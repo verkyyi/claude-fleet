@@ -12,7 +12,11 @@ REPO="${FLEET_REPO:-}"
 ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
-while :; do
+
+# POPUP=1 → single shot for a tmux display-popup modal: esc closes; enter
+# spawns the issue session AND closes. Without it, loop forever (window panes).
+if [ -n "${POPUP:-}" ]; then ENTER_TAIL='+abort'; else ENTER_TAIL=''; fi
+run_fzf() {
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
     --no-sort \
     --layout=reverse-list --info=hidden --border=rounded \
@@ -24,7 +28,8 @@ while :; do
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
-    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})" \
+    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
     >/dev/null 2>&1
-  sleep 0.2
-done
+}
+if [ -n "${POPUP:-}" ]; then run_fzf; exit 0; fi
+while :; do run_fzf; sleep 0.2; done
