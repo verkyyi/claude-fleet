@@ -25,5 +25,7 @@ FLEET_CTX_WINDOW=200000
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
-#FLEET_NOTIFY_CMD="$HOME/bin/notify-me"     # e.g. curl a Slack/WeCom webhook
+# A ready-made WeCom 群机器人 notifier ships in extras/ (put the webhook URL in
+# ~/.config/claude-fleet-webhook, chmod 600):
+#FLEET_NOTIFY_CMD="$HOME/.claude/fleet/extras/wecom-webhook-notify.sh"
 #FLEET_ESCALATE_AFTER=300
