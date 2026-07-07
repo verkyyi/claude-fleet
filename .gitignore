@@ -6,3 +6,7 @@ fleet.conf
 # never belong in the tree and only clutter `git status`
 *.sock
 /fake
+
+# Python bytecode
+__pycache__/
+*.pyc

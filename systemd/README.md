@@ -10,6 +10,7 @@ Parity with `launchd/` for Linux. One always-on service (spinner) plus four
 | `claude-fleet-classify.timer` | every 300s | `com.claude-fleet.classify` | optional (LLM tokens) |
 | `claude-fleet-summarize.timer` | every 180s | `com.claude-fleet.summarize` | optional (LLM tokens) |
 | `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
+| `claude-fleet-restore.timer` | login + every 120s | `com.claude-fleet.restore` | optional (crash recovery) |
 
 Every file is `__HOME__`-templated exactly like the plists — substitute the
 real home dir at install time.
@@ -32,6 +33,10 @@ systemctl --user enable --now claude-fleet-collect.timer
 systemctl --user enable --now claude-fleet-classify.timer
 systemctl --user enable --now claude-fleet-summarize.timer
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
+# optional crash recovery — auto-rebuild + `claude --resume` the whole fleet if
+# the tmux server dies. Enable the timer, then ARM it (else it stays a no-op):
+systemctl --user enable --now claude-fleet-restore.timer
+bash ~/.claude/fleet/bin/fleet-restore.sh --arm
 
 # 3. Keep the units running when you are not logged in (detached fleets).
 loginctl enable-linger "$USER"

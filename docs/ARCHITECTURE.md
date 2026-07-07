@@ -67,11 +67,15 @@ not actively working).
 Per-fleet config keyed by session name:
 
 ```
-~/.config/claude-fleet/<FLEET_ID>.conf     # same keys as fleet.conf.example
+~/.config/claude-fleet/<FLEET_ID>.conf         # same keys as fleet.conf.example
+~/.config/claude-fleet/restore/<FLEET_ID>.map  # durable crash-recovery snapshot
+~/.config/claude-fleet/restore/autorestore.on  # arm flag for the restore watcher
 ```
 
 Any fleet script resolves `FLEET_ID` from `#{session_name}`, sources that conf.
-The shared collector reads *all* of them to build the repo set.
+The shared collector reads *all* of them to build the repo set. The `restore/`
+maps are the durable layout snapshot consumed by `fleet-restore.sh` (see *Crash
+recovery* below) — durable here, unlike the ephemeral `$TMPDIR` dash cache.
 
 ### Cache layout
 
@@ -117,6 +121,39 @@ Where "existing or newly-created checkout" is handled:
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
 disk); `--purge` also removes the conf + this fleet's slug'd cache.
+
+### Crash recovery: `fleet-restore.sh`
+
+The tmux server is a **single point of failure**: if it dies — a crash, a stray
+`tmux kill-server`/`killall`, a terminal teardown — every Claude session in every
+fleet dies with it, and bringing them back by hand (fleet-up each fleet, reopen
+each window, `claude --resume <id>` each session) is slow and error-prone. Note
+that **nothing is lost** in such a crash: worktrees are on disk and Claude Code
+persists every conversation to `~/.claude/projects/<cwd-slug>/*.jsonl`. What's
+lost is the *live layout* — which fleets and windows were open, and which
+transcript each window was on. `fleet-restore.sh` makes that layout durable and
+replayable:
+
+- **Snapshot (write side).** Every collector cycle runs `fleet-restore.sh
+  --snapshot`, recording the live layout to a **durable** map under
+  `$FLEET_CONF_DIR/restore/<session>.map` (durable across reboots, unlike the
+  `$TMPDIR` dash cache). One row per fleet (`FLEET  session  repo  main-dir
+  base`) and per work window (`WIN  name  worktree  claude-session-id  issue`),
+  where the session id is that worktree's newest transcript. Panel windows
+  (`plan`/`dash`/`backlog`) are excluded — they're rebuilt by `fleet-up`.
+- **Restore (read side).** `fleet-restore.sh` (no args) walks the maps: for each
+  fleet **not currently live** it runs `fleet-up.sh` (rebuilding the hub +
+  steward), then reopens each work window with `claude --resume <id>` in its
+  worktree — so the conversation returns with full context. Idempotent: a fleet
+  already up is left untouched; a window whose worktree is gone is skipped.
+  `--dry-run` prints the plan without touching tmux.
+- **Auto-restore watcher.** An optional launchd/systemd unit runs
+  `fleet-restore.sh --if-down` at login/boot and every ~120s. It acts **only**
+  when the whole tmux server is absent **and** auto-restore is *armed*
+  (`fleet-restore.sh --arm` / `--disarm`), so it never fights a healthy server.
+  `fleet-down.sh` disarms automatically when it removes the **last** fleet — a
+  deliberate full teardown stays down, while a real crash (which never runs
+  `fleet-down`) stays armed and is restored on the next tick.
 
 ## The fleet CLI
 

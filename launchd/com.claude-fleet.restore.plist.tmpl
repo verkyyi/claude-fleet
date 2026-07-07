@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-fleet.restore</string>
+  <!-- Crash/boot watcher: `fleet-restore.sh --if-down` restores the fleet ONLY
+       when the whole tmux server is absent AND auto-restore is armed
+       (`fleet-restore.sh --arm`). RunAtLoad covers login/boot; StartInterval
+       catches a crash while you stay logged in. A no-op while the server is up. -->
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/fleet-restore.sh</string><string>--if-down</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>__HOME__</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <!-- PATH must reach `claude`, `tmux`, `git`, `gh`. __HOME__/.local/bin is the
+         default claude install; add your node bin dir if claude lives under nvm. -->
+    <key>PATH</key><string>__HOME__/.local/bin:__BREW_PREFIX__/bin:__BREW_PREFIX__/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>120</integer>
+  <key>StandardErrorPath</key><string>__HOME__/.claude/fleet/logs/restore.launchd.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+</dict></plist>

@@ -1,0 +1,14 @@
+# Fires claude-fleet-restore.service. Parity with the launchd plist:
+# RunAtLoad=true → OnStartupSec (login/boot), StartInterval=120 → OnUnitActiveSec
+# (catch a crash while logged in). Install: `systemctl --user enable --now
+# claude-fleet-restore.timer`, then arm with `fleet-restore.sh --arm`.
+[Unit]
+Description=claude-fleet crash/boot restore watcher timer (login + every 120s)
+
+[Timer]
+OnStartupSec=15
+OnUnitActiveSec=120
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

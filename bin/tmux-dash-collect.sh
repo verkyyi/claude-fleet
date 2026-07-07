@@ -247,4 +247,11 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; 
       && tmux set-window-option -t "$win" @escalated "$ts" 2>/dev/null
   done
 fi
+
+# --- crash-recovery snapshot (every run) ---
+# Durably record the live fleet layout (which fleets, work windows, worktrees,
+# Claude session ids) so fleet-restore.sh can rebuild every fleet and
+# `claude --resume` every session after a tmux-server-wide crash. Cheap; never
+# fatal to the collector.
+bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
 exit 0

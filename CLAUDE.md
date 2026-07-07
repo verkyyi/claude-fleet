@@ -69,6 +69,11 @@ issues as the backlog. See README.md for the architecture. Components:
      macOS). The spinner (KeepAlive) and collector (45s) are the required two;
      summarize/classify/worktree-autoclean are optional — ask the user, and
      mention summarize+classify each spend (small, change-gated) LLM tokens.
+     `com.claude-fleet.restore` is optional crash recovery: it rebuilds every
+     fleet and `claude --resume`s every session if the tmux server dies. Load
+     it, then **arm** it (`bash ~/.claude/fleet/bin/fleet-restore.sh --arm`) —
+     unarmed it's a no-op. It only acts when the whole server is absent, so it
+     never disturbs a live fleet.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
