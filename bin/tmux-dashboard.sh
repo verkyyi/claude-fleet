@@ -27,7 +27,7 @@ while :; do
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --disabled --no-sort \
     --layout=reverse-list --info=hidden --border=rounded \
-    --border-label=" ClaudeFleet · $SP " --border-label-pos=3 \
+    --border-label=" $SP " --border-label-pos=3 \
     --prompt='＋ new ▸ ' \
     --header='enter=jump · type→enter=new · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
     "${PREVIEW[@]}" \
