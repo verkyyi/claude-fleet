@@ -39,7 +39,7 @@ tmux list-windows -a -F '#{session_name}:#{window_index} #{@claude_state}' | whi
     done|needs|looping) : ;;   # quiet/ambiguous -> candidate
     *) continue ;;             # working / empty -> skip (free)
   esac
-  [ "$n" -ge "$MAXW" ] && continue
+  [ "$n" -ge "$MAXW" ] && break   # cap hit: stop, don't keep scanning the rest
 
   cap=$(tmux capture-pane -p -t "$win" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -35)
   [ -z "$cap" ] && continue
