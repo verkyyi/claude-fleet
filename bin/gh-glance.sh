@@ -41,6 +41,11 @@ sel=$(printf '%s\n' "$rows" | fzf --with-nth=4.. --delimiter='\t' \
 [ -z "$sel" ] && exit 0
 url=$(printf '%s' "$sel" | cut -f3)
 
+# If the laptop url-opener tunnel is live, open there directly and be done.
+if printf '%s\n' "$url" | nc 127.0.0.1 "${URL_OPENER_PORT:-2226}" 2>/dev/null; then
+  exit 0
+fi
+
 # Print the URL big and hold the popup so it stays cmd-clickable in iTerm.
 clear
 printf '\n  %s\n\n' "$(printf '%s' "$sel" | cut -f4-)"

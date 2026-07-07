@@ -131,6 +131,26 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 FLEET_CTX_WINDOW=200000               # 1000000 if you run 1M-context models
 ```
 
+## Opening links over SSH
+
+`--web`-style commands open a browser on the *remote* host — useless over
+SSH. Everything here routes URLs through `bin/open-url.sh` instead:
+
+1. **Tunnel mode (recommended)** — on your laptop, add to `~/.ssh/config`:
+
+   ```
+   Host your-remote
+     RemoteForward 2226 127.0.0.1:2226
+   ```
+
+   and keep `extras/laptop-url-opener.sh` running (ad hoc, or as a login
+   item). URLs sent by the remote host then open instantly in your local
+   browser, riding the existing SSH connection — nothing else exposed.
+
+2. **Fallback (zero setup)** — without the tunnel, you get a tmux popup with
+   the URL (cmd-clickable in iTerm) already OSC52-copied to your local
+   clipboard (`set-clipboard on` is in the shipped tmux conf).
+
 ## Assumptions & limitations
 
 - **One tmux session ↔ one GitHub repo.** The PR/issue map is one repo-wide

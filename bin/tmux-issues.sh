@@ -23,7 +23,7 @@ while :; do
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
-    --bind "ctrl-o:execute-silent(gh issue view {1} --repo $REPO --web)" \
+    --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})" \
     >/dev/null 2>&1
   sleep 0.2
