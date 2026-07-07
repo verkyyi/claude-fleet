@@ -82,6 +82,11 @@ Design rules that made it work:
 - **Every session is bound to a GitHub issue.** New work enters through the
   backlog (typed tasks auto-file an issue), so nothing runs untracked.
 
+Deeper reference: **[docs/TERMS.md](docs/TERMS.md)** defines every term (what
+the collector/steward/dash actually are), and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+covers the shared-vs-per-fleet split and the path to running **many fleets on
+one machine** (one tmux session per repo).
+
 ## Install
 
 The installer is Claude itself — `CLAUDE.md` in this repo is the playbook:
