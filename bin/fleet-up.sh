@@ -41,7 +41,9 @@ if [ -z "$REPO" ]; then
 fi
 
 REPO=$(fleet_norm_repo "$REPO")
-NAME="${NAME:-$(basename "$REPO")}"
+# Standard session name: 'fleet-<repo-basename>' so every fleet groups together
+# and its session visibly names its repo. --name overrides verbatim.
+NAME="${NAME:-fleet-$(basename "$REPO")}"
 NAME=$(printf '%s' "$NAME" | tr '.: ' '-')        # tmux session names: no . : space
 DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
 
@@ -81,16 +83,26 @@ FLEET_BASE_BRANCH="$BASE"
 EOF
 echo "fleet-up: wrote $CONF"
 
-# --- create the session + standard windows ---
-tmux new-session -d -s "$NAME" -c "$DIR" -n work || die "tmux new-session failed for '$NAME'"
-tmux new-window  -t "$NAME:" -c "$DIR" -n dash "bash '$BIN/tmux-dashboard.sh'"
-if [ -n "${FLEET_STEWARD_CMD:-}" ]; then
-  tmux new-window -t "$NAME:" -c "$DIR" -n steward "$FLEET_STEWARD_CMD"
-fi
-tmux select-window -t "$NAME:work"
+# --- create the session + the steward HUB ---
+# 'work' is the plain work shell; the 'plan' hub (dash on top + a persistent
+# steward Claude session below) is built by steward-session.sh, scoped to THIS
+# fleet's session + checkout so prefix+g toggles this fleet's own steward.
+workwin=$(tmux new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
+  || die "tmux new-session failed for '$NAME'"
+STEWARD_SESSION="$NAME" STEWARD_CWD="$DIR" bash "$BIN/steward-session.sh"
+# The 'plan' hub is the whole fleet UI — retire the throwaway 'work' shell so the
+# session starts with ONLY the hub (steward-session.sh already selected it). tmux
+# needs an initial window to create the session; we drop it once the hub exists.
+tmux kill-window -t "$workwin" 2>/dev/null || true
 
 # --- populate caches now so the dash isn't empty on first paint ---
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
 echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE)"
-echo "          attach:  tmux attach -t $NAME"
+
+# --- land the caller on the new fleet: switch if already in tmux, else attach ---
+if [ -n "${TMUX:-}" ]; then
+  tmux switch-client -t "$NAME" || echo "          attach:  tmux switch-client -t $NAME"
+else
+  tmux attach -t "$NAME" || echo "          attach:  tmux attach -t $NAME"
+fi

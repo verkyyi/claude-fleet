@@ -1,15 +1,18 @@
 #!/bin/bash
-# steward-zoom.sh — prefix+g, progressive steward focus:
-#   from another window : jump to the plan window and focus the steward pane
-#                         (split view — dash above, steward below)
+# steward-zoom.sh — prefix+g, progressive steward focus, SCOPED TO THE CURRENT
+# SESSION (one steward hub per fleet):
+#   from another window : jump to THIS session's plan window and focus the
+#                         steward pane (split view — dash above, steward below)
 #   already in that window: toggle the steward pane fullscreen (zoom) — press
 #                         again to restore the split
 # The steward pane = pane option @steward=1 (steward-session.sh marks its
-# spawn; mark any pane by hand: tmux set-option -p @steward 1). No marked
-# pane anywhere → fall back to spawning the standalone steward window.
-target=$(tmux list-panes -a -F '#{pane_id} #{@steward}' | awk '$2=="1"{print $1; exit}')
+# spawn; mark any pane by hand: tmux set-option -p @steward 1). No marked pane
+# IN THIS SESSION → fall back to building this fleet's hub (steward-session.sh),
+# passing the current session so the hub lands here, not in another fleet.
+SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+target=$(tmux list-panes -s -t "$SESS" -F '#{pane_id} #{@steward}' 2>/dev/null | awk '$2=="1"{print $1; exit}')
 if [ -z "$target" ]; then
-  exec bash "$HOME/.claude/steward-session.sh"
+  exec env STEWARD_SESSION="$SESS" bash "$(dirname "$0")/steward-session.sh"
 fi
 
 tw=$(tmux display-message -p -t "$target" '#{window_id}')
