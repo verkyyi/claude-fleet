@@ -29,9 +29,9 @@ while :; do
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label=" cwd $SP " --border-label-pos=3 \
     --prompt='＋ new ▸ ' \
-    --header='▐ usage …' \
+    --header='enter=jump · type→enter=new · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
     "${PREVIEW[@]}" \
-    --bind "load:transform-header(printf '▐ %s    enter=jump · type→enter=new · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \"\$(cat $C/usage 2>/dev/null)\")+reload-sync(sleep $REFRESH; bash $ROWS)" \
+    --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-pick.sh {1}\")+reload(bash $ROWS)" \
     --bind "ctrl-e:execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \

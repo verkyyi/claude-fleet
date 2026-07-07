@@ -78,9 +78,15 @@ else
     mem_out="${DIM}–"
 fi
 
+# --- Claude token consumption (5h/7d proxy, written by the dash collector) ---
+INDIGO="#[fg=#bb9af7]"
+usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/usage" 2>/dev/null)
+usage_seg=""
+[ -n "$usage" ] && usage_seg="${INDIGO}${usage} ${DIM}│ "
+
 # --- Live Claude sessions (windows with a @claude_state) ---
 sessions=$(tmux list-windows -a -F '#{@claude_state}' 2>/dev/null | grep -cv '^$' || echo 0)
 
 # --- Output ---
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s ${DIM}│ ${BLUE}%s claude ${DIM}│ ${BLUE}%s " \
-    "$container" "$cpu_out" "$mem_out" "$sessions" "$(hostname -s 2>/dev/null || echo '?')"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s ${DIM}│ %s${BLUE}%s claude ${DIM}│ ${BLUE}%s " \
+    "$container" "$cpu_out" "$mem_out" "$usage_seg" "$sessions" "$(hostname -s 2>/dev/null || echo '?')"
