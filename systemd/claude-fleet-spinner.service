@@ -1,0 +1,21 @@
+# claude-fleet spinner — Linux systemd user unit (parity with launchd
+# com.claude-fleet.spinner). Always-on: the launchd plist uses KeepAlive, here
+# Restart=always. Install: substitute __HOME__, drop into
+# ~/.config/systemd/user/, then `systemctl --user enable --now
+# claude-fleet-spinner.service`. See CLAUDE.md step 6.
+[Unit]
+Description=claude-fleet tmux spinner (animates the working-window glyph)
+
+[Service]
+Type=simple
+ExecStart=/bin/sh __HOME__/.claude/fleet/bin/tmux-spinner.sh
+Environment=SPIN_INTERVAL=0.12
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+RestartSec=2
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/spinner.systemd.log
+
+[Install]
+WantedBy=default.target

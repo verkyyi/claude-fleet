@@ -100,8 +100,9 @@ claude "install claude-fleet on this machine"
 Claude will check dependencies, copy the scripts to `~/.claude/fleet/`, write
 your `fleet.conf` (backlog repo, main checkout, base branch), append one
 source line to `~/.tmux.conf`, merge five hook entries into
-`~/.claude/settings.json`, set up the launchd daemons (or systemd timers on
-Linux), and verify each piece — asking before it touches anything.
+`~/.claude/settings.json`, install the daemons (launchd on macOS, the
+`systemd/` user units on Linux), and verify each piece — asking before it
+touches anything.
 
 Prefer manual? Every step is in [CLAUDE.md](CLAUDE.md); the pieces are plain
 shell scripts with no hidden state.
@@ -194,8 +195,9 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   + cache-read×0.02 over rolling 5h/7d windows.
 - The summarizer and classifier spend real (haiku-sized, change-gated)
   tokens. Both are optional; everything else works without them.
-- Daemon templates are macOS launchd; Linux users need to translate to
-  systemd user timers (Claude will do this during install).
+- Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
+  user units (`systemd/` — one always-on service + `.timer`/`.service` pairs,
+  `__HOME__`-templated; see `systemd/README.md`).
 
 ## Safety notes for parallel fleets
 

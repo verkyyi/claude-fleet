@@ -62,9 +62,14 @@ issues as the backlog. See README.md for the architecture. Components:
      macOS). The spinner (KeepAlive) and collector (45s) are the required two;
      summarize/classify/worktree-autoclean are optional — ask the user, and
      mention summarize+classify each spend (small, change-gated) LLM tokens.
-   - Linux: translate the templates to systemd user units — the spinner is a
-     simple always-on service; the interval ones are timers. `loginctl
-     enable-linger` so they run detached.
+   - Linux: use the ready-made units in `systemd/` (parity with the plists,
+     `__HOME__`-templated). Substitute `__HOME__` and copy into
+     `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
+     `systemctl --user enable --now claude-fleet-spinner.service` +
+     `claude-fleet-collect.timer` (the required two); the optional
+     classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
+     enable-linger "$USER"` so they run detached. Full recipe in
+     `systemd/README.md`.
 
 7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
    `~/.zshrc` (bash users: the functions are zsh-flavored; port on request).

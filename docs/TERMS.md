@@ -42,7 +42,8 @@ nests three levels, and this is where the confusing vocabulary starts:
   One sweep = one pass over repo status → finished-issue closing → new-issue
   triage → prod health → context rotation → fleet hygiene.
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
-  (`launchd/com.claude-fleet.collect.plist.tmpl`), a systemd user timer on Linux.
+  (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
+  Linux (`systemd/claude-fleet-collect.timer`).
 
 ## What you see (rendered surfaces)
 

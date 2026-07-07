@@ -1,0 +1,13 @@
+# claude-fleet worktree janitor — Linux systemd user unit (parity with launchd
+# com.claude-fleet.worktree-autoclean). Oneshot driven by the timer.
+# Optional: prunes merged + clean + idle worktrees. Needs `gh` on PATH.
+[Unit]
+Description=claude-fleet worktree janitor (prunes merged+clean+idle worktrees)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/worktree-autoclean.sh
+Environment=HOME=__HOME__
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=append:__HOME__/.claude/fleet/logs/worktree-autoclean.systemd.log
+StandardError=append:__HOME__/.claude/fleet/logs/worktree-autoclean.systemd.log

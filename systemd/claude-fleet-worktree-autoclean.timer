@@ -1,0 +1,13 @@
+# Fires claude-fleet-worktree-autoclean.service. Parity with the launchd plist:
+# StartInterval=3600 + RunAtLoad=false → no run at startup, first fire one hour
+# after the timer is enabled, then hourly.
+[Unit]
+Description=claude-fleet worktree janitor timer (hourly)
+
+[Timer]
+OnUnitActiveSec=3600
+OnActiveSec=3600
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target
