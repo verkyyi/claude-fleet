@@ -19,9 +19,13 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
 tmux info >/dev/null 2>&1 || exit 0
 
-# --- PR map (≥90s) ---
+# gh fetch TTL (issues + PR map). FLEET_GH_TTL in fleet.conf tunes staleness
+# vs API chatter; GH_TTL=0 on a one-off run forces a fetch.
+GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
+
+# --- PR map ---
 prts=$(cat "$C/prmap.ts" 2>/dev/null || echo 0)
-if [ -n "$REPO" ] && [ $(( $(now) - prts )) -ge 90 ] && command -v gh >/dev/null 2>&1; then
+if [ -n "$REPO" ] && [ $(( $(now) - prts )) -ge "$GH_TTL" ] && command -v gh >/dev/null 2>&1; then
   gh pr list --repo "$REPO" --state all --limit 100 \
     --json number,headRefName,state,statusCheckRollup \
     --jq 'group_by(.headRefName)[] | max_by(.number) |
@@ -33,12 +37,12 @@ if [ -n "$REPO" ] && [ $(( $(now) - prts )) -ge 90 ] && command -v gh >/dev/null
   now > "$C/prmap.ts"
 fi
 
-# --- GitHub open issues (backlog source of truth) → cache, ≥90s ---
+# --- GitHub open issues (backlog source of truth) → cache ---
 its=$(cat "$C/issues.ts" 2>/dev/null || echo 0)
-if [ -n "$REPO" ] && [ $(( $(now) - its )) -ge 90 ] && command -v gh >/dev/null 2>&1; then
+if [ -n "$REPO" ] && [ $(( $(now) - its )) -ge "$GH_TTL" ] && command -v gh >/dev/null 2>&1; then
   gh issue list --repo "$REPO" --state open --limit 300 \
     --json number,title,milestone,assignees \
-    --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((.assignees|map(.login)|join(","))[0:10])+"\t"+(.title)' \
+    --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
     > "$C/issues.tmp" 2>/dev/null && mv "$C/issues.tmp" "$C/issues"
   now > "$C/issues.ts"
 fi

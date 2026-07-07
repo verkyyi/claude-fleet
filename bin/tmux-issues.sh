@@ -13,11 +13,12 @@ ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
 while :; do
-  bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 \
-    --disabled --no-sort \
+  bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
+    --no-sort \
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
-    --header='enter=work issue · tab=collapse group · ⌃o=web · ⌃r · esc' \
+    --prompt='filter ▸ ' \
+    --header='type=filter · enter=work issue · tab=collapse group · ⌃o=web · ⌃r · esc' \
     --preview-window=hidden \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \

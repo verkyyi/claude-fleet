@@ -29,4 +29,12 @@ url=$(gh issue create --repo "$REPO" --title "$title" \
 $text" 2>/dev/null)
 num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
 if [ -z "$num" ]; then tmux display-message "issue create failed — session not spawned"; exit 1; fi
+
+# Instant cache refresh: optimistically append the new issue to the backlog
+# cache (visible on the panels' next repaint), then kick a real fetch in the
+# background so the authoritative row replaces it within seconds.
+printf '· no milestone\t#%s\t·\t%s\n' "$num" "$(printf '%s' "$title" | tr '\t' ' ')" >> "$C/issues"
+rm -f "$C/issues.ts"
+( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
+
 exec bash "$BIN/dash-issue-session.sh" "$num"
