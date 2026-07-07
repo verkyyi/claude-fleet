@@ -4,6 +4,15 @@
 # cw <branch> [window-name]  — create a worktree + tmux window running claude
 # cwrm <branch>              — remove a worktree + its branch
 # cwclean [--prune]          — audit worktrees; --prune removes merged+clean+idle ones
+# cf [<owner/repo>] [dir]    — bring up a fleet (no args = infer from this checkout)
+
+# cf — shorthand for fleet-up.sh. With no args, run it from inside a checkout
+# and it infers the repo from origin. Any fleet-up flags pass straight through.
+cf() {
+  local bin="${${(%):-%x}:h:h}/bin"   # this file lives at <fleet>/shell/cw.zsh
+  [ -x "$bin/fleet-up.sh" ] || { echo "cf: $bin/fleet-up.sh not found"; return 1; }
+  "$bin/fleet-up.sh" "$@"
+}
 
 cw() {
   local repo root branch name dir

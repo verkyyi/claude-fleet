@@ -1,8 +1,10 @@
 #!/bin/bash
-# fleet-up.sh <owner/repo> [<checkout-dir>] [--name <session>] [--base <branch>]
+# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]
 #
 # Bring up a new FLEET: a tmux session pinned to one GitHub repo, with a local
-# checkout (reused if it exists, cloned if it doesn't). Writes the per-fleet conf
+# checkout (reused if it exists, cloned if it doesn't). With no <owner/repo>,
+# infers it from the current checkout: run it from inside a git worktree and it
+# uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
 # ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, opens the
 # standard windows (work shell + dash), and kicks the collector so the dash has
 # data immediately. See docs/ARCHITECTURE.md.
@@ -24,9 +26,19 @@ while [ $# -gt 0 ]; do
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift;;
   esac
 done
-[ -n "$REPO" ] || die "usage: fleet-up.sh <owner/repo> [<dir>] [--name <session>] [--base <branch>]"
 command -v tmux >/dev/null 2>&1 || die "tmux not found"
 command -v git  >/dev/null 2>&1 || die "git not found"
+
+# No <owner/repo> given: infer it from the current checkout ($PWD in a git
+# worktree), and default the checkout dir to that worktree so we reuse it.
+if [ -z "$REPO" ]; then
+  top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) \
+    || die "no <owner/repo> given and $PWD is not a git checkout"
+  REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
+    || die "$top has no 'origin' remote — pass <owner/repo> explicitly"
+  DIR="${DIR:-$top}"
+  echo "fleet-up: inferred $(fleet_norm_repo "$REPO") from $top"
+fi
 
 REPO=$(fleet_norm_repo "$REPO")
 NAME="${NAME:-$(basename "$REPO")}"
