@@ -160,7 +160,8 @@ reuses that worktree — no clone.
 
 Each fleet writes `~/.config/claude-fleet/<session>.conf` (overlays the global
 `fleet.conf`). The single global `fleet.conf` above still works as a one-fleet
-default. Set `FLEET_STEWARD_CMD` to auto-open a steward window per fleet.
+default. Every fleet gets a steward pane in its `plan` hub; set
+`FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it runs.
 
 ## Opening links over SSH
 

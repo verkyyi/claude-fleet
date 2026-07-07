@@ -22,6 +22,13 @@ FLEET_CTX_WINDOW=200000
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 #FLEET_STATUS_CONTAINER="claude-dev"
 
+# Optional: the command each fleet's steward pane runs (the bottom pane of the
+# always-on 'plan' hub). Unset → the built-in default (adopt ~/.claude/steward.md,
+# resume the newest handoff or run one /sweep, then arm a /loop sweep). Set it to
+# drive your own steward, or to a plain shell to opt out of the auto-driven one.
+# Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+#FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
+
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:

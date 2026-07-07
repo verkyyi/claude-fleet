@@ -28,13 +28,18 @@ SESS="${STEWARD_SESSION:-$(fleet_current_session)}"
 # the session's first window cwd → HOME.
 if [ -n "${STEWARD_CWD:-}" ]; then
   BASE="$STEWARD_CWD"
+  fleet_load_conf "$SESS"   # pick up FLEET_STEWARD_CMD; BASE stays pinned above
 else
   fleet_load_conf "$SESS"
   BASE="${FLEET_MAIN:-}"
   [ -z "$BASE" ] && BASE=$(tmux list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
   [ -z "$BASE" ] && BASE="$HOME"
 fi
-STEWARD_CMD="${STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the steward session. If ~/.claude/handoff/ has a recent steward handoff, /handoff pick up the newest one first; otherwise run one /sweep now. Then arm /loop 45m /sweep.\"; exec \$SHELL}"
+# The command the steward pane runs. Precedence: an explicit STEWARD_CMD in the
+# environment (fleet-up.sh's internal contract) > the documented FLEET_STEWARD_CMD
+# conf knob (global or per-fleet fleet.conf) > the built-in default. The hub is
+# always built — this only swaps the command its steward pane launches.
+STEWARD_CMD="${STEWARD_CMD:-${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the steward session. If ~/.claude/handoff/ has a recent steward handoff, /handoff pick up the newest one first; otherwise run one /sweep now. Then arm /loop 45m /sweep.\"; exec \$SHELL}}"
 
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to

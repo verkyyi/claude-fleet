@@ -111,7 +111,8 @@ Where "existing or newly-created checkout" is handled:
 3. Write `$FLEET_CONF_DIR/<session>.conf` (`FLEET_REPO`, `FLEET_MAIN`, base
    branch from the repo's default branch).
 4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
-   `work` shell + `dash`; a `steward` window if `FLEET_STEWARD_CMD` is set).
+   `work` shell + the `plan` hub, whose steward pane runs `FLEET_STEWARD_CMD`
+   or the built-in default).
 5. Kick the collector so the dash has data on first paint.
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
@@ -126,7 +127,7 @@ disk); `--purge` also removes the conf + this fleet's slug'd cache.
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
 
 `FLEET_CONF_DIR` (default `~/.config/claude-fleet`) and `FLEET_STEWARD_CMD`
-(optional per-fleet steward command) are the two knobs.
+(optional override for the steward pane's command) are the two knobs.
 
 ## Migration phases — all shipped ✅
 
@@ -138,7 +139,7 @@ dash/status/backlog read the slug'd files with flat fallback.
 **Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
 overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
 session-spawn (`dash-new-session`/`dash-issue-session`) targets the current
-fleet's repo+checkout; optional per-fleet steward via `FLEET_STEWARD_CMD`.
+fleet's repo+checkout; per-fleet steward-command override via `FLEET_STEWARD_CMD`.
 
 **Phase 3 ✅ — reach + robustness.** `FLEET_REPOS` + configured-conf **pin**
 (fetch repos with no live session); the janitor loops every fleet's checkout;

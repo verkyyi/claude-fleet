@@ -2,3 +2,7 @@ logs/
 fleet.conf
 *.log
 .DS_Store
+# stray unix-domain sockets from ad-hoc testing (e.g. a leftover ./fake) — these
+# never belong in the tree and only clutter `git status`
+*.sock
+/fake
