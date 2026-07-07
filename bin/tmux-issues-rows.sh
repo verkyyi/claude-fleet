@@ -15,7 +15,10 @@ SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
 IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; RD='247;118;142'; CY='125;207;255'
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
-[ -s "$SRC" ] || { printf '%s%s(loading issues…)%s\n' "$US" "$(c "$GY")" "$R"; exit 0; }
+if [ ! -s "$SRC" ]; then   # empty-but-fetched = 0 open issues; absent = not loaded yet
+  [ -e "$SRC" ] && m='(no open issues)' || m='(loading issues…)'
+  printf '%s%s%s%s\n' "$US" "$(c "$GY")" "$m" "$R"; exit 0
+fi
 
 # rank milestones: version-sorted order (so "Week 2" < "Week 10"), no-milestone last
 MS_LIST=$(cut -f1 "$SRC" | grep -vxF "$NOMS" | sort -Vu)

@@ -187,7 +187,7 @@ while IFS="$US" read -r sess win path cur; do
   [ -z "$path" ] && continue
   # each window matches against ITS fleet's prmap (slug from sessmap), flat fallback
   slug=$(fleet_slug_cached "$sess")
-  prmf="$C/prmap"; [ -n "$slug" ] && [ -s "$C/prmap_$slug" ] && prmf="$C/prmap_$slug"
+  prmf="$C/prmap"; [ -n "$slug" ] && [ -f "$C/prmap_$slug.ts" ] && prmf="$C/prmap_$slug"
   key=$(printf '%s' "$path" | tr '/ ' '__')
   branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')

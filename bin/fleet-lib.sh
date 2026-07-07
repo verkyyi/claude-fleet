@@ -76,11 +76,13 @@ fleet_repo_cached() {
 }
 
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
-# the session resolved and the file is non-empty, else the flat fallback.
+# the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
+# the repo has 0 rows), else the flat fallback. Keying off .ts — not file size —
+# so a fleet whose repo genuinely has 0 issues/PRs shows empty, not the primary's.
 fleet_cache() {
   local base="$1" slug
   slug=$(fleet_slug_cached "$2")
-  if [ -n "$slug" ] && [ -s "$FLEET_C/${base}_${slug}" ]; then
+  if [ -n "$slug" ] && [ -f "$FLEET_C/${base}_${slug}.ts" ]; then
     printf '%s' "$FLEET_C/${base}_${slug}"
   else
     printf '%s' "$FLEET_C/${base}"
