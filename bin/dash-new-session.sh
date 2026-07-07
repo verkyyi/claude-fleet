@@ -8,7 +8,8 @@ text="$*"; text="${text#"${text%%[![:space:]]*}"}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
-fleet_load_conf "$(fleet_current_session)"   # multi-fleet: target THIS fleet's repo
+SESS=$(fleet_current_session)
+fleet_load_conf "$SESS"                        # multi-fleet: target THIS fleet's repo
 REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
@@ -32,11 +33,26 @@ $text" 2>/dev/null)
 num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
 if [ -z "$num" ]; then tmux display-message "issue create failed — session not spawned"; exit 1; fi
 
-# Instant cache refresh: optimistically append the new issue to the backlog
-# cache (visible on the panels' next repaint), then kick a real fetch in the
-# background so the authoritative row replaces it within seconds.
-printf '· no milestone\t#%s\t·\t%s\n' "$num" "$(printf '%s' "$title" | tr '\t' ' ')" >> "$C/issues"
-rm -f "$C/issues.ts"
+# Instant cache refresh: optimistically append the new issue to THIS fleet's
+# backlog cache (visible on the panels' next repaint), then kick a real fetch in
+# the background so the authoritative row replaces it within seconds.
+#
+# Resolve the SAME file the readers do (fleet_cache: this fleet's slug'd cache if
+# the collector has fetched it, flat fallback otherwise). The old code always
+# wrote the flat cache, so on a non-primary fleet — whose readers resolve to
+# issues_<slug> — the optimistic row was invisible.
+ISSUES=$(fleet_cache issues "$SESS")
+row=$(printf '· no milestone\t#%s\t·\t%s' "$num" "$(printf '%s' "$title" | tr '\t' ' ')")
+# Atomic write: build the new content in a PID-unique temp, then rename into
+# place, so a concurrent collector/reader never sees a torn line (the old `>>`
+# raced the collector's replace of the same file).
+tmp="$ISSUES.opt.$$"
+{ [ -s "$ISSUES" ] && cat "$ISSUES"; printf '%s\n' "$row"; } > "$tmp" && mv "$tmp" "$ISSUES"
+# Invalidate this fleet's .ts so the next collector cycle re-fetches. BACKDATE
+# rather than delete: fleet_cache keys off the .ts EXISTING to pick the slug'd
+# cache, so removing it would flip readers back to the flat cache and hide the
+# row we just wrote. (Flat fallback has no live .ts — nothing to invalidate.)
+[ -e "$ISSUES.ts" ] && echo 0 > "$ISSUES.ts"
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
 exec bash "$BIN/dash-issue-session.sh" "$num"
