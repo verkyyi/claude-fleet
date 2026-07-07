@@ -83,7 +83,8 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "$FLEET_SESSION" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
-  key=${path//\//_}; key=${key// /_}
+  # collision-free cache key — keep byte-identical to cache_key() in tmux-dash-collect.sh
+  key=${path//_/_u}; key=${key//\//_s}; key=${key// /_w}
   prmapn_for "$sess"   # PMN = this fleet's prmap (flat fallback)
 
   branch='-'

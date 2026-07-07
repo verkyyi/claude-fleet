@@ -25,6 +25,25 @@ trap 'rm -f "$C"/*.'"$$" EXIT
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
+
+# atomic_write DEST — stream stdin to a PID-unique temp, then rename into place.
+# rename(2) is atomic on one filesystem, so a concurrent reader (the dash) always
+# sees either the old file or the complete new one, never a half-written cache.
+# The EXIT trap above sweeps any <name>.$$ temp orphaned by a crash mid-write.
+atomic_write() {
+  local dest="$1" tmp="$1.$$"
+  cat > "$tmp" && mv "$tmp" "$dest"
+}
+
+# cache_key PATH — filesystem-safe, collision-FREE cache key for a worktree path.
+# Reversibly escapes the escape char first, then '/' and ' ' to DISTINCT tokens,
+# so no two distinct paths ever map to the same git_/ctx_ cache (the old
+# tr '/ ' '__' collided '/a b' with '/a/b'). MUST stay byte-identical to the
+# reader in bin/tmux-dashboard-rows.sh and the Python encoder further below.
+cache_key() {
+  local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"
+}
+
 tmux info >/dev/null 2>&1 || exit 0
 
 # python3 powers the context% and usage caches (below). It's a hard dep for
@@ -108,34 +127,39 @@ done
 
 # --- back-compat flat mirror: PRIMARY repo → the un-slug'd prmap/issues names ---
 if [ -n "$PRIMARY_SLUG" ]; then
-  [ -s "$C/prmap_$PRIMARY_SLUG" ]  && cp "$C/prmap_$PRIMARY_SLUG"  "$C/prmap"
-  [ -s "$C/issues_$PRIMARY_SLUG" ] && cp "$C/issues_$PRIMARY_SLUG" "$C/issues"
+  [ -s "$C/prmap_$PRIMARY_SLUG" ]  && atomic_write "$C/prmap"  < "$C/prmap_$PRIMARY_SLUG"
+  [ -s "$C/issues_$PRIMARY_SLUG" ] && atomic_write "$C/issues" < "$C/issues_$PRIMARY_SLUG"
 fi
 
 # --- git per live worktree (every run) ---
 tmux list-windows -a -F '#{pane_current_path}' | sort -u | while read -r path; do
   [ -z "$path" ] && continue
   git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
-  key=$(printf '%s' "$path" | tr '/ ' '__')
+  key=$(cache_key "$path")
   branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null); dirty=''
   [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ] && dirty='✱'
   ab=$(git -C "$path" rev-list --left-right --count "$BASE...HEAD" 2>/dev/null)
   behind=$(echo "$ab" | awk '{print $1+0}'); ahead=$(echo "$ab" | awk '{print $2+0}')
   [ "${ahead:-0}" != 0 ] && branch="$branch+$ahead"; [ "${behind:-0}" != 0 ] && branch="$branch-$behind"
-  printf '%s\t%s' "$branch" "$dirty" > "$C/git_$key"
+  printf '%s\t%s' "$branch" "$dirty" | atomic_write "$C/git_$key"
 done
 
 # --- per-window context tokens (every run): newest transcript's last-turn input+cache ---
 # Claude Code writes transcripts to ~/.claude/projects/<cwd-slug>/*.jsonl; the last
 # assistant turn's input+cache tokens = the conversation's current context weight.
 # NB: paths passed as ARGV, not stdin — stdin is the heredoc script (can't be both).
-CTX_PATHS=$(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
-# shellcheck disable=SC2086  # intentional word-split: each path becomes its own argv entry
-if have_py3; then
-python3 - "$C" $CTX_PATHS <<'PY'
+# Gather paths into an ARRAY (not a word-split string) so a path containing a
+# space stays a single argv entry end-to-end. Guard the length for bash 3.2,
+# where "${arr[@]}" on an empty array trips `set -u`. $$ lets Python suffix its
+# temp files so the EXIT trap can sweep any it orphans.
+CTX_PATHS=()
+while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
+  < <(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
+if [ "${#CTX_PATHS[@]}" -gt 0 ] && have_py3; then
+python3 - "$C" "$$" "${CTX_PATHS[@]}" <<'PY'
 import json, glob, os, sys, re
-C=sys.argv[1]
-for path in sys.argv[2:]:
+C=sys.argv[1]; pid=sys.argv[2]
+for path in sys.argv[3:]:
     if not path: continue
     slug=re.sub(r'[/._]', '-', path)
     files=sorted(glob.glob(os.path.expanduser(f'~/.claude/projects/{slug}/*.jsonl')),
@@ -152,8 +176,11 @@ for path in sys.argv[2:]:
         if u and d.get('type')=='assistant':
             ctx=u.get('input_tokens',0)+u.get('cache_read_input_tokens',0)+u.get('cache_creation_input_tokens',0)
             model=m.get('model','') or model
-    key=path.replace('/','_').replace(' ','_')
-    open(f'{C}/ctx_{key}','w').write(f'{model}\t{ctx}')   # model<TAB>context-tokens
+    # cache key: keep byte-identical to cache_key() in the shell above
+    key=path.replace('_','_u').replace('/','_s').replace(' ','_w')
+    tmp=f'{C}/ctx_{key}.{pid}'
+    with open(tmp,'w') as fh: fh.write(f'{model}\t{ctx}')  # model<TAB>context-tokens
+    os.replace(tmp, f'{C}/ctx_{key}')                     # atomic: readers never see a partial cache
 PY
 fi
 
@@ -163,9 +190,9 @@ fi
 # meter: output heavy, cache-read light.
 uts=$(cat "$C/usage.ts" 2>/dev/null || echo 0)
 if [ $(( $(now) - uts )) -ge 300 ] && have_py3; then
-  python3 - "$C/usage" <<'PY'
+  python3 - "$C/usage" "$$" <<'PY'
 import json, glob, os, sys, time
-out=sys.argv[1]; t=time.time()
+out=sys.argv[1]; pid=sys.argv[2]; t=time.time()
 w={'5h':t-5*3600, '7d':t-7*86400}
 agg={k:0 for k in w}
 for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
@@ -184,7 +211,9 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
 def fmt(n):
     n=int(n)
     return f"{n/1e6:.1f}M" if n>=1e6 else (f"{n/1e3:.0f}k" if n>=1e3 else str(n))
-open(out,'w').write(f"5h {fmt(agg['5h'])} · 7d {fmt(agg['7d'])}")
+tmp=f'{out}.{pid}'
+with open(tmp,'w') as fh: fh.write(f"5h {fmt(agg['5h'])} · 7d {fmt(agg['7d'])}")
+os.replace(tmp, out)                                   # atomic: readers never see a partial cache
 PY
   now > "$C/usage.ts"
 fi
@@ -194,7 +223,7 @@ fi
 line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
   tmux capture-pane -p -S -600 -t "$w" 2>/dev/null
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
-if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" > "$C/ratelimit"; fi
+if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$C/ratelimit"; fi
 
 # --- PR/CI attention signal (every run) ---
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
@@ -207,7 +236,7 @@ while IFS="$US" read -r sess win path cur; do
   # each window matches against ITS fleet's prmap (slug from sessmap), flat fallback
   slug=$(fleet_slug_cached "$sess")
   prmf="$C/prmap"; [ -n "$slug" ] && [ -f "$C/prmap_$slug.ts" ] && prmf="$C/prmap_$slug"
-  key=$(printf '%s' "$path" | tr '/ ' '__')
+  key=$(cache_key "$path")
   branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   glyph=""; pfg=""

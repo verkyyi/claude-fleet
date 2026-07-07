@@ -84,7 +84,27 @@ usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/usage" 2>/dev/null)
 usage_seg=""
 [ -n "$usage" ] && usage_seg="${DIM}│ ${INDIGO}${usage} "
 
+# --- Official weekly/N-hour limit % (opportunistically scraped by the collector) ---
+# The collector writes "$C/ratelimit" as "epoch<TAB>line" whenever a session prints
+# "N% of your weekly limit". Surface that authoritative number next to the local
+# proxy, but only while fresh — a stale weekly % is worse than none. Staleness
+# window is FLEET_RATELIMIT_TTL seconds (default 6h).
+ORANGE="#[fg=#ff9e64]"
+rl_seg=""
+rl_file="${TMPDIR:-/tmp}/.claude-dash/ratelimit"
+if [ -f "$rl_file" ]; then
+    rl_ts="" rl_line=""
+    IFS=$'\t' read -r rl_ts rl_line < "$rl_file" 2>/dev/null
+    case "$rl_ts" in
+        ''|*[!0-9]*) : ;;   # missing / non-numeric epoch → skip
+        *)  if [ -n "$rl_line" ] && \
+               [ "$(( $(date +%s) - rl_ts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ]; then
+                rl_seg="${DIM}│ ${ORANGE}${rl_line} "
+            fi;;
+    esac
+fi
+
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s" \
-    "$container" "$cpu_out" "$mem_out" "$usage_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s" \
+    "$container" "$cpu_out" "$mem_out" "$usage_seg" "$rl_seg"
