@@ -118,6 +118,7 @@ done
 # assistant turn's input+cache tokens = the conversation's current context weight.
 # NB: paths passed as ARGV, not stdin — stdin is the heredoc script (can't be both).
 CTX_PATHS=$(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
+# shellcheck disable=SC2086  # intentional word-split: each path becomes its own argv entry
 python3 - "$C" $CTX_PATHS <<'PY' 2>/dev/null
 import json, glob, os, sys, re
 C=sys.argv[1]
