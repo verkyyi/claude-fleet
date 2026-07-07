@@ -142,12 +142,17 @@ different repo with its own checkout — and they share one collector without
 clobbering each other (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 ```sh
+cf                                         # from inside a checkout: infer the repo, reuse this worktree
 bin/fleet-up.sh you/webapp                 # clone-or-reuse ~/projects/webapp, open a 'webapp' session
 bin/fleet-up.sh you/infra ~/src/infra      # explicit checkout dir
 bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout
 tmux attach -t webapp
 bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache); checkout stays
 ```
+
+`cf` (from `shell/cw.zsh`) is a shorthand for `fleet-up.sh` that forwards all
+args; with none, it infers the repo from the current checkout's `origin` and
+reuses that worktree — no clone.
 
 Each fleet writes `~/.config/claude-fleet/<session>.conf` (overlays the global
 `fleet.conf`). The single global `fleet.conf` above still works as a one-fleet

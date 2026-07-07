@@ -97,10 +97,13 @@ helpers live in `bin/fleet-lib.sh`.
 A fleet's dash/status/backlog reads the shared files plus its own
 `prmap_<slug>` / `issues_<slug>` (slug derived from that session's `FLEET_REPO`).
 
-### Bootstrap: `fleet-up.sh <owner/repo> [<dir>]`
+### Bootstrap: `fleet-up.sh [<owner/repo>] [<dir>]`
 
 Where "existing or newly-created checkout" is handled:
 
+0. If no `<owner/repo>` is given, infer it from `$PWD`'s git checkout (`origin`)
+   and default `<dir>` to that worktree. (`cf`, from `shell/cw.zsh`, is a thin
+   wrapper for this no-arg, from-inside-a-checkout path.)
 1. `session = slug(repo)`; refuse if a tmux session by that name already exists
    (one fleet per repo).
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
@@ -118,7 +121,7 @@ disk); `--purge` also removes the conf + this fleet's slug'd cache.
 
 | Command | What it does |
 |---|---|
-| `fleet-up.sh <owner/repo> [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector |
+| `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
 | `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
 
