@@ -16,13 +16,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { echo "fleet-up: $*" >&2; exit 1; }
+usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>]" >&2; }
+need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
 REPO=""; DIR=""; NAME=""; BASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --name) NAME="$2"; shift 2;;
-    --base) BASE="$2"; shift 2;;
-    -*) die "unknown flag $1";;
+    --name) need_arg "$#" --name; NAME="$2"; shift 2;;
+    --base) need_arg "$#" --base; BASE="$2"; shift 2;;
+    -h|--help) usage; exit 0;;
+    -*) usage; die "unknown flag $1";;
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift;;
   esac
 done
@@ -41,6 +44,14 @@ if [ -z "$REPO" ]; then
 fi
 
 REPO=$(fleet_norm_repo "$REPO")
+# Shape-check owner/repo before it reaches `gh repo clone`/`git clone`: exactly
+# one slash, both halves non-empty, and only chars GitHub allows (no spaces or
+# shell metacharacters). Catches typos and non-GitHub URLs up front.
+case "$REPO" in
+  *[!A-Za-z0-9_./-]* | */*/* | /* | */) die "invalid repo '$REPO' — expected owner/repo";;
+  ?*/?*) : ;;
+  *) die "invalid repo '$REPO' — expected owner/repo";;
+esac
 # Standard session name: 'fleet-<repo-basename>' so every fleet groups together
 # and its session visibly names its repo. --name overrides verbatim.
 NAME="${NAME:-fleet-$(basename "$REPO")}"
