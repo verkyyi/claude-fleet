@@ -18,6 +18,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+# Sweep this run's PID-unique temps on exit: the per-repo gh fetches only `mv`
+# their temp on success, so a failed fetch would otherwise orphan a 0-byte
+# prmap_<slug>.$$ / issues_<slug>.$$ (and sessmap.$$) forever.
+trap 'rm -f "$C"/*.'"$$" EXIT
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
