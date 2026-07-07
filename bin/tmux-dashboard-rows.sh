@@ -77,7 +77,7 @@ prmapn_for() {
 }
 
 buf=""
-while IFS=$US read -r sess idx name path state ts wid iss; do
+while IFS=$US read -r sess idx name path state _ wid iss; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -86,8 +86,8 @@ while IFS=$US read -r sess idx name path state ts wid iss; do
   key=${path//\//_}; key=${key// /_}
   prmapn_for "$sess"   # PMN = this fleet's prmap (flat fallback)
 
-  branch='-'; dirty=''
-  [ -f "$C/git_$key" ] && { IFS=$'\t' read -r branch dirty < "$C/git_$key" || :; }
+  branch='-'
+  [ -f "$C/git_$key" ] && { IFS=$'\t' read -r branch _ < "$C/git_$key" || :; }
 
   state_v "$state"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
@@ -147,7 +147,7 @@ while IFS=$US read -r sess idx name path state ts wid iss; do
 done < <(tmux list-windows -a -F "$WFMT")
 
 # emit sorted by status rank (color/order conveys grouping; no header lines)
-printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk ix line; do
+printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done

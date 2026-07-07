@@ -12,7 +12,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # this fleet's issues cache (slug'd via sessmap; flat fallback). FLEET_SESSION is
 # exported by tmux-issues.sh so reload-binds inherit it.
 SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
-IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; RD='247;118;142'; CY='125;207;255'
+IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;207;255'
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
 if [ ! -s "$SRC" ]; then   # empty-but-fetched = 0 open issues; absent = not loaded yet
@@ -57,7 +57,7 @@ count_of(){ printf '%s\n' "$counts" | awk -F'\t' -v m="$1" '$1==m{print $2; exit
 
 # emit: field1=num(empty for header)·field2=display·field3=milestone(for collapse toggle)
 last=''
-printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3n | while IFS='	' read -r rk ms num row; do
+printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3n | while IFS='	' read -r _ ms num row; do
   [ -z "$num" ] && continue
   if [ "$MODE" != unplanned ] && [ "$ms" != "$last" ]; then
     if is_collapsed "$ms"; then ind='▸'; else ind='▾'; fi

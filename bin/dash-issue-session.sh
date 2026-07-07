@@ -16,6 +16,7 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 slug="issue-$num"; wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 tf="$C/task_$slug.txt"
+# shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
 printf 'Work GitHub issue #%s in this repo. First read it: `gh issue view %s --repo %s --comments`. Then claim it (`gh issue edit %s --repo %s --add-assignee @me`), plan, and implement. Verify per the repo conventions before opening a PR that closes #%s.' \
   "$num" "$num" "$REPO" "$num" "$REPO" "$num" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
