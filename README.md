@@ -109,10 +109,13 @@ shell scripts with no hidden state.
 
 ### Dependencies
 
-tmux ≥ 3.2 · [fzf](https://github.com/junegunn/fzf) ≥ 0.44 ·
-[gh](https://cli.github.com/) (authed) · python3 · jq ·
+tmux ≥ 3.2 · [fzf](https://github.com/junegunn/fzf) ≥ 0.45 (the dashboard binds
+use `transform`) · [gh](https://cli.github.com/) (authed) · python3 ·
 [Claude Code](https://claude.com/claude-code) (the `claude` CLI; also used by
-the two optional LLM daemons)
+the two optional LLM daemons). Soft: perl `Time::HiRes` (sharper dash spinner).
+
+Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
+(No standalone `jq` — the collector only uses `gh --jq`, which is built in.)
 
 ## Keybindings (prefix defaults to your tmux prefix)
 

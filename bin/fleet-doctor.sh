@@ -1,0 +1,101 @@
+#!/bin/sh
+# fleet-doctor.sh — preflight for a claude-fleet install. Checks the tools the
+# fleet actually depends on and prints a pass/warn/fail line for each, so a
+# manual or Linux user can see what's missing before wiring up tmux + daemons.
+#
+#   pass  — present and new enough
+#   warn  — degraded but usable (a feature silently loses quality)
+#   fail  — a core piece will not work
+#
+# Exit status is the number of FAILs (0 = everything at least usable), so it can
+# gate an install script: `sh fleet-doctor.sh && ...`.
+#
+# Dependency truth (keep in sync with README.md#dependencies and CLAUDE.md):
+#   tmux ≥ 3.2   core — the whole thing is a tmux session
+#   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
+#   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
+#   python3      collector context% + usage caches
+#   claude       the sessions you run + the optional summarize/classify daemons
+#   perl HiRes   soft — dash spinner sub-second frames (degrades to 1s ticks)
+#   jq is NOT required standalone: the collector only uses `gh --jq` (built in).
+set -u
+
+# --- output helpers (color only on a tty) ---
+if [ -t 1 ]; then
+  R=$(printf '\033[31m'); G=$(printf '\033[32m'); Y=$(printf '\033[33m')
+  B=$(printf '\033[1m'); Z=$(printf '\033[0m')
+else
+  R=''; G=''; Y=''; B=''; Z=''
+fi
+fails=0; warns=0
+pass() { printf '  %sPASS%s  %-8s %s\n'  "$G" "$Z" "$1" "$2"; }
+warn() { printf '  %sWARN%s  %-8s %s\n'  "$Y" "$Z" "$1" "$2"; warns=$((warns+1)); }
+fail() { printf '  %sFAIL%s  %-8s %s\n'  "$R" "$Z" "$1" "$2"; fails=$((fails+1)); }
+
+# vge A B → 0 (true) if dotted-numeric version A >= B (compares up to 3 parts).
+vge() {
+  awk -v a="$1" -v b="$2" 'BEGIN{
+    n=split(a,x,"."); m=split(b,y,".");
+    for(i=1;i<=3;i++){ xi=(i<=n?x[i]+0:0); yi=(i<=m?y[i]+0:0);
+      if(xi>yi) exit 0; if(xi<yi) exit 1 }
+    exit 0 }'
+}
+
+printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
+
+# --- tmux ≥ 3.2 (core) ---
+if command -v tmux >/dev/null 2>&1; then
+  v=$(tmux -V 2>/dev/null | sed -E 's/[^0-9.]//g')
+  if [ -n "$v" ] && vge "$v" 3.2; then pass tmux "$v (≥ 3.2)"
+  else fail tmux "$v — need ≥ 3.2 (attention layer + status bar)"; fi
+else
+  fail tmux "not found — the fleet is a tmux session (need ≥ 3.2)"
+fi
+
+# --- fzf ≥ 0.45 (dashboard) ---
+if command -v fzf >/dev/null 2>&1; then
+  v=$(fzf --version 2>/dev/null | awk '{print $1}')
+  if [ -n "$v" ] && vge "$v" 0.45; then pass fzf "$v (≥ 0.45)"
+  else fail fzf "$v — need ≥ 0.45; dash binds use \`transform\` (prefix+j breaks below)"; fi
+else
+  fail fzf "not found — need ≥ 0.45 for the prefix+j dashboard"
+fi
+
+# --- gh + auth (backlog + PR/CI map) ---
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then pass gh "authed"
+  else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi
+else
+  fail gh "not found — no backlog, no PR/CI map (\`brew install gh\`)"
+fi
+
+# --- python3 (collector context% + usage caches) ---
+if command -v python3 >/dev/null 2>&1; then
+  pass python3 "$(python3 --version 2>&1 | awk '{print $2}')"
+else
+  fail python3 "not found — collector context% and usage caches will be empty"
+fi
+
+# --- claude CLI (sessions + optional LLM daemons) ---
+if command -v claude >/dev/null 2>&1; then
+  pass claude "on PATH"
+else
+  warn claude "not found — the CLI you run per window and the optional summarize/classify daemons"
+fi
+
+# --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
+if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
+  pass perl "Time::HiRes present (sub-second spinner)"
+else
+  warn perl "Time::HiRes missing — dash spinner falls back to whole-second frames"
+fi
+
+printf '\n'
+if [ "$fails" -gt 0 ]; then
+  printf '%s%d fail%s, %d warn — fix the fails before installing.\n' "$R" "$fails" "$Z" "$warns"
+elif [ "$warns" -gt 0 ]; then
+  printf '%s%d warn%s — usable; the noted features degrade.\n' "$Y" "$warns" "$Z"
+else
+  printf '%sall good.%s\n' "$G" "$Z"
+fi
+exit "$fails"

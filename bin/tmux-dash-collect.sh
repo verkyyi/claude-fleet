@@ -27,6 +27,18 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
 tmux info >/dev/null 2>&1 || exit 0
 
+# python3 powers the context% and usage caches (below). It's a hard dep for
+# those, so guard it once with a diagnostic to stderr (StandardErrorPath →
+# logs/collect.launchd.log) rather than letting a `command not found` get
+# swallowed and leaving those caches silently empty forever.
+py_warned=0
+have_py3() {
+  command -v python3 >/dev/null 2>&1 && return 0
+  [ "$py_warned" = 0 ] && printf 'fleet-collect: python3 not found on PATH (%s) — context%% and usage caches will be empty\n' "$PATH" >&2
+  py_warned=1
+  return 1
+}
+
 # gh fetch TTL (issues + PR map). FLEET_GH_TTL in fleet.conf tunes staleness
 # vs API chatter; GH_TTL=0 on a one-off run forces a fetch.
 GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
@@ -119,7 +131,8 @@ done
 # NB: paths passed as ARGV, not stdin — stdin is the heredoc script (can't be both).
 CTX_PATHS=$(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
 # shellcheck disable=SC2086  # intentional word-split: each path becomes its own argv entry
-python3 - "$C" $CTX_PATHS <<'PY' 2>/dev/null
+if have_py3; then
+python3 - "$C" $CTX_PATHS <<'PY'
 import json, glob, os, sys, re
 C=sys.argv[1]
 for path in sys.argv[2:]:
@@ -142,14 +155,15 @@ for path in sys.argv[2:]:
     key=path.replace('/','_').replace(' ','_')
     open(f'{C}/ctx_{key}','w').write(f'{model}\t{ctx}')   # model<TAB>context-tokens
 PY
+fi
 
 # --- token-usage proxy (≥300s): sum across ALL session transcripts, 5h + 7d ---
 # The official rate-limit % is not exposed by any API, so this is a local proxy
 # over Claude's official limit windows (rolling 5h + 7d), weighted like limits
 # meter: output heavy, cache-read light.
 uts=$(cat "$C/usage.ts" 2>/dev/null || echo 0)
-if [ $(( $(now) - uts )) -ge 300 ]; then
-  python3 - "$C/usage" <<'PY' 2>/dev/null
+if [ $(( $(now) - uts )) -ge 300 ] && have_py3; then
+  python3 - "$C/usage" <<'PY'
 import json, glob, os, sys, time
 out=sys.argv[1]; t=time.time()
 w={'5h':t-5*3600, '7d':t-7*86400}
