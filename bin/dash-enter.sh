@@ -21,7 +21,9 @@ elif [ -f "$flag" ]; then                         # rename mode
     echo "change-prompt($NEWPROMPT)+clear-query+reload(bash $ROWS)"
   else echo "change-prompt($NEWPROMPT)+clear-query"; fi
 elif [ -n "$q" ]; then
-  bash "$BIN/dash-new-session.sh" "$q"
+  # buffered: multi-line pastes (enter per pasted newline) coalesce into ONE
+  # issue after a short quiet window — see dash-task-buffer.sh
+  bash "$BIN/dash-task-buffer.sh" "$q"
   echo "clear-query"
 else
   tmux select-window -t "$target" 2>/dev/null

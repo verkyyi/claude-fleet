@@ -11,12 +11,13 @@ REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
 
-# Throttle: a multi-line PASTE into the fzf box fires Enter once per pasted line
-# → one issue per line. Refuse a second create within 20s; the first line wins.
+# Backstop throttle (multi-line pastes are coalesced upstream by
+# dash-task-buffer.sh, so a burst reaches us as ONE call; this only guards
+# against pathological loops).
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 now=$(date +%s); last=$(cat "$C/last_issue_create" 2>/dev/null || echo 0)
-if [ $(( now - last )) -lt 20 ]; then
-  tmux display-message "issue create throttled (multi-line paste?) — wait 20s"; exit 0
+if [ $(( now - last )) -lt 5 ]; then
+  tmux display-message "issue create throttled — wait 5s"; exit 0
 fi
 echo "$now" > "$C/last_issue_create"
 
