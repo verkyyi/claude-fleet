@@ -135,6 +135,24 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 FLEET_CTX_WINDOW=200000               # 1000000 if you run 1M-context models
 ```
 
+## Multiple fleets on one machine
+
+A **fleet ≡ a tmux session ≡ one repo**. Run several at once — each pinned to a
+different repo with its own checkout — and they share one collector without
+clobbering each other (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
+
+```sh
+bin/fleet-up.sh you/webapp                 # clone-or-reuse ~/projects/webapp, open a 'webapp' session
+bin/fleet-up.sh you/infra ~/src/infra      # explicit checkout dir
+bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout
+tmux attach -t webapp
+bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache); checkout stays
+```
+
+Each fleet writes `~/.config/claude-fleet/<session>.conf` (overlays the global
+`fleet.conf`). The single global `fleet.conf` above still works as a one-fleet
+default. Set `FLEET_STEWARD_CMD` to auto-open a steward window per fleet.
+
 ## Opening links over SSH
 
 `--web`-style commands open a browser on the *remote* host — useless over

@@ -10,10 +10,30 @@
 # exactly as before.
 
 FLEET_C="${TMPDIR:-/tmp}/.claude-dash"
+# Per-fleet configs live here, one <session>.conf per fleet (Phase 2). Override
+# FLEET_CONF_DIR to relocate (used by the test harness).
+FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 
 # git remote URL (or owner/name) → owner/name. Empty if it isn't GitHub-ish.
 fleet_norm_repo() {
   printf '%s' "$1" | sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'
+}
+
+# The tmux session the caller is running in (pane-targeted, client fallback).
+fleet_current_session() {
+  local s
+  s=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  [ -z "$s" ] && s=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  printf '%s' "$s"
+}
+
+# Overlay a fleet's per-session conf ON TOP of the already-sourced global
+# fleet.conf, so FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH/... target THIS fleet.
+# Sources into the caller's shell (call it non-subshelled). No-op if absent.
+fleet_load_conf() {
+  local conf="$FLEET_CONF_DIR/${1}.conf"
+  [ -f "$conf" ] && . "$conf"
+  return 0
 }
 
 # owner/name → filesystem-safe slug (owner-name).
@@ -27,7 +47,7 @@ fleet_slug() {
 # owner/name or empty. Collector-only (runs once per cycle).
 fleet_resolve_repo_for_session() {
   local sess="$1" conf repo path
-  conf="$HOME/.config/claude-fleet/${sess}.conf"
+  conf="$FLEET_CONF_DIR/${sess}.conf"
   if [ -f "$conf" ]; then
     repo=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
     [ -n "$repo" ] && { fleet_norm_repo "$repo"; return; }

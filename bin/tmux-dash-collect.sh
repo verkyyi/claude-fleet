@@ -42,14 +42,26 @@ queue() {                          # $1=repo → add once
 }
 PRIMARY_SLUG=''
 if [ -n "$REPO" ]; then PRIMARY_SLUG=$(fleet_slug "$(fleet_norm_repo "$REPO")"); queue "$(fleet_norm_repo "$REPO")"; fi
-: > "$C/sessmap.tmp"
+SM="$C/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap
 for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
   r=$(fleet_resolve_repo_for_session "$sess")
   [ -z "$r" ] && continue
-  printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$C/sessmap.tmp"
+  printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$SM"
   queue "$r"
 done
-mv "$C/sessmap.tmp" "$C/sessmap"
+mv "$SM" "$C/sessmap"
+
+# pin repos with NO live session so their caches stay fresh (a steward watching a
+# repo you haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +
+# every configured per-fleet conf.
+for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
+if [ -d "$FLEET_CONF_DIR" ]; then
+  for cf in "$FLEET_CONF_DIR"/*.conf; do
+    [ -f "$cf" ] || continue
+    r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+  done
+fi
 
 # --- per-repo PR map + issues (TTL-gated per repo) ---
 i=0
@@ -65,7 +77,7 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
               (.statusCheckRollup // []) | if length==0 then "·"
               elif any(.conclusion=="FAILURE" or .conclusion=="CANCELLED") then "✗"
               elif any(.status!="COMPLETED") then "…" else "✓" end)' \
-      > "$C/prmap_$sg.tmp" 2>/dev/null && mv "$C/prmap_$sg.tmp" "$C/prmap_$sg"
+      > "$C/prmap_$sg.$$" 2>/dev/null && mv "$C/prmap_$sg.$$" "$C/prmap_$sg"
     now > "$C/prmap_$sg.ts"
   fi
   its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
@@ -73,7 +85,7 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees \
       --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
-      > "$C/issues_$sg.tmp" 2>/dev/null && mv "$C/issues_$sg.tmp" "$C/issues_$sg"
+      > "$C/issues_$sg.$$" 2>/dev/null && mv "$C/issues_$sg.$$" "$C/issues_$sg"
     now > "$C/issues_$sg.ts"
   fi
 done

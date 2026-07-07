@@ -105,31 +105,42 @@ Where "existing or newly-created checkout" is handled:
    (one fleet per repo).
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
    becomes `FLEET_MAIN`.
-3. Write `~/.config/claude-fleet/<session>.conf` (`FLEET_REPO`, `FLEET_MAIN`,
-   base branch from the repo's default branch).
-4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (dash,
-   steward, a shell); apply the fleet's tmux bindings/status.
-5. Steward window arms its own `/loop 45m /sweep` with its own ledger.
+3. Write `$FLEET_CONF_DIR/<session>.conf` (`FLEET_REPO`, `FLEET_MAIN`, base
+   branch from the repo's default branch).
+4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
+   `work` shell + `dash`; a `steward` window if `FLEET_STEWARD_CMD` is set).
+5. Kick the collector so the dash has data on first paint.
 
-Teardown = `tmux kill-session -t <session>`; conf + slug'd cache can be reaped
-or left.
+Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
+disk); `--purge` also removes the conf + this fleet's slug'd cache.
 
-## Migration phases
+## The fleet CLI
 
-**Phase 1 — make the data multi-repo (this is the load-bearing change).**
-- Slug the GitHub cache files: collector writes `prmap_<slug>` / `issues_<slug>`.
-- Collector builds the repo set by enumerating tmux sessions → their confs.
-- `FLEET_ID` resolution helper (`#{session_name}` → conf + slug).
-- Dash/status/backlog read the current session's slug'd files (falling back to
-  the flat `prmap`/`issues` names so a single-fleet install is unaffected).
+| Command | What it does |
+|---|---|
+| `fleet-up.sh <owner/repo> [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector |
+| `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
+| `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
 
-**Phase 2 — per-fleet config + bootstrap.**
-- `~/.config/claude-fleet/<id>.conf` resolution; `fleet-up.sh` / teardown.
-- Per-fleet steward + ledger wiring.
+`FLEET_CONF_DIR` (default `~/.config/claude-fleet`) and `FLEET_STEWARD_CMD`
+(optional per-fleet steward command) are the two knobs.
 
-**Phase 3 — polish.**
-- Optional `FLEET_REPOS` pin; janitor loops the discovered mains; docs/screens.
+## Migration phases — all shipped ✅
 
-Back-compat rule throughout: with a single fleet and no `FLEET_ID`, everything
-falls back to today's global `fleet.conf` + flat cache names, so existing
-installs keep working untouched.
+**Phase 1 ✅ — multi-repo data (the load-bearing change).** Collector writes
+`sessmap` + `prmap_<slug>`/`issues_<slug>` (repo set enumerated from live tmux
+sessions), plus the flat mirror; `fleet-lib.sh` resolves session→repo→slug;
+dash/status/backlog read the slug'd files with flat fallback.
+
+**Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
+overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
+session-spawn (`dash-new-session`/`dash-issue-session`) targets the current
+fleet's repo+checkout; optional per-fleet steward via `FLEET_STEWARD_CMD`.
+
+**Phase 3 ✅ — reach + robustness.** `FLEET_REPOS` + configured-conf **pin**
+(fetch repos with no live session); the janitor loops every fleet's checkout;
+collector temp files are PID-unique (safe if two collectors overlap).
+
+Back-compat rule throughout: with a single fleet and no per-fleet conf,
+everything falls back to the global `fleet.conf` + flat cache names, so existing
+installs keep working untouched — verified on macOS `/bin/bash` 3.2.57.

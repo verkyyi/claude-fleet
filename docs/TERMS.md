@@ -105,6 +105,22 @@ they repaint instantly:
 - **`FLEET_ID`** — the fleet's identity = its tmux session name. In the
   multi-fleet model this is the key that scopes a fleet's config and cache. See
   [ARCHITECTURE](ARCHITECTURE.md).
+- **Per-fleet conf** — `$FLEET_CONF_DIR/<session>.conf` (default
+  `~/.config/claude-fleet/`), one per fleet; it overlays the global `fleet.conf`
+  for that session. Written by `fleet-up.sh`.
+
+## Fleet lifecycle commands
+
+- **`fleet-up.sh <owner/repo> [<dir>]`** — bring up a fleet: reuse-or-clone the
+  checkout, write the per-fleet conf, open the `work` + `dash` windows, kick the
+  collector. A fleet ≡ a tmux session ≡ one repo.
+- **`fleet-down.sh <session> [--purge]`** — kill the session (the checkout is
+  always left on disk); `--purge` also removes the conf + this fleet's slug'd
+  cache.
+- **`fleet-list.sh`** — list fleets: `●` live / `○` down · name · repo · checkout.
+- **`fleet-lib.sh`** — the shared helper library the above (and the collector /
+  read-side producers) source: session→repo resolution, slug helpers, per-fleet
+  conf overlay.
 
 ---
 

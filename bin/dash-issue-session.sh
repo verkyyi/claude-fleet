@@ -6,6 +6,8 @@
 num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/fleet-lib.sh"
+fleet_load_conf "$(fleet_current_session)"   # multi-fleet: target THIS fleet's checkout
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { tmux display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"

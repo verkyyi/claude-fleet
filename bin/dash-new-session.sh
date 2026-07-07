@@ -7,6 +7,8 @@ text="$*"; text="${text#"${text%%[![:space:]]*}"}"
 [ -z "$text" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/fleet-lib.sh"
+fleet_load_conf "$(fleet_current_session)"   # multi-fleet: target THIS fleet's repo
 REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
