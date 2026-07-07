@@ -127,4 +127,52 @@ line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
   tmux capture-pane -p -S -600 -t "$w" 2>/dev/null
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" > "$C/ratelimit"; fi
+
+# --- PR/CI attention signal (every run) ---
+# Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
+# @pfg (color). window-status-format renders them after the window name and
+# tmux-sort-windows.sh treats ✗ like 'needs'. Single writer of @prci/@pfg.
+PRM=$(cat "$C/prmap" 2>/dev/null)
+US=$'\x1f'
+tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
+while IFS="$US" read -r win path cur; do
+  [ -z "$path" ] && continue
+  key=$(printf '%s' "$path" | tr '/ ' '__')
+  branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
+  bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
+  glyph=""; pfg=""
+  if [ -n "$bare" ] && [ "$bare" != "-" ]; then
+    hit=$(printf '%s\n' "$PRM" | awk -F'\t' -v x="$bare" '$1==x{print;exit}')
+    if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
+      case "$(echo "$hit"|cut -f4)" in
+        ✗) glyph="✗"; pfg="#f7768e";;   # CI failed → attention
+        ✓) glyph="✓"; pfg="#9ece6a";;   # CI green, awaiting merge
+      esac
+    fi
+  fi
+  if [ "$cur" != "$glyph" ]; then
+    tmux set-window-option -t "$win" @prci "$glyph" 2>/dev/null
+    tmux set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
+  fi
+done
+
+# --- detached-attention escalation (every run) ---
+# A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is
+# attached → run FLEET_NOTIFY_CMD (fleet.conf) with the message as $1 — plug in
+# any notifier (Slack webhook curl, WeCom bot, ntfy, …). One ping per episode.
+ESC_AFTER="${FLEET_ESCALATE_AFTER:-300}"
+if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; then
+  nowts=$(now)
+  tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{window_name}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{@escalated}${US}#{window_id}" 2>/dev/null | \
+  while IFS="$US" read -r win name st ts esc wid; do
+    [ "$st" = "needs" ] || continue
+    case "$ts" in ''|*[!0-9]*) continue;; esac
+    [ $(( nowts - ts )) -ge "$ESC_AFTER" ] || continue
+    [ "$esc" = "$ts" ] && continue
+    sum=$(head -1 "$C/summary_${wid//[^0-9]/}" 2>/dev/null | cut -c1-80)
+    msg="[claude-fleet] session ${name} blocked on your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+ — ${sum}}"
+    $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1 \
+      && tmux set-window-option -t "$win" @escalated "$ts" 2>/dev/null
+  done
+fi
 exit 0

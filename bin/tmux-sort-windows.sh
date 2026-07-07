@@ -22,7 +22,7 @@ while :; do
   sleep 1   # coalesce bursts — parallel sessions often flip state together
 
   # tmux lists windows in index order; NR==1 is the pinned hub.
-  snap=$(tmux list-windows -t "$SESS" -F '#{window_id} #{window_index} #{@claude_state}' 2>/dev/null)
+  snap=$(tmux list-windows -t "$SESS" -F '#{window_id} #{window_index} #{@claude_state} #{@prci}' 2>/dev/null)
   [ -n "$snap" ] || exit 0
   pin_idx=$(printf '%s\n' "$snap" | awk 'NR==1{print $2}')
 
@@ -30,6 +30,7 @@ while :; do
       r = 4
       if ($3 == "needs") r = 0; else if ($3 == "done") r = 1
       else if ($3 == "working") r = 2; else if ($3 == "looping") r = 3
+      if ($4 == "✗") r = 0   # open PR with failing CI = needs attention
       printf "%d %06d %s\n", r, $2, $1
     }' | sort -n -k1,1 -k2,2 | awk '{print $3}')
   [ -n "$want" ] || exit 0
