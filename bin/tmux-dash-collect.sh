@@ -170,7 +170,9 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; 
     [ $(( nowts - ts )) -ge "$ESC_AFTER" ] || continue
     [ "$esc" = "$ts" ] && continue
     sum=$(head -1 "$C/summary_${wid//[^0-9]/}" 2>/dev/null | cut -c1-80)
-    msg="[claude-fleet] session ${name} blocked on your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+ — ${sum}}"
+    msg="# session blocked
+**${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+
+> doing: ${sum}}"
     $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1 \
       && tmux set-window-option -t "$win" @escalated "$ts" 2>/dev/null
   done
