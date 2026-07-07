@@ -88,12 +88,13 @@ while IFS=$US read -r sess idx name path state ts wid iss; do
       "$(c "$GY")" "$(fld 6 "$msht")" "$R" \
       "$(c "$pcolr")" "$(fld 4 "$pct")" "$R")
   else
-    # full: glyph1·idx3·name22·issue6·model6·ctx4·summary(one line)
+    # full: glyph1·idx3·name22·issue6·PR12·model6·ctx4·summary(one line)
     issd=$([ -n "$iss" ] && printf '#%s' "$iss" || printf '')
-    disp=$(printf '%s%s%s %s%s%s %s%s%s %s%s%s %s%s%s %s%s%s  %s%s%s' \
+    disp=$(printf '%s%s%s %s%s%s %s%s%s %s%s%s %s%s%s %s%s%s %s%s%s  %s%s%s' \
       "$(c "$gc")" "$gl" "$R" "$(c "$GY")" "$(fld 3 "$idx")" "$R" \
       "$(c "$nmcol")" "$(fld 22 "$name")" "$R" \
       "$(c "$GN")" "$(fld 6 "$issd")" "$R" \
+      "$(c "$pcol")" "$(fld 12 "$ptxt")" "$R" \
       "$(c "$GY")" "$(fld 6 "$msht")" "$R" \
       "$(c "$pcolr")" "$(fld 4 "$pct")" "$R" \
       "$(c "$TX")" "$smry" "$R")

@@ -21,3 +21,9 @@ FLEET_CTX_WINDOW=200000
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 #FLEET_STATUS_CONTAINER="claude-dev"
+
+# Detached-attention escalation: when a session is blocked on your input for
+# FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
+# runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
+#FLEET_NOTIFY_CMD="$HOME/bin/notify-me"     # e.g. curl a Slack/WeCom webhook
+#FLEET_ESCALATE_AFTER=300
