@@ -1,0 +1,12 @@
+# Fires claude-fleet-classify.service. Parity with the launchd plist:
+# StartInterval=300 + RunAtLoad=true.
+[Unit]
+Description=claude-fleet classifier timer (every 300s)
+
+[Timer]
+OnStartupSec=30
+OnUnitActiveSec=300
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,58 @@
+# Linux systemd user units
+
+Parity with `launchd/` for Linux. One always-on service (spinner) plus four
+`.timer` + `.service` pairs matching the launchd `StartInterval`s:
+
+| Unit | Cadence | launchd equivalent | Optional? |
+|---|---|---|---|
+| `claude-fleet-spinner.service` | always-on (`Restart=always`) | `com.claude-fleet.spinner` (KeepAlive) | required |
+| `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
+| `claude-fleet-classify.timer` | every 300s | `com.claude-fleet.classify` | optional (LLM tokens) |
+| `claude-fleet-summarize.timer` | every 180s | `com.claude-fleet.summarize` | optional (LLM tokens) |
+| `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
+
+Every file is `__HOME__`-templated exactly like the plists — substitute the
+real home dir at install time.
+
+## Install
+
+```sh
+# 1. Substitute __HOME__ and drop the units into the user unit dir.
+mkdir -p ~/.config/systemd/user ~/.claude/fleet/logs
+for f in systemd/*.service systemd/*.timer; do
+  sed "s|__HOME__|$HOME|g" "$f" > ~/.config/systemd/user/"$(basename "$f")"
+done
+
+# 2. Reload, then enable. Enable the .timer (not the .service) for the
+#    interval units; enable the spinner .service directly.
+systemctl --user daemon-reload
+systemctl --user enable --now claude-fleet-spinner.service
+systemctl --user enable --now claude-fleet-collect.timer
+# optional:
+systemctl --user enable --now claude-fleet-classify.timer
+systemctl --user enable --now claude-fleet-summarize.timer
+systemctl --user enable --now claude-fleet-worktree-autoclean.timer
+
+# 3. Keep the units running when you are not logged in (detached fleets).
+loginctl enable-linger "$USER"
+```
+
+## Verify / inspect
+
+```sh
+systemctl --user list-timers 'claude-fleet-*'
+systemctl --user status claude-fleet-spinner.service
+journalctl --user -u claude-fleet-collect.service --since '5 min ago'
+```
+
+## Uninstall
+
+```sh
+for u in spinner.service collect.timer classify.timer summarize.timer \
+         worktree-autoclean.timer; do
+  systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
+done
+rm -f ~/.config/systemd/user/claude-fleet-*.{service,timer}
+systemctl --user daemon-reload
+# loginctl disable-linger "$USER"   # if nothing else needs lingering
+```
