@@ -114,8 +114,7 @@ the two optional LLM daemons)
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix j` | dashboard — jump / new task / bind issue / rename |
-| `prefix b` | toggle the backlog window (roadmap \| unplanned) |
-| `prefix i` | popup: open PRs (+CI) & issues for the current pane's repo |
+| `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix r` | reload tmux config |
 
 ## Configuration
