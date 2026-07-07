@@ -47,6 +47,22 @@ fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
 }
 
+# issue title → short kebab window name (lowercase, ascii-alnum + single
+# hyphens, ≤32 chars, no leading/trailing hyphen). Used to name a session's
+# tmux window after the issue CONTENT instead of a bare "issue-<N>". Prints
+# empty when the title has no usable ascii-alnum content (non-latin titles,
+# symbols-only) — callers fall back to "issue-<N>". LC_ALL=C so tr classes
+# operate byte-wise (multibyte chars collapse to hyphens, not errors).
+fleet_win_name() {
+  printf '%s' "$1" \
+    | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C tr -c 'a-z0-9\n' '-' \
+    | LC_ALL=C tr -s '-' \
+    | sed -e 's/^-//' -e 's/-$//' \
+    | cut -c1-32 \
+    | sed -e 's/-$//'
+}
+
 # EXPENSIVE: resolve a tmux session's repo. Order: per-session conf override
 # (~/.config/claude-fleet/<sess>.conf, Phase 2), else the origin remote of the
 # first git checkout among its windows, else the global FLEET_REPO. Prints

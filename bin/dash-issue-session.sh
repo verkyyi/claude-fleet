@@ -2,8 +2,8 @@
 # dash-issue-session.sh <issue-number> [<target-session>] — spawn a Claude
 # session to work a GitHub issue: a git worktree issue-<N> off the base branch +
 # a tmux window running `claude` seeded to read, claim, and implement the issue.
-# The window is bound to the issue via the @issue window option (shown in the
-# dash and backlog).
+# The window is NAMED after the issue title (falling back to issue-<N>) and bound
+# to the issue via the @issue window option (both shown in the dash and backlog).
 #
 # With no <target-session> the window is created in the CALLER's fleet (the
 # interactive dash/backlog path). Pass <target-session> to spawn into a specific
@@ -53,6 +53,18 @@ REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 
 BASE="${FLEET_BASE_BRANCH:-main}"
 
 wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
+
+# Name the tmux window after the issue CONTENT, not a bare "issue-<N>". Resolve
+# the title from THIS fleet's cached issues (no network — the dash writes the
+# optimistic row before spawning; the collector fills it for backlog picks),
+# and fall back to `gh issue view` only on a cache miss. The git branch/worktree
+# stay "issue-<N>" (the PR map keys off the branch) — only the display name
+# changes. Empty/non-latin titles fall back to the slug.
+ISSUES=$(fleet_cache issues "$SESS")
+title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
+[ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
+
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 tf="$C/task_$slug.txt"
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
@@ -64,8 +76,9 @@ if [ ! -d "$wt" ]; then
     || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
     || { tmux display-message "issues: worktree add failed for $slug"; exit 1; }
 fi
-# Capture the new window-id and drive every follow-up op through it — targeting
-# by "$SESS:$slug" name would bind/select the wrong window the moment that name
+# Capture the new window-id and drive every follow-up op through it — the window
+# name is now the issue-title slug (not a unique handle), so targeting by
+# "$SESS:$slug" name would bind/select the wrong window the moment that name
 # collides (tmux errors "can't find window"); matches steward-session.sh /
 # fleet-up.sh. Create in the fleet's session explicitly (the trailing ':' picks
 # the next free window index) so it works headless with no client attached.
@@ -77,7 +90,7 @@ fi
 # select-window below — so skipping select-window alone isn't enough to keep the
 # active window put. Interactive spawns omit -d and select the window by id.
 detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
-win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$slug" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
+win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Only steal focus for the interactive path; a headless orchestrator spawn must
