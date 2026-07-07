@@ -27,6 +27,10 @@ FLEET_CTX_WINDOW=200000
 # opt-in fill TARGET, not a ceiling). Default 8; set to 0 to disable entirely.
 FLEET_GLOBAL_MAX_SESSIONS=8
 
+# Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
+# before re-fetching from gh. Lower = fresher body/comments, more API chatter.
+#FLEET_ISSUE_TTL=180
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 #FLEET_STATUS_CONTAINER="claude-dev"
 

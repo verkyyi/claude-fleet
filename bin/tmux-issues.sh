@@ -31,12 +31,15 @@ run_fzf() {
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header='type=filter · enter=work issue · tab=collapse group · ⌃o=web · ⌃r · esc' \
-    --preview-window=hidden \
+    --header='type=filter · enter=work · ⌃x=close · ⌃p=preview · tab=collapse · ⌃o=web · ⌃r · esc' \
+    --preview "bash $BIN/tmux-issue-preview.sh {1}" \
+    --preview-window='right,46%,wrap,border-left' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
+    --bind "ctrl-p:toggle-preview" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
+    --bind "ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
     >/dev/null 2>&1
 }

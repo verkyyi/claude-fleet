@@ -38,7 +38,11 @@ demo repo data.</sub>
 - **GitHub backlog panel** (`prefix+b`): open issues grouped by milestone
   (roadmap | unplanned panes). `Enter` on an issue creates a worktree
   `issue-<N>` off your base branch and starts `claude` seeded to read, claim,
-  and implement it. Issues being worked show `▶ <window>`.
+  and implement it. Issues being worked show `▶ <window>`. Manage issues
+  without leaving tmux: a live **preview pane** shows the highlighted issue's
+  body, labels, milestone, assignees, and recent comments (`Ctrl-P` toggles
+  it); `Ctrl-X` closes (triages) an issue after a y/n confirm; `Ctrl-O` opens
+  it on the web.
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
   git status per worktree, the repo's PR/CI map, open issues, per-session
