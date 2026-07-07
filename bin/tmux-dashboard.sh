@@ -8,7 +8,7 @@
 #   Ctrl-E rename window · Ctrl-R refresh now · Esc/q relaunch (it's always-on)
 # Auto-reloads every REFRESH sec (default 3). Run in a dedicated 'dash' window
 # (prefix+j creates one). Env: REFRESH, DASH_COMPACT=1.
-REFRESH="${REFRESH:-3}"
+REFRESH="${REFRESH:-1}"   # 1s repaint: rows are cache-only reads, spinner steps once per second
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"
