@@ -7,8 +7,8 @@
 #   issue and spawn a worktree session bound to it · Ctrl-G bind window↔issue ·
 #   Ctrl-E rename window · Ctrl-R refresh now · Esc/q relaunch (it's always-on)
 # Auto-reloads every REFRESH sec (default 3). Run in a dedicated 'dash' window
-# (prefix+j creates one). Env: REFRESH, DASH_COMPACT=1.
-REFRESH="${REFRESH:-1}"   # 1s repaint: rows are cache-only reads, spinner steps once per second
+# (prefix+j creates one). Env: REFRESH.
+REFRESH="${REFRESH:-0.25}"   # 4Hz repaint: the rows producer is exec-fork-free (~45ms), spinner steps a frame per repaint
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"
