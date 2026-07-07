@@ -29,7 +29,8 @@ mrank(){ case "$1" in "$NOMS") echo 99; return;; esac
 # active bindings: issue-number → session window name (from @issue window options)
 # NB tmux -F emits LITERAL \t → must inject a real tab.
 TAB=$'\t'
-ACTIVE=$(tmux list-windows -a -F "#{@issue}${TAB}#{window_name}" 2>/dev/null | awk -F'\t' '$1!=""')
+ACTIVE=$(tmux list-windows -a -F "#{session_name}${TAB}#{@issue}${TAB}#{window_name}" 2>/dev/null \
+  | awk -F'\t' -v s="${FLEET_SESSION:-}" '$2!="" && (s=="" || $1==s){print $2"\t"$3}')
 active_win(){ printf '%s\n' "$ACTIVE" | awk -F'\t' -v n="$1" '$1==n{print $2; exit}'; }
 
 buf=""

@@ -13,6 +13,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"
 
+# Scope rows to THIS fleet's tmux session (strict per-fleet). The rows producer and
+# its reload-binds inherit FLEET_SESSION; unset ⇒ show-all (single-fleet back-compat).
+# Same convention tmux-issues.sh uses for the backlog panel.
+. "$BIN/fleet-lib.sh" 2>/dev/null || true
+FLEET_SESSION=$(fleet_current_session 2>/dev/null); export FLEET_SESSION
+
 if ! command -v fzf >/dev/null 2>&1; then
   echo "fzf not found — install it (brew install fzf) for the interactive dash."; sleep 5; exit 1
 fi

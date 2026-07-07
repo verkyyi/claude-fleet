@@ -79,6 +79,9 @@ prmapn_for() {
 buf=""
 while IFS=$US read -r sess idx name path state ts wid iss; do
   [ -z "$name" ] && continue
+  # strict per-fleet: only windows from the viewing dash's own tmux session.
+  # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
+  [ -n "$FLEET_SESSION" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   key=${path//\//_}; key=${key// /_}
   prmapn_for "$sess"   # PMN = this fleet's prmap (flat fallback)
