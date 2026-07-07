@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh busy" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh needs bell" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh done" }
+        ]
+      }
+    ]
+  }
+}

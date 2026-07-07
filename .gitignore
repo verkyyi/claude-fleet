@@ -1,0 +1,4 @@
+logs/
+fleet.conf
+*.log
+.DS_Store

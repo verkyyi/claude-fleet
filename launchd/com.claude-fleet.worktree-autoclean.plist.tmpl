@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-fleet.worktree-autoclean</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/worktree-autoclean.sh</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>__HOME__</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><false/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardErrorPath</key><string>__HOME__/.claude/fleet/logs/worktree-autoclean.launchd.log</string>
+  <key>StandardOutPath</key><string>__HOME__/.claude/fleet/logs/worktree-autoclean.launchd.log</string>
+</dict></plist>

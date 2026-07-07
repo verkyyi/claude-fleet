@@ -1,0 +1,70 @@
+<svg class="rich-terminal" viewBox="0 0 2092 74.4" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-2998640314-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-2998640314-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-2998640314-r1 { fill: #7aa2f7;font-weight: bold }
+.terminal-2998640314-r2 { fill: #565f89 }
+.terminal-2998640314-r3 { fill: #1a1b26;font-weight: bold }
+.terminal-2998640314-r4 { fill: #6bb8e0 }
+.terminal-2998640314-r5 { fill: #a9b1d6 }
+.terminal-2998640314-r6 { fill: #f7768e }
+.terminal-2998640314-r7 { fill: #9ece6a }
+.terminal-2998640314-r8 { fill: #a78bde }
+.terminal-2998640314-r9 { fill: #9d7cd8 }
+.terminal-2998640314-r10 { fill: #7dcfff }
+.terminal-2998640314-r11 { fill: #7aa2f7 }
+.terminal-2998640314-r12 { fill: #e0af68 }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-2998640314-clip-terminal">
+      <rect x="0" y="0" width="2073.0" height="23.4" />
+    </clipPath>
+    
+    </defs>
+
+    <rect fill="#1a1b26" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="2090" height="72.4" rx="8"/><text class="terminal-2998640314-title" fill="#a9b1d6" text-anchor="middle" x="1045" y="27">claude-fleet&#160;—&#160;window&#160;list&#160;attention&#160;signals</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-2998640314-clip-terminal)">
+    <rect fill="#a9b1d6" x="85.4" y="1.5" width="134.2" height="24.65" shape-rendering="crispEdges"/>
+    <g class="terminal-2998640314-matrix">
+    <text class="terminal-2998640314-r1" x="0" y="20" textLength="73.2" clip-path="url(#terminal-2998640314-line-0)">&#160;main&#160;</text><text class="terminal-2998640314-r2" x="73.2" y="20" textLength="12.2" clip-path="url(#terminal-2998640314-line-0)">│</text><text class="terminal-2998640314-r3" x="85.4" y="20" textLength="134.2" clip-path="url(#terminal-2998640314-line-0)">&#160;&#160;&#160;1:dash&#160;&#160;</text><text class="terminal-2998640314-r4" x="219.6" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">⠧&#160;</text><text class="terminal-2998640314-r5" x="244" y="20" textLength="158.6" clip-path="url(#terminal-2998640314-line-0)">2:issue-231&#160;&#160;</text><text class="terminal-2998640314-r6" x="402.6" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">!&#160;</text><text class="terminal-2998640314-r6" x="427" y="20" textLength="158.6" clip-path="url(#terminal-2998640314-line-0)">3:issue-198&#160;&#160;</text><text class="terminal-2998640314-r7" x="585.6" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">✓&#160;</text><text class="terminal-2998640314-r7" x="610" y="20" textLength="207.4" clip-path="url(#terminal-2998640314-line-0)">4:auth-refactor&#160;&#160;</text><text class="terminal-2998640314-r8" x="817.4" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">⠼&#160;</text><text class="terminal-2998640314-r9" x="841.8" y="20" textLength="158.6" clip-path="url(#terminal-2998640314-line-0)">5:issue-245&#160;&#160;</text><text class="terminal-2998640314-r10" x="1000.4" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">⠋&#160;</text><text class="terminal-2998640314-r5" x="1024.8" y="20" textLength="463.6" clip-path="url(#terminal-2998640314-line-0)">6:flaky-ci-hunt&#160;&#160;&#160;&#160;7:backlog&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2998640314-r11" x="1488.4" y="20" textLength="48.8" clip-path="url(#terminal-2998640314-line-0)">CPU&#160;</text><text class="terminal-2998640314-r7" x="1537.2" y="20" textLength="48.8" clip-path="url(#terminal-2998640314-line-0)">16%&#160;</text><text class="terminal-2998640314-r2" x="1586" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">│&#160;</text><text class="terminal-2998640314-r11" x="1610.4" y="20" textLength="48.8" clip-path="url(#terminal-2998640314-line-0)">MEM&#160;</text><text class="terminal-2998640314-r12" x="1659.2" y="20" textLength="146.4" clip-path="url(#terminal-2998640314-line-0)">10.9G/16.0G&#160;</text><text class="terminal-2998640314-r2" x="1805.6" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">│&#160;</text><text class="terminal-2998640314-r11" x="1830" y="20" textLength="109.8" clip-path="url(#terminal-2998640314-line-0)">5&#160;claude&#160;</text><text class="terminal-2998640314-r2" x="1939.8" y="20" textLength="24.4" clip-path="url(#terminal-2998640314-line-0)">│&#160;</text><text class="terminal-2998640314-r11" x="1964.2" y="20" textLength="85.4" clip-path="url(#terminal-2998640314-line-0)">devbox&#160;</text><text class="terminal-2998640314-r5" x="2074" y="20" textLength="12.2" clip-path="url(#terminal-2998640314-line-0)">
+</text>
+    </g>
+    </g>
+</svg>

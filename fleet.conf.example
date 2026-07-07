@@ -1,0 +1,23 @@
+# claude-fleet configuration — copy to <install-dir>/fleet.conf and edit.
+# Sourced by the fleet scripts (plain shell; keep it assignments-only).
+
+# The GitHub repo whose issues are your backlog (owner/name). Required for the
+# backlog panel, issue-bound sessions, and PR/CI cells.
+FLEET_REPO="you/your-repo"
+
+# Main checkout of that repo — issue worktrees are created as SIBLINGS of this
+# directory (your-repo-issue-123 next to your-repo).
+FLEET_MAIN="$HOME/projects/your-repo"
+
+# Branch new work forks from (and merged-ness is measured against).
+FLEET_BASE_BRANCH="main"
+
+# Branches the worktree janitor must never touch (extended regex).
+FLEET_PROTECTED_RE="^(master|main|develop|test)$"
+
+# Context window used for the dash's ctx% column (tokens). 200000 for standard
+# plans; 1000000 if your sessions run 1M-context models.
+FLEET_CTX_WINDOW=200000
+
+# Optional: a docker container name to show as ●/○ in the status bar right side.
+#FLEET_STATUS_CONTAINER="claude-dev"
