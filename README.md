@@ -60,7 +60,7 @@ Claude Code hooks (PreToolUse/PostToolUse/Stop/Notification)
       │  slow, semantic                                            colors/glyphs
 LLM classifier (haiku, ~5min, change-gated)                        + urgency sort
       
-collector daemon (45s) ──► cache files ──► fzf dashboard / backlog panels
+collector daemon (60s) ──► cache files ──► fzf dashboard / backlog panels
   git · gh PRs+issues ·                     (read-only producers, render instantly)
   ctx tokens · usage proxy
 summarizer daemon (haiku, 3min, change-gated) ──► one-line summary column

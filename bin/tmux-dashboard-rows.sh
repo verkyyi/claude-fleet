@@ -48,11 +48,40 @@ model_v() { case "$1" in
 PRMAP=""; [ -s "$C/prmap" ] && PRMAP=$(<"$C/prmap")
 PRMAPN=$'\n'"$PRMAP"
 
+# multi-fleet: each row matches against ITS fleet's prmap (session→slug via the
+# collector's sessmap). Preloaded here into indexed arrays so the hot loop stays
+# fork-free; falls back to the flat PRMAP when nothing resolves (single-fleet).
+declare -a MS_SESS MS_SLUG PS_SLUG PS_DATA
+if [ -s "$C/sessmap" ]; then
+  while IFS=$'\t' read -r _s _sl _r; do
+    [ -z "$_s" ] && continue
+    MS_SESS+=("$_s"); MS_SLUG+=("$_sl")
+    case " ${PS_SLUG[*]} " in *" $_sl "*) ;; *)
+      _d=""; [ -s "$C/prmap_$_sl" ] && _d=$(<"$C/prmap_$_sl")
+      PS_SLUG+=("$_sl"); PS_DATA+=("$_d");;
+    esac
+  done < "$C/sessmap"
+fi
+# PMN = newline-prefixed prmap for session $1 (fallback: flat PRMAPN)
+prmapn_for() {
+  local s="$1" i n=${#MS_SESS[@]} sl j m
+  PMN="$PRMAPN"
+  for ((i=0;i<n;i++)); do
+    [ "${MS_SESS[$i]}" = "$s" ] || continue
+    sl="${MS_SLUG[$i]}"; m=${#PS_SLUG[@]}
+    for ((j=0;j<m;j++)); do
+      [ "${PS_SLUG[$j]}" = "$sl" ] && { PMN=$'\n'"${PS_DATA[$j]}"; return; }
+    done
+    return
+  done
+}
+
 buf=""
 while IFS=$US read -r sess idx name path state ts wid iss; do
   [ -z "$name" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   key=${path//\//_}; key=${key// /_}
+  prmapn_for "$sess"   # PMN = this fleet's prmap (flat fallback)
 
   branch='-'; dirty=''
   [ -f "$C/git_$key" ] && { IFS=$'\t' read -r branch dirty < "$C/git_$key" || :; }
@@ -69,8 +98,8 @@ while IFS=$US read -r sess idx name path state ts wid iss; do
     b2=$b1; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
     b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
     for bare in "$b1" "$b3" "$b2"; do
-      tail=${PRMAPN#*$'\n'"$bare"$'\t'}
-      if [ "$tail" != "$PRMAPN" ]; then
+      tail=${PMN#*$'\n'"$bare"$'\t'}
+      if [ "$tail" != "$PMN" ]; then
         line=${tail%%$'\n'*}
         num=${line%%$'\t'*}; rest=${line#*$'\t'}; st=${rest%%$'\t'*}; ci=${rest#*$'\t'}
         case "$st" in

@@ -77,13 +77,22 @@ The shared collector reads *all* of them to build the repo set.
 
 ```
 $TMPDIR/.claude-dash/
+  sessmap            # session<TAB>slug<TAB>repo — the session→repo map (collector)
   usage              # shared (account-global)
   ratelimit          # shared
   git_<key>          # shared (per worktree)
   ctx_<key>          # shared (per Claude session)
   prmap_<slug>       # per repo   (slug = owner-name)
   issues_<slug>      # per repo
+  prmap / issues     # flat mirror of the PRIMARY repo (single-fleet back-compat)
 ```
+
+The collector resolves each live tmux session → its repo (per-session conf
+override, else the session's checkout origin remote) and records it in
+`sessmap`. Read-side producers map their session → slug via `sessmap` (fork-free)
+and read the slug'd cache, falling back to the flat `prmap`/`issues` when nothing
+resolves — so a single-fleet install is byte-identical to before. The shared
+helpers live in `bin/fleet-lib.sh`.
 
 A fleet's dash/status/backlog reads the shared files plus its own
 `prmap_<slug>` / `issues_<slug>` (slug derived from that session's `FLEET_REPO`).

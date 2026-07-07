@@ -7,13 +7,18 @@
 MODE="${1:-all}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 C="${TMPDIR:-/tmp}/.claude-dash"
+BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-lib.sh"
+# this fleet's issues cache (slug'd via sessmap; flat fallback). FLEET_SESSION is
+# exported by tmux-issues.sh so reload-binds inherit it.
+SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
 IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; RD='247;118;142'; CY='125;207;255'
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
-[ -s "$C/issues" ] || { printf '%s%s(loading issues…)%s\n' "$US" "$(c "$GY")" "$R"; exit 0; }
+[ -s "$SRC" ] || { printf '%s%s(loading issues…)%s\n' "$US" "$(c "$GY")" "$R"; exit 0; }
 
 # rank milestones: version-sorted order (so "Week 2" < "Week 10"), no-milestone last
-MS_LIST=$(cut -f1 "$C/issues" | grep -vxF "$NOMS" | sort -Vu)
+MS_LIST=$(cut -f1 "$SRC" | grep -vxF "$NOMS" | sort -Vu)
 mrank(){ case "$1" in "$NOMS") echo 99; return;; esac
   local r; r=$(printf '%s\n' "$MS_LIST" | grep -nxF "$1" | cut -d: -f1)
   echo "${r:-98}"; }
@@ -38,7 +43,7 @@ while IFS=$'\t' read -r ms num asg title; do
       "$(c "$GN")" "$num" "$R" "$(c "$TX")" "${asg:-·}" "$R" "$(c "$GY")" "$title" "$R")
   fi
   buf+="$r	$ms	$n	$row"$'\n'
-done < "$C/issues"
+done < "$SRC"
 
 # collapse state (milestone names, one per line) + per-milestone counts
 COLLAPSED=""; [ -f "$C/collapsed" ] && COLLAPSED=$(cat "$C/collapsed")

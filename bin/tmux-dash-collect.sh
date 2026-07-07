@@ -2,10 +2,13 @@
 # tmux-dash-collect.sh — background collector for the dash. Owns ALL the slow /
 # external status work and writes it to cache files; the dash producer only READS
 # these, so the dashboard renders instantly. Run from launchd
-# (com.claude-fleet.collect, StartInterval ~45s) or a systemd user timer.
+# (com.claude-fleet.collect, StartInterval 60s) or a systemd user timer.
 # Writes under $C = $TMPDIR/.claude-dash:
-#   prmap            — branch<TAB>#num<TAB>state<TAB>ci  (gh, ≥90s)
-#   issues           — milestone<TAB>#num<TAB>assignee<TAB>title (gh, ≥90s)
+#   sessmap          — session<TAB>slug<TAB>repo  (one row per live tmux session)
+#   prmap_<slug>     — branch<TAB>#num<TAB>state<TAB>ci   per repo (gh, ≥90s)
+#   issues_<slug>    — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
+#   prmap / issues   — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
+#                      for single-fleet back-compat (un-migrated readers)
 #   git_<key>        — branch<TAB>dirty  per live worktree (every run)
 #   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
 #   usage            — token-consumption proxy 5h/7d       (≥300s)
@@ -13,6 +16,7 @@
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/fleet-lib.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
@@ -23,28 +27,61 @@ tmux info >/dev/null 2>&1 || exit 0
 # vs API chatter; GH_TTL=0 on a one-off run forces a fetch.
 GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
 
-# --- PR map ---
-prts=$(cat "$C/prmap.ts" 2>/dev/null || echo 0)
-if [ -n "$REPO" ] && [ $(( $(now) - prts )) -ge "$GH_TTL" ] && command -v gh >/dev/null 2>&1; then
-  gh pr list --repo "$REPO" --state all --limit 100 \
-    --json number,headRefName,state,statusCheckRollup \
-    --jq 'group_by(.headRefName)[] | max_by(.number) |
-          .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + (
-            (.statusCheckRollup // []) | if length==0 then "·"
-            elif any(.conclusion=="FAILURE" or .conclusion=="CANCELLED") then "✗"
-            elif any(.status!="COMPLETED") then "…" else "✓" end)' \
-    > "$C/prmap.tmp" 2>/dev/null && mv "$C/prmap.tmp" "$C/prmap"
-  now > "$C/prmap.ts"
-fi
+# --- resolve the repo set from live tmux sessions (multi-fleet) ---
+# Each tmux session ≡ one fleet ≡ one repo. Seed the fetch queue with the primary
+# FLEET_REPO (so its flat mirror stays fresh even with no session), then add every
+# other repo a live session resolves to. Write sessmap for the read-side producers.
+declare -a Q_REPO Q_SLUG          # unique (repo,slug) fetch queue (indexed arrays; bash 3.2 ok)
+SEEN=' '
+queue() {                          # $1=repo → add once
+  local r="$1" s
+  [ -z "$r" ] && return
+  s=$(fleet_slug "$r")
+  case "$SEEN" in *" $s "*) return;; esac
+  SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
+}
+PRIMARY_SLUG=''
+if [ -n "$REPO" ]; then PRIMARY_SLUG=$(fleet_slug "$(fleet_norm_repo "$REPO")"); queue "$(fleet_norm_repo "$REPO")"; fi
+: > "$C/sessmap.tmp"
+for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
+  r=$(fleet_resolve_repo_for_session "$sess")
+  [ -z "$r" ] && continue
+  printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$C/sessmap.tmp"
+  queue "$r"
+done
+mv "$C/sessmap.tmp" "$C/sessmap"
 
-# --- GitHub open issues (backlog source of truth) → cache ---
-its=$(cat "$C/issues.ts" 2>/dev/null || echo 0)
-if [ -n "$REPO" ] && [ $(( $(now) - its )) -ge "$GH_TTL" ] && command -v gh >/dev/null 2>&1; then
-  gh issue list --repo "$REPO" --state open --limit 300 \
-    --json number,title,milestone,assignees \
-    --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
-    > "$C/issues.tmp" 2>/dev/null && mv "$C/issues.tmp" "$C/issues"
-  now > "$C/issues.ts"
+# --- per-repo PR map + issues (TTL-gated per repo) ---
+i=0
+while [ "$i" -lt "${#Q_REPO[@]}" ]; do
+  rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
+  command -v gh >/dev/null 2>&1 || break
+  pts=$(cat "$C/prmap_$sg.ts" 2>/dev/null || echo 0)
+  if [ $(( $(now) - pts )) -ge "$GH_TTL" ]; then
+    gh pr list --repo "$rp" --state all --limit 100 \
+      --json number,headRefName,state,statusCheckRollup \
+      --jq 'group_by(.headRefName)[] | max_by(.number) |
+            .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + (
+              (.statusCheckRollup // []) | if length==0 then "·"
+              elif any(.conclusion=="FAILURE" or .conclusion=="CANCELLED") then "✗"
+              elif any(.status!="COMPLETED") then "…" else "✓" end)' \
+      > "$C/prmap_$sg.tmp" 2>/dev/null && mv "$C/prmap_$sg.tmp" "$C/prmap_$sg"
+    now > "$C/prmap_$sg.ts"
+  fi
+  its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
+  if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
+    gh issue list --repo "$rp" --state open --limit 300 \
+      --json number,title,milestone,assignees \
+      --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
+      > "$C/issues_$sg.tmp" 2>/dev/null && mv "$C/issues_$sg.tmp" "$C/issues_$sg"
+    now > "$C/issues_$sg.ts"
+  fi
+done
+
+# --- back-compat flat mirror: PRIMARY repo → the un-slug'd prmap/issues names ---
+if [ -n "$PRIMARY_SLUG" ]; then
+  [ -s "$C/prmap_$PRIMARY_SLUG" ]  && cp "$C/prmap_$PRIMARY_SLUG"  "$C/prmap"
+  [ -s "$C/issues_$PRIMARY_SLUG" ] && cp "$C/issues_$PRIMARY_SLUG" "$C/issues"
 fi
 
 # --- git per live worktree (every run) ---
@@ -132,17 +169,19 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" > "$C/ratelimit"; fi
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
 # @pfg (color). window-status-format renders them after the window name and
 # tmux-sort-windows.sh treats ✗ like 'needs'. Single writer of @prci/@pfg.
-PRM=$(cat "$C/prmap" 2>/dev/null)
 US=$'\x1f'
-tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
-while IFS="$US" read -r win path cur; do
+tmux list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
+while IFS="$US" read -r sess win path cur; do
   [ -z "$path" ] && continue
+  # each window matches against ITS fleet's prmap (slug from sessmap), flat fallback
+  slug=$(fleet_slug_cached "$sess")
+  prmf="$C/prmap"; [ -n "$slug" ] && [ -s "$C/prmap_$slug" ] && prmf="$C/prmap_$slug"
   key=$(printf '%s' "$path" | tr '/ ' '__')
   branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   glyph=""; pfg=""
   if [ -n "$bare" ] && [ "$bare" != "-" ]; then
-    hit=$(printf '%s\n' "$PRM" | awk -F'\t' -v x="$bare" '$1==x{print;exit}')
+    hit=$(awk -F'\t' -v x="$bare" '$1==x{print;exit}' "$prmf" 2>/dev/null)
     if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
       case "$(echo "$hit"|cut -f4)" in
         ✗) glyph="✗"; pfg="#f7768e";;   # CI failed → attention

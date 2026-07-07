@@ -26,7 +26,7 @@ nests three levels, and this is where the confusing vocabulary starts:
 ## The moving parts (things that run)
 
 - **Collector** — `bin/tmux-dash-collect.sh`. The background data-gatherer.
-  Every ~20–45s it does all the slow/external work — calls the GitHub API (open
+  Every ~60s it does all the slow/external work — calls the GitHub API (open
   PRs + their CI state, open issues), runs `git status` on each worktree, counts
   context tokens per Claude session, scrapes usage/rate-limit — and writes each
   result to a small **cache file**. It renders *nothing*. Everything you see is a
