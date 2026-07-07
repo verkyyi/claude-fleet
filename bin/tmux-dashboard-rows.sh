@@ -28,7 +28,11 @@ age() { local t="$1"; case "$t" in ''|*[!0-9]*) printf '·'; return;; esac
   else printf '%dd' $(( s/86400 )); fi; }
 gcolor() { case "$1" in needs) printf '%s' "$RD";; working) printf '%s' "$CY";;
   looping) printf '%s' "$IN";; done) printf '%s' "$GN";; *) printf '%s' "$GY";; esac; }
-gchar()  { case "$1" in needs) printf '!';; working) printf '⠿';;
+# working glyph rotates: one braille frame per repaint (clock-derived, so each
+# reload advances it — motion = alive; looping stays a static ↻)
+SPINF='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+FRAME=${SPINF:$(( $(now) % 10 )):1}
+gchar()  { case "$1" in needs) printf '!';; working) printf '%s' "$FRAME";;
   looping) printf '↻';; done) printf '✓';; *) printf '·';; esac; }
 rank()   { case "$1" in needs) echo 0;; done) echo 1;; working) echo 2;; looping) echo 3;; *) echo 4;; esac; }
 # plaintext PR cell + its color, via cached map;  echoes "txt<TAB>color"
