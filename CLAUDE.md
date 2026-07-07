@@ -16,7 +16,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort | tmux ≥ 3.2 |
-| Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.44 (0.60+ best) |
+| Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Summarizer daemon (optional) | 1-line LLM summary per session | `claude` CLI |
@@ -26,10 +26,14 @@ issues as the backlog. See README.md for the architecture. Components:
 
 ## Install steps
 
-1. **Preflight.** Check and report: `tmux -V` (≥3.2), `fzf --version`,
-   `gh auth status`, `python3 --version`, `claude` on PATH, `jq`. Offer to
-   `brew install` anything missing. If `gh` is not authed, the backlog/PR
-   features will silently show nothing — tell the user.
+1. **Preflight.** Run `sh ~/.claude/fleet/bin/fleet-doctor.sh` (or from the repo
+   before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.45 · gh (+ auth) · python3 ·
+   claude · perl `Time::HiRes` and prints pass/warn/fail. Offer to
+   `brew install` anything that fails. Notes: standalone `jq` is **not** needed
+   (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
+   a soft dep (without it the dash spinner ticks at whole-second granularity).
+   If `gh` is not authed, the backlog/PR features silently show nothing — tell
+   the user.
 
 2. **Copy to the install dir.** Canonical: `~/.claude/fleet/`. Copy `bin/`,
    `conf/`, `shell/`, `fleet.conf.example` there; `mkdir -p ~/.claude/fleet/logs`;
@@ -57,7 +61,10 @@ issues as the backlog. See README.md for the architecture. Components:
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
-     real home dir, write to `~/Library/LaunchAgents/`, then
+     real home dir **and `__BREW_PREFIX__` with `$(brew --prefix)`** (falls back
+     to `/opt/homebrew` if `brew` isn't on PATH) — this is what makes tool
+     discovery work on Intel (`/usr/local`) as well as Apple Silicon
+     (`/opt/homebrew`). Write to `~/Library/LaunchAgents/`, then
      `launchctl bootstrap gui/$(id -u) <plist>` (or `launchctl load` on older
      macOS). The spinner (KeepAlive) and collector (45s) are the required two;
      summarize/classify/worktree-autoclean are optional — ask the user, and
