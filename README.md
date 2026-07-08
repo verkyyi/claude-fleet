@@ -142,6 +142,7 @@ FLEET_MAIN="$HOME/projects/your-repo" # worktrees are created as its siblings
 FLEET_BASE_BRANCH="main"
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 FLEET_CTX_WINDOW=200000               # 1000000 if you run 1M-context models
+FLEET_GLOBAL_MAX_SESSIONS=8          # system-wide cap on live Claude sessions; 0 = off
 ```
 
 ## Multiple fleets on one machine

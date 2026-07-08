@@ -19,6 +19,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { tmux display-message "issues: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
+
+# Global session cap (issue #28): refuse to spawn once FLEET_GLOBAL_MAX_SESSIONS
+# (default 8) Claude working sessions are already live across ALL fleets. This is
+# the shared choke point for every spawn path — the new-session box, the backlog
+# Enter, AND the headless orchestrator (dash-issue-session.sh <n> <sess>) — so the
+# global cap is a true system-wide ceiling that also bounds auto-orchestration.
+# Exit non-zero so the orchestrator records an honest FAIL, not a false spawn.
+if ! cap_msg=$(fleet_session_cap_ok); then tmux display-message "$cap_msg"; exit 1; fi
+
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { tmux display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
