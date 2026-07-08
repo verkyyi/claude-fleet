@@ -14,7 +14,9 @@
 # An "account" is a file in $FLEET_ACCOUNTS_DIR whose NAME is the label and
 # whose CONTENTS are that account's OAuth token (one line, chmod 600). No files
 # there → multi-account is OFF and every command below is a no-op, so the fleet
-# behaves exactly as a single-account install.
+# behaves exactly as a single-account install. An OPTIONAL companion conf
+# "<label>.conf" (same dir) may set LIMIT_TTL=<N>[smhd] — this account's bench
+# window after a usage-limit hit (default: FLEET_ACCOUNT_LIMIT_TTL).
 #
 # State (account-wide, like usage/ratelimit → shared cache dir):
 #   $C/account.active    — one line: the label new sessions should use
@@ -29,7 +31,8 @@
 #   use <label>          — pin <label> active
 #   rotate               — advance active to the next eligible account
 #   mark-limited <label> [banner]
-#                        — record <label> limited for FLEET_ACCOUNT_LIMIT_TTL; if it
+#                        — record <label> limited for its bench window (per-account
+#                          LIMIT_TTL in <label>.conf, else FLEET_ACCOUNT_LIMIT_TTL); if it
 #                          was the active one, rotate. Prints the (new) active label.
 #                          Exit 10 iff this call rotated the active account away
 #                          (the collector uses that to notify exactly once).
@@ -60,13 +63,41 @@ acct_labels() {
     for f in "$ACCT_DIR"/*; do
       [ -f "$f" ] || continue
       l=${f##*/}
-      case "$l" in .*|*~) continue;; esac
+      case "$l" in .*|*~|*.conf) continue;; esac   # .conf = per-account settings, not a token
       printf '%s\n' "$l"
     done
   fi
 }
 
 acct_token() { [ -f "$ACCT_DIR/$1" ] && sed -n '1{s/[[:space:]]*$//;p;}' "$ACCT_DIR/$1"; }
+
+# <N>[smhd] or bare seconds → seconds (empty on garbage). Suffix must follow a digit.
+dur_secs() { case "$1" in
+  *[0-9]s) printf '%s' $(( ${1%s} ));;
+  *[0-9]m) printf '%s' $(( ${1%m}*60 ));;
+  *[0-9]h) printf '%s' $(( ${1%h}*3600 ));;
+  *[0-9]d) printf '%s' $(( ${1%d}*86400 ));;
+  ''|*[!0-9]*) : ;;                 # empty or non-numeric → nothing
+  *) printf '%s' $(( $1 ));;        # bare seconds
+esac; }
+human_dur() { local s="$1"
+  if   [ "$s" -ge 86400 ]; then printf '%sd' $(( s/86400 ))
+  elif [ "$s" -ge 3600 ];  then printf '%sh' $(( s/3600 ))
+  else printf '%sm' $(( s/60 )); fi; }
+
+# Per-account bench duration after a limit hit: LIMIT_TTL from the account's
+# companion conf ($ACCT_DIR/<label>.conf), else the global FLEET_ACCOUNT_LIMIT_TTL.
+# Lets tiers with different reset windows (a weekly-cap account vs a 5h-session
+# one) bench for the right length instead of being un-benched too early and
+# thrashing straight back into the same limit.
+acct_ttl() {
+  local conf="$ACCT_DIR/$1.conf" v s
+  if [ -f "$conf" ]; then
+    v=$(sed -n 's/^[[:space:]]*LIMIT_TTL[[:space:]]*=[[:space:]]*//p' "$conf" | head -1 | tr -d '[:space:]')
+    s=$(dur_secs "$v"); [ -n "$s" ] && [ "$s" -gt 0 ] && { printf '%s' "$s"; return; }
+  fi
+  printf '%s' "$TTL"
+}
 
 # Epoch until which <label> is limited (0 if not limited or already expired).
 acct_limited_until() {
@@ -148,7 +179,7 @@ cmd_mark_limited() {
   local label="$1" banner="${2:-}" until cur nxt rotated=0
   [ -n "$label" ] || { echo "mark-limited: usage: mark-limited <label> [banner]" >&2; return 1; }
   acct_labels | grep -qx "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
-  until=$(( $(now) + TTL ))
+  until=$(( $(now) + $(acct_ttl "$label") ))
   mkdir -p "$FLEET_C"; acct_lock
   # Rewrite: drop this label's old row + any expired rows, then add the fresh one.
   { [ -f "$STATE_LIMITED" ] && awk -F'\t' -v l="$label" -v now="$(now)" '$1!=l && ($2+0)>now' "$STATE_LIMITED"
@@ -188,7 +219,7 @@ cmd_list() {
     return 0
   fi
   active=$(cmd_active)
-  printf '%-16s %-8s %s\n' ACCOUNT ACTIVE STATE
+  printf '%-16s %-8s %-8s %s\n' ACCOUNT ACTIVE WINDOW STATE
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     until=$(acct_limited_until "$l")
@@ -197,7 +228,7 @@ cmd_list() {
     else
       tok=$(acct_token "$l"); [ -n "$tok" ] && state="ok" || state="NO TOKEN"
     fi
-    printf '%-16s %-8s %s\n' "$l" "$([ "$l" = "$active" ] && echo '  ●' || echo '')" "$state"
+    printf '%-16s %-8s %-8s %s\n' "$l" "$([ "$l" = "$active" ] && echo '  ●' || echo '')" "$(human_dur "$(acct_ttl "$l")")" "$state"
   done <<EOF
 $labels
 EOF

@@ -87,11 +87,11 @@ fi
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.
 acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
-if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' 2>/dev/null)" ]; then
+if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' ! -name '*.conf' 2>/dev/null)" ]; then
   n=0; bad=0
   for f in "$acct_dir"/*; do
     [ -f "$f" ] || continue
-    case "${f##*/}" in .*|*~) continue;; esac
+    case "${f##*/}" in .*|*~|*.conf) continue;; esac   # .conf = per-account settings
     n=$((n+1))
     [ -s "$f" ] || { warn account "empty token file: ${f##*/} (run \`claude setup-token\`)"; bad=$((bad+1)); continue; }
     # ls -ld perms: chars are type + owner(3) + group(3) + other(3);
@@ -103,7 +103,20 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       warn account "${f##*/} is group/other-readable — \`chmod 600 $f\`"; bad=$((bad+1))
     fi
   done
-  [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed"
+  # optional per-account settings: <label>.conf with LIMIT_TTL=<N>[smhd]
+  for cf in "$acct_dir"/*.conf; do
+    [ -f "$cf" ] || continue
+    base=${cf##*/}; base=${base%.conf}
+    [ -f "$acct_dir/$base" ] || warn account "${cf##*/}: no matching token file '$base'"
+    ttl=$(sed -n 's/^[[:space:]]*LIMIT_TTL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d '[:space:]')
+    case "$ttl" in
+      '') warn account "${cf##*/}: no LIMIT_TTL= line — per-account bench window ignored";;
+      *[0-9]s|*[0-9]m|*[0-9]h|*[0-9]d) : ;;
+      *[!0-9]*) warn account "${cf##*/}: LIMIT_TTL='$ttl' is not <N>[smhd] or bare seconds"; bad=$((bad+1));;
+      *) : ;;
+    esac
+  done
+  [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed (per-account windows honored)"
   if [ "$(uname)" = "Darwin" ]; then
     printf '        note: on macOS token files are the ONLY way to switch accounts (Keychain ignores CLAUDE_CONFIG_DIR).\n'
   fi
