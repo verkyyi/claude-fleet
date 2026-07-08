@@ -12,6 +12,8 @@
 #   git_<key>        — branch<TAB>dirty  per live worktree (every run)
 #   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
 #   usage            — token-consumption proxy 5h/7d       (≥300s)
+#   usage.filecache  — per-file raw token sums keyed by (mtime,size) — memoizes
+#                      the usage scan so unchanged transcripts aren't re-read
 #   ratelimit        — last-seen official weekly-% line + epoch (scrape, every run)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -188,32 +190,67 @@ fi
 # The official rate-limit % is not exposed by any API, so this is a local proxy
 # over Claude's official limit windows (rolling 5h + 7d), weighted like limits
 # meter: output heavy, cache-read light.
+#
+# Memoized per file: ~/.claude/projects/ grows unbounded (thousands of *.jsonl,
+# 1GB+), and re-parsing every in-window transcript each tick costs seconds — yet
+# steady-state almost none of them changed. So cache each file's RAW per-file
+# token sums keyed by (mtime,size) in $C/usage.filecache; on the next tick reuse
+# the cached sums for any file whose (mtime,size) is unchanged and only re-read
+# the handful actively being appended. Bucketing into 5h/7d is still done by file
+# mtime (a cached-mtime-vs-cutoff compare, no re-read) exactly as before, so the
+# rolling cutoffs still move correctly. Weighting is linear, so summing raw tokens
+# per file then weighting is identical to weighting per line: warm == cold output.
 uts=$(cat "$C/usage.ts" 2>/dev/null || echo 0)
 if [ $(( $(now) - uts )) -ge 300 ] && have_py3; then
   python3 - "$C/usage" "$$" <<'PY'
 import json, glob, os, sys, time
 out=sys.argv[1]; pid=sys.argv[2]; t=time.time()
+cachef=out+'.filecache'                                # $C/usage.filecache
 w={'5h':t-5*3600, '7d':t-7*86400}
-agg={k:0 for k in w}
+agg={k:0.0 for k in w}
+# load prior per-file cache (path -> {mtime,size,tok:[out,in,cc,cr]}); tolerate any corruption
+try:
+    old=json.load(open(cachef))
+    if not isinstance(old, dict): old={}
+except Exception:
+    old={}
+new={}                                                 # rebuilt fresh → prunes vanished / >7d files
 for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
-    mt=os.path.getmtime(f)
+    try: st=os.stat(f)
+    except OSError: continue
+    mt=st.st_mtime
     if mt < w['7d']: continue
-    for line in open(f, errors='ignore'):
-        if '"usage"' not in line: continue
-        try: d=json.loads(line)
-        except: continue
-        m=d.get('message') or {}; u=m.get('usage')
-        if not u or d.get('type')!='assistant': continue
-        tok=u.get('output_tokens',0)*1.0 + u.get('input_tokens',0)*0.25 \
-            + u.get('cache_creation_input_tokens',0)*0.25 + u.get('cache_read_input_tokens',0)*0.02
-        for k,cut in w.items():
-            if mt>=cut: agg[k]+=tok
+    ent=old.get(f)
+    if ent and ent.get('mtime')==mt and ent.get('size')==st.st_size:
+        tot=ent['tok']                                 # unchanged → reuse cached raw sums, no open()
+    else:
+        tot=[0,0,0,0]                                  # output / input / cache_creation / cache_read
+        try: fh=open(f, errors='ignore')
+        except OSError: continue
+        with fh:
+            for line in fh:
+                if '"usage"' not in line: continue     # fast-path prefilter (kept)
+                try: d=json.loads(line)
+                except: continue
+                m=d.get('message') or {}; u=m.get('usage')
+                if not u or d.get('type')!='assistant': continue
+                tot[0]+=u.get('output_tokens',0)
+                tot[1]+=u.get('input_tokens',0)
+                tot[2]+=u.get('cache_creation_input_tokens',0)
+                tot[3]+=u.get('cache_read_input_tokens',0)
+    new[f]={'mtime':mt,'size':st.st_size,'tok':tot}
+    tok=tot[0]*1.0 + tot[1]*0.25 + tot[2]*0.25 + tot[3]*0.02
+    for k,cut in w.items():
+        if mt>=cut: agg[k]+=tok
 def fmt(n):
     n=int(n)
     return f"{n/1e6:.1f}M" if n>=1e6 else (f"{n/1e3:.0f}k" if n>=1e3 else str(n))
 tmp=f'{out}.{pid}'
 with open(tmp,'w') as fh: fh.write(f"5h {fmt(agg['5h'])} · 7d {fmt(agg['7d'])}")
 os.replace(tmp, out)                                   # atomic: readers never see a partial cache
+ctmp=f'{cachef}.{pid}'
+with open(ctmp,'w') as fh: json.dump(new, fh)
+os.replace(ctmp, cachef)                               # atomic: overlapping collectors can't corrupt it
 PY
   now > "$C/usage.ts"
 fi
