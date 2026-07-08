@@ -25,6 +25,14 @@ FLEET_CTX_WINDOW=200000
 # wins. Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
 #FLEET_MODEL="opus"
 
+# Model the session's SUBAGENTS (Task/Agent spawns) run on, exported as
+# CLAUDE_CODE_SUBAGENT_MODEL — the only global switch for subagent models (there
+# is no settings.json key). Overrides even the pinned built-ins (claude-code-guide
+# runs haiku, statusline-setup runs sonnet by default). Defaults to FLEET_MODEL
+# (so subagents follow the session onto opus). Set to "inherit" to let each
+# subagent resolve normally, or empty to leave the env var untouched.
+#FLEET_SUBAGENT_MODEL="opus"
+
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/

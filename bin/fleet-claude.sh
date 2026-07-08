@@ -25,6 +25,14 @@ if [ -n "$FLEET_MODEL" ]; then
   esac
 fi
 
+# Force the session's SUBAGENTS (Task/Agent spawns) onto the same tier — this is
+# the only global knob for subagent models (no settings.json key exists), and it
+# overrides even the pinned built-ins (claude-code-guide=haiku, statusline=sonnet).
+# Defaults to FLEET_MODEL; set FLEET_SUBAGENT_MODEL=inherit in fleet.conf to let
+# each subagent resolve normally, or empty to not touch it at all.
+if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="$FLEET_MODEL"; fi
+[ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
+
 label=$("$BIN/fleet-account.sh" active 2>/dev/null)
 if [ -n "$label" ]; then
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
