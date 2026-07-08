@@ -21,6 +21,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Classifier daemon (optional) | corrects state, detects `looping` | `claude` CLI |
+| Summarizer daemon (optional) | one-line LLM summary per session → dash summary column | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 
@@ -72,15 +73,17 @@ issues as the backlog. See README.md for the architecture. Components:
      kills the *shared* tmux server, taking every fleet down at once, so the
      watcher captures forensics + notifies on low disk and its `--gate` mode
      (called by fleet-up and fleet-restore) refuses to add load below the floor.
-     classify/worktree-autoclean are optional — ask the user, and mention
-     classify spends (small, change-gated) LLM tokens.
+     classify/summarize/worktree-autoclean are optional — ask the user, and
+     mention classify and summarize spend (small, change-gated) LLM tokens.
+     summarize (`com.claude-fleet.summarize`, 180s) writes the dash's one-line
+     per-session summary column; without it that column just stays empty.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
      `systemctl --user enable --now claude-fleet-spinner.service` +
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard); the optional
-     classify/worktree-autoclean are `.timer`s too. Run `loginctl
+     classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
      enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
