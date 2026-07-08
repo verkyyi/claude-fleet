@@ -30,11 +30,18 @@ slug="issue-$num"
 # `select-window -t $SESS:issue-<N>` is ambiguous the moment two windows share
 # that name (tmux errors "can't find window") — the very failure that left focus
 # stranded on the dash. Scope the scan to $SESS (the target fleet, not the
-# caller's) and, like every spawn below, only steal focus on the interactive path.
+# caller's). Like every spawn below, focus is non-invasive by default and only
+# moves on an interactive spawn when FLEET_SPAWN_FOCUS=1.
 existing=$(tmux list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
 [ -z "$existing" ] && existing=$(tmux list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
 if [ -n "$existing" ]; then
-  [ -z "$TARGET_SESS" ] && tmux select-window -t "$existing"
+  # Non-invasive by default: don't yank the caller to the existing window; just
+  # note it. Opt into the jump with FLEET_SPAWN_FOCUS=1 (interactive spawns only).
+  if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
+    tmux select-window -t "$existing"
+  elif [ -z "$TARGET_SESS" ]; then
+    tmux display-message "#$num already spawned" 2>/dev/null
+  fi
   exit 0
 fi
 
@@ -84,11 +91,14 @@ fi
 # Route through fleet-claude.sh so the session launches under the active
 # subscription account (transparent `exec claude` when no accounts registered).
 #
-# Headless spawns (a <target-session> given) pass -d: new-window makes the new
-# window CURRENT by default, which yanks a user attached to $SESS over to it even
-# though we skip select-window below — so skipping select-window alone isn't
-# enough to keep the active window put. Interactive spawns omit -d and select by id.
-detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
+# Spawn is non-invasive by default: ALWAYS pass -d so new-window creates the
+# window WITHOUT making it current — new-window makes the new window CURRENT by
+# default, which yanks a user attached to $SESS over to it even though we skip
+# select-window below, so -d is what actually keeps the active window put (for
+# BOTH headless and interactive spawns). The new window surfaces via the dash +
+# urgency sorter instead. Opt back into jump-to-it with FLEET_SPAWN_FOCUS=1
+# (interactive spawns only; a headless spawn must never steal focus).
+detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
 # ${detach[@]+"${detach[@]}"}: expand to the flag(s) when set, to NOTHING when the
 # array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
 # when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
@@ -104,6 +114,11 @@ tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ i
 # = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh).
 seed="starting #$num"; [ -n "$title" ] && seed="$seed: $title"
 printf '%s' "$seed" > "$C/summary_${win//[^0-9]/}" 2>/dev/null || :
-# Only steal focus for the interactive path; a headless spawn must not move the
-# active window out from under an attached user.
-[ -z "$TARGET_SESS" ] && tmux select-window -t "$win"
+# Non-invasive by default: leave the active window put and just confirm the spawn
+# on the status line. Only jump to the new worker when the user opted in
+# (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.
+if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
+  tmux select-window -t "$win"
+elif [ -z "$TARGET_SESS" ]; then
+  tmux display-message "spawned #$num → $wname" 2>/dev/null
+fi
