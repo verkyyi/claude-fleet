@@ -93,3 +93,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
 #FLEET_DISK_TARGET="$TMPDIR"  # dir whose volume to measure
 #FLEET_DISK_COOLDOWN=300      # min seconds between incident captures
+
+# --- Spawn ergonomics -------------------------------------------------------
+# By default a newly spawned worker window is created in the background (tmux
+# new-window -d) and NOT selected — you stay on your current window, and the new
+# session surfaces via the dash + urgency sorter. Set to 1 to restore the old
+# behavior: interactive spawns (backlog Enter / new-session box) jump to the new
+# window. Headless spawns never steal focus regardless.
+#FLEET_SPAWN_FOCUS=0
