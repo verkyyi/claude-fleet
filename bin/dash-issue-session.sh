@@ -89,7 +89,10 @@ fi
 # though we skip select-window below — so skipping select-window alone isn't
 # enough to keep the active window put. Interactive spawns omit -d and select by id.
 detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
-win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
+# ${detach[@]+"${detach[@]}"}: expand to the flag(s) when set, to NOTHING when the
+# array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
+# when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
+win=$(tmux new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Only steal focus for the interactive path; a headless spawn must not move the
