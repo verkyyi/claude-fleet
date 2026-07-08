@@ -57,7 +57,7 @@ if [ -s "$C/sessmap" ]; then
   while IFS=$'\t' read -r _s _sl _r; do
     [ -z "$_s" ] && continue
     MS_SESS+=("$_s"); MS_SLUG+=("$_sl")
-    case " ${PS_SLUG[*]} " in *" $_sl "*) ;; *)
+    case " ${PS_SLUG[*]:-} " in *" $_sl "*) ;; *)
       _d=""; [ -s "$C/prmap_$_sl" ] && _d=$(<"$C/prmap_$_sl")
       PS_SLUG+=("$_sl"); PS_DATA+=("$_d");;
     esac
