@@ -19,6 +19,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
+| Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Summarizer daemon (optional) | 1-line LLM summary per session | `claude` CLI |
 | Classifier daemon (optional) | corrects state, detects `looping` | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
@@ -67,13 +68,19 @@ issues as the backlog. See README.md for the architecture. Components:
      (`/opt/homebrew`). Write to `~/Library/LaunchAgents/`, then
      `launchctl bootstrap gui/$(id -u) <plist>` (or `launchctl load` on older
      macOS). The spinner (KeepAlive) and collector (45s) are the required two;
+     the **diskguard** watcher (`com.claude-fleet.diskguard`, 60s) is strongly
+     recommended — it's the crash-guard: a full volume ENOSPCs the collector and
+     kills the *shared* tmux server, taking every fleet down at once, so the
+     watcher captures forensics + notifies on low disk and its `--gate` mode
+     (called by fleet-up and fleet-restore) refuses to add load below the floor.
      summarize/classify/worktree-autoclean are optional — ask the user, and
      mention summarize+classify each spend (small, change-gated) LLM tokens.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
      `systemctl --user enable --now claude-fleet-spinner.service` +
-     `claude-fleet-collect.timer` (the required two); the optional
+     `claude-fleet-collect.timer` (the required two) + the recommended
+     `claude-fleet-diskguard.timer` (crash-guard); the optional
      classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
      enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.

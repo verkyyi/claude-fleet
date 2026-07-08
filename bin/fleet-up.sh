@@ -32,6 +32,14 @@ done
 command -v tmux >/dev/null 2>&1 || die "tmux not found"
 command -v git  >/dev/null 2>&1 || die "git not found"
 
+# Disk-pressure circuit-breaker: never bring a fleet up into a nearly-full volume.
+# A fleet whose first writes ENOSPC takes the SHARED tmux server — and every other
+# fleet on it — down with it. --gate exits 3 when free < FLEET_DISK_FLOOR_GB.
+if [ -x "$BIN/fleet-diskguard.sh" ]; then
+  bash "$BIN/fleet-diskguard.sh" --gate \
+    || die "disk too low to spawn a fleet safely — free space first (see: fleet-diskguard.sh --free)"
+fi
+
 # No <owner/repo> given: infer it from the current checkout ($PWD in a git
 # worktree), and default the checkout dir to that worktree so we reuse it.
 if [ -z "$REPO" ]; then

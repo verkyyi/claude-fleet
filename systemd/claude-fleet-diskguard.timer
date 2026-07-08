@@ -1,0 +1,14 @@
+# Fires claude-fleet-diskguard.service. Parity with the launchd plist:
+# StartInterval=60 + RunAtLoad=true → run ~10s after the user manager comes up,
+# then every 60s. Install: `systemctl --user enable --now
+# claude-fleet-diskguard.timer`.
+[Unit]
+Description=claude-fleet disk-pressure watcher timer (every 60s)
+
+[Timer]
+OnStartupSec=10
+OnUnitActiveSec=60
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
