@@ -15,7 +15,7 @@
 # per-fleet conf in $FLEET_CONF_DIR (~/.config/claude-fleet/*.conf). The "live
 # tmux pane" set is shared across all fleets, so a worktree open in any session
 # is protected everywhere.
-set -u
+set -uo pipefail
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"

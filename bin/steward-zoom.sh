@@ -9,6 +9,7 @@
 # spawn; mark any pane by hand: tmux set-option -p @steward 1). No marked pane
 # IN THIS SESSION → fall back to building this fleet's hub (steward-session.sh),
 # passing the current session so the hub lands here, not in another fleet.
+set -uo pipefail
 SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
 target=$(tmux list-panes -s -t "$SESS" -F '#{pane_id} #{@steward}' 2>/dev/null | awk '$2=="1"{print $1; exit}')
 if [ -z "$target" ]; then

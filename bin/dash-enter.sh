@@ -5,8 +5,9 @@
 #   rename mode  (flag file present, set by ctrl-e): rename <stored target> to query
 #   new-session  (query non-empty): spawn a worktree session seeded with query
 #   jump         (query empty): select the target window
+set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
-target="$1"; q="$2"
+target="${1:-}"; q="${2:-}"
 NEWPROMPT='＋ new ▸ '
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"

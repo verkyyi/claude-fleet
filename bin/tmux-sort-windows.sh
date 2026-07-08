@@ -9,6 +9,7 @@
 #
 # Consequence: window NUMBERS are not stable (prefix+N muscle memory dies);
 # navigate by name/position — slot 1 is always the most urgent session.
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 SESS="${1:-}"
 [ -n "$SESS" ] || SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null) || exit 0
 [ -n "$SESS" ] || exit 0

@@ -10,7 +10,7 @@
 # data immediately. See docs/ARCHITECTURE.md.
 #
 # A fleet ≡ a tmux session ≡ one repo. Run once per repo you want to work.
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"

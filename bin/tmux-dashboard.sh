@@ -8,6 +8,7 @@
 #   Ctrl-E rename window · Ctrl-R refresh now · Esc/q relaunch (it's always-on)
 # Auto-reloads every REFRESH sec (default 3). Run in a dedicated 'dash' window
 # (prefix+j creates one). Env: REFRESH.
+set -uo pipefail
 REFRESH="${REFRESH:-0.25}"   # 4Hz repaint: the rows producer is exec-fork-free (~45ms), spinner steps a frame per repaint
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"

@@ -2,6 +2,7 @@
 # next-attention.sh — jump to the next Claude window that needs attention.
 # Priority: 'needs' (red = answer me) first, then 'done' (green = finished/stopped);
 # lowest index first. Bound to `prefix + a` in conf/tmux-attention.conf.
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 sess=$(tmux display-message -p '#{session_name}')
 
 target=$(tmux list-windows -t "$sess" -F '#{window_index} #{@claude_state}' | awk '

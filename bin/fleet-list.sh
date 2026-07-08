@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-list.sh — list fleets: configured (a per-fleet conf) and/or live (a tmux
 # session). Columns: ● live/○ down · name · repo · checkout.
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"

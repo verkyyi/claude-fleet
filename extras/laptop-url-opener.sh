@@ -11,6 +11,7 @@
 #
 # Run ad hoc:      sh laptop-url-opener.sh
 # Or keep-alive:   put it in a launchd agent / login item.
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 PORT="${URL_OPENER_PORT:-2226}"
 echo "url-opener: listening on 127.0.0.1:$PORT (ctrl-c to stop)"
 while :; do

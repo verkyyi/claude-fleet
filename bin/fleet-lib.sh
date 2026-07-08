@@ -8,6 +8,12 @@
 # the CHEAP cached lookups below (no git/tmux forks), and fall back to the flat
 # prmap/issues names when nothing resolves — so a single-fleet install behaves
 # exactly as before.
+#
+# Shell-options policy (see CONTRIBUTING.md): this file is SOURCED, so it must
+# NOT `set -u`/`set -o pipefail` — those would leak into every caller's shell and
+# change behaviour far from here. Instead it is written to be safe under a `set -u`
+# caller: every optional expansion is defaulted (`${VAR:-}`) and every helper
+# returns cleanly.
 
 FLEET_C="${TMPDIR:-/tmp}/.claude-dash"
 # Per-fleet configs live here, one <session>.conf per fleet (Phase 2). Override

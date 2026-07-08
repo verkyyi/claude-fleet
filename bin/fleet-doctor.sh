@@ -18,7 +18,7 @@
 #   claude       the sessions you run + the optional summarize/classify daemons
 #   perl HiRes   soft — dash spinner sub-second frames (degrades to 1s ticks)
 #   jq is NOT required standalone: the collector only uses `gh --jq` (built in).
-set -u
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 
 # --- output helpers (color only on a tty) ---
 if [ -t 1 ]; then

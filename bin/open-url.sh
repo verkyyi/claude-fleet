@@ -9,7 +9,8 @@
 #      listener      →  run extras/laptop-url-opener.sh from this repo
 # 2) Fallback (no tunnel): tmux popup with the URL — cmd-clickable in iTerm —
 #    and OSC52-copied to your LOCAL clipboard (needs tmux set-clipboard on).
-url="$1"; [ -z "$url" ] && exit 0
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
+url="${1:-}"; [ -z "$url" ] && exit 0
 PORT="${URL_OPENER_PORT:-2226}"
 
 # try the tunnel directly — a probe would consume the listener's accept

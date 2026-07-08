@@ -13,6 +13,7 @@
 # `tmux source-file` -> the bar repaints once per frame. Static windows written
 # once. Run from launchd (com.claude-fleet.spinner, KeepAlive) or any daemon
 # supervisor. SPIN_INTERVAL = seconds per frame.
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 INTERVAL="${SPIN_INTERVAL:-0.12}"
 NFRAMES=10
 CMDF="${TMPDIR:-/tmp}/.claude-spin.cmds"

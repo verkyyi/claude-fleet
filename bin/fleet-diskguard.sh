@@ -36,7 +36,7 @@
 #   FLEET_DISK_TARGET     dir whose volume to measure (default $TMPDIR)
 #   FLEET_DISK_COOLDOWN   min seconds between captures (default 300)
 #   FLEET_NOTIFY_CMD      notifier run as `$CMD "<markdown>"` on an incident
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"

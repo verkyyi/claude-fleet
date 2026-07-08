@@ -6,12 +6,13 @@
 # only sets the semantic state and (for needs) rings the bell.
 # Registered as a Claude Code hook (see hooks/settings-hooks.json).
 # Always exits 0 so it never blocks a turn.
-[ -n "$TMUX" ] || exit 0
-[ -n "$TMUX_PANE" ] || exit 0
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
+[ -n "${TMUX:-}" ] || exit 0
+[ -n "${TMUX_PANE:-}" ] || exit 0
 
 BIN=$(cd "$(dirname "$0")" && pwd)
 
-case "$1" in
+case "${1:-}" in
   needs) sem="needs" ;;
   done)  sem="done" ;;
   *)     sem="working" ;;   # busy / between-tools / prompt submitted

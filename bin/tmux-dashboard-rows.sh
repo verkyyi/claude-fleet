@@ -9,6 +9,7 @@
 # HOT PATH (2026-07-07): this runs on every dash repaint (4×/s) — the loop is
 # exec-fork-free (bash builtins only: read/expansion instead of cat/cut/sed/awk).
 # Execs per render: tmux + sort + perl(sub-second clock) ≈ 3. ~30ms total.
+set -uo pipefail
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} must count chars, not bytes
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -81,7 +82,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
-  [ -n "$FLEET_SESSION" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
+  [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   # collision-free cache key — keep byte-identical to cache_key() in tmux-dash-collect.sh
   key=${path//_/_u}; key=${key//\//_s}; key=${key// /_w}

@@ -3,6 +3,7 @@
 # Creates an issue from the typed task (backlog = source of truth), then spawns the
 # bound worktree session via dash-issue-session.sh. (Pick an EXISTING issue instead
 # from the backlog panel: prefix+b, Enter.)
+set -uo pipefail
 text="$*"; text="${text#"${text%%[![:space:]]*}"}"
 [ -z "$text" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"

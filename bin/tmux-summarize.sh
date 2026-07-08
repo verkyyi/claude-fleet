@@ -5,7 +5,7 @@
 # window-id (stable across reorders): $C/summary_<idnum>.
 # Run from launchd (com.claude-fleet.summarize) every ~180s. OPTIONAL — the
 # dash works without it; the summary column just stays empty.
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 CACHE="$C/sumhash"; mkdir -p "$CACHE"
@@ -32,6 +32,9 @@ while IFS=$'\t' read -r wid name state; do
   h=$(printf '%s' "$cap" | cksum | awk '{print $1}')
   hf="$CACHE/$id.hash"
   [ "$h" = "$(cat "$hf" 2>/dev/null)" ] && continue   # unchanged screen → skip (no LLM call)
+  # tolerant by design: `head -1` closes the pipe early, so claude/sed may exit
+  # via SIGPIPE (141) under pipefail — harmless here, the status is discarded and
+  # only the captured text ($sum) is used.
   sum=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p --model "$MODEL" 2>/dev/null \
         | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
   echo "$h" > "$hf"

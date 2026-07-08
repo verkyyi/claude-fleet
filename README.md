@@ -222,6 +222,11 @@ dangerous commands (force-push to main, prod-database writes, destructive
 test environment, and "claim the issue before working it" as convention.
 The issue-per-session binding in this repo is the foundation for all three.
 
+## Contributing
+
+Shell scripts follow a small `set -u` / `pipefail` policy and are linted by
+`shellcheck` in CI — see [CONTRIBUTING.md](CONTRIBUTING.md) before sending a PR.
+
 ## License
 
 MIT

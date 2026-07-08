@@ -2,7 +2,8 @@
 # dash-issue-pick.sh <target sess:idx> — popup issue picker. Lists all cached
 # GitHub issues (searchable), and on selection binds the target window to it
 # (@issue). Run inside `tmux display-popup -E`. Esc cancels (no binding).
-target="$1"
+set -uo pipefail
+target="${1:-}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 C="${TMPDIR:-/tmp}/.claude-dash"
 [ -s "$C/issues" ] || { echo "no issues cached yet — wait for the collector"; sleep 1.5; exit 0; }

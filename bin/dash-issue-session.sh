@@ -11,7 +11,8 @@
 # (orchestrate-sessions.sh) fills a fleet's backlog; in that mode we do NOT
 # select-window, so a user attached to that session is never yanked to the new
 # window.
-num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
+set -uo pipefail
+num="${1:-}"; num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
 TARGET_SESS="${2:-}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
