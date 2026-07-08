@@ -146,7 +146,16 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done < <(tmux list-windows -a -F "$WFMT")
 
-# emit sorted by status rank (color/order conveys grouping; no header lines)
+# column header — pinned at top of the list by fzf --header-lines=1. Widths match
+# the fld() calls above; leading "  " fills the glyph(1)+space slot so labels line
+# up under their columns. Underlined muted-grey to read as a rule, not a row.
+fld 5  "issue";  h_i=$fld_out
+fld 7  "PR";     h_p=$fld_out
+fld 4  "ctx";    h_c=$fld_out
+fld 22 "window"; h_n=$fld_out
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_p} ${h_c} ${h_n}  summary${R}"
+
+# emit sorted by status rank (color/order conveys grouping)
 printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
