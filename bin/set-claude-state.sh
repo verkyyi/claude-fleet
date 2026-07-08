@@ -15,7 +15,22 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 case "${1:-}" in
   needs) sem="needs" ;;
   done)  sem="done" ;;
-  *)     sem="working" ;;   # busy / between-tools / prompt submitted
+  busy)
+    # PreToolUse heartbeat = working, EXCEPT the AskUserQuestion tool: it opens a
+    # blocking multiple-choice popup mid-turn and NO Notification hook fires for it
+    # (AskUserQuestion isn't a Notification matcher), so without this the window
+    # would masquerade as 'working' the whole time it's really waiting on the user.
+    # PreToolUse is the only caller that passes 'busy'; its stdin JSON carries the
+    # tool_name. PostToolUse (arg 'working') fires when the user answers -> working.
+    sem="working"
+    if [ ! -t 0 ]; then
+      case "$(cat 2>/dev/null)" in
+        *'"tool_name":"AskUserQuestion"'*|*'"tool_name": "AskUserQuestion"'*)
+          sem="needs"; set -- needs bell ;;
+      esac
+    fi
+    ;;
+  *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
 
 tmux set-window-option -t "$TMUX_PANE" @claude_state "$sem" 2>/dev/null

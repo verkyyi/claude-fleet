@@ -20,7 +20,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
-| Classifier daemon (optional) | corrects state, detects `looping` | `claude` CLI |
+| Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
@@ -62,7 +62,12 @@ issues as the backlog. See README.md for the architecture. Components:
    `SessionStart` entries also fire `summarize-hook.sh`, which refreshes the
    dash summary for *that* window the instant a turn ends / a session starts
    (backgrounded, so it never slows a turn); it self-disables if `claude` isn't
-   on PATH, and is a no-op if you skip the summarizer.
+   on PATH, and is a no-op if you skip the summarizer. The `Stop` entry also
+   fires `classify-hook.sh`, the real-time path for state classification: it
+   hands just the stopped window to `classify-sessions.sh --window`, so the
+   ambiguous `done` is resolved to `looping`/`needs`/`done` within ~1-2s instead
+   of waiting for the daemon backstop. Also backgrounded + self-disabling; a
+   no-op if you skip the classifier.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
@@ -79,6 +84,9 @@ issues as the backlog. See README.md for the architecture. Components:
      (called by fleet-up and fleet-restore) refuses to add load below the floor.
      classify/summarize/worktree-autoclean are optional — ask the user, and
      mention classify and summarize spend (small, change-gated) LLM tokens.
+     classify (`com.claude-fleet.classify`, 1800s) is now just a backstop — the
+     real work happens in the `Stop` hook (`classify-hook.sh`); install the
+     daemon only if you want the periodic net for windows a Stop never revisits.
      summarize (`com.claude-fleet.summarize`, 180s) writes the dash's one-line
      per-session summary column; without it that column just stays empty.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
