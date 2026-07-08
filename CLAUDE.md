@@ -51,7 +51,7 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/j/b/i/r` and a status-bar restyle — and comment out anything
+   bindings on `a/j/G/b/A/r` and a status-bar restyle — and comment out anything
    they don't want.
 
 5. **Merge Claude Code hooks.** Merge `hooks/settings-hooks.json` into

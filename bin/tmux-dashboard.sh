@@ -27,22 +27,38 @@ fi
 # Summary is an inline column (one line per row) — no preview panel.
 PREVIEW=( --preview-window=hidden )
 
-# Loop so Esc/q just relaunches — the window stays a live dashboard.
-while :; do
+# POPUP=1 → run as a one-shot FULL-SCREEN modal (prefix+G peek): esc/q closes it
+# and drops you back where you were, and a jump (enter) closes it too. Otherwise
+# it's the always-on 'dash' window that relaunches on esc. Same convention the
+# backlog panel (tmux-issues.sh) uses.
+POPUP="${POPUP:-}"
+ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
+HDR='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · esc=back'
+[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃e=rename · esc=close'
+
+run_dash() {
   rm -f "$C/rename_target" "$C/bind_target"   # clear any half-finished mode from a prior run
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
     --layout=reverse-list --info=hidden --border=none \
     --prompt='▸ ' \
-    --header='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · esc=back' \
+    --header="$HDR" \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
-    --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})" \
+    --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1
+}
+
+# Modal peek: run once, then exit so the popup closes and returns you.
+if [ -n "$POPUP" ]; then run_dash; exit 0; fi
+
+# Loop so Esc/q just relaunches — the window stays a live dashboard.
+while :; do
+  run_dash
   sleep 0.2
 done
