@@ -38,8 +38,14 @@ repo-specific pieces are **per-fleet**.
 | **Config (`fleet.conf`)** | **per-fleet** | each fleet = a different repo + checkout |
 | **Dash / status / backlog** | **per-fleet view** | reads shared globals **+** its own repo's slug'd files |
 | **Steward** | **per-fleet** | sweeping / triage / ledger are stateful per repo; "one writer per ledger" |
+| **Orchestrator** | **shared daemon, per-fleet decision** | one machine-global daemon (`orchestrate-sessions.sh`) loops every live session; each fleet's `FLEET_MAX_SESSIONS` (conf overlay) decides whether/how much to spawn — like the collector, it fans out over the fleet set |
 
 *Collector shared, steward not* is the right split — remember it that way.
+The orchestrator sits on the collector side of that split: one shared daemon,
+opt-in per fleet. It reads only the collector's `issues_<slug>` cache (no gh of
+its own), counts a fleet's running (`@issue`, not-`done`) windows, and spawns
+backlog sessions via `dash-issue-session.sh <n> <session>` until the fleet hits
+`FLEET_MAX_SESSIONS`. Inert for any fleet that hasn't set that cap.
 
 ### Why the collector is shared (not one-per-session)
 

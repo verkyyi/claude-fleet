@@ -1,6 +1,6 @@
 # Linux systemd user units
 
-Parity with `launchd/` for Linux. One always-on service (spinner) plus four
+Parity with `launchd/` for Linux. One always-on service (spinner) plus five
 `.timer` + `.service` pairs matching the launchd `StartInterval`s:
 
 | Unit | Cadence | launchd equivalent | Optional? |
@@ -10,6 +10,7 @@ Parity with `launchd/` for Linux. One always-on service (spinner) plus four
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
 | `claude-fleet-classify.timer` | every 300s | `com.claude-fleet.classify` | optional (LLM tokens) |
 | `claude-fleet-summarize.timer` | every 180s | `com.claude-fleet.summarize` | optional (LLM tokens) |
+| `claude-fleet-orchestrate.timer` | every 120s, +30s after start | `com.claude-fleet.orchestrate` | optional (opt-in via `FLEET_MAX_SESSIONS`) |
 | `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
 
 Every file is `__HOME__`-templated exactly like the plists — substitute the
@@ -33,6 +34,7 @@ systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: cras
 # optional:
 systemctl --user enable --now claude-fleet-classify.timer
 systemctl --user enable --now claude-fleet-summarize.timer
+systemctl --user enable --now claude-fleet-orchestrate.timer   # opt-in: needs FLEET_MAX_SESSIONS
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 
 # 3. Keep the units running when you are not logged in (detached fleets).
@@ -51,7 +53,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 
 ```sh
 for u in spinner.service collect.timer diskguard.timer classify.timer summarize.timer \
-         worktree-autoclean.timer; do
+         orchestrate.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done
 rm -f ~/.config/systemd/user/claude-fleet-*.{service,timer}

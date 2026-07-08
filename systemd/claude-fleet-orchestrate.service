@@ -1,0 +1,16 @@
+# claude-fleet auto-orchestrator — Linux systemd user unit (parity with launchd
+# com.claude-fleet.orchestrate). Oneshot driven by claude-fleet-orchestrate.timer.
+# Optional + opt-in: no-op for any fleet without FLEET_MAX_SESSIONS set. Reads
+# the collector's issue cache and spawns issue sessions via git worktree add +
+# tmux new-window — needs `git`, `tmux` (and `claude` for the spawned sessions).
+[Unit]
+Description=claude-fleet auto-orchestrator (fill backlog up to FLEET_MAX_SESSIONS)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/orchestrate-sessions.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/orchestrate.systemd.log

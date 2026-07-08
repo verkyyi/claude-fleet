@@ -29,6 +29,18 @@ FLEET_CTX_WINDOW=200000
 # Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
 
+# Auto-orchestration (opt-in): the orchestrate-sessions.sh daemon keeps a fleet
+# busy by spawning issue-bound sessions off the remaining backlog (unassigned
+# open issues, oldest first) until the fleet has FLEET_MAX_SESSIONS *running*
+# sessions. Unset or ≤0 → the daemon leaves this fleet alone. A 'running'
+# session is any window bound to an issue whose state isn't yet 'done', so a
+# finished session frees its slot for the next backlog item. Honored globally
+# here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+#FLEET_MAX_SESSIONS=4
+# Optional per-tick ramp cap — spawn at most this many new sessions per daemon
+# cycle (~120s). Unset → fill straight to FLEET_MAX_SESSIONS in one tick.
+#FLEET_ORCHESTRATE_BATCH=2
+
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
