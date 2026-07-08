@@ -77,12 +77,17 @@ prmapn_for() {
   done
 }
 
-# Pane width, to right-align the PR/ctx block to the edge. `tput cols </dev/tty`
-# reads the dash pane fzf is attached to; falls back to 120 when there's no tty
-# (e.g. piped verification). fzf reserves a 2-col gutter; keep a 2-col right
-# margin so it never clips the ctx% digits. Layout column widths:
+# List width, to right-align the PR/ctx block to the edge and give the summary
+# the full remaining span. Prefer fzf's own viewport width — FZF_COLUMNS is
+# exported to reload/transform child procs (fzf ≥0.53) and is the TRUE list
+# width. `tput cols </dev/tty` is unreliable here (it reads the client tty, not
+# the pane), so it's only a fallback for the very first pre-fzf render before
+# FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
+# margin so fzf never clips the ctx% digits. Layout column widths:
 #   LEFTW = glyph1+sp + issue5+sp + window22+sp = 31 ; RIGHTW = PR7+sp + ctx4 = 12
-COLS=$( { tput cols </dev/tty; } 2>/dev/null ); case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
+COLS=${FZF_COLUMNS:-}
+case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
+case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
 LEFTW=31; RIGHTW=12; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
