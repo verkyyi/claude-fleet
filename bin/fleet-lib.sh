@@ -75,6 +75,42 @@ fleet_repo_cached() {
   awk -F'\t' -v s="$1" '$1==s{print $3; exit}' "$FLEET_C/sessmap"
 }
 
+# CHEAP: count the live Claude WORKING-session windows across every fleet on this
+# tmux server (the system-wide count issue #28's cap measures). A fleet session
+# is one that owns a hub window ('plan' or 'dash'); inside it, windows named
+# dash/plan/backlog are panels — everything else is a Claude working session
+# (the same rule the dashboard uses). Pure tmux + awk, no git/tmux-per-window
+# forks. Prints an integer (0 if tmux isn't running or no fleets are up).
+fleet_session_count() {
+  tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk '
+    { rows[NR]=$0; if ($2=="plan" || $2=="dash") fleet[$1]=1 }
+    END {
+      for (i=1; i<=NR; i++) {
+        split(rows[i], a, " "); s=a[1]; w=a[2]
+        if (fleet[s] && w!="dash" && w!="plan" && w!="backlog") c++
+      }
+      print c+0
+    }'
+}
+
+# Global cap on concurrent Claude working sessions (issue #28). Returns 0 if a
+# new session may be spawned, non-zero if the cap is already reached. The limit
+# is FLEET_GLOBAL_MAX_SESSIONS (default 8) — a SYSTEM-WIDE ceiling, distinct from
+# the per-fleet FLEET_MAX_SESSIONS orchestrator fill-target; set it to 0 to
+# disable the cap entirely. On refusal, prints a human-readable reason on stdout
+# for the caller to surface (tmux display-message); prints nothing when allowed.
+fleet_session_cap_ok() {
+  local max="${FLEET_GLOBAL_MAX_SESSIONS:-8}" n
+  case "$max" in ''|*[!0-9]*) max=8;; esac   # tolerate a garbled conf value
+  [ "$max" -eq 0 ] && return 0               # 0 ⇒ unlimited
+  n=$(fleet_session_count)
+  if [ "$n" -ge "$max" ]; then
+    printf 'fleet at capacity: %s/%s Claude sessions running — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' "$n" "$max"
+    return 1
+  fi
+  return 0
+}
+
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
 # the repo has 0 rows), else the flat fallback. Keying off .ts — not file size —

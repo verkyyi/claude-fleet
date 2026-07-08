@@ -14,6 +14,11 @@ REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { tmux display-message "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
 
+# Global session cap (issue #28): check BEFORE creating the issue so a full fleet
+# doesn't leave a dangling backlog issue with no session behind it. dash-issue-
+# session.sh re-checks (it's also the backlog Enter path), so this is belt-and-braces.
+if ! cap_msg=$(fleet_session_cap_ok); then tmux display-message "$cap_msg"; exit 1; fi
+
 # Backstop throttle (multi-line pastes are coalesced upstream by
 # dash-task-buffer.sh, so a burst reaches us as ONE call; this only guards
 # against pathological loops).

@@ -19,6 +19,14 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # plans; 1000000 if your sessions run 1M-context models.
 FLEET_CTX_WINDOW=200000
 
+# SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
+# ALL fleets on this machine. Every spawn path — the new-session box, the
+# backlog's Enter, and the auto-orchestrator (below) — refuses once this many are
+# live (panels — the dash/plan/backlog windows — don't count). This is the global
+# safety cap; the per-fleet FLEET_MAX_SESSIONS below is a different knob (an
+# opt-in fill TARGET, not a ceiling). Default 8; set to 0 to disable entirely.
+FLEET_GLOBAL_MAX_SESSIONS=8
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 #FLEET_STATUS_CONTAINER="claude-dev"
 
@@ -35,7 +43,9 @@ FLEET_CTX_WINDOW=200000
 # sessions. Unset or ≤0 → the daemon leaves this fleet alone. A 'running'
 # session is any window bound to an issue whose state isn't yet 'done', so a
 # finished session frees its slot for the next backlog item. Honored globally
-# here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+# here or per-fleet in $FLEET_CONF_DIR/<session>.conf. NOTE: the global
+# FLEET_GLOBAL_MAX_SESSIONS ceiling (above) still applies — the orchestrator
+# won't push the system past it even if the per-fleet targets sum higher.
 #FLEET_MAX_SESSIONS=4
 # Optional per-tick ramp cap — spawn at most this many new sessions per daemon
 # cycle (~120s). Unset → fill straight to FLEET_MAX_SESSIONS in one tick.
