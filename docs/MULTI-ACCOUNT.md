@@ -65,6 +65,19 @@ API credits, **not** your subscription — the opposite of what this is for.)
    chmod 600 ~/.config/claude-fleet/accounts/*
    ```
 
+   **Different windows per account?** If your accounts are on different tiers
+   (Pro vs Max 5×/20×) whose limits reset over different windows, give an account
+   its own bench duration with a companion `<label>.conf` next to its token:
+
+   ```sh
+   printf 'LIMIT_TTL=7d\n' > ~/.config/claude-fleet/accounts/max20x.conf   # weekly-capped
+   printf 'LIMIT_TTL=5h\n' > ~/.config/claude-fleet/accounts/pro.conf      # 5h session window
+   ```
+
+   `LIMIT_TTL` takes `<N>[smhd]` or bare seconds; accounts without a `.conf` use
+   `FLEET_ACCOUNT_LIMIT_TTL` (default 5h). This stops a weekly-limited account
+   from being un-benched every 5h and thrashing straight back into the same wall.
+
 3. **(Optional) tune it in `fleet.conf`:**
 
    ```sh
