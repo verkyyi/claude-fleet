@@ -30,12 +30,10 @@ PREVIEW=( --preview-window=hidden )
 # Loop so Esc/q just relaunches — the window stays a live dashboard.
 while :; do
   rm -f "$C/rename_target" "$C/bind_target"   # clear any half-finished mode from a prior run
-  SP=$(tmux display-message -p '#{session_path}' 2>/dev/null); SP="${SP/#$HOME/~}"   # cwd new windows open in
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-sort \
-    --layout=reverse-list --info=hidden --border=rounded \
-    --border-label=" $SP " --border-label-pos=3 \
+    --layout=reverse-list --info=hidden --border=none \
     --prompt='＋ new ▸ ' \
     --header='enter=jump · type→enter=new · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
     "${PREVIEW[@]}" \
