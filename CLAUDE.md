@@ -93,6 +93,14 @@ issues as the backlog. See README.md for the architecture. Components:
 7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
    `~/.zshrc` (bash users: the functions are zsh-flavored; port on request).
 
+   **Optional — multiple subscription accounts w/ auto-failover.** If the user
+   holds more than one Claude subscription and wants the fleet to switch when one
+   hits its usage limit, set it up per **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**:
+   one `claude setup-token` OAuth token per file in
+   `~/.config/claude-fleet/accounts/` (name = label, `chmod 600`). Off by default
+   (no files → the spawn launcher `bin/fleet-claude.sh` is just `exec claude`).
+   `bin/fleet-doctor.sh` validates the token files.
+
 8. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
    spinner animates; `prefix+j` opens the dash; `prefix+b` opens the backlog

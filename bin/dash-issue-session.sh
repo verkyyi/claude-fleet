@@ -69,13 +69,15 @@ fi
 # collides (tmux errors "can't find window"); matches steward-session.sh /
 # fleet-up.sh. Create in the fleet's session explicitly (the trailing ':' picks
 # the next free window index) so it works headless with no client attached.
+# Route through fleet-claude.sh so the session launches under the active
+# subscription account (transparent `exec claude` when no accounts registered).
 #
 # Headless orchestrator spawns pass -d: new-window makes the new window CURRENT
 # by default, which yanks a user attached to $SESS over to it even though we skip
 # select-window below — so skipping select-window alone isn't enough to keep the
 # active window put. Interactive spawns omit -d and select the window by id.
 detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
-win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$slug" -c "$wt" "claude \"\$(cat '$tf')\"; exec \$SHELL") \
+win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$slug" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Only steal focus for the interactive path; a headless orchestrator spawn must

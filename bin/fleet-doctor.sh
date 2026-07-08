@@ -83,6 +83,32 @@ else
   warn claude "not found — the CLI you run per window and the optional summarize/classify daemons"
 fi
 
+# --- multi-account token pool (optional: auto-failover across subscriptions) ---
+# OFF unless token files exist. When ON, each file's contents must be a non-empty
+# `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.
+acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
+if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' 2>/dev/null)" ]; then
+  n=0; bad=0
+  for f in "$acct_dir"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in .*|*~) continue;; esac
+    n=$((n+1))
+    [ -s "$f" ] || { warn account "empty token file: ${f##*/} (run \`claude setup-token\`)"; bad=$((bad+1)); continue; }
+    # ls -ld perms: chars are type + owner(3) + group(3) + other(3);
+    # char 5 = group-read, char 8 = other-read. Either 'r' → token is exposed.
+    # shellcheck disable=SC2012  # labels are our own [.~-safe] filenames, not arbitrary
+    mode=$(ls -ld "$f" 2>/dev/null | cut -c1-10)
+    gr=$(printf '%s' "$mode" | cut -c5); ot=$(printf '%s' "$mode" | cut -c8)
+    if [ "$gr" = "r" ] || [ "$ot" = "r" ]; then
+      warn account "${f##*/} is group/other-readable — \`chmod 600 $f\`"; bad=$((bad+1))
+    fi
+  done
+  [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed"
+  if [ "$(uname)" = "Darwin" ]; then
+    printf '        note: on macOS token files are the ONLY way to switch accounts (Keychain ignores CLAUDE_CONFIG_DIR).\n'
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

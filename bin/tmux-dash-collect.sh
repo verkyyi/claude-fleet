@@ -228,6 +228,32 @@ line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$C/ratelimit"; fi
 
+# --- multi-account auto-switch (every run) ---
+# When a window running under a registered account shows the "You've hit your …
+# limit · resets …" banner, mark THAT account limited and rotate the active
+# pointer so NEW sessions spawn on a fresh subscription. The window carries its
+# account label in @cc_account (stamped by bin/fleet-claude.sh at launch).
+# No-op unless accounts are registered — so single-account installs skip it.
+US=$'\x1f'
+if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
+  tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{@cc_account}" 2>/dev/null | \
+  while IFS="$US" read -r win acct; do
+    [ -n "$acct" ] || continue
+    # match the core signal ("hit your <session|weekly|Opus> limit"); the trailing
+    # "· resets …" (when present) is captured for the notification but not required.
+    banner=$(tmux capture-pane -p -S -200 -t "$win" 2>/dev/null \
+      | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
+    [ -n "$banner" ] || continue
+    newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
+    # exit 10 = this call rotated the active account away → notify once
+    if [ "$rc" -eq 10 ] && [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+      $FLEET_NOTIFY_CMD "# subscription limit reached
+account **$acct** hit its usage limit — new sessions now use **${newact:-?}**
+> ${banner}" >/dev/null 2>&1
+    fi
+  done
+fi
+
 # --- PR/CI attention signal (every run) ---
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
 # @pfg (color). window-status-format renders them after the window name and
