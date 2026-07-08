@@ -83,6 +83,26 @@ else
   warn claude "not found — the CLI you run per window and the optional classify daemon"
 fi
 
+# --- fleet quality-of-life commands (optional: repo-shipped /skills) ---
+# Installed by copying the repo's commands/*.md into the Claude Code user
+# commands dir (see CLAUDE.md). Optional — the fleet runs without them — so a
+# missing set is a warn, never a fail. Each fleet skill carries a `fleet skill ·
+# owner:` marker just under its title (see commands/README.md); count how many
+# landed. Match only the file head so README.md — which merely quotes the marker
+# in prose — isn't miscounted as a skill.
+cmd_dir="${CLAUDE_COMMANDS_DIR:-$HOME/.claude/commands}"
+if [ -d "$cmd_dir" ]; then
+  n=0
+  for f in "$cmd_dir"/*.md; do
+    [ -f "$f" ] || continue   # literal *.md when the glob matches nothing
+    head -n 3 "$f" 2>/dev/null | grep -qF 'fleet skill · owner:' && n=$((n+1))
+  done
+  if [ "$n" -gt 0 ]; then pass commands "$n fleet command(s) in $cmd_dir"
+  else warn commands "no fleet commands in $cmd_dir — optional /skills not installed (copy commands/*.md)"; fi
+else
+  warn commands "$cmd_dir absent — optional fleet /skills not installed"
+fi
+
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.

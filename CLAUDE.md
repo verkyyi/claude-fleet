@@ -24,6 +24,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
+| Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
 
 ## Install steps
 
@@ -110,7 +111,15 @@ issues as the backlog. See README.md for the architecture. Components:
    (no files → the spawn launcher `bin/fleet-claude.sh` is just `exec claude`).
    `bin/fleet-doctor.sh` validates the token files.
 
-8. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
+8. **Fleet commands (optional).** Copy `commands/*.md` → `~/.claude/commands/`
+   — **APPEND**; do not clobber existing personal commands (e.g. `sweep.md`,
+   `new-issue.md`). These are repo-shipped, fleet-aware `/skill`s (optional
+   quality-of-life). Phase 0 ships only the contract (`commands/README.md` +
+   `commands/_template.md`); functional skills land later. `fleet-doctor.sh`
+   reports how many are installed (warn, not fail, if none — they're optional).
+   See `commands/README.md` for the skill contract.
+
+9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
    spinner animates; `prefix+j` opens the dash; `prefix+b` opens the backlog
    (needs the collector to have run once — trigger it by hand:
@@ -122,8 +131,10 @@ Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
 `summarize-hook.sh` entries on `Stop`/`SessionStart`) from
-`~/.claude/settings.json`, delete `~/.claude/fleet/`, and clear per-window
-state: `tmux set-window-option -g @claude_state ""` (or just restart tmux).
+`~/.claude/settings.json`, delete `~/.claude/fleet/`, remove any fleet commands
+you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
+marker — leave your personal commands), and clear per-window state:
+`tmux set-window-option -g @claude_state ""` (or just restart tmux).
 
 ## Conventions the code assumes (tell the user)
 
