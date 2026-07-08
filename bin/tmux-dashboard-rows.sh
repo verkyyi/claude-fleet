@@ -77,6 +77,15 @@ prmapn_for() {
   done
 }
 
+# Pane width, to right-align the PR/ctx block to the edge. `tput cols </dev/tty`
+# reads the dash pane fzf is attached to; falls back to 120 when there's no tty
+# (e.g. piped verification). fzf reserves a 2-col gutter; keep a 2-col right
+# margin so it never clips the ctx% digits. Layout column widths:
+#   LEFTW = glyph1+sp + issue5+sp + window22+sp = 31 ; RIGHTW = PR7+sp + ctx4 = 12
+COLS=$( { tput cols </dev/tty; } 2>/dev/null ); case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
+LEFTW=31; RIGHTW=12; USABLE=$(( COLS - 4 ))
+[ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
+
 buf=""
 while IFS=$US read -r sess idx name path state _ wid iss; do
   [ -z "$name" ] && continue
@@ -136,24 +145,32 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   smry=${smry:0:120}
 
   issd=''; [ -n "$iss" ] && issd="#$iss"
-  # full row: glyph1·issue5·PR7·ctx4·name22·summary  (issue# in old idx slot; summary trails name)
+  # full row: glyph1·issue5·window22·summary(flex)·⟨pad⟩·PR7·ctx4
+  # window+summary sit right after the issue; PR/ctx right-align to the edge, the
+  # gap between summary and PR flexing so the metadata column stays pinned right.
   fld 5  "$issd"; f_iss=$fld_out
   fld 22 "$name"; f_name=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R} ${nmcol}${f_name}${R}  ${TX}${smry}${R}"
+  avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
+  [ ${#smry} -gt "$avail" ] && smry=${smry:0:$avail}
+  pad=$(( USABLE - LEFTW - ${#smry} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
+  printf -v gap '%*s' "$pad" ''
+  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${TX}${smry}${R}${gap}${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done < <(tmux list-windows -a -F "$WFMT")
 
-# column header — pinned at top of the list by fzf --header-lines=1. Widths match
-# the fld() calls above; leading "  " fills the glyph(1)+space slot so labels line
-# up under their columns. Underlined muted-grey to read as a rule, not a row.
+# column header — pinned at top of the list by fzf --header-lines=1. Same
+# right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
+# "summary" flexes, PR/ctx pinned right. Underlined muted-grey to read as a rule.
 fld 5  "issue";  h_i=$fld_out
+fld 22 "window"; h_n=$fld_out
 fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
-fld 22 "window"; h_n=$fld_out
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_p} ${h_c} ${h_n}  summary${R}"
+h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = len("summary")
+printf -v h_gap '%*s' "$h_pad" ''
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_p} ${h_c}${R}"
 
 # emit sorted by status rank (color/order conveys grouping)
 printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk _ line; do
