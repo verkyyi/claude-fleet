@@ -105,7 +105,17 @@ if [ -f "$rl_file" ]; then
     esac
 fi
 
+# --- Active subscription account (multi-account only; display-only read, no
+# side effects — resolving via `fleet-account.sh active` could ROTATE, which a
+# status repaint must never do, so read the cached pointer directly). ---
+acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
+acct_seg=""
+if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' ! -name '*.conf' 2>/dev/null)" ]; then
+    act=$(sed -n '1p' "${TMPDIR:-/tmp}/.claude-dash/account.active" 2>/dev/null)
+    [ -n "$act" ] && acct_seg="${DIM}│ ${GREEN}◉ ${act} "
+fi
+
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s" \
-    "$container" "$cpu_out" "$mem_out" "$usage_seg" "$rl_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$acct_seg" "$usage_seg" "$rl_seg"
