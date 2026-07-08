@@ -95,6 +95,15 @@ detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
 win=$(tmux new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# Seed the dash summary column synchronously so the row isn't blank until the
+# session renders content. summarize-hook.sh's SessionStart run skips a still-
+# blank pane (no screen text yet), so without this the column stays empty until
+# the first Stop or the ~180s daemon sweep. The LLM summarizer overwrites this
+# placeholder once real content exists (it change-gates on a screen hash, not on
+# prior file contents). Same key/format the readers expect: summary_<winIdDigits>
+# = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh).
+seed="starting #$num"; [ -n "$title" ] && seed="$seed: $title"
+printf '%s' "$seed" > "$C/summary_${win//[^0-9]/}" 2>/dev/null || :
 # Only steal focus for the interactive path; a headless spawn must not move the
 # active window out from under an attached user.
 [ -z "$TARGET_SESS" ] && tmux select-window -t "$win"
