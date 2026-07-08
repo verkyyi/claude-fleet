@@ -36,3 +36,19 @@ FLEET_CTX_WINDOW=200000
 # ~/.config/claude-fleet-webhook, chmod 600):
 #FLEET_NOTIFY_CMD="$HOME/.claude/fleet/extras/wecom-webhook-notify.sh"
 #FLEET_ESCALATE_AFTER=300
+
+# Disk-pressure guard (bin/fleet-diskguard.sh). The tmux server is shared by
+# every fleet, so a full volume ENOSPCs the collector and kills the server —
+# taking ALL fleets down at once. The guard measures the volume backing $TMPDIR
+# (where the dash cache lives) and:
+#   • GATE — fleet-up (spawn) and fleet-restore --if-down (auto-restore) refuse
+#     to add load when free < FLEET_DISK_FLOOR_GB, so auto-restore can't rebuild
+#     fleets straight back into a full disk (the restore⇄crash loop).
+#   • WATCH — the com.claude-fleet.diskguard daemon (60s) captures a forensic
+#     incident (open-but-deleted fds, largest recent files, top RSS) under
+#     ~/.config/claude-fleet/diskguard/ and fires FLEET_NOTIFY_CMD when free
+#     drops below FLEET_DISK_WARN_GB. Defaults shown:
+#FLEET_DISK_FLOOR_GB=12       # gate refusal threshold
+#FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
+#FLEET_DISK_TARGET="$TMPDIR"  # dir whose volume to measure
+#FLEET_DISK_COOLDOWN=300      # min seconds between incident captures
