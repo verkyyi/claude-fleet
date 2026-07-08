@@ -32,7 +32,7 @@ while :; do
   rm -f "$C/rename_target" "$C/bind_target"   # clear any half-finished mode from a prior run
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
-    --disabled --no-sort \
+    --disabled --no-input --no-sort \
     --layout=reverse-list --info=hidden --border=none \
     --prompt='▸ ' \
     --header='enter=jump · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
@@ -40,7 +40,7 @@ while :; do
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-pick.sh {1}\")+reload(bash $ROWS)" \
-    --bind "ctrl-e:execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
+    --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1

@@ -7,7 +7,7 @@ set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"
 if [ -f "$C/rename_target" ] || [ -f "$C/bind_target" ]; then
   rm -f "$C/rename_target" "$C/bind_target"
-  echo "change-prompt(＋ new ▸ )+clear-query"   # back out, no relaunch
+  echo "hide-input+change-prompt(▸ )+clear-query"   # back out, no relaunch
 else
   echo "abort"
 fi
