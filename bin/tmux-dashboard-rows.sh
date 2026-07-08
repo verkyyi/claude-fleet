@@ -40,10 +40,9 @@ state_v() { case "$1" in
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
 
-# model → short name + context window (FLEET_CTX_WINDOW; haiku 200k)
-model_v() { case "$1" in
-  *opus*) msht='opus';; *sonnet*) msht='sonnet';; *fable*) msht='fable';;
-  *haiku*) msht='haiku';; *mythos*) msht='mythos';; '') msht='';; *) msht='model';; esac
+# model → context window (FLEET_CTX_WINDOW; haiku 200k). The model short name was
+# dropped from the row in #36, so only cwin is computed now.
+model_v() {
   case "$1" in *haiku*) cwin=200000;; *) cwin=${FLEET_CTX_WINDOW:-200000};; esac; }
 
 PRMAP=""; [ -s "$C/prmap" ] && PRMAP=$(<"$C/prmap")
@@ -120,7 +119,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
       tail=${PMN#*$'\n'"$bare"$'\t'}
       if [ "$tail" != "$PMN" ]; then
         line=${tail%%$'\n'*}
-        num=${line%%$'\t'*}; rest=${line#*$'\t'}; st=${rest%%$'\t'*}; ci=${rest#*$'\t'}
+        rest=${line#*$'\t'}; st=${rest%%$'\t'*}; ci=${rest#*$'\t'}
         case "$st" in
           MERGED) pcol=$IN; ptxt="merged";;
           CLOSED) pcol=$GY; ptxt="closed";;
