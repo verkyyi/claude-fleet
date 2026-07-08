@@ -13,7 +13,7 @@
 #   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
 #   usage            — token-consumption proxy 5h/7d       (≥300s)
 #   ratelimit        — last-seen official weekly-% line + epoch (scrape, every run)
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
@@ -220,6 +220,9 @@ fi
 
 # --- opportunistic scrape of the official weekly-% line (every run) ---
 # If any session happens to print "N% of your weekly limit", capture it.
+# tolerant by design: grep exits 1 when no session shows the line (the common
+# case) — that non-zero pipeline status is intentionally discarded; only the
+# captured $line matters.
 line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
   tmux capture-pane -p -S -600 -t "$w" 2>/dev/null
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)

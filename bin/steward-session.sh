@@ -16,6 +16,7 @@
 # by name — a second 'plan' window makes that reference ambiguous, which is how
 # earlier versions piled up orphan 'plan' windows and left you on the wrong one
 # with no steward. Everything below targets by window_id / pane_id.
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"

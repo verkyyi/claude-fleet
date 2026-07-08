@@ -14,7 +14,7 @@
 #     screen -> classified once, then skipped -> steady-state cost ~= 0.
 #   * Caps classifications per tick (CLASSIFY_MAX, default 8).
 # Run from launchd (com.claude-fleet.classify, StartInterval ~300).
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CACHE="$BIN/../logs/.classify-cache"; mkdir -p "$CACHE"
 LOG="$BIN/../logs/classify.log"

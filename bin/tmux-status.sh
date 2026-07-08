@@ -5,6 +5,7 @@
 #               MEM green <60%, yellow 60-85%, red >85%.
 # Optional: set FLEET_STATUS_CONTAINER in fleet.conf to show a docker
 # container's ●/○ running indicator.
+set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"

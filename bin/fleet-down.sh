@@ -4,7 +4,7 @@
 # Tear down a fleet: kill its tmux session. The local checkout is ALWAYS left on
 # disk (your work lives there). With --purge, also remove the per-fleet conf and
 # this fleet's slug'd cache files. See docs/ARCHITECTURE.md.
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"

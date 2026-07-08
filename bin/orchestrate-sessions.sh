@@ -27,7 +27,7 @@
 # no leftover issue-<N> worktree on disk. Lowest issue number first (oldest).
 # The spawned session self-claims the issue, so the next collector cycle drops
 # it from the unassigned set — no double-spawn.
-set -u
+set -uo pipefail
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"

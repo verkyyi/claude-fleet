@@ -4,6 +4,7 @@
 # list. READ-ONLY (the collector writes $C/issues: milestone\t#num\tassignee\ttitle).
 # Line: <#num>US<colored display>US<milestone>. Milestone headers have empty
 # field1 (Enter no-ops on them).
+set -uo pipefail
 MODE="${1:-all}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 C="${TMPDIR:-/tmp}/.claude-dash"

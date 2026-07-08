@@ -27,7 +27,7 @@
 # The map lives under $FLEET_CONF_DIR/restore/ (durable across reboots, unlike the
 # $TMPDIR dash cache). One <session>.map per fleet so a fleet-down drops its own.
 # See docs/ARCHITECTURE.md.
-set -u
+set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"

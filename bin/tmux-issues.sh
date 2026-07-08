@@ -4,6 +4,7 @@
 # Enter on an issue spawns a Claude session to work on it (worktree + claude
 # seeded with the issue). Auto-reloads. Toggled as a two-pane window by
 # prefix+b: roadmap (milestoned) | unplanned (no milestone).
+set -uo pipefail
 REFRESH="${REFRESH:-8}"
 MODE="${1:-all}"
 BIN="$(cd "$(dirname "$0")" && pwd)"

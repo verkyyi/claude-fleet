@@ -2,6 +2,7 @@
 # reapply-tmux-attention.sh — ensure ~/.tmux.conf sources the attention layer.
 # Run once at install, and again after anything regenerates ~/.tmux.conf.
 # Idempotent: does nothing if the source line is already present.
+set -u  # POSIX sh: pipefail is bash-only (dash has none)
 BIN=$(cd "$(dirname "$0")" && pwd)
 FLEET=$(cd "$BIN/.." && pwd)
 CONF="$HOME/.tmux.conf"
