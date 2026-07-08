@@ -35,11 +35,11 @@ while :; do
     --disabled --no-input --no-sort \
     --layout=reverse-list --info=hidden --border=none \
     --prompt='▸ ' \
-    --header='enter=jump · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
+    --header='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · esc=back' \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
-    --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-pick.sh {1}\")+reload(bash $ROWS)" \
+    --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
