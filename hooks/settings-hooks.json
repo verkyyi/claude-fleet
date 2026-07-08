@@ -32,7 +32,8 @@
       {
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh done" },
-          { "type": "command", "command": "sh ~/.claude/fleet/bin/summarize-hook.sh" }
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/summarize-hook.sh" },
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/classify-hook.sh" }
         ]
       }
     ],
