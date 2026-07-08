@@ -34,8 +34,8 @@ while :; do
     --header-lines=1 \
     --disabled --no-sort \
     --layout=reverse-list --info=hidden --border=none \
-    --prompt='＋ new ▸ ' \
-    --header='enter=jump · type→enter=new · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
+    --prompt='▸ ' \
+    --header='enter=jump · ⌃g=bind (pick issue) · ⌃e=rename · esc=back' \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
