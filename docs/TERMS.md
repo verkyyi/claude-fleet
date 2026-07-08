@@ -92,6 +92,13 @@ they repaint instantly:
   long-running `/loop` doesn't die at the context limit.
 - **Handoff** — a doc that lets a fresh Claude session continue the same work
   from where another left off.
+- **Account pool / failover** — an optional set of Claude *subscription* accounts
+  (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
+  launcher `bin/fleet-claude.sh` exports the **active** account's token per
+  session; when a session prints a usage-limit banner, the collector marks that
+  account and `bin/fleet-account.sh` **rotates** the active pointer, so new
+  sessions fail over to a fresh subscription. Off unless token files exist. See
+  [MULTI-ACCOUNT](MULTI-ACCOUNT.md).
 
 ## Configuration
 
@@ -103,6 +110,8 @@ they repaint instantly:
   - `FLEET_CTX_WINDOW` — context size for the ctx% column (200000 / 1000000).
   - `FLEET_NOTIFY_CMD` / `FLEET_ESCALATE_AFTER` — detached-escalation notifier + delay.
   - `FLEET_STATUS_CONTAINER` — optional docker container to show as ●/○.
+  - `FLEET_ACCOUNTS_DIR` / `FLEET_ACCOUNTS` / `FLEET_ACCOUNT_LIMIT_TTL` — multi-account
+    failover pool (see [MULTI-ACCOUNT](MULTI-ACCOUNT.md)); off unless token files exist.
 - **`FLEET_ID`** — the fleet's identity = its tmux session name. In the
   multi-fleet model this is the key that scopes a fleet's config and cache. See
   [ARCHITECTURE](ARCHITECTURE.md).

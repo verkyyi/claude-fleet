@@ -51,6 +51,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # cycle (~120s). Unset → fill straight to FLEET_MAX_SESSIONS in one tick.
 #FLEET_ORCHESTRATE_BATCH=2
 
+# Multiple subscription accounts, with auto-failover when one hits its usage
+# limit (the rolling 5-hour "session" window or the weekly cap). Register each
+# account as a token FILE — name = label, contents = its OAuth token from
+# `claude setup-token` (chmod 600) — in this directory. When the collector sees
+# a session print "You've hit your … limit", it marks that account and rotates,
+# so NEW sessions launch on a fresh subscription. Empty/absent dir → OFF (the
+# fleet uses your single logged-in account exactly as before). See
+# docs/MULTI-ACCOUNT.md.
+#FLEET_ACCOUNTS_DIR="$HOME/.config/claude-fleet/accounts"
+# Optional: pin the account order/subset (space-separated labels); default is
+# every token file, sorted by name.
+#FLEET_ACCOUNTS="work personal spare"
+# How long a limited account stays out of rotation before it's eligible again
+# (seconds; default 18000 = the 5-hour session window).
+#FLEET_ACCOUNT_LIMIT_TTL=18000
+
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:

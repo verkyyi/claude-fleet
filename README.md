@@ -169,6 +169,29 @@ Each fleet writes `~/.config/claude-fleet/<session>.conf` (overlays the global
 default. Every fleet gets a steward pane in its `plan` hub; set
 `FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it runs.
 
+## Multiple subscription accounts (auto-failover)
+
+A busy fleet drains one subscription's rolling 5-hour window quickly. Register
+**several Claude subscriptions** and the fleet **fails over to a fresh one** the
+moment a session hits its limit — new work keeps flowing instead of parking.
+
+Each account is a `claude setup-token` OAuth token dropped in a file (name =
+label, `chmod 600`); the launcher exports `CLAUDE_CODE_OAUTH_TOKEN` per session,
+and the collector rotates the active account when it spots a
+`You've hit your … limit` banner. Off by default — no token files, no change.
+
+```sh
+mkdir -p ~/.config/claude-fleet/accounts
+printf '%s\n' "$(claude setup-token)" > ~/.config/claude-fleet/accounts/work   # per account
+chmod 600 ~/.config/claude-fleet/accounts/*
+bin/fleet-account.sh list          # pool · ● active · limited state
+```
+
+Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
+macOS Keychain ignores). One caveat: an **already-running** session can't
+hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full
+design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
+
 ## Opening links over SSH
 
 `--web`-style commands open a browser on the *remote* host — useless over

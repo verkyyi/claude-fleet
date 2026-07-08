@@ -15,7 +15,10 @@ cf() {
 }
 
 cw() {
-  local repo root branch name dir
+  local repo root branch name dir bin
+  bin="${${(%):-%x}:h:h}/bin"          # this file lives at <fleet>/shell/cw.zsh
+  local launch=claude                  # route through the account launcher if present
+  [ -x "$bin/fleet-claude.sh" ] && launch="$bin/fleet-claude.sh"
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "cw: not in a git repo"; return 1; }
   repo=$(basename "$root")
   branch="$1"; [ -z "$branch" ] && { echo "usage: cw <branch> [window-name]"; return 1; }
@@ -30,11 +33,11 @@ cw() {
   if [ -n "$TMUX" ]; then
     # reuse the current window: rename it, move into the worktree, run claude
     tmux rename-window "$name"
-    cd "$dir" && claude
+    cd "$dir" && "$launch"
   else
     # not in tmux: ensure the global session exists and drop a named window into it
     tmux has-session -t main 2>/dev/null || tmux new-session -d -s main
-    tmux new-window -t main: -n "$name" -c "$dir" claude
+    tmux new-window -t main: -n "$name" -c "$dir" "$launch"
     tmux attach -t main
   fi
 }
