@@ -19,6 +19,12 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # plans; 1000000 if your sessions run 1M-context models.
 FLEET_CTX_WINDOW=200000
 
+# Model every spawned fleet session launches with (passed as `claude --model`).
+# Default: opus — so a new window never silently falls back to sonnet. Set empty
+# to defer to your own `claude` default; an explicit --model in the spawn still
+# wins. Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+#FLEET_MODEL="opus"
+
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/
