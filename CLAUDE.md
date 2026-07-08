@@ -21,7 +21,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Classifier daemon (optional) | corrects state, detects `looping` | `claude` CLI |
-| Summarizer daemon (optional) | one-line LLM summary per session → dash summary column | `claude` CLI |
+| Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 
@@ -58,7 +58,11 @@ issues as the backlog. See README.md for the architecture. Components:
    `~/.claude/settings.json` — APPEND to any existing hook arrays, never
    replace them (jq: `.hooks.PreToolUse += [...]` etc., creating keys that
    don't exist). Back up settings.json first. These hooks are no-ops outside
-   tmux and always exit 0, so they are safe to add globally.
+   tmux and always exit 0, so they are safe to add globally. The `Stop` +
+   `SessionStart` entries also fire `summarize-hook.sh`, which refreshes the
+   dash summary for *that* window the instant a turn ends / a session starts
+   (backgrounded, so it never slows a turn); it self-disables if `claude` isn't
+   on PATH, and is a no-op if you skip the summarizer.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
@@ -108,7 +112,8 @@ issues as the backlog. See README.md for the architecture. Components:
 
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
-`~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries from
+`~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
+`summarize-hook.sh` entries on `Stop`/`SessionStart`) from
 `~/.claude/settings.json`, delete `~/.claude/fleet/`, and clear per-window
 state: `tmux set-window-option -g @claude_state ""` (or just restart tmux).
 

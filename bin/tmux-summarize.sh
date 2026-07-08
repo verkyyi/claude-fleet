@@ -1,10 +1,18 @@
 #!/bin/bash
 # tmux-summarize.sh — write a short LLM summary of what each Claude session is
-# doing, for the dash's summary column. Change-gated + capped so steady-state
-# token cost stays tiny (a static screen is never re-summarized). Keyed by
-# window-id (stable across reorders): $C/summary_<idnum>.
-# Run from launchd (com.claude-fleet.summarize) every ~180s. OPTIONAL — the
-# dash works without it; the summary column just stays empty.
+# doing, for the dash's summary column. The prompt is grounded in the session's
+# BOUND ISSUE (its goal) + window name/state (its identity) + the recent screen
+# (its current activity), so the one-liner reads as progress-against-the-task.
+# Change-gated + capped so steady-state token cost stays tiny (a static screen is
+# never re-summarized). Keyed by window-id (stable across reorders): $C/summary_<idnum>.
+#
+# Two modes:
+#   (default)       — daemon sweep of ALL windows (launchd com.claude-fleet.summarize, ~180s)
+#   --window <wid>  — summarize ONE window now. Fired by bin/summarize-hook.sh on
+#                     the Stop / SessionStart Claude hooks, so the column refreshes
+#                     the instant a turn ends or a session starts — not just on the
+#                     180s tick. Debounced + locked so bursts/daemon don't pile up.
+# OPTIONAL — the dash works without it; the summary column just stays empty.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
@@ -13,36 +21,86 @@ LOGDIR="$BIN/../logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/summarize.log"
 MODEL="${SUMMARIZE_MODEL:-haiku}"
 MAXW="${SUMMARIZE_MAX:-8}"
+DEBOUNCE="${SUMMARIZE_DEBOUNCE:-15}"   # min seconds between summaries of ONE window
 command -v claude >/dev/null 2>&1 || exit 0
 tmux info >/dev/null 2>&1 || exit 0
 
-RUBRIC='Below is a Claude Code terminal session. In ONE short line (max ~14 words), say concretely what this session is doing right now and its status — task + blocker/question if any. No preamble, no markdown, no quotes, no trailing period. If the screen is idle/empty, reply "idle".
-Screen:
------'
+RUBRIC='You are labeling a Claude Code session for a dashboard row. Using the bound issue (the goal) and the recent terminal screen (current activity), reply with ONE short line (max ~14 words): concretely what this session is doing now and its status — progress plus any blocker or question. No preamble, no markdown, no quotes, no trailing period. If the screen is idle or empty, reply "idle".'
 
-n=0
-while IFS=$'\t' read -r wid name state; do
-  [ -z "$wid" ] && continue
-  case "$name" in dash|plan|backlog) continue;; esac
-  [ -z "$state" ] && continue            # non-Claude window → no summary
-  [ "$n" -ge "$MAXW" ] && continue
-  id=${wid//[^0-9]/}
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+# issue_title <session> <num> — the bound issue's title from the collector cache
+# (issues_<slug>: milestone \t #num \t assignee \t title), resolving slug via
+# sessmap (session \t slug \t repo). Empty if uncached — the prompt still gets #num.
+issue_title() {
+  local sess="$1" num="$2" slug
+  slug=$(awk -F'\t' -v s="$sess" '$1==s{print $2; exit}' "$C/sessmap" 2>/dev/null)
+  [ -n "$slug" ] || return 0
+  awk -F'\t' -v n="$num" '{g=$2; gsub(/#/,"",g); if(g==n){print $4; exit}}' "$C/issues_$slug" 2>/dev/null
+}
+
+# do_window <wid> <name> <state> <sess> <iss> — summarize one window. Returns 0
+# iff it wrote a fresh summary. Skips panels, non-Claude windows, unchanged
+# screens (hash), and very recent re-summaries (debounce). A per-window lock keeps
+# the daemon sweep and a hook-fired run (or two rapid hooks) from racing.
+do_window() {
+  local wid="$1" name="$2" state="$3" sess="$4" iss="$5" id out lock cap h hf sum meta ititle rc=1
+  case "$name" in dash|plan|backlog) return 1;; esac
+  [ -z "$state" ] && return 1                       # non-Claude window
+  id=${wid//[^0-9]/}; [ -z "$id" ] && return 1
+  out="$C/summary_$id"
+  # debounce: skip if summarized within DEBOUNCE seconds (coalesces turn bursts)
+  if [ -f "$out" ] && [ "$(( $(date +%s) - $(mtime "$out") ))" -lt "$DEBOUNCE" ]; then return 1; fi
+  lock="$CACHE/$id.lock"
+  mkdir "$lock" 2>/dev/null || return 1             # someone else is on this window
   cap=$(tmux capture-pane -p -S -120 -t "$wid" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -60)
-  [ -z "$cap" ] && continue
-  h=$(printf '%s' "$cap" | cksum | awk '{print $1}')
-  hf="$CACHE/$id.hash"
-  [ "$h" = "$(cat "$hf" 2>/dev/null)" ] && continue   # unchanged screen → skip (no LLM call)
-  # tolerant by design: `head -1` closes the pipe early, so claude/sed may exit
-  # via SIGPIPE (141) under pipefail — harmless here, the status is discarded and
-  # only the captured text ($sum) is used.
-  sum=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p --model "$MODEL" 2>/dev/null \
-        | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
-  echo "$h" > "$hf"
-  [ -z "$sum" ] && continue
-  printf '%s' "$sum" > "$C/summary_$id"
-  printf '%s  %-12s %s\n' "$(date +%H:%M:%S)" "$name" "$(printf '%s' "$sum" | tr '\n' ' ' | cut -c1-70)" >> "$LOG"
-  n=$((n+1))
-done < <(tmux list-windows -a -F "#{window_id}"$'\t'"#{window_name}"$'\t'"#{@claude_state}")
+  if [ -n "$cap" ]; then
+    h=$(printf '%s' "$cap" | cksum | awk '{print $1}')   # gate on screen content only
+    hf="$CACHE/$id.hash"
+    if [ "$h" != "$(cat "$hf" 2>/dev/null)" ]; then
+      meta="Session window: ${name}  (state: ${state})"
+      if [ -n "$iss" ]; then
+        ititle=$(issue_title "$sess" "$iss")
+        meta="${meta}"$'\n'"Bound GitHub issue #${iss}${ititle:+: ${ititle}}"
+      fi
+      # tolerant: `head -1` closes the pipe early, so claude/sed may exit via
+      # SIGPIPE (141) under pipefail — harmless, only the captured text is used.
+      sum=$(printf '%s\n\n%s\n\nRecent screen:\n-----\n%s\n' "$RUBRIC" "$meta" "$cap" \
+            | claude -p --model "$MODEL" 2>/dev/null \
+            | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
+      echo "$h" > "$hf"
+      if [ -n "$sum" ]; then
+        printf '%s' "$sum" > "$out"
+        printf '%s  %-12s %s\n' "$(date +%H:%M:%S)" "$name" "$(printf '%s' "$sum" | tr '\n' ' ' | cut -c1-70)" >> "$LOG"
+        rc=0
+      fi
+    fi
+  fi
+  rmdir "$lock" 2>/dev/null
+  return $rc
+}
+
+# --- single-window mode (hook-driven) ---
+if [ "${1:-}" = "--window" ]; then
+  wid="${2:-}"; [ -n "$wid" ] || exit 0
+  info=$(tmux display-message -p -t "$wid" \
+        "#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{session_name}"$'\t'"#{@issue}" 2>/dev/null) || exit 0
+  IFS=$'\t' read -r name state sess iss <<EOF
+$info
+EOF
+  [ -n "$state" ] || state="working"    # hook fired from a live claude → treat as Claude even pre-first-state
+  do_window "$wid" "$name" "$state" "$sess" "$iss" || true
+  [ -f "$LOG" ] && { tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
+  exit 0
+fi
+
+# --- daemon sweep (default) ---
+n=0
+while IFS=$'\t' read -r wid name state sess iss; do
+  [ -z "$wid" ] && continue
+  [ "$n" -ge "$MAXW" ] && continue
+  do_window "$wid" "$name" "$state" "$sess" "$iss" && n=$((n+1))
+done < <(tmux list-windows -a -F "#{window_id}"$'\t'"#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{session_name}"$'\t'"#{@issue}")
 
 [ -f "$LOG" ] && { tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
 exit 0
