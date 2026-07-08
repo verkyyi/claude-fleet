@@ -1,13 +1,24 @@
 #!/bin/bash
-# dash-issue-session.sh <issue-number> — spawn a Claude session to work a GitHub
-# issue: a git worktree issue-<N> off the base branch + a tmux window running
-# `claude` seeded to read, claim, and implement the issue. The window is bound
-# to the issue via the @issue window option (shown in the dash and backlog).
+# dash-issue-session.sh <issue-number> [<target-session>] — spawn a Claude
+# session to work a GitHub issue: a git worktree issue-<N> off the base branch +
+# a tmux window running `claude` seeded to read, claim, and implement the issue.
+# The window is bound to the issue via the @issue window option (shown in the
+# dash and backlog).
+#
+# With no <target-session> the window is created in the CALLER's fleet (the
+# interactive dash/backlog path). Pass <target-session> to spawn into a specific
+# fleet you are not attached to — this is how the headless orchestrator
+# (orchestrate-sessions.sh) fills a fleet's backlog; in that mode we do NOT
+# select-window, so a user attached to that session is never yanked to the new
+# window.
 num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
+TARGET_SESS="${2:-}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
-fleet_load_conf "$(fleet_current_session)"   # multi-fleet: target THIS fleet's checkout
+SESS="${TARGET_SESS:-$(fleet_current_session)}"
+[ -z "$SESS" ] && { tmux display-message "issues: no target tmux session"; exit 1; }
+fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { tmux display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
@@ -25,6 +36,11 @@ if [ ! -d "$wt" ]; then
     || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
     || { tmux display-message "issues: worktree add failed for $slug"; exit 1; }
 fi
-tmux new-window -n "$slug" -c "$wt" "claude \"\$(cat '$tf')\"; exec \$SHELL"
-tmux set-window-option -t "$slug" @issue "$num" 2>/dev/null   # bind window ↔ issue
-tmux select-window -t "$slug"
+# Target the fleet's session explicitly (works headless, when no client is
+# attached to it) — the trailing ':' lets tmux pick the next free window index.
+tmux new-window -t "$SESS:" -n "$slug" -c "$wt" "claude \"\$(cat '$tf')\"; exec \$SHELL" \
+  || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
+tmux set-window-option -t "$SESS:$slug" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# Only steal focus for the interactive path; a headless orchestrator spawn must
+# not move the active window out from under an attached user.
+[ -z "$TARGET_SESS" ] && tmux select-window -t "$SESS:$slug"

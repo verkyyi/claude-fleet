@@ -49,6 +49,11 @@ demo repo data.</sub>
   an hourly janitor removes worktrees that are merged + clean + not attached
   to any live pane (and never anything else).
 
+- **Auto-orchestration** (opt-in): set `FLEET_MAX_SESSIONS=N` and a background
+  daemon keeps the fleet at N *running* sessions, spawning issue-bound sessions
+  off the remaining backlog (unassigned open issues, oldest first) as slots free
+  up. Off by default — a fleet with no `FLEET_MAX_SESSIONS` is never touched.
+
 ## Architecture
 
 ```
@@ -199,6 +204,10 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   + cache-read×0.02 over rolling 5h/7d windows.
 - The summarizer and classifier spend real (haiku-sized, change-gated)
   tokens. Both are optional; everything else works without them.
+- The auto-orchestrator (`orchestrate-sessions.sh`, 120s) is optional **and**
+  opt-in: it no-ops every fleet until one sets `FLEET_MAX_SESSIONS`. When on it
+  spawns real worktree + `claude` sessions off the backlog (which spend tokens)
+  up to that per-fleet cap; a per-tick `FLEET_ORCHESTRATE_BATCH` ramps it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
   user units (`systemd/` — one always-on service + `.timer`/`.service` pairs,
   `__HOME__`-templated; see `systemd/README.md`).
