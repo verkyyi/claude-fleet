@@ -108,9 +108,9 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
         line=${tail%%$'\n'*}
         num=${line%%$'\t'*}; rest=${line#*$'\t'}; st=${rest%%$'\t'*}; ci=${rest#*$'\t'}
         case "$st" in
-          MERGED) pcol=$IN; ptxt="$num merged";;
-          CLOSED) pcol=$GY; ptxt="$num closed";;
-          *) case "$ci" in ✓) pcol=$GN;; ✗) pcol=$RD;; …) pcol=$TX;; *) pcol=$GY;; esac; ptxt="$num $ci";;
+          MERGED) pcol=$IN; ptxt="merged";;
+          CLOSED) pcol=$GY; ptxt="closed";;
+          *) case "$ci" in ✓) pcol=$GN;; ✗) pcol=$RD;; …) pcol=$TX;; *) pcol=$GY;; esac; ptxt="$ci";;
         esac
         break
       fi
@@ -136,14 +136,13 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   smry=${smry:0:120}
 
   issd=''; [ -n "$iss" ] && issd="#$iss"
-  # full row: glyph1·idx3·name22·issue6·PR12·model6·ctx4·summary
+  # full row: glyph1·idx3·name22·issue6·PR7·ctx4·summary
   fld 3  "$idx";  f_idx=$fld_out
   fld 22 "$name"; f_name=$fld_out
   fld 6  "$issd"; f_iss=$fld_out
-  fld 12 "$ptxt"; f_pr=$fld_out
-  fld 6  "$msht"; f_model=$fld_out
+  fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  disp="${gc}${gl}${R} ${GY}${f_idx}${R} ${nmcol}${f_name}${R} ${GN}${f_iss}${R} ${pcol}${f_pr}${R} ${GY}${f_model}${R} ${pcolr}${f_pct}${R}  ${TX}${smry}${R}"
+  disp="${gc}${gl}${R} ${GY}${f_idx}${R} ${nmcol}${f_name}${R} ${GN}${f_iss}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}  ${TX}${smry}${R}"
 
   buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done < <(tmux list-windows -a -F "$WFMT")
