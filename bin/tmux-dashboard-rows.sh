@@ -136,13 +136,12 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   smry=${smry:0:120}
 
   issd=''; [ -n "$iss" ] && issd="#$iss"
-  # full row: glyph1·idx3·name22·issue6·PR7·ctx4·summary
-  fld 3  "$idx";  f_idx=$fld_out
+  # full row: glyph1·issue5·PR7·ctx4·name22·summary  (issue# in old idx slot; summary trails name)
+  fld 5  "$issd"; f_iss=$fld_out
   fld 22 "$name"; f_name=$fld_out
-  fld 6  "$issd"; f_iss=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  disp="${gc}${gl}${R} ${GY}${f_idx}${R} ${nmcol}${f_name}${R} ${GN}${f_iss}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}  ${TX}${smry}${R}"
+  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R} ${nmcol}${f_name}${R}  ${TX}${smry}${R}"
 
   buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done < <(tmux list-windows -a -F "$WFMT")
