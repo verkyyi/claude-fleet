@@ -8,8 +8,11 @@
 #   * it is clean (no uncommitted changes; untracked counts as dirty)
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is an ancestor of origin/<base>
+# On prune of a merged `issue-<N>` worktree, the bound issue #N is AUTO-CLOSED
+# (if still open) with a pointer to the merge — the net for a PR that landed
+# without a `Closes #N` keyword.
 # Fail-safe: if tmux is not running we cannot tell what's attached, so we SKIP.
-# Pass --dry-run to print decisions without removing anything.
+# Pass --dry-run to print decisions (incl. would-close) without removing anything.
 #
 # Multi-fleet: cleans EVERY fleet — the global fleet.conf default fleet plus each
 # per-fleet conf in $FLEET_CONF_DIR (~/.config/claude-fleet/*.conf). The "live
@@ -35,7 +38,7 @@ if ! tmux info >/dev/null 2>&1; then
 fi
 LIVE="$(tmux list-panes -a -F '#{pane_current_path}' 2>/dev/null)"
 
-removed=0; kept=0
+removed=0; kept=0; closed=0
 dir=""; head=""; branch=""
 REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""
 
@@ -61,13 +64,31 @@ process() {
   if [ -z "$merged" ]; then
     say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return
   fi
+  # issue number bound to this worktree (branch convention: issue-<N>)
+  local inum=""
+  case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac
   if [ "$DRY" = 1 ]; then
-    echo "PRUNE $branch  ($merged)  -> ${dir##*/}"; removed=$((removed+1)); return
+    local ex=""
+    if [ -n "$inum" ] && [ -n "$REPO" ]; then
+      local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+      [ "$st" = "OPEN" ] && ex="  + close #$inum" || ex="  (#$inum already ${st:-?})"
+    fi
+    echo "PRUNE $branch  ($merged)  -> ${dir##*/}$ex"; removed=$((removed+1)); return
   fi
   if git -C "$REPO_ROOT" worktree remove "$dir" 2>/dev/null; then
     git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
     log "PRUNED $branch ($merged) — removed ${dir##*/} + deleted branch"
     removed=$((removed+1))
+    # auto-close the bound issue if still open (net for a PR lacking Closes #N)
+    if [ -n "$inum" ] && [ -n "$REPO" ]; then
+      local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+      if [ "$st" = "OPEN" ]; then
+        if gh -R "$REPO" issue close "$inum" \
+             --comment "Auto-closed: branch \`$branch\` merged ($merged) and its worktree session was reaped by worktree-autoclean." >/dev/null 2>&1; then
+          log "CLOSED #$inum ($REPO) — merged+reaped"; closed=$((closed+1))
+        fi
+      fi
+    fi
   else
     log "FAIL  could not remove $dir (branch $branch)"
   fi
@@ -115,7 +136,7 @@ if [ -d "$FLEET_CONF_DIR" ]; then
   done
 fi
 
-say "done: pruned=$removed kept=$kept"
+say "done: pruned=$removed closed=$closed kept=$kept"
 # keep the log from growing unbounded
 if [ "$DRY" = 0 ] && [ -f "$LOG" ]; then tail -n 500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
 exit 0

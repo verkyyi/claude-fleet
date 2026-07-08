@@ -20,11 +20,9 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 FLEET_CTX_WINDOW=200000
 
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
-# ALL fleets on this machine. Every spawn path — the new-session box, the
-# backlog's Enter, and the auto-orchestrator (below) — refuses once this many are
-# live (panels — the dash/plan/backlog windows — don't count). This is the global
-# safety cap; the per-fleet FLEET_MAX_SESSIONS below is a different knob (an
-# opt-in fill TARGET, not a ceiling). Default 8; set to 0 to disable entirely.
+# ALL fleets on this machine. Every spawn path — the new-session box and the
+# backlog's Enter — refuses once this many are live (panels — the dash/plan/
+# backlog windows — don't count). Default 8; set to 0 to disable entirely.
 FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
@@ -35,25 +33,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_STATUS_CONTAINER="claude-dev"
 
 # Optional: the command each fleet's steward pane runs (the bottom pane of the
-# always-on 'plan' hub). Unset → the built-in default (adopt ~/.claude/steward.md,
-# resume the newest handoff or run one /sweep, then arm a /loop sweep). Set it to
-# drive your own steward, or to a plain shell to opt out of the auto-driven one.
+# always-on 'plan' hub). Unset → the built-in default (adopt ~/.claude/steward.md
+# as an on-demand steward scoped to this fleet's repo, resuming the newest
+# handoff if one exists). Set it to drive your own steward, or to a plain shell
+# to opt out of the auto-driven one.
 # Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
-
-# Auto-orchestration (opt-in): the orchestrate-sessions.sh daemon keeps a fleet
-# busy by spawning issue-bound sessions off the remaining backlog (unassigned
-# open issues, oldest first) until the fleet has FLEET_MAX_SESSIONS *running*
-# sessions. Unset or ≤0 → the daemon leaves this fleet alone. A 'running'
-# session is any window bound to an issue whose state isn't yet 'done', so a
-# finished session frees its slot for the next backlog item. Honored globally
-# here or per-fleet in $FLEET_CONF_DIR/<session>.conf. NOTE: the global
-# FLEET_GLOBAL_MAX_SESSIONS ceiling (above) still applies — the orchestrator
-# won't push the system past it even if the per-fleet targets sum higher.
-#FLEET_MAX_SESSIONS=4
-# Optional per-tick ramp cap — spawn at most this many new sessions per daemon
-# cycle (~120s). Unset → fill straight to FLEET_MAX_SESSIONS in one tick.
-#FLEET_ORCHESTRATE_BATCH=2
 
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each

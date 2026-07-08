@@ -40,7 +40,7 @@ fi
 # environment (fleet-up.sh's internal contract) > the documented FLEET_STEWARD_CMD
 # conf knob (global or per-fleet fleet.conf) > the built-in default. The hub is
 # always built — this only swaps the command its steward pane launches.
-STEWARD_CMD="${STEWARD_CMD:-${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the steward session. If ~/.claude/handoff/ has a recent steward handoff, /handoff pick up the newest one first; otherwise run one /sweep now. Then arm /loop 45m /sweep.\"; exec \$SHELL}}"
+STEWARD_CMD="${STEWARD_CMD:-${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"; exec \$SHELL}}"
 
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to

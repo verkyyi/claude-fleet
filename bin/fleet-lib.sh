@@ -117,8 +117,8 @@ fleet_session_count() {
 
 # Global cap on concurrent Claude working sessions (issue #28). Returns 0 if a
 # new session may be spawned, non-zero if the cap is already reached. The limit
-# is FLEET_GLOBAL_MAX_SESSIONS (default 8) — a SYSTEM-WIDE ceiling, distinct from
-# the per-fleet FLEET_MAX_SESSIONS orchestrator fill-target; set it to 0 to
+# is FLEET_GLOBAL_MAX_SESSIONS (default 8) — a SYSTEM-WIDE ceiling on concurrent
+# Claude working sessions across all fleets; set it to 0 to
 # disable the cap entirely. On refusal, prints a human-readable reason on stdout
 # for the caller to surface (tmux display-message); prints nothing when allowed.
 fleet_session_cap_ok() {

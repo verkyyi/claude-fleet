@@ -55,7 +55,7 @@ not the pipeline. They are **not** safe as the condition of an `if`/`while`, or
 joined with `&&`/`||`, unless you genuinely want the whole pipeline to be
 considered failed on a tolerated stage. When a discarded-status pipeline isn't
 obviously intentional, add a one-line `# tolerant by design:` comment (see
-`tmux-dash-collect.sh`, `tmux-summarize.sh`). If you need a tolerated stage
+`tmux-dash-collect.sh`). If you need a tolerated stage
 inside a conditional, make the tolerance explicit: `if a | b || true; then` or
 restructure so the intended predicate is the last stage.
 
