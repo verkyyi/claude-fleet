@@ -15,12 +15,12 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 if [ -f "$bindflag" ]; then                       # bind-issue mode (empty q unbinds)
   t=$(cat "$bindflag"); rm -f "$bindflag"
   tmux set-window-option -t "$t" @issue "$q" 2>/dev/null
-  echo "change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
+  echo "hide-input+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
 elif [ -f "$flag" ]; then                         # rename mode
   t=$(cat "$flag"); rm -f "$flag"
   if [ -n "$q" ]; then tmux rename-window -t "$t" "$q" 2>/dev/null
-    echo "change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
-  else echo "change-prompt($PROMPT)+clear-query"; fi
+    echo "hide-input+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
+  else echo "hide-input+change-prompt($PROMPT)+clear-query"; fi
 else                                              # jump (typed query is ignored)
   tmux select-window -t "$target" 2>/dev/null
   echo "clear-query"
