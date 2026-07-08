@@ -42,6 +42,30 @@ fleet_load_conf() {
   return 0
 }
 
+# CHEAP: which SEAT is the caller running in? (see commands/README.md — the
+# fleet-skill role-guard.) Prints:
+#   worker  — the current tmux window has @issue set AND cwd is inside an
+#             issue-<N> git worktree (a session bound to one issue)
+#   steward — no @issue on the window AND cwd is the fleet base checkout
+#             ($FLEET_MAIN — the hub session that triages, doesn't implement)
+#   ""      — neither (ambiguous: a stray shell, or cwd elsewhere)
+# Needs FLEET_MAIN in the environment to recognise the steward seat, so call
+# fleet_load_conf first. Pure tmux + shell builtins, no git/gh forks.
+fleet_seat() {
+  local issue cwd main
+  issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+  cwd=$(pwd -P 2>/dev/null)
+  case "$cwd" in
+    */issue-[0-9]*)
+      [ -n "$issue" ] && { printf 'worker'; return; } ;;
+  esac
+  if [ -z "$issue" ] && [ -n "${FLEET_MAIN:-}" ]; then
+    main=$(cd "$FLEET_MAIN" 2>/dev/null && pwd -P)
+    [ -n "$main" ] && [ "$cwd" = "$main" ] && { printf 'steward'; return; }
+  fi
+  return 0
+}
+
 # owner/name → filesystem-safe slug (owner-name).
 fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
