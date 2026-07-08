@@ -20,9 +20,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
-| Summarizer daemon (optional) | 1-line LLM summary per session | `claude` CLI |
 | Classifier daemon (optional) | corrects state, detects `looping` | `claude` CLI |
-| Orchestrator daemon (optional) | auto-spawns backlog sessions up to `FLEET_MAX_SESSIONS`/fleet | gh, git |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 
@@ -74,19 +72,15 @@ issues as the backlog. See README.md for the architecture. Components:
      kills the *shared* tmux server, taking every fleet down at once, so the
      watcher captures forensics + notifies on low disk and its `--gate` mode
      (called by fleet-up and fleet-restore) refuses to add load below the floor.
-     summarize/classify/orchestrate/worktree-autoclean are optional — ask the
-     user, and mention summarize+classify each spend (small, change-gated) LLM
-     tokens. The **orchestrate** daemon (`com.claude-fleet.orchestrate`, 120s) is
-     opt-in AND inert until a fleet sets `FLEET_MAX_SESSIONS`, so installing it is
-     harmless; explain that once opted in it auto-spawns real worktrees + `claude`
-     sessions off the backlog (which spend tokens) up to that per-fleet cap.
+     classify/worktree-autoclean are optional — ask the user, and mention
+     classify spends (small, change-gated) LLM tokens.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
      `systemctl --user enable --now claude-fleet-spinner.service` +
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard); the optional
-     classify/summarize/orchestrate/worktree-autoclean are `.timer`s too. Run `loginctl
+     classify/worktree-autoclean are `.timer`s too. Run `loginctl
      enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
@@ -120,7 +114,7 @@ state: `tmux set-window-option -g @claude_state ""` (or just restart tmux).
 - **One tmux session ↔ one GitHub repo.** The PR map is one repo-wide
   `gh pr list`; multi-repo fleets need per-window repo detection (not built).
 - Windows named `dash`, `plan`, `backlog` are treated as panels, not Claude
-  sessions (excluded from the dash list and the summarizer).
+  sessions (excluded from the dash list).
 - The lowest-indexed window is pinned by the urgency sorter — keep your
   hub/dashboard there. Window numbers are NOT stable; navigate by name or
   position (slot 1 = most urgent).

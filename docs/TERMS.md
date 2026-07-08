@@ -34,13 +34,10 @@ nests three levels, and this is where the confusing vocabulary starts:
   instant. See [ARCHITECTURE](ARCHITECTURE.md) for why there is exactly **one,
   shared** collector even when you run many fleets.
 - **Steward** — a long-lived **Claude session** that watches a whole repo instead
-  of working a single task: runs a sweep on a loop, closes finished issues,
-  triages new ones, checks prod health, keeps the fleet tooling healthy.
+  of working a single task: on demand it closes finished issues, triages new
+  ones, checks prod health, keeps the fleet tooling healthy.
   **One steward per fleet** (per repo). Its standing orders live outside this
   repo (they're operator-specific).
-- **Sweep** — the recurring *task* a steward runs (typically `/loop 45m /sweep`).
-  One sweep = one pass over repo status → finished-issue closing → new-issue
-  triage → prod health → context rotation → fleet hygiene.
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

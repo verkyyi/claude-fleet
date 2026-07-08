@@ -28,8 +28,8 @@ demo repo data.</sub>
   `prefix+a` hops to the neediest window.
 
 - **A mission-control dashboard** (`prefix+j`): an fzf panel listing every
-  session with state glyph, bound issue, model, context %, and a one-line LLM
-  summary of what it's doing. `Enter` jumps. **Type a task and press Enter** —
+  session with state glyph, bound issue, model, and context %. `Enter` jumps.
+  **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-G` binds a window to an existing issue, `Ctrl-E` renames.
 
@@ -53,11 +53,6 @@ demo repo data.</sub>
   an hourly janitor removes worktrees that are merged + clean + not attached
   to any live pane (and never anything else).
 
-- **Auto-orchestration** (opt-in): set `FLEET_MAX_SESSIONS=N` and a background
-  daemon keeps the fleet at N *running* sessions, spawning issue-bound sessions
-  off the remaining backlog (unassigned open issues, oldest first) as slots free
-  up. Off by default — a fleet with no `FLEET_MAX_SESSIONS` is never touched.
-
 ## Architecture
 
 ```
@@ -72,7 +67,6 @@ LLM classifier (haiku, ~5min, change-gated)                        + urgency sor
 collector daemon (60s) ──► cache files ──► fzf dashboard / backlog panels
   git · gh PRs+issues ·                     (read-only producers, render instantly)
   ctx tokens · usage proxy
-summarizer daemon (haiku, 3min, change-gated) ──► one-line summary column
 ```
 
 Design rules that made it work:
@@ -230,12 +224,8 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
 - The token-usage figures are a **local proxy** — the official rate-limit %
   isn't exposed by any API. Weights: output×1 + input×0.25 + cache-write×0.25
   + cache-read×0.02 over rolling 5h/7d windows.
-- The summarizer and classifier spend real (haiku-sized, change-gated)
-  tokens. Both are optional; everything else works without them.
-- The auto-orchestrator (`orchestrate-sessions.sh`, 120s) is optional **and**
-  opt-in: it no-ops every fleet until one sets `FLEET_MAX_SESSIONS`. When on it
-  spawns real worktree + `claude` sessions off the backlog (which spend tokens)
-  up to that per-fleet cap; a per-tick `FLEET_ORCHESTRATE_BATCH` ramps it.
+- The classifier spends real (haiku-sized, change-gated) tokens. It is
+  optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
   user units (`systemd/` — one always-on service + `.timer`/`.service` pairs,
   `__HOME__`-templated; see `systemd/README.md`).

@@ -44,6 +44,15 @@ if [ "$PURGE" = 1 ]; then
   fi
 fi
 
-# refresh sessmap so the dead session drops out immediately
-( GH_TTL=999999 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
+# if that was the LAST fleet (tmux server now gone), this was a deliberate full
+# teardown — disarm crash auto-restore so the watcher doesn't resurrect it. A
+# real crash never runs fleet-down, so it stays armed and gets restored.
+if ! tmux info >/dev/null 2>&1; then
+  bash "$BIN/fleet-restore.sh" --disarm >/dev/null 2>&1 || true
+else
+  # server still up: drop just this fleet's restore map so it isn't rebuilt
+  rm -f "$FLEET_CONF_DIR/restore/$NAME.map" 2>/dev/null || true
+  # refresh sessmap so the dead session drops out immediately
+  ( GH_TTL=999999 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
+fi
 echo "fleet-down: done (checkout left on disk)"

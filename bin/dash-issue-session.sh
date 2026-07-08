@@ -7,8 +7,7 @@
 #
 # With no <target-session> the window is created in the CALLER's fleet (the
 # interactive dash/backlog path). Pass <target-session> to spawn into a specific
-# fleet you are not attached to — this is how the headless orchestrator
-# (orchestrate-sessions.sh) fills a fleet's backlog; in that mode we do NOT
+# fleet you are not attached to — a headless spawn; in that mode we do NOT
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
@@ -42,9 +41,9 @@ fi
 # Global session cap (issue #28): refuse to spawn once FLEET_GLOBAL_MAX_SESSIONS
 # (default 8) Claude working sessions are already live across ALL fleets. This is
 # the shared choke point for every spawn path — the new-session box, the backlog
-# Enter, AND the headless orchestrator (dash-issue-session.sh <n> <sess>) — so the
-# global cap is a true system-wide ceiling that also bounds auto-orchestration.
-# Exit non-zero so the orchestrator records an honest FAIL, not a false spawn.
+# Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>) — so the
+# global cap is a true system-wide ceiling. Exit non-zero on refusal so a
+# headless caller records an honest FAIL, not a false spawn.
 if ! cap_msg=$(fleet_session_cap_ok); then tmux display-message "$cap_msg"; exit 1; fi
 
 MAIN="${FLEET_MAIN:-}"
@@ -85,14 +84,14 @@ fi
 # Route through fleet-claude.sh so the session launches under the active
 # subscription account (transparent `exec claude` when no accounts registered).
 #
-# Headless orchestrator spawns pass -d: new-window makes the new window CURRENT
-# by default, which yanks a user attached to $SESS over to it even though we skip
-# select-window below — so skipping select-window alone isn't enough to keep the
-# active window put. Interactive spawns omit -d and select the window by id.
+# Headless spawns (a <target-session> given) pass -d: new-window makes the new
+# window CURRENT by default, which yanks a user attached to $SESS over to it even
+# though we skip select-window below — so skipping select-window alone isn't
+# enough to keep the active window put. Interactive spawns omit -d and select by id.
 detach=(); [ -n "$TARGET_SESS" ] && detach=(-d)
 win=$(tmux new-window "${detach[@]}" -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
-# Only steal focus for the interactive path; a headless orchestrator spawn must
-# not move the active window out from under an attached user.
+# Only steal focus for the interactive path; a headless spawn must not move the
+# active window out from under an attached user.
 [ -z "$TARGET_SESS" ] && tmux select-window -t "$win"
