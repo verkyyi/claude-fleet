@@ -85,13 +85,12 @@ snapshot() {
       | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     mv "$tmp" "$RDIR/$sess.map" 2>/dev/null || rm -f "$tmp"
   done
-  # prune maps for sessions that no longer exist (kept fleets refresh above)
-  local mf name
-  for mf in "$RDIR"/*.map; do
-    [ -f "$mf" ] || continue
-    name=$(basename "$mf" .map)
-    tmux has-session -t "$name" 2>/dev/null || rm -f "$mf"
-  done
+  # NB: do NOT prune maps for absent sessions here. A CRASHED fleet's session is
+  # gone but its map MUST survive so --if-down can rebuild it. fleet-down.sh is the
+  # sole map remover (drops its own map on deliberate teardown). Pruning here
+  # destroyed the recovery data on a partial crash: after the server came back with
+  # only the surviving fleet, the next snapshot deleted the down fleet's map before
+  # restore could use it.
 }
 
 # ----------------------------------------------------------------- restore ----
@@ -156,17 +155,27 @@ case "${1:-}" in
   --disarm)   rm -f "$ARM"; echo "fleet-restore: auto-restore DISARMED";;
   --dry-run)  restore dry ;;
   --if-down)
-    # launchd watcher: act only if the whole server is gone AND armed.
-    if tmux info >/dev/null 2>&1; then exit 0; fi
+    # launchd watcher: restore any MAPPED fleet whose tmux session is absent —
+    # even when another fleet survived. A partial crash keeps the server "up" but
+    # still loses fleets, so gating on whole-server-absence (the old behaviour)
+    # left the down fleet stranded. restore() skips fleets already up, so acting
+    # whenever ANY mapped fleet is down is safe.
     [ -f "$ARM" ] || exit 0
-    # Disk-pressure circuit-breaker: if the server died because the volume filled,
-    # rebuilding every mapped fleet straight back into a full disk just re-crashes
-    # it — a restore ⇄ crash LOOP every StartInterval. Refuse until there's room.
+    ifd_down=0
+    for ifd_mf in "$RDIR"/*.map; do
+      [ -f "$ifd_mf" ] || continue
+      ifd_s=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$ifd_mf")
+      [ -n "$ifd_s" ] && ! tmux has-session -t "$ifd_s" 2>/dev/null && ifd_down=1
+    done
+    [ "$ifd_down" = 0 ] && exit 0
+    # Disk-pressure circuit-breaker: if a fleet died because the volume filled,
+    # rebuilding straight back into a full disk just re-crashes it — a restore ⇄
+    # crash LOOP every StartInterval. Refuse until there's room.
     if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate 2>/dev/null; then
-      log "server absent + armed BUT disk below floor → NOT restoring (would crash-loop); see fleet-diskguard --free"
+      log "mapped fleet down + armed BUT disk below floor → NOT restoring (would crash-loop); see fleet-diskguard --free"
       exit 0
     fi
-    log "server absent + armed → auto-restore"
+    log "mapped fleet down + armed → auto-restore"
     QUIET=1 restore ;;
   ""|--restore) restore ;;
   *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--arm|--disarm]" >&2; exit 2;;
