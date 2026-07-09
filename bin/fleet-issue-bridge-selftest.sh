@@ -140,9 +140,11 @@ grep -qF 'for the busy one' "$INJECT" && fail "c103 (worker WORKING) must be que
 SEEN="$WORK/state/bridge_fake-repo.seen"
 for id in 100 101 102 104; do grep -qxF "$id" "$SEEN" || fail "c$id should be marked seen"; done
 grep -qxF 103 "$SEEN" && fail "c103 (queued busy) must NOT be marked seen (retry next tick)"
-# watermark held at the earliest queued comment so c103 is refetched next tick.
-[ "$(cat "$WORK/state/bridge_fake-repo.since")" = '2026-07-09T00:00:04Z' ] \
-  || fail "watermark should hold at the queued comment's time (00:00:04Z)"
+# c103 is queued (pending), so the watermark must be HELD at its pre-tick value
+# (GitHub's ?since= is exclusive — advancing to c103's own timestamp would never
+# re-list it). Here that pre-tick value is the seed 00:00:00Z.
+[ "$(cat "$WORK/state/bridge_fake-repo.since")" = '2026-07-09T00:00:00Z' ] \
+  || fail "watermark must be held (not advanced) while a comment is queued"
 
 # DEDUP: a second identical poll injects nothing new (all handled/seen; c103 still
 # busy → still queued, still no inject).
@@ -176,5 +178,13 @@ if printf '%s' "$PAYLOAD" | FLEET_ISSUE_BRIDGE_SECRET="$SECRET" FLEET_DELIVERY_S
 fi
 grep -qF 'delivered via webhook' "$INJECT" && fail "a bad-HMAC delivery must NOT inject"
 
-printf 'selftest PASS: relay core + idle-gate + dedup + HMAC verified\n'
+# FAIL CLOSED: no secret configured → refuse (never relay an unverifiable body).
+: > "$INJECT"
+if printf '%s' "$PAYLOAD" | FLEET_ISSUE_BRIDGE_SECRET="" FLEET_DELIVERY_SIG="$GOODSIG" \
+     runbridge --deliver; then
+  fail "--deliver with NO secret must exit non-zero (fail closed)"
+fi
+grep -qF 'delivered via webhook' "$INJECT" && fail "an unsigned/no-secret delivery must NOT inject"
+
+printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) verified\n'
 exit 0

@@ -170,6 +170,14 @@ fleet_repo_cached() {
   awk -F'\t' -v s="$1" '$1==s{print $3; exit}' "$FLEET_C/sessmap"
 }
 
+# CHEAP: list the tmux sessions that are FLEETS — i.e. own a 'plan' or 'dash' hub
+# window — one per line. The single source for "which sessions are fleets"; the
+# plan/dash hub rule is otherwise copy-pasted across callers. Pure tmux + awk.
+fleet_hub_sessions() {
+  tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk '
+    { if ($2=="plan" || $2=="dash") f[$1]=1 } END { for (s in f) print s }'
+}
+
 # CHEAP: count the live Claude WORKING-session windows across every fleet on this
 # tmux server (the system-wide count issue #28's cap measures). A fleet session
 # is one that owns a hub window ('plan' or 'dash'); inside it, windows named

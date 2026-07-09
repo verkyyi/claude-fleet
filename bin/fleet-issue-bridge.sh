@@ -86,6 +86,30 @@ bridge_seen_add() {
   fi
 }
 
+# base64 decode, portable across GNU (-d) and BSD (-D). One helper so the poll and
+# --deliver paths can't drift.
+bridge_b64d() { printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null; }
+
+# Per-repo single-writer lease — the SAME lock for the poll tick AND a concurrent
+# --deliver, so the two ingresses can never interleave a bridge_seen_has→inject→
+# bridge_seen_add and double-relay one comment. mkdir is the atomic lock; a
+# SIGKILL'd holder can't run its cleanup, so steal a lease dir older than 120s (a
+# normal handler is sub-second). rc 0 = acquired.
+bridge_lease_path() { printf '%s/issue-bridge-%s.lock' "$LEASE_DIR" "$1"; }
+bridge_lease_acquire() { # $1 = lease path
+  local lease="$1" age
+  mkdir -p "$LEASE_DIR" 2>/dev/null
+  mkdir "$lease" 2>/dev/null && return 0
+  # Unknown age (both stat variants failed) → treat as stale (echo 0) and steal,
+  # rather than 0-age-never-steal which would deadlock the repo on a lost cleanup.
+  age=$(( $(now) - $(stat -f %m "$lease" 2>/dev/null || stat -c %Y "$lease" 2>/dev/null || echo 0) ))
+  if [ "$age" -ge 120 ]; then
+    rm -rf "$lease" 2>/dev/null
+    mkdir "$lease" 2>/dev/null && { log "stole stale lease $(basename "$lease") (age ${age}s)"; return 0; }
+  fi
+  return 1
+}
+
 # Resolve the live worker window bound to <issue> on <repo>. Prints
 # "session<TAB>window_id<TAB>@claude_state" for the first match, empty if none.
 # A window matches when @issue == the number AND its session resolves to <repo>
@@ -96,8 +120,12 @@ bridge_find_window() {
   while IFS=$'\t' read -r sess win st bissue; do
     [ "$bissue" = "$issue" ] || continue
     slug=$(fleet_slug_cached "$sess")
-    # No sessmap entry yet (single-fleet install / cold cache) → trust the match.
-    if [ -z "$slug" ] || [ "$slug" = "$want_slug" ]; then
+    # Cold cache (no sessmap entry yet) → don't blindly trust the @issue-number
+    # match: a DIFFERENT fleet may have its own same-numbered issue open, and
+    # injecting there would drive the wrong worker. Resolve the session's repo live
+    # (a git fork, but only on the cold-cache path) and require it to match.
+    [ -z "$slug" ] && slug=$(fleet_slug "$(fleet_resolve_repo_for_session "$sess")")
+    if [ "$slug" = "$want_slug" ]; then
       printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
     fi
   done < <(tmux list-windows -a -F '#{session_name}'$'\t''#{window_id}'$'\t''#{@claude_state}'$'\t''#{@issue}' 2>/dev/null)
@@ -125,8 +153,7 @@ bridge_fleet_for_repo() {
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     [ "$(fleet_slug_cached "$s")" = "$want_slug" ] && { printf '%s' "$s"; return 0; }
-  done < <(tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk \
-    '{ if ($2=="plan" || $2=="dash") f[$1]=1 } END { for (x in f) print x }')
+  done < <(fleet_hub_sessions)
   return 0
 }
 
@@ -150,7 +177,11 @@ bridge_relay() {
     local msg
     msg="[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
     if bridge_inject "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi
-    echo "inject-failed(#$issue)"; return 0
+    # The window still exists (we just resolved it) but a tmux op failed — a
+    # TRANSIENT error. Return the retry code so the comment is NOT marked seen and
+    # is re-attempted next tick, rather than silently dropped. (If the window is
+    # truly gone, the next tick takes the revive/gone path instead.)
+    echo "inject-failed(#$issue) — will retry"; return 3
   fi
 
   # No live window. Revive (opt-in) if the issue is OPEN and a fleet serves it.
@@ -181,6 +212,10 @@ bridge_relay() {
 deliver() {
   command -v python3 >/dev/null 2>&1 || { log "--deliver needs python3"; exit 2; }
   local secret="${FLEET_ISSUE_BRIDGE_SECRET:-}" sig="${FLEET_DELIVERY_SIG:-}" row PY
+  # FAIL CLOSED: the webhook path drives a bypass-permissions worker, so an
+  # unsigned/unverifiable delivery must be REFUSED, never relayed. Without a secret
+  # the HMAC can't be checked — reject rather than trust an attacker-settable body.
+  [ -z "$secret" ] && { log "--deliver: FLEET_ISSUE_BRIDGE_SECRET unset — refusing unsigned webhook delivery"; exit 1; }
   # The parser reads the RAW delivery on stdin — so it must run via `python3 -c`,
   # NOT `python3 - <<HEREDOC` (a heredoc would BE python's stdin, hiding the body).
   PY=$(cat <<'PYEOF'
@@ -211,13 +246,19 @@ PYEOF
   row=$(FLEET_SECRET="$secret" FLEET_SIG="$sig" python3 -c "$PY") \
     || { log "delivery rejected (HMAC/parse) — not relaying"; exit 1; }
 
-  local repo="${FLEET_REPO:-}" cid assoc author num b64 body slug
+  local repo="${FLEET_REPO:-}" cid assoc author num b64 body slug lease
   IFS=$'\t' read -r cid assoc author num b64 <<EOF
 $row
 EOF
   [ -z "$repo" ] && { log "--deliver: FLEET_REPO unset — cannot resolve repo"; exit 1; }
-  body=$(printf '%s' "$b64" | base64 -d 2>/dev/null || printf '%s' "$b64" | base64 -D 2>/dev/null)
+  body=$(bridge_b64d "$b64")
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  # Take the per-repo lease so this delivery can't interleave with a poll tick
+  # (or another delivery) and double-relay the same comment. Held for the whole
+  # relay+seen; released on exit. A held lease ⇒ retry (EX_TEMPFAIL).
+  lease=$(bridge_lease_path "$slug")
+  bridge_lease_acquire "$lease" || { log "deliver #$num c$cid: bridge busy (lease held) — retry"; exit 75; }
+  trap 'rm -rf "$lease" 2>/dev/null' EXIT
   local out
   out=$(bridge_relay "$repo" "$slug" "$num" "$cid" "$assoc" "$author" "$body"); local rc=$?
   log "deliver #$num c$cid: $out"
@@ -243,22 +284,10 @@ poll_repo() {
   # First run: seed to NOW so enabling the bridge never floods with history.
   [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — watermark seeded, no backfill"; return 0; }
 
-  # Single-writer per repo (poll tick vs a concurrent --deliver): skip if held.
-  # A SIGKILL'd tick can't run its RETURN trap, so steal a lease dir older than
-  # 120s (a normal tick is sub-second) — otherwise one crash deadlocks the repo.
-  lease="$LEASE_DIR/issue-bridge-$slug.lock"
-  mkdir -p "$LEASE_DIR" 2>/dev/null
-  if ! mkdir "$lease" 2>/dev/null; then
-    local age
-    age=$(( $(now) - $(stat -f %m "$lease" 2>/dev/null || stat -c %Y "$lease" 2>/dev/null || now) ))
-    if [ "$age" -ge 120 ]; then
-      rm -rf "$lease" 2>/dev/null
-      mkdir "$lease" 2>/dev/null || { log "$slug: lease contended — skip"; return 0; }
-      log "$slug: stole stale lease (age ${age}s)"
-    else
-      log "$slug: another bridge run holds the lease — skip"; return 0
-    fi
-  fi
+  # Single-writer per repo — the SAME lock a concurrent --deliver takes, so the two
+  # ingresses can't double-relay a comment (see bridge_lease_acquire).
+  lease=$(bridge_lease_path "$slug")
+  bridge_lease_acquire "$lease" || { log "$slug: another bridge run holds the lease — skip"; return 0; }
   # shellcheck disable=SC2064  # expand $lease now so the trap removes THIS lease
   trap "rm -rf '$lease' 2>/dev/null" RETURN
 
@@ -270,16 +299,16 @@ poll_repo() {
     2>/dev/null) || { log "$slug: gh api failed — skip this tick"; return 0; }
 
   local cid assoc author num updated b64 body out rc
-  local min_pending='' max_ts='' n=0
+  local pending='' max_ts='' n=0
   while IFS=$'\t' read -r cid assoc author num updated b64; do
     [ -z "$cid" ] && continue
     max_ts="$updated"; n=$((n + 1))
     bridge_seen_has "$slug" "$cid" && continue
-    body=$(printf '%s' "$b64" | base64 -d 2>/dev/null || printf '%s' "$b64" | base64 -D 2>/dev/null)
+    body=$(bridge_b64d "$b64")
     out=$(bridge_relay "$repo" "$slug" "$num" "$cid" "$assoc" "$author" "$body"); rc=$?
     [ "$out" = dup ] || log "$slug #$num c$cid: $out"
     if [ "$rc" -eq 3 ]; then
-      [ -z "$min_pending" ] && min_pending="$updated"   # rows ascending ⇒ earliest pending
+      pending=1                                          # a comment awaits a busy worker
     else
       bridge_seen_add "$slug" "$cid"
     fi
@@ -287,14 +316,16 @@ poll_repo() {
 $rows
 EOF
 
-  # Advance the watermark: to the earliest queued comment if any (so it retries),
-  # else past the newest comment we saw. Never move it backwards.
-  if [ -n "$min_pending" ]; then
-    printf '%s\n' "$min_pending" > "$sincef"
-  elif [ -n "$max_ts" ]; then
+  # Advance the watermark ONLY when nothing is still queued. GitHub's ?since= is
+  # EXCLUSIVE ("updated after"), so we must NOT set the watermark to a queued
+  # comment's own timestamp — it would never be re-listed. Instead, when anything
+  # is pending we leave the watermark untouched (at its pre-tick value): next tick
+  # re-lists everything since then, the already-relayed ones are skipped by the
+  # seen-set, and the queued one is retried. When all clear, jump past the newest.
+  if [ -z "$pending" ] && [ -n "$max_ts" ]; then
     printf '%s\n' "$max_ts" > "$sincef"
   fi
-  [ "$n" -gt 0 ] && log "$slug: examined $n comment(s)"
+  [ "$n" -gt 0 ] && log "$slug: examined $n comment(s)$([ -n "$pending" ] && printf ' (some queued — watermark held)')"
   return 0
 }
 
