@@ -20,7 +20,12 @@ any personal commands you already have. See the install step in
 
 | Skill | Owner | What it does |
 |---|---|---|
+| [`/claim`](claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
+| [`/ship`](ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`. Never merges. |
+| [`/blocked`](blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
 | [`/merge-train`](merge-train.md) | steward | Serial single-writer "merge train": merges a batch of green, auto-merge-armed PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/merge-train.sh`](../bin/merge-train.sh). |
+| [`/land`](land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, deploy master into both live checkouts, reload only the daemons that need it, clean up the merged worktree + window. |
+| [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 
 ## The contract every fleet skill follows
 
