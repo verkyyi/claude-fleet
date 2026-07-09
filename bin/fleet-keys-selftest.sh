@@ -77,8 +77,12 @@ grep -Eq '^bind[[:space:]]+\?[[:space:]]+display-popup' "$CONF" \
   || fail "conf 'prefix ?' is not a display-popup"
 grep -Eq -- '--bind "\?:.*fleet-keys.sh' "$DASH" \
   || fail "dashboard has no '?' bind opening fleet-keys.sh"
-grep -Eq -- '--bind "ctrl-k:.*fleet-keys.sh' "$ISSUES" \
-  || fail "backlog has no '⌃k' bind opening fleet-keys.sh"
+# ⌃k drops a 'keys' sentinel + aborts fzf; the gap dispatcher then opens
+# fleet-keys.sh (it can't nest a popup from inside the backlog popup — #123).
+grep -Eq -- '--bind "ctrl-k:.*keys' "$ISSUES" \
+  || fail "backlog has no '⌃k' bind dropping the keys sentinel"
+grep -q 'fleet-keys.sh' "$ISSUES" \
+  || fail "backlog '⌃k' dispatch does not open fleet-keys.sh"
 
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)"
