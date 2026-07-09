@@ -5,9 +5,10 @@
 # checkout (reused if it exists, cloned if it doesn't). With no <owner/repo>,
 # infers it from the current checkout: run it from inside a git worktree and it
 # uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
-# ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, opens the
-# standard windows (work shell + dash), and kicks the collector so the dash has
-# data immediately. See docs/ARCHITECTURE.md.
+# ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, builds the
+# 'plan' hub (a dash+steward split — the embedded dash self-marks @dash=1 and is
+# reached via prefix+G; there is no standalone 'dash' window), and kicks the
+# collector so the dash has data immediately. See docs/ARCHITECTURE.md.
 #
 # A fleet ≡ a tmux session ≡ one repo. Run once per repo you want to work.
 set -uo pipefail
