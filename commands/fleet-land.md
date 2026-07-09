@@ -91,16 +91,28 @@ resolve it before continuing.
 ## 4. Clean up the merged worktree + window
 
 The worker's `issue-<N>` worktree and branch are now merged and safe to remove;
-close its window too. Find the window by its `@issue` binding.
+close its window too. Find the window by its `@issue` binding. **Before** removing
+the worktree, append a **history-ledger row** so the finished session stays
+reviewable/resumable after cleanup (`/fleet-history`) — the worker's transcript
+survives, but the index only exists if we capture it here, while the worktree
+path (→ transcript dir + session id) is still known.
 
 ```sh
 issue="<the #issue the PR closed>"          # from the PR body's `Closes #<issue>`
 wt=$(git -C "$FLEET_MAIN" worktree list --porcelain | \
      awk -v b="issue-$issue" '/^worktree /{p=$2} $0 ~ "branch refs/heads/"b"$"{print p}')
+win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
+
+# LEDGER (before removal): derives title/sha/mergedAt from the PR and
+# transcript-dir + session-id from the worktree path; pulls the one-line summary
+# from the dash cache via --win. Best-effort — never blocks the land on failure.
+bash ~/.claude/fleet/bin/fleet-history.sh record \
+  --repo "$FLEET_REPO" --main "$FLEET_MAIN" \
+  --pr "<N>" --issue "$issue" --worktree "$wt" --win "$win" || true
+
 [ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"      # add --force only if it's clean but errors
 git -C "$FLEET_MAIN" branch -D "issue-$issue" 2>/dev/null || true
 # close the worker window bound to this issue (this fleet's session only)
-win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
 [ -n "$win" ] && tmux kill-window -t "$win"
 ```
 

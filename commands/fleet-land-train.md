@@ -122,15 +122,24 @@ For **each PR the train merged** (from step 2's summary), remove its merged
 `issue-<N>` worktree + branch and close the bound window. Resolve each PR's
 issue from its head branch (`issue-<N>`):
 
+Like `/fleet-land`, append a **history-ledger row before removing each worktree**
+so every landed session stays reviewable/resumable via `/fleet-history` — the
+capture must happen while the worktree path (→ transcript dir + session id) is
+still known.
+
 ```sh
 for pr in <the merged PR numbers>; do
   issue=$(gh pr view "$pr" --repo "$FLEET_REPO" --json headRefName -q '.headRefName' | sed -n 's/^issue-\([0-9]\{1,\}\)$/\1/p')
   [ -z "$issue" ] && continue                # not an issue-<N> branch — skip cleanup
   wt=$(git -C "$FLEET_MAIN" worktree list --porcelain | \
        awk -v b="issue-$issue" '/^worktree /{p=$2} $0 ~ "branch refs/heads/"b"$"{print p}')
+  win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
+  # LEDGER (before removal) — best-effort, never blocks cleanup on failure.
+  bash ~/.claude/fleet/bin/fleet-history.sh record \
+    --repo "$FLEET_REPO" --main "$FLEET_MAIN" \
+    --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" || true
   [ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"   # add --force only if it's clean but errors
   git -C "$FLEET_MAIN" branch -D "issue-$issue" 2>/dev/null || true
-  win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
   [ -n "$win" ] && tmux kill-window -t "$win"
 done
 ```

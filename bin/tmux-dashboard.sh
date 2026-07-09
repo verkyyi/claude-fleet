@@ -33,11 +33,14 @@ PREVIEW=( --preview-window=hidden )
 # backlog panel (tmux-issues.sh) uses.
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
-HDR='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · ⌃x=reap ⌥x=force · ?=keys · esc=back'
-[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃e=rename · ⌃x=reap ⌥x=force · ?=keys · esc=close'
+HDR='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=back'
+[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=close'
 
 run_dash() {
-  rm -f "$C/rename_target" "$C/bind_target"   # clear any half-finished mode from a prior run
+  # clear any half-finished mode from a prior run; reset the live⇄landed view so
+  # the landed peek doesn't stick across esc-relaunch (and never hides the live
+  # session list on reopen). Per-fleet keyed, matching dash-view-toggle.sh (#130).
+  rm -f "$C/rename_target" "$C/bind_target" "$C/dash_view_${FLEET_SESSION:-default}"
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -50,6 +53,7 @@ run_dash() {
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
+    --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "alt-x:execute(bash $BIN/dash-reap.sh {1} --force)+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
