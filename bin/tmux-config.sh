@@ -6,9 +6,11 @@
 # Rows are DECLARATIVELY driven by the @label/@group/@tier/@scope/@edit/@unit
 # tags in fleet.conf.example (parsed via fleet-config-lib.sh) — there is no
 # hardcoded key list here. Each key shows its FRIENDLY LABEL, effective value,
-# and TWO markers: the allowed write scope (🔒 identity view-only · 🌐 global-only
-# · 🎚 per-fleet overridable) and the layer the effective value came from (green
-# ▸ per-fleet · blue · global · dim default). Rows are grouped common-first;
+# and TWO text tags: the allowed write scope (dim `locked` identity view-only ·
+# blue `global`-only · green `fleet` per-fleet overridable) and the layer the
+# effective value came from (green ▸ per-fleet · blue · global · dim default).
+# Scope is carried by color + a short aligned word, not by emoji. Rows are
+# grouped common-first;
 # Advanced / Global-only-advanced / Identity sit behind Tab-expandable headers.
 # `?` reveals the raw FLEET_* key inline; ⌃s toggles which layer a per-fleet edit
 # WRITES to; enter edits the highlighted key (bin/dash-config-edit.sh validates +
@@ -69,13 +71,18 @@ exp_toggle() {
 # even when the raw column is hidden). RCONF_F/RCONF_G are set once by emit_rows
 # so the effective-value lookup only greps the two (small) confs — no example
 # re-parse per row.
+# Layout: label · value · scope-tag · source-layer, each in a fixed-width column
+# so the eye scans straight down. Scope is a short word (locked/global/fleet)
+# colored by CFG_* — color carries the emphasis emoji used to. The tag + markers
+# are pure ASCII, so `printf %-Ns` byte-padding == cell-width here: alignment holds
+# with no wcwidth pass needed (unlike the old 2-cell emoji that broke column math).
 render_row() {
   local key="$1" label="$2" scope="$3" unit="$4" def="$5"
-  local smark col src srcmark val v lf vf sf raw disp
+  local stag scol col src srcmark val v lf vf tf sf raw disp
   case "$scope" in
-    identity) smark='🔒' ;;
-    global)   smark='🌐' ;;
-    *)        smark='🎚' ;;
+    identity) stag='locked'; scol="$CFG_DIM"    ;;
+    global)   stag='global'; scol="$CFG_GLOBAL" ;;
+    *)        stag='fleet';  scol="$CFG_FLEET"  ;;
   esac
   if   v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
   elif v=$(fcfg_file_value "$RCONF_G" "$key"); then val="$v"; src=global
@@ -89,9 +96,10 @@ render_row() {
   if [ -n "$val" ]; then [ -n "$unit" ] && val="$val $unit"; else val='(empty)'; fi
   lf=$(printf '%-30s' "$(printf '%.30s' "$label")")
   vf=$(printf '%-22s' "$(printf '%.20s' "$val")")
+  tf=$(printf '%-6s' "$stag")
   sf=$(printf '%-11s' "$srcmark")
   raw=''; raw_on && raw="  $CFG_DIM$key$CFG_R"
-  disp="$smark $CFG_KEY$lf$CFG_R $CFG_TX$vf$CFG_R $col$sf$CFG_R$raw"
+  disp="$CFG_KEY$lf$CFG_R $CFG_TX$vf$CFG_R $scol$tf$CFG_R $col$sf$CFG_R$raw"
   printf '%s%s%s%s%s\n' "$key" "$US" "$disp" "$US" "$key"
 }
 
@@ -160,14 +168,14 @@ EOF
   done
 
   emit_spacer
-  emit_bucket advanced   "⚙ Advanced"               "$adv_t"
-  emit_bucket global-adv "🌐 Global-only · advanced" "$gadv_t"
-  emit_bucket identity   "🔒 Identity · view-only"   "$id_t"
+  emit_bucket advanced   "ADVANCED"               "$adv_t"
+  emit_bucket global-adv "GLOBAL-ONLY · ADVANCED"  "$gadv_t"
+  emit_bucket identity   "IDENTITY (locked)"       "$id_t"
 }
 
 # ---- preview: the detail pane for one key -----------------------------------
 emit_preview() {
-  local key="${1:-}" B="$CFG_B" R="$CFG_R" DIM="$CFG_DIM" GN="$CFG_FLEET"
+  local key="${1:-}" B="$CFG_B" R="$CFG_R" DIM="$CFG_DIM" GN="$CFG_FLEET" BL="$CFG_GLOBAL"
   case "$key" in
     FLEET_[A-Z0-9_]*) : ;;
     @@TOGGLE@@*) printf '  %ssection%s\n\n  enter / tab expands or collapses this section.\n' "$DIM" "$R"; return ;;
@@ -183,9 +191,9 @@ emit_preview() {
   fcfg_full "$key" | sed 's/^/  /'
   printf '\n  %s────────%s\n' "$DIM" "$R"
   case "$scope" in
-    identity) printf '  %s🔒 identity%s — view-only; set in fleet.conf and re-provision.\n' "$B" "$R" ;;
-    global)   printf '  %s🌐 global-only%s — writes fleet.conf; applies to ALL fleets.\n' "$B" "$R" ;;
-    *)        printf '  %s🎚 per-fleet%s — g writes the global default, f this fleet'\''s overlay.\n' "$B" "$R" ;;
+    identity) printf '  %slocked%s — identity, view-only; set in fleet.conf and re-provision.\n' "$DIM" "$R" ;;
+    global)   printf '  %s%sglobal%s — global-only; writes fleet.conf; applies to ALL fleets.\n' "$B" "$BL" "$R" ;;
+    *)        printf '  %s%sfleet%s — per-fleet; g writes the global default, f this fleet'\''s overlay.\n' "$B" "$GN" "$R" ;;
   esac
   printf '  %seffective%s : %s%s%s   %s(%s)%s\n' "$B" "$R" "$GN" "${val:-<empty>}" "$R" "$DIM" "$src" "$R"
   printf '  %sdefault%s   : %s\n' "$DIM" "$R" "${dv:-<empty>}"
@@ -196,10 +204,10 @@ emit_preview() {
   if [ "$scope" = identity ]; then
     printf '\n  %senter is disabled for identity keys%s\n' "$DIM" "$R"
   elif [ "$scope" = global ]; then
-    printf '\n  %s✎ enter writes the GLOBAL layer%s\n  %s%s%s\n' "$B" "$R" "$DIM" "$gconf" "$R"
+    printf '\n  %senter writes the GLOBAL layer%s\n  %s%s%s\n' "$B" "$R" "$DIM" "$gconf" "$R"
   else
     ws=$(fcfg_wscope "$SESSION"); tgt=$(fcfg_target_conf "$SESSION" "$ws")
-    printf '\n  %s✎ enter edits the %s layer%s\n  %s%s%s\n' \
+    printf '\n  %senter edits the %s layer%s\n  %s%s%s\n' \
       "$B" "$(printf '%s' "$ws" | tr '[:lower:]' '[:upper:]')" "$R" \
       "$DIM" "${tgt:-<not in a fleet — global only>}" "$R"
   fi

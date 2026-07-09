@@ -99,7 +99,7 @@ done <<EOF
 $(fcfg_table)
 EOF
 # the three global daemon settings must be @scope=global (a per-fleet override is
-# a silent no-op — the modal must not show a 🎚 per-fleet marker for them).
+# a silent no-op — the modal must not show a `fleet` per-fleet tag for them).
 eq 'scope FLEET_GH_TTL'              "$(fcfg_scope FLEET_GH_TTL)"              global
 eq 'scope FLEET_ISSUE_TTL'           "$(fcfg_scope FLEET_ISSUE_TTL)"           global
 eq 'scope FLEET_PR_REFRESH_INTERVAL' "$(fcfg_scope FLEET_PR_REFRESH_INTERVAL)" global
