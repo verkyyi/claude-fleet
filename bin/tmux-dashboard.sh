@@ -33,8 +33,8 @@ PREVIEW=( --preview-window=hidden )
 # backlog panel (tmux-issues.sh) uses.
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
-HDR='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · esc=back'
-[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃e=rename · esc=close'
+HDR='enter=jump · ⌃g=new session (pick issue) · ⌃e=rename · ⌃x=reap · esc=back'
+[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃e=rename · ⌃x=reap · esc=close'
 
 run_dash() {
   rm -f "$C/rename_target" "$C/bind_target"   # clear any half-finished mode from a prior run
@@ -49,6 +49,8 @@ run_dash() {
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
+    --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "ctrl-X:execute(bash $BIN/dash-reap.sh {1} --force)+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1
