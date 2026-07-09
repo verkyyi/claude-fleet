@@ -54,7 +54,11 @@ Run the project's checks and only continue if they pass:
 
 - `/verify` — exercise the change end-to-end.
 - `/code-review` — review the working diff.
-- Plus anything the repo requires (e.g. `bash bin/fleet-doctor.sh`, shellcheck).
+- `bash bin/ci-shellcheck.sh` — runs the **exact** shellcheck invocation CI
+  runs (pinned version from `.shellcheck-version`, `--severity=warning`), so its
+  verdict matches the PR gate. Run it before pushing; it exits non-zero on any
+  finding and warns if your local shellcheck has drifted from the pinned version.
+- Plus anything else the repo requires (e.g. `bash bin/fleet-doctor.sh`).
 
 If verification fails, **do not open the PR** — report what failed and stop.
 
