@@ -127,12 +127,58 @@ If the step-2 diff touched any `commands/*.md`:
 
 If no `commands/*.md` changed, skip.
 
-## 6. Report — keep it short
+## 6. Refresh open (stale) dash panes in place — only if the launcher changed
+
+An already-open dash keeps running the **old** `bin/tmux-dashboard.sh`: fzf reads
+its `--bind`/`--header` **once at launch**, so new binds (e.g. a landed toggle)
+don't appear until it's closed and reopened. If the step-2 diff touched the dash
+**launcher**, respawn this fleet's open dash panes in place so they pick up the
+new script automatically.
+
+The most-used dash is often **not** the standalone `dash` window but an
+**embedded pane in the steward/`plan` split** (dash above, steward below —
+reached via `prefix+g` / `steward-zoom.sh`), so a window-name match alone misses
+it. Instead, target **every dash pane in this fleet's session** by its pane
+marker: `bin/tmux-dashboard.sh` sets `@dash=1` on launch (mirroring the steward
+pane's `@steward=1`), so the pane — which just runs `bash` — is found robustly
+without brittle `pane_current_command`/name heuristics.
+
+**Trigger** — the diff touched `bin/tmux-dashboard.sh` (the fzf launcher — its
+`--bind`/`--header` are fixed at launch) or `bin/tmux-dashboard-rows.sh`
+(header-lines / row format). NOTE: the `dash-*.sh` bind **targets** are re-exec'd
+on each keypress (fresh `bash`), so they're picked up live and do **not** need a
+respawn — only the launcher does. The backlog (`prefix+b`) and config
+(`prefix+c`) modals are `display-popup`s — ephemeral, reopened fresh each time —
+so they're never stale and need no handling.
+
+**Fleet-scoping (critical rail):** operate ONLY on the current fleet's tmux
+session (`$S` from step 0 — `fleet_current_session`). NEVER respawn another
+fleet's dash. Find every `@dash=1` pane in this session and respawn each in
+place:
+
+```sh
+if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
+   | grep -qE '^bin/tmux-dashboard(-rows)?\.sh$'; then
+  n=0
+  for p in $(tmux list-panes -s -t "$S" -F '#{pane_id} #{@dash}' 2>/dev/null \
+               | awk '$2==1{print $1}'); do
+    tmux respawn-pane -k -t "$p" "bash ~/.claude/fleet/bin/tmux-dashboard.sh"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] && echo "refreshed $n dash pane(s)" || echo "no open dash to refresh"
+fi
+```
+
+If the launcher didn't change, skip this step (leave the open dash alone). If no
+`@dash` pane is open for this fleet, it's a no-op — report "no open dash".
+
+## 7. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed} actually ran.
-If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
-report that instead with the one-line reason.
+{daemons reloaded, settings re-merged, commands installed/removed, dash panes
+refreshed (with the count)} actually ran. If you stopped at step 1 (wrong fleet)
+or step 2 (diverged / already current), report that instead with the one-line
+reason.
 
 ---
 

@@ -20,6 +20,14 @@ C="${TMPDIR:-/tmp}/.claude-dash"
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
 FLEET_SESSION=$(fleet_current_session 2>/dev/null); export FLEET_SESSION
 
+# Mark this pane as a dash (mirrors how steward-session.sh marks @steward=1) so
+# /fleet-sync-install can find EVERY dash pane to respawn on a launcher change —
+# the standalone 'dash' window AND an embedded dash pane in the plan/steward
+# split. Set early (before fzf) so even a freshly-launched dash is discoverable;
+# the pane just runs `bash`, so a marker is far more robust than name/command
+# heuristics.
+tmux set-option -p @dash 1 2>/dev/null || true
+
 if ! command -v fzf >/dev/null 2>&1; then
   echo "fzf not found — install it (brew install fzf) for the interactive dash."; sleep 5; exit 1
 fi
