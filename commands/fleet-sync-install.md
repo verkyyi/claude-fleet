@@ -127,12 +127,50 @@ If the step-2 diff touched any `commands/*.md`:
 
 If no `commands/*.md` changed, skip.
 
-## 6. Report — keep it short
+## 6. Refresh an open (stale) dash in place — only if the launcher changed
+
+An already-open `dash` window keeps running the **old** `bin/tmux-dashboard.sh`:
+fzf reads its `--bind`/`--header` **once at launch**, so new binds (e.g. a landed
+toggle) don't appear until the window is closed and reopened. If the step-2 diff
+touched the dash **launcher**, respawn this fleet's open `dash` window in place so
+it picks up the new script automatically.
+
+**Trigger** — the diff touched `bin/tmux-dashboard.sh` (the fzf launcher — its
+`--bind`/`--header` are fixed at launch) or `bin/tmux-dashboard-rows.sh`
+(header-lines / row format). NOTE: the `dash-*.sh` bind **targets** are re-exec'd
+on each keypress (fresh `bash`), so they're picked up live and do **not** need a
+respawn — only the launcher does. The backlog (`prefix+b`) and config
+(`prefix+c`) modals are `display-popup`s — ephemeral, reopened fresh each time —
+so they're never stale and need no handling. Only the persistent `dash` window
+does.
+
+**Fleet-scoping (critical rail):** operate ONLY on the current fleet's tmux
+session (`$S` from step 0 — `fleet_current_session`). NEVER respawn another
+fleet's dash. Find this fleet's `dash` window and respawn it in place:
+
+```sh
+if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
+   | grep -qE '^bin/tmux-dashboard(-rows)?\.sh$'; then
+  dash_win=$(tmux list-windows -t "$S" -F '#{window_id} #{window_name}' 2>/dev/null \
+    | awk '$2=="dash"{print $1; exit}')
+  if [ -n "$dash_win" ]; then
+    tmux respawn-pane -k -t "$dash_win" "bash ~/.claude/fleet/bin/tmux-dashboard.sh"
+    echo "dash refreshed ($dash_win)"
+  else
+    echo "no open dash to refresh"
+  fi
+fi
+```
+
+If the launcher didn't change, skip this step (leave the open dash alone). If no
+`dash` window is open for this fleet, it's a no-op — report "no open dash".
+
+## 7. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed} actually ran.
-If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
-report that instead with the one-line reason.
+{daemons reloaded, settings re-merged, commands installed/removed, dash
+refreshed} actually ran. If you stopped at step 1 (wrong fleet) or step 2
+(diverged / already current), report that instead with the one-line reason.
 
 ---
 
