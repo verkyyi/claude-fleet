@@ -1,8 +1,9 @@
 #!/bin/bash
-# dash-config-edit.sh <KEY> [confirm] — edit one FLEET_* key from the prefix+c
-# config modal (bin/tmux-config.sh). Mirrors dash-issue-comment.sh's two-phase
-# popup: phase 1 opens a small input popup; phase 2 (inside it) shows context,
-# reads one line, validates by @edit type, and writes to the routed conf.
+# dash-config-edit.sh <KEY> — edit one FLEET_* key from the prefix+c config modal
+# (bin/tmux-config.sh). Runs INLINE in the modal's display-popup pty, in the gap
+# between fzf runs (the modal `abort`s fzf, runs us, then relaunches) — NOT in a
+# nested popup-inside-a-popup, which never opened reliably (issue #122). Shows
+# context, reads one line, validates by @edit type, and writes to the routed conf.
 #
 # Scope routing (issue #89), from the key's @scope tag:
 #   identity → REFUSED (view-only; set in fleet.conf and re-provision).
@@ -11,7 +12,7 @@
 #   fleet    → follows the modal's write-scope toggle (global fleet.conf ⇄ the
 #              per-fleet <session>.conf), backing up first.
 set -uo pipefail
-KEY="${1:-}"; MODE="${2:-}"
+KEY="${1:-}"
 case "$KEY" in FLEET_[A-Z0-9_]*) : ;; *) exit 0 ;; esac   # ignore blank/junk/header rows
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -22,10 +23,16 @@ SESSION=$(fleet_current_session)
 KSCOPE=$(fcfg_scope "$KEY")     # identity | global | fleet (from the @scope tag)
 EDIT=$(fcfg_edit "$KEY")        # no | bool | int | enum | path | str | regex
 
+# We run inside the modal's popup pty, so surface refusals right here (a brief
+# printed line) instead of only on the status line hidden behind the popup.
+refuse() { printf '\n  \033[33m%s\033[0m\n' "$1"; sleep 1.4; }
+
 # --- scope routing ----------------------------------------------------------
-# Identity keys are view-only — refuse before opening any popup.
+# Identity keys are view-only — refuse (the modal already filters these out on
+# enter, but keep the guard as defense-in-depth for any direct invocation).
 if [ "$KSCOPE" = identity ] || [ "$EDIT" = no ]; then
   tmux display-message "config: $KEY is an identity key — set it in fleet.conf and re-provision" 2>/dev/null || true
+  refuse "$KEY is an identity key — set it in fleet.conf and re-provision."
   exit 0
 fi
 # Global-only keys always write the global conf; per-fleet keys follow the toggle.
@@ -38,16 +45,12 @@ TARGET=$(fcfg_target_conf "$SESSION" "$SCOPE")
 
 if [ -z "$TARGET" ]; then
   tmux display-message "config: no per-fleet conf here (not in a fleet) — press ⌃s to write GLOBAL" 2>/dev/null || true
+  refuse "no per-fleet conf here (not in a fleet) — press ⌃s to write the GLOBAL layer."
   exit 0
 fi
 
-# phase 1: pop the input dialog, which re-invokes us in confirm mode.
-if [ "$MODE" != confirm ]; then
-  tmux display-popup -w 88 -h 18 -E "bash '$BIN/dash-config-edit.sh' '$KEY' confirm"
-  exit 0
-fi
-
-# phase 2: inside the popup — show context, read one line, validate, write.
+# Clear the leftover fzf frame, then show context, read one line, validate, write.
+printf '\033[H\033[2J'
 cur=$(fcfg_file_value "$TARGET" "$KEY" || true)
 ev=$(fcfg_effective "$KEY" "$SESSION"); effval=${ev%"$FCFG_US"*}; effsrc=${ev##*"$FCFG_US"}
 scope_up=$(printf '%s' "$SCOPE" | tr '[:lower:]' '[:upper:]')
@@ -78,14 +81,14 @@ if ! reason=$(fcfg_validate "$EDIT" "$val" "$KEY"); then
   exit 0
 fi
 
-if ! status=$(fcfg_write "$TARGET" "$KEY" "$val" "$EDIT"); then
+if ! wstatus=$(fcfg_write "$TARGET" "$KEY" "$val" "$EDIT"); then
   printf '\n  \033[31m✗ write failed\033[0m — %s is not writable (full/read-only volume?)\n  (nothing changed — press any key)' "$TARGET"
   read -rsn1 _ || true
   tmux display-message "config: write to ${TARGET##*/} FAILED — nothing changed" 2>/dev/null || true
   exit 0
 fi
 show=${val:-(empty)}
-if [ "$status" = created ]; then
+if [ "$wstatus" = created ]; then
   printf '\n  \033[32m✓ created\033[0m %s and set \033[1m%s = %s\033[0m\n  %s\n' "$TARGET" "$KEY" "$show" "$TARGET"
   tmux display-message "config: created ${TARGET##*/} and set $KEY=$show" 2>/dev/null || true
 else

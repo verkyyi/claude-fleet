@@ -13,13 +13,20 @@
 # grouped common-first;
 # Advanced / Global-only-advanced / Identity sit behind Tab-expandable headers.
 # `?` reveals the raw FLEET_* key inline; ⌃s toggles which layer a per-fleet edit
-# WRITES to; enter edits the highlighted key (bin/dash-config-edit.sh validates +
-# writes by @edit type, backing up first, and refuses identity keys).
+# WRITES to; enter on an editable key edits it, on a section header expands it.
+#
+# enter mirrors the ⌃s abort→act→relaunch pattern rather than nesting a popup:
+# a `transform` bind (emit_enter_action) branches on the row type — a section
+# header toggles in place, an editable FLEET_* key is stashed in a sentinel and
+# fzf `abort`s so the outer loop runs bin/dash-config-edit.sh in the GAP between
+# fzf runs (no popup-inside-a-popup, the #122 bug) then relaunches the modal,
+# and an identity/view-only key refuses on the status line (modal stays open).
 #
 # Dispatch (re-invoked by the fzf binds):
 #   tmux-config.sh                 → the fzf loop (run under `tmux display-popup -E`)
 #   tmux-config.sh rows            → emit the fzf rows (FIELD1<US>colored display)
 #   tmux-config.sh preview KEY     → the detail/preview pane for one key
+#   tmux-config.sh enter-action K S → emit the fzf action(s) for enter on row K
 #   tmux-config.sh toggle-scope    → flip the write scope, then reload
 #   tmux-config.sh toggle-raw      → flip raw-key visibility, then reload
 #   tmux-config.sh toggle-bucket F → expand/collapse a section header row
@@ -213,9 +220,37 @@ emit_preview() {
   fi
 }
 
+# ---- enter dispatch: emit the fzf action(s) for the enter key ---------------
+# Called from the `enter:transform(...)` bind with the current FIELD1 ($key) and
+# the edit-sentinel path ($sentinel, baked into the bind so parent+child agree).
+# Mirrors dash-enter.sh: does the side-effect here, prints fzf actions to stdout.
+#   @@TOGGLE@@ header → expand/collapse in place (reload).
+#   editable FLEET_*  → stash key in the sentinel + `abort`; the outer loop runs
+#                       the edit in the gap between fzf runs, then relaunches.
+#   identity/no-edit  → refuse on the status line, no action (modal stays open).
+#   @@NOOP@@ / blank  → nothing.
+emit_enter_action() {
+  local key="${1:-}" sentinel="${2:-}" sc ed
+  case "$key" in
+    @@TOGGLE@@*)
+      exp_toggle "${key#@@TOGGLE@@}"
+      printf 'reload(bash %s rows)' "$SELF" ;;
+    FLEET_[A-Z0-9_]*)
+      sc=$(fcfg_scope "$key"); ed=$(fcfg_edit "$key")
+      if [ "$sc" = identity ] || [ "$ed" = no ]; then
+        tmux display-message "config: $key is view-only (identity) — set it in fleet.conf and re-provision" 2>/dev/null || true
+      elif [ -n "$sentinel" ]; then
+        printf '%s' "$key" > "$sentinel"
+        printf 'abort'
+      fi ;;
+    *) : ;;
+  esac
+}
+
 case "${1:-loop}" in
   rows)         emit_rows; exit 0 ;;
   preview)      emit_preview "${2:-}"; exit 0 ;;
+  enter-action) emit_enter_action "${2:-}" "${3:-}"; exit 0 ;;
   toggle-scope) fcfg_wscope_toggle "$SESSION"
                 tmux display-message "config: per-fleet edits now write to the $(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]') layer" 2>/dev/null || true
                 exit 0 ;;
@@ -230,9 +265,13 @@ command -v fzf >/dev/null 2>&1 || { echo "fzf required for the prefix+c config m
 # ⌃s toggles write scope; to re-render the border-label with the new scope we
 # drop a restart sentinel and abort fzf — the outer loop relaunches. esc leaves
 # no sentinel, so it exits. enter/tab/? reload in place (the modal stays open).
+# enter on an editable key stashes it here + aborts fzf; the loop reads it and
+# runs the edit in the gap, then relaunches. Baked into the enter bind so the
+# transform child writes the SAME path the parent loop reads (like $RESTART).
 RESTART="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_restart_${SESSION:-_}.$$"
+EDITKEY="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_edit_${SESSION:-_}.$$"
 run_fzf() {
-  rm -f "$RESTART"
+  rm -f "$RESTART" "$EDITKEY"
   local scope; scope=$(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]')
   bash "$SELF" rows | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 --nth=2,3 \
     --no-sort --layout=reverse-list --info=hidden --border=rounded \
@@ -246,12 +285,20 @@ run_fzf() {
     --bind "ctrl-s:execute-silent(bash $SELF toggle-scope; : > '$RESTART')+abort" \
     --bind "?:execute-silent(bash $SELF toggle-raw)+reload(bash $SELF rows)" \
     --bind "tab:execute-silent(bash $SELF toggle-bucket {1})+reload(bash $SELF rows)" \
-    --bind "enter:execute(bash $BIN/dash-config-edit.sh {1})+execute-silent(bash $SELF toggle-bucket {1})+reload(bash $SELF rows)+refresh-preview" \
+    --bind "enter:transform(bash $SELF enter-action {1} '$EDITKEY')" \
     >/dev/null 2>&1
 }
 while :; do
   run_fzf || true
+  # An editable key stashed itself + aborted fzf: run the edit here, in the gap
+  # between fzf runs (a plain interactive prompt in this same display-popup pty —
+  # NOT a nested popup), then relaunch the modal so it reflects the new value.
+  if [ -f "$EDITKEY" ]; then
+    ekey=$(cat "$EDITKEY" 2>/dev/null); rm -f "$EDITKEY"
+    [ -n "$ekey" ] && bash "$BIN/dash-config-edit.sh" "$ekey"
+    continue
+  fi
   [ -f "$RESTART" ] || break
 done
-rm -f "$RESTART"
+rm -f "$RESTART" "$EDITKEY"
 exit 0
