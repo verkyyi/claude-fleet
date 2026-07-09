@@ -103,6 +103,17 @@ else
   warn commands "$cmd_dir absent — optional fleet /skills not installed"
 fi
 
+# --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
+# The popup (bin/tmux-config.sh) sources its key list + per-key help from
+# fleet.conf.example; without that file it can't render. It lives in the repo /
+# install root (one dir up from bin/).
+ex_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+if [ -f "$ex_root/fleet.conf.example" ]; then
+  pass config "fleet.conf.example present — prefix+c config modal can render (view/edit keys)"
+else
+  warn config "fleet.conf.example missing — prefix+c config modal has no key list/help source"
+fi
+
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.

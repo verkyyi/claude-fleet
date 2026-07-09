@@ -1,0 +1,34 @@
+name: tmux-config-selftest
+
+# Hermetic regression guard for the prefix+c config modal (issue #83).
+# bin/tmux-config-selftest.sh exercises bin/fleet-config-lib.sh against the real
+# fleet.conf.example + temp confs — no tmux, no fzf, no network — asserting key
+# discovery, typing, defaults, layer precedence, validation, and backup-first
+# upsert writes. Runs whenever the modal, its lib, the example, or the test change.
+
+on:
+  push:
+    paths:
+      - 'bin/fleet-config-lib.sh'
+      - 'bin/tmux-config.sh'
+      - 'bin/dash-config-edit.sh'
+      - 'bin/tmux-config-selftest.sh'
+      - 'fleet.conf.example'
+      - '.github/workflows/tmux-config-selftest.yml'
+  pull_request:
+    paths:
+      - 'bin/fleet-config-lib.sh'
+      - 'bin/tmux-config.sh'
+      - 'bin/dash-config-edit.sh'
+      - 'bin/tmux-config-selftest.sh'
+      - 'fleet.conf.example'
+      - '.github/workflows/tmux-config-selftest.yml'
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run config-modal self-test
+        run: bash bin/tmux-config-selftest.sh
