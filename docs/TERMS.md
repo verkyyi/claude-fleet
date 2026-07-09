@@ -59,7 +59,11 @@ they repaint instantly:
 ## The data (files the collector writes, the views read)
 
 - **Cache dir** — `$TMPDIR/.claude-dash/`. Holds the cache files:
-  - **`prmap`** — `branch <TAB> #num <TAB> state <TAB> ci-symbol` per open PR.
+  - **`prmap`** — `branch <TAB> #num <TAB> state <TAB> ci-symbol <TAB> ready`
+    per open PR. `ready` (land-readiness of an OPEN + green PR, from
+    `mergeStateStatus`/`mergeable`) ∈ `ready|behind|conflict|blocked|""`; the
+    dash decorates a green PR's `✓` with it (`✓↑` behind · `✓!` conflict ·
+    `✓·` blocked). First 4 fields are a stable contract.
   - **`issues`** — `milestone <TAB> #num <TAB> assignee <TAB> title` per open issue.
   - **`git_<key>`** — per-worktree branch + dirty flag.
   - **`ctx_<key>`** — per-Claude-session model + context-token count (feeds ctx%).

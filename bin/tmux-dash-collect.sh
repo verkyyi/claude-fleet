@@ -5,7 +5,10 @@
 # (com.claude-fleet.collect, StartInterval 60s) or a systemd user timer.
 # Writes under $C = $TMPDIR/.claude-dash:
 #   sessmap          — session<TAB>slug<TAB>repo  (one row per live tmux session)
-#   prmap_<slug>     — branch<TAB>#num<TAB>state<TAB>ci   per repo (gh, ≥90s)
+#   prmap_<slug>     — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready  per repo (gh, ≥90s)
+#                      first 4 fields are a stable contract; `ready` (5th) is
+#                      land-readiness for OPEN+green PRs: ready|behind|conflict|
+#                      blocked|"" (from mergeStateStatus/mergeable).
 #   issues_<slug>    — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
 #   prmap / issues   — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
 #                      for single-fleet back-compat (un-migrated readers)
@@ -107,13 +110,24 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   command -v gh >/dev/null 2>&1 || break
   pts=$(cat "$C/prmap_$sg.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - pts )) -ge "$GH_TTL" ]; then
+    # shellcheck disable=SC2016  # $r/$ci/$ready are jq vars, not shell — keep single-quoted
     gh pr list --repo "$rp" --state all --limit 100 \
-      --json number,headRefName,state,statusCheckRollup \
+      --json number,headRefName,state,mergeable,mergeStateStatus,statusCheckRollup \
       --jq 'group_by(.headRefName)[] | max_by(.number) |
-            .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + (
-              (.statusCheckRollup // []) | if length==0 then "·"
-              elif any(.conclusion=="FAILURE" or .conclusion=="CANCELLED") then "✗"
-              elif any(.status!="COMPLETED") then "…" else "✓" end)' \
+            (.statusCheckRollup // []) as $r |
+            (if   ($r|length)==0                     then "·"
+             elif ($r|any(.conclusion=="FAILURE"))   then "✗"
+             elif ($r|any(.status!="COMPLETED"))     then "…"
+             elif ($r|any(.conclusion=="SUCCESS"))   then "✓"
+             else "…" end) as $ci |
+            (if .state=="OPEN" and $ci=="✓" then
+               (if   (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS") then "ready"
+                elif .mergeStateStatus=="BEHIND"                                    then "behind"
+                elif (.mergeStateStatus=="DIRTY" or .mergeable=="CONFLICTING")      then "conflict"
+                elif .mergeStateStatus=="BLOCKED"                                   then "blocked"
+                else "" end)
+             else "" end) as $ready |
+            .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready' \
       > "$C/prmap_$sg.$$" 2>/dev/null && mv "$C/prmap_$sg.$$" "$C/prmap_$sg"
     now > "$C/prmap_$sg.ts"
   fi
@@ -309,9 +323,15 @@ while IFS="$US" read -r sess win path cur; do
   if [ -n "$bare" ] && [ "$bare" != "-" ]; then
     hit=$(awk -F'\t' -v x="$bare" '$1==x{print;exit}' "$prmf" 2>/dev/null)
     if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
+      ready=$(echo "$hit"|cut -f5)
       case "$(echo "$hit"|cut -f4)" in
-        ✗) glyph="✗"; pfg="#f7768e";;   # CI failed → attention
-        ✓) glyph="✓"; pfg="#9ece6a";;   # CI green, awaiting merge
+        ✗) glyph="✗"; pfg="#f7768e";;   # real CI failure → attention
+        ✓) case "$ready" in             # green: decorate by land-readiness
+             behind)   glyph="✓↑"; pfg="#e0af68";;   # green but behind base → update-branch
+             conflict) glyph="✓!"; pfg="#f7768e";;   # green but conflicting → rebase
+             blocked)  glyph="✓·"; pfg="#e0af68";;   # green+mergeable but blocked (protection)
+             *)        glyph="✓";  pfg="#9ece6a";;   # green, awaiting merge
+           esac;;
       esac
     fi
   fi
