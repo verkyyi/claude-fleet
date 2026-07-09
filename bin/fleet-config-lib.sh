@@ -346,21 +346,21 @@ fcfg_validate() {
 # num/bool write bare (KEY=5); enum/str write double-quoted (KEY="…"). VALUE is
 # passed to awk via the environment so backslashes/metachars survive verbatim.
 fcfg_write() {
-  local file="$1" key="$2" val="$3" type="$4" line status
+  local file="$1" key="$2" val="$3" type="$4" line wstatus
   case "$type" in
     num|int|bool) line="$key=$val" ;;
     *)            line="$key=\"$val\"" ;;
   esac
   if [ -f "$file" ]; then
     cp -p "$file" "$file.bak" 2>/dev/null || cp "$file" "$file.bak" || return 1
-    status=updated
+    wstatus=updated
   else
     mkdir -p "$(dirname "$file")" 2>/dev/null
     {
       printf '# claude-fleet config — created by the prefix+c config modal.\n'
       printf '# Assignments only (this file is sourced). Per-fleet overlays the global fleet.conf.\n'
     } > "$file" || return 1
-    status=created
+    wstatus=created
   fi
   # Upsert to a temp then atomically rename. On ANY failure (full/read-only
   # volume — a first-class case in this repo) leave the original untouched and
@@ -371,7 +371,7 @@ fcfg_write() {
                                             { print }
        END { if (!repl) print ENVIRON["LINE"] }
      ' "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"; then
-    printf '%s' "$status"
+    printf '%s' "$wstatus"
     return 0
   fi
   rm -f "$file.tmp.$$" 2>/dev/null
