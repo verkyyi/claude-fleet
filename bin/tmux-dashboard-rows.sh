@@ -122,6 +122,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
         line=${tail%%$'\n'*}
         # line = #num\tstate\tci\tready. Parse each; ready may be absent on a
         # stale 4-field cache (mid-upgrade) — tab-guard so it degrades to ''.
+        pnum=${line%%$'\t'*}   # "#num" — field 1, surfaced into the OPEN-PR cell
         rest=${line#*$'\t'}; st=${rest%%$'\t'*}; after=${rest#*$'\t'}
         ci=${after%%$'\t'*}
         case "$after" in *$'\t'*) ready=${after#*$'\t'};; *) ready='';; esac
@@ -141,7 +142,13 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
                ✗) pcol=$RD; ptxt="$ci";;
                …) pcol=$TX; ptxt="$ci";;
                *) pcol=$GY; ptxt="$ci";;
-             esac;;
+             esac
+             # OPEN PR → prefix the number next to the glyph (e.g. #75✓, #75✓↑).
+             # #<4-digit> + 2-cell readiness glyph = 7 = the fld 7 ceiling. All
+             # these glyphs are single display cells so ${#}==width; prefix ONLY
+             # when it fits, else keep the glyph (the land signal) glyph-only —
+             # never let fld's right-clip eat the glyph on a huge PR number.
+             [ $(( ${#pnum} + ${#ptxt} )) -le 7 ] && ptxt="$pnum$ptxt";;
         esac
         break
       fi
