@@ -11,10 +11,16 @@ commands dir (`~/.claude/commands/`), appended alongside — never clobbering �
 any personal commands you already have. See the install step in
 [`CLAUDE.md`](../CLAUDE.md).
 
-> Phase 0 (this dir's first landing) ships **only the contract**: this README
-> and [`_template.md`](_template.md). The functional skills (`/claim`, `/ship`,
-> `/land`, …) are separate sub-issues — each one clones the template and fills
-> in its body.
+> Phase 0 landed **just the contract** — this README and
+> [`_template.md`](_template.md); the functional skills (`/claim`, `/ship`,
+> `/land`, …) land one per sub-issue, each cloning the template and filling in
+> its body. See **Shipped skills** below for what's live so far.
+
+## Shipped skills
+
+| Skill | Owner | What it does |
+|---|---|---|
+| [`/merge-train`](merge-train.md) | steward | Serial single-writer "merge train": merges a batch of green, auto-merge-armed PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/merge-train.sh`](../bin/merge-train.sh). |
 
 ## The contract every fleet skill follows
 
