@@ -31,7 +31,7 @@ run_fzf() {
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header='type=filter · enter=work · ⌃t=comment · ⌃x=close · ⌃p=preview · tab=collapse · ⌃o=web · ⌃r · esc' \
+    --header='type=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · ⌃p=preview · tab=collapse · ⌃o=web · ⌃r · esc' \
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
     --preview-window='right,46%,wrap,border-left' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
@@ -39,6 +39,7 @@ run_fzf() {
     --bind "ctrl-p:toggle-preview" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
+    --bind "ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)" \
     --bind "ctrl-t:execute(bash $BIN/dash-issue-comment.sh {1})+refresh-preview" \
     --bind "ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
