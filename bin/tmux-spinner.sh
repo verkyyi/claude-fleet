@@ -21,6 +21,68 @@ NAME_WORKING='#a9b1d6'   # calm neutral name while working
 NAME_DONE='#9ece6a'
 NAME_NEEDS='#f7768e'
 NAME_IDLE='#565f89'
+
+# Global config (FLEET_STUCK_WORKING_SECS lives here). Sourced ONCE at startup,
+# like the other daemons — a change needs a spinner restart.
+BIN=$(cd "$(dirname "$0")" && pwd)
+[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+mkdir -p "$BIN/../logs" 2>/dev/null
+
+# --- stuck-working demotion (issue #101) ------------------------------------
+# A window pinned at @claude_state=working whose Stop hook was missed (crash /
+# race / a turn that didn't emit Stop) stays "working" FOREVER — the classifier
+# backstop deliberately skips working windows, trusting the hook heartbeat. Catch
+# it MARKER-AGNOSTICALLY (never grep the pane for "esc to interrupt" — not every
+# working sub-state renders it, so that would false-demote busy sessions): a
+# genuinely-working Claude session repaints its pane at least once/second (the
+# elapsed-time counter ticks), so tmux's #{window_activity} stays fresh; a
+# stopped session's pane freezes and its activity goes stale. So a working window
+# whose window_activity age exceeds FLEET_STUCK_WORKING_SECS is provably idle ->
+# demote to done and kick classify-sessions.sh to refine it (done|needs|looping).
+# Non-LLM, per-tick-cheap, and biased HARD to false-negatives: the large
+# threshold plus a 2-strike debounce make a false demote of a live session
+# effectively impossible (validated — live workers and an 18s SILENT tool call
+# never exceeded 1s of activity age; see the PR). Set to 0 to disable.
+STUCK_SECS="${FLEET_STUCK_WORKING_SECS:-120}"
+case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=120 ;; esac  # non-integer -> default (0 disables)
+STUCK_LOG="$BIN/../logs/stuck.log"
+STUCK_CHECK_SECS=10   # evaluate at most ~every 10s, not every frame
+# frames between checks (~STUCK_CHECK_SECS / INTERVAL); computed once, min 1.
+STUCK_EVERY=$(awk -v c="$STUCK_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+sc=0            # frame counter for the throttle
+STUCK_STRIKES='|'   # window_ids that were stale on the PREVIOUS check (2-strike debounce)
+
+# stuck_check — one throttled sweep: demote any working window whose pane has
+# been frozen (window_activity stale >= STUCK_SECS) across two consecutive checks.
+# Runs in the current shell (here-doc, no pipe) so STUCK_STRIKES persists.
+stuck_check() {
+  nows=$(date +%s)
+  new='|'
+  demoted=0
+  wl=$(tmux list-windows -a -F '#{window_id} #{@claude_state} #{window_activity}' 2>/dev/null) || return 0
+  while read -r wid st act; do
+    [ "$st" = working ] || continue
+    case "$act" in ''|*[!0-9]*) continue ;; esac   # need a numeric activity stamp
+    age=$(( nows - act ))
+    [ "$age" -ge "$STUCK_SECS" ] || continue        # still fresh -> not stuck, no strike
+    case "$STUCK_STRIKES" in
+      *"|$wid|"*)                                    # stale last check too -> 2nd strike -> demote
+        tmux set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+        tmux set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
+        printf '%s  %-10s working -> done (idle %ss; stop-hook missed)\n' \
+          "$(date +%H:%M:%S)" "$wid" "$age" >> "$STUCK_LOG"
+        ( "$BIN/classify-sessions.sh" --window "$wid" >/dev/null 2>&1 & )   # refine done|needs|looping
+        demoted=1 ;;
+      *) new="$new$wid|" ;;                          # 1st strike -> arm for next check
+    esac
+  done <<EOF
+$wl
+EOF
+  STUCK_STRIKES="$new"
+  [ "$demoted" = 1 ] && [ -f "$STUCK_LOG" ] && \
+    { tail -n 300 "$STUCK_LOG" > "$STUCK_LOG.tmp" 2>/dev/null && mv "$STUCK_LOG.tmp" "$STUCK_LOG" 2>/dev/null; }
+}
+
 i=1
 LAST='|'
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
@@ -28,6 +90,13 @@ frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so
 while :; do
   wins=$(tmux list-windows -a -F '#{session_name}:#{window_index} #{@claude_state}' 2>/dev/null) \
     || { sleep 2; LAST='|'; continue; }
+
+  # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
+  # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
+  if [ "$STUCK_SECS" -gt 0 ]; then
+    sc=$((sc + 1))
+    [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+  fi
 
   set -- '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏';                                eval "frame=\${$i}"
   set -- '#3d6a85' '#4a82a5' '#5aa0c8' '#6bb8e0' '#7dcfff' '#a6e0ff' '#7dcfff' '#6bb8e0' '#5aa0c8' '#4a82a5'; eval "cyan=\${$i}"

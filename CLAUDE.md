@@ -15,7 +15,7 @@ issues as the backlog. See README.md for the architecture. Components:
 
 | Piece | What | Requires |
 |---|---|---|
-| Attention layer | hooks → window colors/spinner/urgency-sort | tmux ≥ 3.2 |
+| Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
 | Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
@@ -23,7 +23,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
-| Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows | `claude` CLI |
+| Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |

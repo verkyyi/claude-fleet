@@ -127,6 +127,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=PR status refresh @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_PR_REFRESH_INTERVAL=15
 
+# Stuck-working demotion (bin/tmux-spinner.sh). A window whose Stop hook was
+# missed (crash/race/a turn that didn't emit Stop) stays pinned at
+# @claude_state=working forever — the classifier backstop skips working windows.
+# The spinner catches it marker-agnostically: a live Claude session repaints its
+# pane at least once/second (the elapsed-time counter ticks) so tmux's
+# window_activity stays fresh, while a stopped session's pane freezes. A working
+# window idle (window_activity stale) longer than this many seconds is demoted to
+# done and reclassified. Conservative by design — a live worker never exceeds ~1s
+# of activity age (validated), so 120 is a ~120× margin; bias is toward leaving a
+# stuck window a tick longer, never toward demoting a busy one. Set to 0 to
+# disable. GLOBAL: one spinner daemon serves every fleet.
+# @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_STUCK_WORKING_SECS=120
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # @label=Status-bar container @group=status @tier=advanced @scope=fleet @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
