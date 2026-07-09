@@ -190,6 +190,20 @@ macOS Keychain ignores). One caveat: an **already-running** session can't
 hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full
 design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
 
+## Fleet commands (`/skill`s)
+
+Optional repo-shipped Claude Code slash commands that operate on the current
+fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
+`~/.claude/commands/`. Each declares an owner seat (`worker` / `steward`) and
+refuses from the wrong one. Live so far:
+
+- **`/merge-train`** (steward) — a serial single-writer *merge train*: merges a
+  batch of green, auto-merge-armed PRs one at a time (update-branch → wait green
+  → merge → next), so each PR is CI-tested once against the master it lands on
+  (O(N), not the O(N²) thundering herd) and one bad PR ejects instead of
+  blocking the rest. A client-side stand-in for a merge queue under
+  `strict:true` branch protection. See [`commands/README.md`](commands/README.md).
+
 ## Opening links over SSH
 
 `--web`-style commands open a browser on the *remote* host — useless over
