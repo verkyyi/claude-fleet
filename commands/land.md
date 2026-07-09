@@ -1,14 +1,19 @@
-# /land — merge a green PR, then deploy the live install
+# /land — merge a green PR, then land it into the fleet's base checkout
 
 <!-- fleet skill · owner: steward -->
 
 The steward's finish line for a worker's PR: verify the PR is truly mergeable,
-squash-merge it, deploy the new master into both live checkouts, reload only the
-daemons that actually need it, and clean up the merged worktree + window. It
-**mutates this fleet's `$FLEET_REPO`** (merges a PR) and the two live checkouts
-(`$FLEET_MAIN` and `~/.claude/fleet`). Merging + deploying is a steward
-operation, so this skill is **steward-only** — a worker never runs it (a worker
-`/ship`s; the steward `/land`s).
+squash-merge it, fast-forward the fleet's base checkout to the new master, and
+clean up the merged worktree + window. It **mutates this fleet's `$FLEET_REPO`**
+(merges a PR) and the fleet's base checkout (`$FLEET_MAIN`). Merging is a
+steward operation, so this skill is **steward-only** — a worker never runs it (a
+worker `/ship`s; the steward `/land`s).
+
+This skill is **fleet-agnostic**: it does the *general* finish work only —
+merge + base-checkout pull + cleanup. It does **not** touch the live install
+(`~/.claude/fleet`), reload daemons, re-merge hooks, or reinstall commands; that
+tooling re-apply is a separate, tooling-fleet-only concern — run `/fleet-sync-install`
+for it after landing a claude-fleet tooling PR.
 
 **Argument** (`$ARGUMENTS`): the PR number to land (`/land 61`). Required — if
 empty, ask the user which PR and stop.
@@ -69,41 +74,21 @@ gh pr merge "<N>" --repo "$FLEET_REPO" --squash
 ```
 
 Do **not** rely on `--delete-branch`: it errors when the branch is still checked
-out in a worker worktree. Branch/worktree cleanup happens in step 5.
+out in a worker worktree. Branch/worktree cleanup happens in step 4.
 
-## 3. Deploy master into both live checkouts
+## 3. Land master into the fleet's base checkout
 
-The merge only moved the remote — the running daemons and dash read from disk.
-Fast-forward **both** live checkouts:
+The merge only moved the remote — the fleet's base checkout still points at the
+old master. Fast-forward it:
 
 ```sh
 git -C "$FLEET_MAIN" pull --ff-only          # the fleet's base checkout
-git -C ~/.claude/fleet pull --ff-only        # the live install the daemons/dash use
 ```
 
-If either refuses to fast-forward, stop and report — something diverged
-locally; resolve it before continuing.
+If it refuses to fast-forward, stop and report — something diverged locally;
+resolve it before continuing.
 
-## 4. Reload daemons — only if the change requires it
-
-Most script-body changes need **no reload**: an *interval* daemon
-(collector / classify / summarize / diskguard) re-reads its script from disk on
-its next tick. Reload only when:
-
-- a **plist/timer interval changed** (macOS: `launchctl bootout` then
-  `bootstrap` the unit; Linux: `systemctl --user daemon-reload` + restart the
-  timer), **or**
-- the **KeepAlive spinner** (`com.claude-fleet.spinner`) script changed — it's
-  long-lived, so `launchctl kickstart -k gui/$(id -u)/com.claude-fleet.spinner`
-  (Linux: `systemctl --user restart claude-fleet-spinner.service`).
-
-If `hooks/settings-hooks.json` changed, re-merge the delta into
-`~/.claude/settings.json` — **append** to the hook arrays, never clobber
-existing entries (back it up first).
-
-If the PR touched none of these, say "no reload needed" and move on.
-
-## 5. Clean up the merged worktree + window
+## 4. Clean up the merged worktree + window
 
 The worker's `issue-<N>` worktree and branch are now merged and safe to remove;
 close its window too. Find the window by its `@issue` binding.
@@ -122,15 +107,19 @@ win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v
 Never remove a worktree with uncommitted changes — if `worktree remove` refuses,
 report it rather than forcing; the work may not have shipped.
 
-## 6. Report — one line
+## 5. Report — one line
 
 ```
 #<issue> landed → <squash commit sha>
 ```
 
-Name the PR, the issue it closed, and the deploy sha. If you stopped at step 1
-(not mergeable) or step 3 (deploy diverged), report that instead — clearly, with
-the one-line reason and what the human/worker must do.
+Name the PR, the issue it closed, and the landed sha. If you stopped at step 1
+(not mergeable) or step 3 (base checkout diverged), report that instead —
+clearly, with the one-line reason and what the human/worker must do.
+
+If the PR changed the claude-fleet tooling itself and you're on the self-hosting
+tooling fleet, note that the live install still needs `/fleet-sync-install` to pick
+up the change — `/land` deliberately does not touch it.
 
 ---
 
@@ -138,4 +127,4 @@ Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo
 sessions, or ledgers. `/land` never force-pushes and never `--admin`-bypasses
 branch protection: it only merges a PR GitHub already considers mergeable, after
 CI is green on the master it lands on. Implementation is the worker's job — the
-steward triages, lands, and deploys.
+steward triages, lands, and hands the live-install re-apply to `/fleet-sync-install`.

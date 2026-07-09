@@ -64,7 +64,7 @@ else gh pr list --repo "$FLEET_REPO" --state open \
 ```
 
 List each open, non-draft PR with its number, title, merge/CI state, and call
-out which are **green + mergeable** (ready for `/land` or `/merge-train`) vs.
+out which are **green + mergeable** (ready for `/land` or `/land-train`) vs.
 **red / behind / blocked**.
 
 ## 3. Ownerless issues + stuck work
