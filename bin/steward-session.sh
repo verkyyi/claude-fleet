@@ -61,7 +61,10 @@ done
 # build the hub fresh, capturing IDs so every op hits THIS window/pane.
 win=$(tmux new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$HOME/.claude" "bash '$BIN/tmux-dashboard.sh'")
 sp=$(tmux split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BASE" "$STEWARD_CMD")
-tmux set-option -p -t "$sp" @steward 1 2>/dev/null
+# Mark the steward pane by its explicit id (never the active pane) and clear any
+# @dash on it — @dash/@steward must stay mutually exclusive (issue #135).
+fleet_mark_role steward "$sp" 2>/dev/null || \
+  tmux set-option -p -t "$sp" @steward 1 2>/dev/null
 # Hub cue: show the top pane-border title on JUST this window (the conf keeps it
 # off globally to spare worker panes a row). pane-border-format (in the conf)
 # labels the @steward pane "▸ STEWARD HUB · <fleet>" — visible even when the pane

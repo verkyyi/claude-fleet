@@ -25,8 +25,12 @@ FLEET_SESSION=$(fleet_current_session 2>/dev/null); export FLEET_SESSION
 # the standalone 'dash' window AND an embedded dash pane in the plan/steward
 # split. Set early (before fzf) so even a freshly-launched dash is discoverable;
 # the pane just runs `bash`, so a marker is far more robust than name/command
-# heuristics.
-tmux set-option -p @dash 1 2>/dev/null || true
+# heuristics. Mark THIS pane explicitly ($TMUX_PANE) — a bare `set-option -p`
+# marks the *active* pane, so an embedded dash relaunching while the steward pane
+# is focused would wrongly tag the steward (issue #135). fleet_mark_role also
+# clears @steward here, keeping the two markers mutually exclusive.
+fleet_mark_role dash "${TMUX_PANE:-}" 2>/dev/null || \
+  tmux set-option -p -t "${TMUX_PANE:-}" @dash 1 2>/dev/null || true
 
 if ! command -v fzf >/dev/null 2>&1; then
   echo "fzf not found — install it (brew install fzf) for the interactive dash."; sleep 5; exit 1

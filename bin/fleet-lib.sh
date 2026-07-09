@@ -70,6 +70,28 @@ fleet_seat() {
   return 0
 }
 
+# Mark a pane with exactly ONE of the mutually-exclusive fleet role markers —
+# @dash (the mission-control dashboard) or @steward (the steward hub). Both
+# dash-/steward-zoom AND /fleet-sync-install key off these, so a pane must never
+# carry both at once (it would read as both a dash to respawn and a steward hub).
+# This sets the chosen role to 1 and UNSETS the other, on the pane the caller
+# names — defaulting to the caller's OWN pane ($TMUX_PANE), NEVER the active
+# pane. tmux's `set-option -p` alone targets the *active* pane, which is wrong
+# when the dash relaunches while another pane is focused (issue #135): the marker
+# would land on whatever pane happens to be active. Passing `-t <pane>` pins it.
+# Args: <dash|steward> [pane-id]   (pane-id defaults to $TMUX_PANE)
+fleet_mark_role() {
+  local role="${1:-}" pane="${2:-${TMUX_PANE:-}}" on off
+  [ -n "$pane" ] || return 0
+  case "$role" in
+    dash)    on='@dash';    off='@steward' ;;
+    steward) on='@steward'; off='@dash' ;;
+    *) return 1 ;;
+  esac
+  tmux set-option -p -t "$pane" "$on" 1  2>/dev/null || true
+  tmux set-option -u -p -t "$pane" "$off" 2>/dev/null || true
+}
+
 # The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
 # and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on
