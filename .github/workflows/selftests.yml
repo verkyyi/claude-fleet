@@ -1,0 +1,43 @@
+name: selftests
+
+# The single gate for every hermetic selftest in the fleet. bin/run-selftests.sh
+# discovers and runs all `bin/*-selftest.sh` — no network, no live tmux, no real
+# repo (each test fakes `gh`/`tmux` and uses temp dirs) — and exits non-zero if
+# any fail. Folds in the former per-selftest workflows (land-train, tmux-config)
+# AND the three that had no workflow at all (dash-reap, fleet-dispatch,
+# fleet-keys), so all five run under one gate. shellcheck.yml stays separate.
+#
+# Triggered on bin/** (where the selftests and the code they test live) plus the
+# few fixtures some tests read from outside bin/ (see the paths below). A new
+# selftest is picked up automatically — the runner globs, so there's no list to
+# keep in sync.
+
+on:
+  push:
+    paths:
+      - 'bin/**'
+      # Fixtures the selftests read from OUTSIDE bin/, kept so an edit to any of
+      # them still re-runs the gate: fleet.conf.example (tmux-config-selftest.sh)
+      # and conf/tmux-attention.conf (fleet-keys-selftest.sh cross-checks the
+      # cheatsheet against the shipped tmux binds).
+      - 'conf/**'
+      - 'fleet.conf.example'
+      - '.github/workflows/selftests.yml'
+  pull_request:
+    paths:
+      - 'bin/**'
+      - 'conf/**'
+      - 'fleet.conf.example'
+      - '.github/workflows/selftests.yml'
+
+jobs:
+  selftests:
+    runs-on: ubuntu-latest
+    # Bound the aggregate run well under GitHub's 6h default so a single hung or
+    # non-hermetic test can't wedge the whole gate for hours.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run all selftests
+        run: bash bin/run-selftests.sh

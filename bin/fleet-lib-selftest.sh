@@ -1,0 +1,195 @@
+#!/bin/bash
+# fleet-lib-selftest.sh — hermetic unit tests for bin/fleet-lib.sh, the shared
+# helper library every fleet skill and daemon sources.
+#
+# Focus is on the BRANCHING logic (not trivial wrappers):
+#
+#   A. fleet_seat() — the seat guard that gates every /fleet-* skill. Covered
+#      across all four outcomes, with an explicit REGRESSION GUARD for issue #118
+#      (fix 5105325): cw.zsh names worktrees `<repo>-issue-<N>`, so `issue-<N>`
+#      is preceded by `-`, not `/`. The old glob `*/issue-[0-9]*` never matched
+#      those, so every cw.zsh worker reported seat=unknown and the role guard
+#      silently disabled. The `claude-fleet-issue-118 + @issue → worker` case
+#      below fails loudly if that glob ever narrows again.
+#
+#   B. fleet_reap_ok() — the clean+merged reap gate. The git-dependent branches
+#      (dirty / ancestor) are exercised against a real throwaway repo; the pure
+#      branches (exact-line merged-PR match, unmerged fallthrough, precedence)
+#      are exercised directly. (dash-reap-selftest.sh drives the same gate
+#      through the UI; this pins the function's own contract.)
+#
+#   C. fleet_slug_cached / fleet_repo_cached / fleet_cache — the cheap sessmap
+#      lookups and the .ts-keyed cache-file routing (slug'd file iff its fetch
+#      completed, else the flat fallback).
+#
+# Fully hermetic: fakes `tmux` (feeds @issue via $FAKE_ISSUE), drives cwd with
+# real temp dirs, and points FLEET_C/FLEET_MAIN at a scratch tree. No network,
+# no live tmux. Exit 0 = pass, non-zero = fail (prints what diverged).
+set -uo pipefail
+
+BIN="$(cd "$(dirname "$0")" && pwd)"
+LIB="$BIN/fleet-lib.sh"
+[ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-lib-selftest.XXXXXX")" || exit 2
+# The fleet_seat "empty" cases require the temp path to have NO `issue-<N>`
+# segment anywhere (the worker glob `*/*issue-[0-9]*` matches any ancestor). If
+# the ambient TMPDIR is itself inside an issue worktree (a claude-fleet dev
+# working in .../claude-fleet-issue-N/), relocate under /tmp (conventionally
+# clean) so the test stays deterministic instead of spuriously reporting worker.
+case "$WORK" in
+  */*issue-[0-9]*)
+    rm -rf "$WORK"
+    WORK="$(mktemp -d /tmp/fleet-lib-selftest.XXXXXX)" || exit 2 ;;
+esac
+trap 'rm -rf "$WORK"' EXIT
+
+CHECKS=0
+fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
+eq() {  # <desc> <expected> <actual>
+  CHECKS=$((CHECKS + 1))
+  [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
+}
+
+# --- fake tmux: only answers the '#{@issue}' query fleet_seat makes ----------
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/tmux" <<'TMUXFAKE'
+#!/bin/bash
+# fleet_seat calls: tmux display-message -p -t <pane> '#{@issue}'
+for a in "$@"; do
+  case "$a" in
+    *'@issue'*) printf '%s\n' "${FAKE_ISSUE:-}"; exit 0 ;;
+  esac
+done
+exit 0
+TMUXFAKE
+chmod +x "$WORK/bin/tmux"
+export PATH="$WORK/bin:$PATH"
+
+# shellcheck source=/dev/null
+. "$LIB"
+
+# ============================================================================
+# A. fleet_seat — the seat guard
+# ============================================================================
+# Real dirs whose basenames drive the cwd glob. `pwd -P` inside fleet_seat and
+# in our FLEET_MAIN resolution both dereference symlinks, so the comparison is
+# consistent even on macOS (/tmp → /private/tmp).
+mkdir -p "$WORK/claude-fleet-issue-118" \
+         "$WORK/issue-111" \
+         "$WORK/base" \
+         "$WORK/random-elsewhere"
+
+# 1. #118 REGRESSION GUARD: `<repo>-issue-<N>` worktree + @issue set → worker.
+eq "seat: cw.zsh <repo>-issue-<N> worktree with @issue" worker \
+  "$( cd "$WORK/claude-fleet-issue-118" && FAKE_ISSUE=118 fleet_seat )"
+
+# 2. Bare `issue-<N>` worktree + @issue set → worker (the pre-#118 shape).
+eq "seat: bare issue-<N> worktree with @issue" worker \
+  "$( cd "$WORK/issue-111" && FAKE_ISSUE=111 fleet_seat )"
+
+# 3. Base checkout (== FLEET_MAIN) + NO @issue → steward.
+eq "seat: base checkout, no @issue" steward \
+  "$( cd "$WORK/base" && FLEET_MAIN="$WORK/base" FAKE_ISSUE='' fleet_seat )"
+
+# 4. Unrelated cwd, no @issue, cwd != FLEET_MAIN → empty (ambiguous).
+eq "seat: unrelated cwd" "" \
+  "$( cd "$WORK/random-elsewhere" && FLEET_MAIN="$WORK/base" FAKE_ISSUE='' fleet_seat )"
+
+# 5. In an issue worktree but @issue EMPTY → NOT worker (the @issue is required,
+#    not just the path shape). cwd isn't FLEET_MAIN either → empty.
+eq "seat: issue worktree but @issue empty" "" \
+  "$( cd "$WORK/claude-fleet-issue-118" && FLEET_MAIN="$WORK/base" FAKE_ISSUE='' fleet_seat )"
+
+# 6. @issue set but cwd is the base checkout (not an issue dir) → NOT worker,
+#    and NOT steward (steward requires @issue empty) → empty.
+eq "seat: @issue set while sitting in base checkout" "" \
+  "$( cd "$WORK/base" && FLEET_MAIN="$WORK/base" FAKE_ISSUE=42 fleet_seat )"
+
+# 7. @issue set + issue-worktree cwd, but FLEET_MAIN unset → still worker
+#    (worker seat doesn't depend on FLEET_MAIN).
+eq "seat: worker without FLEET_MAIN in env" worker \
+  "$( cd "$WORK/issue-111" && unset FLEET_MAIN; FAKE_ISSUE=111 fleet_seat )"
+
+# ============================================================================
+# B. fleet_reap_ok — the clean+merged reap gate
+# ============================================================================
+# Pure branches (no git needed: an empty/absent wtdir skips the dirty probe).
+run_reap() {  # <wtdir> <root> <branch> <head> <base> <merged> → prints "<token> <rc>"
+  local out rc
+  out="$(fleet_reap_ok "$1" "$2" "$3" "$4" "$5" "$6")"; rc=$?
+  printf '%s %s' "$out" "$rc"
+}
+
+# branch present in the merged list (exact whole-line match) → merged-pr / rc 0.
+eq "reap: merged-PR exact match" "merged-pr 0" \
+  "$(run_reap "" "" "feature-x" "" "" "$(printf 'foo\nfeature-x\nbar')")"
+
+# branch NOT in merged list, no head/base to test ancestry → unmerged / rc 1.
+eq "reap: not merged, no ancestry" "unmerged 1" \
+  "$(run_reap "" "" "feature-x" "" "" "$(printf 'foo\nbar')")"
+
+# exact-LINE match: 'feat' must NOT match a 'feature-x' line (grep -qxF) →
+# unmerged, guarding against a substring/prefix false-positive.
+eq "reap: substring is not a merged match" "unmerged 1" \
+  "$(run_reap "" "" "feat" "" "" "$(printf 'feature-x\nother')")"
+
+# git-dependent branches, against a real throwaway repo.
+REPO="$WORK/repo"
+git init -q "$REPO"
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+BASE_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m tip
+TIP_SHA="$(git -C "$REPO" rev-parse HEAD)"
+
+# clean worktree whose HEAD is an ancestor of base → ancestor / rc 0.
+eq "reap: ancestor of base" "ancestor 0" \
+  "$(run_reap "$REPO" "$REPO" "somebranch" "$BASE_SHA" "$TIP_SHA" "")"
+
+# HEAD is NOT an ancestor of base (tip vs older base) and not merged → unmerged.
+eq "reap: not an ancestor" "unmerged 1" \
+  "$(run_reap "$REPO" "$REPO" "somebranch" "$TIP_SHA" "$BASE_SHA" "")"
+
+# dirty worktree short-circuits to dirty / rc 1 even if the branch would
+# otherwise count as merged. Use a MODIFIED TRACKED file (not an untracked one)
+# so `git status --porcelain` reports it regardless of any global
+# core.excludesFile — an untracked file could be gitignored away on a dev box.
+printf 'orig\n' > "$REPO/tracked"
+git -C "$REPO" add tracked
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m 'add tracked'
+printf 'changed\n' >> "$REPO/tracked"        # now ' M tracked' — always dirty
+eq "reap: dirty short-circuits merged" "dirty 1" \
+  "$(run_reap "$REPO" "$REPO" "feature-x" "" "" "$(printf 'feature-x')")"
+git -C "$REPO" checkout -q -- tracked         # restore clean for any later use
+
+# ============================================================================
+# C. sessmap lookups + fleet_cache routing
+# ============================================================================
+FLEET_C="$WORK/cache"          # override the module default (plain var, reassignable)
+mkdir -p "$FLEET_C"
+
+# No sessmap yet → both cached lookups return empty.
+eq "slug_cached: no sessmap" "" "$(fleet_slug_cached s1)"
+eq "repo_cached: no sessmap" "" "$(fleet_repo_cached s1)"
+
+# Write a sessmap: session<TAB>slug<TAB>repo.
+printf 's1\tacme-widgets\tacme/widgets\n' >  "$FLEET_C/sessmap"
+printf 's2\tacme-gadgets\tacme/gadgets\n' >> "$FLEET_C/sessmap"
+
+eq "slug_cached: hit"      "acme-widgets" "$(fleet_slug_cached s1)"
+eq "repo_cached: hit"      "acme/widgets" "$(fleet_repo_cached s1)"
+eq "repo_cached: 2nd row"  "acme/gadgets" "$(fleet_repo_cached s2)"
+eq "repo_cached: miss"     ""             "$(fleet_repo_cached nope)"
+
+# fleet_cache routing: slug'd file ONLY when its <base>_<slug>.ts marker exists.
+# No .ts yet → flat fallback.
+eq "cache: no .ts → flat fallback" "$FLEET_C/prmap" "$(fleet_cache prmap s1)"
+
+# Drop the .ts marker → routes to the slug'd file.
+: > "$FLEET_C/prmap_acme-widgets.ts"
+eq "cache: .ts present → slug'd file" "$FLEET_C/prmap_acme-widgets" "$(fleet_cache prmap s1)"
+
+# A session that doesn't resolve to a slug → always flat, regardless of markers.
+eq "cache: unresolved session → flat" "$FLEET_C/issues" "$(fleet_cache issues nope)"
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing)\n' "$CHECKS"
