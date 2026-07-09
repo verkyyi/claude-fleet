@@ -37,9 +37,9 @@ tmux info >/dev/null 2>&1 || exit 0
 
 RUBRIC='You are a status classifier for a Claude Code terminal session. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
 WORKING - Claude is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
-WAITING - Claude asked the user a question or is blocked waiting for input / confirmation.
+WAITING - Claude EXPLICITLY posed a question, requested specific input, or is blocked on a permission/confirmation prompt that stops progress until the user answers (e.g. "Do you want to proceed?", "Please provide the target path.", a numbered choice list awaiting a selection, "Allow this tool to run?"). This takes precedence: if the screen shows a real pending question OR permission prompt, it is WAITING even if a caret or chips are also visible. A bare idle prompt with only a recap and suggested commands is NOT waiting.
 LOOPING - idle right now but a scheduled wakeup or next loop iteration is pending (mentions waiting N seconds, scheduled, will continue, /loop).
-STOPPED - finished; idle with nothing pending.
+STOPPED - finished; idle with nothing pending. This INCLUDES the normal post-turn idle screen: a recap/summary of the work Claude just COMPLETED, optionally followed by suggested-command chips (lines beginning "❯ ..."). Those chips are passive hints shown after a finished turn, not a question awaiting an answer — still STOPPED.
 ERROR - a crash or error state.
 Screen:
 -----'
