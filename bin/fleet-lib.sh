@@ -55,8 +55,12 @@ fleet_seat() {
   local issue cwd main
   issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
   cwd=$(pwd -P 2>/dev/null)
+  # Match both the bare `issue-<N>` worktree name and the `<repo>-issue-<N>`
+  # form that cw.zsh actually creates (dir="$root/../${repo}-${branch}"), where
+  # `issue-<N>` is preceded by `-`, not `/`. `*/*issue-[0-9]*` still requires a
+  # path separator (a real nested path) but tolerates the `<repo>-` prefix.
   case "$cwd" in
-    */issue-[0-9]*)
+    */*issue-[0-9]*)
       [ -n "$issue" ] && { printf 'worker'; return; } ;;
   esac
   if [ -z "$issue" ] && [ -n "${FLEET_MAIN:-}" ]; then
