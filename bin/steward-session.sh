@@ -62,6 +62,11 @@ done
 win=$(tmux new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$HOME/.claude" "bash '$BIN/tmux-dashboard.sh'")
 sp=$(tmux split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BASE" "$STEWARD_CMD")
 tmux set-option -p -t "$sp" @steward 1 2>/dev/null
+# Hub cue: show the top pane-border title on JUST this window (the conf keeps it
+# off globally to spare worker panes a row). pane-border-format (in the conf)
+# labels the @steward pane "▸ STEWARD HUB · <fleet>" — visible even when the pane
+# is zoomed fullscreen (prefix+g), where the window list is the only other cue.
+tmux set-window-option -t "$win" pane-border-status top 2>/dev/null
 
 # hub belongs at the lowest index (the urgency sorter pins slot 1)
 if tmux list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
