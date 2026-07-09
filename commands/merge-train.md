@@ -3,7 +3,7 @@
 <!-- fleet skill · owner: steward -->
 
 Runs a **serial single-writer "merge train"** over this fleet's `$FLEET_REPO`:
-it merges auto-merge-armed, green PRs **one at a time** — update-branch → wait
+it merges green PRs **one at a time** — update-branch → wait
 for green → merge → advance master → next — so each PR is tested exactly once
 against the master it actually lands on (O(N) CI, not the O(N²) thundering herd
 you get from updating every PR every time master moves). It **mutates PRs**
@@ -13,9 +13,10 @@ operation, so this skill is **steward-only**.
 
 **Argument** (`$ARGUMENTS`): optional. Pass explicit PR numbers to run exactly
 those, in the order given (`/merge-train 41 42 43`). With **no** argument it
-auto-discovers the repo's open, non-draft, auto-merge-armed PRs (ascending /
-FIFO), pre-filtering out the DIRTY/failing ones. Prefix with `--dry-run` to
-print the plan and each PR's current state and mutate **nothing**.
+auto-discovers the repo's open, non-draft, **green** PRs (ascending / FIFO) —
+regardless of auto-merge arming — pre-filtering out the DIRTY/failing/draft
+ones; this is the batch complement to single-PR `/land`. Prefix with `--dry-run`
+to print the plan and each PR's current state and mutate **nothing**.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
@@ -77,6 +78,14 @@ reason and the train moves on:
 | `blocked-review-required` | green + up to date but still blocked | get the review / approval |
 | `stuck-behind` / `merge-failed` | kept losing the head-sha race (≥ retry cap) | re-run merge-train later |
 | `timeout-<secs>s` | didn't go green within the per-PR budget | investigate CI, re-run |
+
+**Note — a red *non-required* check does not block the train.** A PR whose only
+red check is optional lands in GitHub's `UNSTABLE` merge state; branch protection
+still considers it mergeable, so the train treats `UNSTABLE` as **READY** and
+merges it. Only a **required** check going red (`BLOCKED` + failing) ejects a PR
+(`required-check-failed`). This is intentional — the train merges exactly what
+GitHub already considers landable — but can surprise you if you expect *any* red
+check to hold a PR back.
 
 The lease (`~/.claude/leases/merge-train-<repo-slug>.lock`, steal-if-stale)
 means a second `/merge-train` on the same repo refuses with *"a train is

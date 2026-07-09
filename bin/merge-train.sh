@@ -42,14 +42,25 @@ usage() {
   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
+# Add a PR arg, warning (not silently scrubbing) on non-numeric input: a fat-
+# fingered "#65" / "65 " is accepted with a note; a genuinely non-numeric arg
+# ("main", "--foo" that slipped past) is DROPPED loudly, never silently → "".
+add_pr_arg() {
+  local raw="$1" clean="${1//[^0-9]/}"
+  if [ -z "$clean" ]; then
+    printf 'merge-train: ignoring non-numeric PR arg %s\n' "$raw" >&2; return
+  fi
+  [ "$raw" != "$clean" ] && printf 'merge-train: reading PR arg %s as #%s\n' "$raw" "$clean" >&2
+  PRS+=("$clean")
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
     --method|-m)  shift; METHOD="${1:-squash}" ;;
     -h|--help)    usage 0 ;;
-    --)           shift; while [ "$#" -gt 0 ]; do PRS+=("${1//[^0-9]/}"); shift; done; break ;;
+    --)           shift; while [ "$#" -gt 0 ]; do add_pr_arg "$1"; shift; done; break ;;
     -*)           printf 'merge-train: unknown flag %s\n' "$1" >&2; usage 1 ;;
-    *)            PRS+=("${1//[^0-9]/}") ;;
+    *)            add_pr_arg "$1" ;;
   esac
   shift
 done
@@ -99,7 +110,14 @@ lease_acquire() {
     "$REPO" "${holder:-?}" >&2
   return 1
 }
-trap '[ "$LEASE_HELD" = 1 ] && rm -rf "$LEASE" 2>/dev/null' EXIT
+# Release the lease on EXIT *and* on Ctrl-C / kill — otherwise a signal mid-run
+# leaves the lockdir until the TTL steal (a ~1h block on the next run). Idempotent
+# (LEASE_HELD flips to 0), so the INT/TERM path re-triggering EXIT is a no-op.
+# shellcheck disable=SC2329  # invoked indirectly via the trap lines below
+lease_release() { [ "$LEASE_HELD" = 1 ] && rm -rf "$LEASE" 2>/dev/null; LEASE_HELD=0; }
+trap lease_release EXIT
+trap 'lease_release; exit 130' INT
+trap 'lease_release; exit 143' TERM
 
 # --- PR state -----------------------------------------------------------------
 # Prints TSV: state  mergeable  mergeStateStatus  draftflag  checks  headOid
@@ -144,7 +162,11 @@ classify() {
 
 # --- run one PR through the train. Prints "merged" | "eject:<why>" | "skip:<why>".
 process_pr() {
-  local num="$1" retry=0 fields cls st mg ms dr ck oid out
+  # Two independent, bounded budgets: one for BEHIND update-branch retries, one
+  # for merge head-sha-race retries. A single shared counter (issue #73) let one
+  # failure mode burn the other's budget under mixed churn — each mode now gets
+  # its own MAX_RETRY.
+  local num="$1" behind_retry=0 merge_retry=0 fields cls st mg ms dr ck oid out
   SECONDS=0
   while [ "$SECONDS" -lt "$PR_TIMEOUT" ]; do
     fields=$(pr_fields "$num")
@@ -158,11 +180,11 @@ process_pr() {
       FAILING)  echo "eject:required-check-failed"; return ;;
       BLOCKED)  echo "eject:blocked-review-required"; return ;;
       BEHIND)
-        retry=$((retry + 1))
-        if [ "$retry" -gt "$MAX_RETRY" ]; then echo "eject:stuck-behind"; return; fi
-        note "  #$num behind master — update-branch (attempt $retry/$MAX_RETRY)"
+        behind_retry=$((behind_retry + 1))
+        if [ "$behind_retry" -gt "$MAX_RETRY" ]; then echo "eject:stuck-behind"; return; fi
+        note "  #$num behind master — update-branch (attempt $behind_retry/$MAX_RETRY)"
         gh pr update-branch "$num" --repo "$REPO" >/dev/null 2>&1 || true
-        sleep "$(backoff "$retry")" ;;
+        sleep "$(backoff "$behind_retry")" ;;
       PENDING)
         note "  #$num checks pending — waiting ${POLL}s"
         sleep "$POLL" ;;
@@ -172,12 +194,12 @@ process_pr() {
                    --match-head-commit "$oid" 2>&1); then
           echo "merged"; return
         fi
-        retry=$((retry + 1))
-        if [ "$retry" -gt "$MAX_RETRY" ]; then
+        merge_retry=$((merge_retry + 1))
+        if [ "$merge_retry" -gt "$MAX_RETRY" ]; then
           echo "eject:merge-failed"; return
         fi
-        note "  #$num merge lost the head-sha race — retry $retry/$MAX_RETRY (${out##*$'\n'})"
-        sleep "$(backoff "$retry")" ;;
+        note "  #$num merge lost the head-sha race — retry $merge_retry/$MAX_RETRY (${out##*$'\n'})"
+        sleep "$(backoff "$merge_retry")" ;;
     esac
   done
   echo "eject:timeout-${PR_TIMEOUT}s"
@@ -189,9 +211,14 @@ backoff() { local b=$(( POLL * $1 )); [ "$b" -gt 60 ] && b=60; printf '%s' "$b";
 # --- build the queue ----------------------------------------------------------
 SKIPPED_PRE=()   # dropped before the train (dirty/failing/draft at discovery)
 if [ "${#PRS[@]}" -eq 0 ]; then
-  # Auto-discover: open, non-draft, auto-merge-ARMED PRs. Pre-filter the ones
-  # that would only eject (DIRTY/CONFLICTING/failing) so the queue is the PRs
-  # with a real shot. Ascending number = FIFO / fair.
+  # Auto-discover: open, non-draft, GREEN PRs — regardless of auto-merge arming
+  # (issue #73). This fleet's workers /ship and leave PRs for the steward to
+  # /land; they never arm auto-merge, so an armed-only filter made no-arg
+  # discovery a dead path (reported "nothing to do" even with landable PRs open).
+  # No-arg /merge-train now means "drain the ready queue" — the batch complement
+  # to single-PR /land. Pre-filter the ones that would only eject (DIRTY /
+  # CONFLICTING / required-check-failing / draft) so the queue is the PRs with a
+  # real shot; PENDING PRs stay queued (they may go green). Ascending = FIFO.
   while IFS=$'\t' read -r n verdict; do
     [ -z "$n" ] && continue
     case "$verdict" in
@@ -202,8 +229,8 @@ if [ "${#PRS[@]}" -eq 0 ]; then
     # jq expressions use $-bound variables ($c/$ck) — single-quoted on purpose.
     # shellcheck disable=SC2016
     gh pr list --repo "$REPO" --state open --limit 100 \
-      --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup \
-      --jq '.[] | select(.autoMergeRequest != null) |
+      --json number,isDraft,mergeable,mergeStateStatus,statusCheckRollup \
+      --jq '.[] |
             (.statusCheckRollup // []) as $c |
             (if $c|length==0 then "none"
              elif ($c|any(.conclusion=="FAILURE" or .conclusion=="CANCELLED"
@@ -218,7 +245,7 @@ if [ "${#PRS[@]}" -eq 0 ]; then
 fi
 
 if [ "${#PRS[@]}" -eq 0 ]; then
-  note "merge-train: nothing to do for $REPO — no green + auto-merge-armed PRs."
+  note "merge-train: nothing to do for $REPO — no open + non-draft + green PRs."
   [ "${#SKIPPED_PRE[@]}" -gt 0 ] && note "  pre-filtered: ${SKIPPED_PRE[*]}"
   exit 0
 fi
