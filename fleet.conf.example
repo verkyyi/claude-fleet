@@ -103,12 +103,16 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
-# @label=Issue cache lifetime @group=cache @tier=advanced @scope=fleet @edit=int @unit=sec
+# GLOBAL: read by the preview tool from the global env — a per-fleet override
+# would be a silent no-op, so this is machine-wide.
+# @label=Issue cache lifetime @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ISSUE_TTL=180
 
 # Seconds the collector caches gh fetches (open issues + the repo-wide PR map)
 # before re-fetching. Lower = fresher backlog/PR data, more gh API chatter.
-# @label=GitHub cache lifetime @group=cache @tier=common @scope=fleet @edit=int @unit=sec
+# GLOBAL: the collector is ONE daemon serving every fleet and sets this once —
+# it is not per-fleet overridable.
+# @label=GitHub cache lifetime @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_GH_TTL=90
 
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
@@ -118,7 +122,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # watching to /land. Default 15. This value gates the script's own gh-fetch
 # dedup; the DAEMON fire cadence is set in the launchd plist (StartInterval) /
 # systemd timer (OnUnitActiveSec) — keep all three in step if you change it.
-# @label=PR status refresh @group=cache @tier=common @scope=fleet @edit=int @unit=sec
+# GLOBAL: one daemon serves every fleet and its cadence is tied to the plist —
+# not per-fleet overridable.
+# @label=PR status refresh @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_PR_REFRESH_INTERVAL=15
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.

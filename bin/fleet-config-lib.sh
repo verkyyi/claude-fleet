@@ -90,6 +90,7 @@ _fcfg_block() {
         if (line !~ /^[[:space:]]*#/) break                    # non-comment
         if (line ~ /^[[:space:]]*#[[:space:]]*$/) break        # bare "#" separator
         if (line ~ /^[[:space:]]*#[[:space:]]*[-=]{2,}/) break # "# --- section ---"
+        if (line ~ /^[[:space:]]*#[[:space:]]*FLEET_[A-Z0-9_]+=/) break # a prior key default line
         if (line ~ /@label=/) continue                         # tag line — not help
         buf[++n]=line
       }
@@ -190,6 +191,62 @@ fcfg_type() {
     int)            printf num ;;
     *)              printf str ;;
   esac
+}
+
+# fcfg_table → one US-delimited record per key, parsed in a SINGLE awk pass over
+# the example (the fast path for the modal's row builder, which would otherwise
+# re-parse the file ~7× per key). Fields, in order:
+#   KEY  label  group  tier  scope  edit  unit  default
+# Same rules as the per-key accessors above (label/group/tier/scope default to
+# key/other/common/fleet; edit inferred when untagged; default unquoted) — the
+# selftest cross-checks the two so they can never drift.
+fcfg_table() {
+  awk -v US="$FCFG_US" '
+    function unq(rhs,   v) {
+      v = rhs
+      if (v ~ /^"/)  { sub(/^"/,  "", v); sub(/".*/,  "", v); return v }
+      if (v ~ /^'\''/) { sub(/^'\''/, "", v); sub(/'\''.*/, "", v); return v }
+      sub(/[[:space:]]+#.*$/, "", v); sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+      return v
+    }
+    function tagval(line, name,   k, p, rest) {
+      k = "@" name "="; p = index(line, k)
+      if (p == 0) return ""
+      rest = substr(line, p + length(k))
+      if (match(rest, /[[:space:]]+@[a-zA-Z_]+=/)) rest = substr(rest, 1, RSTART-1)
+      sub(/[[:space:]]+$/, "", rest)
+      return rest
+    }
+    { L[NR] = $0 }
+    END {
+      for (n = 1; n <= NR; n++) {
+        if (L[n] !~ /^#?[[:space:]]*FLEET_[A-Z0-9_]+=/) continue
+        key = L[n]; sub(/^#?[[:space:]]*/, "", key); sub(/=.*/, "", key)
+        def = L[n]; sub(/^[^=]*=/, "", def); def = unq(def)
+        tl = ""
+        for (i = n-1; i >= 1; i--) {
+          p = L[i]
+          if (p ~ /^[[:space:]]*$/) break
+          if (p !~ /^[[:space:]]*#/) break
+          if (p ~ /@label=/) { tl = p; break }
+        }
+        label = tagval(tl, "label"); if (label == "") label = key
+        group = tagval(tl, "group"); if (group == "") group = "other"
+        tier  = tagval(tl, "tier");  if (tier  == "") tier  = "common"
+        scope = tagval(tl, "scope"); if (scope == "") scope = "fleet"
+        edit  = tagval(tl, "edit")
+        unit  = tagval(tl, "unit")
+        if (edit == "") {
+          if (key == "FLEET_AUTOFILL" || key == "FLEET_SPAWN_FOCUS") edit = "bool"
+          else if (key == "FLEET_MODEL" || key == "FLEET_SUBAGENT_MODEL") edit = "enum"
+          else if (def ~ /^[0-9]+$/) edit = "int"
+          else edit = "str"
+        }
+        printf "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", \
+          key, US, label, US, group, US, tier, US, scope, US, edit, US, unit, US, def
+      }
+    }
+  ' "$(fcfg_example)"
 }
 
 # --- per-file / effective value resolution ----------------------------------

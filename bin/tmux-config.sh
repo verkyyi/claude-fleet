@@ -54,43 +54,45 @@ exp_has()    { grep -qxF "$1" "$(exp_file)" 2>/dev/null; }
 exp_toggle() {
   local b="$1" f tmp; f=$(exp_file); mkdir -p "$CFG_STATE_DIR" 2>/dev/null
   if grep -qxF "$b" "$f" 2>/dev/null; then
-    tmp="$f.tmp.$$"; grep -vxF "$b" "$f" > "$tmp" 2>/dev/null && mv "$tmp" "$f"
+    # grep -v exits 1 when it filters out the ONLY line (empty output) — that is
+    # success here, not failure, so don't gate the mv on its status or collapsing
+    # the last-open section would silently no-op.
+    tmp="$f.tmp.$$"; { grep -vxF "$b" "$f" 2>/dev/null || true; } > "$tmp" && mv "$tmp" "$f"
   else
     printf '%s\n' "$b" >> "$f"
   fi
 }
 
-# ---- one key row: FIELD1=KEY, FIELD2=colored "scope label value source" ------
+# ---- one key row from pre-parsed fields (label/scope/unit/default) -----------
+# FIELD1=KEY (binds) · FIELD2=colored "scope label value source" (display) ·
+# FIELD3=KEY (always present so fzf --nth=2,3 keeps rows searchable by raw name
+# even when the raw column is hidden). RCONF_F/RCONF_G are set once by emit_rows
+# so the effective-value lookup only greps the two (small) confs — no example
+# re-parse per row.
 render_row() {
-  local key="$1" ev val src col srcmark scope smark label unit lf vf sf raw
-  scope=$(fcfg_scope "$key")
+  local key="$1" label="$2" scope="$3" unit="$4" def="$5"
+  local smark col src srcmark val v lf vf sf raw disp
   case "$scope" in
     identity) smark='🔒' ;;
     global)   smark='🌐' ;;
     *)        smark='🎚' ;;
   esac
-  ev=$(fcfg_effective "$key" "$SESSION"); val=${ev%"$US"*}; src=${ev##*"$US"}
+  if   v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
+  elif v=$(fcfg_file_value "$RCONF_G" "$key"); then val="$v"; src=global
+  else val="$def"; src=default
+  fi
   case "$src" in
     fleet)  col="$CFG_FLEET";  srcmark='▸ per-fleet' ;;
     global) col="$CFG_GLOBAL"; srcmark='· global' ;;
     *)      col="$CFG_DIM";    srcmark='  default' ;;
   esac
-  if [ -n "$val" ]; then
-    unit=$(fcfg_unit "$key"); [ -n "$unit" ] && val="$val $unit"
-  else
-    val='(empty)'
-  fi
-  label=$(fcfg_label "$key")
+  if [ -n "$val" ]; then [ -n "$unit" ] && val="$val $unit"; else val='(empty)'; fi
   lf=$(printf '%-30s' "$(printf '%.30s' "$label")")
   vf=$(printf '%-22s' "$(printf '%.20s' "$val")")
   sf=$(printf '%-11s' "$srcmark")
   raw=''; raw_on && raw="  $CFG_DIM$key$CFG_R"
-  printf '%s%s%s %s%s%s %s%s%s %s%s%s%s\n' \
-    "$key" "$US" \
-    "$smark" \
-    "$CFG_KEY" "$lf" "$CFG_R" \
-    "$CFG_TX" "$vf" "$CFG_R" \
-    "$col" "$sf" "$CFG_R" "$raw"
+  disp="$smark $CFG_KEY$lf$CFG_R $CFG_TX$vf$CFG_R $col$sf$CFG_R$raw"
+  printf '%s%s%s%s%s\n' "$key" "$US" "$disp" "$US" "$key"
 }
 
 # ---- non-key rows (field1 is a sentinel the binds recognize) -----------------
@@ -109,51 +111,58 @@ emit_toggle() {
   printf '@@TOGGLE@@%s%s%s%s %s %s(%s)%s\n' "$bid" "$US" "$CFG_B" "$arrow" "$name" "$CFG_DIM" "$n" "$CFG_R"
 }
 emit_bucket() {
-  local bid="$1" name="$2" keys="$3" n key
-  n=$(printf '%s' "$keys" | grep -c .)
+  local bid="$1" name="$2" t="$3" n key label group tier scope edit unit def
+  n=$(printf '%s' "$t" | grep -c .)
   [ "$n" -gt 0 ] || return 0
   emit_toggle "$bid" "$name" "$n"
   exp_has "$bid" || return 0
-  printf '%s' "$keys" | while IFS= read -r key; do [ -n "$key" ] && render_row "$key"; done
+  printf '%s' "$t" | while IFS="$US" read -r key label group tier scope edit unit def; do
+    [ -n "$key" ] && render_row "$key" "$label" "$scope" "$unit" "$def"
+  done
 }
 
 # ---- rows: context header · common (grouped) · collapsible buckets ----------
+# One awk pass (fcfg_table) parses the example into label/group/tier/scope/edit/
+# unit/default records; everything below works from those in-memory records, so
+# a render no longer re-parses the file per key.
 emit_rows() {
-  local key tier scope g groups
-  local common_keys='' adv_keys='' gadv_keys='' id_keys=''
-  while IFS= read -r key; do
+  local key label group tier scope edit unit def og
+  local common_t='' adv_t='' gadv_t='' id_t='' order='' line
+  RCONF_F=$(fcfg_fleet_conf "$SESSION"); RCONF_G=$(fcfg_global_conf)
+  while IFS="$US" read -r key label group tier scope edit unit def; do
     [ -n "$key" ] || continue
-    scope=$(fcfg_scope "$key"); tier=$(fcfg_tier "$key")
-    if [ "$scope" = identity ]; then                       id_keys="$id_keys$key
+    line="$key$US$label$US$group$US$tier$US$scope$US$edit$US$unit$US$def"
+    if [ "$scope" = identity ]; then                            id_t="$id_t$line
 "
-    elif [ "$tier" = advanced ] && [ "$scope" = global ]; then gadv_keys="$gadv_keys$key
+    elif [ "$tier" = advanced ] && [ "$scope" = global ]; then  gadv_t="$gadv_t$line
 "
-    elif [ "$tier" = advanced ]; then                          adv_keys="$adv_keys$key
+    elif [ "$tier" = advanced ]; then                           adv_t="$adv_t$line
 "
-    else                                                       common_keys="$common_keys$key
+    else
+      common_t="$common_t$line
 "
+      case "$US$order$US" in *"$US$group$US"*) : ;; *) order="${order:+$order$US}$group" ;; esac
     fi
-  done < <(fcfg_keys)
+  done <<EOF
+$(fcfg_table)
+EOF
 
   emit_context
 
   # common section, grouped by @group in first-appearance order
-  groups=$(printf '%s' "$common_keys" | while IFS= read -r key; do [ -n "$key" ] && printf '%s\n' "$(fcfg_group "$key")"; done | awk 'NF && !seen[$0]++')
-  while IFS= read -r g; do
-    [ -n "$g" ] || continue
-    emit_subheader "$g"
-    printf '%s' "$common_keys" | while IFS= read -r key; do
+  local oIFS="$IFS"; IFS="$US"; set -- $order; IFS="$oIFS"
+  for og in "$@"; do
+    emit_subheader "$og"
+    printf '%s' "$common_t" | while IFS="$US" read -r key label group tier scope edit unit def; do
       [ -n "$key" ] || continue
-      [ "$(fcfg_group "$key")" = "$g" ] && render_row "$key"
+      [ "$group" = "$og" ] && render_row "$key" "$label" "$scope" "$unit" "$def"
     done
-  done <<EOF
-$groups
-EOF
+  done
 
   emit_spacer
-  emit_bucket advanced   "⚙ Advanced"               "$adv_keys"
-  emit_bucket global-adv "🌐 Global-only · advanced" "$gadv_keys"
-  emit_bucket identity   "🔒 Identity · view-only"   "$id_keys"
+  emit_bucket advanced   "⚙ Advanced"               "$adv_t"
+  emit_bucket global-adv "🌐 Global-only · advanced" "$gadv_t"
+  emit_bucket identity   "🔒 Identity · view-only"   "$id_t"
 }
 
 # ---- preview: the detail pane for one key -----------------------------------
@@ -217,7 +226,7 @@ RESTART="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_restart_${SESSION:-_}.$
 run_fzf() {
   rm -f "$RESTART"
   local scope; scope=$(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]')
-  bash "$SELF" rows | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 --nth=2 \
+  bash "$SELF" rows | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 --nth=2,3 \
     --no-sort --layout=reverse-list --info=hidden --border=rounded \
     --border-label=" fleet config · per-fleet edits write to the $scope layer " --border-label-pos=3 \
     --prompt='filter ▸ ' \

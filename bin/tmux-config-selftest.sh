@@ -82,6 +82,28 @@ eq 'label fallback'  "$(fcfg_label FLEET_DOES_NOT_EXIST)" FLEET_DOES_NOT_EXIST
 eq 'scope fallback'  "$(fcfg_scope FLEET_DOES_NOT_EXIST)" fleet
 eq 'tier fallback'   "$(fcfg_tier  FLEET_DOES_NOT_EXIST)" common
 
+# --- TABLE: fcfg_table agrees with the per-key accessors (no drift) ----------
+# The single-pass batch parser must produce, for every key, exactly what the
+# individual accessors return — otherwise the fast modal path diverges from the
+# preview/edit path.
+while IFS="$FCFG_US" read -r k label group tier scope edit unit def; do
+  [ -n "$k" ] || continue
+  eq "table label $k" "$label" "$(fcfg_label "$k")"
+  eq "table group $k" "$group" "$(fcfg_group "$k")"
+  eq "table tier  $k" "$tier"  "$(fcfg_tier  "$k")"
+  eq "table scope $k" "$scope" "$(fcfg_scope "$k")"
+  eq "table edit  $k" "$edit"  "$(fcfg_edit  "$k")"
+  eq "table unit  $k" "$unit"  "$(fcfg_unit  "$k")"
+  eq "table def   $k" "$def"   "$(fcfg_default "$k")"
+done <<EOF
+$(fcfg_table)
+EOF
+# the three global daemon settings must be @scope=global (a per-fleet override is
+# a silent no-op — the modal must not show a 🎚 per-fleet marker for them).
+eq 'scope FLEET_GH_TTL'              "$(fcfg_scope FLEET_GH_TTL)"              global
+eq 'scope FLEET_ISSUE_TTL'           "$(fcfg_scope FLEET_ISSUE_TTL)"           global
+eq 'scope FLEET_PR_REFRESH_INTERVAL' "$(fcfg_scope FLEET_PR_REFRESH_INTERVAL)" global
+
 # --- TYPING (fcfg_type derives from @edit) ----------------------------------
 eq 'type FLEET_AUTOFILL'       "$(fcfg_type FLEET_AUTOFILL)"       bool
 eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
