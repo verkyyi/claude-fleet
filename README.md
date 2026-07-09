@@ -198,11 +198,11 @@ fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
 `~/.claude/commands/`. Each declares an owner seat (`worker` / `steward`) and
 refuses from the wrong one. Live so far:
 
-- **`/land`** (steward) — land one worker PR: verify it's genuinely mergeable
+- **`/fleet-land`** (steward) — land one worker PR: verify it's genuinely mergeable
   (update-branch + re-check CI if merely behind, never merge red), squash-merge,
   fast-forward the fleet's base checkout, clean up the merged worktree + window.
   Fleet-agnostic — the general finish work only.
-- **`/land-train`** (steward) — the batch complement to `/land`: a serial
+- **`/fleet-land-train`** (steward) — the batch complement to `/fleet-land`: a serial
   single-writer *land train* that merges a batch of green PRs one at a time
   (update-branch → wait green → merge → next), so each PR is CI-tested once
   against the master it lands on (O(N), not the O(N²) thundering herd) and one

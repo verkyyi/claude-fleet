@@ -1,4 +1,4 @@
-# /claim — startup ritual for a freshly-spawned worker
+# /fleet-claim — startup ritual for a freshly-spawned worker
 
 <!-- fleet skill · owner: worker -->
 
@@ -26,8 +26,8 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — `/claim` is `owner: worker`. If `$SEAT` isn't `worker`,
-  **refuse in one line and stop**, e.g. *"/claim is worker-only; you're in the
+- **Wrong seat** — `/fleet-claim` is `owner: worker`. If `$SEAT` isn't `worker`,
+  **refuse in one line and stop**, e.g. *"/fleet-claim is worker-only; you're in the
   steward seat."* Never proceed from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
@@ -73,8 +73,8 @@ echo "mine=${mine:-no} claimed=${claimed:+yes}"
 
 - One line restating what the issue asks for, in your own words.
 - A short numbered plan (the steps you'll take to implement it).
-- Stop here. Implementation is the worker's job (yours or the human's) — `/claim`
-  only gets you a clean, uncontested start. `/ship` is the finish line.
+- Stop here. Implementation is the worker's job (yours or the human's) — `/fleet-claim`
+  only gets you a clean, uncontested start. `/fleet-ship` is the finish line.
 
 ## 4. Report (keep it short)
 

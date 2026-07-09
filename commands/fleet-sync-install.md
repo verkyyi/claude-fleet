@@ -2,18 +2,19 @@
 
 <!-- fleet skill · owner: steward -->
 
-The tooling-fleet-only counterpart to `/land`: after claude-fleet's *own*
+The tooling-fleet-only counterpart to `/fleet-land`: after claude-fleet's *own*
 changes land on master, this re-applies them to the **live install**
 (`~/.claude/fleet` — the checkout the daemons, hooks, and dash actually read).
 It **mutates the live install and this machine's Claude config**: fast-forwards
 `~/.claude/fleet`, reloads only the daemons that changed, re-merges the
 `settings-hooks.json` delta into `~/.claude/settings.json`, and installs
-new/changed `commands/*.md` into `~/.claude/commands/`. Idempotent — safe to
+new/changed `commands/*.md` into `~/.claude/commands/` (removing any renamed or
+retired ones). Idempotent — safe to
 re-run; a no-op when the live install is already at master. Steward-only.
 
 Because it only makes sense for the fleet that *hosts this tooling*, it **refuses
 on every other fleet** (see step 1). The normal flow: land the tooling PR(s) with
-`/land` or `/land-train`, then run `/fleet-sync-install` **once** to make the live
+`/fleet-land` or `/fleet-land-train`, then run `/fleet-sync-install` **once** to make the live
 install match master.
 
 **Argument** (`$ARGUMENTS`): none — takes no argument.
@@ -52,7 +53,7 @@ echo "fleet_repo=${FLEET_REPO:-} live_slug=${live_slug:-none}"
   *"/fleet-sync-install re-applies the fleet tooling to the live install — only
   runs on the claude-fleet tooling fleet."* Mutate nothing.
 - If they match → proceed. Everything below operates on `~/.claude/fleet` (the
-  live install) — not `$FLEET_MAIN`, which `/land` already fast-forwarded.
+  live install) — not `$FLEET_MAIN`, which `/fleet-land` already fast-forwarded.
 
 ## 2. Fast-forward the live install
 
@@ -69,10 +70,12 @@ If it refuses to fast-forward, **stop and report** — the live install diverged
 nothing to sync" and stop; the rest is a no-op.
 
 Compute what changed between the two revs — this drives steps 3–5, so nothing
-reloads or re-merges unless it actually moved:
+reloads or re-merges unless it actually moved. Use `--name-status -M` so
+**renames** (`R old → new`) and **deletions** (`D old`) surface, not just the new
+paths — step 5 needs the old path to remove a retired command:
 
 ```sh
-git -C ~/.claude/fleet diff --name-only "$before" "$after"
+git -C ~/.claude/fleet diff --name-status -M "$before" "$after"
 ```
 
 ## 3. Reload only the daemons that changed
@@ -105,15 +108,24 @@ Merge each hook array with jq using `+=` (creating keys that don't exist), then
 de-dup so a re-run doesn't stack duplicate entries. If `settings-hooks.json`
 didn't change, skip this step.
 
-## 5. Install new/changed fleet commands
+## 5. Install new/changed fleet commands — and remove retired ones
 
-If the diff (step 2) touched any `commands/*.md`, copy the changed ones into
-`~/.claude/commands/` — **append/overwrite the fleet skills only** (the ones
-carrying the `<!-- fleet skill · owner: … -->` marker); never touch the user's
-personal commands. A rename in the repo (an `R` line in the step-2 diff, old →
-new path) leaves the **old** file behind in `~/.claude/commands/` — remove the
-stale fleet skill too, so a retired command name doesn't linger. If no
-`commands/*.md` changed, skip.
+If the step-2 diff touched any `commands/*.md`:
+
+- **Install** each added/modified skill — every `A`/`M` path, plus the **new**
+  path of each `R` rename — by copying it into `~/.claude/commands/`
+  (overwriting). Only files carrying the `<!-- fleet skill · owner: … -->`
+  marker; never touch the user's personal commands.
+- **Remove** each retired skill from `~/.claude/commands/` — the **old** path of
+  every `R` rename **and** every `D` deletion. A plain pull+copy only ever adds
+  files, so a renamed skill would linger under **both** names; delete the stale
+  bare-named one with `rm -f ~/.claude/commands/<old-basename>`. (This PR is the
+  worked example: `claim.md → fleet-claim.md`, and likewise `ship.md`,
+  `blocked.md`, `land.md`, `land-train.md` → `fleet-*.md` — the five old
+  bare-named files must be removed, same rename-delete pattern as the earlier
+  `merge-train.md → land-train.md`.)
+
+If no `commands/*.md` changed, skip.
 
 ## 6. Report — keep it short
 
@@ -127,5 +139,5 @@ report that instead with the one-line reason.
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. `/fleet-sync-install` mutates the live install
 (`~/.claude/fleet`) and `~/.claude` config, so it is deliberately fenced to the
-self-hosting tooling fleet and refuses everywhere else. Landing is `/land`'s job;
+self-hosting tooling fleet and refuses everywhere else. Landing is `/fleet-land`'s job;
 this only re-applies already-landed tooling to the live install.

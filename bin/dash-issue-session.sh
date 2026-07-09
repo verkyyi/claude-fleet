@@ -76,7 +76,7 @@ wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 tf="$C/task_$slug.txt"
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-printf 'Work GitHub issue #%s in this repo. Start by running /claim (it reads, claims, and plans the issue); if /claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan. Implement and verify per the repo conventions. To finish, run /ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/land). If /ship is unavailable, open the PR manually and still do not merge.' \
+printf 'Work GitHub issue #%s in this repo. Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan. Implement and verify per the repo conventions. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' \
   "$num" "$num" "$REPO" "$num" "$REPO" "$num" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then

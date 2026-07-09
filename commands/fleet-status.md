@@ -65,7 +65,7 @@ else gh pr list --repo "$FLEET_REPO" --state open \
 ```
 
 List each open, non-draft PR with its number, title, merge/CI state, and call
-out which are **green + mergeable** (ready for `/land` or `/land-train`) vs.
+out which are **green + mergeable** (ready for `/fleet-land` or `/fleet-land-train`) vs.
 **red / behind / blocked**.
 
 ## 3. Ownerless issues + stuck work
@@ -98,7 +98,7 @@ reasons to hold off spawning more sessions.
 Print a tight digest (windows, PRs, ownerless issues, health), then end with a
 short **recommended next actions** list, e.g.:
 
-- "PR #61 green → `/land 61`"
+- "PR #61 green → `/fleet-land 61`"
 - "issue #58 unassigned → spawn a worker"
 - "window `issue-42` looping 20m → check in"
 - "disk 6GB free (floor 5) → don't spawn"
@@ -111,4 +111,4 @@ steward decides what to do next.
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. `/fleet-status` is read-only: it must not open, edit,
 merge, or comment on anything. Implementation and merges are separate skills
-(`/claim`, `/ship`, `/land`).
+(`/fleet-claim`, `/fleet-ship`, `/fleet-land`).

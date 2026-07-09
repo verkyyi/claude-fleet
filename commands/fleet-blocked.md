@@ -1,4 +1,4 @@
-# /blocked — signal a blocker instead of silently stalling
+# /fleet-blocked — signal a blocker instead of silently stalling
 
 <!-- fleet skill · owner: worker -->
 
@@ -24,8 +24,8 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — `/blocked` is `owner: worker`. If `$SEAT` isn't `worker`,
-  **refuse in one line and stop**, e.g. *"/blocked is worker-only; you're in the
+- **Wrong seat** — `/fleet-blocked` is `owner: worker`. If `$SEAT` isn't `worker`,
+  **refuse in one line and stop**, e.g. *"/fleet-blocked is worker-only; you're in the
   steward seat."* Never proceed from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /

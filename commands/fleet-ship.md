@@ -1,4 +1,4 @@
-# /ship — finish ritual: verify, push, open the PR (never merge)
+# /fleet-ship — finish ritual: verify, push, open the PR (never merge)
 
 <!-- fleet skill · owner: worker -->
 
@@ -7,8 +7,8 @@ is clean and pushed, and open (or update) a PR that `Closes #<issue>`. Mutates
 this fleet's `$FLEET_REPO` — pushes your branch, opens/updates a PR, and leaves
 a one-line issue comment. It does **not** touch the base checkout.
 
-**HARD RULE: /ship never merges.** Pushing + opening the PR is the finish line;
-the steward's `/land` does the merge + deploy. (This is the exact discipline we
+**HARD RULE: /fleet-ship never merges.** Pushing + opening the PR is the finish line;
+the steward's `/fleet-land` does the merge + deploy. (This is the exact discipline we
 want after a worker self-merged its own PR.)
 
 **Argument** (`$ARGUMENTS`): none — the issue is read from the window's `@issue`
@@ -28,8 +28,8 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — `/ship` is `owner: worker`. If `$SEAT` isn't `worker`,
-  **refuse in one line and stop**, e.g. *"/ship is worker-only; you're in the
+- **Wrong seat** — `/fleet-ship` is `owner: worker`. If `$SEAT` isn't `worker`,
+  **refuse in one line and stop**, e.g. *"/fleet-ship is worker-only; you're in the
   steward seat."* Never proceed from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
@@ -105,8 +105,8 @@ Closes #<issue>
 
 ## 6. Report — and stop
 
-Print the PR URL and state explicitly: **the steward will land it (`/land`);
-/ship does not merge.** Do not merge, do not deploy. Stop here.
+Print the PR URL and state explicitly: **the steward will land it (`/fleet-land`);
+/fleet-ship does not merge.** Do not merge, do not deploy. Stop here.
 
 ---
 

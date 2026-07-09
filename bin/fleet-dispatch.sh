@@ -30,10 +30,10 @@
 # number within a tier; unlabeled issues sort last (tier 3), still FIFO. This
 # needs no schema — the labels are just GitHub labels the steward already sets.
 #
-# Anti-collision: /claim stakes BOTH a GitHub assignee AND a `▶ claiming` comment
+# Anti-collision: /fleet-claim stakes BOTH a GitHub assignee AND a `▶ claiming` comment
 # together, so "has any assignee" is the cheap proxy for "already owned" — one
 # `gh issue list` call, no per-issue comment fetch. A live @issue window is the
-# second guard (covers a just-spawned session before its /claim lands).
+# second guard (covers a just-spawned session before its /fleet-claim lands).
 #
 # Env knobs (all per-fleet, in $FLEET_CONF_DIR/<session>.conf or global fleet.conf):
 #   FLEET_AUTOFILL              1 to enable for this fleet          (default 0/off)
