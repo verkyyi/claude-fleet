@@ -23,13 +23,16 @@ SESSION=$(fleet_current_session)
 KSCOPE=$(fcfg_scope "$KEY")     # identity | global | fleet (from the @scope tag)
 EDIT=$(fcfg_edit "$KEY")        # no | bool | int | enum | path | str | regex
 
-# We run inside the modal's popup pty, so surface refusals right here (a brief
-# printed line) instead of only on the status line hidden behind the popup.
+# We run inside the modal's popup pty (fzf aborted just before us), so clear the
+# stale fzf frame up front and surface everything — refusals included — right here
+# on a clean screen. A tmux display-message alone would be hidden behind the popup.
+printf '\033[H\033[2J'
 refuse() { printf '\n  \033[33m%s\033[0m\n' "$1"; sleep 1.4; }
 
 # --- scope routing ----------------------------------------------------------
-# Identity keys are view-only — refuse (the modal already filters these out on
-# enter, but keep the guard as defense-in-depth for any direct invocation).
+# Identity / view-only keys are refused here (the modal routes every FLEET_* key
+# through us so the refusal is *visible* in the popup, not just on the hidden
+# status line).
 if [ "$KSCOPE" = identity ] || [ "$EDIT" = no ]; then
   tmux display-message "config: $KEY is an identity key — set it in fleet.conf and re-provision" 2>/dev/null || true
   refuse "$KEY is an identity key — set it in fleet.conf and re-provision."
@@ -49,8 +52,7 @@ if [ -z "$TARGET" ]; then
   exit 0
 fi
 
-# Clear the leftover fzf frame, then show context, read one line, validate, write.
-printf '\033[H\033[2J'
+# Show context, read one line, validate, write.
 cur=$(fcfg_file_value "$TARGET" "$KEY" || true)
 ev=$(fcfg_effective "$KEY" "$SESSION"); effval=${ev%"$FCFG_US"*}; effsrc=${ev##*"$FCFG_US"}
 scope_up=$(printf '%s' "$SCOPE" | tr '[:lower:]' '[:upper:]')
