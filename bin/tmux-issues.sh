@@ -22,10 +22,39 @@ ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
 
-# POPUP=1 → single shot for a tmux display-popup modal: esc closes; enter
-# spawns the issue session AND closes. Without it, loop forever (window panes).
-if [ -n "${POPUP:-}" ]; then ENTER_TAIL='+abort'; else ENTER_TAIL=''; fi
+# The ⌃n new · ⌃t comment · ⌃x close · ⌃k keys sub-actions each open a small
+# `tmux display-popup` (input dialog / cheatsheet). That works from a windowed
+# panel, but NOT when the backlog itself already runs in a display-popup
+# (prefix+b): tmux won't nest a popup inside a popup, so the dialog never opens
+# and the input is silently lost (issues #123/#122).
+#
+# So the binds are POPUP-conditional:
+#   • windowed (no POPUP): keep the original in-place binds — nesting a popup is
+#     fine here, and fzf's +reload/+refresh-preview preserve the filter/cursor.
+#   • POPUP: each sub-action drops an intent sentinel + ABORTs fzf; the loop
+#     below runs it in the gap — directly in THIS shell, which owns the terminal,
+#     no nested popup — then relaunches fzf. Same non-nesting pattern the config
+#     modal's ⌃s uses (bin/tmux-config.sh). Each helper's phase-2 (`confirm`)
+#     path reads right here in the terminal, so we call it straight.
+# Also: in POPUP mode enter spawns AND closes (+abort); windowed loops forever.
+ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/issues_act_${FLEET_SESSION:-_}.$$"
+if [ -n "${POPUP:-}" ]; then
+  ENTER_TAIL='+abort'
+  mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
+  N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
+  T_BIND="ctrl-t:execute-silent(printf 'comment %s' {1} > '$ACT')+abort"
+  X_BIND="ctrl-x:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
+  K_BIND="ctrl-k:execute-silent(printf 'keys' > '$ACT')+abort"
+else
+  ENTER_TAIL=''
+  N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
+  T_BIND="ctrl-t:execute(bash $BIN/dash-issue-comment.sh {1})+refresh-preview"
+  X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
+  K_BIND="ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")"
+fi
+
 run_fzf() {
+  rm -f "$ACT"
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
     --no-sort \
     --layout=reverse-list --info=hidden --border=rounded \
@@ -36,15 +65,37 @@ run_fzf() {
     --preview-window='right,46%,wrap,border-left' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
-    --bind "ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")" \
+    --bind "$K_BIND" \
     --bind "ctrl-p:toggle-preview" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
-    --bind "ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)" \
-    --bind "ctrl-t:execute(bash $BIN/dash-issue-comment.sh {1})+refresh-preview" \
-    --bind "ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)" \
+    --bind "$N_BIND" \
+    --bind "$T_BIND" \
+    --bind "$X_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
     >/dev/null 2>&1
 }
-if [ -n "${POPUP:-}" ]; then run_fzf; exit 0; fi
+
+# POPUP only: run the pending sub-action (if any) in the gap between fzf runs.
+# Returns 0 if it ran one (caller relaunches fzf), 1 if there was none — esc, or
+# the enter spawn, both of which leave no sentinel and should close the popup.
+run_action() {
+  [ -s "$ACT" ] || return 1
+  local act arg; read -r act arg < "$ACT"; rm -f "$ACT"
+  case "$act" in
+    new)     bash "$BIN/dash-issue-new.sh" confirm ;;
+    keys)    bash "$BIN/fleet-keys.sh" ;;
+    comment) bash "$BIN/dash-issue-comment.sh" "$arg" confirm ;;
+    close)   bash "$BIN/dash-issue-close.sh" "$arg" confirm ;;
+    *)       return 1 ;;
+  esac
+  return 0
+}
+
+if [ -n "${POPUP:-}" ]; then
+  while :; do run_fzf; run_action || break; done
+  rm -f "$ACT"; exit 0
+fi
+# Windowed panes: the sub-actions run in-place via their own binds, so there is
+# no sentinel to dispatch — just re-run fzf forever (esc reopens it).
 while :; do run_fzf; sleep 0.2; done
