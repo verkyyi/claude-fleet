@@ -28,7 +28,61 @@ any personal commands you already have. See the install step in
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Tooling-fleet only: after claude-fleet's own PRs land, re-apply them to the live install (`~/.claude/fleet`) — pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses on any other fleet. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 
+## Two kinds of fleet skill
+
+Not every fleet skill is a human-invoked playbook. The contract covers **two
+kinds**, distinguished by how they are invoked and what they may do:
+
+| | **A. Interactive / role skill** | **B. Background-job prompt** |
+|---|---|---|
+| Examples | `/claim`, `/ship`, `/land` | `classify-session`, `summarize-session` |
+| Invoked by | a human/steward, on demand | a `claude -p` daemon (on a timer/hook) |
+| Template | [`_template.md`](_template.md) | [`_template-background.md`](_template-background.md) |
+| Step-0 preamble | **yes** — resolve fleet + guard seat | **no** — a daemon has no seat |
+| Marker | `<!-- fleet skill · owner: … -->` | frontmatter `disable-model-invocation: true` |
+| Body | a numbered playbook that runs `gh`/`git`/tmux | a **pure prompt**, no tool use |
+| Contracts | seat guard + fleet guard | an **input** contract + an **output** contract |
+
+Everything under *The contract every fleet skill follows* below describes **kind
+A**. Kind B is a versioned prompt, not a playbook: today the daemons carry their
+prompt as a hardcoded heredoc (`bin/classify-sessions.sh`, `bin/tmux-summarize.sh`);
+kind B is where those prompts move so they can be reviewed, diffed, and reused.
+
+### The two contracts a kind-B skill declares
+
+- **Input contract** — where the dynamic payload arrives. The daemon appends the
+  prompt body as a system prompt and pipes the payload (a terminal capture, a
+  diff, …) on **stdin**; the human/`/why` slash path passes it as **`$ARGUMENTS`**.
+  The body is written so it refers to "the input/screen below".
+- **Output contract** — the exact, machine-parseable reply shape, stated in one
+  line (e.g. *"reply with EXACTLY ONE word and nothing else"*). The caller parses
+  the reply, so it must be deterministic and preamble-free.
+
+### How the daemon consumes a kind-B prompt
+
+The cheapest, most deterministic path — used by the `claude -p` daemons — feeds
+the prompt body as a system prompt and the payload on stdin (verified on claude
+2.1.204):
+
+```sh
+printf '%s' "$payload" \
+  | claude --bare -p --model haiku --allowedTools "" \
+      --append-system-prompt-file <body>
+```
+
+- `--bare` skips hooks/LSP/plugins (fast, no side effects); `--allowedTools ""`
+  forbids tool use (a kind-B body is a pure prompt); `--model haiku` keeps it
+  cheap; `<body>` is the skill's prompt body (frontmatter stripped).
+- The **human/`/why` path** may invoke the same prompt as a slash command
+  (`/classify-session`). That path pays the normal slash-command discovery cost
+  and **won't load under `--bare`** — so it's for interactive one-offs, not the
+  hot daemon loop. `disable-model-invocation: true` keeps the prompt from ever
+  auto-triggering on either path; it runs only when invoked explicitly.
+
 ## The contract every fleet skill follows
+
+> This section describes **kind A** (interactive/role skills). For **kind B**
+> (background-job prompts) see *Two kinds of fleet skill* above.
 
 A fleet skill is a markdown playbook (a header + a numbered body, exactly like
 `sweep.md` / `new-issue.md`). Two rules make it *fleet-aware*:
@@ -98,9 +152,20 @@ Already exposed (all cheap, `set -u`-safe — see `bin/fleet-lib.sh`):
 
 ## Adding a new fleet skill
 
+**Kind A (interactive/role):**
+
 1. Copy `_template.md` → `commands/<name>.md`.
 2. Set the title, the `owner:` on the marker line, and the intent sentence.
 3. Fill in the numbered body **after** step 0 (leave the preamble intact).
 4. Keep every mutation behind the resolved fleet + seat guard. The base
    checkout is read-only (hook-enforced) — a worker edits inside its
    `issue-<N>` worktree and lands via PR.
+
+**Kind B (background-job prompt):**
+
+1. Copy `_template-background.md` → `commands/<name>.md`.
+2. Keep the `disable-model-invocation: true` frontmatter; set the title.
+3. Rewrite the body as a **pure prompt** — no step-0 preamble, no tools —
+   declaring the **input** and **output** contracts (see *Two kinds* above).
+4. Point the consuming daemon at the body via
+   `claude --bare -p … --append-system-prompt-file <body>`.
