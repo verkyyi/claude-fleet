@@ -157,8 +157,45 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
   avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
-  [ ${#smry} -gt "$avail" ] && smry=${smry:0:$avail}
-  pad=$(( USABLE - LEFTW - ${#smry} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
+  # Clip + measure the summary by DISPLAY width, not code-point count: a CJK or
+  # emoji glyph is one ${#} char but two terminal columns, so a char-count clip
+  # can be ~2× wide and overrun the flex span into the right-pinned PR/ctx block
+  # (#63). Fast path — a pure-ASCII summary (the common case) has width == ${#},
+  # so keep the fork-free builtin clip and render byte-identical to before; only
+  # a summary carrying non-ASCII glyphs pays one perl/wcwidth fork to clip+measure.
+  # (fld() at :24 shares the same ${#}=chars assumption; its inputs — issue/PR/
+  #  ctx — are ASCII, and window names are rarely wide, so it's left as-is here.)
+  if [[ $smry == *[![:ascii:]]* ]]; then
+    wres=$(S="$smry" A="$avail" perl -CO -MEncode -e '
+      my $s = decode_utf8($ENV{S}); my $a = $ENV{A} + 0;
+      my ($w, $out) = (0, "");
+      for my $c (split //, $s) {
+        my $o = ord $c;
+        my $cw = ($o >= 0x1100 && (
+            $o <= 0x115F || $o == 0x2329 || $o == 0x232A ||
+            ($o >= 0x2E80 && $o <= 0x303E) || ($o >= 0x3041 && $o <= 0x33FF) ||
+            ($o >= 0x3400 && $o <= 0x4DBF) || ($o >= 0x4E00 && $o <= 0x9FFF) ||
+            ($o >= 0xA000 && $o <= 0xA4CF) || ($o >= 0xAC00 && $o <= 0xD7A3) ||
+            ($o >= 0xF900 && $o <= 0xFAFF) || ($o >= 0xFE10 && $o <= 0xFE19) ||
+            ($o >= 0xFE30 && $o <= 0xFE6F) || ($o >= 0xFF00 && $o <= 0xFF60) ||
+            ($o >= 0xFFE0 && $o <= 0xFFE6) || ($o >= 0x1F000 && $o <= 0x1FAFF) ||
+            ($o >= 0x20000 && $o <= 0x3FFFD))) ? 2 : 1;
+        last if $w + $cw > $a;
+        $w += $cw; $out .= $c;
+      }
+      print "$w\t$out";' 2>/dev/null)
+    if [ -n "$wres" ]; then
+      dwidth=${wres%%$'\t'*}; smry=${wres#*$'\t'}
+    else
+      # no perl: clip to avail/2 glyphs (each ≤2 cols ⇒ never exceeds avail) and
+      # over-estimate width so pad only ever shrinks — degrades, never overruns.
+      smry=${smry:0:$(( avail / 2 ))}; dwidth=$(( ${#smry} * 2 ))
+    fi
+  else
+    [ ${#smry} -gt "$avail" ] && smry=${smry:0:$avail}
+    dwidth=${#smry}
+  fi
+  pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
   disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${TX}${smry}${R}${gap}${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
