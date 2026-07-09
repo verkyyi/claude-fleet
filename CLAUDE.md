@@ -20,6 +20,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
+| Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
@@ -90,13 +91,19 @@ issues as the backlog. See README.md for the architecture. Components:
      daemon only if you want the periodic net for windows a Stop never revisits.
      summarize (`com.claude-fleet.summarize`, 180s) writes the dash's one-line
      per-session summary column; without it that column just stays empty.
+     dispatch (`com.claude-fleet.dispatch`, 60s) is the **autofill** daemon —
+     install it only if a fleet sets `FLEET_AUTOFILL=1`; it auto-spawns the
+     highest-priority eligible backlog issue under both caps (per-fleet
+     `FLEET_MAX_SESSIONS` + global), single-writer + disk-gated + rate-limited.
+     OFF by default; it spends LLM tokens (one real Claude session + PR per
+     spawn), so ask before installing and mention the cost.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
      `systemctl --user enable --now claude-fleet-spinner.service` +
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard); the optional
-     classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
+     dispatch/classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
      enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 

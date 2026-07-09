@@ -45,13 +45,15 @@ if [ -n "$existing" ]; then
   exit 0
 fi
 
-# Global session cap (issue #28): refuse to spawn once FLEET_GLOBAL_MAX_SESSIONS
-# (default 8) Claude working sessions are already live across ALL fleets. This is
+# Session cap (issues #28, #70): refuse to spawn once the GLOBAL cap
+# (FLEET_GLOBAL_MAX_SESSIONS, default 8, across ALL fleets) OR this fleet's
+# per-fleet cap (FLEET_MAX_SESSIONS, default 0 = unlimited) is reached. This is
 # the shared choke point for every spawn path — the new-session box, the backlog
-# Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>) — so the
-# global cap is a true system-wide ceiling. Exit non-zero on refusal so a
-# headless caller records an honest FAIL, not a false spawn.
-if ! cap_msg=$(fleet_session_cap_ok); then tmux display-message "$cap_msg"; exit 1; fi
+# Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>, incl. the
+# autofill dispatcher) — so both caps are true ceilings regardless of who spawns.
+# Passing $SESS enables the per-fleet check for THIS fleet. Exit non-zero on
+# refusal so a headless caller records an honest FAIL, not a false spawn.
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then tmux display-message "$cap_msg"; exit 1; fi
 
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { tmux display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
