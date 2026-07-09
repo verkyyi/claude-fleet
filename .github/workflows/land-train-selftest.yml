@@ -1,0 +1,29 @@
+name: land-train-selftest
+
+# Hermetic regression guard for issue #68 (land-train summary counts stuck at
+# 0). bin/land-train-selftest.sh runs land-train against a FAKE `gh` — no
+# network, no real repo — and asserts the printed summary counts equal the
+# merges that actually happened. Runs whenever the train or its test changes.
+
+on:
+  push:
+    paths:
+      - 'bin/land-train.sh'
+      - 'bin/land-train-selftest.sh'
+      - 'bin/fleet-lib.sh'
+      - '.github/workflows/land-train-selftest.yml'
+  pull_request:
+    paths:
+      - 'bin/land-train.sh'
+      - 'bin/land-train-selftest.sh'
+      - 'bin/fleet-lib.sh'
+      - '.github/workflows/land-train-selftest.yml'
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run land-train self-test
+        run: bash bin/land-train-selftest.sh

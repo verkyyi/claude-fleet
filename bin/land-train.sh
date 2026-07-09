@@ -1,6 +1,6 @@
 #!/bin/bash
-# merge-train.sh [--dry-run] [--method squash|merge|rebase] [pr...] — a serial,
-# single-writer "merge train" for a fleet repo with `strict:true` branch
+# land-train.sh [--dry-run] [--method squash|merge|rebase] [pr...] — a serial,
+# single-writer "land train" for a fleet repo with `strict:true` branch
 # protection and NO merge queue. It merges a set of PRs ONE AT A TIME: only the
 # PR at the head of the queue is ever made "hot" (update-branch + wait-for-green
 # + merge), so each PR is tested exactly once against the master it actually
@@ -22,12 +22,12 @@
 # plan and current per-PR state and mutates nothing (and takes no lease).
 #
 # Env knobs (all optional):
-#   MERGE_TRAIN_METHOD      squash|merge|rebase           (default squash)
-#   MERGE_TRAIN_POLL        seconds between state polls    (default 15)
-#   MERGE_TRAIN_PR_TIMEOUT  per-PR budget, seconds         (default 1800)
-#   MERGE_TRAIN_MAX_RETRY   bounded retries for behind/race (default 3)
-#   MERGE_TRAIN_LEASE_TTL   lease lifetime, seconds        (default 3600)
-#   MERGE_TRAIN_LEASE_DIR   lease dir            (default ~/.claude/leases)
+#   LAND_TRAIN_METHOD      squash|merge|rebase           (default squash)
+#   LAND_TRAIN_POLL        seconds between state polls    (default 15)
+#   LAND_TRAIN_PR_TIMEOUT  per-PR budget, seconds         (default 1800)
+#   LAND_TRAIN_MAX_RETRY   bounded retries for behind/race (default 3)
+#   LAND_TRAIN_LEASE_TTL   lease lifetime, seconds        (default 3600)
+#   LAND_TRAIN_LEASE_DIR   lease dir            (default ~/.claude/leases)
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -36,7 +36,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 # --- args ---------------------------------------------------------------------
 DRY=0
-METHOD="${MERGE_TRAIN_METHOD:-squash}"
+METHOD="${LAND_TRAIN_METHOD:-squash}"
 PRS=()
 usage() {
   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
@@ -48,9 +48,9 @@ usage() {
 add_pr_arg() {
   local raw="$1" clean="${1//[^0-9]/}"
   if [ -z "$clean" ]; then
-    printf 'merge-train: ignoring non-numeric PR arg %s\n' "$raw" >&2; return
+    printf 'land-train: ignoring non-numeric PR arg %s\n' "$raw" >&2; return
   fi
-  [ "$raw" != "$clean" ] && printf 'merge-train: reading PR arg %s as #%s\n' "$raw" "$clean" >&2
+  [ "$raw" != "$clean" ] && printf 'land-train: reading PR arg %s as #%s\n' "$raw" "$clean" >&2
   PRS+=("$clean")
 }
 while [ "$#" -gt 0 ]; do
@@ -59,25 +59,25 @@ while [ "$#" -gt 0 ]; do
     --method|-m)  shift; METHOD="${1:-squash}" ;;
     -h|--help)    usage 0 ;;
     --)           shift; while [ "$#" -gt 0 ]; do add_pr_arg "$1"; shift; done; break ;;
-    -*)           printf 'merge-train: unknown flag %s\n' "$1" >&2; usage 1 ;;
+    -*)           printf 'land-train: unknown flag %s\n' "$1" >&2; usage 1 ;;
     *)            add_pr_arg "$1" ;;
   esac
   shift
 done
-case "$METHOD" in squash|merge|rebase) ;; *) printf 'merge-train: bad --method %s\n' "$METHOD" >&2; exit 1 ;; esac
+case "$METHOD" in squash|merge|rebase) ;; *) printf 'land-train: bad --method %s\n' "$METHOD" >&2; exit 1 ;; esac
 
-POLL="${MERGE_TRAIN_POLL:-15}"
-PR_TIMEOUT="${MERGE_TRAIN_PR_TIMEOUT:-1800}"
-MAX_RETRY="${MERGE_TRAIN_MAX_RETRY:-3}"
-LEASE_TTL="${MERGE_TRAIN_LEASE_TTL:-3600}"
-LEASE_DIR="${MERGE_TRAIN_LEASE_DIR:-$HOME/.claude/leases}"
+POLL="${LAND_TRAIN_POLL:-15}"
+PR_TIMEOUT="${LAND_TRAIN_PR_TIMEOUT:-1800}"
+MAX_RETRY="${LAND_TRAIN_MAX_RETRY:-3}"
+LEASE_TTL="${LAND_TRAIN_LEASE_TTL:-3600}"
+LEASE_DIR="${LAND_TRAIN_LEASE_DIR:-$HOME/.claude/leases}"
 
 # --- resolve the fleet repo (this fleet only — never a cwd default) -----------
 FLEET_SESSION=$(fleet_current_session)
 REPO="${FLEET_REPO:-}"
 _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
-[ -z "$REPO" ] && { printf 'merge-train: no repo resolved — run inside a fleet (FLEET_REPO unset).\n' >&2; exit 1; }
-command -v gh >/dev/null 2>&1 || { printf 'merge-train: gh not found on PATH.\n' >&2; exit 1; }
+[ -z "$REPO" ] && { printf 'land-train: no repo resolved — run inside a fleet (FLEET_REPO unset).\n' >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { printf 'land-train: gh not found on PATH.\n' >&2; exit 1; }
 
 # All human-facing progress goes to STDERR — process_pr's result token is the
 # ONLY thing on stdout, so `result=$(process_pr …)` captures just that token and
@@ -86,7 +86,7 @@ command -v gh >/dev/null 2>&1 || { printf 'merge-train: gh not found on PATH.\n'
 note() { printf '%s\n' "$*" >&2; }
 
 # --- lease: one train per repo -----------------------------------------------
-LEASE="$LEASE_DIR/merge-train-$(fleet_slug "$REPO").lock"
+LEASE="$LEASE_DIR/land-train-$(fleet_slug "$REPO").lock"
 LEASE_HELD=0
 lease_acquire() {
   mkdir -p "$LEASE_DIR" 2>/dev/null
@@ -103,10 +103,10 @@ lease_acquire() {
     rm -rf "$LEASE" 2>/dev/null
     if mkdir "$LEASE" 2>/dev/null; then
       printf '%s\n%s\n' "$me" "$((now + ttl))" > "$LEASE/holder"
-      LEASE_HELD=1; note "merge-train: stole stale lease (was ${holder:-?})"; return 0
+      LEASE_HELD=1; note "land-train: stole stale lease (was ${holder:-?})"; return 0
     fi
   fi
-  printf 'merge-train: a train is already running for %s (held by %s) — one train per repo.\n' \
+  printf 'land-train: a train is already running for %s (held by %s) — one train per repo.\n' \
     "$REPO" "${holder:-?}" >&2
   return 1
 }
@@ -215,7 +215,7 @@ if [ "${#PRS[@]}" -eq 0 ]; then
   # (issue #73). This fleet's workers /ship and leave PRs for the steward to
   # /land; they never arm auto-merge, so an armed-only filter made no-arg
   # discovery a dead path (reported "nothing to do" even with landable PRs open).
-  # No-arg /merge-train now means "drain the ready queue" — the batch complement
+  # No-arg /land-train now means "drain the ready queue" — the batch complement
   # to single-PR /land. Pre-filter the ones that would only eject (DIRTY /
   # CONFLICTING / required-check-failing / draft) so the queue is the PRs with a
   # real shot; PENDING PRs stay queued (they may go green). Ascending = FIFO.
@@ -245,12 +245,12 @@ if [ "${#PRS[@]}" -eq 0 ]; then
 fi
 
 if [ "${#PRS[@]}" -eq 0 ]; then
-  note "merge-train: nothing to do for $REPO — no open + non-draft + green PRs."
+  note "land-train: nothing to do for $REPO — no open + non-draft + green PRs."
   [ "${#SKIPPED_PRE[@]}" -gt 0 ] && note "  pre-filtered: ${SKIPPED_PRE[*]}"
   exit 0
 fi
 
-note "merge-train: repo=$REPO  queue=[${PRS[*]}]  method=$METHOD$([ "$DRY" = 1 ] && echo '  (dry-run)')"
+note "land-train: repo=$REPO  queue=[${PRS[*]}]  method=$METHOD$([ "$DRY" = 1 ] && echo '  (dry-run)')"
 [ "${#SKIPPED_PRE[@]}" -gt 0 ] && note "  pre-filtered (not queued): ${SKIPPED_PRE[*]}"
 
 # --- dry-run: print the plan + each PR's current verdict, mutate nothing -------
@@ -295,9 +295,9 @@ done
 
 # --- summary ------------------------------------------------------------------
 note ""
-note "merge-train summary ($REPO):"
+note "land-train summary ($REPO):"
 note "  merged:  ${#MERGED[@]}${MERGED:+  ${MERGED[*]}}"
 note "  ejected: ${#EJECTED[@]}${EJECTED:+  ${EJECTED[*]}}"
 note "  skipped: ${#SKIPPED[@]}${SKIPPED:+  ${SKIPPED[*]}}"
-[ "${#EJECTED[@]}" -gt 0 ] && note "  → ejected PRs need a human (rebase / fix checks), then re-run merge-train."
+[ "${#EJECTED[@]}" -gt 0 ] && note "  → ejected PRs need a human (rebase / fix checks), then re-run land-train."
 exit 0

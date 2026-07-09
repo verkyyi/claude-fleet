@@ -1,14 +1,14 @@
 #!/bin/bash
-# merge-train-selftest.sh — hermetic smoke test for bin/merge-train.sh.
+# land-train-selftest.sh — hermetic smoke test for bin/land-train.sh.
 #
-# Regression guard for issue #68: merge-train captured process_pr's stdout as
+# Regression guard for issue #68: land-train captured process_pr's stdout as
 # its per-PR result token (`result=$(process_pr …)`), but note() also wrote to
 # stdout, so the progress lines polluted $result → every `case "$result"` missed
 # → the merged/ejected/skipped counters never incremented → the summary printed
 # "0 merged" even after real merges. The bug shipped precisely because nothing
 # asserted "summary counts == what actually happened". This is that assertion.
 #
-# It runs merge-train against a FAKE `gh` (no network, no real repo): the fake
+# It runs land-train against a FAKE `gh` (no network, no real repo): the fake
 # scripts a mixed batch — two mergeable PRs, one conflicting, one already-closed
 # — and records every `gh pr merge` it is asked to perform. The test then checks
 # the printed summary against BOTH the scripted expectation AND the fake's own
@@ -19,7 +19,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-MT="$BIN/merge-train.sh"
+MT="$BIN/land-train.sh"
 [ -x "$MT" ] || { printf 'selftest: %s not found/executable\n' "$MT" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mt-selftest.XXXXXX")" || exit 2
@@ -28,7 +28,7 @@ MERGE_LOG="$WORK/merged"
 : > "$MERGE_LOG"
 
 # --- fake gh -----------------------------------------------------------------
-# Emulates only the calls merge-train makes in the batch path, keyed on PR number:
+# Emulates only the calls land-train makes in the batch path, keyed on PR number:
 #   #1,#2 → OPEN + CLEAN + pass  → classify READY → `gh pr merge` succeeds (logged)
 #   #3    → OPEN + DIRTY         → classify CONFLICT → ejected (never merged)
 #   #4    → CLOSED               → classify GONE     → skipped  (never merged)
@@ -52,7 +52,7 @@ case "\$action" in
     esac ;;
   merge)         printf '%s\n' "\$num" >> "$MERGE_LOG" ;;   # record the real merge
   update-branch) : ;;
-  # No-arg discovery path (issue #73): merge-train reads "number<TAB>verdict"
+  # No-arg discovery path (issue #73): land-train reads "number<TAB>verdict"
   # lines from \`gh pr list --jq ...\`. Real gh evaluates the --jq server-side, so
   # the fake emits the post-jq TSV directly: #5 is a GREEN, un-armed, non-draft
   # PR that MUST be queued (proving discovery no longer requires auto-merge
@@ -63,16 +63,16 @@ exit 0
 GHFAKE
 chmod +x "$WORK/bin/gh"
 
-# --- run merge-train against the fake ----------------------------------------
+# --- run land-train against the fake ----------------------------------------
 # FLEET_REPO drives repo resolution (no tmux/cache needed); lease + poll knobs
-# keep it hermetic and instant. merge-train sends progress+summary to stderr, so
+# keep it hermetic and instant. land-train sends progress+summary to stderr, so
 # capture both streams.
 out="$(
   PATH="$WORK/bin:$PATH" \
   FLEET_REPO="acme/widgets" \
-  MERGE_TRAIN_LEASE_DIR="$WORK/leases" \
-  MERGE_TRAIN_POLL=0 \
-  MERGE_TRAIN_PR_TIMEOUT=30 \
+  LAND_TRAIN_LEASE_DIR="$WORK/leases" \
+  LAND_TRAIN_POLL=0 \
+  LAND_TRAIN_PR_TIMEOUT=30 \
   "$MT" 1 2 3 4 2>&1
 )"
 
@@ -95,7 +95,7 @@ summary_merged="$(printf '%s\n' "$out" | sed -n 's/^  merged:  \([0-9]*\).*/\1/p
 printf 'selftest OK: summary counts match reality (merged=2 ejected=1 skipped=1, %s real merges)\n' "$actual_merges"
 
 # --- discovery path (issue #73): no-arg drains the ready queue -----------------
-# Run merge-train with NO PR args so it auto-discovers via \`gh pr list\`. The fake
+# Run land-train with NO PR args so it auto-discovers via \`gh pr list\`. The fake
 # returns "5\tqueue" (green, un-armed) + "3\tdirty". Correct behaviour: #5 is
 # queued and merged (armed-status irrelevant now), #3 is pre-filtered out and
 # never merged. This guards the #73 realignment: armed-only would have queued
@@ -104,9 +104,9 @@ printf 'selftest OK: summary counts match reality (merged=2 ejected=1 skipped=1,
 out2="$(
   PATH="$WORK/bin:$PATH" \
   FLEET_REPO="acme/widgets" \
-  MERGE_TRAIN_LEASE_DIR="$WORK/leases2" \
-  MERGE_TRAIN_POLL=0 \
-  MERGE_TRAIN_PR_TIMEOUT=30 \
+  LAND_TRAIN_LEASE_DIR="$WORK/leases2" \
+  LAND_TRAIN_POLL=0 \
+  LAND_TRAIN_PR_TIMEOUT=30 \
   "$MT" 2>&1
 )"
 fail2() { printf 'selftest FAIL: %s\n\n--- captured output ---\n%s\n' "$1" "$out2" >&2; exit 1; }

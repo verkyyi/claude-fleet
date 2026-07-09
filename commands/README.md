@@ -13,7 +13,7 @@ any personal commands you already have. See the install step in
 
 > Phase 0 landed **just the contract** — this README and
 > [`_template.md`](_template.md); the functional skills (`/claim`, `/ship`,
-> `/land`, …) land one per sub-issue, each cloning the template and filling in
+> `/land`, `/land-train`, …) land one per sub-issue, each cloning the template and filling in
 > its body. See **Shipped skills** below for what's live so far.
 
 ## Shipped skills
@@ -23,8 +23,9 @@ any personal commands you already have. See the install step in
 | [`/claim`](claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
 | [`/ship`](ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`. Never merges. |
 | [`/blocked`](blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
-| [`/merge-train`](merge-train.md) | steward | Serial single-writer "merge train": merges a batch of green, auto-merge-armed PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/merge-train.sh`](../bin/merge-train.sh). |
-| [`/land`](land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, deploy master into both live checkouts, reload only the daemons that need it, clean up the merged worktree + window. |
+| [`/land`](land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, fast-forward the fleet's base checkout, clean up the merged worktree + window. Fleet-agnostic — the general finish work only. |
+| [`/land-train`](land-train.md) | steward | The batch complement to `/land`: a serial single-writer "land train" that merges a batch of green PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land, then base-pulls once and cleans up per merged PR. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/land-train.sh`](../bin/land-train.sh). |
+| [`/fleet-sync-install`](fleet-sync-install.md) | steward | Tooling-fleet only: after claude-fleet's own PRs land, re-apply them to the live install (`~/.claude/fleet`) — pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses on any other fleet. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 
 ## The contract every fleet skill follows
