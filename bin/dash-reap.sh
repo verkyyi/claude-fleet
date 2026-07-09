@@ -4,15 +4,16 @@
 # (when clean), and close its bound GitHub issue. The safe rule is the SHARED
 # fleet_reap_ok() gate (same guarantees as the worktree-autoclean.sh janitor).
 #
-#   ⌃x  safe reap  (no confirm, instant): proceeds ONLY when the worktree is
-#       clean AND merged (a MERGED PR for issue-<N>, or the tip is an ancestor of
-#       base). Otherwise REFUSES via tmux display-message with the reason — no
-#       data loss.
-#   ⌃X  force reap (y/n confirm): relaxes the *merged* requirement (for
+#   ⌃x  safe reap  (no confirm): proceeds ONLY when the worktree is clean AND
+#       merged (a MERGED PR for issue-<N>, or the tip is an ancestor of base).
+#       Otherwise REFUSES via tmux display-message with the reason — no data loss.
+#   ⌥x  force reap (y/n confirm): relaxes the *merged* requirement (for
 #       abandoned/not-merged workers) but STILL never removes a dirty worktree —
 #       a dirty worktree is kept, and only the window + issue are closed.
+#       (⌥x, not ⌃X: a terminal can't send a distinct Ctrl+Shift byte — fzf
+#        folds ctrl-X onto ctrl-x — so the force path rides a real second key.)
 #
-#   Row state           ⌃x (safe)                    ⌃X (force, confirm)
+#   Row state           ⌃x (safe)                    ⌥x (force, confirm)
 #   clean + merged      reap wt+branch+issue+window   (same)
 #   clean + NOT merged  refuse ("PR not merged")      reap all (issue closed)
 #   dirty (any)         refuse ("worktree changes")   close window+issue, KEEP wt
@@ -74,6 +75,10 @@ iss="${iss//[^0-9]/}"
 [ -z "$iss" ] && refuse "no issue on this row (hub/panel) — nothing to reap"
 
 FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
+# Overlay THIS fleet's per-session conf so FLEET_MAIN/FLEET_BASE_BRANCH/FLEET_REPO
+# target the reaped row's fleet, not the global default (a secondary fleet has its
+# own checkout) — same as dash-issue-session.sh / dash-new-session.sh.
+fleet_load_conf "$FLEET_SESSION"
 REPO="${FLEET_REPO:-}"
 _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
 [ -z "$REPO" ] && refuse "no repo resolved — cannot reap #$iss"
@@ -83,21 +88,16 @@ MAIN="${FLEET_MAIN:-}"
 branch="issue-$iss"
 
 # worktree dir + HEAD for this branch (branch→worktree is authoritative).
-wtdir=""; whead=""; _d=""; _h=""
-if [ -n "$MAIN" ]; then
-  while IFS= read -r line; do
-    case "$line" in
-      "worktree "*) _d="${line#worktree }" ;;
-      "HEAD "*)     _h="${line#HEAD }" ;;
-      "branch refs/heads/$branch") wtdir="$_d"; whead="$_h"; break ;;
-    esac
-  done < <(git -C "$MAIN" worktree list --porcelain 2>/dev/null)
-fi
+wtdir=""; whead=""
+[ -n "$MAIN" ] && IFS=$'\t' read -r wtdir whead < <(fleet_worktree_head "$MAIN" "$branch")
 
-# base ref for the ancestor test (best-effort fetch, like the janitor)
+# base ref for the ancestor test. No blocking `git fetch` on the interactive ⌃x
+# path — use the locally-known origin/<base> (kept fresh by the fleet's normal
+# fetches); a merged-but-not-locally-visible branch is still caught by the gh
+# merged-PR check below, and a stale-negative only makes the SAFE path refuse
+# (no data loss). BASE from FLEET_BASE_BRANCH default matches fleet-lib's 'main'.
 BASE="${FLEET_BASE_BRANCH:-main}"; MASTER=""
 if [ -n "$MAIN" ]; then
-  git -C "$MAIN" fetch -q origin "$BASE" 2>/dev/null || true
   MASTER="$(git -C "$MAIN" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
     || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)"
 fi

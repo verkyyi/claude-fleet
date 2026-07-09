@@ -58,6 +58,8 @@ process() {
   case "$merged" in
     dirty)    say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
     unmerged) say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
+    ancestor) merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
+    merged-pr) merged="merged-PR" ;;
   esac
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""

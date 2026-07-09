@@ -94,6 +94,23 @@ fleet_reap_ok() {
   printf 'unmerged'; return 1
 }
 
+# Locate the worktree checked out on <branch> in <repo-root>. Prints
+# "<worktree-dir>\t<HEAD-sha>" (tab-separated) or nothing if the branch has no
+# worktree. Used by dash-reap.sh; the janitor keeps its own full-scan loop since
+# it iterates EVERY worktree per cycle, not one branch. Safe under `set -u`.
+fleet_worktree_head() {
+  local root="${1:-}" branch="${2:-}" line d="" h=""
+  [ -n "$root" ] && [ -n "$branch" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) d="${line#worktree }" ;;
+      "HEAD "*)     h="${line#HEAD }" ;;
+      "branch refs/heads/$branch") printf '%s\t%s' "$d" "$h"; return 0 ;;
+    esac
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  return 0
+}
+
 # owner/name → filesystem-safe slug (owner-name).
 fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'

@@ -137,5 +137,27 @@ git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branc
 grep -q 'CLOSE' "$GHLOG" || fail "merged reap should close the issue"
 grep -q 'KILL' "$TMLOG" || fail "merged reap should kill the window"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap paths\n'
+# B5: ⌥x force (confirm y) on dirty (issue-3) → KEEP worktree, close + kill only
+: > "$TMLOG"; : > "$GHLOG"
+printf 'y' | run_reap "3" "s1:3" --force confirm
+[ -d "$WORK/wt3" ] || fail "force reap on dirty must KEEP the worktree"
+grep -q 'CLOSE' "$GHLOG" || fail "force reap on dirty should close the issue"
+grep -q 'KILL' "$TMLOG" || fail "force reap on dirty should kill the window"
+
+# B6: ⌥x force (confirm y) on clean+unmerged (issue-2) → full reap (relaxes merged)
+: > "$TMLOG"; : > "$GHLOG"
+printf 'y' | run_reap "2" "s1:2" --force confirm
+[ -d "$WORK/wt2" ] && fail "force reap on clean+unmerged should remove the worktree"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
+grep -q 'CLOSE' "$GHLOG" || fail "force reap should close the issue"
+
+# B7: ⌥x force with confirm 'n' (cancel) → no side effects
+git -C "$BASEDIR" worktree add -q -b issue-4 "$WORK/wt4" >/dev/null 2>&1
+: > "$TMLOG"; : > "$GHLOG"
+printf 'n' | run_reap "4" "s1:4" --force confirm
+[ -d "$WORK/wt4" ] || fail "cancelled force reap must keep the worktree"
+grep -q 'KILL' "$TMLOG" && fail "cancelled force reap must not kill the window"
+[ -s "$GHLOG" ] && fail "cancelled force reap must not touch gh"
+
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force paths\n'
 exit 0
