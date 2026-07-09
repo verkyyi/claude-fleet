@@ -85,6 +85,7 @@ EOF
 
 i=1
 LAST='|'
+LAST_NEEDS='|'   # per-session @attn_needs counts published last frame (change-detect)
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
@@ -131,6 +132,37 @@ while :; do
   done <<EOF
 $wins
 EOF
+
+  # --- needs-count badge (issue #105) ----------------------------------------
+  # Tally windows in @claude_state=needs PER SESSION and publish it as the
+  # session option @attn_needs, which status-left renders as a red "● N" badge
+  # in the bottom-left (hidden at 0). Reuses this frame's window scan ($wins) —
+  # no extra tmux query — folded once by awk; change-detected and batched into
+  # the same $CMDF, so the count only re-sets when it actually moves. A session
+  # with windows but none in needs emits "0" (badge hides); a session that
+  # vanished drops out of $wins and keeps its last (irrelevant) value.
+  NEW_NEEDS='|'
+  needs_map=$(awk '
+    { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
+      if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
+      if ($2 == "needs") c[s]++ }
+    END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }
+  ' <<EOF
+$wins
+EOF
+)
+  while read -r nsess ncnt; do
+    [ -z "$nsess" ] && continue
+    ntok="$nsess=$ncnt"
+    case "$LAST_NEEDS" in
+      *"|$ntok|"*) : ;;
+      *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$CMDF"; changed=1 ;;
+    esac
+    NEW_NEEDS="$NEW_NEEDS$ntok|"
+  done <<EOF
+$needs_map
+EOF
+  LAST_NEEDS="$NEW_NEEDS"
 
   [ "$changed" = 1 ] && tmux source-file "$CMDF" 2>/dev/null
   LAST="$NEW"
