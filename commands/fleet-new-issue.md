@@ -79,30 +79,42 @@ task text (everything after the optional flag) for `<TASK>`:
 > 2. **Ground the task** against the code in `<FLEET_MAIN>` (read the relevant
 >    files, grep, trace the bug/behavior) so the body is evidence-based. Don't
 >    invent scope; a one-liner task gets a short body.
-> 3. **Create the issue.** Write a concise imperative **title** (≤ ~70 chars)
+> 3. **Pick a milestone (best-fit, live-fetched).** Fetch this repo's OPEN
+>    milestones — never hardcode; the user adds/renames/closes them:
+>    `gh api "repos/<FLEET_REPO>/milestones?state=open" --jq '.[].title'`.
+>    They are the fleet's component categories (e.g. *Dashboard & modals*,
+>    *Steward & commands*, *Testing & CI*, *Daemons & automation*). From the
+>    task + your grounding, choose the ONE title that best fits. Pass it as
+>    `--milestone "<title>"` in step 4 — but **only a title that came back from
+>    that live list**. If none clearly fits, or the repo has no open
+>    milestones, skip it: file with **no** `--milestone` rather than forcing a
+>    wrong one (a stale/invalid name fails the create). Remember your choice
+>    (`<milestone>` or "no milestone matched") for the report.
+> 4. **Create the issue.** Write a concise imperative **title** (≤ ~70 chars)
 >    and a **body** with the goal, a short definition-of-done / acceptance
 >    criteria, and concrete pointers (files, related issues). Then
->    `gh issue create --repo <FLEET_REPO> --title "<title>" --body "<body>"`.
->    Add `--label`/`--milestone` only if you know the value already exists.
->    Capture the new number `<N>` from the returned URL.
-> 4. **Spawn the worker.** `bash ~/.claude/fleet/bin/dash-issue-session.sh <N>`.
+>    `gh issue create --repo <FLEET_REPO> --title "<title>" --body "<body>"`,
+>    adding `--milestone "<title>"` iff you matched one in step 3. Add a
+>    `--label` only if you know the value already exists. Capture the new
+>    number `<N>` from the returned URL.
+> 5. **Spawn the worker.** `bash ~/.claude/fleet/bin/dash-issue-session.sh <N>`.
 >    This creates the `issue-<N>` worktree + a `claude` window bound to the
 >    issue. It enforces the **global + per-fleet** session caps: if a cap is
 >    hit it refuses and prints why — **relay that refusal verbatim and do NOT
 >    retry or force it.**
-> 5. **You file and spawn only — you do NOT implement the task.** The spawned
+> 6. **You file and spawn only — you do NOT implement the task.** The spawned
 >    worker owns the implementation.
 >
 > Return **only** one line and nothing else:
-> - success → `#<N> <title> — worker spawned`
+> - success → `#<N> <title> — worker spawned [milestone: <milestone> | no milestone matched]`
 > - reused an existing issue → `#<N> <title> — reused, worker spawned`
 > - cap refusal → the refusal message from `dash-issue-session.sh`
 
 **Graceful fallback.** If this runtime has no sub-agent / Agent-tool capability,
-do NOT hard-fail — fall back to running steps 1–4 of the sub-agent prompt above
-**inline yourself** (dedup → ground → `gh issue create` → `dash-issue-session.sh
-<N>`), then report per step 4. This is the old behavior; it costs the steward a
-long turn, but it never leaves the task unfiled.
+do NOT hard-fail — fall back to running steps 1–5 of the sub-agent prompt above
+**inline yourself** (dedup → ground → pick milestone → `gh issue create` →
+`dash-issue-session.sh <N>`), then report per step 4. This is the old behavior;
+it costs the steward a long turn, but it never leaves the task unfiled.
 
 ## 3. `--quick` — thin inline capture (no grounding)
 
@@ -111,9 +123,16 @@ The `⌃n` backlog behavior as a command: capture the task fast and let the
 
 1. Write a short imperative **title** and a **one-line brief** body straight
    from `<TASK>` — no code reading, no grounding.
-2. `gh issue create --repo "$FLEET_REPO" --title "<title>" --body "<brief>"`;
-   capture `<N>` from the URL.
-3. `bash ~/.claude/fleet/bin/dash-issue-session.sh <N>` — same cap enforcement
+2. **Pick a milestone (best-fit, live-fetched)** — same rule as the delegate
+   path: `gh api "repos/$FLEET_REPO/milestones?state=open" --jq '.[].title'`,
+   choose the ONE open title that best fits `<TASK>`, and only pass a title
+   that came back from that live list. If none fits (or there are none), skip
+   it — no `--milestone`. Note the choice (or "no milestone matched") for the
+   report.
+3. `gh issue create --repo "$FLEET_REPO" --title "<title>" --body "<brief>"`,
+   adding `--milestone "<title>"` iff you matched one; capture `<N>` from the
+   URL. Never force a stale/invalid name — a bad `--milestone` fails the create.
+4. `bash ~/.claude/fleet/bin/dash-issue-session.sh <N>` — same cap enforcement
    as above; relay a refusal, don't retry.
 
 Then report per step 4. The spawned worker grounds the thin issue itself.
@@ -121,8 +140,9 @@ Then report per step 4. The spawned worker grounds the thin issue itself.
 ## 4. Report (one line)
 
 Relay the sub-agent's (or inline path's) single line: `#<N> <title> — worker
-spawned` (or `— reused, worker spawned`, or the cap refusal). Then stop: the new
-window owns the issue; you are the steward, not the worker.
+spawned`, noting the chosen milestone (`[milestone: <title>]` or `[no milestone
+matched]`) — or `— reused, worker spawned`, or the cap refusal. Then stop: the
+new window owns the issue; you are the steward, not the worker.
 
 ---
 

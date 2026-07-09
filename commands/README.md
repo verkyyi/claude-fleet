@@ -111,6 +111,15 @@ The rules that make delegation safe:
 - **A one-line output contract.** The sub-agent returns a single machine-relayable
   line (`#<N> <title> — worker spawned`, or a cap refusal) so the caller just
   relays it, exactly like a kind-B output contract.
+- **Auto-categorize on create, from the LIVE list.** A create skill that files
+  an issue also assigns a best-fit **milestone** (the fleet's component
+  categories). Fetch them at file time — never hardcode, since the user
+  adds/renames/closes them: `gh api "repos/$FLEET_REPO/milestones?state=open"
+  --jq '.[].title'`, pick the one title that best fits, and pass only a title
+  that came back from that live list. When nothing clearly fits (or there are no
+  open milestones), file with **no** milestone — never force a wrong/stale name
+  (a bad `--milestone` fails the create). `/fleet-new-issue` does this in both
+  its delegate and `--quick` paths and notes the choice in its report.
 - **Graceful inline fallback.** If the runtime has no Agent-tool capability, run
   the sub-agent's steps inline instead of hard-failing — slower, but the work
   still lands.
