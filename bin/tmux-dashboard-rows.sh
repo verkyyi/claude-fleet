@@ -17,6 +17,7 @@ C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 E=$'\033['
 CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106m"
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
+AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
 WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}"
 
@@ -119,11 +120,28 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
       tail=${PMN#*$'\n'"$bare"$'\t'}
       if [ "$tail" != "$PMN" ]; then
         line=${tail%%$'\n'*}
-        rest=${line#*$'\t'}; st=${rest%%$'\t'*}; ci=${rest#*$'\t'}
+        # line = #num\tstate\tci\tready. Parse each; ready may be absent on a
+        # stale 4-field cache (mid-upgrade) — tab-guard so it degrades to ''.
+        rest=${line#*$'\t'}; st=${rest%%$'\t'*}; after=${rest#*$'\t'}
+        ci=${after%%$'\t'*}
+        case "$after" in *$'\t'*) ready=${after#*$'\t'};; *) ready='';; esac
         case "$st" in
           MERGED) pcol=$IN; ptxt="merged";;
           CLOSED) pcol=$GY; ptxt="closed";;
-          *) case "$ci" in ✓) pcol=$GN;; ✗) pcol=$RD;; …) pcol=$TX;; *) pcol=$GY;; esac; ptxt="$ci";;
+          *) case "$ci" in
+               ✓) pcol=$GN
+                  # green: decorate by land-readiness (single-cell glyphs only —
+                  # the metadata column is width-budgeted; no 2-cell emoji).
+                  case "$ready" in
+                    behind)   ptxt='✓↑'; pcol=$AM;;   # behind base → update-branch
+                    conflict) ptxt='✓!'; pcol=$RD;;   # conflicting → rebase
+                    blocked)  ptxt='✓·'; pcol=$AM;;   # mergeable+green but blocked
+                    *)        ptxt='✓';;              # land-ready (or neutral)
+                  esac;;
+               ✗) pcol=$RD; ptxt="$ci";;
+               …) pcol=$TX; ptxt="$ci";;
+               *) pcol=$GY; ptxt="$ci";;
+             esac;;
         esac
         break
       fi
