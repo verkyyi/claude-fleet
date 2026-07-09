@@ -1,0 +1,15 @@
+# claude-fleet PR-status refresher — Linux systemd user unit (parity with launchd
+# com.claude-fleet.pr-refresh). Oneshot driven by claude-fleet-pr-refresh.timer.
+# Owns PR status (prmap + @prci/@pfg) on a fast ~15s tick so "CI green"/"merged"
+# shows within ~15s instead of riding the 60s collector. See issue #81.
+[Unit]
+Description=claude-fleet PR-status refresher (prmap + @prci, ~15s)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/tmux-pr-refresh.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/pr-refresh.systemd.log

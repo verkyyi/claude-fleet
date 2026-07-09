@@ -36,8 +36,9 @@ fleet only.
 
 ## 1. Live worker windows
 
-List this session's windows with their per-window state options. The collector
-and hooks keep these current; querying options assumes no TTY:
+List this session's windows with their per-window state options. Hooks, the
+collector, and the pr-refresh daemon (`@prci`) keep these current; querying
+options assumes no TTY:
 
 ```sh
 tmux list-windows -t "$S" -F \
@@ -52,8 +53,8 @@ seconds/minutes), and PR/CI glyph (`@prci`). **Skip the panels** — windows nam
 
 ## 2. Open PRs awaiting review / merge
 
-Prefer the collector's PR map (`branch<TAB>#num<TAB>state<TAB>ci`), falling back
-to live `gh` if the cache is missing/stale:
+Prefer the cached PR map (`branch<TAB>#num<TAB>state<TAB>ci`, written by the
+pr-refresh daemon), falling back to live `gh` if the cache is missing/stale:
 
 ```sh
 C="${TMPDIR:-/tmp}/.claude-dash"; slug=$(fleet_slug_cached "$S")

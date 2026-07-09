@@ -65,6 +65,9 @@ fi
 if command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then pass gh "authed"
   else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi
+  # PR status has its own fast daemon (decoupled from the 60s collector) so
+  # CI-green / merged shows within ~15s. Recommended alongside the collector.
+  printf '        note: install com.claude-fleet.pr-refresh (~15s, FLEET_PR_REFRESH_INTERVAL) for fast PR/CI status — single writer of prmap + @prci.\n'
 else
   fail gh "not found — no backlog, no PR/CI map (\`brew install gh\`)"
 fi

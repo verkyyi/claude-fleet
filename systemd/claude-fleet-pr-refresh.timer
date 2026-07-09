@@ -1,0 +1,15 @@
+# Fires claude-fleet-pr-refresh.service. Parity with the launchd plist:
+# StartInterval=15 + RunAtLoad=true → run ~5s after the user manager comes up,
+# then every 15s. Keep OnUnitActiveSec in step with FLEET_PR_REFRESH_INTERVAL
+# (the script's fetch guard). Install: `systemctl --user enable --now
+# claude-fleet-pr-refresh.timer`.
+[Unit]
+Description=claude-fleet PR-status refresher timer (every 15s)
+
+[Timer]
+OnStartupSec=5
+OnUnitActiveSec=15
+AccuracySec=2s
+
+[Install]
+WantedBy=timers.target
