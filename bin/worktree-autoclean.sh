@@ -52,18 +52,15 @@ process() {
   if printf '%s\n' "$LIVE" | grep -qxF "$dir"; then
     say "KEEP  $branch  (live tmux session)"; kept=$((kept+1)); return
   fi
-  if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
-    say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return
-  fi
-  local merged=""
-  if printf '%s\n' "$MERGED_PRS" | grep -qxF "$branch"; then
-    merged="merged-PR"
-  elif git -C "$REPO_ROOT" merge-base --is-ancestor "$head" "$MASTER" 2>/dev/null; then
-    merged="ancestor-of-$BASE"
-  fi
-  if [ -z "$merged" ]; then
-    say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return
-  fi
+  # clean + merged? — the shared gate (identical logic in dash-reap.sh).
+  local merged
+  merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
+  case "$merged" in
+    dirty)    say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
+    unmerged) say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
+    ancestor) merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
+    merged-pr) merged="merged-PR" ;;
+  esac
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac

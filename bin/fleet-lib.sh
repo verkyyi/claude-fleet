@@ -66,6 +66,51 @@ fleet_seat() {
   return 0
 }
 
+# The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
+# and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
+# worktree, decides whether it is safe to auto-remove. Prints a reason token on
+# stdout and sets the return code:
+#   merged-pr   (rc 0) — clean AND a MERGED PR exists for the branch
+#   ancestor    (rc 0) — clean AND the tip is an ancestor of the base ref
+#   dirty       (rc 1) — has uncommitted/untracked changes (untracked counts)
+#   unmerged    (rc 1) — clean but neither a merged PR nor an ancestor of base
+# Args: <worktree-dir> <repo-root> <branch> <head-sha> <base-ref> <merged-branches>
+# <merged-branches> is a newline-separated list of merged PR head-ref names (the
+# caller's `gh pr list --state merged` output). A caller that only wants the two
+# safe outcomes can just test the return code. Safe under a `set -u` caller.
+fleet_reap_ok() {
+  local wtdir="${1:-}" root="${2:-}" branch="${3:-}" head="${4:-}" base="${5:-}" merged="${6:-}"
+  if [ -n "$wtdir" ] && [ -e "$wtdir" ] \
+     && [ -n "$(git -C "$wtdir" status --porcelain 2>/dev/null)" ]; then
+    printf 'dirty'; return 1
+  fi
+  if [ -n "$branch" ] && printf '%s\n' "$merged" | grep -qxF "$branch"; then
+    printf 'merged-pr'; return 0
+  fi
+  if [ -n "$head" ] && [ -n "$base" ] \
+     && git -C "$root" merge-base --is-ancestor "$head" "$base" 2>/dev/null; then
+    printf 'ancestor'; return 0
+  fi
+  printf 'unmerged'; return 1
+}
+
+# Locate the worktree checked out on <branch> in <repo-root>. Prints
+# "<worktree-dir>\t<HEAD-sha>" (tab-separated) or nothing if the branch has no
+# worktree. Used by dash-reap.sh; the janitor keeps its own full-scan loop since
+# it iterates EVERY worktree per cycle, not one branch. Safe under `set -u`.
+fleet_worktree_head() {
+  local root="${1:-}" branch="${2:-}" line d="" h=""
+  [ -n "$root" ] && [ -n "$branch" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) d="${line#worktree }" ;;
+      "HEAD "*)     h="${line#HEAD }" ;;
+      "branch refs/heads/$branch") printf '%s\t%s' "$d" "$h"; return 0 ;;
+    esac
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  return 0
+}
+
 # owner/name → filesystem-safe slug (owner-name).
 fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
