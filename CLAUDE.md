@@ -58,7 +58,10 @@ issues as the backlog. See README.md for the architecture. Components:
    bindings on `a/j/G/b/A/c/r` and a status-bar restyle — and comment out
    anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
    default new-window**; in a fleet you spawn via the dash/backlog, so it's free
-   — but call it out.
+   — but call it out. There's also one **root-table** bind (`bind -n F9`): F9
+   from any window jumps back to this session's steward hub (`steward-zoom.sh`).
+   Unlike the prefix binds it intercepts the key in every pane before the app —
+   safe because the Claude TUI/shells don't use function keys — so flag it too.
 
 5. **Merge Claude Code hooks.** Merge `hooks/settings-hooks.json` into
    `~/.claude/settings.json` — APPEND to any existing hook arrays, never
