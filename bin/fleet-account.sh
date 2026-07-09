@@ -27,7 +27,8 @@
 #                          any account still inside its limit window); empty = off
 #   token [label]        — print the OAuth token for <label> (default: active)
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
-#   list                 — human table: label · active · state
+#   list                 — aligned table: label · active(●) · rotation window · state
+#                          (state = ok | limited · back in ~Nm | NO TOKEN)
 #   use <label>          — pin <label> active
 #   rotate               — advance active to the next eligible account
 #   mark-limited <label> [banner]
@@ -45,6 +46,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out (5h)
+# ANSI for the `list` table (rendered by fzf --ansi in account-pick.sh, and by a
+# terminal when run directly). Always emitted: the modal pipes us and needs the
+# codes, so gating on [ -t 1 ] would strip colour exactly where it's wanted.
+A_DIM=$'\033[2m'; A_RST=$'\033[0m'; A_GRN=$'\033[32m'; A_YEL=$'\033[33m'; A_RED=$'\033[31m'
 STATE_ACTIVE="$FLEET_C/account.active"
 STATE_LIMITED="$FLEET_C/account.limited"
 LOCK="$FLEET_C/account.lock"
@@ -210,8 +215,15 @@ cmd_clear() {
   acct_unlock
 }
 
+# Aligned, scannable table — first token of every data row is the bare label, so
+# account-pick.sh can extract the pick with `awk '{print $1}'`. Colour lives only
+# in the marker glyph (fixed 1-col) and the trailing STATE field (no padding after
+# it), so the ANSI bytes never throw the column widths off. Row 1 is the column
+# header (fzf pins it via --header-lines=1). Columns:
+#   ACCOUNT  ●(active)  WINDOW(rotation/bench TTL)  STATE(ok | limited · back in ~Nm | NO TOKEN)
 cmd_list() {
-  local labels active l until state tok
+  local labels active l until state tok w now_s hdr
+  local fmt='%-*s  %s  %-7s %s\n'
   labels=$(acct_labels)
   if [ -z "$labels" ]; then
     printf 'multi-account: OFF (no token files in %s)\n' "$ACCT_DIR"
@@ -219,16 +231,28 @@ cmd_list() {
     return 0
   fi
   active=$(cmd_active)
-  printf '%-16s %-8s %-8s %s\n' ACCOUNT ACTIVE WINDOW STATE
+  now_s=$(now)
+  # Dynamic ACCOUNT width: the widest label, floored at len("ACCOUNT").
+  w=7
+  while IFS= read -r l; do [ -n "$l" ] && [ "${#l}" -gt "$w" ] && w=${#l}; done <<EOF
+$labels
+EOF
+  # Header row (dimmed whole-line — wrapped OUTSIDE the padded fields so the
+  # dim/reset bytes can't shift any column).
+  hdr=$(printf "$fmt" "$w" ACCOUNT ' ' WINDOW STATE)
+  printf '%s%s%s\n' "$A_DIM" "$hdr" "$A_RST"
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     until=$(acct_limited_until "$l")
-    if [ "$until" -gt "$(now)" ]; then
-      state="limited (~$(( (until - $(now)) / 60 ))m left)"
+    if [ "$until" -gt "$now_s" ]; then
+      state="${A_YEL}limited${A_RST} ${A_DIM}· back in ~$(human_dur $(( until - now_s )))${A_RST}"
     else
-      tok=$(acct_token "$l"); [ -n "$tok" ] && state="ok" || state="NO TOKEN"
+      tok=$(acct_token "$l")
+      if [ -n "$tok" ]; then state="${A_GRN}ok${A_RST}"; else state="${A_RED}NO TOKEN${A_RST}"; fi
     fi
-    printf '%-16s %-8s %-8s %s\n' "$l" "$([ "$l" = "$active" ] && echo '  ●' || echo '')" "$(human_dur "$(acct_ttl "$l")")" "$state"
+    printf "$fmt" "$w" "$l" \
+      "$([ "$l" = "$active" ] && printf '%s●%s' "$A_GRN" "$A_RST" || printf ' ')" \
+      "$(human_dur "$(acct_ttl "$l")")" "$state"
   done <<EOF
 $labels
 EOF
