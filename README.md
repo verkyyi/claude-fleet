@@ -135,6 +135,10 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 The dash (`prefix j`/`G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
+With `set -g mouse on`, the footer-left is clickable too: the **fleet name**
+(`#S`) opens a picker of running fleets and switches to the chosen one, and the
+red **`● N` needs badge** cycles to the next window that needs you.
+
 ## Configuration
 
 One file, `~/.claude/fleet/fleet.conf` (see
