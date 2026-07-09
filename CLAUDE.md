@@ -91,7 +91,7 @@ issues as the backlog. See README.md for the architecture. Components:
      The **pr-refresh** daemon (`com.claude-fleet.pr-refresh`, 15s) is also
      recommended — it owns PR/CI status (`prmap` + window `@prci`/`@pfg`) on its
      own fast tick, decoupled from the 60s collector, so a PR going green or
-     merging shows within ~15s (when the steward is watching to `/land`) instead
+     merging shows within ~15s (when the steward is watching to `/fleet-land`) instead
      of up to a minute. It's the single writer of that state (the collector no
      longer touches it), disk work is trivial, and only `gh` is needed;
      `FLEET_PR_REFRESH_INTERVAL` (default 15) tunes it — keep it in step with the

@@ -1,4 +1,4 @@
-# /land — merge a green PR, then land it into the fleet's base checkout
+# /fleet-land — merge a green PR, then land it into the fleet's base checkout
 
 <!-- fleet skill · owner: steward -->
 
@@ -7,7 +7,7 @@ squash-merge it, fast-forward the fleet's base checkout to the new master, and
 clean up the merged worktree + window. It **mutates this fleet's `$FLEET_REPO`**
 (merges a PR) and the fleet's base checkout (`$FLEET_MAIN`). Merging is a
 steward operation, so this skill is **steward-only** — a worker never runs it (a
-worker `/ship`s; the steward `/land`s).
+worker `/fleet-ship`s; the steward `/fleet-land`s).
 
 This skill is **fleet-agnostic**: it does the *general* finish work only —
 merge + base-checkout pull + cleanup. It does **not** touch the live install
@@ -15,7 +15,7 @@ merge + base-checkout pull + cleanup. It does **not** touch the live install
 tooling re-apply is a separate, tooling-fleet-only concern — run `/fleet-sync-install`
 for it after landing a claude-fleet tooling PR.
 
-**Argument** (`$ARGUMENTS`): the PR number to land (`/land 61`). Required — if
+**Argument** (`$ARGUMENTS`): the PR number to land (`/fleet-land 61`). Required — if
 empty, ask the user which PR and stop.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
@@ -32,9 +32,9 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — `/land` is `owner: steward`. If `$SEAT` isn't `steward`,
-  **refuse in one line and stop**, e.g. *"/land is steward-only; you're in the
-  worker seat — `/ship` your branch and let the steward land it."* Never merge
+- **Wrong seat** — `/fleet-land` is `owner: steward`. If `$SEAT` isn't `steward`,
+  **refuse in one line and stop**, e.g. *"/fleet-land is steward-only; you're in the
+  worker seat — `/fleet-ship` your branch and let the steward land it."* Never merge
   from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
@@ -119,12 +119,12 @@ clearly, with the one-line reason and what the human/worker must do.
 
 If the PR changed the claude-fleet tooling itself and you're on the self-hosting
 tooling fleet, note that the live install still needs `/fleet-sync-install` to pick
-up the change — `/land` deliberately does not touch it.
+up the change — `/fleet-land` deliberately does not touch it.
 
 ---
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
-sessions, or ledgers. `/land` never force-pushes and never `--admin`-bypasses
+sessions, or ledgers. `/fleet-land` never force-pushes and never `--admin`-bypasses
 branch protection: it only merges a PR GitHub already considers mergeable, after
 CI is green on the master it lands on. Implementation is the worker's job — the
 steward triages, lands, and hands the live-install re-apply to `/fleet-sync-install`.

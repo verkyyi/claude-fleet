@@ -1,13 +1,13 @@
-# /land-train — serially land a batch of green PRs, one at a time
+# /fleet-land-train — serially land a batch of green PRs, one at a time
 
 <!-- fleet skill · owner: steward -->
 
-The batch complement to single-PR `/land`. Runs a **serial single-writer "land
+The batch complement to single-PR `/fleet-land`. Runs a **serial single-writer "land
 train"** over this fleet's `$FLEET_REPO`: it merges green PRs **one at a time** —
 update-branch → wait for green → merge → advance master → next — so each PR is
 tested exactly once against the master it actually lands on (O(N) CI, not the
 O(N²) thundering herd you get from updating every PR every time master moves).
-Then, like `/land`, it does the *general* finish work: **base-pull once** after
+Then, like `/fleet-land`, it does the *general* finish work: **base-pull once** after
 the whole batch and **cleanup per merged PR**. It **mutates PRs** (update-branch
 + merge) on this fleet's own repo only and the fleet's base checkout
 (`$FLEET_MAIN`), and takes a per-repo lease so two sessions never drive the train
@@ -20,10 +20,10 @@ self-hosting tooling fleet, run `/fleet-sync-install` **once** afterward to re-a
 them to the live install.
 
 **Argument** (`$ARGUMENTS`): optional. Pass explicit PR numbers to run exactly
-those, in the order given (`/land-train 41 42 43`). With **no** argument it
+those, in the order given (`/fleet-land-train 41 42 43`). With **no** argument it
 auto-discovers the repo's open, non-draft, **green** PRs (ascending / FIFO) —
 regardless of auto-merge arming — pre-filtering out the DIRTY/failing/draft
-ones; this is the batch complement to single-PR `/land`. Prefix with `--dry-run`
+ones; this is the batch complement to single-PR `/fleet-land`. Prefix with `--dry-run`
 to print the plan and each PR's current state and mutate **nothing**.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
@@ -41,7 +41,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
 - **Wrong seat** — this skill is `owner: steward`. If `$SEAT` is not `steward`,
-  **refuse in one line and stop**, e.g. *"/land-train is steward-only; you're
+  **refuse in one line and stop**, e.g. *"/fleet-land-train is steward-only; you're
   in the worker seat."* Never drive the train from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` — this
@@ -97,7 +97,7 @@ GitHub already considers landable — but can surprise you if you expect *any* r
 check to hold a PR back.
 
 The lease (`~/.claude/leases/land-train-<repo-slug>.lock`, steal-if-stale)
-means a second `/land-train` on the same repo refuses with *"a train is
+means a second `/fleet-land-train` on the same repo refuses with *"a train is
 already running"* — that is expected; wait for the first to finish.
 
 Note the **PR numbers the train reports as merged** — you need them for steps
@@ -148,7 +148,7 @@ yourself; ejected PRs are handed back to their authors.
 
 If the batch landed claude-fleet tooling PRs and you're on the self-hosting
 tooling fleet, remind the user to run `/fleet-sync-install` once to re-apply them to
-the live install — `/land-train` deliberately does not touch it.
+the live install — `/fleet-land-train` deliberately does not touch it.
 
 ---
 

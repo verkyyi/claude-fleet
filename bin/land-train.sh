@@ -212,11 +212,11 @@ backoff() { local b=$(( POLL * $1 )); [ "$b" -gt 60 ] && b=60; printf '%s' "$b";
 SKIPPED_PRE=()   # dropped before the train (dirty/failing/draft at discovery)
 if [ "${#PRS[@]}" -eq 0 ]; then
   # Auto-discover: open, non-draft, GREEN PRs — regardless of auto-merge arming
-  # (issue #73). This fleet's workers /ship and leave PRs for the steward to
-  # /land; they never arm auto-merge, so an armed-only filter made no-arg
+  # (issue #73). This fleet's workers /fleet-ship and leave PRs for the steward to
+  # /fleet-land; they never arm auto-merge, so an armed-only filter made no-arg
   # discovery a dead path (reported "nothing to do" even with landable PRs open).
-  # No-arg /land-train now means "drain the ready queue" — the batch complement
-  # to single-PR /land. Pre-filter the ones that would only eject (DIRTY /
+  # No-arg /fleet-land-train now means "drain the ready queue" — the batch complement
+  # to single-PR /fleet-land. Pre-filter the ones that would only eject (DIRTY /
   # CONFLICTING / required-check-failing / draft) so the queue is the PRs with a
   # real shot; PENDING PRs stay queued (they may go green). Ascending = FIFO.
   while IFS=$'\t' read -r n verdict; do

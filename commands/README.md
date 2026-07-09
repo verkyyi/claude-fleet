@@ -12,19 +12,19 @@ any personal commands you already have. See the install step in
 [`CLAUDE.md`](../CLAUDE.md).
 
 > Phase 0 landed **just the contract** — this README and
-> [`_template.md`](_template.md); the functional skills (`/claim`, `/ship`,
-> `/land`, `/land-train`, …) land one per sub-issue, each cloning the template and filling in
+> [`_template.md`](_template.md); the functional skills (`/fleet-claim`, `/fleet-ship`,
+> `/fleet-land`, `/fleet-land-train`, …) land one per sub-issue, each cloning the template and filling in
 > its body. See **Shipped skills** below for what's live so far.
 
 ## Shipped skills
 
 | Skill | Owner | What it does |
 |---|---|---|
-| [`/claim`](claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
-| [`/ship`](ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`. Never merges. |
-| [`/blocked`](blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
-| [`/land`](land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, fast-forward the fleet's base checkout, clean up the merged worktree + window. Fleet-agnostic — the general finish work only. |
-| [`/land-train`](land-train.md) | steward | The batch complement to `/land`: a serial single-writer "land train" that merges a batch of green PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land, then base-pulls once and cleans up per merged PR. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/land-train.sh`](../bin/land-train.sh). |
+| [`/fleet-claim`](fleet-claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
+| [`/fleet-ship`](fleet-ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`. Never merges. |
+| [`/fleet-blocked`](fleet-blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
+| [`/fleet-land`](fleet-land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, fast-forward the fleet's base checkout, clean up the merged worktree + window. Fleet-agnostic — the general finish work only. |
+| [`/fleet-land-train`](fleet-land-train.md) | steward | The batch complement to `/fleet-land`: a serial single-writer "land train" that merges a batch of green PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land, then base-pulls once and cleans up per merged PR. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/land-train.sh`](../bin/land-train.sh). |
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Tooling-fleet only: after claude-fleet's own PRs land, re-apply them to the live install (`~/.claude/fleet`) — pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses on any other fleet. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 
@@ -35,7 +35,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 | | **A. Interactive / role skill** | **B. Background-job prompt** |
 |---|---|---|
-| Examples | `/claim`, `/ship`, `/land` | `classify-session`, `summarize-session` |
+| Examples | `/fleet-claim`, `/fleet-ship`, `/fleet-land` | `classify-session`, `summarize-session` |
 | Invoked by | a human/steward, on demand | a `claude -p` daemon (on a timer/hook) |
 | Template | [`_template.md`](_template.md) | [`_template-background.md`](_template-background.md) |
 | Step-0 preamble | **yes** — resolve fleet + guard seat | **no** — a daemon has no seat |
@@ -118,12 +118,12 @@ The two seats a fleet skill can run from (`fleet_seat` prints these):
 
 Each skill declares which seat(s) it belongs to, on its marker line (see below):
 
-- `owner: worker`  — only a worker may run it (e.g. `/ship` a branch).
+- `owner: worker`  — only a worker may run it (e.g. `/fleet-ship` a branch).
 - `owner: steward` — only the steward may run it (e.g. `/new-issue`, `/sweep`).
 - `owner: either`  — seat-agnostic.
 
 If `$SEAT` doesn't match a non-`either` `owner`, the skill **refuses in one
-line and stops** — e.g. *"/ship is worker-only; you're in the steward seat."*
+line and stops** — e.g. *"/fleet-ship is worker-only; you're in the steward seat."*
 Never proceed from the wrong seat.
 
 ### 3. It carries the `fleet skill` marker
