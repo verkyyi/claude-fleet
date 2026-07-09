@@ -258,6 +258,10 @@ $labels
 EOF
 }
 
+# Dispatch ONLY when executed directly. Sourcing (the selftest does this to unit
+# -test the pure helpers) must not run a command — no rotation, no state writes —
+# so the tests can exercise dur_secs/acct_ttl/pick_active/… in isolation.
+if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-active}" in
   active)        cmd_active ;;
   token)         cmd_token "${2:-}" ;;
@@ -269,3 +273,4 @@ case "${1:-active}" in
   clear)         cmd_clear "${2:-}" ;;
   *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear)" >&2; exit 2 ;;
 esac
+fi
