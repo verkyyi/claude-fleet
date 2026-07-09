@@ -68,7 +68,11 @@ _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
 [ -z "$REPO" ] && { printf 'merge-train: no repo resolved — run inside a fleet (FLEET_REPO unset).\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'merge-train: gh not found on PATH.\n' >&2; exit 1; }
 
-note() { printf '%s\n' "$*"; }
+# All human-facing progress goes to STDERR — process_pr's result token is the
+# ONLY thing on stdout, so `result=$(process_pr …)` captures just that token and
+# never the interleaved progress lines. (issue #68: note() on stdout polluted
+# the capture → every `case "$result"` missed → summary counts stuck at 0.)
+note() { printf '%s\n' "$*" >&2; }
 
 # --- lease: one train per repo -----------------------------------------------
 LEASE="$LEASE_DIR/merge-train-$(fleet_slug "$REPO").lock"

@@ -1,0 +1,29 @@
+name: merge-train-selftest
+
+# Hermetic regression guard for issue #68 (merge-train summary counts stuck at
+# 0). bin/merge-train-selftest.sh runs merge-train against a FAKE `gh` — no
+# network, no real repo — and asserts the printed summary counts equal the
+# merges that actually happened. Runs whenever the train or its test changes.
+
+on:
+  push:
+    paths:
+      - 'bin/merge-train.sh'
+      - 'bin/merge-train-selftest.sh'
+      - 'bin/fleet-lib.sh'
+      - '.github/workflows/merge-train-selftest.yml'
+  pull_request:
+    paths:
+      - 'bin/merge-train.sh'
+      - 'bin/merge-train-selftest.sh'
+      - 'bin/fleet-lib.sh'
+      - '.github/workflows/merge-train-selftest.yml'
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run merge-train self-test
+        run: bash bin/merge-train-selftest.sh
