@@ -137,12 +137,14 @@ issues as the backlog. See README.md for the architecture. Components:
    `bin/fleet-doctor.sh` validates the token files.
 
 8. **Fleet commands (optional).** Copy `commands/*.md` → `~/.claude/commands/`
-   — **APPEND**; do not clobber existing personal commands (e.g. `sweep.md`,
-   `new-issue.md`). These are repo-shipped, fleet-aware `/skill`s (optional
-   quality-of-life). Phase 0 ships only the contract (`commands/README.md` +
-   `commands/_template.md`); functional skills land later. `fleet-doctor.sh`
-   reports how many are installed (warn, not fail, if none — they're optional).
-   See `commands/README.md` for the skill contract.
+   — **APPEND**; do not clobber existing personal commands (e.g. `sweep.md`).
+   These are repo-shipped, fleet-aware `/skill`s (optional quality-of-life):
+   `fleet-claim`, `fleet-ship`, `fleet-blocked`, `fleet-land`,
+   `fleet-land-train`, `fleet-sync-install`, `fleet-status`, and
+   `fleet-new-issue` (plus the contract/template — `commands/README.md`,
+   `commands/_template.md`). `fleet-doctor.sh` reports how many are installed
+   (warn, not fail, if none — they're optional). See `commands/README.md` for
+   the skill contract.
 
 9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the

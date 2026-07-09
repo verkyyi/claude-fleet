@@ -3,7 +3,7 @@
 This directory holds **fleet skills**: Claude Code slash commands, shipped with
 the repo, that operate on a fleet (a tmux session ↔ one GitHub repo). They are
 the fleet-aware cousins of your personal `~/.claude/commands/` skills
-(`/sweep`, `/new-issue`, …) — optional quality-of-life helpers a fleet operator
+(`/sweep`, …) — optional quality-of-life helpers a fleet operator
 runs from inside a session.
 
 They are **installed by copying** `commands/*.md` into the Claude Code user
@@ -27,6 +27,7 @@ any personal commands you already have. See the install step in
 | [`/fleet-land-train`](fleet-land-train.md) | steward | The batch complement to `/fleet-land`: a serial single-writer "land train" that merges a batch of green PRs one at a time (update-branch → wait green → merge → next), ejecting any that can't land, then base-pulls once and cleans up per merged PR. A client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/land-train.sh`](../bin/land-train.sh). |
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Tooling-fleet only: after claude-fleet's own PRs land, re-apply them to the live install (`~/.claude/fleet`) — pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses on any other fleet. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
+| [`/fleet-new-issue`](fleet-new-issue.md) | steward | File a new issue in this fleet's repo from a task brief (dedup-scan first), then spawn a worker window (`issue-<N>` worktree + `claude`, bound via `@issue`) to implement it. Mutates the fleet's repo + spawns a session; the steward files, the worker implements. |
 
 ## Two kinds of fleet skill
 
@@ -85,7 +86,7 @@ printf '%s' "$payload" \
 > (background-job prompts) see *Two kinds of fleet skill* above.
 
 A fleet skill is a markdown playbook (a header + a numbered body, exactly like
-`sweep.md` / `new-issue.md`). Two rules make it *fleet-aware*:
+`sweep.md`). Two rules make it *fleet-aware*:
 
 ### 1. It opens with the resolve-and-guard preamble (step 0)
 
@@ -119,7 +120,7 @@ The two seats a fleet skill can run from (`fleet_seat` prints these):
 Each skill declares which seat(s) it belongs to, on its marker line (see below):
 
 - `owner: worker`  — only a worker may run it (e.g. `/fleet-ship` a branch).
-- `owner: steward` — only the steward may run it (e.g. `/new-issue`, `/sweep`).
+- `owner: steward` — only the steward may run it (e.g. `/fleet-new-issue`, `/sweep`).
 - `owner: either`  — seat-agnostic.
 
 If `$SEAT` doesn't match a non-`either` `owner`, the skill **refuses in one
