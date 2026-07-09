@@ -14,6 +14,16 @@ export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} mus
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+
+# live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
+# LANDED mode this producer hands off to the history ledger's row emitter, so
+# finished (merged + cleaned-up) sessions are one keystroke away with the same row
+# ergonomics (#130). Keyed by FLEET_SESSION so one fleet's toggle can't flip
+# another's dash (they share $C); FLEET_SESSION is exported by tmux-dashboard.sh.
+if [ "$(cat "$C/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+  exec bash "$BIN/fleet-history.sh" rows
+fi
+
 E=$'\033['
 CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106m"
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"

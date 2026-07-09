@@ -61,6 +61,7 @@ print_sheet() {
   key "⌃e" "rename the highlighted window"
   key "⌃x" "reap a merged+clean worker (window + worktree + issue)"
   key "⌥x" "force-reap (skip the merged/clean gate)"
+  key "⌃t" "toggle live ⇄ landed (finished sessions; enter opens the PR)"
   key "⌃r" "refresh now"
   key "?" "this cheatsheet"
   key "esc" "back (dash window) / close (popup)"
