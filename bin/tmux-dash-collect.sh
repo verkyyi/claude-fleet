@@ -3,14 +3,14 @@
 # external status work and writes it to cache files; the dash producer only READS
 # these, so the dashboard renders instantly. Run from launchd
 # (com.claude-fleet.collect, StartInterval 60s) or a systemd user timer.
+# PR status (prmap_<slug>, the flat prmap mirror, and @prci/@pfg) is NOT written
+# here — it lives in bin/tmux-pr-refresh.sh, which owns it on a faster ~15s tick
+# (see #81). The collector still WRITES sessmap and git_<key>, which that
+# refresher reads; the two never write the same cache file.
 # Writes under $C = $TMPDIR/.claude-dash:
 #   sessmap          — session<TAB>slug<TAB>repo  (one row per live tmux session)
-#   prmap_<slug>     — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready  per repo (gh, ≥90s)
-#                      first 4 fields are a stable contract; `ready` (5th) is
-#                      land-readiness for OPEN+green PRs: ready|behind|conflict|
-#                      blocked|"" (from mergeStateStatus/mergeable).
 #   issues_<slug>    — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
-#   prmap / issues   — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
+#   issues           — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
 #                      for single-fleet back-compat (un-migrated readers)
 #   git_<key>        — branch<TAB>dirty  per live worktree (every run)
 #   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
@@ -25,7 +25,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 # Sweep this run's PID-unique temps on exit: the per-repo gh fetches only `mv`
 # their temp on success, so a failed fetch would otherwise orphan a 0-byte
-# prmap_<slug>.$$ / issues_<slug>.$$ (and sessmap.$$) forever.
+# issues_<slug>.$$ (and sessmap.$$) forever.
 trap 'rm -f "$C"/*.'"$$" EXIT
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
@@ -103,34 +103,15 @@ if [ -d "$FLEET_CONF_DIR" ]; then
   done
 fi
 
-# --- per-repo PR map + issues (TTL-gated per repo) ---
+# --- per-repo issues (TTL-gated per repo) ---
+# NB: PR status (prmap_<slug> + the flat prmap mirror + @prci/@pfg) is NOT built
+# here anymore — it moved to bin/tmux-pr-refresh.sh so it can refresh on a ~15s
+# cadence instead of this 60s tick. That script is the SINGLE writer of all PR
+# state; the collector only touches issues/git/usage. See issue #81.
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
-  pts=$(cat "$C/prmap_$sg.ts" 2>/dev/null || echo 0)
-  if [ $(( $(now) - pts )) -ge "$GH_TTL" ]; then
-    # shellcheck disable=SC2016  # $r/$ci/$ready are jq vars, not shell — keep single-quoted
-    gh pr list --repo "$rp" --state all --limit 100 \
-      --json number,headRefName,state,mergeable,mergeStateStatus,statusCheckRollup \
-      --jq 'group_by(.headRefName)[] | max_by(.number) |
-            (.statusCheckRollup // []) as $r |
-            (if   ($r|length)==0                     then "·"
-             elif ($r|any(.conclusion=="FAILURE"))   then "✗"
-             elif ($r|any(.status!="COMPLETED"))     then "…"
-             elif ($r|any(.conclusion=="SUCCESS"))   then "✓"
-             else "…" end) as $ci |
-            (if .state=="OPEN" and $ci=="✓" then
-               (if   (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS") then "ready"
-                elif .mergeStateStatus=="BEHIND"                                    then "behind"
-                elif (.mergeStateStatus=="DIRTY" or .mergeable=="CONFLICTING")      then "conflict"
-                elif .mergeStateStatus=="BLOCKED"                                   then "blocked"
-                else "" end)
-             else "" end) as $ready |
-            .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready' \
-      > "$C/prmap_$sg.$$" 2>/dev/null && mv "$C/prmap_$sg.$$" "$C/prmap_$sg"
-    now > "$C/prmap_$sg.ts"
-  fi
   its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
     gh issue list --repo "$rp" --state open --limit 300 \
@@ -141,10 +122,10 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   fi
 done
 
-# --- back-compat flat mirror: PRIMARY repo → the un-slug'd prmap/issues names ---
-if [ -n "$PRIMARY_SLUG" ]; then
-  [ -s "$C/prmap_$PRIMARY_SLUG" ]  && atomic_write "$C/prmap"  < "$C/prmap_$PRIMARY_SLUG"
-  [ -s "$C/issues_$PRIMARY_SLUG" ] && atomic_write "$C/issues" < "$C/issues_$PRIMARY_SLUG"
+# --- back-compat flat mirror: PRIMARY repo → the un-slug'd issues name ---
+# (the prmap flat mirror is written by bin/tmux-pr-refresh.sh, not here — see #81)
+if [ -n "$PRIMARY_SLUG" ] && [ -s "$C/issues_$PRIMARY_SLUG" ]; then
+  atomic_write "$C/issues" < "$C/issues_$PRIMARY_SLUG"
 fi
 
 # --- git per live worktree (every run) ---
@@ -305,41 +286,9 @@ account **$acct** hit its usage limit — new sessions now use **${newact:-?}**
   done
 fi
 
-# --- PR/CI attention signal (every run) ---
-# Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
-# @pfg (color). window-status-format renders them after the window name and
-# tmux-sort-windows.sh treats ✗ like 'needs'. Single writer of @prci/@pfg.
-US=$'\x1f'
-tmux list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
-while IFS="$US" read -r sess win path cur; do
-  [ -z "$path" ] && continue
-  # each window matches against ITS fleet's prmap (slug from sessmap), flat fallback
-  slug=$(fleet_slug_cached "$sess")
-  prmf="$C/prmap"; [ -n "$slug" ] && [ -f "$C/prmap_$slug.ts" ] && prmf="$C/prmap_$slug"
-  key=$(cache_key "$path")
-  branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
-  bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
-  glyph=""; pfg=""
-  if [ -n "$bare" ] && [ "$bare" != "-" ]; then
-    hit=$(awk -F'\t' -v x="$bare" '$1==x{print;exit}' "$prmf" 2>/dev/null)
-    if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
-      ready=$(echo "$hit"|cut -f5)
-      case "$(echo "$hit"|cut -f4)" in
-        ✗) glyph="✗"; pfg="#f7768e";;   # real CI failure → attention
-        ✓) case "$ready" in             # green: decorate by land-readiness
-             behind)   glyph="✓↑"; pfg="#e0af68";;   # green but behind base → update-branch
-             conflict) glyph="✓!"; pfg="#f7768e";;   # green but conflicting → rebase
-             blocked)  glyph="✓·"; pfg="#e0af68";;   # green+mergeable but blocked (protection)
-             *)        glyph="✓";  pfg="#9ece6a";;   # green, awaiting merge
-           esac;;
-      esac
-    fi
-  fi
-  if [ "$cur" != "$glyph" ]; then
-    tmux set-window-option -t "$win" @prci "$glyph" 2>/dev/null
-    tmux set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
-  fi
-done
+# NB: the PR/CI attention signal (@prci/@pfg per window) moved to
+# bin/tmux-pr-refresh.sh (single writer, ~15s cadence) — see #81. The collector
+# no longer touches it.
 
 # --- detached-attention escalation (every run) ---
 # A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is

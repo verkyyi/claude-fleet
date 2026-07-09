@@ -69,6 +69,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 #FLEET_ISSUE_TTL=180
 
+# PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
+# PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
+# OWN fast daemon, decoupled from the 60s collector, so "CI went green" / "PR
+# merged" surfaces within ~this many seconds — which is when the steward is
+# watching to /land. Default 15. This value gates the script's own gh-fetch
+# dedup; the DAEMON fire cadence is set in the launchd plist (StartInterval) /
+# systemd timer (OnUnitActiveSec) — keep all three in step if you change it.
+#FLEET_PR_REFRESH_INTERVAL=15
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 #FLEET_STATUS_CONTAINER="claude-dev"
 

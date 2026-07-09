@@ -19,7 +19,8 @@ issues as the backlog. See README.md for the architecture. Components:
 | Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
-| Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
+| Collector daemon | git/gh/usage/issues caches every ~60s | gh, python3 |
+| PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows | `claude` CLI |
@@ -81,12 +82,20 @@ issues as the backlog. See README.md for the architecture. Components:
      discovery work on Intel (`/usr/local`) as well as Apple Silicon
      (`/opt/homebrew`). Write to `~/Library/LaunchAgents/`, then
      `launchctl bootstrap gui/$(id -u) <plist>` (or `launchctl load` on older
-     macOS). The spinner (KeepAlive) and collector (45s) are the required two;
+     macOS). The spinner (KeepAlive) and collector (60s) are the required two;
      the **diskguard** watcher (`com.claude-fleet.diskguard`, 60s) is strongly
      recommended — it's the crash-guard: a full volume ENOSPCs the collector and
      kills the *shared* tmux server, taking every fleet down at once, so the
      watcher captures forensics + notifies on low disk and its `--gate` mode
      (called by fleet-up and fleet-restore) refuses to add load below the floor.
+     The **pr-refresh** daemon (`com.claude-fleet.pr-refresh`, 15s) is also
+     recommended — it owns PR/CI status (`prmap` + window `@prci`/`@pfg`) on its
+     own fast tick, decoupled from the 60s collector, so a PR going green or
+     merging shows within ~15s (when the steward is watching to `/land`) instead
+     of up to a minute. It's the single writer of that state (the collector no
+     longer touches it), disk work is trivial, and only `gh` is needed;
+     `FLEET_PR_REFRESH_INTERVAL` (default 15) tunes it — keep it in step with the
+     plist `StartInterval`.
      classify/summarize/worktree-autoclean are optional — ask the user, and
      mention classify and summarize spend (small, change-gated) LLM tokens.
      classify (`com.claude-fleet.classify`, 1800s) is now just a backstop — the
@@ -105,7 +114,8 @@ issues as the backlog. See README.md for the architecture. Components:
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
      `systemctl --user enable --now claude-fleet-spinner.service` +
      `claude-fleet-collect.timer` (the required two) + the recommended
-     `claude-fleet-diskguard.timer` (crash-guard); the optional
+     `claude-fleet-diskguard.timer` (crash-guard) and
+     `claude-fleet-pr-refresh.timer` (fast ~15s PR/CI status); the optional
      dispatch/classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
      enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
@@ -144,7 +154,10 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.claude/settings.json`, delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands), and clear per-window state:
-`tmux set-window-option -g @claude_state ""` (or just restart tmux).
+`tmux set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by the
+pr-refresh daemon) — or just restart tmux. (The `com.claude-fleet.*` bootout
+glob already covers `com.claude-fleet.pr-refresh`; on Linux
+`systemctl --user disable --now claude-fleet-pr-refresh.timer`.)
 
 ## Conventions the code assumes (tell the user)
 
