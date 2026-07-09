@@ -112,7 +112,10 @@ acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
 acct_seg=""
 if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' ! -name '*.conf' 2>/dev/null)" ]; then
     act=$(sed -n '1p' "${TMPDIR:-/tmp}/.claude-dash/account.active" 2>/dev/null)
-    [ -n "$act" ] && acct_seg="${DIM}│ ${GREEN}◉ ${act} "
+    # Wrap the chip in a clickable range (acct) — a MouseDown1Status bind in
+    # conf/tmux-attention.conf opens the account picker (same as prefix A). Only
+    # emitted when a chip exists, so there's no dead click target when off.
+    [ -n "$act" ] && acct_seg="${DIM}│ #[range=user|acct]${GREEN}◉ ${act} #[norange]"
 fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
