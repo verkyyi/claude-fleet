@@ -18,6 +18,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Attention layer | hooks → window colors/spinner/urgency-sort | tmux ≥ 3.2 |
 | Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
+| Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
 | Collector daemon | git/gh/usage caches every ~45s | gh, python3 |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
@@ -53,8 +54,10 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/j/G/b/A/r` and a status-bar restyle — and comment out anything
-   they don't want.
+   bindings on `a/j/G/b/A/c/r` and a status-bar restyle — and comment out
+   anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
+   default new-window**; in a fleet you spawn via the dash/backlog, so it's free
+   — but call it out.
 
 5. **Merge Claude Code hooks.** Merge `hooks/settings-hooks.json` into
    `~/.claude/settings.json` — APPEND to any existing hook arrays, never
