@@ -47,11 +47,17 @@ case "\$action" in
       1|2) printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
       3)   printf 'OPEN\tCONFLICTING\tDIRTY\t-\tpass\tsha-%s\n' "\$num" ;;
       4)   printf 'CLOSED\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
+      5)   printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
       *)   printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
     esac ;;
   merge)         printf '%s\n' "\$num" >> "$MERGE_LOG" ;;   # record the real merge
   update-branch) : ;;
-  list)          : ;;   # unused: PRs are passed explicitly
+  # No-arg discovery path (issue #73): merge-train reads "number<TAB>verdict"
+  # lines from \`gh pr list --jq ...\`. Real gh evaluates the --jq server-side, so
+  # the fake emits the post-jq TSV directly: #5 is a GREEN, un-armed, non-draft
+  # PR that MUST be queued (proving discovery no longer requires auto-merge
+  # arming); #3 is DIRTY and must be pre-filtered out.
+  list)          printf '5\tqueue\n3\tdirty\n' ;;
 esac
 exit 0
 GHFAKE
@@ -87,3 +93,28 @@ summary_merged="$(printf '%s\n' "$out" | sed -n 's/^  merged:  \([0-9]*\).*/\1/p
   || fail "summary merged=$summary_merged disagrees with actual merges=$actual_merges"
 
 printf 'selftest OK: summary counts match reality (merged=2 ejected=1 skipped=1, %s real merges)\n' "$actual_merges"
+
+# --- discovery path (issue #73): no-arg drains the ready queue -----------------
+# Run merge-train with NO PR args so it auto-discovers via \`gh pr list\`. The fake
+# returns "5\tqueue" (green, un-armed) + "3\tdirty". Correct behaviour: #5 is
+# queued and merged (armed-status irrelevant now), #3 is pre-filtered out and
+# never merged. This guards the #73 realignment: armed-only would have queued
+# nothing here.
+: > "$MERGE_LOG"
+out2="$(
+  PATH="$WORK/bin:$PATH" \
+  FLEET_REPO="acme/widgets" \
+  MERGE_TRAIN_LEASE_DIR="$WORK/leases2" \
+  MERGE_TRAIN_POLL=0 \
+  MERGE_TRAIN_PR_TIMEOUT=30 \
+  "$MT" 2>&1
+)"
+fail2() { printf 'selftest FAIL: %s\n\n--- captured output ---\n%s\n' "$1" "$out2" >&2; exit 1; }
+
+disc_merges="$(grep -c . "$MERGE_LOG" 2>/dev/null || echo 0)"
+[ "$disc_merges" -eq 1 ] || fail2 "no-arg discovery performed $disc_merges merges, expected 1 (#5)"
+grep -qx 5 "$MERGE_LOG" || fail2 "no-arg discovery did not merge the green un-armed PR #5"
+printf '%s\n' "$out2" | grep -Eq '^  merged:  1( |$)' || fail2 "discovery summary 'merged' count != 1"
+printf '%s\n' "$out2" | grep -q 'pre-filtered' || fail2 "discovery did not report the pre-filtered #3"
+
+printf 'selftest OK: no-arg discovery drains the ready queue (queued+merged #5 regardless of auto-merge arming)\n'
