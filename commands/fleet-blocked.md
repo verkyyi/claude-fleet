@@ -45,10 +45,15 @@ echo "issue=${issue:-none}"
 
 ## 2. Post the blocker on the issue
 
-Prefix the comment so it's scannable in the steward's sweep:
+Prefix the comment so it's scannable in the steward's sweep. Post it through
+`fleet-comment.sh --note` (a worker→steward record comment) so it carries the
+`<!-- fleet:no-relay -->` marker and never loops back into this worker when the
+issue-bridge is on (issue #132); it falls back to a plain `gh issue comment` if
+that wrapper isn't installed:
 
 ```sh
-gh issue comment "<issue>" --repo "$FLEET_REPO" --body '⛔ blocked: <why>'
+~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '⛔ blocked: <why>' \
+  || gh issue comment "<issue>" --repo "$FLEET_REPO" --body '⛔ blocked: <why>'
 ```
 
 ## 3. Flip the window to `needs`

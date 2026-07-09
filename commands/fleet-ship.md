@@ -99,8 +99,10 @@ Closes #<issue>
 
 ## 5. Comment on the issue + leave the window sensible
 
-- One-line summary comment on the issue:
-  `gh issue comment "<issue>" --repo "$FLEET_REPO" --body 'Shipped → <PR URL>'`.
+- One-line summary comment on the issue — via `fleet-comment.sh --note` so this
+  worker's own record comment carries `<!-- fleet:no-relay -->` and never loops
+  back in when the issue-bridge is on (issue #132); falls back to plain `gh`:
+  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body 'Shipped → <PR URL>' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body 'Shipped → <PR URL>'`.
 - Leave the window in a done-ish state (the turn ending naturally sets it).
 
 ## 6. Report — and stop

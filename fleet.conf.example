@@ -101,6 +101,40 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-fill: only issues labeled @group=autofill @tier=advanced @scope=fleet @edit=str
 #FLEET_AUTOFILL_READY_LABEL="ready"
 
+# --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
+# OFF by default. When enabled for a fleet, the issue-bridge daemon
+# (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)
+# relays a trusted comment on a bound issue INTO that worker as its next turn.
+# The issue thread becomes the single durable channel for driving a worker
+# (steward→worker, external-collaborator→worker), replacing flaky send-keys.
+#
+# SECURITY: a relayed comment becomes autonomous tool-use in a bypass-permissions
+# worker — treat it as remote code execution. The author_association gate below is
+# the headline control; un-gated relay on a PUBLIC repo is unsafe. Loop-safety: the
+# bridge relays every comment from a trusted author UNLESS it carries the marker
+# `<!-- fleet:no-relay -->` — fleet-internal comments (worker progress, steward
+# record) MUST be posted via bin/fleet-comment.sh (which stamps the marker), so
+# nothing the fleet writes loops back in. See docs/ISSUE-BRIDGE.md.
+# @label=Relay issue comments to worker @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_ISSUE_BRIDGE=0
+# Trusted author_association floor (space-separated, verbatim GitHub values). Only
+# comments whose author is in this set are relayed; NONE/CONTRIBUTOR are refused.
+# Default: the three trusted tiers. Widen it ONLY if you understand the RCE risk.
+# @label=Bridge: trusted associations @group=bridge @tier=advanced @scope=fleet @edit=str
+#FLEET_ISSUE_BRIDGE_ASSOC_FLOOR="OWNER MEMBER COLLABORATOR"
+# Webhook HMAC secret (the `gh webhook forward` / cloudflared shared secret). Used
+# by `--deliver` to validate that only GitHub triggered a delivery — MANDATORY for
+# the webhook ingress (the poll ingress needs no secret). Keep it out of the conf
+# in a real deploy; the daemon reads it from the environment. See docs.
+# @label=Bridge: webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
+#FLEET_ISSUE_BRIDGE_SECRET=""
+# Revive a DORMANT issue: when a trusted comment lands on an OPEN issue whose
+# worker window is gone, re-spawn the worker (its /fleet-claim re-reads the issue,
+# comment and all). OFF by default — turn on once you trust the gate. A closed/
+# landed issue is left alone (resume via #130 is a follow-up).
+# @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
+#FLEET_ISSUE_BRIDGE_REVIVE=0
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 # GLOBAL: read by the preview tool from the global env — a per-fleet override
