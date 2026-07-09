@@ -139,20 +139,54 @@ fleet_session_count() {
     }'
 }
 
-# Global cap on concurrent Claude working sessions (issue #28). Returns 0 if a
-# new session may be spawned, non-zero if the cap is already reached. The limit
-# is FLEET_GLOBAL_MAX_SESSIONS (default 8) — a SYSTEM-WIDE ceiling on concurrent
-# Claude working sessions across all fleets; set it to 0 to
-# disable the cap entirely. On refusal, prints a human-readable reason on stdout
-# for the caller to surface (tmux display-message); prints nothing when allowed.
+# CHEAP: count the live Claude WORKING-session windows in ONE fleet session (the
+# per-fleet analogue of fleet_session_count, for issue #70's FLEET_MAX_SESSIONS).
+# Only counts if the session is a real fleet (owns a 'plan'/'dash' hub window);
+# inside it, dash/plan/backlog are panels, everything else is a working session —
+# the same rule the dashboard and the global count use. Prints an integer (0 if
+# the session isn't a fleet, doesn't exist, or tmux isn't running).
+# NB: the hub/panel names (plan/dash/backlog) are duplicated in fleet_session_count
+# above — keep BOTH in sync, or the global and per-fleet caps count different sets.
+fleet_session_count_for() {
+  tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null | awk '
+    { name=$0; if (name=="plan" || name=="dash") hub=1; rows[NR]=name }
+    END {
+      if (!hub) { print 0; exit }
+      for (i=1; i<=NR; i++) {
+        n=rows[i]
+        if (n!="dash" && n!="plan" && n!="backlog") c++
+      }
+      print c+0
+    }'
+}
+
+# Cap on concurrent Claude working sessions (issues #28, #70). Returns 0 if a new
+# session may be spawned, non-zero if a cap is already reached. Two ceilings:
+#   • GLOBAL   FLEET_GLOBAL_MAX_SESSIONS (default 8) — SYSTEM-WIDE across all
+#              fleets; 0 ⇒ unlimited. Always checked.
+#   • PER-FLEET FLEET_MAX_SESSIONS (default 0 = unlimited) — checked ONLY when a
+#              session name is passed as $1 (so existing no-arg callers keep the
+#              global-only behaviour unchanged) AND the cap is a positive number.
+# On refusal, prints a human-readable reason on stdout for the caller to surface
+# (tmux display-message); prints nothing when allowed.
 fleet_session_cap_ok() {
-  local max="${FLEET_GLOBAL_MAX_SESSIONS:-8}" n
-  case "$max" in ''|*[!0-9]*) max=8;; esac   # tolerate a garbled conf value
-  [ "$max" -eq 0 ] && return 0               # 0 ⇒ unlimited
-  n=$(fleet_session_count)
-  if [ "$n" -ge "$max" ]; then
-    printf 'fleet at capacity: %s/%s Claude sessions running — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' "$n" "$max"
-    return 1
+  local sess="${1:-}"
+  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n
+  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac   # tolerate a garbled conf value
+  case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
+  if [ "$gmax" -ne 0 ]; then                   # 0 ⇒ unlimited
+    n=$(fleet_session_count)
+    if [ "$n" -ge "$gmax" ]; then
+      printf 'fleet at capacity: %s/%s Claude sessions running (global) — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' "$n" "$gmax"
+      return 1
+    fi
+  fi
+  if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
+    n=$(fleet_session_count_for "$sess")
+    if [ "$n" -ge "$fmax" ]; then
+      printf 'fleet at capacity: %s/%s Claude sessions in this fleet — raise FLEET_MAX_SESSIONS or close one first' "$n" "$fmax"
+      return 1
+    fi
   fi
   return 0
 }

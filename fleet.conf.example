@@ -39,6 +39,32 @@ FLEET_CTX_WINDOW=200000
 # backlog windows — don't count). Default 8; set to 0 to disable entirely.
 FLEET_GLOBAL_MAX_SESSIONS=8
 
+# PER-FLEET ceiling on concurrent Claude working sessions in THIS fleet, enforced
+# alongside the global cap by every spawn path (a spawn needs BOTH caps to have
+# headroom). Default 0 = unlimited (only the global cap applies) — set it to give
+# one repo its own slice of the global budget. Best set per-fleet in
+# $FLEET_CONF_DIR/<session>.conf; a value here applies to every fleet.
+#FLEET_MAX_SESSIONS=0
+
+# --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
+# OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
+# fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps
+# above have headroom — auto-spawning the highest-priority ELIGIBLE issue so you
+# don't hand-spawn every one. Eligible = open, unassigned, no live window bound,
+# not labeled epic/meta/blocked. Priority = a `priority:p0|p1|p2` label tier
+# (p0 first), then FIFO by issue number; unlabeled issues go last.
+#
+# COST: each auto-spawn launches a real Claude session that spends LLM tokens and
+# opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
+# (best per-fleet in $FLEET_CONF_DIR/<session>.conf).
+#FLEET_AUTOFILL=0
+# Max issues auto-spawned per fleet per tick (rate-limit against a thundering
+# herd; the ~60s interval is the cooldown between ticks). Default 1.
+#FLEET_AUTOFILL_MAX_PER_TICK=1
+# Optional: require this label for an issue to be autofill-eligible (a manual
+# "ready to auto-spawn" gate). Unset = no gate (any eligible issue qualifies).
+#FLEET_AUTOFILL_READY_LABEL="ready"
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 #FLEET_ISSUE_TTL=180
