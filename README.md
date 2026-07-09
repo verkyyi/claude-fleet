@@ -186,6 +186,10 @@ chmod 600 ~/.config/claude-fleet/accounts/*
 bin/fleet-account.sh list          # pool · ● active · limited state
 ```
 
+Switch by hand with `prefix A` (a popup picker) — or just **click the `◉ <account>`
+chip** in the status-bar footer, which opens the same picker. Enter makes the
+choice active for new sessions; Esc cancels.
+
 Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
 macOS Keychain ignores). One caveat: an **already-running** session can't
 hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full

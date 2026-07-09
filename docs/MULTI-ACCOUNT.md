@@ -92,6 +92,11 @@ API credits, **not** your subscription — the opposite of what this is for.)
 
 That's it — the next session you spawn launches under the active account.
 
+**Switch by hand.** `prefix A` opens a popup picker; Enter makes a choice active
+for new sessions, Esc cancels. The status-bar footer also shows the active
+account as a green `◉ <account>` chip — **click it** to open the same picker (it
+only appears, and is only clickable, when multi-account is on).
+
 ## How it runs
 
 ```
