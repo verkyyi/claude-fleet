@@ -122,6 +122,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
         line=${tail%%$'\n'*}
         # line = #num\tstate\tci\tready. Parse each; ready may be absent on a
         # stale 4-field cache (mid-upgrade) — tab-guard so it degrades to ''.
+        pnum=${line%%$'\t'*}   # "#num" — field 1, surfaced into the OPEN-PR cell
         rest=${line#*$'\t'}; st=${rest%%$'\t'*}; after=${rest#*$'\t'}
         ci=${after%%$'\t'*}
         case "$after" in *$'\t'*) ready=${after#*$'\t'};; *) ready='';; esac
@@ -141,7 +142,11 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
                ✗) pcol=$RD; ptxt="$ci";;
                …) pcol=$TX; ptxt="$ci";;
                *) pcol=$GY; ptxt="$ci";;
-             esac;;
+             esac
+             # OPEN PR → show the number next to the glyph (e.g. #75✓, #75✓↑).
+             # #<4-digit> + 2-cell readiness glyph = 7 = the fld 7 ceiling; a
+             # longer number truncates rather than overrunning the pinned column.
+             ptxt="$pnum$ptxt";;
         esac
         break
       fi
