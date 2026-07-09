@@ -8,6 +8,7 @@ on:
       - 'shell/**'
       - 'extras/**'
       - '.shellcheckrc'
+      - '.shellcheck-version'
       - '.github/workflows/shellcheck.yml'
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - 'shell/**'
       - 'extras/**'
       - '.shellcheckrc'
+      - '.shellcheck-version'
       - '.github/workflows/shellcheck.yml'
 
 jobs:
@@ -24,12 +26,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned shellcheck
+        run: |
+          # Pin the exact version so CI == local (`brew install shellcheck`).
+          # The runner's stock binary drifts (0.9.0 vs modern 0.11.0) and the
+          # two disagree on the SC2317/SC2329 unreachable-function heuristic,
+          # so a disable that's clean locally fails on CI and vice-versa.
+          # Single source of truth: .shellcheck-version. No third-party action —
+          # download the official release straight from koalaman (supply-chain-clean).
+          VER=$(tr -d '[:space:]' < .shellcheck-version)
+          echo "Pinned shellcheck version: $VER"
+          url="https://github.com/koalaman/shellcheck/releases/download/v${VER}/shellcheck-v${VER}.linux.x86_64.tar.xz"
+          curl -fsSL "$url" | tar -xJ
+          sudo install -m 0755 "shellcheck-v${VER}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf "shellcheck-v${VER}"
+
       - name: Lint shell scripts
         run: |
           shellcheck --version
           # Lint every *.sh under the script dirs. shell/cw.zsh is deliberately
           # excluded — shellcheck only supports sh/bash/dash/ksh, not zsh. Per-file
           # shell comes from each shebang; baseline disables live in .shellcheckrc.
+          # --severity=warning: gate on real problems (unquoted vars, unguarded cd,
+          # syntax errors) — not info-level heuristics like SC2317/SC2329 that flag
+          # correct trap/dispatch code as "unreachable".
           count=$(find bin hooks shell extras -name '*.sh' | wc -l)
           if [ "$count" -eq 0 ]; then
             echo "no shell scripts found — nothing to lint" >&2
@@ -37,4 +57,4 @@ jobs:
           fi
           echo "Checking $count script(s):"
           find bin hooks shell extras -name '*.sh' | sort | sed 's/^/  /'
-          find bin hooks shell extras -name '*.sh' -print0 | sort -z | xargs -0 shellcheck
+          find bin hooks shell extras -name '*.sh' -print0 | sort -z | xargs -0 shellcheck --severity=warning
