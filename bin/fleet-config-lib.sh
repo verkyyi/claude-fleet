@@ -8,12 +8,15 @@
 #   code default      (documented in fleet.conf.example)  fallback
 # — exactly the precedence fleet_load_conf applies at runtime.
 #
-# The KEY LIST + per-key help are PARSED from fleet.conf.example (the single
-# source of truth — never a hardcoded divergent copy). Validation TYPE is a
-# small policy layered on top (numeric caps/TTLs, on/off booleans, model enums,
-# free strings) so a bad value can't be written that would break `source`-ing
-# the conf. A key newly added to the example shows up automatically (with
-# best-effort str validation) — nothing to keep in sync here.
+# The KEY LIST, per-key help, AND per-key attributes are all PARSED from
+# fleet.conf.example (the single source of truth — never a hardcoded divergent
+# copy). Each key carries a declarative tag line (issue #89):
+#   # @label=… @group=… @tier=… @scope=… @edit=… @unit=…
+# which drives the modal's friendly label, section grouping, visibility tier,
+# allowed write scope, and editor/validation type. Validation is a small policy
+# on top of @edit so a bad value can't be written that would break `source`-ing
+# the conf. A key newly added to the example shows up automatically — nothing to
+# keep in sync here.
 #
 # Shell-options policy (see CONTRIBUTING.md): this file is SOURCED, so it must
 # NOT `set -u`/`set -o pipefail`. It is written to be safe under a `set -u`
@@ -87,6 +90,7 @@ _fcfg_block() {
         if (line !~ /^[[:space:]]*#/) break                    # non-comment
         if (line ~ /^[[:space:]]*#[[:space:]]*$/) break        # bare "#" separator
         if (line ~ /^[[:space:]]*#[[:space:]]*[-=]{2,}/) break # "# --- section ---"
+        if (line ~ /@label=/) continue                         # tag line — not help
         buf[++n]=line
       }
       if (inline != "") print inline
@@ -106,9 +110,65 @@ fcfg_short() {
 # Full multi-line help for KEY (the preview pane).
 fcfg_full() { _fcfg_block "$1"; }
 
-# Validation type for KEY: bool | enum | num | str. Booleans/enums are an
-# explicit policy; num vs str is inferred from whether the default is an integer.
-fcfg_type() {
+# --- declarative tags (issue #89) -------------------------------------------
+# Each key carries a single "# @label=… @group=… @tier=… @scope=… @edit=… @unit=…"
+# comment line directly above its assignment (see fleet.conf.example). That line
+# is the source of truth for the modal's friendly label, grouping, visibility
+# tier, allowed write scope, and editor/validation type. We parse it here so the
+# scripts never hardcode a divergent copy.
+
+# The tag line for KEY: the comment line in KEY's block that carries @label=.
+_fcfg_tagline() {
+  awk -v key="$1" '
+    { L[NR]=$0 }
+    $0 ~ ("^#?[[:space:]]*" key "=") { target=NR }
+    END {
+      if (!target) exit
+      for (i=target-1; i>=1; i--) {
+        line=L[i]
+        if (line ~ /^[[:space:]]*$/) exit          # blank — out of the block
+        if (line !~ /^[[:space:]]*#/) exit         # non-comment — out of the block
+        if (line ~ /@label=/) { print line; exit }
+      }
+    }
+  ' "$(fcfg_example)"
+}
+
+# fcfg_tag KEY NAME → the value of @NAME on KEY's tag line, or empty. A value
+# runs from after "@NAME=" until the next " @word=" token (so @label may contain
+# spaces, em-dashes, etc.), with trailing whitespace trimmed.
+fcfg_tag() {
+  local line; line=$(_fcfg_tagline "$1")
+  [ -n "$line" ] || return 0
+  printf '%s\n' "$line" | TAG="$2" awk '
+    BEGIN { key = "@" ENVIRON["TAG"] "=" }
+    {
+      p = index($0, key)
+      if (p == 0) exit
+      rest = substr($0, p + length(key))
+      if (match(rest, /[[:space:]]+@[a-zA-Z_]+=/)) rest = substr(rest, 1, RSTART-1)
+      sub(/[[:space:]]+$/, "", rest)
+      print rest
+    }
+  '
+}
+
+# Friendly label for KEY (@label), falling back to the raw key name.
+fcfg_label() { local v; v=$(fcfg_tag "$1" label); [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$1"; }
+# Section bucket (@group), default "other".
+fcfg_group() { local v; v=$(fcfg_tag "$1" group); [ -n "$v" ] && printf '%s' "$v" || printf 'other'; }
+# Visibility tier (@tier): common | advanced. Default common.
+fcfg_tier()  { local v; v=$(fcfg_tag "$1" tier);  [ -n "$v" ] && printf '%s' "$v" || printf 'common'; }
+# Allowed write scope (@scope): identity | global | fleet. Default fleet.
+fcfg_scope() { local v; v=$(fcfg_tag "$1" scope); [ -n "$v" ] && printf '%s' "$v" || printf 'fleet'; }
+# Optional display unit (@unit), e.g. sec / GB / tokens. Empty if none.
+fcfg_unit()  { fcfg_tag "$1" unit; }
+
+# Editor/validation kind (@edit): no | bool | int | enum | path | str | regex.
+# Falls back to a best-effort inference for a key that has no tag line yet.
+fcfg_edit() {
+  local v; v=$(fcfg_tag "$1" edit)
+  if [ -n "$v" ]; then printf '%s' "$v"; return; fi
   case "$1" in
     FLEET_AUTOFILL|FLEET_SPAWN_FOCUS)  printf bool; return ;;
     FLEET_MODEL|FLEET_SUBAGENT_MODEL)  printf enum; return ;;
@@ -116,7 +176,19 @@ fcfg_type() {
   local d; d=$(fcfg_default "$1")
   case "$d" in
     ''|*[!0-9]*) printf str ;;
-    *)           printf num ;;
+    *)           printf int ;;
+  esac
+}
+
+# Validation CLASS for KEY: bool | enum | num | str — the coarse family the
+# validator + writer key off (int→num; path/regex/str/no→str). Derived from the
+# richer @edit type so the two never drift.
+fcfg_type() {
+  case "$(fcfg_edit "$1")" in
+    bool)           printf bool ;;
+    enum)           printf enum ;;
+    int)            printf num ;;
+    *)              printf str ;;
   esac
 }
 
@@ -148,23 +220,41 @@ fcfg_target_conf() {
   esac
 }
 
-# --- scope state (which layer edits write to) -------------------------------
-# Persisted per-session in the dash cache dir so it survives fzf reloads.
-fcfg_scope_file()   { printf '%s/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
-fcfg_scope()        { local f; f=$(fcfg_scope_file "${1:-}"); if [ -f "$f" ]; then cat "$f"; else printf 'fleet'; fi; }
-fcfg_scope_set()    { local f; f=$(fcfg_scope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
-fcfg_scope_toggle() { if [ "$(fcfg_scope "${1:-}")" = fleet ]; then fcfg_scope_set "${1:-}" global; else fcfg_scope_set "${1:-}" fleet; fi; }
+# --- write-scope state (which layer edits write to) -------------------------
+# NOTE: distinct from a KEY's @scope attribute (fcfg_scope above). This is the
+# modal's g/f WRITE-SCOPE toggle — which conf an edit lands in. Persisted
+# per-session in the dash cache dir so it survives fzf reloads.
+fcfg_wscope_file()   { printf '%s/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
+fcfg_wscope()        { local f; f=$(fcfg_wscope_file "${1:-}"); if [ -f "$f" ]; then cat "$f"; else printf 'fleet'; fi; }
+fcfg_wscope_set()    { local f; f=$(fcfg_wscope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
+fcfg_wscope_toggle() { if [ "$(fcfg_wscope "${1:-}")" = fleet ]; then fcfg_wscope_set "${1:-}" global; else fcfg_wscope_set "${1:-}" fleet; fi; }
 
 # --- validation --------------------------------------------------------------
 # fcfg_validate TYPE VALUE KEY → 0 (ok, no output) or 1 + a one-line reason.
-# Guarantees the value can be written without breaking `source`-ing the conf.
+# TYPE accepts either the coarse class (num|bool|enum|str) or an @edit type
+# (int|path|regex map onto num/str). Guarantees the value can be written
+# without breaking `source`-ing the conf.
 fcfg_validate() {
   local type="$1" val="$2" key="${3:-value}"
   case "$type" in
-    num)
+    no)
+      printf '%s is an identity key — set it in fleet.conf and re-provision' "$key"; return 1 ;;
+    num|int)
       case "$val" in
         ''|*[!0-9]*) printf '%s must be a non-negative integer (got: %s)' "$key" "${val:-<empty>}"; return 1 ;;
       esac ;;
+    regex)
+      # must not break source-ing AND must be a valid ERE.
+      case "$val" in
+        *\"*)   printf '%s: value may not contain a double-quote — edit the conf by hand for that' "$key"; return 1 ;;
+        *\`*)   printf '%s: value may not contain a backtick (command substitution)' "$key"; return 1 ;;
+        *'$('*) printf '%s: value may not contain $(…) command substitution — edit the conf by hand for that' "$key"; return 1 ;;
+        *\\)    printf '%s: value may not end in a backslash' "$key"; return 1 ;;
+      esac
+      # grep exits 1 on "no match" (valid pattern) but >=2 on a malformed one.
+      printf '' | grep -E -- "$val" >/dev/null 2>&1
+      [ "$?" -ge 2 ] && { printf '%s: not a valid extended regular expression (got: %s)' "$key" "$val"; return 1; }
+      : ;;
     bool)
       case "$val" in
         0|1) : ;;
@@ -201,8 +291,8 @@ fcfg_validate() {
 fcfg_write() {
   local file="$1" key="$2" val="$3" type="$4" line status
   case "$type" in
-    num|bool) line="$key=$val" ;;
-    *)        line="$key=\"$val\"" ;;
+    num|int|bool) line="$key=$val" ;;
+    *)            line="$key=\"$val\"" ;;
   esac
   if [ -f "$file" ]; then
     cp -p "$file" "$file.bak" 2>/dev/null || cp "$file" "$file.bak" || return 1

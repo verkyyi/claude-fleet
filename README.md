@@ -127,6 +127,7 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix j` | dashboard — jump / new task / bind issue / rename |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
+| `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix r` | reload tmux config |
 
 ## Configuration

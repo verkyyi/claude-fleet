@@ -1,19 +1,23 @@
 #!/bin/bash
 # tmux-config-selftest.sh — hermetic smoke test for bin/fleet-config-lib.sh (the
-# prefix+c config modal, issue #83). No tmux, no fzf, no network.
+# prefix+c config modal, issues #83 + #89). No tmux, no fzf, no network.
 #
 # Asserts the modal's core contract against the REAL fleet.conf.example (so it
-# also guards that the example stays parseable) plus TEMP global/per-fleet confs:
+# also guards that the example stays parseable + fully annotated) plus TEMP
+# global/per-fleet confs:
 #   • KEY LIST      every FLEET_* key in the example is discovered.
-#   • TYPING        booleans/enums/numerics/strings classify correctly.
+#   • TAGS          @label/@group/@tier/@scope/@edit/@unit parse per key, and
+#                   EVERY key carries a full tag line (no un-annotated drift).
+#   • TYPING        @edit maps to the coarse validation class (int→num, etc.).
 #   • DEFAULTS      parsed from the example (commented + uncommented lines).
 #   • LAYERING      effective value + winning layer = per-fleet ▸ global ▸ default.
-#   • VALIDATION    bad values by type are rejected; good ones pass; a value that
-#                   would break `source`-ing (double-quote/backtick/trailing \) is
-#                   refused.
+#   • VALIDATION    bad values by type are rejected; good ones pass; identity
+#                   (@edit=no) always refuses; regex validity is enforced; a
+#                   value that would break `source`-ing is refused.
 #   • WRITE         create-on-first-write, in-place upsert (no dup lines), backup
-#                   on update, prefix-safe keys, and the written conf sources back
-#                   to the value.
+#                   on update, prefix-safe keys, int bare / str quoted, and the
+#                   written conf sources back to the value.
+#   • WRITE-SCOPE   the g/f write-scope toggle persists + flips.
 #
 # Exit 0 = pass. Non-zero = fail (prints which assertion).
 set -uo pipefail
@@ -41,12 +45,44 @@ eq()   { [ "$2" = "$3" ] || fail "$1: got [$2] want [$3]"; ok; }
 keys=$(fcfg_keys)
 for k in FLEET_REPO FLEET_CTX_WINDOW FLEET_MODEL FLEET_GLOBAL_MAX_SESSIONS \
          FLEET_AUTOFILL FLEET_AUTOFILL_MAX_PER_TICK FLEET_NOTIFY_CMD \
-         FLEET_DISK_FLOOR_GB FLEET_SPAWN_FOCUS; do
+         FLEET_DISK_FLOOR_GB FLEET_SPAWN_FOCUS FLEET_GH_TTL FLEET_CONF_DIR; do
   printf '%s\n' "$keys" | grep -qxF "$k" || fail "key list missing $k"
   ok
 done
 
-# --- TYPING -----------------------------------------------------------------
+# --- TAGS: every key is fully annotated -------------------------------------
+# No un-annotated drift: each key must carry a @label, a @scope in the allowed
+# set, and an @edit in the allowed set.
+while IFS= read -r k; do
+  [ -n "$k" ] || continue
+  [ -n "$(fcfg_tag "$k" label)" ] || fail "$k has no @label"
+  case "$(fcfg_scope "$k")" in identity|global|fleet) : ;; *) fail "$k @scope invalid: $(fcfg_scope "$k")" ;; esac
+  case "$(fcfg_edit  "$k")" in no|bool|int|enum|path|str|regex) : ;; *) fail "$k @edit invalid: $(fcfg_edit "$k")" ;; esac
+  case "$(fcfg_tier  "$k")" in common|advanced) : ;; *) fail "$k @tier invalid: $(fcfg_tier "$k")" ;; esac
+  ok
+done <<EOF
+$keys
+EOF
+
+# spot-check specific tag values (the declarative contract from the issue)
+eq 'label FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_label FLEET_GLOBAL_MAX_SESSIONS)" 'Max sessions — all fleets'
+eq 'group FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_group FLEET_GLOBAL_MAX_SESSIONS)" caps
+eq 'tier  FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_tier  FLEET_GLOBAL_MAX_SESSIONS)" common
+eq 'scope FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_scope FLEET_GLOBAL_MAX_SESSIONS)" global
+eq 'edit  FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_edit  FLEET_GLOBAL_MAX_SESSIONS)" int
+eq 'unit  FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_unit  FLEET_GLOBAL_MAX_SESSIONS)" sessions
+eq 'scope FLEET_REPO (identity)'     "$(fcfg_scope FLEET_REPO)"                identity
+eq 'edit  FLEET_REPO (identity)'     "$(fcfg_edit  FLEET_REPO)"                no
+eq 'scope FLEET_MAX_SESSIONS'        "$(fcfg_scope FLEET_MAX_SESSIONS)"        fleet
+eq 'edit  FLEET_PROTECTED_RE'        "$(fcfg_edit  FLEET_PROTECTED_RE)"        regex
+eq 'edit  FLEET_NOTIFY_CMD'          "$(fcfg_edit  FLEET_NOTIFY_CMD)"          path
+eq 'label FLEET_REPO fallback-free'  "$(fcfg_label FLEET_REPO)"                'GitHub repo'
+# a key not in the example → sensible fallbacks (never crashes)
+eq 'label fallback'  "$(fcfg_label FLEET_DOES_NOT_EXIST)" FLEET_DOES_NOT_EXIST
+eq 'scope fallback'  "$(fcfg_scope FLEET_DOES_NOT_EXIST)" fleet
+eq 'tier fallback'   "$(fcfg_tier  FLEET_DOES_NOT_EXIST)" common
+
+# --- TYPING (fcfg_type derives from @edit) ----------------------------------
 eq 'type FLEET_AUTOFILL'       "$(fcfg_type FLEET_AUTOFILL)"       bool
 eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
 eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
@@ -54,8 +90,9 @@ eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
 eq 'type FLEET_MAX_SESSIONS'   "$(fcfg_type FLEET_MAX_SESSIONS)"   num
 eq 'type FLEET_ISSUE_TTL'      "$(fcfg_type FLEET_ISSUE_TTL)"      num
-eq 'type FLEET_REPO'           "$(fcfg_type FLEET_REPO)"           str
+eq 'type FLEET_REPO (no→str)'  "$(fcfg_type FLEET_REPO)"           str
 eq 'type FLEET_NOTIFY_CMD'     "$(fcfg_type FLEET_NOTIFY_CMD)"     str
+eq 'type FLEET_PROTECTED_RE'   "$(fcfg_type FLEET_PROTECTED_RE)"   str
 
 # --- DEFAULTS ---------------------------------------------------------------
 eq 'default FLEET_CTX_WINDOW'          "$(fcfg_default FLEET_CTX_WINDOW)"          200000
@@ -63,35 +100,36 @@ eq 'default FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_default FLEET_GLOBAL_MAX_SESSIONS
 eq 'default FLEET_AUTOFILL'            "$(fcfg_default FLEET_AUTOFILL)"            0
 eq 'default FLEET_MODEL'               "$(fcfg_default FLEET_MODEL)"               opus
 eq 'default FLEET_DISK_FLOOR_GB'       "$(fcfg_default FLEET_DISK_FLOOR_GB)"       12
+eq 'default FLEET_GH_TTL'              "$(fcfg_default FLEET_GH_TTL)"              90
 [ -n "$(fcfg_short FLEET_REPO)" ] || fail 'short help for FLEET_REPO is empty'; ok
+# short help must NOT leak the tag line
+case "$(fcfg_short FLEET_REPO)" in *@label=*) fail 'short help leaked the tag line' ;; esac; ok
+case "$(fcfg_full  FLEET_REPO)" in *@label=*) fail 'full help leaked the tag line' ;; esac; ok
 
 # --- LAYERING ---------------------------------------------------------------
-# no confs → default
 : > "$FCFG_GLOBAL_CONF"; : > "$FCFG_FLEET_CONF"
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
 eq 'effective(default) val' "${ev%"$FCFG_US"*}" 200000
 eq 'effective(default) src' "${ev##*"$FCFG_US"}" default
-# global set → global wins over default
 printf 'FLEET_CTX_WINDOW=300000\n' > "$FCFG_GLOBAL_CONF"
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
 eq 'effective(global) val' "${ev%"$FCFG_US"*}" 300000
 eq 'effective(global) src' "${ev##*"$FCFG_US"}" global
-# per-fleet set → overlay wins over global
 printf 'FLEET_CTX_WINDOW=1000000\n' > "$FCFG_FLEET_CONF"
 ev=$(fcfg_effective FLEET_CTX_WINDOW s1)
 eq 'effective(fleet) val' "${ev%"$FCFG_US"*}" 1000000
 eq 'effective(fleet) src' "${ev##*"$FCFG_US"}" fleet
-# a COMMENTED assignment does NOT count as set
 printf '#FLEET_MODEL=sonnet\n' > "$FCFG_FLEET_CONF"
 ev=$(fcfg_effective FLEET_MODEL s1)
 eq 'commented != set' "${ev##*"$FCFG_US"}" default
 
 # --- VALIDATION -------------------------------------------------------------
-fcfg_validate num  42        FLEET_X >/dev/null || fail 'num 42 should pass'; ok
-fcfg_validate num  0         FLEET_X >/dev/null || fail 'num 0 should pass';  ok
-fcfg_validate num  abc       FLEET_X >/dev/null && fail 'num abc should fail'; ok
-fcfg_validate num  -1        FLEET_X >/dev/null && fail 'num -1 should fail';  ok
-fcfg_validate num  ''        FLEET_X >/dev/null && fail 'num empty should fail'; ok
+fcfg_validate int  42        FLEET_X >/dev/null || fail 'int 42 should pass'; ok
+fcfg_validate int  0         FLEET_X >/dev/null || fail 'int 0 should pass';  ok
+fcfg_validate int  abc       FLEET_X >/dev/null && fail 'int abc should fail'; ok
+fcfg_validate int  -1        FLEET_X >/dev/null && fail 'int -1 should fail';  ok
+fcfg_validate num  7         FLEET_X >/dev/null || fail 'num alias should pass'; ok
+fcfg_validate no   whatever  FLEET_REPO >/dev/null && fail 'edit=no should always refuse'; ok
 fcfg_validate bool 1         FLEET_X >/dev/null || fail 'bool 1 should pass'; ok
 fcfg_validate bool 2         FLEET_X >/dev/null && fail 'bool 2 should fail'; ok
 fcfg_validate enum opus      FLEET_MODEL >/dev/null || fail 'enum opus should pass'; ok
@@ -100,6 +138,10 @@ fcfg_validate enum claude-x  FLEET_MODEL >/dev/null || fail 'enum claude-x shoul
 fcfg_validate enum gpt4      FLEET_MODEL >/dev/null && fail 'enum gpt4 should fail'; ok
 fcfg_validate enum inherit   FLEET_MODEL >/dev/null && fail 'inherit invalid for FLEET_MODEL'; ok
 fcfg_validate enum inherit   FLEET_SUBAGENT_MODEL >/dev/null || fail 'inherit valid for subagent'; ok
+fcfg_validate regex '^(a|b)$' FLEET_PROTECTED_RE >/dev/null || fail 'valid regex should pass'; ok
+fcfg_validate regex '^(a'    FLEET_PROTECTED_RE >/dev/null && fail 'invalid regex should fail'; ok
+fcfg_validate regex 'a`b'    FLEET_PROTECTED_RE >/dev/null && fail 'regex with backtick should fail'; ok
+fcfg_validate path '$HOME/x'   FLEET_NOTIFY_CMD >/dev/null || fail 'path $HOME/x should pass'; ok
 fcfg_validate str  '$HOME/x'   FLEET_NOTIFY_CMD >/dev/null || fail 'str $HOME/x should pass'; ok
 fcfg_validate str  '${HOME}/x' FLEET_NOTIFY_CMD >/dev/null || fail 'str ${HOME} param-expansion should pass'; ok
 fcfg_validate str  'a"b'       FLEET_NOTIFY_CMD >/dev/null && fail 'str with quote should fail'; ok
@@ -109,39 +151,47 @@ fcfg_validate str  'a\'        FLEET_NOTIFY_CMD >/dev/null && fail 'str trailing
 
 # --- WRITE ------------------------------------------------------------------
 NEW="$WORK/new.conf"
-st=$(fcfg_write "$NEW" FLEET_MAX_SESSIONS 3 num)
+st=$(fcfg_write "$NEW" FLEET_MAX_SESSIONS 3 int)
 eq 'write create status' "$st" created
 [ -f "$NEW" ] || fail 'write did not create the file'; ok
 v=$( . "$NEW"; printf '%s' "${FLEET_MAX_SESSIONS:-}" ); eq 'sourced after create' "$v" 3
-# update in place → backup + single line
-st=$(fcfg_write "$NEW" FLEET_MAX_SESSIONS 5 num)
+grep -qxF 'FLEET_MAX_SESSIONS=3' "$NEW" || fail 'int should write bare (no quotes)'; ok
+st=$(fcfg_write "$NEW" FLEET_MAX_SESSIONS 5 int)
 eq 'write update status' "$st" updated
 [ -f "$NEW.bak" ] || fail 'update did not back up'; ok
 n=$(grep -cE '^FLEET_MAX_SESSIONS=' "$NEW"); eq 'no duplicate line' "$n" 1
 v=$( . "$NEW"; printf '%s' "${FLEET_MAX_SESSIONS:-}" ); eq 'sourced after update' "$v" 5
 # prefix-safe: FLEET_AUTOFILL must not clobber FLEET_AUTOFILL_MAX_PER_TICK
 fcfg_write "$NEW" FLEET_AUTOFILL 1 bool >/dev/null
-fcfg_write "$NEW" FLEET_AUTOFILL_MAX_PER_TICK 2 num >/dev/null
+fcfg_write "$NEW" FLEET_AUTOFILL_MAX_PER_TICK 2 int >/dev/null
 v=$( . "$NEW"; printf '%s' "${FLEET_AUTOFILL:-}" );              eq 'prefix key A' "$v" 1
 v=$( . "$NEW"; printf '%s' "${FLEET_AUTOFILL_MAX_PER_TICK:-}" ); eq 'prefix key B' "$v" 2
 n=$(grep -cE '^FLEET_AUTOFILL=' "$NEW"); eq 'AUTOFILL single line' "$n" 1
 # string value with $-expansion + slashes survives verbatim in the file
-fcfg_write "$NEW" FLEET_NOTIFY_CMD '$HOME/bin/notify.sh' str >/dev/null
-grep -qF 'FLEET_NOTIFY_CMD="$HOME/bin/notify.sh"' "$NEW" || fail 'string write mangled the value'; ok
-# and the whole conf still sources cleanly (the invariant that matters)
+fcfg_write "$NEW" FLEET_NOTIFY_CMD '$HOME/bin/notify.sh' path >/dev/null
+grep -qF 'FLEET_NOTIFY_CMD="$HOME/bin/notify.sh"' "$NEW" || fail 'path write mangled the value'; ok
+# regex value round-trips as a quoted string and sources cleanly
+fcfg_write "$NEW" FLEET_PROTECTED_RE '^(master|main)$' regex >/dev/null
+grep -qF 'FLEET_PROTECTED_RE="^(master|main)$"' "$NEW" || fail 'regex write mangled the value'; ok
 ( set -e; . "$NEW" ) || fail 'written conf does not source cleanly'; ok
-# an empty value (the '-' clear sentinel in the modal) writes KEY="" and sources
-# back to empty — the documented "defer to default" path for enums.
+# an empty value (the '-' clear sentinel) writes KEY="" and sources back to empty
 fcfg_write "$NEW" FLEET_MODEL '' enum >/dev/null
 grep -qxF 'FLEET_MODEL=""' "$NEW" || fail 'empty enum should write KEY=""'; ok
 v=$( . "$NEW"; printf '%s' "${FLEET_MODEL-unset}" ); eq 'empty enum sources to empty' "$v" ''
+
+# --- WRITE-SCOPE toggle (the g/f layer selector) ----------------------------
+eq 'default write-scope' "$(fcfg_wscope s1)" fleet
+fcfg_wscope_toggle s1
+eq 'toggled write-scope' "$(fcfg_wscope s1)" global
+fcfg_wscope_set s1 fleet
+eq 'set write-scope back' "$(fcfg_wscope s1)" fleet
 
 # WRITE FAILURE must be reported (not a false success). A read-only dir makes the
 # tmp-write/rename fail; fcfg_write must return non-zero and leave no orphan tmp.
 # (root ignores mode bits — skip there so a root CI runner doesn't spuriously fail.)
 if [ "$(id -u)" != 0 ]; then
   RO="$WORK/ro"; mkdir -p "$RO"; chmod 500 "$RO"
-  if fcfg_write "$RO/x.conf" FLEET_MAX_SESSIONS 9 num >/dev/null 2>&1; then
+  if fcfg_write "$RO/x.conf" FLEET_MAX_SESSIONS 9 int >/dev/null 2>&1; then
     chmod 700 "$RO"; fail 'write to a read-only dir should return non-zero'
   fi
   ok
@@ -150,5 +200,5 @@ if [ "$(id -u)" != 0 ]; then
   chmod 700 "$RO"
 fi
 
-printf 'selftest PASS: %d assertions (keys · typing · defaults · layering · validation · write)\n' "$pass"
+printf 'selftest PASS: %d assertions (keys · tags · typing · defaults · layering · validation · write · write-scope)\n' "$pass"
 exit 0

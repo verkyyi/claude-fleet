@@ -1,28 +1,58 @@
 # claude-fleet configuration — copy to <install-dir>/fleet.conf and edit.
 # Sourced by the fleet scripts (plain shell; keep it assignments-only).
+#
+# TAG LINES (the "# @label=… @group=… @tier=… @scope=… @edit=… @unit=…" line
+# directly above each key) are the DECLARATIVE source of truth for the prefix+c
+# config modal (issue #89). One reviewable file drives the whole UI — there is
+# no hardcoded key list in the scripts. Each key carries three independent
+# attributes:
+#   @scope  where it may be set:  identity (view-only) · global (writes this
+#           fleet.conf, no per-fleet override) · fleet (per-fleet overlay on top
+#           of the global default, via the modal's g/f write-scope toggle).
+#   @tier   modal visibility:     common (default view) · advanced (collapsed).
+#   @edit   editor + validation:  no · bool · int · enum · path · str · regex.
+# @label is the friendly name shown in the modal; @group buckets rows into
+# sections; @unit is an optional display suffix. Adding a key here (with a tag
+# line) makes it appear in the modal automatically — nothing to keep in sync.
+
+# ── Identity ────────────────────────────────────────────────────────────────
+# These pin WHICH repo/checkout this fleet is. They are view-only in the modal
+# (@edit=no): change them by editing fleet.conf and re-provisioning, not live.
 
 # The GitHub repo whose issues are your backlog (owner/name). Required for the
 # backlog panel, issue-bound sessions, and PR/CI cells.
+# @label=GitHub repo @group=identity @tier=common @scope=identity @edit=no
 FLEET_REPO="you/your-repo"
 
 # Main checkout of that repo — issue worktrees are created as SIBLINGS of this
 # directory (your-repo-issue-123 next to your-repo).
+# @label=Base checkout path @group=identity @tier=common @scope=identity @edit=no
 FLEET_MAIN="$HOME/projects/your-repo"
 
 # Branch new work forks from (and merged-ness is measured against).
+# @label=Base branch (locked) @group=identity @tier=common @scope=identity @edit=no
 FLEET_BASE_BRANCH="main"
 
+# Directory holding the per-fleet config overlays (<session>.conf), which the
+# modal writes when its scope is set to per-fleet. Defaults to
+# $HOME/.config/claude-fleet; override only if you relocate the fleet state dir.
+# @label=Per-fleet config dir @group=identity @tier=advanced @scope=identity @edit=no
+#FLEET_CONF_DIR="$HOME/.config/claude-fleet"
+
 # Branches the worktree janitor must never touch (extended regex).
+# @label=Protected-branch pattern @group=janitor @tier=advanced @scope=fleet @edit=regex
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 
 # Context window used for the dash's ctx% column (tokens). 200000 for standard
 # plans; 1000000 if your sessions run 1M-context models.
+# @label=Context window size @group=cache @tier=advanced @scope=fleet @edit=int @unit=tokens
 FLEET_CTX_WINDOW=200000
 
 # Model every spawned fleet session launches with (passed as `claude --model`).
 # Default: opus — so a new window never silently falls back to sonnet. Set empty
 # to defer to your own `claude` default; an explicit --model in the spawn still
 # wins. Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+# @label=Worker model @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MODEL="opus"
 
 # Model the session's SUBAGENTS (Task/Agent spawns) run on, exported as
@@ -31,12 +61,14 @@ FLEET_CTX_WINDOW=200000
 # runs haiku, statusline-setup runs sonnet by default). Defaults to FLEET_MODEL
 # (so subagents follow the session onto opus). Set to "inherit" to let each
 # subagent resolve normally, or empty to leave the env var untouched.
+# @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/
 # backlog windows — don't count). Default 8; set to 0 to disable entirely.
+# @label=Max sessions — all fleets @group=caps @tier=common @scope=global @edit=int @unit=sessions
 FLEET_GLOBAL_MAX_SESSIONS=8
 
 # PER-FLEET ceiling on concurrent Claude working sessions in THIS fleet, enforced
@@ -44,6 +76,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # headroom). Default 0 = unlimited (only the global cap applies) — set it to give
 # one repo its own slice of the global budget. Best set per-fleet in
 # $FLEET_CONF_DIR/<session>.conf; a value here applies to every fleet.
+# @label=Max sessions — this fleet @group=caps @tier=common @scope=fleet @edit=int @unit=sessions
 #FLEET_MAX_SESSIONS=0
 
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
@@ -57,17 +90,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # COST: each auto-spawn launches a real Claude session that spends LLM tokens and
 # opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
 # (best per-fleet in $FLEET_CONF_DIR/<session>.conf).
+# @label=Auto-fill idle slots from backlog @group=autofill @tier=common @scope=fleet @edit=bool
 #FLEET_AUTOFILL=0
 # Max issues auto-spawned per fleet per tick (rate-limit against a thundering
 # herd; the ~60s interval is the cooldown between ticks). Default 1.
+# @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
 # Optional: require this label for an issue to be autofill-eligible (a manual
 # "ready to auto-spawn" gate). Unset = no gate (any eligible issue qualifies).
+# @label=Auto-fill: only issues labeled @group=autofill @tier=advanced @scope=fleet @edit=str
 #FLEET_AUTOFILL_READY_LABEL="ready"
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
+# @label=Issue cache lifetime @group=cache @tier=advanced @scope=fleet @edit=int @unit=sec
 #FLEET_ISSUE_TTL=180
+
+# Seconds the collector caches gh fetches (open issues + the repo-wide PR map)
+# before re-fetching. Lower = fresher backlog/PR data, more gh API chatter.
+# @label=GitHub cache lifetime @group=cache @tier=common @scope=fleet @edit=int @unit=sec
+#FLEET_GH_TTL=90
 
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
 # PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
@@ -76,9 +118,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # watching to /land. Default 15. This value gates the script's own gh-fetch
 # dedup; the DAEMON fire cadence is set in the launchd plist (StartInterval) /
 # systemd timer (OnUnitActiveSec) — keep all three in step if you change it.
+# @label=PR status refresh @group=cache @tier=common @scope=fleet @edit=int @unit=sec
 #FLEET_PR_REFRESH_INTERVAL=15
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.
+# @label=Status-bar container @group=status @tier=advanced @scope=fleet @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
 
 # Optional: the command each fleet's steward pane runs (the bottom pane of the
@@ -87,6 +131,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # handoff if one exists). Set it to drive your own steward, or to a plain shell
 # to opt out of the auto-driven one.
 # Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+# @label=Steward launch command @group=steward @tier=advanced @scope=fleet @edit=str
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
 
 # Multiple subscription accounts, with auto-failover when one hits its usage
@@ -97,12 +142,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # so NEW sessions launch on a fresh subscription. Empty/absent dir → OFF (the
 # fleet uses your single logged-in account exactly as before). See
 # docs/MULTI-ACCOUNT.md.
+# @label=Account tokens dir @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_ACCOUNTS_DIR="$HOME/.config/claude-fleet/accounts"
 # Optional: pin the account order/subset (space-separated labels); default is
 # every token file, sorted by name.
+# @label=Subscription accounts @group=accounts @tier=advanced @scope=global @edit=str
 #FLEET_ACCOUNTS="work personal spare"
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
+# @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_LIMIT_TTL=18000
 
 # Detached-attention escalation: when a session is blocked on your input for
@@ -110,7 +158,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
 # A ready-made WeCom 群机器人 notifier ships in extras/ (put the webhook URL in
 # ~/.config/claude-fleet-webhook, chmod 600):
+# @label=Notification command @group=notify @tier=common @scope=fleet @edit=path
 #FLEET_NOTIFY_CMD="$HOME/.claude/fleet/extras/wecom-webhook-notify.sh"
+# @label=Escalate unattended after @group=notify @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ESCALATE_AFTER=300
 
 # Disk-pressure guard (bin/fleet-diskguard.sh). The tmux server is shared by
@@ -124,9 +174,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #     incident (open-but-deleted fds, largest recent files, top RSS) under
 #     ~/.config/claude-fleet/diskguard/ and fires FLEET_NOTIFY_CMD when free
 #     drops below FLEET_DISK_WARN_GB. Defaults shown:
+# @label=Stop spawning below disk GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_FLOOR_GB=12       # gate refusal threshold
+# @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
+# @label=Disk cleanup target @group=disk @tier=advanced @scope=global @edit=str
 #FLEET_DISK_TARGET="$TMPDIR"  # dir whose volume to measure
+# @label=Disk-guard cooldown @group=disk @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_DISK_COOLDOWN=300      # min seconds between incident captures
 
 # --- Spawn ergonomics -------------------------------------------------------
@@ -135,4 +189,5 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # session surfaces via the dash + urgency sorter. Set to 1 to restore the old
 # behavior: interactive spawns (backlog Enter / new-session box) jump to the new
 # window. Headless spawns never steal focus regardless.
+# @label=Jump to new worker windows @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_SPAWN_FOCUS=0
