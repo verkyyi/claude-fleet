@@ -10,6 +10,7 @@ Parity with `launchd/` for Linux. One always-on service (spinner) plus the
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
 | `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill; LLM tokens) |
+| `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
 | `claude-fleet-classify.timer` | every 300s | `com.claude-fleet.classify` | optional (LLM tokens) |
 | `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
 
@@ -34,6 +35,7 @@ systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: cras
 systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast ~15s PR/CI status
 # optional:
 systemctl --user enable --now claude-fleet-dispatch.timer   # autofill — needs FLEET_AUTOFILL=1 per fleet
+systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
 systemctl --user enable --now claude-fleet-classify.timer
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 
@@ -53,7 +55,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 
 ```sh
 for u in spinner.service collect.timer diskguard.timer pr-refresh.timer \
-         dispatch.timer classify.timer worktree-autoclean.timer; do
+         dispatch.timer issue-bridge.timer classify.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done
 rm -f ~/.config/systemd/user/claude-fleet-*.{service,timer}

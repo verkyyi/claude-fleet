@@ -1,0 +1,16 @@
+# Fires claude-fleet-issue-bridge.service. Parity with the launchd plist:
+# StartInterval=15 + RunAtLoad=true → run ~5s after the user manager comes up,
+# then every 15s (the poll ingress; reads are ~free, so a fast tick is cheap).
+# For sub-second latency wire the webhook (--deliver) ingress instead — see
+# docs/ISSUE-BRIDGE.md. Install: `systemctl --user enable --now
+# claude-fleet-issue-bridge.timer`.
+[Unit]
+Description=claude-fleet issue-bridge poll timer (every 15s)
+
+[Timer]
+OnStartupSec=5
+OnUnitActiveSec=15
+AccuracySec=2s
+
+[Install]
+WantedBy=timers.target

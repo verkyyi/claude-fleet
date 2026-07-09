@@ -1,0 +1,17 @@
+# claude-fleet issue-bridge (poll ingress) — Linux systemd user unit (parity with
+# launchd com.claude-fleet.issue-bridge). Oneshot driven by the .timer.
+# Relays trusted issue comments into the bound worker as its next turn (issue
+# #132). OFF by default: only fleets whose conf sets FLEET_ISSUE_BRIDGE=1 relay.
+# A relayed comment drives a bypass-permissions worker — the author_association
+# gate is the security control. Needs gh.
+[Unit]
+Description=claude-fleet issue-bridge (relay trusted issue comments into the bound worker)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-issue-bridge.sh --poll
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/issue-bridge.systemd.log

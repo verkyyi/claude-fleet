@@ -23,6 +23,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
+| Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the steward↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees | gh |
@@ -114,6 +115,16 @@ issues as the backlog. See README.md for the architecture. Components:
      `FLEET_MAX_SESSIONS` + global), single-writer + disk-gated + rate-limited.
      OFF by default; it spends LLM tokens (one real Claude session + PR per
      spawn), so ask before installing and mention the cost.
+     issue-bridge (`com.claude-fleet.issue-bridge`, 15s) relays trusted issue
+     comments into the bound worker as its next turn (the issue-as-event-bus) —
+     install it only if a fleet sets `FLEET_ISSUE_BRIDGE=1`. A relayed comment is
+     autonomous tool-use in a bypass-permissions worker (treat as **RCE**), so it
+     is OFF by default, gated by `author_association`, and spends LLM tokens per
+     relay — ask before installing, mention the cost, and warn that un-gated relay
+     on a **public** repo is unsafe. The `--poll` ingress needs only `gh`; the
+     faster webhook ingress (`--deliver`) additionally needs `python3` + an HMAC
+     secret. Full setup + loop-safety (the `fleet-comment.sh` marker) in
+     **docs/ISSUE-BRIDGE.md**.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
@@ -121,8 +132,8 @@ issues as the backlog. See README.md for the architecture. Components:
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard) and
      `claude-fleet-pr-refresh.timer` (fast ~15s PR/CI status); the optional
-     dispatch/classify/summarize/worktree-autoclean are `.timer`s too. Run `loginctl
-     enable-linger "$USER"` so they run detached. Full recipe in
+     dispatch/issue-bridge/classify/summarize/worktree-autoclean are `.timer`s too.
+     Run `loginctl enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
 7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
@@ -163,8 +174,11 @@ you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->
 marker — leave your personal commands), and clear per-window state:
 `tmux set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by the
 pr-refresh daemon) — or just restart tmux. (The `com.claude-fleet.*` bootout
-glob already covers `com.claude-fleet.pr-refresh`; on Linux
-`systemctl --user disable --now claude-fleet-pr-refresh.timer`.)
+glob already covers `com.claude-fleet.pr-refresh` and
+`com.claude-fleet.issue-bridge`; on Linux
+`systemctl --user disable --now claude-fleet-pr-refresh.timer` +
+`claude-fleet-issue-bridge.timer`.) If you enabled the issue-bridge, also delete
+its state dir `~/.config/claude-fleet/issue-bridge/` (watermark + dedup).
 
 ## Conventions the code assumes (tell the user)
 
