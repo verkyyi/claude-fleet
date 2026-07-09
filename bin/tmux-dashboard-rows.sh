@@ -143,10 +143,12 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
                …) pcol=$TX; ptxt="$ci";;
                *) pcol=$GY; ptxt="$ci";;
              esac
-             # OPEN PR → show the number next to the glyph (e.g. #75✓, #75✓↑).
-             # #<4-digit> + 2-cell readiness glyph = 7 = the fld 7 ceiling; a
-             # longer number truncates rather than overrunning the pinned column.
-             ptxt="$pnum$ptxt";;
+             # OPEN PR → prefix the number next to the glyph (e.g. #75✓, #75✓↑).
+             # #<4-digit> + 2-cell readiness glyph = 7 = the fld 7 ceiling. All
+             # these glyphs are single display cells so ${#}==width; prefix ONLY
+             # when it fits, else keep the glyph (the land signal) glyph-only —
+             # never let fld's right-clip eat the glyph on a huge PR number.
+             [ $(( ${#pnum} + ${#ptxt} )) -le 7 ] && ptxt="$pnum$ptxt";;
         esac
         break
       fi
