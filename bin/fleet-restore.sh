@@ -114,7 +114,29 @@ snapshot() {
     { tmux list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}' 2>/dev/null
       [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
-    mv "$tmp" "$RDIR/$sess.map" 2>/dev/null || rm -f "$tmp"
+    # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
+    # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
+    # work windows yet — so a snapshot taken in that window has FEWER WIN rows
+    # than the durable map and would blow the recovery data (the claude --resume
+    # ids) away before restore can use it. Only overwrite when the live snapshot
+    # has at least as many WIN rows as the stored map; otherwise the live layout
+    # is suspect, so keep the richer prior map. A genuine net-shrink (a landed
+    # worker's window closed) self-heals the moment the fleet grows back to its
+    # prior size and a full snapshot overwrites — and a stale WIN row is harmless
+    # to restore (its worktree is gone → skipped), so erring on the side of
+    # keeping recovery data is safe.
+    local dest="$RDIR/$sess.map"
+    if [ -f "$dest" ]; then
+      local new_wins old_wins
+      new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"  2>/dev/null | wc -l | tr -d ' ')
+      old_wins=$(awk -F'\t' '$1=="WIN"' "$dest" 2>/dev/null | wc -l | tr -d ' ')
+      if [ "${new_wins:-0}" -lt "${old_wins:-0}" ]; then
+        log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} — keeping richer map (mid-restore?)"
+        rm -f "$tmp"
+        continue
+      fi
+    fi
+    mv "$tmp" "$dest" 2>/dev/null || rm -f "$tmp"
   done
   # NB: do NOT prune maps for absent sessions here. A CRASHED fleet's session is
   # gone but its map MUST survive so --if-down can rebuild it. fleet-down.sh is the
@@ -135,11 +157,21 @@ restore() {
     local sess repo main base
     IFS=$'\t' read -r _ sess repo main base < <(awk -F'\t' '$1=="FLEET"{print;exit}' "$mf")
     [ -z "$sess" ] && continue
+    # Reconcile, don't skip (issue #160): a fleet whose session `has-session`
+    # reports as up may still be HUB-ONLY — a prior restore rebuilt its hub but
+    # never reopened the work windows (e.g. fleet-up ran, restore was interrupted,
+    # or the hub was brought up by hand). Treating any live session as fully
+    # restored stranded those windows. So when the session is live we skip only
+    # the hub/steward REBUILD and still reconcile the work windows below,
+    # reopening any mapped WIN whose window isn't currently present.
+    local live=0 livewins=""
     if tmux has-session -t "$sess" 2>/dev/null; then
-      say "· $sess already up — skipping"
-      continue
+      live=1
+      livewins=$(tmux list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
+      say "▸ reconciling fleet $sess ($repo) — already up, checking for missing work windows"
+    else
+      say "▸ restoring fleet $sess ($repo)"
     fi
-    say "▸ restoring fleet $sess ($repo)"
     # steward resume id (issue #143): if snapshot captured the steward's
     # transcript, hand it to fleet-up → steward-session.sh via STEWARD_RESUME_ID
     # so the hub comes back with `claude --resume`, not a fresh session. Absent
@@ -147,28 +179,35 @@ restore() {
     local sid
     sid=$(awk -F'\t' '$1=="STEWARD"{print $3; exit}' "$mf")
     [ "$sid" = "-" ] && sid=""
-    log "restore fleet $sess repo=$repo main=$main base=$base steward=${sid:-none} dry=${dry:-0}"
-    if [ -n "$dry" ]; then
-      say "    would: fleet-up.sh $repo ${main:-<clone>} --name $sess ${base:+--base $base}"
-      [ -n "$sid" ] && say "    would: steward → claude --resume ${sid%%-*}…"
-    else
-      # rebuild hub + steward. fleet-up refuses if the session exists (it doesn't).
-      local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
-      args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
-      [ -n "$sid" ] && say "    ↻ steward → claude --resume ${sid%%-*}…"
-      env -u TMUX ${sid:+STEWARD_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
-        || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
+    log "restore fleet $sess repo=$repo main=$main base=$base steward=${sid:-none} live=$live dry=${dry:-0}"
+    if [ "$live" = 0 ]; then
+      if [ -n "$dry" ]; then
+        say "    would: fleet-up.sh $repo ${main:-<clone>} --name $sess ${base:+--base $base}"
+        [ -n "$sid" ] && say "    would: steward → claude --resume ${sid%%-*}…"
+      else
+        # rebuild hub + steward. fleet-up refuses if the session exists (it doesn't).
+        local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
+        args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
+        [ -n "$sid" ] && say "    ↻ steward → claude --resume ${sid%%-*}…"
+        env -u TMUX ${sid:+STEWARD_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
+          || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
+      fi
     fi
-    # reopen each work window, resuming its Claude session
-    local wname wpath wid wissue
+    # reopen each MISSING work window, resuming its Claude session
+    local wname wpath wid wissue reopened=0
     while IFS=$'\t' read -r _ wname wpath wid wissue; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
+      # reconcile path: a window with this name is already live — don't duplicate.
+      if [ -n "$livewins" ] && printf '%s\n' "$livewins" | grep -qxF "$wname"; then
+        continue
+      fi
       if [ ! -d "$wpath" ]; then
         say "    ⚠ $wname: worktree gone ($wpath) — skipped"
         log "skip $sess/$wname worktree-missing $wpath"
         continue
       fi
+      reopened=1
       local cmd
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
         cmd="claude --resume '$wid'; exec \$SHELL"
@@ -183,6 +222,7 @@ restore() {
           && tmux set-window-option -t "$sess:$wname" @issue "$wissue" 2>/dev/null
       fi
     done < <(awk -F'\t' '$1=="WIN"' "$mf")
+    [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
   done
   [ "$found" = 0 ] && say "no restore maps under $RDIR — nothing to restore"
   return 0
