@@ -180,6 +180,32 @@ if [ -d "$conf_dir" ]; then
   fi
 fi
 
+# --- fleet watcher (optional: zero-token edge-driven steward wake, issue #147) ---
+# OFF unless a fleet's conf sets FLEET_WATCH=1. When ON, the watch daemon reads only
+# existing caches (no tokens) but each wake makes the steward take a turn, and it can
+# only deliver through FLEET_STEWARD_ISSUE — so flag an armed-but-channel-less fleet.
+if [ -d "$conf_dir" ]; then
+  warmed=0 nochan=0
+  for cf in "$conf_dir"/*.conf; do
+    [ -f "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_WATCH[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ "$val" = 1 ] || continue
+    warmed=$((warmed+1))
+    sti=$(sed -n 's/^[[:space:]]*FLEET_STEWARD_ISSUE[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ -n "$sti" ] || nochan=$((nochan+1))
+  done
+  if [ "$warmed" -gt 0 ]; then
+    if [ "$nochan" -gt 0 ]; then
+      warn watch "$warmed fleet(s) set FLEET_WATCH=1 but $nochan lack FLEET_STEWARD_ISSUE — those wakes have no channel"
+    elif command -v gh >/dev/null 2>&1; then
+      pass watch "$warmed fleet(s) with FLEET_WATCH=1 — steward woken on edges (zero-token; wakes spend steward tokens)"
+    else
+      warn watch "$warmed fleet(s) set FLEET_WATCH=1 but gh is missing — the watcher can't post the wake comment"
+    fi
+    printf '        note: needs com.claude-fleet.watch installed + the issue-bridge (FLEET_ISSUE_BRIDGE=1) to relay wakes into @steward.\n'
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

@@ -170,6 +170,27 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Worker self-land (steward triggers) @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_SELF_LAND=0
 
+# --- Fleet watcher: zero-token event-driven steward wake (issue #147) ------------
+# OFF by default. When enabled for a fleet, the watch daemon (bin/fleet-watch.sh,
+# com.claude-fleet.watch, ~45s) sleeps on the fleet and wakes the STEWARD only on a
+# decision-worthy EDGE — a PR going green (`/land <n>?`), a worker opening a PR, a
+# worker stuck (looping), the needs-attention count rising, a prod-alert issue
+# appearing, or a free slot with eligible backlog. It replaces the steward
+# hand-running PR-green pollers.
+#
+# ZERO-TOKEN: every tick reads only the state the collector + pr-refresh already
+# maintain (@claude_state / @prci / @issue, prmap, issues_<slug> + labels_<slug>,
+# session counts) — no LLM, no per-tick gh reads. It is edge-triggered + deduped
+# (wakes on transitions, not levels; first run seeds silently, no backfill flood).
+#
+# COST: the watcher itself spends no tokens, but each wake makes the STEWARD take an
+# LLM turn — so, like the bridge/dispatcher, it is opt-in per fleet. DELIVERY is the
+# steward control issue: the watcher posts the wake to FLEET_STEWARD_ISSUE and the
+# issue-bridge relays it into the @steward pane. So it REQUIRES FLEET_STEWARD_ISSUE
+# set and, in practice, FLEET_ISSUE_BRIDGE=1. See docs/WATCH.md.
+# @label=Watch fleet, wake steward on edges @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_WATCH=0
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 # GLOBAL: read by the preview tool from the global env — a per-fleet override

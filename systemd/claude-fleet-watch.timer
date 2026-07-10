@@ -1,0 +1,15 @@
+# Fires claude-fleet-watch.service. Parity with the launchd plist:
+# StartInterval=45 + RunAtLoad=true → run ~5s after the user manager comes up, then
+# every 45s. The watcher is OFF until a fleet opts in with FLEET_WATCH=1, so the
+# timer is safe to enable globally. Install: `systemctl --user enable --now
+# claude-fleet-watch.timer`.
+[Unit]
+Description=claude-fleet watcher timer (every 45s)
+
+[Timer]
+OnStartupSec=5
+OnUnitActiveSec=45
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

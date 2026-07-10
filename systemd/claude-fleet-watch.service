@@ -1,0 +1,17 @@
+# claude-fleet watcher — Linux systemd user unit (parity with launchd
+# com.claude-fleet.watch). Oneshot driven by claude-fleet-watch.timer. Zero-token
+# event-driven steward wake: reads the state the collector + pr-refresh already
+# maintain and pings the steward through the #146 control-issue channel ONLY on a
+# decision-worthy edge (PR green, worker stuck, needs-attention rise, …). OFF until
+# a fleet sets FLEET_WATCH=1. See issue #147 / docs/WATCH.md.
+[Unit]
+Description=claude-fleet watcher (zero-token event-driven steward wake, ~45s)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-watch.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/watch.systemd.log
