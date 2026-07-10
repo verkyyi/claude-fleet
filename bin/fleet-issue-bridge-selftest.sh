@@ -102,6 +102,10 @@ case "\$1" in
     elif [ -n "\$FAKE_STEWARD_COLD" ]; then printf '1\ts1\t%s\t\t\n' '%9'
     elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf '1\ts1\t%s\tworking\t%s\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
     else printf '1\ts1\t%s\tdone\t0\n' '%9'; fi ;;
+  capture-pane)  # emulate the Claude TUI: the LAST \`❯\` line is the live input
+                 # row. FAKE_INPUT_TEXT non-empty ⇒ a half-typed, un-submitted
+                 # line (idle-gate must DEFER, issue #191); empty ⇒ empty input.
+    printf 'a past user turn\n❯ some earlier prompt\n❯ %s\n  ████░░ 50%% status\n' "\$FAKE_INPUT_TEXT" ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -150,6 +154,7 @@ runbridge() {
   FAKE_STEWARD_COLD="${FAKE_STEWARD_COLD:-}" \
   FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
+  FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -190,6 +195,35 @@ runbridge --poll || fail "second poll run exited non-zero"
 [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && fail "second poll must not re-inject (dedup)"
 
 printf 'selftest: poll leg PASS (relay/marker/assoc/idle-gate/dedup)\n' >&2
+
+# ============ half-typed input idle-gate leg (issue #191) ======================
+# A human typing an UN-SUBMITTED line into an IDLE worker does NOT flip
+# @claude_state, so the input-content check must DEFER the relay (preserve the
+# partial) rather than prepend+submit onto it — then deliver once the line clears.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T02:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+cat > "$CANNED" <<JSON
+[
+ {"id":300,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T02:00:01Z","body":"deliver me when the line is clear"}
+]
+JSON
+# (a) idle worker + half-typed line → DEFER: no inject, not seen, watermark held.
+: > "$INJECT"
+FAKE_INPUT_TEXT='git lo' runbridge --poll || fail "typing-gate poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
+  && fail "typing-gate: a relay must NOT inject onto a half-typed input line"
+grep -qxF 300 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  && fail "typing-gate: c300 must NOT be marked seen while deferred (retry next tick)"
+[ "$(cat "$WORK/state/bridge_fake-repo.since")" = '2026-07-09T02:00:00Z' ] \
+  || fail "typing-gate: watermark must be held while the relay is deferred"
+# (b) line cleared (empty input) → the deferred relay now delivers, marked seen.
+: > "$INJECT"
+runbridge --poll || fail "typing-gate cleared poll exited non-zero"
+grep -qF 'deliver me when the line is clear' "$INJECT" \
+  || fail "typing-gate: once the input is empty the deferred relay must deliver"
+grep -qxF 300 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  || fail "typing-gate: the delivered comment must be marked seen"
+printf 'selftest: input-content idle-gate leg PASS (defer half-typed, deliver when clear)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then
@@ -311,6 +345,19 @@ FAKE_STEWARD_WORKING_TS=0 FLEET_STEWARD_ISSUE=20 runbridge --poll \
 [ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
   || fail "steward-stale: a stale 'working' must be escaped and relayed (channel must not wedge)"
 
+# STEWARD half-typed input (issue #191): the operator types into the @steward pane
+# too, and a keystroke doesn't flip its state — so an idle steward with a non-empty
+# input row must DEFER (no inject, c200 not marked seen), mirroring the worker gate.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_INPUT_TEXT='half typed' FLEET_STEWARD_ISSUE=20 runbridge --poll \
+  || fail "steward-typing poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'send-keys -t %9 Enter' "$INJECT")" != 0 ] \
+  && fail "steward-typing: a relay must NOT inject onto the steward's half-typed line"
+grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  && fail "steward-typing: c200 must NOT be marked seen while deferred (retry next tick)"
+
 # WITHOUT FLEET_STEWARD_ISSUE, the same comment on #20 has no worker window and
 # no steward route → it must be dropped (gone), never injected anywhere.
 rm -f "$WORK/state/bridge_fake-repo.seen"
@@ -357,5 +404,5 @@ printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=99\n' > "$RES_CONF/norepo.conf
 ) || fail "steward-issue resolver mis-attributed a repo-less conf across fleets"
 printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no primary)\n' >&2
 
-printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/no-config) + resolver-no-leak verified\n'
+printf 'selftest PASS: relay core + idle-gate + input-content-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak verified\n'
 exit 0
