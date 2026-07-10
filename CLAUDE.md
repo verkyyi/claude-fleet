@@ -47,7 +47,13 @@ issues as the backlog. See README.md for the architecture. Components:
    `conf/`, `shell/`, `fleet.conf.example` there; `mkdir -p ~/.claude/fleet/logs`;
    `chmod +x ~/.claude/fleet/bin/*.sh`. If the user wants a different dir,
    also rewrite the `~/.claude/fleet` paths inside `conf/tmux-attention.conf`
-   and `hooks/settings-hooks.json` to match.
+   and `hooks/settings-hooks.json` to match. Also copy the steward's charter
+   **one level up** — `cp steward.md ~/.claude/steward.md` — this is the
+   first-mate standing-orders file `bin/steward-session.sh` reads when it spawns
+   or respawns a fleet's `plan` hub. It's a personal rail (flat in `~/.claude/`,
+   not under the checkout), so a fresh charter that lands on master reaches the
+   live file via `/fleet-sync-install`; if you keep local edits in it, sync will
+   refuse to overwrite and tell you.
 
 3. **Write `~/.claude/fleet/fleet.conf`.** Ask the user (or infer from their
    current repo) the values in `fleet.conf.example`: `FLEET_REPO`
@@ -195,7 +201,8 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
 `summarize-hook.sh` entries on `Stop`/`SessionStart`, plus the
 `steward-readopt-hook.sh` entry on `SessionStart`) from
-`~/.claude/settings.json`, delete `~/.claude/fleet/`, remove any fleet commands
+`~/.claude/settings.json`, delete `~/.claude/fleet/` and the steward charter
+`~/.claude/steward.md`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands), and clear per-window state:
 `tmux set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by the
