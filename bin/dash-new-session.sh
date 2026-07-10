@@ -64,4 +64,7 @@ tmp="$ISSUES.opt.$$"
 [ -e "$ISSUES.ts" ] && echo 0 > "$ISSUES.ts"
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
-exec bash "$BIN/dash-issue-session.sh" "$num"
+# Pass the title as --title so the window is named after the WORK directly, rather
+# than depending on the optimistic cache row above surviving the background
+# collector refetch we just kicked (issue #216).
+exec bash "$BIN/dash-issue-session.sh" "$num" --title "$title"

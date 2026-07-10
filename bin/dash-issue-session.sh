@@ -1,9 +1,12 @@
 #!/bin/bash
-# dash-issue-session.sh <issue-number> [<target-session>] — spawn a Claude
-# session to work a GitHub issue: a git worktree issue-<N> off the base branch +
-# a tmux window running `claude` seeded to read, claim, and implement the issue.
-# The window is NAMED after the issue title (falling back to issue-<N>) and bound
-# to the issue via the @issue window option (both shown in the dash and backlog).
+# dash-issue-session.sh <issue-number> [<target-session>] [--title <t>] — spawn a
+# Claude session to work a GitHub issue: a git worktree issue-<N> off the base
+# branch + a tmux window running `claude` seeded to read, claim, and implement the
+# issue. The window is NAMED after the issue CONTENT (a short kebab of its title,
+# falling back to issue-<N>) and bound to the issue via the @issue window option
+# (both shown in the dash and backlog). Pass --title when you already know the
+# title (a create-then-spawn caller) so the window is named descriptively without
+# a cache/network round-trip — see the --title note below (issue #216).
 #
 # With no <target-session> the window is created in the CALLER's fleet (the
 # interactive dash/backlog path). Pass <target-session> to spawn into a specific
@@ -11,16 +14,29 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-# Parse: <issue-number> [<target-session>] [--self-land] [--scout]. The two
-# positionals keep their historic order (num, target-session); --self-land may
-# appear anywhere and switches the seed prompt to the worker-owned self-land
+# Parse: <issue-number> [<target-session>] [--title <t>] [--self-land] [--scout].
+# The two positionals keep their historic order (num, target-session); --self-land
+# may appear anywhere and switches the seed prompt to the worker-owned self-land
 # lifecycle (issue #138); --scout spawns a READ-ONLY investigation worker that
-# reports and never branches/ships/lands (issue #148).
-num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; _pos=0
+# reports and never branches/ships/lands (issue #148). --title <t> is the
+# AUTHORITATIVE window name (issue #216): a create-then-spawn caller
+# (/fleet-new-issue, the prefix+n quick-dispatch, the dash new-session box) passes
+# the title it JUST wrote so the window is named after the WORK — not the bare
+# issue-<N> slug it otherwise falls back to when the brand-new issue isn't in the
+# collector cache yet and a post-create `gh issue view` lags or fails.
+num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; WIN_TITLE=""; _pos=0; _want=""
 for _a in "$@"; do
+  # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
+  # expectation across one loop turn so the value isn't mistaken for a positional.
+  if [ -n "$_want" ]; then
+    case "$_want" in title) WIN_TITLE="$_a" ;; esac
+    _want=""; continue
+  fi
   case "$_a" in
     --self-land) SELF_LAND_FLAG=1 ;;
     --scout) SCOUT_FLAG=1 ;;
+    --title) _want=title ;;      # value is the NEXT arg
+    --title=*) WIN_TITLE="${_a#--title=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --self-lan). Do NOT let it
     # fall through to the positional slots — treating "--self-lan" as the issue
     # number strips to "" and silently spawns a plain steward-lands worker, so a
@@ -101,15 +117,21 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 
 wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
 
-# Name the tmux window after the issue CONTENT, not a bare "issue-<N>". Resolve
-# the title from THIS fleet's cached issues (no network — the dash writes the
-# optimistic row before spawning; the collector fills it for backlog picks),
-# and fall back to `gh issue view` only on a cache miss. The git branch/worktree
-# stay "issue-<N>" (the PR map keys off the branch) — only the display name
-# changes. Empty/non-latin titles fall back to the slug.
-ISSUES=$(fleet_cache issues "$SESS")
-title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
-[ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+# Name the tmux window after the issue CONTENT, not a bare "issue-<N>". Resolution
+# order (issue #216): an explicit --title wins — the create-then-spawn caller just
+# wrote the issue and KNOWS its title, so it needs no network and can't miss the
+# way a brand-new issue does in the not-yet-refreshed collector cache. Else fall
+# back to THIS fleet's cached issues (a backlog pick is already collected; the
+# dash writes an optimistic row before spawning), then to a `gh issue view`
+# round-trip (which can lag/fail right after create). The git branch/worktree stay
+# "issue-<N>" (the PR map keys off the branch) — only the display name changes.
+# Empty/non-latin titles fall back to the slug.
+title="$WIN_TITLE"
+if [ -z "$title" ]; then
+  ISSUES=$(fleet_cache issues "$SESS")
+  title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
+  [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+fi
 wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"

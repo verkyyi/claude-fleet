@@ -89,16 +89,20 @@ run_new() {
 # title + empty body; spawn succeeds (SPAWN_RC unset → 0).
 run_new $'Add a widget\n\n' confirm --spawn
 grep -q create "$GH_LOG"          || fail "A gh issue create was not called" "$(cat "$WORK/err")"
-grep -qx 205 "$SPAWN_LOG"         || fail "A spawn not invoked for the new issue #205" "$(cat "$SPAWN_LOG")"
+grep -Eq '^205( |$)' "$SPAWN_LOG" || fail "A spawn not invoked for the new issue #205" "$(cat "$SPAWN_LOG")"
+# The spawn must carry the descriptive title so the window is named after the WORK,
+# not the bare issue-<N> slug (issue #216). The stub logs $* → the quoted title
+# flattens to space-separated words after --title.
+grep -q -- '--title Add a widget' "$SPAWN_LOG" || fail "A spawn should pass the descriptive --title (issue #216)" "$(cat "$SPAWN_LOG")"
 grep -qi 'spawned' "$DISPLAY_LOG" || fail "A success should display 'filed + spawned'" "$(cat "$DISPLAY_LOG")"
 grep -qi 'New issue + worker' "$WORK/out" || fail "A --spawn popup verb should read 'New issue + worker'" "$(cat "$WORK/out")"
-ok "A --spawn files the issue AND spawns the bound worker"
+ok "A --spawn files the issue AND spawns the bound worker (with a descriptive --title)"
 
 # ============================ B: cap refusal =================================
 # spawn exits non-zero (cap reached). Feed a 3rd char for the 'press any key' read.
 SPAWN_RC=1 run_new $'Add a widget\nsome body\nx' confirm --spawn
 grep -q create "$GH_LOG"           || fail "B the issue must still be FILED on a cap refusal" "$(cat "$WORK/err")"
-grep -qx 205 "$SPAWN_LOG"          || fail "B spawn should have been attempted" "$(cat "$SPAWN_LOG")"
+grep -Eq '^205( |$)' "$SPAWN_LOG"  || fail "B spawn should have been attempted" "$(cat "$SPAWN_LOG")"
 grep -qi 'NOT spawned' "$WORK/out" || fail "B cap refusal must announce filed-without-spawning" "$(cat "$WORK/out")"
 grep -qi 'backlog' "$WORK/out"     || fail "B cap refusal should say the issue sits in the backlog" "$(cat "$WORK/out")"
 ok "B cap refusal files-without-spawning (issue not lost)"

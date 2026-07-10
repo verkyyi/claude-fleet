@@ -72,12 +72,14 @@ if url=$(gh issue create --repo "$REPO" --title "$title" --body "$body" 2>/dev/n
   if [ "$spawn" = 1 ] && [ -n "$num" ]; then
     # Quick-dispatch (prefix+n): spawn the bound worker now. dash-issue-session.sh
     # is the shared spawn choke point — it enforces the global + per-fleet session
-    # caps and the already-spawned dedup, and reads the title we just wrote into
-    # the issues cache to name the window. It exits non-zero on a cap refusal
-    # (already surfaced via its own display-message). If it refuses, the issue is
-    # STILL filed — announce filed-without-spawning in the popup so the item is
-    # visibly not lost (acceptance (c)); it sits in the backlog for a later spawn.
-    if bash "$BIN/dash-issue-session.sh" "$num"; then
+    # caps and the already-spawned dedup. Pass the title as --title so the window
+    # is named after the WORK without depending on the just-written optimistic cache
+    # row surviving the background collector refetch (issue #216). It exits non-zero
+    # on a cap refusal (already surfaced via its own display-message). If it
+    # refuses, the issue is STILL filed — announce filed-without-spawning in the
+    # popup so the item is visibly not lost (acceptance (c)); it sits in the backlog
+    # for a later spawn.
+    if bash "$BIN/dash-issue-session.sh" "$num" --title "$title"; then
       tmux display-message "filed + spawned #$num in $REPO ✓"
     else
       printf '\n  \033[33mfiled #%s ✓ — but NOT spawned\033[0m (session cap reached).\n  It is in the backlog; enter on its row spawns it later.\n  press any key ' "$num"; read -rsn1 _
