@@ -134,6 +134,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # landed issue is left alone (resume via #130 is a follow-up).
 # @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
 #FLEET_ISSUE_BRIDGE_REVIVE=0
+# Max CONSECUTIVE typing-defers before a relay is delivered anyway (issue #195). The
+# bridge DEFERS a relay while the target's ❯ input row holds un-submitted text (so it
+# never prepends onto a human's half-typed line, issue #191). That defer is otherwise
+# UNBOUNDED: a row that reads non-empty persistently (a stuck render, a future TUI
+# placeholder, a capture-pane quirk) would wedge the channel forever — for the
+# @steward control channel that silently drops operator messages AND watcher wakes.
+# After this many consecutive defers of the SAME comment, the bridge delivers anyway
+# and logs a WARNING; the counter resets the moment the input clears, so a real
+# partial is never clobbered. TRADE-OFF: keep it GENEROUS enough that a human pausing
+# mid-type for a few minutes is respected, small enough that a bad read can't wedge.
+# Default 20 ≈ 5 min at the 15s poll. Per-comment, persisted in the bridge state dir.
+# @label=Bridge: max typing-defers @group=bridge @tier=advanced @scope=fleet @edit=int @unit=ticks
+#FLEET_BRIDGE_MAX_TYPING_DEFERS=20
 
 # --- Steward control issue: relay its comments INTO the steward (issue #146) -----
 # The steward lives in the 'plan' hub (a pane with NO @issue), so the issue-bridge
