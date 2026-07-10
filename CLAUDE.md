@@ -191,8 +191,8 @@ its state dir `~/.config/claude-fleet/issue-bridge/` (watermark + dedup).
   `gh pr list`; multi-repo fleets need per-window repo detection (not built).
 - Windows named `dash`, `plan`, `backlog` are treated as panels, not Claude
   sessions (excluded from the dash list).
-- The lowest-indexed window is pinned by the urgency sorter — keep your
-  hub/dashboard there. Window numbers are NOT stable; navigate by name or
-  position (slot 1 = most urgent).
+- The hub/dashboard is placed at the lowest index (slot 1) once, at spawn.
+  Windows are no longer re-sorted, but numbers still shift when a window closes
+  (`renumber-windows on`) — navigate by name, not a memorized index.
 - Claude Code re-reads settings.json hooks per turn, so running sessions pick
   up the hooks without restart.

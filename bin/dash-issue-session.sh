@@ -170,8 +170,8 @@ fi
 # window WITHOUT making it current — new-window makes the new window CURRENT by
 # default, which yanks a user attached to $SESS over to it even though we skip
 # select-window below, so -d is what actually keeps the active window put (for
-# BOTH headless and interactive spawns). The new window surfaces via the dash +
-# urgency sorter instead. Opt back into jump-to-it with FLEET_SPAWN_FOCUS=1
+# BOTH headless and interactive spawns). The new window surfaces via the dash
+# instead. Opt back into jump-to-it with FLEET_SPAWN_FOCUS=1
 # (interactive spawns only; a headless spawn must never steal focus).
 detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
 # ${detach[@]+"${detach[@]}"}: expand to the flag(s) when set, to NOTHING when the
