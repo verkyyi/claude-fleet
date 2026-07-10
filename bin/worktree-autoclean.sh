@@ -70,8 +70,15 @@ process() {
       local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
       [ "$st" = "OPEN" ] && ex="  + close #$inum" || ex="  (#$inum already ${st:-?})"
     fi
+    local dr; dr="$(fleet_reap_worktree_procs "$dir" dry)"
+    case "$dr" in would\ reap:*) ex="$ex  [$dr]" ;; esac
     echo "PRUNE $branch  ($merged)  -> ${dir##*/}$ex"; removed=$((removed+1)); return
   fi
+  # Reap any detached process still anchored to this worktree BEFORE removing it —
+  # otherwise a since-fixed hang can outlive the dir and peg a core against the
+  # shared tmux server (issue #151). Nothing should outlive its worktree.
+  local rp; rp="$(fleet_reap_worktree_procs "$dir")"
+  case "$rp" in no\ orphan\ procs) ;; *) log "REAP  $branch — $rp" ;; esac
   if git -C "$REPO_ROOT" worktree remove "$dir" 2>/dev/null; then
     git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
     log "PRUNED $branch ($merged) — removed ${dir##*/} + deleted branch"
