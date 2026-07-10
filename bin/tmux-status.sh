@@ -1,8 +1,9 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ N claude │ hostname
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ N claude │ hostname
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
-#               MEM green <60%, yellow 60-85%, red >85%.
+#               MEM green <60%, yellow 60-85%, red >85%;
+#               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
 # Optional: set FLEET_STATUS_CONTAINER in fleet.conf to show a docker
 # container's ●/○ running indicator.
 set -uo pipefail
@@ -79,6 +80,32 @@ else
     mem_out="${DIM}–"
 fi
 
+# --- Disk free (passive at-a-glance gauge; the diskguard daemon still owns the
+# reactive gate/notify/forensics). Measure the SAME volume diskguard guards
+# ($FLEET_DISK_TARGET, via the same portable `df -Pk` → int GB approach) so the
+# footer number and the spawn gate agree, and tie the colors to the SAME floor
+# knob (don't invent a new threshold). Display-only, no side effects — df is
+# cheap + local, never a diskguard mutation path. Suppress with
+# FLEET_STATUS_DISK=0 (default on). ---
+dsk_seg=""
+if [ "${FLEET_STATUS_DISK:-1}" != "0" ]; then
+    disk_target="${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}"
+    disk_floor="${FLEET_DISK_FLOOR_GB:-12}"
+    dsk_free=$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }')
+    if [ -n "$dsk_free" ]; then
+        if [ "$dsk_free" -le "$disk_floor" ]; then
+            dsk_out="${RED}${dsk_free}G"
+        elif [ "$dsk_free" -le "$(( disk_floor * 3 / 2 ))" ]; then
+            dsk_out="${YELLOW}${dsk_free}G"
+        else
+            dsk_out="${GREEN}${dsk_free}G"
+        fi
+    else
+        dsk_out="${DIM}–"
+    fi
+    dsk_seg="${DIM}│ ${BLUE}DSK ${dsk_out} "
+fi
+
 # --- Claude token consumption (5h/7d proxy, written by the dash collector) ---
 INDIGO="#[fg=#bb9af7]"
 usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/usage" 2>/dev/null)
@@ -120,5 +147,5 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
-    "$container" "$cpu_out" "$mem_out" "$acct_seg" "$usage_seg" "$rl_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$acct_seg" "$usage_seg" "$rl_seg"
