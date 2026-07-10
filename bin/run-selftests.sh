@@ -11,6 +11,12 @@
 # (a test that needs an absent tool — e.g. jq — SKIPs cleanly with exit 0). The
 # runner is therefore marker-agnostic: it trusts the exit code, not the wording.
 #
+# The server-spawning tests isolate onto a private `-S` socket and reap it via an
+# EXIT+signal trap, so a normal (even failing) run leaves no litter. A run KILLED
+# outright (SIGKILL/OOM) can still orphan a socket or server — `fleet-selftest-reap.sh`
+# is the backstop that sweeps that debris (dead sockets, aged `*selftest*` servers
+# + temp dirs) without ever touching the shared `default` server (issue #152).
+#
 # Each test's own output streams through (so CI logs show what a failure printed);
 # the runner adds only the PASS/FAIL line and a final summary. Runnable from
 # anywhere — it resolves its own dir (the repo's bin/).

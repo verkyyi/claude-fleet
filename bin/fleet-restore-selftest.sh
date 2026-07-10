@@ -71,6 +71,11 @@ export PATH="$WORK/bin:$PATH"
 
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
+# A bare EXIT trap does NOT fire when bash is killed by a signal — turn INT/TERM/HUP
+# (Ctrl-C, a CI timeout) into a normal exit so cleanup still reaps the isolated
+# server instead of leaking it to the machine (issue #152). fleet-selftest-reap.sh
+# is the backstop for the runs that a SIGKILL still slips past.
+trap 'exit 130' INT TERM HUP
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # slug: mirror the resolver's re.sub(r"[/._]", "-", path).
