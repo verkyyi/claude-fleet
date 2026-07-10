@@ -41,10 +41,11 @@ demo repo data.</sub>
   (roadmap | unplanned panes). `Enter` on an issue creates a worktree
   `issue-<N>` off your base branch and starts `claude` seeded to read, claim,
   and implement it. Issues being worked show `▶ <window>`. Manage issues
-  without leaving tmux: a live **preview pane** shows the highlighted issue's
-  body, labels, milestone, assignees, and recent comments (`Ctrl-P` toggles
-  it); `Ctrl-X` closes (triages) an issue after a y/n confirm; `Ctrl-O` opens
-  it on the web.
+  without leaving tmux: the modal is **list-only by default**, and `Space` (or
+  `Ctrl-P`) toggles a **preview pane** showing the highlighted issue's body,
+  labels, milestone, assignees, and recent comments — word-wrapped to the pane
+  so nothing splits mid-word. `/` turns on type-to-filter; `Ctrl-X` closes
+  (triages) an issue after a y/n confirm; `Ctrl-O` opens it on the web.
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
   git status per worktree, the repo's PR/CI map, open issues, per-session
@@ -62,9 +63,9 @@ Claude Code hooks (PreToolUse/PostToolUse/Stop/Notification)
       │  instant, semantic-blind
       ▼
 @claude_state on the tmux window ──► spinner daemon (0.12s frames, single
-      ▲                               writer, change-detected) ──► window list
-      │  slow, semantic                                            colors/glyphs
-LLM classifier (haiku, ~5min, change-gated)                        + urgency sort
+      ▲                               writer, change-detected) ──► dash glyphs
+      │  slow, semantic                                            + needs tally
+LLM classifier (haiku, ~5min, change-gated)
       
 collector daemon (60s) ──► cache files ──► fzf dashboard / backlog panels
   git · gh PRs+issues ·                     (read-only producers, render instantly)
@@ -224,6 +225,13 @@ refuses from the wrong one. Live so far:
   bad PR ejects instead of blocking the rest, then base-pulls once and cleans up
   per merged PR. A client-side stand-in for a merge queue under `strict:true`
   branch protection.
+- **`/fleet-scout`** (steward) — delegate a *read-only investigation* instead of
+  researching inline: files a `scout`-labeled issue (durable question + report
+  sink) and spawns a **read-only** worker that investigates, posts its findings
+  as a comment, and self-cleans — **no branch, no PR**. A good finding converts
+  cleanly into a ship issue. For a throwaway lookup, skip the command and fire an
+  ephemeral `Explore`/`Agent` sub-agent inline (no issue, no window). Two tiers,
+  by weight — see [docs/SCOUT.md](docs/SCOUT.md).
 - **`/fleet-sync-install`** (steward, tooling-fleet only) — after claude-fleet's
   own PRs land, re-applies them to the live install (`~/.claude/fleet`): pull +
   reload changed daemons + re-merge the hooks delta + install changed commands.
@@ -255,9 +263,9 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   `gh` call. Multi-repo fleets would need per-window repo detection.
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.
-- Window **numbers are not stable** (the urgency sorter re-slots them). The
-  lowest-indexed window is pinned — keep your dashboard there. Navigate by
-  name/position; slot 1 is always the most urgent.
+- The dashboard/hub sits at the lowest index (slot 1), placed once at spawn.
+  Window **numbers still shift** when a window closes (`renumber-windows on`),
+  so navigate by name — not a memorized index.
 - The `Notification` hook (red/bell) can lag a question by up to ~1 min
   (Claude Code's idle threshold); the classifier corrects stragglers.
 - The token-usage figures are a **local proxy** — the official rate-limit %

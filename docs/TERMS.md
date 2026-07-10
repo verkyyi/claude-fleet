@@ -83,7 +83,8 @@ they repaint instantly:
   has merged.
 - **Attention signal** — the collector/hooks tag a window when its Claude session
   needs you: spinner while working, `✗` for failing CI, `!` when blocked on your
-  answer. `bin/tmux-sort-windows.sh` slots the most urgent window to position 1.
+  answer. These surface on the fzf dashboard (which sorts its own rows); tmux
+  windows themselves are not reordered.
 - **Escalation** (detached notify) — if a session is blocked on your input past a
   threshold **and no tmux client is attached** (you're away), the collector runs
   `FLEET_NOTIFY_CMD` with the message. So you're pinged only when you're not

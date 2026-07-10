@@ -124,8 +124,7 @@ fi
 
 # --- PR/CI attention signal ---
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
-# @pfg (color). window-status-format renders them after the window name and
-# tmux-sort-windows.sh treats ✗ like 'needs'. Single writer of @prci/@pfg.
+# @pfg (color) — surfaced on the dash's PR column. Single writer of @prci/@pfg.
 US=$'\x1f'
 tmux list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
 while IFS="$US" read -r sess win path cur; do

@@ -10,8 +10,6 @@ set -u  # POSIX sh: pipefail is bash-only (dash has none)
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0
 
-BIN=$(cd "$(dirname "$0")" && pwd)
-
 case "${1:-}" in
   needs)
     # The Notification hook fires this path unconditionally, but Claude Code emits
@@ -62,9 +60,5 @@ if [ "$sem" != "leave" ]; then
 fi
 
 [ "${2:-}" = "bell" ] && printf '\a' > /dev/tty 2>/dev/null
-
-# Re-slot windows by urgency (lowest-index window pinned) — backgrounded, never blocks the turn.
-sess=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
-[ -n "$sess" ] && ( "$BIN/tmux-sort-windows.sh" "$sess" >/dev/null 2>&1 & )
 
 exit 0
