@@ -61,14 +61,21 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # read each fleet's OWN window id and seed the cache under BOTH the correct
 # <sess>_<id> key AND the legacy bare id — the pre-fix reader would grab the bare
 # one and cross the streams.)
-tmux new-session -d -s fleetA -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
-tmux new-session -d -s fleetB -x 200 -y 50 2>/dev/null || fail "could not start fleetB session"
+# The session's own first window runs a long-lived `sleep` too: a default-shell
+# window exits instantly in a headless CI and, if it's the session's only window,
+# takes the whole session down before mk_worker can add to it (killed at exit).
+tmux new-session -d -s fleetA -x 200 -y 50 'sleep 300' 2>/dev/null || fail "could not start isolated tmux server"
+tmux new-session -d -s fleetB -x 200 -y 50 'sleep 300' 2>/dev/null || fail "could not start fleetB session"
 
 # Worker windows (name them like real workers — NOT dash/plan/backlog panels), each
-# bound to an @issue and given a Claude state so the row renders.
+# bound to an @issue and given a Claude state so the row renders. The window runs a
+# long-lived `sleep` so it SURVIVES until the render: a new-window with no command
+# runs the default shell, which exits instantly in a headless CI (no tty) and tmux
+# then destroys the window — locally the shell lingers, but CI would see zero rows.
+# The whole server is killed at exit, so the sleep never outlives the test.
 mk_worker() { # <session> <issue> → prints the numeric window id
   local s="$1" iss="$2" wid
-  wid=$(tmux new-window -d -P -F '#{window_id}' -t "$s:" -n "issue-$iss")
+  wid=$(tmux new-window -d -P -F '#{window_id}' -t "$s:" -n "issue-$iss" 'sleep 300')
   tmux set-window-option -t "$wid" @claude_state working 2>/dev/null
   tmux set-window-option -t "$wid" @issue "$iss" 2>/dev/null
   printf '%s' "${wid//[^0-9]/}"
