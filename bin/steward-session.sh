@@ -64,6 +64,15 @@ fi
 # An explicit STEWARD_CMD in the environment (fleet-up.sh's internal contract)
 # still overrides everything; otherwise run LAUNCH and keep the pane as a shell.
 STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
+# Durable steward seat marker (issue #202): export FLEET_SEAT=steward into the
+# pane's command so the steward's claude AND every Bash-tool shell it spawns
+# inherit it — independent of whether tmux re-exports $TMUX_PANE per shell (that
+# per-shell export proved unreliable, intermittently refusing the steward's own
+# /fleet-land kill-window under the #185 strict-$TMUX_PANE guard). The tmux()
+# destroy-guard in shell/cw.zsh treats this env as the PRIMARY steward signal.
+# A worker spawn (dash-issue-session.sh) never sets it, so #158 is untouched.
+# Prepended to the FINAL command so it applies to fresh, resume, and override.
+STEWARD_CMD="export FLEET_SEAT=steward; $STEWARD_CMD"
 
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to
