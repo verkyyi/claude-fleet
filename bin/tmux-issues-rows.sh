@@ -40,12 +40,21 @@ while IFS=$'\t' read -r ms num asg title; do
   r=$(mrank "$ms")
   case "$MODE" in roadmap) [ "$r" -ge 99 ] && continue;; unplanned) [ "$r" -lt 99 ] && continue;; esac
   n=${num#\#}; awin=$(active_win "$n")
+  # Fixed-width columns so the TITLE starts at the same screen column on every
+  # row: num padded to 5, then an owner column of a 2-col marker + a 14-col name
+  # (both active ▶window and idle assignee use the SAME 16-col owner width).
+  # Precision (%-14.14s) pads *and* truncates the name; the marker sits outside
+  # it so the multibyte ▶ doesn't skew the byte-counted width.
   if [ -n "$awin" ]; then
-    row=$(printf '%s%-5s%s %s▶ %s%s %s%s%s' \
-      "$(c "$GN")" "$num" "$R" "$(c "$CY")" "$(printf '%.14s' "$awin")" "$R" "$(c "$GY")" "$title" "$R")
+    row=$(printf '%s%-5s%s %s▶ %-14.14s%s %s%s%s' \
+      "$(c "$GN")" "$num" "$R" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
   else
-    row=$(printf '%s%-5s%s %s%-10s%s %s%s%s' \
-      "$(c "$GN")" "$num" "$R" "$(c "$TX")" "${asg:-·}" "$R" "$(c "$GY")" "$title" "$R")
+    # assignees are ASCII (14 bytes = 14 cols); the unassigned '·' is 1 col but 2
+    # bytes (and the collector already writes it into this field), so widen its
+    # byte budget by 1 to keep the 14-col visible width.
+    asg_disp="${asg:-·}"; pad=14; [ "$asg_disp" = "·" ] && pad=15
+    row=$(printf "%s%-5s%s %s  %-${pad}.${pad}s%s %s%s%s" \
+      "$(c "$GN")" "$num" "$R" "$(c "$TX")" "$asg_disp" "$R" "$(c "$GY")" "$title" "$R")
   fi
   buf+="$r	$ms	$n	$row"$'\n'
 done < "$SRC"
