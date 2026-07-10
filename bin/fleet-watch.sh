@@ -352,8 +352,15 @@ watch_fleet() { (
     printf '%s\n' "$cur_needs" > "$needsf"
   }
 
-  # Assemble the new-edge wake body.
-  local wake='' prev_needs
+  # Assemble the new-edge wake body. `wsubs` accumulates a COALESCING SUBJECT per
+  # emitted `- ` line, in the same order (issue #198) — the issue-bridge reads them
+  # from a trailing marker to collapse superseded/duplicate wakes on drain. The
+  # subject KEEPS the edge kind, so semantically-distinct edges that happen to share
+  # a GitHub number (a `stuck` worker on a `prodalert` issue) never collapse into
+  # each other. The ONE deliberate exception is the PR lifecycle: `propened` and
+  # `prgreen` for the same PR map to a shared `pr:<slug>:<num>` subject so a green
+  # (landable) wake supersedes the earlier shipped-for-review wake.
+  local wake='' wsubs='' prev_needs
   prev_needs=$(cat "$needsf" 2>/dev/null)
   # If the .needs level is missing or garbled while the keyset EXISTS (partial state,
   # an interrupted write, manual cleanup), a bare 0 baseline would spuriously fire a
@@ -366,13 +373,20 @@ watch_fleet() { (
     # per-key edges: a firing line whose KEY is not in the persisted set.
     while IFS=$'\t' read -r key msg; do
       [ -z "$key" ] && continue
-      grep -qxF "$key" "$keysf" 2>/dev/null || wake="$wake- $msg"$'\n'
+      if ! grep -qxF "$key" "$keysf" 2>/dev/null; then
+        wake="$wake- $msg"$'\n'
+        case "$key" in
+          prgreen:*|propened:*) wsubs="${wsubs}pr:${key#*:} " ;;  # PR lifecycle: green ≻ opened
+          *)                    wsubs="${wsubs}${key} " ;;        # every other kind stays distinct
+        esac
+      fi
     done <<EOF
 $firing
 EOF
     # needs-attention RISE (a level, not a set member): wake only when it climbs.
     if [ "$cur_needs" -gt "$prev_needs" ]; then
       wake="$wake- $cur_needs window(s) need attention"$'\n'
+      wsubs="${wsubs}needs:$slug "
     fi
   fi
 
@@ -402,6 +416,11 @@ EOF
   fi
 
   local body; body="🛰️ fleet-watch — $slug"$'\n\n'"$wake"
+  # Trailing coalescing marker (issue #198): the per-line subjects, in order, so the
+  # issue-bridge can collapse superseded/duplicate wakes to one line per subject when
+  # they drain to a briefly-busy steward. An HTML comment → invisible in the rendered
+  # issue; the bridge greps it verbatim. Omitted when there are no subjects.
+  [ -n "$wsubs" ] && body="$body"$'\n'"<!-- fleet:wake $wsubs-->"
   if watch_wake "$repo" "$steward" "$slug" "$body"; then
     # Wake delivered (or dry-run) — NOW it's safe to advance the persisted state.
     persist_state
