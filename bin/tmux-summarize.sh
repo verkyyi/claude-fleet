@@ -15,8 +15,11 @@
 # OPTIONAL — the dash works without it; the summary column just stays empty.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"   # fleet_cache_dir / fleet_sessmap_file (#181)
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-CACHE="$C/sumhash"; mkdir -p "$CACHE"
+G="$C/global"; mkdir -p "$G"                          # summary_<id> + sumhash live here (#181)
+CACHE="$G/sumhash"; mkdir -p "$CACHE"
 LOGDIR="$BIN/../logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/summarize.log"
 MODEL="${SUMMARIZE_MODEL:-haiku}"
@@ -33,10 +36,12 @@ mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; 
 # (issues_<slug>: milestone \t #num \t assignee \t title), resolving slug via
 # sessmap (session \t slug \t repo). Empty if uncached — the prompt still gets #num.
 issue_title() {
-  local sess="$1" num="$2" slug
-  slug=$(awk -F'\t' -v s="$sess" '$1==s{print $2; exit}' "$C/sessmap" 2>/dev/null)
+  local sess="$1" num="$2" slug sm issf
+  sm=$(fleet_sessmap_file 2>/dev/null); [ -n "$sm" ] || sm="$C/sessmap"
+  slug=$(awk -F'\t' -v s="$sess" '$1==s{print $2; exit}' "$sm" 2>/dev/null)
   [ -n "$slug" ] || return 0
-  awk -F'\t' -v n="$num" '{g=$2; gsub(/#/,"",g); if(g==n){print $4; exit}}' "$C/issues_$slug" 2>/dev/null
+  issf="$(fleet_cache_dir "$slug" 2>/dev/null)/issues"; [ -f "$issf" ] || issf="$C/issues_$slug"
+  awk -F'\t' -v n="$num" '{g=$2; gsub(/#/,"",g); if(g==n){print $4; exit}}' "$issf" 2>/dev/null
 }
 
 # do_window <wid> <name> <state> <sess> <iss> — summarize one window. Returns 0
@@ -48,7 +53,7 @@ do_window() {
   case "$name" in dash|plan|backlog) return 1;; esac
   [ -z "$state" ] && return 1                       # non-Claude window
   id=${wid//[^0-9]/}; [ -z "$id" ] && return 1
-  out="$C/summary_$id"
+  out="$G/summary_$id"
   # debounce: skip if summarized within DEBOUNCE seconds (coalesces turn bursts)
   if [ -f "$out" ] && [ "$(( $(date +%s) - $(mtime "$out") ))" -lt "$DEBOUNCE" ]; then return 1; fi
   lock="$CACHE/$id.lock"

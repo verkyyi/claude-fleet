@@ -270,7 +270,7 @@ grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NO
 # A comment on the repo's FLEET_STEWARD_ISSUE (here #20) must relay into the
 # @steward=1 pane (%9), NOT a worker window — and still honor the marker + assoc
 # gates. Fresh state so the earlier watermark/seen don't interfere.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 cat > "$CANNED" <<JSON
 [
@@ -295,7 +295,7 @@ grep -qF 'send-keys -t @1' "$INJECT" && fail "steward-issue comment must not inj
 # HUB DOWN: a steward-issue comment with NO @steward pane must DROP terminally
 # (mark seen, advance the watermark) — retrying would pin the watermark and starve
 # worker relays on the repo. Assert c200 is not injected but IS marked seen.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_NO_STEWARD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "hub-down poll exited non-zero"
@@ -306,7 +306,7 @@ grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
 # SESSION NAMED "1": a NON-steward pane in a session literally named "1" must NOT be
 # misread as the steward marker (the awk FS=tab filter tests the exact @steward
 # field, not a collapsed one). No steward is found → drop, nothing injected.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_STEWARD_SESS1=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-sess1 poll exited non-zero"
@@ -316,7 +316,7 @@ FAKE_STEWARD_SESS1=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-se
 # COLD BOOT: a steward pane with EMPTY @claude_state (marker-first field order must
 # survive the empty trailing fields) is idle → the comment relays. Guards the
 # IFS-collapse misparse regression.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_STEWARD_COLD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-cold poll exited non-zero"
@@ -325,7 +325,7 @@ FAKE_STEWARD_COLD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-col
 
 # STEWARD BUSY (fresh @claude_state_ts): a working steward queues the comment — not
 # injected, not marked seen (retry next tick).
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_STEWARD_WORKING_TS="$(date +%s)" FLEET_STEWARD_ISSUE=20 runbridge --poll \
@@ -337,7 +337,7 @@ grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
 # STEWARD STALE (missed Stop — @claude_state=working stamped long ago): the idle-gate
 # must ESCAPE and relay, so the co-resident-dash-pane pollution can't wedge the
 # channel. ts=0 ⇒ age ≫ FLEET_STUCK_WORKING_SECS ⇒ stale ⇒ relay.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_STEWARD_WORKING_TS=0 FLEET_STEWARD_ISSUE=20 runbridge --poll \
@@ -360,7 +360,7 @@ grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
 
 # WITHOUT FLEET_STEWARD_ISSUE, the same comment on #20 has no worker window and
 # no steward route → it must be dropped (gone), never injected anywhere.
-rm -f "$WORK/state/bridge_fake-repo.seen"
+: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 runbridge --poll || fail "no-steward-issue poll exited non-zero"
@@ -404,5 +404,37 @@ printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=99\n' > "$RES_CONF/norepo.conf
 ) || fail "steward-issue resolver mis-attributed a repo-less conf across fleets"
 printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no primary)\n' >&2
 
-printf 'selftest PASS: relay core + idle-gate + input-content-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak verified\n'
+# --- per-fleet state layout (issue #181): bridge_state_file must resolve the dedup/
+# watermark to fleets/<sess>/bridge/{seen,since} when the slug maps to a configured
+# fleet, dual-read a legacy flat file in place, and fall back to the flat
+# issue-bridge/ path only when no fleet owns the slug. Unit-test the resolver
+# directly (extract the real functions), so it's deterministic w.r.t. the fakes.
+(
+  set -uo pipefail
+  # shellcheck source=/dev/null
+  . "$BIN/fleet-lib.sh"
+  FLEET_CONF_DIR="$WORK/conf"; STATE="$WORK/state"
+  : "$FLEET_CONF_DIR" "$STATE"   # read via the eval'd functions below (opaque to shellcheck)
+  rm -rf "$WORK/conf/fleets" "$WORK/state"
+  printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\n' > "$WORK/conf/fake.conf"
+  eval "$(awk '/^bridge_sess_for_slug\(\) \{/,/^}/' "$SRC")"
+  eval "$(awk '/^bridge_state_file\(\) \{/,/^}/'   "$SRC")"
+  _BR_SLUG=''; _BR_SESS=''
+  got=$(bridge_state_file fake-repo seen)
+  [ "$got" = "$WORK/conf/fleets/fake/bridge/seen" ] \
+    || { echo "layout: bridge_state_file should resolve to fleets/<sess>/bridge/ (got $got)" >&2; exit 1; }
+  # dual-read: a legacy flat file present is returned in place (until the migrator moves it)
+  mkdir -p "$WORK/state"; : > "$WORK/state/bridge_fake-repo.since"; _BR_SLUG=''; _BR_SESS=''
+  gots=$(bridge_state_file fake-repo since)
+  [ "$gots" = "$WORK/state/bridge_fake-repo.since" ] \
+    || { echo "layout: a legacy flat file must be dual-read in place (got $gots)" >&2; exit 1; }
+  # a slug with NO configured fleet → flat issue-bridge/ fallback
+  rm -f "$WORK/conf/fake.conf"; rm -rf "$WORK/conf/fleets"; _BR_SLUG=''; _BR_SESS=''
+  gotn=$(bridge_state_file other-repo seen)
+  [ "$gotn" = "$WORK/state/bridge_other-repo.seen" ] \
+    || { echo "layout: an unconfigured slug must fall to the flat path (got $gotn)" >&2; exit 1; }
+) || fail "per-fleet bridge state layout (issue #181) resolution wrong"
+printf 'selftest: layout leg PASS (per-fleet bridge state under fleets/<sess>/bridge/ + dual-read + flat fallback — issue #181)\n' >&2
+
+printf 'selftest PASS: relay core + idle-gate + input-content-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak + per-fleet-layout verified\n'
 exit 0

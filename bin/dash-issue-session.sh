@@ -106,7 +106,11 @@ title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
 wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-tf="$C/task_$slug.txt"
+G="$C/global"; mkdir -p "$G"
+# The seed-prompt handoff is per-fleet (keyed by issue-N, which repeats across
+# repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
+# (issue #181).
+tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # Self-land lifecycle (issue #138): a worker owns its ENTIRE lifecycle incl. the
 # land. Opt in per spawn (--self-land) or per fleet (FLEET_SELF_LAND=1). Self-land
 # NEEDS the issue-bridge running (it is how the steward's /land trigger reaches the
@@ -191,7 +195,7 @@ tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ i
 # prior file contents). Same key/format the readers expect: summary_<winIdDigits>
 # = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh).
 seed="starting #$num"; [ "$SCOUT" = 1 ] && seed="scouting #$num"; [ -n "$title" ] && seed="$seed: $title"
-printf '%s' "$seed" > "$C/summary_${win//[^0-9]/}" 2>/dev/null || :
+printf '%s' "$seed" > "$G/summary_${win//[^0-9]/}" 2>/dev/null || :
 # Non-invasive by default: leave the active window put and just confirm the spawn
 # on the status line. Only jump to the new worker when the user opted in
 # (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.

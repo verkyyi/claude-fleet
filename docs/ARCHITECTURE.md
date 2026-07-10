@@ -33,10 +33,10 @@ repo-specific pieces are **per-fleet**.
 |---|---|---|
 | **Collector** | **shared (one, machine-global)** | usage + rate-limit are account-wide; git + ctx already iterate every window machine-wide; only the PR/issue fetch is per-repo, and that's a cheap fan-out |
 | `usage`, `ratelimit` cache | shared | account-wide — computing per-fleet would just duplicate the same number |
-| `git_<key>`, `ctx_<key>` cache | shared | per-worktree / per-Claude-session, already machine-wide |
-| `prmap` / `issues` cache | **per-repo** | the only per-repo data → written as `prmap_<slug>` / `issues_<slug>` |
-| **Config (`fleet.conf`)** | **per-fleet** | each fleet = a different repo + checkout |
-| **Dash / status / backlog** | **per-fleet view** | reads shared globals **+** its own repo's slug'd files |
+| `git_<key>`, `ctx_<key>` cache | shared (`global/`) | per-worktree / per-Claude-session, already machine-wide |
+| `prmap` / `issues` cache | **per-repo** | the only per-repo data → written under `fleets/<slug>/` (issue #181) |
+| **Config (`fleet.conf`)** | **per-fleet** | each fleet = a different repo + checkout → `fleets/<session>/conf` |
+| **Dash / status / backlog** | **per-fleet view** | reads shared globals **+** its own repo's `fleets/<slug>/` files |
 | **Steward** | **per-fleet** | triage / ledger are stateful per repo; "one writer per ledger" |
 
 *Collector shared, steward not* is the right split — remember it that way.
@@ -62,44 +62,66 @@ Open a fleet (session) → its repo enters the fetch loop automatically. Close i
 repo fetched with **no** session open (e.g. a steward watching a repo you're
 not actively working).
 
-### Config layout
+### Config + durable-state layout — one directory per fleet (issue #181)
 
-Per-fleet config keyed by session name:
+Every fleet's **durable** state is a single directory keyed by its tmux session
+name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets):
 
 ```
-~/.config/claude-fleet/<FLEET_ID>.conf     # same keys as fleet.conf.example
+~/.config/claude-fleet/
+  fleets/<session>/
+    conf              # per-fleet overlay — same keys as fleet.conf.example
+    restore.map       # crash-recovery snapshot (fleet-restore.sh)
+    bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
+    watch/{keys,needs}    # fleet-watcher edge-dedup keyset + needs level
+    sweep.due         # /sweep scheduling ledger
+  accounts/           # GLOBAL — multi-account tokens (unchanged)
+  diskguard/          # GLOBAL — disk-guard forensics (unchanged)
+  restore/            # GLOBAL — auto-restore ARM flag + restore.log
 ```
 
-Any fleet script resolves `FLEET_ID` from `#{session_name}`, sources that conf.
-The shared collector reads *all* of them to build the repo set.
+The single source of this layout is `bin/fleet-lib.sh` (`fleet_state_dir`,
+`fleet_conf_file`, `fleet_each_conf`, `fleet_sess_for_repo`) — no call site
+hand-builds a session-suffixed path. Any fleet script resolves its session from
+`#{session_name}` and sources its conf via `fleet_conf_file`; the shared daemons
+enumerate every fleet with `fleet_each_conf`. A one-time migrator
+(`bin/fleet-migrate-layout.sh`, run by `/fleet-sync-install`) moves an old flat
+estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*`,
+…) into this layout **idempotently**, and every reader **dual-reads** both layouts
+so a fleet keeps working across the land→migrate window.
 
-### Cache layout
+### Runtime cache layout
+
+The **runtime** cache is ephemeral (regenerated each collector/pr-refresh tick),
+split the same way — one directory per fleet (keyed by repo `slug`) plus a
+`global/` bucket for machine-wide state:
 
 ```
 $TMPDIR/.claude-dash/
-  sessmap            # session<TAB>slug<TAB>repo — the session→repo map (collector)
-  usage              # shared (account-global)
-  ratelimit          # shared
-  git_<key>          # shared (per worktree)
-  ctx_<key>          # shared (per Claude session)
-  prmap_<slug>       # per repo   (slug = owner-name)
-  issues_<slug>      # per repo
-  prmap / issues     # un-slug'd name — cold-start fallback ONLY (never written;
-                     #   no fleet is "primary" — issue #180)
+  fleets/<slug>/       # per repo (slug = owner-name)
+    issues  issues.ts  #   backlog cache (+ fetch-complete marker)
+    prmap   prmap.ts   #   PR/CI map
+    labels             #   #num → labels (fleet watcher)
+    issue_<n>.json     #   per-issue preview cache
+    task_issue-<n>.txt #   spawn seed handoff
+  global/              # machine-wide — NOT per-fleet-collidable
+    sessmap            #   session<TAB>slug<TAB>repo (collector)
+    git_<key>          #   per worktree (globally-unique path key)
+    ctx_<key>          #   per Claude session
+    summary_<winid>    #   per window (globally-unique tmux window id)
+    usage · ratelimit  #   account-global usage proxies
+    account.* · collapsed · dash_view_* · …   # dash + account UI state
 ```
 
-The collector resolves each live tmux session → its repo (per-session conf
-override, else the session's checkout origin remote) and records it in
-`sessmap`. Read-side producers map their session → slug via `sessmap` (fork-free)
-and read the slug'd cache through `fleet_cache` — the SINGLE slug-resolution
-truth. **All fleets are equal (issue #180): no fleet is "primary", so no producer
-writes the un-slug'd `prmap`/`issues` file.** That flat name survives only as
-`fleet_cache`'s degenerate cold-start fallback (before a fleet's `<base>_<slug>.ts`
-marker lands); since nothing writes it, readers just see "loading" until the
-slug'd cache appears. The shared helpers live in `bin/fleet-lib.sh`.
-
-A fleet's dash/status/backlog reads the shared files plus its own
-`prmap_<slug>` / `issues_<slug>` (slug derived from that session's `FLEET_REPO`).
+The collector resolves each live tmux session → its repo and records it in
+`global/sessmap`. Read-side producers map their session → slug via `sessmap`
+(fork-free) and read the slug'd cache through `fleet_cache` / `fleet_cache_dir` —
+the SINGLE slug-resolution truth. **All fleets are equal (issue #180): no fleet is
+"primary."** A cold-start / unresolved session returns a non-existent path so the
+reader shows "loading" until the fetch lands. The `git_`/`ctx_`/`summary_` caches
+are keyed by a globally-unique worktree path / tmux window id (so they cannot
+collide across fleets) and live under `global/`, keeping the fork-free dashboard
+hot path a single slug lookup per repaint.
 
 ### Bootstrap: `fleet-up.sh [<owner/repo>] [<dir>]`
 
@@ -112,15 +134,16 @@ Where "existing or newly-created checkout" is handled:
    (one fleet per repo).
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
    becomes `FLEET_MAIN`.
-3. Write `$FLEET_CONF_DIR/<session>.conf` (`FLEET_REPO`, `FLEET_MAIN`, base
-   branch from the repo's default branch).
+3. Write `$FLEET_CONF_DIR/fleets/<session>/conf` (`FLEET_REPO`, `FLEET_MAIN`,
+   base branch from the repo's default branch).
 4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
    `work` shell + the `plan` hub, whose steward pane runs `FLEET_STEWARD_CMD`
    or the built-in default).
 5. Kick the collector so the dash has data on first paint.
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
-disk); `--purge` also removes the conf + this fleet's slug'd cache.
+disk); `--purge` also removes exactly `fleets/<session>/` (its whole durable
+state) + this fleet's `fleets/<slug>/` runtime cache.
 
 ## The fleet CLI
 
@@ -150,6 +173,14 @@ fleet's repo+checkout; per-fleet steward-command override via `FLEET_STEWARD_CMD
 **Phase 3 ✅ — reach + robustness.** `FLEET_REPOS` + configured-conf **pin**
 (fetch repos with no live session); the janitor loops every fleet's checkout;
 collector temp files are PID-unique (safe if two collectors overlap).
+
+**Phase 4 ✅ — one directory per fleet (issue #181).** The flat, slug/session-
+suffixed namespace becomes `fleets/<session>/` (durable) + `fleets/<slug>/`
+(runtime) + `global/`, so each fleet is a self-contained equal and it's no longer
+possible to read the wrong fleet's file. `bin/fleet-lib.sh` path helpers are the
+single source of the layout; `bin/fleet-migrate-layout.sh` migrates an existing
+estate idempotently; every reader dual-reads the old + new layout across the
+land→migrate window.
 
 Back-compat rule throughout: with a single fleet and no per-fleet conf,
 everything falls back to the global `fleet.conf` + flat cache names, so existing

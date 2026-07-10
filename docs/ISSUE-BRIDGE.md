@@ -197,7 +197,7 @@ set tight and don't wire a chatty bot to comment on bound issues.
 | `FLEET_ISSUE_BRIDGE_SECRET` | *(unset)* | webhook HMAC secret (`--deliver` only) |
 | `FLEET_ISSUE_BRIDGE_REVIVE` | `0` | re-spawn a gone worker for an open issue |
 | `FLEET_STEWARD_ISSUE` | *(unset)* | control/inbox issue relayed into the `@steward` pane (#146) |
-| `FLEET_ISSUE_BRIDGE_STATE_DIR` | `~/.config/claude-fleet/issue-bridge` | watermark + dedup state |
+| `FLEET_ISSUE_BRIDGE_STATE_DIR` | `~/.config/claude-fleet/issue-bridge` | legacy flat watermark+dedup dir. Since issue #181, state lives per fleet at `~/.config/claude-fleet/fleets/<session>/bridge/{seen,since}`; this dir is only the fallback for a repo with no configured fleet, and is dual-read until `bin/fleet-migrate-layout.sh` moves it |
 
 ## Verify
 

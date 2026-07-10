@@ -79,7 +79,7 @@ printf '%s\n' "$out" | grep -qF 'Week 1 (1)' || fail "milestone count must match
 
 # --- TOGGLE SHOW: reveal bound rows -----------------------------------------
 bash "$TOGGLE" t
-[ -f "$C/backlog_show_bound_t" ] || fail "toggle should create the per-fleet show-bound state file"
+[ -f "$C/global/backlog_show_bound_t" ] || fail "toggle should create the per-fleet show-bound state file"
 out="$(rows all)"
 printf '%s\n' "$out" | grep -qF 'bravo' || fail "bound issue #42 should REAPPEAR after the toggle"
 printf '%s\n' "$out" | grep -qF '▶ wrk'       || fail "a shown bound issue keeps its ▶window marker"
@@ -87,7 +87,7 @@ printf '%s\n' "$out" | grep -qF 'Week 1 (2)'  || fail "count must grow to 2 when
 
 # --- TOGGLE HIDE again: back to hidden, state removed ------------------------
 bash "$TOGGLE" t
-[ -f "$C/backlog_show_bound_t" ] && fail "a second toggle should remove the show-bound state file"
+[ -f "$C/global/backlog_show_bound_t" ] && fail "a second toggle should remove the show-bound state file"
 out="$(rows all)"
 printf '%s\n' "$out" | grep -qF 'bravo' && fail "bound issue #42 should be HIDDEN again after re-toggle"
 

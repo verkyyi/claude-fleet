@@ -89,7 +89,8 @@ printf 's1\tfake-repo\tfake/repo\n' > "$C/sessmap"
 # the collector stamps it) — the watcher/pr-refresh strip only the +ahead/-behind
 # tail, leaving "issue-42" to match the prmap headRefName.
 key=$(printf '%s' "/w/issue-42" | sed -e 's/_/_u/g' -e 's|/|_s|g' -e 's/ /_w/g')
-printf 'issue-42+3\tclean\n' > "$C/git_$key"
+mkdir -p "$C/global"                          # git_<key> is a machine-wide cache (issue #181)
+printf 'issue-42+3\tclean\n' > "$C/global/git_$key"
 # prmap: branch issue-42 → OPEN PR #100. The ci (col4) + ready (col5) columns are the
 # watcher's PR-state source (issue #187) — run() rewrites them each tick to flip CI
 # status and mergeability. Seed a row so prmap_fake-repo exists before the first tick.
@@ -139,7 +140,7 @@ touch "$WORK/fail_wake"
 run "✓" "ready" "$WORK/log"
 [ "$(nwakes)" -eq 0 ] || fail "wake post failed — nothing should be recorded"
 grep -q 'state NOT advanced' "$WORK/log" || fail "a failed wake should log that state was not advanced"
-grep -qxF 'prgreen:fake-repo:100' "$WORK/state/watch_fake-repo.keys" \
+grep -qxF 'prgreen:fake-repo:100' "$WORK/conf/fleets/s1/watch/keys" \
   && fail "a FAILED wake must NOT persist the prgreen key (else it never retries)"
 
 # tick 3 — still green + ready, wake now SUCCEEDS: the retried edge fires exactly once.
@@ -158,7 +159,7 @@ after=$(nwakes)
 
 # tick 5 — CI regresses to "✗": prgreen clears from the keyset (no wake for a loss).
 run "✗" "" "$WORK/log"
-grep -qxF 'prgreen:fake-repo:100' "$WORK/state/watch_fake-repo.keys" \
+grep -qxF 'prgreen:fake-repo:100' "$WORK/conf/fleets/s1/watch/keys" \
   && fail "prgreen should clear from the keyset once the PR is no longer green"
 
 # tick 6 — CI green again but the PR is CONFLICTING (ci=✓ ready=conflict): the /land
@@ -168,7 +169,7 @@ before=$(nwakes)
 run "✓" "conflict" "$WORK/log"
 after=$(nwakes)
 [ "$after" -eq "$before" ] || fail "a CI-green CONFLICTING PR must NOT fire prgreen; wakes $before -> $after"
-grep -qxF 'prgreen:fake-repo:100' "$WORK/state/watch_fake-repo.keys" \
+grep -qxF 'prgreen:fake-repo:100' "$WORK/conf/fleets/s1/watch/keys" \
   && fail "a CONFLICTING PR must NOT enter the prgreen keyset (issue #187)"
 
 # tick 7 — PR rebased: green + BEHIND base (ci=✓ ready=behind, the common active-fleet

@@ -54,7 +54,7 @@ CFG_GLOBAL=$'\033[38;2;122;162;247m'  # blue   — inherited from global
 CFG_DIM=$'\033[38;2;86;95;137m'       # dim    — unset → code default
 
 # ---- UI state (raw-key + section-expand toggles, persisted per session) ------
-CFG_STATE_DIR="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}"
+CFG_STATE_DIR="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
 raw_file()   { printf '%s/config_raw_%s' "$CFG_STATE_DIR" "${SESSION:-_}"; }
 raw_on()     { [ -f "$(raw_file)" ]; }
 raw_toggle() { local f; f=$(raw_file); if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$CFG_STATE_DIR" 2>/dev/null; : > "$f"; fi; }
@@ -281,10 +281,11 @@ command -v fzf >/dev/null 2>&1 || { echo "fzf required for the prefix+c config m
 # Baked into the enter bind so the transform child writes the SAME paths the parent
 # loop reads (like $RESTART). mkdir the dir up front so the writes can't fail for a
 # missing parent (see the guarded abort in emit_enter_action).
-RESTART="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_restart_${SESSION:-_}.$$"
-EDITKEY="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_edit_${SESSION:-_}.$$"
-QUERYF="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/config_query_${SESSION:-_}.$$"
-mkdir -p "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" 2>/dev/null || true
+CGLOB="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
+RESTART="$CGLOB/config_restart_${SESSION:-_}.$$"
+EDITKEY="$CGLOB/config_edit_${SESSION:-_}.$$"
+QUERYF="$CGLOB/config_query_${SESSION:-_}.$$"
+mkdir -p "$CGLOB" 2>/dev/null || true
 run_fzf() {
   # Restore the filter query the edit path stashed (empty on a fresh open / ⌃s),
   # then clear the one-shot sentinels for this run.

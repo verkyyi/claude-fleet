@@ -7,7 +7,7 @@
 # tmux-issues.sh. Existence of the file = "show bound"; absent = "hide" (the
 # default). tmux-issues-rows.sh reads the same path.
 set -uo pipefail
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp}/.claude-dash/global"   # dash UI state (issue #181)
 sess="${1:-}"
 f="$C/backlog_show_bound_${sess:-_}"
 mkdir -p "$C" 2>/dev/null || true

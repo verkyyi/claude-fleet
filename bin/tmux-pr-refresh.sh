@@ -23,9 +23,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-# Sweep this run's PID-unique temps on exit (a failed gh fetch only `mv`s on
-# success, so it would otherwise orphan a 0-byte prmap_<slug>.$$ forever).
-trap 'rm -f "$C"/*.'"$$" EXIT
+G="$C/global"                       # machine-wide caches (git_<key>) — issue #181
+# Sweep this run's PID-unique temps on exit (across the fleets/<slug>/ subdirs now;
+# a failed gh fetch only `mv`s on success, so it would otherwise orphan a 0-byte
+# prmap.<pid> forever).
+trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true' EXIT
 REPO="${FLEET_REPO:-}"
 now() { date +%s; }
 
@@ -71,26 +73,26 @@ queue() {                          # $1=repo → add once
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
 [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
-if [ -f "$C/sessmap" ]; then
+SESSMAP=$(fleet_sessmap_file)
+if [ -f "$SESSMAP" ]; then
   while IFS=$'\t' read -r _ _ rp; do
     [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")"
-  done < "$C/sessmap"
+  done < "$SESSMAP"
 fi
 for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
-if [ -d "$FLEET_CONF_DIR" ]; then
-  for cf in "$FLEET_CONF_DIR"/*.conf; do
-    [ -f "$cf" ] || continue
-    r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
-  done
-fi
+while IFS=$'\t' read -r _s cf; do
+  [ -f "$cf" ] || continue
+  r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+  [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+done < <(fleet_each_conf)
 
 # --- per-repo PR map (TTL-gated) — the ONLY writer of prmap_<slug> ---
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
-  pts=$(cat "$C/prmap_$sg.ts" 2>/dev/null || echo 0)
+  FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
+  pts=$(cat "$FD/prmap.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
     # shellcheck disable=SC2016  # $r/$ci/$ready are jq vars, not shell — keep single-quoted
     gh pr list --repo "$rp" --state all --limit 100 \
@@ -110,8 +112,8 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
                 else "" end)
              else "" end) as $ready |
             .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready' \
-      > "$C/prmap_$sg.$$" 2>/dev/null && mv "$C/prmap_$sg.$$" "$C/prmap_$sg"
-    now > "$C/prmap_$sg.ts"
+      > "$FD/prmap.$$" 2>/dev/null && mv "$FD/prmap.$$" "$FD/prmap"
+    now > "$FD/prmap.ts"
   fi
 done
 
@@ -131,7 +133,7 @@ while IFS="$US" read -r sess win path cur; do
   # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
   prmf=$(fleet_cache prmap "$sess")
   key=$(cache_key "$path")
-  branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
+  branch=$(cut -f1 "$G/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   glyph=""; pfg=""
   if [ -n "$bare" ] && [ "$bare" != "-" ]; then

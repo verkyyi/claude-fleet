@@ -103,7 +103,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh (env: TMUX_LW / TMUX_SCOUT_OP
 # ============================ Part 1: --scout spawn ===========================
 # 1a. --scout seeds a READ-ONLY investigation prompt (no branch/PR/ship).
 run_spawn 77 --scout
-TF="$WORK/dash/.claude-dash/task_issue-77.txt"
+TF="$WORK/dash/.claude-dash/fleets/acme-widgets/task_issue-77.txt"
 [ -f "$TF" ] || fail "1a scout task file not written ($TF)" "$(cat "$WORK/spawn.err")"
 task="$(cat "$TF")"
 case "$task" in *"READ-ONLY scout"*) ;; *) fail "1a scout prompt missing 'READ-ONLY scout'" "$task" ;; esac
@@ -122,7 +122,7 @@ ok "1b --scout marks the window @scout (and binds @issue)"
 
 # 1c. a NORMAL spawn (no --scout) keeps the ship prompt and no @scout marker.
 run_spawn 77
-task="$(cat "$WORK/dash/.claude-dash/task_issue-77.txt")"
+task="$(cat "$WORK/dash/.claude-dash/fleets/acme-widgets/task_issue-77.txt")"
 case "$task" in *"/fleet-ship"*) ;; *) fail "1c normal spawn should seed /fleet-ship" "$task" ;; esac
 case "$task" in *"READ-ONLY scout"*) fail "1c normal spawn must NOT be a scout prompt" "$task" ;; *) ;; esac
 case "$task" in *"/fleet-claim"*) ;; *) fail "1c normal spawn lost the /fleet-claim ritual" "$task" ;; esac
@@ -131,7 +131,7 @@ ok "1c normal spawn keeps the ship prompt, no @scout (shared claim ritual intact
 
 # 1d. --scout supersedes --self-land (a scout has no PR to land).
 run_spawn 77 --scout --self-land
-task="$(cat "$WORK/dash/.claude-dash/task_issue-77.txt")"
+task="$(cat "$WORK/dash/.claude-dash/fleets/acme-widgets/task_issue-77.txt")"
 case "$task" in *"READ-ONLY scout"*) ;; *) fail "1d --scout must win over --self-land" "$task" ;; esac
 case "$task" in *"/fleet-land-self"*) fail "1d scout prompt must not carry the self-land tail" "$task" ;; *) ;; esac
 ok "1d --scout supersedes --self-land"

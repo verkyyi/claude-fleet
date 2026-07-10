@@ -95,8 +95,43 @@ bridge_assoc_ok() {
   return 1
 }
 
-# dedup set, one file per repo slug (capped so it can't grow without bound).
-bridge_seen_file() { printf '%s/bridge_%s.seen' "$STATE" "$1"; }
+# One directory per fleet (issue #181): the dedup set + watermark move to
+# fleets/<sess>/bridge/{seen,since}. The bridge is repo-native (keyed by slug), so
+# bridge_sess_for_slug resolves the slug→session from the configured confs; a slug
+# with no configured fleet (a bare FLEET_REPO) keeps the legacy flat
+# issue-bridge/bridge_<slug>.* file. bridge_state_file DUAL-READS: a legacy file
+# already in place is used until the migrator moves it, so the dedup/watermark set
+# is never split across the land→migrate window. Single-entry memo keeps the
+# conf scan off the per-comment hot path (poll/deliver handle one slug at a time).
+_BR_SLUG='' _BR_SESS=''
+bridge_sess_for_slug() {
+  local want="$1" sess conf rp found=''
+  [ -n "$want" ] || return 0
+  [ "$want" = "$_BR_SLUG" ] && { printf '%s' "$_BR_SESS"; return; }
+  while IFS=$'\t' read -r sess conf; do
+    rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want" ] && { found="$sess"; break; }
+  done < <(fleet_each_conf)
+  _BR_SLUG="$want"; _BR_SESS="$found"
+  printf '%s' "$found"
+}
+# $1=slug $2=seen|since → the state file path (new per-fleet layout, else legacy).
+bridge_state_file() {
+  local slug="$1" kind="$2" sess new old="$STATE/bridge_$1.$2"
+  sess=$(bridge_sess_for_slug "$slug")
+  if [ -n "$sess" ]; then
+    new="$FLEET_CONF_DIR/fleets/$sess/bridge/$kind"
+    [ -f "$new" ] && { printf '%s' "$new"; return; }
+    [ -f "$old" ] && { printf '%s' "$old"; return; }   # dual-read a legacy file in place
+    mkdir -p "$FLEET_CONF_DIR/fleets/$sess/bridge" 2>/dev/null
+    printf '%s' "$new"; return
+  fi
+  mkdir -p "$STATE" 2>/dev/null
+  printf '%s' "$old"
+}
+
+# dedup set, one file per fleet (capped so it can't grow without bound).
+bridge_seen_file() { bridge_state_file "$1" seen; }
 bridge_seen_has()  { grep -qxF "$2" "$(bridge_seen_file "$1")" 2>/dev/null; }
 bridge_seen_add() {
   local f; f=$(bridge_seen_file "$1")
@@ -230,10 +265,9 @@ bridge_steward_stale() {
 # (fleet-up.sh writes it), so this is safe; a hand-written conf that sets only
 # FLEET_STEWARD_ISSUE is correctly ignored rather than mis-attributed to any repo.
 bridge_steward_issue_for_repo() {
-  local repo="$1" want_slug cf line rp si
+  local repo="$1" want_slug cf line rp si _s
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  [ -d "$FLEET_CONF_DIR" ] || return 0
-  for cf in "$FLEET_CONF_DIR"/*.conf; do
+  while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
     line=$( unset FLEET_STEWARD_ISSUE FLEET_REPO   # count only if THIS conf sets both
             . "$cf" >/dev/null 2>&1
@@ -245,7 +279,7 @@ $line
 EOF
     [ -n "$si" ] && [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want_slug" ] \
       && { printf '%s' "$si"; return 0; }
-  done
+  done < <(fleet_each_conf)
   return 0
 }
 
@@ -481,7 +515,7 @@ EOF
 poll_repo() {
   local repo="$1" slug since rows lease
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  local sincef="$STATE/bridge_$slug.since"
+  local sincef; sincef=$(bridge_state_file "$slug" since)
   since=$(cat "$sincef" 2>/dev/null)
   # First run: seed to NOW so enabling the bridge never floods with history.
   [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — watermark seeded, no backfill"; return 0; }
@@ -555,22 +589,21 @@ poll() {
   # steward issue is NOT threaded here — it is a repo-specific number resolved
   # per-repo below via bridge_steward_issue_for_repo, the SAME resolver --deliver
   # uses, so the two ingresses can't diverge and the value can never leak/dedup-drop.)
-  if [ -d "$FLEET_CONF_DIR" ]; then
-    for cf in "$FLEET_CONF_DIR"/*.conf; do
-      [ -f "$cf" ] || continue
-      local line rp fl rv
-      line=$( . "$cf" >/dev/null 2>&1
-              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s' \
-                "${FLEET_REPO:-}" \
-                "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-                "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
-      [ -z "$line" ] && continue
-      IFS=$'\t' read -r rp fl rv <<EOF
+  local _s cf
+  while IFS=$'\t' read -r _s cf; do
+    [ -f "$cf" ] || continue
+    local line rp fl rv
+    line=$( . "$cf" >/dev/null 2>&1
+            [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s' \
+              "${FLEET_REPO:-}" \
+              "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
+              "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+    [ -z "$line" ] && continue
+    IFS=$'\t' read -r rp fl rv <<EOF
 $line
 EOF
-      queue "$rp" "$fl" "$rv"
-    done
-  fi
+    queue "$rp" "$fl" "$rv"
+  done < <(fleet_each_conf)
 
   if [ "${#REPOS[@]}" -eq 0 ]; then
     log "no fleet has FLEET_ISSUE_BRIDGE=1 — nothing to do"; exit 0

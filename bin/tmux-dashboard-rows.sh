@@ -16,13 +16,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+G="$C/global"                       # machine-wide caches (git_/ctx_/summary_) — issue #181
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
 # LANDED mode this producer hands off to the history ledger's row emitter, so
 # finished (merged + cleaned-up) sessions are one keystroke away with the same row
 # ergonomics (#130). Keyed by FLEET_SESSION so one fleet's toggle can't flip
 # another's dash (they share $C); FLEET_SESSION is exported by tmux-dashboard.sh.
-if [ "$(cat "$C/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+if [ "$(cat "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
   exec bash "$BIN/fleet-history.sh" rows
 fi
 
@@ -92,7 +93,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   key=${path//_/_u}; key=${key//\//_s}; key=${key// /_w}
 
   branch='-'
-  [ -f "$C/git_$key" ] && { IFS=$'\t' read -r branch _ < "$C/git_$key" || :; }
+  [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
 
   state_v "$state"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
@@ -146,7 +147,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
 
   # model + ctx%
   cmodel=''; ctok=''
-  [ -f "$C/ctx_$key" ] && { IFS=$'\t' read -r cmodel ctok < "$C/ctx_$key" || :; }
+  [ -f "$G/ctx_$key" ] && { IFS=$'\t' read -r cmodel ctok < "$G/ctx_$key" || :; }
   model_v "$cmodel"
   pct='·'; pcolr=$GY
   case "$ctok" in
@@ -159,7 +160,7 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
 
   # one-line summary (first line of the cache file)
   idn=${wid//[^0-9]/}; smry=''
-  [ -f "$C/summary_$idn" ] && { read -r smry < "$C/summary_$idn" || :; }
+  [ -f "$G/summary_$idn" ] && { read -r smry < "$G/summary_$idn" || :; }
   smry=${smry:0:120}
 
   issd=''; [ -n "$iss" ] && issd="#$iss"

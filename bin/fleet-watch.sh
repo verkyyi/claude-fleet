@@ -137,7 +137,7 @@ pr_for_path() { # $1 = pane path, $2 = prmap file
   local path="$1" prmf="$2" key branch bare
   [ -s "$prmf" ] || return 0
   key=$(cache_key "$path")
-  branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
+  branch=$(cut -f1 "$C/global/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   [ -z "$bare" ] || [ "$bare" = "-" ] && return 0
   awk -F'\t' -v x="$bare" '$1==x{print $2"\t"$3"\t"$4"\t"$5; exit}' "$prmf" 2>/dev/null
@@ -150,8 +150,17 @@ pr_for_path() { # $1 = pane path, $2 = prmap file
 # against the persisted set and does the level-compare for needs.
 compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_headroom
   local slug="$1" steward="$2" autofill="$3" ghhd="$4" flhd="$5"
-  local prmf="$C/prmap"; [ -f "$C/prmap_$slug.ts" ] && prmf="$C/prmap_$slug"
-  local labf="$C/labels_$slug" issf="$C/issues" ; [ -s "$C/issues_$slug" ] && issf="$C/issues_$slug"
+  # per-fleet runtime cache (issue #181): fleets/<slug>/{prmap,labels,issues}, with a
+  # dual-read fallback to the legacy flat slug-suffixed files across the migrate window.
+  local FD; FD=$(fleet_cache_dir "$slug")
+  local prmf labf issf
+  if   [ -f "$FD/prmap.ts" ];      then prmf="$FD/prmap"
+  elif [ -f "$C/prmap_$slug.ts" ]; then prmf="$C/prmap_$slug"
+  else prmf="$FD/prmap"; fi
+  labf="$FD/labels"; [ -s "$labf" ] || { [ -s "$C/labels_$slug" ] && labf="$C/labels_$slug"; }
+  if   [ -s "$FD/issues" ];        then issf="$FD/issues"
+  elif [ -s "$C/issues_$slug" ];   then issf="$C/issues_$slug"
+  else issf="$FD/issues"; fi
   local needs=0
   local live_issues=' '     # issue numbers with a live window (for slotfree anti-collision)
   local US=$'\x1f'
@@ -314,7 +323,22 @@ watch_fleet() { (
   # every non-needs line = a firing "key<TAB>message"
   local firing; firing=$(printf '%s\n' "$out" | awk -F'\t' '$1!="needs"')
 
-  local keysf="$STATE/watch_$slug.keys" needsf="$STATE/watch_$slug.needs"
+  # One directory per fleet (issue #181): the edge dedup keyset + needs level move to
+  # fleets/<sess>/watch/{keys,needs}. The watch STATE is per-REPO (the lease is
+  # per-slug and two sessions can serve one repo) — so key it by the CANONICAL
+  # session for this repo (fleet_sess_for_repo = first-matching conf, exactly what
+  # the migrator targets), NOT whichever session happens to hold the lease this tick.
+  # Otherwise a change of lease holder would read an empty per-session keyset and
+  # re-seed an already-firing edge, missing the wake.
+  local csess; csess=$(fleet_sess_for_repo "$repo"); [ -n "$csess" ] || csess="$sess"
+  local wdir="$FLEET_CONF_DIR/fleets/$csess/watch"
+  mkdir -p "$wdir" 2>/dev/null
+  # Dual-read PER FILE (keys and needs independently): a not-yet-migrated legacy
+  # watch_<slug>.* file is read in place, so a half-migrated pair (keys moved, needs
+  # not — or vice versa) never presents a fresh-empty file that would spuriously fire.
+  local keysf="$wdir/keys" needsf="$wdir/needs"
+  [ ! -f "$keysf" ]  && [ -f "$STATE/watch_$slug.keys" ]  && keysf="$STATE/watch_$slug.keys"
+  [ ! -f "$needsf" ] && [ -f "$STATE/watch_$slug.needs" ] && needsf="$STATE/watch_$slug.needs"
   local first=0; [ -f "$keysf" ] || first=1
 
   # A tiny helper: persist the firing keyset + needs level. Called ONLY after a wake

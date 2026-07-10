@@ -78,6 +78,20 @@ paths — step 5 needs the old path to remove a retired command:
 git -C ~/.claude/fleet diff --name-status -M "$before" "$after"
 ```
 
+## 2b. Migrate durable state to the per-fleet layout (idempotent — issue #181)
+
+The fleet keeps its durable state as **one directory per fleet** —
+`~/.config/claude-fleet/fleets/<session>/{conf,restore.map,bridge/,watch/,sweep.due}`.
+Run the migrator once, right after the fast-forward, so an estate written in the
+old flat layout (`<session>.conf`, `restore/<session>.map`,
+`issue-bridge/bridge_<slug>.*`, …) moves to the new one. It is **idempotent and
+safe to re-run** (already-migrated files are left in place), and the new bins
+DUAL-READ both layouts, so a fleet keeps working across the land→migrate window.
+
+```sh
+bash ~/.claude/fleet/bin/fleet-migrate-layout.sh          # or --dry-run first to preview
+```
+
 ## 3. Reload only the daemons that changed
 
 Most script-body changes need **no reload**: an *interval* daemon

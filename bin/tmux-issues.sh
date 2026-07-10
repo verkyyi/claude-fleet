@@ -38,7 +38,7 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 #     modal's ⌃s uses (bin/tmux-config.sh). Each helper's phase-2 (`confirm`)
 #     path reads right here in the terminal, so we call it straight.
 # Also: in POPUP mode enter spawns AND closes (+abort); windowed loops forever.
-ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/issues_act_${FLEET_SESSION:-_}.$$"
+ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true

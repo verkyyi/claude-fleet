@@ -52,7 +52,7 @@ run_dash() {
   # clear any half-finished mode from a prior run; reset the live⇄landed view so
   # the landed peek doesn't stick across esc-relaunch (and never hides the live
   # session list on reopen). Per-fleet keyed, matching dash-view-toggle.sh (#130).
-  rm -f "$C/rename_target" "$C/bind_target" "$C/dash_view_${FLEET_SESSION:-default}"
+  rm -f "$C/rename_target" "$C/bind_target" "$C/global/dash_view_${FLEET_SESSION:-default}"
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \

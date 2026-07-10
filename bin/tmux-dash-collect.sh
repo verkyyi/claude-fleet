@@ -7,29 +7,32 @@
 # here — it lives in bin/tmux-pr-refresh.sh, which owns it on a faster ~15s tick
 # (see #81). The collector still WRITES sessmap and git_<key>, which that
 # refresher reads; the two never write the same cache file.
-# Writes under $C = $TMPDIR/.claude-dash:
-#   sessmap          — session<TAB>slug<TAB>repo  (one row per live tmux session)
-#   issues_<slug>    — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
-#   issues           — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
-#                      for single-fleet back-compat (un-migrated readers)
-#   labels_<slug>    — #num<TAB>comma-joined-labels per repo, split from the SAME
-#                      issues fetch (no extra gh call). Read by the fleet watcher
-#                      (bin/fleet-watch.sh, issue #147) for prod-alert + eligibility
-#   git_<key>        — branch<TAB>dirty  per live worktree (every run)
-#   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
-#   usage            — token-consumption proxy 5h/7d       (≥300s)
-#   usage.filecache  — per-file raw token sums keyed by (mtime,size) — memoizes
-#                      the usage scan so unchanged transcripts aren't re-read
-#   ratelimit        — last-seen official weekly-% line + epoch (scrape, every run)
+# Writes under $C = $TMPDIR/.claude-dash, one directory per fleet (issue #181):
+#   global/sessmap        — session<TAB>slug<TAB>repo  (one row per live tmux session)
+#   fleets/<slug>/issues  — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
+#   fleets/<slug>/labels  — #num<TAB>comma-joined-labels per repo, split from the SAME
+#                           issues fetch (no extra gh call). Read by the fleet watcher
+#                           (bin/fleet-watch.sh, issue #147) for prod-alert + eligibility
+#   global/git_<key>      — branch<TAB>dirty  per live worktree (every run). Keyed by a
+#                           globally-unique worktree path, so it lives in global/ (not
+#                           per-fleet) — the reader resolves it without a slug lookup
+#   global/ctx_<key>      — model<TAB>context-tokens per worktree (every run)
+#   global/usage          — token-consumption proxy 5h/7d       (≥300s)
+#   global/usage.filecache— per-file raw token sums keyed by (mtime,size) — memoizes
+#                           the usage scan so unchanged transcripts aren't re-read
+#   global/ratelimit      — last-seen official weekly-% line + epoch (scrape, every run)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-# Sweep this run's PID-unique temps on exit: the per-repo gh fetches only `mv`
-# their temp on success, so a failed fetch would otherwise orphan a 0-byte
-# issues_<slug>.$$ (and sessmap.$$) forever.
-trap 'rm -f "$C"/*.'"$$" EXIT
+# Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
+# and machine-wide caches under global/. G is the global bucket.
+G="$C/global"; mkdir -p "$G"
+# Sweep this run's PID-unique temps on exit (across the global/ + fleets/<slug>/
+# subdirs now): the per-repo gh fetches only `mv` their temp on success, so a failed
+# fetch would otherwise orphan a 0-byte issues.<pid> (and sessmap.<pid>) forever.
+trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true' EXIT
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
@@ -86,26 +89,24 @@ queue() {                          # $1=repo → add once
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
 [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
-SM="$C/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap
+SM="$G/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap
 for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
   r=$(fleet_resolve_repo_for_session "$sess")
   [ -z "$r" ] && continue
   printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$SM"
   queue "$r"
 done
-mv "$SM" "$C/sessmap"
+mv "$SM" "$G/sessmap"
 
 # pin repos with NO live session so their caches stay fresh (a steward watching a
 # repo you haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +
 # every configured per-fleet conf.
 for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
-if [ -d "$FLEET_CONF_DIR" ]; then
-  for cf in "$FLEET_CONF_DIR"/*.conf; do
-    [ -f "$cf" ] || continue
-    r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
-  done
-fi
+while IFS=$'\t' read -r _s cf; do
+  [ -f "$cf" ] || continue
+  r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+  [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+done < <(fleet_each_conf)
 
 # --- per-repo issues (TTL-gated per repo) ---
 # NB: PR status (prmap_<slug> + the flat prmap mirror + @prci/@pfg) is NOT built
@@ -116,7 +117,8 @@ i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
-  its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
+  FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
+  its=$(cat "$FD/issues.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
     # ONE fetch, TWO caches. The gh --jq emits a 6-column raw line whose LEADING two
     # columns are the backlog flag + comma-joined labels, FOLLOWED by the historical
@@ -137,18 +139,18 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     #                    those labels — so it is split from the unfiltered raw.
     # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw
     # temp is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
-    raw="$C/issuesx_$sg.$$"
+    raw="$FD/issuesx.$$"
     if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       > "$raw" 2>/dev/null; then
-      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$C/issues_$sg.$$" \
-        && mv "$C/issues_$sg.$$" "$C/issues_$sg"
-      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$C/labels_$sg.$$" \
-        && mv "$C/labels_$sg.$$" "$C/labels_$sg"
+      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$FD/issues.$$" \
+        && mv "$FD/issues.$$" "$FD/issues"
+      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$FD/labels.$$" \
+        && mv "$FD/labels.$$" "$FD/labels"
     fi
     rm -f "$raw"
-    now > "$C/issues_$sg.ts"
+    now > "$FD/issues.ts"
   fi
 done
 
@@ -166,7 +168,7 @@ tmux list-windows -a -F '#{pane_current_path}' | sort -u | while read -r path; d
   ab=$(git -C "$path" rev-list --left-right --count "$BASE...HEAD" 2>/dev/null)
   behind=$(echo "$ab" | awk '{print $1+0}'); ahead=$(echo "$ab" | awk '{print $2+0}')
   [ "${ahead:-0}" != 0 ] && branch="$branch+$ahead"; [ "${behind:-0}" != 0 ] && branch="$branch-$behind"
-  printf '%s\t%s' "$branch" "$dirty" | atomic_write "$C/git_$key"
+  printf '%s\t%s' "$branch" "$dirty" | atomic_write "$G/git_$key"
 done
 
 # --- per-window context tokens (every run): newest transcript's last-turn input+cache ---
@@ -181,9 +183,9 @@ CTX_PATHS=()
 while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
   < <(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
 if [ "${#CTX_PATHS[@]}" -gt 0 ] && have_py3; then
-python3 - "$C" "$$" "${CTX_PATHS[@]}" <<'PY'
+python3 - "$G" "$$" "${CTX_PATHS[@]}" <<'PY'
 import json, glob, os, sys, re
-C=sys.argv[1]; pid=sys.argv[2]
+C=sys.argv[1]; pid=sys.argv[2]   # C = the global/ cache bucket (ctx_<key> lives here)
 for path in sys.argv[3:]:
     if not path: continue
     slug=re.sub(r'[/._]', '-', path)
@@ -223,9 +225,9 @@ fi
 # mtime (a cached-mtime-vs-cutoff compare, no re-read) exactly as before, so the
 # rolling cutoffs still move correctly. Weighting is linear, so summing raw tokens
 # per file then weighting is identical to weighting per line: warm == cold output.
-uts=$(cat "$C/usage.ts" 2>/dev/null || echo 0)
+uts=$(cat "$G/usage.ts" 2>/dev/null || echo 0)
 if [ $(( $(now) - uts )) -ge 300 ] && have_py3; then
-  python3 - "$C/usage" "$$" <<'PY'
+  python3 - "$G/usage" "$$" <<'PY'
 import json, glob, os, sys, time
 out=sys.argv[1]; pid=sys.argv[2]; t=time.time()
 cachef=out+'.filecache'                                # $C/usage.filecache
@@ -275,7 +277,7 @@ ctmp=f'{cachef}.{pid}'
 with open(ctmp,'w') as fh: json.dump(new, fh)
 os.replace(ctmp, cachef)                               # atomic: overlapping collectors can't corrupt it
 PY
-  now > "$C/usage.ts"
+  now > "$G/usage.ts"
 fi
 
 # --- opportunistic scrape of the official weekly-% line (every run) ---
@@ -286,7 +288,7 @@ fi
 line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
   tmux capture-pane -p -S -600 -t "$w" 2>/dev/null
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
-if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$C/ratelimit"; fi
+if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/ratelimit"; fi
 
 # --- multi-account auto-switch (every run) ---
 # When a window running under a registered account shows the "You've hit your …
@@ -331,7 +333,7 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; 
     case "$ts" in ''|*[!0-9]*) continue;; esac
     [ $(( nowts - ts )) -ge "$ESC_AFTER" ] || continue
     [ "$esc" = "$ts" ] && continue
-    sum=$(head -1 "$C/summary_${wid//[^0-9]/}" 2>/dev/null | cut -c1-80)
+    sum=$(head -1 "$G/summary_${wid//[^0-9]/}" 2>/dev/null | cut -c1-80)
     msg="# session blocked
 **${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+
 > doing: ${sum}}"

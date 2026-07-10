@@ -34,9 +34,36 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
+# One directory per fleet (issue #181): each fleet's restore map lives at
+# fleets/<sess>/restore.map. The global auto-restore ARM flag + log stay under the
+# shared restore/ dir. each_restore_map() enumerates maps in BOTH layouts (new
+# preferred) so recovery still works across the land→migrate window.
 RDIR="$FLEET_CONF_DIR/restore"
 ARM="$RDIR/autorestore.on"
 LOG="${FLEET_RESTORE_LOG:-$RDIR/restore.log}"
+
+# session → its restore map path for READING (new fleets/<sess>/restore.map if it
+# exists, else the legacy restore/<sess>.map).
+restore_map_file() {
+  local new="$FLEET_CONF_DIR/fleets/$1/restore.map" old="$RDIR/$1.map"
+  if [ -f "$new" ]; then printf '%s' "$new"; else printf '%s' "$old"; fi
+}
+# emit "<sess>\t<mapfile>" for every mapped fleet, new layout preferred, each once.
+each_restore_map() {
+  local d mf sess
+  for d in "$FLEET_CONF_DIR"/fleets/*/; do
+    [ -d "$d" ] || continue
+    mf="${d}restore.map"; [ -f "$mf" ] || continue
+    sess=${d%/}; sess=${sess##*/}
+    printf '%s\t%s\n' "$sess" "$mf"
+  done
+  for mf in "$RDIR"/*.map; do
+    [ -f "$mf" ] || continue
+    sess=$(basename "$mf" .map)
+    [ -f "$FLEET_CONF_DIR/fleets/$sess/restore.map" ] && continue
+    printf '%s\t%s\n' "$sess" "$mf"
+  done
+}
 # window names that are fleet UI panels (rebuilt by fleet-up/steward-session),
 # NOT Claude work sessions — never snapshotted or restored as sessions.
 PANEL_RE='^(plan|dash|backlog)$'
@@ -68,7 +95,7 @@ snapshot() {
   local sess
   for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
     local repo main base conf tmp
-    conf="$FLEET_CONF_DIR/$sess.conf"
+    conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""
     if [ -f "$conf" ]; then
       # shellcheck source=/dev/null
@@ -91,7 +118,8 @@ snapshot() {
     fi
     [ -z "$base" ] && base="${FLEET_BASE_BRANCH:-}"
 
-    tmp="$RDIR/.$sess.$$.map"
+    local sdir; sdir="$(fleet_state_dir "$sess")"       # fleets/<sess>/ (issue #181)
+    tmp="$sdir/.restore.$$.map"
     printf 'FLEET\t%s\t%s\t%s\t%s\n' "$sess" "$repo" "$main" "$base" > "$tmp"
     # steward hub pane (issue #143): find it by its @steward=1 marker, NOT the
     # 'plan' window name (panels are excluded by the resolver). Emit it as a
@@ -133,18 +161,27 @@ snapshot() {
     # prior size and a full snapshot overwrites — and a stale WIN row is harmless
     # to restore (its worktree is gone → skipped), so erring on the side of
     # keeping recovery data is safe.
-    local dest="$RDIR/$sess.map"
-    if [ -f "$dest" ]; then
+    local dest="$sdir/restore.map"
+    # shrink guard compares against whichever map currently holds recovery data —
+    # the new-layout map, or a not-yet-migrated legacy one (issue #181).
+    local prior; prior=$(restore_map_file "$sess")
+    if [ -f "$prior" ]; then
       local new_wins old_wins
-      new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"  2>/dev/null | wc -l | tr -d ' ')
-      old_wins=$(awk -F'\t' '$1=="WIN"' "$dest" 2>/dev/null | wc -l | tr -d ' ')
+      new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"   2>/dev/null | wc -l | tr -d ' ')
+      old_wins=$(awk -F'\t' '$1=="WIN"' "$prior" 2>/dev/null | wc -l | tr -d ' ')
       if [ "${new_wins:-0}" -lt "${old_wins:-0}" ]; then
         log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} — keeping richer map (mid-restore?)"
         rm -f "$tmp"
         continue
       fi
     fi
-    mv "$tmp" "$dest" 2>/dev/null || rm -f "$tmp"
+    # Drop the stale legacy map ONLY when the new one actually landed — a failed mv
+    # (ENOSPC/read-only/EXDEV) must NOT leave the fleet with no recovery map at all.
+    if mv "$tmp" "$dest" 2>/dev/null; then
+      [ "$dest" = "$RDIR/$sess.map" ] || rm -f "$RDIR/$sess.map" 2>/dev/null || true
+    else
+      rm -f "$tmp"
+    fi
   done
   # NB: do NOT prune maps for absent sessions here. A CRASHED fleet's session is
   # gone but its map MUST survive so --if-down can rebuild it. fleet-down.sh is the
@@ -158,8 +195,8 @@ snapshot() {
 restore() {
   local dry="${1:-}"
   mkdir -p "$RDIR"
-  local mf found=0
-  for mf in "$RDIR"/*.map; do
+  local found=0 _msess mf
+  while IFS=$'\t' read -r _msess mf; do
     [ -f "$mf" ] || continue
     found=1
     local sess repo main base
@@ -287,8 +324,8 @@ restore() {
       fi
     done < <(awk -F'\t' '$1=="WIN"' "$mf")
     [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
-  done
-  [ "$found" = 0 ] && say "no restore maps under $RDIR — nothing to restore"
+  done < <(each_restore_map)
+  [ "$found" = 0 ] && say "no restore maps under $FLEET_CONF_DIR/fleets/*/ — nothing to restore"
   return 0
 }
 
@@ -306,11 +343,11 @@ case "${1:-}" in
     # whenever ANY mapped fleet is down is safe.
     [ -f "$ARM" ] || exit 0
     ifd_down=0
-    for ifd_mf in "$RDIR"/*.map; do
+    while IFS=$'\t' read -r _ifd_s ifd_mf; do
       [ -f "$ifd_mf" ] || continue
       ifd_s=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$ifd_mf")
       [ -n "$ifd_s" ] && ! tmux has-session -t "$ifd_s" 2>/dev/null && ifd_down=1
-    done
+    done < <(each_restore_map)
     [ "$ifd_down" = 0 ] && exit 0
     # Disk-pressure circuit-breaker: if a fleet died because the volume filled,
     # rebuilding straight back into a full disk just re-crashes it — a restore ⇄

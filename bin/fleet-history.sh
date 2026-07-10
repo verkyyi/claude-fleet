@@ -38,7 +38,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" 2>/dev/null || true
 
-C="${TMPDIR:-/tmp}/.claude-dash"          # dash summary cache lives here (summary_<winid>)
+C="${TMPDIR:-/tmp}/.claude-dash/global"   # dash summary cache lives here (summary_<winid>, issue #181)
 PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 # --- ledger location: per-fleet (a fleet ≡ a repo), durable across reboots -----

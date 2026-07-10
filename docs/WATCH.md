@@ -87,9 +87,12 @@ watched only if it has:
   floor it skips entirely (a full volume is the crash trigger — don't add load).
   The diskguard daemon separately notifies the operator about low disk, so a
   skipped tick loses nothing.
-- **Idempotent dedup state** lives under `~/.config/claude-fleet/watch/`
-  (`FLEET_WATCH_STATE_DIR`): `watch_<slug>.keys` (the firing keyset) and
-  `watch_<slug>.needs` (the needs-attention level for the rise-compare).
+- **Idempotent dedup state** lives per fleet at
+  `~/.config/claude-fleet/fleets/<session>/watch/{keys,needs}` (issue #181):
+  `keys` (the firing keyset) and `needs` (the needs-attention level for the
+  rise-compare). The legacy flat `~/.config/claude-fleet/watch/watch_<slug>.*`
+  (`FLEET_WATCH_STATE_DIR`) is dual-read until `bin/fleet-migrate-layout.sh`
+  moves it.
 
 ## Enable it
 

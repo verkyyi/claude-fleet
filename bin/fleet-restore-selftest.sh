@@ -156,7 +156,8 @@ sp=$(tmux split-window -P -F '#{pane_id}' -t snap:plan -c "$STEW_PATH")
 tmux set-option -p -t "$sp" @steward 1
 
 bash "$RESTORE" --snapshot 2>/dev/null || fail "fleet-restore.sh --snapshot exited non-zero"
-MAP="$FLEET_CONF_DIR/restore/snap.map"
+# One directory per fleet (issue #181): the snapshot writes fleets/<sess>/restore.map.
+MAP="$FLEET_CONF_DIR/fleets/snap/restore.map"
 [ -f "$MAP" ] || fail "snapshot wrote no map at $MAP"
 
 grep -qxF "STEWARD	$STEW_PATH	stew-abc123" "$MAP" \
@@ -267,9 +268,10 @@ rm -f "$WORK/fail-resume"
 # A snapshot of a hub-only session must NOT shrink a richer map, and restore must
 # reopen the missing work windows instead of skipping a live-but-hub-only fleet.
 #
-# Clean slate for restore()'s map glob: drop the earlier sections' maps so it
-# can't wander onto the down 'snap' fleet (that would spawn a real fleet-up).
-rm -f "$FLEET_CONF_DIR/restore/"*.map
+# Clean slate for restore()'s map glob: drop the earlier sections' maps — BOTH the
+# new per-fleet layout (fleets/<sess>/restore.map, issue #181) and any legacy ones —
+# so it can't wander onto the down 'snap' fleet (that would spawn a real fleet-up).
+rm -f "$FLEET_CONF_DIR/restore/"*.map "$FLEET_CONF_DIR"/fleets/*/restore.map
 TAB="$(printf '\t')"
 
 # Two work windows in the durable map (their worktrees must exist so restore

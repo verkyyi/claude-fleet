@@ -20,7 +20,7 @@ esac
 # collector's caches: $C/usage (5h/7d proxy, always shown when present) and
 # $C/ratelimit (official weekly/N-hour %, only while fresh — a stale % is worse
 # than none). Both gracefully contribute nothing when their cache is absent. ---
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp}/.claude-dash/global"   # usage/ratelimit are machine-wide (issue #181)
 usg=""
 u=$(cat "$C/usage" 2>/dev/null)
 [ -n "$u" ] && usg="this machine · rolling  ${u}"

@@ -128,17 +128,15 @@ EOF
 DEFAULT_MAIN="${FLEET_MAIN:-}"
 [ -n "$DEFAULT_MAIN" ] && clean_fleet "$DEFAULT_MAIN" "${FLEET_REPO:-}" \
   "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}"
-if [ -d "$FLEET_CONF_DIR" ]; then
-  for cf in "$FLEET_CONF_DIR"/*.conf; do
-    [ -f "$cf" ] || continue
-    IFS=$'\t' read -r fm fr fb fp < <( . "$cf" >/dev/null 2>&1
-      printf '%s\t%s\t%s\t%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
-        "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" )
-    [ -n "$fm" ] || continue
-    [ "$fm" = "$DEFAULT_MAIN" ] && continue   # already cleaned as the global default
-    clean_fleet "$fm" "$fr" "$fb" "$fp"
-  done
-fi
+while IFS=$'\t' read -r _s cf; do
+  [ -f "$cf" ] || continue
+  IFS=$'\t' read -r fm fr fb fp < <( . "$cf" >/dev/null 2>&1
+    printf '%s\t%s\t%s\t%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
+      "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" )
+  [ -n "$fm" ] || continue
+  [ "$fm" = "$DEFAULT_MAIN" ] && continue   # already cleaned as the global default
+  clean_fleet "$fm" "$fr" "$fb" "$fp"
+done < <(fleet_each_conf)
 
 say "done: pruned=$removed closed=$closed kept=$kept"
 # keep the log from growing unbounded

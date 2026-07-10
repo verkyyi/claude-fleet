@@ -57,8 +57,7 @@ Prefer the cached PR map (`branch<TAB>#num<TAB>state<TAB>ci`, written by the
 pr-refresh daemon), falling back to live `gh` if the cache is missing/stale:
 
 ```sh
-C="${TMPDIR:-/tmp}/.claude-dash"; slug=$(fleet_slug_cached "$S")
-prmf="$C/prmap"; [ -n "$slug" ] && [ -f "$C/prmap_$slug" ] && prmf="$C/prmap_$slug"
+prmf=$(fleet_cache prmap "$S")      # fleets/<slug>/prmap (issue #181), slug-resolved
 if [ -s "$prmf" ]; then cat "$prmf"
 else gh pr list --repo "$FLEET_REPO" --state open \
        --json number,title,mergeStateStatus,statusCheckRollup,isDraft; fi
@@ -74,7 +73,7 @@ Prefer the issues cache (`milestone<TAB>#num<TAB>assignee<TAB>title`); fall back
 to `gh`:
 
 ```sh
-issf="$C/issues"; [ -n "$slug" ] && [ -f "$C/issues_$slug" ] && issf="$C/issues_$slug"
+issf=$(fleet_cache issues "$S")     # fleets/<slug>/issues (issue #181), slug-resolved
 if [ -s "$issf" ]; then cat "$issf"
 else gh issue list --repo "$FLEET_REPO" --state open \
        --json number,title,assignees,milestone; fi
@@ -87,7 +86,7 @@ window stuck on `needs`/`looping` from step 1.
 
 ```sh
 bash ~/.claude/fleet/bin/fleet-diskguard.sh --free    # free GB on the volume backing $TMPDIR
-cat "$C/usage" 2>/dev/null                             # token-consumption proxy (5h / 7d), if the collector wrote it
+cat "${TMPDIR:-/tmp}/.claude-dash/global/usage" 2>/dev/null   # token-consumption proxy (5h / 7d), if the collector wrote it (issue #181)
 ```
 
 Note low disk (near the diskguard floor) and heavy token usage — both are
