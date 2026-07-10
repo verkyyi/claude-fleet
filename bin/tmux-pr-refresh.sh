@@ -29,14 +29,12 @@ trap 'rm -f "$C"/*.'"$$" EXIT
 REPO="${FLEET_REPO:-}"
 now() { date +%s; }
 
-# atomic_write / cache_key — byte-identical to bin/tmux-dash-collect.sh. Both
-# scripts write the same cache dir, so these MUST stay in lockstep (a reader
-# can't tell which process wrote a file). See that file for the full rationale
-# (rename(2) atomicity; collision-free reversible worktree key).
-atomic_write() {
-  local dest="$1" tmp="$1.$$"
-  cat > "$tmp" && mv "$tmp" "$dest"
-}
+# cache_key — byte-identical to bin/tmux-dash-collect.sh. Both scripts write the
+# same cache dir, so this MUST stay in lockstep (a reader can't tell which process
+# wrote a file). See that file for the full rationale (collision-free reversible
+# worktree key). NB: this script no longer writes any cache file atomically —
+# prmap_<slug> is written by the fetch loop's own temp+mv, and the flat mirror is
+# gone (issue #180) — so the shared atomic_write helper is no longer needed here.
 cache_key() {
   local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"
 }
@@ -59,8 +57,9 @@ PR_TTL=$(( INT > 4 ? INT - 3 : 1 ))
 # Mirror of the collector's fetch queue, but sourced from the collector's already
 # written sessmap (a single awk-free read) instead of re-running the expensive
 # per-session git/tmux repo resolution every 15s — that stays the collector's
-# job. Seed with the primary FLEET_REPO (so its flat mirror stays fresh with no
-# session), add every repo a live session resolved to, then the configured
+# job. Seed with the global FLEET_REPO (so its slug'd cache stays fresh with no
+# live session — NOT a primary; issue #180), add every repo a live session
+# resolved to, then the configured
 # fleets (FLEET_REPOS + per-fleet confs) so a watched-but-unopened repo refreshes.
 declare -a Q_REPO Q_SLUG          # unique (repo,slug) fetch queue (bash 3.2 ok)
 SEEN=' '
@@ -71,8 +70,7 @@ queue() {                          # $1=repo → add once
   case "$SEEN" in *" $s "*) return;; esac
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
-PRIMARY_SLUG=''
-if [ -n "$REPO" ]; then PRIMARY_SLUG=$(fleet_slug "$(fleet_norm_repo "$REPO")"); queue "$(fleet_norm_repo "$REPO")"; fi
+[ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
 if [ -f "$C/sessmap" ]; then
   while IFS=$'\t' read -r _ _ rp; do
     [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")"
@@ -117,10 +115,9 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   fi
 done
 
-# --- back-compat flat mirror: PRIMARY repo → the un-slug'd prmap name ---
-if [ -n "$PRIMARY_SLUG" ] && [ -s "$C/prmap_$PRIMARY_SLUG" ]; then
-  atomic_write "$C/prmap" < "$C/prmap_$PRIMARY_SLUG"
-fi
+# No flat prmap mirror is written (issue #180 — all fleets equal, no primary):
+# every reader routes through fleet_cache, which returns prmap_<slug> for a
+# resolved fleet and only falls back to the un-slug'd name during cold start.
 
 # --- PR/CI attention signal ---
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
@@ -129,9 +126,10 @@ US=$'\x1f'
 tmux list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
 while IFS="$US" read -r sess win path cur; do
   [ -z "$path" ] && continue
-  # each window matches against ITS fleet's prmap (slug from sessmap), flat fallback
-  slug=$(fleet_slug_cached "$sess")
-  prmf="$C/prmap"; [ -n "$slug" ] && [ -f "$C/prmap_$slug.ts" ] && prmf="$C/prmap_$slug"
+  # each window matches against ITS fleet's prmap — routed through fleet_cache so
+  # the read side has a single slug-resolution truth (issue #180). Cold-start
+  # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
+  prmf=$(fleet_cache prmap "$sess")
   key=$(cache_key "$path")
   branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')

@@ -400,7 +400,11 @@ fleet_session_cap_ok() {
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
 # the repo has 0 rows), else the flat fallback. Keying off .ts — not file size —
-# so a fleet whose repo genuinely has 0 issues/PRs shows empty, not the primary's.
+# so a fleet whose repo genuinely has 0 issues/PRs shows empty rather than reading
+# a stale un-slug'd file. The flat (un-slug'd) name is ONLY a degenerate cold-start
+# fallback: no producer writes it anymore (issue #180 removed the "primary" flat
+# mirror — all fleets are equal), so it typically won't exist and readers treat
+# absent as "loading". This is the SINGLE slug-resolution truth every reader uses.
 fleet_cache() {
   local base="$1" slug
   slug=$(fleet_slug_cached "$2")

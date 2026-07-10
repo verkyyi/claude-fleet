@@ -1,7 +1,8 @@
 #!/bin/bash
 # tmux-issues-rows.sh [roadmap|unplanned|all] — emit fzf rows for a backlog panel.
 # roadmap = milestoned issues grouped by milestone; unplanned = no-milestone flat
-# list. READ-ONLY (the collector writes $C/issues: milestone\t#num\tassignee\ttitle).
+# list. READ-ONLY: reads THIS fleet's cache via fleet_cache (the collector writes
+# $C/issues_<slug>: milestone\t#num\tassignee\ttitle; no flat mirror — issue #180).
 # Line: <#num>US<colored display>US<milestone>. Milestone headers have empty
 # field1 (Enter no-ops on them).
 set -uo pipefail

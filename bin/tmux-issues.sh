@@ -1,6 +1,7 @@
 #!/bin/bash
 # tmux-issues.sh [roadmap|unplanned|all] — GitHub backlog panel (open issues
-# grouped by milestone), read from cache (the collector writes $C/issues).
+# grouped by milestone), read from THIS fleet's cache via fleet_cache (the
+# collector writes $C/issues_<slug> per fleet; no flat mirror — issue #180).
 # Enter on an issue spawns a Claude session to work on it (worktree + claude
 # seeded with the issue). Auto-reloads. Toggled as a two-pane window by
 # prefix+b: roadmap (milestoned) | unplanned (no milestone).

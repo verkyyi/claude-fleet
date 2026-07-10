@@ -68,9 +68,11 @@ have_py3() {
 GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
 
 # --- resolve the repo set from live tmux sessions (multi-fleet) ---
-# Each tmux session ≡ one fleet ≡ one repo. Seed the fetch queue with the primary
-# FLEET_REPO (so its flat mirror stays fresh even with no session), then add every
-# other repo a live session resolves to. Write sessmap for the read-side producers.
+# Each tmux session ≡ one fleet ≡ one repo. Seed the fetch queue with the global
+# FLEET_REPO (so its slug'd cache stays fresh even with no live session), then add
+# every other repo a live session resolves to. No fleet is "primary": every fleet's
+# cache is issues_<slug> only, and no flat mirror is written as any one fleet's copy
+# (issue #180). Write sessmap for the read-side producers.
 declare -a Q_REPO Q_SLUG          # unique (repo,slug) fetch queue (indexed arrays; bash 3.2 ok)
 SEEN=' '
 queue() {                          # $1=repo → add once
@@ -80,8 +82,7 @@ queue() {                          # $1=repo → add once
   case "$SEEN" in *" $s "*) return;; esac
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
-PRIMARY_SLUG=''
-if [ -n "$REPO" ]; then PRIMARY_SLUG=$(fleet_slug "$(fleet_norm_repo "$REPO")"); queue "$(fleet_norm_repo "$REPO")"; fi
+[ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
 SM="$C/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap
 for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
   r=$(fleet_resolve_repo_for_session "$sess")
@@ -129,11 +130,9 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   fi
 done
 
-# --- back-compat flat mirror: PRIMARY repo → the un-slug'd issues name ---
-# (the prmap flat mirror is written by bin/tmux-pr-refresh.sh, not here — see #81)
-if [ -n "$PRIMARY_SLUG" ] && [ -s "$C/issues_$PRIMARY_SLUG" ]; then
-  atomic_write "$C/issues" < "$C/issues_$PRIMARY_SLUG"
-fi
+# No flat issues mirror is written (issue #180 — all fleets equal, no primary):
+# every reader routes through fleet_cache, which returns issues_<slug> for a
+# resolved fleet and only falls back to the un-slug'd name during cold start.
 
 # --- git per live worktree (every run) ---
 tmux list-windows -a -F '#{pane_current_path}' | sort -u | while read -r path; do

@@ -125,6 +125,17 @@ JSON
 printf '2026-07-09T00:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 
 runbridge() {
+  # Steward routing is now resolved PER-FLEET CONF (issue #180 dropped the global
+  # PRIMARY_STEWARD_ISSUE short-circuit), so materialize the leg's FLEET_STEWARD_ISSUE
+  # into fake/repo's per-fleet conf — exactly how production resolves it. The env
+  # var stays the ergonomic per-leg toggle: set ⇒ the steward route resolves; unset
+  # ⇒ no conf ⇒ no route (mirrors an install that never wired a steward issue).
+  if [ -n "${FLEET_STEWARD_ISSUE:-}" ]; then
+    printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=%s\n' \
+      "$FLEET_STEWARD_ISSUE" > "$WORK/conf/fake.conf"
+  else
+    rm -f "$WORK/conf/fake.conf"
+  fi
   # Forward SECRET/SIG from this call's prefix-assignment env into the child bash
   # (a prefix assignment to a shell FUNCTION isn't exported to its grandchildren).
   PATH="$WORK/fakepath:$PATH" \
@@ -309,41 +320,42 @@ runbridge --poll || fail "no-steward-issue poll exited non-zero"
 [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
   && fail "with no FLEET_STEWARD_ISSUE, a #20 comment must not inject anywhere"
 
-# ============ steward-issue resolver: no cross-fleet leak (issue #146) =========
+# ============ steward-issue resolver: no cross-fleet leak (issue #146/#180) =====
 # bridge_steward_issue_for_repo must map a repo → its OWN FLEET_STEWARD_ISSUE and
-# NEVER inherit the global/primary value onto another fleet (the subtle bug where a
-# conf-sourcing subshell inherits the global). Extract the real function body and
-# exercise it against confs; the primary is faked via the PRIMARY_* snapshot.
+# NEVER inherit another fleet's value (the subtle bug where a conf-sourcing subshell
+# inherits the global). All fleets are equal (issue #180 — the PRIMARY_* snapshot +
+# short-circuit are gone), so EVERY fleet — including what used to be the "primary" —
+# is just a per-fleet <session>.conf. Extract the real function body and exercise it
+# against those confs.
 RES_CONF="$WORK/resconf"; mkdir -p "$RES_CONF"
+printf 'FLEET_REPO="me/alpha"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=20\n' > "$RES_CONF/alpha.conf"
 printf 'FLEET_REPO="me/other"\nFLEET_ISSUE_BRIDGE=1\n' > "$RES_CONF/other.conf"
 printf 'FLEET_REPO="me/beta"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=77\n' > "$RES_CONF/beta.conf"
 (
   set -uo pipefail
   . "$BIN/fleet-lib.sh"
   FLEET_CONF_DIR="$RES_CONF"
-  PRIMARY_REPO="me/primary"; PRIMARY_STEWARD_ISSUE="20"
-  : "$FLEET_CONF_DIR $PRIMARY_REPO $PRIMARY_STEWARD_ISSUE"  # read via the eval below (opaque to shellcheck)
+  : "$FLEET_CONF_DIR"  # read via the eval below (opaque to shellcheck)
   eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
-  [ "$(bridge_steward_issue_for_repo me/primary)" = 20 ] || { echo "resolver: primary should be 20" >&2; exit 1; }
-  [ -z "$(bridge_steward_issue_for_repo me/other)" ]     || { echo "resolver: me/other must NOT inherit the global 20 (cross-fleet leak)" >&2; exit 1; }
-  [ "$(bridge_steward_issue_for_repo me/beta)" = 77 ]    || { echo "resolver: me/beta should resolve its OWN 77" >&2; exit 1; }
-  [ -z "$(bridge_steward_issue_for_repo me/nope)" ]      || { echo "resolver: unknown repo should be empty" >&2; exit 1; }
+  [ "$(bridge_steward_issue_for_repo me/alpha)" = 20 ] || { echo "resolver: me/alpha should resolve its OWN 20" >&2; exit 1; }
+  [ -z "$(bridge_steward_issue_for_repo me/other)" ]   || { echo "resolver: me/other (no own issue) must NOT inherit another fleet's (cross-fleet leak)" >&2; exit 1; }
+  [ "$(bridge_steward_issue_for_repo me/beta)" = 77 ]  || { echo "resolver: me/beta should resolve its OWN 77" >&2; exit 1; }
+  [ -z "$(bridge_steward_issue_for_repo me/nope)" ]    || { echo "resolver: unknown repo should be empty" >&2; exit 1; }
 ) || fail "steward-issue resolver leaked / mis-resolved across fleets"
 # A conf that sets FLEET_STEWARD_ISSUE but NOT its own FLEET_REPO must be ignored,
-# not mis-attributed to the (inherited) primary repo. With NO global primary issue,
-# me/primary must resolve to empty, not the rogue conf's 99.
+# not mis-attributed to another fleet's repo: me/alpha must keep its own 20, never
+# the rogue conf's 99.
 printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=99\n' > "$RES_CONF/norepo.conf"
 (
   set -uo pipefail
   . "$BIN/fleet-lib.sh"
   FLEET_CONF_DIR="$RES_CONF"
-  PRIMARY_REPO="me/primary"; PRIMARY_STEWARD_ISSUE=""
-  : "$FLEET_CONF_DIR $PRIMARY_REPO $PRIMARY_STEWARD_ISSUE"
+  : "$FLEET_CONF_DIR"
   eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
-  [ -z "$(bridge_steward_issue_for_repo me/primary)" ] \
-    || { echo "resolver: a repo-less conf's steward issue must NOT attach to the primary" >&2; exit 1; }
-) || fail "steward-issue resolver mis-attributed a repo-less conf to the primary"
-printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak)\n' >&2
+  [ "$(bridge_steward_issue_for_repo me/alpha)" = 20 ] \
+    || { echo "resolver: a repo-less conf's steward issue must NOT clobber another fleet's" >&2; exit 1; }
+) || fail "steward-issue resolver mis-attributed a repo-less conf across fleets"
+printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no primary)\n' >&2
 
 printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/no-config) + resolver-no-leak verified\n'
 exit 0

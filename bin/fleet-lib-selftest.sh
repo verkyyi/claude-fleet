@@ -192,4 +192,16 @@ eq "cache: .ts present → slug'd file" "$FLEET_C/prmap_acme-widgets" "$(fleet_c
 # A session that doesn't resolve to a slug → always flat, regardless of markers.
 eq "cache: unresolved session → flat" "$FLEET_C/issues" "$(fleet_cache issues nope)"
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing)\n' "$CHECKS"
+# --- two-fleet routing: no cross-fleet leak (issue #180) --------------------
+# With TWO fleets live, each session must route to ITS OWN slug'd cache and NEVER
+# the other's — the regression rail for the tmux-dashboard-rows.sh:59 bug where a
+# non-primary fleet showed another fleet's prmap. Both fetches have COMPLETED
+# (both .ts markers present), so neither can fall back to the flat name.
+: > "$FLEET_C/prmap_acme-gadgets.ts"
+eq "2fleet: s1 → its own prmap"  "$FLEET_C/prmap_acme-widgets" "$(fleet_cache prmap s1)"
+eq "2fleet: s2 → its own prmap"  "$FLEET_C/prmap_acme-gadgets" "$(fleet_cache prmap s2)"
+[ "$(fleet_cache prmap s1)" != "$(fleet_cache prmap s2)" ] \
+  || { echo "FAIL 2fleet: s1 and s2 must not share a prmap (cross-fleet leak)"; exit 1; }
+CHECKS=$((CHECKS + 1))   # the bracket assertion above (the two eq calls self-count)
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180)\n' "$CHECKS"
