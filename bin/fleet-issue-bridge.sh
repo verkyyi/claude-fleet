@@ -10,7 +10,12 @@
 #   • POLL (default, per-tick daemon) — the robust, no-inbound-port path. Each tick
 #     lists new issue comments across every live fleet's repo via `gh api` with a
 #     `since` watermark (reads are ~free), and relays the qualifying ones. Run from
-#     launchd (com.claude-fleet.issue-bridge) / a systemd timer, ~15s cadence.
+#     launchd (com.claude-fleet.issue-bridge) / a systemd timer, ~15s cadence. Per
+#     repo it runs TWO decoupled channels (issue #198) — a WORKER channel (repo-wide
+#     comments minus the steward issue) and a STEWARD channel (the steward control
+#     issue's own per-issue stream) — each with its OWN watermark + seen-set, so a
+#     busy steward can no longer pin the worker watermark and starve worker relays,
+#     and queued steward wakes COALESCE to current state on drain (no stale replay).
 #   • --deliver (webhook) — read ONE GitHub `issue_comment` delivery JSON on stdin,
 #     validate its HMAC (FLEET_ISSUE_BRIDGE_SECRET), and relay that one comment.
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
@@ -130,7 +135,10 @@ bridge_sess_for_slug() {
   _BR_SLUG="$want"; _BR_SESS="$found"
   printf '%s' "$found"
 }
-# $1=slug $2=seen|since → the state file path (new per-fleet layout, else legacy).
+# $1=slug $2=kind (seen|since|steward.seen|steward.since|typing.<cid>) → the state
+# file path (new per-fleet layout, else legacy). The CHANNEL split (issue #198)
+# rides the $2 kind: the steward channel passes steward.seen/steward.since so its
+# bookkeeping co-locates with the worker's under the same fleets/<sess>/bridge/ dir.
 bridge_state_file() {
   local slug="$1" kind="$2" sess new old="$STATE/bridge_$1.$2"
   sess=$(bridge_sess_for_slug "$slug")
@@ -145,11 +153,20 @@ bridge_state_file() {
   printf '%s' "$old"
 }
 
-# dedup set, one file per fleet (capped so it can't grow without bound).
-bridge_seen_file() { bridge_state_file "$1" seen; }
-bridge_seen_has()  { grep -qxF "$2" "$(bridge_seen_file "$1")" 2>/dev/null; }
+# dedup set, one file per fleet (capped so it can't grow without bound). Split by
+# CHANNEL (issue #198): the worker relay and the steward control-issue each get
+# their OWN seen-set (and watermark), so a busy steward can't pin the worker's
+# progress. $3 = channel: "" (worker, default) or "steward" → routed through
+# bridge_state_file as the seen/steward.seen kind, so both land in the #181 layout.
+bridge_seen_file() {
+  case "${2:-}" in
+    ?*) bridge_state_file "$1" "$2.seen" ;;
+    *)  bridge_state_file "$1" seen ;;
+  esac
+}
+bridge_seen_has()  { grep -qxF "$2" "$(bridge_seen_file "$1" "${3:-}")" 2>/dev/null; }
 bridge_seen_add() {
-  local f; f=$(bridge_seen_file "$1")
+  local f; f=$(bridge_seen_file "$1" "${3:-}")
   printf '%s\n' "$2" >> "$f" 2>/dev/null || return 0
   # trim to the most recent 2000 ids (ids only grow, so tail keeps the newest)
   if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 2000 ]; then
@@ -479,7 +496,12 @@ bridge_fleet_for_repo() {
 #   3  queued (target busy) → caller must NOT mark seen; retry next tick
 bridge_relay() {
   local repo="$1" slug="$2" issue="$3" cid="$4" assoc="$5" author="$6" body="$7"
-  if bridge_seen_has "$slug" "$cid"; then echo "dup"; return 0; fi
+  # Which channel's seen-set governs this comment? A comment on the steward control
+  # issue is tracked in the steward seen-set, everything else in the worker one
+  # (issue #198) — so the caller's mark-seen (below / in deliver()) must match.
+  local chan=''
+  [ -n "$STEWARD_ISSUE" ] && [ "$issue" = "$STEWARD_ISSUE" ] && chan=steward
+  if bridge_seen_has "$slug" "$cid" "$chan"; then echo "dup"; return 0; fi
   if bridge_marked "$body"; then echo "suppress:marker"; return 0; fi
   if ! bridge_assoc_ok "$assoc"; then echo "suppress:assoc($assoc)"; return 0; fi
 
@@ -521,15 +543,16 @@ EOF
       # Pane resolved but a tmux op failed — transient; retry next tick.
       echo "inject-failed(steward#$issue) — will retry"; return 3
     fi
-    # No steward pane for this repo — drop (terminal), exactly like a worker's
-    # revive-off "gone". Retrying instead would PIN the repo watermark forever if
-    # the fleet has no steward hub (misconfig, or the hub isn't running), and once
-    # >100 comments accrue past the pinned mark the non-paginated fetch never reaches
-    # newer WORKER comments — a silent, repo-wide starvation far worse than a lost
-    # wake. The comment still lives on the durable issue thread; re-comment once the
-    # hub is up. (A present-but-stuck steward is handled above via the stale escape,
-    # so this branch is truly "no pane", not "busy".)
-    echo "gone(steward#$issue: no @steward pane for repo)"; return 0
+    # No steward pane for this repo THIS tick — QUEUE (retry), not drop. Pre-#198
+    # this dropped terminally because a held SHARED watermark would starve worker
+    # relays; now the steward channel is decoupled (its own per-issue watermark +
+    # --paginate in poll_steward_channel), so retrying can't starve workers and it
+    # survives a transient absence (the hub mid-respawn — a /clear, a restart) that a
+    # drop would silently lose. On the poll path the steward watermark simply holds;
+    # on --deliver this returns EX_TEMPFAIL so a redelivery / the poll backstop lands
+    # it once the hub is up. (A present-but-stuck steward is handled above via the
+    # stale escape, so this branch is truly "no pane", not "busy".)
+    echo "queued(steward#$issue: no @steward pane yet)"; return 3
   fi
 
   local hit sess win st
@@ -649,29 +672,63 @@ EOF
     # the poll daemon (if running) picks it up as the backstop.
     exit 75
   fi
-  bridge_seen_add "$slug" "$cid"   # terminal (relayed|revived|suppressed|dup)
-  bridge_typing_reset "$slug" "$cid"   # reap any typing counter on the terminal path
+  # Mark seen in the SAME channel bridge_relay's dup-check reads (issue #198): a
+  # steward-control-issue delivery goes in the steward seen-set, everything else in
+  # the worker one — so a webhook delivery and the poll steward channel agree.
+  local chan=''
+  [ -n "$STEWARD_ISSUE" ] && [ "$num" = "$STEWARD_ISSUE" ] && chan=steward
+  bridge_seen_add "$slug" "$cid" "$chan"   # terminal (relayed|revived|suppressed|dup)
+  bridge_typing_reset "$slug" "$cid"       # reap any typing counter on the terminal path (issue #195)
   exit 0
 }
 
 # =========================== ingress: poll (default) ===========================
-# Per-repo: list comments updated since our watermark, relay the new ones, then
-# advance the watermark to the low-water mark (earliest still-queued comment, so a
-# busy worker's comment is retried without re-relaying the ones after it).
+# Per repo, TWO independent channels (issue #198), each with its OWN watermark +
+# seen-set so one can't head-of-line-block the other:
+#   • WORKER  — the repo-wide comment stream MINUS the steward control issue.
+#   • STEWARD — the steward control issue's OWN per-issue stream, coalesced on drain.
+# poll_repo takes the single per-repo lease once and runs both under it.
 poll_repo() {
-  local repo="$1" slug since rows lease
+  local repo="$1" slug lease
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  local sincef; sincef=$(bridge_state_file "$slug" since)
-  since=$(cat "$sincef" 2>/dev/null)
-  # First run: seed to NOW so enabling the bridge never floods with history.
-  [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — watermark seeded, no backfill"; return 0; }
-
   # Single-writer per repo — the SAME lock a concurrent --deliver takes, so the two
-  # ingresses can't double-relay a comment (see bridge_lease_acquire).
+  # ingresses can't double-relay a comment (see bridge_lease_acquire). Held across
+  # BOTH channels for this repo.
   lease=$(bridge_lease_path "$slug")
   bridge_lease_acquire "$lease" || { log "$slug: another bridge run holds the lease — skip"; return 0; }
   # shellcheck disable=SC2064  # expand $lease now so the trap removes THIS lease
   trap "rm -rf '$lease' 2>/dev/null" RETURN
+
+  # One-time watermark migration (issue #198): before the split there was ONE shared
+  # watermark. If the steward channel has none yet but the (formerly shared) worker
+  # watermark exists, INHERIT its position — otherwise the steward channel would seed
+  # to NOW and skip any steward wake that was queued (steward busy) under the old
+  # shared mark at the daemon upgrade. Must run BEFORE poll_worker_channel, which
+  # advances the worker watermark past those same comments this very tick.
+  if [ -n "$STEWARD_ISSUE" ]; then
+    local wsince ssince
+    wsince=$(bridge_state_file "$slug" since)          # routed through #181's layout
+    ssince=$(bridge_state_file "$slug" steward.since)
+    [ ! -f "$ssince" ] && [ -f "$wsince" ] && cp "$wsince" "$ssince" 2>/dev/null
+  fi
+
+  poll_worker_channel "$repo" "$slug"
+  [ -n "$STEWARD_ISSUE" ] && poll_steward_channel "$repo" "$slug" "$STEWARD_ISSUE"
+  return 0
+}
+
+# WORKER channel: repo-wide comments EXCEPT the steward control issue, which has its
+# own channel (below). Own watermark bridge_<slug>.since + worker seen-set. Skipping
+# steward-issue comments here is THE decoupling (issue #198): a busy steward returns
+# rc=3 only in ITS channel, so it can never set `pending` here and pin the worker
+# watermark — which, with the non-paginated per_page=100 fetch, would otherwise
+# silently starve workers once >100 comments accrue past the pinned mark.
+poll_worker_channel() {
+  local repo="$1" slug="$2" since rows sincef
+  sincef=$(bridge_state_file "$slug" since)
+  since=$(cat "$sincef" 2>/dev/null)
+  # First run: seed to NOW so enabling the bridge never floods with history.
+  [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — worker watermark seeded, no backfill"; return 0; }
 
   # shellcheck disable=SC2016  # $-vars below are jq bindings, not shell
   rows=$(gh api -H "Accept: application/vnd.github+json" \
@@ -685,6 +742,10 @@ poll_repo() {
   while IFS=$'\t' read -r cid assoc author num updated b64; do
     [ -z "$cid" ] && continue
     max_ts="$updated"; n=$((n + 1))
+    # Steward control-issue comments belong to the steward channel — skip them here
+    # so a busy steward never pins the WORKER watermark (issue #198). They still let
+    # max_ts advance (harmless: the steward channel tracks them via its own mark).
+    [ -n "$STEWARD_ISSUE" ] && [ "$num" = "$STEWARD_ISSUE" ] && continue
     bridge_seen_has "$slug" "$cid" && continue
     body=$(bridge_b64d "$b64")
     out=$(bridge_relay "$repo" "$slug" "$num" "$cid" "$assoc" "$author" "$body"); rc=$?
@@ -709,6 +770,162 @@ EOF
     printf '%s\n' "$max_ts" > "$sincef"
   fi
   [ "$n" -gt 0 ] && log "$slug: examined $n comment(s)$([ -n "$pending" ] && printf ' (some queued — watermark held)')"
+  return 0
+}
+
+# STEWARD channel (issue #198): the steward control issue's comments on their OWN
+# per-issue endpoint + OWN watermark/seen-set, decoupled from the worker channel.
+# A busy steward pins ONLY this watermark; a worker flood on the repo can never bury
+# steward wakes (separate per-issue fetch — no repo-wide 100-comment truncation).
+#
+# COALESCE-ON-DRAIN: when a queue of steward wakes finally drains to an IDLE steward,
+# superseded/duplicate wakes are collapsed to ONE line per subject (newest wins), so
+# the steward wakes to CURRENT state, not a temporal replay of "PR green ×3". The
+# subject of each watcher-wake line is read from the trailing `<!-- fleet:wake … -->`
+# marker (fleet-watch stamps subjects in the same order as the `- ` lines); a comment
+# that isn't a parseable watcher wake (an operator note) is kept whole under a unique
+# subject so it is NEVER dropped.
+poll_steward_channel() {
+  local repo="$1" slug="$2" sissue="$3" since rows sincef
+  sincef=$(bridge_state_file "$slug" steward.since)
+  since=$(cat "$sincef" 2>/dev/null)
+  [ -z "$since" ] && { utcnow > "$sincef"; log "$slug: first run — steward watermark seeded, no backfill"; return 0; }
+
+  # Per-ISSUE list endpoint (naturally scoped + immune to the repo-wide page cap).
+  # It has no sort/direction params — default order is created-asc; we compute max_ts
+  # as the lexicographic MAX of updated_at (ISO-8601 sorts lexically) rather than
+  # trusting last-row order. `--paginate` follows Link headers so a long HOLD (a
+  # down/misconfigured hub) can't leave newer wakes stranded past a 100-comment page;
+  # the `since` watermark keeps a normally-draining channel to a single page.
+  # shellcheck disable=SC2016  # $-vars below are jq bindings, not shell
+  rows=$(gh api --paginate -H "Accept: application/vnd.github+json" \
+    "repos/$repo/issues/$sissue/comments?since=$since&per_page=100" \
+    --jq '.[] | [ (.id|tostring), .author_association, (.user.login // ""),
+                  (.issue_url|split("/")|last), .updated_at, (.body|@base64) ] | @tsv' \
+    2>/dev/null) || { log "$slug: steward gh api failed — skip this tick"; return 0; }
+
+  # First pass: suppress (marker/assoc → mark seen terminally) and collect trusted
+  # candidates. Each candidate expands into one or more coalescing entries; parallel
+  # arrays E_SUBJ/E_TEXT hold (subject, display-line) in arrival order.
+  local cid assoc author num updated b64 body
+  local max_ts='' n=0
+  local -a E_SUBJ=() E_TEXT=() CAND_CIDS=()
+  while IFS=$'\t' read -r cid assoc author num updated b64; do
+    [ -z "$cid" ] && continue
+    [ "$num" = "$sissue" ] || continue          # defensive: endpoint already scopes
+    [[ "$updated" > "$max_ts" ]] && max_ts="$updated"
+    n=$((n + 1))
+    bridge_seen_has "$slug" "$cid" steward && continue
+    body=$(bridge_b64d "$b64")
+    if bridge_marked "$body"; then
+      bridge_seen_add "$slug" "$cid" steward; log "$slug #$sissue c$cid: suppress:marker"; continue
+    fi
+    if ! bridge_assoc_ok "$assoc"; then
+      bridge_seen_add "$slug" "$cid" steward; log "$slug #$sissue c$cid: suppress:assoc($assoc)"; continue
+    fi
+    CAND_CIDS+=("$cid")
+    # Expand into (subject, line) entries. A watcher wake carries a trailing
+    # `<!-- fleet:wake <subj1> <subj2> … -->` marker whose subjects align, in order,
+    # with the body's `- ` lines. If the marker is absent or its subject count does
+    # not match the line count (an operator note, or a format we don't recognize),
+    # keep the whole comment as one opaque entry under a unique subject.
+    local wmark keys line
+    wmark=$(printf '%s\n' "$body" | grep -F '<!-- fleet:wake ' | head -n1)
+    if [ -n "$wmark" ]; then
+      keys=$(printf '%s' "$wmark" | sed -n 's/.*<!-- fleet:wake \(.*\)-->.*/\1/p')
+      local -a wlines=() wsubs=()
+      while IFS= read -r line; do case "$line" in "- "*) wlines+=("$line");; esac; done <<WEOF
+$body
+WEOF
+      for line in $keys; do wsubs+=("$line"); done
+      if [ "${#wlines[@]}" -gt 0 ] && [ "${#wlines[@]}" -eq "${#wsubs[@]}" ]; then
+        local wi=0
+        while [ "$wi" -lt "${#wlines[@]}" ]; do
+          E_SUBJ+=("${wsubs[$wi]}"); E_TEXT+=("${wlines[$wi]}"); wi=$((wi + 1))
+        done
+      else
+        E_SUBJ+=("op:$cid"); E_TEXT+=("@${author:-someone}: $body")
+      fi
+    else
+      E_SUBJ+=("op:$cid"); E_TEXT+=("@${author:-someone}: $body")
+    fi
+  done <<EOF
+$rows
+EOF
+
+  # Nothing to deliver (all seen or suppressed): advance past the newest, done.
+  if [ "${#CAND_CIDS[@]}" -eq 0 ]; then
+    [ -n "$max_ts" ] && printf '%s\n' "$max_ts" > "$sincef"
+    [ "$n" -gt 0 ] && log "$slug: steward examined $n comment(s), none to deliver"
+    return 0
+  fi
+
+  # Resolve the steward pane + idle-gate (the SAME rails bridge_relay's steward
+  # branch uses for the --deliver path).
+  local shit ssess span sst sts
+  shit=$(bridge_find_steward "$slug")
+  if [ -z "$shit" ]; then
+    # No @steward pane THIS tick — HOLD (don't mark seen, don't advance) and retry.
+    # Pre-#198 this dropped terminally, because a held SHARED watermark would starve
+    # worker relays; now the steward channel has its OWN watermark, so holding costs
+    # nothing but a cheap per-issue re-fetch and survives a transient absence — the
+    # common case is the hub mid-respawn (a /clear, a restart), where a drop would
+    # silently lose every queued wake (the watcher's edges are deduped, so they never
+    # re-fire). A genuinely down/misconfigured hub just re-holds each tick until it's
+    # back; --paginate above keeps that bounded.
+    log "$slug: steward — no @steward pane yet, ${#CAND_CIDS[@]} held (retry next tick)"
+    return 0
+  fi
+  IFS=$'\t' read -r ssess span sst sts <<EOF
+$shit
+EOF
+  # Busy / mid-turn / mid-type → HOLD (don't mark seen, don't advance): retry next
+  # tick. This pins ONLY the steward watermark — worker relays already advanced.
+  if [ "$sst" = working ] && ! bridge_steward_stale "$sts"; then
+    log "$slug: steward busy — ${#CAND_CIDS[@]} queued (steward watermark held)"; return 0
+  fi
+  # Half-typed-input defer (issue #191), BOUNDED (issue #195) so a persistently
+  # non-empty steward input row can't wedge this control channel forever. The batch
+  # drains atomically, so the typing counter is keyed to the CHANNEL (steward.<issue>),
+  # not a per-comment id whose value would churn as new wakes arrive; it's reaped on a
+  # clean drain below. Budget spent ⇒ bridge_typing_gate returns 0 (deliver anyway +
+  # a WARN), so the coalesced digest is delivered rather than the channel wedging.
+  local tkey="steward.$sissue"
+  if ! bridge_typing_gate "$span" "$slug" "$tkey"; then
+    log "$slug: steward typing — ${#CAND_CIDS[@]} queued (steward watermark held)"; return 0
+  fi
+
+  # IDLE → coalesce: keep the NEWEST entry per subject. Walk arrival order in reverse
+  # (newest first) emitting a subject once; then reverse the survivors back to
+  # chronological order for the digest.
+  local -a OUT=()
+  local seen_subj=' ' j=$(( ${#E_SUBJ[@]} - 1 )) sj
+  while [ "$j" -ge 0 ]; do
+    sj="${E_SUBJ[$j]}"
+    case "$seen_subj" in *" $sj "*) j=$((j - 1)); continue;; esac
+    seen_subj="$seen_subj$sj "
+    OUT+=("${E_TEXT[$j]}")
+    j=$((j - 1))
+  done
+
+  local nsub="${#OUT[@]}" nent="${#E_SUBJ[@]}" hdr digest k
+  hdr="[steward inbox — issue #$sissue"
+  [ "$nsub" -lt "$nent" ] && hdr="$hdr — ${#CAND_CIDS[@]} update(s) coalesced to $nsub subject(s)"
+  hdr="$hdr]"
+  digest="$hdr"
+  k=$(( ${#OUT[@]} - 1 ))               # OUT is newest-first; emit oldest-first
+  while [ "$k" -ge 0 ]; do digest="$digest"$'\n'"${OUT[$k]}"; k=$((k - 1)); done
+
+  if bridge_inject "$span" "$digest"; then
+    local c
+    for c in "${CAND_CIDS[@]}"; do bridge_seen_add "$slug" "$c" steward; done
+    bridge_typing_reset "$slug" "$tkey"          # reap the channel typing counter (issue #195)
+    [ -n "$max_ts" ] && printf '%s\n' "$max_ts" > "$sincef"
+    log "$slug: steward drain → ${ssess} (${#CAND_CIDS[@]} comment(s) → $nsub subject(s))"
+  else
+    # Pane resolved but a tmux op failed — transient; hold + retry next tick.
+    log "$slug: steward inject-failed — will retry (watermark held)"
+  fi
   return 0
 }
 

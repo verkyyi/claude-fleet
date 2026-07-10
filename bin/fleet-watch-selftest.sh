@@ -150,6 +150,12 @@ n=$(grep -c 'green — /land' "$WAKE_LOG")
 [ "$n" -eq 1 ] || fail "retried PR-green must produce exactly ONE green wake, got $n"
 grep -q 'PR #100 (#42) green — /land 100?' "$WAKE_LOG" || fail "green wake body/format wrong"
 grep -q 'shipped PR #100' "$WAKE_LOG" && fail "propened was seeded — must not re-wake"
+# coalescing marker (issue #198): the wake stamps its per-line subject so the
+# issue-bridge can collapse superseded wakes on drain. A prgreen edge maps to the
+# shared PR-lifecycle subject `pr:<slug>:<num>` (so a later prgreen supersedes an
+# earlier propened for the same PR).
+grep -qF '<!-- fleet:wake pr:fake-repo:100 -->' "$WAKE_LOG" \
+  || fail "green wake must stamp the pr:<slug>:<num> coalescing subject marker"
 
 # tick 4 — still green + ready: DEDUP, no additional wake.
 before=$(nwakes)

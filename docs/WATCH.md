@@ -68,7 +68,12 @@ slot-filling, so the watcher would only double-drive it.
 
 On an edge the watcher posts one compact comment to this fleet's
 `FLEET_STEWARD_ISSUE` via `bin/fleet-comment.sh --to-worker` (left **unmarked** so
-the issue-bridge relays it into the `@steward` hub pane). The watcher never talks
+the issue-bridge relays it into the `@steward` hub pane). The comment ends with a
+trailing `<!-- fleet:wake <slug>:<num> … -->` marker (issue #198) — one coalescing
+**subject** per `- ` edge line, in order — so if a burst of wakes queues behind a
+briefly-busy steward, the bridge can collapse superseded/duplicate ones to the
+current state on drain instead of replaying them (see docs/ISSUE-BRIDGE.md). The
+marker is an HTML comment, invisible in the rendered issue. The watcher never talks
 to the steward pane directly — the bridge is its **only** channel. So a fleet is
 watched only if it has:
 

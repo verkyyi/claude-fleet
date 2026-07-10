@@ -118,27 +118,48 @@ on the control issue. The steward route reuses the whole relay pipeline unchange
   marker, dedup. The steward posts its own record notes through
   `bin/fleet-comment.sh` (marked no-relay), so its comments on its **own** control
   issue never loop back into it.
+- **its own channel + watermark (issue #198)** — the steward control issue is
+  polled on its **own per-issue endpoint** with its **own watermark + seen-set**,
+  fully decoupled from the worker relay stream. A busy steward pins **only** the
+  steward watermark; worker relays on the same repo advance independently. This
+  fixes the head-of-line jam where a continuously-busy steward, holding the single
+  shared per-repo watermark, starved unrelated worker relays too — and, because the
+  repo-wide comment fetch is a single non-paginated 100-comment page, silently lost
+  newer worker comments once >100 comments accrued past the pinned mark.
 - **idle-gate (+ staleness escape)** — the steward is the only Claude session in
   the `plan` window, so its window `@claude_state` is the gate: a comment lands
-  only when the steward is **not** `working`; a busy steward's comment is queued to
-  a later tick. The `plan` window's `#{window_activity}` is kept fresh by the
-  co-resident dash pane, so the spinner's stuck-working demote never fires there —
-  to stop a **missed `Stop` hook** wedging the channel forever, a `working` state
-  whose `@claude_state_ts` is older than `FLEET_STUCK_WORKING_SECS` is treated as
-  stale and relayed anyway. The same **input-content check** as a worker applies:
-  the operator types into the `@steward` pane too, so an idle steward whose input
-  row holds an un-submitted line defers the relay rather than prepending onto it
-  (issue #191) — and, like the worker gate, that defer is **bounded** by
-  `FLEET_BRIDGE_MAX_TYPING_DEFERS` (issue #195) so a persistently non-empty read
+  only when the steward is **not** `working`; a busy steward's wakes are queued to
+  a later tick (holding only the steward watermark). The `plan` window's
+  `#{window_activity}` is kept fresh by the co-resident dash pane, so the spinner's
+  stuck-working demote never fires there — to stop a **missed `Stop` hook** wedging
+  the channel forever, a `working` state whose `@claude_state_ts` is older than
+  `FLEET_STUCK_WORKING_SECS` is treated as stale and relayed anyway. The same
+  **input-content check** as a worker applies: the operator types into the
+  `@steward` pane too, so an idle steward whose input row holds an un-submitted line
+  defers the relay rather than prepending onto it (issue #191) — and, like the worker
+  gate, that defer is **bounded** by `FLEET_BRIDGE_MAX_TYPING_DEFERS` (issue #195, a
+  channel-level counter for the coalesced batch) so a persistently non-empty read
   can't silently wedge the control channel.
-- **hub-down drops (no revive)** — if no `@steward` pane exists (the hub isn't
-  running / is misconfigured) the wake-comment is **dropped terminally**, exactly
-  like a worker's revive-off *gone*. Retrying instead would pin the repo watermark
-  forever and — since the comment fetch is a single non-paginated page — eventually
-  starve **worker** relays on that repo, a silent repo-wide failure far worse than a
-  lost wake. The comment still lives on the durable issue thread; re-comment once
-  the hub is up. (A present-but-*stuck* steward is handled by the staleness escape
-  above, so this path is genuinely "no pane", not "busy".)
+- **coalesce-on-drain (issue #198)** — when a queue of steward wakes finally drains
+  to an idle steward, superseded/duplicate wakes are **collapsed to one line per
+  subject** (newest wins) and delivered as a single digest, so the steward wakes to
+  **current state** — not a temporal replay of "PR #168 green ×3" or a stale
+  "shipped #196" ahead of a fresh "#196 green". The subject of each wake line is
+  read from a trailing `<!-- fleet:wake <slug>:<num> … -->` marker that `fleet-watch`
+  stamps (subjects aligned, in order, with the `- ` lines); a comment that isn't a
+  parseable watcher wake — an operator note — is kept whole and never collapsed. No
+  distinct current subject is ever dropped (still at-least-once); only stale
+  duplicates are.
+- **hub-down holds, not drops (no revive)** — if no `@steward` pane exists this tick
+  (the hub is mid-respawn on a `/clear`/restart, or misconfigured) the queued wakes
+  are **held** (not marked seen, steward watermark not advanced) and retried next
+  tick. Pre-#198 this dropped terminally, because a held *shared* watermark would
+  starve worker relays; now the steward channel has its **own** watermark + a
+  paginated per-issue fetch, so holding costs only a cheap re-fetch and survives a
+  transient absence — a drop would silently lose every queued wake (the watcher's
+  edges are deduped, so they never re-fire). A genuinely down/misconfigured hub just
+  re-holds each tick until it comes back. (A present-but-*stuck* steward is handled by
+  the staleness escape above, so this path is genuinely "no pane", not "busy".)
 
 Routing is by issue number: a comment whose issue **is** the repo's
 `FLEET_STEWARD_ISSUE` goes to the steward; everything else routes to the bound
@@ -153,6 +174,15 @@ The daemon lists new issue comments across every enabled fleet's repo via
 `since` requests), so a ~15s tick is cheap. This is the robust default — nothing
 to expose, no secret required. It is installed as `com.claude-fleet.issue-bridge`
 (launchd `StartInterval=15`) or the `claude-fleet-issue-bridge.timer` on Linux.
+
+Per repo the tick runs **two independent channels** (issue #198), each with its
+own `since` watermark + dedup seen-set so neither can head-of-line-block the
+other: a **worker** channel (the repo-wide comment stream minus the steward
+control issue) and a **steward** channel (the control issue's own per-issue
+stream, coalesced on drain — see above). Per fleet (issue #181) the channel state
+lives at `~/.config/claude-fleet/fleets/<session>/bridge/` as `{since,seen}`
+(worker) and `{steward.since,steward.seen}` (steward), with the legacy flat
+`bridge_<slug>.*` under `FLEET_ISSUE_BRIDGE_STATE_DIR` dual-read as a fallback.
 
 Enable it per fleet:
 
