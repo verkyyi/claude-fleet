@@ -172,13 +172,48 @@ fi
 If the launcher didn't change, skip this step (leave the open dash alone). If no
 `@dash` pane is open for this fleet, it's a no-op — report "no open dash".
 
-## 7. Report — keep it short
+## 7. Reload the tmux conf — unbind removed binds, then re-source (only if it changed)
+
+`conf/tmux-attention.conf` is sourced into the **live tmux server**, but
+`tmux source-file` only **adds/overwrites** bindings — it **cannot remove** a
+`bind` that was *deleted* from the conf. So a landed change that drops a `bind`
+line leaves the **old binding live** in every existing session until an explicit
+`unbind` or a full tmux restart (issue #139; live precedent #135 removed
+`bind j`, but `prefix+j` stayed bound and resurrected the standalone dash it had
+just removed). Make the reload idempotent w.r.t. removals: diff the before/after
+conf, `unbind-key` every bind that disappeared, **then** re-source so adds and
+changes still apply.
+
+`bin/tmux-conf-reload.sh` does exactly this — it parses the bind lines from the
+`before` and `after` conf, computes `before \ after` = removed `(table, key)`
+pairs (handling the prefix / `bind -n` / `bind -T <tbl>` forms plus the `-r`/`-N`
+flags), unbinds each, then `source-file`s. **Trigger only** when the step-2 diff
+touched `conf/tmux-attention.conf`:
+
+```sh
+if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
+   | grep -qx 'conf/tmux-attention.conf'; then
+  # `before` conf as it was pre-sync (empty if the file is brand-new)
+  bconf=$(mktemp)
+  git -C ~/.claude/fleet show "$before:conf/tmux-attention.conf" > "$bconf" 2>/dev/null || : > "$bconf"
+  bash ~/.claude/fleet/bin/tmux-conf-reload.sh \
+    "$bconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf
+  rm -f "$bconf"
+fi
+```
+
+It prints `reloaded conf (unbound N removed binds)` — surface that N in step 8.
+Binds are **server-global** in tmux, so the unbind hits the ambient server (this
+fleet's) — it doesn't target another server/socket. If the conf didn't change,
+skip this step (no reload needed).
+
+## 8. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
 {daemons reloaded, settings re-merged, commands installed/removed, dash panes
-refreshed (with the count)} actually ran. If you stopped at step 1 (wrong fleet)
-or step 2 (diverged / already current), report that instead with the one-line
-reason.
+refreshed (with the count), conf reloaded (with the unbound count)} actually ran.
+If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
+report that instead with the one-line reason.
 
 ---
 
