@@ -140,6 +140,13 @@ issues as the backlog. See README.md for the architecture. Components:
 
 7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
    `~/.zshrc` (bash users: the functions are zsh-flavored; port on request).
+   Sourcing it also installs a `tmux()` **destroy-guard** (issue #158): from a
+   worker shell it refuses `kill-server` and any `kill-session`/`kill-window`
+   aimed at a sibling — one stray kill on the shared `default` socket would take
+   down every fleet at once. It's an accident rail, not a security boundary
+   (bypass-perms can always `pkill`); self-teardown, isolated sockets (`-L`/`-S`),
+   and `FLEET_ALLOW_TMUX_DESTROY=1` all pass through. Tell the user so a
+   deliberate live-server destroy isn't a surprise.
 
    **Optional — multiple subscription accounts w/ auto-failover.** If the user
    holds more than one Claude subscription and wants the fleet to switch when one
