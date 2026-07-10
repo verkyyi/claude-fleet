@@ -5,8 +5,8 @@
 
 The steward is single-threaded, so doing *research* inline (reading code, greps,
 tracing behaviour) ties it up for a long turn and serializes back-to-back
-questions. A **scout** lets the steward delegate the *investigation* — the way
-`/fleet-new-issue` delegates the *filing* — so its own turn stays short.
+questions. A **scout** lets the steward delegate the *investigation* to a
+separate read-only session so its own turn stays short.
 
 A scout is **read-only**: it investigates and **reports**. It never edits the
 base checkout, never opens a branch or PR, and self-cleans when done. That is the

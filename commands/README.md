@@ -29,7 +29,7 @@ any personal commands you already have. See the install step in
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Tooling-fleet only: after claude-fleet's own PRs land, re-apply them to the live install (`~/.claude/fleet`) — pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses on any other fleet. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 | [`/fleet-history`](fleet-history.md) | steward | Browse & resume **landed** (merged + cleaned-up) sessions from the land-time history ledger (written by `/fleet-land` / `/fleet-land-train` before worktree removal). Lists finished work, opens the PR, pages the surviving transcript, and **resumes** a session by reconstructing its removed worktree off the squash SHA → `claude --resume` (or `--from-pr`). Backed by [`bin/fleet-history.sh`](../bin/fleet-history.sh); mirrored in the dash's live⇄landed **⌃t** toggle. |
-| [`/fleet-new-issue`](fleet-new-issue.md) | steward | File a new issue in this fleet's repo from a task brief, then spawn a worker window (`issue-<N>` worktree + `claude`, bound via `@issue`) to implement it. **Delegates by default:** after an inline fail-fast seat guard, offloads dedup + grounding + create + spawn to one background sub-agent so the steward's turn stays short; `--quick` is a thin inline capture. A [delegating kind-A skill](#delegating-kind-a-skills-offload-heavy-inline-work). |
+| [`/fleet-new-issue`](fleet-new-issue.md) | steward | File a new issue in this fleet's repo from a task brief, then spawn a worker window (`issue-<N>` worktree + `claude`, bound via `@issue`) to implement it. **Thin inline file-and-spawn:** guard → dedup → live milestone best-fit → thin title + one-line brief → create → spawn → report, no code reading and no sub-agent — the spawned worker grounds the thin issue itself (via `/fleet-claim`). |
 | [`/fleet-scout`](fleet-scout.md) | steward | Delegate a **read-only investigation**: file a `scout`-labeled issue (durable question + report sink) and spawn a read-only worker (`dash-issue-session.sh <N> --scout`) that investigates + reports and **never branches/ships/lands**. The heavyweight tier of the *scout task shape*; the lightweight tier is an ephemeral `Explore`/`Agent` sub-agent run inline (no issue, no window). See [docs/SCOUT.md](../docs/SCOUT.md). |
 | [`/fleet-scout-report`](fleet-scout-report.md) | worker | A scout's finish line (the `/fleet-ship` analogue for an investigation): post the findings as an issue comment, decide **close vs. leave-open-for-ship-conversion**, then self-clean the window/worktree via [`bin/fleet-scout-clean.sh`](../bin/fleet-scout-clean.sh) (ordered teardown, no PR to merge). |
 
@@ -84,60 +84,32 @@ printf '%s' "$payload" \
   hot daemon loop. `disable-model-invocation: true` keeps the prompt from ever
   auto-triggering on either path; it runs only when invoked explicitly.
 
-### Delegating kind-A skills (offload heavy inline work)
+### Create skills: auto-categorize from the LIVE milestone list
 
-Most kind-A skills run their whole playbook **inline** on the caller's thread.
-That's fine when the work is cheap (`/fleet-claim` posts a comment; `/fleet-ship`
-pushes a branch). It's a problem when a *steward* skill does something expensive
-inline — the steward is single-threaded, so a long turn blocks every other thing
-it could be doing (landing PRs, triaging, filing the next issue), and firing the
-skill N times serializes into N long turns.
+A kind-A skill that **files** an issue (`/fleet-new-issue`) also assigns a
+best-fit **milestone** — the fleet's component categories. Fetch them at file
+time — never hardcode, since the user adds/renames/closes them: `gh api
+"repos/$FLEET_REPO/milestones?state=open" --jq '.[].title'`, pick the one title
+that best fits the task, and pass only a title that came back from that live
+list. When nothing clearly fits (or there are no open milestones), file with
+**no** milestone — never force a wrong/stale name (a bad `--milestone` fails the
+create). `/fleet-new-issue` does this and notes the choice in its report.
 
-A **delegating kind-A skill** keeps the cheap, fail-fast part inline and hands
-the expensive part to a **sub-agent** (the Agent tool), so the caller's turn
-ends fast and N calls run in parallel. `/fleet-new-issue` is the reference: the
-steward's turn is just step-0 (resolve fleet + guard seat) + one Agent launch;
-the sub-agent does the grounding + drafting + `gh issue create` + spawn.
-
-The rules that make delegation safe:
-
-- **Guard inline, before spending an agent.** Step 0 (fleet + seat) stays inline
-  and fail-fast so a wrong-seat / no-fleet call aborts *without* launching a
-  sub-agent. Nothing else runs inline in the default path.
-- **One self-contained sub-agent, not a fork.** Launch a fresh `general-purpose`
-  agent with a prompt that carries everything it needs — do **not** fork the
-  caller (a fork inherits cross-fleet context the proxy must not have).
-- **Bake the rails into the prompt.** The sub-agent can't see the skill's header,
-  so the delegation prompt must restate every rail: the resolved
-  `$FLEET_REPO` / `$FLEET_MAIN` / `$FLEET_BASE_BRANCH` **literals** (this fleet
-  only), what it may mutate, cap/limit handling, and — crucially — that it is a
-  **proxy for the mutation, not a worker**: it files/spawns but never implements.
-- **A one-line output contract.** The sub-agent returns a single machine-relayable
-  line (`#<N> <title> — worker spawned`, or a cap refusal) so the caller just
-  relays it, exactly like a kind-B output contract.
-- **Auto-categorize on create, from the LIVE list.** A create skill that files
-  an issue also assigns a best-fit **milestone** (the fleet's component
-  categories). Fetch them at file time — never hardcode, since the user
-  adds/renames/closes them: `gh api "repos/$FLEET_REPO/milestones?state=open"
-  --jq '.[].title'`, pick the one title that best fits, and pass only a title
-  that came back from that live list. When nothing clearly fits (or there are no
-  open milestones), file with **no** milestone — never force a wrong/stale name
-  (a bad `--milestone` fails the create). `/fleet-new-issue` does this in both
-  its delegate and `--quick` paths and notes the choice in its report.
-- **Graceful inline fallback.** If the runtime has no Agent-tool capability, run
-  the sub-agent's steps inline instead of hard-failing — slower, but the work
-  still lands.
-
-This is still **kind A** (a seat-guarded, human-invoked role skill) — it just
-offloads its body. It is distinct from **kind B**, where a *daemon* runs a pure
-prompt on a timer with no seat; here a *human/steward* invokes the skill and the
-sub-agent is a one-shot proxy for that single invocation.
+> **A note on inline vs. delegated work.** Most kind-A skills run their whole
+> playbook inline on the caller's thread, which is right when the work is cheap
+> (`/fleet-claim` posts a comment; `/fleet-new-issue` fires a handful of `gh`
+> calls). `/fleet-new-issue` used to offload its body to a background sub-agent
+> to keep the steward's turn short, but its grounding step was removed (the
+> spawned worker grounds itself), so the thin inline path is fast enough to not
+> need one. If a future steward skill does something genuinely expensive inline,
+> the sub-agent-proxy shape is available — guard inline and fail-fast first, then
+> launch one self-contained `general-purpose` agent (not a fork) with every rail
+> baked into its prompt and a one-line output contract to relay back.
 
 ## The contract every fleet skill follows
 
-> This section describes **kind A** (interactive/role skills), including the
-> delegating variant above. For **kind B** (background-job prompts) see *Two
-> kinds of fleet skill* above.
+> This section describes **kind A** (interactive/role skills). For **kind B**
+> (background-job prompts) see *Two kinds of fleet skill* above.
 
 A fleet skill is a markdown playbook (a header + a numbered body, exactly like
 `sweep.md`). Two rules make it *fleet-aware*:
