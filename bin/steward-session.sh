@@ -25,6 +25,11 @@ SESS="${STEWARD_SESSION:-$(fleet_current_session)}"
 # Last resort (run outside tmux, no session given): the global primary fleet,
 # named by the same 'fleet-<repo>' standard fleet-up.sh uses.
 [ -z "$SESS" ] && SESS="fleet-$(basename "${FLEET_REPO:-primary}")"
+# This fleet's own tmux server socket (== session name, issue #159). Named on
+# EVERY tmux call so the hub is built on the right socket whether we're invoked
+# from fleet-up (no $TMUX) or from a zoom bind inside the fleet ($TMUX set) — the
+# explicit -L resolves to the same socket either way.
+SOCK=$(fleet_socket "$SESS")
 # BASE: explicit override → this fleet's FLEET_MAIN (per-session conf) →
 # the session's first window cwd → HOME.
 if [ -n "${STEWARD_CWD:-}" ]; then
@@ -33,7 +38,7 @@ if [ -n "${STEWARD_CWD:-}" ]; then
 else
   fleet_load_conf "$SESS"
   BASE="${FLEET_MAIN:-}"
-  [ -z "$BASE" ] && BASE=$(tmux list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
+  [ -z "$BASE" ] && BASE=$(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
   [ -z "$BASE" ] && BASE="$HOME"
 fi
 # The command the steward pane runs. The FRESH launch is the steward's normal
@@ -63,39 +68,43 @@ STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to
 # another fleet's steward.
-existing=$(fleet_steward_pane "$SESS")
+existing=$(fleet_steward_pane "$SESS")   # socket-aware (issue #159)
 if [ -n "$existing" ]; then
-  tmux select-window -t "$existing"; tmux select-pane -t "$existing"; exit 0
+  tmux -L "$SOCK" select-window -t "$existing"; tmux -L "$SOCK" select-pane -t "$existing"; exit 0
 fi
 
 # No steward pane in this session → no 'plan' window here holds anything precious
 # (their dash pane is just a respawnable `bash tmux-dashboard.sh`). Nuke ALL
 # 'plan' windows IN THIS SESSION so we rebuild exactly one hub — this also
 # self-heals any accumulated orphans.
-for wid in $(tmux list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="plan"{print $1}'); do
-  tmux kill-window -t "$wid" 2>/dev/null
+for wid in $(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="plan"{print $1}'); do
+  tmux -L "$SOCK" kill-window -t "$wid" 2>/dev/null
 done
 
-# build the hub fresh, capturing IDs so every op hits THIS window/pane.
-win=$(tmux new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "bash '$BIN/tmux-dashboard.sh'")
-sp=$(tmux split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BASE" "$STEWARD_CMD")
+# build the hub fresh, capturing IDs so every op hits THIS window/pane. The dash
+# pane's `tmux-dashboard.sh` runs ON this socket (tmux new-window inherits it via
+# $TMUX), so it self-marks @dash correctly with bare tmux.
+win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "bash '$BIN/tmux-dashboard.sh'")
+sp=$(tmux -L "$SOCK" split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BASE" "$STEWARD_CMD")
 # Mark the steward pane by its explicit id (never the active pane) and clear any
-# @dash on it — @dash/@steward must stay mutually exclusive (issue #135).
-fleet_mark_role steward "$sp" 2>/dev/null || \
-  tmux set-option -p -t "$sp" @steward 1 2>/dev/null
+# @dash on it — @dash/@steward must stay mutually exclusive (issue #135). Done
+# inline (not via fleet_mark_role) because that helper uses bare tmux, which would
+# hit the WRONG (default) socket when we're invoked from fleet-up outside $TMUX.
+tmux -L "$SOCK" set-option -p -t "$sp" @steward 1  2>/dev/null || true
+tmux -L "$SOCK" set-option -u -p -t "$sp" @dash    2>/dev/null || true
 # Hub cue: show the top pane-border title on JUST this window (the conf keeps it
 # off globally to spare worker panes a row). pane-border-format (in the conf)
 # labels the @steward pane "▸ STEWARD HUB · <fleet>" — visible even when the pane
 # is zoomed fullscreen (prefix+g), where the window list is the only other cue.
-tmux set-window-option -t "$win" pane-border-status top 2>/dev/null
+tmux -L "$SOCK" set-window-option -t "$win" pane-border-status top 2>/dev/null
 
 # hub belongs at the lowest index (slot 1). Nothing re-sorts windows anymore,
 # so this one-time placement is what keeps the hub at slot 1.
-if tmux list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
-  tmux swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+if tmux -L "$SOCK" list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
+  tmux -L "$SOCK" swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
 else
-  tmux move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
+  tmux -L "$SOCK" move-window -d -s "$win" -t "$SESS:1" 2>/dev/null
 fi
-tmux select-window -t "$win"
-tmux select-pane -t "$sp"
+tmux -L "$SOCK" select-window -t "$win"
+tmux -L "$SOCK" select-pane -t "$sp"
 exit 0

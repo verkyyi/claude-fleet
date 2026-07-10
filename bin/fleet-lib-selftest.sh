@@ -51,16 +51,28 @@ eq() {  # <desc> <expected> <actual>
   [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"
 }
 
-# --- fake tmux: only answers the '#{@issue}' query fleet_seat makes ----------
+# --- fake tmux ----------------------------------------------------------------
+# Answers the '#{@issue}' query fleet_seat makes, plus the per-fleet-socket
+# machinery (issue #159): a leading `-L <label>` global option (captured, then
+# stripped like real tmux), `has-session` (down iff the label is in $FAKE_DOWN),
+# and `list-windows -a` (each fleet socket emits a 'plan' hub + one worker window).
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/tmux" <<'TMUXFAKE'
 #!/bin/bash
-# fleet_seat calls: tmux display-message -p -t <pane> '#{@issue}'
-for a in "$@"; do
-  case "$a" in
-    *'@issue'*) printf '%s\n' "${FAKE_ISSUE:-}"; exit 0 ;;
-  esac
-done
+label=""
+if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then label="$2"; shift 2; fi
+case "${1:-}" in
+  has-session)
+    for d in ${FAKE_DOWN:-}; do [ "$d" = "$label" ] && exit 1; done
+    exit 0 ;;
+  list-windows)
+    # fleet_hub_sessions / fleet_session_count use the '<session> <window>' fmt.
+    case "$*" in *window_name*) printf '%s plan\n%s work1\n' "$label" "$label" ;; esac
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *'@issue'*) printf '%s\n' "${FAKE_ISSUE:-}"; exit 0 ;; esac; done
+    exit 0 ;;
+esac
 exit 0
 TMUXFAKE
 chmod +x "$WORK/bin/tmux"
@@ -271,4 +283,33 @@ eq "sess_for_repo: stable across calls (canonical)" "$csess1" "$csess2"
 case "$csess1" in dup-1|dup-2) : ;; *) fail "sess_for_repo: two-fleets-one-repo must resolve to one of them, got [$csess1]";; esac
 CHECKS=$((CHECKS + 1))
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181)\n' "$CHECKS"
+
+# ============================================================================
+# E. per-fleet socket helpers (issue #159)
+# ============================================================================
+# fleet_socket is the single scheme point: the socket LABEL is the session name.
+eq "socket: label == session name (identity)" "fleet-acme" "$(fleet_socket fleet-acme)"
+
+# fleet_sockets enumerates the per-fleet confs, then keeps only those whose server
+# actually answers has-session. s3 has a conf but its server is "down" (FAKE_DOWN)
+# → excluded; a missing conf dir yields nothing (the user's default tmux is never
+# probed). NB: prefix-assigned FAKE_DOWN/FLEET_CONF_DIR reach the fake tmux the
+# same way FAKE_ISSUE reaches it above.
+SOCKCONF="$WORK/sockconf"; mkdir -p "$SOCKCONF"
+: > "$SOCKCONF/s1.conf"; : > "$SOCKCONF/s2.conf"; : > "$SOCKCONF/s3.conf"
+eq "sockets: live confs only (down fleet excluded)" "s1,s2," \
+  "$(FLEET_CONF_DIR="$SOCKCONF" FAKE_DOWN="s3" fleet_sockets | sort | tr '\n' ',')"
+eq "sockets: no conf dir → empty (default tmux untouched)" "" \
+  "$(FLEET_CONF_DIR="$WORK/does-not-exist" fleet_sockets)"
+
+# fleet_hub_sessions fans out across live sockets — one 'plan' hub each.
+eq "hub_sessions: one per live socket" "s1,s2," \
+  "$(FLEET_CONF_DIR="$SOCKCONF" FAKE_DOWN="s3" fleet_hub_sessions | sort | tr '\n' ',')"
+
+# fleet_session_count sums the non-hub worker windows across live sockets (1 each,
+# the down fleet contributes none) — the system-wide cap now spans every socket.
+eq "session_count: sums workers across live sockets" "2" \
+  "$(FLEET_CONF_DIR="$SOCKCONF" FAKE_DOWN="s3" fleet_session_count)"
+
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159)\n' "$CHECKS"

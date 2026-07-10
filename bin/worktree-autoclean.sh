@@ -32,11 +32,14 @@ say() { if [ "$DRY" = 1 ]; then echo "$*"; else log "$*"; fi; }
 
 command -v git >/dev/null 2>&1 || { say "git not found; abort"; exit 0; }
 
-# Fail-safe: require a live tmux server so the "attached" check is meaningful.
-if ! tmux info >/dev/null 2>&1; then
-  say "tmux not running — skipping (cannot determine attached sessions)"; exit 0
+# Fail-safe: require a live fleet so the "attached" check is meaningful. Each fleet
+# is its own tmux server now (issue #159), so gather the live pane paths across
+# EVERY fleet socket; no live fleet → skip (we can't tell what's attached).
+SOCKETS="$(fleet_sockets)"
+if [ -z "$SOCKETS" ]; then
+  say "no live fleet — skipping (cannot determine attached sessions)"; exit 0
 fi
-LIVE="$(tmux list-panes -a -F '#{pane_current_path}' 2>/dev/null)"
+LIVE="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{pane_current_path}' 2>/dev/null; done)"
 
 removed=0; kept=0; closed=0
 dir=""; head=""; branch=""

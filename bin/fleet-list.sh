@@ -11,7 +11,9 @@ seen=' '
 
 emit() {  # $1=name $2=repo $3=main
   local live='○'
-  tmux has-session -t "$1" 2>/dev/null && live='●'
+  # Each fleet runs on its own named socket (== session name, issue #159), so the
+  # liveness probe must name that socket — a bare has-session hits only the default.
+  tmux -L "$(fleet_socket "$1")" has-session -t "$1" 2>/dev/null && live='●'
   printf '%-2s %-22s %-40s %s\n' "$live" "$1" "${2:-·}" "${3:-·}"
   seen="$seen$1 "
 }

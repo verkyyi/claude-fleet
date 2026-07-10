@@ -66,6 +66,10 @@ GHFAKE
 # existing window's @scout via \$TMUX_SCOUT_OPT.
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash
+# real tmux accepts a global -L/-S <socket> before the subcommand; each fleet now
+# runs on its own named socket (issue #159), so the spawn path prepends one. Strip
+# it so the subcommand dispatch below still sees the verb in \$1.
+if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
 case "\${1:-}" in
   display-message)
     case "\$*" in

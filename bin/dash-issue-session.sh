@@ -37,6 +37,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { tmux display-message "issues: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
+# Each fleet is its OWN tmux server on a named socket (== session name, issue
+# #159). This spawn path runs BOTH interactively (in the target fleet, $TMUX set)
+# AND headless from the dispatcher / issue-bridge revive (no $TMUX) — so route
+# EVERY tmux call through TM(), which names the target fleet's socket explicitly.
+# Naming -L is correct in-session too (it resolves to the same current socket).
+SOCK=$(fleet_socket "$SESS")
+TM() { tmux -L "$SOCK" "$@"; }
 
 slug="issue-$num"
 
@@ -50,8 +57,8 @@ slug="issue-$num"
 # stranded on the dash. Scope the scan to $SESS (the target fleet, not the
 # caller's). Like every spawn below, focus is non-invasive by default and only
 # moves on an interactive spawn when FLEET_SPAWN_FOCUS=1.
-existing=$(tmux list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
-[ -z "$existing" ] && existing=$(tmux list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
+existing=$(TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
+[ -z "$existing" ] && existing=$(TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
 if [ -n "$existing" ]; then
   # A scout and a worker for the same issue share the SAME issue-<N> worktree, so
   # they can't coexist — the existing window always wins the dedup. But the two
@@ -60,7 +67,7 @@ if [ -n "$existing" ]; then
   # bare "already spawned" and believe a worker is implementing (issue #148). Tell
   # them a read-only scout holds the slot; the scout self-cleans when it reports,
   # freeing #N for a real worker spawn.
-  existing_scout=$(tmux show-options -w -v -t "$existing" @scout 2>/dev/null)
+  existing_scout=$(TM show-options -w -v -t "$existing" @scout 2>/dev/null)
   if [ "$existing_scout" = 1 ] && [ "$SCOUT_FLAG" != 1 ]; then
     msg="#$num has a live READ-ONLY scout — wait for its report (it self-cleans), then re-spawn a worker"
   else
@@ -69,10 +76,10 @@ if [ -n "$existing" ]; then
   # Non-invasive by default: don't yank the caller to the existing window; just
   # note it. Opt into the jump with FLEET_SPAWN_FOCUS=1 (interactive spawns only).
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
-    tmux select-window -t "$existing"
-    tmux display-message "$msg" 2>/dev/null
+    TM select-window -t "$existing"
+    TM display-message "$msg" 2>/dev/null
   elif [ -z "$TARGET_SESS" ]; then
-    tmux display-message "$msg" 2>/dev/null
+    TM display-message "$msg" 2>/dev/null
   fi
   exit 0
 fi
@@ -85,10 +92,10 @@ fi
 # autofill dispatcher) — so both caps are true ceilings regardless of who spawns.
 # Passing $SESS enables the per-fleet check for THIS fleet. Exit non-zero on
 # refusal so a headless caller records an honest FAIL, not a false spawn.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then tmux display-message "$cap_msg"; exit 1; fi
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"; exit 1; fi
 
 MAIN="${FLEET_MAIN:-}"
-[ -d "$MAIN/.git" ] || { tmux display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
+[ -d "$MAIN/.git" ] || { TM display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
@@ -122,11 +129,11 @@ SELF_LAND="$SELF_LAND_FLAG"; [ "${FLEET_SELF_LAND:-0}" = 1 ] && SELF_LAND=1
 # mode supersedes self-land (issue #148). Warn if both were asked for, then drop
 # the self-land lifecycle — there is no PR to land.
 if [ "$SCOUT" = 1 ] && [ "$SELF_LAND" = 1 ]; then
-  tmux display-message "note: #$num --scout supersedes --self-land (a scout opens no PR to land)" 2>/dev/null
+  TM display-message "note: #$num --scout supersedes --self-land (a scout opens no PR to land)" 2>/dev/null
   SELF_LAND=0
 fi
 if [ "$SELF_LAND" = 1 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
-  tmux display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
+  TM display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
 fi
 # The claim ritual ("run /fleet-claim, else do it by hand") is identical for every
 # lifecycle — scout, self-land, and steward-lands — so build it ONCE here and reuse
@@ -159,7 +166,7 @@ git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
     || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
-    || { tmux display-message "issues: worktree add failed for $slug"; exit 1; }
+    || { TM display-message "issues: worktree add failed for $slug"; exit 1; }
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
@@ -181,12 +188,12 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # ${detach[@]+"${detach[@]}"}: expand to the flag(s) when set, to NOTHING when the
 # array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
 # when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
-win=$(tmux new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
-tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
+  || { TM display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
+TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Mark a scout window (issue #148) so its self-clean can assert it's a scout and
 # tooling can tell "no PR expected" from a normal worker.
-[ "$SCOUT" = 1 ] && tmux set-window-option -t "$win" @scout 1 2>/dev/null
+[ "$SCOUT" = 1 ] && TM set-window-option -t "$win" @scout 1 2>/dev/null
 # Seed the dash summary column synchronously so the row isn't blank until the
 # session renders content. summarize-hook.sh's SessionStart run skips a still-
 # blank pane (no screen text yet), so without this the column stays empty until
@@ -200,7 +207,7 @@ printf '%s' "$seed" > "$G/summary_${win//[^0-9]/}" 2>/dev/null || :
 # on the status line. Only jump to the new worker when the user opted in
 # (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.
 if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
-  tmux select-window -t "$win"
+  TM select-window -t "$win"
 elif [ -z "$TARGET_SESS" ]; then
-  tmux display-message "spawned #$num → $wname" 2>/dev/null
+  TM display-message "spawned #$num → $wname" 2>/dev/null
 fi

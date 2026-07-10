@@ -8,6 +8,7 @@
 # Graceful when only this fleet is live: shows a note instead of an empty list.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-lib.sh"          # fleet_socket (per-fleet tmux socket, issue #159)
 
 cur=$(tmux display-message -p '#S' 2>/dev/null)
 
@@ -37,6 +38,8 @@ pick=$(printf '%s\n' "$listing" \
 
 [ -n "$pick" ] || exit 0
 [ "$pick" = "$cur" ] && exit 0
-if tmux switch-client -t "$pick" 2>/dev/null; then
-  tmux display-message "fleet: switched to  ${pick}"
-fi
+# Each fleet is its OWN tmux server now (issue #159), so switch-client (same-server
+# only) can't cross fleets. Detach this client and re-attach to the chosen fleet's
+# socket in one motion: detach-client -E replaces the client with the attach once
+# it detaches (tmux ≥ 3.2, already a hard dep). The socket label == the session name.
+tmux detach-client -E "exec tmux -L '$(fleet_socket "$pick")' attach -t '$pick'" 2>/dev/null

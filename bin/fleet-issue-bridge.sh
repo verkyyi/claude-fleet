@@ -207,11 +207,11 @@ bridge_typing_reset() { rm -f "$(bridge_typing_file "$1" "$2")" 2>/dev/null || :
 # working would let a pane flapping working/idle with a stuck input row dodge the
 # bound forever, the exact wedge #195 forbids; the residual bias is toward delivering
 # a tick early, which is the fail-safe direction.
-bridge_typing_gate() {  # $1=pane $2=slug $3=cid
-  bridge_input_busy "$1" || return 0                    # input clear → deliver
-  local n; n=$(bridge_typing_bump "$2" "$3")
+bridge_typing_gate() {  # $1=sock $2=pane $3=slug $4=cid  (sock: per-fleet socket, issue #159)
+  bridge_input_busy "$1" "$2" || return 0               # input clear → deliver
+  local n; n=$(bridge_typing_bump "$3" "$4")
   [ "$n" -le "$MAX_TYPING_DEFERS" ] && return 3         # within budget → keep deferring
-  log "input-check: $1 input row non-empty for $n ticks — delivering to avoid a wedge"
+  log "input-check: $2 input row non-empty for $n ticks — delivering to avoid a wedge"
   return 0                                              # budget spent → deliver anyway
 }
 
@@ -257,7 +257,7 @@ bridge_find_window() {
     if [ "$slug" = "$want_slug" ]; then
       printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
     fi
-  done < <(tmux list-windows -a -F '#{session_name}'$'\t''#{window_id}'$'\t''#{@claude_state}'$'\t''#{@issue}' 2>/dev/null)
+  done < <(fleet_list_windows_all '#{session_name}'$'\t''#{window_id}'$'\t''#{@claude_state}'$'\t''#{@issue}')
   return 0
 }
 
@@ -288,8 +288,12 @@ bridge_find_steward() {
     if [ "$slug" = "$want_slug" ]; then
       printf '%s\t%s\t%s\t%s' "$sess" "$pane" "$st" "$ts"; return 0
     fi
-  done < <(tmux list-panes -a -F '#{@steward}'$'\t''#{session_name}'$'\t''#{pane_id}'$'\t''#{@claude_state}'$'\t''#{@claude_state_ts}' 2>/dev/null \
-             | awk -F'\t' '$1=="1"{print $2"\t"$3"\t"$4"\t"$5}')
+  done < <(
+    # Each fleet is its own tmux server now (issue #159): fan the @steward-pane
+    # scan out across every live fleet socket, then filter as before.
+    for _sock in $(fleet_sockets); do
+      tmux -L "$_sock" list-panes -a -F '#{@steward}'$'\t''#{session_name}'$'\t''#{pane_id}'$'\t''#{@claude_state}'$'\t''#{@claude_state_ts}' 2>/dev/null
+    done | awk -F'\t' '$1=="1"{print $2"\t"$3"\t"$4"\t"$5}')
   return 0
 }
 
@@ -388,9 +392,11 @@ EOF
 #     (cursor at input-start yet real text sits to its right).
 # A defensive trailing `│` strip covers a bordered-input rendering.
 bridge_input_busy() {
-  local win="$1" cap lineno irow erow plain esc cx cy prefix istart n after left eafter
-  # -e keeps the SGR spans so the faint (ghost) runs stay distinguishable.
-  cap=$(tmux capture-pane -t "$win" -e -p 2>/dev/null) \
+  local sock="$1" win="$2" cap lineno irow erow plain esc cx cy prefix istart n after left eafter
+  # -e keeps the SGR spans so the faint (ghost) runs stay distinguishable. -L "$sock":
+  # the pane lives on its fleet's OWN server (issue #159), so read the RIGHT socket or
+  # #191/#199's typing-gate silently no-ops (wrong-socket capture fails → safe fallback).
+  cap=$(tmux -L "$sock" capture-pane -t "$win" -e -p 2>/dev/null) \
     || { log "input-check: capture-pane failed for $win — proceeding (fallback)"; return 1; }
   # The live input row is the LAST `❯` row; its 1-based line no. maps to the
   # 0-based pane row (== cursor_y when the cursor sits on it).
@@ -412,7 +418,7 @@ bridge_input_busy() {
   # char count equals its display-column count; a wide-char prefix would desync it,
   # but SECONDARY still backstops.)
   read -r cx cy <<EOF
-$(tmux display-message -p -t "$win" '#{cursor_x} #{cursor_y}' 2>/dev/null)
+$(tmux -L "$sock" display-message -p -t "$win" '#{cursor_x} #{cursor_y}' 2>/dev/null)
 EOF
   if [ -n "$cx" ] && [ -n "$cy" ] && [ "$cx" -ge 0 ] 2>/dev/null && [ "$cy" = "$irow" ]; then
     prefix=${plain%%❯*}                            # text left of the glyph (borders/pad)
@@ -470,11 +476,13 @@ EOF
 # Enters (submitting the first line early) — the bracketed-paste gotcha; pasting
 # via a buffer with -p brackets the whole body as ONE paste, and the standalone
 # Enter is what actually submits the turn.
+# Args: <socket> <window-id> <text>. The worker window lives on its fleet's own
+# tmux server (issue #159), so every op names that fleet's -L socket.
 bridge_inject() {
-  local win="$1" text="$2" buf="fleet-relay-$$"
-  tmux set-buffer -b "$buf" -- "$text" 2>/dev/null || return 1
-  tmux paste-buffer -t "$win" -b "$buf" -d -p 2>/dev/null || { tmux delete-buffer -b "$buf" 2>/dev/null; return 1; }
-  tmux send-keys -t "$win" Enter 2>/dev/null || return 1
+  local sock="$1" win="$2" text="$3" buf="fleet-relay-$$"
+  tmux -L "$sock" set-buffer -b "$buf" -- "$text" 2>/dev/null || return 1
+  tmux -L "$sock" paste-buffer -t "$win" -b "$buf" -d -p 2>/dev/null || { tmux -L "$sock" delete-buffer -b "$buf" 2>/dev/null; return 1; }
+  tmux -L "$sock" send-keys -t "$win" Enter 2>/dev/null || return 1
   return 0
 }
 
@@ -536,10 +544,13 @@ EOF
       # flip its state, so defer while the input row holds text — but only up to the
       # budget, then deliver anyway so a persistently non-empty read can't wedge this
       # control channel forever. The counter is reaped when the comment is marked seen.
-      if ! bridge_typing_gate "$span" "$slug" "$cid"; then echo "queued-typing(steward#$issue)"; return 3; fi
+      # ssess == the fleet's socket label (issue #159) — the gate reads the steward
+      # pane on its own server.
+      if ! bridge_typing_gate "$(fleet_socket "$ssess")" "$span" "$slug" "$cid"; then echo "queued-typing(steward#$issue)"; return 3; fi
       local smsg
       smsg="[steward inbox — issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
-      if bridge_inject "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
+      # ssess == the fleet's socket label (issue #159): inject into that server.
+      if bridge_inject "$(fleet_socket "$ssess")" "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
       # Pane resolved but a tmux op failed — transient; retry next tick.
       echo "inject-failed(steward#$issue) — will retry"; return 3
     fi
@@ -567,10 +578,13 @@ EOF
     # un-submitted line so the partial is preserved (issue #191), BOUNDED by the
     # defer budget (issue #195) so a persistently non-empty read can't wedge the
     # channel forever. The counter is reaped when the comment is marked seen.
-    if ! bridge_typing_gate "$win" "$slug" "$cid"; then echo "queued-typing(#$issue)"; return 3; fi
+    # sess == the fleet's socket label (issue #159) — the gate reads the worker pane
+    # on its own server.
+    if ! bridge_typing_gate "$(fleet_socket "$sess")" "$win" "$slug" "$cid"; then echo "queued-typing(#$issue)"; return 3; fi
     local msg
     msg="[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
-    if bridge_inject "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi
+    # sess == the fleet's socket label (issue #159): inject into that server.
+    if bridge_inject "$(fleet_socket "$sess")" "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi
     # The window still exists (we just resolved it) but a tmux op failed — a
     # TRANSIENT error. Return the retry code so the comment is NOT marked seen and
     # is re-attempted next tick, rather than silently dropped. (If the window is
@@ -891,7 +905,9 @@ EOF
   # clean drain below. Budget spent ⇒ bridge_typing_gate returns 0 (deliver anyway +
   # a WARN), so the coalesced digest is delivered rather than the channel wedging.
   local tkey="steward.$sissue"
-  if ! bridge_typing_gate "$span" "$slug" "$tkey"; then
+  # ssess == the fleet's socket label (issue #159): the gate reads the steward pane
+  # on its own server (else #191/#199's typing check silently no-ops).
+  if ! bridge_typing_gate "$(fleet_socket "$ssess")" "$span" "$slug" "$tkey"; then
     log "$slug: steward typing — ${#CAND_CIDS[@]} queued (steward watermark held)"; return 0
   fi
 
@@ -916,7 +932,7 @@ EOF
   k=$(( ${#OUT[@]} - 1 ))               # OUT is newest-first; emit oldest-first
   while [ "$k" -ge 0 ]; do digest="$digest"$'\n'"${OUT[$k]}"; k=$((k - 1)); done
 
-  if bridge_inject "$span" "$digest"; then
+  if bridge_inject "$(fleet_socket "$ssess")" "$span" "$digest"; then
     local c
     for c in "${CAND_CIDS[@]}"; do bridge_seen_add "$slug" "$c" steward; done
     bridge_typing_reset "$slug" "$tkey"          # reap the channel typing counter (issue #195)
@@ -931,7 +947,9 @@ EOF
 
 poll() {
   command -v gh >/dev/null 2>&1 || { log "gh not on PATH — nothing to poll"; exit 0; }
-  tmux info >/dev/null 2>&1 || { log "tmux not running — nothing to relay into"; exit 0; }
+  # Each fleet is its own tmux server now (issue #159) — "is tmux up" means "is any
+  # fleet live", which fleet_sockets answers without a single shared server.
+  [ -n "$(fleet_sockets)" ] || { log "no live fleet — nothing to relay into"; exit 0; }
 
   # Repo set: every ENABLED fleet's repo, each with ITS OWN gate/revive knobs. A
   # fleet enables the bridge in its conf (FLEET_ISSUE_BRIDGE=1); mirror pr-refresh's

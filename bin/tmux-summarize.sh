@@ -26,7 +26,14 @@ MODEL="${SUMMARIZE_MODEL:-haiku}"
 MAXW="${SUMMARIZE_MAX:-8}"
 DEBOUNCE="${SUMMARIZE_DEBOUNCE:-15}"   # min seconds between summaries of ONE window
 command -v claude >/dev/null 2>&1 || exit 0
-tmux info >/dev/null 2>&1 || exit 0
+
+# Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. In
+# --window mode the socket is inherited from $TMUX (the Stop/SessionStart hook
+# fires in-pane); the daemon sweep fans out over every live fleet socket, setting
+# SUMMARIZE_SOCK per fleet. TM() routes every tmux call to the right server.
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+TM() { if [ -n "${SUMMARIZE_SOCK:-}" ]; then tmux -L "$SUMMARIZE_SOCK" "$@"; else tmux "$@"; fi; }
 
 RUBRIC='You are labeling a Claude Code session for a dashboard row. Using the bound issue (the goal) and the recent terminal screen (current activity), reply with ONE short line (max ~14 words): concretely what this session is doing now and its status — progress plus any blocker or question. No preamble, no markdown, no quotes, no trailing period. If the screen is idle or empty, reply "idle".'
 
@@ -58,7 +65,7 @@ do_window() {
   if [ -f "$out" ] && [ "$(( $(date +%s) - $(mtime "$out") ))" -lt "$DEBOUNCE" ]; then return 1; fi
   lock="$CACHE/$id.lock"
   mkdir "$lock" 2>/dev/null || return 1             # someone else is on this window
-  cap=$(tmux capture-pane -p -S -120 -t "$wid" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -60)
+  cap=$(TM capture-pane -p -S -120 -t "$wid" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -60)
   if [ -n "$cap" ]; then
     h=$(printf '%s' "$cap" | cksum | awk '{print $1}')   # gate on screen content only
     hf="$CACHE/$id.hash"
@@ -88,7 +95,7 @@ do_window() {
 # --- single-window mode (hook-driven) ---
 if [ "${1:-}" = "--window" ]; then
   wid="${2:-}"; [ -n "$wid" ] || exit 0
-  info=$(tmux display-message -p -t "$wid" \
+  info=$(TM display-message -p -t "$wid" \
         "#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{session_name}"$'\t'"#{@issue}" 2>/dev/null) || exit 0
   IFS=$'\t' read -r name state sess iss <<EOF
 $info
@@ -100,12 +107,19 @@ EOF
 fi
 
 # --- daemon sweep (default) ---
+# Fan out over every live fleet socket (issue #159); window ids are per-server, so
+# SUMMARIZE_SOCK is set per fleet and routes do_window's tmux calls there. The
+# MAXW cap is applied ACROSS all fleets so one tick can't blow the token budget.
 n=0
-while IFS=$'\t' read -r wid name state sess iss; do
-  [ -z "$wid" ] && continue
-  [ "$n" -ge "$MAXW" ] && continue
-  do_window "$wid" "$name" "$state" "$sess" "$iss" && n=$((n+1))
-done < <(tmux list-windows -a -F "#{window_id}"$'\t'"#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{session_name}"$'\t'"#{@issue}")
+for sock in $(command -v fleet_sockets >/dev/null 2>&1 && fleet_sockets); do
+  [ "$n" -ge "$MAXW" ] && break
+  export SUMMARIZE_SOCK="$sock"
+  while IFS=$'\t' read -r wid name state sess iss; do
+    [ -z "$wid" ] && continue
+    [ "$n" -ge "$MAXW" ] && break
+    do_window "$wid" "$name" "$state" "$sess" "$iss" && n=$((n+1))
+  done < <(TM list-windows -a -F "#{window_id}"$'\t'"#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{session_name}"$'\t'"#{@issue}")
+done
 
 [ -f "$LOG" ] && { tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
 exit 0

@@ -84,9 +84,16 @@ chmod +x "$WORK/fakepath/gh"
 # session s1 → pane %9, idle.
 cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
+# real tmux accepts a global -L/-S <socket> before the subcommand; each fleet now
+# runs on its own named socket (issue #159), so fleet_sockets + the injectors
+# prepend one. Strip it so the dispatch below still sees the verb in \$1.
+if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
 args="\$*"
 case "\$1" in
   info) [ -n "\$FAKE_TMUX_DOWN" ] && exit 1; exit 0 ;;
+  # fleet_sockets liveness probe (issue #159): mirror info's down-switch so the
+  # "tmux down" test also makes fleet_sockets empty (the poll gate keys off it).
+  has-session) [ -n "\$FAKE_TMUX_DOWN" ] && exit 1; exit 0 ;;
   list-windows)
     case "\$args" in
       *@claude_state*) printf 's1\t@1\tdone\t10\ns1\t@2\tworking\t11\n' ;;
@@ -122,6 +129,14 @@ esac
 exit 0
 FAKE
 chmod +x "$WORK/fakepath/tmux"
+# Each fleet is a conf named after its session/socket (issue #159): fleet_sockets
+# keys the socket off the conf BASENAME (not its repo), so this makes the "s1"
+# fleet discoverable. FLEET_REPO="" (explicitly empty) OVERRIDES the ambient
+# FLEET_REPO in the conf-sourcing subshell, so bridge_sess_for_slug does NOT
+# resolve fake-repo→s1 — the bridge's per-fleet state (issue #181) therefore stays
+# on the legacy flat path this test asserts. (bridge_find_window still resolves the
+# window via the global FLEET_REPO env, which the resolver falls through to.)
+printf 'FLEET_REPO=""\n' > "$WORK/conf/s1.conf"
 
 # --- canned comments (ascending updated_at) ------------------------------------
 MARK='<!-- fleet:no-relay -->'

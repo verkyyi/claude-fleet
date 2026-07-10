@@ -187,7 +187,7 @@ dispatch_fleet() { (
   # binding AND the bare "issue-<N>" window name — so a window whose @issue was
   # cleared (a slug-named window) is still recognised as live and not counted as
   # a fresh spawn. Second guard beyond the eligible-set's unassigned filter.
-  live=$(tmux list-windows -t "$sess" -F '#{@issue}	#{window_name}' 2>/dev/null | awk -F'\t' '
+  live=$(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{@issue}	#{window_name}' 2>/dev/null | awk -F'\t' '
     { if ($1 != "") print $1
       if ($2 ~ /^issue-[0-9]+$/) { n=$2; sub(/^issue-/, "", n); print n } }' | sort -u)
   is_live() { printf '%s\n' "$live" | grep -qxF "$1"; }
@@ -236,12 +236,11 @@ if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
   SESSIONS=("${ARGV_SESS[@]}")
 else
   # A fleet session is one that owns a 'plan' or 'dash' hub window (same rule the
-  # global count uses). Derive the set from a single tmux scan.
+  # global count uses). fleet_hub_sessions fans this out across every live fleet
+  # socket (issue #159) — no single server sees them all anymore.
   while IFS= read -r s; do
     [ -n "$s" ] && SESSIONS+=("$s")
-  done < <(tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk '
-    { if ($2=="plan" || $2=="dash") fleet[$1]=1 }
-    END { for (s in fleet) print s }' | sort)
+  done < <(fleet_hub_sessions | sort)
 fi
 
 if [ "${#SESSIONS[@]}" -eq 0 ]; then

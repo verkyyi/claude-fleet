@@ -55,7 +55,19 @@ cache_key() {
   local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"
 }
 
-tmux info >/dev/null 2>&1 || exit 0
+# Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
+# single shared server to probe — enumerate the live fleet sockets ONCE and fan
+# every tmux query out across them. NB: we do NOT early-exit when the set is empty
+# (unlike the old `tmux info` gate): the per-repo issue fetch below still refreshes
+# every CONFIGURED repo's cache even with no live fleet, so the backlog has data
+# the moment a fleet opens. The tmux-dependent sections (sessmap, git/ctx, capture,
+# escalation, snapshot) each iterate $SOCKETS / lw_all and simply no-op when empty.
+SOCKETS=$(fleet_sockets)
+# lw_all FMT — the per-fleet-socket replacement for the old `tmux list-windows -a
+# -F FMT`: run it against every live fleet socket and concatenate. Reuses the
+# cached $SOCKETS (no re-probe). Read-only callers use this; writers loop $SOCKETS
+# themselves so they hold the -L label to target (see the escalation block).
+lw_all() { local s; for s in $SOCKETS; do tmux -L "$s" list-windows -a -F "$1" 2>/dev/null; done; }
 
 # python3 powers the context% and usage caches (below). It's a hard dep for
 # those, so guard it once with a diagnostic to stderr (StandardErrorPath →
@@ -89,12 +101,16 @@ queue() {                          # $1=repo → add once
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
 [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
-SM="$G/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap
-for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
-  r=$(fleet_resolve_repo_for_session "$sess")
-  [ -z "$r" ] && continue
-  printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$SM"
-  queue "$r"
+SM="$G/sessmap.$$"; : > "$SM"          # PID-unique tmp: safe if two collectors overlap (global bucket, issue #181)
+# Fan the session enumeration across every live fleet socket (issue #159): no
+# single shared server sees them all now.
+for sock in $SOCKETS; do
+  for sess in $(tmux -L "$sock" list-sessions -F '#{session_name}' 2>/dev/null); do
+    r=$(fleet_resolve_repo_for_session "$sess")
+    [ -z "$r" ] && continue
+    printf '%s\t%s\t%s\n' "$sess" "$(fleet_slug "$r")" "$r" >> "$SM"
+    queue "$r"
+  done
 done
 mv "$SM" "$G/sessmap"
 
@@ -159,7 +175,7 @@ done
 # resolved fleet and only falls back to the un-slug'd name during cold start.
 
 # --- git per live worktree (every run) ---
-tmux list-windows -a -F '#{pane_current_path}' | sort -u | while read -r path; do
+lw_all '#{pane_current_path}' | sort -u | while read -r path; do
   [ -z "$path" ] && continue
   git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
   key=$(cache_key "$path")
@@ -181,7 +197,7 @@ done
 # temp files so the EXIT trap can sweep any it orphans.
 CTX_PATHS=()
 while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
-  < <(tmux list-windows -a -F '#{pane_current_path}' | sort -u)
+  < <(lw_all '#{pane_current_path}' | sort -u)
 if [ "${#CTX_PATHS[@]}" -gt 0 ] && have_py3; then
 python3 - "$G" "$$" "${CTX_PATHS[@]}" <<'PY'
 import json, glob, os, sys, re
@@ -285,8 +301,10 @@ fi
 # tolerant by design: grep exits 1 when no session shows the line (the common
 # case) — that non-zero pipeline status is intentionally discarded; only the
 # captured $line matters.
-line=$(for w in $(tmux list-windows -a -F '#{session_name}:#{window_index}'); do
-  tmux capture-pane -p -S -600 -t "$w" 2>/dev/null
+line=$(for sock in $SOCKETS; do
+  for w in $(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index}' 2>/dev/null); do
+    tmux -L "$sock" capture-pane -p -S -600 -t "$w" 2>/dev/null
+  done
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/ratelimit"; fi
 
@@ -298,12 +316,13 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/rate
 # No-op unless accounts are registered — so single-account installs skip it.
 US=$'\x1f'
 if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
-  tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{@cc_account}" 2>/dev/null | \
+  for sock in $SOCKETS; do
+  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{@cc_account}" 2>/dev/null | \
   while IFS="$US" read -r win acct; do
     [ -n "$acct" ] || continue
     # match the core signal ("hit your <session|weekly|Opus> limit"); the trailing
     # "· resets …" (when present) is captured for the notification but not required.
-    banner=$(tmux capture-pane -p -S -200 -t "$win" 2>/dev/null \
+    banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null \
       | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
     [ -n "$banner" ] || continue
     newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
@@ -313,6 +332,7 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
 account **$acct** hit its usage limit — new sessions now use **${newact:-?}**
 > ${banner}" >/dev/null 2>&1
     fi
+  done
   done
 fi
 
@@ -324,10 +344,16 @@ fi
 # A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is
 # attached → run FLEET_NOTIFY_CMD (fleet.conf) with the message as $1 — plug in
 # any notifier (Slack webhook curl, WeCom bot, ntfy, …). One ping per episode.
+# Per-fleet-socket now (issue #159): the "no client attached" gate is evaluated
+# PER FLEET (its own server), so an unwatched fleet still escalates even while
+# you're attached to a DIFFERENT fleet — strictly better than the old shared
+# server, where any attached client suppressed escalation for every fleet.
 ESC_AFTER="${FLEET_ESCALATE_AFTER:-300}"
-if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; then
+if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   nowts=$(now)
-  tmux list-windows -a -F "#{session_name}:#{window_index}${US}#{window_name}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{@escalated}${US}#{window_id}" 2>/dev/null | \
+  for sock in $SOCKETS; do
+  [ -z "$(tmux -L "$sock" list-clients 2>/dev/null)" ] || continue   # someone's watching THIS fleet → skip it
+  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_name}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{@escalated}${US}#{window_id}" 2>/dev/null | \
   while IFS="$US" read -r win name st ts esc wid; do
     [ "$st" = "needs" ] || continue
     case "$ts" in ''|*[!0-9]*) continue;; esac
@@ -338,7 +364,8 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ] && [ -z "$(tmux list-clients 2>/dev/null)" ]; 
 **${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+
 > doing: ${sum}}"
     $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1 \
-      && tmux set-window-option -t "$win" @escalated "$ts" 2>/dev/null
+      && tmux -L "$sock" set-window-option -t "$win" @escalated "$ts" 2>/dev/null
+  done
   done
 fi
 

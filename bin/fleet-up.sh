@@ -67,7 +67,12 @@ NAME="${NAME:-fleet-$(basename "$REPO")}"
 NAME=$(printf '%s' "$NAME" | tr '.: ' '-')        # tmux session names: no . : space
 DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
 
-tmux has-session -t "$NAME" 2>/dev/null && die "a tmux session '$NAME' already exists (one fleet per repo)"
+# Each fleet gets its OWN tmux server on a named socket (== the session name), so
+# one fleet's crash / stray kill-server can't take down the others (issue #159).
+# SOCK is that socket label; every tmux call below names it explicitly because
+# fleet-up runs from a plain shell (no inherited $TMUX for THIS fleet's server).
+SOCK=$(fleet_socket "$NAME")
+tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null && die "a tmux session '$NAME' already exists (one fleet per repo)"
 
 # --- checkout: reuse if it's already that repo, else clone ---
 if [ -d "$DIR/.git" ]; then
@@ -109,22 +114,29 @@ echo "fleet-up: wrote $CONF"
 # 'work' is the plain work shell; the 'plan' hub (dash on top + a persistent
 # steward Claude session below) is built by steward-session.sh, scoped to THIS
 # fleet's session + checkout so prefix+g toggles this fleet's own steward.
-workwin=$(tmux new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
+workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
+# steward-session.sh builds the hub against this fleet's socket. It resolves the
+# same SOCK from the session name, so it needs no explicit socket argument.
 STEWARD_SESSION="$NAME" STEWARD_CWD="$DIR" bash "$BIN/steward-session.sh"
 # The 'plan' hub is the whole fleet UI — retire the throwaway 'work' shell so the
 # session starts with ONLY the hub (steward-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
-tmux kill-window -t "$workwin" 2>/dev/null || true
+tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 
 # --- populate caches now so the dash isn't empty on first paint ---
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
 echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE)"
 
-# --- land the caller on the new fleet: switch if already in tmux, else attach ---
+# --- land the caller on the new fleet ---
+# Each fleet is its OWN tmux server now, so switch-client (same-server only) can't
+# reach it. If we're already attached to ANOTHER fleet, detach this client and
+# re-attach to the new socket in one motion (-E runs post-detach; tmux ≥ 3.2).
+# Outside tmux, just attach the new socket.
 if [ -n "${TMUX:-}" ]; then
-  tmux switch-client -t "$NAME" || echo "          attach:  tmux switch-client -t $NAME"
+  tmux detach-client -E "exec tmux -L '$SOCK' attach -t '$NAME'" 2>/dev/null \
+    || echo "          attach:  tmux -L $SOCK attach -t $NAME"
 else
-  tmux attach -t "$NAME" || echo "          attach:  tmux attach -t $NAME"
+  tmux -L "$SOCK" attach -t "$NAME" || echo "          attach:  tmux -L $SOCK attach -t $NAME"
 fi
