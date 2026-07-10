@@ -158,9 +158,13 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
        pct="${pct}%";;
   esac
 
-  # one-line summary (first line of the cache file)
-  idn=${wid//[^0-9]/}; smry=''
-  [ -f "$G/summary_$idn" ] && { read -r smry < "$G/summary_$idn" || :; }
+  # one-line summary (first line of the cache file). Keyed by <session>_<id>:
+  # per-fleet tmux servers renumber windows from @1, so the bare id would read
+  # another fleet's row (issue #208) — the session prefix pins it to THIS fleet.
+  # Inlined (not fleet_summary_key) to keep this hot loop fork-free; MUST stay
+  # byte-identical to that helper in fleet-lib.sh.
+  smk=${sess//[^A-Za-z0-9._-]/_}_${wid//[^0-9]/}; smry=''
+  [ -f "$G/summary_$smk" ] && { read -r smry < "$G/summary_$smk" || :; }
   smry=${smry:0:120}
 
   issd=''; [ -n "$iss" ] && issd="#$iss"

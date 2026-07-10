@@ -199,10 +199,11 @@ TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ iss
 # blank pane (no screen text yet), so without this the column stays empty until
 # the first Stop or the ~180s daemon sweep. The LLM summarizer overwrites this
 # placeholder once real content exists (it change-gates on a screen hash, not on
-# prior file contents). Same key/format the readers expect: summary_<winIdDigits>
-# = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh).
+# prior file contents). Same key/format the readers expect: summary_<sess>_<winIdDigits>
+# = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh). The session
+# prefix keeps per-fleet servers from colliding on the bare window id (issue #208).
 seed="starting #$num"; [ "$SCOUT" = 1 ] && seed="scouting #$num"; [ -n "$title" ] && seed="$seed: $title"
-printf '%s' "$seed" > "$G/summary_${win//[^0-9]/}" 2>/dev/null || :
+printf '%s' "$seed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
 # Non-invasive by default: leave the active window put and just confirm the spawn
 # on the status line. Only jump to the new worker when the user opted in
 # (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.

@@ -109,6 +109,23 @@ fleet_cache_global() {
   printf '%s' "$d"
 }
 
+# Filename key for a window's dash-summary cache, machine-wide under global/
+# (callers do "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$wid")").
+# Post-#159 each fleet runs its OWN tmux server numbering windows from @1, so the
+# bare numeric window id — globally unique under the old shared `default` socket —
+# now COLLIDES across fleets: fleet A's @2 and fleet B's @2 both mapped to
+# summary_2, so one fleet's row bled into another fleet's dash (issue #208).
+# Prefixing the (globally-unique, fleet-up-sanitized) session name disambiguates.
+# Both parts are sanitized to [A-Za-z0-9._-] so an unexpected char can't escape
+# the cache dir; a real session name (fleet-up already strips '.'/':'/space) is
+# unchanged, and the numeric id is digits-only, so the key stays stable across
+# window reorders. The one hot-path reader (tmux-dashboard-rows.sh) inlines this
+# same expansion to stay fork-free, so keep the two byte-identical.
+fleet_summary_key() {
+  local sess="${1:-}" wid="${2:-}"
+  printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"
+}
+
 # Path to the sessmap for READING, dual-layout: the new global/sessmap if present,
 # else the legacy flat one (cold start / pre-#181). Writers always write the new
 # global/ path via fleet_cache_global.

@@ -199,7 +199,7 @@ land_after_merge() {
   # History ledger (best-effort; never blocks the land) so the finished session
   # stays reviewable/resumable after self-destruct removes the worktree.
   bash "$BIN/fleet-history.sh" record \
-    --repo "$REPO" --main "$MAIN" \
+    --repo "$REPO" --main "$MAIN" --session "$FLEET_SESSION" \
     --pr "$PR" --issue "$ISSUE" --worktree "$WT" --win "$SELF_WIN" >/dev/null 2>&1 || true
   self_destruct || true
   done_token "landed:${sha:-merged}"
