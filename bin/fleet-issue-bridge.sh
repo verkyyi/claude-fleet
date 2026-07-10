@@ -77,6 +77,21 @@ STEWARD_ISSUE=''
 # bridge_steward_stale, which floors this to 120 for the steward escape — 0 disables
 # the spinner's worker-demote, but disabling the steward escape would wedge/starve).
 STUCK_SECS="${FLEET_STUCK_WORKING_SECS:-120}"
+# Max CONSECUTIVE typing-defers before a relay is delivered anyway (issue #195).
+# bridge_input_busy DEFERS a relay while the target's input row holds un-submitted
+# text (issue #191) — right for a real mid-type, but UNBOUNDED: if a row ever reads
+# non-empty PERSISTENTLY (a future TUI ghost/placeholder after ❯, a stuck/garbled
+# render, a capture-pane quirk) the channel would defer FOREVER, silently — for the
+# @steward control channel that means missed operator messages AND missed watcher
+# wakes with no signal. So bound it, mirroring bridge_steward_stale's "never wedge
+# forever" escape: after this many consecutive typing-defers of the SAME comment,
+# deliver anyway + WARN. The cap must be GENEROUS (a real human pausing mid-type for
+# minutes is respected) yet finite (no infinite wedge). Default 20 ≈ 5 min at the
+# 15s poll. A garbled / non-positive value floors to 20 rather than DISABLING the
+# bound (an unbounded defer is the exact failure this exists to prevent).
+MAX_TYPING_DEFERS="${FLEET_BRIDGE_MAX_TYPING_DEFERS:-20}"
+case "$MAX_TYPING_DEFERS" in ''|*[!0-9]*) MAX_TYPING_DEFERS=20 ;; esac
+[ "$MAX_TYPING_DEFERS" -gt 0 ] 2>/dev/null || MAX_TYPING_DEFERS=20
 
 now() { date +%s 2>/dev/null || echo 0; }
 utcnow() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '1970-01-01T00:00:00Z'; }
@@ -140,6 +155,47 @@ bridge_seen_add() {
   if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 2000 ]; then
     tail -n 2000 "$f" > "$f.$$" 2>/dev/null && mv "$f.$$" "$f" 2>/dev/null || rm -f "$f.$$" 2>/dev/null
   fi
+}
+
+# Per-comment consecutive-typing-defer counter (issue #195) — one small file per
+# (repo slug, comment id), holding an integer tick count. Routed through
+# bridge_state_file (issue #181) so a counter co-locates with the fleet's seen/since
+# under fleets/<sess>/bridge/typing.<cid> (dual-reading a legacy flat file), never
+# split off into the flat $STATE dir. Keyed EXACTLY like the dedup seen-set (per slug
+# + per cid) so one wedged pane's counter can NEVER force-deliver another comment's
+# queue. The counter is reset when the comment is marked SEEN (bridge_seen_add's
+# terminal callers — relayed | suppressed | dropped | dup), which reaps it on EVERY
+# terminal path (incl. the window-gone drop), not only on a clean delivery; a
+# still-queued (rc 3) comment is not seen, so its counter persists across ticks.
+bridge_typing_file() { bridge_state_file "$1" "typing.$2"; }
+# Increment + persist the counter, echo the new value. FAIL SAFE: if the count
+# can't be persisted (unwritable/full state dir), an UN-trackable defer is exactly
+# the silent wedge #195 exists to prevent — so echo MAX_TYPING_DEFERS+1, forcing the
+# deliver-anyway path rather than a forever-1 that never trips the bound.
+bridge_typing_bump() {
+  local f n; f=$(bridge_typing_file "$1" "$2")
+  n=$(cat "$f" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  n=$((n + 1))
+  printf '%s\n' "$n" > "$f" 2>/dev/null || { printf '%s' "$((MAX_TYPING_DEFERS + 1))"; return 0; }
+  printf '%s' "$n"
+}
+bridge_typing_reset() { rm -f "$(bridge_typing_file "$1" "$2")" 2>/dev/null || :; }
+
+# The bounded half-typed-input gate (issue #191 + #195), shared by the worker and
+# @steward relay paths so their wedge behavior can't drift. rc 3 = KEEP DEFERRING
+# (input row holds un-submitted text and we're still within the defer budget); rc 0 =
+# DELIVER (row is clear, OR the budget is spent → deliver anyway + a WARNING log, the
+# safety valve). Args: pane slug cid. NOTE a `working` interlude deliberately does
+# NOT reset the counter (the caller gates that BEFORE calling this) — resetting on
+# working would let a pane flapping working/idle with a stuck input row dodge the
+# bound forever, the exact wedge #195 forbids; the residual bias is toward delivering
+# a tick early, which is the fail-safe direction.
+bridge_typing_gate() {  # $1=pane $2=slug $3=cid
+  bridge_input_busy "$1" || return 0                    # input clear → deliver
+  local n; n=$(bridge_typing_bump "$2" "$3")
+  [ "$n" -le "$MAX_TYPING_DEFERS" ] && return 3         # within budget → keep deferring
+  log "input-check: $1 input row non-empty for $n ticks — delivering to avoid a wedge"
+  return 0                                              # budget spent → deliver anyway
 }
 
 # base64 decode, portable across GNU (-d) and BSD (-D). One helper so the poll and
@@ -290,7 +346,10 @@ EOF
 # `❯` row found — a parse miss ⇒ fall back to deliver; NEVER wedge the queue on a
 # bad read). A human keystroke doesn't flip @claude_state, so this input-content
 # check is the ONLY thing standing between an idle-but-being-typed-into pane and an
-# accidental prepend+submit.
+# accidental prepend+submit. It stays a PURE busy/clear read; the defer it triggers
+# is BOUNDED at the callsite (issue #195, bridge_typing_gate) so a persistently
+# busy read — one the cursor/faint heuristics below don't resolve to a ghost —
+# degrades to delivery, not a silent dead channel.
 #
 # The Claude TUI renders the live input on a `❯ `-anchored row. PAST user turns
 # render the same glyph higher in the scrollback and the status footer below it
@@ -450,9 +509,12 @@ EOF
       if [ "$sst" = working ] && ! bridge_steward_stale "$sts"; then
         echo "queued-busy(steward#$issue)"; return 3
       fi
-      # Same half-typed-input protection as a worker (issue #191): the operator
-      # types into the @steward pane too, and a keystroke doesn't flip its state.
-      if bridge_input_busy "$span"; then echo "queued-typing(steward#$issue)"; return 3; fi
+      # Same half-typed-input protection as a worker (issue #191), BOUNDED (issue
+      # #195): the operator types into the @steward pane too and a keystroke doesn't
+      # flip its state, so defer while the input row holds text — but only up to the
+      # budget, then deliver anyway so a persistently non-empty read can't wedge this
+      # control channel forever. The counter is reaped when the comment is marked seen.
+      if ! bridge_typing_gate "$span" "$slug" "$cid"; then echo "queued-typing(steward#$issue)"; return 3; fi
       local smsg
       smsg="[steward inbox — issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
       if bridge_inject "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
@@ -478,9 +540,11 @@ EOF
     st=$(printf '%s' "$hit" | cut -f3)
     if [ "$st" = working ]; then echo "queued-busy(#$issue)"; return 3; fi
     # A human keystroke doesn't set @claude_state, so an idle worker being typed
-    # into is a live prepend-and-submit target — defer while the input row is
-    # non-empty so the partial is preserved (issue #191).
-    if bridge_input_busy "$win"; then echo "queued-typing(#$issue)"; return 3; fi
+    # into is a live prepend-and-submit target — defer while the input row holds an
+    # un-submitted line so the partial is preserved (issue #191), BOUNDED by the
+    # defer budget (issue #195) so a persistently non-empty read can't wedge the
+    # channel forever. The counter is reaped when the comment is marked seen.
+    if ! bridge_typing_gate "$win" "$slug" "$cid"; then echo "queued-typing(#$issue)"; return 3; fi
     local msg
     msg="[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
     if bridge_inject "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi
@@ -586,6 +650,7 @@ EOF
     exit 75
   fi
   bridge_seen_add "$slug" "$cid"   # terminal (relayed|revived|suppressed|dup)
+  bridge_typing_reset "$slug" "$cid"   # reap any typing counter on the terminal path
   exit 0
 }
 
@@ -628,6 +693,7 @@ poll_repo() {
       pending=1                                          # a comment awaits a busy worker
     else
       bridge_seen_add "$slug" "$cid"
+      bridge_typing_reset "$slug" "$cid"                 # reap any typing counter on the terminal path
     fi
   done <<EOF
 $rows

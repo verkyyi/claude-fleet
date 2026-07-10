@@ -46,7 +46,13 @@ For every new comment the bridge decides, in order:
    so the cursor stays parked at input-start) **or** is **not faint-styled** (the
    ghost is dim, SGR 2) — otherwise a ghost would be misread as a half-typed line
    and defer forever. A parse-miss (no input row / cursor resolvable) falls back to
-   delivering, so a bad read never wedges the queue. Injection is a two-step bracketed
+   delivering, so a bad read never wedges the queue. That defer is also **bounded**
+   (issue #195): after `FLEET_BRIDGE_MAX_TYPING_DEFERS` *consecutive* typing-defers
+   of the same comment the bridge delivers anyway and logs a WARNING — so a row that
+   reads non-empty *persistently* (a stuck render, a future TUI placeholder the
+   ghost/faint heuristics don't catch) degrades to delivery, not a silent dead
+   channel. The per-comment counter resets the instant the input clears, so a
+   genuine multi-minute pause is respected. Injection is a two-step bracketed
    **paste** + a **separate Enter** (the send-keys/bracketed-paste gotcha eats an
    inline Enter and would submit a multi-line body early).
 5. **revive** *(opt-in `FLEET_ISSUE_BRIDGE_REVIVE=1`)* — if the issue is **open**
@@ -122,7 +128,9 @@ on the control issue. The steward route reuses the whole relay pipeline unchange
   stale and relayed anyway. The same **input-content check** as a worker applies:
   the operator types into the `@steward` pane too, so an idle steward whose input
   row holds an un-submitted line defers the relay rather than prepending onto it
-  (issue #191).
+  (issue #191) — and, like the worker gate, that defer is **bounded** by
+  `FLEET_BRIDGE_MAX_TYPING_DEFERS` (issue #195) so a persistently non-empty read
+  can't silently wedge the control channel.
 - **hub-down drops (no revive)** — if no `@steward` pane exists (the hub isn't
   running / is misconfigured) the wake-comment is **dropped terminally**, exactly
   like a worker's revive-off *gone*. Retrying instead would pin the repo watermark
@@ -201,6 +209,7 @@ set tight and don't wire a chatty bot to comment on bound issues.
 | `FLEET_ISSUE_BRIDGE_ASSOC_FLOOR` | `OWNER MEMBER COLLABORATOR` | trusted authors (verbatim GitHub values) |
 | `FLEET_ISSUE_BRIDGE_SECRET` | *(unset)* | webhook HMAC secret (`--deliver` only) |
 | `FLEET_ISSUE_BRIDGE_REVIVE` | `0` | re-spawn a gone worker for an open issue |
+| `FLEET_BRIDGE_MAX_TYPING_DEFERS` | `20` | consecutive typing-defers before a relay is delivered anyway (≈5 min at 15s poll, issue #195) |
 | `FLEET_STEWARD_ISSUE` | *(unset)* | control/inbox issue relayed into the `@steward` pane (#146) |
 | `FLEET_ISSUE_BRIDGE_STATE_DIR` | `~/.config/claude-fleet/issue-bridge` | legacy flat watermark+dedup dir. Since issue #181, state lives per fleet at `~/.config/claude-fleet/fleets/<session>/bridge/{seen,since}`; this dir is only the fallback for a repo with no configured fleet, and is dual-read until `bin/fleet-migrate-layout.sh` moves it |
 

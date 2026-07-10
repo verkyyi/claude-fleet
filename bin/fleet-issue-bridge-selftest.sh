@@ -167,6 +167,7 @@ runbridge() {
   FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
   FAKE_INPUT_ROW="${FAKE_INPUT_ROW:-}" \
   FAKE_CURSOR="${FAKE_CURSOR:-}" \
+  FLEET_BRIDGE_MAX_TYPING_DEFERS="${FLEET_BRIDGE_MAX_TYPING_DEFERS:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -284,6 +285,117 @@ ghost_expect defer   'git lo'                                           '2 2' "t
 # literal '2' must NOT be misread as the dim (SGR 2) attribute:
 ghost_expect defer   "${G}[38;5;2mreal green text${G}[0m"               ''    "256-color idx 2 is NOT dim"
 printf 'selftest: ghost-autosuggestion leg PASS (deliver ghost across encodings, defer typed/edited/colored)\n' >&2
+
+# ============ max-typing-defer safety valve leg (issue #195) ====================
+# The #191 typing-defer is UNBOUNDED: a row that reads non-empty PERSISTENTLY would
+# defer forever, silently. The safety valve caps it — after N consecutive typing-
+# defers of the SAME comment, deliver anyway + WARN; a counter that clears before N
+# resets so a real partial is never penalized. Drive it with a tiny cap (N=3) for
+# speed. State persists in $WORK/state across polls, so the counter accrues.
+TYPING_MAX=3
+# (a) PERSISTENT non-empty input → defer N times, then deliver-anyway on the (N+1)th
+#     with a WARNING; the per-comment counter accrues across ticks.
+rm -f "$WORK/state/bridge_fake-repo.seen" "$WORK"/state/bridge_fake-repo.typing.* 2>/dev/null
+printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+cat > "$CANNED" <<JSON
+[
+ {"id":400,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:00:01Z","body":"deliver me even if the input wedges"}
+]
+JSON
+CNT="$WORK/state/bridge_fake-repo.typing.400"
+i=1
+while [ "$i" -le "$TYPING_MAX" ]; do
+  : > "$INJECT"
+  FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" FAKE_INPUT_TEXT='git lo' \
+    runbridge --poll || fail "max-defer poll (defer #$i) exited non-zero"
+  [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
+    && fail "max-defer: relay must still DEFER on tick $i (≤ N), not inject"
+  grep -qxF 400 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+    && fail "max-defer: c400 must NOT be seen while deferred (tick $i)"
+  [ "$(cat "$CNT" 2>/dev/null)" = "$i" ] \
+    || fail "max-defer: per-comment counter must be $i after $i defers, got $(cat "$CNT" 2>/dev/null)"
+  i=$((i + 1))
+done
+# (N+1)th tick, input STILL non-empty → deliver anyway + WARN, counter reset.
+: > "$INJECT"; : > "$WORK/log"
+FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" FAKE_INPUT_TEXT='git lo' \
+  runbridge --poll || fail "max-defer deliver-anyway poll exited non-zero"
+grep -qF 'deliver me even if the input wedges' "$INJECT" \
+  || fail "max-defer: after N defers the relay must deliver anyway (avoid a wedge)"
+grep -qF 'delivering to avoid a wedge' "$WORK/log" \
+  || fail "max-defer: the deliver-anyway must emit the WARNING log"
+grep -qxF 400 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  || fail "max-defer: the force-delivered comment must be marked seen"
+[ -e "$CNT" ] && fail "max-defer: the per-comment counter must be reset (removed) on delivery"
+
+# (b) SHORT-LIVED partial (clears before N) → normal deliver + counter reset, no warn.
+rm -f "$WORK/state/bridge_fake-repo.seen" "$WORK"/state/bridge_fake-repo.typing.* 2>/dev/null
+printf '2026-07-09T03:10:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+cat > "$CANNED" <<JSON
+[
+ {"id":401,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:10:01Z","body":"short pause then deliver clean"}
+]
+JSON
+CNT2="$WORK/state/bridge_fake-repo.typing.401"
+# two defers (< N=3), input non-empty
+i=1
+while [ "$i" -le 2 ]; do
+  : > "$INJECT"
+  FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" FAKE_INPUT_TEXT='half' \
+    runbridge --poll || fail "max-defer(b) poll (defer #$i) exited non-zero"
+  i=$((i + 1))
+done
+[ "$(cat "$CNT2" 2>/dev/null)" = 2 ] || fail "max-defer(b): counter must be 2 before the line clears"
+# input clears → normal deliver, counter reset, and NO deliver-anyway warning.
+: > "$INJECT"; : > "$WORK/log"
+FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" runbridge --poll \
+  || fail "max-defer(b) cleared poll exited non-zero"
+grep -qF 'short pause then deliver clean' "$INJECT" \
+  || fail "max-defer(b): once the line clears the deferred relay must deliver normally"
+grep -qxF 401 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  || fail "max-defer(b): the cleanly-delivered comment must be marked seen"
+[ -e "$CNT2" ] && fail "max-defer(b): the counter must be reset when the input clears"
+grep -qF 'delivering to avoid a wedge' "$WORK/log" \
+  && fail "max-defer(b): a clean clear-before-N delivery must NOT emit the wedge warning"
+
+# (c) WINDOW-GONE terminal path must REAP an orphaned counter (issue #195 review):
+# a comment deferred a few times (counter file exists), then its window vanishes,
+# must be dropped (seen) AND have its .typing.<cid> file reaped — no state-dir leak.
+rm -f "$WORK/state/bridge_fake-repo.seen" "$WORK"/state/bridge_fake-repo.typing.* 2>/dev/null
+printf '2026-07-09T03:20:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+printf '2\n' > "$WORK/state/bridge_fake-repo.typing.402"   # a stale counter from prior defers
+cat > "$CANNED" <<JSON
+[
+ {"id":402,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/99","updated_at":"2026-07-09T03:20:01Z","body":"my worker window is gone"}
+]
+JSON
+: > "$INJECT"
+FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" runbridge --poll || fail "gone-reap poll exited non-zero"
+grep -qxF 402 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  || fail "gone-reap: a comment with no live window must be marked seen (dropped)"
+[ -e "$WORK/state/bridge_fake-repo.typing.402" ] \
+  && fail "gone-reap: the orphaned per-comment counter must be reaped on the terminal drop"
+
+# (d) FAIL SAFE: an UN-persistable counter (unwritable state dir) must DELIVER anyway
+# rather than defer forever on a stuck-at-1 count (issue #195 review). Skip as root
+# (a read-only dir is still writable to root, masking the failure).
+if [ "$(id -u 2>/dev/null)" != 0 ]; then
+  rm -f "$WORK/state/bridge_fake-repo.seen" "$WORK"/state/bridge_fake-repo.typing.* 2>/dev/null
+  printf '2026-07-09T03:30:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+  cat > "$CANNED" <<JSON
+[
+ {"id":403,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:30:01Z","body":"deliver despite an unwritable state dir"}
+]
+JSON
+  : > "$INJECT"
+  chmod 500 "$WORK/state"
+  FLEET_BRIDGE_MAX_TYPING_DEFERS="$TYPING_MAX" FAKE_INPUT_TEXT='git lo' runbridge --poll; rc=$?
+  chmod 700 "$WORK/state"
+  [ "$rc" = 0 ] || fail "fail-safe poll exited non-zero ($rc)"
+  grep -qF 'deliver despite an unwritable state dir' "$INJECT" \
+    || fail "fail-safe: an un-persistable counter must deliver anyway, not defer forever"
+fi
+printf 'selftest: max-typing-defer leg PASS (bounded defer: force-deliver+warn after N, reset on clear, gone-reap, fail-safe)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then
@@ -496,5 +608,5 @@ printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no prima
 ) || fail "per-fleet bridge state layout (issue #181) resolution wrong"
 printf 'selftest: layout leg PASS (per-fleet bridge state under fleets/<sess>/bridge/ + dual-read + flat fallback — issue #181)\n' >&2
 
-printf 'selftest PASS: relay core + idle-gate + input-content-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak + per-fleet-layout verified\n'
+printf 'selftest PASS: relay core + idle-gate + input-content-gate + ghost-detect + max-typing-defer + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak + per-fleet-layout verified\n'
 exit 0
