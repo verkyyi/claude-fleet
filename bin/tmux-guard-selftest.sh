@@ -21,6 +21,10 @@
 #                              REFUSED (#177 reopen: never guess the seat from the
 #                              active pane; empty caller pane is conservatively
 #                              NOT steward).
+#   • kill-window @sibling with FLEET_SEAT=steward in the env + EMPTY $TMUX_PANE →
+#                              ALLOWED (issue #202: the durable inherited seat
+#                              marker is the primary signal, so a steward shell is
+#                              exempt even when tmux didn't re-export $TMUX_PANE).
 #   • kill-window @sibling from an unmarked WORKER pane → REFUSED (#158 holds).
 #   • FLEET_ALLOW_TMUX_DESTROY=1 → guard OFF: kill-window @sibling ALLOWED.
 #   • tmux -L <name> kill-server → guard PASSES THROUGH (isolated server = ok);
@@ -189,6 +193,28 @@ if guard "" kill-window -t "$WK3" 2>/dev/null; then
   fail "empty \$TMUX_PANE must be REFUSED even with a steward window active (no active-pane guess)"
 fi
 win_gone wk3 && fail "worker window wk3 must survive a refused empty-\$TMUX_PANE kill"
+
+# --- FLEET_SEAT=steward env is the PRIMARY seat signal, even with EMPTY $TMUX_PANE
+# (issue #202) --------------------------------------------------------------------
+# #185's strict $TMUX_PANE read intermittently saw an empty caller pane and refused
+# the steward's own /fleet-land kill-window (the reopen this issue fixes). The fix
+# gives the steward a durable inherited env marker (FLEET_SEAT=steward, exported by
+# steward-session.sh) that the guard trusts FIRST — so a steward Bash-tool shell
+# whose $TMUX_PANE didn't get re-exported is STILL allowed. Prove it: no pane
+# marker, empty $TMUX_PANE, but FLEET_SEAT=steward in the env → ALLOWED. (This
+# assertion FAILS against the pre-#202 code, so it's a real regression test; the
+# empty-$TMUX_PANE REFUSED leg above is its no-marker counterpart.)
+tmux new-window -t t: -n stew4 2>/dev/null || fail "could not create steward window stew4"
+tmux new-window -t t: -n wk4   2>/dev/null || fail "could not create worker window wk4"
+WK4="$(win_id wk4)"
+[ -n "$WK4" ] || fail "could not build FLEET_SEAT fixture"
+# Focus a NON-target window so the empty-$TMUX_PANE ownwin fallback resolves to
+# stew4 (not wk4). Otherwise a freshly-created target IS the active window and the
+# self-teardown path would allow the kill regardless of seat — masking the test.
+tmux select-window -t t:stew4 2>/dev/null
+FLEET_SEAT=steward guard "" kill-window -t "$WK4" 2>/dev/null \
+  || fail "FLEET_SEAT=steward must ALLOW kill-window @sibling even with an empty \$TMUX_PANE (#202)"
+win_gone wk4 || fail "worker window wk4 should be gone after a FLEET_SEAT=steward kill (#202)"
 
 # --- a command on an ISOLATED server (-L <name>) passes straight through -------
 # There is no server on that label, so real tmux errors — but the KEY assertion

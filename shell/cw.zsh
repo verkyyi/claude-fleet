@@ -129,7 +129,10 @@ cwclean() {
 #                                      own window (self-teardown is allowed), OR
 #                                      the caller is the STEWARD hub (issue #177:
 #                                      the operator's hub legitimately kills a
-#                                      merged worker's window in /fleet-land).
+#                                      merged worker's window in /fleet-land). The
+#                                      steward seat is read from the inherited
+#                                      FLEET_SEAT=steward env (issue #202), with
+#                                      the $TMUX_PANE→@steward pane read as backup.
 #   • anything on an isolated server (a global -L/-S is present) → allowed: that
 #                                      is exactly the safe testing convention.
 #   • FLEET_ALLOW_TMUX_DESTROY=1     → guard disabled entirely (maintenance, and
@@ -179,20 +182,31 @@ tmux() {
   # they always take down sibling fleets and are never window management (use
   # FLEET_ALLOW_TMUX_DESTROY for a deliberate whole-server destroy).
   #
-  # Resolve the caller's seat STRICTLY from $TMUX_PANE — the pane id tmux exports
-  # into every process it starts in a pane (confirmed present in the steward
-  # hub's claude process AND the Bash-tool shells it spawns to run the land).
+  # Resolve the caller's seat. The PRIMARY signal is a durable, inherited env
+  # marker: steward-session.sh spawns the steward's claude with FLEET_SEAT=steward
+  # in its environment, so EVERY Bash-tool shell that claude runs inherits it —
+  # unconditionally, without depending on tmux re-exporting $TMUX_PANE per shell.
+  # That per-shell $TMUX_PANE turned out to be unreliable across tool-shell
+  # invocations (issue #202): #185's strict pane read intermittently saw an empty
+  # $TMUX_PANE and refused the steward's own /fleet-land kill-window, forcing the
+  # FLEET_ALLOW_TMUX_DESTROY override. A worker is NEVER spawned with FLEET_SEAT
+  # (dash-issue-session.sh sets nothing), so the #158 worker guarantee is intact.
+  #
+  # The $TMUX_PANE→@steward pane read stays as a SECONDARY/confirming path (for a
+  # steward shell that somehow lacks the env but does have a resolvable pane).
   # NEVER fall back to the active pane: `display-message -t ''` resolves to
   # whichever pane is *focused*, and the plan hub has two panes — dash (no
   # @steward) and steward (@steward=1). With the dash focused, an active-pane
   # read misclassifies the steward's own land as a worker and refuses it — the
   # #177 reopen. A session-level "does this session own a @steward pane?" check
   # is also wrong: a worker window lives in the SAME fleet session as the hub, so
-  # it would exempt workers and break #158. The signal must be caller-pane-level.
-  # Empty/unresolvable $TMUX_PANE → conservatively NOT steward (require the
-  # FLEET_ALLOW_TMUX_DESTROY override), never an active-pane guess.
+  # it would exempt workers and break #158. Empty FLEET_SEAT + empty/unresolvable
+  # $TMUX_PANE → conservatively NOT steward (require the FLEET_ALLOW_TMUX_DESTROY
+  # override), never an active-pane guess.
   local seat_steward=0
-  if [[ -n "${TMUX_PANE:-}" ]]; then
+  if [[ "${FLEET_SEAT:-}" == steward ]]; then
+    seat_steward=1
+  elif [[ -n "${TMUX_PANE:-}" ]]; then
     [[ "$(command tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)" == 1 ]] && seat_steward=1
   fi
 
