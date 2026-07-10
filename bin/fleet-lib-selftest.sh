@@ -302,9 +302,41 @@ eq "sockets: live confs only (down fleet excluded)" "s1,s2," \
 eq "sockets: no conf dir → empty (default tmux untouched)" "" \
   "$(FLEET_CONF_DIR="$WORK/does-not-exist" fleet_sockets)"
 
+# --- issue #203 REGRESSION GUARD: new-layout (#181) socket discovery ----------
+# After #181 moved confs to fleets/<sess>/conf, fleet_sockets globbed the empty
+# flat *.conf path and returned NOTHING — every socket-aware daemon (bridge/watch/
+# collector-fanout/dispatch) found "no live fleet" and serviced the whole estate
+# not at all. These pin: (1) discovery from the NEW layout, (2) label == the DIR
+# basename (never `basename … .conf`, which yields "conf"), (3) dual-read of a
+# still-flat legacy conf. If fleet_sockets ever hand-rolls the flat glob again,
+# the first assertion drops to empty and fails loudly.
+NEWCONF="$WORK/newconf"; mkdir -p "$NEWCONF/fleets/na" "$NEWCONF/fleets/nb" "$NEWCONF/fleets/nc"
+: > "$NEWCONF/fleets/na/conf"; : > "$NEWCONF/fleets/nb/conf"; : > "$NEWCONF/fleets/nc/conf"
+eq "sockets #203: new-layout discovery + dir-basename label (nc down)" "na,nb," \
+  "$(FLEET_CONF_DIR="$NEWCONF" FAKE_DOWN="nc" fleet_sockets | sort | tr '\n' ',')"
+# Label derivation MUST be the dir name, never "conf": a single fleets/foo/conf
+# fleet resolves to label "foo". (The bug produced "conf" for every fleet.)
+SOLOCONF="$WORK/newconf-solo"; mkdir -p "$SOLOCONF/fleets/foo"; : > "$SOLOCONF/fleets/foo/conf"
+eq "sockets #203: single new-layout fleet → label is the dir, not 'conf'" "foo" \
+  "$(FLEET_CONF_DIR="$SOLOCONF" fleet_sockets)"
+# Dual-read: a HALF-migrated estate — one fleet in the new layout, one still flat —
+# lists BOTH, each exactly once (a fleet with a new-layout dir is not double-listed
+# by a leftover flat conf of the same name).
+MIXCONF="$WORK/mixconf"; mkdir -p "$MIXCONF/fleets/newf"
+: > "$MIXCONF/fleets/newf/conf"           # migrated fleet
+: > "$MIXCONF/oldf.conf"                   # un-migrated legacy flat fleet
+: > "$MIXCONF/newf.conf"                   # stale leftover flat conf for newf — must NOT re-list
+eq "sockets #203: dual-read half-migrated, each fleet once" "newf,oldf," \
+  "$(FLEET_CONF_DIR="$MIXCONF" fleet_sockets | sort -u | tr '\n' ',')"
+eq "sockets #203: newf listed exactly once (no flat double-count)" "1" \
+  "$(FLEET_CONF_DIR="$MIXCONF" fleet_sockets | grep -cx newf)"
+
 # fleet_hub_sessions fans out across live sockets — one 'plan' hub each.
 eq "hub_sessions: one per live socket" "s1,s2," \
   "$(FLEET_CONF_DIR="$SOCKCONF" FAKE_DOWN="s3" fleet_hub_sessions | sort | tr '\n' ',')"
+# ...and equally over the NEW layout (fans through the same fleet_sockets).
+eq "hub_sessions #203: one per new-layout socket" "na,nb," \
+  "$(FLEET_CONF_DIR="$NEWCONF" FAKE_DOWN="nc" fleet_hub_sessions | sort | tr '\n' ',')"
 
 # fleet_session_count sums the non-hub worker windows across live sockets (1 each,
 # the down fleet contributes none) — the system-wide cap now spans every socket.

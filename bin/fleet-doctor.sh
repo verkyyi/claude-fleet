@@ -162,14 +162,41 @@ fi
 # armed fleets and the cost. A missing daemon/config is not a fault (opt-in), so
 # this only speaks up when at least one fleet has enabled it.
 conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+
+# Enumerate configured fleet conf paths, dual-layout (issue #203): the new
+# per-fleet layout (fleets/<sess>/conf, #181) preferred, with the legacy flat
+# <sess>.conf read only when that session has no new-layout dir. POSIX inline copy
+# (doctor is /bin/sh; it can't source the bash-only fleet-lib.sh) — KEEP IN SYNC
+# with fleet_each_conf() in bin/fleet-lib.sh. A flat `for cf in "$conf_dir"/*.conf`
+# glob matches nothing after the #181 migration, so this under-counts armed fleets.
+_fleet_confs() {
+  _cd="$1"
+  if [ -d "$_cd/fleets" ]; then
+    for _d in "$_cd"/fleets/*/; do
+      [ -d "$_d" ] || continue
+      [ -f "${_d}conf" ] || continue
+      printf '%s\n' "${_d}conf"
+    done
+  fi
+  for _c in "$_cd"/*.conf; do
+    [ -f "$_c" ] || continue
+    _s=$(basename "$_c" .conf)
+    [ -f "$_cd/fleets/$_s/conf" ] && continue
+    printf '%s\n' "$_c"
+  done
+}
+
 if [ -d "$conf_dir" ]; then
   armed=0
-  for cf in "$conf_dir"/*.conf; do
-    [ -f "$cf" ] || continue
+  # here-doc (not a pipe) so the `while` runs in THIS shell and `armed` survives.
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
     # FLEET_AUTOFILL=1, tolerating quotes/spaces (FLEET_AUTOFILL = "1").
     val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
     [ "$val" = 1 ] && armed=$((armed+1))
-  done
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
   if [ "$armed" -gt 0 ]; then
     if command -v gh >/dev/null 2>&1; then
       pass autofill "$armed fleet(s) with FLEET_AUTOFILL=1 — dispatcher will auto-spawn (spends LLM tokens)"
@@ -186,14 +213,16 @@ fi
 # only deliver through FLEET_STEWARD_ISSUE — so flag an armed-but-channel-less fleet.
 if [ -d "$conf_dir" ]; then
   warmed=0 nochan=0
-  for cf in "$conf_dir"/*.conf; do
-    [ -f "$cf" ] || continue
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
     val=$(sed -n 's/^[[:space:]]*FLEET_WATCH[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
     [ "$val" = 1 ] || continue
     warmed=$((warmed+1))
     sti=$(sed -n 's/^[[:space:]]*FLEET_STEWARD_ISSUE[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
     [ -n "$sti" ] || nochan=$((nochan+1))
-  done
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
   if [ "$warmed" -gt 0 ]; then
     if [ "$nochan" -gt 0 ]; then
       warn watch "$warmed fleet(s) set FLEET_WATCH=1 but $nochan lack FLEET_STEWARD_ISSUE — those wakes have no channel"
