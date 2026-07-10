@@ -26,6 +26,14 @@
 # SNAPSHOT capture), and restore() auto-continues ONLY a window that was
 # 'working' at crash, leaving 'done'/idle windows parked.
 #
+# And the hub-only recovery contract (issue #160):
+#   • SHRINK GUARD  a snapshot of a HUB-ONLY session (panels only, no work
+#                   windows) must NOT erase a richer prior map's WIN rows — that
+#                   was how a mid-restore snapshot destroyed the recovery data.
+#   • RECONCILE     restore against an up-but-hub-only fleet must REOPEN the
+#                   mapped work windows (resumed), not skip the live session; and
+#                   a second restore must not duplicate them (idempotent).
+#
 # tmux/python3 absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -255,5 +263,80 @@ grep -q 'steward.md' "$WORK/claude-argv" \
   || fail "stale: a FAILED resume must fall back to a fresh steward, not a bare shell (got: $(cat "$WORK/claude-argv"))"
 rm -f "$WORK/fail-resume"
 
-printf 'selftest PASS: steward snapshot+resume — STEWARD row captured, resumed with --resume, fresh + stale-id fallbacks intact; per-window state trio (#153) captured + working-window auto-continue wired\n'
+# ================================= 4. HUB-ONLY RECOVERY (issue #160) ============
+# A snapshot of a hub-only session must NOT shrink a richer map, and restore must
+# reopen the missing work windows instead of skipping a live-but-hub-only fleet.
+#
+# Clean slate for restore()'s map glob: drop the earlier sections' maps so it
+# can't wander onto the down 'snap' fleet (that would spawn a real fleet-up).
+rm -f "$FLEET_CONF_DIR/restore/"*.map
+TAB="$(printf '\t')"
+
+# Two work windows in the durable map (their worktrees must exist so restore
+# doesn't skip them). $WORK_PATH is the issue-9 worktree seeded in section 1.
+# 5-field (pre-#153) WIN rows on purpose: they exercise the legacy-map parse in
+# the reconcile path (missing state trio → no nudge/re-stamp, just resume).
+W11="$WORK/repo-issue-11"; mkdir -p "$W11"
+cat > "$FLEET_CONF_DIR/hubonly.conf" <<EOF
+FLEET_REPO=acme/widgets
+FLEET_MAIN=$STEW_PATH
+FLEET_BASE_BRANCH=main
+EOF
+HMAP="$FLEET_CONF_DIR/restore/hubonly.map"
+mkdir -p "$FLEET_CONF_DIR/restore"
+{
+  printf 'FLEET\thubonly\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
+  printf 'WIN\tissue-9\t%s\twrk-def456\t9\n'  "$WORK_PATH"
+  printf 'WIN\tissue-11\t%s\twrk-xyz789\t11\n' "$W11"
+  printf 'STEWARD\t%s\tstew-abc123\n' "$STEW_PATH"
+} > "$HMAP"
+
+# A LIVE hub-only session: just the 'plan' panel with a @steward pane, no work
+# windows — exactly the mid-restore shape that used to destroy the map. Create it
+# on the SAME isolated server the earlier sections are still using; do NOT
+# kill-server first and restart — that races the socket teardown and flaked
+# ("could not start hub-only session") in CI. The section-3 res/fresh/stale
+# sessions keep the server alive; retire them AFTER hubonly exists so the
+# --snapshot below sees only hubonly (deterministic map).
+tmux new-session -d -s hubonly -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null \
+  || fail "could not start hub-only session"
+tmux rename-window -t hubonly plan
+hsp=$(tmux split-window -P -F '#{pane_id}' -t hubonly:plan -c "$STEW_PATH")
+tmux set-option -p -t "$hsp" @steward 1
+for _s in res fresh stale; do tmux kill-session -t "$_s" 2>/dev/null; done
+
+# --- SHRINK GUARD: a hub-only snapshot must keep the richer prior WIN rows ------
+bash "$RESTORE" --snapshot 2>/dev/null || fail "snapshot (hub-only) exited non-zero"
+grep -q "^WIN${TAB}issue-9${TAB}" "$HMAP" \
+  || fail "shrink-guard: a hub-only snapshot erased the issue-9 WIN row (map: $(cat "$HMAP"))"
+grep -q "^WIN${TAB}issue-11${TAB}" "$HMAP" \
+  || fail "shrink-guard: a hub-only snapshot erased the issue-11 WIN row (map: $(cat "$HMAP"))"
+
+# --- RECONCILE: restore an up-but-hub-only fleet reopens the missing windows ----
+: > "$WORK/claude-argv"
+out=$(bash "$RESTORE" 2>/dev/null)
+printf '%s\n' "$out" | grep -q 'reconciling fleet hubonly' \
+  || fail "reconcile: restore should reconcile (not skip) a live hub-only fleet (got: $out)"
+lw=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null)
+printf '%s\n' "$lw" | grep -qxF issue-9 \
+  || fail "reconcile: restore did not reopen the missing issue-9 window (windows: $lw)"
+printf '%s\n' "$lw" | grep -qxF issue-11 \
+  || fail "reconcile: restore did not reopen the missing issue-11 window (windows: $lw)"
+# the reopened window resumed its transcript (launched through fleet-claude.sh,
+# which transparently exec's `claude --resume <id>`; the pane starts async → poll)
+for _n in $(seq 1 200); do
+  grep -q -- '--resume wrk-def456' "$WORK/claude-argv" && break
+  tmux run-shell -t hubonly 'true' 2>/dev/null
+  perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
+done
+grep -q -- '--resume wrk-def456' "$WORK/claude-argv" \
+  || fail "reconcile: issue-9 should resume via 'claude --resume wrk-def456' (argv: $(cat "$WORK/claude-argv"))"
+
+# --- IDEMPOTENT: a second restore must not duplicate the now-live windows -------
+bash "$RESTORE" >/dev/null 2>&1
+dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF issue-9)
+[ "$dup" = 1 ] \
+  || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
+
+printf 'selftest PASS: steward snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — STEWARD row captured & resumed, working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
 exit 0
