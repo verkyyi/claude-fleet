@@ -71,7 +71,8 @@ fleet_mark_role steward "$sp" 2>/dev/null || \
 # is zoomed fullscreen (prefix+g), where the window list is the only other cue.
 tmux set-window-option -t "$win" pane-border-status top 2>/dev/null
 
-# hub belongs at the lowest index (the urgency sorter pins slot 1)
+# hub belongs at the lowest index (slot 1). Nothing re-sorts windows anymore,
+# so this one-time placement is what keeps the hub at slot 1.
 if tmux list-windows -t "$SESS" -F '#{window_index}' | grep -qx 1; then
   tmux swap-window -d -s "$win" -t "$SESS:1" 2>/dev/null
 else

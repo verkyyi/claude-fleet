@@ -62,9 +62,9 @@ Claude Code hooks (PreToolUse/PostToolUse/Stop/Notification)
       │  instant, semantic-blind
       ▼
 @claude_state on the tmux window ──► spinner daemon (0.12s frames, single
-      ▲                               writer, change-detected) ──► window list
-      │  slow, semantic                                            colors/glyphs
-LLM classifier (haiku, ~5min, change-gated)                        + urgency sort
+      ▲                               writer, change-detected) ──► dash glyphs
+      │  slow, semantic                                            + needs tally
+LLM classifier (haiku, ~5min, change-gated)
       
 collector daemon (60s) ──► cache files ──► fzf dashboard / backlog panels
   git · gh PRs+issues ·                     (read-only producers, render instantly)
@@ -255,9 +255,9 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   `gh` call. Multi-repo fleets would need per-window repo detection.
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.
-- Window **numbers are not stable** (the urgency sorter re-slots them). The
-  lowest-indexed window is pinned — keep your dashboard there. Navigate by
-  name/position; slot 1 is always the most urgent.
+- The dashboard/hub sits at the lowest index (slot 1), placed once at spawn.
+  Window **numbers still shift** when a window closes (`renumber-windows on`),
+  so navigate by name — not a memorized index.
 - The `Notification` hook (red/bell) can lag a question by up to ~1 min
   (Claude Code's idle threshold); the classifier corrects stragglers.
 - The token-usage figures are a **local proxy** — the official rate-limit %
