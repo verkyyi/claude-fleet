@@ -118,15 +118,19 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   command -v gh >/dev/null 2>&1 || break
   its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
-    # ONE fetch, TWO caches. The gh --jq emits a 6-column raw line — the historical
-    # 4 (milestone, #num, assignee, title) + a comma-joined labels column + a
-    # backlog flag (jq does the exact `steward-control` match, so a weird label name
-    # can't fool the comma-split). We then derive:
-    #   issues_<slug>  — the 4-column backlog, keeping its contract EXACTLY (readers
-    #                    `cut`/`read` fields 1-4) and DROPPING steward-control issues
-    #                    (#176: a relay endpoint like the #169 hub is not a task; the
-    #                    autofill dispatcher excludes the same label). Filter = the jq
-    #                    flag column, so it's still one gh call + fixture-testable.
+    # ONE fetch, TWO caches. The gh --jq emits a 6-column raw line whose LEADING two
+    # columns are the backlog flag + comma-joined labels, FOLLOWED by the historical
+    # 4 (milestone, #num, assignee, title). Putting the extra columns FIRST keeps the
+    # title LAST, so a tab inside an issue title is absorbed into the title field
+    # (harmless — exactly as before this change) instead of shifting the label/flag
+    # columns and dropping the issue. jq does the exact `steward-control` match into
+    # the flag, so a weird label name can't fool the comma-split. We then derive:
+    #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title),
+    #                    keeping its contract EXACTLY (readers `cut`/`read` fields
+    #                    1-4) and DROPPING steward-control issues (#176: a relay
+    #                    endpoint like the #169 hub is not a task; autofill excludes
+    #                    the same label). Filter = the jq flag column ⇒ still one gh
+    #                    call + fixture-testable.
     #   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
     #                    prod-alert) for the fleet watcher (#147). It must NOT inherit
     #                    the backlog's steward-control drop — the watcher needs to see
@@ -136,11 +140,11 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     raw="$C/issuesx_$sg.$$"
     if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
-      --jq '.[] | (.labels|map(.name)) as $l | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)+"\t"+($l|join(","))+"\t"+(if ($l|any(.=="steward-control")) then "0" else "1" end)' \
+      --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       > "$raw" 2>/dev/null; then
-      awk -F'\t' '$6=="1"' "$raw" | cut -f1-4 > "$C/issues_$sg.$$" \
+      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$C/issues_$sg.$$" \
         && mv "$C/issues_$sg.$$" "$C/issues_$sg"
-      awk -F'\t' '{n=$2; sub(/^#/,"",n); print n"\t"$5}' "$raw" > "$C/labels_$sg.$$" \
+      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$C/labels_$sg.$$" \
         && mv "$C/labels_$sg.$$" "$C/labels_$sg"
     fi
     rm -f "$raw"
