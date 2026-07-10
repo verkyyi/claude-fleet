@@ -11,6 +11,9 @@
 #   • kill-session (default) → REFUSED (a multi-window session survives).
 #   • kill-window -a         → REFUSED (all-but-current sweep hits siblings).
 #   • kill-window @own       → ALLOWED (self-teardown; the window is gone).
+#   • kill-window @sibling from a STEWARD pane (@steward=1) → ALLOWED (issue #177:
+#                              the operator's hub kills a merged worker's window).
+#   • kill-window @sibling from an unmarked WORKER pane → REFUSED (#158 holds).
 #   • FLEET_ALLOW_TMUX_DESTROY=1 → guard OFF: kill-window @sibling ALLOWED.
 #   • tmux -L <name> kill-server → guard PASSES THROUGH (isolated server = ok);
 #                              the refusal text is proven absent from stderr.
@@ -116,6 +119,33 @@ W3="$(win_id w3)"
 FLEET_ALLOW_TMUX_DESTROY=1 guard "$PANE_W1" kill-window -t "$W3" 2>/dev/null \
   || fail "escape hatch should ALLOW kill-window @sibling"
 win_gone w3 || fail "sibling window w3 should be gone once the guard is disabled"
+
+# --- STEWARD-seat cross-window kill is ALLOWED (issue #177) --------------------
+# The operator's steward hub (its pane carries @steward=1) legitimately kills a
+# merged worker's window as the last step of /fleet-land. Build a steward window
+# (hub, marked) + a worker window (wk), then kill wk FROM the steward pane — a
+# cross-window kill the guard must ALLOW because the caller is the steward.
+tmux new-window -t t: -n stew 2>/dev/null || fail "could not create steward window stew"
+tmux new-window -t t: -n wk   2>/dev/null || fail "could not create worker window wk"
+PANE_STEW="$(pane_of stew)"; PANE_WK="$(pane_of wk)"; WK="$(win_id wk)"
+[ -n "$PANE_STEW" ] && [ -n "$PANE_WK" ] && [ -n "$WK" ] || fail "could not build steward/worker fixture"
+tmux set-option -p -t "$PANE_STEW" @steward 1 2>/dev/null || fail "could not mark steward pane"
+guard "$PANE_STEW" kill-window -t "$WK" 2>/dev/null \
+  || fail "steward-seat kill-window @sibling should be ALLOWED (#177)"
+win_gone wk || fail "worker window wk should be gone after a steward-seat kill-window"
+
+# --- a WORKER-seat cross-window kill is STILL refused (the #158 guarantee) ------
+# Same shape, but the caller pane has NO @steward marker → must be refused again.
+# Caller = a fresh, unmarked worker pane; target = the (marked) steward window,
+# a genuine cross-window kill. The guard keys off the CALLER's seat, so it must
+# refuse — and the steward window survives.
+tmux new-window -t t: -n wk 2>/dev/null || fail "could not recreate worker window wk"
+PANE_WK="$(pane_of wk)"; STEW="$(win_id stew)"
+[ -n "$PANE_WK" ] && [ -n "$STEW" ] || fail "could not build worker-seat refusal fixture"
+if guard "$PANE_WK" kill-window -t "$STEW" 2>/dev/null; then
+  fail "worker-seat kill-window @sibling must STILL be REFUSED (#158 must hold)"
+fi
+win_gone stew && fail "steward window stew must survive a refused worker-seat kill-window"
 
 # --- a command on an ISOLATED server (-L <name>) passes straight through -------
 # There is no server on that label, so real tmux errors — but the KEY assertion
