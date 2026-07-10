@@ -34,12 +34,21 @@ ACTIVE=$(tmux list-windows -a -F "#{session_name}${TAB}#{@issue}${TAB}#{window_n
   | awk -F'\t' -v s="${FLEET_SESSION:-}" '$2!="" && (s=="" || $1==s){print $2"\t"$3}')
 active_win(){ printf '%s\n' "$ACTIVE" | awk -F'\t' -v n="$1" '$1==n{print $2; exit}'; }
 
-buf=""
+# hide-bound state (per-fleet, keyed by session): by default an issue already
+# bound to a live worker window is hidden; the ⌃b toggle (dash-toggle-show-bound.sh)
+# creates this file to reveal them. Existence = show, absent = hide.
+SHOW_BOUND=0
+[ -f "$C/backlog_show_bound_${FLEET_SESSION:-_}" ] && SHOW_BOUND=1
+
+buf=""; hidden_any=""
 while IFS=$'\t' read -r ms num asg title; do
   [ -z "$num" ] && continue
   r=$(mrank "$ms")
   case "$MODE" in roadmap) [ "$r" -ge 99 ] && continue;; unplanned) [ "$r" -lt 99 ] && continue;; esac
   n=${num#\#}; awin=$(active_win "$n")
+  # Hide rows bound to a live worker unless the toggle is on. Skipping here (not
+  # at emit time) keeps the milestone counts below in step with the visible rows.
+  if [ -n "$awin" ] && [ "$SHOW_BOUND" = 0 ]; then hidden_any=1; continue; fi
   # Fixed-width columns so the TITLE starts at the same screen column on every
   # row: num padded to 5, then an owner column of a 2-col marker + a 14-col name
   # (both active ▶window and idle assignee use the SAME 16-col owner width).
@@ -58,6 +67,13 @@ while IFS=$'\t' read -r ms num asg title; do
   fi
   buf+="$r	$ms	$n	$row"$'\n'
 done < "$SRC"
+
+# All open issues (in this MODE) are bound + hidden → a friendly line instead of
+# a bare blank/"(no open issues)", so the steward knows why the panel is empty.
+if [ -z "$buf" ] && [ "$SHOW_BOUND" = 0 ] && [ -n "$hidden_any" ]; then
+  printf '%s%s%s%s\n' "$US" "$(c "$GY")" '(all open issues have a live worker — ⌃b to show)' "$R"
+  exit 0
+fi
 
 # collapse state (milestone names, one per line) + per-milestone counts
 COLLAPSED=""; [ -f "$C/collapsed" ] && COLLAPSED=$(cat "$C/collapsed")
