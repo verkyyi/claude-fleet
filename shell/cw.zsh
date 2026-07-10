@@ -178,8 +178,23 @@ tmux() {
   # all-but-current sweep stay refused for EVERYONE below, steward included —
   # they always take down sibling fleets and are never window management (use
   # FLEET_ALLOW_TMUX_DESTROY for a deliberate whole-server destroy).
+  #
+  # Resolve the caller's seat STRICTLY from $TMUX_PANE — the pane id tmux exports
+  # into every process it starts in a pane (confirmed present in the steward
+  # hub's claude process AND the Bash-tool shells it spawns to run the land).
+  # NEVER fall back to the active pane: `display-message -t ''` resolves to
+  # whichever pane is *focused*, and the plan hub has two panes — dash (no
+  # @steward) and steward (@steward=1). With the dash focused, an active-pane
+  # read misclassifies the steward's own land as a worker and refuses it — the
+  # #177 reopen. A session-level "does this session own a @steward pane?" check
+  # is also wrong: a worker window lives in the SAME fleet session as the hub, so
+  # it would exempt workers and break #158. The signal must be caller-pane-level.
+  # Empty/unresolvable $TMUX_PANE → conservatively NOT steward (require the
+  # FLEET_ALLOW_TMUX_DESTROY override), never an active-pane guess.
   local seat_steward=0
-  [[ "$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{@steward}' 2>/dev/null)" == 1 ]] && seat_steward=1
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    [[ "$(command tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)" == 1 ]] && seat_steward=1
+  fi
 
   local hint="test on an isolated socket (tmux -L scratch …) or set FLEET_ALLOW_TMUX_DESTROY=1 to override"
 

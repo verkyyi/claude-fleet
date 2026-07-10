@@ -13,6 +13,14 @@
 #   • kill-window @own       → ALLOWED (self-teardown; the window is gone).
 #   • kill-window @sibling from a STEWARD pane (@steward=1) → ALLOWED (issue #177:
 #                              the operator's hub kills a merged worker's window).
+#   • kill-window @sibling from a STEWARD pane while a NON-steward window is the
+#                              ACTIVE one → still ALLOWED (#177 reopen: the seat
+#                              is read from the caller's $TMUX_PANE, not the
+#                              focused pane).
+#   • kill-window @sibling with an EMPTY $TMUX_PANE, steward window ACTIVE →
+#                              REFUSED (#177 reopen: never guess the seat from the
+#                              active pane; empty caller pane is conservatively
+#                              NOT steward).
 #   • kill-window @sibling from an unmarked WORKER pane → REFUSED (#158 holds).
 #   • FLEET_ALLOW_TMUX_DESTROY=1 → guard OFF: kill-window @sibling ALLOWED.
 #   • tmux -L <name> kill-server → guard PASSES THROUGH (isolated server = ok);
@@ -146,6 +154,41 @@ if guard "$PANE_WK" kill-window -t "$STEW" 2>/dev/null; then
   fail "worker-seat kill-window @sibling must STILL be REFUSED (#158 must hold)"
 fi
 win_gone stew && fail "steward window stew must survive a refused worker-seat kill-window"
+
+# --- STEWARD exemption is FOCUS-INDEPENDENT (issue #177 reopen) ----------------
+# The reopen: the pre-fix guard read the seat from `display-message -t ""`, which
+# falls back to the *active* pane. The plan hub has two panes — dash (no @steward)
+# and steward (@steward=1). With the dash focused, the steward's own /fleet-land
+# was misread as a worker and REFUSED. The fix resolves the seat STRICTLY from the
+# caller's $TMUX_PANE. Prove it: focus a NON-steward window as the active pane,
+# then land FROM the steward pane — the active pane isn't the caller, yet it must
+# still be ALLOWED.
+tmux new-window -t t: -n stew2 2>/dev/null || fail "could not create steward window stew2"
+tmux new-window -t t: -n wk2   2>/dev/null || fail "could not create worker window wk2"
+PANE_STEW2="$(pane_of stew2)"; WK2="$(win_id wk2)"
+[ -n "$PANE_STEW2" ] && [ -n "$WK2" ] || fail "could not build focus-independence fixture"
+tmux set-option -p -t "$PANE_STEW2" @steward 1 2>/dev/null || fail "could not mark steward pane stew2"
+tmux select-window -t t:wk2 2>/dev/null   # focus a NON-steward window as the active pane
+guard "$PANE_STEW2" kill-window -t "$WK2" 2>/dev/null \
+  || fail "steward-seat kill must be ALLOWED with a non-steward window focused (#177 reopen)"
+win_gone wk2 || fail "worker window wk2 should be gone after a focus-independent steward kill"
+
+# --- EMPTY $TMUX_PANE is REFUSED, never active-pane-guessed (issue #177 reopen) -
+# When $TMUX_PANE is empty/unresolvable the pre-fix guard read the ACTIVE pane; if
+# a steward window happened to be focused it would WRONGLY allow a cross-window
+# kill from a caller with no resolvable pane. The fix treats an empty caller pane
+# as conservatively NOT steward. Mark + FOCUS a steward window, then call with an
+# EMPTY TMUX_PANE targeting a sibling worker → must be REFUSED, worker survives.
+tmux new-window -t t: -n stew3 2>/dev/null || fail "could not create steward window stew3"
+tmux new-window -t t: -n wk3   2>/dev/null || fail "could not create worker window wk3"
+PANE_STEW3="$(pane_of stew3)"; WK3="$(win_id wk3)"
+[ -n "$PANE_STEW3" ] && [ -n "$WK3" ] || fail "could not build empty-TMUX_PANE fixture"
+tmux set-option -p -t "$PANE_STEW3" @steward 1 2>/dev/null || fail "could not mark steward pane stew3"
+tmux select-window -t t:stew3 2>/dev/null   # steward window is now the ACTIVE pane
+if guard "" kill-window -t "$WK3" 2>/dev/null; then
+  fail "empty \$TMUX_PANE must be REFUSED even with a steward window active (no active-pane guess)"
+fi
+win_gone wk3 && fail "worker window wk3 must survive a refused empty-\$TMUX_PANE kill"
 
 # --- a command on an ISOLATED server (-L <name>) passes straight through -------
 # There is no server on that label, so real tmux errors — but the KEY assertion
