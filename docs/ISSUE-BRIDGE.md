@@ -67,6 +67,50 @@ fleet-comment.sh 132 --to-worker --body "rebase on master and re-push"
 fleet-comment.sh 132 --note --body "landed in a train with #130"
 ```
 
+## Steward control issue (the wake / async channel)
+
+> Answers issue #146.
+
+A worker is reachable because it is bound to an issue (`@issue`). The **steward**
+lives in the `plan` hub — a pane with **no `@issue`** — so the bridge has no route
+to it by default. Give the steward its own long-lived **control / inbox issue** and
+it becomes a bridge endpoint like a worker: a comment on that issue is relayed
+**into the `@steward` pane** as its next turn. That buys you
+
+- an **operator ↔ steward async channel** — comment from anywhere (phone, laptop,
+  a teammate) and the steward takes a turn, no attached tmux client required;
+- an **event sink** for a fleet watcher (a daemon can comment to wake the steward);
+- a durable **audit log** of wake-events + steward decisions, on one issue thread.
+
+Bind it per fleet with **`FLEET_STEWARD_ISSUE`** (its issue number):
+
+```sh
+# in ~/.config/claude-fleet/<session>.conf (or global fleet.conf):
+FLEET_ISSUE_BRIDGE=1
+FLEET_STEWARD_ISSUE=146      # a long-lived, non-closing control issue for THIS fleet
+```
+
+Create **one non-closing issue per fleet** (e.g. titled `🛰 steward · <fleet>`,
+label `steward-control`) and record its number. The steward route reuses the whole
+relay pipeline unchanged:
+
+- **same gates** — `author_association` floor, the `<!-- fleet:no-relay -->`
+  marker, dedup. The steward posts its own record notes through
+  `bin/fleet-comment.sh` (marked no-relay), so its comments on its **own** control
+  issue never loop back into it.
+- **idle-gate** — the steward is the only Claude session in the `plan` window, so
+  its window `@claude_state` is the gate: a comment lands only when the steward is
+  **not** `working`; a busy steward's comment is queued to a later tick.
+- **no revive** — the hub is always-on; if no `@steward` pane exists the comment is
+  dropped (the thread is still the durable record), so the repo watermark keeps
+  advancing rather than stalling behind an absent hub.
+
+Routing is by issue number: a comment whose issue **is** the repo's
+`FLEET_STEWARD_ISSUE` goes to the steward; everything else routes to the bound
+worker exactly as before. A same-numbered control issue in another fleet never
+collides — the pane is matched to the repo by the same slug logic worker routing
+uses.
+
 ## Ingress A — poll (default, no inbound port)
 
 The daemon lists new issue comments across every enabled fleet's repo via
@@ -130,6 +174,7 @@ set tight and don't wire a chatty bot to comment on bound issues.
 | `FLEET_ISSUE_BRIDGE_ASSOC_FLOOR` | `OWNER MEMBER COLLABORATOR` | trusted authors (verbatim GitHub values) |
 | `FLEET_ISSUE_BRIDGE_SECRET` | *(unset)* | webhook HMAC secret (`--deliver` only) |
 | `FLEET_ISSUE_BRIDGE_REVIVE` | `0` | re-spawn a gone worker for an open issue |
+| `FLEET_STEWARD_ISSUE` | *(unset)* | control/inbox issue relayed into the `@steward` pane (#146) |
 | `FLEET_ISSUE_BRIDGE_STATE_DIR` | `~/.config/claude-fleet/issue-bridge` | watermark + dedup state |
 
 ## Verify

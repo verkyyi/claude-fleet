@@ -71,6 +71,9 @@ chmod +x "$WORK/fakepath/gh"
 
 # --- fake tmux: window table for find_window/fleet_for_repo; records injection --
 # find_window format contains @claude_state; fleet_for_repo contains window_name.
+# For the steward route (issue #146): list-panes yields the @steward pane (%9) and
+# display-message answers its window @claude_state ('done' = idle) — so
+# bridge_find_steward resolves session s1 → pane %9, idle.
 cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
 args="\$*"
@@ -82,6 +85,9 @@ case "\$1" in
       *window_name*)   printf 's1 plan\ns1 dash\n' ;;
     esac
     exit 0 ;;
+  list-panes)   printf '%s 1\n' '%9' ;;                 # the @steward=1 pane in s1
+  display-message)
+    case "\$args" in *@claude_state*) printf 'done\n' ;; esac ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -113,6 +119,7 @@ runbridge() {
   FLEET_ISSUE_BRIDGE_STATE_DIR="$WORK/state" \
   FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
   FLEET_ISSUE_BRIDGE_REVIVE=0 \
+  FLEET_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -186,5 +193,40 @@ if printf '%s' "$PAYLOAD" | FLEET_ISSUE_BRIDGE_SECRET="" FLEET_DELIVERY_SIG="$GO
 fi
 grep -qF 'delivered via webhook' "$INJECT" && fail "an unsigned/no-secret delivery must NOT inject"
 
-printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) verified\n'
+# ===================== steward control-issue leg (issue #146) ==================
+# A comment on the repo's FLEET_STEWARD_ISSUE (here #20) must relay into the
+# @steward=1 pane (%9), NOT a worker window — and still honor the marker + assoc
+# gates. Fresh state so the earlier watermark/seen don't interfere.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+cat > "$CANNED" <<JSON
+[
+ {"id":200,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:01Z","body":"ping steward"},
+ {"id":201,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:02Z","body":"steward note $MARK"},
+ {"id":202,"author_association":"NONE","user":{"login":"rando"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:03Z","body":"untrusted poke"}
+]
+JSON
+: > "$INJECT"
+FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-route poll exited non-zero"
+
+# exactly one Enter into the steward pane (%9), carrying the trusted comment.
+senters=$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)
+[ "$senters" = 1 ] || fail "expected 1 injection into the steward pane %9, got $senters"
+grep -qF 'ping steward' "$INJECT"    || fail "c200 (OWNER, steward issue) should relay to the steward"
+grep -qF 'steward inbox' "$INJECT"   || fail "the steward injection should carry the steward-inbox header"
+grep -qF 'steward note' "$INJECT"    && fail "c201 (no-relay marker) must be suppressed"
+grep -qF 'untrusted poke' "$INJECT"  && fail "c202 (NONE assoc) must be suppressed"
+# a worker window (@1/@2) must NOT be driven by a steward-issue comment
+grep -qF 'send-keys -t @1' "$INJECT" && fail "steward-issue comment must not inject into a worker window"
+
+# WITHOUT FLEET_STEWARD_ISSUE, the same comment on #20 has no worker window and
+# no steward route → it must be dropped (gone), never injected anywhere.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+runbridge --poll || fail "no-steward-issue poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
+  && fail "with no FLEET_STEWARD_ISSUE, a #20 comment must not inject anywhere"
+
+printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route verified\n'
 exit 0

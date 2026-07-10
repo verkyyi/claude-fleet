@@ -56,6 +56,12 @@ LEASE_DIR="${FLEET_DISPATCH_LEASE_DIR:-$HOME/.claude/leases}"
 # relay only the listed set (verbatim match) — default: the three trusted tiers.
 ASSOC_FLOOR="${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-OWNER MEMBER COLLABORATOR}"
 REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}"
+# Per-fleet steward control issue (issue #146). A comment on THIS repo's
+# FLEET_STEWARD_ISSUE drives the @steward hub pane instead of a bound worker
+# window — so the steward becomes a bridge endpoint like a worker (an async
+# operator↔steward channel + an event sink for the fleet watcher). Empty ⇒ no
+# steward route (worker relay is unchanged). Set per-repo in poll() below.
+STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}"
 
 now() { date +%s 2>/dev/null || echo 0; }
 utcnow() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '1970-01-01T00:00:00Z'; }
@@ -132,6 +138,31 @@ bridge_find_window() {
   return 0
 }
 
+# Resolve the live steward hub pane serving <repo> (issue #146). Prints
+# "session<TAB>pane_id<TAB>@claude_state" for the first fleet whose repo matches,
+# empty if none. The steward lives in the 'plan' hub (no @issue), so it can't be
+# found by @issue like a worker — instead we walk this machine's fleet sessions
+# (fleet_hub_sessions), match each to <repo> by the SAME slug logic as
+# bridge_find_window (cached sessmap, cold-cache live fallback so a same-numbered
+# control issue in another fleet never collides), and read its @steward pane via
+# fleet_steward_pane. The state is the pane's WINDOW @claude_state (the steward is
+# the only Claude session in the plan window), so it drives the same idle-gate.
+bridge_find_steward() {
+  local repo="$1" want_slug sess slug pane st
+  want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  while IFS= read -r sess; do
+    [ -n "$sess" ] || continue
+    slug=$(fleet_slug_cached "$sess")
+    [ -z "$slug" ] && slug=$(fleet_slug "$(fleet_resolve_repo_for_session "$sess")")
+    [ "$slug" = "$want_slug" ] || continue
+    pane=$(fleet_steward_pane "$sess")
+    [ -n "$pane" ] || continue
+    st=$(tmux display-message -p -t "$pane" '#{@claude_state}' 2>/dev/null)
+    printf '%s\t%s\t%s' "$sess" "$pane" "$st"; return 0
+  done < <(fleet_hub_sessions)
+  return 0
+}
+
 # Two-step injection: bracketed paste of the (possibly multi-line) text, then a
 # SEPARATE Enter to submit. A single `send-keys -l` treats embedded newlines as
 # Enters (submitting the first line early) — the bracketed-paste gotcha; pasting
@@ -166,6 +197,30 @@ bridge_relay() {
   if bridge_seen_has "$slug" "$cid"; then echo "dup"; return 0; fi
   if bridge_marked "$body"; then echo "suppress:marker"; return 0; fi
   if ! bridge_assoc_ok "$assoc"; then echo "suppress:assoc($assoc)"; return 0; fi
+
+  # Steward control-issue route (issue #146): a comment on THIS repo's
+  # FLEET_STEWARD_ISSUE drives the @steward hub pane, not a bound worker window.
+  # Same gates already applied above (dedup/marker/assoc) — the steward's own
+  # notes carry the no-relay marker (bin/fleet-comment.sh --note) so they never
+  # loop back into itself. Idle-gated on the hub window's @claude_state exactly
+  # like a worker; no revive (the hub is always-on — a missing pane just drops,
+  # mirroring the worker "revive off" path, so the repo watermark keeps advancing).
+  if [ -n "$STEWARD_ISSUE" ] && [ "$issue" = "$STEWARD_ISSUE" ]; then
+    local shit ssess span sst
+    shit=$(bridge_find_steward "$repo")
+    if [ -n "$shit" ]; then
+      ssess=$(printf '%s' "$shit" | cut -f1)
+      span=$(printf '%s' "$shit" | cut -f2)
+      sst=$(printf '%s' "$shit" | cut -f3)
+      if [ "$sst" = working ]; then echo "queued-busy(steward#$issue)"; return 3; fi
+      local smsg
+      smsg="[steward inbox — issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
+      if bridge_inject "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
+      # Pane resolved but a tmux op failed — transient; retry next tick.
+      echo "inject-failed(steward#$issue) — will retry"; return 3
+    fi
+    echo "gone(steward#$issue: no @steward pane for repo)"; return 0
+  fi
 
   local hit sess win st
   hit=$(bridge_find_window "$issue" "$repo")
@@ -337,33 +392,35 @@ poll() {
   # fleet enables the bridge in its conf (FLEET_ISSUE_BRIDGE=1); mirror pr-refresh's
   # cheap resolution — the primary FLEET_REPO (global knobs), plus each per-fleet
   # conf that opts in (its per-fleet FLEET_ISSUE_BRIDGE_ASSOC_FLOOR/…_REVIVE).
-  declare -a REPOS R_FLOOR R_REVIVE; local seen=' '
-  queue() { # $1=repo $2=assoc-floor $3=revive
+  declare -a REPOS R_FLOOR R_REVIVE R_STEWARD; local seen=' '
+  queue() { # $1=repo $2=assoc-floor $3=revive $4=steward-issue
     local rp="$1" sg; [ -z "$rp" ] && return
     sg=$(fleet_slug "$(fleet_norm_repo "$rp")")
     case "$seen" in *" $sg "*) return;; esac
-    seen="$seen$sg "; REPOS+=("$rp"); R_FLOOR+=("$2"); R_REVIVE+=("$3")
+    seen="$seen$sg "; REPOS+=("$rp"); R_FLOOR+=("$2"); R_REVIVE+=("$3"); R_STEWARD+=("$4")
   }
 
   # Global opt-in covers the primary repo (global knobs).
   [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] \
-    && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE"
-  # Per-fleet confs opt in individually, each carrying its own floor/revive. Source
-  # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak.
+    && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE" "$STEWARD_ISSUE"
+  # Per-fleet confs opt in individually, each carrying its own floor/revive/steward.
+  # Source in a subshell and emit repo<TAB>floor<TAB>revive<TAB>steward-issue so the
+  # values can't leak.
   if [ -d "$FLEET_CONF_DIR" ]; then
     for cf in "$FLEET_CONF_DIR"/*.conf; do
       [ -f "$cf" ] || continue
-      local line rp fl rv
+      local line rp fl rv si
       line=$( . "$cf" >/dev/null 2>&1
-              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s' \
+              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s\t%s\t%s' \
                 "${FLEET_REPO:-}" \
                 "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-                "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+                "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" \
+                "${FLEET_STEWARD_ISSUE:-$STEWARD_ISSUE}" )
       [ -z "$line" ] && continue
-      IFS=$'\t' read -r rp fl rv <<EOF
+      IFS=$'\t' read -r rp fl rv si <<EOF
 $line
 EOF
-      queue "$rp" "$fl" "$rv"
+      queue "$rp" "$fl" "$rv" "$si"
     done
   fi
 
@@ -373,6 +430,7 @@ EOF
   local i=0
   while [ "$i" -lt "${#REPOS[@]}" ]; do
     ASSOC_FLOOR="${R_FLOOR[$i]}"; REVIVE="${R_REVIVE[$i]}"   # per-fleet gate/revive
+    STEWARD_ISSUE="${R_STEWARD[$i]}"                         # per-fleet steward route
     poll_repo "${REPOS[$i]}"
     i=$((i + 1))
   done

@@ -135,6 +135,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
 #FLEET_ISSUE_BRIDGE_REVIVE=0
 
+# --- Steward control issue: relay its comments INTO the steward (issue #146) -----
+# The steward lives in the 'plan' hub (a pane with NO @issue), so the issue-bridge
+# has no route to it by default. Bind a long-lived control/inbox issue here and the
+# bridge relays trusted comments on it INTO the @steward pane as its next turn — the
+# steward becomes a bridge endpoint like a worker, giving you (a) an async
+# operator↔steward channel (comment from anywhere → the steward takes a turn), (b) an
+# event sink for the fleet watcher, and (c) a durable audit log of wake-events. Every
+# bridge gate still applies (author_association floor, the <!-- fleet:no-relay -->
+# marker, idle-gate on the hub's @claude_state, dedup) — so the steward's OWN notes
+# (posted via bin/fleet-comment.sh, which stamps the marker) never loop back into it.
+# Create ONE non-closing issue per fleet (e.g. titled "🛰 steward · <fleet>", label
+# steward-control) and record its number here. Requires FLEET_ISSUE_BRIDGE=1; empty ⇒
+# no steward route (worker relay unchanged). See docs/ISSUE-BRIDGE.md.
+# @label=Steward control issue @group=bridge @tier=common @scope=fleet @edit=int
+#FLEET_STEWARD_ISSUE=
+
 # --- Worker-owned self-land (commands/fleet-land-self.md, issue #138) -----------
 # OFF by default. When enabled for a fleet (or per spawn via
 # `dash-issue-session.sh <N> --self-land`), a worker owns its ENTIRE lifecycle

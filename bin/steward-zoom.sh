@@ -10,8 +10,9 @@
 # IN THIS SESSION → fall back to building this fleet's hub (steward-session.sh),
 # passing the current session so the hub lands here, not in another fleet.
 set -uo pipefail
+. "$(cd "$(dirname "$0")" && pwd)/fleet-lib.sh"
 SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
-target=$(tmux list-panes -s -t "$SESS" -F '#{pane_id} #{@steward}' 2>/dev/null | awk '$2=="1"{print $1; exit}')
+target=$(fleet_steward_pane "$SESS")
 if [ -z "$target" ]; then
   exec env STEWARD_SESSION="$SESS" bash "$(dirname "$0")/steward-session.sh"
 fi
