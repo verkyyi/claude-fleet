@@ -60,7 +60,7 @@ run_fzf() {
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
-    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · tab=collapse · ⌃o=web · ⌃r · ⌃k=keys · esc' \
+    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · tab=collapse · ⌃b=bound · ⌃o=web · ⌃r · ⌃k=keys · esc' \
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
@@ -70,6 +70,7 @@ run_fzf() {
     --bind "ctrl-p:toggle-preview" \
     --bind "/:enable-search+change-prompt(filter ▸ )" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
+    --bind "ctrl-b:execute-silent(bash $BIN/dash-toggle-show-bound.sh '$FLEET_SESSION')+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
     --bind "$T_BIND" \
