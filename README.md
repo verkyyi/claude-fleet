@@ -175,10 +175,14 @@ bin/fleet-down.sh webapp --purge           # kill session (+ drop its conf/cache
 args; with none, it infers the repo from the current checkout's `origin` and
 reuses that worktree — no clone.
 
-Each fleet writes `~/.config/claude-fleet/<session>.conf` (overlays the global
-`fleet.conf`). The single global `fleet.conf` above still works as a one-fleet
-default. Every fleet gets a steward pane in its `plan` hub; set
-`FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it runs.
+Each fleet keeps its durable state in **one directory per fleet** —
+`~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,
+issue-bridge/watch state), so `ls ~/.config/claude-fleet/fleets/` is the list of
+running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
+still works as a one-fleet default. Every fleet gets a steward pane in its `plan`
+hub; set `FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it
+runs. Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
+`bin/fleet-migrate-layout.sh` once (idempotent; readers dual-read both layouts).
 
 ## Multiple subscription accounts (auto-failover)
 

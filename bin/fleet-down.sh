@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$NAME" ] || die "usage: fleet-down.sh <session> [--purge]"
 
-CONF="$FLEET_CONF_DIR/$NAME.conf"
+CONF="$(fleet_conf_file "$NAME")"     # new fleets/<sess>/conf, or a legacy flat one
 # resolve this fleet's repo/slug BEFORE deleting the conf (for cache purge)
 SLUG=""
 if [ -f "$CONF" ]; then
@@ -36,10 +36,18 @@ else
 fi
 
 if [ "$PURGE" = 1 ]; then
-  [ -f "$CONF" ] && { rm -f "$CONF" && echo "fleet-down: removed $CONF"; }
+  # One directory per fleet (issue #181): remove exactly fleets/<sess>/ — its whole
+  # durable state (conf, restore.map, bridge/, watch/, sweep.due). Also sweep any
+  # legacy flat conf the migrator hasn't reached yet.
+  SDIR="$FLEET_CONF_DIR/fleets/$NAME"
+  [ -d "$SDIR" ] && { rm -rf "$SDIR" && echo "fleet-down: removed $SDIR"; }
+  rm -f "$FLEET_CONF_DIR/$NAME.conf" 2>/dev/null || true
   if [ -n "$SLUG" ]; then
+    # runtime cache: the fleet's own dir + any legacy flat slug-suffixed files
+    rm -rf "$FLEET_C/fleets/$SLUG"
     rm -f "$FLEET_C/prmap_$SLUG" "$FLEET_C/prmap_$SLUG.ts" \
-          "$FLEET_C/issues_$SLUG" "$FLEET_C/issues_$SLUG.ts"
+          "$FLEET_C/issues_$SLUG" "$FLEET_C/issues_$SLUG.ts" \
+          "$FLEET_C/labels_$SLUG" 2>/dev/null || true
     echo "fleet-down: purged cache for slug '$SLUG'"
   fi
 fi
@@ -51,7 +59,8 @@ if ! tmux info >/dev/null 2>&1; then
   bash "$BIN/fleet-restore.sh" --disarm >/dev/null 2>&1 || true
 else
   # server still up: drop just this fleet's restore map so it isn't rebuilt
-  rm -f "$FLEET_CONF_DIR/restore/$NAME.map" 2>/dev/null || true
+  # (new per-fleet layout + legacy path, issue #181)
+  rm -f "$FLEET_CONF_DIR/fleets/$NAME/restore.map" "$FLEET_CONF_DIR/restore/$NAME.map" 2>/dev/null || true
   # refresh sessmap so the dead session drops out immediately
   ( GH_TTL=999999 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 fi

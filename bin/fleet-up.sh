@@ -95,8 +95,12 @@ fi
 # restore re-runs fleet-up, and a truncating rewrite would silently drop the
 # operator's FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND / FLEET_AUTOFILL / … Only the
 # derived three (repo/main/base) are refreshed; the rest survive. Atomic write.
-mkdir -p "$FLEET_CONF_DIR"
-CONF="$FLEET_CONF_DIR/$NAME.conf"
+# One directory per fleet (issue #181): the conf lives at fleets/<sess>/conf. If an
+# un-migrated legacy flat <sess>.conf exists, adopt it into the per-fleet dir FIRST
+# so fleet_write_conf preserves its custom FLEET_* keys (issue #170) at the new path.
+CONF="$(fleet_state_dir "$NAME")/conf"
+legacy="$FLEET_CONF_DIR/$NAME.conf"
+[ ! -f "$CONF" ] && [ -f "$legacy" ] && { mv "$legacy" "$CONF" 2>/dev/null || cp "$legacy" "$CONF"; }
 fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M:%S')" \
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"

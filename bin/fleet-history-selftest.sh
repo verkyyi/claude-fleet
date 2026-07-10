@@ -77,7 +77,7 @@ case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]"
 CHECKS=$((CHECKS + 1))
 
 # --win path: pull the summary from the dash cache when --summary is absent.
-DC="$TMPDIR/.claude-dash"; mkdir -p "$DC"
+DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # summary_<id> lives in global/ (issue #181)
 printf 'summary from the dash cache\n' > "$DC/summary_77"
 run record --issue 10 --worktree "$WT" --win '@77' >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')

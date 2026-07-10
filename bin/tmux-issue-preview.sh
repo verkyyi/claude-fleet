@@ -30,7 +30,7 @@ _r=$(fleet_repo_cached "${FLEET_SESSION:-}"); [ -n "$_r" ] && REPO="$_r"
 [ -z "$REPO" ] && { printf '%s  (no repo resolved for this fleet)%s\n' "$(c "$GY")" "$R"; exit 0; }
 command -v gh >/dev/null 2>&1 || { printf '%s  gh not found — cannot preview%s\n' "$(c "$GY")" "$R"; exit 0; }
 
-slug=$(fleet_slug "$REPO"); cache="$C/issue_${slug}_${num}.json"; ts="$cache.ts"
+slug=$(fleet_slug "$REPO"); cache="$(fleet_cache_dir "$slug")/issue_${num}.json"; ts="$cache.ts"
 TTL="${FLEET_ISSUE_TTL:-180}"
 now=$(date +%s); last=$(cat "$ts" 2>/dev/null || echo 0)
 if [ ! -s "$cache" ] || [ $(( now - last )) -ge "$TTL" ]; then

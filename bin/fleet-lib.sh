@@ -16,9 +16,107 @@
 # returns cleanly.
 
 FLEET_C="${TMPDIR:-/tmp}/.claude-dash"
-# Per-fleet configs live here, one <session>.conf per fleet (Phase 2). Override
-# FLEET_CONF_DIR to relocate (used by the test harness).
+# Per-fleet configs live here. Override FLEET_CONF_DIR to relocate (used by the
+# test harness).
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+
+# ----------------------------------------------------------------- layout (#181)
+# ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
+# name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,
+# bridge/{seen,since}, watch/{keys,needs}, sweep.due). Its RUNTIME cache is keyed
+# by repo SLUG and lives under $FLEET_C/fleets/<slug>/ (issues, prmap, labels, …).
+# Machine-wide state (sessmap, account.*, git_*/ctx_*/summary_* window caches,
+# usage, collapsed) lives under $FLEET_C/global/. Truly global durable state
+# (accounts/, diskguard/, restore/{autorestore.on,restore.log}) is unchanged.
+#
+# These helpers are the SINGLE source of the on-disk layout — no call site should
+# hand-build a slug/session-suffixed path. For a transition window (land→migrate)
+# the READ-side helpers accept BOTH the new layout and the legacy flat one, so a
+# running fleet keeps working until bin/fleet-migrate-layout.sh moves its state.
+
+# Durable per-fleet state dir for <sess> (created on demand). WRITERS use this.
+fleet_state_dir() {
+  local d="$FLEET_CONF_DIR/fleets/${1:-_}"
+  mkdir -p "$d" 2>/dev/null
+  printf '%s' "$d"
+}
+
+# A session's conf path for READING, dual-layout: the new fleets/<sess>/conf if it
+# exists, else the legacy flat <sess>.conf, else the NEW path (so passing this to a
+# create still lands in the new layout). Never creates directories.
+fleet_conf_file() {
+  local sess="${1:-}" new old
+  new="$FLEET_CONF_DIR/fleets/$sess/conf"; old="$FLEET_CONF_DIR/$sess.conf"
+  if   [ -f "$new" ]; then printf '%s' "$new"
+  elif [ -f "$old" ]; then printf '%s' "$old"
+  else                     printf '%s' "$new"; fi
+}
+
+# Enumerate configured fleets → one "<sess>\t<conf-path>" line each. The new layout
+# (fleets/<sess>/conf) is preferred; a legacy flat <sess>.conf is emitted ONLY when
+# that session has no new-layout dir yet — so a half-migrated estate lists each
+# fleet exactly once. Replaces every `for cf in "$FLEET_CONF_DIR"/*.conf` loop.
+fleet_each_conf() {
+  local d conf sess
+  if [ -d "$FLEET_CONF_DIR/fleets" ]; then
+    for d in "$FLEET_CONF_DIR"/fleets/*/; do
+      [ -d "$d" ] || continue
+      conf="${d}conf"; [ -f "$conf" ] || continue
+      sess=${d%/}; sess=${sess##*/}
+      printf '%s\t%s\n' "$sess" "$conf"
+    done
+  fi
+  for conf in "$FLEET_CONF_DIR"/*.conf; do
+    [ -f "$conf" ] || continue
+    sess=$(basename "$conf" .conf)
+    # dedup only when the NEW-layout conf FILE exists — a fleets/<sess>/ dir that
+    # holds just restore.map/bridge/watch (no conf yet) must NOT hide the legacy conf.
+    [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
+    printf '%s\t%s\n' "$sess" "$conf"
+  done
+}
+
+# repo (owner/name or any remote URL) → the tmux SESSION name of the configured
+# fleet whose FLEET_REPO matches, or empty if none. Lets the repo-native daemons
+# (issue-bridge/watch) resolve which fleets/<sess>/ dir owns their state. Compares
+# on normalized owner/name so URL vs slug forms match.
+fleet_sess_for_repo() {
+  local want sess conf rp
+  want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 0
+  while IFS=$'\t' read -r sess conf; do
+    [ -n "$sess" ] || continue
+    rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ "$(fleet_norm_repo "$rp")" = "$want" ] && { printf '%s' "$sess"; return 0; }
+  done < <(fleet_each_conf)
+  return 0
+}
+
+# Per-fleet RUNTIME cache dir for <slug> (created on demand). The single source of
+# the runtime layout: callers do "$(fleet_cache_dir "$slug")/issues" instead of
+# hand-building "$FLEET_C/issues_$slug".
+fleet_cache_dir() {
+  local d="$FLEET_C/fleets/${1:-_}"
+  mkdir -p "$d" 2>/dev/null
+  printf '%s' "$d"
+}
+
+# Machine-wide (non-fleet) runtime cache dir — sessmap, account.*, git_*/ctx_*/
+# summary_* window caches, usage, ratelimit, collapsed, config scratch. Created on
+# demand.
+fleet_cache_global() {
+  local d="$FLEET_C/global"
+  mkdir -p "$d" 2>/dev/null
+  printf '%s' "$d"
+}
+
+# Path to the sessmap for READING, dual-layout: the new global/sessmap if present,
+# else the legacy flat one (cold start / pre-#181). Writers always write the new
+# global/ path via fleet_cache_global.
+fleet_sessmap_file() {
+  local new="$FLEET_C/global/sessmap"
+  [ -f "$new" ] && { printf '%s' "$new"; return; }
+  printf '%s' "$FLEET_C/sessmap"
+}
 
 # git remote URL (or owner/name) → owner/name. Empty if it isn't GitHub-ish.
 fleet_norm_repo() {
@@ -37,7 +135,7 @@ fleet_current_session() {
 # fleet.conf, so FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH/... target THIS fleet.
 # Sources into the caller's shell (call it non-subshelled). No-op if absent.
 fleet_load_conf() {
-  local conf="$FLEET_CONF_DIR/${1}.conf"
+  local conf; conf=$(fleet_conf_file "$1")
   [ -f "$conf" ] && . "$conf"
   return 0
 }
@@ -286,12 +384,12 @@ fleet_win_name() {
 }
 
 # EXPENSIVE: resolve a tmux session's repo. Order: per-session conf override
-# (~/.config/claude-fleet/<sess>.conf, Phase 2), else the origin remote of the
-# first git checkout among its windows, else the global FLEET_REPO. Prints
+# (fleets/<sess>/conf, or the legacy flat <sess>.conf), else the origin remote of
+# the first git checkout among its windows, else the global FLEET_REPO. Prints
 # owner/name or empty. Collector-only (runs once per cycle).
 fleet_resolve_repo_for_session() {
   local sess="$1" conf repo path
-  conf="$FLEET_CONF_DIR/${sess}.conf"
+  conf=$(fleet_conf_file "$sess")
   if [ -f "$conf" ]; then
     repo=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
     [ -n "$repo" ] && { fleet_norm_repo "$repo"; return; }
@@ -309,14 +407,16 @@ fleet_resolve_repo_for_session() {
 # CHEAP: session → slug from the collector's sessmap (single awk, no forks into
 # git/tmux). Prints slug or empty.
 fleet_slug_cached() {
-  [ -f "$FLEET_C/sessmap" ] || return 0
-  awk -F'\t' -v s="$1" '$1==s{print $2; exit}' "$FLEET_C/sessmap"
+  local sm; sm=$(fleet_sessmap_file)
+  [ -f "$sm" ] || return 0
+  awk -F'\t' -v s="$1" '$1==s{print $2; exit}' "$sm"
 }
 
 # CHEAP: session → repo (owner/name) from the sessmap. Prints repo or empty.
 fleet_repo_cached() {
-  [ -f "$FLEET_C/sessmap" ] || return 0
-  awk -F'\t' -v s="$1" '$1==s{print $3; exit}' "$FLEET_C/sessmap"
+  local sm; sm=$(fleet_sessmap_file)
+  [ -f "$sm" ] || return 0
+  awk -F'\t' -v s="$1" '$1==s{print $3; exit}' "$sm"
 }
 
 # CHEAP: list the tmux sessions that are FLEETS — i.e. own a 'plan' or 'dash' hub
@@ -399,18 +499,22 @@ fleet_session_cap_ok() {
 
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
-# the repo has 0 rows), else the flat fallback. Keying off .ts — not file size —
-# so a fleet whose repo genuinely has 0 issues/PRs shows empty rather than reading
-# a stale un-slug'd file. The flat (un-slug'd) name is ONLY a degenerate cold-start
-# fallback: no producer writes it anymore (issue #180 removed the "primary" flat
-# mirror — all fleets are equal), so it typically won't exist and readers treat
-# absent as "loading". This is the SINGLE slug-resolution truth every reader uses.
+# the repo has 0 rows). Keying off .ts — not file size — so a fleet whose repo
+# genuinely has 0 issues/PRs shows empty rather than reading a stale file. This is
+# the SINGLE slug-resolution truth every reader uses. Layout (#181): the fetch
+# lives at fleets/<slug>/<base>; for the land→migrate transition we also accept the
+# legacy flat <base>_<slug> file (the collector regenerates into the new dir within
+# a tick). A cold start / unresolved session returns a NON-EXISTENT path so the
+# reader treats absent as "loading".
 fleet_cache() {
-  local base="$1" slug
+  local base="$1" slug new old
   slug=$(fleet_slug_cached "$2")
-  if [ -n "$slug" ] && [ -f "$FLEET_C/${base}_${slug}.ts" ]; then
-    printf '%s' "$FLEET_C/${base}_${slug}"
-  else
-    printf '%s' "$FLEET_C/${base}"
+  if [ -n "$slug" ]; then
+    new="$FLEET_C/fleets/$slug/$base"
+    [ -f "$new.ts" ] && { printf '%s' "$new"; return; }
+    old="$FLEET_C/${base}_${slug}"          # legacy flat slug-suffixed (pre-#181)
+    [ -f "$old.ts" ] && { printf '%s' "$old"; return; }
+    printf '%s' "$new"; return              # cold start → new path (won't exist yet)
   fi
+  printf '%s' "$FLEET_C/$base"              # unresolved session: degenerate fallback
 }

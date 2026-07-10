@@ -108,7 +108,7 @@ fi
 
 # --- Claude token consumption (5h/7d proxy, written by the dash collector) ---
 INDIGO="#[fg=#bb9af7]"
-usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/usage" 2>/dev/null)
+usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/global/usage" 2>/dev/null)   # global/ (issue #181)
 usage_seg=""
 [ -n "$usage" ] && usage_seg="${DIM}│ ${INDIGO}${usage} "
 
@@ -119,7 +119,7 @@ usage_seg=""
 # window is FLEET_RATELIMIT_TTL seconds (default 6h).
 ORANGE="#[fg=#ff9e64]"
 rl_seg=""
-rl_file="${TMPDIR:-/tmp}/.claude-dash/ratelimit"
+rl_file="${TMPDIR:-/tmp}/.claude-dash/global/ratelimit"   # global/ (issue #181)
 if [ -f "$rl_file" ]; then
     rl_ts="" rl_line=""
     IFS=$'\t' read -r rl_ts rl_line < "$rl_file" 2>/dev/null
@@ -138,7 +138,7 @@ fi
 acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
 acct_seg=""
 if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' ! -name '*.conf' 2>/dev/null)" ]; then
-    act=$(sed -n '1p' "${TMPDIR:-/tmp}/.claude-dash/account.active" 2>/dev/null)
+    act=$(sed -n '1p' "${TMPDIR:-/tmp}/.claude-dash/global/account.active" 2>/dev/null)   # global/ (issue #181)
     # Wrap the chip in a clickable range (acct) — a MouseDown1Status bind in
     # conf/tmux-attention.conf opens the account picker (same as prefix A). Only
     # emitted when a chip exists, so there's no dead click target when off.

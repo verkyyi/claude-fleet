@@ -84,7 +84,7 @@ JSON
 
 # --- run the real collector against the fakes ---------------------------------
 C="$WORK/.claude-dash"
-ISSUES="$C/issues_fake-repo"   # slug'd per-fleet cache (fleet_slug fake/repo → fake-repo)
+ISSUES="$C/fleets/fake-repo/issues"   # per-fleet cache (fleet_slug fake/repo → fake-repo, issue #181)
 LOG="$WORK/log"
 PATH="$WORK/fakepath:$PATH" \
 TMPDIR="$WORK" \

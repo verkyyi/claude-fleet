@@ -39,7 +39,7 @@ active_win(){ printf '%s\n' "$ACTIVE" | awk -F'\t' -v n="$1" '$1==n{print $2; ex
 # bound to a live worker window is hidden; the ⌃b toggle (dash-toggle-show-bound.sh)
 # creates this file to reveal them. Existence = show, absent = hide.
 SHOW_BOUND=0
-[ -f "$C/backlog_show_bound_${FLEET_SESSION:-_}" ] && SHOW_BOUND=1
+[ -f "$C/global/backlog_show_bound_${FLEET_SESSION:-_}" ] && SHOW_BOUND=1
 
 buf=""; hidden_any=""
 while IFS=$'\t' read -r ms num asg title; do
@@ -77,7 +77,7 @@ if [ -z "$buf" ] && [ "$SHOW_BOUND" = 0 ] && [ -n "$hidden_any" ]; then
 fi
 
 # collapse state (milestone names, one per line) + per-milestone counts
-COLLAPSED=""; [ -f "$C/collapsed" ] && COLLAPSED=$(cat "$C/collapsed")
+COLLAPSED=""; [ -f "$C/global/collapsed" ] && COLLAPSED=$(cat "$C/global/collapsed")
 is_collapsed(){ printf '%s\n' "$COLLAPSED" | grep -qxF "$1"; }
 counts=$(printf '%s' "$buf" | awk -F'\t' 'NF>=2{c[$2]++} END{for(m in c) print m"\t"c[m]}')
 count_of(){ printf '%s\n' "$counts" | awk -F'\t' -v m="$1" '$1==m{print $2; exit}'; }

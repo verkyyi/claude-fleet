@@ -163,7 +163,7 @@ eq "reap: dirty short-circuits merged" "dirty 1" \
 git -C "$REPO" checkout -q -- tracked         # restore clean for any later use
 
 # ============================================================================
-# C. sessmap lookups + fleet_cache routing
+# C. sessmap lookups + fleet_cache routing (per-fleet layout, issue #181)
 # ============================================================================
 FLEET_C="$WORK/cache"          # override the module default (plain var, reassignable)
 mkdir -p "$FLEET_C"
@@ -172,36 +172,103 @@ mkdir -p "$FLEET_C"
 eq "slug_cached: no sessmap" "" "$(fleet_slug_cached s1)"
 eq "repo_cached: no sessmap" "" "$(fleet_repo_cached s1)"
 
-# Write a sessmap: session<TAB>slug<TAB>repo.
-printf 's1\tacme-widgets\tacme/widgets\n' >  "$FLEET_C/sessmap"
-printf 's2\tacme-gadgets\tacme/gadgets\n' >> "$FLEET_C/sessmap"
+# Write the sessmap to the NEW global/ location: session<TAB>slug<TAB>repo.
+mkdir -p "$FLEET_C/global"
+printf 's1\tacme-widgets\tacme/widgets\n' >  "$FLEET_C/global/sessmap"
+printf 's2\tacme-gadgets\tacme/gadgets\n' >> "$FLEET_C/global/sessmap"
 
-eq "slug_cached: hit"      "acme-widgets" "$(fleet_slug_cached s1)"
-eq "repo_cached: hit"      "acme/widgets" "$(fleet_repo_cached s1)"
-eq "repo_cached: 2nd row"  "acme/gadgets" "$(fleet_repo_cached s2)"
-eq "repo_cached: miss"     ""             "$(fleet_repo_cached nope)"
+eq "slug_cached: hit (global/)" "acme-widgets" "$(fleet_slug_cached s1)"
+eq "repo_cached: hit (global/)" "acme/widgets" "$(fleet_repo_cached s1)"
+eq "repo_cached: 2nd row"       "acme/gadgets" "$(fleet_repo_cached s2)"
+eq "repo_cached: miss"          ""             "$(fleet_repo_cached nope)"
 
-# fleet_cache routing: slug'd file ONLY when its <base>_<slug>.ts marker exists.
-# No .ts yet → flat fallback.
-eq "cache: no .ts → flat fallback" "$FLEET_C/prmap" "$(fleet_cache prmap s1)"
+# sessmap dual-read: with NO global/ file, a legacy flat sessmap still resolves.
+rm -f "$FLEET_C/global/sessmap"
+printf 's3\tacme-legacy\tacme/legacy\n' > "$FLEET_C/sessmap"
+eq "slug_cached: legacy flat sessmap" "acme-legacy" "$(fleet_slug_cached s3)"
+# and global/ WINS over the legacy flat file when both exist.
+mkdir -p "$FLEET_C/global"
+printf 's1\tacme-widgets\tacme/widgets\n' >  "$FLEET_C/global/sessmap"
+printf 's2\tacme-gadgets\tacme/gadgets\n' >> "$FLEET_C/global/sessmap"
+eq "sessmap: global/ wins over legacy" "acme-widgets" "$(fleet_slug_cached s1)"
 
-# Drop the .ts marker → routes to the slug'd file.
-: > "$FLEET_C/prmap_acme-widgets.ts"
-eq "cache: .ts present → slug'd file" "$FLEET_C/prmap_acme-widgets" "$(fleet_cache prmap s1)"
+# fleet_cache routing: the slug'd fetch lives at fleets/<slug>/<base>, gated on its
+# .ts marker. No .ts yet → the (non-existent) new-layout path (reader = "loading").
+eq "cache: no .ts → new-layout path" "$FLEET_C/fleets/acme-widgets/prmap" "$(fleet_cache prmap s1)"
 
-# A session that doesn't resolve to a slug → always flat, regardless of markers.
+# Drop the new-layout .ts marker → routes to the fleets/<slug>/ file.
+mkdir -p "$FLEET_C/fleets/acme-widgets"
+: > "$FLEET_C/fleets/acme-widgets/prmap.ts"
+eq "cache: .ts present → fleets/<slug> file" "$FLEET_C/fleets/acme-widgets/prmap" "$(fleet_cache prmap s1)"
+
+# Dual-read: with ONLY a legacy flat <base>_<slug>.ts (no new-layout .ts), the
+# legacy file is still returned so a fleet keeps working across land→migrate.
+: > "$FLEET_C/issues_acme-widgets.ts"
+eq "cache: legacy flat dual-read" "$FLEET_C/issues_acme-widgets" "$(fleet_cache issues s1)"
+
+# A session that doesn't resolve to a slug → degenerate flat fallback.
 eq "cache: unresolved session → flat" "$FLEET_C/issues" "$(fleet_cache issues nope)"
 
 # --- two-fleet routing: no cross-fleet leak (issue #180) --------------------
-# With TWO fleets live, each session must route to ITS OWN slug'd cache and NEVER
-# the other's — the regression rail for the tmux-dashboard-rows.sh:59 bug where a
-# non-primary fleet showed another fleet's prmap. Both fetches have COMPLETED
-# (both .ts markers present), so neither can fall back to the flat name.
-: > "$FLEET_C/prmap_acme-gadgets.ts"
-eq "2fleet: s1 → its own prmap"  "$FLEET_C/prmap_acme-widgets" "$(fleet_cache prmap s1)"
-eq "2fleet: s2 → its own prmap"  "$FLEET_C/prmap_acme-gadgets" "$(fleet_cache prmap s2)"
+# Each session must route to ITS OWN slug'd cache and NEVER the other's. Both
+# fetches have COMPLETED (both new-layout .ts markers present).
+mkdir -p "$FLEET_C/fleets/acme-gadgets"
+: > "$FLEET_C/fleets/acme-gadgets/prmap.ts"
+eq "2fleet: s1 → its own prmap"  "$FLEET_C/fleets/acme-widgets/prmap" "$(fleet_cache prmap s1)"
+eq "2fleet: s2 → its own prmap"  "$FLEET_C/fleets/acme-gadgets/prmap" "$(fleet_cache prmap s2)"
 [ "$(fleet_cache prmap s1)" != "$(fleet_cache prmap s2)" ] \
   || { echo "FAIL 2fleet: s1 and s2 must not share a prmap (cross-fleet leak)"; exit 1; }
 CHECKS=$((CHECKS + 1))   # the bracket assertion above (the two eq calls self-count)
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180)\n' "$CHECKS"
+# ============================================================================
+# D. layout helpers (issue #181): dirs, dual-layout conf, enumeration, repo→sess
+# ============================================================================
+CONFROOT="$WORK/conf"
+FLEET_CONF_DIR="$CONFROOT"     # override the module default (plain var, reassignable)
+: "$FLEET_CONF_DIR"           # read by the sourced fleet-lib helpers (opaque to shellcheck)
+
+# fleet_state_dir / fleet_cache_dir / fleet_cache_global create + print the dir.
+eq "state_dir path"  "$CONFROOT/fleets/fleet-a" "$(fleet_state_dir fleet-a)"
+[ -d "$CONFROOT/fleets/fleet-a" ] || fail "state_dir did not create the dir"
+eq "cache_dir path"  "$FLEET_C/fleets/acme-widgets" "$(fleet_cache_dir acme-widgets)"
+[ -d "$FLEET_C/fleets/acme-widgets" ] || fail "cache_dir did not create the dir"
+eq "cache_global"    "$FLEET_C/global" "$(fleet_cache_global)"
+
+# fleet_conf_file dual-layout: new fleets/<sess>/conf preferred, else legacy flat.
+printf 'FLEET_REPO="acme/new"\n' > "$CONFROOT/fleets/fleet-a/conf"
+printf 'FLEET_REPO="acme/legacy"\n' > "$CONFROOT/fleet-b.conf"
+eq "conf_file: new layout"     "$CONFROOT/fleets/fleet-a/conf" "$(fleet_conf_file fleet-a)"
+eq "conf_file: legacy flat"    "$CONFROOT/fleet-b.conf"        "$(fleet_conf_file fleet-b)"
+eq "conf_file: absent → new"   "$CONFROOT/fleets/fleet-z/conf" "$(fleet_conf_file fleet-z)"
+
+# fleet_each_conf enumerates each fleet ONCE, preferring the new layout. Give
+# fleet-a BOTH a new dir and a legacy flat conf — it must appear only once (new).
+printf 'FLEET_REPO="acme/stale"\n' > "$CONFROOT/fleet-a.conf"
+enum=$(fleet_each_conf | sort)
+eq "each_conf: fleet-a once, new path" "$CONFROOT/fleets/fleet-a/conf" \
+  "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-a"{print $2}')"
+eq "each_conf: fleet-a listed once" "1" \
+  "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-a"' | grep -c .)"
+eq "each_conf: fleet-b (legacy) present" "$CONFROOT/fleet-b.conf" \
+  "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-b"{print $2}')"
+
+# fleet_sess_for_repo maps a repo back to its configured session (normalized).
+eq "sess_for_repo: new-layout fleet"  "fleet-a" "$(fleet_sess_for_repo acme/new)"
+eq "sess_for_repo: URL form matches"  "fleet-a" "$(fleet_sess_for_repo https://github.com/acme/new.git)"
+eq "sess_for_repo: legacy fleet"      "fleet-b" "$(fleet_sess_for_repo acme/legacy)"
+eq "sess_for_repo: unknown → empty"   ""        "$(fleet_sess_for_repo acme/nope)"
+
+# DETERMINISM GUARD: the issue-bridge + fleet-watch key their per-repo state to the
+# CANONICAL session (fleet_sess_for_repo) so two sessions serving ONE repo share it
+# rather than re-seeding. With two fleets on the same repo, the mapping must be
+# STABLE (first-enumerated wins, same every call) — else the watcher/bridge would
+# flip which dir they read and spuriously re-seed an already-firing edge.
+mkdir -p "$CONFROOT/fleets/dup-1" "$CONFROOT/fleets/dup-2"
+printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-1/conf"
+printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-2/conf"
+csess1=$(fleet_sess_for_repo shared/repo); csess2=$(fleet_sess_for_repo shared/repo)
+eq "sess_for_repo: stable across calls (canonical)" "$csess1" "$csess2"
+case "$csess1" in dup-1|dup-2) : ;; *) fail "sess_for_repo: two-fleets-one-repo must resolve to one of them, got [$csess1]";; esac
+CHECKS=$((CHECKS + 1))
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181)\n' "$CHECKS"

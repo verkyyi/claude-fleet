@@ -18,9 +18,9 @@
 # "<label>.conf" (same dir) may set LIMIT_TTL=<N>[smhd] — this account's bench
 # window after a usage-limit hit (default: FLEET_ACCOUNT_LIMIT_TTL).
 #
-# State (account-wide, like usage/ratelimit → shared cache dir):
-#   $C/account.active    — one line: the label new sessions should use
-#   $C/account.limited   — label<TAB>until-epoch<TAB>banner   (one row per limited acct)
+# State (account-wide, like usage/ratelimit → the global/ cache dir, issue #181):
+#   global/account.active   — one line: the label new sessions should use
+#   global/account.limited  — label<TAB>until-epoch<TAB>banner  (one row per limited acct)
 #
 # Commands:
 #   active               — print the label new sessions should use (rotating past
@@ -50,9 +50,11 @@ TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out 
 # terminal when run directly). Always emitted: the modal pipes us and needs the
 # codes, so gating on [ -t 1 ] would strip colour exactly where it's wanted.
 A_DIM=$'\033[2m'; A_RST=$'\033[0m'; A_GRN=$'\033[32m'; A_YEL=$'\033[33m'; A_RED=$'\033[31m'
-STATE_ACTIVE="$FLEET_C/account.active"
-STATE_LIMITED="$FLEET_C/account.limited"
-LOCK="$FLEET_C/account.lock"
+# account state is machine-wide (not per-fleet) → global/ (issue #181)
+STATE_DIR="$FLEET_C/global"
+STATE_ACTIVE="$STATE_DIR/account.active"
+STATE_LIMITED="$STATE_DIR/account.limited"
+LOCK="$STATE_DIR/account.lock"
 
 now() { date +%s; }
 
@@ -141,7 +143,7 @@ atomic_write() { local f="$1" tmp="$1.$$"; cat > "$tmp" && mv "$tmp" "$f"; }
 cmd_active() {
   local labels cur nxt
   labels=$(acct_labels); [ -z "$labels" ] && return 0        # off → nothing
-  mkdir -p "$FLEET_C"
+  mkdir -p "$STATE_DIR"
   cur=$(sed -n '1p' "$STATE_ACTIVE" 2>/dev/null || true)
   nxt=$(pick_active "$cur")
   [ -z "$nxt" ] && return 0
@@ -158,7 +160,7 @@ cmd_env() {
 
 cmd_use() {
   local l="$1"; acct_labels | grep -qx "$l" || { echo "use: unknown account '$l'" >&2; return 1; }
-  mkdir -p "$FLEET_C"; acct_lock; printf '%s\n' "$l" | atomic_write "$STATE_ACTIVE"; acct_unlock
+  mkdir -p "$STATE_DIR"; acct_lock; printf '%s\n' "$l" | atomic_write "$STATE_ACTIVE"; acct_unlock
   printf '%s' "$l"
 }
 
@@ -176,7 +178,7 @@ EOF
     acct_eligible "${L[$idx]}" && { nxt="${L[$idx]}"; break; }
   done
   nxt="${nxt:-$cur}"
-  mkdir -p "$FLEET_C"; acct_lock; printf '%s\n' "$nxt" | atomic_write "$STATE_ACTIVE"; acct_unlock
+  mkdir -p "$STATE_DIR"; acct_lock; printf '%s\n' "$nxt" | atomic_write "$STATE_ACTIVE"; acct_unlock
   printf '%s' "$nxt"
 }
 
@@ -185,7 +187,7 @@ cmd_mark_limited() {
   [ -n "$label" ] || { echo "mark-limited: usage: mark-limited <label> [banner]" >&2; return 1; }
   acct_labels | grep -qx "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
   until=$(( $(now) + $(acct_ttl "$label") ))
-  mkdir -p "$FLEET_C"; acct_lock
+  mkdir -p "$STATE_DIR"; acct_lock
   # Rewrite: drop this label's old row + any expired rows, then add the fresh one.
   { [ -f "$STATE_LIMITED" ] && awk -F'\t' -v l="$label" -v now="$(now)" '$1!=l && ($2+0)>now' "$STATE_LIMITED"
     printf '%s\t%s\t%s\n' "$label" "$until" "$banner"; } | atomic_write "$STATE_LIMITED"

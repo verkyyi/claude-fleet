@@ -44,7 +44,8 @@ if { [ -x "$BIN/fleet-comment.sh" ] && "$BIN/fleet-comment.sh" "$num" --repo "$R
   : # posted (via wrapper or the marker-carrying fallback)
   # invalidate the per-issue preview cache so the pane refetches with the new
   # comment on the next hover / refresh-preview.
-  rm -f "$C/issue_$(fleet_slug "$REPO")_${num}" "$C/issue_$(fleet_slug "$REPO")_${num}.ts"
+  FD=$(fleet_cache_dir "$(fleet_slug "$REPO")")              # fleets/<slug>/ (issue #181)
+  rm -f "$FD/issue_${num}.json" "$FD/issue_${num}.json.ts"
   tmux display-message "commented on #$num ✓"
 else
   printf '\n  \033[31mfailed to comment on #%s\033[0m — press any key ' "$num"; read -rsn1 _

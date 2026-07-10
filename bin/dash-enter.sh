@@ -17,7 +17,7 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 # Per-fleet keyed (FLEET_SESSION), matching dash-view-toggle.sh. Clear any half-set
 # rename/bind flag first so a mode toggled in landed view can't leak into the next
 # live-view Enter (those flags are meaningless on a landed row).
-if [ "$(cat "$C/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+if [ "$(cat "$C/global/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
   rm -f "$flag" "$bindflag"
   case "$target" in
     landed:issue:*)   echo "clear-query"; exit 0 ;;   # PR-less row — nothing to open

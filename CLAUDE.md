@@ -220,10 +220,13 @@ pr-refresh daemon) — or just restart tmux. (The `com.claude-fleet.*` bootout
 glob already covers `com.claude-fleet.pr-refresh`,
 `com.claude-fleet.issue-bridge`, and `com.claude-fleet.watch`; on Linux
 `systemctl --user disable --now claude-fleet-pr-refresh.timer` +
-`claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer`.) If you enabled
-the issue-bridge, also delete its state dir
-`~/.config/claude-fleet/issue-bridge/` (watermark + dedup); likewise the watcher's
-`~/.config/claude-fleet/watch/` (edge-dedup keyset).
+`claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer`.) Per-fleet durable
+state (issue #181) lives one directory per fleet under
+`~/.config/claude-fleet/fleets/<session>/` (conf, restore map, and — if you
+enabled them — the issue-bridge `bridge/` watermark+dedup and the watcher `watch/`
+edge-dedup keyset); delete `~/.config/claude-fleet/fleets/` to remove it all. (A
+pre-migration estate may still have the old flat `issue-bridge/` + `watch/` dirs —
+remove those too.)
 
 ## Conventions the code assumes (tell the user)
 

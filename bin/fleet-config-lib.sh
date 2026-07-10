@@ -30,13 +30,23 @@ FCFG_US="$(printf '\037')"
 # --- file locations (all overridable for tests) -----------------------------
 fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../fleet.conf.example}"; }
 fcfg_global_conf() { printf '%s' "${FCFG_GLOBAL_CONF:-$FCFG_DIR/../fleet.conf}"; }
-# The per-fleet overlay for a session. FCFG_FLEET_CONF overrides (tests); else
-# $FLEET_CONF_DIR/<session>.conf. Empty when there is no session (not in a fleet).
+# The per-fleet overlay for a session. FCFG_FLEET_CONF overrides (tests); else the
+# per-fleet layout fleets/<session>/conf (issue #181), falling back to a legacy
+# flat <session>.conf when only that exists (edit it in place until migrated). A
+# not-yet-created overlay resolves to the NEW path. Empty when there is no session.
 fcfg_fleet_conf() {
   if [ -n "${FCFG_FLEET_CONF:-}" ]; then printf '%s' "$FCFG_FLEET_CONF"; return; fi
-  local sess="${1:-}"
+  local sess="${1:-}" root new old
   [ -n "$sess" ] || return 0
-  printf '%s/%s.conf' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" "$sess"
+  # Reuse fleet-lib's fleet_conf_file when it's in scope (the config modal sources
+  # fleet-lib via tmux-config.sh) so the dual-layout ladder has ONE definition; fall
+  # back to an inline copy for the standalone-sourced case (the selftest).
+  if declare -F fleet_conf_file >/dev/null 2>&1; then fleet_conf_file "$sess"; return; fi
+  root="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+  new="$root/fleets/$sess/conf"; old="$root/$sess.conf"
+  if   [ -f "$new" ]; then printf '%s' "$new"
+  elif [ -f "$old" ]; then printf '%s' "$old"
+  else                     printf '%s' "$new"; fi
 }
 
 # --- key list / defaults / help (parsed from the example) -------------------
@@ -281,7 +291,7 @@ fcfg_target_conf() {
 # NOTE: distinct from a KEY's @scope attribute (fcfg_scope above). This is the
 # modal's g/f WRITE-SCOPE toggle — which conf an edit lands in. Persisted
 # per-session in the dash cache dir so it survives fzf reloads.
-fcfg_wscope_file()   { printf '%s/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
+fcfg_wscope_file()   { printf '%s/global/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
 fcfg_wscope()        { local f; f=$(fcfg_wscope_file "${1:-}"); if [ -f "$f" ]; then cat "$f"; else printf 'fleet'; fi; }
 fcfg_wscope_set()    { local f; f=$(fcfg_wscope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
 fcfg_wscope_toggle() { if [ "$(fcfg_wscope "${1:-}")" = fleet ]; then fcfg_wscope_set "${1:-}" global; else fcfg_wscope_set "${1:-}" fleet; fi; }

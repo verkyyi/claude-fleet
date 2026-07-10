@@ -38,8 +38,9 @@ if gh issue close "$num" --repo "$REPO" >/dev/null 2>&1; then
   if [ -f "$src" ]; then
     tmp="$src.$$"; grep -v $'\t#'"$num"$'\t' "$src" > "$tmp" 2>/dev/null; mv -f "$tmp" "$src"
   fi
-  rm -f "$C/issue_$(fleet_slug "$REPO")_${num}" "$C/issue_$(fleet_slug "$REPO")_${num}.ts"
-  rm -f "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"   # force the next fetch
+  FD=$(fleet_cache_dir "$(fleet_slug "$REPO")")              # fleets/<slug>/ (issue #181)
+  rm -f "$FD/issue_${num}.json" "$FD/issue_${num}.json.ts"   # per-issue preview cache
+  rm -f "$FD/issues.ts" "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"  # force the next fetch
   ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
   tmux display-message "issue #$num closed ✓"
 else
