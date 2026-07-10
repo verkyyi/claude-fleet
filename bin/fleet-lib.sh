@@ -42,6 +42,43 @@ fleet_load_conf() {
   return 0
 }
 
+# Write a fleet's per-session conf, PRESERVING everything the operator added
+# (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
+# truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND /
+# FLEET_AUTOFILL / FLEET_MAX_SESSIONS / FLEET_STEWARD_ISSUE / … — anything outside
+# the derived three. Here we rewrite ONLY the three derived keys (repo/main/base)
+# and re-emit every OTHER line from the existing conf verbatim — not just custom
+# FLEET_* keys but comments, `source` includes, and plain vars too (dropping any
+# of those is the same silent-content-loss class this fix exists to kill). The one
+# thing we strip is OUR OWN regenerated header, so repeated rewrites don't stack
+# stale headers. Atomic (temp + mv in the same dir) so an interrupted or failed
+# write never leaves a truncated conf. Args:
+#   $1=conf path  $2=session name  $3=repo  $4=main  $5=base  $6=timestamp string
+fleet_write_conf() {
+  local conf="$1" name="$2" repo="$3" main="$4" base="$5" stamp="$6"
+  local tmp preserved=""
+  # The three derived assignment lines we re-derive canonically (optional leading
+  # whitespace / `export`), and our own 3-line auto-generated header (matched by
+  # its fixed phrasing, timestamp-independent) — both are re-emitted below.
+  local derived='^[[:space:]]*(export[[:space:]]+)?FLEET_(REPO|MAIN|BASE_BRANCH)='
+  local ourhdr='^# (claude-fleet: fleet .* written by fleet-up\.sh|Overlays the global fleet\.conf|FLEET_\* keys \(see fleet\.conf\.example\))'
+  if [ -f "$conf" ]; then
+    preserved=$(grep -Ev "$derived" "$conf" 2>/dev/null | grep -Ev "$ourhdr")
+  fi
+  tmp="$conf.tmp.$$"
+  {
+    printf "# claude-fleet: fleet '%s' — written by fleet-up.sh %s\n" "$name" "$stamp"
+    printf '# Overlays the global fleet.conf for this fleet'\''s tmux session. Add any other\n'
+    printf '# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.\n'
+    printf 'FLEET_REPO="%s"\n' "$repo"
+    printf 'FLEET_MAIN="%s"\n' "$main"
+    printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+    # `if` (not `&&`) so an empty $preserved doesn't make the group exit non-zero.
+    if [ -n "$preserved" ]; then printf '%s\n' "$preserved"; fi
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+}
+
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside an
