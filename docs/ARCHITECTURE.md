@@ -128,8 +128,10 @@ hot path a single slug lookup per repaint.
 Where "existing or newly-created checkout" is handled:
 
 0. If no `<owner/repo>` is given, infer it from `$PWD`'s git checkout (`origin`)
-   and default `<dir>` to that worktree. (`cf`, from `shell/cw.zsh`, is a thin
-   wrapper for this no-arg, from-inside-a-checkout path.)
+   and default `<dir>` to that worktree. (`cf`, from `shell/cw.zsh`, wraps this
+   no-arg, from-inside-a-checkout path — but *first* tries `bin/fleet-attach.sh`,
+   the fast-path reattach to an already-running fleet: it only walks the fleet-up
+   path below when nothing is live. See issue #212.)
 1. `session = slug(repo)`; refuse if a tmux session by that name already exists
    (one fleet per repo).
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
@@ -150,6 +152,7 @@ state) + this fleet's `fleets/<slug>/` runtime cache.
 | Command | What it does |
 |---|---|
 | `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
+| `fleet-attach.sh` | fast-path (re)attach to an already-running fleet — the no-arg `cf` tries this first (single → straight in, several → picker, cross-socket detach+attach); exits 10 when nothing is live so `cf` falls through to `fleet-up.sh` (issue #212) |
 | `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
 

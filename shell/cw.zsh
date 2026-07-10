@@ -10,10 +10,23 @@
 # file — so an accidental `tmux kill-server` from a bypass-perms worker can't
 # take down every fleet sharing the default socket.
 
-# cf — shorthand for fleet-up.sh. With no args, run it from inside a checkout
-# and it infers the repo from origin. Any fleet-up flags pass straight through.
+# cf — go to a fleet. With NO args it first tries to (re)attach to an already-
+# running fleet (issue #212): a live fleet is one detach+attach away, so there's no
+# need to walk the heavier fleet-up/restore machinery — fleet-attach.sh handles the
+# single-fleet-straight-in / multiple-fleet-picker / cross-socket cases and exits 10
+# only when nothing is running, at which point we fall through to fleet-up (which
+# infers the repo from this checkout). With args (an explicit repo/dir/flags) the
+# operator is naming a fleet to bring up, so go straight to fleet-up; any of its
+# flags pass through.
 cf() {
   local bin="${${(%):-%x}:h:h}/bin"   # this file lives at <fleet>/shell/cw.zsh
+  if [ $# -eq 0 ] && [ -x "$bin/fleet-attach.sh" ]; then
+    "$bin/fleet-attach.sh" && return 0
+    local rc=$?
+    # 10 = no live fleet → fall through to fleet-up. Any other non-zero is a real
+    # attach failure (already reported by fleet-attach.sh) — surface it.
+    [ $rc -eq 10 ] || return $rc
+  fi
   [ -x "$bin/fleet-up.sh" ] || { echo "cf: $bin/fleet-up.sh not found"; return 1; }
   "$bin/fleet-up.sh" "$@"
 }
