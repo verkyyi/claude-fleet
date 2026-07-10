@@ -147,7 +147,11 @@ snapshot() {
     # carried for map completeness/forensics but NOT replayed on restore (the
     # pr-refresh daemon is their single writer). The __STEWARD__ row omits the trio
     # (it's the hub, not a work window); the resolver defaults the missing fields to '-'.
-    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}' 2>/dev/null
+    # Trailing @raw (issue #214): a raw scratch window is ephemeral (no issue/
+    # worktree/PR) and its transcript can't be reliably resolved from the shared
+    # base checkout — the resolver drops @raw=1 rows so they are never snapshotted
+    # or restored. Older maps (pre-#214, no @raw field) default it to '' → kept.
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}' 2>/dev/null
       [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is

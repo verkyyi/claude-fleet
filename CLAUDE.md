@@ -30,6 +30,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees. Before each removal it **reaps any process still anchored to the worktree** (`fleet_reap_worktree_procs` — argv match + cwd match, SIGTERM→SIGKILL; issue #151) so a detached orphan can't outlive its dir and drain a core against the shared tmux server. The dash's `⌃x`/`⌥x` reap (`dash-reap.sh`) does the same | gh |
+| Raw scratch session (`prefix+R` / dash `⌃s`) | opens a plain, **non-issue-bound** `claude` window in the fleet — no GitHub issue, no git worktree, no PR lifecycle (`bin/dash-raw-session.sh`, issue #214). The counterpart to the issue-bound spawns (`prefix+n` / backlog Enter / `dash-issue-session.sh`), for ad-hoc exploration in the fleet's checkout. Runs in `FLEET_MAIN`, marked `@raw=1`, named `scratch[-N]`; **listed in the dash as a real session** (counts toward the session cap) but excluded from the issue machinery — no `@issue`, so the janitor (cwd is the main checkout, never a worktree), autofill, and the watcher (`@raw` skipped) leave it alone, while the classifier/summarizer still show its state + summary. **Ephemeral**: not snapshotted or restored across a crash (its transcript can't be reliably resolved from the shared base checkout) | claude |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
 
@@ -65,13 +66,15 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/G/b/n/A/c/r/?` and a status-bar restyle — and comment out
+   bindings on `a/G/b/n/R/A/c/r/?` and a status-bar restyle — and comment out
    anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
    default new-window**, `prefix+n` (quick-dispatch — file an issue + spawn its
    worker) **rebinds tmux's default `next-window`**, and `prefix+?` (the keymap
    cheatsheet popup — `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**;
    in a fleet you spawn via the dash/backlog and navigate by name, so all three
-   defaults are rarely needed — but call them out. There's also one **root-table** bind (`bind -n F9`): F9
+   defaults are rarely needed — but call them out. `prefix+R` (raw scratch
+   session — `bin/dash-raw-session.sh`) is **not** a tmux default, so it clobbers
+   nothing, but mention it too. There's also one **root-table** bind (`bind -n F9`): F9
    from any window jumps back to this session's steward hub (`steward-zoom.sh`).
    Unlike the prefix binds it intercepts the key in every pane before the app —
    safe because the Claude TUI/shells don't use function keys — so flag it too.

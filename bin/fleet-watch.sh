@@ -177,9 +177,10 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   fi
 
   # ONE tmux scan of every window; keep only this repo's (slug match) worker windows.
-  while IFS="$US" read -r sess win name issue st path; do
+  while IFS="$US" read -r sess win name issue st path raw; do
     [ -z "$sess" ] && continue
     case "$name" in plan|dash|backlog) continue;; esac   # hub panels, not workers
+    [ "$raw" = 1 ] && continue                            # raw scratch session (#214): no issue/PR/land — nothing steward-actionable
     case "$slugsess" in *" $sess "*) : ;; *) continue;; esac
     [ -n "$issue" ] && live_issues="$live_issues$issue "
 
@@ -214,7 +215,7 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
       needs)   needs=$((needs + 1)) ;;
     esac
   done < <(tmux list-windows -a -F \
-      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{pane_current_path}" 2>/dev/null)
+      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{pane_current_path}${US}#{@raw}" 2>/dev/null)
 
   # prod-alert: any OPEN issue carrying the `prod-alert` label (from labels_<slug>).
   if [ -s "$labf" ]; then
