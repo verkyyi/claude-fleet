@@ -92,6 +92,20 @@ fleet_mark_role() {
   tmux set-option -u -p -t "$pane" "$off" 2>/dev/null || true
 }
 
+# CHEAP: the @steward=1 pane_id in <session> (that fleet's steward hub pane), or
+# empty if the session has none. The shared marker lookup for the SESSION-scoped
+# callers steward-zoom.sh and steward-session.sh (issue #146). The issue-bridge
+# does NOT use this — it scans @steward panes across ALL sessions in one pass and
+# needs @claude_state(_ts) + repo-match in the same row, so it has its own
+# machine-wide scan (bridge_find_steward); keep the @steward=1 marker semantics in
+# step between the two. Scoped with -s so it never leaks a pane from another fleet.
+# Pure tmux + awk, no git/gh forks.
+fleet_steward_pane() {
+  [ -n "${1:-}" ] || return 0
+  tmux list-panes -s -t "$1" -F '#{pane_id} #{@steward}' 2>/dev/null \
+    | awk '$2=="1"{print $1; exit}'
+}
+
 # The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
 # and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on

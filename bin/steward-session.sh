@@ -63,7 +63,7 @@ STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to
 # another fleet's steward.
-existing=$(tmux list-panes -s -t "$SESS" -F '#{pane_id} #{@steward}' 2>/dev/null | awk '$2=="1"{print $1; exit}')
+existing=$(fleet_steward_pane "$SESS")
 if [ -n "$existing" ]; then
   tmux select-window -t "$existing"; tmux select-pane -t "$existing"; exit 0
 fi

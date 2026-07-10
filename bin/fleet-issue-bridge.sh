@@ -56,6 +56,27 @@ LEASE_DIR="${FLEET_DISPATCH_LEASE_DIR:-$HOME/.claude/leases}"
 # relay only the listed set (verbatim match) — default: the three trusted tiers.
 ASSOC_FLOOR="${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-OWNER MEMBER COLLABORATOR}"
 REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}"
+# Steward control issue (issue #146). A comment on a repo's FLEET_STEWARD_ISSUE
+# drives that fleet's @steward hub pane instead of a bound worker window — so the
+# steward becomes a bridge endpoint like a worker (an async operator↔steward
+# channel + an event sink for the fleet watcher). It is a repo-specific NUMBER, so
+# unlike ASSOC_FLOOR/REVIVE it must NEVER inherit across fleets: both ingresses
+# resolve it per-repo via bridge_steward_issue_for_repo(). STEWARD_ISSUE below is
+# just the CURRENT repo's value (set by poll() per repo / deliver() per delivery);
+# empty ⇒ no steward route (worker relay unchanged). PRIMARY_* snapshot the GLOBAL
+# fleet.conf's repo+issue BEFORE any per-repo override clobbers FLEET_REPO, so the
+# resolver can map the primary repo without the variable aliasing that would leak
+# the primary's issue onto another repo.
+PRIMARY_REPO="${FLEET_REPO:-}"
+PRIMARY_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}"
+STEWARD_ISSUE=''
+# Stuck-working threshold for the steward idle-gate (mirrors tmux-spinner.sh). The
+# steward lives in the 'plan' hub, whose #{window_activity} is polluted by the
+# co-resident dash pane, so the spinner's demote never fires there — the bridge
+# instead judges a 'working' steward stale via @claude_state_ts (see
+# bridge_steward_stale, which floors this to 120 for the steward escape — 0 disables
+# the spinner's worker-demote, but disabling the steward escape would wedge/starve).
+STUCK_SECS="${FLEET_STUCK_WORKING_SECS:-120}"
 
 now() { date +%s 2>/dev/null || echo 0; }
 utcnow() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '1970-01-01T00:00:00Z'; }
@@ -132,6 +153,109 @@ bridge_find_window() {
   return 0
 }
 
+# Resolve the live steward hub pane for <repo-slug> (issue #146). Prints
+# "session<TAB>pane_id<TAB>@claude_state<TAB>@claude_state_ts" for the first fleet
+# whose repo matches, empty if none. The steward lives in the 'plan' hub (no
+# @issue), so it can't be found by @issue like a worker — instead we scan every
+# pane once (mirroring bridge_find_window's single list-windows), keep the
+# @steward=1 pane, and match its session to <repo> by the SAME slug logic
+# (cached sessmap, cold-cache live fallback so a same-numbered control issue in
+# another fleet never collides). @claude_state / @claude_state_ts are WINDOW
+# options but resolve at pane scope, and the steward is the only Claude session in
+# the plan window — so they drive the idle-gate (state) and its staleness escape
+# (ts), all from one tmux fork (no separate fleet_steward_pane + display-message).
+bridge_find_steward() {
+  local want_slug="$1" sess pane st ts slug   # caller passes the ALREADY-computed slug
+  # `read` with a whitespace IFS (tab is one) collapses runs and strips leading /
+  # trailing empties, so we must NOT rely on it to test a possibly-empty field. Do
+  # the @steward filter in awk with an EXPLICIT FS=tab (which keeps every empty
+  # field, so $1 is exactly @steward — a non-steward pane, or even a session named
+  # "1", can never shift into a false marker match). awk emits the kept panes as
+  # session<TAB>pane<TAB>state<TAB>ts; session/pane are always non-empty and the
+  # possibly-empty state/ts trail, so the read below is safe.
+  while IFS=$'\t' read -r sess pane st ts; do
+    [ -n "$sess" ] || continue
+    slug=$(fleet_slug_cached "$sess")
+    [ -z "$slug" ] && slug=$(fleet_slug "$(fleet_resolve_repo_for_session "$sess")")
+    if [ "$slug" = "$want_slug" ]; then
+      printf '%s\t%s\t%s\t%s' "$sess" "$pane" "$st" "$ts"; return 0
+    fi
+  done < <(tmux list-panes -a -F '#{@steward}'$'\t''#{session_name}'$'\t''#{pane_id}'$'\t''#{@claude_state}'$'\t''#{@claude_state_ts}' 2>/dev/null \
+             | awk -F'\t' '$1=="1"{print $2"\t"$3"\t"$4"\t"$5}')
+  return 0
+}
+
+# 0 if a 'working' steward state stamped at <ts> is STALE (a missed Stop hook), so
+# the idle-gate must NOT wedge on it. A live steward turn re-stamps @claude_state_ts
+# on every tool call (set-claude-state.sh), so a stamp older than STUCK_SECS means
+# the turn ended without a Stop — the plan window's polluted #{window_activity}
+# keeps the spinner from demoting it, so the bridge self-heals here instead. This is
+# also what BOUNDS the busy-queue: without it a stuck 'working' would return 3 every
+# tick and pin the watermark like the hub-down case. 1 if fresh, unstamped/garbled,
+# or STUCK_SECS=0 (⇒ treat as genuinely busy, queue it).
+# CAVEAT: @claude_state_ts is coarse (only re-stamped per tool call, not mid-call),
+# so a steward inside ONE tool call longer than STUCK_SECS (e.g. a /fleet-land
+# waiting on CI) reads as stale and gets the comment delivered mid-call. Claude Code
+# QUEUES injected input during a turn (it doesn't interrupt the tool), so the wake is
+# processed when the long call finishes — degraded latency, not corruption — and the
+# alternative (no escape) is a permanently wedged channel, which is worse.
+bridge_steward_stale() {
+  local ts="$1" age secs="${STUCK_SECS:-120}" nowv
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  # STUCK_SECS=0 means "spinner: never demote a stuck worker" — but for the STEWARD
+  # escape, never-escape = a wedged, watermark-pinning, worker-starving channel. So
+  # a non-positive / garbled value floors to 120 here (the escape always applies)
+  # rather than disabling it.
+  case "$secs" in ''|*[!0-9]*) secs=120 ;; esac
+  [ "$secs" -gt 0 ] || secs=120
+  nowv=$(now)
+  # If the clock is unreadable (now() fell back to 0) or age comes out negative, we
+  # can't trust the freshness read — bias to STALE (escape/relay) rather than risk
+  # wedging the channel + pinning the watermark on a bad clock.
+  [ "$nowv" -gt 0 ] 2>/dev/null || return 0
+  age=$(( nowv - ts ))
+  [ "$age" -lt 0 ] && return 0
+  [ "$age" -ge "$secs" ]
+}
+
+# THE steward-issue resolver: map a repo → its FLEET_STEWARD_ISSUE, or empty. The
+# SINGLE source both ingresses use, so poll() and --deliver can never diverge on
+# which fleet's steward issue wins — and a repo-specific number NEVER leaks across
+# fleets. Order:
+#   1. the GLOBAL primary (PRIMARY_REPO/PRIMARY_STEWARD_ISSUE snapshot at load) —
+#      covers a single-fleet install that sets it in the top-level fleet.conf;
+#   2. else the per-fleet <session>.conf whose FLEET_REPO matches — each conf is
+#      sourced with BOTH FLEET_STEWARD_ISSUE and FLEET_REPO UNSET FIRST, so a
+#      steward issue counts only when THAT conf sets its own repo AND issue (never
+#      the global values the subshell would otherwise inherit — a bare
+#      `${FLEET_STEWARD_ISSUE:-}`/`${FLEET_REPO:-}` doesn't prevent that). Every real
+#      <session>.conf sets FLEET_REPO (fleet-up.sh writes it), so this is safe; a
+#      hand-written conf that sets only FLEET_STEWARD_ISSUE is correctly ignored
+#      rather than mis-attributed to the primary repo.
+bridge_steward_issue_for_repo() {
+  local repo="$1" want_slug cf line rp si
+  want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  if [ -n "$PRIMARY_STEWARD_ISSUE" ] \
+     && [ "$(fleet_slug "$(fleet_norm_repo "$PRIMARY_REPO")")" = "$want_slug" ]; then
+    printf '%s' "$PRIMARY_STEWARD_ISSUE"; return 0
+  fi
+  [ -d "$FLEET_CONF_DIR" ] || return 0
+  for cf in "$FLEET_CONF_DIR"/*.conf; do
+    [ -f "$cf" ] || continue
+    line=$( unset FLEET_STEWARD_ISSUE FLEET_REPO   # count only if THIS conf sets both
+            . "$cf" >/dev/null 2>&1
+            [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s' \
+              "${FLEET_REPO:-}" "${FLEET_STEWARD_ISSUE:-}" )
+    [ -z "$line" ] && continue
+    IFS=$'\t' read -r rp si <<EOF
+$line
+EOF
+    [ -n "$si" ] && [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want_slug" ] \
+      && { printf '%s' "$si"; return 0; }
+  done
+  return 0
+}
+
 # Two-step injection: bracketed paste of the (possibly multi-line) text, then a
 # SEPARATE Enter to submit. A single `send-keys -l` treats embedded newlines as
 # Enters (submitting the first line early) — the bracketed-paste gotcha; pasting
@@ -166,6 +290,49 @@ bridge_relay() {
   if bridge_seen_has "$slug" "$cid"; then echo "dup"; return 0; fi
   if bridge_marked "$body"; then echo "suppress:marker"; return 0; fi
   if ! bridge_assoc_ok "$assoc"; then echo "suppress:assoc($assoc)"; return 0; fi
+
+  # Steward control-issue route (issue #146): a comment on THIS repo's
+  # FLEET_STEWARD_ISSUE drives the @steward hub pane, not a bound worker window.
+  # Same gates already applied above (dedup/marker/assoc) — the steward's own
+  # notes carry the no-relay marker (bin/fleet-comment.sh --note) so they never
+  # loop back into itself. Idle-gated on the hub window's @claude_state like a
+  # worker, but with a STALENESS ESCAPE (a stuck 'working' from a missed Stop is
+  # relayed anyway) so a genuinely-idle-but-mislabelled steward can't wedge the
+  # channel; a missing pane drops terminally (see the tail of this block).
+  if [ -n "$STEWARD_ISSUE" ] && [ "$issue" = "$STEWARD_ISSUE" ]; then
+    local shit ssess span sst sts
+    shit=$(bridge_find_steward "$slug")
+    if [ -n "$shit" ]; then
+      IFS=$'\t' read -r ssess span sst sts <<EOF
+$shit
+EOF
+      # Idle-gate like a worker, but escape a STALE 'working' (missed Stop) so the
+      # channel can't wedge — the plan window's activity is polluted by the dash
+      # pane, so the spinner never demotes it (see bridge_steward_stale). Queuing a
+      # genuinely-busy steward (return 3) holds the repo watermark exactly as a busy
+      # worker does — a pre-existing property of the single per-repo watermark, not
+      # new here. The DEFAULT steward is "quiet until asked" (steward-session.sh), so
+      # this is normally a brief turn; a custom always-busy steward could hold it
+      # longer, and the stale escape above bounds even that once ts ages out.
+      if [ "$sst" = working ] && ! bridge_steward_stale "$sts"; then
+        echo "queued-busy(steward#$issue)"; return 3
+      fi
+      local smsg
+      smsg="[steward inbox — issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
+      if bridge_inject "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
+      # Pane resolved but a tmux op failed — transient; retry next tick.
+      echo "inject-failed(steward#$issue) — will retry"; return 3
+    fi
+    # No steward pane for this repo — drop (terminal), exactly like a worker's
+    # revive-off "gone". Retrying instead would PIN the repo watermark forever if
+    # the fleet has no steward hub (misconfig, or the hub isn't running), and once
+    # >100 comments accrue past the pinned mark the non-paginated fetch never reaches
+    # newer WORKER comments — a silent, repo-wide starvation far worse than a lost
+    # wake. The comment still lives on the durable issue thread; re-comment once the
+    # hub is up. (A present-but-stuck steward is handled above via the stale escape,
+    # so this branch is truly "no pane", not "busy".)
+    echo "gone(steward#$issue: no @steward pane for repo)"; return 0
+  fi
 
   local hit sess win st
   hit=$(bridge_find_window "$issue" "$repo")
@@ -251,8 +418,18 @@ PYEOF
 $row
 EOF
   [ -z "$repo" ] && { log "--deliver: FLEET_REPO unset — cannot resolve repo"; exit 1; }
+  # tmux down = no target resolvable (every window/pane lookup returns empty, so a
+  # relay would take a terminal 'gone' drop and lose the delivery). Treat as
+  # TRANSIENT: exit EX_TEMPFAIL so the comment is NOT marked seen and a redelivery /
+  # the poll backstop re-tries it once tmux is back — mirrors poll()'s tmux guard,
+  # which exits without advancing its watermark. (issue #146)
+  tmux info >/dev/null 2>&1 || { log "deliver #$num c$cid: tmux not running — retry"; exit 75; }
   body=$(bridge_b64d "$b64")
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  # Steward route (issue #146): resolve the steward issue for THIS delivery's repo
+  # via the shared resolver — never the global value blindly (a shared webhook
+  # serves many repos, and the primary's issue must not leak onto another repo).
+  STEWARD_ISSUE=$(bridge_steward_issue_for_repo "$repo")
   # Take the per-repo lease so this delivery can't interleave with a poll tick
   # (or another delivery) and double-relay the same comment. Held for the whole
   # relay+seen; released on exit. A held lease ⇒ retry (EX_TEMPFAIL).
@@ -349,7 +526,10 @@ poll() {
   [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] \
     && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE"
   # Per-fleet confs opt in individually, each carrying its own floor/revive. Source
-  # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak.
+  # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak. (The
+  # steward issue is NOT threaded here — it is a repo-specific number resolved
+  # per-repo below via bridge_steward_issue_for_repo, the SAME resolver --deliver
+  # uses, so the two ingresses can't diverge and the value can never leak/dedup-drop.)
   if [ -d "$FLEET_CONF_DIR" ]; then
     for cf in "$FLEET_CONF_DIR"/*.conf; do
       [ -f "$cf" ] || continue
@@ -373,6 +553,11 @@ EOF
   local i=0
   while [ "$i" -lt "${#REPOS[@]}" ]; do
     ASSOC_FLOOR="${R_FLOOR[$i]}"; REVIVE="${R_REVIVE[$i]}"   # per-fleet gate/revive
+    # Resolved per-repo via the SAME resolver --deliver uses (one source, no
+    # divergence, leak-proof). This re-scans the confs per repo — O(#repos·#confs)
+    # cheap subshells per ~15s tick — a deliberate trade of a tiny cost for keeping
+    # one resolver rather than threading a second parsed value through queue().
+    STEWARD_ISSUE=$(bridge_steward_issue_for_repo "${REPOS[$i]}")
     poll_repo "${REPOS[$i]}"
     i=$((i + 1))
   done

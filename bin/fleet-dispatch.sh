@@ -16,7 +16,7 @@
 #     acquire a per-fleet LEASE (mkdir, steal-if-stale)   → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate) → never fill a full disk
 #     slots = min(global headroom, per-fleet headroom, MAX_PER_TICK)  → rate-limit
-#     eligible = open, UNASSIGNED, not blocked/epic/meta, [ready-gated],
+#     eligible = open, UNASSIGNED, not blocked/epic/meta/steward-control, [ready-gated],
 #                no live @issue window already bound                 → anti-collision
 #     rank eligible by priority:p{0,1,2} tier then issue# (FIFO)      → priority
 #     spawn the top `slots` via dash-issue-session.sh <N> <sess>      → reuse guards
@@ -84,7 +84,8 @@ fleet_headroom() {
 }
 
 # Rank the eligible backlog: TSV "tier<TAB>number", priority tier then issue#.
-# Excludes assigned / blocked / epic / meta; optionally requires the ready label.
+# Excludes assigned / blocked / epic / meta / steward-control (the #146 control
+# issue is a bridge endpoint, never a worker task); optionally requires ready label.
 # One `gh issue list` call; jq does all the filtering + tiering. gh's --jq has no
 # --arg passthrough, so the ready label is spliced into the filter as a jq string
 # literal — JSON-escaped (backslash + double-quote) so labels with spaces/parens/
@@ -104,7 +105,7 @@ eligible_issues() {
     --jq '.[]
       | select((.assignees|length)==0)
       | (.labels|map(.name)) as $l
-      | select(($l|any(.=="epic" or .=="meta" or .=="blocked"))|not)
+      | select(($l|any(.=="epic" or .=="meta" or .=="blocked" or .=="steward-control"))|not)
       '"$gate"'
       | ( if   ($l|any(.=="priority:p0")) then 0
           elif ($l|any(.=="priority:p1")) then 1
