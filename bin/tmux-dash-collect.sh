@@ -12,6 +12,9 @@
 #   issues_<slug>    — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
 #   issues           — flat mirror of the PRIMARY (FLEET_REPO) slug'd file, kept
 #                      for single-fleet back-compat (un-migrated readers)
+#   labels_<slug>    — #num<TAB>comma-joined-labels per repo, split from the SAME
+#                      issues fetch (no extra gh call). Read by the fleet watcher
+#                      (bin/fleet-watch.sh, issue #147) for prod-alert + eligibility
 #   git_<key>        — branch<TAB>dirty  per live worktree (every run)
 #   ctx_<key>        — model<TAB>context-tokens per worktree (every run)
 #   usage            — token-consumption proxy 5h/7d       (≥300s)
@@ -114,17 +117,32 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   command -v gh >/dev/null 2>&1 || break
   its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
-    # Drop `steward-control`-labeled issues (e.g. the issue-bridge steward hub,
-    # #169): they're a relay endpoint, not a pickable task, so they must not reach
-    # the backlog. Filtered client-side in the jq (mirrors autofill's exclusion in
-    # fleet-dispatch.sh) rather than server-side so it stays a single gh call, the
-    # row producer is unit-testable against a fixture, and there's no search-index
-    # lag. Narrowed to steward-control (issue #174); autofill also drops
-    # epic/meta/blocked, but widening here needs the steward's sign-off.
-    gh issue list --repo "$rp" --state open --limit 300 \
+    # ONE fetch, TWO caches. The gh --jq emits a 6-column raw line — the historical
+    # 4 (milestone, #num, assignee, title) + a comma-joined labels column + a
+    # backlog flag (jq does the exact `steward-control` match, so a weird label name
+    # can't fool the comma-split). We then derive:
+    #   issues_<slug>  — the 4-column backlog, keeping its contract EXACTLY (readers
+    #                    `cut`/`read` fields 1-4) and DROPPING steward-control issues
+    #                    (#176: a relay endpoint like the #169 hub is not a task; the
+    #                    autofill dispatcher excludes the same label). Filter = the jq
+    #                    flag column, so it's still one gh call + fixture-testable.
+    #   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
+    #                    prod-alert) for the fleet watcher (#147). It must NOT inherit
+    #                    the backlog's steward-control drop — the watcher needs to see
+    #                    those labels — so it is split from the unfiltered raw.
+    # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw
+    # temp is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
+    raw="$C/issuesx_$sg.$$"
+    if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
-      --jq '.[] | select(((.labels|map(.name))|any(.=="steward-control"))|not) | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
-      > "$C/issues_$sg.$$" 2>/dev/null && mv "$C/issues_$sg.$$" "$C/issues_$sg"
+      --jq '.[] | (.labels|map(.name)) as $l | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)+"\t"+($l|join(","))+"\t"+(if ($l|any(.=="steward-control")) then "0" else "1" end)' \
+      > "$raw" 2>/dev/null; then
+      awk -F'\t' '$6=="1"' "$raw" | cut -f1-4 > "$C/issues_$sg.$$" \
+        && mv "$C/issues_$sg.$$" "$C/issues_$sg"
+      awk -F'\t' '{n=$2; sub(/^#/,"",n); print n"\t"$5}' "$raw" > "$C/labels_$sg.$$" \
+        && mv "$C/labels_$sg.$$" "$C/labels_$sg"
+    fi
+    rm -f "$raw"
     now > "$C/issues_$sg.ts"
   fi
 done
