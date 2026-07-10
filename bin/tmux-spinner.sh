@@ -28,6 +28,30 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 mkdir -p "$BIN/../logs" 2>/dev/null
 
+# --- per-fleet sockets (issue #159) -----------------------------------------
+# Each fleet runs on its OWN tmux server/socket now, so there is no single
+# `tmux list-windows -a` that sees every fleet — this daemon fans every query out
+# across the live fleet sockets. fleet-lib.sh's fleet_sockets can't be sourced
+# here (this is POSIX /bin/sh; that file's process substitutions are bash-only
+# and would fail to parse under dash), so inline a byte-equivalent POSIX copy.
+# KEEP IN SYNC with fleet_sockets() in bin/fleet-lib.sh.
+FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+fleet_sockets() {
+  [ -d "$FLEET_CONF_DIR" ] || return 0
+  for _cf in "$FLEET_CONF_DIR"/*.conf; do
+    [ -f "$_cf" ] || continue
+    _label=$(basename "$_cf" .conf)
+    tmux -L "$_label" has-session -t "$_label" 2>/dev/null && printf '%s\n' "$_label"
+  done
+}
+# The live socket list is refreshed on a ~2s throttle (fleets come/go rarely; a
+# new WORKER window inside a known fleet still animates instantly because we
+# already hold that fleet's socket). SOCK_EVERY = frames between refreshes.
+SOCK_REFRESH_SECS=2
+SOCK_EVERY=$(awk -v c="$SOCK_REFRESH_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+socc=0
+SOCKETS=''
+
 # --- stuck-working demotion (issue #101) ------------------------------------
 # A window pinned at @claude_state=working whose Stop hook was missed (crash /
 # race / a turn that didn't emit Stop) stays "working" FOREVER — the classifier
@@ -59,25 +83,32 @@ stuck_check() {
   nows=$(date +%s)
   new='|'
   demoted=0
-  wl=$(tmux list-windows -a -F '#{window_id} #{@claude_state} #{window_activity}' 2>/dev/null) || return 0
+  # Fan out over every live fleet socket. window_id (@N) is unique only WITHIN a
+  # server, so the strike key + demote target are namespaced by "<sock>:<wid>" and
+  # the demote/classify run against that socket's -L.
+  for sock in $SOCKETS; do
+  wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@claude_state} #{window_activity}' 2>/dev/null) || continue
   while read -r wid st act; do
+    [ -n "$wid" ] || continue
     [ "$st" = working ] || continue
     case "$act" in ''|*[!0-9]*) continue ;; esac   # need a numeric activity stamp
     age=$(( nows - act ))
     [ "$age" -ge "$STUCK_SECS" ] || continue        # still fresh -> not stuck, no strike
+    skey="$sock:$wid"
     case "$STUCK_STRIKES" in
-      *"|$wid|"*)                                    # stale last check too -> 2nd strike -> demote
-        tmux set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
-        tmux set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
+      *"|$skey|"*)                                   # stale last check too -> 2nd strike -> demote
+        tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+        tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
         printf '%s  %-10s working -> done (idle %ss; stop-hook missed)\n' \
-          "$(date +%H:%M:%S)" "$wid" "$age" >> "$STUCK_LOG"
-        ( "$BIN/classify-sessions.sh" --window "$wid" >/dev/null 2>&1 & )   # refine done|needs|looping
+          "$(date +%H:%M:%S)" "$skey" "$age" >> "$STUCK_LOG"
+        ( CLASSIFY_SOCK="$sock" "$BIN/classify-sessions.sh" --window "$wid" >/dev/null 2>&1 & )   # refine done|needs|looping
         demoted=1 ;;
-      *) new="$new$wid|" ;;                          # 1st strike -> arm for next check
+      *) new="$new$skey|" ;;                         # 1st strike -> arm for next check
     esac
   done <<EOF
 $wl
 EOF
+  done
   STUCK_STRIKES="$new"
   [ "$demoted" = 1 ] && [ -f "$STUCK_LOG" ] && \
     { tail -n 300 "$STUCK_LOG" > "$STUCK_LOG.tmp" 2>/dev/null && mv "$STUCK_LOG.tmp" "$STUCK_LOG" 2>/dev/null; }
@@ -90,15 +121,11 @@ LAST_STEWARD='|' # per-session @steward_needs flags published last frame (change
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
-  # Fields are SPACE-separated, and BOTH the render loop and the awk tally below
-  # split on whitespace — which collapses runs. @claude_state is EMPTY for any
-  # non-Claude / freshly-spawned window, so an empty middle field would collapse
-  # the double space and shift #{window_name} into the state slot (a window named
-  # 'needs'/'done' would then be miscounted/misstyled). Emit a '-' placeholder for
-  # empty state so the three fields always parse cleanly; '-' is not a real state,
-  # so it renders as idle and never counts.
-  wins=$(tmux list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{window_name}' 2>/dev/null) \
-    || { sleep 2; LAST='|'; continue; }
+  # Refresh the live fleet-socket list on a ~2s throttle; idle cheaply (and keep
+  # re-probing) while no fleet is up so a freshly-spawned fleet is picked up fast.
+  socc=$((socc + 1))
+  if [ "$socc" -ge "$SOCK_EVERY" ] || [ -z "$SOCKETS" ]; then socc=0; SOCKETS=$(fleet_sockets); fi
+  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_STEWARD='|'; continue; fi
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
@@ -111,92 +138,98 @@ while :; do
   set -- '#3d6a85' '#4a82a5' '#5aa0c8' '#6bb8e0' '#7dcfff' '#a6e0ff' '#7dcfff' '#6bb8e0' '#5aa0c8' '#4a82a5'; eval "cyan=\${$i}"
   set -- '#5a4a8a' '#6a5a9e' '#7d6bb5' '#9078c8' '#a78bde' '#bb9af7' '#a78bde' '#9078c8' '#7d6bb5' '#6a5a9e'; eval "indigo=\${$i}"
 
+  # Each fleet is its OWN tmux server (issue #159): scan + apply PER SOCKET, each
+  # with its own command file + `tmux -L … source-file`. Change-detection state
+  # (LAST/LAST_NEEDS) stays GLOBAL, keyed by the globally-unique session:index
+  # token, so a repaint still fires exactly once per real change across the estate.
   NEW='|'
-  changed=0
-  : > "$CMDF"
-  # wname reads the trailing #{window_name} field so it never bleeds into $st
-  # (the case below matches $st exactly); the name itself is used by the awk
-  # tally further down, not here. Empty @claude_state can't collapse the fields —
-  # the scan above emits a '-' placeholder for it.
-  # shellcheck disable=SC2034  # wname read only to keep $st clean
-  while IFS=' ' read -r win st wname; do
-    [ -z "$win" ] && continue
-    # wst = window-status-style (the BACKGROUND). Only 'needs' gets bold red;
-    # every other state is font-color-only (no bg) — this also clears any
-    # stale per-window styling left by an earlier design.
-    case "$st" in
-      working) glyph="$frame "; sfg="$cyan";      nfg="$NAME_WORKING"; wst="fg=#565f89" ;;
-      looping) glyph="$frame "; sfg="$indigo";    nfg="#9d7cd8";       wst="fg=#565f89" ;;
-      done)    glyph="✓ ";      sfg="$NAME_DONE"; nfg="$NAME_DONE";    wst="fg=#565f89" ;;
-      needs)   glyph="! ";      sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
-      *)       glyph="  ";      sfg="$NAME_IDLE"; nfg="$NAME_IDLE";    wst="fg=#565f89" ;;
-    esac
-    token="$win^$glyph^$sfg^$nfg^$wst"
-    case "$LAST" in
-      *"|$token|"*) : ;;
-      *)
-        printf 'set-window-option -t %s @spin "%s"\n' "$win" "$glyph" >> "$CMDF"
-        printf 'set-window-option -t %s @sfg "%s"\n'  "$win" "$sfg"   >> "$CMDF"
-        printf 'set-window-option -t %s @nfg "%s"\n'  "$win" "$nfg"   >> "$CMDF"
-        printf 'set-window-option -t %s window-status-style "%s"\n' "$win" "$wst" >> "$CMDF"
-        changed=1 ;;
-    esac
-    NEW="$NEW$token|"
-  done <<EOF
+  NEW_NEEDS='|'
+  NEW_STEWARD='|'
+  # Each fleet is its OWN tmux server (issue #159): scan + apply PER SOCKET, each
+  # with its own command file + `tmux -L … source-file`. Change-detection state
+  # (LAST/LAST_NEEDS/LAST_STEWARD) stays GLOBAL, keyed by the globally-unique
+  # session:index token, so a repaint fires exactly once per real change estate-wide.
+  for sock in $SOCKETS; do
+    # Fields SPACE-separated; a '-' placeholder for an EMPTY @claude_state keeps the
+    # three fields parsing cleanly (issue #105) — else an empty middle field would
+    # collapse the double space and shift #{window_name} into the state slot.
+    wins=$(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{window_name}' 2>/dev/null) || continue
+    cmdf="$CMDF.$sock"
+    changed=0
+    : > "$cmdf"
+    # wname reads the trailing #{window_name} so it never bleeds into $st (the case
+    # matches $st exactly); the name is used only by the awk tally below.
+    # shellcheck disable=SC2034  # wname read only to keep $st clean
+    while IFS=' ' read -r win st wname; do
+      [ -z "$win" ] && continue
+      # wst = window-status-style (the BACKGROUND). Only 'needs' gets bold red;
+      # every other state is font-color-only (no bg) — this also clears any
+      # stale per-window styling left by an earlier design.
+      case "$st" in
+        working) glyph="$frame "; sfg="$cyan";      nfg="$NAME_WORKING"; wst="fg=#565f89" ;;
+        looping) glyph="$frame "; sfg="$indigo";    nfg="#9d7cd8";       wst="fg=#565f89" ;;
+        done)    glyph="✓ ";      sfg="$NAME_DONE"; nfg="$NAME_DONE";    wst="fg=#565f89" ;;
+        needs)   glyph="! ";      sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
+        *)       glyph="  ";      sfg="$NAME_IDLE"; nfg="$NAME_IDLE";    wst="fg=#565f89" ;;
+      esac
+      token="$win^$glyph^$sfg^$nfg^$wst"
+      case "$LAST" in
+        *"|$token|"*) : ;;
+        *)
+          printf 'set-window-option -t %s @spin "%s"\n' "$win" "$glyph" >> "$cmdf"
+          printf 'set-window-option -t %s @sfg "%s"\n'  "$win" "$sfg"   >> "$cmdf"
+          printf 'set-window-option -t %s @nfg "%s"\n'  "$win" "$nfg"   >> "$cmdf"
+          printf 'set-window-option -t %s window-status-style "%s"\n' "$win" "$wst" >> "$cmdf"
+          changed=1 ;;
+      esac
+      NEW="$NEW$token|"
+    done <<EOF
 $wins
 EOF
 
-  # --- needs signals: worker badge + steward icon (issues #105, #166) --------
-  # Tally windows in @claude_state=needs PER SESSION, split into two independent
-  # signals that never double-count the same window:
-  #   @attn_needs   — WORKERS only: count of needy windows EXCLUDING the hub
-  #                   panels (plan/dash/backlog). status-left renders it as a red
-  #                   "● N" badge (hidden at 0).
-  #   @steward_needs — the HUB: 1 when a panel window (plan/dash/backlog) is in
-  #                   needs (the steward is waiting on you), else 0. status-left's
-  #                   ⌂ hub icon renders a solid red block when it's 1, from every
-  #                   window in the fleet.
-  # Both reuse this frame's window scan ($wins) — no extra tmux query — folded
-  # once by awk; change-detected and batched into the same $CMDF, so each only
-  # re-sets when it actually moves. A session with windows but none needy emits
-  # "0" for both (badge hides, icon clears); a vanished session drops out of
-  # $wins and keeps its last (irrelevant) value.
-  NEW_NEEDS='|'
-  NEW_STEWARD='|'
-  needs_map=$(awk '
-    { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
-      if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
-      if ($2 == "needs") {
-        if ($3 ~ /^(plan|dash|backlog)$/) sw[s] = 1   # hub panel  → steward icon
-        else c[s]++                                    # worker win → badge
-      } }
-    END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d %d\n", s, c[s] + 0, sw[s] + 0 } }
-  ' <<EOF
+    # --- needs signals: worker badge + steward icon (issues #105, #166) --------
+    # PER SESSION, split into two signals that never double-count a window:
+    #   @attn_needs    — WORKERS: needy windows EXCLUDING hub panels (plan/dash/
+    #                    backlog); status-left renders a red "● N" badge (hides at 0).
+    #   @steward_needs — the HUB: 1 when a panel window is needy (the steward is
+    #                    waiting on you), else 0; drives the ⌂ hub icon.
+    # Reuses this socket's scan ($wins); change-detected + batched into this
+    # socket's $cmdf so each only re-sets when it actually moves.
+    needs_map=$(awk '
+      { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
+        if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
+        if ($2 == "needs") {
+          if ($3 ~ /^(plan|dash|backlog)$/) sw[s] = 1   # hub panel  → steward icon
+          else c[s]++                                    # worker win → badge
+        } }
+      END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d %d\n", s, c[s] + 0, sw[s] + 0 } }
+    ' <<EOF
 $wins
 EOF
 )
-  while read -r nsess ncnt nstew; do
-    [ -z "$nsess" ] && continue
-    ntok="$nsess=$ncnt"
-    case "$LAST_NEEDS" in
-      *"|$ntok|"*) : ;;
-      *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$CMDF"; changed=1 ;;
-    esac
-    NEW_NEEDS="$NEW_NEEDS$ntok|"
-    stok="$nsess=$nstew"
-    case "$LAST_STEWARD" in
-      *"|$stok|"*) : ;;
-      *) printf 'set-option -t %s @steward_needs "%s"\n' "$nsess" "$nstew" >> "$CMDF"; changed=1 ;;
-    esac
-    NEW_STEWARD="$NEW_STEWARD$stok|"
-  done <<EOF
+    while read -r nsess ncnt nstew; do
+      [ -z "$nsess" ] && continue
+      ntok="$nsess=$ncnt"
+      case "$LAST_NEEDS" in
+        *"|$ntok|"*) : ;;
+        *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$cmdf"; changed=1 ;;
+      esac
+      NEW_NEEDS="$NEW_NEEDS$ntok|"
+      stok="$nsess=$nstew"
+      case "$LAST_STEWARD" in
+        *"|$stok|"*) : ;;
+        *) printf 'set-option -t %s @steward_needs "%s"\n' "$nsess" "$nstew" >> "$cmdf"; changed=1 ;;
+      esac
+      NEW_STEWARD="$NEW_STEWARD$stok|"
+    done <<EOF
 $needs_map
 EOF
+
+    [ "$changed" = 1 ] && tmux -L "$sock" source-file "$cmdf" 2>/dev/null
+  done
+  LAST="$NEW"
   LAST_NEEDS="$NEW_NEEDS"
   LAST_STEWARD="$NEW_STEWARD"
-
-  [ "$changed" = 1 ] && tmux source-file "$CMDF" 2>/dev/null
-  LAST="$NEW"
 
   i=$((i + 1)); [ "$i" -gt "$NFRAMES" ] && i=1
   sleep "$INTERVAL"

@@ -33,7 +33,15 @@ MAXW="${CLASSIFY_MAX:-8}"
 SETTLE="${CLASSIFY_SETTLE:-0.5}"   # let the "scheduled/waiting" line render before capture
 
 command -v claude >/dev/null 2>&1 || exit 0
-tmux info >/dev/null 2>&1 || exit 0
+
+# Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. In
+# --window mode the socket is inherited from $TMUX (the Stop hook fires in-pane)
+# or handed in via CLASSIFY_SOCK (the spinner's stuck-demote fires out-of-band);
+# the full-scan fans out over every live fleet socket, setting CLASSIFY_SOCK per
+# fleet. TM() routes every tmux call to the right server accordingly.
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else tmux "$@"; fi; }
 
 RUBRIC='You are a status classifier for a Claude Code terminal session. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
 WORKING - Claude is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
@@ -50,21 +58,21 @@ Screen:
 # full-scan can cap on real classifications), 0 otherwise. Never fails the caller.
 classify_one() {
   target="$1"
-  st=$(tmux display-message -p -t "$target" '#{@claude_state}' 2>/dev/null)
+  st=$(TM display-message -p -t "$target" '#{@claude_state}' 2>/dev/null)
   case "$st" in
     done|needs|looping) : ;;   # quiet/ambiguous -> candidate
     *) return 0 ;;             # working / empty -> skip (free)
   esac
 
   # stable key for lock + hash: prefer the window id (survives re-slotting).
-  wid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)
+  wid=$(TM display-message -p -t "$target" '#{window_id}' 2>/dev/null)
   key=$(printf '%s' "${wid:-$target}" | tr '/:@' '___')
   lock="$CACHE/$key.lock"
   mkdir "$lock" 2>/dev/null || return 0            # someone else is on this window
   # shellcheck disable=SC2064
   trap "rmdir '$lock' 2>/dev/null" RETURN
 
-  cap=$(tmux capture-pane -p -t "$target" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -35)
+  cap=$(TM capture-pane -p -t "$target" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -35)
   [ -z "$cap" ] && return 0
 
   h=$(printf '%s' "$cap" | cksum | awk '{print $1}')
@@ -86,8 +94,8 @@ classify_one() {
   esac
 
   if [ -n "$new" ] && [ "$new" != "$st" ]; then
-    tmux set-window-option -t "$target" @claude_state "$new" 2>/dev/null
-    tmux set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
+    TM set-window-option -t "$target" @claude_state "$new" 2>/dev/null
+    TM set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
     printf '%s  %-10s %-8s -> %s\n' "$(date +%H:%M:%S)" "$target" "$st" "$new" >> "$LOG"
   fi
   return 10           # an LLM call was made this pass
@@ -103,12 +111,19 @@ if [ "${1:-}" = "--window" ]; then
 fi
 
 # ---- full-scan mode (daemon backstop) ---------------------------------------
+# Fan out over every live fleet socket (issue #159); window ids are per-server, so
+# CLASSIFY_SOCK is set per fleet and routes classify_one's tmux calls there. The
+# MAXW cap is applied ACROSS all fleets so one busy tick can't blow the budget.
 n=0
-while IFS= read -r win; do
-  [ "$n" -ge "$MAXW" ] && break   # cap hit: stop, don't keep scanning the rest
-  classify_one "$win"; rc=$?
-  [ "$rc" -eq 10 ] && n=$((n + 1))
-done < <(tmux list-windows -a -F '#{window_id}')
+for sock in $(command -v fleet_sockets >/dev/null 2>&1 && fleet_sockets); do
+  [ "$n" -ge "$MAXW" ] && break
+  export CLASSIFY_SOCK="$sock"
+  while IFS= read -r win; do
+    [ "$n" -ge "$MAXW" ] && break   # cap hit: stop, don't keep scanning the rest
+    classify_one "$win"; rc=$?
+    [ "$rc" -eq 10 ] && n=$((n + 1))
+  done < <(TM list-windows -a -F '#{window_id}')
+done
 
 [ -f "$LOG" ] && { tail -n 300 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
 exit 0

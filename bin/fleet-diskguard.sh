@@ -102,10 +102,15 @@ capture() {
     df -Ph "$TARGET" 2>/dev/null
     echo
     echo "## live fleets (tmux sessions × windows — how much load is up)"
-    if tmux info >/dev/null 2>&1; then
-      tmux list-sessions -F '#{session_name} (#{session_windows} windows, created #{t:session_created})' 2>/dev/null
+    # Each fleet is its own tmux server on a named socket (issue #159), so fan the
+    # forensic listing out across the live fleet sockets rather than one server.
+    dg_socks="$(command -v fleet_sockets >/dev/null 2>&1 && fleet_sockets)"
+    if [ -n "$dg_socks" ]; then
+      for dg_s in $dg_socks; do
+        tmux -L "$dg_s" list-sessions -F '#{session_name} (#{session_windows} windows, created #{t:session_created})' 2>/dev/null
+      done
     else
-      echo "(no tmux server)"
+      echo "(no live fleet)"
     fi
     echo
     # lsof is the primary forensic — fast (~0.2s) and it points straight at the

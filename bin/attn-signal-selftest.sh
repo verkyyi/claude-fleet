@@ -35,52 +35,50 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/attn-selftest.XXXXXX")" || exit 2
-SOCK="$WORK/tmux.sock"
 
-# PATH shim: route the plain `tmux` the spinner calls onto our private socket,
-# passing -L/-S invocations straight through (mirrors tmux-guard-selftest.sh).
-mkdir -p "$WORK/bin"
-cat > "$WORK/bin/tmux" <<EOF
-#!/bin/sh
-case " \$* " in
-  *" -L "*|*" -S "*) exec "$REAL_TMUX" "\$@" ;;
-  *)                 exec "$REAL_TMUX" -S "$SOCK" "\$@" ;;
-esac
-EOF
-chmod +x "$WORK/bin/tmux"
+# Each fleet is its OWN tmux server on a named socket (issue #159): drive the real
+# spinner exactly as production does. An isolated TMUX_TMPDIR keeps every `-L
+# <fleet>` socket in this test's scratch dir (never the user's live servers), and
+# a per-fleet conf is what fleet_sockets enumerates. No PATH shim needed — the
+# spinner already names `-L "$sock"` on every call, resolved via TMUX_TMPDIR.
+export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
+export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
+for f in fleetA fleetB fleetC; do printf 'FLEET_REPO="acme/%s"\n' "$f" > "$FLEET_CONF_DIR/$f.conf"; done
 
-t() { "$REAL_TMUX" -S "$SOCK" "$@"; }   # explicit isolated-socket handle for asserts
+# tf <fleet> <tmux-args…> — run tmux against THAT fleet's own server (socket ==
+# session name). The socket resolves inside the isolated TMUX_TMPDIR set above.
+tf() { local f="$1"; shift; "$REAL_TMUX" -L "$f" "$@"; }
 
 SPIN_PID=''
 cleanup() {
   [ -n "$SPIN_PID" ] && kill "$SPIN_PID" 2>/dev/null
-  "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null
+  for f in fleetA fleetB fleetC; do "$REAL_TMUX" -L "$f" kill-server 2>/dev/null; done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
 # A bare EXIT trap does not fire on a signal — turn INT/TERM/HUP into a normal
-# exit so cleanup still reaps the isolated server (issue #152).
+# exit so cleanup still reaps the isolated servers (issue #152).
 trap 'exit 130' INT TERM HUP
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-# --- fixture: three fleets, hub panels + worker windows in known states -------
+# --- fixture: three fleets, EACH ON ITS OWN SOCKET, hubs + workers in states ---
 # fleetA: needy hub + 2 needy workers + 1 working  → @attn_needs=2 @steward_needs=1
 # fleetB: calm hub + 1 needy worker + 2 STATELESS  → @attn_needs=1 @steward_needs=0
 #         windows named like state keywords (must NOT be miscounted)
 # fleetC: needy 'backlog' panel only               → @attn_needs=0 @steward_needs=1
-t new-session -d -s fleetA -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
-t new-window -t fleetA: -n issue-1
-t new-window -t fleetA: -n issue-2
-t new-window -t fleetA: -n issue-3
-t new-session -d -s fleetB -n plan
-t new-window -t fleetB: -n issue-9
-t new-window -t fleetB: -n needs       # STATELESS window named exactly 'needs'
-t new-window -t fleetB: -n 'done'      # STATELESS window named 'done' (quoted: SC1010)
-t new-session -d -s fleetC -n plan
-t new-window -t fleetC: -n backlog
+tf fleetA new-session -d -s fleetA -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
+tf fleetA new-window -t fleetA: -n issue-1
+tf fleetA new-window -t fleetA: -n issue-2
+tf fleetA new-window -t fleetA: -n issue-3
+tf fleetB new-session -d -s fleetB -n plan
+tf fleetB new-window -t fleetB: -n issue-9
+tf fleetB new-window -t fleetB: -n needs       # STATELESS window named exactly 'needs'
+tf fleetB new-window -t fleetB: -n 'done'      # STATELESS window named 'done' (quoted: SC1010)
+tf fleetC new-session -d -s fleetC -n plan
+tf fleetC new-window -t fleetC: -n backlog
 
-setst() { t set-window-option -t "$1" @claude_state "$2"; }
+setst() { local f="${1%%:*}"; tf "$f" set-window-option -t "$1" @claude_state "$2"; }
 setst fleetA:plan   needs      # hub → steward, NOT the badge
 setst fleetA:issue-1 needs      # worker → badge
 setst fleetA:issue-2 needs      # worker → badge
@@ -94,22 +92,28 @@ setst fleetC:backlog needs      # panel → steward, NOT the badge
 
 # --- PART A: run the real spinner, read back what it published ----------------
 # Isolate its temp (CMDF lives at $TMPDIR/.claude-spin.cmds) so it never touches
-# a live spinner's file; disable the stuck-working sweep (irrelevant here).
-PATH="$WORK/bin:$PATH" TMPDIR="$WORK" SPIN_INTERVAL=0.02 FLEET_STUCK_WORKING_SECS=0 \
+# a live spinner's file; disable the stuck-working sweep (irrelevant here). The
+# exported TMUX_TMPDIR + FLEET_CONF_DIR are what let the spinner's fleet_sockets
+# discover our three fleets and drive each on its own -L socket.
+TMPDIR="$WORK" SPIN_INTERVAL=0.02 FLEET_STUCK_WORKING_SECS=0 \
   "$SPINNER" >/dev/null 2>&1 &
 SPIN_PID=$!
 
-# Poll until the spinner has published (first frame writes everything), up to ~3s.
+# Poll until the spinner has published (first frame writes everything), up to ~10s.
+# Budget is generous (was ~3s) because the per-fleet-socket spinner (issue #159)
+# forks a `tmux -L <label> has-session` per fleet on its FIRST frame to discover
+# the live sockets, which under full-suite load can push first-publish past 3s —
+# a race that flaked this test even though the steady-state behaviour is correct.
 got=''
 n=0
-while [ "$n" -lt 60 ]; do
-  got="$(t show-options -t fleetA 2>/dev/null | grep -c '@steward_needs')"
+while [ "$n" -lt 200 ]; do
+  got="$(tf fleetA show-options -t fleetA 2>/dev/null | grep -c '@steward_needs')"
   [ "$got" = 1 ] && break
   n=$((n + 1)); sleep 0.05
 done
 [ "$got" = 1 ] || fail "spinner never published @steward_needs within timeout"
 
-opt() { t show-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{gsub(/"/,"",$2); print $2}'; }
+opt() { tf "$1" show-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{gsub(/"/,"",$2); print $2}'; }
 
 a_badge="$(opt fleetA @attn_needs)";   a_stew="$(opt fleetA @steward_needs)"
 b_badge="$(opt fleetB @attn_needs)";   b_stew="$(opt fleetB @steward_needs)"
@@ -132,7 +136,7 @@ printf 'PART A ok: tally split — A(●2,⌂) B(●1) C(⌂), hub excluded from
 SL="$(grep -m1 '^set -g status-left ' "$CONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
 [ -n "$SL" ] || fail "could not extract status-left from $CONF"
 
-render() { t set-option -t "$1" @steward_needs "$2"; t display-message -p -t "$1:$3" "$SL"; }
+render() { tf "$1" set-option -t "$1" @steward_needs "$2"; tf "$1" display-message -p -t "$1:$3" "$SL"; }
 
 # on the hub (plan), calm steward → blue block, no red
 out="$(render fleetB 0 plan)"

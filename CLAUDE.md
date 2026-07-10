@@ -21,7 +21,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
 | Collector daemon | git/gh/usage/issues caches every ~60s | gh, python3 |
 | PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
-| Disk guard daemon (recommended) | disk circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server. Its `--watch` tick also runs a **runaway-CPU watchdog** (issue #151): our-user, no-controlling-tty processes held ≥`FLEET_RUNAWAY_CPU_PCT`% for ≥`FLEET_RUNAWAY_CPU_SECS`s → forensic incident + notify, optionally SIGTERM/KILL (`FLEET_RUNAWAY_CPU_ACTION`). Protects the tmux server from a detached orphan spinning a core; the server + launchd/systemd are excluded, live worker panes have a tty so are never touched. OFF by default (`PCT=0`) | — |
+| Disk guard daemon (recommended) | disk circuit-breaker + runaway-writer forensics; stops a full disk from crashing a fleet's tmux server (each fleet has its OWN socket now — issue #159 — but a full volume still ENOSPCs every server on it). Its `--watch` tick also runs a **runaway-CPU watchdog** (issue #151): our-user, no-controlling-tty processes held ≥`FLEET_RUNAWAY_CPU_PCT`% for ≥`FLEET_RUNAWAY_CPU_SECS`s → forensic incident + notify, optionally SIGTERM/KILL (`FLEET_RUNAWAY_CPU_ACTION`). Protects each tmux server from a detached orphan spinning a core; the server + launchd/systemd are excluded, live worker panes have a tty so are never touched. OFF by default (`PCT=0`) | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
 | Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the steward↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. Also routes a per-fleet **steward control issue** (`FLEET_STEWARD_ISSUE`, #146) — comments on it relay into the `@steward` hub pane (the operator↔steward wake/async channel), same gates/marker/idle/dedup. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
 | Scout task (optional) | Read-only investigation delegation shape (issue #148). Two tiers by weight: an **ephemeral** `Explore`/`Agent` sub-agent the steward runs inline (no issue/window, for throwaway lookups), or a **scout worker** — `/fleet-scout <q>` files a `scout`-labeled issue (durable question + report sink) and spawns a read-only worker (`dash-issue-session.sh <N> --scout`, window marked `@scout`) that investigates + reports as a comment and **never branches/ships/lands**. Closing move: `/fleet-scout-report` posts findings, closes-or-leaves-open (convert-to-ship), and self-cleans via `bin/fleet-scout-clean.sh` (ordered teardown, no PR). See docs/SCOUT.md | gh |
@@ -108,14 +108,15 @@ issues as the backlog. See README.md for the architecture. Components:
      `launchctl bootstrap gui/$(id -u) <plist>` (or `launchctl load` on older
      macOS). The spinner (KeepAlive) and collector (60s) are the required two;
      the **diskguard** watcher (`com.claude-fleet.diskguard`, 60s) is strongly
-     recommended — it's the crash-guard: a full volume ENOSPCs the collector and
-     kills the *shared* tmux server, taking every fleet down at once, so the
-     watcher captures forensics + notifies on low disk and its `--gate` mode
-     (called by fleet-up and fleet-restore) refuses to add load below the floor.
-     The same `--watch` tick also runs the **runaway-CPU watchdog** (issue #151) —
-     no extra unit; it's OFF until a fleet sets `FLEET_RUNAWAY_CPU_PCT>0`, then a
-     detached orphan spinning a core is caught + (optionally) killed before it can
-     overload the shared server.
+     recommended — a full volume ENOSPCs any tmux server whose writes fail, and
+     though each fleet now runs on its OWN socket (issue #159) so a disk-full no
+     longer takes *every* fleet down through one shared server, it can still crash
+     each fleet sharing that volume — so the watcher captures forensics + notifies
+     on low disk and its `--gate` mode (called by fleet-up and fleet-restore)
+     refuses to add load below the floor. The same `--watch` tick also runs the
+     **runaway-CPU watchdog** (issue #151) — no extra unit; it's OFF until a fleet
+     sets `FLEET_RUNAWAY_CPU_PCT>0`, then a detached orphan spinning a core is
+     caught + (optionally) killed before it can overload its fleet's server.
      The **pr-refresh** daemon (`com.claude-fleet.pr-refresh`, 15s) is also
      recommended — it owns PR/CI status (`prmap` + window `@prci`/`@pfg`) on its
      own fast tick, decoupled from the 60s collector, so a PR going green or
@@ -214,9 +215,12 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.claude/settings.json`, delete `~/.claude/fleet/` and the steward charter
 `~/.claude/steward.md`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
-marker — leave your personal commands), and clear per-window state:
-`tmux set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by the
-pr-refresh daemon) — or just restart tmux. (The `com.claude-fleet.*` bootout
+marker — leave your personal commands), and clear per-window state. Each fleet
+runs on its own tmux socket now (issue #159), so per-window state lives per
+server — the simplest reset is to `fleet-down <sess>` (or `tmux -L <sess>
+kill-server`) each fleet; to clear it in place instead, run
+`tmux -L <sess> set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by
+the pr-refresh daemon) once per live fleet socket. (The `com.claude-fleet.*` bootout
 glob already covers `com.claude-fleet.pr-refresh`,
 `com.claude-fleet.issue-bridge`, and `com.claude-fleet.watch`; on Linux
 `systemctl --user disable --now claude-fleet-pr-refresh.timer` +
@@ -230,6 +234,31 @@ remove those too.)
 
 ## Conventions the code assumes (tell the user)
 
+- **One fleet ≡ one tmux session ≡ one tmux server on its OWN named socket**
+  (`tmux -L <session>`, issue #159). The socket LABEL is the session name (unique
+  + sanitized per fleet). This is the **blast-radius rail**: a fatal signal from
+  any worker — a stray `tmux kill-server`, an OOM-kill, resource exhaustion —
+  takes down only *that* fleet's server, never the others sharing the machine.
+  Consequences the code encodes:
+  - Scripts run INSIDE a pane (Claude hooks, dash producers, the zoom/F9 binds,
+    `commands/*.md`, every spawn) inherit the right socket via `$TMUX` — bare
+    `tmux` is correct; new windows they open land on the same fleet's socket.
+  - Scripts run OUTSIDE any session (the launchd/systemd daemons; `fleet-up`,
+    `fleet-down`, `fleet-restore`) have no `$TMUX`, so they pass
+    `-L "$(fleet_socket "$sess")"` on every call, and daemons that once did one
+    server-wide `tmux list-windows -a` now fan out over `fleet_sockets` (the live
+    fleets = per-fleet confs whose server answers `has-session`). See
+    `bin/fleet-lib.sh` (`fleet_socket`/`fleet_sockets`/`fleet_list_windows_all`).
+  - **No shared `tmux ls`.** Cross-fleet views iterate the sockets; the dash is
+    per-fleet (it always was — scoped by `FLEET_SESSION`). Switching between
+    fleets is a detach-and-reattach to the other socket (`fleet-pick.sh` /
+    `fleet-up`'s landing use `detach-client -E`), not `switch-client` (which is
+    single-server). **Ad-hoc sessions on the `default` socket are NOT fleets** —
+    a fleet is created by `fleet-up` (which writes its conf + spins its socket).
+  - Migration from the old single-`default`-socket layout: drain each fleet
+    (`fleet-down <sess>`) and bring it back with `cf`/`fleet-up`/`fleet-restore`,
+    which now spawn it on `-L <session>`. A fleet still on `default` is invisible
+    to the socket-aware daemons until re-homed.
 - **One tmux session ↔ one GitHub repo.** The PR map is one repo-wide
   `gh pr list`; multi-repo fleets need per-window repo detection (not built).
 - Windows named `dash`, `plan`, `backlog` are treated as panels, not Claude

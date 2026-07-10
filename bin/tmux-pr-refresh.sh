@@ -41,7 +41,12 @@ cache_key() {
   local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"
 }
 
-tmux info >/dev/null 2>&1 || exit 0
+# Each fleet runs on its own tmux server/socket now (issue #159): enumerate the
+# live fleet sockets once and fan the @prci/@pfg writes out across them. No live
+# fleet → nothing to refresh (the dash only exists inside a fleet), same as the
+# old `tmux info` gate that this replaces.
+SOCKETS=$(fleet_sockets)
+[ -n "$SOCKETS" ] || exit 0
 # NB: a missing gh only skips the FETCH loop below (guarded there) — the @prci
 # mapping still runs off whatever prmap cache already exists, exactly as the
 # collector did, so window glyphs don't freeze if gh is transiently unavailable.
@@ -125,7 +130,8 @@ done
 # Maps each window's branch → its open PR's CI state; writes @prci (glyph) +
 # @pfg (color) — surfaced on the dash's PR column. Single writer of @prci/@pfg.
 US=$'\x1f'
-tmux list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
+for sock in $SOCKETS; do
+tmux -L "$sock" list-windows -a -F "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}" 2>/dev/null | \
 while IFS="$US" read -r sess win path cur; do
   [ -z "$path" ] && continue
   # each window matches against ITS fleet's prmap — routed through fleet_cache so
@@ -152,8 +158,9 @@ while IFS="$US" read -r sess win path cur; do
     fi
   fi
   if [ "$cur" != "$glyph" ]; then
-    tmux set-window-option -t "$win" @prci "$glyph" 2>/dev/null
-    tmux set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
+    tmux -L "$sock" set-window-option -t "$win" @prci "$glyph" 2>/dev/null
+    tmux -L "$sock" set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
   fi
+done
 done
 exit 0

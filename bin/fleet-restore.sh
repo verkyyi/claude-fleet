@@ -82,18 +82,18 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 # which lives in the 'plan' PANEL window (excluded from WIN rows) — so a crash
 # can `claude --resume` the steward with its live history, like a worker.
 snapshot() {
-  # Liveness gate: is the tmux server up with at least one session to snapshot?
-  # Use list-sessions, NOT `tmux info` — `info` reports the CURRENT CLIENT and
-  # exits non-zero ("no current client") on some tmux builds (e.g. 3.4) when the
-  # caller isn't an attached client. snapshot runs from the collector DAEMON,
-  # which is never a client, so an `info` gate silently skipped every snapshot on
-  # those builds (and whenever the fleet was detached) — nothing to restore after
-  # a crash. list-sessions is client-independent: rc 0 iff a live server has ≥1
-  # session (exactly the set we iterate below), rc 1 if the server is down.
-  tmux list-sessions -F '#{session_name}' >/dev/null 2>&1 || return 0
+  # No single-server liveness gate anymore: each fleet has its OWN socket (issue
+  # #159), so the loop below fans out over fleet_sockets (per-conf has-session,
+  # which is client-independent — unlike `tmux info`, which reports the current
+  # client and fails in the collector daemon). No live fleet → the loop is empty
+  # and snapshot writes nothing, exactly the old return-early behaviour.
   mkdir -p "$RDIR" || return 0
-  local sess
-  for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
+  # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
+  # single `tmux list-sessions` that sees them all — fan out over the live fleet
+  # sockets and snapshot each one against its own `-L` socket.
+  local sock sess
+  for sock in $(fleet_sockets); do
+  for sess in $(tmux -L "$sock" list-sessions -F '#{session_name}' 2>/dev/null); do
     local repo main base conf tmp
     conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""
@@ -113,7 +113,7 @@ snapshot() {
     # repo basename (the base checkout, not a worktree suffix), else skip.
     if [ -z "$main" ]; then
       local rb; rb=$(basename "$repo")
-      main=$(tmux list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null \
+      main=$(tmux -L "$sock" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null \
              | awk -v rb="$rb" 'NF && (($0 ~ ("/" rb "$"))) {print; exit}')
     fi
     [ -z "$base" ] && base="${FLEET_BASE_BRANCH:-}"
@@ -138,7 +138,7 @@ snapshot() {
     # itself stays TAB-delimited — it's written by printf/python, never through
     # tmux, and read back with awk -F'\t'.
     local spath
-    spath=$(tmux list-panes -s -t "$sess" -F '#{@steward}|#{pane_current_path}' 2>/dev/null \
+    spath=$(tmux -L "$sock" list-panes -s -t "$sess" -F '#{@steward}|#{pane_current_path}' 2>/dev/null \
             | awk -F'|' '$1=="1"{print $2; exit}')
     # Trailing @claude_state|@prci|@pfg (issue #153) are per-window runtime state.
     # restore() re-stamps @claude_state after resume — without it a restored worker
@@ -147,7 +147,7 @@ snapshot() {
     # carried for map completeness/forensics but NOT replayed on restore (the
     # pr-refresh daemon is their single writer). The __STEWARD__ row omits the trio
     # (it's the hub, not a work window); the resolver defaults the missing fields to '-'.
-    { tmux list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}' 2>/dev/null
       [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -183,6 +183,7 @@ snapshot() {
       rm -f "$tmp"
     fi
   done
+  done
   # NB: do NOT prune maps for absent sessions here. A CRASHED fleet's session is
   # gone but its map MUST survive so --if-down can rebuild it. fleet-down.sh is the
   # sole map remover (drops its own map on deliberate teardown). Pruning here
@@ -209,10 +210,11 @@ restore() {
     # restored stranded those windows. So when the session is live we skip only
     # the hub/steward REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
+    local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
     local live=0 livewins=""
-    if tmux has-session -t "$sess" 2>/dev/null; then
+    if tmux -L "$sock" has-session -t "$sess" 2>/dev/null; then
       live=1
-      livewins=$(tmux list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
+      livewins=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
       say "▸ reconciling fleet $sess ($repo) — already up, checking for missing work windows"
     else
       say "▸ restoring fleet $sess ($repo)"
@@ -296,12 +298,12 @@ restore() {
         # Capture the new window-id and target every follow-up option-set through
         # it: window names aren't unique handles (title-slug collisions), so a
         # "$sess:$wname" target could hit the wrong window once two restored
-        # windows share a name.
+        # windows share a name. -L "$sock": each fleet is its own server (#159).
         local nw
-        nw=$(tmux new-window -t "$sess:" -n "$wname" -c "$wpath" -P -F '#{window_id}' "$cmd" 2>/dev/null)
+        nw=$(tmux -L "$sock" new-window -t "$sess:" -n "$wname" -c "$wpath" -P -F '#{window_id}' "$cmd" 2>/dev/null)
         [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
-          && tmux set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
+          && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
         # Re-stamp @claude_state so the dash reflects reality instead of a blank row
         # (issue #153) — the bug this fixes is a restored worker coming back with an
         # empty state that the attention layer reads as "stuck idle". Stamp a fresh
@@ -318,8 +320,8 @@ restore() {
         # until the daemon ticks is the safe failure mode. (They still ride the WIN
         # row for map completeness + forensics.)
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then
-          tmux set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
-          tmux set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
         fi
       fi
     done < <(awk -F'\t' '$1=="WIN"' "$mf")
@@ -346,7 +348,8 @@ case "${1:-}" in
     while IFS=$'\t' read -r _ifd_s ifd_mf; do
       [ -f "$ifd_mf" ] || continue
       ifd_s=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$ifd_mf")
-      [ -n "$ifd_s" ] && ! tmux has-session -t "$ifd_s" 2>/dev/null && ifd_down=1
+      # -L "$(fleet_socket "$ifd_s")": each fleet is its own server now (issue #159)
+      [ -n "$ifd_s" ] && ! tmux -L "$(fleet_socket "$ifd_s")" has-session -t "$ifd_s" 2>/dev/null && ifd_down=1
     done < <(each_restore_map)
     [ "$ifd_down" = 0 ] && exit 0
     # Disk-pressure circuit-breaker: if a fleet died because the volume filled,

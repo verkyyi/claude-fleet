@@ -177,6 +177,56 @@ fleet_write_conf() {
   mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
 }
 
+# ---- per-fleet tmux socket (issue #159) -------------------------------------
+# A fleet ≡ a tmux SESSION ≡ its OWN tmux server on a NAMED socket, so one
+# fleet's fatal crash — or a bypass-permissions worker's stray `tmux kill-server`
+# — can only take down ITS OWN fleet, not every fleet sharing the machine (the
+# old single `default` socket made the server a whole-machine single point of
+# failure). The socket LABEL is the session name itself: fleet-up.sh already
+# makes it unique per fleet and sanitizes it (no '.', ':' or space), so one
+# string is BOTH the `-L` socket and the `-t` session target.
+#
+# The dividing line for callers:
+#   • INSIDE a pane (Claude hooks, dash producers, zoom/F9 binds, spawn scripts,
+#     commands/*.md): tmux inherits the right socket via $TMUX — call bare tmux,
+#     no `-L` needed. New windows/sessions they open land on the same (correct)
+#     socket automatically.
+#   • OUTSIDE any session (launchd/systemd daemons; fleet-up/-down/-restore run
+#     from a plain shell): there is no $TMUX, so every tmux call MUST pass
+#     `-L "$(fleet_socket "$sess")"`. A daemon that used ONE server-wide
+#     `tmux list-windows -a` must instead fan out over fleet_sockets and run its
+#     per-fleet logic against each socket (writes stay on the same `-L` label).
+fleet_socket() { printf '%s' "$1"; }
+
+# List the socket labels of all fleets with a CURRENTLY-LIVE tmux server, one per
+# line. Source of truth: the per-fleet confs ($FLEET_CONF_DIR/*.conf — basename
+# == session name == socket label), filtered to those whose server actually
+# answers (`tmux -L <label> has-session`). A downed-but-configured fleet (conf
+# kept, server gone) is skipped, and the user's own default-socket tmux is never
+# touched. Safe under a `set -u` caller.
+fleet_sockets() {
+  local cf label
+  [ -d "$FLEET_CONF_DIR" ] || return 0
+  for cf in "$FLEET_CONF_DIR"/*.conf; do
+    [ -f "$cf" ] || continue
+    label=$(basename "$cf" .conf)
+    tmux -L "$label" has-session -t "$label" 2>/dev/null && printf '%s\n' "$label"
+  done
+}
+
+# Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live
+# fleet socket, so a read-side daemon that relied on one estate-wide scan keeps
+# its whole-fleet view. Each emitted line is the tmux -F expansion (no socket
+# prefix — session_name is globally unique across fleets, so read-side keys don't
+# collide). A daemon that must WRITE per window should loop fleet_sockets ITSELF
+# so it holds the `-L` label to target the write. Safe under `set -u`.
+fleet_list_windows_all() {
+  local fmt="$1" label
+  while IFS= read -r label; do
+    tmux -L "$label" list-windows -a -F "$fmt" 2>/dev/null
+  done < <(fleet_sockets)
+}
+
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside an
@@ -237,7 +287,11 @@ fleet_mark_role() {
 # Pure tmux + awk, no git/gh forks.
 fleet_steward_pane() {
   [ -n "${1:-}" ] || return 0
-  tmux list-panes -s -t "$1" -F '#{pane_id} #{@steward}' 2>/dev/null \
+  # -L "$(fleet_socket "$1")": each fleet is its own tmux server (issue #159); the
+  # session arg IS the socket label, so this resolves correctly whether the caller
+  # is in-session (steward-zoom via $TMUX → same socket) or out-of-session
+  # (steward-session from fleet-up, which has no $TMUX for this fleet's server).
+  tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@steward}' 2>/dev/null \
     | awk '$2=="1"{print $1; exit}'
 }
 
@@ -400,7 +454,9 @@ fleet_resolve_repo_for_session() {
     repo=$(git -C "$path" remote get-url origin 2>/dev/null) || continue
     repo=$(fleet_norm_repo "$repo")
     [ -n "$repo" ] && { printf '%s' "$repo"; return; }
-  done < <(tmux list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
+    # -L "$sess": each fleet runs on its own named socket (== session name), so a
+    # daemon/collector querying from OUTSIDE tmux must name the socket explicitly.
+  done < <(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
   fleet_norm_repo "${FLEET_REPO:-}"
 }
 
@@ -421,20 +477,23 @@ fleet_repo_cached() {
 
 # CHEAP: list the tmux sessions that are FLEETS — i.e. own a 'plan' or 'dash' hub
 # window — one per line. The single source for "which sessions are fleets"; the
-# plan/dash hub rule is otherwise copy-pasted across callers. Pure tmux + awk.
+# plan/dash hub rule is otherwise copy-pasted across callers. Fans out across
+# every live fleet socket (issue #159), since no single server sees them all now.
 fleet_hub_sessions() {
-  tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk '
+  fleet_list_windows_all '#{session_name} #{window_name}' | awk '
     { if ($2=="plan" || $2=="dash") f[$1]=1 } END { for (s in f) print s }'
 }
 
-# CHEAP: count the live Claude WORKING-session windows across every fleet on this
-# tmux server (the system-wide count issue #28's cap measures). A fleet session
-# is one that owns a hub window ('plan' or 'dash'); inside it, windows named
+# CHEAP: count the live Claude WORKING-session windows across every fleet (the
+# system-wide count issue #28's cap measures). Since each fleet now runs on its
+# own socket (issue #159), this fans out over fleet_sockets rather than scanning
+# one shared server. A fleet session is one that owns a hub window ('plan' or
+# 'dash'); inside it, windows named
 # dash/plan/backlog are panels — everything else is a Claude working session
 # (the same rule the dashboard uses). Pure tmux + awk, no git/tmux-per-window
 # forks. Prints an integer (0 if tmux isn't running or no fleets are up).
 fleet_session_count() {
-  tmux list-windows -a -F '#{session_name} #{window_name}' 2>/dev/null | awk '
+  fleet_list_windows_all '#{session_name} #{window_name}' | awk '
     { rows[NR]=$0; if ($2=="plan" || $2=="dash") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
@@ -454,7 +513,7 @@ fleet_session_count() {
 # NB: the hub/panel names (plan/dash/backlog) are duplicated in fleet_session_count
 # above — keep BOTH in sync, or the global and per-fleet caps count different sets.
 fleet_session_count_for() {
-  tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null | awk '
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F '#{window_name}' 2>/dev/null | awk '
     { name=$0; if (name=="plan" || name=="dash") hub=1; rows[NR]=name }
     END {
       if (!hub) { print 0; exit }

@@ -44,8 +44,12 @@ if [ -f "$CONF" ]; then
   [ -n "$r" ] && SLUG=$(fleet_slug "$(fleet_norm_repo "$r")")
 fi
 
-if tmux has-session -t "$NAME" 2>/dev/null; then
-  tmux kill-session -t "$NAME" && echo "fleet-down: killed tmux session '$NAME'"
+# This fleet's own tmux server socket (== session name, issue #159). Killing its
+# lone session also tears the server down, so the socket goes away — leaving every
+# OTHER fleet's server untouched (that isolation is the whole point).
+SOCK=$(fleet_socket "$NAME")
+if tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null; then
+  tmux -L "$SOCK" kill-session -t "$NAME" && echo "fleet-down: killed tmux session '$NAME'"
 else
   echo "fleet-down: no live tmux session '$NAME'"
 fi
@@ -76,13 +80,15 @@ if [ "$PURGE" = 1 ]; then
   fi
 fi
 
-# if that was the LAST fleet (tmux server now gone), this was a deliberate full
-# teardown — disarm crash auto-restore so the watcher doesn't resurrect it. A
-# real crash never runs fleet-down, so it stays armed and gets restored.
-if ! tmux info >/dev/null 2>&1; then
+# if that was the LAST fleet (no live fleet server remains), this was a deliberate
+# full teardown — disarm crash auto-restore so the watcher doesn't resurrect it. A
+# real crash never runs fleet-down, so it stays armed and gets restored. With
+# per-fleet sockets there is no single shared server to probe, so ask
+# fleet_sockets whether ANY fleet is still live.
+if [ -z "$(fleet_sockets)" ]; then
   bash "$BIN/fleet-restore.sh" --disarm >/dev/null 2>&1 || true
 else
-  # server still up: drop just this fleet's restore map so it isn't rebuilt
+  # other fleets still up: drop just this fleet's restore map so it isn't rebuilt
   # (new per-fleet layout + legacy path, issue #181)
   rm -f "$FLEET_CONF_DIR/fleets/$NAME/restore.map" "$FLEET_CONF_DIR/restore/$NAME.map" 2>/dev/null || true
   # refresh sessmap so the dead session drops out immediately
