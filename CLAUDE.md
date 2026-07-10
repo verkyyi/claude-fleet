@@ -24,6 +24,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Disk guard daemon (recommended) | circuit-breaker + runaway-writer forensics; stops a full disk from crashing the shared tmux server | — |
 | Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (~60s): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom. OFF by default (`FLEET_AUTOFILL=1` per fleet); single-writer, disk-gated, rate-limited; spends LLM tokens | gh |
 | Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the steward↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
+| Scout task (optional) | Read-only investigation delegation shape (issue #148). Two tiers by weight: an **ephemeral** `Explore`/`Agent` sub-agent the steward runs inline (no issue/window, for throwaway lookups), or a **scout worker** — `/fleet-scout <q>` files a `scout`-labeled issue (durable question + report sink) and spawns a read-only worker (`dash-issue-session.sh <N> --scout`, window marked `@scout`) that investigates + reports as a comment and **never branches/ships/lands**. Closing move: `/fleet-scout-report` posts findings, closes-or-leaves-open (convert-to-ship), and self-cleans via `bin/fleet-scout-clean.sh` (ordered teardown, no PR). See docs/SCOUT.md | gh |
 | Self-land (optional) | Worker owns its FULL lifecycle incl. the land (`commands/fleet-land-self.md` + `bin/fleet-land-self.sh`): after `/fleet-ship` the worker waits; the steward triggers by commenting `/land` on the issue (relayed by the issue-bridge); the worker then merges its OWN PR — per-repo land-lease-serialized (shared `bin/fleet-land-lease.sh`, hold-through-green, steal-if-stale, `--match-head-commit`), base fast-forward, self-destruct. Steward only *approves* (one comment) instead of *performing* the merge. **Relaxes the "workers never self-merge" rail, re-gated by the trigger.** OFF by default (`FLEET_SELF_LAND=1` per fleet, implies `FLEET_ISSUE_BRIDGE=1`); spends LLM tokens. See docs/SELF-LAND.md | gh + issue-bridge |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
@@ -153,8 +154,10 @@ issues as the backlog. See README.md for the architecture. Components:
    These are repo-shipped, fleet-aware `/skill`s (optional quality-of-life):
    `fleet-claim`, `fleet-ship`, `fleet-blocked`, `fleet-land`,
    `fleet-land-self` (worker self-land, opt-in — see docs/SELF-LAND.md),
-   `fleet-land-train`, `fleet-sync-install`, `fleet-status`, and
-   `fleet-new-issue` (plus the contract/template — `commands/README.md`,
+   `fleet-land-train`, `fleet-sync-install`, `fleet-status`,
+   `fleet-new-issue`, and the read-only scout pair `fleet-scout` (steward) +
+   `fleet-scout-report` (worker) — see docs/SCOUT.md (plus the
+   contract/template — `commands/README.md`,
    `commands/_template.md`). `fleet-doctor.sh` reports how many are installed
    (warn, not fail, if none — they're optional). See `commands/README.md` for
    the skill contract.
