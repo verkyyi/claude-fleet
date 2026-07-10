@@ -239,45 +239,51 @@ printf 'selftest: input-content idle-gate leg PASS (defer half-typed, deliver wh
 
 # ============ ghost-autosuggestion vs typed input (issue #199) =================
 # The input row is capture line 3 (0-based row 2). `❯ ` occupies cols 0-1, so
-# input-start = col 2. A dim ghost autosuggestion renders faint text in that row
-# but leaves the cursor parked at input-start (col 2) — it must be read as EMPTY
-# (deliver), where the old "any text after ❯" test wedged forever. Genuinely-typed
-# text advances the cursor past input-start — still DEFER.
-rm -f "$WORK/state/bridge_fake-repo.seen"
-printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
-cat > "$CANNED" <<JSON
+# input-start = col 2. Claude draws a DIM ghost autosuggestion in that row when the
+# input is empty but leaves the cursor parked at input-start (col 2) — it must be
+# read as EMPTY (deliver), where the old "any text after ❯" test wedged forever.
+# Genuinely-typed text advances the cursor past input-start (or is non-dim) — DEFER.
+# ghost() asserts a fresh comment DELIVERS for the given input row + cursor;
+# typed() asserts it DEFERS. Each resets state so the low-water-mark is clean.
+ghost_id=400
+ghost_expect() {  # <verb: deliver|defer> <input-row> <cursor|""> <label>
+  local verb="$1" row="$2" cur="$3" label="$4"
+  ghost_id=$((ghost_id + 1))
+  rm -f "$WORK/state/bridge_fake-repo.seen"
+  printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+  cat > "$CANNED" <<JSON
 [
- {"id":400,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:00:01Z","body":"ghost must not wedge this relay"}
+ {"id":$ghost_id,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:00:01Z","body":"ghost probe $ghost_id"}
 ]
 JSON
-# (a) dim ghost only, cursor AT input-start (col 2) → NOT busy → relay DELIVERS.
-: > "$INJECT"
-FAKE_INPUT_ROW=$'\033[2mThe steward will land it via /land\033[0m' FAKE_CURSOR='2 2' \
-  runbridge --poll || fail "ghost-gate poll exited non-zero"
-grep -qF 'ghost must not wedge this relay' "$INJECT" \
-  || fail "ghost-gate: a dim ghost autosuggestion (cursor at input-start) must be read as EMPTY → deliver"
-grep -qxF 400 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
-  || fail "ghost-gate: the delivered comment must be marked seen"
-
-# (b) genuinely typed 'git lo', cursor advanced past input-start → DEFER (no inject).
-rm -f "$WORK/state/bridge_fake-repo.seen"
-printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
-: > "$INJECT"
-FAKE_INPUT_ROW='git lo' FAKE_CURSOR='8 2' \
-  runbridge --poll || fail "typed-gate poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
-  && fail "typed-gate: a half-typed line (cursor past input-start) must DEFER, not inject"
-grep -qxF 400 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
-  && fail "typed-gate: c400 must NOT be marked seen while deferred"
-
-# (c) typed 'git lo' then Home-to-col-0 → cursor back AT input-start, but the text
-# is non-faint to its right → the faint-strip signal still catches it → DEFER.
-: > "$INJECT"
-FAKE_INPUT_ROW='git lo' FAKE_CURSOR='2 2' \
-  runbridge --poll || fail "home-edit-gate poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
-  && fail "home-edit-gate: real (non-faint) text must DEFER even with cursor at input-start"
-printf 'selftest: ghost-autosuggestion leg PASS (deliver on ghost, defer on typed/edited)\n' >&2
+  : > "$INJECT"
+  FAKE_INPUT_ROW="$row" FAKE_CURSOR="$cur" runbridge --poll || fail "ghost-leg [$label] poll exited non-zero"
+  local injected=no
+  [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && injected=yes
+  case "$verb" in
+    deliver) [ "$injected" = yes ] || fail "ghost-leg [$label]: must DELIVER (relay was wedged)" ;;
+    defer)   [ "$injected" = no  ] || fail "ghost-leg [$label]: must DEFER (would clobber typed input)" ;;
+  esac
+}
+G=$'\033'   # ESC, for building realistic SGR-styled ghost rows
+# DELIVER — a dim ghost with cursor parked at input-start, across the encodings a
+# real Claude TUI actually emits (a brittle span-regex strip would miss most):
+ghost_expect deliver "${G}[2mThe steward will land it via /land${G}[0m"  '2 2' "bare dim \\e[2m…\\e[0m"
+ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   '2 2' "combined dim+256 \\e[2;38;5;244m"
+ghost_expect deliver "${G}[2;90msome gray ghost text${G}[22m"           '2 2' "combined dim+color, \\e[22m off"
+ghost_expect deliver "${G}[2m${G}[38;5;244mghost then color${G}[0m"     '2 2' "dim then SEPARATE color SGR"
+ghost_expect deliver "${G}[2mghost via bare reset${G}[m"                '2 2' "\\e[m bare-reset terminator"
+# DELIVER on the awk fallback ALONE — cursor unresolvable (old tmux / copy-mode),
+# so the faint-state parse is the only signal and must still see the ghost as dim:
+ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   ''   "combined dim, NO cursor (awk fallback)"
+# DEFER — genuinely typed input in each of the two independent ways:
+ghost_expect defer   'git lo'                                           '8 2' "typed, cursor past input-start"
+ghost_expect defer   'git lo'                                           ''    "typed, NO cursor (awk sees non-dim)"
+ghost_expect defer   'git lo'                                           '2 2' "typed then Home-to-col-0 (non-dim)"
+# DEFER — real text colored with a 256/truecolor code whose value tokens contain a
+# literal '2' must NOT be misread as the dim (SGR 2) attribute:
+ghost_expect defer   "${G}[38;5;2mreal green text${G}[0m"               ''    "256-color idx 2 is NOT dim"
+printf 'selftest: ghost-autosuggestion leg PASS (deliver ghost across encodings, defer typed/edited/colored)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then
