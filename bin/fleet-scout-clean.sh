@@ -112,7 +112,12 @@ fi
 # sits AT base (no commits), so -d deletes it cleanly. But if the scout committed
 # against the prompt, -d REFUSES (branch not merged) and the branch survives —
 # preserving that work rather than force-discarding it with no PR (issue #148).
-cmd="tmux kill-window -t $WIN; git -C '$MAIN' worktree remove --force '$WT'; git -C '$MAIN' branch -d 'issue-$ISSUE' 2>/dev/null"
+# Silence the git steps: run-shell echoes any non-empty command output into a
+# view-mode overlay on the attached client, and kill-window switches that client to
+# the plan window — so `git branch -d`'s "Deleted branch …" line would surface as an
+# Esc-to-dismiss overlay ON THE STEWARD (issue #192). Drop the git stdout/stderr;
+# kill-window stays un-redirected (silent on success). branch -d already fails soft.
+cmd="tmux kill-window -t $WIN; { git -C '$MAIN' worktree remove --force '$WT'; git -C '$MAIN' branch -d 'issue-$ISSUE'; } >/dev/null 2>&1"
 note "fleet-scout-clean: teardown → $cmd"
 if [ "$DRY" = 1 ]; then printf 'dry:%s\n' "$cmd"; exit 0; fi
 tmux run-shell -b "$cmd" 2>/dev/null || {

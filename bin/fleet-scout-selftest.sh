@@ -169,7 +169,10 @@ case "$tok" in dry:*) ;; *) fail "2a expected a dry:<cmd> token, got '$tok'" "$(
 printf '%s\n' "$tok" | grep -Eq 'kill-window .*worktree remove --force .*branch -d ' \
   || fail "2a teardown ordering wrong (kill-window → worktree remove → branch -d)" "$tok"
 case "$tok" in *"issue-77"*) ;; *) fail "2a teardown should target issue-77 worktree/branch" "$tok" ;; esac
-ok "2a teardown is ordered + uses safe branch -d (kill-window → worktree remove → branch -d)"
+# ...and the git steps are silenced so run-shell shows no overlay on the steward (issue #192)
+printf '%s\n' "$tok" | grep -Eq 'branch -d .*; \} >/dev/null 2>&1' \
+  || fail "2a teardown must redirect the git steps to /dev/null (no run-shell overlay)" "$tok"
+ok "2a teardown is ordered + uses safe, silenced branch -d (kill-window → worktree remove → branch -d)"
 
 # 2b. --close closes the issue before teardown; plain run does not.
 : > "$CLOSE_LOG"; run_clean "$WT" --close --dry-run
