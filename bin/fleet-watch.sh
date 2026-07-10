@@ -8,8 +8,9 @@
 # control-issue channel when something needs a decision.
 #
 # ZERO-TOKEN / NO NEW POLLING. Every tick reads only local state the collector +
-# pr-refresh already wrote — window `@claude_state`/`@prci`/`@issue`, the per-repo
-# `prmap`/`issues_<slug>`/`labels_<slug>` caches, and tmux session counts. It calls
+# pr-refresh already wrote — window `@claude_state`/`@issue`, the per-repo
+# `prmap` (branch→PR state/ci/ready)/`issues_<slug>`/`labels_<slug>` caches, and tmux
+# session counts. It calls
 # NO LLM and issues NO per-tick `gh` reads; the only outbound work is a single
 # `gh issue comment` when (and only when) a NEW edge fires. So an idle fleet costs
 # nothing but a few cache reads per tick.
@@ -28,7 +29,9 @@
 # FLEET_STEWARD_ISSUE (or no running bridge) is simply not watched.
 #
 # Events (issue #147 initial set):
-#   prgreen    a worker PR is green + mergeable (@prci="✓")   → "PR #<n> (#<iss>) green — /land <n>?"
+#   prgreen    a worker PR is CI-green AND landable (prmap ready∈{ready,behind}; a
+#              conflicting/blocked/unknown-mergeability PR is suppressed, issue #187)
+#                                                              → "PR #<n> (#<iss>) green — /land <n>?"
 #   propened   a worker opened a PR (prmap gained an OPEN PR)  → "#<iss> shipped PR #<n> — review?"
 #   stuck      a worker looks stuck (@claude_state=looping)    → "#<iss> looks stuck (looping) — investigate?"
 #   needs      the needs-attention count ROSE                  → "<k> window(s) need attention"
@@ -125,8 +128,11 @@ lease_release() { # $1 = lease path, $2 = holder id
 }
 
 # --- PR lookup: window branch → its OPEN PR row from the per-slug prmap ----------
-# prmap line: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready. Prints "#num<TAB>state<TAB>ci"
-# for the branch's PR, or empty. Mirrors the branch-normalisation in tmux-pr-refresh.
+# prmap line: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready. Prints
+# "#num<TAB>state<TAB>ci<TAB>ready" for the branch's PR, or empty. The `ready`
+# column (pr-refresh's mergeability verdict) is surfaced so prgreen can gate the
+# /land wake on landability, not CI alone (issue #187). Mirrors the
+# branch-normalisation in tmux-pr-refresh.
 pr_for_path() { # $1 = pane path, $2 = prmap file
   local path="$1" prmf="$2" key branch bare
   [ -s "$prmf" ] || return 0
@@ -134,7 +140,7 @@ pr_for_path() { # $1 = pane path, $2 = prmap file
   branch=$(cut -f1 "$C/git_$key" 2>/dev/null)
   bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
   [ -z "$bare" ] || [ "$bare" = "-" ] && return 0
-  awk -F'\t' -v x="$bare" '$1==x{print $2"\t"$3"\t"$4; exit}' "$prmf" 2>/dev/null
+  awk -F'\t' -v x="$bare" '$1==x{print $2"\t"$3"\t"$4"\t"$5; exit}' "$prmf" 2>/dev/null
 }
 
 # =============================== per-fleet scan =================================
@@ -162,30 +168,35 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   fi
 
   # ONE tmux scan of every window; keep only this repo's (slug match) worker windows.
-  while IFS="$US" read -r sess win name issue st prci path; do
+  while IFS="$US" read -r sess win name issue st path; do
     [ -z "$sess" ] && continue
     case "$name" in plan|dash|backlog) continue;; esac   # hub panels, not workers
     case "$slugsess" in *" $sess "*) : ;; *) continue;; esac
     [ -n "$issue" ] && live_issues="$live_issues$issue "
 
-    # per-window PR events (need the PR number from prmap)
-    local prrow pnum pstate
+    # per-window PR events (PR number + CI + mergeability from the prmap row)
+    local prrow pnum pstate pci pready
     prrow=$(pr_for_path "$path" "$prmf")
     pnum=$(printf '%s' "$prrow" | cut -f1); pnum="${pnum#\#}"
     pstate=$(printf '%s' "$prrow" | cut -f2)
+    pci=$(printf '%s' "$prrow" | cut -f3)
+    pready=$(printf '%s' "$prrow" | cut -f4)
     if [ -n "$pnum" ] && [ "$pstate" = OPEN ]; then
       printf 'propened:%s:%s\t#%s shipped PR #%s — review?\n' "$slug" "$pnum" "${issue:-?}" "$pnum"
-      # green + landable. pr-refresh writes a DECORATED glyph: "✓" (clean, ready),
-      # "✓↑" (green but behind base → land updates the branch first). Both are a
-      # "/land <n>?" wake — in an active fleet the base moves constantly, so most
-      # greens read "✓↑", and matching only a bare "✓" would miss the common case.
-      # "✓!" (conflicting → worker must rebase) and "✓·" (green but branch-protection
-      # blocked → needs a human, not a steward land) are deliberately NOT landable
-      # wakes, so they're excluded.
-      case "$prci" in
-        ✓)  printf 'prgreen:%s:%s\tPR #%s (#%s) green — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
-        ✓↑) printf 'prgreen:%s:%s\tPR #%s (#%s) green (behind base) — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
-      esac
+      # green + LANDABLE. Gate on the prmap `ready` column (pr-refresh's authoritative
+      # mergeability verdict from mergeStateStatus/mergeable), NOT the @prci glyph
+      # (issue #187). The glyph conflates "ready" and "mergeability-not-yet-computed"
+      # as a bare "✓" (ready="" ⇒ default glyph), so a glyph-only gate fires /land on a
+      # PR that later resolves CONFLICTING. Only ci-green PRs carry a ready verdict:
+      #   ready  → landable now                            → /land wake
+      #   behind → landable (update-branch fast-forwards it) → /land wake
+      #   conflict/blocked/"" (unknown) → NOT a /land wake (author/human/GitHub must act)
+      if [ "$pci" = "✓" ]; then
+        case "$pready" in
+          ready)  printf 'prgreen:%s:%s\tPR #%s (#%s) green — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
+          behind) printf 'prgreen:%s:%s\tPR #%s (#%s) green (behind base) — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
+        esac
+      fi
     fi
 
     # worker-state events
@@ -194,7 +205,7 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
       needs)   needs=$((needs + 1)) ;;
     esac
   done < <(tmux list-windows -a -F \
-      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{@prci}${US}#{pane_current_path}" 2>/dev/null)
+      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{pane_current_path}" 2>/dev/null)
 
   # prod-alert: any OPEN issue carrying the `prod-alert` label (from labels_<slug>).
   if [ -s "$labf" ]; then
