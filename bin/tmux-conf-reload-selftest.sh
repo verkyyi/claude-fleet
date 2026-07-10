@@ -32,8 +32,9 @@ trap 'rm -rf "$work"' EXIT
 before="$work/before.conf"
 after="$work/after.conf"
 
-# before: a bind per table form, plus two that will SURVIVE (`a` changes action,
-# `?` is untouched) so we can prove they are NOT reported as removed.
+# before: a bind per table form (incl. tricky ones — a `-N "multi word note"`,
+# a literal `-` key, a bare `?` key), plus two that will SURVIVE (`a` changes
+# action, `?` is untouched) so we can prove they are NOT reported as removed.
 cat > "$before" <<'EOF'
 bind a run-shell "attention"
 bind j run-shell "standalone-dash"
@@ -41,20 +42,25 @@ bind ? display-popup "keys"
 bind -n F1 run-shell "root-one"
 bind -T copy-mode-vi v send -X begin-selection
 bind -r H resize-pane -L
+bind -N "reload the conf" R source-file ~/.tmux.conf
+bind - resize-pane -D
 EOF
 
-# after: drop j / F1 / copy-mode-vi v / H; keep ? ; change a's action; add a NEW
-# bind (must not count as removed).
+# after: drop j / F1 / copy-mode-vi v / H / R / - ; keep ? ; change a's action;
+# add a NEW bind (must not count as removed).
 cat > "$after" <<'EOF'
 bind a run-shell "attention CHANGED"
 bind ? display-popup "keys"
 bind N run-shell "brand-new"
 EOF
 
-# expected removed set, sorted (table<TAB>key)
+# expected removed set, sorted (table<TAB>key). The `-N` note bind must surface
+# as key `R` (NOT a note word), and the literal-dash bind as key `-`.
 expected="$(printf '%s\n' \
   "copy-mode-vi	v" \
   "prefix	H" \
+  "prefix	R" \
+  "prefix	-" \
   "root	F1" \
   "prefix	j" | sort)"
 
@@ -83,19 +89,20 @@ chmod +x "$fakebin/tmux"
 
 out="$(PATH="$fakebin:$PATH" bash "$SUT" "$before" "$after" "$work/fake.tmux.conf")" \
   || fail "full run exited non-zero"
-printf '%s\n' "$out" | grep -q 'unbound 4 removed' \
-  || fail "report line wrong (expected 'unbound 4 removed …'): $out"
+printf '%s\n' "$out" | grep -q 'unbound 6 removed' \
+  || fail "report line wrong (expected 'unbound 6 removed …'): $out"
 
 # one unbind-key per removed bind, right table+key
 for call in "unbind-key -T copy-mode-vi v" "unbind-key -T prefix H" \
-            "unbind-key -T root F1" "unbind-key -T prefix j"; do
+            "unbind-key -T root F1" "unbind-key -T prefix j" \
+            "unbind-key -T prefix R" "unbind-key -T prefix -"; do
   grep -Fxq "$call" "$work/tmux.log" \
     || fail "missing '$call' in tmux calls:
 $(cat "$work/tmux.log")"
 done
-# exactly 4 unbinds — no over-unbinding of survivors
+# exactly 6 unbinds — no over-unbinding of survivors
 uc="$(grep -c '^unbind-key ' "$work/tmux.log")"
-[ "$uc" -eq 4 ] || fail "expected 4 unbind-key calls, got $uc:
+[ "$uc" -eq 6 ] || fail "expected 6 unbind-key calls, got $uc:
 $(cat "$work/tmux.log")"
 # and the re-source happened, after the unbinds
 grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
@@ -110,5 +117,19 @@ printf '%s\n' "$out" | grep -q 'unbound 0 removed' \
   || fail "missing before-conf should remove nothing: $out"
 grep -q '^unbind-key ' "$work/tmux.log" \
   && fail "missing before-conf triggered an unbind (should not)"
+
+# --- 4. a malformed trailing `-T` must not spin (parser bail, not hang) --------
+# Run under a timeout so a regressed infinite loop fails LOUD instead of hanging
+# CI. The truncated `bind -T` line yields no key and is simply ignored.
+printf 'bind -T\nbind j run-shell "x"\n' > "$work/malformed.conf"
+if command -v timeout >/dev/null 2>&1; then
+  timeout 10 bash "$SUT" --print "$work/malformed.conf" "$after" >/dev/null \
+    || fail "parser hung/failed on a malformed trailing '-T' (infinite-loop regression?)"
+else
+  # no `timeout` (bare macOS) — still assert it returns; a hang would wedge the
+  # whole selftest run, which is itself a visible failure signal.
+  bash "$SUT" --print "$work/malformed.conf" "$after" >/dev/null \
+    || fail "parser failed on a malformed trailing '-T'"
+fi
 
 printf 'selftest OK: removed-bind unbinding correct across all table forms\n'

@@ -60,18 +60,20 @@ fi
 # has an empty "before" set and nothing counts as removed). `set -f` is REQUIRED:
 # without it, word-splitting an unquoted line would glob-expand a bare `?` key
 # (`bind ?`) or a `*` in the action against the cwd.
+# `-N <note>` is the one bind flag whose argument can contain spaces (`bind -N
+# "reload the conf" R …`). Word-splitting a quoted note would desync the token
+# stream and hand a note word to KEY, so strip the note (double-quoted or a bare
+# word) off the line BEFORE splitting. Kept in a var to dodge regex quoting hell.
+NOTE_RE='^(.*[[:space:]])-N[[:space:]]+("[^"]*"|[^[:space:]]+)(.*)$'
+
 parse_binds() {
   local file="$1" line
   [ -f "$file" ] || return 0
   set -f
   while IFS= read -r line || [ -n "$line" ]; do
-    # first token must be bind / bind-key (allow leading whitespace)
-    case "$line" in
-      *[!$' \t']*) ;;   # non-blank
-      *) continue ;;
-    esac
+    [[ $line =~ $NOTE_RE ]] && line="${BASH_REMATCH[1]}${BASH_REMATCH[3]}"
     # shellcheck disable=SC2086
-    set -- $line
+    set -- $line          # blank line → no args → the case below `continue`s
     case "${1:-}" in
       bind|bind-key) ;;
       *) continue ;;
@@ -80,14 +82,15 @@ parse_binds() {
     local table=prefix key=''
     while [ $# -gt 0 ]; do
       case "$1" in
-        -n)     table=root; shift ;;
-        -T)     table="${2:-}"; shift 2 ;;
-        -N)     shift 2 ;;            # note text — skip it (and its arg)
-        -r)     shift ;;             # repeatable flag — no arg
+        -n)      table=root; shift ;;
         -rn|-nr) table=root; shift ;; # combined repeat+root
-        --)     shift; key="${1:-}"; break ;;
-        -*)     shift ;;             # any other flag — skip
-        *)      key="$1"; break ;;
+        -r)      shift ;;             # repeatable flag — no arg
+        -T)      [ $# -ge 2 ] || break  # malformed trailing -T: bail, don't spin
+                 table="$2"; shift 2 ;;
+        --)      shift; key="${1:-}"; break ;;
+        -)       key='-'; break ;;    # a literal `-` is a key, not a flag
+        -?*)     shift ;;             # any other flag — skip
+        *)       key="$1"; break ;;
       esac
     done
     [ -n "$key" ] && printf '%s\t%s\n' "$table" "$key"
@@ -119,6 +122,11 @@ $removed
 EOF
 fi
 
-tmux source-file "$tmux_conf"
-
-echo "reloaded conf (unbound $n removed bind$([ "$n" -eq 1 ] || echo s))"
+if tmux source-file "$tmux_conf"; then
+  echo "reloaded conf (unbound $n removed bind$([ "$n" -eq 1 ] || echo s))"
+else
+  # unbinds already applied; only the re-source failed — say so, don't claim a
+  # clean reload the caller would surface as success.
+  echo "unbound $n removed bind$([ "$n" -eq 1 ] || echo s), but 'source-file $tmux_conf' FAILED — adds/changes not applied" >&2
+  exit 1
+fi
