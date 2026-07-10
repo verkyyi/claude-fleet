@@ -36,11 +36,29 @@ else
   [ -z "$BASE" ] && BASE=$(tmux list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
   [ -z "$BASE" ] && BASE="$HOME"
 fi
-# The command the steward pane runs. Precedence: an explicit STEWARD_CMD in the
-# environment (fleet-up.sh's internal contract) > the documented FLEET_STEWARD_CMD
-# conf knob (global or per-fleet fleet.conf) > the built-in default. The hub is
-# always built — this only swaps the command its steward pane launches.
-STEWARD_CMD="${STEWARD_CMD:-${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"; exec \$SHELL}}"
+# The command the steward pane runs. The FRESH launch is the steward's normal
+# startup: a documented per-fleet FLEET_STEWARD_CMD override if set, else the
+# built-in that reads its standing orders from steward.md and picks up the newest
+# handoff. FRESH_INNER is that launch WITHOUT the pane-keep-alive `exec $SHELL`
+# tail (appended once below) so it can double as the resume fallback.
+FRESH_INNER="${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"}"
+# Crash-resume (issue #143): if fleet-restore.sh captured this steward's live
+# transcript and passes its id via STEWARD_RESUME_ID, RESUME it (`claude --resume
+# <id>`) so the steward's full history survives a tmux-server crash — same as a
+# worker. Resume is PRIMARY (it beats FLEET_STEWARD_CMD, matching what restore
+# announces), but if the resume FAILS (stale/pruned id) fall back to the fresh
+# launch with `||` — never leave a bare shell with no steward (which would be
+# strictly worse than the pre-#143 always-fresh behaviour). No id → just fresh.
+# NB: a successful resume already carries the steward.md adoption in its restored
+# history, so it stays correctly scoped without re-reading steward.md.
+if [ -n "${STEWARD_RESUME_ID:-}" ] && [ "${STEWARD_RESUME_ID}" != "-" ]; then
+  LAUNCH="claude --resume '${STEWARD_RESUME_ID}' || { ${FRESH_INNER}; }"
+else
+  LAUNCH="$FRESH_INNER"
+fi
+# An explicit STEWARD_CMD in the environment (fleet-up.sh's internal contract)
+# still overrides everything; otherwise run LAUNCH and keep the pane as a shell.
+STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
 
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to
@@ -59,7 +77,7 @@ for wid in $(tmux list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk
 done
 
 # build the hub fresh, capturing IDs so every op hits THIS window/pane.
-win=$(tmux new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$HOME/.claude" "bash '$BIN/tmux-dashboard.sh'")
+win=$(tmux new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "bash '$BIN/tmux-dashboard.sh'")
 sp=$(tmux split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BASE" "$STEWARD_CMD")
 # Mark the steward pane by its explicit id (never the active pane) and clear any
 # @dash on it — @dash/@steward must stay mutually exclusive (issue #135).

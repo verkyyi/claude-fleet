@@ -46,9 +46,13 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 
 # ---------------------------------------------------------------- snapshot ----
 # Write one $RDIR/<session>.map per live fleet:
-#   FLEET <TAB> session <TAB> repo <TAB> main-checkout-dir <TAB> base-branch
-#   WIN   <TAB> window-name <TAB> worktree-path <TAB> claude-session-id <TAB> issue
-# claude-session-id = newest transcript for that worktree ('-' if none).
+#   FLEET   <TAB> session <TAB> repo <TAB> main-checkout-dir <TAB> base-branch
+#   WIN     <TAB> window-name <TAB> worktree-path <TAB> claude-session-id <TAB> issue
+#   STEWARD <TAB> steward-pane-cwd <TAB> claude-session-id   (0 or 1 per fleet)
+# claude-session-id = newest transcript for that worktree/pane ('-' if none).
+# The STEWARD row (issue #143) captures the hub's persistent steward session,
+# which lives in the 'plan' PANEL window (excluded from WIN rows) — so a crash
+# can `claude --resume` the steward with its live history, like a worker.
 snapshot() {
   tmux info >/dev/null 2>&1 || return 0
   mkdir -p "$RDIR" || return 0
@@ -80,9 +84,17 @@ snapshot() {
 
     tmp="$RDIR/.$sess.$$.map"
     printf 'FLEET\t%s\t%s\t%s\t%s\n' "$sess" "$repo" "$main" "$base" > "$tmp"
-    # per-window rows, resolving the newest transcript id in python (cheap, one pass)
-    tmux list-windows -t "$sess" -F '#{window_name}	#{pane_current_path}	#{@issue}' 2>/dev/null \
-      | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
+    # steward hub pane (issue #143): find it by its @steward=1 marker, NOT the
+    # 'plan' window name (panels are excluded by the resolver). Emit it as a
+    # __STEWARD__ sentinel row appended to the window list so BOTH resolve in a
+    # SINGLE python3 pass → a STEWARD row + the per-window WIN rows, newest
+    # transcript id resolved for each.
+    local spath
+    spath=$(tmux list-panes -s -t "$sess" -F '#{@steward}	#{pane_current_path}' 2>/dev/null \
+            | awk -F'\t' '$1=="1"{print $2; exit}')
+    { tmux list-windows -t "$sess" -F '#{window_name}	#{pane_current_path}	#{@issue}' 2>/dev/null
+      [ -n "$spath" ] && printf '__STEWARD__\t%s\t-\n' "$spath"
+    } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     mv "$tmp" "$RDIR/$sess.map" 2>/dev/null || rm -f "$tmp"
   done
   # NB: do NOT prune maps for absent sessions here. A CRASHED fleet's session is
@@ -109,14 +121,23 @@ restore() {
       continue
     fi
     say "▸ restoring fleet $sess ($repo)"
-    log "restore fleet $sess repo=$repo main=$main base=$base dry=${dry:-0}"
+    # steward resume id (issue #143): if snapshot captured the steward's
+    # transcript, hand it to fleet-up → steward-session.sh via STEWARD_RESUME_ID
+    # so the hub comes back with `claude --resume`, not a fresh session. Absent
+    # id ('-'/missing) falls through to the fresh + newest-handoff path.
+    local sid
+    sid=$(awk -F'\t' '$1=="STEWARD"{print $3; exit}' "$mf")
+    [ "$sid" = "-" ] && sid=""
+    log "restore fleet $sess repo=$repo main=$main base=$base steward=${sid:-none} dry=${dry:-0}"
     if [ -n "$dry" ]; then
       say "    would: fleet-up.sh $repo ${main:-<clone>} --name $sess ${base:+--base $base}"
+      [ -n "$sid" ] && say "    would: steward → claude --resume ${sid%%-*}…"
     else
       # rebuild hub + steward. fleet-up refuses if the session exists (it doesn't).
       local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
       args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
-      env -u TMUX bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
+      [ -n "$sid" ] && say "    ↻ steward → claude --resume ${sid%%-*}…"
+      env -u TMUX ${sid:+STEWARD_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
         || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
     fi
     # reopen each work window, resuming its Claude session
