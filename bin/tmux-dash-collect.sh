@@ -114,9 +114,16 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   command -v gh >/dev/null 2>&1 || break
   its=$(cat "$C/issues_$sg.ts" 2>/dev/null || echo 0)
   if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
+    # Drop `steward-control`-labeled issues (e.g. the issue-bridge steward hub,
+    # #169): they're a relay endpoint, not a pickable task, so they must not reach
+    # the backlog. Filtered client-side in the jq (mirrors autofill's exclusion in
+    # fleet-dispatch.sh) rather than server-side so it stays a single gh call, the
+    # row producer is unit-testable against a fixture, and there's no search-index
+    # lag. Narrowed to steward-control (issue #174); autofill also drops
+    # epic/meta/blocked, but widening here needs the steward's sign-off.
     gh issue list --repo "$rp" --state open --limit 300 \
-      --json number,title,milestone,assignees \
-      --jq '.[] | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
+      --json number,title,milestone,assignees,labels \
+      --jq '.[] | select(((.labels|map(.name))|any(.=="steward-control"))|not) | (.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       > "$C/issues_$sg.$$" 2>/dev/null && mv "$C/issues_$sg.$$" "$C/issues_$sg"
     now > "$C/issues_$sg.ts"
   fi
