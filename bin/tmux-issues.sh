@@ -56,17 +56,19 @@ fi
 run_fzf() {
   rm -f "$ACT"
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
-    --no-sort \
+    --no-sort --disabled \
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
-    --prompt='filter ▸ ' \
-    --header='type=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · ⌃p=preview · tab=collapse · ⌃o=web · ⌃r · ⌃k=keys · esc' \
+    --prompt='backlog ▸ ' \
+    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · tab=collapse · ⌃o=web · ⌃r · ⌃k=keys · esc' \
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
-    --preview-window='right,46%,wrap,border-left' \
+    --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
     --bind "$K_BIND" \
+    --bind "space:toggle-preview" \
     --bind "ctrl-p:toggle-preview" \
+    --bind "/:enable-search+change-prompt(filter ▸ )" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
