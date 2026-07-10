@@ -124,9 +124,12 @@ cwclean() {
 # or signal the pid directly; nothing at the shell level can stop arbitrary code.
 # It only closes the everyday footguns, which is where the real crashes came from.
 #
-#   • kill-server                    → always refused.
+#   • kill-server                    → always refused (even for the steward).
 #   • kill-session / kill-window     → refused unless the target is THIS worker's
-#                                      own window (self-teardown is allowed).
+#                                      own window (self-teardown is allowed), OR
+#                                      the caller is the STEWARD hub (issue #177:
+#                                      the operator's hub legitimately kills a
+#                                      merged worker's window in /fleet-land).
 #   • anything on an isolated server (a global -L/-S is present) → allowed: that
 #                                      is exactly the safe testing convention.
 #   • FLEET_ALLOW_TMUX_DESTROY=1     → guard disabled entirely (maintenance, and
@@ -164,6 +167,20 @@ tmux() {
   # Isolated server, or a subcommand we don't guard → straight through.
   if (( isolated )) || [[ -z "$dest" ]]; then command tmux "$@"; return; fi
 
+  # Steward exemption — issue #177. The operator's steward hub legitimately
+  # manages fleet windows/sessions: /fleet-land and /fleet-land-train kill a
+  # just-merged worker's window as their final cleanup step, which is exactly a
+  # cross-window kill this guard would otherwise refuse — leaving a zombie
+  # window (worktree gone, claude still in a deleted dir). The steward pane
+  # carries @steward=1; a WORKER pane never does, so the #158 guarantee is
+  # untouched — a worker is still fully guarded. Scoped to kill-window /
+  # kill-session (the legit window/session management); kill-server and the -a
+  # all-but-current sweep stay refused for EVERYONE below, steward included —
+  # they always take down sibling fleets and are never window management (use
+  # FLEET_ALLOW_TMUX_DESTROY for a deliberate whole-server destroy).
+  local seat_steward=0
+  [[ "$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{@steward}' 2>/dev/null)" == 1 ]] && seat_steward=1
+
   local hint="test on an isolated socket (tmux -L scratch …) or set FLEET_ALLOW_TMUX_DESTROY=1 to override"
 
   # This worker's own window — a globally-unique id like @4. Prefer the caller's
@@ -193,7 +210,7 @@ tmux() {
     local tw
     if [[ -z "$target" ]]; then tw="$ownwin"   # default target = the current window
     else tw="$(command tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)"; fi
-    if [[ -n "$ownwin" && "$tw" == "$ownwin" ]]; then command tmux "$@"; return; fi
+    if [[ -n "$ownwin" && "$tw" == "$ownwin" ]] || (( seat_steward )); then command tmux "$@"; return; fi
     print -ru2 -- "tmux: refusing to kill-window '${target:-current}' — not this worker's own window. $hint"
     return 1
   fi
@@ -205,7 +222,7 @@ tmux() {
   else sess="$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{session_id}' 2>/dev/null)"; fi
   local -a wins
   wins=( ${(f)"$(command tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null)"} )
-  if [[ -n "$ownwin" && ${#wins} -eq 1 && "${wins[1]}" == "$ownwin" ]]; then command tmux "$@"; return; fi
+  if [[ -n "$ownwin" && ${#wins} -eq 1 && "${wins[1]}" == "$ownwin" ]] || (( seat_steward )); then command tmux "$@"; return; fi
   print -ru2 -- "tmux: refusing kill-session '${target:-current}' — it would kill sibling fleet windows. $hint"
   return 1
 }
