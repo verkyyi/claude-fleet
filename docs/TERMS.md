@@ -33,11 +33,13 @@ nests three levels, and this is where the confusing vocabulary starts:
   cheap read of the files the collector produced, which is why the UI is
   instant. See [ARCHITECTURE](ARCHITECTURE.md) for why there is exactly **one,
   shared** collector even when you run many fleets.
-- **Steward** — a long-lived **Claude session** that watches a whole repo instead
-  of working a single task: on demand it closes finished issues, triages new
-  ones, checks prod health, keeps the fleet tooling healthy.
-  **One steward per fleet** (per repo). Its standing orders live outside this
-  repo (they're operator-specific).
+- **Steward** — a long-lived **Claude session** that runs a whole repo's estate
+  instead of working a single task. It's the fleet's **first mate**: it
+  **dispatches, decides, escalates, and reports — it never does the work itself.**
+  Watch (event-driven, not polling) · Converse (the operator's one channel) ·
+  Dispatch & decide (file issues, spawn workers, trigger self-land). **One steward
+  per fleet** (per repo). Its charter ships as [`steward.md`](../steward.md) and is
+  installed to the operator-specific `~/.claude/steward.md`.
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

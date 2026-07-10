@@ -69,7 +69,7 @@ If it refuses to fast-forward, **stop and report** — the live install diverged
 `before == after`, the live install was already current — say "already at master,
 nothing to sync" and stop; the rest is a no-op.
 
-Compute what changed between the two revs — this drives steps 3–5, so nothing
+Compute what changed between the two revs — this drives steps 3–8, so nothing
 reloads or re-merges unless it actually moved. Use `--name-status -M` so
 **renames** (`R old → new`) and **deletions** (`D old`) surface, not just the new
 paths — step 5 needs the old path to remove a retired command:
@@ -127,7 +127,36 @@ If the step-2 diff touched any `commands/*.md`:
 
 If no `commands/*.md` changed, skip.
 
-## 6. Refresh open (stale) dash panes in place — only if the launcher changed
+## 6. Re-apply the steward charter — only if it changed
+
+The steward's standing orders live **flat** at `~/.claude/steward.md` (a personal
+rail, *not* under the checkout — `bin/steward-session.sh` reads it from there when
+it spawns/respawns a `plan` hub), while the canonical copy is `steward.md` at the
+repo root. So a landed charter rewrite doesn't reach the live steward until it's
+copied up. If the step-2 diff touched `steward.md`, re-apply it — but **don't
+clobber local edits**: only overwrite when the live file still matches the
+*pre-sync* repo version (or doesn't exist yet); otherwise leave it and warn.
+
+```sh
+if git -C ~/.claude/fleet diff --name-only "$before" "$after" | grep -qx 'steward.md'; then
+  live=~/.claude/steward.md
+  bsteward=$(mktemp)
+  git -C ~/.claude/fleet show "$before:steward.md" > "$bsteward" 2>/dev/null || : > "$bsteward"
+  if [ ! -f "$live" ] || cmp -s "$live" "$bsteward"; then
+    cp ~/.claude/fleet/steward.md "$live"
+    echo "steward.md: charter updated"
+  else
+    echo "steward.md: LOCAL EDITS — not overwritten; diff ~/.claude/fleet/steward.md against $live by hand"
+  fi
+  rm -f "$bsteward"
+fi
+```
+
+A running steward re-reads the charter on its next respawn (or an explicit
+re-read); it won't retroactively change a live session's already-adopted orders.
+If `steward.md` didn't change, skip this step.
+
+## 7. Refresh open (stale) dash panes in place — only if the launcher changed
 
 An already-open dash keeps running the **old** `bin/tmux-dashboard.sh`: fzf reads
 its `--bind`/`--header` **once at launch**, so new binds (e.g. a landed toggle)
@@ -172,7 +201,7 @@ fi
 If the launcher didn't change, skip this step (leave the open dash alone). If no
 `@dash` pane is open for this fleet, it's a no-op — report "no open dash".
 
-## 7. Reload the tmux conf — unbind removed binds, then re-source (only if it changed)
+## 8. Reload the tmux conf — unbind removed binds, then re-source (only if it changed)
 
 `conf/tmux-attention.conf` is sourced into the **live tmux server**, but
 `tmux source-file` only **adds/overwrites** bindings — it **cannot remove** a
@@ -202,16 +231,17 @@ if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
 fi
 ```
 
-It prints `reloaded conf (unbound N removed binds)` — surface that N in step 8.
+It prints `reloaded conf (unbound N removed binds)` — surface that N in step 9.
 Binds are **server-global** in tmux, so the unbind hits the ambient server (this
 fleet's) — it doesn't target another server/socket. If the conf didn't change,
 skip this step (no reload needed).
 
-## 8. Report — keep it short
+## 9. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed, dash panes
-refreshed (with the count), conf reloaded (with the unbound count)} actually ran.
+{daemons reloaded, settings re-merged, commands installed/removed, steward charter
+re-applied, dash panes refreshed (with the count), conf reloaded (with the
+unbound count)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 
