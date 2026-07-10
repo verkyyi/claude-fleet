@@ -224,6 +224,13 @@ refuses from the wrong one. Live so far:
   bad PR ejects instead of blocking the rest, then base-pulls once and cleans up
   per merged PR. A client-side stand-in for a merge queue under `strict:true`
   branch protection.
+- **`/fleet-scout`** (steward) — delegate a *read-only investigation* instead of
+  researching inline: files a `scout`-labeled issue (durable question + report
+  sink) and spawns a **read-only** worker that investigates, posts its findings
+  as a comment, and self-cleans — **no branch, no PR**. A good finding converts
+  cleanly into a ship issue. For a throwaway lookup, skip the command and fire an
+  ephemeral `Explore`/`Agent` sub-agent inline (no issue, no window). Two tiers,
+  by weight — see [docs/SCOUT.md](docs/SCOUT.md).
 - **`/fleet-sync-install`** (steward, tooling-fleet only) — after claude-fleet's
   own PRs land, re-applies them to the live install (`~/.claude/fleet`): pull +
   reload changed daemons + re-merge the hooks delta + install changed commands.

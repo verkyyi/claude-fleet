@@ -11,13 +11,16 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-# Parse: <issue-number> [<target-session>] [--self-land]. The two positionals keep
-# their historic order (num, target-session); --self-land may appear anywhere and
-# switches the seed prompt to the worker-owned self-land lifecycle (issue #138).
-num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; _pos=0
+# Parse: <issue-number> [<target-session>] [--self-land] [--scout]. The two
+# positionals keep their historic order (num, target-session); --self-land may
+# appear anywhere and switches the seed prompt to the worker-owned self-land
+# lifecycle (issue #138); --scout spawns a READ-ONLY investigation worker that
+# reports and never branches/ships/lands (issue #148).
+num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; _pos=0
 for _a in "$@"; do
   case "$_a" in
     --self-land) SELF_LAND_FLAG=1 ;;
+    --scout) SCOUT_FLAG=1 ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --self-lan). Do NOT let it
     # fall through to the positional slots — treating "--self-lan" as the issue
     # number strips to "" and silently spawns a plain steward-lands worker, so a
@@ -50,12 +53,26 @@ slug="issue-$num"
 existing=$(tmux list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
 [ -z "$existing" ] && existing=$(tmux list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
 if [ -n "$existing" ]; then
+  # A scout and a worker for the same issue share the SAME issue-<N> worktree, so
+  # they can't coexist — the existing window always wins the dedup. But the two
+  # roles differ, so the message must be honest: a steward converting a scout
+  # finding to ship work (spawn #N while its scout is still alive) must not read a
+  # bare "already spawned" and believe a worker is implementing (issue #148). Tell
+  # them a read-only scout holds the slot; the scout self-cleans when it reports,
+  # freeing #N for a real worker spawn.
+  existing_scout=$(tmux show-options -w -v -t "$existing" @scout 2>/dev/null)
+  if [ "$existing_scout" = 1 ] && [ "$SCOUT_FLAG" != 1 ]; then
+    msg="#$num has a live READ-ONLY scout — wait for its report (it self-cleans), then re-spawn a worker"
+  else
+    msg="#$num already spawned"
+  fi
   # Non-invasive by default: don't yank the caller to the existing window; just
   # note it. Opt into the jump with FLEET_SPAWN_FOCUS=1 (interactive spawns only).
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
     tmux select-window -t "$existing"
+    tmux display-message "$msg" 2>/dev/null
   elif [ -z "$TARGET_SESS" ]; then
-    tmux display-message "#$num already spawned" 2>/dev/null
+    tmux display-message "$msg" 2>/dev/null
   fi
   exit 0
 fi
@@ -95,23 +112,45 @@ tf="$C/task_$slug.txt"
 # NEEDS the issue-bridge running (it is how the steward's /land trigger reaches the
 # worker) — warn if the fleet hasn't enabled it, since without it the trigger can't
 # arrive and the worker falls back to steward-lands.
+SCOUT="$SCOUT_FLAG"
 SELF_LAND="$SELF_LAND_FLAG"; [ "${FLEET_SELF_LAND:-0}" = 1 ] && SELF_LAND=1
+# A scout is a READ-ONLY investigation: it never branches/ships/lands, so scout
+# mode supersedes self-land (issue #148). Warn if both were asked for, then drop
+# the self-land lifecycle — there is no PR to land.
+if [ "$SCOUT" = 1 ] && [ "$SELF_LAND" = 1 ]; then
+  tmux display-message "note: #$num --scout supersedes --self-land (a scout opens no PR to land)" 2>/dev/null
+  SELF_LAND=0
+fi
 if [ "$SELF_LAND" = 1 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
   tmux display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
 fi
-# The claim→implement→ship preamble is identical for both lifecycles; only the
-# finish differs (steward-lands vs the worker's wait-for-trigger → self-land). Build
-# the shared prefix once, then append the seat-appropriate tail (issue #138).
+# The claim ritual ("run /fleet-claim, else do it by hand") is identical for every
+# lifecycle — scout, self-land, and steward-lands — so build it ONCE here and reuse
+# it, rather than hand-maintaining three copies that can drift (issue #148).
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-prefix=$(printf 'Work GitHub issue #%s in this repo. Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan. Implement and verify per the repo conventions' \
-  "$num" "$num" "$REPO" "$num" "$REPO")
-if [ "$SELF_LAND" = 1 ]; then
-  # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
-  tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
+claim=$(printf 'Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan.' \
+  "$num" "$REPO" "$num" "$REPO")
+if [ "$SCOUT" = 1 ]; then
+  # Read-only scout seed (issue #148): investigate + report, NEVER implement. No
+  # branch, no PR, no ship mandate — the closing move is a findings comment + a
+  # self-clean (bin/fleet-scout-clean.sh, driven by /fleet-scout-report).
+  # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
+  printf 'Investigate GitHub issue #%s in this repo as a READ-ONLY scout. %s This is a SCOUT task: investigate and REPORT — do NOT implement. Make NO code edits, create NO branch, open NO PR. Read the code and run read-only commands (gh/grep/git log) to gather findings. When your investigation is complete, run /fleet-scout-report — it posts your findings as an issue comment and self-cleans this window (there is no PR to merge). If /fleet-scout-report is unavailable, post your findings via `~/.claude/fleet/bin/fleet-comment.sh %s --repo %s --note --body '"'"'<findings>'"'"'` then run `~/.claude/fleet/bin/fleet-scout-clean.sh` to tear down. If the finding should convert to ship work, leave the issue OPEN and say so (a follow-up worker implements it); otherwise close it. Never open a PR.' \
+    "$num" "$claim" "$num" "$REPO" > "$tf"
 else
-  tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' "$num")
+  # The claim→implement→ship preamble is identical for both non-scout lifecycles;
+  # only the finish differs (steward-lands vs the worker's wait-for-trigger →
+  # self-land). Build the shared prefix once, then append the seat-appropriate tail
+  # (issue #138).
+  prefix=$(printf 'Work GitHub issue #%s in this repo. %s Implement and verify per the repo conventions' "$num" "$claim")
+  if [ "$SELF_LAND" = 1 ]; then
+    # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
+    tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
+  else
+    tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' "$num")
+  fi
+  printf '%s%s' "$prefix" "$tail" > "$tf"
 fi
-printf '%s%s' "$prefix" "$tail" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
@@ -141,6 +180,9 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 win=$(tmux new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { tmux display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# Mark a scout window (issue #148) so its self-clean can assert it's a scout and
+# tooling can tell "no PR expected" from a normal worker.
+[ "$SCOUT" = 1 ] && tmux set-window-option -t "$win" @scout 1 2>/dev/null
 # Seed the dash summary column synchronously so the row isn't blank until the
 # session renders content. summarize-hook.sh's SessionStart run skips a still-
 # blank pane (no screen text yet), so without this the column stays empty until
@@ -148,7 +190,7 @@ tmux set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ i
 # placeholder once real content exists (it change-gates on a screen hash, not on
 # prior file contents). Same key/format the readers expect: summary_<winIdDigits>
 # = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh).
-seed="starting #$num"; [ -n "$title" ] && seed="$seed: $title"
+seed="starting #$num"; [ "$SCOUT" = 1 ] && seed="scouting #$num"; [ -n "$title" ] && seed="$seed: $title"
 printf '%s' "$seed" > "$C/summary_${win//[^0-9]/}" 2>/dev/null || :
 # Non-invasive by default: leave the active window put and just confirm the spawn
 # on the status line. Only jump to the new worker when the user opted in
