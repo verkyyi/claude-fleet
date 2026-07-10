@@ -1,15 +1,31 @@
 #!/bin/bash
-# dash-issue-new.sh [confirm] — file a NEW GitHub issue straight from the backlog
-# panel WITHOUT spawning a worker (pure quick-capture). Called with no args it
-# opens a small popup that reads a title (required) and an optional body; the
-# popup re-invokes it with `confirm`, which runs `gh issue create` against this
-# fleet's repo, optimistically drops the new row into the issues cache (so the
-# panel's reload shows it at once), and kicks a background refetch to make it
-# authoritative. Deliberately does NOT call dash-issue-session.sh —
-# this captures a backlog item; `enter` on the row later spawns the worker (or
-# autofill picks it up). Empty title aborts quietly; a gh failure surfaces and
-# doesn't wedge the modal.
-mode="${1:-}"
+# dash-issue-new.sh [confirm] [--spawn] — file a NEW GitHub issue from a popup.
+#
+# Two callers share this one script (issue #205):
+#   • backlog ⌃n (capture-only): file the issue, drop it in the backlog, done.
+#     `enter` on the row later spawns the worker (or autofill picks it up).
+#   • prefix+n (quick-dispatch, --spawn): file the issue AND immediately spawn
+#     its bound worker window (dash-issue-session.sh) — one keystroke → one line
+#     → issue filed + worker running, zero LLM tokens in the dispatch path.
+#
+# Called with no args it opens a small popup that reads a title (required) and an
+# optional body; the popup re-invokes it with `confirm` (carrying --spawn when
+# set), which runs `gh issue create` against this fleet's repo, optimistically
+# drops the new row into the issues cache (so the panel's reload shows it at
+# once), and kicks a background refetch to make it authoritative. In --spawn mode
+# it then spawns the worker; a session-cap refusal surfaces visibly and the issue
+# is still filed (files-without-spawning — the backlog item is never lost).
+# Empty title aborts quietly; a gh failure surfaces and doesn't wedge the modal.
+#
+# Args (order-independent): `confirm` = phase 2 (running inside the popup);
+# `--spawn` = quick-dispatch mode (spawn the worker after create).
+mode=""; spawn=0
+for _a in "$@"; do
+  case "$_a" in
+    confirm) mode=confirm ;;
+    --spawn) spawn=1 ;;
+  esac
+done
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
@@ -23,15 +39,18 @@ _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
 
-# phase 1: pop the input dialog that re-invokes us in `confirm` mode.
+# phase 1: pop the input dialog that re-invokes us in `confirm` mode. Carry
+# --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
 if [ "$mode" != confirm ]; then
-  tmux display-popup -w 72 -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm"
+  spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
+  tmux display-popup -w 72 -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg"
   exit 0
 fi
 
 # phase 2: running inside the popup — read a title (required) then an optional
 # body, then file the issue. Title-only is the fast path (empty body is fine).
-printf '\n  New issue in \033[1m%s\033[0m\n  (empty title = cancel)\n\n  title ▸ ' "$REPO"
+[ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
+printf '\n  %s in \033[1m%s\033[0m\n  (empty title = cancel)\n\n  title ▸ ' "$verb" "$REPO"
 IFS= read -r title
 [ -z "$title" ] && exit 0
 printf '  body  ▸ (optional, enter to skip) '
@@ -50,7 +69,22 @@ if url=$(gh issue create --repo "$REPO" --title "$title" --body "$body" 2>/dev/n
   # kick a background refetch to make the cache authoritative (ordering, dedup);
   # GH_TTL=0 forces the fetch regardless of cache age.
   ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
-  tmux display-message "filed new issue #$num in $REPO ✓"
+  if [ "$spawn" = 1 ] && [ -n "$num" ]; then
+    # Quick-dispatch (prefix+n): spawn the bound worker now. dash-issue-session.sh
+    # is the shared spawn choke point — it enforces the global + per-fleet session
+    # caps and the already-spawned dedup, and reads the title we just wrote into
+    # the issues cache to name the window. It exits non-zero on a cap refusal
+    # (already surfaced via its own display-message). If it refuses, the issue is
+    # STILL filed — announce filed-without-spawning in the popup so the item is
+    # visibly not lost (acceptance (c)); it sits in the backlog for a later spawn.
+    if bash "$BIN/dash-issue-session.sh" "$num"; then
+      tmux display-message "filed + spawned #$num in $REPO ✓"
+    else
+      printf '\n  \033[33mfiled #%s ✓ — but NOT spawned\033[0m (session cap reached).\n  It is in the backlog; enter on its row spawns it later.\n  press any key ' "$num"; read -rsn1 _
+    fi
+  else
+    tmux display-message "filed new issue #$num in $REPO ✓"
+  fi
 else
   printf '\n  \033[31mfailed to create issue in %s\033[0m — press any key ' "$REPO"; read -rsn1 _
 fi

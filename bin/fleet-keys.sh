@@ -47,6 +47,7 @@ print_sheet() {
   key "prefix a" "jump to the next window that needs you (red first, then green)"
   key "prefix G" "focus the dash — jump to the hub's dash pane; press again to zoom it"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
+  key "prefix n" "quick-dispatch — popup files a new issue AND spawns its worker"
   key "prefix A" "switch the active subscription account (multi-account failover)"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix r" "hot-reload tmux config"

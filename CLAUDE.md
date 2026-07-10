@@ -65,12 +65,13 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/G/b/A/c/r/?` and a status-bar restyle — and comment out
+   bindings on `a/G/b/n/A/c/r/?` and a status-bar restyle — and comment out
    anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
-   default new-window**, and `prefix+?` (the keymap cheatsheet popup —
-   `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**; in a fleet you
-   spawn via the dash/backlog and rarely need raw `list-keys`, so both are free
-   — but call them out. There's also one **root-table** bind (`bind -n F9`): F9
+   default new-window**, `prefix+n` (quick-dispatch — file an issue + spawn its
+   worker) **rebinds tmux's default `next-window`**, and `prefix+?` (the keymap
+   cheatsheet popup — `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**;
+   in a fleet you spawn via the dash/backlog and navigate by name, so all three
+   defaults are rarely needed — but call them out. There's also one **root-table** bind (`bind -n F9`): F9
    from any window jumps back to this session's steward hub (`steward-zoom.sh`).
    Unlike the prefix binds it intercepts the key in every pane before the app —
    safe because the Claude TUI/shells don't use function keys — so flag it too.
