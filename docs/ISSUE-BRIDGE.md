@@ -38,10 +38,15 @@ For every new comment the bridge decides, in order:
    a busy worker's comment is queued to a later tick. The idle-gate also
    inspects the pane's **input line**: a human typing an un-submitted line does
    **not** flip `@claude_state`, so the bridge `capture-pane`s the pane, finds the
-   `❯`-anchored input row, and if it holds text **defers** the relay too (issue
-   #191) — otherwise the paste would prepend onto the partial and submit the
-   merged line. A parse-miss (no input row resolvable) falls back to delivering,
-   so a bad read never wedges the queue. Injection is a two-step bracketed
+   `❯`-anchored input row, and if it holds **real typed text defers** the relay too
+   (issue #191) — otherwise the paste would prepend onto the partial and submit the
+   merged line. "Real" is cursor/style-aware (issue #199): Claude draws a **dim
+   "ghost" autosuggestion** in that same row when the input is empty, so text counts
+   only if it sits to the **left of the cursor** (a ghost never enters the buffer,
+   so the cursor stays parked at input-start) **or** is **not faint-styled** (the
+   ghost is dim, SGR 2) — otherwise a ghost would be misread as a half-typed line
+   and defer forever. A parse-miss (no input row / cursor resolvable) falls back to
+   delivering, so a bad read never wedges the queue. Injection is a two-step bracketed
    **paste** + a **separate Enter** (the send-keys/bracketed-paste gotcha eats an
    inline Enter and would submit a multi-line body early).
 5. **revive** *(opt-in `FLEET_ISSUE_BRIDGE_REVIVE=1`)* — if the issue is **open**

@@ -283,29 +283,110 @@ EOF
   return 0
 }
 
-# 0 if the pane's Claude TUI input line holds UN-SUBMITTED text — a human is
-# mid-type — so a relay must DEFER rather than bracketed-paste-prepend onto their
-# partial and submit the merged line (issue #191). 1 if the input line is empty
-# (safe to deliver) OR the prompt row can't be resolved (capture-pane failed / no
-# `❯` row found — a parse miss ⇒ fall back to today's behavior; NEVER wedge the
-# queue on a bad read). A human keystroke doesn't flip @claude_state, so this
-# input-content check is the ONLY thing standing between an idle-but-being-typed-into
-# pane and an accidental prepend+submit.
+# 0 if the pane's Claude TUI input line holds UN-SUBMITTED text a human typed — so
+# a relay must DEFER rather than bracketed-paste-prepend onto their partial and
+# submit the merged line (issue #191). 1 if the input line is empty (safe to
+# deliver) OR the prompt row / cursor can't be resolved (capture-pane failed / no
+# `❯` row found — a parse miss ⇒ fall back to deliver; NEVER wedge the queue on a
+# bad read). A human keystroke doesn't flip @claude_state, so this input-content
+# check is the ONLY thing standing between an idle-but-being-typed-into pane and an
+# accidental prepend+submit.
 #
 # The Claude TUI renders the live input on a `❯ `-anchored row. PAST user turns
 # render the same glyph higher in the scrollback and the status footer below it
-# carries none, so the LAST `❯` line is the input row. A wrapped input still puts
-# text on that anchor row, so testing that one row alone tells empty from typed. A
-# defensive trailing `│` strip covers a bordered-input rendering.
+# carries none, so the LAST `❯` line is the input row.
+#
+# But Claude also draws a DIM "ghost" autosuggestion in that same row when the
+# input is EMPTY, and plain `capture-pane -p` returns the ghost as ordinary text —
+# so the naive "any text after ❯ ⇒ busy" test read a ghost as a half-typed line and
+# deferred FOREVER (the ghost can't be cleared — there's nothing in the buffer to
+# delete), wedging the relay (issue #199). Text is "real input" only if it is to
+# the LEFT of the cursor OR not faint-styled; two signals encode that, and busy ⟺
+# EITHER fires (a faint ghost is rejected by BOTH):
+#   • PRIMARY (cursor, style-agnostic): the slice of the input row from input-start
+#     up to cursor_x, stripped, is non-empty. A ghost never enters the buffer, so
+#     the cursor stays parked at input-start ⇒ empty slice ⇒ deliver.
+#   • SECONDARY (faint-strip): remove dim (SGR 2) runs from the input row, then
+#     empty-check the remainder. Directly semantic (Claude marks ghosts faint) and
+#     catches the rare "typed then Home-to-col-0" case the cursor slice alone misses
+#     (cursor at input-start yet real text sits to its right).
+# A defensive trailing `│` strip covers a bordered-input rendering.
 bridge_input_busy() {
-  local win="$1" cap row rest
-  cap=$(tmux capture-pane -t "$win" -p 2>/dev/null) \
+  local win="$1" cap lineno irow erow plain esc cx cy prefix istart n after left eafter
+  # -e keeps the SGR spans so the faint (ghost) runs stay distinguishable.
+  cap=$(tmux capture-pane -t "$win" -e -p 2>/dev/null) \
     || { log "input-check: capture-pane failed for $win — proceeding (fallback)"; return 1; }
-  row=$(printf '%s\n' "$cap" | grep '❯' | tail -n1)
-  [ -n "$row" ] || { log "input-check: no prompt row in $win — proceeding (fallback)"; return 1; }
-  rest=${row#*❯}                                   # everything after the glyph
-  rest=$(printf '%s' "$rest" | sed -e 's/│[[:space:]]*$//' -e 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  [ -n "$rest" ]                                   # non-empty ⇒ mid-type ⇒ defer (rc 0)
+  # The live input row is the LAST `❯` row; its 1-based line no. maps to the
+  # 0-based pane row (== cursor_y when the cursor sits on it).
+  lineno=$(printf '%s\n' "$cap" | grep -n '❯' | tail -n1 | cut -d: -f1)
+  [ -n "$lineno" ] || { log "input-check: no prompt row in $win — proceeding (fallback)"; return 1; }
+  irow=$((lineno - 1))
+  erow=$(printf '%s\n' "$cap" | sed -n "${lineno}p")
+  esc=$(printf '\033')
+  plain=$(printf '%s' "$erow" | sed -E "s/${esc}\[[0-9;]*m//g")   # all SGR stripped
+
+  # PRIMARY (fast, style-agnostic) — typed text to the LEFT of the cursor is real
+  # input, period. `❯` is 1 display column, so input-start = its column + 2 (`❯ `);
+  # the slice [input-start, cursor_x) is the typed buffer (the ghost always renders
+  # to the RIGHT of the cursor). Non-empty ⇒ busy. This is only ever allowed to
+  # ASSERT busy — an empty slice falls through to the faint check below, so a ghost
+  # (cursor parked at input-start) is decided by SECONDARY, and a "typed then
+  # Home-to-col-0" edit (cursor at input-start, real text to its right) is still
+  # caught there. (The prompt prefix is single-width — ASCII/box-drawing — so a
+  # char count equals its display-column count; a wide-char prefix would desync it,
+  # but SECONDARY still backstops.)
+  read -r cx cy <<EOF
+$(tmux display-message -p -t "$win" '#{cursor_x} #{cursor_y}' 2>/dev/null)
+EOF
+  if [ -n "$cx" ] && [ -n "$cy" ] && [ "$cx" -ge 0 ] 2>/dev/null && [ "$cy" = "$irow" ]; then
+    prefix=${plain%%❯*}                            # text left of the glyph (borders/pad)
+    istart=$(( ${#prefix} + 2 ))                   # column where typed input begins
+    n=$(( cx - istart ))                           # typed columns to the left of the cursor
+    if [ "$n" -gt 0 ]; then
+      after=${plain#*❯}; after=${after# }          # input region (drop the ❯'s trailing space)
+      left=$(printf '%s' "$after" | cut -c1-"$n")
+      left=$(printf '%s' "$left" | sed -e 's/│[[:space:]]*$//' -e 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [ -n "$left" ] && return 0                   # real typed text before the cursor ⇒ busy
+    fi
+  fi
+
+  # SECONDARY (robust, faint-aware) — is there any NON-DIM real text after `❯`?
+  # Claude marks the ghost autosuggestion faint (SGR 2), so a genuine mid-type has
+  # non-dim glyphs while a ghost has only dim ones. A regex strip of dim SPANS is
+  # brittle (combined openers `\e[2;90m`, dim-then-color, varied `\e[0m|\e[22m|\e[m`
+  # terminators all evade it — and a missed strip re-wedges the relay, issue #199),
+  # so we PARSE the SGR state instead: walk the row after `❯`, track whether dim is
+  # active (param 2 on; 0/22/bare-reset off), and flag busy on the first non-dim
+  # printable ASCII char. Non-ASCII bytes (the `❯`/`│`/box glyphs, or the dim ghost)
+  # are ignored, so borders never false-trip it. This is also the sole signal when
+  # the cursor is unresolvable (old tmux / copy-mode / a wrapped continuation row).
+  eafter=${erow#*❯}                                # after the glyph, SGR spans intact
+  # LC_ALL=C ⇒ byte-oriented scan (no multibyte decode of the ghost / `│` / box
+  # glyphs, so no towc warning and `[!-~]` is exactly printable ASCII).
+  printf '%s' "$eafter" | LC_ALL=C awk -v ESC="$esc" '
+    { s=$0; n=length(s); i=1; dim=0; busy=0
+      while (i<=n) {
+        c=substr(s,i,1)
+        if (c==ESC && substr(s,i+1,1)=="[") {       # an SGR (…m) sequence — update dim
+          j=i+2; p=""
+          while (j<=n && substr(s,j,1)!="m") { p=p substr(s,j,1); j++ }
+          if (p=="") dim=0                          # bare \e[m == reset
+          else { k=split(p,a,";"); t=1
+                 while (t<=k) {                      # walk params, honoring 38/48/58 extended color
+                   v=a[t]
+                   if (v=="38"||v=="48"||v=="58") {  # skip its VALUE tokens so a color index/RGB
+                     if (a[t+1]=="5") t+=3           # `38;5;N`  — 1 index token
+                     else if (a[t+1]=="2") t+=5      # `38;2;R;G;B` — 3 rgb tokens
+                     else t+=1                       # (`2` here is RGB selector, not dim)
+                     continue }
+                   if (v=="0"||v=="22") dim=0; else if (v=="2") dim=1
+                   t++ } }
+          i=j+1; continue
+        }
+        if (dim==0 && c ~ /[!-~]/) { busy=1; break } # non-dim printable ASCII ⇒ real input
+        i++
+      }
+      exit (busy?0:1) }'                            # rc 0 ⇒ mid-type ⇒ defer; rc 1 ⇒ empty/ghost ⇒ deliver
 }
 
 # Two-step injection: bracketed paste of the (possibly multi-line) text, then a

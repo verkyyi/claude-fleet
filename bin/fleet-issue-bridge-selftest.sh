@@ -103,9 +103,19 @@ case "\$1" in
     elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf '1\ts1\t%s\tworking\t%s\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
     else printf '1\ts1\t%s\tdone\t0\n' '%9'; fi ;;
   capture-pane)  # emulate the Claude TUI: the LAST \`❯\` line is the live input
-                 # row. FAKE_INPUT_TEXT non-empty ⇒ a half-typed, un-submitted
-                 # line (idle-gate must DEFER, issue #191); empty ⇒ empty input.
-    printf 'a past user turn\n❯ some earlier prompt\n❯ %s\n  ████░░ 50%% status\n' "\$FAKE_INPUT_TEXT" ;;
+                 # row (index 2, so cursor_y=2 sits on it). FAKE_INPUT_ROW (raw,
+                 # may embed \\033 escapes for a dim ghost) wins if set — used with
+                 # FAKE_CURSOR to exercise the cursor/faint signals (issue #199);
+                 # else FAKE_INPUT_TEXT is a plain half-typed line (issue #191);
+                 # empty ⇒ empty input.
+    if [ -n "\$FAKE_INPUT_ROW" ]; then
+      printf 'a past user turn\n❯ some earlier prompt\n❯ %b\n  ████░░ 50%% status\n' "\$FAKE_INPUT_ROW"
+    else
+      printf 'a past user turn\n❯ some earlier prompt\n❯ %s\n  ████░░ 50%% status\n' "\$FAKE_INPUT_TEXT"
+    fi ;;
+  display-message)  # cursor probe: FAKE_CURSOR is "x y" (empty ⇒ unresolvable, so
+                    # bridge_input_busy falls back to the faint-strip signal alone).
+    printf '%s\n' "\$FAKE_CURSOR" ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -155,6 +165,8 @@ runbridge() {
   FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
   FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
+  FAKE_INPUT_ROW="${FAKE_INPUT_ROW:-}" \
+  FAKE_CURSOR="${FAKE_CURSOR:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -224,6 +236,54 @@ grep -qF 'deliver me when the line is clear' "$INJECT" \
 grep -qxF 300 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
   || fail "typing-gate: the delivered comment must be marked seen"
 printf 'selftest: input-content idle-gate leg PASS (defer half-typed, deliver when clear)\n' >&2
+
+# ============ ghost-autosuggestion vs typed input (issue #199) =================
+# The input row is capture line 3 (0-based row 2). `❯ ` occupies cols 0-1, so
+# input-start = col 2. Claude draws a DIM ghost autosuggestion in that row when the
+# input is empty but leaves the cursor parked at input-start (col 2) — it must be
+# read as EMPTY (deliver), where the old "any text after ❯" test wedged forever.
+# Genuinely-typed text advances the cursor past input-start (or is non-dim) — DEFER.
+# ghost() asserts a fresh comment DELIVERS for the given input row + cursor;
+# typed() asserts it DEFERS. Each resets state so the low-water-mark is clean.
+ghost_id=400
+ghost_expect() {  # <verb: deliver|defer> <input-row> <cursor|""> <label>
+  local verb="$1" row="$2" cur="$3" label="$4"
+  ghost_id=$((ghost_id + 1))
+  rm -f "$WORK/state/bridge_fake-repo.seen"
+  printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+  cat > "$CANNED" <<JSON
+[
+ {"id":$ghost_id,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T03:00:01Z","body":"ghost probe $ghost_id"}
+]
+JSON
+  : > "$INJECT"
+  FAKE_INPUT_ROW="$row" FAKE_CURSOR="$cur" runbridge --poll || fail "ghost-leg [$label] poll exited non-zero"
+  local injected=no
+  [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && injected=yes
+  case "$verb" in
+    deliver) [ "$injected" = yes ] || fail "ghost-leg [$label]: must DELIVER (relay was wedged)" ;;
+    defer)   [ "$injected" = no  ] || fail "ghost-leg [$label]: must DEFER (would clobber typed input)" ;;
+  esac
+}
+G=$'\033'   # ESC, for building realistic SGR-styled ghost rows
+# DELIVER — a dim ghost with cursor parked at input-start, across the encodings a
+# real Claude TUI actually emits (a brittle span-regex strip would miss most):
+ghost_expect deliver "${G}[2mThe steward will land it via /land${G}[0m"  '2 2' "bare dim \\e[2m…\\e[0m"
+ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   '2 2' "combined dim+256 \\e[2;38;5;244m"
+ghost_expect deliver "${G}[2;90msome gray ghost text${G}[22m"           '2 2' "combined dim+color, \\e[22m off"
+ghost_expect deliver "${G}[2m${G}[38;5;244mghost then color${G}[0m"     '2 2' "dim then SEPARATE color SGR"
+ghost_expect deliver "${G}[2mghost via bare reset${G}[m"                '2 2' "\\e[m bare-reset terminator"
+# DELIVER on the awk fallback ALONE — cursor unresolvable (old tmux / copy-mode),
+# so the faint-state parse is the only signal and must still see the ghost as dim:
+ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   ''   "combined dim, NO cursor (awk fallback)"
+# DEFER — genuinely typed input in each of the two independent ways:
+ghost_expect defer   'git lo'                                           '8 2' "typed, cursor past input-start"
+ghost_expect defer   'git lo'                                           ''    "typed, NO cursor (awk sees non-dim)"
+ghost_expect defer   'git lo'                                           '2 2' "typed then Home-to-col-0 (non-dim)"
+# DEFER — real text colored with a 256/truecolor code whose value tokens contain a
+# literal '2' must NOT be misread as the dim (SGR 2) attribute:
+ghost_expect defer   "${G}[38;5;2mreal green text${G}[0m"               ''    "256-color idx 2 is NOT dim"
+printf 'selftest: ghost-autosuggestion leg PASS (deliver ghost across encodings, defer typed/edited/colored)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then
