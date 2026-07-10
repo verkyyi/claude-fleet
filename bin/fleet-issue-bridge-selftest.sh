@@ -91,11 +91,14 @@ case "\$1" in
       *window_name*)   printf 's1 plan\ns1 dash\n' ;;
     esac
     exit 0 ;;
-  list-panes)   # s1's @steward pane. FAKE_NO_STEWARD ⇒ hub down (no row);
-                # FAKE_STEWARD_WORKING_TS=<n> ⇒ working stamped at <n>; else idle.
+  list-panes)   # emits @steward<TAB>session<TAB>pane<TAB>@claude_state<TAB>@claude_state_ts
+                # (marker FIRST so empty state/ts trail). FAKE_NO_STEWARD ⇒ hub down;
+                # FAKE_STEWARD_COLD ⇒ empty state/ts (cold boot); FAKE_STEWARD_WORKING_TS
+                # ⇒ working stamped at <n>; else idle (done).
     if [ -n "\$FAKE_NO_STEWARD" ]; then :
-    elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf 's1\t%s\tworking\t%s\t1\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
-    else printf 's1\t%s\tdone\t0\t1\n' '%9'; fi ;;
+    elif [ -n "\$FAKE_STEWARD_COLD" ]; then printf '1\ts1\t%s\t\t\n' '%9'
+    elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf '1\ts1\t%s\tworking\t%s\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
+    else printf '1\ts1\t%s\tdone\t0\n' '%9'; fi ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -129,6 +132,7 @@ runbridge() {
   FLEET_ISSUE_BRIDGE_REVIVE=0 \
   FLEET_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}" \
   FAKE_NO_STEWARD="${FAKE_NO_STEWARD:-}" \
+  FAKE_STEWARD_COLD="${FAKE_STEWARD_COLD:-}" \
   FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
@@ -229,16 +233,26 @@ grep -qF 'untrusted poke' "$INJECT"  && fail "c202 (NONE assoc) must be suppress
 # a worker window (@1/@2) must NOT be driven by a steward-issue comment
 grep -qF 'send-keys -t @1' "$INJECT" && fail "steward-issue comment must not inject into a worker window"
 
-# HUB DOWN: a steward-issue comment with NO @steward pane must be RETRIED (return 3),
-# never dropped — so it lands when the hub returns. Assert the trusted comment
-# (c200) is neither injected nor marked seen (the watermark holds it for next tick).
+# HUB DOWN: a steward-issue comment with NO @steward pane must DROP terminally
+# (mark seen, advance the watermark) — retrying would pin the watermark and starve
+# worker relays on the repo. Assert c200 is not injected but IS marked seen.
 rm -f "$WORK/state/bridge_fake-repo.seen"
 printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 : > "$INJECT"
 FAKE_NO_STEWARD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "hub-down poll exited non-zero"
 [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && fail "hub-down: nothing should be injected"
 grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
-  && fail "hub-down: c200 must NOT be marked seen (retry when the hub returns)"
+  || fail "hub-down: c200 must be marked seen (dropped, so the watermark advances — no worker starvation)"
+
+# COLD BOOT: a steward pane with EMPTY @claude_state (marker-first field order must
+# survive the empty trailing fields) is idle → the comment relays. Guards the
+# IFS-collapse misparse regression.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_STEWARD_COLD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-cold poll exited non-zero"
+[ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
+  || fail "steward-cold: an empty-@claude_state steward must still be found (idle) and relayed"
 
 # STEWARD BUSY (fresh @claude_state_ts): a working steward queues the comment — not
 # injected, not marked seen (retry next tick).
@@ -271,5 +285,27 @@ runbridge --poll || fail "no-steward-issue poll exited non-zero"
 [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
   && fail "with no FLEET_STEWARD_ISSUE, a #20 comment must not inject anywhere"
 
-printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/hub-down/no-config) verified\n'
+# ============ steward-issue resolver: no cross-fleet leak (issue #146) =========
+# bridge_steward_issue_for_repo must map a repo → its OWN FLEET_STEWARD_ISSUE and
+# NEVER inherit the global/primary value onto another fleet (the subtle bug where a
+# conf-sourcing subshell inherits the global). Extract the real function body and
+# exercise it against confs; the primary is faked via the PRIMARY_* snapshot.
+RES_CONF="$WORK/resconf"; mkdir -p "$RES_CONF"
+printf 'FLEET_REPO="me/other"\nFLEET_ISSUE_BRIDGE=1\n' > "$RES_CONF/other.conf"
+printf 'FLEET_REPO="me/beta"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=77\n' > "$RES_CONF/beta.conf"
+(
+  set -uo pipefail
+  . "$BIN/fleet-lib.sh"
+  FLEET_CONF_DIR="$RES_CONF"
+  PRIMARY_REPO="me/primary"; PRIMARY_STEWARD_ISSUE="20"
+  : "$FLEET_CONF_DIR $PRIMARY_REPO $PRIMARY_STEWARD_ISSUE"  # read via the eval below (opaque to shellcheck)
+  eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
+  [ "$(bridge_steward_issue_for_repo me/primary)" = 20 ] || { echo "resolver: primary should be 20" >&2; exit 1; }
+  [ -z "$(bridge_steward_issue_for_repo me/other)" ]     || { echo "resolver: me/other must NOT inherit the global 20 (cross-fleet leak)" >&2; exit 1; }
+  [ "$(bridge_steward_issue_for_repo me/beta)" = 77 ]    || { echo "resolver: me/beta should resolve its OWN 77" >&2; exit 1; }
+  [ -z "$(bridge_steward_issue_for_repo me/nope)" ]      || { echo "resolver: unknown repo should be empty" >&2; exit 1; }
+) || fail "steward-issue resolver leaked / mis-resolved across fleets"
+printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak)\n' >&2
+
+printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/no-config) + resolver-no-leak verified\n'
 exit 0

@@ -106,11 +106,14 @@ relay pipeline unchanged:
   to stop a **missed `Stop` hook** wedging the channel forever, a `working` state
   whose `@claude_state_ts` is older than `FLEET_STUCK_WORKING_SECS` is treated as
   stale and relayed anyway.
-- **hub-down retries (no revive)** — if no `@steward` pane exists right now (the
-  hub is restarting/booting) the wake-comment is **not** dropped: the bridge holds
-  the watermark and retries, so it lands once the hub is back. (Worker relays on
-  the repo keep flowing meanwhile — a held watermark only pauses its own
-  advancement, not the per-tick relays.)
+- **hub-down drops (no revive)** — if no `@steward` pane exists (the hub isn't
+  running / is misconfigured) the wake-comment is **dropped terminally**, exactly
+  like a worker's revive-off *gone*. Retrying instead would pin the repo watermark
+  forever and — since the comment fetch is a single non-paginated page — eventually
+  starve **worker** relays on that repo, a silent repo-wide failure far worse than a
+  lost wake. The comment still lives on the durable issue thread; re-comment once
+  the hub is up. (A present-but-*stuck* steward is handled by the staleness escape
+  above, so this path is genuinely "no pane", not "busy".)
 
 Routing is by issue number: a comment whose issue **is** the repo's
 `FLEET_STEWARD_ISSUE` goes to the steward; everything else routes to the bound
