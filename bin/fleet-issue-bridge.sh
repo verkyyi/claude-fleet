@@ -153,7 +153,7 @@ bridge_find_window() {
   return 0
 }
 
-# Resolve the live steward hub pane serving <repo> (issue #146). Prints
+# Resolve the live steward hub pane for <repo-slug> (issue #146). Prints
 # "session<TAB>pane_id<TAB>@claude_state<TAB>@claude_state_ts" for the first fleet
 # whose repo matches, empty if none. The steward lives in the 'plan' hub (no
 # @issue), so it can't be found by @issue like a worker — instead we scan every
@@ -165,8 +165,7 @@ bridge_find_window() {
 # the plan window — so they drive the idle-gate (state) and its staleness escape
 # (ts), all from one tmux fork (no separate fleet_steward_pane + display-message).
 bridge_find_steward() {
-  local repo="$1" want_slug sess pane st ts slug
-  want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  local want_slug="$1" sess pane st ts slug   # caller passes the ALREADY-computed slug
   # `read` with a whitespace IFS (tab is one) collapses runs and strips leading /
   # trailing empties, so we must NOT rely on it to test a possibly-empty field. Do
   # the @steward filter in awk with an EXPLICIT FS=tab (which keeps every empty
@@ -201,7 +200,7 @@ bridge_find_steward() {
 # processed when the long call finishes — degraded latency, not corruption — and the
 # alternative (no escape) is a permanently wedged channel, which is worse.
 bridge_steward_stale() {
-  local ts="$1" age secs="${STUCK_SECS:-120}"
+  local ts="$1" age secs="${STUCK_SECS:-120}" nowv
   case "$ts" in ''|*[!0-9]*) return 1 ;; esac
   # STUCK_SECS=0 means "spinner: never demote a stuck worker" — but for the STEWARD
   # escape, never-escape = a wedged, watermark-pinning, worker-starving channel. So
@@ -209,7 +208,13 @@ bridge_steward_stale() {
   # rather than disabling it.
   case "$secs" in ''|*[!0-9]*) secs=120 ;; esac
   [ "$secs" -gt 0 ] || secs=120
-  age=$(( $(now) - ts ))
+  nowv=$(now)
+  # If the clock is unreadable (now() fell back to 0) or age comes out negative, we
+  # can't trust the freshness read — bias to STALE (escape/relay) rather than risk
+  # wedging the channel + pinning the watermark on a bad clock.
+  [ "$nowv" -gt 0 ] 2>/dev/null || return 0
+  age=$(( nowv - ts ))
+  [ "$age" -lt 0 ] && return 0
   [ "$age" -ge "$secs" ]
 }
 
@@ -296,14 +301,19 @@ bridge_relay() {
   # channel; a missing pane drops terminally (see the tail of this block).
   if [ -n "$STEWARD_ISSUE" ] && [ "$issue" = "$STEWARD_ISSUE" ]; then
     local shit ssess span sst sts
-    shit=$(bridge_find_steward "$repo")
+    shit=$(bridge_find_steward "$slug")
     if [ -n "$shit" ]; then
       IFS=$'\t' read -r ssess span sst sts <<EOF
 $shit
 EOF
       # Idle-gate like a worker, but escape a STALE 'working' (missed Stop) so the
       # channel can't wedge — the plan window's activity is polluted by the dash
-      # pane, so the spinner never demotes it (see bridge_steward_stale).
+      # pane, so the spinner never demotes it (see bridge_steward_stale). Queuing a
+      # genuinely-busy steward (return 3) holds the repo watermark exactly as a busy
+      # worker does — a pre-existing property of the single per-repo watermark, not
+      # new here. The DEFAULT steward is "quiet until asked" (steward-session.sh), so
+      # this is normally a brief turn; a custom always-busy steward could hold it
+      # longer, and the stale escape above bounds even that once ts ages out.
       if [ "$sst" = working ] && ! bridge_steward_stale "$sts"; then
         echo "queued-busy(steward#$issue)"; return 3
       fi
@@ -408,6 +418,12 @@ PYEOF
 $row
 EOF
   [ -z "$repo" ] && { log "--deliver: FLEET_REPO unset — cannot resolve repo"; exit 1; }
+  # tmux down = no target resolvable (every window/pane lookup returns empty, so a
+  # relay would take a terminal 'gone' drop and lose the delivery). Treat as
+  # TRANSIENT: exit EX_TEMPFAIL so the comment is NOT marked seen and a redelivery /
+  # the poll backstop re-tries it once tmux is back — mirrors poll()'s tmux guard,
+  # which exits without advancing its watermark. (issue #146)
+  tmux info >/dev/null 2>&1 || { log "deliver #$num c$cid: tmux not running — retry"; exit 75; }
   body=$(bridge_b64d "$b64")
   slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
   # Steward route (issue #146): resolve the steward issue for THIS delivery's repo

@@ -93,10 +93,13 @@ fleet_mark_role() {
 }
 
 # CHEAP: the @steward=1 pane_id in <session> (that fleet's steward hub pane), or
-# empty if the session has none. The SINGLE source for the marker lookup that
-# steward-zoom.sh, steward-session.sh AND the issue-bridge (issue #146) share —
-# so "which pane is the steward" is defined once. Scoped with -s so it never
-# leaks a pane from another fleet. Pure tmux + awk, no git/gh forks.
+# empty if the session has none. The shared marker lookup for the SESSION-scoped
+# callers steward-zoom.sh and steward-session.sh (issue #146). The issue-bridge
+# does NOT use this — it scans @steward panes across ALL sessions in one pass and
+# needs @claude_state(_ts) + repo-match in the same row, so it has its own
+# machine-wide scan (bridge_find_steward); keep the @steward=1 marker semantics in
+# step between the two. Scoped with -s so it never leaks a pane from another fleet.
+# Pure tmux + awk, no git/gh forks.
 fleet_steward_pane() {
   [ -n "${1:-}" ] || return 0
   tmux list-panes -s -t "$1" -F '#{pane_id} #{@steward}' 2>/dev/null \

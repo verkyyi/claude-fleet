@@ -86,7 +86,7 @@ cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
 args="\$*"
 case "\$1" in
-  info) exit 0 ;;
+  info) [ -n "\$FAKE_TMUX_DOWN" ] && exit 1; exit 0 ;;
   list-windows)
     case "\$args" in
       *@claude_state*) printf 's1\t@1\tdone\t10\ns1\t@2\tworking\t11\n' ;;
@@ -138,6 +138,7 @@ runbridge() {
   FAKE_STEWARD_SESS1="${FAKE_STEWARD_SESS1:-}" \
   FAKE_STEWARD_COLD="${FAKE_STEWARD_COLD:-}" \
   FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
+  FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -210,6 +211,15 @@ if printf '%s' "$PAYLOAD" | FLEET_ISSUE_BRIDGE_SECRET="" FLEET_DELIVERY_SIG="$GO
   fail "--deliver with NO secret must exit non-zero (fail closed)"
 fi
 grep -qF 'delivered via webhook' "$INJECT" && fail "an unsigned/no-secret delivery must NOT inject"
+
+# TMUX DOWN: a validly-signed delivery arriving while tmux is down must RETRY
+# (exit 75, EX_TEMPFAIL) — never inject, never mark the comment seen — so a
+# redelivery / the poll backstop can land it once tmux is back (issue #146).
+: > "$INJECT"
+printf '%s' "$PAYLOAD" | FAKE_TMUX_DOWN=1 FLEET_ISSUE_BRIDGE_SECRET="$SECRET" FLEET_DELIVERY_SIG="$GOODSIG" \
+  runbridge --deliver; rc=$?
+[ "$rc" = 75 ] || fail "--deliver with tmux down must exit 75 (retry), got $rc"
+grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NOT inject"
 
 # ===================== steward control-issue leg (issue #146) ==================
 # A comment on the repo's FLEET_STEWARD_ISSUE (here #20) must relay into the
