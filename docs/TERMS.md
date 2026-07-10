@@ -48,7 +48,7 @@ All three are **read-only views of the cache files** — they do no slow work, s
 they repaint instantly:
 
 - **Dash / dashboard** — `bin/tmux-dashboard.sh` + `bin/tmux-dashboard-rows.sh`,
-  opened with `prefix+j`. A full-screen grid, one row per Claude session/window:
+  focused with `prefix+G` (an embedded pane in the `plan` hub). A grid, one row per Claude session/window:
   branch, dirty flag, context %, PR number + CI symbol. Mission control.
 - **Status bar** (a.k.a. status line) — `bin/tmux-status.sh` plus the
   window-name format. The thin strip tmux always shows; renders a per-window

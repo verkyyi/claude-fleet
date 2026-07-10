@@ -16,7 +16,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
-| Dashboard (`prefix+j`) | fzf mission control | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
+| Dashboard (`prefix+G`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+G` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
 | Collector daemon | git/gh/usage/issues caches every ~60s | gh, python3 |
@@ -56,7 +56,7 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/j/G/b/A/c/r/?` and a status-bar restyle — and comment out
+   bindings on `a/G/b/A/c/r/?` and a status-bar restyle — and comment out
    anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
    default new-window**, and `prefix+?` (the keymap cheatsheet popup —
    `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**; in a fleet you
@@ -159,7 +159,7 @@ issues as the backlog. See README.md for the architecture. Components:
 
 9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
-   spinner animates; `prefix+j` opens the dash; `prefix+b` opens the backlog
+   spinner animates; `prefix+G` focuses the hub's dash pane; `prefix+b` opens the backlog
    (needs the collector to have run once — trigger it by hand:
    `bash ~/.claude/fleet/bin/tmux-dash-collect.sh`). Report each check.
 

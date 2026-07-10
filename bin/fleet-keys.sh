@@ -45,8 +45,7 @@ print_sheet() {
 
   group "tmux prefix" "— global, from any window"
   key "prefix a" "jump to the next window that needs you (red first, then green)"
-  key "prefix j" "dashboard window — fzf mission control (creates it if missing)"
-  key "prefix G" "full-screen dash popup — peek without switching windows"
+  key "prefix G" "focus the dash — jump to the hub's dash pane; press again to zoom it"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix A" "switch the active subscription account (multi-account failover)"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
@@ -55,7 +54,7 @@ print_sheet() {
   key "F9" "(no prefix) jump back to this session's steward hub"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
 
-  group "dashboard" "— inside prefix j / prefix G"
+  group "dashboard" "— inside the hub dash pane (prefix G)"
   key "enter" "jump to the highlighted window"
   key "⌃g" "new session — pick an issue to spawn"
   key "⌃e" "rename the highlighted window"
@@ -64,7 +63,7 @@ print_sheet() {
   key "⌃t" "toggle live ⇄ landed (finished sessions; enter opens the PR)"
   key "⌃r" "refresh now"
   key "?" "this cheatsheet"
-  key "esc" "back (dash window) / close (popup)"
+  key "esc" "relaunch the dash (it's the always-on hub pane)"
 
   group "backlog" "— inside prefix b"
   key "type" "filter issues"

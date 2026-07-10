@@ -27,9 +27,11 @@ demo repo data.</sub>
   idle). Your view never jumps — the sorter restores focus after every move.
   `prefix+a` hops to the neediest window.
 
-- **A mission-control dashboard** (`prefix+j`): an fzf panel listing every
-  session with state glyph, bound issue, model, and context %. `Enter` jumps.
-  **Type a task and press Enter** —
+- **A mission-control dashboard** (`prefix+G`): an fzf panel listing every
+  session with state glyph, bound issue, model, and context %. It lives as an
+  embedded pane in the `plan` hub (dash above, steward below); `prefix+G`
+  focuses it and, pressed again, zooms it fullscreen — the mirror of `F9`'s
+  steward focus. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-G` binds a window to an existing issue, `Ctrl-E` renames.
 
@@ -125,14 +127,14 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | Key | Action |
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix j` | dashboard — jump / new task / bind issue / rename |
+| `prefix G` | focus the hub's dash pane (jump / new task / bind issue / rename); press again to zoom it fullscreen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix r` | reload tmux config |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and `⌃k` in the backlog) |
 | `F9` | (no prefix) jump back to this session's steward hub |
 
-The dash (`prefix j`/`G`) and backlog (`prefix b`) each list their own fzf binds
+The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
 With `set -g mouse on`, the footer-left is clickable too: the **fleet name**
