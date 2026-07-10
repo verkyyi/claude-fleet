@@ -54,6 +54,27 @@ trap 'exit 130' INT TERM HUP
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
+# --- portability probe: does this tmux round-trip a raw US (0x1f) byte in -F? --
+# tmux-dashboard-rows.sh separates its `-F` fields with the US control byte
+# (0x1f). macOS tmux emits it raw, but some Linux tmux builds (e.g. 3.4 on GitHub
+# ubuntu-latest) OCTAL-ESCAPE control bytes in `-F` output — emitting the literal
+# 4-char string `\037` instead — so the producer's `IFS=$'\x1f' read` never splits
+# and it renders ZERO rows, for a reason ENTIRELY UNRELATED to the #208 cache-key
+# fix under test. Where that's the case we can't faithfully drive the real
+# producer, so SKIP cleanly (the cache-key isolation this issue is about is still
+# covered portably by fleet-lib-selftest.sh's fleet_summary_key unit tests and
+# fleet-history-selftest.sh's two-fleet record-path isolation case).
+US=$(printf '\037')
+tmux new-session -d -s probe -x 80 -y 24 'sleep 300' 2>/dev/null || fail "could not start isolated tmux server"
+probe_out=$(tmux list-windows -t probe -F "a${US}b" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+tmux kill-session -t probe 2>/dev/null
+case "$probe_out" in
+  *611f62*) : ;;   # raw US survived → the producer can parse; run the full test
+  *)
+    printf 'selftest SKIP: this tmux octal-escapes the US (0x1f) field byte in -F, so tmux-dashboard-rows.sh cannot parse here (unrelated to #208) — cache-key isolation is covered by fleet-lib/fleet-history selftests\n'
+    exit 0 ;;
+esac
+
 # --- two fleets on one isolated server, each with a window at the SAME id ------
 # (One server here stands in for two — what matters is the SHARED global cache and
 # a COLLIDING numeric window id. We give each fleet its own session and force both
