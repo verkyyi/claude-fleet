@@ -36,6 +36,11 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 absent — SKI
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
+# Hermeticity: scrub ambient vars that would skew the scripts under test. QUIET
+# silences restore()'s `say` (we assert on that output); the FLEET_*/STEWARD_*
+# knobs would override the per-fleet conf / launch command we set up below.
+unset QUIET FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_STEWARD_CMD STEWARD_CMD STEWARD_RESUME_ID STEWARD_SESSION STEWARD_CWD
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fr-selftest.XXXXXX")" || exit 2
 # Resolve to the physical path: tmux reports pane_current_path with symlinks
 # resolved (macOS /var → /private/var), so our seeded transcript slugs must match.
@@ -80,10 +85,11 @@ seed_transcript() {
 
 # ============================================================ 1. RESOLVER ======
 # The steward pane's project dir gets a transcript; a panel and a work window too.
+# Input rows are PIPE-delimited (matching tmux -F output); output rows are TAB.
 STEW_PATH="$WORK/main"; mkdir -p "$STEW_PATH"; seed_transcript "$STEW_PATH" "stew-abc123"
 WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PATH" "wrk-def456"
 
-out=$(printf '%s\t%s\t-\n%s\t%s\t9\n%s\t%s\t-\n' \
+out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|-\n' \
         "__STEWARD__" "$STEW_PATH" \
         "issue-9" "$WORK_PATH" \
         "dash" "$WORK/whatever" \
@@ -96,7 +102,7 @@ printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9" \
 printf '%s\n' "$out" | grep -q '^WIN	dash' \
   && fail "resolver: a panel (dash) must NOT emit a WIN row (got: $out)"
 # a steward pane with no transcript yet → id '-'
-noid=$(printf '__STEWARD__\t%s\t-\n' "$WORK/fresh" | python3 "$RESOLVE")
+noid=$(printf '__STEWARD__|%s|-\n' "$WORK/fresh" | python3 "$RESOLVE")
 [ "$noid" = "STEWARD	$WORK/fresh	-" ] \
   || fail "resolver: a steward pane with no transcript should resolve id '-' (got: $noid)"
 

@@ -54,7 +54,15 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 # which lives in the 'plan' PANEL window (excluded from WIN rows) — so a crash
 # can `claude --resume` the steward with its live history, like a worker.
 snapshot() {
-  tmux info >/dev/null 2>&1 || return 0
+  # Liveness gate: is the tmux server up with at least one session to snapshot?
+  # Use list-sessions, NOT `tmux info` — `info` reports the CURRENT CLIENT and
+  # exits non-zero ("no current client") on some tmux builds (e.g. 3.4) when the
+  # caller isn't an attached client. snapshot runs from the collector DAEMON,
+  # which is never a client, so an `info` gate silently skipped every snapshot on
+  # those builds (and whenever the fleet was detached) — nothing to restore after
+  # a crash. list-sessions is client-independent: rc 0 iff a live server has ≥1
+  # session (exactly the set we iterate below), rc 1 if the server is down.
+  tmux list-sessions -F '#{session_name}' >/dev/null 2>&1 || return 0
   mkdir -p "$RDIR" || return 0
   local sess
   for sess in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
@@ -89,11 +97,22 @@ snapshot() {
     # __STEWARD__ sentinel row appended to the window list so BOTH resolve in a
     # SINGLE python3 pass → a STEWARD row + the per-window WIN rows, newest
     # transcript id resolved for each.
+    #
+    # Delimiter INSIDE tmux -F formats: a pipe '|', NOT a tab. tmux < 3.5
+    # sanitizes CONTROL characters in format OUTPUT — a literal tab becomes '_'
+    # and other controls become octal escapes (verified on 3.4) — which collapsed
+    # every field so the resolver saw one column and emitted nothing (snapshot
+    # recorded no windows at all on those builds). Only PRINTABLE delimiters
+    # survive; '|' is passed through by every tmux, is a literal single-char awk
+    # FS (no regex), keeps a space-bearing path in one field, and does not occur
+    # in this fleet's window names / worktree paths / numeric issues. The MAP FILE
+    # itself stays TAB-delimited — it's written by printf/python, never through
+    # tmux, and read back with awk -F'\t'.
     local spath
-    spath=$(tmux list-panes -s -t "$sess" -F '#{@steward}	#{pane_current_path}' 2>/dev/null \
-            | awk -F'\t' '$1=="1"{print $2; exit}')
-    { tmux list-windows -t "$sess" -F '#{window_name}	#{pane_current_path}	#{@issue}' 2>/dev/null
-      [ -n "$spath" ] && printf '__STEWARD__\t%s\t-\n' "$spath"
+    spath=$(tmux list-panes -s -t "$sess" -F '#{@steward}|#{pane_current_path}' 2>/dev/null \
+            | awk -F'|' '$1=="1"{print $2; exit}')
+    { tmux list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}' 2>/dev/null
+      [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     mv "$tmp" "$RDIR/$sess.map" 2>/dev/null || rm -f "$tmp"
   done
