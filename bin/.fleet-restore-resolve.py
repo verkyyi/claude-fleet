@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-# fleet-restore-resolve.py — stdin: PIPE-delimited rows "window_name|path|issue".
-# stdout: TAB rows "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue" for each
-# work window. The session id is the stem of the NEWEST transcript in that
+# fleet-restore-resolve.py — stdin: PIPE-delimited rows
+# "window_name|path|issue|claude_state|prci|pfg".
+# stdout: TAB rows
+# "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue<TAB>state<TAB>prci<TAB>pfg"
+# for each work window. The session id is the stem of the NEWEST transcript in that
 # worktree's project dir (same slug convention the collector uses), or '-' if none.
+#
+# The trailing state/prci/pfg fields (issue #153) carry per-window RUNTIME state so
+# restore() can re-stamp it after `claude --resume` (otherwise a restored worker
+# comes back with a blank @claude_state — the attention layer reads it as "stuck
+# idle"). Each is passed through verbatim, defaulting to '-' (= nothing to restore)
+# when tmux reported the option empty. Old maps (pre-#153, 5-field WIN rows) parse
+# fine — the missing fields just default to '-'.
 #
 # INPUT is PIPE-delimited, not tab: it comes straight from a tmux `-F` format, and
 # tmux < 3.5 sanitizes CONTROL chars in format output (a literal tab becomes '_'),
@@ -52,6 +61,9 @@ for line in sys.stdin:
     name = parts[0] if len(parts) > 0 else ""
     path = parts[1] if len(parts) > 1 else ""
     issue = parts[2] if len(parts) > 2 and parts[2] else "-"
+    state = parts[3] if len(parts) > 3 and parts[3] else "-"
+    prci = parts[4] if len(parts) > 4 and parts[4] else "-"
+    pfg = parts[5] if len(parts) > 5 and parts[5] else "-"
     if not name or not path:
         continue
     if name == STEWARD:
@@ -59,4 +71,4 @@ for line in sys.stdin:
         continue
     if name in PANELS:
         continue
-    print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}")
+    print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}\t{state}\t{prci}\t{pfg}")
