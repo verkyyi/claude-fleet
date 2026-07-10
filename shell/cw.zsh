@@ -5,6 +5,10 @@
 # cwrm <branch>              — remove a worktree + its branch
 # cwclean [--prune]          — audit worktrees; --prune removes merged+clean+idle ones
 # cf [<owner/repo>] [dir]    — bring up a fleet (no args = infer from this checkout)
+#
+# It also installs a tmux() destroy-guard (issue #158) — see the bottom of the
+# file — so an accidental `tmux kill-server` from a bypass-perms worker can't
+# take down every fleet sharing the default socket.
 
 # cf — shorthand for fleet-up.sh. With no args, run it from inside a checkout
 # and it infers the repo from origin. Any fleet-up flags pass straight through.
@@ -108,4 +112,100 @@ cwclean() {
     git -C "$main" worktree remove "${prunable[$i]}" && echo "removed ${prunable[$i]##*/}"
     git -C "$main" branch -D "${prunebranch[$i]}" 2>/dev/null && echo "  deleted branch ${prunebranch[$i]}"
   done
+}
+
+# tmux() destroy-guard — issue #158.
+#
+# Every fleet runs its workers with --dangerously-skip-permissions on the SHARED
+# `default` tmux socket. One stray `tmux kill-server` (or a kill-session /
+# kill-window aimed at a sibling window) therefore takes down EVERY fleet on the
+# machine at once. This wrapper blocks the common *accidental* forms. It is an
+# accident rail, NOT a security boundary — bypass-perms can always `pkill tmux`
+# or signal the pid directly; nothing at the shell level can stop arbitrary code.
+# It only closes the everyday footguns, which is where the real crashes came from.
+#
+#   • kill-server                    → always refused.
+#   • kill-session / kill-window     → refused unless the target is THIS worker's
+#                                      own window (self-teardown is allowed).
+#   • anything on an isolated server (a global -L/-S is present) → allowed: that
+#                                      is exactly the safe testing convention.
+#   • FLEET_ALLOW_TMUX_DESTROY=1     → guard disabled entirely (maintenance, and
+#                                      what the fleet's own scripts set if needed).
+#
+# Fleet scripts (fleet-down.sh, fleet-restore.sh, the selftests) are unaffected:
+# a shell function is not inherited by the bash processes they run in, so they
+# always reach the real tmux binary.
+tmux() {
+  emulate -L zsh
+  # Escape hatch first — never stand between a deliberate operator and tmux.
+  [[ "${FLEET_ALLOW_TMUX_DESTROY:-}" == 1 ]] && { command tmux "$@"; return; }
+
+  local -a A=( "$@" )
+  # Walk the GLOBAL options to find the subcommand; note an isolated socket
+  # (-L name / -S path), which means "not the shared default server" → allowed.
+  local sub="" isolated=0 i=1
+  while (( i <= ${#A} )); do
+    case "${A[i]}" in
+      -L|-S)     isolated=1; (( i++ )) ;;   # socket value is the next token
+      -L*|-S*)   isolated=1 ;;              # glued form: -Lname / -S/path/sock
+      -f|-c|-T)  (( i++ )) ;;               # global opts that consume a value
+      -*)        ;;                          # a boolean global flag
+      *)         sub="${A[i]}"; break ;;    # the subcommand
+    esac
+    (( i++ ))
+  done
+
+  local dest=""
+  case "$sub" in
+    kill-ser*) dest=server ;;   # kill-server (prefixes: tmux accepts abbreviations)
+    kill-ses*) dest=session ;;  # kill-session
+    kill-w*)   dest=window ;;   # kill-window
+  esac
+  # Isolated server, or a subcommand we don't guard → straight through.
+  if (( isolated )) || [[ -z "$dest" ]]; then command tmux "$@"; return; fi
+
+  local hint="test on an isolated socket (tmux -L scratch …) or set FLEET_ALLOW_TMUX_DESTROY=1 to override"
+
+  # This worker's own window — a globally-unique id like @4. Prefer the caller's
+  # own pane ($TMUX_PANE) over the active pane, so the check is about THIS shell.
+  local ownwin
+  ownwin="$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)"
+  [[ -z "$ownwin" ]] && ownwin="$(command tmux display-message -p '#{window_id}' 2>/dev/null)"
+
+  # Parse the subcommand's target (-t) and the "all but current" flag (-a).
+  local target="" allbut=0 j=$(( i + 1 ))
+  while (( j <= ${#A} )); do
+    case "${A[j]}" in
+      -t)   target="${A[j+1]}"; (( j++ )) ;;
+      -t*)  target="${A[j]#-t}" ;;
+      -a)   allbut=1 ;;
+    esac
+    (( j++ ))
+  done
+
+  # kill-server, or a `-a` (all-but-current) sweep, always hits siblings.
+  if [[ "$dest" == server ]] || (( allbut )); then
+    print -ru2 -- "tmux: refusing '$sub' on the shared fleet server — it can take down every fleet. $hint"
+    return 1
+  fi
+
+  if [[ "$dest" == window ]]; then
+    local tw
+    if [[ -z "$target" ]]; then tw="$ownwin"   # default target = the current window
+    else tw="$(command tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)"; fi
+    if [[ -n "$ownwin" && "$tw" == "$ownwin" ]]; then command tmux "$@"; return; fi
+    print -ru2 -- "tmux: refusing to kill-window '${target:-current}' — not this worker's own window. $hint"
+    return 1
+  fi
+
+  # dest == session: only self-teardown is OK, i.e. the target session holds just
+  # this one window. Anything larger would take sibling workers (or the hub) down.
+  local sess
+  if [[ -n "$target" ]]; then sess="$target"
+  else sess="$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{session_id}' 2>/dev/null)"; fi
+  local -a wins
+  wins=( ${(f)"$(command tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null)"} )
+  if [[ -n "$ownwin" && ${#wins} -eq 1 && "${wins[1]}" == "$ownwin" ]]; then command tmux "$@"; return; fi
+  print -ru2 -- "tmux: refusing kill-session '${target:-current}' — it would kill sibling fleet windows. $hint"
+  return 1
 }

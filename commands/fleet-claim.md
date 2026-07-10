@@ -92,3 +92,13 @@ Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
 edits inside its `issue-<N>` worktree and lands via PR; a steward files/triages
 and hands implementation to a worker.
+
+**Never run destructive tmux on the live server.** Every fleet shares ONE tmux
+server on the `default` socket, so a stray `tmux kill-server` (or a
+`kill-session`/`kill-window` aimed at a sibling) takes down *every* fleet on the
+machine at once (issue #158). If you're developing or testing tmux tooling, run
+it on an **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim
+pattern the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
+`shell/cw.zsh` refuses the common accidental forms from a worker shell (it's an
+accident rail, not a security boundary); set `FLEET_ALLOW_TMUX_DESTROY=1` for the
+rare legitimate destroy on the live server.
