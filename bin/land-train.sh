@@ -27,12 +27,16 @@
 #   LAND_TRAIN_PR_TIMEOUT  per-PR budget, seconds         (default 1800)
 #   LAND_TRAIN_MAX_RETRY   bounded retries for behind/race (default 3)
 #   LAND_TRAIN_LEASE_TTL   lease lifetime, seconds        (default 3600)
-#   LAND_TRAIN_LEASE_DIR   lease dir            (default ~/.claude/leases)
+#   FLEET_LAND_LEASE_DIR   SHARED land-lock dir for land-train AND self-land
+#                          (default ~/.claude/leases) — relocate the lock here so
+#                          both landers stay on the same lock
+#   LAND_TRAIN_LEASE_DIR   per-tool override of the lease dir (tests)
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+. "$BIN/fleet-land-lease.sh"
 
 # --- args ---------------------------------------------------------------------
 DRY=0
@@ -70,7 +74,7 @@ POLL="${LAND_TRAIN_POLL:-15}"
 PR_TIMEOUT="${LAND_TRAIN_PR_TIMEOUT:-1800}"
 MAX_RETRY="${LAND_TRAIN_MAX_RETRY:-3}"
 LEASE_TTL="${LAND_TRAIN_LEASE_TTL:-3600}"
-LEASE_DIR="${LAND_TRAIN_LEASE_DIR:-$HOME/.claude/leases}"
+LEASE_DIR="${LAND_TRAIN_LEASE_DIR:-${FLEET_LAND_LEASE_DIR:-$HOME/.claude/leases}}"
 
 # --- resolve the fleet repo (this fleet only — never a cwd default) -----------
 FLEET_SESSION=$(fleet_current_session)
@@ -85,36 +89,26 @@ command -v gh >/dev/null 2>&1 || { printf 'land-train: gh not found on PATH.\n' 
 # the capture → every `case "$result"` missed → summary counts stuck at 0.)
 note() { printf '%s\n' "$*" >&2; }
 
-# --- lease: one train per repo -----------------------------------------------
-LEASE="$LEASE_DIR/land-train-$(fleet_slug "$REPO").lock"
+# --- lease: one LANDER per repo (shared with the worker self-land, issue #138) --
+# The lock is the generalized per-repo land lease (bin/fleet-land-lease.sh):
+# `land-<slug>.lock`, the SAME lock bin/fleet-land-self.sh takes, so a batch
+# land-train and a self-landing worker interlock instead of racing the base
+# branch. The helper adds dead-PID steal-if-stale on top of the old TTL steal.
+LEASE="$LEASE_DIR/land-$(fleet_slug "$(fleet_norm_repo "$REPO")").lock"
 LEASE_HELD=0
 lease_acquire() {
-  mkdir -p "$LEASE_DIR" 2>/dev/null
-  local now ttl me holder exp
-  now=$(date +%s); ttl="$LEASE_TTL"
-  me="${FLEET_SESSION:-$USER}:$$@$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)"
-  if mkdir "$LEASE" 2>/dev/null; then
-    printf '%s\n%s\n' "$me" "$((now + ttl))" > "$LEASE/holder"
+  if land_lease_acquire "$LEASE" "$LEASE_TTL" "${FLEET_SESSION:-$USER}:$$"; then
     LEASE_HELD=1; return 0
   fi
-  holder=$(sed -n 1p "$LEASE/holder" 2>/dev/null)
-  exp=$(sed -n 2p "$LEASE/holder" 2>/dev/null); exp="${exp//[^0-9]/}"; exp="${exp:-0}"
-  if [ "$now" -ge "$exp" ]; then           # stale → steal
-    rm -rf "$LEASE" 2>/dev/null
-    if mkdir "$LEASE" 2>/dev/null; then
-      printf '%s\n%s\n' "$me" "$((now + ttl))" > "$LEASE/holder"
-      LEASE_HELD=1; note "land-train: stole stale lease (was ${holder:-?})"; return 0
-    fi
-  fi
   printf 'land-train: a train is already running for %s (held by %s) — one train per repo.\n' \
-    "$REPO" "${holder:-?}" >&2
+    "$REPO" "$(land_lease_holder "$LEASE")" >&2
   return 1
 }
 # Release the lease on EXIT *and* on Ctrl-C / kill — otherwise a signal mid-run
 # leaves the lockdir until the TTL steal (a ~1h block on the next run). Idempotent
 # (LEASE_HELD flips to 0), so the INT/TERM path re-triggering EXIT is a no-op.
 # shellcheck disable=SC2329  # invoked indirectly via the trap lines below
-lease_release() { [ "$LEASE_HELD" = 1 ] && rm -rf "$LEASE" 2>/dev/null; LEASE_HELD=0; }
+lease_release() { [ "$LEASE_HELD" = 1 ] && land_lease_release "$LEASE"; LEASE_HELD=0; }
 trap lease_release EXIT
 trap 'lease_release; exit 130' INT
 trap 'lease_release; exit 143' TERM
@@ -136,29 +130,9 @@ pr_fields() {
            .headRefOid] | @tsv' 2>/dev/null
 }
 
-# Fold (state,mergeable,mss,draft,checks) → one verdict the loop switches on.
-#   GONE     not open (already merged/closed)      → skip
-#   DRAFT    draft                                 → eject
-#   CONFLICT CONFLICTING / DIRTY                   → eject (needs human rebase)
-#   FAILING  a REQUIRED check is red               → eject
-#   BLOCKED  mergeable-blocked, checks green (review required / other) → eject
-#   BEHIND   out of date w/ base                   → update-branch, then wait
-#   PENDING  checks still running / unknown        → wait
-#   READY    green + up to date                    → merge
-classify() {
-  local st="$1" mg="$2" ms="$3" dr="$4" ck="$5"
-  [ "$st" != OPEN ]     && { echo GONE;     return; }
-  [ "$dr" = DRAFT ]     && { echo DRAFT;    return; }
-  [ "$mg" = CONFLICTING ] && { echo CONFLICT; return; }
-  case "$ms" in
-    DIRTY)          echo CONFLICT ;;
-    BEHIND)         echo BEHIND ;;
-    CLEAN|HAS_HOOKS) echo READY ;;
-    UNSTABLE)       echo READY ;;  # mergeable: at worst a NON-required check is red (a required red ⇒ BLOCKED)
-    BLOCKED)        case "$ck" in fail) echo FAILING ;; pending|none) echo PENDING ;; *) echo BLOCKED ;; esac ;;
-    *)              case "$ck" in fail) echo FAILING ;; *) echo PENDING ;; esac ;;  # UNKNOWN → give CI a beat
-  esac
-}
+# The (state,mergeable,mss,draft,checks) → verdict fold lives in fleet-land-lease.sh
+# as `land_classify` — the SINGLE taxonomy shared with the worker self-land, so the
+# two land paths can never disagree on landability.
 
 # --- run one PR through the train. Prints "merged" | "eject:<why>" | "skip:<why>".
 process_pr() {
@@ -172,7 +146,7 @@ process_pr() {
     fields=$(pr_fields "$num")
     [ -z "$fields" ] && { echo "skip:not-found"; return; }
     IFS=$'\t' read -r st mg ms dr ck oid <<<"$fields"
-    cls=$(classify "$st" "$mg" "$ms" "$dr" "$ck")
+    cls=$(land_classify "$st" "$mg" "$ms" "$dr" "$ck")
     case "$cls" in
       GONE)     echo "skip:already-closed"; return ;;
       DRAFT)    echo "eject:draft"; return ;;
@@ -262,7 +236,7 @@ if [ "$DRY" = 1 ]; then
     fields=$(pr_fields "$num")
     if [ -z "$fields" ]; then note "    $pos. #$num — not found"; continue; fi
     IFS=$'\t' read -r st mg ms dr ck oid <<<"$fields"
-    cls=$(classify "$st" "$mg" "$ms" "$dr" "$ck")
+    cls=$(land_classify "$st" "$mg" "$ms" "$dr" "$ck")
     case "$cls" in
       READY)    act="merge now" ;;
       BEHIND)   act="update-branch → wait green → merge" ;;

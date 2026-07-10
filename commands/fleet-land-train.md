@@ -96,9 +96,11 @@ merges it. Only a **required** check going red (`BLOCKED` + failing) ejects a PR
 GitHub already considers landable — but can surprise you if you expect *any* red
 check to hold a PR back.
 
-The lease (`~/.claude/leases/land-train-<repo-slug>.lock`, steal-if-stale)
-means a second `/fleet-land-train` on the same repo refuses with *"a train is
-already running"* — that is expected; wait for the first to finish.
+The lease (`~/.claude/leases/land-<repo-slug>.lock`, steal-if-stale) is the
+shared **per-repo land lease** — the SAME lock a worker `/fleet-land-self` takes
+(issue #138), so a second `/fleet-land-train` *or* a self-landing worker on the
+same repo refuses with *"a train is already running"* / waits its turn — that is
+expected; landing on a repo is single-writer. Wait for the holder to finish.
 
 Note the **PR numbers the train reports as merged** — you need them for steps
 3–4.

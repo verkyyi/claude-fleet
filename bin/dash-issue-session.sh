@@ -11,8 +11,23 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-num="${1:-}"; num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
-TARGET_SESS="${2:-}"
+# Parse: <issue-number> [<target-session>] [--self-land]. The two positionals keep
+# their historic order (num, target-session); --self-land may appear anywhere and
+# switches the seed prompt to the worker-owned self-land lifecycle (issue #138).
+num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; _pos=0
+for _a in "$@"; do
+  case "$_a" in
+    --self-land) SELF_LAND_FLAG=1 ;;
+    # An UNKNOWN dash-flag is almost always a typo (e.g. --self-lan). Do NOT let it
+    # fall through to the positional slots — treating "--self-lan" as the issue
+    # number strips to "" and silently spawns a plain steward-lands worker, so a
+    # later /land trigger no-ops. Warn loudly and ignore it instead.
+    --*) printf 'dash-issue-session: ignoring unknown flag %s\n' "$_a" >&2
+         tmux display-message "issues: ignoring unknown flag $_a" 2>/dev/null ;;
+    *) _pos=$((_pos + 1)); case "$_pos" in 1) num="$_a" ;; 2) TARGET_SESS="$_a" ;; esac ;;
+  esac
+done
+num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
@@ -75,9 +90,28 @@ wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 tf="$C/task_$slug.txt"
+# Self-land lifecycle (issue #138): a worker owns its ENTIRE lifecycle incl. the
+# land. Opt in per spawn (--self-land) or per fleet (FLEET_SELF_LAND=1). Self-land
+# NEEDS the issue-bridge running (it is how the steward's /land trigger reaches the
+# worker) — warn if the fleet hasn't enabled it, since without it the trigger can't
+# arrive and the worker falls back to steward-lands.
+SELF_LAND="$SELF_LAND_FLAG"; [ "${FLEET_SELF_LAND:-0}" = 1 ] && SELF_LAND=1
+if [ "$SELF_LAND" = 1 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
+  tmux display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
+fi
+# The claim→implement→ship preamble is identical for both lifecycles; only the
+# finish differs (steward-lands vs the worker's wait-for-trigger → self-land). Build
+# the shared prefix once, then append the seat-appropriate tail (issue #138).
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-printf 'Work GitHub issue #%s in this repo. Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan. Implement and verify per the repo conventions. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' \
-  "$num" "$num" "$REPO" "$num" "$REPO" "$num" > "$tf"
+prefix=$(printf 'Work GitHub issue #%s in this repo. Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan. Implement and verify per the repo conventions' \
+  "$num" "$num" "$REPO" "$num" "$REPO")
+if [ "$SELF_LAND" = 1 ]; then
+  # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
+  tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
+else
+  tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' "$num")
+fi
+printf '%s%s' "$prefix" "$tail" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \

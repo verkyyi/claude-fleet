@@ -135,6 +135,23 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
 #FLEET_ISSUE_BRIDGE_REVIVE=0
 
+# --- Worker-owned self-land (commands/fleet-land-self.md, issue #138) -----------
+# OFF by default. When enabled for a fleet (or per spawn via
+# `dash-issue-session.sh <N> --self-land`), a worker owns its ENTIRE lifecycle
+# including the land: after /fleet-ship it WAITS, and when the steward triggers the
+# land by commenting `/land` on the issue (relayed by the issue-bridge), the worker
+# runs /fleet-land-self to merge its OWN PR — lease-serialized (the same per-repo
+# land lock /fleet-land-train uses), hold-through-green, base fast-forward, then
+# self-destruct. The steward only *approves* (one comment) instead of *performing*
+# the merge. This deliberately RELAXES the "workers never self-merge" rail, re-gated
+# by the steward's explicit trigger + pre-trigger review.
+#
+# REQUIRES the issue-bridge (the trigger channel) — FLEET_SELF_LAND=1 implies you
+# also set FLEET_ISSUE_BRIDGE=1; without a bridge no trigger arrives and workers
+# fall back to steward-lands (/fleet-land). See docs/SELF-LAND.md.
+# @label=Worker self-land (steward triggers) @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_SELF_LAND=0
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 # GLOBAL: read by the preview tool from the global env — a per-fleet override
