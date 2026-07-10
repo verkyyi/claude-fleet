@@ -91,16 +91,14 @@ fi
 [ -z "$BASE" ] && BASE=main
 
 # --- write the per-fleet conf ---
+# PRESERVE any custom FLEET_* keys already in the conf (issue #170): a crash + `cf`
+# restore re-runs fleet-up, and a truncating rewrite would silently drop the
+# operator's FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND / FLEET_AUTOFILL / … Only the
+# derived three (repo/main/base) are refreshed; the rest survive. Atomic write.
 mkdir -p "$FLEET_CONF_DIR"
 CONF="$FLEET_CONF_DIR/$NAME.conf"
-cat > "$CONF" <<EOF
-# claude-fleet: fleet '$NAME' — written by fleet-up.sh $(date '+%Y-%m-%d %H:%M:%S')
-# Overlays the global fleet.conf for this fleet's tmux session. Add any other
-# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
-FLEET_REPO="$REPO"
-FLEET_MAIN="$DIR"
-FLEET_BASE_BRANCH="$BASE"
-EOF
+fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M:%S')" \
+  || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
 
 # --- create the session + the steward HUB ---
