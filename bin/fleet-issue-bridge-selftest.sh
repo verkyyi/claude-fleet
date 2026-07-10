@@ -12,6 +12,11 @@
 #   • DEDUP          re-running relays nothing already handled.
 #   • HMAC (--deliver) a correctly-signed delivery injects; a bad signature does
 #                    NOT (and exits non-zero).
+#   • STEWARD (#146)  a comment on FLEET_STEWARD_ISSUE relays into the @steward
+#                    pane (not a worker), honoring the marker/assoc gates; a busy
+#                    steward queues, a STALE 'working' (missed Stop) is escaped so
+#                    the channel can't wedge, a down hub RETRIES (never drops), and
+#                    without FLEET_STEWARD_ISSUE the same comment routes nowhere.
 #
 # The scenario (repo fake/repo): worker windows for #10 (idle=done) and #11
 # (working). Comments, ascending: c100 #10 OWNER→relay, c101 #10 marker→suppress,
@@ -71,9 +76,10 @@ chmod +x "$WORK/fakepath/gh"
 
 # --- fake tmux: window table for find_window/fleet_for_repo; records injection --
 # find_window format contains @claude_state; fleet_for_repo contains window_name.
-# For the steward route (issue #146): list-panes yields the @steward pane (%9) and
-# display-message answers its window @claude_state ('done' = idle) — so
-# bridge_find_steward resolves session s1 → pane %9, idle.
+# For the steward route (issue #146): bridge_find_steward does ONE `list-panes -a`
+# returning session<TAB>pane_id<TAB>@claude_state<TAB>@claude_state_ts<TAB>@steward,
+# so the fake yields s1's @steward=1 pane (%9) idle (state=done) — it resolves to
+# session s1 → pane %9, idle.
 cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
 args="\$*"
@@ -85,9 +91,11 @@ case "\$1" in
       *window_name*)   printf 's1 plan\ns1 dash\n' ;;
     esac
     exit 0 ;;
-  list-panes)   printf '%s 1\n' '%9' ;;                 # the @steward=1 pane in s1
-  display-message)
-    case "\$args" in *@claude_state*) printf 'done\n' ;; esac ;;
+  list-panes)   # s1's @steward pane. FAKE_NO_STEWARD ⇒ hub down (no row);
+                # FAKE_STEWARD_WORKING_TS=<n> ⇒ working stamped at <n>; else idle.
+    if [ -n "\$FAKE_NO_STEWARD" ]; then :
+    elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf 's1\t%s\tworking\t%s\t1\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
+    else printf 's1\t%s\tdone\t0\t1\n' '%9'; fi ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -120,6 +128,8 @@ runbridge() {
   FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
   FLEET_ISSUE_BRIDGE_REVIVE=0 \
   FLEET_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}" \
+  FAKE_NO_STEWARD="${FAKE_NO_STEWARD:-}" \
+  FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
   FLEET_DELIVERY_SIG="${FLEET_DELIVERY_SIG:-}" \
     bash "$WORK/bin/fleet-issue-bridge.sh" "$@" 2>>"$WORK/log"
@@ -219,6 +229,39 @@ grep -qF 'untrusted poke' "$INJECT"  && fail "c202 (NONE assoc) must be suppress
 # a worker window (@1/@2) must NOT be driven by a steward-issue comment
 grep -qF 'send-keys -t @1' "$INJECT" && fail "steward-issue comment must not inject into a worker window"
 
+# HUB DOWN: a steward-issue comment with NO @steward pane must be RETRIED (return 3),
+# never dropped — so it lands when the hub returns. Assert the trusted comment
+# (c200) is neither injected nor marked seen (the watermark holds it for next tick).
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_NO_STEWARD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "hub-down poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && fail "hub-down: nothing should be injected"
+grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  && fail "hub-down: c200 must NOT be marked seen (retry when the hub returns)"
+
+# STEWARD BUSY (fresh @claude_state_ts): a working steward queues the comment — not
+# injected, not marked seen (retry next tick).
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_STEWARD_WORKING_TS="$(date +%s)" FLEET_STEWARD_ISSUE=20 runbridge --poll \
+  || fail "steward-busy poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && fail "steward-busy: must not inject into a working steward"
+grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
+  && fail "steward-busy: c200 must NOT be marked seen (queued for retry)"
+
+# STEWARD STALE (missed Stop — @claude_state=working stamped long ago): the idle-gate
+# must ESCAPE and relay, so the co-resident-dash-pane pollution can't wedge the
+# channel. ts=0 ⇒ age ≫ FLEET_STUCK_WORKING_SECS ⇒ stale ⇒ relay.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_STEWARD_WORKING_TS=0 FLEET_STEWARD_ISSUE=20 runbridge --poll \
+  || fail "steward-stale poll exited non-zero"
+[ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
+  || fail "steward-stale: a stale 'working' must be escaped and relayed (channel must not wedge)"
+
 # WITHOUT FLEET_STEWARD_ISSUE, the same comment on #20 has no worker window and
 # no steward route → it must be dropped (gone), never injected anywhere.
 rm -f "$WORK/state/bridge_fake-repo.seen"
@@ -228,5 +271,5 @@ runbridge --poll || fail "no-steward-issue poll exited non-zero"
 [ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
   && fail "with no FLEET_STEWARD_ISSUE, a #20 comment must not inject anywhere"
 
-printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route verified\n'
+printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/hub-down/no-config) verified\n'
 exit 0

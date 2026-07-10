@@ -98,12 +98,19 @@ relay pipeline unchanged:
   marker, dedup. The steward posts its own record notes through
   `bin/fleet-comment.sh` (marked no-relay), so its comments on its **own** control
   issue never loop back into it.
-- **idle-gate** — the steward is the only Claude session in the `plan` window, so
-  its window `@claude_state` is the gate: a comment lands only when the steward is
-  **not** `working`; a busy steward's comment is queued to a later tick.
-- **no revive** — the hub is always-on; if no `@steward` pane exists the comment is
-  dropped (the thread is still the durable record), so the repo watermark keeps
-  advancing rather than stalling behind an absent hub.
+- **idle-gate (+ staleness escape)** — the steward is the only Claude session in
+  the `plan` window, so its window `@claude_state` is the gate: a comment lands
+  only when the steward is **not** `working`; a busy steward's comment is queued to
+  a later tick. The `plan` window's `#{window_activity}` is kept fresh by the
+  co-resident dash pane, so the spinner's stuck-working demote never fires there —
+  to stop a **missed `Stop` hook** wedging the channel forever, a `working` state
+  whose `@claude_state_ts` is older than `FLEET_STUCK_WORKING_SECS` is treated as
+  stale and relayed anyway.
+- **hub-down retries (no revive)** — if no `@steward` pane exists right now (the
+  hub is restarting/booting) the wake-comment is **not** dropped: the bridge holds
+  the watermark and retries, so it lands once the hub is back. (Worker relays on
+  the repo keep flowing meanwhile — a held watermark only pauses its own
+  advancement, not the per-tick relays.)
 
 Routing is by issue number: a comment whose issue **is** the repo's
 `FLEET_STEWARD_ISSUE` goes to the steward; everything else routes to the bound
