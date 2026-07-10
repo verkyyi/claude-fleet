@@ -30,8 +30,12 @@
 #                   NONE/CONTRIBUTOR. Configurable via FLEET_ISSUE_BRIDGE_ASSOC_FLOOR.
 #   4. target     — resolve the bound worker window by @issue across live fleets on
 #                   this repo. Idle-gate on @claude_state: inject only when NOT
-#                   `working` (queue a busy worker to a later tick). Two-step paste
-#                   injection (bracketed paste + a SEPARATE Enter) dodges the
+#                   `working` (queue a busy worker to a later tick). Also DEFER when
+#                   the pane holds an un-submitted, half-typed input line — a human
+#                   keystroke does NOT flip @claude_state, so pasting would prepend
+#                   onto their text and submit the merged line (issue #191); treat a
+#                   non-empty input row like a busy worker and retry next tick. Two-step
+#                   paste injection (bracketed paste + a SEPARATE Enter) dodges the
 #                   send-keys/bracketed-paste gotcha for multi-line bodies.
 #   5. revive     — (opt-in FLEET_ISSUE_BRIDGE_REVIVE=1) if the issue is OPEN but its
 #                   worker window is gone, re-spawn it via dash-issue-session.sh; the
@@ -245,6 +249,31 @@ EOF
   return 0
 }
 
+# 0 if the pane's Claude TUI input line holds UN-SUBMITTED text — a human is
+# mid-type — so a relay must DEFER rather than bracketed-paste-prepend onto their
+# partial and submit the merged line (issue #191). 1 if the input line is empty
+# (safe to deliver) OR the prompt row can't be resolved (capture-pane failed / no
+# `❯` row found — a parse miss ⇒ fall back to today's behavior; NEVER wedge the
+# queue on a bad read). A human keystroke doesn't flip @claude_state, so this
+# input-content check is the ONLY thing standing between an idle-but-being-typed-into
+# pane and an accidental prepend+submit.
+#
+# The Claude TUI renders the live input on a `❯ `-anchored row. PAST user turns
+# render the same glyph higher in the scrollback and the status footer below it
+# carries none, so the LAST `❯` line is the input row. A wrapped input still puts
+# text on that anchor row, so testing that one row alone tells empty from typed. A
+# defensive trailing `│` strip covers a bordered-input rendering.
+bridge_input_busy() {
+  local win="$1" cap row rest
+  cap=$(tmux capture-pane -t "$win" -p 2>/dev/null) \
+    || { log "input-check: capture-pane failed for $win — proceeding (fallback)"; return 1; }
+  row=$(printf '%s\n' "$cap" | grep '❯' | tail -n1)
+  [ -n "$row" ] || { log "input-check: no prompt row in $win — proceeding (fallback)"; return 1; }
+  rest=${row#*❯}                                   # everything after the glyph
+  rest=$(printf '%s' "$rest" | sed -e 's/│[[:space:]]*$//' -e 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$rest" ]                                   # non-empty ⇒ mid-type ⇒ defer (rc 0)
+}
+
 # Two-step injection: bracketed paste of the (possibly multi-line) text, then a
 # SEPARATE Enter to submit. A single `send-keys -l` treats embedded newlines as
 # Enters (submitting the first line early) — the bracketed-paste gotcha; pasting
@@ -306,6 +335,9 @@ EOF
       if [ "$sst" = working ] && ! bridge_steward_stale "$sts"; then
         echo "queued-busy(steward#$issue)"; return 3
       fi
+      # Same half-typed-input protection as a worker (issue #191): the operator
+      # types into the @steward pane too, and a keystroke doesn't flip its state.
+      if bridge_input_busy "$span"; then echo "queued-typing(steward#$issue)"; return 3; fi
       local smsg
       smsg="[steward inbox — issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
       if bridge_inject "$span" "$smsg"; then echo "relayed(steward#${issue}->${ssess})"; return 0; fi
@@ -330,6 +362,10 @@ EOF
     win=$(printf '%s' "$hit" | cut -f2)
     st=$(printf '%s' "$hit" | cut -f3)
     if [ "$st" = working ]; then echo "queued-busy(#$issue)"; return 3; fi
+    # A human keystroke doesn't set @claude_state, so an idle worker being typed
+    # into is a live prepend-and-submit target — defer while the input row is
+    # non-empty so the partial is preserved (issue #191).
+    if bridge_input_busy "$win"; then echo "queued-typing(#$issue)"; return 3; fi
     local msg
     msg="[issue #$issue — comment from @${author:-someone}]"$'\n\n'"$body"
     if bridge_inject "$win" "$msg"; then echo "relayed(#${issue}->${sess})"; return 0; fi

@@ -35,9 +35,15 @@ For every new comment the bridge decides, in order:
    `CONTRIBUTOR` are never relayed.
 4. **target + idle-gate** — resolve the worker window bound to the issue
    (`@issue`) and inject **only when it is idle** (`@claude_state` ≠ `working`);
-   a busy worker's comment is queued to a later tick. Injection is a two-step
-   bracketed **paste** + a **separate Enter** (the send-keys/bracketed-paste
-   gotcha eats an inline Enter and would submit a multi-line body early).
+   a busy worker's comment is queued to a later tick. The idle-gate also
+   inspects the pane's **input line**: a human typing an un-submitted line does
+   **not** flip `@claude_state`, so the bridge `capture-pane`s the pane, finds the
+   `❯`-anchored input row, and if it holds text **defers** the relay too (issue
+   #191) — otherwise the paste would prepend onto the partial and submit the
+   merged line. A parse-miss (no input row resolvable) falls back to delivering,
+   so a bad read never wedges the queue. Injection is a two-step bracketed
+   **paste** + a **separate Enter** (the send-keys/bracketed-paste gotcha eats an
+   inline Enter and would submit a multi-line body early).
 5. **revive** *(opt-in `FLEET_ISSUE_BRIDGE_REVIVE=1`)* — if the issue is **open**
    but its worker window is gone, re-spawn it (`dash-issue-session.sh`); the
    fresh worker's `/fleet-claim` re-reads the issue, comment and all. A
@@ -108,7 +114,10 @@ on the control issue. The steward route reuses the whole relay pipeline unchange
   co-resident dash pane, so the spinner's stuck-working demote never fires there —
   to stop a **missed `Stop` hook** wedging the channel forever, a `working` state
   whose `@claude_state_ts` is older than `FLEET_STUCK_WORKING_SECS` is treated as
-  stale and relayed anyway.
+  stale and relayed anyway. The same **input-content check** as a worker applies:
+  the operator types into the `@steward` pane too, so an idle steward whose input
+  row holds an un-submitted line defers the relay rather than prepending onto it
+  (issue #191).
 - **hub-down drops (no revive)** — if no `@steward` pane exists (the hub isn't
   running / is misconfigured) the wake-comment is **dropped terminally**, exactly
   like a worker's revive-off *gone*. Retrying instead would pin the repo watermark
