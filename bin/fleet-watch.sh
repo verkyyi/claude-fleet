@@ -150,11 +150,22 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   local live_issues=' '     # issue numbers with a live window (for slotfree anti-collision)
   local US=$'\x1f'
 
+  # Resolve THIS slug's sessions ONCE (a single sessmap read) instead of forking an
+  # awk per window to re-run fleet_slug_cached — the watcher must stay light on the
+  # very tmux server it protects (review finding #10). Same source/semantics as
+  # fleet_slug_cached: a stale/missing sessmap yields no match, exactly as before.
+  local slugsess=' ' _s _sl
+  if [ -f "$C/sessmap" ]; then
+    while IFS=$'\t' read -r _s _sl _; do
+      [ "$_sl" = "$slug" ] && slugsess="$slugsess$_s "
+    done < "$C/sessmap"
+  fi
+
   # ONE tmux scan of every window; keep only this repo's (slug match) worker windows.
   while IFS="$US" read -r sess win name issue st prci path; do
     [ -z "$sess" ] && continue
     case "$name" in plan|dash|backlog) continue;; esac   # hub panels, not workers
-    [ "$(fleet_slug_cached "$sess")" = "$slug" ] || continue
+    case "$slugsess" in *" $sess "*) : ;; *) continue;; esac
     [ -n "$issue" ] && live_issues="$live_issues$issue "
 
     # per-window PR events (need the PR number from prmap)
@@ -164,8 +175,17 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
     pstate=$(printf '%s' "$prrow" | cut -f2)
     if [ -n "$pnum" ] && [ "$pstate" = OPEN ]; then
       printf 'propened:%s:%s\t#%s shipped PR #%s — review?\n' "$slug" "$pnum" "${issue:-?}" "$pnum"
-      [ "$prci" = "✓" ] && \
-        printf 'prgreen:%s:%s\tPR #%s (#%s) green — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum"
+      # green + landable. pr-refresh writes a DECORATED glyph: "✓" (clean, ready),
+      # "✓↑" (green but behind base → land updates the branch first). Both are a
+      # "/land <n>?" wake — in an active fleet the base moves constantly, so most
+      # greens read "✓↑", and matching only a bare "✓" would miss the common case.
+      # "✓!" (conflicting → worker must rebase) and "✓·" (green but branch-protection
+      # blocked → needs a human, not a steward land) are deliberately NOT landable
+      # wakes, so they're excluded.
+      case "$prci" in
+        ✓)  printf 'prgreen:%s:%s\tPR #%s (#%s) green — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
+        ✓↑) printf 'prgreen:%s:%s\tPR #%s (#%s) green (behind base) — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
+      esac
     fi
 
     # worker-state events
@@ -187,9 +207,14 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   fi
 
   # slotfree: only when the dispatcher is NOT autofilling (else it double-drives),
-  # both caps have headroom, and the backlog has an eligible issue (open, UNASSIGNED,
-  # not epic/meta/blocked/steward-control, no live window). Suggest the top one.
-  if [ "$autofill" != 1 ] && [ "$ghhd" -gt 0 ] && [ "$flhd" -gt 0 ] && [ -s "$issf" ]; then
+  # both caps have headroom, and the backlog has an eligible issue. GATED on the
+  # labels cache existing: without labels we can't exclude epic/meta/blocked, and a
+  # WRONG "spawn this" suggestion is worse than none, so we stay silent rather than
+  # suggest a disqualified issue (a transient gap — the collector writes labels_
+  # every ~GH_TTL). Suggest the highest-PRIORITY eligible issue (same ranking the
+  # dispatcher uses), so the two "what's next" pickers agree.
+  if [ "$autofill" != 1 ] && [ "$ghhd" -gt 0 ] && [ "$flhd" -gt 0 ] \
+     && [ -s "$issf" ] && [ -s "$labf" ]; then
     local top top_num top_title
     top=$(watch_top_eligible "$issf" "$labf" "$live_issues")
     if [ -n "$top" ]; then
@@ -201,23 +226,33 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   printf 'needs\t%s\n' "$needs"   # ALWAYS last: the level for the rise-compare
 }
 
-# Lowest-numbered eligible backlog issue (FIFO). Prints "num<TAB>title" or empty.
-# Eligible = unassigned (issues_<slug> assignee field "·"), no disqualifying label,
-# no live window. labels_<slug> may be absent (older collector) → no label filter.
+# The highest-PRIORITY eligible backlog issue. Prints "num<TAB>title" or empty.
+# Eligible = unassigned (issues_<slug> assignee field "·"), no live window, and no
+# disqualifying label. Ranking mirrors fleet-dispatch.sh::eligible_issues so the
+# watcher's spawn suggestion agrees with what autofill would pick: priority:p0<p1<p2
+# tier first (unlabeled last), then FIFO by issue number within a tier. prod-alert
+# is EXCLUDED here — it gets its own first-response wake, so it must not ALSO fire a
+# slotfree "spawn" wake for the same issue (that would double-drive one number).
 watch_top_eligible() { # $1=issues file $2=labels file $3=" live issues "
-  local issf="$1" labf="$2" live="$3" best='' n
+  local issf="$1" labf="$2" live="$3" best='' btier='' btitle='' n labels tier
   while IFS=$'\t' read -r _ num asg title; do
     n="${num#\#}"
     [ -z "$n" ] && continue
     [ "$asg" = "·" ] || continue                       # unassigned only
     case "$live" in *" $n "*) continue;; esac          # not already bound
-    if [ -s "$labf" ]; then
-      local labels; labels=$(awk -F'\t' -v x="$n" '$1==x{print $2; exit}' "$labf" 2>/dev/null)
-      case ",$labels," in
-        *,epic,*|*,meta,*|*,blocked,*|*,steward-control,*) continue;;
-      esac
+    labels=$(awk -F'\t' -v x="$n" '$1==x{print $2; exit}' "$labf" 2>/dev/null)
+    case ",$labels," in
+      *,epic,*|*,meta,*|*,blocked,*|*,steward-control,*|*,prod-alert,*) continue;;
+    esac
+    case ",$labels," in
+      *,priority:p0,*) tier=0;; *,priority:p1,*) tier=1;;
+      *,priority:p2,*) tier=2;; *) tier=3;;
+    esac
+    # better = lower tier, or same tier + lower number (FIFO)
+    if [ -z "$best" ] || [ "$tier" -lt "$btier" ] \
+       || { [ "$tier" -eq "$btier" ] && [ "$n" -lt "$best" ]; }; then
+      best="$n"; btier="$tier"; btitle="$title"
     fi
-    if [ -z "$best" ] || [ "$n" -lt "$best" ]; then best="$n"; local btitle="$title"; fi
   done < "$issf"
   [ -n "$best" ] && printf '%s\t%s' "$best" "$btitle"
 }
@@ -271,9 +306,26 @@ watch_fleet() { (
   local keysf="$STATE/watch_$slug.keys" needsf="$STATE/watch_$slug.needs"
   local first=0; [ -f "$keysf" ] || first=1
 
+  # A tiny helper: persist the firing keyset + needs level. Called ONLY after a wake
+  # succeeds (or when there was nothing to wake on) — never before the post, so a
+  # transient wake-post failure leaves the prior state intact and the edge retries
+  # next tick instead of being silently marked seen (review finding #1).
+  # shellcheck disable=SC2317  # called below within this subshell
+  persist_state() {
+    [ "$DRY" = 0 ] || return 0
+    printf '%s\n' "$firing" | awk -F'\t' 'NF{print $1}' > "$keysf.$$" && mv "$keysf.$$" "$keysf"
+    printf '%s\n' "$cur_needs" > "$needsf"
+  }
+
   # Assemble the new-edge wake body.
   local wake='' prev_needs
-  prev_needs=$(cat "$needsf" 2>/dev/null); case "$prev_needs" in ''|*[!0-9]*) prev_needs=0;; esac
+  prev_needs=$(cat "$needsf" 2>/dev/null)
+  # If the .needs level is missing or garbled while the keyset EXISTS (partial state,
+  # an interrupted write, manual cleanup), a bare 0 baseline would spuriously fire a
+  # "N need attention" wake. Seed the baseline to the current count instead so we
+  # only ever wake on a REAL rise (review finding #6); a genuine first-ever rise is
+  # then just deferred one tick, which self-heals.
+  case "$prev_needs" in ''|*[!0-9]*) prev_needs="$cur_needs";; esac
 
   if [ "$first" = 0 ]; then
     # per-key edges: a firing line whose KEY is not in the persisted set.
@@ -289,15 +341,10 @@ EOF
     fi
   fi
 
-  # Persist the new state (keys + needs level) regardless of first-run/dry-run so the
-  # next tick dedups against reality. In --dry-run we DON'T persist (a dry run must be
-  # side-effect-free and repeatable) — it only prints what WOULD fire.
-  if [ "$DRY" = 0 ]; then
-    printf '%s\n' "$firing" | awk -F'\t' 'NF{print $1}' > "$keysf.$$" && mv "$keysf.$$" "$keysf"
-    printf '%s\n' "$cur_needs" > "$needsf"
-  fi
-
   if [ "$first" = 1 ]; then
+    # Seed silently (no wake to fail) — persist the current firing set as the
+    # baseline so a fleet enabled mid-flight doesn't backfill-flood the steward.
+    persist_state
     local nkeys; nkeys=$(printf '%s\n' "$firing" | awk 'NF{c++} END{print c+0}')
     log "$slug: first run — seeded $nkeys key(s), needs=$cur_needs (no backfill wake)"
     # In --dry-run on a cold fleet there is nothing to diff against, so show the
@@ -312,14 +359,23 @@ EOF
   fi
 
   if [ -z "$wake" ]; then
+    # No new edges: persist so a CLEARED condition is dropped from the set and the
+    # needs level tracks reality (nothing was posted, so nothing can be lost).
+    persist_state
     log "$slug: no new edges (needs=$cur_needs)"
     exit 0
   fi
 
   local body; body="🛰️ fleet-watch — $slug"$'\n\n'"$wake"
   if watch_wake "$repo" "$steward" "$slug" "$body"; then
+    # Wake delivered (or dry-run) — NOW it's safe to advance the persisted state.
+    persist_state
     local nedges; nedges=$(printf '%s' "$wake" | grep -c '^- ')
     log "$slug: woke steward (#$steward) on $nedges edge(s)$([ "$DRY" = 1 ] && printf ' [dry-run]')"
+  else
+    # Post failed (watch_wake already logged): do NOT persist, so these edges are
+    # re-detected and retried next tick rather than lost.
+    log "$slug: wake not delivered — state NOT advanced, will retry next tick"
   fi
   exit 0
 ) }

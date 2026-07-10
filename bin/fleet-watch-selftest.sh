@@ -34,9 +34,11 @@ cp "$SRC" "$WORK/bin/fleet-watch.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
 chmod +x "$WORK/bin/fleet-watch.sh"
 
-# --- fake fleet-comment.sh: record the wake body, never really comment ----------
+# --- fake fleet-comment.sh: record the wake body; FAIL when $WORK/fail_wake exists
+# (so the test can exercise the persist-only-after-successful-post retry path) -----
 cat > "$WORK/bin/fleet-comment.sh" <<FAKE
 #!/bin/bash
+[ -f "$WORK/fail_wake" ] && exit 1
 body=''
 while [ "\$#" -gt 0 ]; do case "\$1" in --body) shift; body="\${1:-}";; esac; shift; done
 printf '%s\n' "\$body" >> "$WAKE_LOG"
@@ -112,8 +114,11 @@ run() { # $1 = @prci glyph for this tick, $2 = log file
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- log ---\n' >&2; cat "$WORK/log" 2>/dev/null >&2
-         printf -- '--- wakes (%s) ---\n' "$(wc -l < "$WAKE_LOG" 2>/dev/null)" >&2; cat "$WAKE_LOG" >&2
+         printf -- '--- wakes (%s post(s)) ---\n' "$(nwakes)" >&2; cat "$WAKE_LOG" >&2
          exit 1; }
+
+# Count wake POSTS (not lines): each post is a multi-line comment led by one header.
+nwakes() { grep -c 'fleet-watch — ' "$WAKE_LOG" 2>/dev/null || true; }  # grep -c already prints 0
 
 : > "$WORK/log"
 
@@ -122,19 +127,42 @@ run "…" "$WORK/log"
 [ "$(wc -l < "$WAKE_LOG")" -eq 0 ] || fail "first run must SEED silently (0 wakes), got $(wc -l < "$WAKE_LOG")"
 grep -q 'first run — seeded' "$WORK/log" || fail "first run should log a seed line"
 
-# tick 2 — PR goes green (@prci="✓"): exactly ONE wake, naming the green PR.
+# tick 2 — PR goes green (@prci="✓") but the WAKE POST FAILS: the edge must NOT be
+# marked seen, so no state advance and it will retry (review finding #1).
+touch "$WORK/fail_wake"
+run "✓" "$WORK/log"
+[ "$(nwakes)" -eq 0 ] || fail "wake post failed — nothing should be recorded"
+grep -q 'state NOT advanced' "$WORK/log" || fail "a failed wake should log that state was not advanced"
+grep -qxF 'prgreen:fake-repo:100' "$WORK/state/watch_fake-repo.keys" \
+  && fail "a FAILED wake must NOT persist the prgreen key (else it never retries)"
+
+# tick 3 — still green, wake now SUCCEEDS: the retried edge fires exactly once.
+rm -f "$WORK/fail_wake"
 run "✓" "$WORK/log"
 n=$(grep -c 'green — /land' "$WAKE_LOG")
-[ "$n" -eq 1 ] || fail "PR-green must produce exactly ONE green wake, got $n"
+[ "$n" -eq 1 ] || fail "retried PR-green must produce exactly ONE green wake, got $n"
 grep -q 'PR #100 (#42) green — /land 100?' "$WAKE_LOG" || fail "green wake body/format wrong"
-# the seeded propened must NOT re-fire as a new edge on this tick
 grep -q 'shipped PR #100' "$WAKE_LOG" && fail "propened was seeded — must not re-wake"
 
-# tick 3 — still green: DEDUP, no additional wake.
-before=$(wc -l < "$WAKE_LOG")
+# tick 4 — still green: DEDUP, no additional wake.
+before=$(nwakes)
 run "✓" "$WORK/log"
-after=$(wc -l < "$WAKE_LOG")
-[ "$after" -eq "$before" ] || fail "persistent green must NOT re-wake (dedup); wakes $before→$after"
+after=$(nwakes)
+[ "$after" -eq "$before" ] || fail "persistent green must NOT re-wake (dedup); wakes $before -> $after"
 
-printf 'selftest PASS: seed-silent → one PR-green wake → deduped (zero-token, edge-triggered)\n'
+# tick 5 — CI regresses to "✗": prgreen clears from the keyset (no wake for a loss).
+run "✗" "$WORK/log"
+grep -qxF 'prgreen:fake-repo:100' "$WORK/state/watch_fake-repo.keys" \
+  && fail "prgreen should clear from the keyset once the PR is no longer green"
+
+# tick 6 — PR goes green again but BEHIND base (@prci="✓↑", the common active-fleet
+# glyph): prgreen must fire again, with the behind-base message (finding #2).
+before=$(nwakes)
+run "✓↑" "$WORK/log"
+after=$(nwakes)
+[ "$after" -eq "$((before + 1))" ] || fail "a decorated green (✓↑) must fire prgreen; wakes $before -> $after"
+grep -q 'PR #100 (#42) green (behind base) — /land 100?' "$WAKE_LOG" \
+  || fail "behind-base green wake body/format wrong"
+
+printf 'selftest PASS: seed → failed-wake-retry → one green wake → dedup → clear → decorated-green re-fires\n'
 exit 0
