@@ -175,7 +175,12 @@ fi
 # before the window dies would fail on the busy cwd.
 self_destruct() {
   local cmd
-  cmd="tmux kill-window -t ${SELF_WIN:-@self}; git -C '$MAIN' worktree remove --force '$WT'; git -C '$MAIN' branch -D 'issue-$ISSUE'"
+  # Silence the git steps: run-shell surfaces any non-empty command output in a
+  # view-mode overlay on the attached client, and since kill-window switches that
+  # client to the plan window, `git branch -D`'s "Deleted branch …" line would land
+  # as an Esc-to-dismiss overlay ON THE STEWARD (issue #192). kill-window stays
+  # un-redirected (it produces no output on success); only the git stdout/stderr is dropped.
+  cmd="tmux kill-window -t ${SELF_WIN:-@self}; { git -C '$MAIN' worktree remove --force '$WT'; git -C '$MAIN' branch -D 'issue-$ISSUE'; } >/dev/null 2>&1"
   note "  self-destruct: $cmd"
   if [ "${LAND_SELF_DRY_DESTRUCT:-0}" = 1 ]; then return 0; fi
   tmux run-shell -b "$cmd" 2>/dev/null || {

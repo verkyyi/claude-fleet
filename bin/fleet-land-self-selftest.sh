@@ -158,7 +158,10 @@ grep -qx 42 "$MERGE_LOG" || fail "2a PR #42 was not merged" "$err"
 # self-destruct: kill-window must precede worktree-remove which precedes branch -D
 printf '%s\n' "$err" | grep -Eq 'kill-window .*worktree remove --force .*branch -D' \
   || fail "2a self-destruct command ordering wrong (kill-window → worktree remove → branch -D)" "$err"
-ok "2a own+green → merged + base-pull + ordered self-destruct"
+# ...and the git steps are silenced so run-shell shows no overlay on the steward (issue #192)
+printf '%s\n' "$err" | grep -Eq 'branch -D.*; \} >/dev/null 2>&1' \
+  || fail "2a self-destruct must redirect the git steps to /dev/null (no run-shell overlay)" "$err"
+ok "2a own+green → merged + base-pull + ordered, silenced self-destruct"
 
 # 2b. foreign PR (head != our branch) → ejected, NEVER merged.
 : > "$MERGE_LOG"; : > "$UB_LOG"
