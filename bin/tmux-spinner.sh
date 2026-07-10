@@ -86,10 +86,18 @@ EOF
 i=1
 LAST='|'
 LAST_NEEDS='|'   # per-session @attn_needs counts published last frame (change-detect)
+LAST_STEWARD='|' # per-session @steward_needs flags published last frame (change-detect)
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
-  wins=$(tmux list-windows -a -F '#{session_name}:#{window_index} #{@claude_state}' 2>/dev/null) \
+  # Fields are SPACE-separated, and BOTH the render loop and the awk tally below
+  # split on whitespace — which collapses runs. @claude_state is EMPTY for any
+  # non-Claude / freshly-spawned window, so an empty middle field would collapse
+  # the double space and shift #{window_name} into the state slot (a window named
+  # 'needs'/'done' would then be miscounted/misstyled). Emit a '-' placeholder for
+  # empty state so the three fields always parse cleanly; '-' is not a real state,
+  # so it renders as idle and never counts.
+  wins=$(tmux list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{window_name}' 2>/dev/null) \
     || { sleep 2; LAST='|'; continue; }
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
@@ -106,7 +114,12 @@ while :; do
   NEW='|'
   changed=0
   : > "$CMDF"
-  while IFS=' ' read -r win st; do
+  # wname reads the trailing #{window_name} field so it never bleeds into $st
+  # (the case below matches $st exactly); the name itself is used by the awk
+  # tally further down, not here. Empty @claude_state can't collapse the fields —
+  # the scan above emits a '-' placeholder for it.
+  # shellcheck disable=SC2034  # wname read only to keep $st clean
+  while IFS=' ' read -r win st wname; do
     [ -z "$win" ] && continue
     # wst = window-status-style (the BACKGROUND). Only 'needs' gets bold red;
     # every other state is font-color-only (no bg) — this also clears any
@@ -133,25 +146,36 @@ while :; do
 $wins
 EOF
 
-  # --- needs-count badge (issue #105) ----------------------------------------
-  # Tally windows in @claude_state=needs PER SESSION and publish it as the
-  # session option @attn_needs, which status-left renders as a red "● N" badge
-  # in the bottom-left (hidden at 0). Reuses this frame's window scan ($wins) —
-  # no extra tmux query — folded once by awk; change-detected and batched into
-  # the same $CMDF, so the count only re-sets when it actually moves. A session
-  # with windows but none in needs emits "0" (badge hides); a session that
-  # vanished drops out of $wins and keeps its last (irrelevant) value.
+  # --- needs signals: worker badge + steward icon (issues #105, #166) --------
+  # Tally windows in @claude_state=needs PER SESSION, split into two independent
+  # signals that never double-count the same window:
+  #   @attn_needs   — WORKERS only: count of needy windows EXCLUDING the hub
+  #                   panels (plan/dash/backlog). status-left renders it as a red
+  #                   "● N" badge (hidden at 0).
+  #   @steward_needs — the HUB: 1 when a panel window (plan/dash/backlog) is in
+  #                   needs (the steward is waiting on you), else 0. status-left's
+  #                   ⌂ hub icon renders a solid red block when it's 1, from every
+  #                   window in the fleet.
+  # Both reuse this frame's window scan ($wins) — no extra tmux query — folded
+  # once by awk; change-detected and batched into the same $CMDF, so each only
+  # re-sets when it actually moves. A session with windows but none needy emits
+  # "0" for both (badge hides, icon clears); a vanished session drops out of
+  # $wins and keeps its last (irrelevant) value.
   NEW_NEEDS='|'
+  NEW_STEWARD='|'
   needs_map=$(awk '
     { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
       if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
-      if ($2 == "needs") c[s]++ }
-    END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }
+      if ($2 == "needs") {
+        if ($3 ~ /^(plan|dash|backlog)$/) sw[s] = 1   # hub panel  → steward icon
+        else c[s]++                                    # worker win → badge
+      } }
+    END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d %d\n", s, c[s] + 0, sw[s] + 0 } }
   ' <<EOF
 $wins
 EOF
 )
-  while read -r nsess ncnt; do
+  while read -r nsess ncnt nstew; do
     [ -z "$nsess" ] && continue
     ntok="$nsess=$ncnt"
     case "$LAST_NEEDS" in
@@ -159,10 +183,17 @@ EOF
       *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$CMDF"; changed=1 ;;
     esac
     NEW_NEEDS="$NEW_NEEDS$ntok|"
+    stok="$nsess=$nstew"
+    case "$LAST_STEWARD" in
+      *"|$stok|"*) : ;;
+      *) printf 'set-option -t %s @steward_needs "%s"\n' "$nsess" "$nstew" >> "$CMDF"; changed=1 ;;
+    esac
+    NEW_STEWARD="$NEW_STEWARD$stok|"
   done <<EOF
 $needs_map
 EOF
   LAST_NEEDS="$NEW_NEEDS"
+  LAST_STEWARD="$NEW_STEWARD"
 
   [ "$changed" = 1 ] && tmux source-file "$CMDF" 2>/dev/null
   LAST="$NEW"
