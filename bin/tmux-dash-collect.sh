@@ -112,7 +112,40 @@ for sock in $SOCKETS; do
     queue "$r"
   done
 done
-mv "$SM" "$G/sessmap"
+# Sessmap write-guard (issue #203, mirror of the #160 restore-map shrink-guard):
+# NEVER let an EMPTY sessmap replace/shadow a non-empty one. If discovery hiccups
+# — fleet_sockets momentarily returns nothing (the very #203 regression, or a
+# transient tmux) — a 0-row sessmap makes fleet_slug_cached return empty, so
+# fleet_cache falls back to a stale flat file and the backlog renders ANOTHER
+# repo's issues. So only publish an empty map when there's nothing good to protect.
+smrows() { if [ -f "$1" ]; then grep -c . "$1" 2>/dev/null || true; else echo 0; fi; }
+new_rows=$(smrows "$SM")
+if [ "${new_rows:-0}" -gt 0 ]; then
+  mv "$SM" "$G/sessmap"                 # real rows → publish
+else
+  rm -f "$SM"
+  g_rows=$(smrows "$G/sessmap")         # existing new-layout global map
+  l_rows=$(smrows "$C/sessmap")         # legacy flat map (fleet_sessmap_file's fallback)
+  if [ "${g_rows:-0}" -eq 0 ] && [ "${l_rows:-0}" -gt 0 ]; then
+    # An empty global/sessmap would SHADOW the good legacy flat rows (fleet_sessmap_file
+    # prefers global/ once it exists) — drop it so the fallback un-shadows and serves
+    # the correct repo. A NON-empty global map is always kept as-is.
+    rm -f "$G/sessmap"
+  fi
+  # else: nothing good anywhere (genuinely no live fleet) — leave the map absent so
+  # readers show "loading"/empty rather than a wrong-repo flat leftover.
+fi
+
+# Prune dead pre-#180 flat mirrors (issue #203): current code writes issues/prmap/
+# labels ONLY under fleets/<slug>/ (never the flat $C root), so a leftover
+# unsuffixed issues/prmap/labels is a PRE-#180 artifact that fleet_cache's
+# degenerate (unresolved-session) fallback would serve as ANOTHER repo's data —
+# worse than empty. Remove them so that fallback reads absent → "loading". The flat
+# `sessmap` is deliberately NOT pruned: fleet_sessmap_file dual-reads it as the
+# cold-start fallback until global/sessmap is populated.
+for _stale in issues prmap labels; do
+  rm -f "$C/$_stale" "$C/$_stale.ts" 2>/dev/null || true
+done
 
 # pin repos with NO live session so their caches stay fresh (a steward watching a
 # repo you haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +

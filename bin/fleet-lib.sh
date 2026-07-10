@@ -199,19 +199,22 @@ fleet_write_conf() {
 fleet_socket() { printf '%s' "$1"; }
 
 # List the socket labels of all fleets with a CURRENTLY-LIVE tmux server, one per
-# line. Source of truth: the per-fleet confs ($FLEET_CONF_DIR/*.conf — basename
-# == session name == socket label), filtered to those whose server actually
-# answers (`tmux -L <label> has-session`). A downed-but-configured fleet (conf
-# kept, server gone) is skipped, and the user's own default-socket tmux is never
-# touched. Safe under a `set -u` caller.
+# line. Source of truth: the configured fleets enumerated by fleet_each_conf —
+# the new per-fleet layout (fleets/<sess>/conf, label = the DIRECTORY basename)
+# with a dual-read of the legacy flat <sess>.conf (issue #203) — filtered to those
+# whose server actually answers (`tmux -L <label> has-session`). Routing through
+# fleet_each_conf is what makes the socket-aware daemons (bridge/watch/collector-
+# fanout/dispatch) find fleets post-#181; a hand-rolled `for cf in …/*.conf` glob
+# matched NOTHING after the confs moved under fleets/<sess>/. A downed-but-
+# configured fleet (conf kept, server gone) is skipped, and the user's own
+# default-socket tmux is never touched. Safe under a `set -u` caller.
 fleet_sockets() {
-  local cf label
+  local sess conf
   [ -d "$FLEET_CONF_DIR" ] || return 0
-  for cf in "$FLEET_CONF_DIR"/*.conf; do
-    [ -f "$cf" ] || continue
-    label=$(basename "$cf" .conf)
-    tmux -L "$label" has-session -t "$label" 2>/dev/null && printf '%s\n' "$label"
-  done
+  while IFS=$'\t' read -r sess conf; do
+    [ -n "$sess" ] || continue
+    tmux -L "$sess" has-session -t "$sess" 2>/dev/null && printf '%s\n' "$sess"
+  done < <(fleet_each_conf)
 }
 
 # Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live

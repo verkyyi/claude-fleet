@@ -38,9 +38,23 @@ mkdir -p "$BIN/../logs" 2>/dev/null
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 fleet_sockets() {
   [ -d "$FLEET_CONF_DIR" ] || return 0
+  # New per-fleet layout (#181): fleets/<sess>/conf, label = the DIRECTORY basename
+  # (NOT `basename … .conf`, which would yield "conf"). Iterating the flat
+  # *.conf glob matched nothing post-migration and broke discovery (issue #203).
+  if [ -d "$FLEET_CONF_DIR/fleets" ]; then
+    for _d in "$FLEET_CONF_DIR"/fleets/*/; do
+      [ -d "$_d" ] || continue
+      [ -f "${_d}conf" ] || continue
+      _label=${_d%/}; _label=${_label##*/}
+      tmux -L "$_label" has-session -t "$_label" 2>/dev/null && printf '%s\n' "$_label"
+    done
+  fi
+  # Dual-read the legacy flat <sess>.conf (label = basename .conf) for a
+  # half-migrated estate, but skip a session already covered by a new-layout dir.
   for _cf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$_cf" ] || continue
     _label=$(basename "$_cf" .conf)
+    [ -f "$FLEET_CONF_DIR/fleets/$_label/conf" ] && continue
     tmux -L "$_label" has-session -t "$_label" 2>/dev/null && printf '%s\n' "$_label"
   done
 }
