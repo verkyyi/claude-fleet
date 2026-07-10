@@ -21,7 +21,12 @@
 #   • STALE ID      when `--resume` itself FAILS (pruned id), it falls back to a
 #                   fresh steward via `||`, never a bare shell.
 #
-# It also covers the hub-only recovery contract (issue #160):
+# Also covers the per-window runtime-state restore (issue #153): the
+# @claude_state|@prci|@pfg trio rides each WIN row (RESOLVER pass-through +
+# SNAPSHOT capture), and restore() auto-continues ONLY a window that was
+# 'working' at crash, leaving 'done'/idle windows parked.
+#
+# And the hub-only recovery contract (issue #160):
 #   • SHRINK GUARD  a snapshot of a HUB-ONLY session (panels only, no work
 #                   windows) must NOT erase a richer prior map's WIN rows — that
 #                   was how a mid-restore snapshot destroyed the recovery data.
@@ -102,16 +107,21 @@ seed_transcript() {
 STEW_PATH="$WORK/main"; mkdir -p "$STEW_PATH"; seed_transcript "$STEW_PATH" "stew-abc123"
 WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PATH" "wrk-def456"
 
-out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|-\n' \
+# issue-9  : a bare 3-field row → the state trio defaults to '-' (nothing to restore).
+# issue-9b : carries the @claude_state|@prci|@pfg trio (issue #153) → passed through.
+out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a\n%s|%s|-\n' \
         "__STEWARD__" "$STEW_PATH" \
         "issue-9" "$WORK_PATH" \
+        "issue-9b" "$WORK_PATH" \
         "dash" "$WORK/whatever" \
       | python3 "$RESOLVE")
 
 printf '%s\n' "$out" | grep -qxF "STEWARD	$STEW_PATH	stew-abc123" \
   || fail "resolver: __STEWARD__ should emit a STEWARD row with the newest id (got: $out)"
-printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9" \
-  || fail "resolver: a work window should still emit its WIN row (got: $out)"
+printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9	-	-	-" \
+  || fail "resolver: a bare work window WIN row should default the state trio to '-' (got: $out)"
+printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH	wrk-def456	9	working	✓	#9ece6a" \
+  || fail "resolver: the @claude_state|@prci|@pfg trio should pass through onto the WIN row (got: $out)"
 printf '%s\n' "$out" | grep -q '^WIN	dash' \
   && fail "resolver: a panel (dash) must NOT emit a WIN row (got: $out)"
 # a steward pane with no transcript yet → id '-'
@@ -131,6 +141,15 @@ tmux new-session -d -s snap -x 200 -y 50 -c "$WORK_PATH" 2>/dev/null \
   || fail "could not start isolated tmux server"
 tmux rename-window -t snap "issue-9"
 tmux set-window-option -t snap:issue-9 @issue 9
+# issue-9 was mid-turn at crash: @claude_state=working (+ a green-PR glyph/color).
+# snapshot must capture the trio so restore() can re-stamp + auto-continue it (#153).
+tmux set-window-option -t snap:issue-9 @claude_state working
+tmux set-window-option -t snap:issue-9 @prci "✓"
+tmux set-window-option -t snap:issue-9 @pfg "#9ece6a"
+# issue-10 was parked at 'done' — captured too, but restore must NOT auto-continue it.
+tmux new-window -t snap: -n issue-10 -c "$WORK_PATH"
+tmux set-window-option -t snap:issue-10 @issue 10
+tmux set-window-option -t snap:issue-10 @claude_state "done"
 # the hub 'plan' window: dash pane + a split @steward pane rooted at the base checkout
 tmux new-window -t snap: -n plan -c "$WORK/whatever"
 sp=$(tmux split-window -P -F '#{pane_id}' -t snap:plan -c "$STEW_PATH")
@@ -146,6 +165,11 @@ grep -q '^WIN	issue-9	' "$MAP" \
   || fail "snapshot: the work window should still be a WIN row (map: $(cat "$MAP"))"
 grep -q '^WIN	plan	' "$MAP" \
   && fail "snapshot: the 'plan' panel must not be a WIN row (map: $(cat "$MAP"))"
+# issue #153: the per-window runtime state trio rides on the WIN row.
+grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a$' "$MAP" \
+  || fail "snapshot: issue-9's @claude_state|@prci|@pfg trio should be captured (map: $(cat "$MAP"))"
+grep -qE '^WIN	issue-10	.*	done	-	-$' "$MAP" \
+  || fail "snapshot: issue-10's 'done' state should be captured, unset prci/pfg as '-' (map: $(cat "$MAP"))"
 
 # restore() must PARSE that STEWARD row and route the id into the steward launch.
 # --dry-run exercises the parse+wiring without spawning fleet-up/claude, but only
@@ -156,6 +180,33 @@ dry=$(bash "$RESTORE" --dry-run 2>/dev/null)
 # 'stew…' prefix from 'stew-abc123' confirms restore parsed the STEWARD row's id.
 printf '%s\n' "$dry" | grep -q 'steward → claude --resume stew' \
   || fail "restore --dry-run should report resuming the steward from the STEWARD row (got: $dry)"
+# issue #153: a 'working' window is flagged for auto-continue; a 'done' one is not.
+printf '%s\n' "$dry" | grep 'issue-9 ' | grep -q '(auto-continue)' \
+  || fail "restore --dry-run should mark the 'working' issue-9 window for auto-continue (got: $dry)"
+printf '%s\n' "$dry" | grep 'issue-10 ' | grep -q '(auto-continue)' \
+  && fail "restore --dry-run must NOT auto-continue the parked 'done' issue-10 window (got: $dry)"
+
+# --- legacy map (pre-#153, 5-field WIN rows) + a no-transcript 'working' window --
+# A map left on disk from before #153 has NO state trio; restore must parse it
+# gracefully (resumed by id, never auto-continued — the resolver docstring promises
+# "old maps parse fine"). And a 'working' window whose transcript can't be found
+# (wid='-') must fall to the FRESH branch WITHOUT a nudge: telling a brand-new,
+# context-less claude it was "restored … continue the task" would have it act on
+# work it never saw (issue #153 review finding).
+LEGACY="$FLEET_CONF_DIR/restore/legacy.map"
+printf 'FLEET\tlegacy\tacme/widgets\t%s\tmain\n' "$STEW_PATH"                > "$LEGACY"
+printf 'WIN\tissue-42\t%s\twrk-def456\t42\n'      "$WORK_PATH"              >> "$LEGACY"  # legacy 5-field row
+printf 'WIN\tissue-77\t%s\t-\t77\tworking\t-\t-\n' "$WORK_PATH"             >> "$LEGACY"  # working, no transcript
+dry2=$(bash "$RESTORE" --dry-run 2>/dev/null)
+rm -f "$LEGACY"
+printf '%s\n' "$dry2" | grep 'issue-42 ' | grep -q 'claude --resume wrk' \
+  || fail "restore: a legacy 5-field WIN row should still resume by id (got: $dry2)"
+printf '%s\n' "$dry2" | grep 'issue-42 ' | grep -q '(auto-continue)' \
+  && fail "restore: a legacy row with no captured state must NOT be auto-continued (got: $dry2)"
+printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q 'no transcript found' \
+  || fail "restore: a 'working' window with no transcript should fall to the fresh branch (got: $dry2)"
+printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q '(auto-continue)' \
+  && fail "restore: a no-transcript 'working' window must NOT be nudged as if resumed (got: $dry2)"
 
 # ============================================================ 3. RESUME/FALLBACK
 # steward-session.sh builds the hub; assert the steward pane's launch command.
@@ -216,14 +267,15 @@ rm -f "$WORK/fail-resume"
 # A snapshot of a hub-only session must NOT shrink a richer map, and restore must
 # reopen the missing work windows instead of skipping a live-but-hub-only fleet.
 #
-# Clean slate: drop every session/map from the earlier sections so restore's map
-# glob can't wander onto the down 'snap' fleet and spawn a real fleet-up.
-tmux kill-server 2>/dev/null
+# Clean slate for restore()'s map glob: drop the earlier sections' maps so it
+# can't wander onto the down 'snap' fleet (that would spawn a real fleet-up).
 rm -f "$FLEET_CONF_DIR/restore/"*.map
 TAB="$(printf '\t')"
 
 # Two work windows in the durable map (their worktrees must exist so restore
 # doesn't skip them). $WORK_PATH is the issue-9 worktree seeded in section 1.
+# 5-field (pre-#153) WIN rows on purpose: they exercise the legacy-map parse in
+# the reconcile path (missing state trio → no nudge/re-stamp, just resume).
 W11="$WORK/repo-issue-11"; mkdir -p "$W11"
 cat > "$FLEET_CONF_DIR/hubonly.conf" <<EOF
 FLEET_REPO=acme/widgets
@@ -240,12 +292,18 @@ mkdir -p "$FLEET_CONF_DIR/restore"
 } > "$HMAP"
 
 # A LIVE hub-only session: just the 'plan' panel with a @steward pane, no work
-# windows — exactly the mid-restore shape that used to destroy the map.
+# windows — exactly the mid-restore shape that used to destroy the map. Create it
+# on the SAME isolated server the earlier sections are still using; do NOT
+# kill-server first and restart — that races the socket teardown and flaked
+# ("could not start hub-only session") in CI. The section-3 res/fresh/stale
+# sessions keep the server alive; retire them AFTER hubonly exists so the
+# --snapshot below sees only hubonly (deterministic map).
 tmux new-session -d -s hubonly -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null \
   || fail "could not start hub-only session"
 tmux rename-window -t hubonly plan
 hsp=$(tmux split-window -P -F '#{pane_id}' -t hubonly:plan -c "$STEW_PATH")
 tmux set-option -p -t "$hsp" @steward 1
+for _s in res fresh stale; do tmux kill-session -t "$_s" 2>/dev/null; done
 
 # --- SHRINK GUARD: a hub-only snapshot must keep the richer prior WIN rows ------
 bash "$RESTORE" --snapshot 2>/dev/null || fail "snapshot (hub-only) exited non-zero"
@@ -264,7 +322,8 @@ printf '%s\n' "$lw" | grep -qxF issue-9 \
   || fail "reconcile: restore did not reopen the missing issue-9 window (windows: $lw)"
 printf '%s\n' "$lw" | grep -qxF issue-11 \
   || fail "reconcile: restore did not reopen the missing issue-11 window (windows: $lw)"
-# the reopened window resumed its transcript (the pane launches async → poll)
+# the reopened window resumed its transcript (launched through fleet-claude.sh,
+# which transparently exec's `claude --resume <id>`; the pane starts async → poll)
 for _n in $(seq 1 200); do
   grep -q -- '--resume wrk-def456' "$WORK/claude-argv" && break
   tmux run-shell -t hubonly 'true' 2>/dev/null
@@ -279,5 +338,5 @@ dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF i
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
 
-printf 'selftest PASS: steward snapshot+resume + hub-only recovery — STEWARD row captured, resumed; snapshot keeps a richer map; restore reconciles missing windows idempotently\n'
+printf 'selftest PASS: steward snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — STEWARD row captured & resumed, working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
 exit 0

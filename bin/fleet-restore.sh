@@ -48,6 +48,7 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 # Write one $RDIR/<session>.map per live fleet:
 #   FLEET   <TAB> session <TAB> repo <TAB> main-checkout-dir <TAB> base-branch
 #   WIN     <TAB> window-name <TAB> worktree-path <TAB> claude-session-id <TAB> issue
+#                 <TAB> @claude_state <TAB> @prci <TAB> @pfg   (state trio: issue #153)
 #   STEWARD <TAB> steward-pane-cwd <TAB> claude-session-id   (0 or 1 per fleet)
 # claude-session-id = newest transcript for that worktree/pane ('-' if none).
 # The STEWARD row (issue #143) captures the hub's persistent steward session,
@@ -111,7 +112,14 @@ snapshot() {
     local spath
     spath=$(tmux list-panes -s -t "$sess" -F '#{@steward}|#{pane_current_path}' 2>/dev/null \
             | awk -F'|' '$1=="1"{print $2; exit}')
-    { tmux list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}' 2>/dev/null
+    # Trailing @claude_state|@prci|@pfg (issue #153) are per-window runtime state.
+    # restore() re-stamps @claude_state after resume — without it a restored worker
+    # comes back with a blank state the attention layer reads as "stuck idle" — and
+    # uses a 'working' snapshot to auto-continue a mid-turn session. @prci/@pfg are
+    # carried for map completeness/forensics but NOT replayed on restore (the
+    # pr-refresh daemon is their single writer). The __STEWARD__ row omits the trio
+    # (it's the hub, not a work window); the resolver defaults the missing fields to '-'.
+    { tmux list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}' 2>/dev/null
       [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -193,9 +201,13 @@ restore() {
           || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
       fi
     fi
-    # reopen each MISSING work window, resuming its Claude session
-    local wname wpath wid wissue reopened=0
-    while IFS=$'\t' read -r _ wname wpath wid wissue; do
+    # reopen each MISSING work window, resuming its Claude session. @prci/@pfg
+    # (the last two WIN-row fields) are intentionally discarded — they ride the
+    # map for completeness but restore does not replay them (see the re-stamp
+    # note below). `reopened` tracks whether the reconcile path (issue #160)
+    # actually had a window to reopen, for the "fully up" note after the loop.
+    local wname wpath wid wissue wstate reopened=0
+    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # reconcile path: a window with this name is already live — don't duplicate.
@@ -208,18 +220,70 @@ restore() {
         continue
       fi
       reopened=1
+      # Auto-continue a window that was mid-turn at crash (issue #153): a snapshot
+      # state of 'working' means the turn was interrupted, and `claude --resume`
+      # restores context but leaves the session idle at the prompt. Hand claude a
+      # re-orient NUDGE as its initial prompt arg — the same delivery the spawner
+      # uses for a fresh seed (`claude "<prompt>"`), so it submits as the next turn
+      # once the transcript loads. This sidesteps the send-keys/bracketed-paste
+      # boot-timing race of injecting after the TUI comes up. The nudge only makes
+      # sense when we actually have a transcript to RESUME — a window with no
+      # transcript comes back as a FRESH, context-less claude, and telling that
+      # session it was "restored … continue the task" would have it act on a task
+      # it never saw (spurious tool use), so the no-transcript branch never nudges.
+      # Idle/done/needs windows were awaiting input anyway → parked (no nudge). The
+      # wording is deliberately safe for a window whose Stop hook was merely MISSED
+      # at crash (snapshotted 'working' but actually finished): it says re-check
+      # FIRST and stop if the work is already done, so it never re-does shipped work.
+      # Keep the nudge free of single-quotes/backticks — it's embedded single-quoted.
+      local nudge=""
+      [ "$wstate" = "working" ] \
+        && nudge="The tmux server crashed and this session was restored via claude --resume, so its turn was interrupted. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete (PR open, nothing left to do), just stop. Otherwise, continue the task."
+      # Route through fleet-claude.sh like the spawner (dash-issue-session.sh) so a
+      # restored worker launches under the active subscription account (multi-account
+      # failover) + the fleet's default model — a bare `claude` would strand it on
+      # an exhausted account. Transparent `exec claude` when no accounts registered.
+      local launch="'$BIN/fleet-claude.sh'"
       local cmd
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
-        cmd="claude --resume '$wid'; exec \$SHELL"
-        say "    ↻ $wname → claude --resume ${wid%%-*}…"
+        # `|| fleet-claude.sh` fallback (mirrors steward-session.sh): a stale/pruned
+        # id makes `--resume` exit non-zero — fall back to a FRESH (parked, un-nudged)
+        # session instead of stranding the pane at a bare shell.
+        cmd="$launch --resume '$wid'${nudge:+ '$nudge'} || $launch; exec \$SHELL"
+        say "    ↻ $wname → claude --resume ${wid%%-*}…${nudge:+ (auto-continue)}"
       else
-        cmd="claude; exec \$SHELL"
+        cmd="$launch; exec \$SHELL"
         say "    + $wname → fresh claude (no transcript found)"
       fi
       if [ -z "$dry" ]; then
-        tmux new-window -t "$sess:" -n "$wname" -c "$wpath" "$cmd" 2>/dev/null
+        # Capture the new window-id and target every follow-up option-set through
+        # it: window names aren't unique handles (title-slug collisions), so a
+        # "$sess:$wname" target could hit the wrong window once two restored
+        # windows share a name.
+        local nw
+        nw=$(tmux new-window -t "$sess:" -n "$wname" -c "$wpath" -P -F '#{window_id}' "$cmd" 2>/dev/null)
+        [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
-          && tmux set-window-option -t "$sess:$wname" @issue "$wissue" 2>/dev/null
+          && tmux set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
+        # Re-stamp @claude_state so the dash reflects reality instead of a blank row
+        # (issue #153) — the bug this fixes is a restored worker coming back with an
+        # empty state that the attention layer reads as "stuck idle". Stamp a fresh
+        # @claude_state_ts too so the classifier/issue-bridge idle-gate see a current
+        # timestamp. This is a BOOTSTRAP value: a genuinely-working resumed session's
+        # own hooks re-stamp it within seconds, and if a stale-id resume fell through
+        # to a parked fresh claude, the spinner's stuck-working demote (keyed on tmux
+        # #{window_activity} going stale, NOT on @claude_state_ts) flips it to done.
+        #
+        # @prci/@pfg are deliberately NOT re-stamped: the pr-refresh daemon is their
+        # single writer (CLAUDE.md) and re-derives them within ~15s. Replaying the
+        # snapshot-time glyph could show a stale 'CI green / open PR' after the PR
+        # merged or went red mid-crash — misleading a /fleet-land — and a brief blank
+        # until the daemon ticks is the safe failure mode. (They still ride the WIN
+        # row for map completeness + forensics.)
+        if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then
+          tmux set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
+          tmux set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+        fi
       fi
     done < <(awk -F'\t' '$1=="WIN"' "$mf")
     [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
