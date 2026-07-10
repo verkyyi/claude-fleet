@@ -8,11 +8,13 @@
 #
 # HOT PATH (2026-07-07): this runs on every dash repaint (4×/s) — the loop is
 # exec-fork-free (bash builtins only: read/expansion instead of cat/cut/sed/awk).
-# Execs per render: tmux + sort + perl(sub-second clock) ≈ 3. ~30ms total.
+# Execs per render: tmux + sort + perl(sub-second clock) + one fleet_cache slug
+# lookup ≈ 4. ~30ms total.
 set -uo pipefail
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} must count chars, not bytes
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
@@ -56,36 +58,14 @@ esac; }
 model_v() {
   case "$1" in *haiku*) cwin=200000;; *) cwin=${FLEET_CTX_WINDOW:-200000};; esac; }
 
-PRMAP=""; [ -s "$C/prmap" ] && PRMAP=$(<"$C/prmap")
+# This fleet's PR map — slug-resolved for THIS dash's own session (issue #180:
+# all fleets equal, no privileged "primary" flat mirror). The row loop below
+# strictly filters to FLEET_SESSION, so one slug'd cache is exactly this fleet's
+# PR status and can never be another fleet's; fleet_cache's flat name is only a
+# cold-start fallback before the slug'd .ts marker lands. Loaded once (not
+# per-row) so the hot loop stays fork-free.
+PRMAP=""; _pf=$(fleet_cache prmap "${FLEET_SESSION:-}"); [ -s "$_pf" ] && PRMAP=$(<"$_pf")
 PRMAPN=$'\n'"$PRMAP"
-
-# multi-fleet: each row matches against ITS fleet's prmap (session→slug via the
-# collector's sessmap). Preloaded here into indexed arrays so the hot loop stays
-# fork-free; falls back to the flat PRMAP when nothing resolves (single-fleet).
-declare -a MS_SESS MS_SLUG PS_SLUG PS_DATA
-if [ -s "$C/sessmap" ]; then
-  while IFS=$'\t' read -r _s _sl _r; do
-    [ -z "$_s" ] && continue
-    MS_SESS+=("$_s"); MS_SLUG+=("$_sl")
-    case " ${PS_SLUG[*]:-} " in *" $_sl "*) ;; *)
-      _d=""; [ -s "$C/prmap_$_sl" ] && _d=$(<"$C/prmap_$_sl")
-      PS_SLUG+=("$_sl"); PS_DATA+=("$_d");;
-    esac
-  done < "$C/sessmap"
-fi
-# PMN = newline-prefixed prmap for session $1 (fallback: flat PRMAPN)
-prmapn_for() {
-  local s="$1" i n=${#MS_SESS[@]} sl j m
-  PMN="$PRMAPN"
-  for ((i=0;i<n;i++)); do
-    [ "${MS_SESS[$i]}" = "$s" ] || continue
-    sl="${MS_SLUG[$i]}"; m=${#PS_SLUG[@]}
-    for ((j=0;j<m;j++)); do
-      [ "${PS_SLUG[$j]}" = "$sl" ] && { PMN=$'\n'"${PS_DATA[$j]}"; return; }
-    done
-    return
-  done
-}
 
 # List width, to right-align the PR/ctx block to the edge and give the summary
 # the full remaining span. Prefer fzf's own viewport width — FZF_COLUMNS is
@@ -110,7 +90,6 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   # collision-free cache key — keep byte-identical to cache_key() in tmux-dash-collect.sh
   key=${path//_/_u}; key=${key//\//_s}; key=${key// /_w}
-  prmapn_for "$sess"   # PMN = this fleet's prmap (flat fallback)
 
   branch='-'
   [ -f "$C/git_$key" ] && { IFS=$'\t' read -r branch _ < "$C/git_$key" || :; }
@@ -127,8 +106,8 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
     b2=$b1; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
     b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
     for bare in "$b1" "$b3" "$b2"; do
-      tail=${PMN#*$'\n'"$bare"$'\t'}
-      if [ "$tail" != "$PMN" ]; then
+      tail=${PRMAPN#*$'\n'"$bare"$'\t'}
+      if [ "$tail" != "$PRMAPN" ]; then
         line=${tail%%$'\n'*}
         # line = #num\tstate\tci\tready. Parse each; ready may be absent on a
         # stale 4-field cache (mid-upgrade) — tab-guard so it degrades to ''.

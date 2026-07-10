@@ -61,14 +61,10 @@ REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}"
 # steward becomes a bridge endpoint like a worker (an async operator↔steward
 # channel + an event sink for the fleet watcher). It is a repo-specific NUMBER, so
 # unlike ASSOC_FLOOR/REVIVE it must NEVER inherit across fleets: both ingresses
-# resolve it per-repo via bridge_steward_issue_for_repo(). STEWARD_ISSUE below is
-# just the CURRENT repo's value (set by poll() per repo / deliver() per delivery);
-# empty ⇒ no steward route (worker relay unchanged). PRIMARY_* snapshot the GLOBAL
-# fleet.conf's repo+issue BEFORE any per-repo override clobbers FLEET_REPO, so the
-# resolver can map the primary repo without the variable aliasing that would leak
-# the primary's issue onto another repo.
-PRIMARY_REPO="${FLEET_REPO:-}"
-PRIMARY_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}"
+# resolve it per-repo via bridge_steward_issue_for_repo(), which reads each
+# per-fleet <session>.conf uniformly — no fleet is "primary" (issue #180).
+# STEWARD_ISSUE below is just the CURRENT repo's value (set by poll() per repo /
+# deliver() per delivery); empty ⇒ no steward route (worker relay unchanged).
 STEWARD_ISSUE=''
 # Stuck-working threshold for the steward idle-gate (mirrors tmux-spinner.sh). The
 # steward lives in the 'plan' hub, whose #{window_activity} is polluted by the
@@ -221,24 +217,17 @@ bridge_steward_stale() {
 # THE steward-issue resolver: map a repo → its FLEET_STEWARD_ISSUE, or empty. The
 # SINGLE source both ingresses use, so poll() and --deliver can never diverge on
 # which fleet's steward issue wins — and a repo-specific number NEVER leaks across
-# fleets. Order:
-#   1. the GLOBAL primary (PRIMARY_REPO/PRIMARY_STEWARD_ISSUE snapshot at load) —
-#      covers a single-fleet install that sets it in the top-level fleet.conf;
-#   2. else the per-fleet <session>.conf whose FLEET_REPO matches — each conf is
-#      sourced with BOTH FLEET_STEWARD_ISSUE and FLEET_REPO UNSET FIRST, so a
-#      steward issue counts only when THAT conf sets its own repo AND issue (never
-#      the global values the subshell would otherwise inherit — a bare
-#      `${FLEET_STEWARD_ISSUE:-}`/`${FLEET_REPO:-}` doesn't prevent that). Every real
-#      <session>.conf sets FLEET_REPO (fleet-up.sh writes it), so this is safe; a
-#      hand-written conf that sets only FLEET_STEWARD_ISSUE is correctly ignored
-#      rather than mis-attributed to the primary repo.
+# fleets. All fleets are equal (issue #180 — no "primary" short-circuit): it maps
+# uniformly by iterating the per-fleet <session>.conf files. Each conf is sourced
+# with BOTH FLEET_STEWARD_ISSUE and FLEET_REPO UNSET FIRST, so a steward issue
+# counts only when THAT conf sets its own repo AND issue (never the global values
+# the subshell would otherwise inherit — a bare `${FLEET_STEWARD_ISSUE:-}`/
+# `${FLEET_REPO:-}` doesn't prevent that). Every real <session>.conf sets FLEET_REPO
+# (fleet-up.sh writes it), so this is safe; a hand-written conf that sets only
+# FLEET_STEWARD_ISSUE is correctly ignored rather than mis-attributed to any repo.
 bridge_steward_issue_for_repo() {
   local repo="$1" want_slug cf line rp si
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  if [ -n "$PRIMARY_STEWARD_ISSUE" ] \
-     && [ "$(fleet_slug "$(fleet_norm_repo "$PRIMARY_REPO")")" = "$want_slug" ]; then
-    printf '%s' "$PRIMARY_STEWARD_ISSUE"; return 0
-  fi
   [ -d "$FLEET_CONF_DIR" ] || return 0
   for cf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$cf" ] || continue

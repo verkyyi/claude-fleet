@@ -60,8 +60,9 @@ chmod +x "$WORK/fakepath/gh"
 
 # --- fake tmux: info succeeds (so the collector proceeds); every list/capture is
 # empty (no live sessions/windows/clients ⇒ the git/ctx/usage/notify sections are
-# all no-ops). The primary FLEET_REPO is still queued + fetched regardless, and
-# its flat `issues` mirror is written — that's what the backlog reads.
+# all no-ops). The configured FLEET_REPO is still queued + fetched regardless, and
+# its slug'd `issues_<slug>` cache is written — that's what the backlog reads via
+# fleet_cache (issue #180 dropped the flat `issues` mirror; no fleet is primary).
 cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
 case "$1" in
@@ -83,6 +84,7 @@ JSON
 
 # --- run the real collector against the fakes ---------------------------------
 C="$WORK/.claude-dash"
+ISSUES="$C/issues_fake-repo"   # slug'd per-fleet cache (fleet_slug fake/repo → fake-repo)
 LOG="$WORK/log"
 PATH="$WORK/fakepath:$PATH" \
 TMPDIR="$WORK" \
@@ -96,12 +98,12 @@ FLEET_CONF_DIR="$WORK/emptyconf" \
   }
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2
-         printf -- '--- issues cache ---\n' >&2; cat "$C/issues" 2>/dev/null >&2
+         printf -- '--- issues cache ---\n' >&2; cat "$ISSUES" 2>/dev/null >&2
          printf -- '--- gh issue-list calls: %s ---\n' "$(wc -l < "$GH_CALLS" | tr -d ' ')" >&2
          printf -- '--- log ---\n' >&2; cat "$LOG" >&2; exit 1; }
 
-[ -s "$C/issues" ] || fail "flat issues cache should have been written"
-cache="$(cat "$C/issues")"
+[ -s "$ISSUES" ] || fail "slug'd issues cache should have been written"
+cache="$(cat "$ISSUES")"
 
 # EXCLUDES: the steward-control issue is gone.
 printf '%s\n' "$cache" | grep -qF '#169'       && fail "steward-control issue #169 must be EXCLUDED from the cache"

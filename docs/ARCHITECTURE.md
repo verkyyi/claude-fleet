@@ -84,15 +84,19 @@ $TMPDIR/.claude-dash/
   ctx_<key>          # shared (per Claude session)
   prmap_<slug>       # per repo   (slug = owner-name)
   issues_<slug>      # per repo
-  prmap / issues     # flat mirror of the PRIMARY repo (single-fleet back-compat)
+  prmap / issues     # un-slug'd name — cold-start fallback ONLY (never written;
+                     #   no fleet is "primary" — issue #180)
 ```
 
 The collector resolves each live tmux session → its repo (per-session conf
 override, else the session's checkout origin remote) and records it in
 `sessmap`. Read-side producers map their session → slug via `sessmap` (fork-free)
-and read the slug'd cache, falling back to the flat `prmap`/`issues` when nothing
-resolves — so a single-fleet install is byte-identical to before. The shared
-helpers live in `bin/fleet-lib.sh`.
+and read the slug'd cache through `fleet_cache` — the SINGLE slug-resolution
+truth. **All fleets are equal (issue #180): no fleet is "primary", so no producer
+writes the un-slug'd `prmap`/`issues` file.** That flat name survives only as
+`fleet_cache`'s degenerate cold-start fallback (before a fleet's `<base>_<slug>.ts`
+marker lands); since nothing writes it, readers just see "loading" until the
+slug'd cache appears. The shared helpers live in `bin/fleet-lib.sh`.
 
 A fleet's dash/status/backlog reads the shared files plus its own
 `prmap_<slug>` / `issues_<slug>` (slug derived from that session's `FLEET_REPO`).
@@ -133,8 +137,10 @@ disk); `--purge` also removes the conf + this fleet's slug'd cache.
 
 **Phase 1 ✅ — multi-repo data (the load-bearing change).** Collector writes
 `sessmap` + `prmap_<slug>`/`issues_<slug>` (repo set enumerated from live tmux
-sessions), plus the flat mirror; `fleet-lib.sh` resolves session→repo→slug;
-dash/status/backlog read the slug'd files with flat fallback.
+sessions); `fleet-lib.sh` resolves session→repo→slug; dash/status/backlog read
+the slug'd files via `fleet_cache`. Every fleet is equal — no "primary" flat
+mirror (issue #180); the un-slug'd name is only `fleet_cache`'s cold-start
+fallback and is never written.
 
 **Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
 overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
