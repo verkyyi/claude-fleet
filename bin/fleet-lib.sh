@@ -137,6 +137,82 @@ fleet_worktree_head() {
   return 0
 }
 
+# Reap any processes still anchored to a worktree BEFORE it is removed (issue
+# #151). A worker can detach processes — selftest tmux servers, backgrounded
+# scripts, hung pipes — that outlive `git worktree remove`: reparented to init,
+# invisible to the janitor, they keep burning CPU/fds against the SHARED tmux
+# server (a since-fixed hang became a permanent 100%-core drain in crash #3).
+# Nothing should outlive its worktree.
+#
+#   $1  worktree dir (required; a broad root like / or $HOME is refused)
+#   $2  mode: "kill" (default) SIGTERM→grace→SIGKILL, or "dry" (report only)
+#   $3  grace seconds before SIGKILL (default 2; ignored in dry mode)
+#
+# Finds them two ways because the crash-#3 orphan had a RELATIVE argv but its cwd
+# was inside the worktree: (1) argv references the path (pgrep -f — catches e.g. a
+# selftest `tmux -S <dir>/sock`), and (2) cwd is inside the path (lsof, or /proc
+# on Linux). Never touches this process, its parent, pid≤1, or the shared tmux
+# server. Prints a one-line summary to stdout (the caller logs it). Best-effort:
+# absent pgrep/lsof simply narrow the search; it never fails the caller.
+fleet_reap_worktree_procs() {
+  local dir="${1:-}" mode="${2:-kill}" grace="${3:-2}"
+  [ -n "$dir" ] || { printf 'no worktree dir\n'; return 0; }
+  dir="${dir%/}"
+  # Never sweep a broad root — a bad caller must not turn this into a mass kill.
+  case "$dir" in ""|/|/Users|/home|/tmp|/var|"$HOME") printf 'refused (broad root: %s)\n' "$dir"; return 0 ;; esac
+
+  # Canonical (symlink-resolved) form for the cwd match: lsof/readlink report the
+  # PHYSICAL path (macOS /var → /private/var), so compare against that. argv match
+  # keeps the path as passed (that's how the process references it on its cmdline).
+  local cdir; cdir="$(cd "$dir" 2>/dev/null && pwd -P)"; [ -n "$cdir" ] || cdir="$dir"
+
+  local pids="" p re
+  # 1) argv references the worktree path. Escape ERE metacharacters so a `.` in
+  #    the path can't over-match an unrelated process (pgrep -f is a regex).
+  if command -v pgrep >/dev/null 2>&1; then
+    re="$(printf '%s' "$dir" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+    pids="$(pgrep -f "$re" 2>/dev/null)"
+  fi
+  # 2) cwd is inside the worktree. One lsof lists every process's cwd (macOS +
+  #    Linux); fall back to /proc where lsof is absent. Exact prefix match on $cdir.
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$pids
+$(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
+        /^p/ { pid=substr($0,2) }
+        /^n/ { path=substr($0,2)
+               if (path==d || substr(path,1,length(d)+1)==d"/") print pid }')"
+  elif [ -d /proc ]; then
+    for p in /proc/[0-9]*/cwd; do
+      case "$(readlink "$p" 2>/dev/null)" in
+        "$cdir"|"$cdir"/*) p="${p#/proc/}"; pids="$pids ${p%/cwd}" ;;
+      esac
+    done
+  fi
+
+  # Dedupe → drop self, parent, pid≤1, and the shared tmux server → keep runnable.
+  local self=$$ parent="${PPID:-0}" list="" tmuxpid=""
+  command -v pgrep >/dev/null 2>&1 && tmuxpid="$(pgrep -x tmux 2>/dev/null; pgrep -f 'tmux: server' 2>/dev/null)"
+  for p in $(printf '%s\n' $pids | grep -E '^[0-9]+$' | sort -un); do
+    [ "$p" -gt 1 ] 2>/dev/null || continue
+    [ "$p" = "$self" ] && continue
+    [ "$p" = "$parent" ] && continue
+    printf '%s\n' $tmuxpid | grep -qx "$p" && continue
+    list="$list $p"
+  done
+  list="${list# }"
+  [ -n "$list" ] || { printf 'no orphan procs\n'; return 0; }
+
+  if [ "$mode" = dry ]; then printf 'would reap:%s\n' " $list"; return 0; fi
+
+  kill -TERM $list 2>/dev/null
+  # brief grace, then SIGKILL survivors (a spinning orphan may ignore SIGTERM).
+  local i=0; while [ "$i" -lt "$grace" ]; do sleep 1; i=$((i+1)); done
+  local survivors=""
+  for p in $list; do kill -0 "$p" 2>/dev/null && survivors="$survivors $p"; done
+  [ -n "$survivors" ] && kill -KILL $survivors 2>/dev/null
+  printf 'reaped:%s%s\n' " $list" "${survivors:+ (SIGKILL$survivors)}"
+}
+
 # owner/name → filesystem-safe slug (owner-name).
 fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'

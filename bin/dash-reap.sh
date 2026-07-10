@@ -43,6 +43,10 @@ close_issue() {
 # full reap: remove worktree + delete branch, close issue, kill window
 reap_full() {
   if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
+    # Reap any detached process anchored to this worktree first (issue #151) — a
+    # since-fixed hang left spinning would otherwise outlive the dir and drain a
+    # core against the shared tmux server.
+    fleet_reap_worktree_procs "$wtdir" >/dev/null 2>&1
     # plain remove (no --force): git itself refuses a dirty worktree, so even a
     # TOCTOU race after the fleet_reap_ok check cannot delete uncommitted work.
     git -C "$MAIN" worktree remove "$wtdir" 2>/dev/null \

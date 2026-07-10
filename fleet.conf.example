@@ -254,6 +254,22 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Disk-guard cooldown @group=disk @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_DISK_COOLDOWN=300      # min seconds between incident captures
 
+# Runaway-CPU watchdog (same daemon). The shared tmux server can also be
+# overloaded by a detached orphan spinning a core (issue #151, crash #3: a
+# since-fixed hang from an already-removed worktree pegged 100% for ~1h). The
+# --watch tick flags OUR-USER processes at/above FLEET_RUNAWAY_CPU_PCT % CPU held
+# for >= FLEET_RUNAWAY_CPU_SECS with NO controlling terminal (a reparented orphan;
+# live worker panes have a pts and are never touched — the tmux server + launchd/
+# systemd are excluded outright). It then captures a forensic incident under
+# ~/.config/claude-fleet/diskguard/ and fires FLEET_NOTIFY_CMD; with ACTION=kill it
+# also SIGTERM→SIGKILLs the runaway. OFF by default — set PCT>0 to enable.
+# @label=Runaway CPU percent @group=disk @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_RUNAWAY_CPU_PCT=0        # %CPU that counts as hot; 0 = watchdog OFF
+# @label=Runaway CPU seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_RUNAWAY_CPU_SECS=300     # seconds sustained-hot before it's a runaway
+# @label=Runaway CPU action @group=disk @tier=advanced @scope=global @edit=str
+#FLEET_RUNAWAY_CPU_ACTION=notify  # notify (forensics+notify only) | kill (also SIGTERM/KILL)
+
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux
 # new-window -d) and NOT selected — you stay on your current window, and the new
