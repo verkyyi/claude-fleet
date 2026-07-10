@@ -145,9 +145,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # bridge gate still applies (author_association floor, the <!-- fleet:no-relay -->
 # marker, idle-gate on the hub's @claude_state, dedup) — so the steward's OWN notes
 # (posted via bin/fleet-comment.sh, which stamps the marker) never loop back into it.
-# Create ONE non-closing issue per fleet (e.g. titled "🛰 steward · <fleet>", label
-# steward-control) and record its number here. Requires FLEET_ISSUE_BRIDGE=1; empty ⇒
-# no steward route (worker relay unchanged). See docs/ISSUE-BRIDGE.md.
+# Create ONE non-closing issue per fleet (e.g. titled "🛰 steward · <fleet>") and
+# record its number here. It is a DEDICATED bridge endpoint, never a worker task —
+# label it `steward-control` (the autofill dispatcher excludes that label so it
+# can't spawn a worker on it). Requires FLEET_ISSUE_BRIDGE=1; empty ⇒ no steward
+# route (worker relay unchanged). See docs/ISSUE-BRIDGE.md.
 # @label=Steward control issue @group=bridge @tier=common @scope=fleet @edit=int
 #FLEET_STEWARD_ISSUE=
 

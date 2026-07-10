@@ -15,8 +15,10 @@
 #   • STEWARD (#146)  a comment on FLEET_STEWARD_ISSUE relays into the @steward
 #                    pane (not a worker), honoring the marker/assoc gates; a busy
 #                    steward queues, a STALE 'working' (missed Stop) is escaped so
-#                    the channel can't wedge, a down hub RETRIES (never drops), and
-#                    without FLEET_STEWARD_ISSUE the same comment routes nowhere.
+#                    the channel can't wedge, a down hub DROPS terminally (so the
+#                    watermark advances — no worker starvation), an empty-state
+#                    (cold-boot) steward is still found, and without
+#                    FLEET_STEWARD_ISSUE the same comment routes nowhere.
 #
 # The scenario (repo fake/repo): worker windows for #10 (idle=done) and #11
 # (working). Comments, ascending: c100 #10 OWNER→relay, c101 #10 marker→suppress,
@@ -96,6 +98,7 @@ case "\$1" in
                 # FAKE_STEWARD_COLD ⇒ empty state/ts (cold boot); FAKE_STEWARD_WORKING_TS
                 # ⇒ working stamped at <n>; else idle (done).
     if [ -n "\$FAKE_NO_STEWARD" ]; then :
+    elif [ -n "\$FAKE_STEWARD_SESS1" ]; then printf '\t1\t%s\tworking\t0\n' '%12'  # NON-steward pane in a session named "1" (empty @steward, leading field)
     elif [ -n "\$FAKE_STEWARD_COLD" ]; then printf '1\ts1\t%s\t\t\n' '%9'
     elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf '1\ts1\t%s\tworking\t%s\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
     else printf '1\ts1\t%s\tdone\t0\n' '%9'; fi ;;
@@ -132,6 +135,7 @@ runbridge() {
   FLEET_ISSUE_BRIDGE_REVIVE=0 \
   FLEET_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}" \
   FAKE_NO_STEWARD="${FAKE_NO_STEWARD:-}" \
+  FAKE_STEWARD_SESS1="${FAKE_STEWARD_SESS1:-}" \
   FAKE_STEWARD_COLD="${FAKE_STEWARD_COLD:-}" \
   FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FLEET_ISSUE_BRIDGE_SECRET="${FLEET_ISSUE_BRIDGE_SECRET:-}" \
@@ -244,6 +248,16 @@ FAKE_NO_STEWARD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "hub-down poll
 grep -qxF 200 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
   || fail "hub-down: c200 must be marked seen (dropped, so the watermark advances — no worker starvation)"
 
+# SESSION NAMED "1": a NON-steward pane in a session literally named "1" must NOT be
+# misread as the steward marker (the awk FS=tab filter tests the exact @steward
+# field, not a collapsed one). No steward is found → drop, nothing injected.
+rm -f "$WORK/state/bridge_fake-repo.seen"
+printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+: > "$INJECT"
+FAKE_STEWARD_SESS1=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-sess1 poll exited non-zero"
+[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
+  && fail "session-named-1: a non-steward pane must not be misread as the steward and injected"
+
 # COLD BOOT: a steward pane with EMPTY @claude_state (marker-first field order must
 # survive the empty trailing fields) is idle → the comment relays. Guards the
 # IFS-collapse misparse regression.
@@ -305,6 +319,20 @@ printf 'FLEET_REPO="me/beta"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=77\n' > 
   [ "$(bridge_steward_issue_for_repo me/beta)" = 77 ]    || { echo "resolver: me/beta should resolve its OWN 77" >&2; exit 1; }
   [ -z "$(bridge_steward_issue_for_repo me/nope)" ]      || { echo "resolver: unknown repo should be empty" >&2; exit 1; }
 ) || fail "steward-issue resolver leaked / mis-resolved across fleets"
+# A conf that sets FLEET_STEWARD_ISSUE but NOT its own FLEET_REPO must be ignored,
+# not mis-attributed to the (inherited) primary repo. With NO global primary issue,
+# me/primary must resolve to empty, not the rogue conf's 99.
+printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=99\n' > "$RES_CONF/norepo.conf"
+(
+  set -uo pipefail
+  . "$BIN/fleet-lib.sh"
+  FLEET_CONF_DIR="$RES_CONF"
+  PRIMARY_REPO="me/primary"; PRIMARY_STEWARD_ISSUE=""
+  : "$FLEET_CONF_DIR $PRIMARY_REPO $PRIMARY_STEWARD_ISSUE"
+  eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
+  [ -z "$(bridge_steward_issue_for_repo me/primary)" ] \
+    || { echo "resolver: a repo-less conf's steward issue must NOT attach to the primary" >&2; exit 1; }
+) || fail "steward-issue resolver mis-attributed a repo-less conf to the primary"
 printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak)\n' >&2
 
 printf 'selftest PASS: relay core + idle-gate + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/no-config) + resolver-no-leak verified\n'

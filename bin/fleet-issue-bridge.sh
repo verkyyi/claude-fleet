@@ -74,7 +74,8 @@ STEWARD_ISSUE=''
 # steward lives in the 'plan' hub, whose #{window_activity} is polluted by the
 # co-resident dash pane, so the spinner's demote never fires there — the bridge
 # instead judges a 'working' steward stale via @claude_state_ts (see
-# bridge_steward_stale). 0 disables the staleness escape (honor working strictly).
+# bridge_steward_stale, which floors this to 120 for the steward escape — 0 disables
+# the spinner's worker-demote, but disabling the steward escape would wedge/starve).
 STUCK_SECS="${FLEET_STUCK_WORKING_SECS:-120}"
 
 now() { date +%s 2>/dev/null || echo 0; }
@@ -164,21 +165,24 @@ bridge_find_window() {
 # the plan window — so they drive the idle-gate (state) and its staleness escape
 # (ts), all from one tmux fork (no separate fleet_steward_pane + display-message).
 bridge_find_steward() {
-  local repo="$1" want_slug marker sess pane st ts slug
+  local repo="$1" want_slug sess pane st ts slug
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  # Field ORDER matters: `read` with a whitespace IFS (tab is one) collapses runs
-  # and strips leading/trailing, so empty MIDDLE fields would shift later ones. We
-  # therefore emit the always-present fields first (@steward marker, session, pane)
-  # and put the possibly-empty @claude_state / @claude_state_ts LAST — an empty
-  # trailing pair just leaves st/ts empty (idle), never misreads the marker or pane.
-  while IFS=$'\t' read -r marker sess pane st ts; do
-    [ "$marker" = 1 ] || continue
+  # `read` with a whitespace IFS (tab is one) collapses runs and strips leading /
+  # trailing empties, so we must NOT rely on it to test a possibly-empty field. Do
+  # the @steward filter in awk with an EXPLICIT FS=tab (which keeps every empty
+  # field, so $1 is exactly @steward — a non-steward pane, or even a session named
+  # "1", can never shift into a false marker match). awk emits the kept panes as
+  # session<TAB>pane<TAB>state<TAB>ts; session/pane are always non-empty and the
+  # possibly-empty state/ts trail, so the read below is safe.
+  while IFS=$'\t' read -r sess pane st ts; do
+    [ -n "$sess" ] || continue
     slug=$(fleet_slug_cached "$sess")
     [ -z "$slug" ] && slug=$(fleet_slug "$(fleet_resolve_repo_for_session "$sess")")
     if [ "$slug" = "$want_slug" ]; then
       printf '%s\t%s\t%s\t%s' "$sess" "$pane" "$st" "$ts"; return 0
     fi
-  done < <(tmux list-panes -a -F '#{@steward}'$'\t''#{session_name}'$'\t''#{pane_id}'$'\t''#{@claude_state}'$'\t''#{@claude_state_ts}' 2>/dev/null)
+  done < <(tmux list-panes -a -F '#{@steward}'$'\t''#{session_name}'$'\t''#{pane_id}'$'\t''#{@claude_state}'$'\t''#{@claude_state_ts}' 2>/dev/null \
+             | awk -F'\t' '$1=="1"{print $2"\t"$3"\t"$4"\t"$5}')
   return 0
 }
 
@@ -197,11 +201,16 @@ bridge_find_steward() {
 # processed when the long call finishes — degraded latency, not corruption — and the
 # alternative (no escape) is a permanently wedged channel, which is worse.
 bridge_steward_stale() {
-  local ts="$1" age
+  local ts="$1" age secs="${STUCK_SECS:-120}"
   case "$ts" in ''|*[!0-9]*) return 1 ;; esac
-  [ "${STUCK_SECS:-0}" -gt 0 ] 2>/dev/null || return 1
+  # STUCK_SECS=0 means "spinner: never demote a stuck worker" — but for the STEWARD
+  # escape, never-escape = a wedged, watermark-pinning, worker-starving channel. So
+  # a non-positive / garbled value floors to 120 here (the escape always applies)
+  # rather than disabling it.
+  case "$secs" in ''|*[!0-9]*) secs=120 ;; esac
+  [ "$secs" -gt 0 ] || secs=120
   age=$(( $(now) - ts ))
-  [ "$age" -ge "$STUCK_SECS" ]
+  [ "$age" -ge "$secs" ]
 }
 
 # THE steward-issue resolver: map a repo → its FLEET_STEWARD_ISSUE, or empty. The
@@ -211,9 +220,13 @@ bridge_steward_stale() {
 #   1. the GLOBAL primary (PRIMARY_REPO/PRIMARY_STEWARD_ISSUE snapshot at load) —
 #      covers a single-fleet install that sets it in the top-level fleet.conf;
 #   2. else the per-fleet <session>.conf whose FLEET_REPO matches — each conf is
-#      sourced with FLEET_STEWARD_ISSUE UNSET FIRST, so a value only counts when
-#      THAT conf sets it (never the global value the subshell would otherwise
-#      inherit — the bug a bare `${FLEET_STEWARD_ISSUE:-}` doesn't prevent).
+#      sourced with BOTH FLEET_STEWARD_ISSUE and FLEET_REPO UNSET FIRST, so a
+#      steward issue counts only when THAT conf sets its own repo AND issue (never
+#      the global values the subshell would otherwise inherit — a bare
+#      `${FLEET_STEWARD_ISSUE:-}`/`${FLEET_REPO:-}` doesn't prevent that). Every real
+#      <session>.conf sets FLEET_REPO (fleet-up.sh writes it), so this is safe; a
+#      hand-written conf that sets only FLEET_STEWARD_ISSUE is correctly ignored
+#      rather than mis-attributed to the primary repo.
 bridge_steward_issue_for_repo() {
   local repo="$1" want_slug cf line rp si
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
@@ -224,7 +237,7 @@ bridge_steward_issue_for_repo() {
   [ -d "$FLEET_CONF_DIR" ] || return 0
   for cf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$cf" ] || continue
-    line=$( unset FLEET_STEWARD_ISSUE          # count only if THIS conf sets it
+    line=$( unset FLEET_STEWARD_ISSUE FLEET_REPO   # count only if THIS conf sets both
             . "$cf" >/dev/null 2>&1
             [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && printf '%s\t%s' \
               "${FLEET_REPO:-}" "${FLEET_STEWARD_ISSUE:-}" )
@@ -524,7 +537,11 @@ EOF
   local i=0
   while [ "$i" -lt "${#REPOS[@]}" ]; do
     ASSOC_FLOOR="${R_FLOOR[$i]}"; REVIVE="${R_REVIVE[$i]}"   # per-fleet gate/revive
-    STEWARD_ISSUE=$(bridge_steward_issue_for_repo "${REPOS[$i]}")   # repo-specific, leak-proof
+    # Resolved per-repo via the SAME resolver --deliver uses (one source, no
+    # divergence, leak-proof). This re-scans the confs per repo — O(#repos·#confs)
+    # cheap subshells per ~15s tick — a deliberate trade of a tiny cost for keeping
+    # one resolver rather than threading a second parsed value through queue().
+    STEWARD_ISSUE=$(bridge_steward_issue_for_repo "${REPOS[$i]}")
     poll_repo "${REPOS[$i]}"
     i=$((i + 1))
   done
