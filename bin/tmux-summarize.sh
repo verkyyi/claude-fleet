@@ -4,7 +4,8 @@
 # BOUND ISSUE (its goal) + window name/state (its identity) + the recent screen
 # (its current activity), so the one-liner reads as progress-against-the-task.
 # Change-gated + capped so steady-state token cost stays tiny (a static screen is
-# never re-summarized). Keyed by window-id (stable across reorders): $C/summary_<idnum>.
+# never re-summarized). Keyed by <session>_<window-id> (stable across reorders,
+# collision-free across per-fleet servers — issue #208): $C/global/summary_<sess>_<idnum>.
 #
 # Two modes:
 #   (default)       — daemon sweep of ALL windows (launchd com.claude-fleet.summarize, ~180s)
@@ -18,7 +19,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"   # fleet_cache_dir / fleet_sessmap_file (#181)
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-G="$C/global"; mkdir -p "$G"                          # summary_<id> + sumhash live here (#181)
+G="$C/global"; mkdir -p "$G"                          # summary_<sess>_<id> + sumhash live here (#181/#208)
 CACHE="$G/sumhash"; mkdir -p "$CACHE"
 LOGDIR="$BIN/../logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/summarize.log"
@@ -56,19 +57,26 @@ issue_title() {
 # screens (hash), and very recent re-summaries (debounce). A per-window lock keeps
 # the daemon sweep and a hook-fired run (or two rapid hooks) from racing.
 do_window() {
-  local wid="$1" name="$2" state="$3" sess="$4" iss="$5" id out lock cap h hf sum meta ititle rc=1
+  local wid="$1" name="$2" state="$3" sess="$4" iss="$5" id key out lock cap h hf sum meta ititle rc=1
   case "$name" in dash|plan|backlog) return 1;; esac
   [ -z "$state" ] && return 1                       # non-Claude window
   id=${wid//[^0-9]/}; [ -z "$id" ] && return 1
-  out="$G/summary_$id"
+  # Key by <session>_<id>, not the bare id: per-fleet tmux servers (issue #159)
+  # renumber windows from @1, so the bare id collides across fleets (issue #208).
+  # The daemon sweep fans over ALL fleet sockets in one process, so the OUT file,
+  # the per-window lock AND the change-gate hash must all carry the session — else
+  # fleet A's @2 and fleet B's @2 share a lock (spurious skips) and a hash (needless
+  # re-summaries), on top of the row bleed the OUT key fixes.
+  key=$(fleet_summary_key "$sess" "$wid")
+  out="$G/summary_$key"
   # debounce: skip if summarized within DEBOUNCE seconds (coalesces turn bursts)
   if [ -f "$out" ] && [ "$(( $(date +%s) - $(mtime "$out") ))" -lt "$DEBOUNCE" ]; then return 1; fi
-  lock="$CACHE/$id.lock"
+  lock="$CACHE/$key.lock"
   mkdir "$lock" 2>/dev/null || return 1             # someone else is on this window
   cap=$(TM capture-pane -p -S -120 -t "$wid" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -60)
   if [ -n "$cap" ]; then
     h=$(printf '%s' "$cap" | cksum | awk '{print $1}')   # gate on screen content only
-    hf="$CACHE/$id.hash"
+    hf="$CACHE/$key.hash"
     if [ "$h" != "$(cat "$hf" 2>/dev/null)" ]; then
       meta="Session window: ${name}  (state: ${state})"
       if [ -n "$iss" ]; then

@@ -392,7 +392,7 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
     case "$ts" in ''|*[!0-9]*) continue;; esac
     [ $(( nowts - ts )) -ge "$ESC_AFTER" ] || continue
     [ "$esc" = "$ts" ] && continue
-    sum=$(head -1 "$G/summary_${wid//[^0-9]/}" 2>/dev/null | cut -c1-80)
+    sum=$(head -1 "$G/summary_$(fleet_summary_key "$sock" "$wid")" 2>/dev/null | cut -c1-80)
     msg="# session blocked
 **${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+
 > doing: ${sum}}"

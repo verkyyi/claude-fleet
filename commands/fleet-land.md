@@ -107,7 +107,7 @@ win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v
 # transcript-dir + session-id from the worktree path; pulls the one-line summary
 # from the dash cache via --win. Best-effort — never blocks the land on failure.
 bash ~/.claude/fleet/bin/fleet-history.sh record \
-  --repo "$FLEET_REPO" --main "$FLEET_MAIN" \
+  --repo "$FLEET_REPO" --main "$FLEET_MAIN" --session "$S" \
   --pr "<N>" --issue "$issue" --worktree "$wt" --win "$win" || true
 
 [ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"      # add --force only if it's clean but errors

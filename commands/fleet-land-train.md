@@ -138,7 +138,7 @@ for pr in <the merged PR numbers>; do
   win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
   # LEDGER (before removal) — best-effort, never blocks cleanup on failure.
   bash ~/.claude/fleet/bin/fleet-history.sh record \
-    --repo "$FLEET_REPO" --main "$FLEET_MAIN" \
+    --repo "$FLEET_REPO" --main "$FLEET_MAIN" --session "$S" \
     --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" || true
   [ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"   # add --force only if it's clean but errors
   git -C "$FLEET_MAIN" branch -D "issue-$issue" 2>/dev/null || true

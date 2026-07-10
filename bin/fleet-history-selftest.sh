@@ -77,11 +77,20 @@ case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]"
 CHECKS=$((CHECKS + 1))
 
 # --win path: pull the summary from the dash cache when --summary is absent.
-DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # summary_<id> lives in global/ (issue #181)
-printf 'summary from the dash cache\n' > "$DC/summary_77"
-run record --issue 10 --worktree "$WT" --win '@77' >/dev/null
+# Keyed by <session>_<id> (issue #208), so --session is required to resolve it.
+DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # summary_<sess>_<id> lives in global/ (#181/#208)
+printf 'summary from the dash cache\n' > "$DC/summary_fleetA_77"
+run record --issue 10 --worktree "$WT" --win '@77' --session fleetA >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
 eq "record: --win pulls summary from dash cache" "summary from the dash cache" "$smry_col"
+
+# Cross-fleet isolation (issue #208): a DIFFERENT fleet's window @77 must NOT
+# render this fleet's row. fleetB's @77 has its own key; recording fleetB/@77
+# pulls fleetB's summary, never fleetA's.
+printf 'summary belonging to fleetB\n' > "$DC/summary_fleetB_77"
+run record --issue 11 --worktree "$WT" --win '@77' --session fleetB >/dev/null
+last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
+eq "record: cross-fleet @77 pulls its OWN summary, not fleetA's" "summary belonging to fleetB" "$smry_col"
 
 # ============================================================================
 # B. list / find_row — newest-first + lookup by issue and by #PR

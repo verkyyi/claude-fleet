@@ -344,4 +344,18 @@ eq "session_count: sums workers across live sockets" "2" \
   "$(FLEET_CONF_DIR="$SOCKCONF" FAKE_DOWN="s3" fleet_session_count)"
 
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159)\n' "$CHECKS"
+# --- fleet_summary_key (issue #208): dash-summary cache key is collision-free ---
+# across per-fleet tmux servers, which renumber windows from @1. Two fleets each
+# with window @2 must map to DISTINCT keys, else one fleet's summary row bleeds
+# into the other's dash.
+eq "summary_key: <session>_<numeric-id>" "fleetA_2" "$(fleet_summary_key fleetA @2)"
+eq "summary_key: cross-fleet same window-id → DISTINCT keys" "fleetB_2" "$(fleet_summary_key fleetB @2)"
+eq "summary_key: id is digits-only (strips the @)" "s_17" "$(fleet_summary_key s @17)"
+eq "summary_key: unexpected chars in session sanitized to _" "a_b.c_1" "$(fleet_summary_key 'a/b.c' @1)"
+eq "summary_key: empty session → bare _<id> (single-fleet / uncached)" "_2" "$(fleet_summary_key '' @2)"
+# The hot-path reader inlines the SAME expansion (fork-free) — assert byte-identity
+# so the two can't silently drift.
+_inline() { local sess="$1" wid="$2"; printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"; }
+eq "summary_key: inline reader form matches the helper" "$(fleet_summary_key 'a/b.c' @42)" "$(_inline 'a/b.c' @42)"
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, summary-key #208)\n' "$CHECKS"

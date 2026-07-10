@@ -14,7 +14,7 @@
 # PR metadata or transcript can't be resolved.
 #
 # Subcommands:
-#   record  --repo R --main M --pr N --issue N --worktree W [--win ID] [--summary S]
+#   record  --repo R --main M --pr N --issue N --worktree W [--win ID] [--session S] [--summary S]
 #           Append one ledger row. Derives title/sha/mergedAt from `gh pr view`,
 #           and transcript-dir + session-id from the worktree path. Run it BEFORE
 #           `git worktree remove` in the land cleanup step.
@@ -78,7 +78,7 @@ newest_session_in() {
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
 cmd_record() {
-  local repo="" main="" pr="" issue="" wt="" win="" summary="" mergedat=""
+  local repo="" main="" pr="" issue="" wt="" win="" summary="" mergedat="" sess=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -87,11 +87,17 @@ cmd_record() {
       --issue) issue="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
       --win) win="${2:-}"; shift 2;;
+      --session) sess="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
       --mergedat) mergedat="${2:-}"; shift 2;;
       *) shift;;
     esac
   done
+  # The dash-summary cache is keyed by <session>_<window-id> (issue #208), so a
+  # --win lookup needs the fleet session. Default to the caller's fleet when the
+  # (in-pane) caller didn't pass --session: land runs in the fleet whose window
+  # we're recording, so both resolve to the same session.
+  [ -z "$sess" ] && sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
   [ -z "$issue" ] && { echo "fleet-history record: --issue is required" >&2; return 2; }
 
   # Derive PR metadata from GitHub (best-effort; tolerate a missing/removed PR).
@@ -117,8 +123,8 @@ cmd_record() {
 
   # summary: explicit --summary wins, else the dash summary cache for --win.
   if [ -z "$summary" ] && [ -n "$win" ]; then
-    local idn="${win//[^0-9]/}"
-    [ -n "$idn" ] && [ -f "$C/summary_$idn" ] && read -r summary < "$C/summary_$idn"
+    local smk; smk=$(fleet_summary_key "$sess" "$win")
+    [ -n "${win//[^0-9]/}" ] && [ -f "$C/summary_$smk" ] && read -r summary < "$C/summary_$smk"
   fi
 
   local ledger; ledger=$(ledger_path "$repo")
