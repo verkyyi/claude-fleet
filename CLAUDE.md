@@ -81,7 +81,16 @@ issues as the backlog. See README.md for the architecture. Components:
    hands just the stopped window to `classify-sessions.sh --window`, so the
    ambiguous `done` is resolved to `looping`/`needs`/`done` within ~1-2s instead
    of waiting for the daemon backstop. Also backgrounded + self-disabling; a
-   no-op if you skip the classifier.
+   no-op if you skip the classifier. The `SessionStart` array also fires
+   `steward-readopt-hook.sh` (issue #155): a `/clear` keeps the same steward
+   process alive but wipes its context, so it forgets it's the steward and — since
+   CC reloads the cwd `CLAUDE.md`, which for the steward is *this install playbook*
+   — silently re-adopts the installer persona. The hook re-injects `steward.md`
+   (plus a newest-handoff pointer) back into context, but ONLY when the pane is
+   `@steward=1` **and** the SessionStart `source` is `clear` — so a worker/scout
+   `/clear` is never handed steward identity, and startup/resume/compact (already
+   covered by the spawn seed prompt and the crash-resume path #143) don't pile on
+   redundant context. No-op outside tmux and if `~/.claude/steward.md` is absent.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
@@ -184,7 +193,8 @@ issues as the backlog. See README.md for the architecture. Components:
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
-`summarize-hook.sh` entries on `Stop`/`SessionStart`) from
+`summarize-hook.sh` entries on `Stop`/`SessionStart`, plus the
+`steward-readopt-hook.sh` entry on `SessionStart`) from
 `~/.claude/settings.json`, delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands), and clear per-window state:
