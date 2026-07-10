@@ -249,29 +249,75 @@ EOF
   return 0
 }
 
-# 0 if the pane's Claude TUI input line holds UN-SUBMITTED text — a human is
-# mid-type — so a relay must DEFER rather than bracketed-paste-prepend onto their
-# partial and submit the merged line (issue #191). 1 if the input line is empty
-# (safe to deliver) OR the prompt row can't be resolved (capture-pane failed / no
-# `❯` row found — a parse miss ⇒ fall back to today's behavior; NEVER wedge the
-# queue on a bad read). A human keystroke doesn't flip @claude_state, so this
-# input-content check is the ONLY thing standing between an idle-but-being-typed-into
-# pane and an accidental prepend+submit.
+# 0 if the pane's Claude TUI input line holds UN-SUBMITTED text a human typed — so
+# a relay must DEFER rather than bracketed-paste-prepend onto their partial and
+# submit the merged line (issue #191). 1 if the input line is empty (safe to
+# deliver) OR the prompt row / cursor can't be resolved (capture-pane failed / no
+# `❯` row found — a parse miss ⇒ fall back to deliver; NEVER wedge the queue on a
+# bad read). A human keystroke doesn't flip @claude_state, so this input-content
+# check is the ONLY thing standing between an idle-but-being-typed-into pane and an
+# accidental prepend+submit.
 #
 # The Claude TUI renders the live input on a `❯ `-anchored row. PAST user turns
 # render the same glyph higher in the scrollback and the status footer below it
-# carries none, so the LAST `❯` line is the input row. A wrapped input still puts
-# text on that anchor row, so testing that one row alone tells empty from typed. A
-# defensive trailing `│` strip covers a bordered-input rendering.
+# carries none, so the LAST `❯` line is the input row.
+#
+# But Claude also draws a DIM "ghost" autosuggestion in that same row when the
+# input is EMPTY, and plain `capture-pane -p` returns the ghost as ordinary text —
+# so the naive "any text after ❯ ⇒ busy" test read a ghost as a half-typed line and
+# deferred FOREVER (the ghost can't be cleared — there's nothing in the buffer to
+# delete), wedging the relay (issue #199). Text is "real input" only if it is to
+# the LEFT of the cursor OR not faint-styled; two signals encode that, and busy ⟺
+# EITHER fires (a faint ghost is rejected by BOTH):
+#   • PRIMARY (cursor, style-agnostic): the slice of the input row from input-start
+#     up to cursor_x, stripped, is non-empty. A ghost never enters the buffer, so
+#     the cursor stays parked at input-start ⇒ empty slice ⇒ deliver.
+#   • SECONDARY (faint-strip): remove dim (SGR 2) runs from the input row, then
+#     empty-check the remainder. Directly semantic (Claude marks ghosts faint) and
+#     catches the rare "typed then Home-to-col-0" case the cursor slice alone misses
+#     (cursor at input-start yet real text sits to its right).
+# A defensive trailing `│` strip covers a bordered-input rendering.
 bridge_input_busy() {
-  local win="$1" cap row rest
-  cap=$(tmux capture-pane -t "$win" -p 2>/dev/null) \
+  local win="$1" cap lineno irow erow plain esc cx cy prefix promptcol n rest left nofaint
+  # -e keeps the SGR spans so the faint (ghost) runs stay distinguishable.
+  cap=$(tmux capture-pane -t "$win" -e -p 2>/dev/null) \
     || { log "input-check: capture-pane failed for $win — proceeding (fallback)"; return 1; }
-  row=$(printf '%s\n' "$cap" | grep '❯' | tail -n1)
-  [ -n "$row" ] || { log "input-check: no prompt row in $win — proceeding (fallback)"; return 1; }
-  rest=${row#*❯}                                   # everything after the glyph
+  # The live input row is the LAST `❯` row; its 1-based line no. maps to the
+  # 0-based pane row (== cursor_y when the cursor sits on it).
+  lineno=$(printf '%s\n' "$cap" | grep -n '❯' | tail -n1 | cut -d: -f1)
+  [ -n "$lineno" ] || { log "input-check: no prompt row in $win — proceeding (fallback)"; return 1; }
+  irow=$((lineno - 1))
+  erow=$(printf '%s\n' "$cap" | sed -n "${lineno}p")
+  esc=$(printf '\033')
+  plain=$(printf '%s' "$erow" | sed -E "s/${esc}\[[0-9;]*m//g")   # all SGR stripped
+
+  # PRIMARY — cursor position. The `❯` is 1 display column; input-start = its
+  # column + 2 (`❯ `). Real input = the input-row slice [input-start, cursor_x):
+  # a ghost leaves cursor_x AT input-start, so the slice is empty ⇒ deliver.
+  read -r cx cy <<EOF
+$(tmux display-message -p -t "$win" '#{cursor_x} #{cursor_y}' 2>/dev/null)
+EOF
+  if [ -n "$cx" ] && [ -n "$cy" ] && [ "$cx" -ge 0 ] 2>/dev/null && [ "$cy" = "$irow" ]; then
+    prefix=${plain%%❯*}                            # text left of the glyph (borders/pad)
+    promptcol=${#prefix}                           # ❯ is 1 col; the prefix is 1-col chars
+    n=$(( cx - promptcol - 1 ))                    # cols after `❯` up to the cursor
+    if [ "$n" -gt 0 ]; then
+      rest=${plain#*❯}                             # after the glyph (leads with the ❯'s space)
+      left=$(printf '%s' "$rest" | cut -c1-"$n")
+      left=$(printf '%s' "$left" | sed -e 's/│[[:space:]]*$//' -e 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [ -n "$left" ] && return 0                   # typed text left of the cursor ⇒ busy
+    fi
+  fi
+
+  # SECONDARY — strip faint (dim, SGR 2) runs, then empty-check the input row. A
+  # faint span is `\e[2m … \e[0m|\e[22m`; its inner text carries no ESC, so a
+  # `[^ESC]*` body is a safe non-greedy stand-in that clears every ghost run in one
+  # pass. A second pass drops the remaining (non-faint) SGR before the empty-check.
+  nofaint=$(printf '%s' "$erow" | sed -E "s/${esc}\[2m[^${esc}]*${esc}\[(0|22)m//g" \
+                                | sed -E "s/${esc}\[[0-9;]*m//g")
+  rest=${nofaint#*❯}                               # everything after the glyph
   rest=$(printf '%s' "$rest" | sed -e 's/│[[:space:]]*$//' -e 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  [ -n "$rest" ]                                   # non-empty ⇒ mid-type ⇒ defer (rc 0)
+  [ -n "$rest" ]                                   # non-faint text after ❯ ⇒ mid-type ⇒ defer (rc 0)
 }
 
 # Two-step injection: bracketed paste of the (possibly multi-line) text, then a
