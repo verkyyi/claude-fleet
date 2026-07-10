@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # fleet-restore-resolve.py — stdin: PIPE-delimited rows
-# "window_name|path|issue|claude_state|prci|pfg".
+# "window_name|path|issue|claude_state|prci|pfg|raw".  (trailing `raw` = issue #214)
 # stdout: TAB rows
 # "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue<TAB>state<TAB>prci<TAB>pfg"
 # for each work window. The session id is the stem of the NEWEST transcript in that
@@ -64,11 +64,20 @@ for line in sys.stdin:
     state = parts[3] if len(parts) > 3 and parts[3] else "-"
     prci = parts[4] if len(parts) > 4 and parts[4] else "-"
     pfg = parts[5] if len(parts) > 5 and parts[5] else "-"
+    raw = parts[6] if len(parts) > 6 and parts[6] else ""
     if not name or not path:
         continue
     if name == STEWARD:
         print(f"STEWARD\t{path}\t{newest_sid(path)}")
         continue
     if name in PANELS:
+        continue
+    # A RAW scratch window (@raw=1, issue #214) is deliberately ephemeral: no
+    # issue, no worktree, no PR. Its cwd is the SHARED base checkout, so
+    # newest_sid() can't tell its transcript from the steward's or another raw
+    # session's (same project dir) — resuming would risk loading the WRONG
+    # conversation (the documented newest_sid caveat). So it is never snapshotted
+    # and never restored; a crash simply drops it.
+    if raw == "1":
         continue
     print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}\t{state}\t{prci}\t{pfg}")
