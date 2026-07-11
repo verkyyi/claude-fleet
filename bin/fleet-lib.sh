@@ -157,6 +157,54 @@ fleet_load_conf() {
   return 0
 }
 
+# Resolve the operator-facing BODY of an implementing worker's seed prompt
+# (issue #234). A spawned worker is seeded (in dash-issue-session.sh) with:
+#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship/land tail>
+# The head (issue binding), the /fleet-claim startup ritual, and the /fleet-ship +
+# steward-lands|self-land tail are STRUCTURAL — the machinery depends on them, so
+# they are always kept. Only <BODY> is operator-customizable per fleet, letting
+# different fleets seed workers differently. Resolution (highest precedence
+# first), from the ALREADY-SOURCED conf env (per-fleet ▸ global ▸ default — the
+# caller runs fleet_load_conf first):
+#   1. FLEET_WORKER_PROMPT_FILE — path to a file whose contents are the body (for a
+#      long/multi-line template the single-line config modal can't hold); a leading
+#      ~/ is expanded. Set-but-unreadable ⇒ warn on stderr and fall through.
+#   2. FLEET_WORKER_PROMPT — an inline body string.
+#   3. the built-in default.
+# {issue}/{repo} placeholders are substituted (plain parameter expansion, no eval).
+# The result is trimmed and a single trailing sentence-ender (. ! ?) removed, so
+# the returned fragment flows into the tail (which supplies its own leading '. '/
+# ', ' punctuation) — which keeps the DEFAULT body's seed byte-identical to the
+# historic hardcoded string. Args: $1=issue number  $2=repo (owner/name).
+fleet_worker_prompt_body() {
+  local num="${1:-}" repo="${2:-}" body="" f
+  local def='Implement and verify per the repo conventions'
+  f="${FLEET_WORKER_PROMPT_FILE:-}"
+  if [ -n "$f" ]; then
+    # A leading ~/ from the conf/modal is a LITERAL tilde (the shell never
+    # expanded it in a quoted assignment), so match it literally and expand by
+    # hand — the "~/" here is a case PATTERN, not an attempted expansion.
+    # shellcheck disable=SC2088
+    case "$f" in "~/"*) f="$HOME/${f#\~/}" ;; esac
+    if [ -r "$f" ]; then
+      body=$(cat "$f")
+    else
+      printf 'fleet: FLEET_WORKER_PROMPT_FILE not readable (%s) — using inline/default\n' "$f" >&2
+    fi
+  fi
+  [ -n "$body" ] || body="${FLEET_WORKER_PROMPT:-}"
+  body="${body//\{issue\}/$num}"
+  body="${body//\{repo\}/$repo}"
+  # trim leading + trailing whitespace, then one trailing sentence-ender, then any
+  # whitespace that ender was hiding — leaving a clean clause for the tail seam.
+  body="${body#"${body%%[![:space:]]*}"}"
+  body="${body%"${body##*[![:space:]]}"}"
+  body="${body%[.!?]}"
+  body="${body%"${body##*[![:space:]]}"}"
+  [ -n "$body" ] || body="$def"
+  printf '%s' "$body"
+}
+
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
 # truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND /
