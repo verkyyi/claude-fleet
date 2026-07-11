@@ -132,7 +132,7 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix G` | focus the hub's dash pane (jump / new task / bind issue / rename); press again to zoom it fullscreen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
-| `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue, no worktree, no PR); listed in the dash but excluded from the issue machinery, and ephemeral (not restored across a crash). Also on the dash as `⌃s` |
+| `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue, no worktree, no PR); listed in the dash but excluded from the issue machinery, and ephemeral (not restored across a crash). Prompts for an **optional name** (Enter empty keeps the auto `scratch`/`scratch-2`… name). Also on the dash as `⌃s` |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix r` | reload tmux config |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and `⌃k` in the backlog) |
