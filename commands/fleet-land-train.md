@@ -3,15 +3,17 @@
 <!-- fleet skill · owner: steward -->
 
 The batch complement to single-PR `/fleet-land`. Runs a **serial single-writer "land
-train"** over this fleet's `$FLEET_REPO`: it merges green PRs **one at a time** —
-update-branch → wait for green → merge → advance master → next — so each PR is
-tested exactly once against the master it actually lands on (O(N) CI, not the
-O(N²) thundering herd you get from updating every PR every time master moves).
-Then, like `/fleet-land`, it does the *general* finish work: **base-pull once** after
-the whole batch and **cleanup per merged PR**. It **mutates PRs** (update-branch
-+ merge) on this fleet's own repo only and the fleet's base checkout
-(`$FLEET_MAIN`), and takes a per-repo lease so two sessions never drive the train
-at once. Merging is a steward operation, so this skill is **steward-only**.
+train"** over this fleet's `$FLEET_REPO`: it lands green PRs **one at a time** —
+update-branch → wait for green → merge → advance base → base-pull → clean up → next
+— so each PR is tested exactly once against the base it actually lands on (O(N) CI,
+not the O(N²) thundering herd you get from updating every PR every time the base
+moves). Since issue #231 the train is a thin batch driver over `bin/fleet-land.sh`:
+each PR gets the **full mechanical land** (merge + base fast-forward + history
+ledger + worktree/window teardown) inside the script — **no manual base-pull or
+cleanup follow-up**. It **mutates PRs** (update-branch + merge) on this fleet's own
+repo only and the fleet's base checkout (`$FLEET_MAIN`), and every lap takes the
+shared per-repo land lease so two landers never advance the base at once. Merging
+is a steward operation, so this skill is **steward-only**.
 
 This skill is **fleet-agnostic**: it never touches the live install
 (`~/.claude/fleet`), reloads no daemons, re-merges no hooks, reinstalls no
@@ -69,24 +71,32 @@ When the plan looks right, run it for real:
 bash ~/.claude/fleet/bin/land-train.sh $ARGUMENTS
 ```
 
-What it does, per PR, in order:
+What it does, **per PR, in order** — each lap is one `bin/fleet-land.sh` call:
 
-1. **update-branch** — only when it's *this* PR's turn (never the tail early).
-2. **wait** until the PR is green **and** up to date (polls; checks re-run
-   after the update-branch).
-3. **merge** with `--match-head-commit` so a head-sha race (master moved under
-   us) is caught and bounded-retried, not merged blind.
+1. **lease** — take the shared per-repo land lease and hold it through this PR's
+   green-wait (so the base can't advance under it).
+2. **update-branch** — only when it's *this* PR's turn (never the tail early),
+   only if it's `BEHIND`.
+3. **wait** until the PR is green **and** up to date (polls; checks re-run after
+   the update-branch).
+4. **merge** with `--match-head-commit` so a head-sha race (base moved under us)
+   is caught and bounded-retried, not merged blind.
+5. **finish the land** — `git -C $FLEET_MAIN pull --ff-only`, record the history
+   ledger row (for `/fleet-history`), then tear down the worker's window +
+   worktree + branch **in order** (window first, so the busy cwd frees). This all
+   happens inside the script now — you do **not** base-pull or clean up by hand.
 
-A PR that can't make it **does not block the train** — it is **ejected** with a
-reason and the train moves on:
+A PR that can't make it **does not block the train** — `fleet-land.sh` **ejects**
+it with a reason and the train moves on:
 
 | Eject reason | Meaning | What the human does |
 |---|---|---|
 | `conflict-needs-rebase` | DIRTY / CONFLICTING with base | rebase the branch by hand |
 | `required-check-failed` | a required check is red | fix the failing check |
-| `blocked-review-required` | green + up to date but still blocked | get the review / approval |
+| `blocked` | green + up to date but still blocked (review required) | get the review / approval |
 | `stuck-behind` / `merge-failed` | kept losing the head-sha race (≥ retry cap) | re-run land-train later |
-| `timeout-<secs>s` | didn't go green within the per-PR budget | investigate CI, re-run |
+| `max-hold-timeout` | didn't go green within the per-PR budget | investigate CI, re-run |
+| `lease-wait-timeout` | another lander held the lease past the queue budget | wait / re-run |
 
 **Note — a red *non-required* check does not block the train.** A PR whose only
 red check is optional lands in GitHub's `UNSTABLE` merge state; branch protection
@@ -97,65 +107,20 @@ GitHub already considers landable — but can surprise you if you expect *any* r
 check to hold a PR back.
 
 The lease (`~/.claude/leases/land-<repo-slug>.lock`, steal-if-stale) is the
-shared **per-repo land lease** — the SAME lock a worker `/fleet-land-self` takes
-(issue #138), so a second `/fleet-land-train` *or* a self-landing worker on the
-same repo refuses with *"a train is already running"* / waits its turn — that is
-expected; landing on a repo is single-writer. Wait for the holder to finish.
+shared **per-repo land lease** — the SAME lock a worker `/fleet-land-self` and a
+single `/fleet-land` take (issues #138, #231). The train takes it **per PR** (not
+once for the whole batch), so a second landing path on the same repo interlocks
+lap-by-lap rather than racing the base — that is expected; landing on a repo is
+single-writer.
 
-Note the **PR numbers the train reports as merged** — you need them for steps
-3–4.
-
-## 3. Land master into the fleet's base checkout — once, after the batch
-
-The train advanced the remote master with each merge, but the fleet's base
-checkout still points at the old master. Fast-forward it **once**, after the
-whole batch:
-
-```sh
-git -C "$FLEET_MAIN" pull --ff-only          # the fleet's base checkout
-```
-
-If it refuses to fast-forward, stop and report — something diverged locally;
-resolve it before cleaning up.
-
-## 4. Clean up each merged PR's worktree + window
-
-For **each PR the train merged** (from step 2's summary), remove its merged
-`issue-<N>` worktree + branch and close the bound window. Resolve each PR's
-issue from its head branch (`issue-<N>`):
-
-Like `/fleet-land`, append a **history-ledger row before removing each worktree**
-so every landed session stays reviewable/resumable via `/fleet-history` — the
-capture must happen while the worktree path (→ transcript dir + session id) is
-still known.
-
-```sh
-for pr in <the merged PR numbers>; do
-  issue=$(gh pr view "$pr" --repo "$FLEET_REPO" --json headRefName -q '.headRefName' | sed -n 's/^issue-\([0-9]\{1,\}\)$/\1/p')
-  [ -z "$issue" ] && continue                # not an issue-<N> branch — skip cleanup
-  wt=$(git -C "$FLEET_MAIN" worktree list --porcelain | \
-       awk -v b="issue-$issue" '/^worktree /{p=$2} $0 ~ "branch refs/heads/"b"$"{print p}')
-  win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
-  # LEDGER (before removal) — best-effort, never blocks cleanup on failure.
-  bash ~/.claude/fleet/bin/fleet-history.sh record \
-    --repo "$FLEET_REPO" --main "$FLEET_MAIN" --session "$S" \
-    --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" || true
-  [ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"   # add --force only if it's clean but errors
-  git -C "$FLEET_MAIN" branch -D "issue-$issue" 2>/dev/null || true
-  [ -n "$win" ] && tmux kill-window -t "$win"
-done
-```
-
-Never remove a worktree with uncommitted changes — if `worktree remove` refuses,
-report it rather than forcing; the work may not have shipped.
-
-## 5. Report
+## 3. Report
 
 Relay the tool's final summary: how many **merged**, which were **ejected**
-(with reasons) and which **skipped**, plus the base-checkout pull and the
-worktrees/windows cleaned up. If anything ejected, name the PRs and the one-line
-human action each needs, then stop — do **not** try to rebase or force anything
-yourself; ejected PRs are handed back to their authors.
+(with reasons) and which **skipped**, plus a note that each merged PR was fully
+landed (base fast-forwarded, ledger recorded, worktree + window cleaned up) by the
+script. If anything ejected, name the PRs and the one-line human action each needs,
+then stop — do **not** try to rebase or force anything yourself; ejected PRs are
+handed back to their authors.
 
 If the batch landed claude-fleet tooling PRs and you're on the self-hosting
 tooling fleet, remind the user to run `/fleet-sync-install` once to re-apply them to
@@ -167,4 +132,5 @@ Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo
 sessions, or ledgers. The train never force-pushes and never `--admin`-bypasses
 branch protection: it only merges PRs that GitHub already considers mergeable.
 Tune behaviour with the `LAND_TRAIN_*` env knobs documented at the top of
-`bin/land-train.sh` (poll interval, per-PR timeout, retry cap, merge method).
+`bin/land-train.sh` (poll interval, per-PR timeout, retry cap, merge method) —
+they are forwarded to `bin/fleet-land.sh` as its `LAND_*` knobs.

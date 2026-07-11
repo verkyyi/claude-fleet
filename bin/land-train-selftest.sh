@@ -1,19 +1,25 @@
 #!/bin/bash
 # land-train-selftest.sh — hermetic smoke test for bin/land-train.sh.
 #
-# Regression guard for issue #68: land-train captured process_pr's stdout as
-# its per-PR result token (`result=$(process_pr …)`), but note() also wrote to
-# stdout, so the progress lines polluted $result → every `case "$result"` missed
-# → the merged/ejected/skipped counters never incremented → the summary printed
-# "0 merged" even after real merges. The bug shipped precisely because nothing
-# asserted "summary counts == what actually happened". This is that assertion.
+# Regression guard for issue #68: land-train captured its per-PR result token
+# (`result=$(land_one …)`), but note() also wrote to stdout, so the progress
+# lines polluted $result → every `case "$result"` missed → the merged/ejected/
+# skipped counters never incremented → the summary printed "0 merged" even after
+# real merges. The bug shipped precisely because nothing asserted "summary counts
+# == what actually happened". This is that assertion.
 #
-# It runs land-train against a FAKE `gh` (no network, no real repo): the fake
-# scripts a mixed batch — two mergeable PRs, one conflicting, one already-closed
-# — and records every `gh pr merge` it is asked to perform. The test then checks
-# the printed summary against BOTH the scripted expectation AND the fake's own
-# merge log, so a recurrence of the capture-pollution bug (counts drift from the
-# real merges) fails loudly.
+# Since issue #231 the train is a thin batch driver over bin/fleet-land.sh, so the
+# test must fake the FULL surface fleet-land.sh drives — gh/git/tmux — and SEAL the
+# fleet resolution (TMUX='' + FLEET_MAIN/FLEET_SESSION/FLEET_CONF_DIR pointed at temp
+# dirs), or fleet-land.sh would resolve the ambient tmux session and run REAL git
+# against the developer's real checkout. Everything below is on-PATH fakes + temp
+# dirs; nothing touches a real repo, tmux server, or network.
+#
+# The fake scripts a mixed batch — two mergeable PRs, one conflicting, one
+# already-closed — and records every `gh pr merge` fleet-land.sh performs. The test
+# then checks the printed summary against BOTH the scripted expectation AND the
+# fake's merge log, so a recurrence of the capture-pollution bug (counts drift from
+# the real merges) fails loudly.
 #
 # Exit 0 = pass. Non-zero = fail (and prints the captured output for triage).
 set -uo pipefail
@@ -26,66 +32,97 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/mt-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 MERGE_LOG="$WORK/merged"
 : > "$MERGE_LOG"
+mkdir -p "$WORK/bin" "$WORK/main/.git" "$WORK/conf"
 
 # --- fake gh -----------------------------------------------------------------
-# Emulates only the calls land-train makes in the batch path, keyed on PR number:
+# Emulates the calls land-train + fleet-land.sh make, keyed on PR number:
 #   #1,#2 → OPEN + CLEAN + pass  → classify READY → `gh pr merge` succeeds (logged)
 #   #3    → OPEN + DIRTY         → classify CONFLICT → ejected (never merged)
 #   #4    → CLOSED               → classify GONE     → skipped  (never merged)
-# `pr view` prints the exact TSV pr_fields expects (jq is emulated away); every
-# `pr merge` appends its PR number to $MERGE_LOG so the test can compare the
-# summary's merged count against the merges that actually occurred.
-mkdir -p "$WORK/bin"
+# fleet-land.sh's pr_fields is the 7-field TSV (adds headRefOid + headRefName); the
+# fake emits `issue-<num>` as the head so fleet-land resolves the issue. `--json
+# title` is fleet-history's metadata read. `pr merge` logs the real merge.
 cat > "$WORK/bin/gh" <<GHFAKE
 #!/bin/bash
-# args: pr <action> <num> --repo <r> [flags...]
 sub="\${1:-}"; action="\${2:-}"; num="\${3:-}"
 [ "\$sub" = pr ] || exit 0
 case "\$action" in
   view)
-    case "\$num" in
-      1|2) printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
-      3)   printf 'OPEN\tCONFLICTING\tDIRTY\t-\tpass\tsha-%s\n' "\$num" ;;
-      4)   printf 'CLOSED\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
-      5)   printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
-      *)   printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\n' "\$num" ;;
+    case "\$*" in
+      *"--json state,mergeable"*)
+        case "\$num" in
+          1|2|5) printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\tissue-%s\n' "\$num" "\$num" ;;
+          3)     printf 'OPEN\tCONFLICTING\tDIRTY\t-\tpass\tsha-%s\tissue-%s\n' "\$num" "\$num" ;;
+          4)     printf 'CLOSED\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\tissue-%s\n' "\$num" "\$num" ;;
+          *)     printf 'OPEN\tMERGEABLE\tCLEAN\t-\tpass\tsha-%s\tissue-%s\n' "\$num" "\$num" ;;
+        esac ;;
+      *"--json title"*) printf 'Fake PR %s\t2026-01-01T00:00:00Z\tsha-%s\n' "\$num" "\$num" ;;
     esac ;;
   merge)         printf '%s\n' "\$num" >> "$MERGE_LOG" ;;   # record the real merge
   update-branch) : ;;
-  # No-arg discovery path (issue #73): land-train reads "number<TAB>verdict"
-  # lines from \`gh pr list --jq ...\`. Real gh evaluates the --jq server-side, so
-  # the fake emits the post-jq TSV directly: #5 is a GREEN, un-armed, non-draft
-  # PR that MUST be queued (proving discovery no longer requires auto-merge
-  # arming); #3 is DIRTY and must be pre-filtered out.
+  # No-arg discovery path (issue #73): land-train reads "number<TAB>verdict" lines
+  # from \`gh pr list --jq ...\`. Real gh evaluates the --jq server-side, so the fake
+  # emits the post-jq TSV directly: #5 is a GREEN, un-armed, non-draft PR that MUST
+  # be queued; #3 is DIRTY and must be pre-filtered out.
   list)          printf '5\tqueue\n3\tdirty\n' ;;
 esac
 exit 0
 GHFAKE
 chmod +x "$WORK/bin/gh"
 
-# --- run land-train against the fake ----------------------------------------
-# FLEET_REPO drives repo resolution (no tmux/cache needed); lease + poll knobs
-# keep it hermetic and instant. land-train sends progress+summary to stderr, so
-# capture both streams.
-out="$(
-  PATH="$WORK/bin:$PATH" \
-  FLEET_REPO="acme/widgets" \
-  LAND_TRAIN_LEASE_DIR="$WORK/leases" \
-  LAND_TRAIN_POLL=0 \
-  LAND_TRAIN_PR_TIMEOUT=30 \
-  "$MT" 1 2 3 4 2>&1
-)"
+# --- fake git: no-op success (worktree list empty → nothing to reap) ----------
+cat > "$WORK/bin/git" <<'GITFAKE'
+#!/bin/bash
+if [ "${1:-}" = "-C" ]; then shift 2; fi
+case "${1:-}" in
+  worktree) case "${2:-}" in list) : ;; *) : ;; esac ;;   # list → empty; remove → ok
+  rev-parse) printf 'deadbeef\n' ;;
+  *) : ;;                                                  # fetch / pull / branch → ok
+esac
+exit 0
+GITFAKE
+chmod +x "$WORK/bin/git"
+
+# --- fake tmux: strip a leading -L; no windows to reap ------------------------
+cat > "$WORK/bin/tmux" <<'TMUXFAKE'
+#!/bin/bash
+if [ "${1:-}" = "-L" ]; then shift 2; fi
+case "${1:-}" in
+  list-windows)   : ;;                       # no windows → fleet-land teardown no-ops
+  display-message) case "$*" in *session_name*) echo 'testsess' ;; *) echo '@0' ;; esac ;;
+  *) : ;;
+esac
+exit 0
+TMUXFAKE
+chmod +x "$WORK/bin/tmux"
+
+# SEALED env so fleet-land.sh resolves the FAKE fleet, never the ambient tmux one.
+run_train() {
+  TMUX='' PATH="$WORK/bin:$PATH" \
+  FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
+  FLEET_SESSION="testsess" FLEET_CONF_DIR="$WORK/conf" \
+  FLEET_HISTORY_LEDGER="$WORK/ledger.tsv" \
+  LAND_TRAIN_LEASE_DIR="$1" LAND_TRAIN_POLL=0 LAND_TRAIN_PR_TIMEOUT=30 \
+    "$MT" "${@:2}" 2>&1
+}
+
+# --- run the train over an explicit mixed batch ------------------------------
+out="$(run_train "$WORK/leases" 1 2 3 4)"
 
 # --- assertions --------------------------------------------------------------
 fail() { printf 'selftest FAIL: %s\n\n--- captured output ---\n%s\n' "$1" "$out" >&2; exit 1; }
 
 actual_merges="$(grep -c . "$MERGE_LOG" 2>/dev/null || echo 0)"
 [ "$actual_merges" -eq 2 ] || fail "fake performed $actual_merges merges, expected 2 (#1,#2)"
+grep -qx 1 "$MERGE_LOG" || fail "#1 was not merged"
+grep -qx 2 "$MERGE_LOG" || fail "#2 was not merged"
+grep -qx 3 "$MERGE_LOG" && fail "#3 (conflict) must NOT be merged"
+grep -qx 4 "$MERGE_LOG" && fail "#4 (closed) must NOT be merged"
 
 # The heart of #68: the summary must report what actually happened, not 0.
 printf '%s\n' "$out" | grep -Eq '^  merged:  2( |$)'  || fail "summary 'merged' count != 2 (the #68 regression: counts stuck at 0)"
-printf '%s\n' "$out" | grep -Eq '^  ejected: 1( |$)'  || fail "summary 'ejected' count != 1"
-printf '%s\n' "$out" | grep -Eq '^  skipped: 1( |$)'  || fail "summary 'skipped' count != 1"
+printf '%s\n' "$out" | grep -Eq '^  ejected: 1( |$)'  || fail "summary 'ejected' count != 1 (the CONFLICT #3)"
+printf '%s\n' "$out" | grep -Eq '^  skipped: 1( |$)'  || fail "summary 'skipped' count != 1 (the closed #4)"
 
 # Cross-check: the summary's merged count equals the merges the fake truly did.
 summary_merged="$(printf '%s\n' "$out" | sed -n 's/^  merged:  \([0-9]*\).*/\1/p' | head -n1)"
@@ -95,20 +132,12 @@ summary_merged="$(printf '%s\n' "$out" | sed -n 's/^  merged:  \([0-9]*\).*/\1/p
 printf 'selftest OK: summary counts match reality (merged=2 ejected=1 skipped=1, %s real merges)\n' "$actual_merges"
 
 # --- discovery path (issue #73): no-arg drains the ready queue -----------------
-# Run land-train with NO PR args so it auto-discovers via \`gh pr list\`. The fake
+# Run land-train with NO PR args so it auto-discovers via `gh pr list`. The fake
 # returns "5\tqueue" (green, un-armed) + "3\tdirty". Correct behaviour: #5 is
 # queued and merged (armed-status irrelevant now), #3 is pre-filtered out and
-# never merged. This guards the #73 realignment: armed-only would have queued
-# nothing here.
+# never merged. This guards the #73 realignment: armed-only would have queued nothing.
 : > "$MERGE_LOG"
-out2="$(
-  PATH="$WORK/bin:$PATH" \
-  FLEET_REPO="acme/widgets" \
-  LAND_TRAIN_LEASE_DIR="$WORK/leases2" \
-  LAND_TRAIN_POLL=0 \
-  LAND_TRAIN_PR_TIMEOUT=30 \
-  "$MT" 2>&1
-)"
+out2="$(run_train "$WORK/leases2")"
 fail2() { printf 'selftest FAIL: %s\n\n--- captured output ---\n%s\n' "$1" "$out2" >&2; exit 1; }
 
 disc_merges="$(grep -c . "$MERGE_LOG" 2>/dev/null || echo 0)"
