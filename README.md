@@ -48,6 +48,12 @@ demo repo data.</sub>
   labels, milestone, assignees, and recent comments — word-wrapped to the pane
   so nothing splits mid-word. `/` turns on type-to-filter; `Ctrl-X` closes
   (triages) an issue after a y/n confirm; `Ctrl-O` opens it on the web.
+  **Priority** shows as a `p0`/`p1`/`p2` tag on each row and orders issues within
+  a milestone; `Ctrl-Y` cycles a highlighted issue's priority (none→p2→p1→p0).
+  `Ctrl-N` files a **one-line issue** fast — and with `FLEET_AUTO_TRIAGE=1` that
+  one line is auto-expanded into a titled, elaborated, classified, prioritised
+  issue by a single LLM pass (every suggestion validated against the repo's real
+  milestones/labels). See [docs/AUTO-TRIAGE.md](docs/AUTO-TRIAGE.md).
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
   git status per worktree, the repo's PR/CI map, open issues, per-session

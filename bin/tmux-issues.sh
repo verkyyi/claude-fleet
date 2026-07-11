@@ -54,6 +54,13 @@ else
   K_BIND="ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")"
 fi
 
+# Priority cycle (⌃y): raises the highlighted issue's priority:pN label one step
+# and wraps (none→p2→p1→p0→none). It takes NO text input, so — unlike ⌃n/⌃t/⌃x —
+# it needs no popup and uses ONE bind in both windowed + popup modes (execute-silent
+# blocks fzf until the label edit + optimistic cache write finish, so the reload
+# repaints with the fresh tag). {1} is the row's issue number.
+P_BIND="ctrl-y:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload(bash $ROWS $MODE)"
+
 run_fzf() {
   rm -f "$ACT"
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
@@ -61,7 +68,7 @@ run_fzf() {
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
-    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · tab=collapse · ⌃b=bound · ⌃o=web · ⌃r · ⌃k=keys · esc' \
+    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · ⌃y=priority · tab=collapse · ⌃b=bound · ⌃o=web · ⌃r · ⌃k=keys · esc' \
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
@@ -76,6 +83,7 @@ run_fzf() {
     --bind "$N_BIND" \
     --bind "$T_BIND" \
     --bind "$X_BIND" \
+    --bind "$P_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
     >/dev/null 2>&1
 }

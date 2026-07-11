@@ -101,6 +101,27 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-fill: only issues labeled @group=autofill @tier=advanced @scope=fleet @edit=str
 #FLEET_AUTOFILL_READY_LABEL="ready"
 
+# --- Auto-triage: LLM-expand the one-line capture (bin/fleet-triage.sh, #235) ---
+# OFF by default. When enabled for a fleet, filing an issue from the backlog's
+# one-line capture (⌃n) or quick-dispatch (prefix+n) first runs an LLM pass that
+# turns the single line into a TRIAGED issue: a refined title, an elaborated body,
+# a component MILESTONE, a type LABEL, and a priority:pN tier (the same tier the
+# autofill dispatcher above ranks by and the backlog rows tag + sort by). Every
+# milestone/label suggestion is VALIDATED against this repo's real sets before it
+# is applied, so a hallucinated name can never break the create — an unknown
+# suggestion is dropped, never invented.
+#
+# COST: one `claude -p` call per issue you capture — small, and only on the fast
+# path when a human files one (not a background sweep). Opt-in per fleet like the
+# other token-spenders. No claude on PATH ⇒ capture stays the raw, zero-token
+# fast path unchanged.
+# @label=Auto-triage one-line capture @group=triage @tier=common @scope=fleet @edit=bool
+#FLEET_AUTO_TRIAGE=0
+# Model the triage pass runs on (passed as `claude -p --model`). Default haiku —
+# cheap + fast, matching the classifier/summarizer daemons.
+# @label=Auto-triage model @group=triage @tier=advanced @scope=fleet @edit=enum
+#FLEET_AUTO_TRIAGE_MODEL="haiku"
+
 # --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
 # OFF by default. When enabled for a fleet, the issue-bridge daemon
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)
