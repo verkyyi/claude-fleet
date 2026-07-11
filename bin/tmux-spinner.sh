@@ -21,6 +21,8 @@ NAME_WORKING='#a9b1d6'   # calm neutral name while working
 NAME_DONE='#9ece6a'
 NAME_NEEDS='#f7768e'
 NAME_IDLE='#565f89'
+NL='
+'   # literal newline — accumulator delimiter for the cross-fleet pass (issue #236)
 
 # Global config (FLEET_STUCK_WORKING_SECS lives here). Sourced ONCE at startup,
 # like the other daemons — a change needs a spinner restart.
@@ -132,6 +134,7 @@ i=1
 LAST='|'
 LAST_NEEDS='|'   # per-session @attn_needs counts published last frame (change-detect)
 LAST_STEWARD='|' # per-session @steward_needs flags published last frame (change-detect)
+LAST_OTHER='|'   # per-session @attn_other_fleets counts published last frame (issue #236)
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
@@ -139,7 +142,7 @@ while :; do
   # re-probing) while no fleet is up so a freshly-spawned fleet is picked up fast.
   socc=$((socc + 1))
   if [ "$socc" -ge "$SOCK_EVERY" ] || [ -z "$SOCKETS" ]; then socc=0; SOCKETS=$(fleet_sockets); fi
-  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_STEWARD='|'; continue; fi
+  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_STEWARD='|'; LAST_OTHER='|'; continue; fi
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
@@ -159,6 +162,7 @@ while :; do
   NEW='|'
   NEW_NEEDS='|'
   NEW_STEWARD='|'
+  AGG=''   # "sess sock need" per live fleet this frame → cross-fleet pass (issue #236)
   # Each fleet is its OWN tmux server (issue #159): scan + apply PER SOCKET, each
   # with its own command file + `tmux -L … source-file`. Change-detection state
   # (LAST/LAST_NEEDS/LAST_STEWARD) stays GLOBAL, keyed by the globally-unique
@@ -235,6 +239,12 @@ EOF
         *) printf 'set-option -t %s @steward_needs "%s"\n' "$nsess" "$nstew" >> "$cmdf"; changed=1 ;;
       esac
       NEW_STEWARD="$NEW_STEWARD$stok|"
+      # Cross-fleet feed (issue #236): does THIS session need attention (a worker
+      # badge > 0 OR a needy steward hub)? Record that flag + its socket so the
+      # post-loop pass can tell every OTHER fleet how many fleets are waiting.
+      oneed=0
+      { [ "${ncnt:-0}" -gt 0 ] || [ "${nstew:-0}" -gt 0 ]; } 2>/dev/null && oneed=1
+      AGG="$AGG$nsess $sock $oneed$NL"
     done <<EOF
 $needs_map
 EOF
@@ -244,6 +254,51 @@ EOF
   LAST="$NEW"
   LAST_NEEDS="$NEW_NEEDS"
   LAST_STEWARD="$NEW_STEWARD"
+
+  # --- cross-fleet needs → @attn_other_fleets (issue #236) --------------------
+  # An operator attached to ONE fleet couldn't tell that a DIFFERENT fleet was
+  # waiting — the needs signal (● badge / ⌂ beacon) is scoped to this fleet only.
+  # Reuse the per-session need flags just gathered in $AGG (one "sess sock need"
+  # line per live fleet) to publish, per fleet, how many OTHER live fleets need
+  # attention. total_need = # of fleets waiting; each fleet's own count is
+  # total_need minus its OWN need, so a needy fleet never counts itself and a calm
+  # fleet sees them all. conf/tmux-attention.conf renders this into the EXISTING
+  # #S fleet-switcher chip (no new bar element) — clicking #S opens the picker to
+  # jump to the waiting fleet. Runs AFTER the socket loop because it needs the
+  # estate-wide total first; change-detected + published per socket like @attn_needs.
+  NEW_OTHER='|'
+  if [ -n "$AGG" ]; then
+    total_need=0
+    while read -r asess asock aneed; do
+      [ -n "$asess" ] || continue
+      [ "$aneed" = 1 ] && total_need=$((total_need + 1))
+    done <<EOF
+$AGG
+EOF
+    otouched=''
+    while read -r asess asock aneed; do
+      [ -n "$asess" ] || continue
+      oother=$((total_need - aneed))
+      otok="$asess=$oother"
+      case "$LAST_OTHER" in
+        *"|$otok|"*) : ;;
+        *)
+          ocmd="$CMDF.$asock.other"
+          case " $otouched " in
+            *" $asock "*) : ;;
+            *) : > "$ocmd"; otouched="$otouched $asock" ;;
+          esac
+          printf 'set-option -t %s @attn_other_fleets "%s"\n' "$asess" "$oother" >> "$ocmd" ;;
+      esac
+      NEW_OTHER="$NEW_OTHER$otok|"
+    done <<EOF
+$AGG
+EOF
+    for asock in $otouched; do
+      tmux -L "$asock" source-file "$CMDF.$asock.other" 2>/dev/null
+    done
+  fi
+  LAST_OTHER="$NEW_OTHER"
 
   i=$((i + 1)); [ "$i" -gt "$NFRAMES" ] && i=1
   sleep "$INTERVAL"

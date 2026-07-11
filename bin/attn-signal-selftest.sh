@@ -21,6 +21,14 @@
 #     red block (bg=#f7768e) when @steward_needs, else blue block (bg=#7aa2f7)
 #     on the hub / dim (bg=#414868) off it — the three styles, from any window.
 #
+#   PART C — the CROSS-FLEET flag (issue #236): the spinner also publishes, per
+#     fleet, @attn_other_fleets = how many OTHER live fleets currently need
+#     attention (a worker badge or a needy steward hub). PART A asserts the count
+#     (each of the 3 needy fleets sees 2 others; the 1 calm fleet sees 3); PART C
+#     asserts the REAL status-left renders it as an orange "⚑ N" flag on the
+#     existing #S chip — shown when > 0, hidden at 0 — reusing that element (no new
+#     bar item) so an operator on one fleet sees that a DIFFERENT fleet is waiting.
+#
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -43,7 +51,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/attn-selftest.XXXXXX")" || exit 2
 # spinner already names `-L "$sock"` on every call, resolved via TMUX_TMPDIR.
 export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
-for f in fleetA fleetB fleetC; do printf 'FLEET_REPO="acme/%s"\n' "$f" > "$FLEET_CONF_DIR/$f.conf"; done
+for f in fleetA fleetB fleetC fleetD; do printf 'FLEET_REPO="acme/%s"\n' "$f" > "$FLEET_CONF_DIR/$f.conf"; done
 
 # tf <fleet> <tmux-args…> — run tmux against THAT fleet's own server (socket ==
 # session name). The socket resolves inside the isolated TMUX_TMPDIR set above.
@@ -52,7 +60,7 @@ tf() { local f="$1"; shift; "$REAL_TMUX" -L "$f" "$@"; }
 SPIN_PID=''
 cleanup() {
   [ -n "$SPIN_PID" ] && kill "$SPIN_PID" 2>/dev/null
-  for f in fleetA fleetB fleetC; do "$REAL_TMUX" -L "$f" kill-server 2>/dev/null; done
+  for f in fleetA fleetB fleetC fleetD; do "$REAL_TMUX" -L "$f" kill-server 2>/dev/null; done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -62,11 +70,14 @@ trap 'exit 130' INT TERM HUP
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-# --- fixture: three fleets, EACH ON ITS OWN SOCKET, hubs + workers in states ---
+# --- fixture: four fleets, EACH ON ITS OWN SOCKET, hubs + workers in states ---
 # fleetA: needy hub + 2 needy workers + 1 working  → @attn_needs=2 @steward_needs=1
 # fleetB: calm hub + 1 needy worker + 2 STATELESS  → @attn_needs=1 @steward_needs=0
 #         windows named like state keywords (must NOT be miscounted)
 # fleetC: needy 'backlog' panel only               → @attn_needs=0 @steward_needs=1
+# fleetD: calm hub + 1 working worker              → @attn_needs=0 @steward_needs=0
+#         needs NOTHING — the cross-fleet control (issue #236): A/B/C all need, so D
+#         must see 3 other needy fleets while each of A/B/C sees 2 (excludes itself)
 tf fleetA new-session -d -s fleetA -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
 tf fleetA new-window -t fleetA: -n issue-1
 tf fleetA new-window -t fleetA: -n issue-2
@@ -77,6 +88,8 @@ tf fleetB new-window -t fleetB: -n needs       # STATELESS window named exactly 
 tf fleetB new-window -t fleetB: -n 'done'      # STATELESS window named 'done' (quoted: SC1010)
 tf fleetC new-session -d -s fleetC -n plan
 tf fleetC new-window -t fleetC: -n backlog
+tf fleetD new-session -d -s fleetD -n plan
+tf fleetD new-window -t fleetD: -n issue-5
 
 setst() { local f="${1%%:*}"; tf "$f" set-window-option -t "$1" @claude_state "$2"; }
 setst fleetA:plan   needs      # hub → steward, NOT the badge
@@ -87,6 +100,8 @@ setst fleetB:plan   'done'     # quoted: 'done' is a shell keyword (SC1010)
 setst fleetB:issue-9 needs      # worker → badge
 setst fleetC:plan   idle
 setst fleetC:backlog needs      # panel → steward, NOT the badge
+setst fleetD:plan   idle        # calm hub    → no steward need
+setst fleetD:issue-5 working    # calm worker → no badge; fleetD needs NOTHING
 # fleetB:needs and fleetB:done get NO @claude_state — an empty state field must
 # not collapse and let the window NAME be read as the state (issue #166 review).
 
@@ -104,14 +119,16 @@ SPIN_PID=$!
 # forks a `tmux -L <label> has-session` per fleet on its FIRST frame to discover
 # the live sockets, which under full-suite load can push first-publish past 3s —
 # a race that flaked this test even though the steady-state behaviour is correct.
+# @attn_other_fleets is published in the cross-fleet pass that runs AFTER the whole
+# per-socket loop, so waiting on it guarantees @attn_needs/@steward_needs are set too.
 got=''
 n=0
 while [ "$n" -lt 200 ]; do
-  got="$(tf fleetA show-options -t fleetA 2>/dev/null | grep -c '@steward_needs')"
+  got="$(tf fleetA show-options -t fleetA 2>/dev/null | grep -c '@attn_other_fleets')"
   [ "$got" = 1 ] && break
   n=$((n + 1)); sleep 0.05
 done
-[ "$got" = 1 ] || fail "spinner never published @steward_needs within timeout"
+[ "$got" = 1 ] || fail "spinner never published @attn_other_fleets within timeout"
 
 opt() { tf "$1" show-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{gsub(/"/,"",$2); print $2}'; }
 
@@ -126,8 +143,21 @@ c_badge="$(opt fleetC @attn_needs)";   c_stew="$(opt fleetC @steward_needs)"
 [ "$c_badge" = 0 ] || fail "fleetC badge: expected 0 workers, got '${c_badge}'"
 [ "$c_stew"  = 1 ] || fail "fleetC steward: expected 1 (needy 'backlog' panel), got '${c_stew}'"
 
+# Cross-fleet count (issue #236): A/B/C each need attention, D does not. So each of
+# A/B/C sees the OTHER two needy fleets (2), and calm D sees all three (3) — proving
+# the per-fleet "minus its own need" subtraction and the estate-wide aggregation.
+a_other="$(opt fleetA @attn_other_fleets)"
+b_other="$(opt fleetB @attn_other_fleets)"
+c_other="$(opt fleetC @attn_other_fleets)"
+d_other="$(opt fleetD @attn_other_fleets)"
+[ "$a_other" = 2 ] || fail "fleetA cross-fleet: expected 2 other needy fleets (B,C), got '${a_other}'"
+[ "$b_other" = 2 ] || fail "fleetB cross-fleet: expected 2 other needy fleets (A,C), got '${b_other}'"
+[ "$c_other" = 2 ] || fail "fleetC cross-fleet: expected 2 other needy fleets (A,B), got '${c_other}'"
+[ "$d_other" = 3 ] || fail "fleetD cross-fleet: expected 3 other needy fleets (A,B,C — D itself calm), got '${d_other}'"
+
 kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 printf 'PART A ok: tally split — A(●2,⌂) B(●1) C(⌂), hub excluded from the dot, per-fleet\n'
+printf 'PART A ok: cross-fleet — A/B/C see 2 other needy fleets, calm D sees 3 (#236)\n'
 
 # --- PART B: the three ⌂ styles from the REAL conf status-left ----------------
 # Pull the shipped `set -g status-left "..."` value and expand it per state;
@@ -158,5 +188,22 @@ case "$out" in *"bg=#f7768e"*) : ;; *) fail "off-hub needy: red beacon must show
 
 printf 'PART B ok: ⌂ icon — red(bg=#f7768e) beacon over blue(on-hub)/dim(off-hub), from any window\n'
 
-printf 'selftest PASS: attention split — workers-only ● N badge + steward red ⌂ beacon (#166)\n'
+# --- PART C: the cross-fleet ⚑ flag on the #S chip (issue #236) ----------------
+# The same shipped status-left, expanded with @attn_other_fleets set: > 0 shows an
+# orange "⚑ N" flag right after the fleet name; 0 (like @attn_needs) hides it. This
+# is the REUSE-an-existing-element requirement — the flag lives inside the #S chip,
+# no new bar item — so it must render from ANY window, hub or worker.
+tf fleetB set-option -t fleetB @attn_other_fleets 2
+out="$(tf fleetB display-message -p -t fleetB:plan "$SL")"
+case "$out" in *"⚑2"*)          : ;; *) fail "cross-fleet flag: expected ⚑2 on the #S chip when @attn_other_fleets=2" ;; esac
+case "$out" in *"fg=#ff9e64"*)  : ;; *) fail "cross-fleet flag: expected the orange fg=#ff9e64 (distinct from the red local ● badge)" ;; esac
+out="$(tf fleetB display-message -p -t fleetB:issue-9 "$SL")"
+case "$out" in *"⚑2"*)          : ;; *) fail "cross-fleet flag: must render from a worker window too, got no ⚑2" ;; esac
+tf fleetB set-option -t fleetB @attn_other_fleets 0
+out="$(tf fleetB display-message -p -t fleetB:plan "$SL")"
+case "$out" in *"⚑"*) fail "cross-fleet flag: must be HIDDEN when @attn_other_fleets=0" ;; *) : ;; esac
+
+printf 'PART C ok: ⚑ N cross-fleet flag on the #S chip — shown >0, hidden at 0, from any window (#236)\n'
+
+printf 'selftest PASS: attention signals — ● N badge + ⌂ beacon (#166) + ⚑ N cross-fleet flag (#236)\n'
 exit 0

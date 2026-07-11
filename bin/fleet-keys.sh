@@ -55,6 +55,7 @@ print_sheet() {
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's steward hub"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
+  key "click ⚑ N" "orange flag on the #S chip = N OTHER fleets need you; click to switch"
 
   group "dashboard" "— inside the hub dash pane (prefix G)"
   key "enter" "jump to the highlighted window"

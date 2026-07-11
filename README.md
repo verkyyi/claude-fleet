@@ -147,6 +147,15 @@ fleets and switches to the chosen one, and the red **`● N` needs badge** cycle
 to the next window that needs you. (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
+The `#S` chip also carries the **cross-fleet** cue: when you're attached to one
+fleet and a **different** live fleet has a needs-attention session, an orange
+**`⚑ N` flag** appears next to the fleet name — `N` = how many *other* fleets are
+waiting. It reuses the existing `#S` element (no new bar item), so clicking it
+opens the same picker to jump straight to the waiting fleet. Orange `⚑` means
+"another fleet needs you"; the red `●` means "*this* fleet needs you." The signal
+is produced by the spinner daemon, which already reads every live fleet's state
+across sockets.
+
 ### tmux baseline
 
 `conf/tmux-attention.conf` also carries an opinionated **fleet baseline** the UX
