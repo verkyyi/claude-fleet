@@ -48,19 +48,20 @@ echo "issue=${issue:-none} branch=${branch:-none}"
 - You should be on the `issue-<N>` branch inside its worktree (the worker seat
   guarantees this). If not, stop and say why.
 
-## 2. Verify per the repo's conventions
+## 2. Verify per the repo's own conventions
 
-Run the project's checks and only continue if they pass:
+Before you push, make sure the change passes whatever **this** repo uses to gate
+a PR — its own tests, linters, and CI (discover them from its `CLAUDE.md` /
+`README` / `.github/workflows` if you're unsure what they are). Don't open a red
+PR: the repo's own PR checks are the real gate, and the steward reviews before
+landing.
 
-- `/verify` — exercise the change end-to-end.
-- `/code-review` — review the working diff.
-- `bash bin/ci-shellcheck.sh` — runs the **exact** shellcheck invocation CI
-  runs (pinned version from `.shellcheck-version`, `--severity=warning`), so its
-  verdict matches the PR gate. Run it before pushing; it exits non-zero on any
-  finding and warns if your local shellcheck has drifted from the pinned version.
-- Plus anything else the repo requires (e.g. `bash bin/fleet-doctor.sh`).
+Keep this step **repo-agnostic** — `/fleet-ship` runs for a worker on ANY repo a
+fleet targets, so discover and run the *target* repo's checks; do NOT hardcode
+one project's commands (a specific `bin/…` script, a named test runner) into this
+shared skill.
 
-If verification fails, **do not open the PR** — report what failed and stop.
+If the checks fail, **do not open the PR** — report what failed and stop.
 
 ## 3. Ensure the worktree is clean and pushed
 
