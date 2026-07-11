@@ -20,6 +20,17 @@ FLEET_C="${TMPDIR:-/tmp}/.claude-dash"
 # test harness).
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 
+# GLOBAL-ONLY FLEET_* keys (issue #237): read machine-wide — one daemon serving
+# EVERY fleet (collector, pr-refresh, spinner, diskguard) or the SYSTEM-WIDE
+# session cap — so a per-fleet value is a silent no-op at best, and for the caps
+# actively wrong (one fleet raising the machine-wide ceiling for its own spawns).
+# fleet_load_conf strips these from the per-fleet overlay so GLOBAL always wins,
+# mirroring the prefix+c config modal, which already refuses to WRITE a
+# global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
+# in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
+# cross-checks the two so they can't drift.
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION"
+
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
 # name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,
@@ -151,9 +162,25 @@ fleet_current_session() {
 # Overlay a fleet's per-session conf ON TOP of the already-sourced global
 # fleet.conf, so FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH/... target THIS fleet.
 # Sources into the caller's shell (call it non-subshelled). No-op if absent.
+#
+# GLOBAL-ONLY keys ($_FLEET_GLOBAL_ONLY) are STRIPPED from the overlay before it is
+# sourced (issue #237): they are read machine-wide, so a per-fleet value is a no-op
+# at best and, for the SYSTEM-WIDE session cap, actively wrong — a per-fleet
+# FLEET_GLOBAL_MAX_SESSIONS would otherwise raise the shared ceiling for THIS
+# fleet's spawns (every spawn path + the dispatch/watch daemons load the overlay,
+# then read that cap). Filtering here makes GLOBAL win, matching the modal's
+# write-side, and everything else — comments, `source` includes, per-fleet keys —
+# passes through verbatim.
 fleet_load_conf() {
   local conf; conf=$(fleet_conf_file "$1")
-  [ -f "$conf" ] && . "$conf"
+  [ -f "$conf" ] || return 0
+  # eval the conf with global-only lines filtered out (rather than `. <(grep …)`:
+  # process substitution is unreliable when this function runs inside a command
+  # substitution, as the dispatch/watch subshell-capture paths do). Confs are
+  # trusted assignments-only content, so eval-ing the filtered text is exactly what
+  # sourcing would do, minus the stripped keys.
+  local _ore; _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+  eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
   return 0
 }
 

@@ -245,7 +245,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_STUCK_WORKING_SECS=120
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.
-# @label=Status-bar container @group=status @tier=advanced @scope=fleet @edit=str
+# GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
+# — a per-fleet override would be a silent no-op — so it is machine-wide (like the
+# FLEET_DISK_* thresholds the same status bar renders).
+# @label=Status-bar container @group=status @tier=advanced @scope=global @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
 
 # Optional: the command each fleet's steward pane runs (the bottom pane of the
@@ -281,7 +284,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:
 # A ready-made WeCom 群机器人 notifier ships in extras/ (put the webhook URL in
 # ~/.config/claude-fleet-webhook, chmod 600):
-# @label=Notification command @group=notify @tier=common @scope=fleet @edit=path
+# GLOBAL: the two readers — the collector (bin/tmux-dash-collect.sh) and the
+# disk guard (bin/fleet-diskguard.sh) — are single machine-wide daemons that read
+# this from the global env; a per-fleet override never reaches them (silent no-op),
+# so it is machine-wide like its companion FLEET_ESCALATE_AFTER.
+# @label=Notification command @group=notify @tier=common @scope=global @edit=path
 #FLEET_NOTIFY_CMD="$HOME/.claude/fleet/extras/wecom-webhook-notify.sh"
 # @label=Escalate unattended after @group=notify @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ESCALATE_AFTER=300
@@ -301,10 +308,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_DISK_FLOOR_GB=12       # gate refusal threshold
 # @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
-# @label=Disk cleanup target @group=disk @tier=advanced @scope=global @edit=str
-#FLEET_DISK_TARGET="$TMPDIR"  # dir whose volume to measure
-# @label=Disk-guard cooldown @group=disk @tier=advanced @scope=global @edit=int @unit=sec
-#FLEET_DISK_COOLDOWN=300      # min seconds between incident captures
+# (The volume the guard measures and the min seconds between incident captures are
+# fixed internal constants now — the guard MUST measure the $TMPDIR volume the dash
+# cache writes to, and the capture cooldown is plumbing no one tunes. A stale
+# FLEET_DISK_TARGET / FLEET_DISK_COOLDOWN in an old conf is still honored by
+# bin/fleet-diskguard.sh but is no longer a surfaced knob — issue #237.)
 
 # Runaway-CPU watchdog (same daemon). The shared tmux server can also be
 # overloaded by a detached orphan spinning a core (issue #151, crash #3: a

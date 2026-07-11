@@ -98,11 +98,28 @@ while IFS="$FCFG_US" read -r k label group tier scope edit unit def; do
 done <<EOF
 $(fcfg_table)
 EOF
-# the three global daemon settings must be @scope=global (a per-fleet override is
-# a silent no-op — the modal must not show a `fleet` per-fleet tag for them).
+# the global daemon settings must be @scope=global (a per-fleet override is a
+# silent no-op — the modal must not show a `fleet` per-fleet tag for them).
 eq 'scope FLEET_GH_TTL'              "$(fcfg_scope FLEET_GH_TTL)"              global
 eq 'scope FLEET_ISSUE_TTL'           "$(fcfg_scope FLEET_ISSUE_TTL)"           global
 eq 'scope FLEET_PR_REFRESH_INTERVAL' "$(fcfg_scope FLEET_PR_REFRESH_INTERVAL)" global
+# issue #237: the notifier (read only by the collector + diskguard daemons) and the
+# status-bar container (read only by tmux-status.sh, global env) are now global-only.
+eq 'scope FLEET_NOTIFY_CMD'          "$(fcfg_scope FLEET_NOTIFY_CMD)"          global
+eq 'scope FLEET_STATUS_CONTAINER'    "$(fcfg_scope FLEET_STATUS_CONTAINER)"    global
+
+# DRIFT GUARD (issue #237): fleet_load_conf strips exactly fleet-lib's
+# $_FLEET_GLOBAL_ONLY from the per-fleet overlay, so that list MUST equal the set of
+# keys the example tags @scope=global. If the two drift, a global-only key silently
+# becomes per-fleet-overridable again (or a per-fleet key gets wrongly stripped).
+# Extract the list from fleet-lib in a SUBSHELL so its unconditional FLEET_C reset
+# can't clobber this test's isolated cache dir.
+example_global=$(printf '%s\n' "$keys" | while IFS= read -r gk; do
+  [ -n "$gk" ] || continue
+  [ "$(fcfg_scope "$gk")" = global ] && printf '%s\n' "$gk"
+done | sort | tr '\n' ' ')
+lib_global=$( . "$BIN/fleet-lib.sh" >/dev/null 2>&1; printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '\n' | sort | tr '\n' ' ' )
+eq 'global-only list == example @scope=global set' "$example_global" "$lib_global"
 
 # --- TYPING (fcfg_type derives from @edit) ----------------------------------
 eq 'type FLEET_AUTOFILL'       "$(fcfg_type FLEET_AUTOFILL)"       bool
