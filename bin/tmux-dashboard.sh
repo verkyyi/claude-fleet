@@ -9,7 +9,7 @@
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
 # the 'plan' hub (fleet-up/steward-session builds it; prefix+G focuses it). Env: REFRESH.
 set -uo pipefail
-REFRESH="${REFRESH:-0.25}"   # 4Hz repaint: the rows producer is exec-fork-free (~45ms), spinner steps a frame per repaint
+REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady state; the spinner steps a frame per repaint
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"
