@@ -45,8 +45,8 @@ PREVIEW=( --preview-window=hidden )
 # backlog panel (tmux-issues.sh) uses.
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
-HDR='enter=jump · ⌃g=new session (pick issue) · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=back'
-[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=close'
+HDR='enter=jump · ⌃g=new session (pick issue) · ⌃n=new issue+worker · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=back'
+[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃n=new issue+worker · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃t=landed · ?=keys · esc=close'
 
 run_dash() {
   # clear any half-finished mode from a prior run; reset the live⇄landed view so
@@ -64,6 +64,7 @@ run_dash() {
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")" \
     --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
+    --bind "ctrl-n:execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
     --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh)+reload(bash $ROWS)" \
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \

@@ -59,6 +59,7 @@ print_sheet() {
   group "dashboard" "— inside the hub dash pane (prefix G)"
   key "enter" "jump to the highlighted window"
   key "⌃g" "new session — pick an issue to spawn"
+  key "⌃n" "new issue — file one AND spawn its worker (quick-dispatch, like prefix n)"
   key "⌃s" "raw scratch session — plain claude, no issue/worktree/PR"
   key "⌃e" "rename the highlighted window"
   key "⌃x" "reap a merged+clean worker (window + worktree + issue)"
