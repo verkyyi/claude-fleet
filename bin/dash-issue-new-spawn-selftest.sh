@@ -124,5 +124,17 @@ grep -q create "$GH_LOG"        || fail "D gh issue create should have been atte
 grep -qi 'failed' "$WORK/out"   || fail "D create failure should surface in the popup" "$(cat "$WORK/out")"
 ok "D a failed create surfaces and spawns nothing"
 
-printf '\nselftest OK: %s assertions passed (prefix+n quick-dispatch)\n' "$pass"
+# ============================ E: dash ⌃n wiring =============================
+# The dashboard fzf pane exposes this same quick-dispatch path as a ⌃n bind, so
+# file+spawn is reachable from INSIDE the dash pane too, not just prefix+n
+# (issue #226). Static assertion: a fzf --bind on ctrl-n that runs the very
+# script under test with --spawn. Purely an extra entry point — behaviour is the
+# prefix+n path already exercised by A–D above.
+DASH="$BIN/tmux-dashboard.sh"
+[ -f "$DASH" ] || fail "E $DASH missing"
+grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
+  || fail "E dashboard has no ⌃n bind invoking dash-issue-new.sh --spawn" "$(grep -n 'ctrl-n' "$DASH" || true)"
+ok "E dash ⌃n bind wires into the quick-dispatch (dash-issue-new.sh --spawn)"
+
+printf '\nselftest OK: %s assertions passed (prefix+n quick-dispatch + dash ⌃n wiring)\n' "$pass"
 exit 0
