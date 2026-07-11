@@ -2,18 +2,19 @@
 
 <!-- fleet skill · owner: steward -->
 
-The steward's finish line for a worker's PR: verify the PR is truly mergeable,
-squash-merge it, fast-forward the fleet's base checkout to the new master, and
-clean up the merged worktree + window. It **mutates this fleet's `$FLEET_REPO`**
-(merges a PR) and the fleet's base checkout (`$FLEET_MAIN`). Merging is a
-steward operation, so this skill is **steward-only** — a worker never runs it (a
-worker `/fleet-ship`s; the steward `/fleet-land`s).
+The steward's finish line for a worker's PR. This skill is now a **thin approval
+wrapper** over `bin/fleet-land.sh`: your job here is the **judgment** — verify the
+PR is truly mergeable and the work is complete — and then hand the **mechanics**
+(lease → merge → base fast-forward → history ledger → worktree/window teardown) to
+the script, which runs them OUTSIDE this LLM turn. It **mutates this fleet's
+`$FLEET_REPO`** (merges a PR) and the fleet's base checkout (`$FLEET_MAIN`).
+Merging is a steward operation, so this skill is **steward-only** — a worker never
+runs it (a worker `/fleet-ship`s; the steward `/fleet-land`s).
 
-This skill is **fleet-agnostic**: it does the *general* finish work only —
-merge + base-checkout pull + cleanup. It does **not** touch the live install
-(`~/.claude/fleet`), reload daemons, re-merge hooks, or reinstall commands; that
-tooling re-apply is a separate, tooling-fleet-only concern — run `/fleet-sync-install`
-for it after landing a claude-fleet tooling PR.
+This skill is **fleet-agnostic**: it does the *general* finish work only. It does
+**not** touch the live install (`~/.claude/fleet`), reload daemons, re-merge hooks,
+or reinstall commands; that tooling re-apply is a separate concern — run
+`/fleet-sync-install` for it after landing a claude-fleet tooling PR.
 
 **Argument** (`$ARGUMENTS`): the PR number to land (`/fleet-land 61`). Required — if
 empty, ask the user which PR and stop.
@@ -40,94 +41,74 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 `$FLEET_BASE_BRANCH` — this fleet only.
 
-## 1. Verify the PR is genuinely mergeable
+## 1. The judgment — review the PR before you approve it (this is the whole point)
 
-Never merge a red or incomplete PR. Read its state:
+The script lands what it's told; **you** are the approval gate. Never hand a red,
+incomplete, or wrong PR to the lander. Read its state and its diff:
 
 ```sh
 gh pr view "<N>" --repo "$FLEET_REPO" \
   --json number,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup,state
+gh pr diff "<N>" --repo "$FLEET_REPO"
 ```
 
-Decide from `mergeable` + `statusCheckRollup`:
-
-- **`MERGEABLE` + all checks green** → proceed to step 2.
-- **Red/blocked *only* because the branch is behind master** (mergeStateStatus
-  `BEHIND`, checks otherwise green) → bring it up to date and re-check, do **not**
-  merge blind:
-
-  ```sh
-  gh pr update-branch "<N>" --repo "$FLEET_REPO"
-  ```
-
-  Then wait for CI to re-run and re-view (re-run step 1) until it's green + up to
-  date. Poll, don't merge on the stale result.
 - **Genuinely failing** (a required check is red on its own merits), **CONFLICTING**
-  (needs a real rebase), or the **work looks incomplete** → **STOP and report**.
-  Do not merge, do not `--admin`-bypass, do not rebase the worker's branch
+  (needs a real rebase), or the **work looks incomplete / wrong** → **STOP and report**.
+  Do not run the lander, do not `--admin`-bypass, do not rebase the worker's branch
   yourself — hand it back with the one-line reason.
+- **Merely `BEHIND`** (out of date with base, checks otherwise green) is **fine to
+  approve** — the lander brings it up to date under the lease and waits for green
+  before merging. You do **not** need to `update-branch` by hand first.
+- **Mergeable + green (or BEHIND-but-otherwise-green) + work looks right** → approve
+  it: go to step 2.
 
-## 2. Squash-merge
+## 2. Hand the mechanics to the lander
 
-```sh
-gh pr merge "<N>" --repo "$FLEET_REPO" --squash
-```
-
-Do **not** rely on `--delete-branch`: it errors when the branch is still checked
-out in a worker worktree. Branch/worktree cleanup happens in step 4.
-
-## 3. Land master into the fleet's base checkout
-
-The merge only moved the remote — the fleet's base checkout still points at the
-old master. Fast-forward it:
-
-```sh
-git -C "$FLEET_MAIN" pull --ff-only          # the fleet's base checkout
-```
-
-If it refuses to fast-forward, stop and report — something diverged locally;
-resolve it before continuing.
-
-## 4. Clean up the merged worktree + window
-
-The worker's `issue-<N>` worktree and branch are now merged and safe to remove;
-close its window too. Find the window by its `@issue` binding. **Before** removing
-the worktree, append a **history-ledger row** so the finished session stays
-reviewable/resumable after cleanup (`/fleet-history`) — the worker's transcript
-survives, but the index only exists if we capture it here, while the worktree
-path (→ transcript dir + session id) is still known.
+`bin/fleet-land.sh` does the mechanical land with no further LLM turn: it takes the
+**per-repo land lease** (the SAME lock `/fleet-land-train` and `/fleet-land-self`
+take, so landing stays single-writer — this also closes the old gap where
+`/fleet-land` took *no* lease and could race a train), **holds it through the
+green-wait** (if `BEHIND` it `update-branch`es and waits for CI *while holding the
+lease*, so base can't advance under it), re-validates ownership + `--match-head-commit`
+(a stolen lease / a head-sha race aborts instead of landing blind), squash-merges,
+`pull --ff-only`s the base checkout, records the history ledger **before** removal,
+then tears down the worker's window + worktree + branch in order.
 
 ```sh
-issue="<the #issue the PR closed>"          # from the PR body's `Closes #<issue>`
-wt=$(git -C "$FLEET_MAIN" worktree list --porcelain | \
-     awk -v b="issue-$issue" '/^worktree /{p=$2} $0 ~ "branch refs/heads/"b"$"{print p}')
-win=$(tmux list-windows -t "$S" -F '#{window_id} #{@issue}' 2>/dev/null | awk -v i="$issue" '$2==i{print $1}')
-
-# LEDGER (before removal): derives title/sha/mergedAt from the PR and
-# transcript-dir + session-id from the worktree path; pulls the one-line summary
-# from the dash cache via --win. Best-effort — never blocks the land on failure.
-bash ~/.claude/fleet/bin/fleet-history.sh record \
-  --repo "$FLEET_REPO" --main "$FLEET_MAIN" --session "$S" \
-  --pr "<N>" --issue "$issue" --worktree "$wt" --win "$win" || true
-
-[ -n "$wt" ] && git -C "$FLEET_MAIN" worktree remove "$wt"      # add --force only if it's clean but errors
-git -C "$FLEET_MAIN" branch -D "issue-$issue" 2>/dev/null || true
-# close the worker window bound to this issue (this fleet's session only)
-[ -n "$win" ] && tmux kill-window -t "$win"
+bash ~/.claude/fleet/bin/fleet-land.sh "<N>" 2>&1
 ```
 
-Never remove a worktree with uncommitted changes — if `worktree remove` refuses,
-report it rather than forcing; the work may not have shipped.
+Read the single result token it prints on the last line:
 
-## 5. Report — one line
+- `landed:<sha>` / `landed:already` → **success.** The PR is merged, the base is
+  fast-forwarded, the ledger row is recorded, and the worker's window/worktree/branch
+  are cleaned up. Report it (step 3).
+- `eject:<reason>` (conflict / failing / blocked / draft / gone / max-hold / lease
+  timeout) → it refused to force. Do **not** retry blindly — report the reason and
+  hand the PR back (rebase / fix checks / get review, per the reason).
+- `error:<reason>` (no repo / no main / no gh / PR not found) → a precondition
+  failed. Fix it and retry, or report.
+
+Preview without mutating anything with `--dry-run` (prints the verdict + planned
+action, takes no lease):
+
+```sh
+bash ~/.claude/fleet/bin/fleet-land.sh "<N>" --dry-run 2>&1
+```
+
+Tune behaviour with the `LAND_*` env knobs documented at the top of
+`bin/fleet-land.sh` (poll interval, hold/queue timeouts, retry cap, merge method,
+lease TTL).
+
+## 3. Report — one line
 
 ```
 #<issue> landed → <squash commit sha>
 ```
 
-Name the PR, the issue it closed, and the landed sha. If you stopped at step 1
-(not mergeable) or step 3 (base checkout diverged), report that instead —
-clearly, with the one-line reason and what the human/worker must do.
+Name the PR, the issue it closed (from the head branch / PR body), and the landed
+sha. If the lander ejected (not mergeable) or errored, report **that** instead —
+clearly, with the one-line reason and what the human/worker must do next.
 
 If the PR changed the claude-fleet tooling itself and you're on the self-hosting
 tooling fleet, note that the live install still needs `/fleet-sync-install` to pick
@@ -137,6 +118,7 @@ up the change — `/fleet-land` deliberately does not touch it.
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. `/fleet-land` never force-pushes and never `--admin`-bypasses
-branch protection: it only merges a PR GitHub already considers mergeable, after
-CI is green on the master it lands on. Implementation is the worker's job — the
-steward triages, lands, and hands the live-install re-apply to `/fleet-sync-install`.
+branch protection: the lander only merges a PR GitHub already considers mergeable,
+after CI is green on the base it lands on. Implementation is the worker's job — the
+steward triages, approves the land, and hands the live-install re-apply to
+`/fleet-sync-install`.

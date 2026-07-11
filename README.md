@@ -246,12 +246,12 @@ refuses from the wrong one. Live so far:
   fast-forward the fleet's base checkout, clean up the merged worktree + window.
   Fleet-agnostic — the general finish work only.
 - **`/fleet-land-train`** (steward) — the batch complement to `/fleet-land`: a serial
-  single-writer *land train* that merges a batch of green PRs one at a time
-  (update-branch → wait green → merge → next), so each PR is CI-tested once
-  against the master it lands on (O(N), not the O(N²) thundering herd) and one
-  bad PR ejects instead of blocking the rest, then base-pulls once and cleans up
-  per merged PR. A client-side stand-in for a merge queue under `strict:true`
-  branch protection.
+  single-writer *land train* that lands a batch of green PRs one at a time
+  (update-branch → wait green → merge → base-pull → clean up → next), so each PR is
+  CI-tested once against the master it lands on (O(N), not the O(N²) thundering
+  herd) and one bad PR ejects instead of blocking the rest. A thin batch driver
+  over the shared `bin/fleet-land.sh` — each lap is one full mechanical land — and a
+  client-side stand-in for a merge queue under `strict:true` branch protection.
 - **`/fleet-scout`** (steward) — delegate a *read-only investigation* instead of
   researching inline: files a `scout`-labeled issue (durable question + report
   sink) and spawns a **read-only** worker that investigates, posts its findings
