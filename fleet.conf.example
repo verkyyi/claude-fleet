@@ -330,3 +330,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # window. Headless spawns never steal focus regardless.
 # @label=Jump to new worker windows @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_SPAWN_FOCUS=0
+
+# --- Worker seed prompt (issue #234) ----------------------------------------
+# The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
+# worker is seeded with. The full seed is STRUCTURAL + body:
+#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship/land tail>
+# Only <BODY> is customizable — the issue-binding head, the /fleet-claim startup
+# ritual, and the /fleet-ship + (steward-lands | self-land) tail are kept intact
+# so the fleet machinery still works. Unset ⇒ the built-in default shown below.
+# Placeholders {issue} and {repo} are substituted; a trailing sentence-ender is
+# stripped so the body flows into the tail. Per-fleet ▸ global ▸ default like any
+# @scope=fleet key (best set per-fleet in $FLEET_CONF_DIR/<session>.conf). Scouts
+# use their own fixed read-only seed and ignore this.
+# @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
+#FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
+
+# A FILE whose contents are the worker seed BODY (above) — use this instead of
+# FLEET_WORKER_PROMPT for a long or multi-line template the single-line modal
+# editor can't hold. A leading ~/ is expanded. Takes precedence over
+# FLEET_WORKER_PROMPT when set and readable; if the path is set but unreadable the
+# spawn warns and falls back to the inline value / default. Same {issue}/{repo}
+# placeholders.
+# @label=Worker seed prompt file @group=spawn @tier=advanced @scope=fleet @edit=path
+#FLEET_WORKER_PROMPT_FILE="$HOME/.config/claude-fleet/worker-prompt.txt"

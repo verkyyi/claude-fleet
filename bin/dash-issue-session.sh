@@ -174,8 +174,14 @@ else
   # The claim→implement→ship preamble is identical for both non-scout lifecycles;
   # only the finish differs (steward-lands vs the worker's wait-for-trigger →
   # self-land). Build the shared prefix once, then append the seat-appropriate tail
-  # (issue #138).
-  prefix=$(printf 'Work GitHub issue #%s in this repo. %s Implement and verify per the repo conventions' "$num" "$claim")
+  # (issue #138). The BODY between the /fleet-claim ritual and the tail is the one
+  # operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE overrides
+  # it per fleet (default = the built-in instruction). fleet_worker_prompt_body
+  # strips any trailing sentence punctuation so the body stays a clause that flows
+  # into the tail's own leading '. '/', ' — keeping the DEFAULT seed byte-identical.
+  # The head (issue binding), $claim, and the tail below stay structural + intact.
+  body=$(fleet_worker_prompt_body "$num" "$REPO")
+  prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
   if [ "$SELF_LAND" = 1 ]; then
     # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
     tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
