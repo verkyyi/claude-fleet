@@ -16,25 +16,13 @@ case "$listing" in
 esac
 
 # --- Machine-wide window usage header (aggregate, NOT per-account — one shared
-# ~/.claude, so transcripts can't be attributed to an OAuth account). Reads the
-# collector's caches: $C/usage (5h/7d proxy, always shown when present) and
-# $C/ratelimit (official weekly/N-hour %, only while fresh — a stale % is worse
-# than none). Both gracefully contribute nothing when their cache is absent. ---
-C="${TMPDIR:-/tmp}/.claude-dash/global"   # usage/ratelimit are machine-wide (issue #181)
-usg=""
-u=$(cat "$C/usage" 2>/dev/null)
-[ -n "$u" ] && usg="this machine · rolling  ${u}"
-if [ -f "$C/ratelimit" ]; then
-  rlts="" rlline=""
-  IFS=$'\t' read -r rlts rlline < "$C/ratelimit" 2>/dev/null
-  case "$rlts" in
-    ''|*[!0-9]*) : ;;   # missing / non-numeric epoch → skip
-    *) if [ -n "$rlline" ] && \
-          [ "$(( $(date +%s) - rlts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ]; then
-         [ -n "$usg" ] && usg="${usg}  ·  ${rlline}" || usg="$rlline"
-       fi;;
-  esac
-fi
+# ~/.claude, so transcripts can't be attributed to an OAuth account). The 5h/7d
+# proxy + the official weekly/N-hour % (fresh-gated) come from usage-lib.sh, the
+# same shared reader the footer colors and the usage popup (prefix+u) render, so
+# this header can't drift from them. Empty when neither cache has anything. ---
+# shellcheck source=/dev/null
+. "$BIN/usage-lib.sh"
+usg=$(fleet_usage_summary_plain)
 
 active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
 hdr="switch the account NEW sessions use  ·  enter=select · esc=cancel   [now: ${active}]"

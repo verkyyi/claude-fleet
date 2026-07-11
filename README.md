@@ -140,6 +140,7 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue, no worktree, no PR); listed in the dash but excluded from the issue machinery, and ephemeral (not restored across a crash). Prompts for an **optional name** (Enter empty keeps the auto `scratch`/`scratch-2`… name). Also on the dash as `⌃s` |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
+| `prefix u` | usage popup — the on-demand usage / subscription-limit detail: the 5h/7d proxy, the official weekly/N-hour limit line (which limit, reset time), and (multi-account) which account new sessions use. Same target as clicking the footer usage stat |
 | `prefix r` | reload tmux config |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and `⌃k` in the backlog) |
 | `F9` | (no prefix) jump back to this session's steward hub |
@@ -147,11 +148,12 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
-Mouse mode is shipped **on** by the fleet baseline (see below), so the
-footer-left is clickable too: the **fleet name** (`#S`) opens a picker of running
-fleets and switches to the chosen one, and the red **`● N` needs badge** cycles
-to the next window that needs you. (Comment out `set -g mouse on` in
-`conf/tmux-attention.conf` to keep native select-to-copy.)
+Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
+clickable too: the **fleet name** (`#S`) opens a picker of running fleets and
+switches to the chosen one, the red **`● N` needs badge** cycles to the next
+window that needs you, the **usage stat** opens the usage popup (`prefix u`), and
+the **`◉ <account>` chip** opens the account picker (`prefix A`). (Comment out
+`set -g mouse on` in `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 The `#S` chip also carries the **cross-fleet** cue: when you're attached to one
 fleet and a **different** live fleet has a needs-attention session, an orange
@@ -312,7 +314,12 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   (Claude Code's idle threshold); the classifier corrects stragglers.
 - The token-usage figures are a **local proxy** — the official rate-limit %
   isn't exposed by any API. Weights: output×1 + input×0.25 + cache-write×0.25
-  + cache-read×0.02 over rolling 5h/7d windows.
+  + cache-read×0.02 over rolling 5h/7d windows. When a session happens to print
+  the official "N% of your weekly limit" line, the collector scrapes it and uses
+  it to **color the footer usage stat** (indigo → yellow ≥`FLEET_USAGE_WARN_PCT`
+  → red ≥`FLEET_USAGE_CRIT_PCT`) rather than adding another always-on footer
+  segment; the full detail (which limit, reset time, account) is in the usage
+  popup — `prefix u` or click the stat.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd

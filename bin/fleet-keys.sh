@@ -50,6 +50,7 @@ print_sheet() {
   key "prefix n" "quick-dispatch — popup files a new issue AND spawns its worker"
   key "prefix R" "raw scratch session (optional name) — plain claude, no issue/worktree/PR (ephemeral)"
   key "prefix A" "switch the active subscription account (multi-account failover)"
+  key "prefix u" "usage popup — 5h/7d proxy + official limit line (which limit, reset)"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix r" "hot-reload tmux config"
   key "prefix ?" "this cheatsheet"

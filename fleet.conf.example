@@ -272,6 +272,23 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Status-bar container @group=status @tier=advanced @scope=global @edit=str
 #FLEET_STATUS_CONTAINER="claude-dev"
 
+# Subscription-limit coloring of the footer usage stat (issue #239). The
+# official weekly/N-hour limit % (scraped into the ratelimit cache while fresh)
+# is NOT printed as its own footer text — that was noise. Instead the existing
+# 5h/7d usage stat CHANGES COLOR: indigo = ok, yellow at/above WARN%, red at/
+# above CRIT%. The full detail (which limit, reset time, which account) lives in
+# the usage popup — click the stat or press prefix+u. Thresholds (percent of the
+# official limit); defaults shown.
+# @label=Usage warn % @group=status @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_USAGE_WARN_PCT=75
+# @label=Usage crit % @group=status @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_USAGE_CRIT_PCT=90
+# Staleness window for the scraped official limit % (seconds; default 21600 =
+# 6h). Past this the color falls back to indigo and the popup drops the line — a
+# stale limit % is worse than none. Shared with the collector's scrape.
+# @label=Ratelimit staleness @group=status @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_RATELIMIT_TTL=21600
+
 # Optional: the command each fleet's steward pane runs (the bottom pane of the
 # always-on 'plan' hub). Unset → the built-in default (adopt ~/.claude/steward.md
 # as an on-demand steward scoped to this fleet's repo, resuming the newest

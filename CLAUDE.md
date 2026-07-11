@@ -67,7 +67,7 @@ issues as the backlog. See README.md for the architecture. Components:
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — a **fleet
-   baseline** block (issue #222) + prefix bindings on `a/G/b/n/R/A/c/r/?` and a
+   baseline** block (issue #222) + prefix bindings on `a/G/b/n/R/A/u/c/r/?` and a
    status-bar restyle — and comment out anything they don't want. The **fleet
    baseline** ships the tmux defaults the fleet UX assumes so a clean install is
    consistent (they used to live only in a pre-repo install.sh's `~/.tmux.conf`):
@@ -84,8 +84,9 @@ issues as the backlog. See README.md for the architecture. Components:
    cheatsheet popup — `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**;
    in a fleet you spawn via the dash/backlog and navigate by name, so all three
    defaults are rarely needed — but call them out. `prefix+R` (raw scratch
-   session — `bin/dash-raw-session.sh`) is **not** a tmux default, so it clobbers
-   nothing, but mention it too. There's also one **root-table** bind (`bind -n F9`): F9
+   session — `bin/dash-raw-session.sh`) and `prefix+u` (the usage popup —
+   `bin/usage-popup.sh`, issue #239) are **not** tmux defaults, so they clobber
+   nothing, but mention them too. There's also one **root-table** bind (`bind -n F9`): F9
    from any window jumps back to this session's steward hub (`steward-zoom.sh`).
    Unlike the prefix binds it intercepts the key in every pane before the app —
    safe because the Claude TUI/shells don't use function keys — so flag it too.
