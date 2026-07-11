@@ -12,7 +12,7 @@
 # source the new conf so adds/changes still apply.
 #
 # Usage:
-#   tmux-conf-reload.sh <before-conf> <after-conf> [tmux-conf]
+#   tmux-conf-reload.sh [--socket <label>] <before-conf> <after-conf> [tmux-conf]
 #   tmux-conf-reload.sh --print <before-conf> <after-conf>
 #
 #   <before-conf>  conf/tmux-attention.conf as it was BEFORE the sync (e.g.
@@ -25,6 +25,13 @@
 #   --print        parse-only: print the removed `<table>\t<key>` pairs to stdout
 #                  and exit WITHOUT touching tmux. Used by the hermetic selftest
 #                  and handy for a dry run.
+#   --socket <l>   run the unbind + source-file against the tmux server on socket
+#                  LABEL `<l>` (`tmux -L <l> …`) instead of the ambient server.
+#                  This is what lets fleet-ui-refresh.sh reload a conf into EVERY
+#                  live fleet's own server (issue #248) — each fleet now has its
+#                  own socket (#159), so a bare `tmux` would only hit one. Default
+#                  (no --socket) = the ambient server, as the in-session caller
+#                  (`/fleet-sync-install` step 8) inherits it via $TMUX.
 #
 # Bind-form coverage (the (table, key) extraction):
 #   bind KEY …            / bind-key KEY …      → prefix table
@@ -32,19 +39,30 @@
 #   bind -T <tbl> KEY …                          → <tbl>
 #   plus the -r (repeat) / -N <note> flags, which are skipped to find KEY.
 #
-# Scope: tmux bindings are server-global, so this runs against the ambient tmux
-# server (the one the invoking fleet session lives on). It never targets another
-# server/socket. No-op-safe: nothing removed → it just re-sources.
+# Scope: tmux bindings are server-global, so this runs against ONE tmux server —
+# the ambient one (the invoking fleet session's) by default, or the `--socket
+# <label>` server when given. It targets exactly that one server; to reload every
+# live fleet, fleet-ui-refresh.sh --all calls this once per socket (issue #248).
+# No-op-safe: nothing removed → it just re-sources.
 #
 # Exit 0 on success (including "nothing removed"). Non-zero only on a usage error.
 set -uo pipefail
 
 # --- args ---------------------------------------------------------------------
+# Optional flags (--print / --socket <label>) may appear in any order before the
+# positional confs. `tmux_cmd` is the tmux invocation used for the LIVE calls
+# (unbind-key / source-file); --socket prepends `-L <label>` so it targets that
+# fleet's own server (issue #248) instead of the ambient one.
 print_only=0
-if [ "${1:-}" = "--print" ]; then
-  print_only=1
-  shift
-fi
+tmux_cmd=(tmux)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --print)  print_only=1; shift ;;
+    --socket) [ $# -ge 2 ] || { echo "usage: --socket needs a label" >&2; exit 2; }
+              tmux_cmd=(tmux -L "$2"); shift 2 ;;
+    *)        break ;;
+  esac
+done
 
 before="${1:-}"
 after="${2:-}"
@@ -115,14 +133,14 @@ n=0
 if [ -n "$removed" ]; then
   while IFS=$'\t' read -r table key; do
     [ -n "$key" ] || continue
-    tmux unbind-key -T "$table" "$key"
+    "${tmux_cmd[@]}" unbind-key -T "$table" "$key"
     n=$((n + 1))
   done <<EOF
 $removed
 EOF
 fi
 
-if tmux source-file "$tmux_conf"; then
+if "${tmux_cmd[@]}" source-file "$tmux_conf"; then
   echo "reloaded conf (unbound $n removed bind$([ "$n" -eq 1 ] || echo s))"
 else
   # unbinds already applied; only the re-source failed — say so, don't claim a

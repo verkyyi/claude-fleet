@@ -132,4 +132,21 @@ else
     || fail "parser failed on a malformed trailing '-T'"
 fi
 
+# --- 5. --socket <label> routes every live tmux call through `tmux -L <label>` --
+# (issue #248: fleet-ui-refresh.sh --all reloads each fleet's OWN server this way.)
+: > "$work/tmux.log"
+out="$(PATH="$fakebin:$PATH" bash "$SUT" --socket myfleet "$before" "$after" "$work/fake.tmux.conf")" \
+  || fail "--socket run exited non-zero"
+# every unbind + the source-file must carry `-L myfleet` as the first two tokens
+grep -q '^-L myfleet unbind-key ' "$work/tmux.log" \
+  || fail "--socket did not prefix unbind-key with '-L myfleet':
+$(cat "$work/tmux.log")"
+grep -Fxq -e "-L myfleet source-file $work/fake.tmux.conf" "$work/tmux.log" \
+  || fail "--socket did not prefix source-file with '-L myfleet':
+$(cat "$work/tmux.log")"
+# no bare (socket-less) tmux call leaked through
+grep -q '^unbind-key ' "$work/tmux.log" \
+  && fail "--socket leaked a bare (ambient-server) unbind-key:
+$(cat "$work/tmux.log")"
+
 printf 'selftest OK: removed-bind unbinding correct across all table forms\n'
