@@ -15,6 +15,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # exported by tmux-issues.sh so reload-binds inherit it.
 SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
 IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;207;255'
+P0='247;118;142'; P1='224;175;104'; P2='224;204;122'   # priority tier tags (red/orange/yellow)
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
 if [ ! -s "$SRC" ]; then   # empty-but-fetched = 0 open issues; absent = not loaded yet
@@ -35,6 +36,25 @@ ACTIVE=$(tmux list-windows -a -F "#{session_name}${TAB}#{@issue}${TAB}#{window_n
   | awk -F'\t' -v s="${FLEET_SESSION:-}" '$2!="" && (s=="" || $1==s){print $2"\t"$3}')
 active_win(){ printf '%s\n' "$ACTIVE" | awk -F'\t' -v n="$1" '$1==n{print $2; exit}'; }
 
+# priority per issue: read the collector's labels cache (num<TAB>comma-labels — the
+# SAME fetch the backlog uses, no extra gh call) and map the priority:p{0,1,2} label
+# to a tier 0/1/2 (3 = unprioritised). Drives both the row tag and the in-milestone
+# sort below, and the whole file degrades to "no tags, number order" if it's absent.
+LBL=$(fleet_cache labels "${FLEET_SESSION:-}")
+PRIOS=$(cat "$LBL" 2>/dev/null)
+prio_tier(){ # $1 = bare issue number → 0/1/2/3
+  local ls; ls=$(printf '%s\n' "$PRIOS" | awk -F'\t' -v n="$1" '$1==n{print $2; exit}')
+  case ",$ls," in
+    *,priority:p0,*) echo 0 ;; *,priority:p1,*) echo 1 ;; *,priority:p2,*) echo 2 ;; *) echo 3 ;;
+  esac
+}
+prio_tag(){ # $1 = tier → a fixed 2-col colored tag (or 2 spaces for none)
+  case "$1" in
+    0) printf '%sp0%s' "$(c "$P0")" "$R" ;; 1) printf '%sp1%s' "$(c "$P1")" "$R" ;;
+    2) printf '%sp2%s' "$(c "$P2")" "$R" ;; *) printf '  ' ;;
+  esac
+}
+
 # hide-bound state (per-fleet, keyed by session): by default an issue already
 # bound to a live worker window is hidden; the ⌃b toggle (dash-toggle-show-bound.sh)
 # creates this file to reveal them. Existence = show, absent = hide.
@@ -50,23 +70,24 @@ while IFS=$'\t' read -r ms num asg title; do
   # Hide rows bound to a live worker unless the toggle is on. Skipping here (not
   # at emit time) keeps the milestone counts below in step with the visible rows.
   if [ -n "$awin" ] && [ "$SHOW_BOUND" = 0 ]; then hidden_any=1; continue; fi
+  tier=$(prio_tier "$n"); ptag=$(prio_tag "$tier")
   # Fixed-width columns so the TITLE starts at the same screen column on every
-  # row: num padded to 5, then an owner column of a 2-col marker + a 14-col name
-  # (both active ▶window and idle assignee use the SAME 16-col owner width).
-  # Precision (%-14.14s) pads *and* truncates the name; the marker sits outside
-  # it so the multibyte ▶ doesn't skew the byte-counted width.
+  # row: num padded to 5, a 2-col priority tag, then an owner column of a 2-col
+  # marker + a 14-col name (both active ▶window and idle assignee use the SAME
+  # 16-col owner width). Precision (%-14.14s) pads *and* truncates the name; the
+  # marker and the tag sit outside it so multibyte glyphs don't skew the width.
   if [ -n "$awin" ]; then
-    row=$(printf '%s%-5s%s %s▶ %-14.14s%s %s%s%s' \
-      "$(c "$GN")" "$num" "$R" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
+    row=$(printf '%s%-5s%s %s %s▶ %-14.14s%s %s%s%s' \
+      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
   else
     # assignees are ASCII (14 bytes = 14 cols); the unassigned '·' is 1 col but 2
     # bytes (and the collector already writes it into this field), so widen its
     # byte budget by 1 to keep the 14-col visible width.
     asg_disp="${asg:-·}"; pad=14; [ "$asg_disp" = "·" ] && pad=15
-    row=$(printf "%s%-5s%s %s  %-${pad}.${pad}s%s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$(c "$TX")" "$asg_disp" "$R" "$(c "$GY")" "$title" "$R")
+    row=$(printf "%s%-5s%s %s %s  %-${pad}.${pad}s%s %s%s%s" \
+      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$TX")" "$asg_disp" "$R" "$(c "$GY")" "$title" "$R")
   fi
-  buf+="$r	$ms	$n	$row"$'\n'
+  buf+="$r	$ms	$tier	$n	$row"$'\n'
 done < "$SRC"
 
 # All open issues (in this MODE) are bound + hidden → a friendly line instead of
@@ -83,8 +104,11 @@ counts=$(printf '%s' "$buf" | awk -F'\t' 'NF>=2{c[$2]++} END{for(m in c) print m
 count_of(){ printf '%s\n' "$counts" | awk -F'\t' -v m="$1" '$1==m{print $2; exit}'; }
 
 # emit: field1=num(empty for header)·field2=display·field3=milestone(for collapse toggle)
+# buf rows are: rank<TAB>milestone<TAB>tier<TAB>num<TAB>display. Sort groups by
+# milestone rank, then by priority TIER (p0 first), then issue number (FIFO within
+# a tier) — so priority is the visible in-milestone order (issue #235 "reorder").
 last=''
-printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3n | while IFS='	' read -r _ ms num row; do
+printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3n -k4,4n | while IFS='	' read -r _ ms _tier num row; do
   [ -z "$num" ] && continue
   if [ "$MODE" != unplanned ] && [ "$ms" != "$last" ]; then
     if is_collapsed "$ms"; then ind='▸'; else ind='▾'; fi
