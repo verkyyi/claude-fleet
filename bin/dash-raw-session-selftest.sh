@@ -16,6 +16,17 @@
 #   D. restore excludes    → resolver drops a @raw=1 row, keeps a normal WIN row
 #   E. old-map back-compat → a 6-field WIN row (pre-#214, no @raw) is still kept
 #
+# Optional --name at creation (issue #225) — the name is display-only; the @raw=1
+# / no-@issue invariants hold regardless:
+#   F. --name foo          → window named `foo`, still @raw=1 + no @issue
+#   G. empty --name        → auto `scratch` (empty input keeps today's behavior)
+#   H. custom collision    → a live `foo` window → the next one is `foo-2`
+#   I. reserved name       → --name plan/dash/backlog → fallback `scratch` + note
+#   J. empties-after-sanitize → --name '###' → fallback `scratch` + note
+#   K. sanitization        → control chars / `#` stripped, case/spacing kept, ≤24 chars
+#   L. positional target   → --name foo <sess> still spawns `foo` into <sess>
+#   M. ⌃s popup phase      → --prompt-read reads the name off one stdin line
+#
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
 
@@ -67,14 +78,17 @@ chmod +x "$WORK/fakebin/tmux"
 
 # run the raw spawner. The per-case env (WINS, FLEET_MAX_SESSIONS,
 # FLEET_SPAWN_FOCUS) is set as a prefix on the `run_raw` call — bash exports those
-# into the function's command environment, so the child `bash` inherits them.
+# into the function's command environment, so the child `bash` inherits them. Any
+# args passed to run_raw are forwarded to the script (--name / --prompt-read /
+# positional <target-session>); stdin is inherited, so a caller can pipe the
+# --prompt-read line in.
 run_raw() {
   : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" \
   FLEET_GLOBAL_MAX_SESSIONS=0 \
   DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" \
-    bash "$WORK/bin/dash-raw-session.sh" >"$WORK/out" 2>"$WORK/err"
+    bash "$WORK/bin/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"
 }
 
 # ============================ A: happy spawn =================================
@@ -99,6 +113,59 @@ ok "B raw spawn honours the session cap (refuses, no window)"
 WINS=$'plan\ndash\nscratch' FLEET_MAX_SESSIONS=0 run_raw
 grep -q -- '-n scratch-2\b' "$NEWWIN_LOG" || fail "C a second scratch should be named scratch-2" "$(cat "$NEWWIN_LOG")"
 ok "C a live 'scratch' window makes the next one 'scratch-2'"
+
+# ==================== F: --name names the window (issue #225) ================
+WINS=$'plan\ndash' FLEET_MAX_SESSIONS=0 run_raw --name foo
+grep -q -- '-n foo\b' "$NEWWIN_LOG"    || fail "F --name foo should name the window foo" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"  || fail "F a named raw window must still be @raw=1" "$(cat "$OPTS_LOG")"
+grep -q '@issue' "$OPTS_LOG"           && fail "F a named raw window must NOT get an @issue" "$(cat "$OPTS_LOG")"
+ok "F --name foo → window 'foo', still @raw=1 and no @issue"
+
+# ==================== G: empty --name keeps the auto name ====================
+WINS=$'plan\ndash' FLEET_MAX_SESSIONS=0 run_raw --name ''
+grep -q -- '-n scratch\b' "$NEWWIN_LOG" || fail "G empty --name should fall back to auto scratch" "$(cat "$NEWWIN_LOG")"
+ok "G an empty --name keeps the auto 'scratch' name"
+
+# ==================== H: custom-name dedup ==================================
+WINS=$'plan\nfoo' FLEET_MAX_SESSIONS=0 run_raw --name foo
+grep -q -- '-n foo-2\b' "$NEWWIN_LOG" || fail "H a taken custom name should get a -2 suffix" "$(cat "$NEWWIN_LOG")"
+ok "H a live 'foo' window makes the next --name foo → 'foo-2'"
+
+# ==================== I: reserved panel names fall back ======================
+for r in plan dash backlog; do
+  WINS=$'other' FLEET_MAX_SESSIONS=0 run_raw --name "$r"
+  grep -q -- '-n scratch\b' "$NEWWIN_LOG" || fail "I reserved --name $r should fall back to scratch" "$(cat "$NEWWIN_LOG")"
+  grep -qi 'reserved' "$DISPLAY_LOG"      || fail "I reserved --name $r should surface a note" "$(cat "$DISPLAY_LOG")"
+done
+ok "I --name plan/dash/backlog → fallback 'scratch' + a reserved note"
+
+# ==================== J: empties-after-sanitize falls back ===================
+WINS=$'other' FLEET_MAX_SESSIONS=0 run_raw --name '###'
+grep -q -- '-n scratch\b' "$NEWWIN_LOG"        || fail "J a name that sanitizes empty should fall back to scratch" "$(cat "$NEWWIN_LOG")"
+grep -qi 'empty after sanitize' "$DISPLAY_LOG"  || fail "J empties-after-sanitize should surface a note" "$(cat "$DISPLAY_LOG")"
+ok "J --name '###' (empties after sanitize) → fallback 'scratch' + note"
+
+# ==================== K: sanitization (strip / preserve / cap) ===============
+# tab (control char) + '#' stripped; internal space + casing preserved.
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name $'A\tB C#D'
+grep -qF -- '-n AB CD -c' "$NEWWIN_LOG" || fail "K control chars + '#' stripped, space/case kept" "$(cat "$NEWWIN_LOG")"
+# length cap: a 36-char name is truncated to 24.
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+grep -q -- '-n ABCDEFGHIJKLMNOPQRSTUVWX\b' "$NEWWIN_LOG" || fail "K a long name should be capped at ~24 chars" "$(cat "$NEWWIN_LOG")"
+ok "K sanitize strips control chars + '#', preserves case/spacing, caps at ~24"
+
+# ==================== L: positional target alongside --name ==================
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name foo othersess
+grep -q -- '-n foo\b' "$NEWWIN_LOG"       || fail "L --name foo <sess> should still name the window foo" "$(cat "$NEWWIN_LOG")"
+grep -q -- '-t othersess:' "$NEWWIN_LOG"  || fail "L a positional <target-session> should still be honored" "$(cat "$NEWWIN_LOG")"
+ok "L --name foo <target-session> spawns 'foo' into the target"
+
+# ==================== M: ⌃s popup phase reads name off stdin =================
+printf 'mybox\n' | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
+grep -q -- '-n mybox\b' "$NEWWIN_LOG" || fail "M --prompt-read should read the name off stdin" "$(cat "$NEWWIN_LOG")"
+printf '\n'        | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
+grep -q -- '-n scratch\b' "$NEWWIN_LOG" || fail "M an empty --prompt-read line → auto scratch" "$(cat "$NEWWIN_LOG")"
+ok "M --prompt-read (⌃s popup) reads the name from one stdin line"
 
 # ============================ D: restore drops @raw ==========================
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__STEWARD__|%s|-\n' \
