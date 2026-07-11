@@ -235,6 +235,36 @@ EOF
   fi
 fi
 
+# --- auto-land daemon (optional: hands-off land landable-green PRs, issue #233) ---
+# OFF unless a fleet's conf sets FLEET_AUTOLAND=1. When ON, the land daemon lands
+# green PRs with NO human approval gate — surface the armed fleets loudly (this is a
+# deliberate relaxation) and note the unbounded ones (no FLEET_AUTOLAND_LABEL scope
+# guard). A missing daemon/config is not a fault (opt-in), so it only speaks up when
+# at least one fleet has enabled it.
+if [ -d "$conf_dir" ]; then
+  landing=0 unbounded=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOLAND[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ "$val" = 1 ] || continue
+    landing=$((landing+1))
+    lbl=$(sed -n 's/^[[:space:]]*FLEET_AUTOLAND_LABEL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ -n "$lbl" ] || unbounded=$((unbounded+1))
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$landing" -gt 0 ]; then
+    if ! command -v gh >/dev/null 2>&1; then
+      warn autoland "$landing fleet(s) set FLEET_AUTOLAND=1 but gh is missing — the lander can't merge"
+    elif [ "$unbounded" -gt 0 ]; then
+      warn autoland "$landing fleet(s) with FLEET_AUTOLAND=1 (approval gate OFF); $unbounded have NO FLEET_AUTOLAND_LABEL scope guard — every ready PR auto-lands"
+    else
+      pass autoland "$landing fleet(s) with FLEET_AUTOLAND=1 — landable-green PRs land hands-off (approval gate OFF, label-scoped)"
+    fi
+    printf '        note: needs com.claude-fleet.land installed; auto-land REMOVES the human approval gate (CI green + branch protection are the only gate).\n'
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

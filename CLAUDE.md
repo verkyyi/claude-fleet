@@ -28,6 +28,7 @@ issues as the backlog. See README.md for the architecture. Components:
 | Scout task (optional) | Read-only investigation delegation shape (issue #148). Two tiers by weight: an **ephemeral** `Explore`/`Agent` sub-agent the steward runs inline (no issue/window, for throwaway lookups), or a **scout worker** — `/fleet-scout <q>` files a `scout`-labeled issue (durable question + report sink) and spawns a read-only worker (`dash-issue-session.sh <N> --scout`, window marked `@scout`) that investigates + reports as a comment and **never branches/ships/lands**. Closing move: `/fleet-scout-report` posts findings, closes-or-leaves-open (convert-to-ship), and self-cleans via `bin/fleet-scout-clean.sh` (ordered teardown, no PR). See docs/SCOUT.md | gh |
 | Self-land (optional) | Worker owns its FULL lifecycle incl. the land (`commands/fleet-land-self.md` + `bin/fleet-land-self.sh`): after `/fleet-ship` the worker waits; the steward triggers by commenting `/land` on the issue (relayed by the issue-bridge); the worker then merges its OWN PR — per-repo land-lease-serialized (shared `bin/fleet-land-lease.sh`, hold-through-green, steal-if-stale, `--match-head-commit`), base fast-forward, self-destruct. Steward only *approves* (one comment) instead of *performing* the merge. **Relaxes the "workers never self-merge" rail, re-gated by the trigger.** OFF by default (`FLEET_SELF_LAND=1` per fleet, implies `FLEET_ISSUE_BRIDGE=1`); spends LLM tokens. See docs/SELF-LAND.md | gh + issue-bridge |
 | Watcher (optional) | `com.claude-fleet.watch` (~45s): the **zero-token event-driven steward wake** (issue #147). Sleeps on the fleet reading ONLY existing state (`@claude_state`/`@prci`/`@issue`, `prmap`, `issues_<slug>` + the new `labels_<slug>`, session counts — no LLM, no per-tick `gh`) and wakes the steward ONLY on a decision-worthy **edge**: a PR going green (`/land <n>?`), a worker opening a PR, a worker stuck (`looping`), the needs-attention count rising, a `prod-alert` issue appearing, or a free slot + eligible backlog. Edge-triggered + deduped (transitions not levels; first run seeds silently). Delivery = the steward control issue (`FLEET_STEWARD_ISSUE`, #146) → the issue-bridge relays the wake into the `@steward` pane. Single-writer per repo + disk-gated like the dispatcher; `--dry-run` prints edges without posting. OFF by default (`FLEET_WATCH=1` per fleet; needs `FLEET_STEWARD_ISSUE` + in practice `FLEET_ISSUE_BRIDGE=1`); the watcher spends no tokens but each wake makes the steward take a turn. See docs/WATCH.md | gh + issue-bridge |
+| Auto-land (optional) | `com.claude-fleet.land` (~60s): **hands-off lands landable-green PRs** (issue #233) by driving the same mechanical `bin/fleet-land.sh` the dash `⌃l`/`/fleet-land` use — no steward turn, no human. Detection is cache-only: it reads the `prmap_<slug>` the pr-refresh daemon already writes (ZERO extra `gh`) and lands only OPEN PRs whose `ready` column is exactly `ready` (green + mergeable now; `behind`/`conflict`/`blocked` left to the steward). Single-writer per repo + disk-gated + rate-limited (`FLEET_AUTOLAND_MAX_PER_TICK`, default 1) like the dispatcher; the shared land-lease inside `fleet-land.sh` serializes it with every other lander, which re-validates against live `gh` and EJECTS (never force-merges) a PR that drifted. **Deliberately RELAXES the human approval gate — CI-green + branch protection become the ONLY gate**, so bound it with `FLEET_AUTOLAND_LABEL` (only issues carrying it auto-land; fail-closed). `--dry-run` prints intent without landing. OFF by default (`FLEET_AUTOLAND=1` per fleet); the daemon spends no tokens itself but each land runs `fleet-land`'s merge. See docs/AUTOLAND.md | gh |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`); a slow ~1800s daemon backstops missed windows. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees. Before each removal it **reaps any process still anchored to the worktree** (`fleet_reap_worktree_procs` — argv match + cwd match, SIGTERM→SIGKILL; issue #151) so a detached orphan can't outlive its dir and drain a core against the shared tmux server. The dash's `⌃x`/`⌥x` reap (`dash-reap.sh`) does the same | gh |
@@ -173,6 +174,17 @@ issues as the backlog. See README.md for the architecture. Components:
      makes the steward take an LLM turn — so it is OFF by default; ask before
      installing and mention that wakes cost steward tokens. `--dry-run` prints the
      edges without posting. Full design in **docs/WATCH.md**.
+     land (`com.claude-fleet.land`, 60s) is the **auto-land daemon** — install it
+     only if a fleet sets `FLEET_AUTOLAND=1`. It hands-off lands landable-green PRs
+     (prmap `ready` rows) by driving `bin/fleet-land.sh`, single-writer + disk-gated
+     + rate-limited (`FLEET_AUTOLAND_MAX_PER_TICK`) like the dispatcher. It
+     **deliberately REMOVES the human approval gate** (CI-green + branch protection
+     become the only gate), the same class of relaxation as self-land/autofill — so
+     it is OFF by default; ask before installing, mention that it lands with no human
+     in the loop, and recommend bounding it with `FLEET_AUTOLAND_LABEL` (only issues
+     carrying that label auto-land). The daemon spends no tokens itself; each land
+     runs `fleet-land`'s merge. `--dry-run` prints intent without landing. Full
+     design in **docs/AUTOLAND.md**.
    - Linux: use the ready-made units in `systemd/` (parity with the plists,
      `__HOME__`-templated). Substitute `__HOME__` and copy into
      `~/.config/systemd/user/`, then `systemctl --user daemon-reload` and
@@ -180,7 +192,7 @@ issues as the backlog. See README.md for the architecture. Components:
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard) and
      `claude-fleet-pr-refresh.timer` (fast ~15s PR/CI status); the optional
-     dispatch/issue-bridge/watch/classify/summarize/worktree-autoclean are `.timer`s too.
+     dispatch/issue-bridge/watch/land/classify/summarize/worktree-autoclean are `.timer`s too.
      Run `loginctl enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
@@ -237,10 +249,11 @@ server — the simplest reset is to `fleet-down <sess>` (or `tmux -L <sess>
 kill-server`) each fleet; to clear it in place instead, run
 `tmux -L <sess> set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by
 the pr-refresh daemon) once per live fleet socket. (The `com.claude-fleet.*` bootout
-glob already covers `com.claude-fleet.pr-refresh`,
-`com.claude-fleet.issue-bridge`, and `com.claude-fleet.watch`; on Linux
+glob already covers `com.claude-fleet.pr-refresh`, `com.claude-fleet.issue-bridge`,
+`com.claude-fleet.watch`, and `com.claude-fleet.land`; on Linux
 `systemctl --user disable --now claude-fleet-pr-refresh.timer` +
-`claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer`.) Per-fleet durable
+`claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer` +
+`claude-fleet-land.timer`.) Per-fleet durable
 state (issue #181) lives one directory per fleet under
 `~/.config/claude-fleet/fleets/<session>/` (conf, restore map, and — if you
 enabled them — the issue-bridge `bridge/` watermark+dedup and the watcher `watch/`

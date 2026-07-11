@@ -225,6 +225,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Watch fleet, wake steward on edges @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_WATCH=0
 
+# --- Auto-land daemon (bin/fleet-autoland.sh, com.claude-fleet.land) -------------
+# OFF by default. When enabled for a fleet, the auto-land daemon (~60s) lands that
+# fleet's landable-green PRs HANDS-OFF — no steward turn, no human — by driving the
+# same mechanical lander (bin/fleet-land.sh) the dash ⌃l / /fleet-land use. It reads
+# only the prmap cache the pr-refresh daemon already writes (ZERO extra gh) and lands
+# a PR only when its `ready` verdict is exactly "ready" (CI-green AND mergeable now);
+# behind/conflict/blocked PRs are left to the steward.
+#
+# ⚠️ APPROVAL-GATE RELAXATION: auto-land REMOVES the human "is the work complete?"
+# gate — CI green + branch protection become the ONLY gate. Like FLEET_SELF_LAND /
+# FLEET_AUTOFILL it is a deliberate relaxation, so it is opt-in per fleet. BOUND what
+# it may land with FLEET_AUTOLAND_LABEL (below). See docs/AUTOLAND.md.
+# @label=Auto-land green PRs (no approval) @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_AUTOLAND=0
+# Max PRs auto-landed per fleet per tick (rate-limit against a stampede; the ~60s
+# interval is the cooldown between ticks). Default 1.
+# @label=Auto-land batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
+#FLEET_AUTOLAND_MAX_PER_TICK=1
+# Scope guard: only auto-land a PR whose bound issue (its issue-<N> head) carries
+# THIS label — a "cleared to auto-land" gate so the operator bounds what lands
+# hands-off. Checked against the labels cache (zero gh); FAIL-CLOSED (a PR with no
+# resolvable issue or an unreadable cache is NOT landed). Unset = no gate (every
+# ready PR in scope). RECOMMENDED whenever FLEET_AUTOLAND=1 on a shared/public repo.
+# @label=Auto-land: only issues labeled @group=bridge @tier=advanced @scope=fleet @edit=str
+#FLEET_AUTOLAND_LABEL="autoland"
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 # GLOBAL: read by the preview tool from the global env — a per-fleet override

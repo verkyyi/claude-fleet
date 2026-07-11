@@ -12,6 +12,7 @@ Parity with `launchd/` for Linux. One always-on service (spinner) plus the
 | `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill; LLM tokens) |
 | `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
 | `claude-fleet-watch.timer` | every 45s, +5s after start | `com.claude-fleet.watch` | optional (zero-token steward wake; wakes spend steward tokens) |
+| `claude-fleet-land.timer` | every 60s, +25s after start | `com.claude-fleet.land` | optional (auto-land; REMOVES the human approval gate) |
 | `claude-fleet-classify.timer` | every 300s | `com.claude-fleet.classify` | optional (LLM tokens) |
 | `claude-fleet-worktree-autoclean.timer` | hourly, no run at start | `com.claude-fleet.worktree-autoclean` | optional |
 
@@ -38,6 +39,7 @@ systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast
 systemctl --user enable --now claude-fleet-dispatch.timer   # autofill — needs FLEET_AUTOFILL=1 per fleet
 systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
 systemctl --user enable --now claude-fleet-watch.timer      # steward wake — needs FLEET_WATCH=1 + FLEET_STEWARD_ISSUE per fleet
+systemctl --user enable --now claude-fleet-land.timer       # auto-land — needs FLEET_AUTOLAND=1 per fleet; REMOVES the human approval gate
 systemctl --user enable --now claude-fleet-classify.timer
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 
@@ -57,7 +59,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 
 ```sh
 for u in spinner.service collect.timer diskguard.timer pr-refresh.timer \
-         dispatch.timer issue-bridge.timer watch.timer classify.timer worktree-autoclean.timer; do
+         dispatch.timer issue-bridge.timer watch.timer land.timer classify.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done
 rm -f ~/.config/systemd/user/claude-fleet-*.{service,timer}
