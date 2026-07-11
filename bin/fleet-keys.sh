@@ -66,6 +66,7 @@ print_sheet() {
   key "⌃e" "rename the highlighted window"
   key "⌃x" "reap a merged+clean worker (window + worktree + issue)"
   key "⌥x" "force-reap (skip the merged/clean gate)"
+  key "⌃l" "land the row's green PR (no steward turn — pressing the key is approval)"
   key "⌃t" "toggle live ⇄ landed (finished sessions; enter opens the PR)"
   key "⌃o" "restore the highlighted landed session into a new window (claude --resume)"
   key "⌃r" "refresh now"
