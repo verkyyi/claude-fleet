@@ -56,11 +56,13 @@ Write your findings up as a clear, self-contained comment (what you looked at,
 what you found, concrete file:line pointers, and — if relevant — a recommended
 next step). Post it via `fleet-comment.sh --note` so the record comment carries
 `<!-- fleet:no-relay -->` and never loops back into a worker when the
-issue-bridge is on (issue #132); the fallback keeps the marker INLINE:
+issue-bridge is on (issue #132), and the per-role `scout` footer (issue #224);
+the fallback keeps the marker INLINE plus a minimal static `scout` footer so
+attribution survives degraded mode:
 
 ```sh
 ~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '<findings>' \
-  || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'<findings>\n\n<!-- fleet:no-relay -->'
+  || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'<findings>\n\n— fleet · scout · #<issue>\n<!-- fleet:from role=scout issue=<issue> -->\n<!-- fleet:no-relay -->'
 ```
 
 For a long report, pipe the body on stdin:

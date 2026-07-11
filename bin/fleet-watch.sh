@@ -23,8 +23,9 @@
 # SEEDS the set silently (no history flood), mirroring the issue-bridge watermark.
 #
 # DELIVERY = the steward control issue (#146). On an edge we post a compact comment
-# to this fleet's FLEET_STEWARD_ISSUE via bin/fleet-comment.sh --to-worker (UNMARKED
-# so the issue-bridge relays it into the @steward hub pane). The watcher never talks
+# to this fleet's FLEET_STEWARD_ISSUE via bin/fleet-comment.sh --to-worker --from
+# watcher (UNMARKED so the issue-bridge relays it into the @steward hub pane; the
+# --from watcher stamps the unified per-role footer — issue #224). The watcher never talks
 # to the steward pane directly — the bridge is its only channel, so a fleet with no
 # FLEET_STEWARD_ISSUE (or no running bridge) is simply not watched.
 #
@@ -279,12 +280,16 @@ watch_top_eligible() { # $1=issues file $2=labels file $3=" live issues "
 }
 
 # WAKE: post one batched comment to the steward issue (unmarked → bridge relays it).
+# --from watcher stamps the unified per-role footer (issue #224), which REPLACES the
+# ad-hoc "🛰️ fleet-watch — <slug>" top-prefix this daemon used to prepend. The
+# watcher runs headless (no $TMUX), so fleet-comment.sh's footer resolves the fleet
+# by slug — no private identifier leaks.
 watch_wake() { # $1=repo $2=steward_issue $3=slug $4=body
   if [ "$DRY" = 1 ]; then
     printf '%s\n' "$4" | sed 's/^/  [dry-run wake] /' >&2
     return 0
   fi
-  "$BIN/fleet-comment.sh" "$2" --repo "$1" --to-worker --body "$4" >/dev/null 2>&1 \
+  "$BIN/fleet-comment.sh" "$2" --repo "$1" --to-worker --from watcher --body "$4" >/dev/null 2>&1 \
     || { log "$slug: wake post failed (steward issue #$2)"; return 1; }
   return 0
 }
@@ -416,11 +421,15 @@ EOF
     exit 0
   fi
 
-  local body; body="🛰️ fleet-watch — $slug"$'\n\n'"$wake"
+  # Sender attribution is now the unified per-role footer (issue #224), stamped by
+  # watch_wake → fleet-comment.sh --from watcher; the old "🛰️ fleet-watch — <slug>"
+  # top-prefix is retired. The wake body is just the edge lines.
+  local body; body="$wake"
   # Trailing coalescing marker (issue #198): the per-line subjects, in order, so the
   # issue-bridge can collapse superseded/duplicate wakes to one line per subject when
   # they drain to a briefly-busy steward. An HTML comment → invisible in the rendered
-  # issue; the bridge greps it verbatim. Omitted when there are no subjects.
+  # issue; the bridge greps it verbatim. Omitted when there are no subjects. Kept
+  # SEPARATE from the #224 footer (the footer is appended after it, below the marker).
   [ -n "$wsubs" ] && body="$body"$'\n'"<!-- fleet:wake $wsubs-->"
   if watch_wake "$repo" "$steward" "$slug" "$body"; then
     # Wake delivered (or dry-run) — NOW it's safe to advance the persisted state.

@@ -45,7 +45,9 @@ cat > "$WORK/bin/fleet-comment.sh" <<FAKE
 [ -f "$WORK/fail_wake" ] && exit 1
 body=''
 while [ "\$#" -gt 0 ]; do case "\$1" in --body) shift; body="\${1:-}";; esac; shift; done
-printf '%s\n' "\$body" >> "$WAKE_LOG"
+# One delimiter line per post so nwakes() counts POSTS independently of the body
+# format (issue #224 retired the "🛰️ fleet-watch — <slug>" header this used to key on).
+printf '<<<wake-post>>>\n%s\n' "\$body" >> "$WAKE_LOG"
 exit 0
 FAKE
 chmod +x "$WORK/bin/fleet-comment.sh"
@@ -124,8 +126,10 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- wakes (%s post(s)) ---\n' "$(nwakes)" >&2; cat "$WAKE_LOG" >&2
          exit 1; }
 
-# Count wake POSTS (not lines): each post is a multi-line comment led by one header.
-nwakes() { grep -c 'fleet-watch — ' "$WAKE_LOG" 2>/dev/null || true; }  # grep -c already prints 0
+# Count wake POSTS (not lines): the fake recorder writes one <<<wake-post>>> delimiter
+# per post, so this is robust to the multi-line body (the per-role footer is added by
+# the real fleet-comment.sh, which is faked out here — issue #224).
+nwakes() { grep -c '<<<wake-post>>>' "$WAKE_LOG" 2>/dev/null || true; }  # grep -c already prints 0
 
 : > "$WORK/log"
 

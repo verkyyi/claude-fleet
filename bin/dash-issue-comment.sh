@@ -33,14 +33,15 @@ printf '\n  Comment on \033[1m#%s\033[0m in %s\n  (empty = cancel)\n\n  ▸ ' "$
 IFS= read -r body
 [ -z "$body" ] && exit 0
 
-# Route through fleet-comment.sh so the marker is stamped: a backlog triage note
-# is fleet-internal (for the record/humans) → no-relay, so it can't loop back into
-# a bound worker when the issue-bridge is on (issue #132). --note is the default,
-# named here for clarity. Fall back to plain gh with the marker appended INLINE if
-# the wrapper isn't present (a partial/diverged install) — so triage commenting
-# never silently breaks AND stays loop-safe.
-if { [ -x "$BIN/fleet-comment.sh" ] && "$BIN/fleet-comment.sh" "$num" --repo "$REPO" --note --body "$body" >/dev/null 2>&1; } \
-   || gh issue comment "$num" --repo "$REPO" --body "$body"$'\n\n<!-- fleet:no-relay -->' >/dev/null 2>&1; then
+# Route through fleet-comment.sh so the marker + per-role footer are stamped: a
+# backlog triage note is fleet-internal (for the record/humans) → no-relay, so it
+# can't loop back into a bound worker when the issue-bridge is on (issue #132), and
+# it's posted as the `dash` role (--from dash, issue #224). --note is the default,
+# named here for clarity. Fall back to plain gh with a minimal STATIC dash footer +
+# marker appended INLINE if the wrapper isn't present (a partial/diverged install) —
+# so triage commenting never silently breaks, stays loop-safe, AND keeps attribution.
+if { [ -x "$BIN/fleet-comment.sh" ] && "$BIN/fleet-comment.sh" "$num" --repo "$REPO" --from dash --note --body "$body" >/dev/null 2>&1; } \
+   || gh issue comment "$num" --repo "$REPO" --body "$body"$'\n\n— fleet · dash · #'"$num"$'\n<!-- fleet:from role=dash issue='"$num"$' -->\n<!-- fleet:no-relay -->' >/dev/null 2>&1; then
   : # posted (via wrapper or the marker-carrying fallback)
   # invalidate the per-issue preview cache so the pane refetches with the new
   # comment on the next hover / refresh-preview.
