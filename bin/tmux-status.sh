@@ -10,6 +10,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/usage-lib.sh"
 
 # Palette (Tokyo Night)
 RED="#[fg=#f7768e]"
@@ -107,29 +108,27 @@ if [ "${FLEET_STATUS_DISK:-1}" != "0" ]; then
 fi
 
 # --- Claude token consumption (5h/7d proxy, written by the dash collector) ---
+# The official weekly/N-hour limit % (scraped into $C/ratelimit) is no longer a
+# separate always-on footer segment — that text was noise on the status bar
+# (issue #239). Instead it COLORS this one usage stat: indigo = ok, yellow =
+# approaching the limit (≥FLEET_USAGE_WARN_PCT), red = at/near it
+# (≥FLEET_USAGE_CRIT_PCT). The full story — which limit, reset time, which
+# account — lives in the usage popup, opened on demand: click this stat
+# (range=user|usage) or press prefix+u. Severity math + freshness gate are
+# shared with the popup via usage-lib.sh so they can't drift.
 INDIGO="#[fg=#bb9af7]"
-usage=$(cat "${TMPDIR:-/tmp}/.claude-dash/global/usage" 2>/dev/null)   # global/ (issue #181)
+usage=$(fleet_usage_proxy)
 usage_seg=""
-[ -n "$usage" ] && usage_seg="${DIM}│ ${INDIGO}${usage} "
-
-# --- Official weekly/N-hour limit % (opportunistically scraped by the collector) ---
-# The collector writes "$C/ratelimit" as "epoch<TAB>line" whenever a session prints
-# "N% of your weekly limit". Surface that authoritative number next to the local
-# proxy, but only while fresh — a stale weekly % is worse than none. Staleness
-# window is FLEET_RATELIMIT_TTL seconds (default 6h).
-ORANGE="#[fg=#ff9e64]"
-rl_seg=""
-rl_file="${TMPDIR:-/tmp}/.claude-dash/global/ratelimit"   # global/ (issue #181)
-if [ -f "$rl_file" ]; then
-    rl_ts="" rl_line=""
-    IFS=$'\t' read -r rl_ts rl_line < "$rl_file" 2>/dev/null
-    case "$rl_ts" in
-        ''|*[!0-9]*) : ;;   # missing / non-numeric epoch → skip
-        *)  if [ -n "$rl_line" ] && \
-               [ "$(( $(date +%s) - rl_ts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ]; then
-                rl_seg="${DIM}│ ${ORANGE}${rl_line} "
-            fi;;
+if [ -n "$usage" ]; then
+    rl_pct="$(fleet_usage_ratelimit | cut -f1)"
+    case "$(fleet_usage_severity "$rl_pct")" in
+        crit) usage_col="$RED" ;;
+        warn) usage_col="$YELLOW" ;;
+        *)    usage_col="$INDIGO" ;;
     esac
+    # Clickable range → the usage popup (a MouseDown1Status bind opens it; same
+    # target as prefix+u). Emitted only when a stat exists, so no dead click.
+    usage_seg="${DIM}│ #[range=user|usage]${usage_col}${usage} #[norange]"
 fi
 
 # --- Active subscription account (multi-account only; display-only read, no
@@ -147,5 +146,5 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s%s" \
-    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$acct_seg" "$usage_seg" "$rl_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$acct_seg" "$usage_seg"
