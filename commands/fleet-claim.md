@@ -67,11 +67,12 @@ echo "mine=${mine:-no} claimed=${claimed:+yes}"
   `gh issue edit "<issue>" --repo "$FLEET_REPO" --add-assignee @me`.
 - Post the claim comment only if none exists yet — via `fleet-comment.sh --note`
   so it carries the `<!-- fleet:no-relay -->` marker and never loops back into
-  this worker when the issue-bridge is on (issue #132); the `▶ claiming` text is
-  preserved so the anti-collision grep still matches. The fallback keeps the
-  marker INLINE (dropping it would let the bridge relay the worker's own comment
-  back into itself):
-  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '▶ claiming' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'▶ claiming\n\n<!-- fleet:no-relay -->'`.
+  this worker when the issue-bridge is on (issue #132), and the per-role `worker`
+  footer (issue #224); the `▶ claiming` text is preserved so the anti-collision
+  grep still matches. The fallback keeps the marker INLINE (dropping it would let
+  the bridge relay the worker's own comment back into itself) plus a minimal
+  static `worker` footer so attribution survives degraded mode:
+  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '▶ claiming' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'▶ claiming\n\n— fleet · worker · #<issue>\n<!-- fleet:from role=worker issue=<issue> -->\n<!-- fleet:no-relay -->'`.
 - If both were already set, say so and skip both writes — do **not** re-comment.
 
 ## 3. Restate scope + plan, then hand back
