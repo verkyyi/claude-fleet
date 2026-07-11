@@ -65,9 +65,19 @@ issues as the backlog. See README.md for the architecture. Components:
 
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
-   user about the opinionated bits of `conf/tmux-attention.conf` — prefix
-   bindings on `a/G/b/n/R/A/c/r/?` and a status-bar restyle — and comment out
-   anything they don't want. Note `prefix+c` (the config modal) **rebinds tmux's
+   user about the opinionated bits of `conf/tmux-attention.conf` — a **fleet
+   baseline** block (issue #222) + prefix bindings on `a/G/b/n/R/A/c/r/?` and a
+   status-bar restyle — and comment out anything they don't want. The **fleet
+   baseline** ships the tmux defaults the fleet UX assumes so a clean install is
+   consistent (they used to live only in a pre-repo install.sh's `~/.tmux.conf`):
+   `set -g mouse on` (the clickable footer ranges + dashboard mouse), truecolor
+   (`default-terminal` + a `Tc` `terminal-overrides` so the theme's hex colors
+   render — most likely to fight a user's own TERM, so flag it), `escape-time 10`,
+   `history-limit 50000`, `allow-rename`/`automatic-rename` off, and the
+   Tokyo-Night status/pane/message theme. Each line is documented inline and
+   overridable — a user's own `~/.tmux.conf` settings AFTER the `source-file` line
+   win (later wins), or comment the baseline out. Truly personal bits (a prefix
+   remap, personal binds) are intentionally NOT shipped. Note `prefix+c` (the config modal) **rebinds tmux's
    default new-window**, `prefix+n` (quick-dispatch — file an issue + spawn its
    worker) **rebinds tmux's default `next-window`**, and `prefix+?` (the keymap
    cheatsheet popup — `bin/fleet-keys.sh`) **rebinds tmux's default `list-keys`**;
