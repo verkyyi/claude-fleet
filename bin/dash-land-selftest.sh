@@ -79,7 +79,7 @@ grep -Eq -- 'display-popup .*dash-land\.sh' "$DASH" \
   || fail "A the ctrl-l bind should open dash-land.sh in a display-popup" "$(grep -n ctrl-l "$DASH")"
 grep -q 'bin/fleet-land.sh' "$LAND" \
   || fail "A dash-land.sh does not hand off to fleet-land.sh"
-grep -q '⌃l=land' "$DASH" || fail "A the dash header (HDR) does not advertise ⌃l=land"
+grep -q '⌃l land' "$DASH" || fail "A the dash header (HDR) does not advertise ⌃l land"
 # Capture the sheet first (pipe-free match) — `... | grep -q` can SIGPIPE the
 # producer under `pipefail` when grep closes the pipe on its first match.
 SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)" || fail "A fleet-keys.sh --plain exited non-zero"

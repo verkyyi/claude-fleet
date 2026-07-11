@@ -47,8 +47,13 @@ PREVIEW=( --preview-window=hidden )
 # backlog panel (tmux-issues.sh) uses.
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
-HDR='enter=jump · ⌃g=new session (pick issue) · ⌃n=new issue+worker · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃l=land · ⌃t=landed ⌃o=restore · ?=keys · esc=back'
-[ -n "$POPUP" ] && HDR='enter=jump (closes) · ⌃g=new session · ⌃n=new issue+worker · ⌃s=raw session · ⌃e=rename · ⌃x=reap ⌥x=force · ⌃l=land · ⌃t=landed ⌃o=restore · ?=keys · esc=close'
+# Minimal header (issue #249): core actions inline, the rest deferred to the `?`
+# cheatsheet (fleet-keys.sh lists every demoted bind: ⌃g ⌃s ⌃e ⌃x ⌥x ⌃t ⌃o).
+# Terse `key verb` form, not `key=phrase`, so it fits one line at normal widths.
+HDR='↵ jump · ⌃n new · ⌃l land · ? keys'
+# POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
+# less obvious than esc-back on the always-on dash) — that token is the only diff.
+[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ⌃l land · ? keys · esc close'
 
 run_dash() {
   # clear any half-finished mode from a prior run; reset the live⇄landed view so
