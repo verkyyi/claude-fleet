@@ -158,8 +158,14 @@ vpr=$(run resume '#70'); contains "resume: lookup by #PR resolves the right row"
 # D. rows — dash landed view
 # ============================================================================
 rows=$(run rows)
-contains "rows: emits a pinned header line" "$rows" "landed sessions"
+# The landed view now shares the live list's column header (issue · window ·
+# summary · act · PR · ctx) so the two read as one table (issue #228).
+contains "rows: emits the unified column header (window)"  "$rows" "window"
+contains "rows: emits the unified column header (summary)" "$rows" "summary"
+contains "rows: emits the last-activity column header"     "$rows" "act"
 contains "rows: PR-bearing row targets landed:<pr>" "$rows" "landed:70"
+# field2 still carries the session id (used by the resume/restore path).
+contains "rows: PR-bearing row carries its session id in field2" "$rows" "sid-abc"
 # a PR-less row targets landed:issue:<n>
 : > "$FLEET_HISTORY_LEDGER"
 printf '2026-01-01T00:00:00Z\t8\tt8\t-\t-\t/w/issue-8\t/nope\t-\t-\n' >> "$FLEET_HISTORY_LEDGER"

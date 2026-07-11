@@ -66,6 +66,7 @@ print_sheet() {
   key "⌃x" "reap a merged+clean worker (window + worktree + issue)"
   key "⌥x" "force-reap (skip the merged/clean gate)"
   key "⌃t" "toggle live ⇄ landed (finished sessions; enter opens the PR)"
+  key "⌃o" "restore the highlighted landed session into a new window (claude --resume)"
   key "⌃r" "refresh now"
   key "?" "this cheatsheet"
   key "esc" "relaunch the dash (it's the always-on hub pane)"

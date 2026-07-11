@@ -532,6 +532,51 @@ fleet_win_name() {
     | sed -e 's/-$//'
 }
 
+# timestamp → friendly relative span (issue #228). Sets $reltime_out to a short,
+# human-readable "time since": "now", "5 mins", "2 hours", "3 days", "2 wks",
+# "5 mos", "1 yr". Both the dash live-list activity column and the landed history
+# rows/list render last-activity through this, so the two lists read alike.
+#
+# PURE bash (no forks) so it is safe in the dash rows HOT LOOP (one call per
+# window per repaint). Args:
+#   $1 = epoch SECONDS (all-digits). Non-numeric / empty → reltime_out='' so the
+#        caller can render its own "unknown" marker. (ISO timestamps must be
+#        pre-converted with fleet_epoch_from_iso — that path forks `date`, which
+#        is fine for the ledger but never for the hot loop.)
+#   $2 = now epoch SECONDS. Empty/non-numeric → reltime_out='' (caller supplies a
+#        NOW it already computed once, keeping this fork-free).
+# Widths stay ≤8 ("23 hours") so callers can budget a fixed column.
+# shellcheck disable=SC2034  # reltime_out is a caller-facing OUTPUT global (read
+# cross-file by the dash/history producers), so it reads as "unused" in this file.
+fleet_reltime() {
+  reltime_out=''
+  local ts="${1:-}" now="${2:-}"
+  case "$ts"  in ''|*[!0-9]*) return 0;; esac
+  case "$now" in ''|*[!0-9]*) return 0;; esac
+  local d=$(( now - ts )); [ "$d" -lt 0 ] && d=0        # clock-skew guard
+  local n
+  if   [ "$d" -lt 60 ]; then reltime_out='now'
+  elif [ "$d" -lt 3600 ];     then n=$(( d / 60 ));       reltime_out="$n min";  [ "$n" -ne 1 ] && reltime_out="$n mins"
+  elif [ "$d" -lt 86400 ];    then n=$(( d / 3600 ));     reltime_out="$n hour"; [ "$n" -ne 1 ] && reltime_out="$n hours"
+  elif [ "$d" -lt 604800 ];   then n=$(( d / 86400 ));    reltime_out="$n day";  [ "$n" -ne 1 ] && reltime_out="$n days"
+  elif [ "$d" -lt 2592000 ];  then n=$(( d / 604800 ));   reltime_out="$n wk";   [ "$n" -ne 1 ] && reltime_out="$n wks"
+  elif [ "$d" -lt 31536000 ]; then n=$(( d / 2592000 ));  reltime_out="$n mo";   [ "$n" -ne 1 ] && reltime_out="$n mos"
+  else                             n=$(( d / 31536000 )); reltime_out="$n yr";   [ "$n" -ne 1 ] && reltime_out="$n yrs"
+  fi
+}
+
+# ISO-8601 UTC (e.g. 2026-01-01T00:00:00Z, as the history ledger stores mergedAt
+# and gh returns it) → epoch seconds on stdout, empty on failure. Handles GNU
+# date (-d) and BSD/macOS date (-j -f). FORKS `date`, so it is for the ledger
+# path (once per landed row), NOT the dash hot loop — feed its output into
+# fleet_reltime (issue #228).
+fleet_epoch_from_iso() {
+  local iso="${1:-}"
+  case "$iso" in ''|-) return 0;; esac
+  date -u -d "$iso" +%s 2>/dev/null && return 0                    # GNU date
+  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null    # BSD/macOS date
+}
+
 # EXPENSIVE: resolve a tmux session's repo. Order: per-session conf override
 # (fleets/<sess>/conf, or the legacy flat <sess>.conf), else the origin remote of
 # the first git checkout among its windows, else the global FLEET_REPO. Prints

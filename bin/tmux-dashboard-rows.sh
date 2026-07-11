@@ -40,9 +40,13 @@ fld() { local w="$1" s="$2" n=${#2}
   else printf -v fld_out "%s%*s" "$s" $((w-n)) ''; fi; }
 
 # working glyph rotates: quarter-second frames from perl HiRes (macOS date has
-# no %N and /bin/bash 3.2 no EPOCHREALTIME) — one frame per 4Hz repaint.
+# no %N and /bin/bash 3.2 no EPOCHREALTIME) — one frame per 4Hz repaint. The same
+# tick doubles as the fork-free NOW (epoch seconds) for the activity column:
+# perl's time()*4 ÷ 4 == floor(now), so no extra `date` fork on the hot path; the
+# no-perl fallback reads whole seconds from `date` (one fork, as before).
 SPINF='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-TICK=$(perl -MTime::HiRes=time -e 'printf "%d", time()*4' 2>/dev/null || date +%s)
+TICK=$(perl -MTime::HiRes=time -e 'printf "%d", time()*4' 2>/dev/null)
+if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; fi
 FRAME=${SPINF:$(( TICK % 10 )):1}
 
 # state → color/glyph/rank (set vars; no subshells)
@@ -75,15 +79,18 @@ PRMAPN=$'\n'"$PRMAP"
 # the pane), so it's only a fallback for the very first pre-fzf render before
 # FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
 # margin so fzf never clips the ctx% digits. Layout column widths:
-#   LEFTW = glyph1+sp + issue5+sp + window22+sp = 31 ; RIGHTW = PR7+sp + ctx4 = 12
+#   LEFTW  = glyph1+sp + issue5+sp + window22+sp = 31
+#   RIGHTW = act8+sp + PR7+sp + ctx4 = 21   (act = last-activity, issue #228)
+# NB: LEFTW/ACTW/RIGHTW MUST stay in step with fleet-history.sh cmd_rows so the
+# live list and the landed history list render the SAME aligned columns (#228).
 COLS=${FZF_COLUMNS:-}
 case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
 case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-LEFTW=31; RIGHTW=12; USABLE=$(( COLS - 4 ))
+LEFTW=31; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
 buf=""
-while IFS=$US read -r sess idx name path state _ wid iss; do
+while IFS=$US read -r sess idx name path state state_ts wid iss; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -167,12 +174,20 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   [ -f "$G/summary_$smk" ] && { read -r smry < "$G/summary_$smk" || :; }
   smry=${smry:0:120}
 
+  # last-activity (issue #228): friendly "time since" from @claude_state_ts (epoch
+  # re-stamped by the hooks/spinner/classifier on every state change). fleet_reltime
+  # is pure-bash (no fork) so it stays on the hot path; NOW was computed once above.
+  # No timestamp yet (a window that never took a turn) → a muted dot.
+  fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
+  acol=$GY; [ -z "$act" ] && act='·'
+
   issd=''; [ -n "$iss" ] && issd="#$iss"
-  # full row: glyph1·issue5·window22·summary(flex)·⟨pad⟩·PR7·ctx4
-  # window+summary sit right after the issue; PR/ctx right-align to the edge, the
-  # gap between summary and PR flexing so the metadata column stays pinned right.
+  # full row: glyph1·issue5·window22·summary(flex)·⟨pad⟩·act8·PR7·ctx4
+  # window+summary sit right after the issue; act/PR/ctx right-align to the edge,
+  # the gap between summary and act flexing so the metadata block stays pinned right.
   fld 5  "$issd"; f_iss=$fld_out
   fld 22 "$name"; f_name=$fld_out
+  fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
   avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
@@ -216,21 +231,22 @@ while IFS=$US read -r sess idx name path state _ wid iss; do
   fi
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${TX}${smry}${R}${gap}${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done < <(tmux list-windows -a -F "$WFMT")
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
-# "summary" flexes, PR/ctx pinned right. Underlined muted-grey to read as a rule.
+# "summary" flexes, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
 fld 5  "issue";  h_i=$fld_out
 fld 22 "window"; h_n=$fld_out
+fld "$ACTW" "act"; h_a=$fld_out
 fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = len("summary")
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
 # emit sorted by status rank (color/order conveys grouping)
 printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk _ line; do
