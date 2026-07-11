@@ -141,9 +141,24 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
-With `set -g mouse on`, the footer-left is clickable too: the **fleet name**
-(`#S`) opens a picker of running fleets and switches to the chosen one, and the
-red **`● N` needs badge** cycles to the next window that needs you.
+Mouse mode is shipped **on** by the fleet baseline (see below), so the
+footer-left is clickable too: the **fleet name** (`#S`) opens a picker of running
+fleets and switches to the chosen one, and the red **`● N` needs badge** cycles
+to the next window that needs you. (Comment out `set -g mouse on` in
+`conf/tmux-attention.conf` to keep native select-to-copy.)
+
+### tmux baseline
+
+`conf/tmux-attention.conf` also carries an opinionated **fleet baseline** the UX
+assumes so a clean install behaves consistently: `mouse on` (the clickable
+footer + dashboard mouse), truecolor (`default-terminal` + a `Tc`
+`terminal-overrides` so the theme's hex colors render), `escape-time 10` (snappy
+ESC in the Claude TUI), `history-limit 50000`, `allow-rename`/`automatic-rename`
+off (the fleet navigates by explicit window names), and the Tokyo-Night status /
+pane / message theme. Every line is documented inline and easy to override —
+put your own settings in `~/.tmux.conf` *after* the `source-file` line (later
+wins) or comment the baseline out. Truly personal bits (prefix remaps, personal
+binds) are intentionally left in your `~/.tmux.conf`.
 
 ## Configuration
 
