@@ -45,12 +45,17 @@ bash ~/.claude/fleet/bin/fleet-history.sh list --repo "$FLEET_REPO" $ARGUMENTS
 ```
 
 Each row is `#issue · when · title · PR · squash-sha · one-line-summary`, newest
-first. If the ledger is empty, say so — nothing has been landed-and-recorded yet
-(the ledger fills as `/fleet-land` / `/fleet-land-train` land PRs). Relay the
-list; if the user passed a filter, note it.
+first — `when` is a friendly relative span (`2 hours`, `3 days`), not a raw
+timestamp (issue #228). If the ledger is empty, say so — nothing has been
+landed-and-recorded yet (the ledger fills as `/fleet-land` / `/fleet-land-train`
+land PRs). Relay the list; if the user passed a filter, note it.
 
 Same data is one keystroke away in the dashboard: **⌃t** toggles the dash between
-its live session list and this landed view (Enter there opens the PR).
+its live session list and this landed view. The landed view shares the SAME
+aligned columns as the live list (issue · window · summary · **act** · PR · ctx,
+where `act` is time-since-merge), so the two read as one table. In the landed
+view **Enter** opens the PR and **⌃o** restores the highlighted session into a new
+window (the one-key form of step 3's resume).
 
 ## 2. Per-entry actions (offer these on a chosen row)
 
@@ -95,7 +100,13 @@ Notes:
   the degrade path when the SHA/transcript is missing.
 - To resume without leaving the worktree behind afterward, remove it when done:
   `git -C "$FLEET_MAIN" worktree remove <worktree>` (it's a throwaway checkout at
-  the squash SHA).
+  the squash SHA). Or just close the restored window — its reconstructed worktree
+  is merged+clean+unattached, so the worktree janitor prunes it on the next sweep.
+- **One-key restore from the dash** (issue #228): in the landed view (⌃t), press
+  **⌃o** on a row to run exactly this reconstruct-off-SHA resume and open the
+  session in a NEW window — no manual `cd`/`claude --resume`. It is cap-gated and
+  non-invasive (the window surfaces in the dash without yanking you over), and is
+  driven by `bin/dash-restore-session.sh`, which calls the same `resume --exec`.
 
 ## 4. Report — keep it short
 

@@ -358,4 +358,41 @@ eq "summary_key: empty session → bare _<id> (single-fleet / uncached)" "_2" "$
 _inline() { local sess="$1" wid="$2"; printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"; }
 eq "summary_key: inline reader form matches the helper" "$(fleet_summary_key 'a/b.c' @42)" "$(_inline 'a/b.c' @42)"
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, summary-key #208)\n' "$CHECKS"
+# --- fleet_reltime / fleet_epoch_from_iso (issue #228) -------------------------
+# The friendly last-activity span rendered in BOTH the live dash list and the
+# landed history list. fleet_reltime is pure integer arithmetic → fully
+# deterministic (no wall-clock dependency): feed a fixed now + delta and assert
+# the exact string, incl. singular/plural and each unit boundary.
+NOW=1000000000
+rel() { fleet_reltime "$1" "$NOW"; printf '%s' "${reltime_out:-}"; }
+eq "reltime: 0s → now"            "now"      "$(rel $((NOW-0)))"
+eq "reltime: 59s → now"           "now"      "$(rel $((NOW-59)))"
+eq "reltime: 60s → 1 min"         "1 min"    "$(rel $((NOW-60)))"
+eq "reltime: 120s → 2 mins"       "2 mins"   "$(rel $((NOW-120)))"
+eq "reltime: 3599s → 59 mins"     "59 mins"  "$(rel $((NOW-3599)))"
+eq "reltime: 3600s → 1 hour"      "1 hour"   "$(rel $((NOW-3600)))"
+eq "reltime: 7200s → 2 hours"     "2 hours"  "$(rel $((NOW-7200)))"
+eq "reltime: 86399s → 23 hours"   "23 hours" "$(rel $((NOW-86399)))"
+eq "reltime: 86400s → 1 day"      "1 day"    "$(rel $((NOW-86400)))"
+eq "reltime: 172800s → 2 days"    "2 days"   "$(rel $((NOW-172800)))"
+eq "reltime: 604800s → 1 wk"      "1 wk"     "$(rel $((NOW-604800)))"
+eq "reltime: 1209600s → 2 wks"    "2 wks"    "$(rel $((NOW-1209600)))"
+eq "reltime: 2592000s → 1 mo"     "1 mo"     "$(rel $((NOW-2592000)))"
+eq "reltime: 31536000s → 1 yr"    "1 yr"     "$(rel $((NOW-31536000)))"
+eq "reltime: 63072000s → 2 yrs"   "2 yrs"    "$(rel $((NOW-63072000)))"
+# clock-skew guard: a future timestamp clamps to "now", never a negative span.
+eq "reltime: future ts (skew) → now" "now"    "$(rel $((NOW+500)))"
+# unknown inputs → empty (the caller renders its own '·'/'-' marker).
+fleet_reltime ""    "$NOW"; eq "reltime: empty ts → ''"      "" "${reltime_out:-}"
+fleet_reltime "abc" "$NOW"; eq "reltime: non-numeric ts → ''" "" "${reltime_out:-}"
+fleet_reltime "5"   "";     eq "reltime: empty now → ''"     "" "${reltime_out:-}"
+
+# fleet_epoch_from_iso: ISO-8601 UTC → epoch (deterministic in UTC on GNU & BSD).
+eq "epoch_from_iso: fixed UTC ISO → epoch" "1767225600" "$(fleet_epoch_from_iso '2026-01-01T00:00:00Z')"
+eq "epoch_from_iso: dash placeholder → ''" "" "$(fleet_epoch_from_iso '-')"
+eq "epoch_from_iso: empty → ''"            "" "$(fleet_epoch_from_iso '')"
+# round-trip: parse an ISO, then render "2 hours later" relative to it.
+_ep=$(fleet_epoch_from_iso '2026-01-01T00:00:00Z')
+fleet_reltime "$_ep" $((_ep + 7200)); eq "reltime: ISO round-trip → 2 hours" "2 hours" "${reltime_out:-}"
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, summary-key #208, reltime #228)\n' "$CHECKS"

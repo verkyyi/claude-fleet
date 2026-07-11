@@ -183,19 +183,34 @@ cmd_list() {
     echo "no landed sessions recorded yet$( [ -n "$filter" ] && printf ' (filter: %s)' "$filter")."
     return 0
   fi
-  printf '%s\n' "$out" | awk -F'\t' '
-    {
-      when=$1; iss=$2; title=$3; pr=$4; sha=$5; sid=$8; smry=$9
-      short=substr(sha,1,7); if (sha=="-") short="-"
-      if (length(title)>44) title=substr(title,1,43) "\xe2\x80\xa6"
-      if (length(smry)>60)  smry=substr(smry,1,59) "\xe2\x80\xa6"
-      printf "#%-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n", iss, when, title, pr, short, smry
-    }'
+  # Render the merge time as a friendly relative span ("2 hours", "3 days") rather
+  # than a raw ISO timestamp (issue #228), so the CLI list matches the dash's
+  # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
+  # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
+  local now; now=$(date +%s 2>/dev/null)
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry; do
+    [ -z "$iss" ] && continue
+    local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
+    local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
+    [ "${title:--}" = "-" ] && title="(untitled)"
+    [ "${smry:--}" = "-" ] && smry=""
+    [ ${#title} -gt 44 ] && title="${title:0:43}…"
+    [ ${#smry}  -gt 60 ] && smry="${smry:0:59}…"
+    printf '#%-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' "$iss" "$rel" "$title" "$pr" "$short" "$smry"
+  done
 }
 
 # ============================================================================
 # rows — dash US-delimited landed rows (field1=landed:<pr|issue>, field3=display)
 # ============================================================================
+# The landed view shares the SAME aligned column skeleton as the live dash list
+# (glyph·issue·window·summary·act·PR·ctx) so toggling ⌃t reads as ONE list, not a
+# separate ad-hoc format (issue #228). Finished-session specifics: the glyph is an
+# indigo ✓ (merged/archived, vs live green ✓ = done); "window" mirrors the tmux
+# window name the worker had (kebab of the title); "act" is time-since-merge; PR
+# is the merged number; ctx has no live meaning → a muted dot (skeleton parity).
+# Column widths MUST match tmux-dashboard-rows.sh (LEFTW/ACTW/RIGHTW) or the two
+# lists won't line up.
 cmd_rows() {
   # Resolve the viewing fleet's repo so we read ITS ledger, not "default". The
   # dash execs into us with FLEET_SESSION exported but NOT FLEET_REPO, so try, in
@@ -208,24 +223,72 @@ cmd_rows() {
     if [ -n "$r" ]; then repo="$r"
     else fleet_load_conf "$FLEET_SESSION" 2>/dev/null; repo="${FLEET_REPO:-$repo}"; fi
   fi
+  export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} counts chars
   local E=$'\033[' US=$'\x1f'
   local GN="${E}38;2;158;206;106m" IN="${E}38;2;187;154;247m" TX="${E}38;2;169;177;214m"
   local GY="${E}38;2;86;95;137m" R="${E}0m"
+
+  # Column widths — kept in step with tmux-dashboard-rows.sh so live & landed align.
+  local COLS=${FZF_COLUMNS:-}
+  case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
+  case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
+  local LEFTW=31 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
+  [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
+  # pad/truncate to N DISPLAY chars → $fld_out (mirror of the live producer's fld).
+  local fld_out
+  fld() { local w="$1" s="$2" n=${#2}
+    if [ "$n" -gt "$w" ]; then fld_out="${s:0:$w}"
+    else printf -v fld_out "%s%*s" "$s" $((w-n)) ''; fi; }
+  local now; now=$(date +%s 2>/dev/null)
+
   local out; out=$(read_ledger "$repo")
-  # header row (fzf --header-lines=1 pins it)
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  landed sessions — enter=open PR · ⌃t=back to live${R}"
-  [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate)${R}"; return 0; }
+
+  # header row (fzf --header-lines=1 pins it) — identical column layout to the live
+  # list's header so the two read as one table.
+  local h_i h_n h_a h_p h_c h_pad h_gap
+  fld 5  "issue";  h_i=$fld_out
+  fld 22 "window"; h_n=$fld_out
+  fld "$ACTW" "act"; h_a=$fld_out
+  fld 7  "PR";     h_p=$fld_out
+  fld 4  "ctx";    h_c=$fld_out
+  h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = len("summary")
+  printf -v h_gap '%*s' "$h_pad" ''
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
+
+  [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry; do
     [ -z "$iss" ] && continue
-    local target key short
+    local target key
     key="${sid:--}"
     case "$pr" in ''|-) target="landed:issue:$iss";; *) target="landed:${pr#\#}";; esac
-    short="${sha:0:7}"; [ "$sha" = "-" ] && short="-------"
-    [ "${title:--}" = "-" ] && title="(untitled)"
-    [ "${smry:--}" = "-" ] && smry=""
+
+    # window column: the kebab window name the worker had (falls back to issue-<N>).
+    local wname; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
+    [ -z "${wname:-}" ] && wname="issue-$iss"
+    # summary column: the recorded one-line summary, else the title so it's not blank.
+    local dsmry="$smry"; { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="$title"
+    [ "${dsmry:--}" = "-" ] && dsmry="(untitled)"
+    # activity = time since the merge (mergedAt → epoch → friendly span).
+    local ep act; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; act="${reltime_out:--}"
+    # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
+    local prcell; case "$pr" in ''|-) prcell="—";; *) prcell="#${pr#\#}";; esac
+
+    local issd="#$iss"
+    local f_iss f_name f_act f_pr f_ctx
+    fld 5  "$issd";   f_iss=$fld_out
+    fld 22 "$wname";  f_name=$fld_out
+    fld "$ACTW" "$act"; f_act=$fld_out
+    fld 7  "$prcell"; f_pr=$fld_out
+    fld 4  "·";       f_ctx=$fld_out
+    # summary flexes into the gap; clip to the same avail the live list uses. Char
+    # clip (ASCII-fast); a rare wide glyph may run a hair short — never overruns.
+    local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
+    [ ${#dsmry} -gt "$avail" ] && dsmry="${dsmry:0:$avail}"
+    local pad=$(( USABLE - LEFTW - ${#dsmry} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
+    local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$key" "$US" \
-      "${GN}#${iss}${R} ${IN}PR${pr#\#}${R} ${GY}${short}${R} ${GY}${when}${R}  ${TX}${title}${R}${smry:+  ${GY}${smry}${R}}"
+      "${IN}✓${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
   done
 }
 
