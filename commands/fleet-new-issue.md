@@ -90,11 +90,18 @@ Straight from the task text — no code reading, no grounding:
 
 ## 4. Spawn the worker
 
+Pass the **title you just wrote** as `--title` so the worker's tmux window is
+named after the WORK (a short kebab of the title), not the bare `issue-<N>` slug
+(issue #216). The brand-new issue isn't in the collector cache yet, and a
+post-create `gh issue view` can lag — so `--title` is what makes the window name
+reliably explaining/descriptive instead of falling back to `issue-<N>`:
+
 ```sh
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N>
+bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<title>"
 ```
 
-This creates the `issue-<N>` worktree + a `claude` window bound to the issue. It
+This creates the `issue-<N>` worktree + a `claude` window (named after `<title>`)
+bound to the issue. It
 enforces the **global + per-fleet** session caps and its own dedup: if a cap is
 hit (or the issue already has a live window) it refuses and prints why — **relay
 that refusal verbatim and do NOT retry or force it.** You file and spawn only —
