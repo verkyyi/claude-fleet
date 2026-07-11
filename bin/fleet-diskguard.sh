@@ -36,12 +36,14 @@
 #   --probe           capture an incident right now regardless of free space
 #   --help
 #
-# Config (fleet.conf / per-fleet conf; all optional):
+# Config (fleet.conf; all optional):
 #   FLEET_DISK_FLOOR_GB     gate refusal threshold      (default 12)
 #   FLEET_DISK_WARN_GB      watch capture threshold     (default 15)
+#   FLEET_NOTIFY_CMD        notifier run as `$CMD "<markdown>"` on an incident
+# Internal constants (no longer surfaced in fleet.conf.example / the prefix+c modal
+# — issue #237 — but an override in an old conf is still honored for back-compat):
 #   FLEET_DISK_TARGET       dir whose volume to measure (default $TMPDIR)
 #   FLEET_DISK_COOLDOWN     min seconds between captures (default 300)
-#   FLEET_NOTIFY_CMD        notifier run as `$CMD "<markdown>"` on an incident
 #   FLEET_RUNAWAY_CPU_PCT   %CPU that counts as "hot"    (default 0 = watchdog OFF)
 #   FLEET_RUNAWAY_CPU_SECS  seconds hot before it's a runaway (default 300)
 #   FLEET_RUNAWAY_CPU_ACTION on a runaway: notify | kill (default notify)

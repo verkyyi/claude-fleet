@@ -253,6 +253,33 @@ eq "conf_file: new layout"     "$CONFROOT/fleets/fleet-a/conf" "$(fleet_conf_fil
 eq "conf_file: legacy flat"    "$CONFROOT/fleet-b.conf"        "$(fleet_conf_file fleet-b)"
 eq "conf_file: absent → new"   "$CONFROOT/fleets/fleet-z/conf" "$(fleet_conf_file fleet-z)"
 
+# fleet_load_conf strips GLOBAL-ONLY keys from the per-fleet overlay (issue #237)
+# so a fleet cannot override a machine-wide key — the headline case being a
+# per-fleet FLEET_GLOBAL_MAX_SESSIONS raising the SYSTEM-WIDE spawn cap. Per-fleet
+# identity + tunables must still apply; global-only keys must keep their pre-overlay
+# (global) value. Run each assertion in a subshell so the sourced vars don't bleed.
+mkdir -p "$CONFROOT/fleets/loadc"
+cat > "$CONFROOT/fleets/loadc/conf" <<'LOADC'
+FLEET_REPO="acme/widgets"
+FLEET_CTX_WINDOW=1000000
+FLEET_MAX_SESSIONS=3
+FLEET_GLOBAL_MAX_SESSIONS=999
+FLEET_NOTIFY_CMD="/evil/notify.sh"
+LOADC
+eq "load_conf: per-fleet identity applied" "acme/widgets" \
+  "$( FLEET_REPO="you/repo"; fleet_load_conf loadc; printf '%s' "$FLEET_REPO" )"
+eq "load_conf: per-fleet tunable applied" "1000000" \
+  "$( FLEET_CTX_WINDOW=200000; fleet_load_conf loadc; printf '%s' "$FLEET_CTX_WINDOW" )"
+eq "load_conf: per-fleet cap applied" "3" \
+  "$( FLEET_MAX_SESSIONS=0; fleet_load_conf loadc; printf '%s' "$FLEET_MAX_SESSIONS" )"
+eq "load_conf: global-only cap NOT overridable" "8" \
+  "$( FLEET_GLOBAL_MAX_SESSIONS=8; fleet_load_conf loadc; printf '%s' "$FLEET_GLOBAL_MAX_SESSIONS" )"
+eq "load_conf: global-only notifier NOT overridable" "/good.sh" \
+  "$( FLEET_NOTIFY_CMD="/good.sh"; fleet_load_conf loadc; printf '%s' "$FLEET_NOTIFY_CMD" )"
+# absent conf is a clean no-op (does not clobber the global value)
+eq "load_conf: absent conf no-op" "keep" \
+  "$( FLEET_CTX_WINDOW=keep; fleet_load_conf no-such-sess; printf '%s' "$FLEET_CTX_WINDOW" )"
+
 # fleet_each_conf enumerates each fleet ONCE, preferring the new layout. Give
 # fleet-a BOTH a new dir and a legacy flat conf — it must appear only once (new).
 printf 'FLEET_REPO="acme/stale"\n' > "$CONFROOT/fleet-a.conf"
