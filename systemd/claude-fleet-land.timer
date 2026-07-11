@@ -1,0 +1,12 @@
+# Fires claude-fleet-land.service. Parity with the launchd plist:
+# StartInterval=60 + RunAtLoad=true.
+[Unit]
+Description=claude-fleet auto-land daemon timer (every 60s)
+
+[Timer]
+OnStartupSec=25
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

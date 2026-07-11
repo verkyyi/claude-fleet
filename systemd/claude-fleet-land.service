@@ -1,0 +1,16 @@
+# claude-fleet auto-land daemon — Linux systemd user unit (parity with launchd
+# com.claude-fleet.land). Oneshot driven by claude-fleet-land.timer.
+# OFF by default: only fleets whose conf sets FLEET_AUTOLAND=1 auto-land, which
+# REMOVES the human approval gate (CI green + branch protection become the only
+# gate) and spends LLM tokens only in fleet-land's mechanical merge. Needs gh.
+[Unit]
+Description=claude-fleet auto-land daemon (hands-off land landable-green PRs under caps)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-autoland.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/land.systemd.log
