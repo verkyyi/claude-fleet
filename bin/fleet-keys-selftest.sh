@@ -10,8 +10,10 @@
 #   2. Every prefix `bind`/`bind -n` in the conf (minus the mouse status bind) is
 #      documented in the sheet — no missing entries.
 #   3. The `?` popup bind exists in the conf, and the dash (`?`) + backlog (`⌃k`)
-#      each open fleet-keys.sh.
+#      each open fleet-keys.sh — scoped to their own panel (issue #265).
 #   4. The sheet renders non-empty in --plain mode and lists all four groups.
+#   5. Context scoping (issue #265): `--context dash`/`--context backlog` show
+#      that panel + the global `tmux prefix` group, and drop the OTHER panels.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
 set -uo pipefail
@@ -75,16 +77,35 @@ EOF
 grep -q 'bin/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
 grep -Eq '^bind[[:space:]]+\?[[:space:]]+display-popup' "$CONF" \
   || fail "conf 'prefix ?' is not a display-popup"
-grep -Eq -- '--bind "\?:.*fleet-keys.sh' "$DASH" \
-  || fail "dashboard has no '?' bind opening fleet-keys.sh"
+# The in-panel opens are scoped to their own panel (issue #265): the dash `?`
+# passes `--context dash`, the backlog `⌃k` passes `--context backlog` — while the
+# global `prefix ?` (checked above) stays the full sheet.
+grep -Eq -- '--bind "\?:.*fleet-keys.sh --context dash' "$DASH" \
+  || fail "dashboard '?' does not open fleet-keys.sh scoped '--context dash'"
 # ⌃k opens the cheatsheet two ways depending on mode (#123): a windowed panel
 # binds ⌃k straight to fleet-keys.sh; the prefix+b popup can't nest a popup, so
 # ⌃k drops a 'keys' sentinel that the gap dispatcher maps to fleet-keys.sh. Assert
 # both halves of the chain so a break in either fails the guard (not a loose grep).
-grep -Eq -- 'ctrl-k:.*(keys|fleet-keys\.sh)' "$ISSUES" \
-  || fail "backlog has no '⌃k' bind wired to the keys cheatsheet"
-grep -Eq -- 'keys\).*fleet-keys\.sh' "$ISSUES" \
-  || fail "backlog '⌃k' keys-sentinel dispatch does not open fleet-keys.sh"
+grep -Eq -- 'ctrl-k:.*(keys|fleet-keys\.sh.*--context backlog)' "$ISSUES" \
+  || fail "backlog has no '⌃k' bind wired to the (backlog-scoped) keys cheatsheet"
+grep -Eq -- 'keys\).*fleet-keys\.sh.*--context backlog' "$ISSUES" \
+  || fail "backlog '⌃k' keys-sentinel dispatch does not open '--context backlog'"
+
+# --- 5. context scoping drops the OTHER panels (issue #265) --------------------
+# `--context dash` ⇒ tmux prefix + dashboard only; backlog/config gone.
+DSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context dash)" \
+  || fail "fleet-keys.sh --context dash exited non-zero"
+printf '%s\n' "$DSHEET" | grep -qi '^tmux prefix '  || fail "--context dash dropped the global 'tmux prefix' group"
+printf '%s\n' "$DSHEET" | grep -qi '^dashboard '    || fail "--context dash missing its own 'dashboard' group"
+printf '%s\n' "$DSHEET" | grep -qi '^backlog '      && fail "--context dash should NOT list the 'backlog' group"
+printf '%s\n' "$DSHEET" | grep -qi '^config modal ' && fail "--context dash should NOT list the 'config modal' group"
+# `--context backlog` ⇒ tmux prefix + backlog only; dashboard/config gone.
+BSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context backlog)" \
+  || fail "fleet-keys.sh --context backlog exited non-zero"
+printf '%s\n' "$BSHEET" | grep -qi '^tmux prefix '  || fail "--context backlog dropped the global 'tmux prefix' group"
+printf '%s\n' "$BSHEET" | grep -qi '^backlog '      || fail "--context backlog missing its own 'backlog' group"
+printf '%s\n' "$BSHEET" | grep -qi '^dashboard '    && fail "--context backlog should NOT list the 'dashboard' group"
+printf '%s\n' "$BSHEET" | grep -qi '^config modal ' && fail "--context backlog should NOT list the 'config modal' group"
 
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)"

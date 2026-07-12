@@ -57,7 +57,7 @@ else
   N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
   T_BIND="ctrl-t:execute(bash $BIN/dash-issue-comment.sh {1})+refresh-preview"
   X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
-  K_BIND="ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh\")"
+  K_BIND="ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
 fi
 
 # Priority cycle (⌃y): raises the highlighted issue's priority:pN label one step
@@ -102,7 +102,7 @@ run_action() {
   local act arg; read -r act arg < "$ACT"; rm -f "$ACT"
   case "$act" in
     new)     bash "$BIN/dash-issue-new.sh" confirm ;;
-    keys)    bash "$BIN/fleet-keys.sh" ;;
+    keys)    bash "$BIN/fleet-keys.sh" --context backlog ;;
     comment) bash "$BIN/dash-issue-comment.sh" "$arg" confirm ;;
     close)   bash "$BIN/dash-issue-close.sh" "$arg" confirm ;;
     *)       return 1 ;;
