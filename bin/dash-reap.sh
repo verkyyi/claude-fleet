@@ -17,6 +17,7 @@
 #   clean + merged      reap wt+branch+issue+window   (same)
 #   clean + NOT merged  refuse ("PR not merged")      reap all (issue closed)
 #   dirty (any)         refuse ("worktree changes")   close window+issue, KEEP wt
+#   raw scratch (@raw)  close window (ephemeral)      (same)
 #   hub/panel (no issue) refuse                       refuse
 #
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
@@ -72,6 +73,25 @@ shift || true
 for a in "$@"; do case "$a" in --force) force=1;; confirm) confirm=1;; esac; done
 
 command -v git >/dev/null 2>&1 || refuse "git not found"
+
+# --- raw scratch row: close it directly (no issue-bound reap) -----------------
+# A raw/scratch session (@raw=1, issue #214) has NO @issue, NO git worktree, and
+# no branch/issue/PR lifecycle — it is ephemeral (never snapshotted or restored).
+# So it can't ride the issue-bound reap below; ⌃x simply CLOSES its window, with
+# no fleet_reap_ok/merged/dirty gate and no confirm (⌥x hits the same early
+# return). Detect it BEFORE the hub/panel guard so a scratch stops looking like a
+# no-op ⌃x. True hub/panel rows (plan/dash/backlog — no @issue AND no @raw) still
+# fall through to the "nothing to reap" refuse below.
+if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
+  # Drop the dash summary-cache seed the raw spawn wrote (dash-raw-session.sh) so a
+  # reaped scratch leaves behind no stale summary row — same key the writer used
+  # (fleet_summary_key of this fleet's session + this window id).
+  wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
+  rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$(fleet_current_session)" "$wid")" 2>/dev/null || true
+  tmux kill-window -t "$target" 2>/dev/null || true
+  tmux display-message "closed scratch ✓" 2>/dev/null || true
+  exit 0
+fi
 
 # --- resolve the row: bound issue, repo, branch, worktree, base ---------------
 iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"
