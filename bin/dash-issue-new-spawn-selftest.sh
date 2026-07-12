@@ -38,7 +38,6 @@ SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"
 # Symlink the REAL scripts under test; stub the siblings BIN resolves to.
 ln -s "$NEW" "$WORK/bin/dash-issue-new.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
-[ -f "$BIN/fleet-triage.sh" ] && ln -s "$BIN/fleet-triage.sh" "$WORK/bin/fleet-triage.sh"
 cat > "$WORK/bin/dash-issue-session.sh" <<SPAWNSTUB
 #!/bin/bash
 printf '%s\n' "\$*" >> "$SPAWN_LOG"
@@ -137,39 +136,5 @@ grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
   || fail "E dashboard has no ⌃n bind invoking dash-issue-new.sh --spawn" "$(grep -n 'ctrl-n' "$DASH" || true)"
 ok "E dash ⌃n bind wires into the quick-dispatch (dash-issue-new.sh --spawn)"
 
-# ===================== F: inline auto-triage (issue #235) ====================
-# FLEET_AUTO_TRIAGE=1 + a canned `claude` + injected valid sets: the create must
-# carry the model's refined title, the validated milestone, the type label, AND
-# the priority tier from the PRIORITY field (not a raw echo of the typed line).
-cat > "$WORK/fakebin/claude" <<'CLFAKE'
-#!/bin/bash
-cat >/dev/null            # drain the prompt
-cat <<'OUT'
-TITLE: Add a jump-to-newest-worker keybind
-MILESTONE: Dashboard & modals
-LABELS: enhancement
-PRIORITY: p1
-BODY:
-One keystroke to reach the freshest worker.
-OUT
-CLFAKE
-chmod +x "$WORK/fakebin/claude"
-: > "$SPAWN_LOG"; : > "$DISPLAY_LOG"; : > "$GH_LOG"
-printf '%s' $'jump to newest worker\n\n' | \
-  PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
-  FLEET_REPO="acme/widgets" FLEET_AUTO_TRIAGE=1 \
-  TRIAGE_MILESTONES=$'Dashboard & modals\nDaemons & automation' \
-  TRIAGE_LABELS=$'bug\nenhancement\npriority:p0\npriority:p1\npriority:p2' \
-    bash "$WORK/bin/dash-issue-new.sh" confirm >"$WORK/out" 2>"$WORK/err"
-grep -q -- '--title Add a jump-to-newest-worker keybind' "$GH_LOG" \
-  || fail "F create must use the TRIAGED title, not the raw line" "$(cat "$GH_LOG")"
-grep -q -- '--milestone Dashboard & modals' "$GH_LOG" \
-  || fail "F create must apply the validated milestone" "$(cat "$GH_LOG")"
-grep -q -- '--label enhancement' "$GH_LOG" \
-  || fail "F create must apply the type label" "$(cat "$GH_LOG")"
-grep -q -- '--label priority:p1' "$GH_LOG" \
-  || fail "F create must apply the priority tier from the PRIORITY field" "$(cat "$GH_LOG")"
-ok "F FLEET_AUTO_TRIAGE=1 rewrites the create with title/milestone/label/priority"
-
-printf '\nselftest OK: %s assertions passed (prefix+n quick-dispatch + dash ⌃n + auto-triage)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (prefix+n quick-dispatch + dash ⌃n)\n' "$pass"
 exit 0

@@ -5,11 +5,16 @@
 
 The **watcher** (`com.claude-fleet.watch`, `bin/fleet-watch.sh`) is an always-on
 daemon that watches the whole fleet and pings the **steward** only on a
-**decision-worthy edge** — a PR going green, a worker getting stuck, the
-needs-attention count rising. It replaces the steward hand-running PR-green
-pollers: instead of a human staring at the dash, the watcher stares at the state
-the other daemons already maintain and taps the steward on the shoulder when a
-decision is actually needed.
+**decision-worthy edge** — a worker getting stuck, the needs-attention count
+rising, a `prod-alert` issue appearing. It replaces the steward hand-running
+attention pollers: instead of a human staring at the dash, the watcher stares at
+the state the other daemons already maintain and taps the steward on the shoulder
+when a decision is actually needed.
+
+> **Trimmed in #279.** Once landing was retired (#277), the PR-green→`/land`,
+> worker-opened-PR and free-slot edges stopped being decision-worthy — nothing
+> triggers a land, the dash already shows an opened PR, and autofill owns
+> slot-fill — so they were removed, leaving the three attention edges below.
 
 It is **opt-in and OFF by default** (`FLEET_WATCH=1` per fleet). The watcher
 process spends **no tokens** — but each wake makes the *steward* take an LLM turn,
@@ -18,51 +23,45 @@ by default.
 
 ## Why it is zero-token
 
-Every tick reads **only local state** that `tmux-dash-collect.sh` and
-`tmux-pr-refresh.sh` already wrote — it calls no LLM and issues **no per-tick
-`gh` reads**:
+Every tick reads **only local state** that `tmux-dash-collect.sh` already
+wrote — it calls no LLM and issues **no per-tick `gh` reads**:
 
 | Signal | Source (already maintained) |
 |---|---|
 | worker state (`working`/`done`/`needs`/`looping`) | window `@claude_state` |
-| PR CI glyph (`✓`/`✗`/…) | window `@prci` (pr-refresh) |
-| PR number + open/merged state | `prmap_<slug>` (pr-refresh) |
 | bound issue | window `@issue` |
-| open backlog + labels | `issues_<slug>` + `labels_<slug>` (collector) |
-| slot headroom | tmux session counts |
+| open issue labels | `labels_<slug>` (collector) |
 
 The only outbound work is a single `gh issue comment` **when — and only when — a
 new edge fires**. An idle fleet costs a handful of cache reads per tick.
 
-> The collector now writes a companion `labels_<slug>` cache (issue→labels),
-> split from the **same** `gh issue list` it already runs (no extra call), so the
-> watcher can spot `prod-alert` issues and filter the backlog without polling.
+> The collector writes a companion `labels_<slug>` cache (issue→labels), split
+> from the **same** `gh issue list` it already runs (no extra call), so the
+> watcher can spot `prod-alert` issues without polling.
 
 ## Edge-triggered + deduped
 
 The watcher wakes on **transitions, not levels**. Each tick it computes the set of
-currently-firing event **keys** (e.g. `prgreen:<slug>:<pr>`); a per-repo persisted
+currently-firing event **keys** (e.g. `stuck:<slug>:<iss>`); a per-repo persisted
 keyset records what was already firing. The **new** keys (now − seen) are the
 edges → **one batched wake comment**. A condition that persists stays in the set
 and never re-fires; if it clears and later recurs, it fires again.
 
 The **first run** for a repo **seeds the keyset silently** — enabling the watcher
-on a fleet that already has three green PRs does **not** flood the steward with
+on a fleet that already has three stuck workers does **not** flood the steward with
 backfill (mirrors the issue-bridge watermark seed).
 
 ## The events
 
 | Event | Detected from | Wake message |
 |---|---|---|
-| **prgreen** — PR green + mergeable | `@prci == ✓` | `PR #<n> (#<iss>) green — /land <n>?` |
-| **propened** — a worker opened a PR | `prmap` gained an OPEN PR for the branch | `#<iss> shipped PR #<n> — review?` |
 | **stuck** — a worker looks stuck | `@claude_state == looping` | `#<iss> looks stuck (looping) — investigate?` |
 | **needs** — needs-attention count rose | count of `@claude_state == needs` windows | `<k> window(s) need attention` |
 | **prodalert** — a `prod-alert` issue appeared | `labels_<slug>` | `prod-alert #<n> filed — first-response?` |
-| **slotfree** — caps have headroom + eligible backlog | session counts + `issues_<slug>` (autofill **off**) | `slot free — spawn #<n> (<title>)?` |
 
-`slotfree` is suppressed when `FLEET_AUTOFILL=1` — the dispatcher already owns
-slot-filling, so the watcher would only double-drive it.
+> The PR-green→`/land`, worker-opened-PR and free-slot edges were removed in
+> **#279** once landing was retired (#277): nothing triggers a land, the dash
+> already surfaces an opened PR, and the autofill dispatcher owns slot-filling.
 
 ## Delivery = the steward control issue (#146)
 
@@ -134,7 +133,5 @@ bash ~/.claude/fleet/bin/fleet-watch.sh --dry-run <session> # one fleet
 |---|---|---|
 | `FLEET_WATCH` | `0` (off) | `1` to watch this fleet |
 | `FLEET_STEWARD_ISSUE` | — | control-issue number = the wake channel (required) |
-| `FLEET_AUTOFILL` | `0` | if `1`, the `slotfree` event is suppressed (dispatcher owns it) |
-| `FLEET_MAX_SESSIONS` / `FLEET_GLOBAL_MAX_SESSIONS` | `0` / `8` | caps used for the `slotfree` headroom check |
 | `FLEET_WATCH_STATE_DIR` | `~/.config/claude-fleet/watch` | dedup keyset + needs-level state |
 | `FLEET_WATCH_LEASE_TTL` | `120` | single-writer lease lifetime (seconds) |
