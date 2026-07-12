@@ -93,9 +93,14 @@ API credits, **not** your subscription — the opposite of what this is for.)
 That's it — the next session you spawn launches under the active account.
 
 **Switch by hand.** `prefix A` opens a popup picker; Enter makes a choice active
-for new sessions, Esc cancels. The status-bar footer also shows the active
-account as a green `◉ <account>` chip — **click it** to open the same picker (it
-only appears, and is only clickable, when multi-account is on).
+for new sessions **and restarts this fleet's idle Claude windows in place** —
+each gets a double ctrl-c, then relaunches via `fleet-claude.sh --continue`, so
+it resumes its own transcript under the new account. Windows mid-turn
+(`working`) or between `/loop` iterations (`looping`) are left alone; they pick
+up the switch on their next restart. Esc cancels. The status-bar footer also
+shows the active account as a green `◉ <account>` chip — **click it** to open
+the same picker (it only appears, and is only clickable, when multi-account is
+on).
 
 ## How it runs
 
@@ -139,11 +144,13 @@ until its TTL passes (or you clear it with `fleet-account.sh clear <label>`). If
 - ✅ Works on **macOS and Linux** (token env var, not config-dir juggling).
 - ✅ **Zero cost when off** — no token files ⇒ every code path is a no-op and the
   fleet is byte-for-byte its old single-account self.
-- ⚠️ **A session already running does not hot-swap accounts.** Claude Code binds
-  its credential at launch; there is no supported way to change the account of a
-  live process. The limited session stays parked on its banner until its window
-  resets (or you restart it — the restart picks up the new active account). This
-  is a Claude Code limitation, not a fleet choice.
+- ⚠️ **A live process cannot hot-swap its token.** Claude Code binds its
+  credential at launch. The manual picker (`prefix A`) compensates by
+  restarting idle windows with `--continue` (they resume their transcript on
+  the new account), but a session that is mid-turn — including one parked on a
+  limit banner mid-response — keeps its old account until it is restarted.
+  The automatic limit-hit rotation only redirects *new* spawns; it never
+  restarts windows itself.
 - ⚠️ **The usage proxy (`5h/7d` in the status bar) is aggregate**, summed across
   *all* accounts' transcripts — it can't attribute past tokens to an account
   after the fact. Treat it as total fleet consumption, not per-subscription.

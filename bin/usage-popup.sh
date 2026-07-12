@@ -74,7 +74,7 @@ case "$listing" in
     active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
     printf '\n  %s%saccounts%s %s(new sessions use %s)%s\n' "$B" "$IND" "$R" "$DIM" "${active:-?}" "$R"
     printf '%s\n' "$listing" | sed 's/^/    /'
-    printf '  %sswitch with prefix A — running sessions keep theirs.%s\n' "$DIM" "$R"
+    printf '  %sswitch with prefix A — idle sessions restart+resume on the new account.%s\n' "$DIM" "$R"
     ;;
 esac
 
