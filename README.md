@@ -276,10 +276,11 @@ refuses from the wrong one. Live so far:
   cleanly into a ship issue. For a throwaway lookup, skip the command and fire an
   ephemeral `Explore`/`Agent` sub-agent inline (no issue, no window). Two tiers,
   by weight — see [docs/SCOUT.md](docs/SCOUT.md).
-- **`/fleet-sync-install`** (steward, tooling-fleet only) — after claude-fleet's
-  own PRs land, re-applies them to the live install (`~/.claude/fleet`): pull +
+- **`/fleet-sync-install`** (steward, any fleet) — after claude-fleet's
+  own PRs land, re-applies them to the shared live install (`~/.claude/fleet`): pull +
   reload changed daemons + re-merge the hooks delta + install changed commands.
-  Refuses on any other fleet. See [`commands/README.md`](commands/README.md).
+  Maintains machine-global tooling, so it runs from any fleet; refuses only if
+  `~/.claude/fleet` isn't a git checkout. See [`commands/README.md`](commands/README.md).
 
 ## Opening links over SSH
 
