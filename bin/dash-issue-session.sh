@@ -120,7 +120,7 @@ MAIN="${FLEET_MAIN:-}"
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
-# --- Cross-machine pre-spawn dedup (issue #258; FLEET_PRESPAWN_DEDUP=1, OFF by default) ---
+# --- Cross-machine pre-spawn dedup (issue #258; ON by default, FLEET_PRESPAWN_DEDUP=0 opts out) ---
 # The local-tmux dedup above only sees THIS fleet's server. When two fleets run on
 # DIFFERENT machines against the same repo, a peer's worker is invisible — both can
 # spawn issue-<N> (duplicate worktrees, a non-fast-forward push race, competing PRs).
@@ -128,12 +128,16 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # ledger, then claim AT SPAWN (not on the worker's first /fleet-claim turn — that gap
 # WAS the race) so a peer sees the marker within ~1s. It is NOT a mutex (GitHub has
 # no compare-and-swap on an issue), so two peers can still both pass in a sub-second
-# overlap — the post-window tie-break below resolves that remainder. OFF by default:
-# single-machine fleets don't need it (local dedup suffices) and it costs gh calls per
-# spawn (1 read + 2 writes). Scouts are read-only (no branch/push/PR race) → exempt;
-# --force/--reclaim is the manual escape hatch past a stale claim.
+# overlap — the post-window tie-break below resolves that remainder. ON by default:
+# the cross-machine safety is the right default and the marginal cost is a few gh
+# READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim writes
+# earlier (same write count; /fleet-claim then no-ops), and a gh outage/absence
+# degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
+# the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. Scouts are read-only (no
+# branch/push/PR race) → exempt; --force/--reclaim is the manual escape hatch past a
+# stale claim.
 my_claim_id=""
-if [ "${FLEET_PRESPAWN_DEDUP:-0}" = 1 ] && [ "$FORCE_FLAG" != 1 ] && [ "$SCOUT_FLAG" != 1 ] \
+if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && [ "$SCOUT_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   # One issue read (assignee count · state · a ▶ claiming-comment count) + one cheap
   # open-PR probe. Same-account caveat: every worker assigns the SAME gh account, so

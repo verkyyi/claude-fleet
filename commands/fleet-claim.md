@@ -53,12 +53,13 @@ echo "issue=${issue:-none}"
 The fleet uses two markers so nothing else grabs an owned issue: the GitHub
 assignee **and** a `▶ claiming` comment. Set both — but idempotently.
 
-> Cross-machine dedup (issue #258): when a fleet runs `FLEET_PRESPAWN_DEDUP=1`,
-> the **spawn already pre-claimed** this issue (assignee + `▶ claiming` marker) the
-> instant it passed the pre-spawn check — so this step should find `mine` non-empty
-> **and** `claimed` set and **no-op both writes**. That is by design: the checks
-> below already make it idempotent, so re-running after a pre-claim adds neither a
-> duplicate assignee nor a second comment. Just confirm and move on.
+> Cross-machine dedup (issue #258): the pre-spawn GitHub-claim dedup is **ON by
+> default** (unless the fleet sets `FLEET_PRESPAWN_DEDUP=0`), so the **spawn already
+> pre-claimed** this issue (assignee + `▶ claiming` marker) the instant it passed the
+> pre-spawn check — so this step normally finds `mine` non-empty **and** `claimed`
+> set and **no-ops both writes**. That is by design: the checks below already make it
+> idempotent, so re-running after a pre-claim adds neither a duplicate assignee nor a
+> second comment. Just confirm and move on.
 
 ```sh
 # Am I already the assignee? (empty output = not yet mine)

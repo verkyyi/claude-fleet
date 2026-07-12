@@ -10,7 +10,8 @@
 # LOG their calls so we can assert which ops ran. The real dash-issue-session.sh +
 # its sibling fleet-comment.sh/fleet-lib.sh run unmodified.
 #
-#   OFF  flag unset ⇒ today's behaviour: NO claim gh calls; the window still spawns.
+#   DEF  flag UNSET ⇒ dedup is ACTIVE (ON by default): an assigned issue is refused.
+#   OPT  FLEET_PRESPAWN_DEDUP=0 ⇒ opt-out: NO claim gh calls; the window still spawns.
 #   A    flag on + assignee present            → refuse, no claim, no spawn.
 #   B    flag on + a ▶ claiming comment present → refuse, no claim, no spawn.
 #   C    flag on + issue CLOSED                 → refuse, no claim, no spawn.
@@ -114,14 +115,26 @@ tmux_has()    { grep -qF -- "$1" "$TMUX_LOG"; }
 git_has()     { grep -qF -- "$1" "$GIT_LOG"; }
 display_has() { grep -qiF -- "$1" "$DISPLAY_LOG"; }
 
-# ===== OFF: flag unset ⇒ no claim gh calls, but the window still spawns =============
-run_spawn 258
-[ "$(rc)" = 0 ]                                 || fail "OFF spawn should exit 0" "$(cat "$WORK/spawn.err")"
-gh_has 'assignees,state,comments'               && fail "OFF must NOT run the claim-ledger read (flag off)"
-gh_has '--add-assignee'                         && fail "OFF must NOT claim (assign) with the flag off"
-gh_has 'issue comment'                          && fail "OFF must NOT post a ▶ claiming comment with the flag off"
-tmux_has 'new-window'                            || fail "OFF should still spawn the window"
-ok "OFF (flag unset) is byte-for-byte today's behaviour — no claim gh calls, window spawns"
+# The default is ON: make sure a stray value from this shell can't mask that.
+unset FLEET_PRESPAWN_DEDUP
+
+# ===== DEF: flag UNSET ⇒ dedup is ACTIVE (ON by default) ===========================
+# An assigned issue must be refused even with NO FLEET_PRESPAWN_DEDUP set — the
+# cross-machine claim ledger is the default now (issue #258 follow-up).
+CLAIM_STATE=$'1\tOPEN\t0' run_spawn 258
+[ "$(rc)" != 0 ]                                 || fail "DEF (unset) must dedup by default — an assigned issue refuses"
+tmux_has 'new-window'                            && fail "DEF (unset) must NOT spawn a claimed issue"
+display_has 'already claimed elsewhere'          || fail "DEF should announce 'already claimed elsewhere'"
+ok "DEF (flag unset) runs the dedup — ON by default"
+
+# ===== OPT: FLEET_PRESPAWN_DEDUP=0 ⇒ opt-out fast path: no claim calls, still spawns =
+CLAIM_STATE=$'1\tOPEN\t0' FLEET_PRESPAWN_DEDUP=0 run_spawn 258
+[ "$(rc)" = 0 ]                                  || fail "OPT (=0) should spawn even an assigned issue (dedup off)" "$(cat "$WORK/spawn.err")"
+gh_has 'assignees,state,comments'                && fail "OPT (=0) must NOT run the claim-ledger read"
+gh_has '--add-assignee'                          && fail "OPT (=0) must NOT claim (assign)"
+gh_has 'issue comment'                           && fail "OPT (=0) must NOT post a ▶ claiming comment"
+tmux_has 'new-window'                            || fail "OPT (=0) should still spawn the window"
+ok "OPT (FLEET_PRESPAWN_DEDUP=0) is the zero-gh opt-out — no claim calls, window spawns"
 
 # ===== A: assignee present ⇒ refuse ================================================
 CLAIM_STATE=$'1\tOPEN\t0' FLEET_PRESPAWN_DEDUP=1 run_spawn 258

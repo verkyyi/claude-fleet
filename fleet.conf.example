@@ -404,26 +404,28 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_SPAWN_FOCUS=0
 
 # --- Cross-machine pre-spawn dedup (bin/dash-issue-session.sh, issue #258) --------
-# OFF by default. The local spawn dedup only sees THIS machine's tmux server. When
-# two fleets run on DIFFERENT machines against the SAME repo, a peer's worker is
-# invisible, so both can spawn issue-<N> — duplicate worktrees, a non-fast-forward
-# push race, and competing PRs. With this on, every spawn first consults the shared
-# GitHub issue as the claim ledger (assignee · state · a ▶ claiming comment · an
-# open PR); if the issue is already claimed it refuses. If free it claims AT SPAWN
-# (assignee + marker) — not on the worker's first /fleet-claim turn, which was the
-# race — then a best-effort tie-break (earliest ▶ claiming comment wins) rolls back
-# and refuses if a peer claimed in the same sub-second overlap.
+# ON by default (set to 0 to opt out). The local spawn dedup only sees THIS machine's
+# tmux server. When two fleets run on DIFFERENT machines against the SAME repo, a
+# peer's worker is invisible, so both can spawn issue-<N> — duplicate worktrees, a
+# non-fast-forward push race, and competing PRs. With this on, every spawn first
+# consults the shared GitHub issue as the claim ledger (assignee · state · a ▶
+# claiming comment · an open PR); if the issue is already claimed it refuses. If free
+# it claims AT SPAWN (assignee + marker) — not on the worker's first /fleet-claim
+# turn, which was the race — then a best-effort tie-break (earliest ▶ claiming
+# comment wins) rolls back and refuses if a peer claimed in the same sub-second overlap.
 #
 # NOT a mutex: GitHub has no compare-and-swap on an issue, so this SHRINKS the
-# duplicate-spawn window to a sub-second race, it does not eliminate it. COST: 1 gh
-# read + 2 gh writes per spawn (latency + rate limit) — so single-machine fleets
-# (where the local dedup already suffices) should leave it off; turn it on only for
-# the multi-fleet-same-repo case. Same-account caveat: all workers assign the SAME
-# gh account, so a HUMAN self-assigning an issue they aren't fleet-working reads as
-# taken and is skipped (arguably correct). Stale claim from a dead worker? Spawn past
-# it with `dash-issue-session.sh <N> --force` (alias --reclaim).
+# duplicate-spawn window to a sub-second race, it does not eliminate it. COST: a few
+# gh READS per spawn (latency + a little rate limit) — claim-at-spawn only moves the
+# worker's own /fleet-claim writes earlier (same write count; /fleet-claim then
+# no-ops), and a gh outage/absence degrades to spawn-anyway, never a false refusal. A
+# single-machine fleet that wants the zero-gh fast path can set this to 0. Same-account
+# caveat: all workers assign the SAME gh account, so a HUMAN self-assigning an issue
+# they aren't fleet-working reads as taken and is skipped (arguably correct). Stale
+# claim from a dead worker? Spawn past it with `dash-issue-session.sh <N> --force`
+# (alias --reclaim).
 # @label=Cross-machine pre-spawn dedup @group=spawn @tier=common @scope=fleet @edit=bool
-#FLEET_PRESPAWN_DEDUP=0
+#FLEET_PRESPAWN_DEDUP=1
 
 # --- Worker seed prompt (issue #234) ----------------------------------------
 # The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
