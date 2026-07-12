@@ -6,7 +6,11 @@
 #   • PRIORITY ORDER   priority:p0 spawns before p1 before unlabeled.
 #   • RATE-LIMIT       at most min(headroom, MAX_PER_TICK) spawns per tick.
 #   • PER-FLEET CAP    FLEET_MAX_SESSIONS bounds the fill independent of global.
-#   • ELIGIBILITY      assigned / epic / blocked issues are never spawned.
+#   • ELIGIBILITY      assigned / epic / blocked issues are never spawned. (This is
+#                      also the cross-machine pre-filter for issue #258: with
+#                      FLEET_PRESPAWN_DEDUP the spawn claims AT SPAWN, so a peer's
+#                      claim shows as an assignee and #30 below — assigned — is the
+#                      "claimed elsewhere is skipped" case.)
 #   • ANTI-COLLISION   an issue with a live window is skipped even if it is the
 #                      highest-priority pick — matched by @issue binding AND by a
 #                      bare "issue-<N>" window name (dash-issue-session's own dedup).
@@ -135,7 +139,7 @@ grep -qxF 20 "$SPAWN_LOG" || fail "#20 (p1) should have spawned"
 grep -qxF 50 "$SPAWN_LOG" || fail "#50 (unlabeled) should have spawned as the 2nd slot"
 grep -qxF 10 "$SPAWN_LOG" && fail "#10 has a live @issue window — must NOT spawn"
 grep -qxF 15 "$SPAWN_LOG" && fail "#15 has a live issue-15 window (slug) — must NOT spawn"
-grep -qxF 30 "$SPAWN_LOG" && fail "#30 is assigned — must NOT spawn"
+grep -qxF 30 "$SPAWN_LOG" && fail "#30 is assigned (== claimed elsewhere, #258) — must NOT spawn"
 grep -qxF 40 "$SPAWN_LOG" && fail "#40 is an epic — must NOT spawn"
 
 printf 'selftest PASS: spawned [%s] in priority order under caps + eligibility + anti-collision\n' "$got"

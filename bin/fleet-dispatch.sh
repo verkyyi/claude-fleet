@@ -35,6 +35,14 @@
 # `gh issue list` call, no per-issue comment fetch. A live @issue window is the
 # second guard (covers a just-spawned session before its /fleet-claim lands).
 #
+# Cross-machine (issue #258): with FLEET_PRESPAWN_DEDUP=1 the spawn claims AT SPAWN
+# (assignee + marker) instead of on the worker's first turn, so a peer's claim shows
+# up as an assignee almost immediately — the SAME unassigned-only filter below is the
+# autofill pre-filter that keeps this fleet's dispatcher from racing a peer for a
+# claimed issue. The pre-spawn GitHub check in dash-issue-session.sh is then only the
+# sub-second-race backstop, not the primary gate. (Still the cheap assignee proxy —
+# no per-issue comment fetch; single shared gh account means assigned-at-all ⇒ taken.)
+#
 # Env knobs (all per-fleet, in $FLEET_CONF_DIR/<session>.conf or global fleet.conf):
 #   FLEET_AUTOFILL              1 to enable for this fleet          (default 0/off)
 #   FLEET_MAX_SESSIONS          per-fleet session ceiling           (default 0/unlimited)
