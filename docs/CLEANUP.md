@@ -37,7 +37,7 @@ cleanup daemon reaps them all identically (**this closes #260**).
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch. Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each. Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | `/fleet-cleanup <n>` | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick. Same mechanical core. |
-| dash `⌃l` (`bin/dash-arm-merge.sh`) | **Arm auto-merge now** on the highlighted row's open PR — for a PR shipped before arming existed, or whose auto-merge got disarmed. It arms; it never merges. |
+| `gh pr merge --auto --squash <PR>` | **Arm auto-merge by hand** — for a PR shipped before arming existed, or whose auto-merge got disarmed. `/fleet-ship` already runs this at PR-open; the old dash `⌃l` affordance (`dash-arm-merge.sh`) was pruned in #289. It arms; GitHub merges when green. |
 | `bin/fleet-land-lease.sh` | Kept for the per-repo **base fast-forward** serialization (renamed conceptually to a base lease). `fleet-cleanup.sh` takes it only for the quick base pull — no hold-through-green. |
 
 ## Config
@@ -50,7 +50,7 @@ cleanup daemon reaps them all identically (**this closes #260**).
 ## What was retired
 
 - **Skills**: `/fleet-land`, `/fleet-land-self`, `/fleet-land-train` — deleted. The
-  manual merge escape hatch is now `gh pr merge` by hand (or the dash `⌃l` to arm);
+  manual merge escape hatch is now `gh pr merge` by hand (`--auto --squash` to arm);
   the cleanup daemon handles the rest.
 - **Config**: `FLEET_AUTOLAND` (+ `FLEET_AUTOLAND_MAX_PER_TICK` / `FLEET_AUTOLAND_LABEL`)
   and `FLEET_SELF_LAND` — removed. A migration that applies this change should flip

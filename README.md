@@ -33,10 +33,9 @@ demo repo data.</sub>
   focuses it and, pressed again, zooms it fullscreen — the mirror of `F9`'s
   steward focus. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
-  `Ctrl-G` binds a window to an existing issue, `Ctrl-E` renames, `Ctrl-S`
-  opens a raw scratch session (plain `claude`, no issue — but in its own
-  writable `scratch-N` worktree, so an experiment can push a branch and open a
-  PR like any worker — also `prefix+R`).
+  `Ctrl-S` opens a raw scratch session (plain `claude`, no issue — but in its
+  own writable `scratch-N` worktree, so an experiment can push a branch and open
+  a PR like any worker).
 
 ![backlog](docs/img/backlog.svg)
 
@@ -44,8 +43,8 @@ demo repo data.</sub>
   (roadmap | unplanned panes). `Enter` on an issue creates a worktree
   `issue-<N>` off your base branch and starts `claude` seeded to read, claim,
   and implement it. Issues being worked show `▶ <window>`. Manage issues
-  without leaving tmux: the modal is **list-only by default**, and `Space` (or
-  `Ctrl-P`) toggles a **preview pane** showing the highlighted issue's body,
+  without leaving tmux: the modal is **list-only by default**, and `Space`
+  toggles a **preview pane** showing the highlighted issue's body,
   labels, milestone, assignees, and recent comments — word-wrapped to the pane
   so nothing splits mid-word. `/` turns on type-to-filter; `Ctrl-X` closes
   (triages) an issue after a y/n confirm; `Ctrl-O` opens it on the web.
@@ -134,14 +133,17 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | Key | Action |
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix G` | focus the hub's dash pane (jump / new task / bind issue / rename); press again to zoom it fullscreen |
+| `prefix G` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
-| `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue) in its own **writable `scratch-N` git worktree** off the base branch: it can experiment freely (unlike the read-only base checkout), and a scratch that turns real just pushes its branch + opens a PR — the janitor then reaps it like any worker. Listed in the dash but excluded from the issue machinery; the **window** is ephemeral (not restored across a crash) while its worktree survives on disk and is reaped by the scratch rules (clean → removed; dirty/unmerged → kept + surfaced, `⌃x` to dispose). Prompts for an **optional name** (Enter empty keeps the auto `scratch-N` name). Also on the dash as `⌃s` |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
-| `prefix u` | usage popup — the on-demand usage / subscription-limit detail: the 5h/7d proxy, the official weekly/N-hour limit line (which limit, reset time), and (multi-account) which account new sessions use. Same target as clicking the footer usage stat |
-| `prefix r` | reload tmux config |
-| `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and `⌃k` in the backlog) |
+| `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
 | `F9` | (no prefix) jump back to this session's steward hub |
+
+The shortcut surface was pruned in #289 (one keyboard home per action): raw
+scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
+`prefix u` / `prefix A`) merged into one modal reachable by clicking the footer
+usage stat or the `◉` account chip. `prefix n` / `prefix r` are back to tmux's
+stock `next-window` / `refresh-client`.
 
 The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
@@ -149,9 +151,10 @@ in a header; `prefix ?` is the one place that shows **all** of them together.
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **fleet name** (`#S`) opens a picker of running fleets and
 switches to the chosen one, the red **`● N` needs badge** cycles to the next
-window that needs you, the **usage stat** opens the usage popup (`prefix u`), and
-the **`◉ <account>` chip** opens the account picker (`prefix A`). (Comment out
-`set -g mouse on` in `conf/tmux-attention.conf` to keep native select-to-copy.)
+window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
+open the consolidated **usage + account modal** (usage/limit detail on top, the
+account pool as a selectable body below). (Comment out `set -g mouse on` in
+`conf/tmux-attention.conf` to keep native select-to-copy.)
 
 The `#S` chip also carries the **cross-fleet** cue: when you're attached to one
 fleet and a **different** live fleet has a needs-attention session, an orange
@@ -240,9 +243,10 @@ chmod 600 ~/.config/claude-fleet/accounts/*
 bin/fleet-account.sh list          # pool · ● active · limited state
 ```
 
-Switch by hand with `prefix A` (a popup picker) — or just **click the `◉ <account>`
-chip** in the status-bar footer, which opens the same picker. Enter makes the
-choice active for new sessions; Esc cancels.
+Switch by hand by **clicking the `◉ <account>` chip** (or the usage stat) in the
+status-bar footer — it opens the usage + account modal, with the account pool as
+a selectable body under the usage detail. Enter makes the choice active for new
+sessions; Esc cancels.
 
 Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
 macOS Keychain ignores). One caveat: an **already-running** session can't
@@ -306,8 +310,8 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   the official "N% of your weekly limit" line, the collector scrapes it and uses
   it to **color the footer usage stat** (indigo → yellow ≥`FLEET_USAGE_WARN_PCT`
   → red ≥`FLEET_USAGE_CRIT_PCT`) rather than adding another always-on footer
-  segment; the full detail (which limit, reset time, account) is in the usage
-  popup — `prefix u` or click the stat.
+  segment; the full detail (which limit, reset time, account) is in the usage +
+  account modal — click the usage stat or the `◉` account chip.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd

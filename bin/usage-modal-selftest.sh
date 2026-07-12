@@ -1,7 +1,8 @@
 #!/bin/bash
-# account-pick-selftest.sh — hermetic unit test for the pure window-SELECTION
-# predicate in bin/account-pick.sh (issue #263). When `prefix A` switches the
-# active subscription account it now also restarts this fleet's IDLE Claude
+# usage-modal-selftest.sh — hermetic unit test for the pure window-SELECTION
+# predicate in bin/usage-modal.sh (issue #263; renamed from account-pick in the
+# #289 usage/account consolidation). When the usage+account modal switches the
+# active subscription account it also restarts this fleet's IDLE Claude
 # windows so running sessions move onto the new account. WHICH windows get
 # restarted is the one decision worth pinning: restart the wrong window and you
 # interrupt a mid-turn worker or resume the wrong transcript; miss the right one
@@ -17,7 +18,7 @@
 #   • only the idle states done/needs restart — working (mid-turn) and looping
 #     (between /loop iterations) are left on their current account.
 #
-# Sourced (not run): account-pick.sh guards its interactive body with
+# Sourced (not run): usage-modal.sh guards its interactive body with
 # `[ "${BASH_SOURCE[0]}" = "$0" ]`, so sourcing defines the helpers WITHOUT
 # opening fzf or touching account state — hermetic, no tmux, no network.
 #
@@ -25,7 +26,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT="$BIN/account-pick.sh"
+SCRIPT="$BIN/usage-modal.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
 # shellcheck source=/dev/null
@@ -35,7 +36,7 @@ command -v _ap_restart_eligible >/dev/null 2>&1 \
   || { printf 'selftest: _ap_restart_eligible not defined after sourcing\n' >&2; exit 1; }
 
 CHECKS=0
-fail() { printf 'account-pick selftest FAIL: %s\n' "$1" >&2; exit 1; }
+fail() { printf 'usage-modal selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # elig <desc> <name> <state> <raw> — assert the window IS eligible (rc 0).
 elig() {
@@ -77,5 +78,5 @@ elig "raw flag empty = normal worker" issue-1 "done" ""
 # --- A panel that is somehow @raw is still skipped (name wins first) ---
 skip "raw + panel name"       plan "done" 1
 
-printf 'account-pick selftest: OK (%d checks)\n' "$CHECKS"
+printf 'usage-modal selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

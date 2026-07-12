@@ -9,7 +9,7 @@
 #      conf/tmux-attention.conf (and F9 has a `bind -n F9`).
 #   2. Every prefix `bind`/`bind -n` in the conf (minus the mouse status bind) is
 #      documented in the sheet — no missing entries.
-#   3. The `?` popup bind exists in the conf, and the dash (`?`) + backlog (`⌃k`)
+#   3. The `?` popup bind exists in the conf, and the dash (`?`) + backlog (`?`)
 #      each open fleet-keys.sh — scoped to their own panel (issue #265).
 #   4. The sheet renders non-empty in --plain mode and lists all four groups.
 #   5. Context scoping (issue #265): `--context dash`/`--context backlog` show
@@ -47,7 +47,12 @@ sheet_prefix_keys="$(printf '%s\n' "$SHEET" \
 # Prefix binds shipped in the conf: `bind <key> ...` or `bind-key <key> ...`,
 # excluding root-table `bind -n ...` ($2 == "-n"). F9/mouse are surfaced as the
 # F9 / "● N" rows and checked separately, so they must not be `bind <key>` here.
-conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n") print $2 }' "$CONF" | sort -u)"
+# Also EXCLUDE the "restore-a-tmux-default" binds (issue #289): `bind n
+# next-window` and `bind r refresh-client` exist only so a live server reverts
+# cleanly when the fleet stops overriding those keys (a bare unbind would leave
+# them dead) — they are not fleet shortcuts, so the cheatsheet deliberately omits
+# them and this guard must not demand a sheet row for them.
+conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $3!="next-window" && $3!="refresh-client") print $2 }' "$CONF" | sort -u)"
 [ -n "$conf_prefix_keys" ] || fail "no prefix binds parsed from the conf"
 
 # --- 1. every 'prefix X' row in the sheet is bound in the conf -----------------
@@ -82,14 +87,15 @@ grep -Eq '^bind[[:space:]]+\?[[:space:]]+display-popup' "$CONF" \
 # global `prefix ?` (checked above) stays the full sheet.
 grep -Eq -- '--bind "\?:.*fleet-keys.sh --context dash' "$DASH" \
   || fail "dashboard '?' does not open fleet-keys.sh scoped '--context dash'"
-# ⌃k opens the cheatsheet two ways depending on mode (#123): a windowed panel
-# binds ⌃k straight to fleet-keys.sh; the prefix+b popup can't nest a popup, so
-# ⌃k drops a 'keys' sentinel that the gap dispatcher maps to fleet-keys.sh. Assert
-# both halves of the chain so a break in either fails the guard (not a loose grep).
-grep -Eq -- 'ctrl-k:.*(keys|fleet-keys\.sh.*--context backlog)' "$ISSUES" \
-  || fail "backlog has no '⌃k' bind wired to the (backlog-scoped) keys cheatsheet"
+# `?` opens the cheatsheet two ways depending on mode (#123, renamed ⌃k→? in
+# #289 for one `?` convention everywhere): a windowed panel binds `?` straight to
+# fleet-keys.sh; the prefix+b popup can't nest a popup, so `?` drops a 'keys'
+# sentinel that the gap dispatcher maps to fleet-keys.sh. Assert both halves of
+# the chain so a break in either fails the guard (not a loose grep).
+grep -Eq -- '\?:.*(keys|fleet-keys\.sh.*--context backlog)' "$ISSUES" \
+  || fail "backlog has no '?' bind wired to the (backlog-scoped) keys cheatsheet"
 grep -Eq -- 'keys\).*fleet-keys\.sh.*--context backlog' "$ISSUES" \
-  || fail "backlog '⌃k' keys-sentinel dispatch does not open '--context backlog'"
+  || fail "backlog '?' keys-sentinel dispatch does not open '--context backlog'"
 
 # --- 5. context scoping drops the OTHER panels (issue #265) --------------------
 # `--context dash` ⇒ tmux prefix + dashboard only; backlog/config gone.
