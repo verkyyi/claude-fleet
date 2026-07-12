@@ -12,26 +12,20 @@ PROMPT='▸ '
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 
-# LANDED view (dash ⌃t): rows carry a `landed:<pr>` / `landed:issue:<n>` target,
-# not a live window — Enter opens that PR in your browser instead of jumping (#130).
-# Per-fleet keyed (FLEET_SESSION), matching dash-view-toggle.sh. Clear any half-set
-# rename/bind flag first so a mode toggled in landed view can't leak into the next
-# live-view Enter (those flags are meaningless on a landed row).
+# LANDED view (dash ⌃t): rows carry a `landed:<pr>` / `landed:issue:<n>` target, not a
+# live window — Enter RESUMES that finished session, identical to ⌃o: it hands the target
+# to dash-restore-session.sh, which reconstructs the removed worktree off the squash SHA and
+# reopens a `claude --resume` window (#261). Both row shapes resume (dash-restore-session.sh's
+# restore_key_for handles landed:issue:<n> and landed:<pr>). Open the row's PR in the browser
+# with ⌃p (dash-open-pr.sh) — the pre-#261 Enter behavior (#130), relocated so Enter can jump.
+# Per-fleet keyed (FLEET_SESSION), matching dash-view-toggle.sh. Clear any half-set rename/bind
+# flag first so a mode toggled in landed view can't leak into the next live-view Enter.
 if [ "$(cat "$C/global/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
   rm -f "$flag" "$bindflag"
   case "$target" in
-    landed:issue:*)   echo "clear-query"; exit 0 ;;   # PR-less row — nothing to open
-    landed:*)
-      pr="${target#landed:}"
-      # shellcheck source=/dev/null
-      . "$BIN/fleet-lib.sh" 2>/dev/null || true
-      repo=$(fleet_repo_cached "${FLEET_SESSION:-}" 2>/dev/null)
-      [ -z "$repo" ] && { fleet_load_conf "${FLEET_SESSION:-}" 2>/dev/null; repo="${FLEET_REPO:-}"; }
-      case "$pr" in
-        ''|*[!0-9]*) : ;;                             # not a numeric PR — skip
-        *) [ -n "$repo" ] && (sh "$BIN/open-url.sh" "https://github.com/$repo/pull/$pr" >/dev/null 2>&1 &) ;;
-      esac
-      echo "clear-query"; exit 0 ;;
+    landed:*)   # landed:<pr> or landed:issue:<n> — resume the finished session (= ⌃o, #261)
+      bash "$BIN/dash-restore-session.sh" "$target" >/dev/null 2>&1
+      echo "clear-query+reload(bash $ROWS)"; exit 0 ;;
   esac
 fi
 
