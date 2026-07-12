@@ -4,10 +4,12 @@
 # Wired to the Claude Code `SessionStart` hook. A /clear keeps the SAME claude
 # process alive (same PID/cwd/tmux markers) but wipes the conversation context —
 # so the steward, whose identity was injected exactly once by the spawn seed
-# prompt (bin/steward-session.sh), silently goes amnesiac. Worse, CC reloads the
+# prompt (bin/steward-session.sh), silently goes amnesiac. CC also reloads the
 # cwd CLAUDE.md on every SessionStart, and for the steward that cwd is the base
-# checkout whose CLAUDE.md is the *install playbook* — so post-/clear the steward
-# re-adopts the WRONG (installer) persona. Nothing re-injects steward.md.
+# checkout — that CLAUDE.md now points install/uninstall work at docs/INSTALL.md
+# (issue #285) rather than asserting an installer identity, but on its own it
+# still doesn't re-adopt the steward's first-mate charter. Nothing re-injects
+# steward.md.
 #
 # This hook closes that gap: on a /clear in a @steward pane it prints steward.md
 # (plus a pointer to the newest handoff) back into the model's context. For
@@ -81,9 +83,10 @@ still apply — re-adopt them now. A fleet == one tmux session == one GitHub rep
 resolve your bound repo from the fleet conf:
     source ~/.claude/fleet/bin/fleet-lib.sh
     S=$(fleet_current_session); fleet_load_conf "$S"   # -> FLEET_REPO / FLEET_MAIN
-Note: this repo's cwd CLAUDE.md is an *install playbook*, reloaded on every
-SessionStart — that is NOT your identity; these steward orders are. Do NOT run
-/sweep and do NOT arm /loop. Stay quiet until asked.
+Note: this repo's cwd CLAUDE.md (reloaded on every SessionStart) describes the
+repo and points install/uninstall work at docs/INSTALL.md — that is NOT your
+identity; these steward orders are, and you do NOT install unless the operator
+asks. Do NOT run /sweep and do NOT arm /loop. Stay quiet until asked.
 
 ===== ~/.claude/steward.md =====
 MSG

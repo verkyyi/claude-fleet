@@ -100,7 +100,7 @@ one machine** (one tmux session per repo).
 
 ## Install
 
-The installer is Claude itself — `CLAUDE.md` in this repo is the playbook:
+The installer is Claude itself — [`docs/INSTALL.md`](docs/INSTALL.md) is the playbook:
 
 ```sh
 git clone https://github.com/verkyyi/claude-fleet.git
@@ -115,8 +115,8 @@ source line to `~/.tmux.conf`, merge five hook entries into
 `systemd/` user units on Linux), and verify each piece — asking before it
 touches anything.
 
-Prefer manual? Every step is in [CLAUDE.md](CLAUDE.md); the pieces are plain
-shell scripts with no hidden state.
+Prefer manual? Every step is in [docs/INSTALL.md](docs/INSTALL.md); the pieces are
+plain shell scripts with no hidden state.
 
 ### Dependencies
 

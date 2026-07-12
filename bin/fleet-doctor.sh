@@ -10,7 +10,7 @@
 # Exit status is the number of FAILs (0 = everything at least usable), so it can
 # gate an install script: `sh fleet-doctor.sh && ...`.
 #
-# Dependency truth (keep in sync with README.md#dependencies and CLAUDE.md):
+# Dependency truth (keep in sync with README.md#dependencies and docs/INSTALL.md):
 #   tmux ≥ 3.2   core — the whole thing is a tmux session
 #   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
@@ -88,7 +88,7 @@ fi
 
 # --- fleet quality-of-life commands (optional: repo-shipped /skills) ---
 # Installed by copying the repo's commands/*.md into the Claude Code user
-# commands dir (see CLAUDE.md). Optional — the fleet runs without them — so a
+# commands dir (see docs/INSTALL.md). Optional — the fleet runs without them — so a
 # missing set is a warn, never a fail. Each fleet skill carries a `fleet skill ·
 # owner:` marker just under its title (see commands/README.md); count how many
 # landed. Match only the file head so README.md — which merely quotes the marker

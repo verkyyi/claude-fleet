@@ -2,8 +2,9 @@
 # steward-readopt-selftest.sh — the SessionStart re-adopt hook's gate matrix (issue #155).
 #
 # bin/steward-readopt-hook.sh re-injects steward.md into the model's context after
-# a /clear, so the steward doesn't go amnesiac (and re-adopt the installer CLAUDE.md
-# by mistake). It must fire in EXACTLY one case and stay silent in every other. This
+# a /clear, so the steward doesn't go amnesiac (and drift off its first-mate charter
+# onto the reloaded cwd CLAUDE.md). It must fire in EXACTLY one case and stay silent
+# in every other. This
 # test drives the REAL hook against a REAL, isolated tmux server (its own -S socket,
 # torn down at exit — never the user's live server) and a throwaway $HOME:
 #
