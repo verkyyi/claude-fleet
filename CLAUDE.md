@@ -278,6 +278,14 @@ remove those too.)
     server-wide `tmux list-windows -a` now fan out over `fleet_sockets` (the live
     fleets = per-fleet confs whose server answers `has-session`). See
     `bin/fleet-lib.sh` (`fleet_socket`/`fleet_sockets`/`fleet_list_windows_all`).
+  - The live install (`~/.claude/fleet`) is **shared by every fleet** but each
+    fleet's tmux server holds its OWN copy of per-server UI state (open dash panes,
+    key binds). So after `/fleet-sync-install` fast-forwards that one checkout, a
+    landed dash-launcher or `conf/tmux-attention.conf` change must be re-applied to
+    **every** live server, not just the current one — `bin/fleet-ui-refresh.sh --all`
+    fans the dash-pane respawn + the unbind-aware `bin/tmux-conf-reload.sh --socket`
+    over `fleet_sockets` (issue #248). The rest of sync-install stays one-fleet-scoped
+    (only these two touch per-server UI).
   - **No shared `tmux ls`.** Cross-fleet views iterate the sockets; the dash is
     per-fleet (it always was — scoped by `FLEET_SESSION`). Switching between
     fleets is a detach-and-reattach to the other socket (`fleet-pick.sh` /

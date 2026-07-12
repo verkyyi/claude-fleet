@@ -170,85 +170,70 @@ A running steward re-reads the charter on its next respawn (or an explicit
 re-read); it won't retroactively change a live session's already-adopted orders.
 If `steward.md` didn't change, skip this step.
 
-## 7. Refresh open (stale) dash panes in place — only if the launcher changed
+## 7 + 8. Refresh the UI on ALL live fleet servers — only what changed
 
-An already-open dash keeps running the **old** `bin/tmux-dashboard.sh`: fzf reads
-its `--bind`/`--header` **once at launch**, so new binds (e.g. a landed toggle)
-don't appear until it's closed and reopened. If the step-2 diff touched the dash
-**launcher**, respawn this fleet's open dash panes in place so they pick up the
-new script automatically.
+Steps 7 (respawn stale dash panes) and 8 (unbind-aware conf reload) both re-apply
+a landed **per-server** UI change — and the live install (`~/.claude/fleet`) is
+**shared by every fleet**, yet each fleet runs on its OWN tmux socket (issue #159).
+So a sync that touches the dash launcher or the conf must reach **every** live
+fleet's server, not just this one — otherwise every OTHER fleet keeps a stale dash
+pane + stale server binds until respawned by hand (issue #248). `bin/fleet-ui-refresh.sh
+--all` fans BOTH refreshes out over `fleet_sockets` (the live fleets), running each
+per-server against its own `-L <label>`.
 
-The most-used dash is often **not** the standalone `dash` window but an
-**embedded pane in the steward/`plan` split** (dash above, steward below —
-reached via `prefix+g` / `steward-zoom.sh`), so a window-name match alone misses
-it. Instead, target **every dash pane in this fleet's session** by its pane
-marker: `bin/tmux-dashboard.sh` sets `@dash=1` on launch (mirroring the steward
-pane's `@steward=1`), so the pane — which just runs `bash` — is found robustly
-without brittle `pane_current_command`/name heuristics.
+**Why fan out here but nowhere else:** the one-fleet scoping rail stays for
+everything NON-UI (daemons in step 3, settings in step 4, commands in step 5,
+charter in step 6) — those touch machine-global or current-fleet state. Only the
+open dash pane and the server binds are held *per tmux server*, so only these two
+refreshes fan out across sockets.
 
-**Trigger** — the diff touched `bin/tmux-dashboard.sh` (the fzf launcher — its
-`--bind`/`--header` are fixed at launch) or `bin/tmux-dashboard-rows.sh`
-(header-lines / row format). NOTE: the `dash-*.sh` bind **targets** are re-exec'd
-on each keypress (fresh `bash`), so they're picked up live and do **not** need a
-respawn — only the launcher does. The backlog (`prefix+b`) and config
-(`prefix+c`) modals are `display-popup`s — ephemeral, reopened fresh each time —
-so they're never stale and need no handling.
+**What each refresh fixes:**
+- **Dash panes (step 7):** an already-open dash keeps running the **old**
+  `bin/tmux-dashboard.sh` — fzf reads its `--bind`/`--header` **once at launch**, so
+  new binds don't appear until it's reopened. The most-used dash is often the
+  **embedded pane in the steward/`plan` split** (not a `dash` window), so panes are
+  found by the `@dash=1` marker (`bin/tmux-dashboard.sh` sets it on launch), not a
+  name. NOTE: the `dash-*.sh` bind **targets** are re-exec'd on each keypress (fresh
+  `bash`), so they're live without a respawn — only the launcher needs one. The
+  backlog/config modals are `display-popup`s (reopened fresh), never stale.
+- **Conf binds (step 8):** `tmux source-file` only **adds/overwrites** bindings — it
+  **cannot remove** a `bind` deleted from the conf, so a dropped `bind` stays live in
+  every existing session until an explicit `unbind` (issue #139; #135 removed
+  `bind j` but `prefix+j` stayed bound). `fleet-ui-refresh.sh --conf` drives the same
+  `bin/tmux-conf-reload.sh` (now with `--socket`) per server: diff before/after,
+  `unbind-key` every removed `(table, key)`, **then** re-source.
 
-**Fleet-scoping (critical rail):** operate ONLY on the current fleet's tmux
-session (`$S` from step 0 — `fleet_current_session`). NEVER respawn another
-fleet's dash. Find every `@dash=1` pane in this session and respawn each in
-place:
-
-```sh
-if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
-   | grep -qE '^bin/tmux-dashboard(-rows)?\.sh$'; then
-  n=0
-  for p in $(tmux list-panes -s -t "$S" -F '#{pane_id} #{@dash}' 2>/dev/null \
-               | awk '$2==1{print $1}'); do
-    tmux respawn-pane -k -t "$p" "bash ~/.claude/fleet/bin/tmux-dashboard.sh"
-    n=$((n + 1))
-  done
-  [ "$n" -gt 0 ] && echo "refreshed $n dash pane(s)" || echo "no open dash to refresh"
-fi
-```
-
-If the launcher didn't change, skip this step (leave the open dash alone). If no
-`@dash` pane is open for this fleet, it's a no-op — report "no open dash".
-
-## 8. Reload the tmux conf — unbind removed binds, then re-source (only if it changed)
-
-`conf/tmux-attention.conf` is sourced into the **live tmux server**, but
-`tmux source-file` only **adds/overwrites** bindings — it **cannot remove** a
-`bind` that was *deleted* from the conf. So a landed change that drops a `bind`
-line leaves the **old binding live** in every existing session until an explicit
-`unbind` or a full tmux restart (issue #139; live precedent #135 removed
-`bind j`, but `prefix+j` stayed bound and resurrected the standalone dash it had
-just removed). Make the reload idempotent w.r.t. removals: diff the before/after
-conf, `unbind-key` every bind that disappeared, **then** re-source so adds and
-changes still apply.
-
-`bin/tmux-conf-reload.sh` does exactly this — it parses the bind lines from the
-`before` and `after` conf, computes `before \ after` = removed `(table, key)`
-pairs (handling the prefix / `bind -n` / `bind -T <tbl>` forms plus the `-r`/`-N`
-flags), unbinds each, then `source-file`s. **Trigger only** when the step-2 diff
-touched `conf/tmux-attention.conf`:
+**Trigger — call it once, passing only the refreshes whose inputs changed:**
 
 ```sh
-if git -C ~/.claude/fleet diff --name-only "$before" "$after" \
-   | grep -qx 'conf/tmux-attention.conf'; then
+dash_changed=$(git -C ~/.claude/fleet diff --name-only "$before" "$after" \
+  | grep -qE '^bin/tmux-dashboard(-rows)?\.sh$' && echo 1)
+conf_changed=$(git -C ~/.claude/fleet diff --name-only "$before" "$after" \
+  | grep -qx 'conf/tmux-attention.conf' && echo 1)
+
+args=()
+[ -n "$dash_changed" ] && args+=(--dash)
+if [ -n "$conf_changed" ]; then
   # `before` conf as it was pre-sync (empty if the file is brand-new)
   bconf=$(mktemp)
   git -C ~/.claude/fleet show "$before:conf/tmux-attention.conf" > "$bconf" 2>/dev/null || : > "$bconf"
-  bash ~/.claude/fleet/bin/tmux-conf-reload.sh \
-    "$bconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf
-  rm -f "$bconf"
+  args+=(--conf "$bconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf)
+fi
+
+if [ ${#args[@]} -gt 0 ]; then
+  bash ~/.claude/fleet/bin/fleet-ui-refresh.sh --all "${args[@]}"
+  [ -n "${bconf:-}" ] && rm -f "$bconf"
 fi
 ```
 
-It prints `reloaded conf (unbound N removed binds)` — surface that N in step 9.
-Binds are **server-global** in tmux, so the unbind hits the ambient server (this
-fleet's) — it doesn't target another server/socket. If the conf didn't change,
-skip this step (no reload needed).
+It prints a per-fleet line plus a summary (`refreshed N fleet(s); dash panes: X;
+conf reloaded: Y`) — surface those counts in step 9. `--dry-run` previews without
+touching anything. If neither the launcher nor the conf changed, skip this step
+entirely (leave every fleet's dash + binds alone). Note the fan-out reaches only
+CONFIGURED, live fleets (`fleet_sockets`) — never the user's ad-hoc default-socket
+tmux; the same before-conf is handed to every server (a fleet may have sourced a
+different vintage, but the live install is one checkout and the unbind is harmless
+when a key is already gone).
 
 ## 9. Report — keep it short
 
