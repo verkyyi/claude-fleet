@@ -227,8 +227,10 @@ issues as the backlog. See README.md for the architecture. Components:
    `fleet-claim`, `fleet-ship`, `fleet-blocked`, `fleet-land`,
    `fleet-land-self` (worker self-land, opt-in — see docs/SELF-LAND.md),
    `fleet-land-train`, `fleet-sync-install`, `fleet-status`,
-   `fleet-new-issue`, and the read-only scout pair `fleet-scout` (steward) +
-   `fleet-scout-report` (worker) — see docs/SCOUT.md (plus the
+   `fleet-new-issue`, the read-only scout pair `fleet-scout` (steward) +
+   `fleet-scout-report` (worker) — see docs/SCOUT.md — and `fleet-handoff`
+   (either seat: writes a handoff doc, then a detached helper auto-`/clear`s the
+   pane and resumes from it — `bin/fleet-handoff-cycle.sh`) (plus the
    contract/template — `commands/README.md`,
    `commands/_template.md`). `fleet-doctor.sh` reports how many are installed
    (warn, not fail, if none — they're optional). See `commands/README.md` for
