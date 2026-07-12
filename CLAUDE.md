@@ -87,10 +87,16 @@ issues as the backlog. See README.md for the architecture. Components:
    defaults are rarely needed — but call them out. `prefix+R` (raw scratch
    session — `bin/dash-raw-session.sh`) and `prefix+u` (the usage popup —
    `bin/usage-popup.sh`, issue #239) are **not** tmux defaults, so they clobber
-   nothing, but mention them too. There's also one **root-table** bind (`bind -n F9`): F9
-   from any window jumps back to this session's steward hub (`steward-zoom.sh`).
-   Unlike the prefix binds it intercepts the key in every pane before the app —
-   safe because the Claude TUI/shells don't use function keys — so flag it too.
+   nothing, but mention them too. There are also **root-table** binds (`bind -n …`)
+   that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
+   jumps back to this session's steward hub (`steward-zoom.sh`) — safe because the
+   Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
+   footer ranges (hub/fleet/needs/account/usage); and **double-click-to-zoom**
+   (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
+   toggles a pane's fullscreen as the mouse counterpart to `prefix+G`/`F9` — its
+   trade-off is losing tmux's default double-click = select-word (copy), so call it
+   out. All are overridable from the user's own `~/.tmux.conf` after the `source-file`
+   line, or comment them out — the same framing as the rest of the baseline block.
 
 5. **Merge Claude Code hooks.** Merge `hooks/settings-hooks.json` into
    `~/.claude/settings.json` — APPEND to any existing hook arrays, never
