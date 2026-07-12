@@ -17,7 +17,8 @@ set -uo pipefail
 # Parse: <issue-number> [<target-session>] [--title <t>] [--self-land] [--scout] [--force].
 # The two positionals keep their historic order (num, target-session); --self-land
 # may appear anywhere and switches the seed prompt to the worker-owned self-land
-# lifecycle (issue #138); --scout spawns a READ-ONLY investigation worker that
+# lifecycle (issue #138) — bare/=1 is steward-triggered, =auto (issue #270) lands
+# straight after /fleet-ship with no trigger; --scout spawns a READ-ONLY investigation worker that
 # reports and never branches/ships/lands (issue #148). --title <t> is the
 # AUTHORITATIVE window name (issue #216): a create-then-spawn caller
 # (/fleet-new-issue, the prefix+n quick-dispatch, the dash new-session box) passes
@@ -28,7 +29,7 @@ set -uo pipefail
 # pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
 # dead/abandoned peer worker that left the issue assigned+marked forever), skipping
 # the claim check + claim-at-spawn entirely.
-num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; SELF_LAND_FLAG=""; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -37,7 +38,11 @@ for _a in "$@"; do
     _want=""; continue
   fi
   case "$_a" in
-    --self-land) SELF_LAND_FLAG=1 ;;
+    # --self-land selects the worker-owned lifecycle; the OPTIONAL =mode picks the
+    # gate (issue #270): bare/=1/=trigger = steward triggers the land (back-compat),
+    # =auto = the worker lands itself straight after /fleet-ship (no /land needed).
+    --self-land|--self-land=1|--self-land=trigger) SELF_LAND_FLAG=trigger ;;
+    --self-land=auto|--self-land-auto) SELF_LAND_FLAG=auto ;;
     --scout) SCOUT_FLAG=1 ;;
     --force|--reclaim) FORCE_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
@@ -196,21 +201,43 @@ G="$C/global"; mkdir -p "$G"
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Self-land lifecycle (issue #138): a worker owns its ENTIRE lifecycle incl. the
-# land. Opt in per spawn (--self-land) or per fleet (FLEET_SELF_LAND=1). Self-land
-# NEEDS the issue-bridge running (it is how the steward's /land trigger reaches the
-# worker) — warn if the fleet hasn't enabled it, since without it the trigger can't
-# arrive and the worker falls back to steward-lands.
+# Self-land lifecycle (issue #138, auto mode #270): a worker owns its ENTIRE
+# lifecycle incl. the land. Opt in per spawn (--self-land[=auto]) or per fleet
+# (FLEET_SELF_LAND=1|auto). The STEWARD-TRIGGERED form (=1) NEEDS the issue-bridge
+# (it is how the steward's /land trigger reaches the worker) — warn if the fleet
+# hasn't enabled it, since without it the trigger can't arrive and the worker falls
+# back to steward-lands. The AUTO form (=auto) lands itself with no trigger, so it
+# needs no bridge.
 SCOUT="$SCOUT_FLAG"
-SELF_LAND="$SELF_LAND_FLAG"; [ "${FLEET_SELF_LAND:-0}" = 1 ] && SELF_LAND=1
+# Self-land MODE (issue #138 + #270): a per-spawn --self-land[=auto] flag wins;
+# otherwise the fleet conf's FLEET_SELF_LAND selects it. Three states —
+#   ""/0  = off (steward-lands)
+#   1     = self-land, STEWARD-TRIGGERED (worker waits for /land)   [back-compat]
+#   auto  = self-land, AUTO (worker lands itself straight after /fleet-ship)
+# Collapse to two booleans the rest of the spawn reasons over: SELF_LAND (on?) and
+# AUTO_LAND (auto vs trigger?).
+SELF_MODE="$SELF_LAND_FLAG"
+if [ -z "$SELF_MODE" ]; then
+  case "${FLEET_SELF_LAND:-0}" in
+    auto)        SELF_MODE=auto ;;
+    1|trigger)   SELF_MODE=trigger ;;
+    *)           SELF_MODE="" ;;
+  esac
+fi
+SELF_LAND=0; [ -n "$SELF_MODE" ] && SELF_LAND=1
+AUTO_LAND=0; [ "$SELF_MODE" = auto ] && AUTO_LAND=1
 # A scout is a READ-ONLY investigation: it never branches/ships/lands, so scout
 # mode supersedes self-land (issue #148). Warn if both were asked for, then drop
 # the self-land lifecycle — there is no PR to land.
 if [ "$SCOUT" = 1 ] && [ "$SELF_LAND" = 1 ]; then
   TM display-message "note: #$num --scout supersedes --self-land (a scout opens no PR to land)" 2>/dev/null
-  SELF_LAND=0
+  SELF_LAND=0; AUTO_LAND=0
 fi
-if [ "$SELF_LAND" = 1 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
+# The STEWARD-TRIGGERED lifecycle needs the issue-bridge — it is how the /land
+# trigger reaches the worker; without it no trigger arrives and the worker falls
+# back to steward-lands. AUTO mode needs NO trigger channel (it lands itself), so
+# the bridge is not required there — warn only for the trigger lifecycle.
+if [ "$SELF_LAND" = 1 ] && [ "$AUTO_LAND" = 0 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
   TM display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
 fi
 # The claim ritual ("run /fleet-claim, else do it by hand") is identical for every
@@ -238,7 +265,13 @@ else
   # The head (issue binding), $claim, and the tail below stay structural + intact.
   body=$(fleet_worker_prompt_body "$num" "$REPO")
   prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
-  if [ "$SELF_LAND" = 1 ]; then
+  if [ "$SELF_LAND" = 1 ] && [ "$AUTO_LAND" = 1 ]; then
+    # AUTO self-land (issue #270): no /land trigger — /fleet-ship flows straight
+    # into /fleet-land-self. The worker still waits for CI green (the hold-through-
+    # green lease inside /fleet-land-self), but no steward comment is required.
+    # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
+    tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. This fleet runs FLEET_SELF_LAND=auto: after /fleet-ship opens the PR, do NOT wait for a trigger — run /fleet-land-self IMMEDIATELY to land your OWN PR (it waits for CI green via the hold-through-green lease, re-verifies, sanitizes your diff, lease-serialized squash-merge, base fast-forward, self-destruct). No /land comment is required. If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing.' "$num")
+  elif [ "$SELF_LAND" = 1 ]; then
     # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
     tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
   else

@@ -1,8 +1,27 @@
 # Worker-owned self-land
 
 > **Opt-in.** OFF by default; the steward-lands model (`/fleet-land`) stays the
-> default. A fleet enables it with `FLEET_SELF_LAND=1`, or a single worker is
-> spawned with `dash-issue-session.sh <N> --self-land`. Issue #138.
+> default. A fleet enables it with `FLEET_SELF_LAND=1` (steward-triggered) or
+> `FLEET_SELF_LAND=auto` (no trigger — issue #270), or a single worker is spawned
+> with `dash-issue-session.sh <N> --self-land[=auto]`. Issue #138.
+
+## Two modes: triggered (`=1`) and auto (`=auto`)
+
+Self-land has two gates, chosen by `FLEET_SELF_LAND`:
+
+| | `FLEET_SELF_LAND=1` — **triggered** | `FLEET_SELF_LAND=auto` — **auto** (issue #270) |
+|---|---|---|
+| after `/fleet-ship` | worker **waits** | worker flows **straight into** `/fleet-land-self` |
+| what starts the land | the steward's `/land` comment (relayed by the bridge) | nothing — it's automatic |
+| approval gate | the steward's **pre-trigger review** | **CI-green + branch protection** only |
+| needs the issue-bridge | **yes** (the trigger channel) | **no** (there is no trigger to relay) |
+| relaxation class | "workers never self-merge", re-gated by the trigger | same **and** removes the human approval gate — like `FLEET_AUTOLAND` |
+
+Everything else is identical — both run the exact same `bin/fleet-land-self.sh`
+(lease-serialized, hold-through-green, `--match-head-commit`, base fast-forward,
+self-destruct). `auto` only drops the trigger wait; it still **waits for CI green**
+under the hold-through-green lease, still sanitizes, still ejects to
+`/fleet-blocked` rather than force-merging a red or conflicting PR.
 
 Normally a worker `/fleet-ship`s its PR and the **steward** does the land —
 verify green, squash-merge, fast-forward the base checkout, clean up the worktree.
@@ -22,12 +41,17 @@ comments."
 ## The relaxed rail (state it honestly)
 
 Self-land deliberately **relaxes the "workers never self-merge" rail** — the
-exact discipline the fleet adopted after a worker once self-merged its own PR. It
-is safe only because it is **re-gated by the steward's explicit trigger**:
+exact discipline the fleet adopted after a worker once self-merged its own PR. In
+`=1` (triggered) mode it is safe because it is **re-gated by the steward's explicit
+trigger**; in `=auto` mode the trigger gate is **removed** and CI-green + branch
+protection become the only gate (the same relaxation `FLEET_AUTOLAND` makes —
+choose `auto` only where that trade is acceptable):
 
-- **The trigger is the approval gate.** Nothing self-lands until the steward
-  comments `/land`; the worker *waits* after `/fleet-ship`. Review discipline
-  moves to "eyeball the PR before you trigger."
+- **In triggered mode, the trigger is the approval gate.** Nothing self-lands
+  until the steward comments `/land`; the worker *waits* after `/fleet-ship`.
+  Review discipline moves to "eyeball the PR before you trigger." **In auto mode
+  there is no trigger** — `/fleet-ship` flows straight into `/fleet-land-self` and
+  CI + branch protection are the sole gate.
 - **Sanitize still runs** in `/fleet-land-self` (on the worker's own diff), but
   it is a self-check — the steward's pre-trigger review is the real independent
   gate.
@@ -37,6 +61,8 @@ is safe only because it is **re-gated by the steward's explicit trigger**:
   (steward / daemon).
 
 ## Lifecycle
+
+**Triggered (`FLEET_SELF_LAND=1`):**
 
 ```
 spawn (--self-land)  →  /fleet-claim  →  implement  →  /fleet-ship  →  WAIT
@@ -50,9 +76,20 @@ spawn (--self-land)  →  /fleet-claim  →  implement  →  /fleet-ship  →  W
                                    self-destruct (kill window + remove worktree)
 ```
 
-The worker is seeded with this extended lifecycle at spawn (the `--self-land`
-seed prompt). Workers spawned without it stay steward-landed — the switch is
-**gradual and per-worker**.
+**Auto (`FLEET_SELF_LAND=auto`, issue #270)** — no WAIT, no `/land`:
+
+```
+spawn (--self-land=auto)  →  /fleet-claim  →  implement  →  /fleet-ship
+                                                                │  (PR opened)
+                                                                ▼
+              /fleet-land-self  →  wait for CI green (hold-through-green lease) ·
+                                   re-verify · sanitize · lease-serialized merge ·
+                                   base fast-forward · self-destruct
+```
+
+The worker is seeded with the appropriate lifecycle at spawn (the
+`--self-land[=auto]` seed prompt). Workers spawned without it stay steward-landed
+— the switch is **gradual and per-worker**.
 
 ## The bridge is the solo channel
 
@@ -63,8 +100,13 @@ relays**. `send-keys` is retired as a control channel; the whole lifecycle
 
 Because the trigger rides the bridge, **`FLEET_SELF_LAND=1` implies
 `FLEET_ISSUE_BRIDGE=1`**. With no bridge there is no trigger channel, so a
-self-land worker falls back to steward-lands (and `dash-issue-session.sh` warns at
-spawn if you asked for `--self-land` on a fleet whose bridge is off).
+triggered self-land worker falls back to steward-lands (and `dash-issue-session.sh`
+warns at spawn if you asked for `--self-land` on a fleet whose bridge is off).
+
+**`FLEET_SELF_LAND=auto` needs no bridge** — there is no `/land` trigger to relay,
+so auto mode lands with the bridge off (the spawn skips that warning for `auto`).
+The bridge is still useful in auto mode for *other* steward↔worker comms (scope
+adds, a rebase handback), but it is no longer required for the land itself.
 
 ### Triggering a land
 
@@ -158,7 +200,7 @@ force-pushes, and never rebases past a real conflict.
 | [`commands/fleet-land-self.md`](../commands/fleet-land-self.md) | the `owner: worker` skill (re-verify · sanitize · land · self-destruct; failure → `/fleet-blocked`) |
 | [`bin/fleet-land-self.sh`](../bin/fleet-land-self.sh) | the mechanical driver (lease-gated hold-through-green merge + base pull + self-destruct) |
 | [`bin/fleet-land-lease.sh`](../bin/fleet-land-lease.sh) | the shared per-repo land lease (mkdir-atomic · PID+TTL holder · steal-if-stale · `land_lease_mine`) |
-| [`bin/dash-issue-session.sh`](../bin/dash-issue-session.sh) | `--self-land` / `FLEET_SELF_LAND=1` seeds the extended lifecycle prompt |
+| [`bin/dash-issue-session.sh`](../bin/dash-issue-session.sh) | `--self-land[=auto]` / `FLEET_SELF_LAND=1\|auto` seeds the extended lifecycle prompt (triggered or auto) |
 | [`bin/worktree-autoclean.sh`](../bin/worktree-autoclean.sh) | the cleanup backstop if self-destruct fails |
 | [`bin/fleet-land-self-selftest.sh`](../bin/fleet-land-self-selftest.sh) | hermetic tests (lease primitives + self-land driver) |
 
@@ -168,7 +210,7 @@ Configured in `fleet.conf` / a per-fleet overlay (see `fleet.conf.example`):
 
 | Var | Default | Meaning |
 |---|---|---|
-| `FLEET_SELF_LAND` | `0` | enable self-land for this fleet (implies `FLEET_ISSUE_BRIDGE=1`) |
+| `FLEET_SELF_LAND` | `0` | `0` off · `1` self-land, steward-triggered (implies `FLEET_ISSUE_BRIDGE=1`) · `auto` self-land, no trigger — `/fleet-ship` flows straight into the land, needs no bridge (issue #270) |
 
 `fleet-land-self.sh` also honors these process-level knobs (rarely changed):
 `LAND_SELF_METHOD` (squash), `LAND_SELF_POLL` (15s), `LAND_SELF_MAX_HOLD`
