@@ -41,12 +41,56 @@ else
   [ -z "$BASE" ] && BASE=$(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
   [ -z "$BASE" ] && BASE="$HOME"
 fi
+# --- Steward Lite profile (issue #284) --------------------------------------
+# Minimum fixed context + hard no-code rails for the hub, rendered per-fleet and
+# applied at this one choke point every hub shares. ON by default
+# (FLEET_STEWARD_LITE=1); set =0 to revert to today's bare spawn. Applies ONLY to
+# the built-in launch (fresh + resume) — a FLEET_STEWARD_CMD override owns its
+# whole command line, so we never inject flags into it. STEWARD_FLAGS collects the
+# `--settings/--strict-mcp-config/--mcp-config/--model` flags spliced into `claude`.
+STEWARD_FLAGS=""
+if [ "${FLEET_STEWARD_LITE:-1}" != 0 ] && [ -z "${FLEET_STEWARD_CMD:-}" ]; then
+  # The base checkout this steward must never edit — plus its issue-<N> worktree
+  # siblings (created next to it as <repo>-issue-*). Prefer FLEET_MAIN (the canonical
+  # code root); fall back to the resolved BASE. Claude's absolute-path anchor is a
+  # DOUBLE slash (//abs), so strip the single leading slash before prefixing `//`.
+  lite_base="${FLEET_MAIN:-$BASE}"
+  tpl="$(cat "$BIN/../conf/steward-settings.template.json" 2>/dev/null)"
+  if [ -n "$lite_base" ] && [ -n "$tpl" ]; then
+    fdir="$(fleet_state_dir "$SESS")"
+    settings="$fdir/steward-settings.json"
+    mcpcfg="$fdir/steward-mcp.json"
+    deny_base="//${lite_base#/}"
+    lite_parent="$(dirname "$lite_base")"; lite_repo="$(basename "$lite_base")"
+    deny_wt="//${lite_parent#/}/${lite_repo}-issue-*"
+    # Render the template via bash substitution (no sed delimiter clash on the /'s).
+    tpl="${tpl//__DENY_BASE__/$deny_base}"
+    tpl="${tpl//__DENY_WORKTREES__/$deny_wt}"
+    tpl="${tpl//__BIN__/$BIN}"
+    printf '%s\n' "$tpl" > "$settings"
+    STEWARD_FLAGS="--settings '$settings'"
+    # MCP diet (the responsiveness win): mount NO personal MCP servers into the hub
+    # — their tool lists + instruction blocks are pure per-turn overhead for a
+    # dispatcher. --strict-mcp-config + an empty --mcp-config ⇒ zero servers. Escape
+    # hatch: FLEET_STEWARD_MCP=1 skips it so an operator keeps their connectors.
+    if [ "${FLEET_STEWARD_MCP:-0}" != 1 ]; then
+      printf '{"mcpServers":{}}\n' > "$mcpcfg"
+      STEWARD_FLAGS="$STEWARD_FLAGS --strict-mcp-config --mcp-config '$mcpcfg'"
+    fi
+    # Model: a dispatcher needn't run the biggest model. FLEET_STEWARD_MODEL ▸
+    # FLEET_MODEL ▸ (unset → claude's own default).
+    lite_model="${FLEET_STEWARD_MODEL:-${FLEET_MODEL:-}}"
+    [ -n "$lite_model" ] && STEWARD_FLAGS="$STEWARD_FLAGS --model '$lite_model'"
+  fi
+fi
+
 # The command the steward pane runs. The FRESH launch is the steward's normal
 # startup: a documented per-fleet FLEET_STEWARD_CMD override if set, else the
 # built-in that reads its standing orders from steward.md and picks up the newest
 # handoff. FRESH_INNER is that launch WITHOUT the pane-keep-alive `exec $SHELL`
-# tail (appended once below) so it can double as the resume fallback.
-FRESH_INNER="${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"}"
+# tail (appended once below) so it can double as the resume fallback. STEWARD_FLAGS
+# (empty unless Steward Lite is on) is spliced right after `claude`.
+FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"}"
 # Crash-resume (issue #143): if fleet-restore.sh captured this steward's live
 # transcript and passes its id via STEWARD_RESUME_ID, RESUME it (`claude --resume
 # <id>`) so the steward's full history survives a tmux-server crash — same as a
@@ -57,7 +101,7 @@ FRESH_INNER="${FLEET_STEWARD_CMD:-claude \"Read ~/.claude/steward.md and adopt i
 # NB: a successful resume already carries the steward.md adoption in its restored
 # history, so it stays correctly scoped without re-reading steward.md.
 if [ -n "${STEWARD_RESUME_ID:-}" ] && [ "${STEWARD_RESUME_ID}" != "-" ]; then
-  LAUNCH="claude --resume '${STEWARD_RESUME_ID}' || { ${FRESH_INNER}; }"
+  LAUNCH="claude ${STEWARD_FLAGS} --resume '${STEWARD_RESUME_ID}' || { ${FRESH_INNER}; }"
 else
   LAUNCH="$FRESH_INNER"
 fi
@@ -73,6 +117,14 @@ STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
 # A worker spawn (dash-issue-session.sh) never sets it, so #158 is untouched.
 # Prepended to the FINAL command so it applies to fresh, resume, and override.
 STEWARD_CMD="export FLEET_SEAT=steward; $STEWARD_CMD"
+
+# Debug seam (issue #284): print the fully-resolved launch command and exit
+# BEFORE any tmux spawn, so the Steward-Lite flag logic (steward-session-selftest.sh)
+# can be asserted hermetically without a live claude/hub. Never set in normal use.
+if [ -n "${STEWARD_PRINT_CMD:-}" ]; then
+  printf '%s\n' "$STEWARD_CMD"
+  exit 0
+fi
 
 # already have a live steward pane IN THIS SESSION → just focus it, done. Scoped
 # with -s (not -a) so a fresh fleet builds its own hub instead of jumping to

@@ -255,6 +255,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Steward launch command @group=steward @tier=advanced @scope=fleet @edit=str
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
 
+# --- Steward Lite profile (issue #284) --------------------------------------
+# Minimum fixed context + hard no-code rails for the hub, applied at spawn/respawn
+# in bin/steward-session.sh. ON by default. The rendered per-fleet settings
+# (~/.config/claude-fleet/fleets/<session>/steward-settings.json, from
+# conf/steward-settings.template.json) DENY Edit/Write across this fleet's base
+# checkout AND its issue-<N> worktree siblings (the steward is a dispatcher, never
+# a coder — deny overrides bypassPermissions) while still letting it Write its own
+# memory/scratchpad; the hub also launches with --strict-mcp-config so personal MCP
+# servers never mount (per-turn overhead for a dispatcher). Set =0 to revert to the
+# bare spawn. Applies to the built-in launch only — a FLEET_STEWARD_CMD override
+# owns its whole command line and is left untouched. Existing running stewards keep
+# their old profile until their next hub respawn.
+# @label=Steward Lite profile @group=steward @tier=common @scope=fleet @edit=bool
+#FLEET_STEWARD_LITE=1
+# Keep personal MCP servers (mail/calendar/etc. connectors) mounted in the hub
+# despite Steward Lite — set =1 to skip the --strict-mcp-config MCP diet for an
+# operator who wants connectors in the steward pane. Default 0 (no MCP in the hub).
+# @label=Keep MCP in steward hub @group=steward @tier=advanced @scope=fleet @edit=bool
+#FLEET_STEWARD_MCP=0
+# Model the steward hub launches with (a dispatcher doesn't need the biggest
+# model). Defaults to FLEET_MODEL; set to route the hub onto a cheaper tier
+# independently of the workers. Same alias set as FLEET_MODEL; empty defers to
+# claude's own default. Only honored when Steward Lite is on.
+# @label=Steward model @group=steward @tier=advanced @scope=fleet @edit=enum
+#FLEET_STEWARD_MODEL="opus"
+
 # Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
 # Where the handoff doc is STORED so a cleared session can resume from it:
 #   comment  (default) — when the pane is issue-bound (a worker's @issue, or a
