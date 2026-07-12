@@ -16,7 +16,7 @@
 #                   STEWARD row (path + id), even though the window is a panel.
 #   • RESUME        steward-session.sh with STEWARD_RESUME_ID launches
 #                   `claude --resume <id>`, NOT a fresh steward.
-#   • FALLBACK      with no id it launches a FRESH steward that reads steward.md
+#   • FALLBACK      with no id it launches a FRESH steward that runs /fleet-steward
 #                   (the first-boot path — no regression).
 #   • STALE ID      when `--resume` itself FAILS (pruned id), it falls back to a
 #                   fresh steward via `||`, never a bare shell.
@@ -237,7 +237,7 @@ wait_argv res || fail "resume: the steward pane never launched claude (no record
 grep -q -- '--resume stew-abc123' "$WORK/claude-argv" \
   || fail "resume: steward should launch 'claude --resume stew-abc123' (got: $(cat "$WORK/claude-argv"))"
 
-# --- FALLBACK: no id ⇒ a FRESH steward that reads steward.md ------------------
+# --- FALLBACK: no id ⇒ a FRESH steward that runs /fleet-steward ---------------
 : > "$WORK/claude-argv"
 tmux new-session -d -s fresh -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session fresh"
 env -u STEWARD_CMD -u FLEET_STEWARD_CMD -u STEWARD_RESUME_ID \
@@ -246,8 +246,8 @@ env -u STEWARD_CMD -u FLEET_STEWARD_CMD -u STEWARD_RESUME_ID \
 wait_argv fresh || fail "fallback: the steward pane never launched claude (no recorded argv)"
 grep -q -- '--resume' "$WORK/claude-argv" \
   && fail "fallback: a steward with no id must NOT use --resume (got: $(cat "$WORK/claude-argv"))"
-grep -q 'steward.md' "$WORK/claude-argv" \
-  || fail "fallback: a fresh steward should read steward.md (got: $(cat "$WORK/claude-argv"))"
+grep -q -- '/fleet-steward' "$WORK/claude-argv" \
+  || fail "fallback: a fresh steward should run /fleet-steward (got: $(cat "$WORK/claude-argv"))"
 
 # --- STALE ID: `--resume` fails ⇒ fall back to a FRESH steward, not a bare shell
 : > "$WORK/claude-argv"; : > "$WORK/fail-resume"   # make the stub fail on --resume
@@ -257,13 +257,13 @@ env -u STEWARD_CMD -u FLEET_STEWARD_CMD \
   bash "$STEWARDSH" >/dev/null 2>&1 || fail "steward-session.sh (stale) exited non-zero"
 # both should appear: the attempted resume, THEN the fresh fallback (|| path)
 for _n in $(seq 1 200); do
-  grep -q 'steward.md' "$WORK/claude-argv" && break
+  grep -q -- '/fleet-steward' "$WORK/claude-argv" && break
   tmux run-shell -t stale 'true' 2>/dev/null
   perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
 done
 grep -q -- '--resume stew-gone-77' "$WORK/claude-argv" \
   || fail "stale: the steward should first attempt --resume (got: $(cat "$WORK/claude-argv"))"
-grep -q 'steward.md' "$WORK/claude-argv" \
+grep -q -- '/fleet-steward' "$WORK/claude-argv" \
   || fail "stale: a FAILED resume must fall back to a fresh steward, not a bare shell (got: $(cat "$WORK/claude-argv"))"
 rm -f "$WORK/fail-resume"
 

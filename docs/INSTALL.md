@@ -47,13 +47,12 @@ assumes — this doc is only the install/uninstall procedure.
    `conf/`, `shell/`, `fleet.conf.example` there; `mkdir -p ~/.claude/fleet/logs`;
    `chmod +x ~/.claude/fleet/bin/*.sh`. If the user wants a different dir,
    also rewrite the `~/.claude/fleet` paths inside `conf/tmux-attention.conf`
-   and `hooks/settings-hooks.json` to match. Also copy the steward's charter
-   **one level up** — `cp steward.md ~/.claude/steward.md` — this is the
-   first-mate standing-orders file `bin/steward-session.sh` reads when it spawns
-   or respawns a fleet's `plan` hub. It's a personal rail (flat in `~/.claude/`,
-   not under the checkout), so a fresh charter that lands on master reaches the
-   live file via `/fleet-sync-install`; if you keep local edits in it, sync will
-   refuse to overwrite and tell you.
+   and `hooks/settings-hooks.json` to match. (The steward's charter is **no longer
+   a flat file to copy up** — since issue #286 it ships as the `/fleet-steward`
+   skill installed in step 8, resolved at spawn by `bin/steward-charter.sh`. Any
+   per-fleet local edits go in the operator overlay
+   `~/.config/claude-fleet/fleets/<session>/steward.md`, not a flat
+   `~/.claude/steward.md`.)
 
 3. **Write `~/.claude/fleet/fleet.conf`.** Ask the user (or infer from their
    current repo) the values in `fleet.conf.example`: `FLEET_REPO`
@@ -110,12 +109,14 @@ assumes — this doc is only the install/uninstall procedure.
    `steward-readopt-hook.sh` (issue #155): a `/clear` keeps the same steward
    process alive but wipes its context, so it forgets it's the steward and — since
    CC reloads the cwd `CLAUDE.md` — could drift off its first-mate charter. The
-   hook re-injects `steward.md` (plus a newest-handoff pointer) back into context,
-   but ONLY when the pane is `@steward=1` **and** the SessionStart `source` is
-   `clear` — so a worker `/clear` is never handed steward identity, and
+   hook re-injects the **layered steward charter** (plus a newest-handoff pointer)
+   back into context via the shared `bin/steward-charter.sh` resolver — the SAME
+   path `/fleet-steward` uses at spawn (issue #286), so a `/clear` re-adopt can't
+   drift — but ONLY when the pane is `@steward=1` **and** the SessionStart `source`
+   is `clear` — so a worker `/clear` is never handed steward identity, and
    startup/resume/compact (already covered by the spawn seed prompt and the
    crash-resume path #143) don't pile on redundant context. No-op outside tmux and
-   if `~/.claude/steward.md` is absent.
+   if the resolver emits nothing (e.g. the `/fleet-steward` skill isn't installed).
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
@@ -218,10 +219,11 @@ assumes — this doc is only the install/uninstall procedure.
    `fleet-claim` (the whole worker lifecycle — claim via the assignee, load a
    layered charter, ground, implement, then open the PR + arm GitHub auto-merge;
    the fleet never merges — issue #283 folded the retired `fleet-ship` +
-   `fleet-blocked` into it), `fleet-cleanup` (manual reap of a merged/closed
-   PR, the escape hatch past the cleanup daemon — see docs/CLEANUP.md),
-   `fleet-sync-install`, `fleet-status`,
-   `fleet-new-issue`, and `fleet-handoff`
+   `fleet-blocked` into it), `fleet-steward` (the steward mirror — the hub's
+   spawn ritual: adopt a layered steward charter via `bin/steward-charter.sh`,
+   then dispatch; issue #286 folded the retired `fleet-new-issue`, `fleet-status`,
+   and `fleet-cleanup` into its charter as hot-path ops),
+   `fleet-sync-install`, and `fleet-handoff`
    (either seat: writes a handoff doc, then a detached helper auto-`/clear`s the
    pane and resumes from it — `bin/fleet-handoff-cycle.sh`) (plus the
    contract/template — `commands/README.md`,
@@ -242,8 +244,8 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
 `summarize-hook.sh` entries on `Stop`/`SessionStart`, plus the
 `steward-readopt-hook.sh` entry on `SessionStart`) from
-`~/.claude/settings.json`, delete `~/.claude/fleet/` and the steward charter
-`~/.claude/steward.md`, remove any fleet commands
+`~/.claude/settings.json`, delete `~/.claude/fleet/` (and, on a pre-#286 install,
+the obsolete flat charter `~/.claude/steward.md`), remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands), and clear per-window state. Each fleet
 runs on its own tmux socket now (issue #159), so per-window state lives per

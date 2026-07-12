@@ -1,6 +1,6 @@
 #!/bin/bash
 # dash-issue-session-name-selftest.sh — hermetic tests for how a spawned worker's
-# tmux window is NAMED (issue #216). A create-then-spawn caller (/fleet-new-issue,
+# tmux window is NAMED (issue #216). A create-then-spawn caller (the steward's file+spawn op,
 # the prefix+n quick-dispatch, the dash new-session box) now passes the title it
 # just wrote as --title, so the window is named after the WORK — reliably, without
 # depending on the brand-new issue being in the collector cache yet or on a

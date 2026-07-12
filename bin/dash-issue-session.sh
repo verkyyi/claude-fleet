@@ -18,7 +18,7 @@ set -uo pipefail
 # The two positionals keep their historic order (num, target-session). --title <t>
 # is the
 # AUTHORITATIVE window name (issue #216): a create-then-spawn caller
-# (/fleet-new-issue, the prefix+n quick-dispatch, the dash new-session box) passes
+# (the steward's file+spawn op, the prefix+n quick-dispatch, the dash new-session box) passes
 # the title it JUST wrote so the window is named after the WORK — not the bare
 # issue-<N> slug it otherwise falls back to when the brand-new issue isn't in the
 # collector cache yet and a post-create `gh issue view` lags or fails.

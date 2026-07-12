@@ -6,7 +6,7 @@
 # Since issue #277 the fleet never merges — GitHub auto-merge (armed by the worker ship step)
 # does the merge, and bin/fleet-cleanup.sh reaps + fast-forwards the base afterward.
 # This lease is what serializes that base fast-forward across concurrent cleaners
-# (the cleanup daemon + a manual /fleet-cleanup), using the mkdir-atomic acquire +
+# (the cleanup daemon + the steward's manual reap op), using the mkdir-atomic acquire +
 # steal-if-stale semantics that used to serialize the (retired) landers.
 #
 # The `land_classify` verdict taxonomy below is retained for callers that still need

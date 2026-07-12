@@ -110,7 +110,7 @@ out=$(run FLEET_STEWARD_LITE=0) || fail "lite=0 run exited non-zero"
 [ -f "$SETTINGS" ] && fail "lite=0: must NOT render a settings file"
 case "$out" in *"--settings"*)          fail "lite=0: --settings must not appear" ;; esac
 case "$out" in *"--strict-mcp-config"*) fail "lite=0: --strict-mcp-config must not appear" ;; esac
-case "$out" in *"claude "*"Read ~/.claude/steward.md"*) : ;; *) fail "lite=0: expected the bare built-in claude launch: $out" ;; esac
+case "$out" in *"claude "*"/fleet-steward"*) : ;; *) fail "lite=0: expected the bare built-in /fleet-steward launch: $out" ;; esac
 
 # --- 5. resume: rails re-applied on the resume invocation --------------------
 out=$(run STEWARD_RESUME_ID=abc123 FLEET_STEWARD_LITE=1)
