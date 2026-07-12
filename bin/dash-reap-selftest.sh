@@ -17,6 +17,8 @@
 #        • ⌃x on a clean+unmerged row          → refuse ("PR not merged")
 #        • ⌃x on a clean+merged row            → FULL reap: worktree removed,
 #          branch deleted, `gh issue close` issued, `tmux kill-window` issued.
+#        • ⌃x on a raw scratch row (@raw=1, no @issue) → close window directly,
+#          NO refuse, summary-cache seed removed, no worktree/issue/gh touched.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -69,16 +71,19 @@ chk "dirty" dirty 1 "$WORK/wt3" "$BASEDIR" issue-3 "$H3" "$MASTER" "issue-3"
 chk "empty-wtdir+ancestor" ancestor 0 "" "$BASEDIR" issue-1 "$H1" "$MASTER" ""
 
 # --- B. dash-reap.sh with fakes -----------------------------------------------
-mkdir -p "$WORK/fakepath"
+mkdir -p "$WORK/fakepath" "$WORK/rt"
 TMLOG="$WORK/tmlog"; GHLOG="$WORK/ghlog"; : > "$TMLOG"; : > "$GHLOG"
 
 # fake tmux: answers the info queries dash-reap needs; logs kill-window + messages.
-# @issue is read from the env var ISS (set per run). Order matters — check @issue
-# BEFORE session_name (both contain "display-message -p").
+# @issue / @raw / window_id are read from env vars (ISS/RAW/WID, set per run).
+# Order matters — check the specific #{@...}/window_id queries BEFORE session_name
+# (all contain "display-message -p"); the generic MSG fallback stays last.
 cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
 case "$*" in
+  *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
+  *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
   *display-popup*) printf 'POPUP %s\n' "$*" >> "$TMLOG" ;;
@@ -102,9 +107,12 @@ chmod +x "$WORK/fakepath/gh"
 
 run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base checkout
   local iss="$1"; shift
-  ISS="$iss" TMLOG="$TMLOG" GHLOG="$GHLOG" \
+  # RAW/WID feed the fake tmux's @raw/window_id answers (empty RAW ⇒ not a raw row).
+  # TMPDIR is redirected under $WORK so fleet-lib's cache dir (FLEET_C) — and the
+  # raw path's summary-cache rm — stay hermetic (never touch the real cache).
+  ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
-  FLEET_CONF_DIR="$WORK/noconf" \
+  FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
   PATH="$WORK/fakepath:$PATH" \
     bash "$BIN/dash-reap.sh" "$@"
 }
@@ -159,5 +167,26 @@ printf 'n' | run_reap "4" "s1:4" --force confirm
 grep -q 'KILL' "$TMLOG" && fail "cancelled force reap must not kill the window"
 [ -s "$GHLOG" ] && fail "cancelled force reap must not touch gh"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force paths\n'
+# B8: ⌃x on a raw scratch row (@raw=1, no @issue, issue #252) → close the window
+# directly. No refuse, the dash summary-cache seed is removed, and nothing
+# issue-bound is touched (no gh). The summary key mirrors dash-raw-session.sh:
+# fleet_summary_key <session s1> <window @9> = s1_9.
+CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
+SEED="$CACHE/summary_s1_9"; printf 'scratch (raw session)' > "$SEED"
+: > "$TMLOG"; : > "$GHLOG"
+RAW=1 WID='@9' run_reap "" "s1:9"
+grep -q 'KILL' "$TMLOG" || fail "raw ⌃x should kill the scratch window"
+grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothing to reap')"
+grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
+[ -e "$SEED" ] && fail "raw ⌃x should remove the summary-cache seed"
+[ -s "$GHLOG" ] && fail "raw ⌃x must not touch gh (no issue/PR lifecycle)"
+
+# B9: hub/panel row with @raw explicitly 0 (not a scratch) still refuses — the
+# raw early-return keys on @raw=1 exactly, not merely "@raw set".
+: > "$TMLOG"; : > "$GHLOG"
+RAW=0 run_reap "" "s1:1"
+grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
+grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
+
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force + raw paths\n'
 exit 0
