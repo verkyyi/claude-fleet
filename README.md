@@ -34,8 +34,9 @@ demo repo data.</sub>
   steward focus. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-G` binds a window to an existing issue, `Ctrl-E` renames, `Ctrl-S`
-  opens a raw scratch session (plain `claude`, no issue/worktree/PR — also
-  `prefix+R`).
+  opens a raw scratch session (plain `claude`, no issue — but in its own
+  writable `scratch-N` worktree, so an experiment can push a branch and open a
+  PR like any worker — also `prefix+R`).
 
 ![backlog](docs/img/backlog.svg)
 
@@ -135,7 +136,7 @@ Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix G` | focus the hub's dash pane (jump / new task / bind issue / rename); press again to zoom it fullscreen |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
-| `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue, no worktree, no PR); listed in the dash but excluded from the issue machinery, and ephemeral (not restored across a crash). Prompts for an **optional name** (Enter empty keeps the auto `scratch`/`scratch-2`… name). Also on the dash as `⌃s` |
+| `prefix R` | raw scratch session — a plain, **non-issue-bound** `claude` window (no issue) in its own **writable `scratch-N` git worktree** off the base branch: it can experiment freely (unlike the read-only base checkout), and a scratch that turns real just pushes its branch + opens a PR — the janitor then reaps it like any worker. Listed in the dash but excluded from the issue machinery; the **window** is ephemeral (not restored across a crash) while its worktree survives on disk and is reaped by the scratch rules (clean → removed; dirty/unmerged → kept + surfaced, `⌃x` to dispose). Prompts for an **optional name** (Enter empty keeps the auto `scratch-N` name). Also on the dash as `⌃s` |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix u` | usage popup — the on-demand usage / subscription-limit detail: the 5h/7d proxy, the official weekly/N-hour limit line (which limit, reset time), and (multi-account) which account new sessions use. Same target as clicking the footer usage stat |
 | `prefix r` | reload tmux config |

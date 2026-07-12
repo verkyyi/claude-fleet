@@ -74,22 +74,100 @@ for a in "$@"; do case "$a" in --force) force=1;; confirm) confirm=1;; esac; don
 
 command -v git >/dev/null 2>&1 || refuse "git not found"
 
-# --- raw scratch row: close it directly (no issue-bound reap) -----------------
-# A raw/scratch session (@raw=1, issue #214) has NO @issue, NO git worktree, and
-# no branch/issue/PR lifecycle — it is ephemeral (never snapshotted or restored).
-# So it can't ride the issue-bound reap below; ⌃x simply CLOSES its window, with
-# no fleet_reap_ok/merged/dirty gate and no confirm (⌥x hits the same early
-# return). Detect it BEFORE the hub/panel guard so a scratch stops looking like a
-# no-op ⌃x. True hub/panel rows (plan/dash/backlog — no @issue AND no @raw) still
-# fall through to the "nothing to reap" refuse below.
+# --- raw scratch row: close the window + dispose its worktree by the gate ------
+# A raw/scratch session (@raw=1) has NO @issue, but since issue #290 it DOES own a
+# `scratch-<N>` git worktree off the base branch. So ⌃x closes the window AND
+# applies the SAME safe gate the janitor uses (fleet_reap_ok): a clean+no-unmerged
+# scratch worktree is removed with its branch; a dirty/unmerged one is KEPT (never
+# silently delete an experiment) and ⌥x force disposes it (dirty still kept). With
+# no resolvable worktree (a pre-#290 scratch, or a hermetic test) it degrades to the
+# historic "just close the window" behavior. Detected BEFORE the hub/panel guard so
+# a scratch stops looking like a no-op ⌃x; true hub/panel rows (plan/dash/backlog —
+# no @issue AND no @raw) still fall through to the "nothing to reap" refuse below.
 if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # Drop the dash summary-cache seed the raw spawn wrote (dash-raw-session.sh) so a
   # reaped scratch leaves behind no stale summary row — same key the writer used
   # (fleet_summary_key of this fleet's session + this window id).
   wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
   rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$(fleet_current_session)" "$wid")" 2>/dev/null || true
+
+  # Resolve this fleet's checkout + the scratch worktree. @worktree is written at
+  # spawn (dash-raw-session.sh); fall back to the window's cwd. Only ever act on a
+  # `scratch-<N>` branch under this fleet's MAIN — anything else degrades to a plain
+  # window-close, so a stray cwd can never make ⌃x delete unrelated work.
+  FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
+  fleet_load_conf "$FLEET_SESSION"
+  MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
+  swt="$(tmux display-message -t "$target" -p '#{@worktree}' 2>/dev/null)"
+  [ -z "$swt" ] && swt="$(tmux display-message -t "$target" -p '#{pane_current_path}' 2>/dev/null)"
+  sbranch=""; shead=""
+  if [ -n "$swt" ] && [ -n "$MAIN" ] && [ -e "$swt" ] \
+     && git -C "$swt" rev-parse --git-dir >/dev/null 2>&1; then
+    sbranch="$(git -C "$swt" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    shead="$(git -C "$swt" rev-parse HEAD 2>/dev/null)"
+  fi
+  case "$sbranch" in scratch-*) ;; *) sbranch="" ;; esac   # scratch-only guard
+
+  # No resolvable scratch worktree → historic behavior: just close the window.
+  if [ -z "$sbranch" ]; then
+    tmux kill-window -t "$target" 2>/dev/null || true
+    tmux display-message "closed scratch ✓" 2>/dev/null || true
+    exit 0
+  fi
+
+  # Gate the worktree the same way the issue-bound path does. No blocking fetch on
+  # the interactive ⌃x path — use the locally-known origin/<base>.
+  SBASE="${FLEET_BASE_BRANCH:-master}"
+  SMASTER="$(git -C "$MAIN" rev-parse --verify -q "origin/$SBASE" 2>/dev/null \
+    || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
+  SMERGED=""
+  command -v gh >/dev/null 2>&1 && SMERGED="$(gh -R "${FLEET_REPO:-}" pr list \
+    --state merged --head "$sbranch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
+  sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED")"
+
+  scratch_remove() {   # remove worktree + branch (reap anchored procs first, #151)
+    fleet_reap_worktree_procs "$swt" >/dev/null 2>&1
+    git -C "$MAIN" worktree remove "$swt" 2>/dev/null \
+      && git -C "$MAIN" branch -D "$sbranch" >/dev/null 2>&1
+    git -C "$MAIN" worktree prune 2>/dev/null || true
+  }
+
+  # Safe path (⌃x): reap only a clean+no-unmerged scratch; else KEEP + note.
+  if [ "$force" = 0 ]; then
+    case "$sreason" in
+      merged-pr|ancestor)
+        scratch_remove
+        tmux kill-window -t "$target" 2>/dev/null || true
+        tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true ;;
+      *)   # dirty | unmerged — keep the experiment, close the window only
+        tmux kill-window -t "$target" 2>/dev/null || true
+        tmux display-message "closed scratch ✓ — worktree KEPT ($sreason); ⌃X to dispose" 2>/dev/null || true ;;
+    esac
+    exit 0
+  fi
+
+  # Force path (⌥x): confirm once, then dispose. A DIRTY worktree is still KEPT
+  # (git refuses a dirty remove anyway) — only the window closes.
+  if [ "$confirm" = 0 ]; then
+    tmux display-popup -w 68 -h 9 -E \
+      "bash '$BIN/dash-reap.sh' '$target' --force confirm" 2>/dev/null || true
+    exit 0
+  fi
+  if [ "$sreason" = dirty ]; then
+    msg="Force-reap $sbranch? Worktree is DIRTY — it will be KEPT; window closes."
+  else
+    msg="Force-reap $sbranch? Removes the scratch worktree + branch, closes the window."
+  fi
+  printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
+  read -rsn1 ans; echo
+  case "$ans" in y|Y) ;; *) exit 0;; esac
+  [ "$sreason" = dirty ] || scratch_remove
   tmux kill-window -t "$target" 2>/dev/null || true
-  tmux display-message "closed scratch ✓" 2>/dev/null || true
+  if [ "$sreason" = dirty ]; then
+    tmux display-message "closed scratch ✓ — worktree kept (dirty)" 2>/dev/null || true
+  else
+    tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true
+  fi
   exit 0
 fi
 
