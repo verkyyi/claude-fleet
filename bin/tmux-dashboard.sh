@@ -76,6 +76,7 @@ run_dash() {
     --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
+    --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
     --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "alt-x:execute(bash $BIN/dash-reap.sh {1} --force)+reload(bash $ROWS)" \
     --bind "ctrl-l:execute(tmux display-popup -E -w 72% -h 60% \"bash $BIN/dash-land.sh {1}\")+reload(bash $ROWS)" \
