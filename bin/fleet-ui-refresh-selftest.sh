@@ -75,7 +75,9 @@ done
 LAUNCH="$WORK/launch.sh"
 cat > "$LAUNCH" <<EOF
 #!/bin/sh
-# $TMUX gives the running server's socket path; its basename is the -L label.
+# \$TMUX gives the running server's socket path; its basename is the -L label.
+# (Escaped so THIS heredoc — written under the selftest's own set -u — doesn't try
+# to expand \$TMUX, which is unset when the selftest runs outside tmux, e.g. in CI.)
 label=\$(basename "\$(printf '%s' "\$TMUX" | cut -d, -f1)")
 printf 'respawned\n' >> "$WORK/dash.\$label"
 exec sleep 300
