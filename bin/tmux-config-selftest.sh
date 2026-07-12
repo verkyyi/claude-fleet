@@ -171,6 +171,10 @@ fcfg_validate num  7         FLEET_X >/dev/null || fail 'num alias should pass';
 fcfg_validate no   whatever  FLEET_REPO >/dev/null && fail 'edit=no should always refuse'; ok
 fcfg_validate bool 1         FLEET_X >/dev/null || fail 'bool 1 should pass'; ok
 fcfg_validate bool 2         FLEET_X >/dev/null && fail 'bool 2 should fail'; ok
+# FLEET_SELF_LAND is a bool + the extra "auto" value (issue #270), gated per-key
+# like "inherit" is for FLEET_SUBAGENT_MODEL.
+fcfg_validate bool auto      FLEET_SELF_LAND >/dev/null || fail 'bool auto valid for FLEET_SELF_LAND'; ok
+fcfg_validate bool auto      FLEET_X >/dev/null && fail 'bool auto invalid for a plain bool key'; ok
 fcfg_validate enum opus      FLEET_MODEL >/dev/null || fail 'enum opus should pass'; ok
 fcfg_validate enum ''        FLEET_MODEL >/dev/null || fail 'enum empty should pass'; ok
 fcfg_validate enum claude-x  FLEET_MODEL >/dev/null || fail 'enum claude-x should pass'; ok

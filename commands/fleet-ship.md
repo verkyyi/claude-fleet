@@ -23,8 +23,12 @@ reuse the literal values it prints:
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
 SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} self_land=${FLEET_SELF_LAND:-0}"
 ```
+
+`self_land` decides what you do **after** the PR is open (step 6): `0` = stop, the
+steward lands (`/fleet-land`); `1` = self-land, but WAIT for the steward's `/land`
+trigger; `auto` = self-land straight away — flow into `/fleet-land-self` yourself.
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
@@ -109,10 +113,23 @@ Closes #<issue>
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body 'Shipped → <PR URL>' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'Shipped → <PR URL>\n\n— fleet · worker · #<issue>\n<!-- fleet:from role=worker issue=<issue> -->\n<!-- fleet:no-relay -->'`.
 - Leave the window in a done-ish state (the turn ending naturally sets it).
 
-## 6. Report — and stop
+## 6. Report — then follow the fleet's land lifecycle
 
-Print the PR URL and state explicitly: **the steward will land it (`/fleet-land`);
-/fleet-ship does not merge.** Do not merge, do not deploy. Stop here.
+**/fleet-ship never merges** — pushing + opening the PR is always the finish of
+*ship*. What happens next depends on `self_land` (from step 0):
+
+- **`0` (steward-lands, default)** — Print the PR URL and state explicitly: **the
+  steward will land it (`/fleet-land`).** Do not merge, do not deploy. **Stop here.**
+- **`1` (self-land, triggered)** — Print the PR URL and **WAIT.** Do not merge. The
+  steward reviews and triggers the land by commenting `/land` on the issue (relayed
+  to you by the issue-bridge); only then do you run `/fleet-land-self`. **Stop here.**
+- **`auto` (self-land, auto — issue #270)** — the steward trigger is OPTIONAL.
+  After the PR is open, **immediately continue into `/fleet-land-self`** (no `/land`
+  comment required). It waits for CI green under the hold-through-green lease, then
+  squash-merges your own PR, fast-forwards the base, and self-destructs. If it
+  can't land cleanly, it hands back via `/fleet-blocked` — never force.
+
+Only the `auto` path continues past ship on its own; `0`/`1` stop and wait.
 
 ---
 

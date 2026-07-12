@@ -8,16 +8,18 @@ mergeable, sanitize your own diff, take the per-repo land lease, squash-merge,
 fast-forward the fleet's base checkout, and self-destruct (kill this window +
 remove the worktree). It **mutates this fleet's `$FLEET_REPO`** (merges your PR)
 and the base checkout (`$FLEET_MAIN`). It is **worker-only** and — unlike every
-other worker skill — it *merges*. That relaxed rail is safe only because it runs
-solely on the steward's explicit trigger (a bridge-relayed `/land` comment); the
-steward's pre-trigger review is the real approval gate. See
-[docs/SELF-LAND.md](../docs/SELF-LAND.md).
+other worker skill — it *merges*. What gates that relaxed rail depends on the
+fleet's `FLEET_SELF_LAND` mode (step 0): in `=1` (triggered) it runs solely on the
+steward's explicit `/land` trigger and the steward's pre-trigger review is the
+approval gate; in `=auto` (issue #270) the trigger is optional and CI-green +
+branch protection are the gate. See [docs/SELF-LAND.md](../docs/SELF-LAND.md).
 
-**Do not run this on your own initiative.** After `/fleet-ship` you **wait**. Run
-this only when the steward triggers the land — a comment containing `/land` (or
-`<!-- fleet:land -->`) relayed onto the issue by the #132 issue-bridge — or when
-the human in your pane tells you to. If it can't land cleanly, run `/fleet-blocked`
-with the reason instead of forcing.
+**In triggered mode (`=1`), do not run this on your own initiative** — after
+`/fleet-ship` you **wait** and run this only when the steward triggers the land (a
+`/land` / `<!-- fleet:land -->` comment relayed onto the issue by the #132
+issue-bridge) or the human in your pane tells you to. **In `auto` mode you flow
+here directly from `/fleet-ship`** — no wait, no trigger. Either way, if it can't
+land cleanly, run `/fleet-blocked` with the reason instead of forcing.
 
 **Argument** (`$ARGUMENTS`): none — the PR is resolved from your `issue-<N>`
 branch. (You may pass an explicit PR number to override, but the default is
@@ -32,8 +34,12 @@ reuse the literal values it prints:
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
 SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} self_land=${FLEET_SELF_LAND:-0}"
 ```
+
+`self_land` decides the gate in step 1: `1` = you may land **only** after the
+steward's `/land` trigger; `auto` (issue #270) = no trigger required — you flow
+here straight from `/fleet-ship`.
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
@@ -44,17 +50,24 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 `$FLEET_BASE_BRANCH` — this fleet only.
 
-## 1. Confirm you were triggered
+## 1. Confirm you're cleared to land
 
-The trigger is the approval gate. Land **only** when one of these is true:
+The gate depends on `self_land` (from step 0):
 
-- The steward (or a trusted collaborator) left a comment containing `/land` or
-  `<!-- fleet:land -->` on your bound issue — relayed to you as a turn by the
-  issue-bridge (that turn is likely *how you got here*).
-- The human in your pane told you to land.
+- **`self_land=auto` (issue #270)** — **no trigger required.** In auto mode the
+  steward trigger is optional; you flow here straight from `/fleet-ship`. Skip
+  the trigger check and go to step 2. CI-green + branch protection are the gate
+  (the same relaxation `FLEET_AUTOLAND` makes) — step 2's re-verify + step 4's
+  hold-through-green enforce it.
+- **`self_land=1` (triggered, the default self-land)** — the trigger IS the
+  approval gate. Land **only** when one of these is true:
+  - The steward (or a trusted collaborator) left a comment containing `/land` or
+    `<!-- fleet:land -->` on your bound issue — relayed to you as a turn by the
+    issue-bridge (that turn is likely *how you got here*).
+  - The human in your pane told you to land.
 
-If you are here on your own initiative with no trigger, **stop** — go back to
-waiting. Do not self-land un-triggered.
+  If you are here on your own initiative with no trigger, **stop** — go back to
+  waiting. Do not self-land un-triggered.
 
 ## 2. Identify the PR + re-verify it's genuinely mergeable
 

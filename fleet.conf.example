@@ -189,19 +189,29 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # --- Worker-owned self-land (commands/fleet-land-self.md, issue #138) -----------
 # OFF by default. When enabled for a fleet (or per spawn via
-# `dash-issue-session.sh <N> --self-land`), a worker owns its ENTIRE lifecycle
-# including the land: after /fleet-ship it WAITS, and when the steward triggers the
-# land by commenting `/land` on the issue (relayed by the issue-bridge), the worker
-# runs /fleet-land-self to merge its OWN PR — lease-serialized (the same per-repo
-# land lock /fleet-land-train uses), hold-through-green, base fast-forward, then
-# self-destruct. The steward only *approves* (one comment) instead of *performing*
-# the merge. This deliberately RELAXES the "workers never self-merge" rail, re-gated
-# by the steward's explicit trigger + pre-trigger review.
+# `dash-issue-session.sh <N> --self-land[=auto]`), a worker owns its ENTIRE
+# lifecycle including the land: it runs /fleet-land-self to merge its OWN PR —
+# lease-serialized (the same per-repo land lock /fleet-land-train uses),
+# hold-through-green, base fast-forward, then self-destruct. This deliberately
+# RELAXES the "workers never self-merge" rail. Three values:
 #
-# REQUIRES the issue-bridge (the trigger channel) — FLEET_SELF_LAND=1 implies you
-# also set FLEET_ISSUE_BRIDGE=1; without a bridge no trigger arrives and workers
-# fall back to steward-lands (/fleet-land). See docs/SELF-LAND.md.
-# @label=Worker self-land (steward triggers) @group=bridge @tier=common @scope=fleet @edit=bool
+#   0     OFF — the steward lands every PR with /fleet-land (default).
+#   1     TRIGGERED — after /fleet-ship the worker WAITS; the steward reviews the
+#         PR and triggers the land by commenting `/land` on the issue (relayed by
+#         the issue-bridge). The steward only *approves* (one comment) instead of
+#         *performing* the merge; the pre-trigger review is the approval gate.
+#         REQUIRES the issue-bridge (the trigger channel) — FLEET_SELF_LAND=1
+#         implies you also set FLEET_ISSUE_BRIDGE=1; without a bridge no trigger
+#         arrives and workers fall back to steward-lands (/fleet-land).
+#   auto  AUTO (issue #270) — the steward trigger becomes OPTIONAL: /fleet-ship
+#         flows straight into /fleet-land-self after opening the PR, with NO /land
+#         comment required. The worker still waits for CI green (the same
+#         hold-through-green lease). CI-green + branch protection become the ONLY
+#         gate — the same approval-gate relaxation class as FLEET_AUTOLAND. Needs
+#         no issue-bridge (there is no trigger to relay).
+#
+# See docs/SELF-LAND.md.
+# @label=Worker self-land (0|1 triggered|auto) @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_SELF_LAND=0
 
 # --- Fleet watcher: zero-token event-driven steward wake (issue #147) ------------

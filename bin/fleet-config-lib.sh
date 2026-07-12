@@ -325,6 +325,10 @@ fcfg_validate() {
     bool)
       case "$val" in
         0|1) : ;;
+        # FLEET_SELF_LAND is a bool + one extra value: "auto" (land straight after
+        # /fleet-ship, no /land trigger — issue #270). Same per-key special-case
+        # shape as "inherit" for FLEET_SUBAGENT_MODEL below.
+        auto) [ "$key" = FLEET_SELF_LAND ] || { printf '%s: "auto" is valid only for FLEET_SELF_LAND' "$key"; return 1; } ;;
         *)   printf '%s must be 0 or 1 (got: %s)' "$key" "${val:-<empty>}"; return 1 ;;
       esac ;;
     enum)

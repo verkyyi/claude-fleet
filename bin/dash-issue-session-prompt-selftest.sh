@@ -22,6 +22,10 @@
 #   F. --self-land still appends the self-land tail after a custom body (structural
 #      tail intact regardless of the body override).
 #   G. --scout ignores the override entirely (a scout has its own read-only seed).
+#   H. FLEET_SELF_LAND=auto seeds the trigger-free AUTO tail (issue #270): flows
+#      straight into /fleet-land-self, no WAIT / no /land trigger language.
+#   I. FLEET_SELF_LAND=1 keeps the steward-TRIGGERED tail (waits for /land).
+#   J. the --self-land=auto flag seeds auto; bare --self-land stays triggered.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -167,6 +171,39 @@ has 'THIS-MUST-NOT-APPEAR' && fail "G a scout must ignore FLEET_WORKER_PROMPT" "
 has 'READ-ONLY scout' || fail "G scout seed missing its read-only framing" "$(seed)"
 has 'do NOT implement' || fail "G scout seed missing its no-implement rail" "$(seed)"
 ok "G --scout ignores FLEET_WORKER_PROMPT and keeps its read-only seed"
+
+# ===== H: FLEET_SELF_LAND=auto → the AUTO tail (no trigger, no wait) ============
+# Issue #270: the steward trigger becomes optional; /fleet-ship flows straight into
+# /fleet-land-self. The auto tail must NOT carry the triggered-mode WAIT language.
+FLEET_SELF_LAND=auto run_spawn 234
+has '/fleet-land-self' || fail "H auto mode must still seed the self-land tail" "$(seed)"
+has 'FLEET_SELF_LAND=auto' || fail "H auto tail should name the auto mode" "$(seed)"
+has 'No /land comment is required' \
+  || fail "H auto tail must say no /land trigger is required" "$(seed)"
+has 'run /fleet-land-self IMMEDIATELY' \
+  || fail "H auto tail must flow straight into /fleet-land-self" "$(seed)"
+case "$(seed)" in
+  *'do NOT merge — WAIT'*) fail "H auto tail must NOT carry the triggered-mode WAIT" "$(seed)" ;;
+  *'triggers the land by commenting'*) fail "H auto tail must NOT mention the /land trigger" "$(seed)" ;;
+esac
+ok "H FLEET_SELF_LAND=auto seeds the trigger-free auto self-land tail"
+
+# ===== I: FLEET_SELF_LAND=1 → the TRIGGERED tail (waits for /land) ==============
+FLEET_SELF_LAND=1 run_spawn 234
+has 'do NOT merge — WAIT' || fail "I =1 must seed the triggered wait-for-/land tail" "$(seed)"
+has 'triggers the land by commenting' || fail "I =1 tail must mention the /land trigger" "$(seed)"
+has 'FLEET_SELF_LAND=auto' && fail "I =1 must NOT emit the auto-mode tail" "$(seed)"
+ok "I FLEET_SELF_LAND=1 seeds the steward-triggered self-land tail"
+
+# ===== J: --self-land=auto flag matches the =auto conf (flag wins) =============
+run_spawn 234 --self-land=auto
+has 'run /fleet-land-self IMMEDIATELY' \
+  || fail "J --self-land=auto flag should seed the auto tail" "$(seed)"
+case "$(seed)" in *'do NOT merge — WAIT'*) fail "J --self-land=auto must not carry the WAIT" "$(seed)" ;; esac
+# ...and the bare --self-land flag stays TRIGGERED (back-compat).
+run_spawn 234 --self-land
+has 'do NOT merge — WAIT' || fail "J bare --self-land must stay steward-triggered" "$(seed)"
+ok "J --self-land=auto seeds auto; bare --self-land stays triggered"
 
 printf '\nselftest OK: %s assertions passed (per-fleet worker seed prompt)\n' "$pass"
 exit 0
