@@ -117,7 +117,7 @@ grep -q 'Escape' "$INJECT" 2>/dev/null && fail "never-idle must send NO keys at 
 printf 'selftest: never-idle leg PASS (aborts without clearing)\n' >&2
 
 # ---- KEY-SEQUENCE (idle + fresh capture) → exact ordered keys -----------------
-FAKE_STATE=done FAKE_CAP='❯ \n  ? for shortcuts\n' run --pane "$PANE" --doc "$DOC" \
+FAKE_STATE='done' FAKE_CAP='❯ \n  ? for shortcuts\n' run --pane "$PANE" --doc "$DOC" \
   || fail "idle+fresh cycle must exit 0"
 # The five ordered send-keys, in order, each on its own line:
 #   1 Escape · 2 "-l -- /clear" · 3 Enter · 4 "-l -- <pickup> <doc>" · 5 Enter
@@ -136,7 +136,7 @@ case "${KEYS[3]}" in *Enter*) fail "the pickup text must not carry an inline Ent
 printf 'selftest: key-sequence leg PASS (Escape · /clear · Enter · pickup · Enter, all separate)\n' >&2
 
 # ---- VERIFY-GATE (never-fresh capture) → clears but WITHHOLDS pickup ----------
-VF=1 FAKE_STATE=done FAKE_CAP='still churning...\n' run --pane "$PANE" --doc "$DOC" \
+VF=1 FAKE_STATE='done' FAKE_CAP='still churning...\n' run --pane "$PANE" --doc "$DOC" \
   || fail "verify-gate cycle must exit 0 (fail-safe)"
 cleared || fail "verify-gate: the /clear must still have been sent (idle reached)"
 grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null \
