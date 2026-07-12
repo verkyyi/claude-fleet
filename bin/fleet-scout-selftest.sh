@@ -98,9 +98,13 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 
 run_spawn() { # $@ = args to dash-issue-session.sh (env: TMUX_LW / TMUX_SCOUT_OPT)
   : > "$SETOPT_LOG"; : > "$NEWWIN_LOG"; : > "$DISPLAY_LOG"
+  # This test is about the SCOUT vs normal seed (a scout is exempt from the dedup
+  # anyway, but case 1c spawns a NORMAL worker) — opt out of the cross-machine claim
+  # dedup (issue #258, on by default) so the fake gh isn't parsed as a claim ledger
+  # and the normal spawn proceeds. The dedup has its own selftest.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_C="$WORK/dash" FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" \
-  FLEET_BASE_BRANCH="master" \
+  FLEET_BASE_BRANCH="master" FLEET_PRESPAWN_DEDUP=0 \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 

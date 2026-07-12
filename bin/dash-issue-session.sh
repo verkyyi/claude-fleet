@@ -14,7 +14,7 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-# Parse: <issue-number> [<target-session>] [--title <t>] [--self-land] [--scout].
+# Parse: <issue-number> [<target-session>] [--title <t>] [--self-land] [--scout] [--force].
 # The two positionals keep their historic order (num, target-session); --self-land
 # may appear anywhere and switches the seed prompt to the worker-owned self-land
 # lifecycle (issue #138); --scout spawns a READ-ONLY investigation worker that
@@ -24,7 +24,11 @@ set -uo pipefail
 # the title it JUST wrote so the window is named after the WORK — not the bare
 # issue-<N> slug it otherwise falls back to when the brand-new issue isn't in the
 # collector cache yet and a post-create `gh issue view` lags or fails.
-num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; WIN_TITLE=""; _pos=0; _want=""
+# --force (alias --reclaim) is the manual escape hatch past the cross-machine
+# pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
+# dead/abandoned peer worker that left the issue assigned+marked forever), skipping
+# the claim check + claim-at-spawn entirely.
+num=""; TARGET_SESS=""; SELF_LAND_FLAG=0; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -35,6 +39,7 @@ for _a in "$@"; do
   case "$_a" in
     --self-land) SELF_LAND_FLAG=1 ;;
     --scout) SCOUT_FLAG=1 ;;
+    --force|--reclaim) FORCE_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --self-lan). Do NOT let it
@@ -114,6 +119,57 @@ MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { TM display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
+
+# --- Cross-machine pre-spawn dedup (issue #258; ON by default, FLEET_PRESPAWN_DEDUP=0 opts out) ---
+# The local-tmux dedup above only sees THIS fleet's server. When two fleets run on
+# DIFFERENT machines against the same repo, a peer's worker is invisible — both can
+# spawn issue-<N> (duplicate worktrees, a non-fast-forward push race, competing PRs).
+# This is the cross-machine backstop: consult the shared GitHub issue as the claim
+# ledger, then claim AT SPAWN (not on the worker's first /fleet-claim turn — that gap
+# WAS the race) so a peer sees the marker within ~1s. It is NOT a mutex (GitHub has
+# no compare-and-swap on an issue), so two peers can still both pass in a sub-second
+# overlap — the post-window tie-break below resolves that remainder. ON by default:
+# the cross-machine safety is the right default and the marginal cost is a few gh
+# READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim writes
+# earlier (same write count; /fleet-claim then no-ops), and a gh outage/absence
+# degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
+# the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. Scouts are read-only (no
+# branch/push/PR race) → exempt; --force/--reclaim is the manual escape hatch past a
+# stale claim.
+my_claim_id=""
+if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && [ "$SCOUT_FLAG" != 1 ] \
+   && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
+  # One issue read (assignee count · state · a ▶ claiming-comment count) + one cheap
+  # open-PR probe. Same-account caveat: every worker assigns the SAME gh account, so
+  # we cannot tell "assigned to someone else" — assigned/marked AT ALL ⇒ taken. An
+  # empty read (gh down / missing issue) leaves every counter 0 and state blank → NOT
+  # taken, so a gh outage degrades to today's spawn-anyway behaviour, never a false
+  # refusal.
+  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,comments \
+        --jq '"\(.assignees|length)\t\(.state)\t\((.comments//[])|map(.body)|map(select(contains("▶ claiming")))|length)"' 2>/dev/null)
+  n_assignee=${cs%%$'\t'*}; _rest=${cs#*$'\t'}; st=${_rest%%$'\t'*}; n_claim=${_rest##*$'\t'}
+  n_assignee="${n_assignee//[^0-9]/}"; n_claim="${n_claim//[^0-9]/}"
+  n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null)
+  n_open_pr="${n_open_pr//[^0-9]/}"
+  if [ "${n_assignee:-0}" -gt 0 ] || [ "${n_claim:-0}" -gt 0 ] \
+     || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
+    # Refuse and DO NOT spawn. Exit non-zero so a headless caller (the autofill
+    # dispatcher) records an honest FAIL, not a false spawn — mirroring the cap check.
+    TM display-message "#$num already claimed elsewhere — not spawning" 2>/dev/null
+    exit 1
+  fi
+  # Free → claim NOW so a peer's check sees it within ~1s. /fleet-claim stays and
+  # no-ops idempotently when it finds this pre-claim. Post the marker via
+  # fleet-comment.sh so it carries <!-- fleet:no-relay --> (never loops back into the
+  # worker via the issue-bridge) + the worker footer; capture the created comment URL
+  # — its monotonic issuecomment REST id is our tie-break token. Fall back to a direct
+  # comment that keeps BOTH markers inline if the wrapper is unavailable.
+  gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
+  claim_url=$("$BIN/fleet-comment.sh" "$num" --repo "$REPO" --from worker --note --body '▶ claiming' 2>/dev/null) \
+    || claim_url=$(gh issue comment "$num" --repo "$REPO" \
+         --body "$(printf '▶ claiming\n\n— fleet · worker · #%s\n<!-- fleet:from role=worker issue=%s -->\n<!-- fleet:no-relay -->' "$num" "$num")" 2>/dev/null)
+  my_claim_id=$(printf '%s\n' "$claim_url" | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | tail -1)
+fi
 
 wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
 
@@ -222,6 +278,30 @@ TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ iss
 # Mark a scout window (issue #148) so its self-clean can assert it's a scout and
 # tooling can tell "no PR expected" from a normal worker.
 [ "$SCOUT" = 1 ] && TM set-window-option -t "$win" @scout 1 2>/dev/null
+
+# --- Best-effort tie-break (issue #258): resolve a simultaneous cross-machine race.
+# We claimed then created the window; re-read the ▶ claiming comments. GitHub has no
+# CAS, so two peers can both pass the pre-spawn check in the sub-second overlap and
+# both claim. The EARLIEST claim wins — issuecomment REST ids are globally monotonic,
+# so a claim id strictly smaller than ours means a peer got there first and we LOST →
+# roll back the just-created window/worktree/branch cleanly and refuse. (Eventual-
+# consistency lag can hide a peer's just-posted comment; this shrinks the race window,
+# it is not a mutex.) Runs only when we actually claimed above (my_claim_id set).
+if [ -n "$my_claim_id" ]; then
+  earliest=$(gh issue view "$num" --repo "$REPO" --json comments \
+    --jq '.comments[] | select(.body|contains("▶ claiming")) | .url' 2>/dev/null \
+    | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | sort -n | head -n1)
+  if [ -n "$earliest" ] && [ "$earliest" -lt "$my_claim_id" ]; then
+    # Kill the window FIRST (its just-launched process releases the worktree cwd),
+    # then drop the worktree + the brand-new (commit-less) branch we just added.
+    TM kill-window -t "$win" 2>/dev/null
+    git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1
+    git -C "$MAIN" branch -D "$slug" >/dev/null 2>&1
+    git -C "$MAIN" worktree prune >/dev/null 2>&1
+    TM display-message "#$num claimed earlier elsewhere — rolled back, not spawning" 2>/dev/null
+    exit 1
+  fi
+fi
 # Seed the dash summary column synchronously so the row isn't blank until the
 # session renders content. summarize-hook.sh's SessionStart run skips a still-
 # blank pane (no screen text yet), so without this the column stays empty until

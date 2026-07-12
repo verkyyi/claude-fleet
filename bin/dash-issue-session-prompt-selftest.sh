@@ -93,8 +93,13 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # path to the seed task file it wrote. Extra FLEET_* overrides come in via env.
 run_spawn() { # $@ = args to dash-issue-session.sh
   rm -rf "$WORK/dash/.claude-dash/fleets"
+  # This test is about the SEED PROMPT, not the cross-machine claim dedup (issue
+  # #258, on by default) — opt out so the fake gh (which returns a title for any
+  # `issue view`) isn't parsed as a claim ledger and the spawn refuses. Its own
+  # selftest covers the dedup.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
+  FLEET_PRESPAWN_DEDUP=0 \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 # The seed is written to $TMPDIR/.claude-dash/fleets/<slug>/task_issue-<N>.txt.
