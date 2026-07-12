@@ -334,6 +334,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Steward launch command @group=steward @tier=advanced @scope=fleet @edit=str
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
 
+# Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
+# Where the handoff doc is STORED so a cleared session can resume from it:
+#   comment  (default) — when the pane is issue-bound (a worker's @issue, or a
+#            steward's FLEET_STEWARD_ISSUE), post the doc as a durable
+#            `<!-- fleet:handoff -->`-marked issue COMMENT. It outlives the
+#            worktree teardown a committed doc/handoff/*.md does not, and pickup
+#            self-resolves it from the pane's @issue (no path to remember). A raw
+#            scratch / no-issue pane still falls back to a local file.
+#   file     — force the local-file convention for EVERY pane (no comment ever).
+#            Use on a SENSITIVE repo where even a scrubbed handoff must not be
+#            pushed to a public issue thread.
+# Empty is treated as the default (comment).
+# @label=Handoff destination (comment|file) @group=steward @tier=advanced @scope=fleet @edit=enum
+#FLEET_HANDOFF_DEST=comment
+
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each
 # account as a token FILE — name = label, contents = its OAuth token from

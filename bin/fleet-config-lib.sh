@@ -332,6 +332,15 @@ fcfg_validate() {
         *)   printf '%s must be 0 or 1 (got: %s)' "$key" "${val:-<empty>}"; return 1 ;;
       esac ;;
     enum)
+      # FLEET_HANDOFF_DEST is an enum over its OWN small set (comment|file), not a
+      # model alias — same per-key special-case shape as SELF_LAND's "auto" above.
+      if [ "$key" = FLEET_HANDOFF_DEST ]; then
+        case "$val" in
+          ''|comment|file) : ;;
+          *) printf '%s must be comment|file or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
       case "$val" in
         ''|opus|sonnet|haiku|opusplan|default|claude-*) : ;;
         inherit)

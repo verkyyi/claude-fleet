@@ -9,7 +9,16 @@
 # It outlives that turn and drives the context-clear + resume the arming session
 # cannot do to itself: WAIT for the arming turn to end (@claude_state leaves
 # `working`), then `/clear` the pane, verify a fresh session, and type
-# `/fleet-handoff pickup <doc>` so the emptied session resumes from the doc.
+# `/fleet-handoff pickup [<doc>]` so the emptied session resumes from the doc.
+#
+# Two storage modes for the handoff (issue #275) — exactly one is armed:
+#   • --doc <abs-path>  FILE storage (raw scratch / no bound issue). The gate is
+#     `-s <doc>`; the injected pickup carries the doc path.
+#   • --issue <N>       COMMENT storage (the pane is issue-bound). The handoff was
+#     posted as a `<!-- fleet:handoff -->`-marked comment on issue N (durable —
+#     it survives the worktree teardown a committed doc/handoff/*.md does not).
+#     The gate is "a marked comment is fetchable on issue N"; the injected pickup
+#     is ARGUMENT-FREE (`/fleet-handoff pickup` self-resolves from the pane @issue).
 #
 # It runs OUTSIDE any pane (nohup+disown), but is LAUNCHED from inside one, so it
 # inherits $TMUX and bare `tmux` targets that fleet's own server/socket (issue
@@ -20,11 +29,12 @@
 #     undefined interleaving, so gate every keystroke on @claude_state != working
 #     (the Stop hook fired = the arming turn ended), exactly like the issue-bridge
 #     idle-gate. On the never-idle timeout we ABORT *without clearing*.
-#   • Fail-safe ordering — every failure degrades to "doc written, context not
-#     cleared": the doc is written+verified by the skill BEFORE this is armed; we
-#     abort rather than clear a busy/gone pane; and if the post-clear verify fails
-#     we do NOT type pickup (a lost pickup still leaves the operator a manual
-#     `/fleet-handoff pickup <doc>`).
+#   • Fail-safe ordering — every failure degrades to "handoff stored, context not
+#     cleared": the handoff is stored+verified (doc on disk, or marked comment on
+#     the issue) BEFORE this is armed, and re-validated here BEFORE the first key;
+#     we abort rather than clear a busy/gone pane; and if the post-clear verify
+#     fails we do NOT type pickup (a lost pickup still leaves the operator a manual
+#     `/fleet-handoff pickup [<doc>]`).
 #   • Never an immortal orphan (the crash-#3 lesson) — a hard overall self-timeout
 #     TERMs the whole process group even if a phase wedges; the runaway-CPU
 #     watchdog is the backstop, not the plan.
@@ -45,11 +55,15 @@ POLL="${FLEET_HANDOFF_POLL:-2}"                      # poll interval (s)
 PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-/fleet-handoff pickup}"
 LOG_DIR="${FLEET_HANDOFF_LOG_DIR:-$HOME/.claude/fleet/logs}"
 
-PANE='' DOC='' SOCKET=''
+HANDOFF_MARKER='<!-- fleet:handoff -->'   # pickup-lookup marker on a stored comment
+
+PANE='' DOC='' ISSUE='' REPO='' SOCKET=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pane)   PANE="${2:-}"; shift 2 ;;
     --doc)    DOC="${2:-}"; shift 2 ;;
+    --issue)  ISSUE="${2//[^0-9]/}"; shift 2 ;;
+    --repo)   REPO="${2:-}"; shift 2 ;;
     --socket) SOCKET="${2:-}"; shift 2 ;;
     *) shift ;;
   esac
@@ -73,11 +87,37 @@ nap() { sleep "$POLL" 2>/dev/null || sleep 1; }
 
 # ============================ 1. VALIDATE ======================================
 [ -n "$PANE" ] || { log "REFUSE: no --pane"; exit 1; }
-[ -n "$DOC" ]  || refuse "no --doc handoff path given"
+# Exactly one storage mode: --issue (comment) or --doc (file). --issue wins if both.
+[ -n "$ISSUE" ] || [ -n "$DOC" ] || refuse "need --issue <N> (comment storage) or --doc <path> (file storage)"
 # Inside tmux (bare) or an explicit socket — else there is nothing to drive.
 [ -n "$SOCKET" ] || [ -n "${TMUX:-}" ] || refuse "not inside tmux (no \$TMUX and no --socket)"
-# The doc MUST exist and be non-empty — never arm/clear around an empty handoff.
-[ -s "$DOC" ] || refuse "handoff doc missing or empty: $DOC"
+
+# The handoff MUST be durably stored BEFORE we ever touch the pane — the whole
+# fail-safe rests on this gate (never clear a session whose handoff can't be
+# recovered). PICKUP is what the emptied session's first turn will type.
+if [ -n "$ISSUE" ]; then
+  # COMMENT storage (issue #275): the skill already posted the scrubbed handoff as
+  # a `<!-- fleet:handoff -->`-marked comment on issue N. Re-confirm it is fetchable
+  # (the equivalent of `-s "$DOC"` for a file). Repo: --repo → CF_REPO → this
+  # fleet's cached repo → FLEET_REPO (mirrors bin/fleet-comment.sh).
+  command -v gh >/dev/null 2>&1 || refuse "comment-storage handoff needs gh on PATH"
+  repo="${REPO:-${CF_REPO:-${FLEET_REPO:-}}}"
+  if [ -z "$repo" ]; then
+    repo="$(fleet_repo_cached "$(fleet_current_session 2>/dev/null)" 2>/dev/null)"
+  fi
+  [ -n "$repo" ] || refuse "comment-storage handoff: no repo resolved (pass --repo or set FLEET_REPO)"
+  gh issue view "$ISSUE" --repo "$repo" --json comments -q '.comments[].body' 2>/dev/null \
+    | grep -Fq "$HANDOFF_MARKER" \
+    || refuse "no fleet:handoff comment on issue #$ISSUE (@ $repo) — NOT clearing (handoff not durably stored)"
+  STORE="issue #$ISSUE"
+  PICKUP="$PICKUP_CMD"            # argument-free — the pane @issue self-resolves the comment
+else
+  # FILE storage: the doc must exist and be non-empty — never arm around an empty one.
+  [ -s "$DOC" ] || refuse "handoff doc missing or empty: $DOC"
+  STORE="$DOC"
+  PICKUP="$PICKUP_CMD $DOC"       # the raw-scratch pane has no @issue → pass the path
+fi
+
 # The pane must be alive (a dead pane = nothing to clear/resume).
 TM display-message -p -t "$PANE" '#{pane_id}' >/dev/null 2>&1 \
   || refuse "target pane $PANE is gone"
@@ -103,7 +143,7 @@ cleanup() { rm -f "$LOCK" 2>/dev/null || true; kill "$WATCHDOG" 2>/dev/null || t
 trap cleanup EXIT
 trap 'log "TERM (hard timeout ${HARD_TIMEOUT}s or signal) — exiting; doc left intact"; exit 0' TERM
 
-log "armed: doc=$DOC pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIMEOUT}s hard_to=${HARD_TIMEOUT}s"
+log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIMEOUT}s hard_to=${HARD_TIMEOUT}s"
 
 # ============================ 2. WAIT-IDLE =====================================
 # The arming turn is still running (this was its last tool call). Wait until the
@@ -120,7 +160,7 @@ while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$idl_deadline" ]; do
   nap
 done
 if [ "$idle" != 1 ]; then
-  notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (doc saved at $DOC)"
+  notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE)"
   exit 0   # fail-safe: doc intact, context untouched
 fi
 
@@ -153,17 +193,18 @@ while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$vf_deadline" ]; do
   sleep 0.5 2>/dev/null || true
 done
 if [ "$fresh" != 1 ]; then
-  notify "could not confirm a fresh session after /clear — resume manually: $PICKUP_CMD $DOC"
+  notify "could not confirm a fresh session after /clear — resume manually: $PICKUP"
   exit 0   # fail-safe: cleared but pickup withheld; manual pickup still works
 fi
 
 # ============================ 5. PICKUP ========================================
 # Type the pickup command + a SEPARATE Enter (same bracketed-paste discipline) so
-# the emptied session's FIRST turn is `/fleet-handoff pickup <doc>` and it resumes
-# from the doc's NEXT ACTION.
-log "sending pickup: $PICKUP_CMD $DOC"
-TM send-keys -t "$PANE" -l -- "$PICKUP_CMD $DOC" 2>/dev/null || true
+# the emptied session's FIRST turn is `/fleet-handoff pickup [<doc>]` and it
+# resumes from the handoff's NEXT ACTION. Comment storage → argument-free (the
+# pane @issue self-resolves the marked comment); file storage → the doc path.
+log "sending pickup: $PICKUP"
+TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
 TM send-keys -t "$PANE" Enter 2>/dev/null || true
 
-log "cycle complete — pane $PANE cleared and resumed from $DOC"
+log "cycle complete — pane $PANE cleared and resumed from $STORE"
 exit 0
