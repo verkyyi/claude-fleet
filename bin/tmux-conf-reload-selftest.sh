@@ -10,7 +10,9 @@
 #      action merely changed, nor one only present in `after`.
 #   2. A full run (against a fake `tmux` on PATH) issues one `unbind-key -T
 #      <table> <key>` per removed bind AND a final `source-file`.
-#   3. A missing/absent `before` conf removes nothing (new conf → no false unbinds).
+#   3. A missing/EMPTY `before` conf removes nothing (no false unbinds) AND says so
+#      distinctly instead of a bare "unbound 0" — a lost snapshot must be visible,
+#      never masquerade as a clean reload (issue #295).
 #
 # All tables/keys are covered: prefix (`bind K`), root (`bind -n K`), an explicit
 # `-T <tbl>`, and the `-r` repeat flag. No real tmux, no network.
@@ -109,14 +111,23 @@ grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
   || fail "no 'source-file' call after unbinding:
 $(cat "$work/tmux.log")"
 
-# --- 3. absent `before` conf → nothing removed --------------------------------
-: > "$work/tmux.log"
-out="$(PATH="$fakebin:$PATH" bash "$SUT" "$work/nonexistent.conf" "$after" "$work/fake.tmux.conf")" \
-  || fail "run with missing before-conf exited non-zero"
-printf '%s\n' "$out" | grep -q 'unbound 0 removed' \
-  || fail "missing before-conf should remove nothing: $out"
-grep -q '^unbind-key ' "$work/tmux.log" \
-  && fail "missing before-conf triggered an unbind (should not)"
+# --- 3. absent/empty `before` conf → nothing removed, AND said so honestly ------
+# A missing before-conf removes nothing (no false unbinds), but the report must NOT
+# read as a clean "unbound 0" — that silent 0 is exactly how issue #295 left A/R/u
+# stale on live servers when a caller handed in a lost/empty snapshot. The pass must
+# announce that it had no before-conf to diff, so the miss is visible.
+for bc in "$work/nonexistent.conf" "$work/empty-before.conf"; do
+  [ "$bc" = "$work/empty-before.conf" ] && : > "$bc"   # exists but zero bytes
+  : > "$work/tmux.log"
+  out="$(PATH="$fakebin:$PATH" bash "$SUT" "$bc" "$after" "$work/fake.tmux.conf")" \
+    || fail "run with unusable before-conf ($bc) exited non-zero"
+  printf '%s\n' "$out" | grep -q 'no readable before-conf' \
+    || fail "unusable before-conf ($bc) must report it, not a bare 'unbound 0': $out"
+  printf '%s\n' "$out" | grep -q 'unbound 0 removed' \
+    && fail "unusable before-conf ($bc) must NOT masquerade as 'unbound 0 removed': $out"
+  grep -q '^unbind-key ' "$work/tmux.log" \
+    && fail "unusable before-conf ($bc) triggered an unbind (should not)"
+done
 
 # --- 4. a malformed trailing `-T` must not spin (parser bail, not hang) --------
 # Run under a timeout so a regressed infinite loop fails LOUD instead of hanging
