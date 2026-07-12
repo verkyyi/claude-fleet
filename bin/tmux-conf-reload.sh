@@ -17,7 +17,10 @@
 #
 #   <before-conf>  conf/tmux-attention.conf as it was BEFORE the sync (e.g.
 #                  `git show <before>:conf/tmux-attention.conf`). May be missing
-#                  or empty — then nothing is treated as removed.
+#                  or empty — then nothing is treated as removed, and the report
+#                  SAYS so ("no readable before-conf …") instead of a bare
+#                  "unbound 0", so a lost snapshot can't masquerade as a clean
+#                  reload (issue #295).
 #   <after-conf>   the conf as it is NOW (the freshly-pulled working copy).
 #   [tmux-conf]    file to `source-file` after unbinding (default ~/.tmux.conf,
 #                  which is what sources tmux-attention.conf via reapply-*).
@@ -116,6 +119,16 @@ parse_binds() {
   set +f
 }
 
+# A before-conf that is absent or EMPTY yields no removed set — but that "0
+# removed" is ambiguous: it also fires when a caller hands in a broken/empty
+# before-conf. That is exactly how issue #295 slipped by — a lost pre-sync conf
+# snapshot let removed binds (A/R/u) stay live on both servers while this pass
+# cheerfully reported "unbound 0 removed binds". Flag when there was NO usable
+# before-conf to diff so the report below can't mask a stale-bind miss. A genuinely
+# brand-new conf legitimately hits this too; the honest wording covers both.
+before_usable=1
+[ -s "$before" ] || before_usable=0
+
 # removed = binds present in <before> but absent in <after>, compared by
 # (table, key) — a bind that merely changed its *action* keeps its identity and
 # is NOT removed (source-file overwrites it).
@@ -141,7 +154,14 @@ EOF
 fi
 
 if "${tmux_cmd[@]}" source-file "$tmux_conf"; then
-  echo "reloaded conf (unbound $n removed bind$([ "$n" -eq 1 ] || echo s))"
+  if [ "$before_usable" -eq 0 ]; then
+    # No before-conf to diff → removals could NOT be detected. Do not report a
+    # bare "unbound 0" that reads like a clean reload (issue #295): say so plainly
+    # so a lost snapshot is visible in the fan-out output, not silently swallowed.
+    echo "reloaded conf (no readable before-conf — removed binds NOT diffed; a dropped bind stays live)"
+  else
+    echo "reloaded conf (unbound $n removed bind$([ "$n" -eq 1 ] || echo s))"
+  fi
 else
   # unbinds already applied; only the re-source failed — say so, don't claim a
   # clean reload the caller would surface as success.

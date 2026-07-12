@@ -73,9 +73,18 @@ checkout. That's what makes it safe to run from a fleet bound to a different rep
 
 ```sh
 before=$(git -C ~/.claude/fleet rev-parse HEAD)
+# Snapshot the PRE-SYNC conf right here — while HEAD is still `before` and the sha
+# is freshly in hand — into a durable FILE. Step 8's unbind-aware reload needs the
+# OLD conf to diff which binds were removed. Capturing it now (not re-deriving it
+# from `$before` several Bash calls later) is the fix for issue #295: a lost/empty
+# snapshot silently degraded the reload to "0 removed" while dropped binds (A/R/u)
+# stayed live on both servers. A conf that didn't exist at `before` (brand-new file)
+# legitimately yields an empty snapshot.
+beforeconf=$(mktemp)
+git -C ~/.claude/fleet show "$before:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
 git -C ~/.claude/fleet pull --ff-only
 after=$(git -C ~/.claude/fleet rev-parse HEAD)
-echo "before=$before after=$after"
+echo "before=$before after=$after beforeconf=$beforeconf"
 ```
 
 If it refuses to fast-forward, **stop and report** — the live install diverged
@@ -221,16 +230,19 @@ conf_changed=$(git -C ~/.claude/fleet diff --name-only "$before" "$after" \
 args=()
 [ -n "$dash_changed" ] && args+=(--dash)
 if [ -n "$conf_changed" ]; then
-  # `before` conf as it was pre-sync (empty if the file is brand-new)
-  bconf=$(mktemp)
-  git -C ~/.claude/fleet show "$before:conf/tmux-attention.conf" > "$bconf" 2>/dev/null || : > "$bconf"
-  args+=(--conf "$bconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf)
+  # Use the durable pre-sync snapshot captured in step 2 ($beforeconf) — do NOT
+  # re-derive it from `$before` here (a var that may be empty by now, or a git show
+  # that silently yields the post-sync conf → "0 removed" + stale binds, issue #295).
+  # If it came up empty while the conf DID change, the pre-sync conf was lost: the
+  # reload can't diff removals, so say so — don't leave it silent.
+  [ -s "$beforeconf" ] || echo "sync: pre-sync conf snapshot empty but conf/tmux-attention.conf changed — removed binds can't be diffed; the reload will report it, re-run with the real pre-change conf if a bind was dropped" >&2
+  args+=(--conf "$beforeconf" ~/.claude/fleet/conf/tmux-attention.conf ~/.tmux.conf)
 fi
 
 if [ ${#args[@]} -gt 0 ]; then
   bash ~/.claude/fleet/bin/fleet-ui-refresh.sh --all "${args[@]}"
-  [ -n "${bconf:-}" ] && rm -f "$bconf"
 fi
+[ -n "${beforeconf:-}" ] && rm -f "$beforeconf"
 ```
 
 It prints a per-fleet line plus a summary (`refreshed N fleet(s); dash panes: X;

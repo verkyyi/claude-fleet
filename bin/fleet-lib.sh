@@ -69,6 +69,14 @@ fleet_conf_file() {
 # fleet exactly once. Replaces every `for cf in "$FLEET_CONF_DIR"/*.conf` loop.
 fleet_each_conf() {
   local d conf sess
+  # An empty conf estate must expand to NOTHING, not abort. zsh's NOMATCH (on by
+  # default) errors `no matches found` on an unmatched glob — so when this lib is
+  # sourced into a zsh shell and the `fleets/*/` or legacy `*.conf` glob matches
+  # nothing, the whole function used to die noisily (issue #295). bash instead
+  # passes the literal pattern through, which the per-entry `[ -d ]`/`[ -f ]`
+  # guards below already skip. Enable null_glob function-locally under zsh (the
+  # local_options save/restore is scoped to this function); bash needs no change.
+  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
   if [ -d "$FLEET_CONF_DIR/fleets" ]; then
     for d in "$FLEET_CONF_DIR"/fleets/*/; do
       [ -d "$d" ] || continue
