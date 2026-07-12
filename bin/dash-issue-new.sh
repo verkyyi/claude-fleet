@@ -3,7 +3,7 @@
 #
 # Two callers share this one script (issue #205):
 #   • backlog ⌃n (capture-only): file the issue, drop it in the backlog, done.
-#     `enter` on the row later spawns the worker (or autofill picks it up).
+#     `enter` on the row later spawns the worker.
 #   • prefix+n (quick-dispatch, --spawn): file the issue AND immediately spawn
 #     its bound worker window (dash-issue-session.sh) — one keystroke → one line
 #     → issue filed + worker running, zero LLM tokens in the dispatch path.

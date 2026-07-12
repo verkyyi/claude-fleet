@@ -181,7 +181,7 @@ fcfg_edit() {
   local v; v=$(fcfg_tag "$1" edit)
   if [ -n "$v" ]; then printf '%s' "$v"; return; fi
   case "$1" in
-    FLEET_AUTOFILL|FLEET_SPAWN_FOCUS)  printf bool; return ;;
+    FLEET_SPAWN_FOCUS)  printf bool; return ;;
     FLEET_MODEL|FLEET_SUBAGENT_MODEL)  printf enum; return ;;
   esac
   local d; d=$(fcfg_default "$1")
@@ -247,7 +247,7 @@ fcfg_table() {
         edit  = tagval(tl, "edit")
         unit  = tagval(tl, "unit")
         if (edit == "") {
-          if (key == "FLEET_AUTOFILL" || key == "FLEET_SPAWN_FOCUS") edit = "bool"
+          if (key == "FLEET_SPAWN_FOCUS") edit = "bool"
           else if (key == "FLEET_MODEL" || key == "FLEET_SUBAGENT_MODEL") edit = "enum"
           else if (def ~ /^[0-9]+$/) edit = "int"
           else edit = "str"

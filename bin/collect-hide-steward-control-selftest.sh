@@ -5,8 +5,8 @@
 # The collector (bin/tmux-dash-collect.sh) builds the issues cache the backlog
 # reads. A `steward-control`-labeled issue (e.g. the issue-bridge steward hub,
 # #169) is a relay endpoint, not a pickable task, so it must be dropped at the
-# collector's `gh issue list` — matching autofill's exclusion in
-# fleet-dispatch.sh. This drives the REAL collect script against a FAKE gh + tmux
+# collector's `gh issue list` — matching the spawn-eligibility exclusion of the
+# same label. This drives the REAL collect script against a FAKE gh + tmux
 # (no network, no tmux server) so it exercises the actual `--jq` row producer:
 #   • EXCLUDES    a steward-control issue (#169) never reaches the issues cache.
 #   • KEEPS       normal issues (assigned or not) still land in the cache.

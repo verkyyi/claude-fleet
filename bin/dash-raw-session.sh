@@ -24,8 +24,8 @@
 #   * classifier / summarizer — run normally (its state + summary show in the dash).
 #   * worktree janitor — never touches it: its cwd is the MAIN checkout, not an
 #                        issue-<N> worktree (the janitor always skips the main one).
-#   * autofill dispatcher — sees one fewer free slot (correct — it holds a slot).
-#   * watcher     — SKIPS @raw windows (no issue/PR/land → nothing steward-actionable).
+#   * watcher     — SKIPS @raw windows (no issue/PR/land → nothing steward-actionable),
+#                   and it holds a slot so headroom checks see one fewer free slot.
 #   * fleet-restore — NOT snapshotted or restored (@raw is excluded): scratch
 #                     sessions are ephemeral, and their transcript can't be
 #                     reliably resolved from the shared base checkout (issue #214).

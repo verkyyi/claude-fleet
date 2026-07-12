@@ -109,7 +109,7 @@ bash ~/.claude/fleet/bin/fleet-migrate-layout.sh          # or --dry-run first t
 ## 3. Reload only the daemons that changed
 
 Most script-body changes need **no reload**: an *interval* daemon
-(collector / classify / summarize / diskguard / dispatch) re-reads its script
+(collector / summarize / diskguard) re-reads its script
 from disk on its next tick. Reload only when the diff (step 2) touched:
 
 - a **plist/timer** under `launchd/` or `systemd/` (an interval or arguments

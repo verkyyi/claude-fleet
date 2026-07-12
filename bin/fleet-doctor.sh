@@ -15,7 +15,7 @@
 #   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
 #   python3      collector context% + usage caches
-#   claude       the sessions you run + the optional classify daemon
+#   claude       the sessions you run + the optional classify/summarize hooks
 #   perl HiRes   soft — dash spinner sub-second frames (degrades to 1s ticks)
 #   jq is NOT required standalone: the collector only uses `gh --jq` (built in).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
@@ -83,7 +83,7 @@ fi
 if command -v claude >/dev/null 2>&1; then
   pass claude "on PATH"
 else
-  warn claude "not found — the CLI you run per window and the optional classify daemon"
+  warn claude "not found — the CLI you run per window and the optional classify/summarize hooks"
 fi
 
 # --- fleet quality-of-life commands (optional: repo-shipped /skills) ---
@@ -156,11 +156,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
   fi
 fi
 
-# --- autofill dispatcher (optional: auto-spawn backlog by priority) ---
-# OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
-# auto-spawns eligible backlog issues — which spends LLM tokens — so surface the
-# armed fleets and the cost. A missing daemon/config is not a fault (opt-in), so
-# this only speaks up when at least one fleet has enabled it.
+# --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
 conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 
 # Enumerate configured fleet conf paths, dual-layout (issue #203): the new
@@ -185,27 +181,6 @@ _fleet_confs() {
     printf '%s\n' "$_c"
   done
 }
-
-if [ -d "$conf_dir" ]; then
-  armed=0
-  # here-doc (not a pipe) so the `while` runs in THIS shell and `armed` survives.
-  while IFS= read -r cf; do
-    [ -n "$cf" ] || continue
-    # FLEET_AUTOFILL=1, tolerating quotes/spaces (FLEET_AUTOFILL = "1").
-    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
-    [ "$val" = 1 ] && armed=$((armed+1))
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-  if [ "$armed" -gt 0 ]; then
-    if command -v gh >/dev/null 2>&1; then
-      pass autofill "$armed fleet(s) with FLEET_AUTOFILL=1 — dispatcher will auto-spawn (spends LLM tokens)"
-    else
-      warn autofill "$armed fleet(s) set FLEET_AUTOFILL=1 but gh is missing — the dispatcher can't read the backlog"
-    fi
-    printf '        note: needs the com.claude-fleet.dispatch daemon installed; each auto-spawn opens a real Claude session + PR.\n'
-  fi
-fi
 
 # --- fleet watcher (optional: zero-token edge-driven steward wake, issue #147) ---
 # OFF unless a fleet's conf sets FLEET_WATCH=1. When ON, the watch daemon reads only

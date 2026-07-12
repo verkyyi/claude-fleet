@@ -21,7 +21,6 @@
 #      content verbatim; an unreadable file warns and falls back to the default.
 #   F. every worker seed arms auto-merge (the ship tail names it) and NEVER carries
 #      a self-land / land-trigger instruction (the retired lifecycle).
-#   G. --scout ignores the override entirely (a scout has its own read-only seed).
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -163,13 +162,6 @@ for gone in '/fleet-land-self' 'FLEET_SELF_LAND' 'do NOT merge — WAIT' \
   case "$(seed)" in *"$gone"*) fail "F retired self-land text '$gone' leaked into the seed" "$(seed)" ;; esac
 done
 ok "F the worker seed arms auto-merge and drops every retired self-land instruction"
-
-# ===== G: --scout ignores the override (own read-only seed) ====================
-FLEET_WORKER_PROMPT='THIS-MUST-NOT-APPEAR' run_spawn 234 --scout
-has 'THIS-MUST-NOT-APPEAR' && fail "G a scout must ignore FLEET_WORKER_PROMPT" "$(seed)"
-has 'READ-ONLY scout' || fail "G scout seed missing its read-only framing" "$(seed)"
-has 'do NOT implement' || fail "G scout seed missing its no-implement rail" "$(seed)"
-ok "G --scout ignores FLEET_WORKER_PROMPT and keeps its read-only seed"
 
 printf '\nselftest OK: %s assertions passed (per-fleet worker seed prompt)\n' "$pass"
 exit 0

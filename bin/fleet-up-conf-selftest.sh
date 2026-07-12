@@ -5,7 +5,7 @@
 # The bug: fleet-up.sh regenerated the conf with a truncating `cat >` that wrote
 # ONLY the three derived keys (FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH). A crash +
 # `cf`/restore re-runs fleet-up → every custom knob the operator set (FLEET_ISSUE_BRIDGE,
-# FLEET_CLEANUP, FLEET_AUTOFILL, FLEET_MAX_SESSIONS, FLEET_STEWARD_ISSUE, …) was
+# FLEET_CLEANUP, FLEET_MAX_SESSIONS, FLEET_STEWARD_ISSUE, …) was
 # silently wiped and the feature went OFF undetected. The fix preserves every
 # non-derived FLEET_* key while still refreshing the derived three, atomically.
 #
@@ -65,7 +65,7 @@ eq "fresh: FLEET_REPO"        "acme/widgets"     "$(val "$CONF" FLEET_REPO)"
 eq "fresh: FLEET_MAIN"        "/home/me/widgets" "$(val "$CONF" FLEET_MAIN)"
 eq "fresh: FLEET_BASE_BRANCH" "main"             "$(val "$CONF" FLEET_BASE_BRANCH)"
 # a fresh conf carries no other FLEET_* keys
-hasnt "fresh: no stray keys" "$CONF" '^[[:space:]]*(export[[:space:]]+)?FLEET_(ISSUE_BRIDGE|CLEANUP|AUTOFILL|MAX_SESSIONS)='
+hasnt "fresh: no stray keys" "$CONF" '^[[:space:]]*(export[[:space:]]+)?FLEET_(ISSUE_BRIDGE|CLEANUP|MAX_SESSIONS)='
 
 # ===================================================== 2+3. PRESERVE / REFRESH =
 # Seed a conf as an operator would: derived three PLUS custom knobs. Then rewrite
@@ -80,7 +80,6 @@ FLEET_BASE_BRANCH="develop"
 FLEET_ISSUE_BRIDGE=1
 FLEET_STEWARD_ISSUE=169
 FLEET_CLEANUP=0
-FLEET_AUTOFILL=1
 FLEET_MAX_SESSIONS=3
 FLEET_CTX_WINDOW=1
 SEED
@@ -100,7 +99,6 @@ hasnt "refresh: old base gone" "$CONF" 'FLEET_BASE_BRANCH="develop"'
 has "preserve: FLEET_ISSUE_BRIDGE" "$CONF" "FLEET_ISSUE_BRIDGE=1"
 has "preserve: FLEET_STEWARD_ISSUE" "$CONF" "FLEET_STEWARD_ISSUE=169"
 has "preserve: FLEET_CLEANUP"      "$CONF" "FLEET_CLEANUP=0"
-has "preserve: FLEET_AUTOFILL"     "$CONF" "FLEET_AUTOFILL=1"
 has "preserve: FLEET_MAX_SESSIONS" "$CONF" "FLEET_MAX_SESSIONS=3"
 has "preserve: FLEET_CTX_WINDOW"   "$CONF" "FLEET_CTX_WINDOW=1"
 

@@ -44,9 +44,8 @@ conf) do nothing until told your scope.
      it files a tracked issue in your `$FLEET_REPO` and spawns a worker window
      (worktree + `claude`, bound to the issue). You file and delegate; the window
      implements.
-   - **Delegate investigation to a scout** ([`/fleet-scout`](docs/SCOUT.md), #148)
-     — a read-only worker for trackable questions, or an ephemeral `Explore`/`Agent`
-     sub-agent for a throwaway lookup. It reports; it never branches or ships.
+   - **Delegate investigation** — run an ephemeral `Explore`/`Agent` sub-agent
+     inline for a lookup. It reports; it never branches or ships.
    - **Review, don't merge — the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md),
      #277). `/fleet-ship` arms GitHub auto-merge, so a green PR merges itself once
      branch protection is satisfied; the `com.claude-fleet.cleanup` daemon reaps the
@@ -73,9 +72,8 @@ Each temptation to do the work yourself maps to the crew member who owns it:
   You review the PR and enforce branch protection — that is your approval gate.
   `/fleet-cleanup <n>` is a manual reap *after* a merge, never a merge itself; the
   dash `⌃l` only *arms* auto-merge on a PR that missed it at ship time.
-- **Never research deep inline.** Investigation → a **scout** — ephemeral
-  sub-agent for quick lookups, scout worker for trackable ones. Don't tie up your
-  single thread tracing code.
+- **Never research deep inline.** Investigation → an ephemeral `Explore`/`Agent`
+  sub-agent. Don't tie up your single thread tracing code.
 - **Never lose state in conversation.** Durable facts → **memory / ledger /
   handoff**, never the conversation buffer. Crash-resume (#143) restores your live
   history after a tmux-server crash, but anything you must not lose belongs in the

@@ -13,12 +13,13 @@ when a decision is actually needed.
 
 > **Trimmed in #279.** Once landing was retired (#277), the PR-green→`/land`,
 > worker-opened-PR and free-slot edges stopped being decision-worthy — nothing
-> triggers a land, the dash already shows an opened PR, and autofill owns
-> slot-fill — so they were removed, leaving the three attention edges below.
+> triggers a land, the dash already shows an opened PR, and a free slot is
+> surfaced by the dash/backlog directly — so they were removed, leaving the
+> three attention edges below.
 
 It is **opt-in and OFF by default** (`FLEET_WATCH=1` per fleet). The watcher
 process spends **no tokens** — but each wake makes the *steward* take an LLM turn,
-so, like the issue-bridge and dispatcher, it is enabled per fleet rather than on
+so, like the issue-bridge, it is enabled per fleet rather than on
 by default.
 
 ## Why it is zero-token
@@ -61,7 +62,7 @@ backfill (mirrors the issue-bridge watermark seed).
 
 > The PR-green→`/land`, worker-opened-PR and free-slot edges were removed in
 > **#279** once landing was retired (#277): nothing triggers a land, the dash
-> already surfaces an opened PR, and the autofill dispatcher owns slot-filling.
+> already surfaces an opened PR, and a free slot is surfaced by the dash/backlog.
 
 ## Delivery = the steward control issue (#146)
 
@@ -86,7 +87,7 @@ watched only if it has:
 
 - **Single-writer per repo.** A `mkdir` lease (`watch-<slug>.lock`, steal-if-stale)
   means two sessions serving one repo can't double-wake — the lease holder scans
-  the whole repo, the others skip that tick. (Same lease shape as the dispatcher.)
+  the whole repo, the others skip that tick.
 - **Disk-gated.** A tick answers `fleet-diskguard.sh --gate` once; below the disk
   floor it skips entirely (a full volume is the crash trigger — don't add load).
   The diskguard daemon separately notifies the operator about low disk, so a
