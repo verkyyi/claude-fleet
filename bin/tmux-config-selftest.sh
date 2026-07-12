@@ -181,6 +181,12 @@ fcfg_validate enum claude-x  FLEET_MODEL >/dev/null || fail 'enum claude-x shoul
 fcfg_validate enum gpt4      FLEET_MODEL >/dev/null && fail 'enum gpt4 should fail'; ok
 fcfg_validate enum inherit   FLEET_MODEL >/dev/null && fail 'inherit invalid for FLEET_MODEL'; ok
 fcfg_validate enum inherit   FLEET_SUBAGENT_MODEL >/dev/null || fail 'inherit valid for subagent'; ok
+# FLEET_HANDOFF_DEST is an enum over its OWN set (comment|file|empty), issue #275.
+fcfg_validate enum comment   FLEET_HANDOFF_DEST >/dev/null || fail 'comment valid for FLEET_HANDOFF_DEST'; ok
+fcfg_validate enum file      FLEET_HANDOFF_DEST >/dev/null || fail 'file valid for FLEET_HANDOFF_DEST'; ok
+fcfg_validate enum ''        FLEET_HANDOFF_DEST >/dev/null || fail 'empty valid for FLEET_HANDOFF_DEST'; ok
+fcfg_validate enum opus      FLEET_HANDOFF_DEST >/dev/null && fail 'model alias invalid for FLEET_HANDOFF_DEST'; ok
+fcfg_validate enum comment   FLEET_MODEL >/dev/null && fail 'comment invalid for FLEET_MODEL'; ok
 fcfg_validate regex '^(a|b)$' FLEET_PROTECTED_RE >/dev/null || fail 'valid regex should pass'; ok
 fcfg_validate regex '^(a'    FLEET_PROTECTED_RE >/dev/null && fail 'invalid regex should fail'; ok
 fcfg_validate regex 'a`b'    FLEET_PROTECTED_RE >/dev/null && fail 'regex with backtick should fail'; ok

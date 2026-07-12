@@ -4,22 +4,28 @@
 # Asserts the detached cycle's contract (issue #273) against a FAKE tmux (no tmux
 # server, no real pane, no live Claude) — the same mock-tmux shape the issue-bridge
 # selftest uses (bin/fleet-issue-bridge-selftest.sh):
-#   • REFUSE-NO-DOC     armed without --doc → refuses (exit≠0), never clears.
+#   • REFUSE-NO-STORE   armed without --doc AND without --issue → refuses, no clear.
 #   • REFUSE-EMPTY-DOC  --doc points at an empty file → refuses, never clears.
 #   • REFUSE-OUTSIDE    no $TMUX and no --socket → refuses (nothing to drive).
 #   • REFUSE-GONE-PANE  the target pane is dead → refuses, never clears.
 #   • REFUSE-DOUBLE-ARM a live per-pane lock is present → refuses (no second clear).
+#   • REFUSE-COMMENT-NOT-STORED  --issue but no `<!-- fleet:handoff -->` comment on
+#                       the issue → refuses, never clears (issue #275 storage gate).
 #   • ABORT-NEVER-IDLE  @claude_state stuck `working` past the idle timeout → exits
 #                       0 (fail-safe) and NEVER sends the destructive /clear.
-#   • KEY-SEQUENCE      an IDLE pane + fresh-session capture → the EXACT ordered key
-#                       sequence: Escape · "/clear" · Enter · "<pickup> <doc>" · Enter,
-#                       each as a SEPARATE send-keys (the bracketed-paste discipline),
-#                       with text and Enter never combined.
+#   • KEY-SEQUENCE      (--doc, FILE storage) IDLE pane + fresh capture → the EXACT
+#                       ordered key sequence: Escape · "/clear" · Enter ·
+#                       "<pickup> <doc>" · Enter, each a SEPARATE send-keys (the
+#                       bracketed-paste discipline), text and Enter never combined.
+#   • KEY-SEQUENCE-COMMENT  (--issue, COMMENT storage) a marked comment round-trips →
+#                       clears and injects an ARGUMENT-FREE pickup (no doc/issue arg;
+#                       the cleared pane's @issue self-resolves it, issue #275).
 #   • VERIFY-GATE       an IDLE pane whose post-clear capture NEVER looks fresh →
 #                       clears but WITHHOLDS pickup (fail-safe: manual pickup remains).
 #
 # The fake tmux records every send-keys to an INJECT log and answers the helper's
-# reads (pane-alive, @claude_state, capture-pane) from FAKE_* env. Exit 0 = pass.
+# reads (pane-alive, @claude_state, capture-pane) from FAKE_* env; a fake gh answers
+# the comment-storage read from FAKE_COMMENTS. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -56,8 +62,19 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 
+# --- fake gh: the ONE read the helper makes in comment-storage mode —
+# `gh issue view <N> --json comments -q '.comments[].body'`. Print FAKE_COMMENTS
+# (the helper greps it for the `<!-- fleet:handoff -->` marker); empty = no comment.
+cat > "$WORK/fakepath/gh" <<'FAKEGH'
+#!/bin/bash
+printf '%b' "${FAKE_COMMENTS:-}"
+exit 0
+FAKEGH
+chmod +x "$WORK/fakepath/gh"
+
 DOC="$WORK/handoff.md"; printf '# Handoff\n\n## NEXT ACTION\ndo the thing\n' > "$DOC"
 EMPTY="$WORK/empty.md"; : > "$EMPTY"
+MARKED='handoff body\n<!-- fleet:handoff -->\n'   # a comment body carrying the pickup marker
 
 # run the cycle helper with the fake tmux on PATH and fast, deterministic tunables.
 run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] -- <helper args...>
@@ -71,6 +88,7 @@ run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] -- <helper args...>
   FAKE_STATE="${FAKE_STATE:-done}" \
   FAKE_CAP="${FAKE_CAP:-}" \
   FAKE_PANE_DEAD="${FAKE_PANE_DEAD:-}" \
+  FAKE_COMMENTS="${FAKE_COMMENTS:-}" \
   TMUX="${TMUX_OVERRIDE-fake,1,0}" \
     bash "$SRC" "$@"
 }
@@ -81,9 +99,9 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
 
 cleared() { grep -q '/clear' "$INJECT" 2>/dev/null; }
 
-# ---- REFUSE-NO-DOC ------------------------------------------------------------
-if run --pane "$PANE"; then fail "must refuse when armed with no --doc"; fi
-cleared && fail "no-doc refusal must not clear"
+# ---- REFUSE-NO-STORE (neither --doc nor --issue) ------------------------------
+if run --pane "$PANE"; then fail "must refuse when armed with no --doc/--issue"; fi
+cleared && fail "no-store refusal must not clear"
 
 # ---- REFUSE-EMPTY-DOC ---------------------------------------------------------
 if run --pane "$PANE" --doc "$EMPTY"; then fail "must refuse an empty handoff doc"; fi
@@ -106,7 +124,15 @@ cleared && fail "double-arm refusal must not clear"
 [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] || fail "double-arm refusal must not steal/rewrite the live lock"
 rm -f "$LOCK"
 
-printf 'selftest: refusal legs PASS (no-doc / empty-doc / outside-tmux / gone-pane / double-arm)\n' >&2
+# ---- REFUSE-COMMENT-NOT-STORED (--issue but no marked comment) ----------------
+# Comment-storage gate (issue #275): the helper re-confirms a `<!-- fleet:handoff -->`
+# comment is fetchable BEFORE clearing. No marker ⇒ refuse, never clear (the
+# handoff is not durably stored — same fail-safe class as the empty-doc refusal).
+if FAKE_COMMENTS='some unrelated comment\n' run --pane "$PANE" --issue 42 --repo o/r; then
+  fail "must refuse --issue when no fleet:handoff comment is present"; fi
+cleared && fail "comment-not-stored refusal must not clear"
+
+printf 'selftest: refusal legs PASS (no-store / empty-doc / outside-tmux / gone-pane / double-arm / comment-not-stored)\n' >&2
 
 # ---- ABORT-NEVER-IDLE (working forever) → exit 0, no clear --------------------
 IDLE=1 POLL=1 FAKE_STATE=working run --pane "$PANE" --doc "$DOC" \
@@ -134,6 +160,26 @@ case "${KEYS[1]}" in *Enter*) fail "the /clear text must not carry an inline Ent
 case "${KEYS[3]}" in *Enter*) fail "the pickup text must not carry an inline Enter";; esac
 
 printf 'selftest: key-sequence leg PASS (Escape · /clear · Enter · pickup · Enter, all separate)\n' >&2
+
+# ---- KEY-SEQUENCE-COMMENT (--issue + marker round-trip) → ARGUMENT-FREE pickup -
+# Marker present (round-trip), idle, fresh capture → clears and injects a pickup
+# with NO argument (the cleared pane's @issue self-resolves the comment, issue #275).
+FAKE_STATE='done' FAKE_CAP='❯ \n  ? for shortcuts\n' FAKE_COMMENTS="$MARKED" \
+  run --pane "$PANE" --issue 42 --repo o/r || fail "idle+marked comment cycle must exit 0"
+KEYS=()
+while IFS= read -r _ln; do KEYS+=("$_ln"); done < "$INJECT"
+[ "${#KEYS[@]}" -eq 5 ] || fail "comment mode: expected exactly 5 send-keys, got ${#KEYS[@]}: ${KEYS[*]}"
+case "${KEYS[0]}" in *Escape*) : ;; *) fail "comment key1 must be Escape, got: ${KEYS[0]}";; esac
+case "${KEYS[1]}" in *'-l'*'/clear'*) : ;; *) fail "comment key2 must type /clear, got: ${KEYS[1]}";; esac
+case "${KEYS[2]}" in *Enter*) : ;; *) fail "comment key3 must be a SEPARATE Enter, got: ${KEYS[2]}";; esac
+# key4: the pickup must be ARGUMENT-FREE — the line ENDS at "pickup", no doc/issue.
+case "${KEYS[3]}" in
+  *'-l'*'/fleet-handoff pickup') : ;;
+  *) fail "comment key4 must be an ARGUMENT-FREE pickup (no path/issue), got: ${KEYS[3]}";;
+esac
+case "${KEYS[4]}" in *Enter*) : ;; *) fail "comment key5 must be a SEPARATE Enter, got: ${KEYS[4]}";; esac
+
+printf 'selftest: comment-mode leg PASS (marker round-trip → clears → argument-free pickup)\n' >&2
 
 # ---- VERIFY-GATE (never-fresh capture) → clears but WITHHOLDS pickup ----------
 VF=1 FAKE_STATE='done' FAKE_CAP='still churning...\n' run --pane "$PANE" --doc "$DOC" \
