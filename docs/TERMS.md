@@ -37,9 +37,11 @@ nests three levels, and this is where the confusing vocabulary starts:
   instead of working a single task. It's the fleet's **first mate**: it
   **dispatches, decides, escalates, and reports — it never does the work itself.**
   Watch (event-driven, not polling) · Converse (the operator's one channel) ·
-  Dispatch & decide (file issues, spawn workers, trigger self-land). **One steward
-  per fleet** (per repo). Its charter ships as [`steward.md`](../steward.md) and is
-  installed to the operator-specific `~/.claude/steward.md`.
+  Dispatch & decide (file issues, spawn workers, review PRs). **One steward
+  per fleet** (per repo). Its charter is the layered
+  [`/fleet-steward`](../commands/fleet-steward.md) skill (built-in ▸ gated repo
+  `.fleet/steward.md` ▸ operator overlay), resolved at spawn by
+  [`bin/steward-charter.sh`](../bin/steward-charter.sh) (issue #286).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

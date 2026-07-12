@@ -247,10 +247,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #FLEET_RATELIMIT_TTL=21600
 
 # Optional: the command each fleet's steward pane runs (the bottom pane of the
-# always-on 'plan' hub). Unset → the built-in default (adopt ~/.claude/steward.md
-# as an on-demand steward scoped to this fleet's repo, resuming the newest
-# handoff if one exists). Set it to drive your own steward, or to a plain shell
-# to opt out of the auto-driven one.
+# always-on 'plan' hub). Unset → the built-in default (run /fleet-steward to adopt
+# the layered steward charter — issue #286 — as an on-demand steward scoped to this
+# fleet's repo, resuming the newest handoff if one exists). Set it to drive your own
+# steward, or to a plain shell to opt out of the auto-driven one.
 # Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
 # @label=Steward launch command @group=steward @tier=advanced @scope=fleet @edit=str
 #FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
@@ -408,16 +408,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-merge method @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MERGE_METHOD="squash"
 
-# --- Repo worker charter (issue #283) ---------------------------------------
-# When 1, /fleet-claim loads a repo-shipped worker charter from
-# $FLEET_MAIN/.fleet/worker.md and layers it under the fleet overlay (operator)
-# charter. OFF by default (fail-closed): .fleet/worker.md is an INJECTION SURFACE
-# — PRs auto-merge on green CI with no human review, so a PR could rewrite the
-# charter every future worker then obeys. Opt in ONLY on a repo where you trust
-# what lands, and on a public repo protect .fleet/ with CODEOWNERS + required
-# review. The fleet overlay charter (~/.config/.../fleets/<session>/worker.md)
-# needs no gate — only the operator writes it.
-# @label=Load repo worker charter @group=spawn @tier=advanced @scope=fleet @edit=bool
+# --- Repo charter gate (issues #283 worker, #286 steward) -------------------
+# When 1, the fleet loads repo-shipped CHARTERS from $FLEET_MAIN/.fleet/ and layers
+# each UNDER its fleet overlay (operator) charter:
+#   • /fleet-claim   loads .fleet/worker.md  (issue #283)
+#   • /fleet-steward loads .fleet/steward.md (issue #286)
+# OFF by default (fail-closed): a .fleet/*.md is an INJECTION SURFACE — PRs
+# auto-merge on green CI with no human review, so a PR could rewrite the charter
+# every future worker/steward then obeys (and the steward is the higher-value
+# target — it reviews and dispatches). Opt in ONLY on a repo where you trust what
+# lands, and on a public repo protect .fleet/ with CODEOWNERS + required review.
+# The fleet OVERLAY charters (~/.config/.../fleets/<session>/{worker,steward}.md)
+# need no gate — only the operator writes them, and they win on conflict.
+# @label=Load repo charters @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_REPO_CHARTER=0
 
 # --- Worker seed prompt (issue #234) ----------------------------------------

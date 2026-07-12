@@ -147,42 +147,35 @@ If the step-2 diff touched any `commands/*.md`:
 - **Remove** each retired skill from `~/.claude/commands/` — the **old** path of
   every `R` rename **and** every `D` deletion. A plain pull+copy only ever adds
   files, so a renamed skill would linger under **both** names; delete the stale
-  bare-named one with `rm -f ~/.claude/commands/<old-basename>`. (This PR is the
-  worked example: `claim.md → fleet-claim.md`, and likewise `ship.md`,
-  `blocked.md`, `land.md`, `land-train.md` → `fleet-*.md` — the five old
-  bare-named files must be removed, same rename-delete pattern as the earlier
-  `merge-train.md → land-train.md`.)
+  bare-named one with `rm -f ~/.claude/commands/<old-basename>`. (Worked examples:
+  the #283 renames `claim.md → fleet-claim.md`, likewise `ship.md`, `blocked.md`,
+  `land.md`, `land-train.md` → `fleet-*.md`; and the #286 **deletions**
+  `fleet-new-issue.md`, `fleet-status.md`, `fleet-cleanup.md` — folded into the new
+  `/fleet-steward` charter — whose live copies must be `rm -f`'d, same D-pass.)
 
 If no `commands/*.md` changed, skip.
 
-## 6. Re-apply the steward charter — only if it changed
+## 6. Steward charter — nothing extra to re-apply (issue #286)
 
-The steward's standing orders live **flat** at `~/.claude/steward.md` (a personal
-rail, *not* under the checkout — `bin/steward-session.sh` reads it from there when
-it spawns/respawns a `plan` hub), while the canonical copy is `steward.md` at the
-repo root. So a landed charter rewrite doesn't reach the live steward until it's
-copied up. If the step-2 diff touched `steward.md`, re-apply it — but **don't
-clobber local edits**: only overwrite when the live file still matches the
-*pre-sync* repo version (or doesn't exist yet); otherwise leave it and warn.
+The flat `~/.claude/steward.md` is **retired**. The steward charter is now the
+`/fleet-steward` skill's built-in text (installed/updated by **step 5** like any
+other `commands/*.md`), layered at spawn by `bin/steward-charter.sh` over an
+optional gated repo `.fleet/steward.md` (synced with the bound repo, not by this)
+and an operator overlay `~/.config/claude-fleet/fleets/<session>/steward.md`
+(machine-local, never touched by sync — local edits live here now). So there is
+**no separate charter copy-up step** — step 5 already carried it, and the old
+local-edits dance is gone (the overlay is the proper home for edits).
+
+One migration nicety: if a pre-#286 install still has a stale flat charter, point
+it out (don't auto-delete — it may hold edits the operator wants to move to the
+overlay):
 
 ```sh
-if git -C ~/.claude/fleet diff --name-only "$before" "$after" | grep -qx 'steward.md'; then
-  live=~/.claude/steward.md
-  bsteward=$(mktemp)
-  git -C ~/.claude/fleet show "$before:steward.md" > "$bsteward" 2>/dev/null || : > "$bsteward"
-  if [ ! -f "$live" ] || cmp -s "$live" "$bsteward"; then
-    cp ~/.claude/fleet/steward.md "$live"
-    echo "steward.md: charter updated"
-  else
-    echo "steward.md: LOCAL EDITS — not overwritten; diff ~/.claude/fleet/steward.md against $live by hand"
-  fi
-  rm -f "$bsteward"
-fi
+[ -f ~/.claude/steward.md ] && echo "steward.md: obsolete flat charter present (issue #286) — the charter is now the /fleet-steward skill; move any local edits to ~/.config/claude-fleet/fleets/<session>/steward.md, then rm ~/.claude/steward.md"
 ```
 
-A running steward re-reads the charter on its next respawn (or an explicit
-re-read); it won't retroactively change a live session's already-adopted orders.
-If `steward.md` didn't change, skip this step.
+A running steward re-adopts the charter on its next `/fleet-steward` (spawn/respawn
+or `/clear`); it won't retroactively change a live session's already-adopted orders.
 
 ## 7 + 8. Refresh the UI on ALL live fleet servers — only what changed
 
@@ -252,9 +245,9 @@ when a key is already gone).
 ## 9. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed, steward charter
-re-applied, dash panes refreshed (with the count), conf reloaded (with the
-unbound count)} actually ran.
+{daemons reloaded, settings re-merged, commands installed/removed (the
+`/fleet-steward` charter rides here now), dash panes refreshed (with the count),
+conf reloaded (with the unbound count)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
 report that instead with the one-line reason.
 

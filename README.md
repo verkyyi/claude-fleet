@@ -268,13 +268,17 @@ fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
 `~/.claude/commands/`. Each declares an owner seat (`worker` / `steward`) and
 refuses from the wrong one. Live so far:
 
-- **`/fleet-cleanup`** (steward) — **the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md)).
-  The worker's `/fleet-claim` ship step arms GitHub auto-merge, GitHub does the merge when the PR is green,
-  and the `com.claude-fleet.cleanup` daemon reaps the leftover worktree/window/branch
-  and records the resume ledger. `/fleet-cleanup <n>` is the manual escape hatch to
-  clean up a specific merged/closed PR *now* instead of waiting a daemon tick — it
-  records the ledger, fast-forwards the base checkout, and tears down the worktree.
-  It merges nothing and forces nothing.
+- **`/fleet-steward`** (steward) — the steward mirror of `/fleet-claim`: the one
+  skill the `plan` hub runs at spawn. It resolves the fleet, adopts a **layered
+  steward charter** (built-in ▸ gated repo `.fleet/steward.md` ▸ operator overlay,
+  via `bin/steward-charter.sh` — the same resolver the `/clear` re-adopt hook uses,
+  so they can't drift), reports readiness, then goes idle. Its built-in charter
+  carries the three responsibilities (watch/converse/dispatch), the shall-nots +
+  rails, and the everyday steward ops folded in from the retired `/fleet-new-issue`
+  (file + spawn a worker), `/fleet-status` (estate digest), and `/fleet-cleanup`
+  (manual reap — **the fleet never merges**: the worker's `/fleet-claim` ship step
+  arms GitHub auto-merge and the `com.claude-fleet.cleanup` daemon reaps the
+  leftovers; see [docs/CLEANUP.md](docs/CLEANUP.md)).
 - **`/fleet-sync-install`** (steward, any fleet) — after claude-fleet's
   own PRs land, re-applies them to the shared live install (`~/.claude/fleet`): pull +
   reload changed daemons + re-merge the hooks delta + install changed commands.

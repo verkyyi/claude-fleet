@@ -4,8 +4,8 @@
 # fleet's base checkout. Idempotent PER SESSION: if a @steward-marked pane
 # already exists IN THIS SESSION, just jump to it. This is prefix+g's fallback
 # (steward-zoom.sh), so an accidentally closed hub window is one keypress from
-# restored. The steward picks up its standing orders from ~/.claude/steward.md
-# and the latest handoff doc if one exists.
+# restored. The steward picks up its standing orders by running /fleet-steward
+# (issue #286), which adopts the layered charter and the latest handoff if one exists.
 #
 # Multi-fleet (a fleet ≡ a tmux session ≡ one repo): SESS defaults to the CURRENT
 # session so every fleet gets its OWN hub, and BASE defaults to that fleet's
@@ -86,11 +86,14 @@ fi
 
 # The command the steward pane runs. The FRESH launch is the steward's normal
 # startup: a documented per-fleet FLEET_STEWARD_CMD override if set, else the
-# built-in that reads its standing orders from steward.md and picks up the newest
-# handoff. FRESH_INNER is that launch WITHOUT the pane-keep-alive `exec $SHELL`
-# tail (appended once below) so it can double as the resume fallback. STEWARD_FLAGS
-# (empty unless Steward Lite is on) is spliced right after `claude`.
-FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} \"Read ~/.claude/steward.md and adopt it: you are the ON-DEMAND steward for THIS fleet (default scope = your bound repo only). If ~/.claude/handoff/ has a recent steward handoff for this fleet, /handoff pick up the newest one. Do NOT run /sweep and do NOT arm /loop — there is no periodic sweep. Stay quiet until asked.\"}"
+# built-in seed — a ONE-LINE /fleet-steward invocation (issue #286). That skill
+# carries the whole steward bootstrap: resolve the fleet, adopt the layered charter
+# (bin/steward-charter.sh), pick up the newest handoff if one exists, report
+# readiness, then go idle (no /sweep, no /loop). FRESH_INNER is that launch WITHOUT
+# the pane-keep-alive `exec $SHELL` tail (appended once below) so it can double as
+# the resume fallback. STEWARD_FLAGS (empty unless Steward Lite is on) is spliced
+# right after `claude`.
+FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} \"/fleet-steward\"}"
 # Crash-resume (issue #143): if fleet-restore.sh captured this steward's live
 # transcript and passes its id via STEWARD_RESUME_ID, RESUME it (`claude --resume
 # <id>`) so the steward's full history survives a tmux-server crash — same as a
@@ -98,8 +101,8 @@ FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} \"Read ~/.claude/stewa
 # announces), but if the resume FAILS (stale/pruned id) fall back to the fresh
 # launch with `||` — never leave a bare shell with no steward (which would be
 # strictly worse than the pre-#143 always-fresh behaviour). No id → just fresh.
-# NB: a successful resume already carries the steward.md adoption in its restored
-# history, so it stays correctly scoped without re-reading steward.md.
+# NB: a successful resume already carries the /fleet-steward charter adoption in its
+# restored history, so it stays correctly scoped without re-running the skill.
 if [ -n "${STEWARD_RESUME_ID:-}" ] && [ "${STEWARD_RESUME_ID}" != "-" ]; then
   LAUNCH="claude ${STEWARD_FLAGS} --resume '${STEWARD_RESUME_ID}' || { ${FRESH_INNER}; }"
 else

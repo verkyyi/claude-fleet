@@ -4,25 +4,29 @@
 # Wired to the Claude Code `SessionStart` hook. A /clear keeps the SAME claude
 # process alive (same PID/cwd/tmux markers) but wipes the conversation context —
 # so the steward, whose identity was injected exactly once by the spawn seed
-# prompt (bin/steward-session.sh), silently goes amnesiac. CC also reloads the
-# cwd CLAUDE.md on every SessionStart, and for the steward that cwd is the base
-# checkout — that CLAUDE.md now points install/uninstall work at docs/INSTALL.md
-# (issue #285) rather than asserting an installer identity, but on its own it
-# still doesn't re-adopt the steward's first-mate charter. Nothing re-injects
-# steward.md.
+# prompt (bin/steward-session.sh → /fleet-steward), silently goes amnesiac. CC also
+# reloads the cwd CLAUDE.md on every SessionStart, and for the steward that cwd is
+# the base checkout — that CLAUDE.md now points install/uninstall work at
+# docs/INSTALL.md (issue #285) rather than asserting an installer identity, but on
+# its own it still doesn't re-adopt the steward's first-mate charter.
 #
-# This hook closes that gap: on a /clear in a @steward pane it prints steward.md
-# (plus a pointer to the newest handoff) back into the model's context. For
-# SessionStart, plain stdout IS added to the model's context (confirmed against
+# This hook closes that gap: on a /clear in a @steward pane it re-emits the
+# LAYERED steward charter (plus a pointer to the newest handoff) back into the
+# model's context. Crucially it goes through the SAME resolver the /fleet-steward
+# skill uses at spawn — bin/steward-charter.sh (issue #286: built-in skill charter
+# + gated repo .fleet/steward.md + operator overlay) — so a /clear re-adopt can
+# never drift from a fresh spawn. The flat ~/.claude/steward.md is retired; local
+# per-fleet edits now live in the operator overlay the resolver reads.
+# For SessionStart, plain stdout IS added to the model's context (confirmed against
 # the CC hooks docs), so we print ONLY the context string and nothing else.
 #
 # Scope is deliberately TIGHT — SessionStart also fires on startup/resume/compact,
 # and every SessionStart hook's output is concatenated, so we re-adopt on `clear`
 # ONLY:
-#   • startup — the spawn seed prompt already reads steward.md (and the @steward
+#   • startup — the spawn seed prompt already runs /fleet-steward (and the @steward
 #     marker is often not set yet at startup, so the gate below would skip anyway);
-#   • resume  — a `claude --resume` carries the steward.md adoption in its restored
-#     history, and the fresh-fallback path (#143) re-reads steward.md itself;
+#   • resume  — a `claude --resume` carries the charter adoption in its restored
+#     history, and the fresh-fallback path (#143) re-runs /fleet-steward itself;
 #   • compact — identity is preserved in the compaction summary.
 # Re-injecting on those would just pile redundant context onto every session.
 #
@@ -30,11 +34,12 @@
 #   1. source == clear   (the only case the crash-resume path #143 doesn't cover);
 #   2. the pane is @steward=1 — a worker pane running /clear must NEVER be
 #      handed the steward's standing orders.
-# No-op outside tmux, with no pane, or if ~/.claude/steward.md is absent (the
-# identity file is a personal rail, not shipped in the repo — nothing to adopt).
+# No-op outside tmux, with no pane, or if the resolver emits nothing (e.g. the
+# skill file is unreadable — then there is nothing to re-adopt).
 #
-# Testable seam: FLEET_READOPT_SOURCE overrides the stdin source (the selftest
-# has no real hook payload). Always exits 0 — SessionStart cannot block.
+# Testable seams: FLEET_READOPT_SOURCE overrides the stdin source (the selftest
+# has no real hook payload); FLEET_READOPT_CHARTER_CMD overrides the resolver
+# invocation. Always exits 0 — SessionStart cannot block.
 set -u
 
 # 1. No-op outside tmux / with no owning pane.
@@ -61,10 +66,18 @@ fi
 st=$(tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)
 [ "$st" = "1" ] || exit 0
 
-# 4. The identity file. steward.md is a personal rail (~/.claude/steward.md), not
-#    shipped in the repo; if it is absent there is nothing to re-adopt — no-op.
-ORDERS="$HOME/.claude/steward.md"
-[ -f "$ORDERS" ] || exit 0
+# 4. Resolve the fleet's charter through the shared resolver — the same one
+#    /fleet-steward runs at spawn (issue #286). Session name straight from tmux
+#    (no fleet-lib needed here). If the resolver prints nothing (skill unreadable),
+#    there is nothing to re-adopt — no-op.
+BIN="$(cd "$(dirname "$0")" && pwd)"
+sess=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
+if [ -n "${FLEET_READOPT_CHARTER_CMD:-}" ]; then
+  charter=$(eval "$FLEET_READOPT_CHARTER_CMD" 2>/dev/null)
+else
+  charter=$("$BIN/steward-charter.sh" "$sess" 2>/dev/null)
+fi
+[ -n "$charter" ] || exit 0
 
 # 5. Newest steward handoff, if any — a pointer only (the steward decides whether
 #    to /handoff pick it up; we do not dump its whole body).
@@ -78,19 +91,20 @@ cat <<'MSG'
 [fleet steward re-adopt] Your conversation context was just cleared (/clear), but
 you are still the SAME long-lived STEWARD process for this fleet — the same PID,
 cwd, tmux @steward marker, worktrees and daemons are all intact; only your
-conversation memory was wiped. The standing orders below (from ~/.claude/steward.md)
-still apply — re-adopt them now. A fleet == one tmux session == one GitHub repo;
-resolve your bound repo from the fleet conf:
+conversation memory was wiped. The layered steward charter below (built-in +
+optional repo/operator overrides, resolved by bin/steward-charter.sh — the same
+path /fleet-steward runs at spawn) still applies — re-adopt it now. A fleet == one
+tmux session == one GitHub repo; resolve your bound repo from the fleet conf:
     source ~/.claude/fleet/bin/fleet-lib.sh
     S=$(fleet_current_session); fleet_load_conf "$S"   # -> FLEET_REPO / FLEET_MAIN
 Note: this repo's cwd CLAUDE.md (reloaded on every SessionStart) describes the
 repo and points install/uninstall work at docs/INSTALL.md — that is NOT your
-identity; these steward orders are, and you do NOT install unless the operator
+identity; the steward charter below is, and you do NOT install unless the operator
 asks. Do NOT run /sweep and do NOT arm /loop. Stay quiet until asked.
 
-===== ~/.claude/steward.md =====
+===== steward charter (bin/steward-charter.sh) =====
 MSG
-cat "$ORDERS"
+printf '%s\n' "$charter"
 
 if [ -n "$handoff" ]; then
   # shellcheck disable=SC2016  # the backticks are literal markdown code-span text, not expansions
