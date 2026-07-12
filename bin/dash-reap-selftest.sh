@@ -17,8 +17,12 @@
 #        • ⌃x on a clean+unmerged row          → refuse ("PR not merged")
 #        • ⌃x on a clean+merged row            → FULL reap: worktree removed,
 #          branch deleted, `gh issue close` issued, `tmux kill-window` issued.
-#        • ⌃x on a raw scratch row (@raw=1, no @issue) → close window directly,
-#          NO refuse, summary-cache seed removed, no worktree/issue/gh touched.
+#        • ⌃x on a raw scratch row (@raw=1, no @issue) — issue #290 the scratch owns
+#          a `scratch-<N>` worktree (resolved via @worktree):
+#            - clean+ancestor  → window closed + worktree/branch removed
+#            - dirty           → window closed, worktree KEPT (never delete an experiment)
+#            - no @worktree     → degrade: just close the window (pre-#290 behavior)
+#          Nothing issue-bound is touched; the summary-cache seed is removed.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -82,7 +86,9 @@ cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
 case "$*" in
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
+  *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
+  *pane_current_path*) printf '%s\n' "${WT:-}" ;;
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
@@ -110,7 +116,7 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
   # RAW/WID feed the fake tmux's @raw/window_id answers (empty RAW ⇒ not a raw row).
   # TMPDIR is redirected under $WORK so fleet-lib's cache dir (FLEET_C) — and the
   # raw path's summary-cache rm — stay hermetic (never touch the real cache).
-  ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
+  ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" WT="${WT:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
   PATH="$WORK/fakepath:$PATH" \
@@ -167,19 +173,56 @@ printf 'n' | run_reap "4" "s1:4" --force confirm
 grep -q 'KILL' "$TMLOG" && fail "cancelled force reap must not kill the window"
 [ -s "$GHLOG" ] && fail "cancelled force reap must not touch gh"
 
-# B8: ⌃x on a raw scratch row (@raw=1, no @issue, issue #252) → close the window
-# directly. No refuse, the dash summary-cache seed is removed, and nothing
-# issue-bound is touched (no gh). The summary key mirrors dash-raw-session.sh:
-# fleet_summary_key <session s1> <window @9> = s1_9.
+# B8: ⌃x on a raw scratch row (@raw=1, no @issue, no @worktree) → DEGRADE to the
+# pre-#290 behavior: just close the window. No refuse, the dash summary-cache seed
+# is removed, and nothing issue-bound is touched (no gh). The summary key mirrors
+# dash-raw-session.sh: fleet_summary_key <session s1> <window @9> = s1_9.
 CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
 SEED="$CACHE/summary_s1_9"; printf 'scratch (raw session)' > "$SEED"
 : > "$TMLOG"; : > "$GHLOG"
-RAW=1 WID='@9' run_reap "" "s1:9"
-grep -q 'KILL' "$TMLOG" || fail "raw ⌃x should kill the scratch window"
+RAW=1 WID='@9' WT='' run_reap "" "s1:9"
+grep -q 'KILL' "$TMLOG" || fail "raw ⌃x (no worktree) should kill the scratch window"
 grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothing to reap')"
 grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
 [ -e "$SEED" ] && fail "raw ⌃x should remove the summary-cache seed"
-[ -s "$GHLOG" ] && fail "raw ⌃x must not touch gh (no issue/PR lifecycle)"
+[ -s "$GHLOG" ] && fail "raw ⌃x (no worktree) must not touch gh (no issue/PR lifecycle)"
+
+# B8b: ⌃x on a scratch row WITH a clean+ancestor worktree (issue #290) → close the
+# window AND remove the scratch worktree + branch. No issue/gh close (scratch has
+# no issue). Build a real `scratch-9` worktree, clean, tip == base ⇒ ancestor.
+git -C "$BASEDIR" worktree add -q -b scratch-9 "$WORK/scr9" >/dev/null 2>&1
+: > "$TMLOG"; : > "$GHLOG"
+RAW=1 WID='@9' WT="$WORK/scr9" run_reap "" "s1:9"
+grep -q 'KILL' "$TMLOG" || fail "scratch ⌃x should kill the window"
+grep -qi 'MSG.*worktree reaped' "$TMLOG" || fail "scratch ⌃x (clean) should report 'worktree reaped'"
+[ -d "$WORK/scr9" ] && fail "clean scratch ⌃x should remove the worktree"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-9 && fail "clean scratch ⌃x should delete the branch"
+grep -q 'CLOSE' "$GHLOG" && fail "scratch reap must NOT close any issue (no @issue)"
+
+# B8c: ⌃x on a scratch row WITH a DIRTY worktree → close the window but KEEP the
+# worktree (never silently delete an experiment).
+git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
+printf 'exp\n' > "$WORK/scr10/untracked"
+: > "$TMLOG"; : > "$GHLOG"
+RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9"
+grep -q 'KILL' "$TMLOG" || fail "dirty scratch ⌃x should still close the window"
+[ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
+grep -qi 'MSG.*KEPT' "$TMLOG" || fail "dirty scratch ⌃x should note the worktree was kept"
+
+# B8d: ⌥x force (confirm y) on the DIRTY scratch → still KEEP the worktree, close
+# the window only (git refuses a dirty remove; force never destroys uncommitted work).
+: > "$TMLOG"; : > "$GHLOG"
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9" --force confirm
+[ -d "$WORK/scr10" ] || fail "force reap on a dirty scratch must KEEP the worktree"
+grep -q 'KILL' "$TMLOG" || fail "force reap on a dirty scratch should close the window"
+
+# B8e: ⌥x force (confirm y) on a clean+unmerged scratch → remove worktree + branch.
+git -C "$BASEDIR" worktree add -q -b scratch-11 "$WORK/scr11" >/dev/null 2>&1
+printf 'x\n' > "$WORK/scr11/g"; git -C "$WORK/scr11" add g; git -C "$WORK/scr11" commit -qm work
+: > "$TMLOG"; : > "$GHLOG"
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "s1:9" --force confirm
+[ -d "$WORK/scr11" ] && fail "force reap on a clean+unmerged scratch should remove the worktree"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "force reap should delete the scratch branch"
 
 # B9: hub/panel row with @raw explicitly 0 (not a scratch) still refuses — the
 # raw early-return keys on @raw=1 exactly, not merely "@raw set".
@@ -188,5 +231,5 @@ RAW=0 run_reap "" "s1:1"
 grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force + raw paths\n'
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force + raw/scratch paths\n'
 exit 0

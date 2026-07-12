@@ -30,6 +30,27 @@ LOG="$LOGDIR/worktree-autoclean.log"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 say() { if [ "$DRY" = 1 ]; then echo "$*"; else log "$*"; fi; }
 
+# --- scratch (@raw) worktrees, issue #290 -------------------------------------
+# A `scratch-<N>` worktree (dash-raw-session.sh) has no issue/PR, so the ancestor/
+# merged-PR gate below already reaps a pristine or landed one for free. What it must
+# NOT do is silently delete an EXPERIMENT: a scratch worktree that is dirty or has
+# unmerged local commits is KEPT and surfaced ONCE (a deduped, best-effort notify to
+# whatever fleet client is attached), so the operator knows to dispose of it with
+# `dash ⌃x`. The surface marker lives outside the worktree (a marker inside would
+# itself read as untracked → forever "dirty").
+SURF_DIR="$LOGDIR/.scratch-surfaced"
+scratch_key() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_'; }
+scratch_surface() {   # $1=worktree-dir  $2=branch  $3=reason-label
+  say "KEEP  $2  ($3 — scratch experiment, window gone; ⌃x to dispose)"; kept=$((kept+1))
+  [ "$DRY" = 1 ] && return
+  local mk; mk="$SURF_DIR/$(scratch_key "$1")"
+  [ -e "$mk" ] && return                    # already surfaced once — stay quiet
+  mkdir -p "$SURF_DIR" 2>/dev/null || true; : > "$mk" 2>/dev/null || true
+  for _s in $SOCKETS; do
+    tmux -L "$_s" display-message "fleet: scratch $2 kept ($3) — ⌃x to dispose" 2>/dev/null || true
+  done
+}
+
 command -v git >/dev/null 2>&1 || { say "git not found; abort"; exit 0; }
 
 # Fail-safe: require a live fleet so the "attached" check is meaningful. Each fleet
@@ -56,14 +77,22 @@ process() {
     say "KEEP  $branch  (live tmux session)"; kept=$((kept+1)); return
   fi
   # clean + merged? — the shared gate (identical logic in dash-reap.sh).
-  local merged
+  local merged is_scratch=0
+  case "$branch" in scratch-*) is_scratch=1 ;; esac   # issue #290
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
   case "$merged" in
-    dirty)    say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
-    unmerged) say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
+    dirty)
+      # scratch: never silently delete an experiment — keep + surface once (#290).
+      if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "dirty"; return; fi
+      say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
+    unmerged)
+      if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "unmerged work"; return; fi
+      say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
     ancestor) merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
     merged-pr) merged="merged-PR" ;;
   esac
+  # Past the gate: this is a clean+no-unmerged-work (scratch, silently) OR a
+  # clean+merged (issue or escalated scratch) worktree → prune below.
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac
@@ -86,6 +115,7 @@ process() {
     git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
     log "PRUNED $branch ($merged) — removed ${dir##*/} + deleted branch"
     removed=$((removed+1))
+    rm -f "$SURF_DIR/$(scratch_key "$dir")" 2>/dev/null || true   # drop any scratch surface marker (#290)
     # auto-close the bound issue if still open (net for a PR lacking Closes #N)
     if [ -n "$inum" ] && [ -n "$REPO" ]; then
       local st; st="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
