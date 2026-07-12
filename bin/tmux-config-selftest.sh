@@ -127,6 +127,9 @@ eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
 eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
 eq 'type FLEET_MERGE_METHOD'   "$(fcfg_type FLEET_MERGE_METHOD)"   enum
+eq 'type FLEET_STEWARD_MODEL'  "$(fcfg_type FLEET_STEWARD_MODEL)"  enum
+eq 'type FLEET_STEWARD_LITE'   "$(fcfg_type FLEET_STEWARD_LITE)"   bool
+eq 'type FLEET_STEWARD_MCP'    "$(fcfg_type FLEET_STEWARD_MCP)"    bool
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
 eq 'type FLEET_MAX_SESSIONS'   "$(fcfg_type FLEET_MAX_SESSIONS)"   num
 eq 'type FLEET_ISSUE_TTL'      "$(fcfg_type FLEET_ISSUE_TTL)"      num
@@ -179,6 +182,13 @@ fcfg_validate enum claude-x  FLEET_MODEL >/dev/null || fail 'enum claude-x shoul
 fcfg_validate enum gpt4      FLEET_MODEL >/dev/null && fail 'enum gpt4 should fail'; ok
 fcfg_validate enum inherit   FLEET_MODEL >/dev/null && fail 'inherit invalid for FLEET_MODEL'; ok
 fcfg_validate enum inherit   FLEET_SUBAGENT_MODEL >/dev/null || fail 'inherit valid for subagent'; ok
+# FLEET_STEWARD_MODEL is a plain model enum (issue #284) — aliases + claude-* + empty,
+# but NOT "inherit" (that's a subagent-only shape).
+fcfg_validate enum sonnet    FLEET_STEWARD_MODEL >/dev/null || fail 'enum sonnet valid for steward model'; ok
+fcfg_validate enum ''        FLEET_STEWARD_MODEL >/dev/null || fail 'empty valid for steward model'; ok
+fcfg_validate enum inherit   FLEET_STEWARD_MODEL >/dev/null && fail 'inherit invalid for steward model'; ok
+fcfg_validate bool 1         FLEET_STEWARD_LITE  >/dev/null || fail 'bool 1 valid for steward lite'; ok
+fcfg_validate bool 2         FLEET_STEWARD_LITE  >/dev/null && fail 'bool 2 invalid for steward lite'; ok
 # FLEET_HANDOFF_DEST is an enum over its OWN set (comment|file|empty), issue #275.
 fcfg_validate enum comment   FLEET_HANDOFF_DEST >/dev/null || fail 'comment valid for FLEET_HANDOFF_DEST'; ok
 fcfg_validate enum file      FLEET_HANDOFF_DEST >/dev/null || fail 'file valid for FLEET_HANDOFF_DEST'; ok

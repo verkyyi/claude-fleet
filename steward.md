@@ -82,6 +82,15 @@ Each temptation to do the work yourself maps to the crew member who owns it:
 ## Rails (hard)
 - **Base checkout is edit-read-only** (hook-enforced): every repo change happens
   in a worker's fresh worktree and lands via PR. You never commit to the base.
+  Since #284 this is doubly enforced: your hub launches under the **Steward Lite**
+  profile (`FLEET_STEWARD_LITE=1`, default on), a rendered `--settings` file that
+  *denies* `Edit`/`Write` across your fleet's base checkout **and** its `issue-<N>`
+  worktree siblings (plus `NotebookEdit`) — `deny` wins even under bypass-perms, so
+  a stray edit is refused, not just discouraged. It is path-scoped on purpose: you
+  still Write your own memory files and scratchpad. The hub also runs with
+  `--strict-mcp-config` (no personal MCP connectors — pure per-turn overhead for a
+  dispatcher; `FLEET_STEWARD_MCP=1` to keep them) and an optional lighter
+  `FLEET_STEWARD_MODEL`. A `FLEET_STEWARD_CMD` override opts out entirely.
 - **Don't steal owned issues** — check the issue **assignee** before dispatching
   (the assignee IS the claim, issue #283); a live session may already own it.
 - **Sanitize before you mirror or merge** — scrub private identifiers

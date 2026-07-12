@@ -222,7 +222,15 @@ issue-bridge/watch state), so `ls ~/.config/claude-fleet/fleets/` is the list of
 running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
 still works as a one-fleet default. Every fleet gets a steward pane in its `plan`
 hub; set `FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it
-runs. Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
+runs. By default the hub launches under the **Steward Lite** profile
+(`FLEET_STEWARD_LITE=1`, issue #284): `bin/steward-session.sh` renders a per-fleet
+`--settings` file that **denies `Edit`/`Write` across this fleet's base checkout and
+its `issue-<N>` worktree siblings** (the steward is a dispatcher, never a coder —
+`deny` overrides bypass-perms, and it still Writes its own memory/scratchpad), and
+launches with `--strict-mcp-config` so personal MCP connectors never mount into the
+hub. Tune it per fleet with `FLEET_STEWARD_LITE` / `FLEET_STEWARD_MCP` /
+`FLEET_STEWARD_MODEL`; running stewards keep their old profile until the next hub
+respawn. Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
 `bin/fleet-migrate-layout.sh` once (idempotent; readers dual-read both layouts).
 
 ## Multiple subscription accounts (auto-failover)

@@ -73,10 +73,13 @@ EOF
 # file $WORK/fail-resume exists AND this invocation is a `--resume`, it records
 # and EXITS NON-ZERO instead — simulating a stale/pruned transcript id, so we can
 # assert the `|| fresh` fallback fires rather than leaving a bare shell.
+# NB: match --resume ANYWHERE in argv, not just \$1 — the Steward Lite profile
+# (issue #284) prepends --settings/--strict-mcp-config before --resume, exactly as
+# the real `claude` accepts flags in any order.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$WORK/claude-argv"
-if [ -f "$WORK/fail-resume" ] && [ "\$1" = "--resume" ]; then exit 1; fi
+case " \$* " in *" --resume "*) [ -f "$WORK/fail-resume" ] && exit 1 ;; esac
 exec /bin/sh
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"
