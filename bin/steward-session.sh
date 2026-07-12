@@ -101,10 +101,13 @@ sp=$(tmux -L "$SOCK" split-window -P -F '#{pane_id}' -v -l 60% -t "$win" -c "$BA
 # hit the WRONG (default) socket when we're invoked from fleet-up outside $TMUX.
 tmux -L "$SOCK" set-option -p -t "$sp" @steward 1  2>/dev/null || true
 tmux -L "$SOCK" set-option -u -p -t "$sp" @dash    2>/dev/null || true
-# Hub cue: show the top pane-border title on JUST this window (the conf keeps it
-# off globally to spare worker panes a row). pane-border-format (in the conf)
-# labels the @steward pane "▸ STEWARD HUB · <fleet>" — visible even when the pane
-# is zoomed fullscreen (prefix+g), where the window list is the only other cue.
+# Hub cue: re-affirm the top pane-border on this window. Since issue #267 the conf
+# sets pane-border-status top GLOBALLY (every window shows a top-of-window header),
+# so this is now a redundant safety net for a hub built before that conf is live.
+# pane-border-format (in the conf) labels the @steward pane "▸ STEWARD HUB · <fleet>"
+# — visible even when the pane is zoomed fullscreen (prefix+g), where the window
+# list is the only other cue — while worker/scratch windows get an index:name+#issue
+# header and the hub's dash pane stays empty.
 tmux -L "$SOCK" set-window-option -t "$win" pane-border-status top 2>/dev/null
 
 # hub belongs at the lowest index (slot 1). Nothing re-sorts windows anymore,
