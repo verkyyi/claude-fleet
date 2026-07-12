@@ -5,7 +5,7 @@
 # just wrote as --title, so the window is named after the WORK — reliably, without
 # depending on the brand-new issue being in the collector cache yet or on a
 # post-create `gh issue view` succeeding. No network, no real repo, no tmux server
-# — git/gh/tmux are faked on PATH (same shape as fleet-scout-selftest.sh).
+# — git/gh/tmux are faked on PATH.
 #
 #   A. --title is AUTHORITATIVE + needs NO network: the window is named from the
 #      passed title even when `gh issue view` would return something else, and

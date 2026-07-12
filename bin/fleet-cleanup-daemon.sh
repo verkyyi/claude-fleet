@@ -13,7 +13,7 @@
 # auto-land daemon it replaces, it is ON BY DEFAULT for every fleet (opt out per
 # fleet with FLEET_CLEANUP=0); the janitorial work is the point of the design.
 #
-# Design (mirrors fleet-dispatch.sh / the former fleet-autoland.sh):
+# Design (mirrors the other single-writer, disk-gated fleet daemons):
 #   for each live fleet session (or the ones named on argv):
 #     load its conf; skip if FLEET_CLEANUP=0
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer
@@ -67,7 +67,7 @@ LEASE_DIR="${FLEET_DISPATCH_LEASE_DIR:-$HOME/.claude/leases}"
 now() { date +%s 2>/dev/null || echo 0; }
 log() { printf '%s fleet-cleanup: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
 
-# --- per-repo lease (single-writer; steal-if-stale). Mirrors fleet-dispatch.sh. ---
+# --- per-repo lease (single-writer; steal-if-stale) ----------------------------
 lease_acquire() { # $1 = lease path, $2 = my holder id
   local lease="$1" me="$2" now exp holder
   mkdir -p "$LEASE_DIR" 2>/dev/null
@@ -214,7 +214,7 @@ fi
 
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
-# I/O below the floor. Mirrors fleet-dispatch.sh / the former fleet-autoland.sh.
+# I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.
 if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
    && ! "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
   log "disk gate closed — skipping all fleets this tick"

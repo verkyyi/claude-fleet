@@ -179,8 +179,8 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title),
     #                    keeping its contract EXACTLY (readers `cut`/`read` fields
     #                    1-4) and DROPPING steward-control issues (#176: a relay
-    #                    endpoint like the #169 hub is not a task; autofill excludes
-    #                    the same label). Filter = the jq flag column ⇒ still one gh
+    #                    endpoint like the #169 hub is not a task; the spawn-
+    #                    eligibility filters exclude the same label). Filter = the jq flag column ⇒ still one gh
     #                    call + fixture-testable.
     #   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
     #                    prod-alert) for the fleet watcher (#147). It must NOT inherit

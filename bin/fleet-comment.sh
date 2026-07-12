@@ -37,8 +37,8 @@
 #   • an invisible machine marker for tooling:
 #       <!-- fleet:from role=<role> session=<slug> issue=<n> -->
 # Role resolution: explicit --from <role> wins → else auto-detect (steward via the
-# FLEET_SEAT env / fleet_seat(); worker/scout via fleet_seat() + the @scout window
-# marker) → else the generic word 'fleet'. The footer identifies role + fleet ONLY
+# FLEET_SEAT env / fleet_seat(); worker via fleet_seat()) → else the generic word
+# 'fleet'. The footer identifies role + fleet ONLY
 # — never $(hostname), $USER, or any other private identifier (the charter scrub).
 # --no-footer is an escape hatch that drops the signature+marker but NEVER the
 # no-relay loop-safety marker (that stays independent, verbatim, and last).
@@ -59,19 +59,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # Which fleet ROLE is posting? Explicit --from wins (honoured verbatim so a caller
 # can force it); else auto-detect the seat — steward via the durable FLEET_SEAT env
 # (exported by steward-session.sh, survives a Bash-tool subshell) or fleet_seat();
-# worker vs scout via fleet_seat() + the @scout window marker — else the generic
-# word 'fleet'. Pure env + one cheap tmux read; only the WORD carries identity.
+# worker via fleet_seat() — else the generic word 'fleet'. Pure env; only the WORD
+# carries identity.
 resolve_role() {
   [ -n "${from:-}" ] && { printf '%s' "$from"; return; }
   [ "${FLEET_SEAT:-}" = steward ] && { printf 'steward'; return; }
-  local seat scout
+  local seat
   seat=$(fleet_seat 2>/dev/null)
   case "$seat" in
     steward) printf 'steward'; return ;;
-    worker)
-      scout=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@scout}' 2>/dev/null)
-      case "$scout" in ''|0) printf 'worker' ;; *) printf 'scout' ;; esac
-      return ;;
+    worker)  printf 'worker';  return ;;
   esac
   printf 'fleet'
 }
@@ -112,7 +109,7 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2;
 # Order matters: the no-relay loop-safety marker (bin/fleet-issue-bridge.sh greps
 # it as a verbatim substring) must stay LAST for a --note/default comment.
 role=$(resolve_role)
-# Context = the SENDER's own binding: a worker/scout window carries @issue → '#<n>'
+# Context = the SENDER's own binding: a worker window carries @issue → '#<n>'
 # + marker issue=<n>; otherwise (steward hub, watcher/dash daemon) fall to the fleet
 # slug/session name — repo-derived, so NO private identifier leaks (charter scrub).
 f_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)

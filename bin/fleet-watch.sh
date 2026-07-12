@@ -30,21 +30,21 @@
 #
 # Events (trimmed in issue #279 to the edges that stay decision-worthy once landing
 # is retired in #277 — the PR-green→/land, worker-opened-PR and free-slot edges were
-# removed: nothing triggers a land, the dash already shows an opened PR, and autofill
-# owns slot-fill):
+# removed: nothing triggers a land, the dash already shows an opened PR, and a free
+# slot is surfaced by the dash/backlog directly):
 #   stuck      a worker looks stuck (@claude_state=looping)    → "#<iss> looks stuck (looping) — investigate?"
 #   needs      the needs-attention count ROSE                  → "<k> window(s) need attention"
 #   prodalert  a new `prod-alert`-labelled issue appeared      → "prod-alert #<n> filed — first-response?"
 #
 # OFF BY DEFAULT. A fleet opts in with FLEET_WATCH=1 in its conf. The watcher spends
 # no tokens ITSELF, but a wake makes the STEWARD take an LLM turn — so, like every
-# other steward-driving daemon (issue-bridge/dispatch), it is explicitly enabled per
-# fleet rather than on by default. Requires FLEET_STEWARD_ISSUE (its delivery channel)
+# other steward-driving daemon (issue-bridge), it is explicitly enabled per fleet
+# rather than on by default. Requires FLEET_STEWARD_ISSUE (its delivery channel)
 # and, in practice, FLEET_ISSUE_BRIDGE=1 (what relays the wake into the steward).
 #
 # Single-writer per repo (mkdir lease, steal-if-stale) + disk-gated (fleet-diskguard
-# --gate), exactly like fleet-dispatch.sh. Run from launchd (com.claude-fleet.watch,
-# ~45s) / a systemd timer, or by hand (optionally --dry-run to just print edges).
+# --gate). Run from launchd (com.claude-fleet.watch, ~45s) / a systemd timer, or by
+# hand (optionally --dry-run to just print edges).
 #
 # Env knobs (per-fleet in $FLEET_CONF_DIR/<session>.conf or the global fleet.conf):
 #   FLEET_WATCH               1 to watch this fleet                 (default 0/off)
@@ -78,7 +78,7 @@ done
 now() { date +%s 2>/dev/null || echo 0; }
 log() { printf '%s fleet-watch: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
 
-# --- per-repo single-writer lease (mkdir; steal-if-stale). Mirrors fleet-dispatch. -
+# --- per-repo single-writer lease (mkdir; steal-if-stale) ----------------------
 lease_acquire() { # $1 = lease path, $2 = holder id
   local lease="$1" me="$2" now exp holder
   mkdir -p "$LEASE_DIR" 2>/dev/null
@@ -330,7 +330,7 @@ tmux info >/dev/null 2>&1 || { log "tmux not running — nothing to watch"; exit
 # Disk gate is a machine-wide (per-volume) condition — answer ONCE per tick. A full
 # volume is the crash trigger; don't add even light load below the floor. (The
 # diskguard daemon itself notifies the operator on low disk, so a skipped watch tick
-# loses nothing.) Mirrors fleet-dispatch.sh.
+# loses nothing.)
 if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
    && ! "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
   log "disk gate closed — skipping this tick"; exit 0

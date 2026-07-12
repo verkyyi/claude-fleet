@@ -2,9 +2,9 @@
 # dash-issue-priority.sh <issue-number> [cycle|p0|p1|p2|none] — set/cycle an
 # issue's priority tier straight from the backlog panel (issue #235).
 #
-# Priority is the `priority:p{0,1,2}` LABEL the autofill dispatcher already ranks
-# by (bin/fleet-dispatch.sh) and the backlog rows now tag + sort by
-# (bin/tmux-issues-rows.sh) — so managing priority is just swapping that one
+# Priority is the `priority:p{0,1,2}` LABEL the backlog rows tag + sort by
+# (bin/tmux-issues-rows.sh) and the watcher's slotfree suggestion ranks by — so
+# managing priority is just swapping that one
 # label. This is the ⌃y keyboard path (bound in bin/tmux-issues.sh): NO text
 # input, so it needs no popup and works identically in the windowed panel and the
 # prefix+b popup (unlike ⌃t/⌃x, which prompt and so route through the sentinel).

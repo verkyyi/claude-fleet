@@ -26,7 +26,7 @@
 #
 # Two hard gates keep this from ever mis-firing:
 #   1. source == clear   (the only case the crash-resume path #143 doesn't cover);
-#   2. the pane is @steward=1 — a worker/scout pane running /clear must NEVER be
+#   2. the pane is @steward=1 — a worker pane running /clear must NEVER be
 #      handed the steward's standing orders.
 # No-op outside tmux, with no pane, or if ~/.claude/steward.md is absent (the
 # identity file is a personal rail, not shipped in the repo — nothing to adopt).
@@ -55,7 +55,7 @@ fi
 [ "$src" = "clear" ] || exit 0
 
 # 3. Hard gate: only a @steward=1 pane gets steward identity. An unmarked pane
-#    (worker/scout) reports empty here and is skipped.
+#    (a worker) reports empty here and is skipped.
 st=$(tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)
 [ "$st" = "1" ] || exit 0
 

@@ -111,7 +111,7 @@ Create **one non-closing issue per fleet** (e.g. titled `🛰 steward · <fleet>
 label `steward-control`) and record its number. It is a **dedicated bridge
 endpoint, never a worker task** — a comment on it always routes to the steward, so
 it must not also be a backlog issue a worker binds to. Give it the `steward-control`
-label: the autofill dispatcher excludes that label so it can't auto-spawn a worker
+label: the spawn-eligibility filters exclude that label so a worker is never spawned
 on the control issue. The steward route reuses the whole relay pipeline unchanged:
 
 - **same gates** — `author_association` floor, the `<!-- fleet:no-relay -->`

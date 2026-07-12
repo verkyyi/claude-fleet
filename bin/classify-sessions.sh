@@ -6,15 +6,11 @@
 # ONLY way the purple 'looping' state gets set. OPTIONAL — everything else works
 # without it; you just won't get looping detection or false-alarm correction.
 #
-# Two modes:
+# One mode:
 #   --window <target>  — classify ONE window now. Fired by bin/classify-hook.sh on
 #                        the Stop hook, so a stopped turn is disambiguated (done vs
-#                        looping vs needs) within ~1-2s instead of waiting for the
-#                        slow daemon tick. This is the real-time path.
-#   (no args)          — full scan of every window. Runs from launchd/systemd
-#                        (com.claude-fleet.classify, ~1800s) purely as a backstop
-#                        for windows a Stop event will never revisit (e.g. a loop
-#                        killed externally, left stuck on 'looping').
+#                        looping vs needs) within ~1-2s. This is the real-time path.
+#                        The spinner's stuck-working demote also fires it directly.
 #
 # Cost gating (lazy):
 #   * ONLY classifies windows whose state is done|needs|looping (ambiguous/quiet).
@@ -22,25 +18,20 @@
 #   * Change-detected: a window is only sent to the LLM when its pane content
 #     changed since last check. A loop paused between iterations has a static
 #     screen -> classified once, then skipped -> steady-state cost ~= 0.
-#   * Full-scan caps LLM classifications per tick (CLASSIFY_MAX, default 8).
-#   * Per-window lock so the daemon backstop and a Stop-hook fire can't double-run.
+#   * Per-window lock so a Stop-hook fire and the spinner's demote can't double-run.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CACHE="$BIN/../logs/.classify-cache"; mkdir -p "$CACHE"
 LOG="$BIN/../logs/classify.log"
 MODEL="${CLASSIFY_MODEL:-haiku}"
-MAXW="${CLASSIFY_MAX:-8}"
 SETTLE="${CLASSIFY_SETTLE:-0.5}"   # let the "scheduled/waiting" line render before capture
 
 command -v claude >/dev/null 2>&1 || exit 0
 
-# Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. In
-# --window mode the socket is inherited from $TMUX (the Stop hook fires in-pane)
-# or handed in via CLASSIFY_SOCK (the spinner's stuck-demote fires out-of-band);
-# the full-scan fans out over every live fleet socket, setting CLASSIFY_SOCK per
-# fleet. TM() routes every tmux call to the right server accordingly.
-# shellcheck source=/dev/null
-[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+# Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. The
+# socket is inherited from $TMUX (the Stop hook fires in-pane) or handed in via
+# CLASSIFY_SOCK (the spinner's stuck-demote fires out-of-band). TM() routes every
+# tmux call to the right server accordingly.
 TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else tmux "$@"; fi; }
 
 RUBRIC='You are a status classifier for a Claude Code terminal session. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
@@ -54,8 +45,7 @@ Screen:
 
 # classify_one <target> — classify a single window (target = any tmux -t spec,
 # e.g. a window id "@7" or "session:idx"). Honours the state gate, change-hash
-# and a per-window lock. Returns 10 iff an LLM call was actually made (so the
-# full-scan can cap on real classifications), 0 otherwise. Never fails the caller.
+# and a per-window lock. Never fails the caller.
 classify_one() {
   target="$1"
   st=$(TM display-message -p -t "$target" '#{@claude_state}' 2>/dev/null)
@@ -98,32 +88,16 @@ classify_one() {
     TM set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
     printf '%s  %-10s %-8s -> %s\n' "$(date +%H:%M:%S)" "$target" "$st" "$new" >> "$LOG"
   fi
-  return 10           # an LLM call was made this pass
+  return 0
 }
 
 # ---- single-window mode (event / Stop-hook path) ----------------------------
+# The only mode: classify ONE window now, fired by the Stop hook (classify-hook.sh)
+# or the spinner's stuck-working demote. A bare/unknown invocation is a clean no-op.
 if [ "${1:-}" = "--window" ]; then
   [ -n "${2:-}" ] || exit 0
   sleep "$SETTLE" 2>/dev/null   # settle: let post-turn scheduling text land
   classify_one "$2"
   [ -f "$LOG" ] && { tail -n 300 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
-  exit 0
 fi
-
-# ---- full-scan mode (daemon backstop) ---------------------------------------
-# Fan out over every live fleet socket (issue #159); window ids are per-server, so
-# CLASSIFY_SOCK is set per fleet and routes classify_one's tmux calls there. The
-# MAXW cap is applied ACROSS all fleets so one busy tick can't blow the budget.
-n=0
-for sock in $(command -v fleet_sockets >/dev/null 2>&1 && fleet_sockets); do
-  [ "$n" -ge "$MAXW" ] && break
-  export CLASSIFY_SOCK="$sock"
-  while IFS= read -r win; do
-    [ "$n" -ge "$MAXW" ] && break   # cap hit: stop, don't keep scanning the rest
-    classify_one "$win"; rc=$?
-    [ "$rc" -eq 10 ] && n=$((n + 1))
-  done < <(TM list-windows -a -F '#{window_id}')
-done
-
-[ -f "$LOG" ] && { tail -n 300 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; }
 exit 0

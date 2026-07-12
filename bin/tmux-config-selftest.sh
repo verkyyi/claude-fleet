@@ -44,7 +44,7 @@ eq()   { [ "$2" = "$3" ] || fail "$1: got [$2] want [$3]"; ok; }
 # --- KEY LIST ---------------------------------------------------------------
 keys=$(fcfg_keys)
 for k in FLEET_REPO FLEET_CTX_WINDOW FLEET_MODEL FLEET_GLOBAL_MAX_SESSIONS \
-         FLEET_AUTOFILL FLEET_AUTOFILL_MAX_PER_TICK FLEET_NOTIFY_CMD \
+         FLEET_CLEANUP FLEET_CLEANUP_MAX_PER_TICK FLEET_NOTIFY_CMD \
          FLEET_DISK_FLOOR_GB FLEET_SPAWN_FOCUS FLEET_GH_TTL FLEET_CONF_DIR; do
   printf '%s\n' "$keys" | grep -qxF "$k" || fail "key list missing $k"
   ok
@@ -122,7 +122,7 @@ lib_global=$( . "$BIN/fleet-lib.sh" >/dev/null 2>&1; printf '%s' "$_FLEET_GLOBAL
 eq 'global-only list == example @scope=global set' "$example_global" "$lib_global"
 
 # --- TYPING (fcfg_type derives from @edit) ----------------------------------
-eq 'type FLEET_AUTOFILL'       "$(fcfg_type FLEET_AUTOFILL)"       bool
+eq 'type FLEET_CLEANUP'       "$(fcfg_type FLEET_CLEANUP)"       bool
 eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
 eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
@@ -136,7 +136,7 @@ eq 'type FLEET_PROTECTED_RE'   "$(fcfg_type FLEET_PROTECTED_RE)"   str
 # --- DEFAULTS ---------------------------------------------------------------
 eq 'default FLEET_CTX_WINDOW'          "$(fcfg_default FLEET_CTX_WINDOW)"          200000
 eq 'default FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_default FLEET_GLOBAL_MAX_SESSIONS)" 8
-eq 'default FLEET_AUTOFILL'            "$(fcfg_default FLEET_AUTOFILL)"            0
+eq 'default FLEET_CLEANUP'            "$(fcfg_default FLEET_CLEANUP)"            1
 eq 'default FLEET_MODEL'               "$(fcfg_default FLEET_MODEL)"               opus
 eq 'default FLEET_DISK_FLOOR_GB'       "$(fcfg_default FLEET_DISK_FLOOR_GB)"       12
 eq 'default FLEET_GH_TTL'              "$(fcfg_default FLEET_GH_TTL)"              90
@@ -207,12 +207,12 @@ eq 'write update status' "$st" updated
 [ -f "$NEW.bak" ] || fail 'update did not back up'; ok
 n=$(grep -cE '^FLEET_MAX_SESSIONS=' "$NEW"); eq 'no duplicate line' "$n" 1
 v=$( . "$NEW"; printf '%s' "${FLEET_MAX_SESSIONS:-}" ); eq 'sourced after update' "$v" 5
-# prefix-safe: FLEET_AUTOFILL must not clobber FLEET_AUTOFILL_MAX_PER_TICK
-fcfg_write "$NEW" FLEET_AUTOFILL 1 bool >/dev/null
-fcfg_write "$NEW" FLEET_AUTOFILL_MAX_PER_TICK 2 int >/dev/null
-v=$( . "$NEW"; printf '%s' "${FLEET_AUTOFILL:-}" );              eq 'prefix key A' "$v" 1
-v=$( . "$NEW"; printf '%s' "${FLEET_AUTOFILL_MAX_PER_TICK:-}" ); eq 'prefix key B' "$v" 2
-n=$(grep -cE '^FLEET_AUTOFILL=' "$NEW"); eq 'AUTOFILL single line' "$n" 1
+# prefix-safe: FLEET_CLEANUP must not clobber FLEET_CLEANUP_MAX_PER_TICK
+fcfg_write "$NEW" FLEET_CLEANUP 1 bool >/dev/null
+fcfg_write "$NEW" FLEET_CLEANUP_MAX_PER_TICK 2 int >/dev/null
+v=$( . "$NEW"; printf '%s' "${FLEET_CLEANUP:-}" );              eq 'prefix key A' "$v" 1
+v=$( . "$NEW"; printf '%s' "${FLEET_CLEANUP_MAX_PER_TICK:-}" ); eq 'prefix key B' "$v" 2
+n=$(grep -cE '^FLEET_CLEANUP=' "$NEW"); eq 'CLEANUP single line' "$n" 1
 # string value with $-expansion + slashes survives verbatim in the file
 fcfg_write "$NEW" FLEET_NOTIFY_CMD '$HOME/bin/notify.sh' path >/dev/null
 grep -qF 'FLEET_NOTIFY_CMD="$HOME/bin/notify.sh"' "$NEW" || fail 'path write mangled the value'; ok

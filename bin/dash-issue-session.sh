@@ -14,10 +14,9 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-# Parse: <issue-number> [<target-session>] [--title <t>] [--scout] [--force].
-# The two positionals keep their historic order (num, target-session). --scout
-# spawns a READ-ONLY investigation worker that reports and never branches/ships/
-# lands (issue #148). --title <t> is the
+# Parse: <issue-number> [<target-session>] [--title <t>] [--force].
+# The two positionals keep their historic order (num, target-session). --title <t>
+# is the
 # AUTHORITATIVE window name (issue #216): a create-then-spawn caller
 # (/fleet-new-issue, the prefix+n quick-dispatch, the dash new-session box) passes
 # the title it JUST wrote so the window is named after the WORK — not the bare
@@ -27,7 +26,7 @@ set -uo pipefail
 # pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
 # dead/abandoned peer worker that left the issue assigned+marked forever), skipping
 # the claim check + claim-at-spawn entirely.
-num=""; TARGET_SESS=""; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -36,12 +35,11 @@ for _a in "$@"; do
     _want=""; continue
   fi
   case "$_a" in
-    --scout) SCOUT_FLAG=1 ;;
     --force|--reclaim) FORCE_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
-    # An UNKNOWN dash-flag is almost always a typo (e.g. --scou). Do NOT let it
-    # fall through to the positional slots — treating "--scou" as the issue number
+    # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
+    # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
     --*) printf 'dash-issue-session: ignoring unknown flag %s\n' "$_a" >&2
          tmux display-message "issues: ignoring unknown flag $_a" 2>/dev/null ;;
@@ -78,19 +76,7 @@ slug="issue-$num"
 existing=$(TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
 [ -z "$existing" ] && existing=$(TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
 if [ -n "$existing" ]; then
-  # A scout and a worker for the same issue share the SAME issue-<N> worktree, so
-  # they can't coexist — the existing window always wins the dedup. But the two
-  # roles differ, so the message must be honest: a steward converting a scout
-  # finding to ship work (spawn #N while its scout is still alive) must not read a
-  # bare "already spawned" and believe a worker is implementing (issue #148). Tell
-  # them a read-only scout holds the slot; the scout self-cleans when it reports,
-  # freeing #N for a real worker spawn.
-  existing_scout=$(TM show-options -w -v -t "$existing" @scout 2>/dev/null)
-  if [ "$existing_scout" = 1 ] && [ "$SCOUT_FLAG" != 1 ]; then
-    msg="#$num has a live READ-ONLY scout — wait for its report (it self-cleans), then re-spawn a worker"
-  else
-    msg="#$num already spawned"
-  fi
+  msg="#$num already spawned"
   # Non-invasive by default: don't yank the caller to the existing window; just
   # note it. Opt into the jump with FLEET_SPAWN_FOCUS=1 (interactive spawns only).
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
@@ -106,8 +92,8 @@ fi
 # (FLEET_GLOBAL_MAX_SESSIONS, default 8, across ALL fleets) OR this fleet's
 # per-fleet cap (FLEET_MAX_SESSIONS, default 0 = unlimited) is reached. This is
 # the shared choke point for every spawn path — the new-session box, the backlog
-# Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>, incl. the
-# autofill dispatcher) — so both caps are true ceilings regardless of who spawns.
+# Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>) — so both caps
+# are true ceilings regardless of who spawns.
 # Passing $SESS enables the per-fleet check for THIS fleet. Exit non-zero on
 # refusal so a headless caller records an honest FAIL, not a false spawn.
 if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"; exit 1; fi
@@ -130,11 +116,10 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim writes
 # earlier (same write count; /fleet-claim then no-ops), and a gh outage/absence
 # degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
-# the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. Scouts are read-only (no
-# branch/push/PR race) → exempt; --force/--reclaim is the manual escape hatch past a
-# stale claim.
+# the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. --force/--reclaim is the
+# manual escape hatch past a stale claim.
 my_claim_id=""
-if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && [ "$SCOUT_FLAG" != 1 ] \
+if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   # One issue read (assignee count · state · a ▶ claiming-comment count) + one cheap
   # open-PR probe. Same-account caveat: every worker assigns the SAME gh account, so
@@ -150,8 +135,8 @@ if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && [ "$SCOUT_
   n_open_pr="${n_open_pr//[^0-9]/}"
   if [ "${n_assignee:-0}" -gt 0 ] || [ "${n_claim:-0}" -gt 0 ] \
      || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
-    # Refuse and DO NOT spawn. Exit non-zero so a headless caller (the autofill
-    # dispatcher) records an honest FAIL, not a false spawn — mirroring the cap check.
+    # Refuse and DO NOT spawn. Exit non-zero so a headless caller records an honest
+    # FAIL, not a false spawn — mirroring the cap check.
     TM display-message "#$num already claimed elsewhere — not spawning" 2>/dev/null
     exit 1
   fi
@@ -196,36 +181,24 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # Lifecycle (issue #277): THE FLEET NEVER MERGES. Every worker runs the same
 # finish — /fleet-ship verifies, pushes, opens a PR, and ARMS GitHub auto-merge;
 # GitHub merges when the PR is green and the com.claude-fleet.cleanup daemon reaps
-# the worktree/window afterward. There is no self-land and no /land trigger — the
-# only lifecycle split left is scout (read-only, opens no PR) vs a regular worker.
-SCOUT="$SCOUT_FLAG"
-# The claim ritual ("run /fleet-claim, else do it by hand") is identical for both
-# the scout and the regular lifecycle — build it ONCE here and reuse it, rather
-# than hand-maintaining two copies that can drift (issue #148).
+# the worktree/window afterward. There is no self-land and no /land trigger.
+# The claim ritual ("run /fleet-claim, else do it by hand") is built ONCE here and
+# reused.
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
 claim=$(printf 'Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan.' \
   "$num" "$REPO" "$num" "$REPO")
-if [ "$SCOUT" = 1 ]; then
-  # Read-only scout seed (issue #148): investigate + report, NEVER implement. No
-  # branch, no PR, no ship mandate — the closing move is a findings comment + a
-  # self-clean (bin/fleet-scout-clean.sh, driven by /fleet-scout-report).
-  # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-  printf 'Investigate GitHub issue #%s in this repo as a READ-ONLY scout. %s This is a SCOUT task: investigate and REPORT — do NOT implement. Make NO code edits, create NO branch, open NO PR. Read the code and run read-only commands (gh/grep/git log) to gather findings. When your investigation is complete, run /fleet-scout-report — it posts your findings as an issue comment and self-cleans this window (there is no PR to merge). If /fleet-scout-report is unavailable, post your findings via `~/.claude/fleet/bin/fleet-comment.sh %s --repo %s --note --body '"'"'<findings>'"'"'` then run `~/.claude/fleet/bin/fleet-scout-clean.sh` to tear down. If the finding should convert to ship work, leave the issue OPEN and say so (a follow-up worker implements it); otherwise close it. Never open a PR.' \
-    "$num" "$claim" "$num" "$REPO" > "$tf"
-else
-  # The claim→implement→ship preamble builds a shared prefix + one uniform tail
-  # (issue #277): every worker finishes with /fleet-ship, which arms auto-merge —
-  # the fleet never merges. The BODY between the /fleet-claim ritual and the tail
-  # is the one operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE
-  # overrides it per fleet (default = the built-in instruction). fleet_worker_prompt_body
-  # strips any trailing sentence punctuation so the body stays a clause that flows
-  # into the tail's own leading '. ' — keeping the DEFAULT seed byte-identical.
-  # The head (issue binding), $claim, and the tail below stay structural + intact.
-  body=$(fleet_worker_prompt_body "$num" "$REPO")
-  prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
-  tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s, and arm GitHub auto-merge). IMPORTANT: open the PR, let /fleet-ship arm auto-merge, and STOP — do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If /fleet-ship is unavailable, open the PR manually and still do not merge. If you hit a blocker you cannot resolve, run /fleet-blocked with the reason.' "$num")
-  printf '%s%s' "$prefix" "$tail" > "$tf"
-fi
+# The claim→implement→ship preamble builds a shared prefix + one uniform tail
+# (issue #277): every worker finishes with /fleet-ship, which arms auto-merge —
+# the fleet never merges. The BODY between the /fleet-claim ritual and the tail
+# is the one operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE
+# overrides it per fleet (default = the built-in instruction). fleet_worker_prompt_body
+# strips any trailing sentence punctuation so the body stays a clause that flows
+# into the tail's own leading '. ' — keeping the DEFAULT seed byte-identical.
+# The head (issue binding), $claim, and the tail below stay structural + intact.
+body=$(fleet_worker_prompt_body "$num" "$REPO")
+prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
+tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s, and arm GitHub auto-merge). IMPORTANT: open the PR, let /fleet-ship arm auto-merge, and STOP — do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If /fleet-ship is unavailable, open the PR manually and still do not merge. If you hit a blocker you cannot resolve, run /fleet-blocked with the reason.' "$num")
+printf '%s%s' "$prefix" "$tail" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
@@ -255,9 +228,6 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { TM display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
-# Mark a scout window (issue #148) so its self-clean can assert it's a scout and
-# tooling can tell "no PR expected" from a normal worker.
-[ "$SCOUT" = 1 ] && TM set-window-option -t "$win" @scout 1 2>/dev/null
 
 # --- Best-effort tie-break (issue #258): resolve a simultaneous cross-machine race.
 # We claimed then created the window; re-read the ▶ claiming comments. GitHub has no
@@ -290,7 +260,7 @@ fi
 # prior file contents). Same key/format the readers expect: summary_<sess>_<winIdDigits>
 # = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh). The session
 # prefix keeps per-fleet servers from colliding on the bare window id (issue #208).
-seed="starting #$num"; [ "$SCOUT" = 1 ] && seed="scouting #$num"; [ -n "$title" ] && seed="$seed: $title"
+seed="starting #$num"; [ -n "$title" ] && seed="$seed: $title"
 printf '%s' "$seed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
 # Non-invasive by default: leave the active window put and just confirm the spawn
 # on the status line. Only jump to the new worker when the user opted in

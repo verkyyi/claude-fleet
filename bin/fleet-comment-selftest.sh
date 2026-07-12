@@ -4,7 +4,7 @@
 #
 # Drives the real fleet-comment.sh + fleet-lib.sh against a FAKE gh + tmux (no
 # network, no tmux server): the fake gh records the --body it would post into
-# $BODYFILE, the fake tmux answers @issue / @scout / session_name from FAKE_*
+# $BODYFILE, the fake tmux answers @issue / session_name from FAKE_*
 # env, so every role path is deterministic. Asserts the issue's contract:
 #   (a) the visible signature line carries the correct role WORD, with NO emoji /
 #       glyph (only the em-dash + middle-dot separators are allowed);
@@ -15,7 +15,7 @@
 #   (e) explicit --from overrides auto-detection;
 #   (f) --no-footer suppresses the footer but KEEPS no-relay;
 #   (g) no $(hostname) / $USER leak;
-#   plus role auto-detection (worker/scout/steward/generic), idempotency, and the
+#   plus role auto-detection (worker/steward/generic), idempotency, and the
 #   watcher path preserving the separate `<!-- fleet:wake … -->` coalescing marker
 #   + never inflating the bridge's `- ` wake-line count.
 #
@@ -62,7 +62,6 @@ case "${1:-}" in
   display-message)
     case "$*" in
       *@issue*)       printf '%s' "${FAKE_ISSUE:-}" ;;
-      *@scout*)       printf '%s' "${FAKE_SCOUT:-}" ;;
       *session_name*) printf '%s' "${FAKE_SESSION:-}" ;;
     esac ;;
 esac
@@ -75,7 +74,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf '\n--- end ---\n' >&2; exit 1; }
 
 # Run fleet-comment.sh in a controlled env. Per-test knobs are shell vars set by
-# the caller: RUNDIR (cwd), FAKE_ISSUE/FAKE_SCOUT/FAKE_SESSION, FLEET_SEAT. The
+# the caller: RUNDIR (cwd), FAKE_ISSUE/FAKE_SESSION, FLEET_SEAT. The
 # vars are explicitly forwarded (a prefix assignment to a function is NOT exported
 # to its grandchild bash). BODYFILE goes into the env so the fake gh can find it.
 fc() {
@@ -86,7 +85,6 @@ fc() {
     TMUX_PANE="" \
     BODYFILE="$BODYFILE" \
     FAKE_ISSUE="${FAKE_ISSUE:-}" \
-    FAKE_SCOUT="${FAKE_SCOUT:-}" \
     FAKE_SESSION="${FAKE_SESSION:-}" \
     FLEET_SEAT="${FLEET_SEAT:-}" \
       bash "$FCS" "$@" >/dev/null 2>&1
@@ -94,7 +92,7 @@ fc() {
 }
 
 # Reset the per-test knobs to a neutral baseline (no seat signals, a session name).
-reset() { RUNDIR="$WORK"; FAKE_ISSUE=''; FAKE_SCOUT=''; FAKE_SESSION='fleet-testrepo'; FLEET_SEAT=''; }
+reset() { RUNDIR="$WORK"; FAKE_ISSUE=''; FAKE_SESSION='fleet-testrepo'; FLEET_SEAT=''; }
 
 # Assert the visible signature line has no emoji/glyph: strip the two ALLOWED
 # separators (em-dash U+2014 = \342\200\224, middle-dot U+00B7 = \302\267) byte-wise
@@ -127,17 +125,6 @@ grep -qF "$MARKER" "$BODYFILE" || fail "(c) worker: no-relay marker missing on a
 # constraint #1 corollary: the visible line must not read as a bridge wake '- ' line
 grep -q '^- ' "$BODYFILE" && fail "worker: the footer must not introduce a '- ' line (would inflate the bridge wake count)"
 printf 'selftest: worker leg PASS (auto-detect, visible+marker+no-relay-last, no emoji)\n' >&2
-
-# ============================== scout (auto-detect) ============================
-# Same worktree/@issue but the window is marked @scout → role 'scout'.
-reset; RUNDIR="$WORK/wt/issue-10"; FAKE_ISSUE=10; FAKE_SCOUT=1
-fc 10 --note --body 'scouted' || fail "scout --note exited non-zero"
-grep -qxF '— fleet · scout · #10' "$BODYFILE" \
-  || fail "scout: visible signature '— fleet · scout · #10' missing (worker+@scout should resolve to scout)"
-printf '%s' "$(grep -F '<!-- fleet:from ' "$BODYFILE")" | grep -qF 'role=scout' \
-  || fail "scout: marker role should be scout"
-assert_no_emoji "scout"
-printf 'selftest: scout leg PASS (worker seat + @scout → scout)\n' >&2
 
 # ============================== steward (auto via FLEET_SEAT) ==================
 # The steward hub exports FLEET_SEAT=steward (steward-session.sh); it has no @issue,
@@ -228,5 +215,5 @@ edges=$(grep -c '^- ' "$BODYFILE")
 [ "$edges" = 2 ] || fail "watcher: expected exactly 2 '- ' wake lines (footer must not add/remove any), got $edges"
 printf 'selftest: watcher leg PASS (footer preserves wake edges + fleet:wake marker)\n' >&2
 
-printf 'selftest PASS: footer role-resolution (worker/scout/steward/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + watcher-coalesce-safe verified\n'
+printf 'selftest PASS: footer role-resolution (worker/steward/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + watcher-coalesce-safe verified\n'
 exit 0

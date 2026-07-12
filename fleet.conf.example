@@ -79,28 +79,6 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Max sessions — this fleet @group=caps @tier=common @scope=fleet @edit=int @unit=sessions
 #FLEET_MAX_SESSIONS=0
 
-# --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
-# OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
-# fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps
-# above have headroom — auto-spawning the highest-priority ELIGIBLE issue so you
-# don't hand-spawn every one. Eligible = open, unassigned, no live window bound,
-# not labeled epic/meta/blocked. Priority = a `priority:p0|p1|p2` label tier
-# (p0 first), then FIFO by issue number; unlabeled issues go last.
-#
-# COST: each auto-spawn launches a real Claude session that spends LLM tokens and
-# opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
-# (best per-fleet in $FLEET_CONF_DIR/<session>.conf).
-# @label=Auto-fill idle slots from backlog @group=autofill @tier=common @scope=fleet @edit=bool
-#FLEET_AUTOFILL=0
-# Max issues auto-spawned per fleet per tick (rate-limit against a thundering
-# herd; the ~60s interval is the cooldown between ticks). Default 1.
-# @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
-#FLEET_AUTOFILL_MAX_PER_TICK=1
-# Optional: require this label for an issue to be autofill-eligible (a manual
-# "ready to auto-spawn" gate). Unset = no gate (any eligible issue qualifies).
-# @label=Auto-fill: only issues labeled @group=autofill @tier=advanced @scope=fleet @edit=str
-#FLEET_AUTOFILL_READY_LABEL="ready"
-
 # --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
 # OFF by default. When enabled for a fleet, the issue-bridge daemon
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)
@@ -160,8 +138,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (posted via bin/fleet-comment.sh, which stamps the marker) never loop back into it.
 # Create ONE non-closing issue per fleet (e.g. titled "🛰 steward · <fleet>") and
 # record its number here. It is a DEDICATED bridge endpoint, never a worker task —
-# label it `steward-control` (the autofill dispatcher excludes that label so it
-# can't spawn a worker on it). Requires FLEET_ISSUE_BRIDGE=1; empty ⇒ no steward
+# label it `steward-control` (a control label the spawn-eligibility filters exclude
+# so a worker is never spawned on it). Requires FLEET_ISSUE_BRIDGE=1; empty ⇒ no steward
 # route (worker relay unchanged). See docs/ISSUE-BRIDGE.md.
 # @label=Steward control issue @group=bridge @tier=common @scope=fleet @edit=int
 #FLEET_STEWARD_ISSUE=
@@ -196,7 +174,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (wakes on transitions, not levels; first run seeds silently, no backfill flood).
 #
 # COST: the watcher itself spends no tokens, but each wake makes the STEWARD take an
-# LLM turn — so, like the bridge/dispatcher, it is opt-in per fleet. DELIVERY is the
+# LLM turn — so, like the issue-bridge, it is opt-in per fleet. DELIVERY is the
 # steward control issue: the watcher posts the wake to FLEET_STEWARD_ISSUE and the
 # issue-bridge relays it into the @steward pane. So it REQUIRES FLEET_STEWARD_ISSUE
 # set and, in practice, FLEET_ISSUE_BRIDGE=1. See docs/WATCH.md.
@@ -404,8 +382,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # kept intact so the fleet machinery still works. Unset ⇒ the built-in default below.
 # Placeholders {issue} and {repo} are substituted; a trailing sentence-ender is
 # stripped so the body flows into the tail. Per-fleet ▸ global ▸ default like any
-# @scope=fleet key (best set per-fleet in $FLEET_CONF_DIR/<session>.conf). Scouts
-# use their own fixed read-only seed and ignore this.
+# @scope=fleet key (best set per-fleet in $FLEET_CONF_DIR/<session>.conf).
 # @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
 
