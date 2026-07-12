@@ -6,7 +6,7 @@
 #
 # Part 1 — SPAWN (--scout): the seeded task prompt is a read-only investigation
 #   (investigate + REPORT, no branch/PR/ship), the window is marked @scout, and a
-#   NON-scout spawn keeps the normal ship prompt. --scout supersedes --self-land.
+#   NON-scout spawn keeps the normal ship prompt; a scout seed carries no ship tail.
 #   A convert-to-ship spawn while a scout still holds the issue is short-circuited
 #   with an HONEST "a live scout holds it" message (not a bare "already spawned").
 # Part 2 — TEARDOWN (fleet-scout-clean.sh): ordered self-destruct (kill window →
@@ -137,12 +137,14 @@ case "$task" in *"/fleet-claim"*) ;; *) fail "1c normal spawn lost the /fleet-cl
 grep -q '@scout' "$SETOPT_LOG" && fail "1c normal spawn must NOT set @scout" "$(cat "$SETOPT_LOG")"
 ok "1c normal spawn keeps the ship prompt, no @scout (shared claim ritual intact)"
 
-# 1d. --scout supersedes --self-land (a scout has no PR to land).
-run_spawn 77 --scout --self-land
+# 1d. a scout seed NEVER carries a ship/merge tail (it opens no PR to arm/land).
+run_spawn 77 --scout
 task="$(cat "$WORK/dash/.claude-dash/fleets/acme-widgets/task_issue-77.txt")"
-case "$task" in *"READ-ONLY scout"*) ;; *) fail "1d --scout must win over --self-land" "$task" ;; esac
-case "$task" in *"/fleet-land-self"*) fail "1d scout prompt must not carry the self-land tail" "$task" ;; *) ;; esac
-ok "1d --scout supersedes --self-land"
+case "$task" in *"READ-ONLY scout"*) ;; *) fail "1d scout seed lost its read-only framing" "$task" ;; esac
+for gone in '/fleet-ship' 'arm GitHub auto-merge'; do
+  case "$task" in *"$gone"*) fail "1d scout prompt must not carry the ship tail ('$gone')" "$task" ;; *) ;; esac
+done
+ok "1d --scout seed carries no ship/merge tail"
 
 # 1e. convert-to-ship: a worker spawn while a live SCOUT holds #77 short-circuits
 # (shared worktree) with an HONEST message — not a bare "already spawned".

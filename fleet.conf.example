@@ -166,32 +166,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Steward control issue @group=bridge @tier=common @scope=fleet @edit=int
 #FLEET_STEWARD_ISSUE=
 
-# --- Worker-owned self-land (commands/fleet-land-self.md, issue #138) -----------
-# OFF by default. When enabled for a fleet (or per spawn via
-# `dash-issue-session.sh <N> --self-land[=auto]`), a worker owns its ENTIRE
-# lifecycle including the land: it runs /fleet-land-self to merge its OWN PR —
-# lease-serialized (the same per-repo land lock /fleet-land-train uses),
-# hold-through-green, base fast-forward, then self-destruct. This deliberately
-# RELAXES the "workers never self-merge" rail. Three values:
-#
-#   0     OFF — the steward lands every PR with /fleet-land (default).
-#   1     TRIGGERED — after /fleet-ship the worker WAITS; the steward reviews the
-#         PR and triggers the land by commenting `/land` on the issue (relayed by
-#         the issue-bridge). The steward only *approves* (one comment) instead of
-#         *performing* the merge; the pre-trigger review is the approval gate.
-#         REQUIRES the issue-bridge (the trigger channel) — FLEET_SELF_LAND=1
-#         implies you also set FLEET_ISSUE_BRIDGE=1; without a bridge no trigger
-#         arrives and workers fall back to steward-lands (/fleet-land).
-#   auto  AUTO (issue #270) — the steward trigger becomes OPTIONAL: /fleet-ship
-#         flows straight into /fleet-land-self after opening the PR, with NO /land
-#         comment required. The worker still waits for CI green (the same
-#         hold-through-green lease). CI-green + branch protection become the ONLY
-#         gate — the same approval-gate relaxation class as FLEET_AUTOLAND. Needs
-#         no issue-bridge (there is no trigger to relay).
-#
-# See docs/SELF-LAND.md.
-# @label=Worker self-land (0|1 triggered|auto) @group=bridge @tier=common @scope=fleet @edit=bool
-#FLEET_SELF_LAND=0
+# --- Cleanup daemon (bin/fleet-cleanup-daemon.sh, com.claude-fleet.cleanup) ------
+# ON by default. THE FLEET NEVER MERGES — /fleet-ship arms GitHub auto-merge and
+# GitHub (or a human on the web, or a collaborator) does the merge; the cleanup
+# daemon (~60s) is what reaps the leftover worktree/window/branch and records the
+# resume ledger once a PR is final (MERGED or CLOSED-unmerged). It merges NOTHING
+# and relaxes NO approval gate, so it is safe to leave on for every fleet. Detection
+# is cache + local (the prmap pr-refresh already writes + a local git/tmux check —
+# ZERO extra gh); single-writer per repo + disk-gated. Set to 0 to opt a fleet OUT
+# (the worktree-autoclean janitor still backstops merged worktrees). See docs/CLEANUP.md.
+# @label=Cleanup daemon (reap after merges) @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_CLEANUP=1
+# Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
+# cooldown). Default 4.
+# @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
+#FLEET_CLEANUP_MAX_PER_TICK=4
 
 # --- Fleet watcher: zero-token event-driven steward wake (issue #147) ------------
 # OFF by default. When enabled for a fleet, the watch daemon (bin/fleet-watch.sh,
@@ -214,31 +203,6 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Watch fleet, wake steward on edges @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_WATCH=0
 
-# --- Auto-land daemon (bin/fleet-autoland.sh, com.claude-fleet.land) -------------
-# OFF by default. When enabled for a fleet, the auto-land daemon (~60s) lands that
-# fleet's landable-green PRs HANDS-OFF — no steward turn, no human — by driving the
-# same mechanical lander (bin/fleet-land.sh) the dash ⌃l / /fleet-land use. It reads
-# only the prmap cache the pr-refresh daemon already writes (ZERO extra gh) and lands
-# a PR only when its `ready` verdict is exactly "ready" (CI-green AND mergeable now);
-# behind/conflict/blocked PRs are left to the steward.
-#
-# ⚠️ APPROVAL-GATE RELAXATION: auto-land REMOVES the human "is the work complete?"
-# gate — CI green + branch protection become the ONLY gate. Like FLEET_SELF_LAND /
-# FLEET_AUTOFILL it is a deliberate relaxation, so it is opt-in per fleet. BOUND what
-# it may land with FLEET_AUTOLAND_LABEL (below). See docs/AUTOLAND.md.
-# @label=Auto-land green PRs (no approval) @group=bridge @tier=common @scope=fleet @edit=bool
-#FLEET_AUTOLAND=0
-# Max PRs auto-landed per fleet per tick (rate-limit against a stampede; the ~60s
-# interval is the cooldown between ticks). Default 1.
-# @label=Auto-land batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
-#FLEET_AUTOLAND_MAX_PER_TICK=1
-# Scope guard: only auto-land a PR whose bound issue (its issue-<N> head) carries
-# THIS label — a "cleared to auto-land" gate so the operator bounds what lands
-# hands-off. Checked against the labels cache (zero gh); FAIL-CLOSED (a PR with no
-# resolvable issue or an unreadable cache is NOT landed). Unset = no gate (every
-# ready PR in scope). RECOMMENDED whenever FLEET_AUTOLAND=1 on a shared/public repo.
-# @label=Auto-land: only issues labeled @group=bridge @tier=advanced @scope=fleet @edit=str
-#FLEET_AUTOLAND_LABEL="autoland"
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
@@ -434,10 +398,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # --- Worker seed prompt (issue #234) ----------------------------------------
 # The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
 # worker is seeded with. The full seed is STRUCTURAL + body:
-#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship/land tail>
+#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship tail>
 # Only <BODY> is customizable — the issue-binding head, the /fleet-claim startup
-# ritual, and the /fleet-ship + (steward-lands | self-land) tail are kept intact
-# so the fleet machinery still works. Unset ⇒ the built-in default shown below.
+# ritual, and the /fleet-ship tail (open the PR + arm auto-merge, then stop) are
+# kept intact so the fleet machinery still works. Unset ⇒ the built-in default below.
 # Placeholders {issue} and {repo} are substituted; a trailing sentence-ender is
 # stripped so the body flows into the tail. Per-fleet ▸ global ▸ default like any
 # @scope=fleet key (best set per-fleet in $FLEET_CONF_DIR/<session>.conf). Scouts

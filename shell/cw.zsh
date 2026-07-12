@@ -142,7 +142,7 @@ cwclean() {
 #                                      own window (self-teardown is allowed), OR
 #                                      the caller is the STEWARD hub (issue #177:
 #                                      the operator's hub legitimately kills a
-#                                      merged worker's window in /fleet-land). The
+#                                      merged worker's window in /fleet-cleanup). The
 #                                      steward seat is read from the inherited
 #                                      FLEET_SEAT=steward env (issue #202), with
 #                                      the $TMUX_PANE→@steward pane read as backup.
@@ -184,8 +184,8 @@ tmux() {
   if (( isolated )) || [[ -z "$dest" ]]; then command tmux "$@"; return; fi
 
   # Steward exemption — issue #177. The operator's steward hub legitimately
-  # manages fleet windows/sessions: /fleet-land and /fleet-land-train kill a
-  # just-merged worker's window as their final cleanup step, which is exactly a
+  # manages fleet windows/sessions: /fleet-cleanup (and the cleanup daemon) kill a
+  # just-merged worker's window as their final teardown step, which is exactly a
   # cross-window kill this guard would otherwise refuse — leaving a zombie
   # window (worktree gone, claude still in a deleted dir). The steward pane
   # carries @steward=1; a WORKER pane never does, so the #158 guarantee is
@@ -201,7 +201,7 @@ tmux() {
   # unconditionally, without depending on tmux re-exporting $TMUX_PANE per shell.
   # That per-shell $TMUX_PANE turned out to be unreliable across tool-shell
   # invocations (issue #202): #185's strict pane read intermittently saw an empty
-  # $TMUX_PANE and refused the steward's own /fleet-land kill-window, forcing the
+  # $TMUX_PANE and refused the steward's own /fleet-cleanup kill-window, forcing the
   # FLEET_ALLOW_TMUX_DESTROY override. A worker is NEVER spawned with FLEET_SEAT
   # (dash-issue-session.sh sets nothing), so the #158 worker guarantee is intact.
   #

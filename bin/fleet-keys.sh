@@ -106,7 +106,7 @@ print_sheet() {
   key "⌃e" "rename the highlighted window"
   key "⌃x" "reap a merged+clean worker (window + worktree + issue)"
   key "⌥x" "force-reap (skip the merged/clean gate)"
-  key "⌃l" "land the row's green PR (no steward turn — pressing the key is approval)"
+  key "⌃l" "arm auto-merge on the row's open PR (the fleet never merges — GitHub merges when green)"
   key "⌃t" "toggle live ⇄ landed (finished sessions)"
   key "⌃o" "restore the highlighted landed session into a new window (claude --resume)"
   key "enter (landed)" "resume the highlighted landed session — same as ⌃o"

@@ -1,7 +1,7 @@
-# Fires claude-fleet-land.service. Parity with the launchd plist:
+# Fires claude-fleet-cleanup.service. Parity with the launchd plist:
 # StartInterval=60 + RunAtLoad=true.
 [Unit]
-Description=claude-fleet auto-land daemon timer (every 60s)
+Description=claude-fleet cleanup daemon timer (every 60s)
 
 [Timer]
 OnStartupSec=25

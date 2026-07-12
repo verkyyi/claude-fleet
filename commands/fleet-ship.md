@@ -1,15 +1,19 @@
-# /fleet-ship — finish ritual: verify, push, open the PR (never merge)
+# /fleet-ship — finish ritual: verify, push, open the PR, arm auto-merge (never merge)
 
 <!-- fleet skill · owner: worker -->
 
 The worker's finish line: verify the change, make sure the `issue-<N>` worktree
-is clean and pushed, and open (or update) a PR that `Closes #<issue>`. Mutates
-this fleet's `$FLEET_REPO` — pushes your branch, opens/updates a PR, and leaves
-a one-line issue comment. It does **not** touch the base checkout.
+is clean and pushed, open (or update) a PR that `Closes #<issue>`, and **arm
+GitHub auto-merge** so the PR merges itself when it goes green. Mutates this
+fleet's `$FLEET_REPO` — pushes your branch, opens/updates a PR, arms auto-merge,
+and leaves a one-line issue comment. It does **not** touch the base checkout.
 
-**HARD RULE: /fleet-ship never merges.** Pushing + opening the PR is the finish line;
-the steward's `/fleet-land` does the merge + deploy. (This is the exact discipline we
-want after a worker self-merged its own PR.)
+**HARD RULE: /fleet-ship never merges.** The fleet never merges — it arms
+auto-merge and cleans up afterward. Arming auto-merge (`gh pr merge --auto`) is
+*not* a merge: GitHub performs the merge only when the PR is green and branch
+protection is satisfied — that is the whole gate. Once the merge happens, the
+cleanup daemon (`com.claude-fleet.cleanup`) reaps the worktree/window/branch and
+records the resume ledger. You push, open the PR, arm, and **stop**.
 
 **Argument** (`$ARGUMENTS`): none — the issue is read from the window's `@issue`
 binding.
@@ -23,12 +27,12 @@ reuse the literal values it prints:
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
 SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} self_land=${FLEET_SELF_LAND:-0}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
 ```
 
-`self_land` decides what you do **after** the PR is open (step 6): `0` = stop, the
-steward lands (`/fleet-land`); `1` = self-land, but WAIT for the steward's `/land`
-trigger; `auto` = self-land straight away — flow into `/fleet-land-self` yourself.
+After the PR is open you always do the **same** thing (step 6): arm auto-merge and
+stop. There is no self-land branch and no waiting for a `/land` trigger — GitHub
+merges when green, and the cleanup daemon reaps afterward.
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
@@ -102,6 +106,26 @@ Closes #<issue>
 - <what you ran and what it showed>
 ```
 
+## 4b. Arm GitHub auto-merge (the fleet never merges — GitHub does)
+
+The finish move: tell GitHub to merge the PR **itself** the moment it is green and
+branch protection is satisfied. You do NOT merge — you arm.
+
+```sh
+gh pr merge --repo "$FLEET_REPO" --auto --squash "<branch-or-PR>" 2>&1
+```
+
+- On success the PR is queued: GitHub squash-merges it when the required checks
+  pass. Nothing else in the fleet merges it — the `com.claude-fleet.cleanup`
+  daemon reaps the worktree/window/branch and records the resume ledger afterward.
+- If arming **fails because the repo has auto-merge disabled** (GitHub returns
+  *"Auto-merge is not allowed for this repository"* or similar), do **not** fail
+  the ship and do **not** merge by hand — the PR is still open and reviewable.
+  **Say so in the ship report**: the PR is open but auto-merge could not be armed
+  (enable it in the repo's Settings → General, or merge on the web when green).
+- Never pass `--admin` and never merge the PR yourself — arming is the only
+  merge-adjacent action /fleet-ship takes.
+
 ## 5. Comment on the issue + leave the window sensible
 
 - One-line summary comment on the issue — via `fleet-comment.sh --note` so this
@@ -113,23 +137,21 @@ Closes #<issue>
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body 'Shipped → <PR URL>' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'Shipped → <PR URL>\n\n— fleet · worker · #<issue>\n<!-- fleet:from role=worker issue=<issue> -->\n<!-- fleet:no-relay -->'`.
 - Leave the window in a done-ish state (the turn ending naturally sets it).
 
-## 6. Report — then follow the fleet's land lifecycle
+## 6. Report — then stop
 
-**/fleet-ship never merges** — pushing + opening the PR is always the finish of
-*ship*. What happens next depends on `self_land` (from step 0):
+**/fleet-ship never merges** — pushing + opening the PR + arming auto-merge is the
+whole finish of *ship*. There is no self-land and no `/land` trigger to wait for.
 
-- **`0` (steward-lands, default)** — Print the PR URL and state explicitly: **the
-  steward will land it (`/fleet-land`).** Do not merge, do not deploy. **Stop here.**
-- **`1` (self-land, triggered)** — Print the PR URL and **WAIT.** Do not merge. The
-  steward reviews and triggers the land by commenting `/land` on the issue (relayed
-  to you by the issue-bridge); only then do you run `/fleet-land-self`. **Stop here.**
-- **`auto` (self-land, auto — issue #270)** — the steward trigger is OPTIONAL.
-  After the PR is open, **immediately continue into `/fleet-land-self`** (no `/land`
-  comment required). It waits for CI green under the hold-through-green lease, then
-  squash-merges your own PR, fast-forwards the base, and self-destructs. If it
-  can't land cleanly, it hands back via `/fleet-blocked` — never force.
+- Print the PR URL and state explicitly: **auto-merge is armed** — GitHub will
+  squash-merge it when it goes green, and `com.claude-fleet.cleanup` will reap the
+  worktree/window/branch and record the resume ledger. Do not merge, do not deploy.
+  **Stop here.**
+- If auto-merge could not be armed (step 4b — repo has it disabled), say so: the
+  PR is open and reviewable but will not self-merge; a human enables auto-merge or
+  merges it on the web when green. Still **stop** — never merge it yourself.
 
-Only the `auto` path continues past ship on its own; `0`/`1` stop and wait.
+If the checks in step 2 failed you should already have stopped without opening the
+PR. A blocker you can't resolve is `/fleet-blocked`, not a forced merge.
 
 ---
 

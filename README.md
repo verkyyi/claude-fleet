@@ -255,17 +255,13 @@ fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
 `~/.claude/commands/`. Each declares an owner seat (`worker` / `steward`) and
 refuses from the wrong one. Live so far:
 
-- **`/fleet-land`** (steward) — land one worker PR: verify it's genuinely mergeable
-  (update-branch + re-check CI if merely behind, never merge red), squash-merge,
-  fast-forward the fleet's base checkout, clean up the merged worktree + window.
-  Fleet-agnostic — the general finish work only.
-- **`/fleet-land-train`** (steward) — the batch complement to `/fleet-land`: a serial
-  single-writer *land train* that lands a batch of green PRs one at a time
-  (update-branch → wait green → merge → base-pull → clean up → next), so each PR is
-  CI-tested once against the master it lands on (O(N), not the O(N²) thundering
-  herd) and one bad PR ejects instead of blocking the rest. A thin batch driver
-  over the shared `bin/fleet-land.sh` — each lap is one full mechanical land — and a
-  client-side stand-in for a merge queue under `strict:true` branch protection.
+- **`/fleet-cleanup`** (steward) — **the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md)).
+  `/fleet-ship` arms GitHub auto-merge, GitHub does the merge when the PR is green,
+  and the `com.claude-fleet.cleanup` daemon reaps the leftover worktree/window/branch
+  and records the resume ledger. `/fleet-cleanup <n>` is the manual escape hatch to
+  clean up a specific merged/closed PR *now* instead of waiting a daemon tick — it
+  records the ledger, fast-forwards the base checkout, and tears down the worktree.
+  It merges nothing and forces nothing.
 - **`/fleet-scout`** (steward) — delegate a *read-only investigation* instead of
   researching inline: files a `scout`-labeled issue (durable question + report
   sink) and spawns a **read-only** worker that investigates, posts its findings

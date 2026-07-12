@@ -3,9 +3,9 @@ name: selftests
 # The single gate for every hermetic selftest in the fleet. bin/run-selftests.sh
 # discovers and runs all `bin/*-selftest.sh` — no network, no live tmux, no real
 # repo (each test fakes `gh`/`tmux` and uses temp dirs) — and exits non-zero if
-# any fail. Folds in the former per-selftest workflows (land-train, tmux-config)
-# AND the three that had no workflow at all (dash-reap, fleet-dispatch,
-# fleet-keys), so all five run under one gate. shellcheck.yml stays separate.
+# any fail. Folds in the former per-selftest workflows (tmux-config, …)
+# AND the ones that had no workflow at all (dash-reap, fleet-dispatch,
+# fleet-keys), so they all run under one gate. shellcheck.yml stays separate.
 #
 # Triggered on bin/** (where the selftests and the code they test live) plus the
 # few fixtures some tests read from outside bin/ (see the paths below). A new

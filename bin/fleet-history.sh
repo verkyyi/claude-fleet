@@ -1,15 +1,16 @@
 #!/bin/bash
 # fleet-history.sh — the landed-session history ledger + its reader/actions.
 #
-# When /fleet-land (or /fleet-land-train) merges a worker's PR it removes the
+# When the cleanup daemon (bin/fleet-cleanup.sh) reaps a merged worker's PR it removes the
 # `issue-<N>` worktree and kills the window — but the worker's Claude transcript
 # SURVIVES cleanup under ~/.claude/projects/<encoded-cwd>/<session>.jsonl. This
 # tool indexes that survivor at land time (`record`) and surfaces it afterward:
 # list landed sessions (`list`/`rows`), and RESUME one by reconstructing the
 # removed worktree off the squash SHA (`resume`). See issue #130.
 #
-# Single-writer: only the steward lands, so only the steward appends. The ledger
-# is append-only and tolerant of missing fields (a row degrades to '-' rather
+# Single-writer: the cleanup daemon serializes per repo (its own lease), so the
+# ledger row is written once per merge. The ledger is append-only and tolerant of
+# missing fields (a row degrades to '-' rather
 # than being dropped) — a landed session should always be listable even if its
 # PR metadata or transcript can't be resolved.
 #
@@ -17,7 +18,7 @@
 #   record  --repo R --main M --pr N --issue N --worktree W [--win ID] [--session S] [--summary S]
 #           Append one ledger row. Derives title/sha/mergedAt from `gh pr view`,
 #           and transcript-dir + session-id from the worktree path. Run it BEFORE
-#           `git worktree remove` in the land cleanup step.
+#           `git worktree remove` in the cleanup teardown step.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
 #   rows                             Dash US-delimited rows (landed view of the dashboard).
 #   resume  --repo R --main M <issue|#pr>   Reconstruct the worktree off the SHA and

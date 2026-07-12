@@ -2,7 +2,7 @@
 
 <!-- fleet skill · owner: steward -->
 
-The live-install counterpart to `/fleet-land`: after claude-fleet's *own*
+The live-install maintenance skill: after claude-fleet's *own*
 changes land on master, this re-applies them to the **live install**
 (`~/.claude/fleet` — the checkout the daemons, hooks, and dash actually read).
 It **mutates the live install and this machine's Claude config**: fast-forwards
@@ -17,8 +17,8 @@ The live install is **shared, machine-global tooling** every fleet uses, so this
 (issue #256). It operates on `~/.claude/fleet` (always a claude-fleet checkout)
 regardless of which fleet invokes it; the only precondition is that
 `~/.claude/fleet` is a git checkout to fast-forward (see step 1). The normal flow:
-land the tooling PR(s) with `/fleet-land` or `/fleet-land-train`, then run
-`/fleet-sync-install` **once** to make the live install match master.
+get the tooling PR(s) merged (auto-merge, armed at ship; or `gh pr merge` by hand),
+then run `/fleet-sync-install` **once** to make the live install match master.
 
 **Argument** (`$ARGUMENTS`): none — takes no argument.
 
@@ -61,7 +61,7 @@ echo "live_slug=${live_slug:-none}"
   repo-match fence was deliberately dropped (issue #256): the skill only ever
   touches `~/.claude/fleet`, never `$FLEET_MAIN`, so the current fleet's repo is
   irrelevant. Everything below operates on `~/.claude/fleet` (the live install) —
-  not `$FLEET_MAIN`, which `/fleet-land` already fast-forwarded.
+  not `$FLEET_MAIN`, which the cleanup daemon already fast-forwarded.
 
 **Scope-rail note:** this is a DELIBERATE, explicit exception to the steward
 "work only on your bound repo" rail. `/fleet-sync-install` touches **machine-global
@@ -265,5 +265,5 @@ Rails: `/fleet-sync-install` is the one deliberate exception to the steward
 shared tooling** (the live install `~/.claude/fleet` + `~/.claude` config), never
 another fleet's repo, sessions, or ledgers, so **any** fleet's steward may run it;
 it refuses only when `~/.claude/fleet` isn't a git checkout to fast-forward.
-Landing is `/fleet-land`'s job; this only re-applies already-landed tooling to the
-live install.
+Merging is GitHub auto-merge's job (the fleet never merges); this only re-applies
+already-merged tooling to the live install.

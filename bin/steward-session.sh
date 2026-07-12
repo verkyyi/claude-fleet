@@ -68,7 +68,7 @@ STEWARD_CMD="${STEWARD_CMD:-$LAUNCH; exec \$SHELL}"
 # pane's command so the steward's claude AND every Bash-tool shell it spawns
 # inherit it — independent of whether tmux re-exports $TMUX_PANE per shell (that
 # per-shell export proved unreliable, intermittently refusing the steward's own
-# /fleet-land kill-window under the #185 strict-$TMUX_PANE guard). The tmux()
+# /fleet-cleanup kill-window under the #185 strict-$TMUX_PANE guard). The tmux()
 # destroy-guard in shell/cw.zsh treats this env as the PRIMARY steward signal.
 # A worker spawn (dash-issue-session.sh) never sets it, so #158 is untouched.
 # Prepended to the FINAL command so it applies to fresh, resume, and override.

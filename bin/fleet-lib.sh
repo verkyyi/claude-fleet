@@ -234,7 +234,7 @@ fleet_worker_prompt_body() {
 
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
-# truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND /
+# truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_CLEANUP /
 # FLEET_AUTOFILL / FLEET_MAX_SESSIONS / FLEET_STEWARD_ISSUE / … — anything outside
 # the derived three. Here we rewrite ONLY the three derived keys (repo/main/base)
 # and re-emit every OTHER line from the existing conf verbatim — not just custom

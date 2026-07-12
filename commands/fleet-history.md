@@ -2,8 +2,9 @@
 
 <!-- fleet skill · owner: steward -->
 
-When `/fleet-land` merges a worker's PR it removes the `issue-<N>` worktree and
-kills the window — but the worker's Claude transcript **survives** under
+When the cleanup daemon (`/fleet-cleanup`) reaps a merged worker's PR it removes
+the `issue-<N>` worktree and kills the window — but the worker's Claude transcript
+**survives** under
 `~/.claude/projects/`. This skill surfaces those finished sessions from the
 land-time history ledger (`bin/fleet-history.sh`): **list** what landed, **open**
 a PR, **review** the recorded transcript, and — the point — **resume** a landed
@@ -47,8 +48,8 @@ bash ~/.claude/fleet/bin/fleet-history.sh list --repo "$FLEET_REPO" $ARGUMENTS
 Each row is `#issue · when · title · PR · squash-sha · one-line-summary`, newest
 first — `when` is a friendly relative span (`2 hours`, `3 days`), not a raw
 timestamp (issue #228). If the ledger is empty, say so — nothing has been
-landed-and-recorded yet (the ledger fills as `/fleet-land` / `/fleet-land-train`
-land PRs). Relay the list; if the user passed a filter, note it.
+landed-and-recorded yet (the ledger fills as the cleanup daemon / `/fleet-cleanup`
+reap merged PRs). Relay the list; if the user passed a filter, note it.
 
 Same data is one keystroke away in the dashboard: **⌃t** toggles the dash between
 its live session list and this landed view. The landed view shares the SAME
@@ -120,5 +121,5 @@ session.
 Rails: operate on YOUR fleet's `$FLEET_REPO` / `$FLEET_MAIN` only — never another
 fleet's repo, sessions, or ledger. This skill never merges, force-pushes, or
 edits history; it reads the ledger and, on resume, recreates a **throwaway**
-worktree at an already-merged SHA. The ledger is written by `/fleet-land` /
-`/fleet-land-train` at land time — this skill only reads and acts on it.
+worktree at an already-merged SHA. The ledger is written by the cleanup daemon /
+`/fleet-cleanup` at reap time — this skill only reads and acts on it.

@@ -5,8 +5,9 @@
 # but you can drive it:
 #   ↑/↓ move · Enter jump to that window · type a task + Enter = create a GitHub
 #   issue and spawn a worktree session bound to it · Ctrl-G bind window↔issue ·
-#   Ctrl-E rename window · Ctrl-L land the row's green PR (dash-land.sh → the
-#   no-LLM fleet-land.sh; #232 — overrides fzf's low-value clear-screen default) ·
+#   Ctrl-E rename window · Ctrl-L arm auto-merge on the row's open PR
+#   (dash-arm-merge.sh → gh pr merge --auto; #277 — the fleet never merges, it arms
+#   + cleans up; overrides fzf's low-value clear-screen default) ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on)
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
 # the 'plan' hub (fleet-up/steward-session builds it; prefix+G focuses it). Env: REFRESH.
@@ -50,10 +51,10 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # Minimal header (issue #249): core actions inline, the rest deferred to the `?`
 # cheatsheet (fleet-keys.sh lists every demoted bind: ⌃g ⌃s ⌃e ⌃x ⌥x ⌃t ⌃o).
 # Terse `key verb` form, not `key=phrase`, so it fits one line at normal widths.
-HDR='↵ jump · ⌃n new · ⌃l land · ? keys'
+HDR='↵ jump · ⌃n new · ⌃l arm · ? keys'
 # POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
 # less obvious than esc-back on the always-on dash) — that token is the only diff.
-[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ⌃l land · ? keys · esc close'
+[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ⌃l arm · ? keys · esc close'
 
 run_dash() {
   # clear any half-finished mode from a prior run; reset the live⇄landed view so
@@ -79,7 +80,7 @@ run_dash() {
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
     --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "alt-x:execute(bash $BIN/dash-reap.sh {1} --force)+reload(bash $ROWS)" \
-    --bind "ctrl-l:execute(tmux display-popup -E -w 72% -h 60% \"bash $BIN/dash-land.sh {1}\")+reload(bash $ROWS)" \
+    --bind "ctrl-l:execute(tmux display-popup -E -w 72% -h 60% \"bash $BIN/dash-arm-merge.sh {1}\")+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1

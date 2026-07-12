@@ -320,7 +320,7 @@ restore() {
         # @prci/@pfg are deliberately NOT re-stamped: the pr-refresh daemon is their
         # single writer (CLAUDE.md) and re-derives them within ~15s. Replaying the
         # snapshot-time glyph could show a stale 'CI green / open PR' after the PR
-        # merged or went red mid-crash — misleading a /fleet-land — and a brief blank
+        # merged or went red mid-crash — misleading the steward's arm/review — and a brief blank
         # until the daemon ticks is the safe failure mode. (They still ride the WIN
         # row for map completeness + forensics.)
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then

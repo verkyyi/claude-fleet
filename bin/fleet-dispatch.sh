@@ -124,7 +124,7 @@ eligible_issues() {
     | sort -t"$(printf '\t')" -k1,1n -k2,2n
 }
 
-# --- per-fleet lease (single-writer; steal-if-stale). Mirrors land-train.sh. ---
+# --- per-fleet lease (single-writer; steal-if-stale). Mirrors fleet-cleanup-daemon.sh. ---
 # The holder id ($2) is passed in — a fully-defaulted string (never bare $USER,
 # which is unset in a launchd/systemd daemon env and would abort under `set -u`).
 lease_acquire() { # $1 = lease path, $2 = my holder id
