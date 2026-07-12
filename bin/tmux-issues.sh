@@ -38,9 +38,15 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 #     modal's ⌃s uses (bin/tmux-config.sh). Each helper's phase-2 (`confirm`)
 #     path reads right here in the terminal, so we call it straight.
 # Also: in POPUP mode enter spawns AND closes (+abort); windowed loops forever.
+# The header is deliberately terse — the essential action (enter=work), the
+# common one (⌃n new), and a pointer to the full keymap (⌃k keys), matching the
+# dashboard's `↵ jump · ⌃n new · … · ? keys` grammar. Every other bind lives in
+# the ⌃k cheatsheet (bin/fleet-keys.sh) rather than crowding this line.
+HDR='↵ work · ⌃n new · ⌃k keys'
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
+  HDR="$HDR · esc close"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
   T_BIND="ctrl-t:execute-silent(printf 'comment %s' {1} > '$ACT')+abort"
@@ -68,7 +74,7 @@ run_fzf() {
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
-    --header='space=preview · /=filter · enter=work · ⌃n=new · ⌃t=comment · ⌃x=close · ⌃y=priority · tab=collapse · ⌃b=bound · ⌃o=web · ⌃r · ⌃k=keys · esc' \
+    --header="$HDR" \
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
