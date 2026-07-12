@@ -1,23 +1,25 @@
 #!/bin/bash
 # dash-issue-prespawn-dedup-selftest.sh — hermetic tests for the cross-machine
-# pre-spawn GitHub-claim dedup in bin/dash-issue-session.sh (issue #258).
+# pre-spawn GitHub-claim dedup in bin/dash-issue-session.sh (issues #258, #283).
 #
 # The local tmux dedup only sees ONE machine's server, so two fleets on different
 # machines / same repo can both spawn issue-<N>. FLEET_PRESPAWN_DEDUP=1 makes the
-# spawn consult the shared GitHub issue as a claim ledger, claim AT SPAWN, and
-# tie-break a simultaneous race. No network, no real repo, no tmux server — git/gh/
-# tmux are faked on PATH (same shape as dash-issue-session-prompt-selftest.sh) and
-# LOG their calls so we can assert which ops ran. The real dash-issue-session.sh +
-# its sibling fleet-comment.sh/fleet-lib.sh run unmodified.
+# spawn consult the shared GitHub issue as a claim ledger and claim AT SPAWN.
+# Since issue #283 THE ASSIGNEE IS THE CLAIM: the "▶ claiming" comment convention
+# (and the sub-second REST-comment-id tie-break that depended on it) is retired —
+# the taken-check reads assignees+state only, and claiming is a bare
+# `gh issue edit --add-assignee @me` with NO comment write. No network, no real
+# repo, no tmux server — git/gh/tmux are faked on PATH and LOG their calls so we
+# can assert which ops ran. The real dash-issue-session.sh + its sibling
+# fleet-lib.sh run unmodified.
 #
 #   DEF  flag UNSET ⇒ dedup is ACTIVE (ON by default): an assigned issue is refused.
 #   OPT  FLEET_PRESPAWN_DEDUP=0 ⇒ opt-out: NO claim gh calls; the window still spawns.
 #   A    flag on + assignee present            → refuse, no claim, no spawn.
-#   B    flag on + a ▶ claiming comment present → refuse, no claim, no spawn.
 #   C    flag on + issue CLOSED                 → refuse, no claim, no spawn.
 #   D    flag on + an open PR on issue-<N>      → refuse (in-flight elsewhere).
-#   E    flag on + FREE issue                   → claims (assignee + ▶ marker) THEN spawns.
-#   F    flag on + tie-break: an EARLIER foreign ▶ claiming comment → self-reap + refuse.
+#   E    flag on + FREE issue                   → claims (assignee ONLY) THEN spawns,
+#                                                 and posts NO ▶ claiming comment.
 #   G    flag on + --force despite an assignee  → spawns, skipping the check + claim.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured logs).
@@ -54,22 +56,18 @@ esac
 exit 0
 GITFAKE
 
-# --- fake gh: LOG every call; answer the claim-ledger reads + writes from env -------
-# CLAIM_STATE  = "<assignee_count>\t<state>\t<claiming_comment_count>" (the check read)
-# PR_COUNT     = open-PR count on issue-<N>                            (the PR probe)
-# MY_CLAIM_URL = the URL `gh issue comment` prints (its REST id is our tie token)
-# CLAIM_URLS   = newline-separated ▶ claiming comment URLs             (the tie-break read)
+# --- fake gh: LOG every call; answer the claim-ledger reads from env ---------------
+# CLAIM_STATE = "<assignee_count>\t<state>"  (the taken-check read — assignees,state)
+# PR_COUNT    = open-PR count on issue-<N>   (the PR probe)
 cat > "$WORK/fakebin/gh" <<GHFAKE
 #!/bin/bash
 printf 'gh %s\n' "\$*" >> "$GH_LOG"
 case "\$*" in
-  *"issue view"*"--json assignees,state,comments"*) printf '%s\n' "\${CLAIM_STATE:-0	OPEN	0}" ;;
-  *"issue view"*"--json comments"*)                 printf '%s\n' "\${CLAIM_URLS:-}" ;;
-  *"issue view"*"--json title"*)                    printf '%s\n' "\${GH_TITLE:-Some Issue}" ;;
-  *"pr list"*)                                       printf '%s\n' "\${PR_COUNT:-0}" ;;
-  *"issue comment"*)                                 printf '%s\n' "\${MY_CLAIM_URL:-https://github.com/acme/widgets/issues/258#issuecomment-200}" ;;
-  *"issue edit"*)                                    : ;;
-  *"api user"*)                                      printf 'me\n' ;;
+  *"issue view"*"--json assignees,state"*) printf '%s\n' "\${CLAIM_STATE:-0	OPEN}" ;;
+  *"issue view"*"--json title"*)           printf '%s\n' "\${GH_TITLE:-Some Issue}" ;;
+  *"pr list"*)                             printf '%s\n' "\${PR_COUNT:-0}" ;;
+  *"issue edit"*)                          : ;;
+  *"api user"*)                            printf 'me\n' ;;
   *) : ;;
 esac
 exit 0
@@ -120,82 +118,58 @@ unset FLEET_PRESPAWN_DEDUP
 
 # ===== DEF: flag UNSET ⇒ dedup is ACTIVE (ON by default) ===========================
 # An assigned issue must be refused even with NO FLEET_PRESPAWN_DEDUP set — the
-# cross-machine claim ledger is the default now (issue #258 follow-up).
-CLAIM_STATE=$'1\tOPEN\t0' run_spawn 258
+# cross-machine claim ledger (the assignee) is the default now.
+CLAIM_STATE=$'1\tOPEN' run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "DEF (unset) must dedup by default — an assigned issue refuses"
 tmux_has 'new-window'                            && fail "DEF (unset) must NOT spawn a claimed issue"
 display_has 'already claimed elsewhere'          || fail "DEF should announce 'already claimed elsewhere'"
 ok "DEF (flag unset) runs the dedup — ON by default"
 
 # ===== OPT: FLEET_PRESPAWN_DEDUP=0 ⇒ opt-out fast path: no claim calls, still spawns =
-CLAIM_STATE=$'1\tOPEN\t0' FLEET_PRESPAWN_DEDUP=0 run_spawn 258
+CLAIM_STATE=$'1\tOPEN' FLEET_PRESPAWN_DEDUP=0 run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "OPT (=0) should spawn even an assigned issue (dedup off)" "$(cat "$WORK/spawn.err")"
-gh_has 'assignees,state,comments'                && fail "OPT (=0) must NOT run the claim-ledger read"
+gh_has 'assignees,state'                         && fail "OPT (=0) must NOT run the claim-ledger read"
 gh_has '--add-assignee'                          && fail "OPT (=0) must NOT claim (assign)"
-gh_has 'issue comment'                           && fail "OPT (=0) must NOT post a ▶ claiming comment"
 tmux_has 'new-window'                            || fail "OPT (=0) should still spawn the window"
 ok "OPT (FLEET_PRESPAWN_DEDUP=0) is the zero-gh opt-out — no claim calls, window spawns"
 
 # ===== A: assignee present ⇒ refuse ================================================
-CLAIM_STATE=$'1\tOPEN\t0' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
+CLAIM_STATE=$'1\tOPEN' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "A an assigned issue must refuse (non-zero exit)"
 tmux_has 'new-window'                            && fail "A must NOT spawn a window for a claimed issue"
 gh_has '--add-assignee'                          && fail "A must NOT claim an already-claimed issue"
 display_has 'already claimed elsewhere'          || fail "A should announce 'already claimed elsewhere'"
-ok "A assignee present → refuse + no spawn"
-
-# ===== B: a ▶ claiming comment present ⇒ refuse ===================================
-CLAIM_STATE=$'0\tOPEN\t1' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
-[ "$(rc)" != 0 ]                                 || fail "B a ▶ claiming comment must refuse"
-tmux_has 'new-window'                            && fail "B must NOT spawn for a ▶ claiming-marked issue"
-ok "B ▶ claiming comment present → refuse + no spawn"
+ok "A assignee present → refuse + no spawn (the assignee is the claim)"
 
 # ===== C: issue CLOSED ⇒ refuse ===================================================
-CLAIM_STATE=$'0\tCLOSED\t0' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
+CLAIM_STATE=$'0\tCLOSED' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "C a CLOSED issue must refuse"
 tmux_has 'new-window'                            && fail "C must NOT spawn for a closed/merged issue"
 ok "C closed/merged issue → refuse + no spawn"
 
 # ===== D: an open PR on issue-<N> ⇒ refuse ========================================
-CLAIM_STATE=$'0\tOPEN\t0' PR_COUNT=1 FLEET_PRESPAWN_DEDUP=1 run_spawn 258
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=1 FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "D an open PR (in flight) must refuse"
 tmux_has 'new-window'                            && fail "D must NOT spawn when a PR is already open elsewhere"
 ok "D open PR on issue-<N> → refuse + no spawn"
 
-# ===== E: FREE issue ⇒ claim (assignee + marker) THEN spawn =======================
-CLAIM_STATE=$'0\tOPEN\t0' PR_COUNT=0 \
-  MY_CLAIM_URL='https://github.com/acme/widgets/issues/258#issuecomment-200' \
-  CLAIM_URLS='https://github.com/acme/widgets/issues/258#issuecomment-200' \
-  FLEET_PRESPAWN_DEDUP=1 run_spawn 258
+# ===== E: FREE issue ⇒ claim (assignee ONLY, NO comment) THEN spawn ================
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "E a free issue should claim + spawn (exit 0)" "$(cat "$WORK/spawn.err")"
 gh_has '--add-assignee'                          || fail "E a free issue must claim the assignee AT SPAWN"
-gh_has 'issue comment'                           || fail "E a free issue must post the ▶ claiming marker AT SPAWN"
+gh_has 'issue comment'                           && fail "E the retired ▶ claiming comment must NOT be posted (assignee is the claim, #283)"
 tmux_has 'new-window'                            || fail "E a free issue must spawn the window after claiming"
-tmux_has 'kill-window'                           && fail "E winning the tie-break must NOT self-reap the window"
-ok "E free issue → claims (assignee + ▶ marker) THEN spawns, no rollback"
-
-# ===== F: tie-break — an EARLIER foreign ▶ claiming ⇒ self-reap + refuse ===========
-# The check passes (free at read time); we claim (our REST id 200) + create the
-# window; the re-read finds a foreign claim with an EARLIER id (100) → we lost.
-CLAIM_STATE=$'0\tOPEN\t0' PR_COUNT=0 \
-  MY_CLAIM_URL='https://github.com/acme/widgets/issues/258#issuecomment-200' \
-  CLAIM_URLS=$'https://github.com/acme/widgets/issues/258#issuecomment-100\nhttps://github.com/acme/widgets/issues/258#issuecomment-200' \
-  FLEET_PRESPAWN_DEDUP=1 run_spawn 258
-[ "$(rc)" != 0 ]                                 || fail "F losing the tie-break must refuse (non-zero exit)"
-tmux_has 'new-window'                            || fail "F the window is created BEFORE the tie-break re-read"
-tmux_has 'kill-window'                           || fail "F a lost tie-break must self-reap (kill) the window"
-git_has 'worktree remove'                        || fail "F a lost tie-break must remove the worktree"
-git_has 'branch -D'                              || fail "F a lost tie-break must drop the just-created branch"
-display_has 'rolled back'                        || fail "F should announce the rollback"
-ok "F earlier foreign ▶ claiming → self-reap window/worktree/branch + refuse"
+tmux_has 'kill-window'                           && fail "E there is no tie-break rollback anymore — must NOT self-reap"
+git_has 'worktree remove'                        && fail "E there is no tie-break rollback anymore — must NOT remove the worktree"
+ok "E free issue → claims (assignee only, no ▶ comment) THEN spawns, no tie-break rollback"
 
 # ===== G: --force spawns despite an assignee, skipping check + claim ===============
-CLAIM_STATE=$'1\tOPEN\t0' FLEET_PRESPAWN_DEDUP=1 run_spawn 258 --force
+CLAIM_STATE=$'1\tOPEN' FLEET_PRESPAWN_DEDUP=1 run_spawn 258 --force
 [ "$(rc)" = 0 ]                                  || fail "G --force should spawn despite a claim (exit 0)" "$(cat "$WORK/spawn.err")"
-gh_has 'assignees,state,comments'                && fail "G --force must SKIP the claim-ledger check"
+gh_has 'assignees,state'                         && fail "G --force must SKIP the claim-ledger check"
 gh_has '--add-assignee'                          && fail "G --force must SKIP claim-at-spawn"
 tmux_has 'new-window'                            || fail "G --force must spawn the window"
 ok "G --force/--reclaim spawns past a stale claim, skipping the check + claim"
 
-printf '\nselftest OK: %s assertions passed (cross-machine pre-spawn dedup, issue #258)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (cross-machine pre-spawn dedup, issues #258/#283)\n' "$pass"
 exit 0

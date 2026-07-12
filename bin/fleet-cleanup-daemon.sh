@@ -3,7 +3,7 @@
 # (com.claude-fleet.cleanup, ~60s; issue #277, closes #260).
 #
 # THE FLEET NEVER MERGES — it cleans up AFTER merges and keeps sessions resumable.
-# /fleet-ship arms GitHub auto-merge; GitHub (or a human on the web, or a
+# the worker /fleet-claim ship step arms GitHub auto-merge; GitHub (or a human on the web, or a
 # collaborator) does the merge; this daemon is what reaps the leftover worktree +
 # window + branch and records the resume ledger once the PR is final. It replaces
 # the retired auto-land daemon: same single-writer + disk-gated shape, but it

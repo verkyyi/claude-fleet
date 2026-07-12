@@ -2,8 +2,8 @@
 
 <!-- fleet skill · owner: steward -->
 
-The **fleet never merges** — `/fleet-ship` arms GitHub auto-merge and GitHub (or a
-human on the web, or a collaborator) does the merge. The `com.claude-fleet.cleanup`
+The **fleet never merges** — the worker's `/fleet-claim` ship step arms GitHub
+auto-merge and GitHub (or a human on the web, or a collaborator) does the merge. The `com.claude-fleet.cleanup`
 daemon then reaps the leftover worktree/window/branch and records the resume ledger
 within ~60s. This command is the **manual escape hatch**: run it to clean up a
 specific PR *immediately* instead of waiting for the next daemon tick. It drives

@@ -212,7 +212,7 @@ fi
 
 # --- cleanup daemon (reaps worktrees + records the resume ledger after merges) ---
 # ON by default per fleet (opt out with FLEET_CLEANUP=0). THE FLEET NEVER MERGES:
-# /fleet-ship arms GitHub auto-merge; this daemon reaps the leftover worktree/window/
+# the worker's /fleet-claim ship step arms GitHub auto-merge; this daemon reaps the leftover worktree/window/
 # branch once a PR is final. It merges nothing, so there's no approval-gate warning
 # — but it needs gh to read PR state, and it needs com.claude-fleet.cleanup installed.
 if [ -d "$conf_dir" ]; then
@@ -230,7 +230,7 @@ EOF
     else
       pass cleanup "$cleaning fleet(s) with the cleanup daemon on$([ "$optout" -gt 0 ] && printf ' (%s opted out)' "$optout") — worktrees reaped after merges"
     fi
-    printf '        note: needs com.claude-fleet.cleanup installed; the fleet never merges — /fleet-ship arms GitHub auto-merge and this daemon cleans up.\n'
+    printf '        note: needs com.claude-fleet.cleanup installed; the fleet never merges — the worker ship step arms GitHub auto-merge and this daemon cleans up.\n'
   fi
 fi
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-cleanup.sh <PR> [--dry-run] — the SEAT-AGNOSTIC, no-LLM, no-merge janitor
-# (issue #277). The fleet NEVER merges: GitHub auto-merge (armed by /fleet-ship),
+# (issue #277). The fleet NEVER merges: GitHub auto-merge (armed by the worker ship step),
 # a human clicking Merge on the web, or a collaborator does the merge; this script
 # is what runs AFTER a merge to clean up and keep the session resumable. It is the
 # mechanical core the cleanup daemon (com.claude-fleet.cleanup) and the manual

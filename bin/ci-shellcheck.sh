@@ -1,6 +1,6 @@
 #!/bin/sh
 # ci-shellcheck.sh — run the EXACT shellcheck invocation CI runs, locally, so a
-# worker gets an identical verdict before pushing (/fleet-ship == CI). Reproducibility
+# worker gets an identical verdict before pushing (the ship step == CI). Reproducibility
 # is the whole point: CI pins the version from .shellcheck-version and gates at
 # --severity=warning; this mirrors both.
 #

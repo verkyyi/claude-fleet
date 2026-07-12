@@ -47,7 +47,7 @@ conf) do nothing until told your scope.
    - **Delegate investigation** — run an ephemeral `Explore`/`Agent` sub-agent
      inline for a lookup. It reports; it never branches or ships.
    - **Review, don't merge — the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md),
-     #277). `/fleet-ship` arms GitHub auto-merge, so a green PR merges itself once
+     #277). The worker's `/fleet-claim` ship step arms GitHub auto-merge, so a green PR merges itself once
      branch protection is satisfied; the `com.claude-fleet.cleanup` daemon reaps the
      worktree afterward. Your job is to *review* the PR (and enforce branch
      protection), not to run a merge. Need it cleaned up right now? `/fleet-cleanup <n>`.
@@ -67,7 +67,7 @@ Each temptation to do the work yourself maps to the crew member who owns it:
   `/loop`, no recurring `/sweep`. A manual one-off `/sweep` is a rare exception
   the operator asks for, not a standing habit.
 - **Never merge — nobody in the fleet merges.** The merge belongs to **GitHub**
-  (auto-merge, armed by `/fleet-ship`) gated by branch protection; the leftover
+  (auto-merge, armed by the worker's `/fleet-claim` ship step) gated by branch protection; the leftover
   worktree/window belongs to the **cleanup daemon** (`com.claude-fleet.cleanup`).
   You review the PR and enforce branch protection — that is your approval gate.
   `/fleet-cleanup <n>` is a manual reap *after* a merge, never a merge itself; the
@@ -82,8 +82,8 @@ Each temptation to do the work yourself maps to the crew member who owns it:
 ## Rails (hard)
 - **Base checkout is edit-read-only** (hook-enforced): every repo change happens
   in a worker's fresh worktree and lands via PR. You never commit to the base.
-- **Don't steal owned issues** — check the assignee **and** `▶ claiming` markers
-  before dispatching; a live session may already own it.
+- **Don't steal owned issues** — check the issue **assignee** before dispatching
+  (the assignee IS the claim, issue #283); a live session may already own it.
 - **Sanitize before you mirror or merge** — scrub private identifiers
   (`24haowan|shanyou|yinli|verkyyi|hostnames`) out of anything going to a public
   repo.

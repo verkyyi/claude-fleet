@@ -186,11 +186,12 @@ fleet_load_conf() {
 
 # Resolve the operator-facing BODY of an implementing worker's seed prompt
 # (issue #234). A spawned worker is seeded (in dash-issue-session.sh) with:
-#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship/land tail>
-# The head (issue binding), the /fleet-claim startup ritual, and the /fleet-ship +
-# steward-lands|self-land tail are STRUCTURAL — the machinery depends on them, so
-# they are always kept. Only <BODY> is operator-customizable per fleet, letting
-# different fleets seed workers differently. Resolution (highest precedence
+#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>
+# The head (issue binding), the /fleet-claim ritual (which since issue #283 carries
+# the whole lifecycle), and the "open the PR + arm auto-merge, then STOP" tail are
+# STRUCTURAL — the machinery depends on them, so they are always kept. Only <BODY>
+# is operator-customizable per fleet, letting different fleets seed workers
+# differently. Resolution (highest precedence
 # first), from the ALREADY-SOURCED conf env (per-fleet ▸ global ▸ default — the
 # caller runs fleet_load_conf first):
 #   1. FLEET_WORKER_PROMPT_FILE — path to a file whose contents are the body (for a
@@ -230,6 +231,52 @@ fleet_worker_prompt_body() {
   body="${body%"${body##*[![:space:]]}"}"
   [ -n "$body" ] || body="$def"
   printf '%s' "$body"
+}
+
+# The GitHub auto-merge strategy the fleet ARMS (issue #283). The fleet never
+# merges — /fleet-ship (folded into /fleet-claim) and the dash ⌃l arm
+# `gh pr merge --auto --<method>`; GitHub performs the merge when green. Reads
+# FLEET_MERGE_METHOD from the already-sourced conf env (fleet_load_conf first).
+# squash (default) | merge | rebase — an unset/typo'd value falls back to squash
+# so arming never breaks on a bad key. Kept in lockstep with the enum validation
+# in fleet-config-lib.sh (fcfg_validate) via tmux-config-selftest.sh.
+fleet_merge_method() {
+  case "${FLEET_MERGE_METHOD:-}" in
+    squash|merge|rebase) printf '%s' "$FLEET_MERGE_METHOD" ;;
+    *)                    printf 'squash' ;;
+  esac
+}
+
+# Print the LAYERED worker charter for /fleet-claim to load into a worker's
+# context (issue #283). The built-in contract lives in the skill TEXT (the base
+# layer); this emits the two FILE layers that override it, LOW→HIGH precedence so
+# "later wins on conflict" reads top-to-bottom for the worker:
+#   1. repo charter  $FLEET_MAIN/.fleet/worker.md — an INJECTION SURFACE: PRs
+#      auto-merge on green CI with no human review, so a PR could rewrite the
+#      charter every future worker then obeys. GATED behind FLEET_REPO_CHARTER=1
+#      (default OFF, fail-closed); skipped silently when the gate is off or the
+#      file is absent/unreadable.
+#   2. fleet overlay $FLEET_CONF_DIR/fleets/<session>/worker.md — operator-owned
+#      and machine-local (~/.config, only the operator writes it), so it needs no
+#      gate and is always trusted; skipped silently when absent.
+# Emits NOTHING when no file layer applies (the worker then runs on the built-in
+# defaults == today's behaviour). Needs the fleet conf already sourced
+# (FLEET_MAIN / FLEET_CONF_DIR). Arg: $1 = session name (for the overlay path).
+fleet_worker_charter() {
+  local sess="${1:-}" repo_md overlay_md
+  repo_md="${FLEET_MAIN:-}/.fleet/worker.md"
+  overlay_md="$FLEET_CONF_DIR/fleets/$sess/worker.md"
+  # Repo tier (gated, lower precedence) FIRST so the overlay printed after it wins.
+  if [ "${FLEET_REPO_CHARTER:-0}" = 1 ] && [ -r "$repo_md" ]; then
+    printf '===== repo charter · %s (lower precedence) =====\n' ".fleet/worker.md"
+    cat "$repo_md"
+    printf '\n'
+  fi
+  if [ -n "$sess" ] && [ -r "$overlay_md" ]; then
+    printf '===== fleet overlay charter · operator (wins on conflict) =====\n'
+    cat "$overlay_md"
+    printf '\n'
+  fi
 }
 
 # Write a fleet's per-session conf, PRESERVING everything the operator added

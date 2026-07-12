@@ -13,9 +13,9 @@ land / self-land / auto-land machinery — nobody in the fleet self-merges anymo
 ## The lifecycle
 
 ```
-worker: implement → /fleet-ship
+worker: /fleet-claim → implement → ship step (same skill)
                        ├─ verify + push + open PR (Closes #N)
-                       └─ gh pr merge --auto --squash     ← ARM (not merge)
+                       └─ gh pr merge --auto --<FLEET_MERGE_METHOD>   ← ARM (not merge)
 GitHub:  PR goes green + branch protection satisfied → squash-merge
 cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
          → bin/fleet-cleanup.sh <PR>
@@ -33,7 +33,7 @@ cleanup daemon reaps them all identically (**this closes #260**).
 
 | Piece | What |
 |---|---|
-| `/fleet-ship` | After opening the PR, runs `gh pr merge --auto --squash`. If the repo has auto-merge disabled, it says so in the ship report instead of failing — the PR stays open and reviewable. It **never** merges. |
+| `/fleet-claim` ship step | After opening the PR, runs `gh pr merge --auto --<FLEET_MERGE_METHOD>` (default `squash`). If the repo has auto-merge disabled, it says so instead of failing — the PR stays open and reviewable. It **never** merges. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch. Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each. Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | `/fleet-cleanup <n>` | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick. Same mechanical core. |
