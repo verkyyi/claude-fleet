@@ -3,7 +3,7 @@
 # lock that serializes advancing ONE repo's base branch, so two base-movers can
 # never fast-forward the same base under each other.
 #
-# Since issue #277 the fleet never merges — GitHub auto-merge (armed by /fleet-ship)
+# Since issue #277 the fleet never merges — GitHub auto-merge (armed by the worker ship step)
 # does the merge, and bin/fleet-cleanup.sh reaps + fast-forwards the base afterward.
 # This lease is what serializes that base fast-forward across concurrent cleaners
 # (the cleanup daemon + a manual /fleet-cleanup), using the mkdir-atomic acquire +

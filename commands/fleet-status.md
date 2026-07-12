@@ -110,4 +110,4 @@ steward decides what to do next.
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. `/fleet-status` is read-only: it must not open, edit,
 merge, or comment on anything. Implementation and cleanup are separate skills
-(`/fleet-claim`, `/fleet-ship`, `/fleet-cleanup`).
+(`/fleet-claim`, `/fleet-cleanup`).

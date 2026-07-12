@@ -108,49 +108,43 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # DIFFERENT machines against the same repo, a peer's worker is invisible — both can
 # spawn issue-<N> (duplicate worktrees, a non-fast-forward push race, competing PRs).
 # This is the cross-machine backstop: consult the shared GitHub issue as the claim
-# ledger, then claim AT SPAWN (not on the worker's first /fleet-claim turn — that gap
-# WAS the race) so a peer sees the marker within ~1s. It is NOT a mutex (GitHub has
-# no compare-and-swap on an issue), so two peers can still both pass in a sub-second
-# overlap — the post-window tie-break below resolves that remainder. ON by default:
-# the cross-machine safety is the right default and the marginal cost is a few gh
-# READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim writes
-# earlier (same write count; /fleet-claim then no-ops), and a gh outage/absence
+# ledger, then claim AT SPAWN (assign @me — not on the worker's first /fleet-claim
+# turn — that gap WAS the race) so a peer sees the assignee within ~1s. It is NOT a
+# mutex (GitHub has no compare-and-swap on an issue), so a sub-second cross-machine
+# overlap can still let two peers both pass — this shrinks the window, it does not
+# eliminate it (there is no longer a comment-id tie-break; see issue #283). ON by
+# default: the cross-machine safety is the right default and the marginal cost is a
+# few gh READS per spawn — claim-at-spawn only MOVES the worker's own /fleet-claim
+# assign earlier (same write; /fleet-claim then no-ops), and a gh outage/absence
 # degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
 # the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. --force/--reclaim is the
 # manual escape hatch past a stale claim.
-my_claim_id=""
 if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-  # One issue read (assignee count · state · a ▶ claiming-comment count) + one cheap
-  # open-PR probe. Same-account caveat: every worker assigns the SAME gh account, so
-  # we cannot tell "assigned to someone else" — assigned/marked AT ALL ⇒ taken. An
-  # empty read (gh down / missing issue) leaves every counter 0 and state blank → NOT
-  # taken, so a gh outage degrades to today's spawn-anyway behaviour, never a false
-  # refusal.
-  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,comments \
-        --jq '"\(.assignees|length)\t\(.state)\t\((.comments//[])|map(.body)|map(select(contains("▶ claiming")))|length)"' 2>/dev/null)
-  n_assignee=${cs%%$'\t'*}; _rest=${cs#*$'\t'}; st=${_rest%%$'\t'*}; n_claim=${_rest##*$'\t'}
-  n_assignee="${n_assignee//[^0-9]/}"; n_claim="${n_claim//[^0-9]/}"
+  # One issue read (assignee count · state) + one cheap open-PR probe. THE ASSIGNEE
+  # IS THE CLAIM (issue #283): we no longer read or write a "▶ claiming" comment — its
+  # substring match false-fired on any comment that merely MENTIONED the marker string
+  # (e.g. this very issue's design comment tripped the dedup). Same-account caveat:
+  # every worker assigns the SAME gh account, so we cannot tell "assigned to someone
+  # else" — assigned AT ALL ⇒ taken. An empty read (gh down / missing issue) leaves
+  # the counter 0 and state blank → NOT taken, so a gh outage degrades to today's
+  # spawn-anyway behaviour, never a false refusal.
+  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state \
+        --jq '"\(.assignees|length)\t\(.state)"' 2>/dev/null)
+  n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
+  n_assignee="${n_assignee//[^0-9]/}"
   n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null)
   n_open_pr="${n_open_pr//[^0-9]/}"
-  if [ "${n_assignee:-0}" -gt 0 ] || [ "${n_claim:-0}" -gt 0 ] \
+  if [ "${n_assignee:-0}" -gt 0 ] \
      || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
     # Refuse and DO NOT spawn. Exit non-zero so a headless caller records an honest
     # FAIL, not a false spawn — mirroring the cap check.
     TM display-message "#$num already claimed elsewhere — not spawning" 2>/dev/null
     exit 1
   fi
-  # Free → claim NOW so a peer's check sees it within ~1s. /fleet-claim stays and
-  # no-ops idempotently when it finds this pre-claim. Post the marker via
-  # fleet-comment.sh so it carries <!-- fleet:no-relay --> (never loops back into the
-  # worker via the issue-bridge) + the worker footer; capture the created comment URL
-  # — its monotonic issuecomment REST id is our tie-break token. Fall back to a direct
-  # comment that keeps BOTH markers inline if the wrapper is unavailable.
+  # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
+  # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
   gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
-  claim_url=$("$BIN/fleet-comment.sh" "$num" --repo "$REPO" --from worker --note --body '▶ claiming' 2>/dev/null) \
-    || claim_url=$(gh issue comment "$num" --repo "$REPO" \
-         --body "$(printf '▶ claiming\n\n— fleet · worker · #%s\n<!-- fleet:from role=worker issue=%s -->\n<!-- fleet:no-relay -->' "$num" "$num")" 2>/dev/null)
-  my_claim_id=$(printf '%s\n' "$claim_url" | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | tail -1)
 fi
 
 wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
@@ -178,26 +172,24 @@ G="$C/global"; mkdir -p "$G"
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Lifecycle (issue #277): THE FLEET NEVER MERGES. Every worker runs the same
-# finish — /fleet-ship verifies, pushes, opens a PR, and ARMS GitHub auto-merge;
-# GitHub merges when the PR is green and the com.claude-fleet.cleanup daemon reaps
-# the worktree/window afterward. There is no self-land and no /land trigger.
-# The claim ritual ("run /fleet-claim, else do it by hand") is built ONCE here and
-# reused.
+# Lifecycle (issues #277, #283): THE FLEET NEVER MERGES, and /fleet-claim now
+# carries the WHOLE worker lifecycle (claim → load charter → ground → implement →
+# open PR + ARM GitHub auto-merge). So the seed COLLAPSES to essentially "run
+# /fleet-claim": the skill owns the steps that used to live in separate /fleet-ship
+# and /fleet-blocked prompts. The manual fallback spells out the same lifecycle for
+# when the skill isn't installed. The claim is native (assign @me — no ▶ marker).
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-claim=$(printf 'Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan.' \
+claim=$(printf 'Run /fleet-claim — it claims the issue (assigns you), loads your worker charter, grounds you in the issue thread and the code, and carries the whole lifecycle through to opening the PR and arming GitHub auto-merge (the fleet never merges). If /fleet-claim is unavailable, do it by hand: `gh issue view %s --repo %s --comments`, then claim it with `gh issue edit %s --repo %s --add-assignee @me`, and implement in THIS worktree.' \
   "$num" "$REPO" "$num" "$REPO")
-# The claim→implement→ship preamble builds a shared prefix + one uniform tail
-# (issue #277): every worker finishes with /fleet-ship, which arms auto-merge —
-# the fleet never merges. The BODY between the /fleet-claim ritual and the tail
-# is the one operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE
-# overrides it per fleet (default = the built-in instruction). fleet_worker_prompt_body
-# strips any trailing sentence punctuation so the body stays a clause that flows
-# into the tail's own leading '. ' — keeping the DEFAULT seed byte-identical.
-# The head (issue binding), $claim, and the tail below stay structural + intact.
+# The BODY between the /fleet-claim ritual and the tail is the one operator-
+# customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE overrides it per
+# fleet (default = the built-in instruction). fleet_worker_prompt_body strips any
+# trailing sentence punctuation so the body stays a clause that flows into the
+# tail's own leading '. '. The head (issue binding), $claim, and the tail below
+# stay structural + intact.
 body=$(fleet_worker_prompt_body "$num" "$REPO")
 prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
-tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s, and arm GitHub auto-merge). IMPORTANT: open the PR, let /fleet-ship arm auto-merge, and STOP — do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If /fleet-ship is unavailable, open the PR manually and still do not merge. If you hit a blocker you cannot resolve, run /fleet-blocked with the reason.' "$num")
+tail=$(printf '. To finish: verify, push, and open a PR that closes #%s, then arm GitHub auto-merge with `gh pr merge --auto` — IMPORTANT: open the PR, arm auto-merge, and STOP; do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If you hit a blocker you cannot resolve, say why in a comment on the issue and stop.' "$num")
 printf '%s%s' "$prefix" "$tail" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
@@ -229,29 +221,10 @@ win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:"
   || { TM display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 
-# --- Best-effort tie-break (issue #258): resolve a simultaneous cross-machine race.
-# We claimed then created the window; re-read the ▶ claiming comments. GitHub has no
-# CAS, so two peers can both pass the pre-spawn check in the sub-second overlap and
-# both claim. The EARLIEST claim wins — issuecomment REST ids are globally monotonic,
-# so a claim id strictly smaller than ours means a peer got there first and we LOST →
-# roll back the just-created window/worktree/branch cleanly and refuse. (Eventual-
-# consistency lag can hide a peer's just-posted comment; this shrinks the race window,
-# it is not a mutex.) Runs only when we actually claimed above (my_claim_id set).
-if [ -n "$my_claim_id" ]; then
-  earliest=$(gh issue view "$num" --repo "$REPO" --json comments \
-    --jq '.comments[] | select(.body|contains("▶ claiming")) | .url' 2>/dev/null \
-    | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | sort -n | head -n1)
-  if [ -n "$earliest" ] && [ "$earliest" -lt "$my_claim_id" ]; then
-    # Kill the window FIRST (its just-launched process releases the worktree cwd),
-    # then drop the worktree + the brand-new (commit-less) branch we just added.
-    TM kill-window -t "$win" 2>/dev/null
-    git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1
-    git -C "$MAIN" branch -D "$slug" >/dev/null 2>&1
-    git -C "$MAIN" worktree prune >/dev/null 2>&1
-    TM display-message "#$num claimed earlier elsewhere — rolled back, not spawning" 2>/dev/null
-    exit 1
-  fi
-fi
+# (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
+# was retired with the claiming marker in issue #283 — the assignee is now the
+# claim, and workers share one gh account so a per-attempt tie token no longer
+# exists. Claim-at-spawn still shrinks the race window; it was never a mutex.)
 # Seed the dash summary column synchronously so the row isn't blank until the
 # session renders content. summarize-hook.sh's SessionStart run skips a still-
 # blank pane (no screen text yet), so without this the column stays empty until

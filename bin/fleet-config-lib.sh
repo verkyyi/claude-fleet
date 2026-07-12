@@ -338,6 +338,15 @@ fcfg_validate() {
         esac
         return 0
       fi
+      # FLEET_MERGE_METHOD is an enum over the GitHub auto-merge strategies
+      # (issue #283) — its own set, not a model alias. Empty defers to squash.
+      if [ "$key" = FLEET_MERGE_METHOD ]; then
+        case "$val" in
+          ''|squash|merge|rebase) : ;;
+          *) printf '%s must be squash|merge|rebase or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
       case "$val" in
         ''|opus|sonnet|haiku|opusplan|default|claude-*) : ;;
         inherit)

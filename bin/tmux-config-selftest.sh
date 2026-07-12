@@ -126,6 +126,7 @@ eq 'type FLEET_CLEANUP'       "$(fcfg_type FLEET_CLEANUP)"       bool
 eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
 eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
+eq 'type FLEET_MERGE_METHOD'   "$(fcfg_type FLEET_MERGE_METHOD)"   enum
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
 eq 'type FLEET_MAX_SESSIONS'   "$(fcfg_type FLEET_MAX_SESSIONS)"   num
 eq 'type FLEET_ISSUE_TTL'      "$(fcfg_type FLEET_ISSUE_TTL)"      num
@@ -183,6 +184,13 @@ fcfg_validate enum comment   FLEET_HANDOFF_DEST >/dev/null || fail 'comment vali
 fcfg_validate enum file      FLEET_HANDOFF_DEST >/dev/null || fail 'file valid for FLEET_HANDOFF_DEST'; ok
 fcfg_validate enum ''        FLEET_HANDOFF_DEST >/dev/null || fail 'empty valid for FLEET_HANDOFF_DEST'; ok
 fcfg_validate enum opus      FLEET_HANDOFF_DEST >/dev/null && fail 'model alias invalid for FLEET_HANDOFF_DEST'; ok
+# FLEET_MERGE_METHOD is an enum over its OWN set (squash|merge|rebase|empty), issue #283.
+fcfg_validate enum squash    FLEET_MERGE_METHOD >/dev/null || fail 'squash valid for FLEET_MERGE_METHOD'; ok
+fcfg_validate enum merge     FLEET_MERGE_METHOD >/dev/null || fail 'merge valid for FLEET_MERGE_METHOD'; ok
+fcfg_validate enum rebase    FLEET_MERGE_METHOD >/dev/null || fail 'rebase valid for FLEET_MERGE_METHOD'; ok
+fcfg_validate enum ''        FLEET_MERGE_METHOD >/dev/null || fail 'empty valid for FLEET_MERGE_METHOD'; ok
+fcfg_validate enum opus      FLEET_MERGE_METHOD >/dev/null && fail 'model alias invalid for FLEET_MERGE_METHOD'; ok
+fcfg_validate enum fast      FLEET_MERGE_METHOD >/dev/null && fail 'garbage invalid for FLEET_MERGE_METHOD'; ok
 fcfg_validate enum comment   FLEET_MODEL >/dev/null && fail 'comment invalid for FLEET_MODEL'; ok
 fcfg_validate regex '^(a|b)$' FLEET_PROTECTED_RE >/dev/null || fail 'valid regex should pass'; ok
 fcfg_validate regex '^(a'    FLEET_PROTECTED_RE >/dev/null && fail 'invalid regex should fail'; ok

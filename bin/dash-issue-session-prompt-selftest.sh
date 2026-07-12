@@ -1,17 +1,16 @@
 #!/bin/bash
 # dash-issue-session-prompt-selftest.sh — hermetic tests for the per-fleet
-# customizable worker seed prompt (issue #234). The BODY of an implementing
-# worker's one-shot seed — the clause between the /fleet-claim ritual and the
-# uniform /fleet-ship tail — is overridable per fleet via FLEET_WORKER_PROMPT /
-# FLEET_WORKER_PROMPT_FILE, while the structural pieces (issue-binding head,
-# /fleet-claim, the ship tail) are always kept intact. Since issue #277 there is
-# ONE tail: every worker finishes with /fleet-ship, which arms GitHub auto-merge —
-# the fleet never merges. No network, no real repo, no tmux server — git/gh/tmux
+# customizable worker seed prompt (issues #234, #283). Since issue #283 the seed
+# COLLAPSES to essentially "run /fleet-claim" (the skill carries the whole
+# lifecycle). The BODY of an implementing worker's one-shot seed — the clause
+# between the /fleet-claim ritual and the "open the PR + arm auto-merge, then STOP"
+# tail — is overridable per fleet via FLEET_WORKER_PROMPT / FLEET_WORKER_PROMPT_FILE,
+# while the structural pieces (issue-binding head, /fleet-claim ritual, the ship+stop
+# tail) are always kept intact. No network, no real repo, no tmux server — git/gh/tmux
 # are faked on PATH. We read the SEED the spawn wrote to its task file and assert.
 #
-#   A. DEFAULT (no override) is byte-identical at the seam: the body flows into
-#      the ship tail as "…conventions. To finish, run /fleet-ship" with a SINGLE
-#      period — proving the refactor didn't change the seam behavior.
+#   A. DEFAULT (no override) joins the body into the tail with a SINGLE period:
+#      "…conventions. To finish: verify, push…" — proving a clean seam.
 #   B. FLEET_WORKER_PROMPT replaces the body; the /fleet-claim ritual + the ship
 #      tail (structural, "do NOT merge it yourself") are still present.
 #   C. a trailing sentence-ender in the override is stripped so the tail seam
@@ -19,8 +18,9 @@
 #   D. {issue}/{repo} placeholders are substituted.
 #   E. FLEET_WORKER_PROMPT_FILE wins over the inline value and carries multi-line
 #      content verbatim; an unreadable file warns and falls back to the default.
-#   F. every worker seed arms auto-merge (the ship tail names it) and NEVER carries
-#      a self-land / land-trigger instruction (the retired lifecycle).
+#   F. every worker seed arms auto-merge (the tail names it) and carries NEITHER a
+#      retired self-land instruction NOR a reference to the retired /fleet-ship or
+#      /fleet-blocked skills (issue #283 folded them into /fleet-claim).
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -106,18 +106,18 @@ seedfile() { ls "$WORK"/dash/.claude-dash/fleets/*/task_issue-234.txt 2>/dev/nul
 seed()     { local f; f=$(seedfile); [ -n "$f" ] && cat "$f"; }
 has()      { case "$(seed)" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-# ===== A: default seam is byte-identical (single-period join) ==================
+# ===== A: default seam is a clean single-period join ==========================
 run_spawn 234
 [ -n "$(seedfile)" ] || fail "A no seed task file was written" "$(cat "$WORK/spawn.err")"
 has 'Work GitHub issue #234 in this repo.' || fail "A default seed lost the issue-binding head" "$(seed)"
 has '/fleet-claim' || fail "A default seed lost the /fleet-claim ritual" "$(seed)"
-has 'Implement and verify per the repo conventions. To finish, run /fleet-ship' \
+has 'Implement and verify per the repo conventions. To finish: verify, push' \
   || fail "A default body→tail seam changed (expected single-period join)" "$(seed)"
-ok "A default worker seed is unchanged at the body→tail seam"
+ok "A default worker seed joins body→tail cleanly (single period)"
 
 # ===== B: FLEET_WORKER_PROMPT replaces the body; structure intact ==============
 FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
-has 'Follow CONTRIBUTING and add coverage. To finish, run /fleet-ship' \
+has 'Follow CONTRIBUTING and add coverage. To finish: verify, push' \
   || fail "B override body should replace the default and flow into the tail" "$(seed)"
 has 'Implement and verify per the repo conventions' \
   && fail "B override should REMOVE the default body" "$(seed)"
@@ -128,7 +128,7 @@ ok "B FLEET_WORKER_PROMPT replaces the body while keeping the structural seed"
 
 # ===== C: trailing sentence-ender stripped so the seam stays clean =============
 FLEET_WORKER_PROMPT='Do the thing.' run_spawn 234
-has 'Do the thing. To finish, run /fleet-ship' \
+has 'Do the thing. To finish: verify, push' \
   || fail "C a trailing period should be stripped before the tail" "$(seed)"
 has 'Do the thing.. To finish' && fail "C double-period seam not de-duplicated" "$(seed)"
 ok "C a trailing sentence-ender in the override is stripped at the seam"
@@ -153,15 +153,17 @@ grep -q 'FLEET_WORKER_PROMPT_FILE not readable' "$WORK/spawn.err" \
   || fail "E an unreadable prompt file should warn on stderr" "$(cat "$WORK/spawn.err")"
 ok "E prompt FILE wins + is multi-line; an unreadable file warns and falls back"
 
-# ===== F: the ship tail arms auto-merge and carries NO retired self-land text ==
+# ===== F: the collapsed seed arms auto-merge, drops retired skills + self-land ==
 run_spawn 234
-has 'arm GitHub auto-merge' || fail "F default ship tail must arm auto-merge" "$(seed)"
-has 'com.claude-fleet.cleanup' || fail "F ship tail should name the cleanup daemon" "$(seed)"
-for gone in '/fleet-land-self' 'FLEET_SELF_LAND' 'do NOT merge — WAIT' \
+has 'arm GitHub auto-merge' || fail "F default seed must arm auto-merge" "$(seed)"
+has 'com.claude-fleet.cleanup' || fail "F seed should name the cleanup daemon" "$(seed)"
+# Retired skills (issue #283 folded them into /fleet-claim) must not be named.
+for gone in '/fleet-ship' '/fleet-blocked' \
+            '/fleet-land-self' 'FLEET_SELF_LAND' 'do NOT merge — WAIT' \
             'triggers the land by commenting' 'the steward reviews and lands'; do
-  case "$(seed)" in *"$gone"*) fail "F retired self-land text '$gone' leaked into the seed" "$(seed)" ;; esac
+  case "$(seed)" in *"$gone"*) fail "F retired text '$gone' leaked into the collapsed seed" "$(seed)" ;; esac
 done
-ok "F the worker seed arms auto-merge and drops every retired self-land instruction"
+ok "F the worker seed arms auto-merge and drops the retired /fleet-ship, /fleet-blocked + self-land text"
 
 printf '\nselftest OK: %s assertions passed (per-fleet worker seed prompt)\n' "$pass"
 exit 0

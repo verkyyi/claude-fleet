@@ -3,7 +3,8 @@
 # open PR, straight from the dash in ONE keystroke (issue #277). The dash's ⌃l
 # bind runs this inside a display-popup.
 #
-# THE FLEET NEVER MERGES — it arms auto-merge and cleans up afterward. /fleet-ship
+# THE FLEET NEVER MERGES — it arms auto-merge and cleans up afterward. The worker's
+# /fleet-claim ship step
 # already arms auto-merge when it opens a PR; this key is the manual escape hatch
 # for a PR that was shipped BEFORE arming existed, or whose auto-merge got
 # disarmed. It does NOT merge and it does NOT force: it queues the PR with
@@ -109,11 +110,13 @@ case "$pstate" in
 esac
 
 # --- arm auto-merge ------------------------------------------------------------
+# Strategy is FLEET_MERGE_METHOD (default squash), validated in fleet_merge_method.
+method=$(fleet_merge_method)
 say "▸ arming auto-merge on PR #$pnum${iss:+  (issue #$iss)}"
-say "  → gh pr merge --auto --squash $pnum"
+say "  → gh pr merge --auto --$method $pnum"
 say ""
-if out=$(gh pr merge "$pnum" --repo "$REPO" --auto --squash 2>&1); then
-  say "✓ auto-merge armed — GitHub squash-merges PR #$pnum when it goes green;"
+if out=$(gh pr merge "$pnum" --repo "$REPO" --auto --"$method" 2>&1); then
+  say "✓ auto-merge armed — GitHub $method-merges PR #$pnum when it goes green;"
   say "  com.claude-fleet.cleanup reaps the worktree/window afterward."
 else
   say "⚠ could not arm auto-merge on PR #$pnum:"

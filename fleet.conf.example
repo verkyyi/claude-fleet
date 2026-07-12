@@ -373,16 +373,40 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Cross-machine pre-spawn dedup @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_PRESPAWN_DEDUP=1
 
+# --- Auto-merge strategy (issue #283) ---------------------------------------
+# The GitHub auto-merge strategy the fleet ARMS. THE FLEET NEVER MERGES — the
+# worker's /fleet-claim ship step (and the dash ⌃l arm) run
+# `gh pr merge --auto --<method>`; GitHub performs the merge when the PR is green.
+# squash (default) | merge | rebase. An unset/typo'd value falls back to squash so
+# arming never breaks on a bad key. Per-fleet ▸ global ▸ default.
+# @label=Auto-merge method @group=spawn @tier=common @scope=fleet @edit=enum
+#FLEET_MERGE_METHOD="squash"
+
+# --- Repo worker charter (issue #283) ---------------------------------------
+# When 1, /fleet-claim loads a repo-shipped worker charter from
+# $FLEET_MAIN/.fleet/worker.md and layers it under the fleet overlay (operator)
+# charter. OFF by default (fail-closed): .fleet/worker.md is an INJECTION SURFACE
+# — PRs auto-merge on green CI with no human review, so a PR could rewrite the
+# charter every future worker then obeys. Opt in ONLY on a repo where you trust
+# what lands, and on a public repo protect .fleet/ with CODEOWNERS + required
+# review. The fleet overlay charter (~/.config/.../fleets/<session>/worker.md)
+# needs no gate — only the operator writes it.
+# @label=Load repo worker charter @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_REPO_CHARTER=0
+
 # --- Worker seed prompt (issue #234) ----------------------------------------
 # The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
-# worker is seeded with. The full seed is STRUCTURAL + body:
-#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship tail>
-# Only <BODY> is customizable — the issue-binding head, the /fleet-claim startup
-# ritual, and the /fleet-ship tail (open the PR + arm auto-merge, then stop) are
-# kept intact so the fleet machinery still works. Unset ⇒ the built-in default below.
-# Placeholders {issue} and {repo} are substituted; a trailing sentence-ender is
-# stripped so the body flows into the tail. Per-fleet ▸ global ▸ default like any
-# @scope=fleet key (best set per-fleet in $FLEET_CONF_DIR/<session>.conf).
+# worker is seeded with. Since issue #283 the seed COLLAPSES to essentially "run
+# /fleet-claim" (the skill carries the whole lifecycle: claim → charter → ground →
+# implement → open PR + arm auto-merge). The full seed is STRUCTURAL + body:
+#   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>
+# Only <BODY> is customizable — the issue-binding head, the /fleet-claim ritual,
+# and the "open the PR + arm auto-merge, then STOP" tail are kept intact so the
+# fleet machinery still works. (For richer per-fleet standing orders, prefer the
+# fleet overlay worker charter — see FLEET_REPO_CHARTER above.) Unset ⇒ the
+# built-in default below. Placeholders {issue} and {repo} are substituted; a
+# trailing sentence-ender is stripped so the body flows into the tail. Per-fleet ▸
+# global ▸ default like any @scope=fleet key.
 # @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
 

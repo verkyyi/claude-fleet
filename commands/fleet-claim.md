@@ -1,13 +1,16 @@
-# /fleet-claim — startup ritual for a freshly-spawned worker
+# /fleet-claim — the worker lifecycle: claim → charter → ground → work → ship+arm
 
 <!-- fleet skill · owner: worker -->
 
-Formalizes the one-shot seed prompt a worker is spawned with: read the bound
-issue, stake a collision-proof claim on it, then restate the scope and sketch a
-plan before you implement. Mutates ONLY the bound issue on this fleet's
-`$FLEET_REPO` (an assignee + a one-time `▶ claiming` comment) — it touches no
-branches or PRs. Idempotent: re-running it after you already claimed does not
-re-comment.
+The one skill a freshly-spawned worker runs. It formalizes the whole worker
+lifecycle that the seed prompt used to spell out across three skills: **claim**
+the bound issue, **load your charter**, **ground** yourself in the issue + code,
+then implement under a **standing contract** that ends by opening a PR and
+**arming GitHub auto-merge** (the fleet never merges) — and signals a blocker
+loudly rather than stalling. Mutates ONLY the bound issue on this fleet's
+`$FLEET_REPO` (an assignee at claim time; issue comments as you go) and — at
+ship — pushes your branch, opens/updates a PR, and arms auto-merge. It never
+touches the base checkout.
 
 **Argument** (`$ARGUMENTS`): none — the issue is read from the window's `@issue`
 binding, not an argument.
@@ -35,8 +38,8 @@ Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 
 ## 1. Read the bound issue
 
-Get the issue number from the window (set by the spawner), then read the issue
-with its comments:
+Get the issue number from the window (set by the spawner), then read it with its
+comments:
 
 ```sh
 issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}')
@@ -48,52 +51,110 @@ echo "issue=${issue:-none}"
 - Otherwise read it (reuse the literal number):
   `gh issue view "<issue>" --repo "$FLEET_REPO" --comments`.
 
-## 2. Claim it (the anti-collision rail)
+## 2. Claim it — natively, via the assignee (the anti-collision rail)
 
-The fleet uses two markers so nothing else grabs an owned issue: the GitHub
-assignee **and** a `▶ claiming` comment. Set both — but idempotently.
+**The assignee IS the claim** (issue #283). Assign yourself; that's the whole
+claim — there is no `▶ claiming` comment convention anymore (it false-fired
+whenever a comment merely mentioned the marker string).
 
-> Cross-machine dedup (issue #258): the pre-spawn GitHub-claim dedup is **ON by
-> default** (unless the fleet sets `FLEET_PRESPAWN_DEDUP=0`), so the **spawn already
-> pre-claimed** this issue (assignee + `▶ claiming` marker) the instant it passed the
-> pre-spawn check — so this step normally finds `mine` non-empty **and** `claimed`
-> set and **no-ops both writes**. That is by design: the checks below already make it
-> idempotent, so re-running after a pre-claim adds neither a duplicate assignee nor a
-> second comment. Just confirm and move on.
+> Cross-machine dedup (issues #258, #283): the pre-spawn dedup is **ON by
+> default** (unless the fleet sets `FLEET_PRESPAWN_DEDUP=0`), so the **spawn
+> already pre-claimed** this issue by assigning you the instant it passed the
+> pre-spawn check. So this step normally finds you already the assignee and
+> **no-ops**. That is by design — the check below makes it idempotent.
 
 ```sh
 # Am I already the assignee? (empty output = not yet mine)
 mine=$(gh issue view "<issue>" --repo "$FLEET_REPO" \
   --json assignees -q '.assignees[].login' 2>/dev/null | grep -Fx "$(gh api user -q .login)")
-# Is there already a "▶ claiming" comment? (non-empty = already claimed)
-claimed=$(gh issue view "<issue>" --repo "$FLEET_REPO" \
-  --json comments -q '.comments[].body' 2>/dev/null | grep -F '▶ claiming' | head -n1)
-echo "mine=${mine:-no} claimed=${claimed:+yes}"
+echo "mine=${mine:-no}"
 ```
 
-- Assign to yourself only if not already yours:
+- Assign yourself only if not already yours:
   `gh issue edit "<issue>" --repo "$FLEET_REPO" --add-assignee @me`.
-- Post the claim comment only if none exists yet — via `fleet-comment.sh --note`
-  so it carries the `<!-- fleet:no-relay -->` marker and never loops back into
-  this worker when the issue-bridge is on (issue #132), and the per-role `worker`
-  footer (issue #224); the `▶ claiming` text is preserved so the anti-collision
-  grep still matches. The fallback keeps the marker INLINE (dropping it would let
-  the bridge relay the worker's own comment back into itself) plus a minimal
-  static `worker` footer so attribution survives degraded mode:
-  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '▶ claiming' || gh issue comment "<issue>" --repo "$FLEET_REPO" --body $'▶ claiming\n\n— fleet · worker · #<issue>\n<!-- fleet:from role=worker issue=<issue> -->\n<!-- fleet:no-relay -->'`.
-- If both were already set, say so and skip both writes — do **not** re-comment.
+- If you were already the assignee, say so and skip the write — don't re-assign.
 
-## 3. Restate scope + plan, then hand back
+## 3. Load your charter (layered — later wins on conflict)
+
+Your standing orders come in up to three layers. The **built-in contract**
+(step 5 below) is the base. Two optional FILE layers override it — load them and
+treat a later layer as authoritative where it conflicts with an earlier one:
+
+```sh
+fleet_worker_charter "$S"    # prints the file layers that apply, low→high precedence
+```
+
+- **repo charter** `$FLEET_MAIN/.fleet/worker.md` — printed **only when the
+  fleet opts in** with `FLEET_REPO_CHARTER=1` (default OFF, fail-closed). It is
+  an injection surface: PRs auto-merge on green CI with no human review, so a PR
+  could rewrite the charter every future worker obeys — hence the gate. A fleet
+  that arms it on a public repo should protect `.fleet/` with CODEOWNERS +
+  required review.
+- **fleet overlay** `~/.config/claude-fleet/fleets/<session>/worker.md` —
+  operator-owned and machine-local, so it is always trusted (no gate) and **wins
+  on conflict**. This is the operator's per-fleet customization channel.
+
+Both files are optional; missing ones are skipped silently. With neither, you
+run on the built-in contract == the historic default. Read whatever prints and
+fold it into how you work below.
+
+## 4. Ground yourself before you edit
+
+Restate scope, then read before you write:
 
 - One line restating what the issue asks for, in your own words.
-- A short numbered plan (the steps you'll take to implement it).
-- Stop here. Implementation is the worker's job (yours or the human's) — `/fleet-claim`
-  only gets you a clean, uncontested start. `/fleet-ship` is the finish line.
+- Read the **full issue thread** (step 1's output — including any steward design
+  comments), then the **relevant code** the change touches, before editing.
+- Sketch a short numbered plan (the steps you'll take).
 
-## 4. Report (keep it short)
+## 5. The standing contract (built-in charter — the base layer)
 
-One line: the issue number + title, and whether you just claimed it or it was
-already claimed. Then the restated scope + plan from step 3.
+Implement under these invariants (a charter layer from step 3 may extend or
+override them):
+
+- **Work only in this worktree.** You are in the `issue-<N>` git worktree off
+  `$FLEET_BASE_BRANCH`; never commit to or edit the base checkout (it's
+  hook-enforced read-only). Converse with the steward/collaborators by
+  **commenting on the bound issue** (via
+  `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
+  so it carries the no-relay marker + worker footer).
+- **Hand off before you run out of context.** When the window fills, run
+  `/fleet-handoff` — it writes a durable handoff and cycles the pane.
+- **Done = ship + arm auto-merge (the fleet never merges).** When the change is
+  complete:
+  1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
+     discover them from its `CLAUDE.md` / `README` / `.github/workflows`; don't
+     hardcode one project's commands). Don't ship red.
+  2. **Push** the clean worktree: `git status --porcelain` empty (commit
+     anything left), then `git push -u origin issue-<N>`.
+  3. **Open (or update) the PR** with a body containing `Closes #<issue>` plus a
+     short summary + how you verified:
+     `gh pr create --repo "$FLEET_REPO" --base "$FLEET_BASE_BRANCH" --fill` (or
+     `gh pr edit … --body …` if one exists).
+  4. **Arm** GitHub auto-merge — this is *not* a merge; GitHub merges when the PR
+     is green and branch protection is satisfied:
+     ```sh
+     gh pr merge --repo "$FLEET_REPO" --auto --"$(fleet_merge_method)" issue-<N>
+     ```
+     `fleet_merge_method` resolves `FLEET_MERGE_METHOD` (default `squash`).
+     If arming fails because the repo has auto-merge disabled, **do not merge by
+     hand** — say so; the PR is open and reviewable, a human enables auto-merge
+     or merges on the web when green.
+  5. **Stop.** Never merge the PR yourself and never pass `--admin`. GitHub
+     merges when green; `com.claude-fleet.cleanup` reaps the worktree/window/
+     branch and records the resume ledger afterward.
+- **Blocked = say why, never stall silently.** If you can't make progress, post
+  a `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
+  wrapper) and set the window red so the steward sees it:
+  `sh ~/.claude/fleet/bin/set-claude-state.sh needs`. Then stop — don't spin.
+
+## 6. Report + proceed
+
+One line: the issue number + title, whether you just claimed it or it was
+already claimed, and which charter layers loaded (built-in only / + overlay / +
+repo). Then restate scope + the plan from step 4 and start implementing — the
+rest of the lifecycle (ship + arm, or blocked) is the contract in step 5, run it
+when the work is done.
 
 ---
 

@@ -256,7 +256,7 @@ fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
 refuses from the wrong one. Live so far:
 
 - **`/fleet-cleanup`** (steward) — **the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md)).
-  `/fleet-ship` arms GitHub auto-merge, GitHub does the merge when the PR is green,
+  The worker's `/fleet-claim` ship step arms GitHub auto-merge, GitHub does the merge when the PR is green,
   and the `com.claude-fleet.cleanup` daemon reaps the leftover worktree/window/branch
   and records the resume ledger. `/fleet-cleanup <n>` is the manual escape hatch to
   clean up a specific merged/closed PR *now* instead of waiting a daemon tick — it

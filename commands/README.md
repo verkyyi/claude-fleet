@@ -12,7 +12,7 @@ any personal commands you already have. See the install step in
 [`docs/INSTALL.md`](../docs/INSTALL.md).
 
 > Phase 0 landed **just the contract** — this README and
-> [`_template.md`](_template.md); the functional skills (`/fleet-claim`, `/fleet-ship`,
+> [`_template.md`](_template.md); the functional skills (`/fleet-claim`,
 > `/fleet-cleanup`, …) land one per sub-issue, each cloning the template and filling in
 > its body. See **Shipped skills** below for what's live so far.
 
@@ -20,10 +20,8 @@ any personal commands you already have. See the install step in
 
 | Skill | Owner | What it does |
 |---|---|---|
-| [`/fleet-claim`](fleet-claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
-| [`/fleet-ship`](fleet-ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`, and **arm GitHub auto-merge** (`gh pr merge --auto`). Never merges — GitHub merges when green. |
-| [`/fleet-blocked`](fleet-blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
-| [`/fleet-cleanup`](fleet-cleanup.md) | steward | **The fleet never merges** — GitHub auto-merge (armed by `/fleet-ship`), a web merge, or a collaborator does the merge; this reaps the leftover worktree/window/branch and records the resume ledger *after* a PR is final. The manual escape hatch past the `com.claude-fleet.cleanup` daemon: records the ledger, fast-forwards the base checkout under the shared land lease, and tears down window → worktree → branch. Merges nothing, forces nothing. Backed by [`bin/fleet-cleanup.sh`](../bin/fleet-cleanup.sh). See [docs/CLEANUP.md](../docs/CLEANUP.md). |
+| [`/fleet-claim`](fleet-claim.md) | worker | The whole worker lifecycle (issue #283): read the bound issue, claim it natively via the **assignee** (idempotent with the spawner's pre-claim), load a layered **worker charter** (built-in ▸ gated repo `.fleet/worker.md` ▸ fleet overlay), ground in the issue + code, then implement under a standing contract that ends by opening a PR and **arming GitHub auto-merge** (`gh pr merge --auto --<FLEET_MERGE_METHOD>`; the fleet never merges) — or signals a blocker on the issue. Subsumes the retired `/fleet-ship` + `/fleet-blocked`. |
+| [`/fleet-cleanup`](fleet-cleanup.md) | steward | **The fleet never merges** — GitHub auto-merge (armed by the worker's `/fleet-claim` ship step), a web merge, or a collaborator does the merge; this reaps the leftover worktree/window/branch and records the resume ledger *after* a PR is final. The manual escape hatch past the `com.claude-fleet.cleanup` daemon: records the ledger, fast-forwards the base checkout under the shared land lease, and tears down window → worktree → branch. Merges nothing, forces nothing. Backed by [`bin/fleet-cleanup.sh`](../bin/fleet-cleanup.sh). See [docs/CLEANUP.md](../docs/CLEANUP.md). |
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Any fleet: maintains the shared live install (`~/.claude/fleet`) — after claude-fleet's own PRs land, re-apply them: pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses only if `~/.claude/fleet` isn't a git checkout. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
 | [`/fleet-history`](fleet-history.md) | steward | Browse & resume **landed** (merged + cleaned-up) sessions from the history ledger (written by the cleanup daemon / `/fleet-cleanup` before worktree removal). Lists finished work, opens the PR, pages the surviving transcript, and **resumes** a session by reconstructing its removed worktree off the squash SHA → `claude --resume` (or `--from-pr`). Backed by [`bin/fleet-history.sh`](../bin/fleet-history.sh); mirrored in the dash's live⇄landed **⌃t** toggle. |
@@ -37,7 +35,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 | | **A. Interactive / role skill** | **B. Background-job prompt** |
 |---|---|---|
-| Examples | `/fleet-claim`, `/fleet-ship`, `/fleet-cleanup` | `classify-session`, `summarize-session` |
+| Examples | `/fleet-claim`, `/fleet-cleanup`, `/fleet-new-issue` | `classify-session`, `summarize-session` |
 | Invoked by | a human/steward, on demand | a `claude -p` daemon (on a timer/hook) |
 | Template | [`_template.md`](_template.md) | [`_template-background.md`](_template-background.md) |
 | Step-0 preamble | **yes** — resolve fleet + guard seat | **no** — a daemon has no seat |
@@ -142,12 +140,12 @@ The two seats a fleet skill can run from (`fleet_seat` prints these):
 
 Each skill declares which seat(s) it belongs to, on its marker line (see below):
 
-- `owner: worker`  — only a worker may run it (e.g. `/fleet-ship` a branch).
+- `owner: worker`  — only a worker may run it (e.g. `/fleet-claim`, which ships its branch).
 - `owner: steward` — only the steward may run it (e.g. `/fleet-new-issue`, `/sweep`).
 - `owner: either`  — seat-agnostic.
 
 If `$SEAT` doesn't match a non-`either` `owner`, the skill **refuses in one
-line and stops** — e.g. *"/fleet-ship is worker-only; you're in the steward seat."*
+line and stops** — e.g. *"/fleet-claim is worker-only; you're in the steward seat."*
 Never proceed from the wrong seat.
 
 ### 3. It carries the `fleet skill` marker
