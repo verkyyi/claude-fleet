@@ -84,22 +84,34 @@ chmod +x "$LAUNCH"
 
 out=$(FLEET_DASH_LAUNCHER="$LAUNCH" bash "$SUT" --all --dash 2>&1) \
   || fail "--all --dash exited non-zero: $out"
-# give the respawned panes a beat to run the marker script
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+
+# DETERMINISTIC core assertion (the #248 fan-out): the helper reports respawning
+# the @dash pane on BOTH fleets — 2 total, one per fleet, never the plain pane.
+# This is read from the helper's OWN stdout, so it never races on pane execution.
+printf '%s\n' "$out" | grep -q 'dash panes: 2' \
+  || fail "summary should report 2 dash panes total — got: $out"
+printf '%s\n' "$out" | grep -q '\[fleetA\] dash: 1 pane' \
+  || fail "fleetA should report exactly 1 dash pane respawned — got: $out"
+printf '%s\n' "$out" | grep -q '\[fleetB\] dash: 1 pane' \
+  || fail "fleetB should report exactly 1 dash pane respawned — got: $out"
+
+# END-TO-END confirmation: each server's respawned pane actually RAN the launcher
+# (proving respawn-pane executed `bash <launcher>` on the right socket). The pane's
+# bash is scheduled asynchronously, so poll with a REAL sleep up to ~15s — a fake
+# no-sleep spin raced on a loaded CI runner and flaked (marker not yet written).
+for _ in $(seq 1 50); do
   [ -f "$WORK/dash.fleetA" ] && [ -f "$WORK/dash.fleetB" ] && break
-  tmux -L fleetA list-panes >/dev/null 2>&1  # tiny non-sleep yield
+  sleep 0.3
 done
-[ -f "$WORK/dash.fleetA" ] || fail "fleetA dash pane was not respawned (marker missing)
+[ -f "$WORK/dash.fleetA" ] || fail "fleetA dash pane never ran the launcher (marker missing after 15s)
 out: $out"
-[ -f "$WORK/dash.fleetB" ] || fail "fleetB dash pane was not respawned (marker missing)
+[ -f "$WORK/dash.fleetB" ] || fail "fleetB dash pane never ran the launcher (marker missing after 15s)
 out: $out"
 # exactly one respawn per fleet (only the @dash pane, never the plain one)
 [ "$(grep -c respawned "$WORK/dash.fleetA")" = 1 ] \
   || fail "fleetA: expected exactly 1 dash respawn (a non-dash pane was hit?)"
 [ "$(grep -c respawned "$WORK/dash.fleetB")" = 1 ] \
   || fail "fleetB: expected exactly 1 dash respawn (a non-dash pane was hit?)"
-printf '%s\n' "$out" | grep -q 'dash panes: 2' \
-  || fail "summary should report 2 dash panes total — got: $out"
 
 # --- 2. --all --conf unbinds a REMOVED bind on BOTH servers -------------------
 # Bind a key on each server, then hand the helper a before/after conf pair where the
