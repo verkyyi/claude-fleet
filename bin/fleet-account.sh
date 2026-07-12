@@ -46,7 +46,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out (5h)
-# ANSI for the `list` table (rendered by fzf --ansi in account-pick.sh, and by a
+# ANSI for the `list` table (rendered by fzf --ansi in usage-modal.sh, and by a
 # terminal when run directly). Always emitted: the modal pipes us and needs the
 # codes, so gating on [ -t 1 ] would strip colour exactly where it's wanted.
 A_DIM=$'\033[2m'; A_RST=$'\033[0m'; A_GRN=$'\033[32m'; A_YEL=$'\033[33m'; A_RED=$'\033[31m'
@@ -218,7 +218,7 @@ cmd_clear() {
 }
 
 # Aligned, scannable table — first token of every data row is the bare label, so
-# account-pick.sh can extract the pick with `awk '{print $1}'`. Colour lives only
+# usage-modal.sh can extract the pick with `awk '{print $1}'`. Colour lives only
 # in the marker glyph (fixed 1-col) and the trailing STATE field (no padding after
 # it), so the ANSI bytes never throw the column widths off. Row 1 is the column
 # header (fzf pins it via --header-lines=1). Columns:

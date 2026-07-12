@@ -1,24 +1,27 @@
 #!/bin/bash
-# dash-reap.sh <window-target> [--force] [confirm] — reap a finished worker row
-# from the dash in one keystroke: close its tmux window, remove its git worktree
-# (when clean), and close its bound GitHub issue. The safe rule is the SHARED
-# fleet_reap_ok() gate (same guarantees as the worktree-autoclean.sh janitor).
+# dash-reap.sh <window-target> [confirm] — reap a finished worker row from the
+# dash on ONE key (⌃x, issue #289 merged the old ⌃x/⌥x pair): close its tmux
+# window, remove its git worktree (when clean), and close its bound GitHub issue.
+# The gate is the SHARED fleet_reap_ok() (same guarantees as the
+# worktree-autoclean.sh janitor).
 #
-#   ⌃x  safe reap  (no confirm): proceeds ONLY when the worktree is clean AND
-#       merged (a MERGED PR for issue-<N>, or the tip is an ancestor of base).
-#       Otherwise REFUSES via tmux display-message with the reason — no data loss.
-#   ⌥x  force reap (y/n confirm): relaxes the *merged* requirement (for
-#       abandoned/not-merged workers) but STILL never removes a dirty worktree —
-#       a dirty worktree is kept, and only the window + issue are closed.
-#       (⌥x, not ⌃X: a terminal can't send a distinct Ctrl+Shift byte — fzf
-#        folds ctrl-X onto ctrl-x — so the force path rides a real second key.)
+#   ⌃x on a clean+merged row (a MERGED PR for the branch, or the tip is an
+#      ancestor of base) reaps STRAIGHT AWAY — the common case, and the cleanup
+#      daemon reaps those anyway, so no confirm.
+#   ⌃x on anything else (dirty, or clean-but-not-merged) opens a y/n confirm
+#      popup FIRST, then force-reaps — but STILL never removes a dirty worktree
+#      (a dirty worktree is KEPT; only the window + issue close).
+# The same one-key rule applies to BOTH a bound worker row (issue-<N>) and a raw
+# `scratch-<N>` row (issue #290 gave scratch its own writable worktree).
 #
-#   Row state           ⌃x (safe)                    ⌥x (force, confirm)
-#   clean + merged      reap wt+branch+issue+window   (same)
-#   clean + NOT merged  refuse ("PR not merged")      reap all (issue closed)
-#   dirty (any)         refuse ("worktree changes")   close window+issue, KEEP wt
-#   raw scratch (@raw)  close window (ephemeral)      (same)
-#   hub/panel (no issue) refuse                       refuse
+#   Row state            ⌃x
+#   clean + merged       reap wt+branch+issue+window   (no confirm)
+#   clean + NOT merged   confirm → reap all (issue closed)
+#   dirty (any)          confirm → close window+issue, KEEP wt
+#   raw scratch, merged  dispose wt+branch, close window (no confirm)
+#   raw scratch, else    confirm → dispose (dirty KEEPs the wt), close window
+#   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic)
+#   hub/panel (no issue) refuse
 #
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
 # worktree/issue. gh issue close is idempotent (a merge may have closed it
@@ -68,22 +71,23 @@ reap_keep() {
 
 # --- parse args ---------------------------------------------------------------
 target="${1:-}"; [ -z "$target" ] && exit 0
-force=0; confirm=0
+confirm=0
 shift || true
-for a in "$@"; do case "$a" in --force) force=1;; confirm) confirm=1;; esac; done
+for a in "$@"; do case "$a" in confirm) confirm=1;; esac; done
 
 command -v git >/dev/null 2>&1 || refuse "git not found"
 
 # --- raw scratch row: close the window + dispose its worktree by the gate ------
 # A raw/scratch session (@raw=1) has NO @issue, but since issue #290 it DOES own a
 # `scratch-<N>` git worktree off the base branch. So ⌃x closes the window AND
-# applies the SAME safe gate the janitor uses (fleet_reap_ok): a clean+no-unmerged
-# scratch worktree is removed with its branch; a dirty/unmerged one is KEPT (never
-# silently delete an experiment) and ⌥x force disposes it (dirty still kept). With
-# no resolvable worktree (a pre-#290 scratch, or a hermetic test) it degrades to the
-# historic "just close the window" behavior. Detected BEFORE the hub/panel guard so
-# a scratch stops looking like a no-op ⌃x; true hub/panel rows (plan/dash/backlog —
-# no @issue AND no @raw) still fall through to the "nothing to reap" refuse below.
+# applies the SAME one-key rule the issue-bound path below uses: a clean+merged
+# scratch worktree is disposed straight away; a dirty/unmerged one is disposed
+# only after a y/n confirm (and a dirty worktree is still KEPT — never silently
+# delete an experiment). With no resolvable worktree (a pre-#290 scratch, or a
+# hermetic test) it degrades to the historic "just close the window" behavior.
+# Detected BEFORE the hub/panel guard so a scratch stops looking like a no-op ⌃x;
+# true hub/panel rows (plan/dash/backlog — no @issue AND no @raw) still fall
+# through to the "nothing to reap" refuse below.
 if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # Drop the dash summary-cache seed the raw spawn wrote (dash-raw-session.sh) so a
   # reaped scratch leaves behind no stale summary row — same key the writer used
@@ -132,31 +136,28 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     git -C "$MAIN" worktree prune 2>/dev/null || true
   }
 
-  # Safe path (⌃x): reap only a clean+no-unmerged scratch; else KEEP + note.
-  if [ "$force" = 0 ]; then
+  # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
+  # dirty/unmerged one opens a y/n confirm popup FIRST (a dirty worktree stays
+  # KEPT). The initial keypress (no `confirm` arg) decides which.
+  if [ "$confirm" = 0 ]; then
     case "$sreason" in
       merged-pr|ancestor)
         scratch_remove
         tmux kill-window -t "$target" 2>/dev/null || true
         tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true ;;
-      *)   # dirty | unmerged — keep the experiment, close the window only
-        tmux kill-window -t "$target" 2>/dev/null || true
-        tmux display-message "closed scratch ✓ — worktree KEPT ($sreason); ⌃X to dispose" 2>/dev/null || true ;;
+      *)   # dirty | unmerged — confirm before disposing / closing
+        tmux display-popup -w 68 -h 9 -E \
+          "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true ;;
     esac
     exit 0
   fi
 
-  # Force path (⌥x): confirm once, then dispose. A DIRTY worktree is still KEPT
-  # (git refuses a dirty remove anyway) — only the window closes.
-  if [ "$confirm" = 0 ]; then
-    tmux display-popup -w 68 -h 9 -E \
-      "bash '$BIN/dash-reap.sh' '$target' --force confirm" 2>/dev/null || true
-    exit 0
-  fi
+  # running inside the confirm popup. A DIRTY worktree is still KEPT (git refuses a
+  # dirty remove anyway) — only the window closes.
   if [ "$sreason" = dirty ]; then
-    msg="Force-reap $sbranch? Worktree is DIRTY — it will be KEPT; window closes."
+    msg="Dispose $sbranch? Worktree is DIRTY — it will be KEPT; window closes."
   else
-    msg="Force-reap $sbranch? Removes the scratch worktree + branch, closes the window."
+    msg="Dispose $sbranch? Removes the scratch worktree + branch, closes the window."
   fi
   printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
   read -rsn1 ans; echo
@@ -211,21 +212,18 @@ command -v gh >/dev/null 2>&1 && MERGED_PRS="$(gh -R "$REPO" pr list \
 
 reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")"
 
-# --- safe path (⌃x): reap only clean+merged, else refuse with the reason ------
-if [ "$force" = 0 ]; then
-  case "$reason" in
-    dirty)    refuse "#$iss worktree has changes — use ⌃X to force (keeps the worktree)";;
-    unmerged) refuse "#$iss PR not merged — use ⌃X to force";;
-    *)        reap_full ;;   # merged-pr | ancestor
-  esac
-  exit 0
-fi
-
-# --- force path (⌃X): confirm once, then reap (dirty keeps the worktree) -------
+# --- ⌃x (issue #289): clean+merged reaps straight away; anything else confirms -
+# first, then force-reaps. The initial keypress (no `confirm` arg) decides which:
+#   merged-pr | ancestor → reap_full now (the cleanup daemon reaps these anyway);
+#   dirty | unmerged     → open a y/n confirm popup that re-invokes us `confirm`.
 if [ "$confirm" = 0 ]; then
-  tmux display-popup -w 68 -h 9 -E \
-    "bash '$BIN/dash-reap.sh' '$target' --force confirm" 2>/dev/null || true
-  exit 0
+  case "$reason" in
+    dirty|unmerged)
+      tmux display-popup -w 68 -h 9 -E \
+        "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
+      exit 0 ;;
+    *)  reap_full; exit 0 ;;   # merged-pr | ancestor — clean+merged, no confirm
+  esac
 fi
 
 # running inside the confirm popup

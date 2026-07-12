@@ -3,8 +3,8 @@
 # (issue #239). Sourced by three consumers so the freshness gate, the % parse,
 # and the warn/crit thresholds live in ONE place and can't drift:
 #   • bin/tmux-status.sh   — colors the footer usage stat by severity (no text)
-#   • bin/usage-popup.sh   — the on-demand usage/limit detail popup
-#   • bin/account-pick.sh  — the picker's usage header
+#   • bin/usage-modal.sh   — the usage/limit detail header + account picker body
+#                            (issue #289 merged the old usage-popup + account-pick)
 #
 # Pure: sourcing defines functions only, runs nothing (like fleet-lib.sh). No
 # tmux, no network — every read is a cache file the collector already writes.
@@ -57,8 +57,8 @@ fleet_usage_severity() {
 }
 
 # One-line PLAIN summary (no ANSI) — proxy + the official limit line when fresh —
-# for popup headers (account-pick.sh, usage-popup.sh --summary). Empty when
-# neither cache has anything to show.
+# for the usage-modal.sh picker header. Empty when neither cache has anything to
+# show.
 fleet_usage_summary_plain() {
   local proxy rl line out=""
   proxy=$(fleet_usage_proxy)

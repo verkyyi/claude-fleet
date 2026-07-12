@@ -92,7 +92,10 @@ API credits, **not** your subscription — the opposite of what this is for.)
 
 That's it — the next session you spawn launches under the active account.
 
-**Switch by hand.** `prefix A` opens a popup picker; Enter makes a choice active
+**Switch by hand.** Click the footer `◉` account chip (or the usage stat) to open
+the usage + account modal — the account pool is the selectable body under the
+usage detail (issue #289 merged the old `prefix A` picker + `prefix u` popup into
+one). Enter makes a choice active
 for new sessions **and restarts this fleet's idle Claude windows in place** —
 each gets a double ctrl-c, then relaunches via `fleet-claude.sh --continue`, so
 it resumes its own transcript under the new account. Windows mid-turn
@@ -145,7 +148,8 @@ until its TTL passes (or you clear it with `fleet-account.sh clear <label>`). If
 - ✅ **Zero cost when off** — no token files ⇒ every code path is a no-op and the
   fleet is byte-for-byte its old single-account self.
 - ⚠️ **A live process cannot hot-swap its token.** Claude Code binds its
-  credential at launch. The manual picker (`prefix A`) compensates by
+  credential at launch. The manual picker (the footer `◉` chip / usage stat →
+  usage + account modal) compensates by
   restarting idle windows with `--continue` (they resume their transcript on
   the new account), but a session that is mid-turn — including one parked on a
   limit banner mid-response — keeps its old account until it is restarted.

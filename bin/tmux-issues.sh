@@ -23,7 +23,7 @@ ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
 
-# The ⌃n new · ⌃t comment · ⌃x close · ⌃k keys sub-actions each open a small
+# The ⌃n new · ⌃x close · ? keys sub-actions each open a small
 # `tmux display-popup` (input dialog / cheatsheet). That works from a windowed
 # panel, but NOT when the backlog itself already runs in a display-popup
 # (prefix+b): tmux won't nest a popup inside a popup, so the dialog never opens
@@ -39,29 +39,28 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 #     path reads right here in the terminal, so we call it straight.
 # Also: in POPUP mode enter spawns AND closes (+abort); windowed loops forever.
 # The header is deliberately terse — the essential action (enter=work), the
-# common one (⌃n new), and a pointer to the full keymap (⌃k keys), matching the
-# dashboard's `↵ jump · ⌃n new · … · ? keys` grammar. Every other bind lives in
-# the ⌃k cheatsheet (bin/fleet-keys.sh) rather than crowding this line.
-HDR='↵ work · ⌃n new · ⌃k keys'
+# common one (⌃n new), and a pointer to the full keymap (? keys), matching the
+# dashboard's `↵ jump · ⌃n new · … · ? keys` grammar (one `?` convention
+# everywhere, issue #289). Every other bind lives in the `?` cheatsheet
+# (bin/fleet-keys.sh) rather than crowding this line.
+HDR='↵ work · ⌃n new · ? keys'
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
   HDR="$HDR · esc close"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
-  T_BIND="ctrl-t:execute-silent(printf 'comment %s' {1} > '$ACT')+abort"
   X_BIND="ctrl-x:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
-  K_BIND="ctrl-k:execute-silent(printf 'keys' > '$ACT')+abort"
+  K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
 else
   ENTER_TAIL=''
   N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
-  T_BIND="ctrl-t:execute(bash $BIN/dash-issue-comment.sh {1})+refresh-preview"
   X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
-  K_BIND="ctrl-k:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
+  K_BIND="?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
 fi
 
 # Priority cycle (⌃y): raises the highlighted issue's priority:pN label one step
-# and wraps (none→p2→p1→p0→none). It takes NO text input, so — unlike ⌃n/⌃t/⌃x —
+# and wraps (none→p2→p1→p0→none). It takes NO text input, so — unlike ⌃n/⌃x —
 # it needs no popup and uses ONE bind in both windowed + popup modes (execute-silent
 # blocks fzf until the label edit + optimistic cache write finish, so the reload
 # repaints with the fresh tag). {1} is the row's issue number.
@@ -81,13 +80,10 @@ run_fzf() {
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
-    --bind "ctrl-p:toggle-preview" \
     --bind "/:enable-search+change-prompt(filter ▸ )" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
-    --bind "ctrl-b:execute-silent(bash $BIN/dash-toggle-show-bound.sh '$FLEET_SESSION')+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
-    --bind "$T_BIND" \
     --bind "$X_BIND" \
     --bind "$P_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
@@ -103,7 +99,6 @@ run_action() {
   case "$act" in
     new)     bash "$BIN/dash-issue-new.sh" confirm ;;
     keys)    bash "$BIN/fleet-keys.sh" --context backlog ;;
-    comment) bash "$BIN/dash-issue-comment.sh" "$arg" confirm ;;
     close)   bash "$BIN/dash-issue-close.sh" "$arg" confirm ;;
     *)       return 1 ;;
   esac

@@ -3,12 +3,14 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · Enter jump to that window · type a task + Enter = create a GitHub
-#   issue and spawn a worktree session bound to it · Ctrl-G bind window↔issue ·
-#   Ctrl-E rename window · Ctrl-L arm auto-merge on the row's open PR
-#   (dash-arm-merge.sh → gh pr merge --auto; #277 — the fleet never merges, it arms
-#   + cleans up; overrides fzf's low-value clear-screen default) ·
-#   Ctrl-R refresh now · Esc/q relaunch (it's always-on)
+#   ↑/↓ move · Enter jump to that window · ⌃n file an issue + spawn its worker ·
+#   ⌃s raw scratch session · ⌃x reap a finished worker (confirms when the row
+#   isn't merged+clean) · ⌃t live⇄landed · ⌃o restore a landed session ·
+#   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
+#   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning), ⌃e
+#   (rename — windows take their name from the issue title, #216), ⌃l (arm
+#   auto-merge — /fleet-ship arms it now, gh pr merge --auto covers stragglers),
+#   and ⌥x (force-reap — folded into the one confirming ⌃x).
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
 # the 'plan' hub (fleet-up/steward-session builds it; prefix+G focuses it). Env: REFRESH.
 set -uo pipefail
@@ -49,18 +51,18 @@ PREVIEW=( --preview-window=hidden )
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # Minimal header (issue #249): core actions inline, the rest deferred to the `?`
-# cheatsheet (fleet-keys.sh lists every demoted bind: ⌃g ⌃s ⌃e ⌃x ⌥x ⌃t ⌃o).
-# Terse `key verb` form, not `key=phrase`, so it fits one line at normal widths.
-HDR='↵ jump · ⌃n new · ⌃l arm · ? keys'
+# cheatsheet (fleet-keys.sh lists every demoted bind: ⌃s ⌃x ⌃t ⌃o). Terse
+# `key verb` form, not `key=phrase`, so it fits one line at normal widths.
+HDR='↵ jump · ⌃n new · ? keys'
 # POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
 # less obvious than esc-back on the always-on dash) — that token is the only diff.
-[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ⌃l arm · ? keys · esc close'
+[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ? keys · esc close'
 
 run_dash() {
-  # clear any half-finished mode from a prior run; reset the live⇄landed view so
-  # the landed peek doesn't stick across esc-relaunch (and never hides the live
-  # session list on reopen). Per-fleet keyed, matching dash-view-toggle.sh (#130).
-  rm -f "$C/rename_target" "$C/bind_target" "$C/global/dash_view_${FLEET_SESSION:-default}"
+  # reset the live⇄landed view so the landed peek doesn't stick across
+  # esc-relaunch (and never hides the live session list on reopen). Per-fleet
+  # keyed, matching dash-view-toggle.sh (#130).
+  rm -f "$C/global/dash_view_${FLEET_SESSION:-default}"
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -71,16 +73,12 @@ run_dash() {
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
-    --bind "ctrl-g:execute(tmux display-popup -E -w 82% -h 72% \"bash $BIN/dash-issue-spawn.sh\")+reload(bash $ROWS)" \
     --bind "ctrl-n:execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
     --bind "ctrl-s:execute(tmux display-popup -w 72 -h 10 -E \"bash $BIN/dash-raw-session.sh --prompt-read\")+reload(bash $ROWS)" \
-    --bind "ctrl-e:show-input+execute-silent(echo {1} > $C/rename_target)+transform-query(tmux display-message -t {1} -p '#W')+change-prompt(rename ▸ )" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
-    --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
-    --bind "alt-x:execute(bash $BIN/dash-reap.sh {1} --force)+reload(bash $ROWS)" \
-    --bind "ctrl-l:execute(tmux display-popup -E -w 72% -h 60% \"bash $BIN/dash-arm-merge.sh {1}\")+reload(bash $ROWS)" \
+    --bind "ctrl-x:execute(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1

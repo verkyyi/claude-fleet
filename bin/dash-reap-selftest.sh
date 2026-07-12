@@ -11,17 +11,25 @@
 #        • clean + NOT merged                  → unmerged  (rc 1)
 #        • dirty (untracked file)              → dirty     (rc 1)
 #
-#   B. dash-reap.sh decisions, with a FAKE tmux + gh and a real git checkout:
+#   B. dash-reap.sh decisions (issue #289 merged ⌃x/⌥x into one confirming ⌃x),
+#      with a FAKE tmux + gh and a real git checkout:
 #        • hub/panel row (no @issue)           → refuse, no side effects
-#        • ⌃x on a dirty row                   → refuse ("worktree has changes")
-#        • ⌃x on a clean+unmerged row          → refuse ("PR not merged")
-#        • ⌃x on a clean+merged row            → FULL reap: worktree removed,
-#          branch deleted, `gh issue close` issued, `tmux kill-window` issued.
+#        • ⌃x on a dirty row                   → open a confirm POPUP, KEEP the
+#          worktree, no kill (the popup re-invokes with `confirm`)
+#        • ⌃x on a clean+unmerged row          → open a confirm POPUP, KEEP it
+#        • ⌃x on a clean+merged row            → FULL reap STRAIGHT AWAY (no
+#          confirm): worktree removed, branch deleted, `gh issue close` issued,
+#          `tmux kill-window` issued.
+#        • confirm y on dirty                  → KEEP worktree, close + kill only
+#        • confirm y on clean+unmerged         → FULL reap
+#        • confirm n                           → no side effects
 #        • ⌃x on a raw scratch row (@raw=1, no @issue) — issue #290 the scratch owns
-#          a `scratch-<N>` worktree (resolved via @worktree):
-#            - clean+ancestor  → window closed + worktree/branch removed
-#            - dirty           → window closed, worktree KEPT (never delete an experiment)
-#            - no @worktree     → degrade: just close the window (pre-#290 behavior)
+#          a `scratch-<N>` worktree (resolved via @worktree), reaped by the SAME
+#          one-key ⌃x rule (issue #289):
+#            - clean+ancestor  → window closed + worktree/branch removed (no confirm)
+#            - dirty/unmerged  → confirm POPUP first; confirm y keeps a dirty wt but
+#                                removes a clean+unmerged one; the window closes
+#            - no @worktree    → degrade: just close the window (pre-#290 behavior)
 #          Nothing issue-bound is touched; the summary-cache seed is removed.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
@@ -130,17 +138,19 @@ grep -q 'MSG.*no issue' "$TMLOG" || fail "no-issue row should refuse with 'no is
 grep -q 'KILL' "$TMLOG" && fail "no-issue row must not kill a window"
 [ -s "$GHLOG" ] && fail "no-issue row must not touch gh"
 
-# B2: ⌃x on dirty (issue-3) → refuse, worktree kept
+# B2: ⌃x on dirty (issue-3) → open a confirm popup, worktree kept, no kill (#289)
 : > "$TMLOG"; : > "$GHLOG"
 run_reap "3" "s1:3"
-grep -qi 'MSG.*has changes' "$TMLOG" || fail "dirty ⌃x should refuse ('has changes')"
-grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window"
+grep -q 'POPUP' "$TMLOG" || fail "dirty ⌃x should open a confirm popup"
+grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window before confirm"
+[ -s "$GHLOG" ] && fail "dirty ⌃x must not touch gh before confirm"
 [ -d "$WORK/wt3" ] || fail "dirty worktree must be kept"
 
-# B3: ⌃x on clean+unmerged (issue-2) → refuse
+# B3: ⌃x on clean+unmerged (issue-2) → open a confirm popup, worktree kept (#289)
 : > "$TMLOG"; : > "$GHLOG"
 run_reap "2" "s1:2"
-grep -qi 'MSG.*not merged' "$TMLOG" || fail "unmerged ⌃x should refuse ('not merged')"
+grep -q 'POPUP' "$TMLOG" || fail "unmerged ⌃x should open a confirm popup"
+grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before confirm"
 [ -d "$WORK/wt2" ] || fail "unmerged worktree must be kept"
 
 # B4: ⌃x on clean+merged (issue-1, ancestor) → full reap
@@ -151,27 +161,27 @@ git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branc
 grep -q 'CLOSE' "$GHLOG" || fail "merged reap should close the issue"
 grep -q 'KILL' "$TMLOG" || fail "merged reap should kill the window"
 
-# B5: ⌥x force (confirm y) on dirty (issue-3) → KEEP worktree, close + kill only
+# B5: confirm y on dirty (issue-3) → KEEP worktree, close + kill only
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | run_reap "3" "s1:3" --force confirm
-[ -d "$WORK/wt3" ] || fail "force reap on dirty must KEEP the worktree"
-grep -q 'CLOSE' "$GHLOG" || fail "force reap on dirty should close the issue"
-grep -q 'KILL' "$TMLOG" || fail "force reap on dirty should kill the window"
+printf 'y' | run_reap "3" "s1:3" confirm
+[ -d "$WORK/wt3" ] || fail "confirmed reap on dirty must KEEP the worktree"
+grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap on dirty should close the issue"
+grep -q 'KILL' "$TMLOG" || fail "confirmed reap on dirty should kill the window"
 
-# B6: ⌥x force (confirm y) on clean+unmerged (issue-2) → full reap (relaxes merged)
+# B6: confirm y on clean+unmerged (issue-2) → full reap (relaxes merged)
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | run_reap "2" "s1:2" --force confirm
-[ -d "$WORK/wt2" ] && fail "force reap on clean+unmerged should remove the worktree"
+printf 'y' | run_reap "2" "s1:2" confirm
+[ -d "$WORK/wt2" ] && fail "confirmed reap on clean+unmerged should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
-grep -q 'CLOSE' "$GHLOG" || fail "force reap should close the issue"
+grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap should close the issue"
 
-# B7: ⌥x force with confirm 'n' (cancel) → no side effects
+# B7: confirm 'n' (cancel) → no side effects
 git -C "$BASEDIR" worktree add -q -b issue-4 "$WORK/wt4" >/dev/null 2>&1
 : > "$TMLOG"; : > "$GHLOG"
-printf 'n' | run_reap "4" "s1:4" --force confirm
-[ -d "$WORK/wt4" ] || fail "cancelled force reap must keep the worktree"
-grep -q 'KILL' "$TMLOG" && fail "cancelled force reap must not kill the window"
-[ -s "$GHLOG" ] && fail "cancelled force reap must not touch gh"
+printf 'n' | run_reap "4" "s1:4" confirm
+[ -d "$WORK/wt4" ] || fail "cancelled reap must keep the worktree"
+grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
+[ -s "$GHLOG" ] && fail "cancelled reap must not touch gh"
 
 # B8: ⌃x on a raw scratch row (@raw=1, no @issue, no @worktree) → DEGRADE to the
 # pre-#290 behavior: just close the window. No refuse, the dash summary-cache seed
@@ -199,30 +209,30 @@ grep -qi 'MSG.*worktree reaped' "$TMLOG" || fail "scratch ⌃x (clean) should re
 git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-9 && fail "clean scratch ⌃x should delete the branch"
 grep -q 'CLOSE' "$GHLOG" && fail "scratch reap must NOT close any issue (no @issue)"
 
-# B8c: ⌃x on a scratch row WITH a DIRTY worktree → close the window but KEEP the
-# worktree (never silently delete an experiment).
+# B8c: ⌃x on a scratch row WITH a DIRTY worktree → open a confirm POPUP first (#289
+# one-key rule); do NOT close the window or touch the worktree yet.
 git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
 printf 'exp\n' > "$WORK/scr10/untracked"
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9"
-grep -q 'KILL' "$TMLOG" || fail "dirty scratch ⌃x should still close the window"
+grep -q 'POPUP' "$TMLOG" || fail "dirty scratch ⌃x should open a confirm popup"
+grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window before confirm"
 [ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
-grep -qi 'MSG.*KEPT' "$TMLOG" || fail "dirty scratch ⌃x should note the worktree was kept"
 
-# B8d: ⌥x force (confirm y) on the DIRTY scratch → still KEEP the worktree, close
-# the window only (git refuses a dirty remove; force never destroys uncommitted work).
+# B8d: confirm y on the DIRTY scratch → still KEEP the worktree, close the window
+# only (git refuses a dirty remove; a confirmed reap never destroys uncommitted work).
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9" --force confirm
-[ -d "$WORK/scr10" ] || fail "force reap on a dirty scratch must KEEP the worktree"
-grep -q 'KILL' "$TMLOG" || fail "force reap on a dirty scratch should close the window"
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9" confirm
+[ -d "$WORK/scr10" ] || fail "confirmed reap on a dirty scratch must KEEP the worktree"
+grep -q 'KILL' "$TMLOG" || fail "confirmed reap on a dirty scratch should close the window"
 
-# B8e: ⌥x force (confirm y) on a clean+unmerged scratch → remove worktree + branch.
+# B8e: confirm y on a clean+unmerged scratch → remove worktree + branch, close window.
 git -C "$BASEDIR" worktree add -q -b scratch-11 "$WORK/scr11" >/dev/null 2>&1
 printf 'x\n' > "$WORK/scr11/g"; git -C "$WORK/scr11" add g; git -C "$WORK/scr11" commit -qm work
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "s1:9" --force confirm
-[ -d "$WORK/scr11" ] && fail "force reap on a clean+unmerged scratch should remove the worktree"
-git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "force reap should delete the scratch branch"
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "s1:9" confirm
+[ -d "$WORK/scr11" ] && fail "confirmed reap on a clean+unmerged scratch should remove the worktree"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "confirmed reap should delete the scratch branch"
 
 # B9: hub/panel row with @raw explicitly 0 (not a scratch) still refuses — the
 # raw early-return keys on @raw=1 exactly, not merely "@raw set".
@@ -231,5 +241,5 @@ RAW=0 run_reap "" "s1:1"
 grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap safe/refuse/reap + force + raw/scratch paths\n'
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths (#289+#290)\n'
 exit 0
