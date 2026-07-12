@@ -13,7 +13,7 @@ any personal commands you already have. See the install step in
 
 > Phase 0 landed **just the contract** — this README and
 > [`_template.md`](_template.md); the functional skills (`/fleet-claim`, `/fleet-ship`,
-> `/fleet-land`, `/fleet-land-train`, …) land one per sub-issue, each cloning the template and filling in
+> `/fleet-cleanup`, …) land one per sub-issue, each cloning the template and filling in
 > its body. See **Shipped skills** below for what's live so far.
 
 ## Shipped skills
@@ -21,14 +21,12 @@ any personal commands you already have. See the install step in
 | Skill | Owner | What it does |
 |---|---|---|
 | [`/fleet-claim`](fleet-claim.md) | worker | Startup ritual: read the window's bound issue, stake a collision-proof claim (assignee + `▶ claiming` comment), restate scope + sketch a plan. Idempotent. |
-| [`/fleet-ship`](fleet-ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`. Never merges. |
+| [`/fleet-ship`](fleet-ship.md) | worker | Finish line: verify, ensure the `issue-<N>` worktree is clean + pushed, open/update a PR that `Closes #<issue>`, and **arm GitHub auto-merge** (`gh pr merge --auto`). Never merges — GitHub merges when green. |
 | [`/fleet-blocked`](fleet-blocked.md) | worker | Signal a blocker on the bound issue instead of stalling silently. |
-| [`/fleet-land`](fleet-land.md) | steward | Land one worker PR: verify it's genuinely mergeable (update-branch + re-check CI if merely behind, never merge red), squash-merge, fast-forward the fleet's base checkout, clean up the merged worktree + window. Fleet-agnostic — the general finish work only. |
-| [`/fleet-land-self`](fleet-land-self.md) | worker | The worker-owned mirror of `/fleet-land` scoped to its OWN PR (opt-in `FLEET_SELF_LAND=1`). After `/fleet-ship` the worker waits; when the steward triggers by commenting `/land` (relayed by the #132 bridge), it re-verifies green, sanitizes its diff, takes the per-repo land lease (hold-through-green, `--match-head-commit`, steal-if-stale), squash-merges, fast-forwards the base, and self-destructs (kill window + remove worktree). Deliberately relaxes the "workers never self-merge" rail, re-gated by the trigger; failure → `/fleet-blocked`. Backed by [`bin/fleet-land-self.sh`](../bin/fleet-land-self.sh) + [`bin/fleet-land-lease.sh`](../bin/fleet-land-lease.sh). See [docs/SELF-LAND.md](../docs/SELF-LAND.md). |
-| [`/fleet-land-train`](fleet-land-train.md) | steward | The batch complement to `/fleet-land`: a serial single-writer "land train" that lands a batch of green PRs one at a time (update-branch → wait green → merge → base-pull → clean up → next), ejecting any that can't land. A thin batch driver over the shared [`bin/fleet-land.sh`](../bin/fleet-land.sh) (each lap is one full mechanical land), so it's a client-side stand-in for a merge queue under `strict:true` branch protection. Backed by [`bin/land-train.sh`](../bin/land-train.sh). |
+| [`/fleet-cleanup`](fleet-cleanup.md) | steward | **The fleet never merges** — GitHub auto-merge (armed by `/fleet-ship`), a web merge, or a collaborator does the merge; this reaps the leftover worktree/window/branch and records the resume ledger *after* a PR is final. The manual escape hatch past the `com.claude-fleet.cleanup` daemon: records the ledger, fast-forwards the base checkout under the shared land lease, and tears down window → worktree → branch. Merges nothing, forces nothing. Backed by [`bin/fleet-cleanup.sh`](../bin/fleet-cleanup.sh). See [docs/CLEANUP.md](../docs/CLEANUP.md). |
 | [`/fleet-sync-install`](fleet-sync-install.md) | steward | Any fleet: maintains the shared live install (`~/.claude/fleet`) — after claude-fleet's own PRs land, re-apply them: pull + reload changed daemons + re-merge the hooks delta + install changed commands. Idempotent; refuses only if `~/.claude/fleet` isn't a git checkout. |
 | [`/fleet-status`](fleet-status.md) | steward | Read-only estate digest for this fleet — live windows + state, open PRs, ownerless issues, disk/usage health — capped with recommended next actions. Mutates nothing; prefers the collector caches. |
-| [`/fleet-history`](fleet-history.md) | steward | Browse & resume **landed** (merged + cleaned-up) sessions from the land-time history ledger (written by `/fleet-land` / `/fleet-land-train` before worktree removal). Lists finished work, opens the PR, pages the surviving transcript, and **resumes** a session by reconstructing its removed worktree off the squash SHA → `claude --resume` (or `--from-pr`). Backed by [`bin/fleet-history.sh`](../bin/fleet-history.sh); mirrored in the dash's live⇄landed **⌃t** toggle. |
+| [`/fleet-history`](fleet-history.md) | steward | Browse & resume **landed** (merged + cleaned-up) sessions from the history ledger (written by the cleanup daemon / `/fleet-cleanup` before worktree removal). Lists finished work, opens the PR, pages the surviving transcript, and **resumes** a session by reconstructing its removed worktree off the squash SHA → `claude --resume` (or `--from-pr`). Backed by [`bin/fleet-history.sh`](../bin/fleet-history.sh); mirrored in the dash's live⇄landed **⌃t** toggle. |
 | [`/fleet-new-issue`](fleet-new-issue.md) | steward | File a new issue in this fleet's repo from a task brief, then spawn a worker window (`issue-<N>` worktree + `claude`, bound via `@issue`) to implement it. **Thin inline file-and-spawn:** guard → dedup → live milestone best-fit → thin title + one-line brief → create → spawn → report, no code reading and no sub-agent — the spawned worker grounds the thin issue itself (via `/fleet-claim`). |
 | [`/fleet-scout`](fleet-scout.md) | steward | Delegate a **read-only investigation**: file a `scout`-labeled issue (durable question + report sink) and spawn a read-only worker (`dash-issue-session.sh <N> --scout`) that investigates + reports and **never branches/ships/lands**. The heavyweight tier of the *scout task shape*; the lightweight tier is an ephemeral `Explore`/`Agent` sub-agent run inline (no issue, no window). See [docs/SCOUT.md](../docs/SCOUT.md). |
 | [`/fleet-scout-report`](fleet-scout-report.md) | worker | A scout's finish line (the `/fleet-ship` analogue for an investigation): post the findings as an issue comment, decide **close vs. leave-open-for-ship-conversion**, then self-clean the window/worktree via [`bin/fleet-scout-clean.sh`](../bin/fleet-scout-clean.sh) (ordered teardown, no PR to merge). |
@@ -41,7 +39,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 | | **A. Interactive / role skill** | **B. Background-job prompt** |
 |---|---|---|
-| Examples | `/fleet-claim`, `/fleet-ship`, `/fleet-land` | `classify-session`, `summarize-session` |
+| Examples | `/fleet-claim`, `/fleet-ship`, `/fleet-cleanup` | `classify-session`, `summarize-session` |
 | Invoked by | a human/steward, on demand | a `claude -p` daemon (on a timer/hook) |
 | Template | [`_template.md`](_template.md) | [`_template-background.md`](_template-background.md) |
 | Step-0 preamble | **yes** — resolve fleet + guard seat | **no** — a daemon has no seat |

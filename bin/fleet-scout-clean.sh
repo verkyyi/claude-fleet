@@ -1,11 +1,12 @@
 #!/bin/bash
 # fleet-scout-clean.sh — a read-only SCOUT worker's self-destruct (issue #148).
 #
-# A scout has NO PR/branch to merge (unlike bin/fleet-land-self.sh's self_destruct),
-# so this is TEARDOWN-ONLY: no land lease, no base pull, no history ledger — just
-# kill this window and drop its read-only worktree (+ the unused issue-<N> branch).
+# A scout has NO PR/branch to merge (unlike bin/fleet-cleanup.sh's merged-PR
+# teardown), so this is TEARDOWN-ONLY: no land lease, no base pull, no history
+# ledger — just kill this window and drop its read-only worktree (+ the unused
+# issue-<N> branch).
 #
-# Ordering is load-bearing and mirrors self-land: the scout's own process holds the
+# Ordering is load-bearing and mirrors the cleanup teardown: the scout's own process holds the
 # worktree cwd, so we can't remove it from under ourselves. `tmux run-shell -b` runs
 # in the tmux SERVER (not this pane): it kills the window FIRST (our process dies,
 # releasing the cwd) and only THEN removes the worktree + branch.

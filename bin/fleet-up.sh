@@ -98,7 +98,7 @@ fi
 # --- write the per-fleet conf ---
 # PRESERVE any custom FLEET_* keys already in the conf (issue #170): a crash + `cf`
 # restore re-runs fleet-up, and a truncating rewrite would silently drop the
-# operator's FLEET_ISSUE_BRIDGE / FLEET_SELF_LAND / FLEET_AUTOFILL / … Only the
+# operator's FLEET_ISSUE_BRIDGE / FLEET_CLEANUP / FLEET_AUTOFILL / … Only the
 # derived three (repo/main/base) are refreshed; the rest survive. Atomic write.
 # One directory per fleet (issue #181): the conf lives at fleets/<sess>/conf. If an
 # un-migrated legacy flat <sess>.conf exists, adopt it into the per-fleet dir FIRST

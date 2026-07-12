@@ -2,7 +2,8 @@
 # tmux-pr-refresh.sh — dedicated FAST refresher for PR/CI status on the dash +
 # status bar. The PR pipeline used to ride the collector's 60s tick
 # (tmux-dash-collect.sh), so "CI went green" / "PR merged" took up to a minute to
-# surface — exactly when the steward is watching to /fleet-land. This script owns that
+# surface — exactly when the steward is watching a PR go green (to review / arm
+# auto-merge) and the cleanup daemon is waiting to reap it. This script owns that
 # pipeline on its own ~15s cadence (FLEET_PR_REFRESH_INTERVAL) instead.
 #
 # SINGLE WRITER of prmap_<slug> (+ the flat prmap mirror) and each window's

@@ -1,20 +1,19 @@
 #!/bin/bash
-# fleet-land-lease.sh — the reusable per-repo "land lease": the single-writer
-# lock that serializes LANDING (squash-merge + base fast-forward) on ONE repo, so
-# two landers can never advance the same base branch under each other.
+# fleet-land-lease.sh — the reusable per-repo "base lease": the single-writer
+# lock that serializes advancing ONE repo's base branch, so two base-movers can
+# never fast-forward the same base under each other.
 #
-# It GENERALIZES the inline lease that ships in bin/land-train.sh (issue #62): the
-# steward's batch land-train and the worker-owned self-land (bin/fleet-land-self.sh,
-# issue #138) share the EXACT same mkdir-atomic acquire + steal-if-stale semantics,
-# so the two land paths interlock on the same lock instead of each rolling its own.
+# Since issue #277 the fleet never merges — GitHub auto-merge (armed by /fleet-ship)
+# does the merge, and bin/fleet-cleanup.sh reaps + fast-forwards the base afterward.
+# This lease is what serializes that base fast-forward across concurrent cleaners
+# (the cleanup daemon + a manual /fleet-cleanup), using the mkdir-atomic acquire +
+# steal-if-stale semantics that used to serialize the (retired) landers.
 #
-# Why a lease at all (issue #138 §5 — hold-through-green): a lander holds the lease
-# across the whole "update-branch → wait for green → merge" window. Holding through
-# the green-wait means master can't advance under it, so green ⇒ still-up-to-date ⇒
-# the merge lands first try — no wasted CI, no starvation. The correctness partner
-# to steal-if-stale is land_lease_mine: because a lease CAN be stolen (a crashed
-# holder must not deadlock the queue), the holder re-validates ownership right
-# before it merges.
+# The `land_classify` verdict taxonomy below is retained for callers that still need
+# to fold a PR's (state,mergeable,mss,draft,checks) into one verdict. The correctness
+# partner to steal-if-stale is land_lease_mine: because a lease CAN be stolen (a
+# crashed holder must not deadlock the queue), a holder that slept can re-validate
+# ownership before it acts on the base.
 #
 # SOURCED, not executed — like fleet-lib.sh this file must NOT `set -u` /
 # `set -o pipefail` (those would leak into every caller and change behaviour far
@@ -149,9 +148,8 @@ land_lease_holder() {
   sed -n 4p "$lease/holder" 2>/dev/null
 }
 
-# The SHARED merge-state taxonomy for both landers (bin/land-train.sh's batch and
-# bin/fleet-land-self.sh's single-PR self-land) — one source so the two paths can
-# never disagree on whether a PR is landable. Folds (state,mergeable,mss,draft,
+# A shared merge-state taxonomy (retained from the retired landers, #277) — folds
+# (state,mergeable,mss,draft,
 # checks) → one verdict the land loops switch on:
 #   GONE     not open (already merged/closed)                        → skip
 #   DRAFT    draft                                                   → eject

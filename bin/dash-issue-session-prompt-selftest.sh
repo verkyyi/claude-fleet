@@ -2,30 +2,26 @@
 # dash-issue-session-prompt-selftest.sh — hermetic tests for the per-fleet
 # customizable worker seed prompt (issue #234). The BODY of an implementing
 # worker's one-shot seed — the clause between the /fleet-claim ritual and the
-# /fleet-ship + steward-lands|self-land tail — is overridable per fleet via
-# FLEET_WORKER_PROMPT / FLEET_WORKER_PROMPT_FILE, while the structural pieces
-# (issue-binding head, /fleet-claim, the ship/land tail) are always kept intact.
-# No network, no real repo, no tmux server — git/gh/tmux are faked on PATH (same
-# shape as dash-issue-session-name-selftest.sh). We read the SEED the spawn wrote
-# to its task file and assert on its contents.
+# uniform /fleet-ship tail — is overridable per fleet via FLEET_WORKER_PROMPT /
+# FLEET_WORKER_PROMPT_FILE, while the structural pieces (issue-binding head,
+# /fleet-claim, the ship tail) are always kept intact. Since issue #277 there is
+# ONE tail: every worker finishes with /fleet-ship, which arms GitHub auto-merge —
+# the fleet never merges. No network, no real repo, no tmux server — git/gh/tmux
+# are faked on PATH. We read the SEED the spawn wrote to its task file and assert.
 #
 #   A. DEFAULT (no override) is byte-identical at the seam: the body flows into
-#      the steward-lands tail as "…conventions. To finish, run /fleet-ship" with a
-#      SINGLE period — proving the refactor didn't change historic behavior.
+#      the ship tail as "…conventions. To finish, run /fleet-ship" with a SINGLE
+#      period — proving the refactor didn't change the seam behavior.
 #   B. FLEET_WORKER_PROMPT replaces the body; the /fleet-claim ritual + the ship
-#      tail (structural) are still present.
+#      tail (structural, "do NOT merge it yourself") are still present.
 #   C. a trailing sentence-ender in the override is stripped so the tail seam
 #      stays clean (no "thing.. To finish").
 #   D. {issue}/{repo} placeholders are substituted.
 #   E. FLEET_WORKER_PROMPT_FILE wins over the inline value and carries multi-line
 #      content verbatim; an unreadable file warns and falls back to the default.
-#   F. --self-land still appends the self-land tail after a custom body (structural
-#      tail intact regardless of the body override).
+#   F. every worker seed arms auto-merge (the ship tail names it) and NEVER carries
+#      a self-land / land-trigger instruction (the retired lifecycle).
 #   G. --scout ignores the override entirely (a scout has its own read-only seed).
-#   H. FLEET_SELF_LAND=auto seeds the trigger-free AUTO tail (issue #270): flows
-#      straight into /fleet-land-self, no WAIT / no /land trigger language.
-#   I. FLEET_SELF_LAND=1 keeps the steward-TRIGGERED tail (waits for /land).
-#   J. the --self-land=auto flag seeds auto; bare --self-land stays triggered.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -111,7 +107,7 @@ seedfile() { ls "$WORK"/dash/.claude-dash/fleets/*/task_issue-234.txt 2>/dev/nul
 seed()     { local f; f=$(seedfile); [ -n "$f" ] && cat "$f"; }
 has()      { case "$(seed)" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-# ===== A: default seam is byte-identical (steward-lands) =======================
+# ===== A: default seam is byte-identical (single-period join) ==================
 run_spawn 234
 [ -n "$(seedfile)" ] || fail "A no seed task file was written" "$(cat "$WORK/spawn.err")"
 has 'Work GitHub issue #234 in this repo.' || fail "A default seed lost the issue-binding head" "$(seed)"
@@ -127,8 +123,8 @@ has 'Follow CONTRIBUTING and add coverage. To finish, run /fleet-ship' \
 has 'Implement and verify per the repo conventions' \
   && fail "B override should REMOVE the default body" "$(seed)"
 has '/fleet-claim' || fail "B override must keep the /fleet-claim ritual" "$(seed)"
-has 'do NOT merge it yourself; the steward reviews and lands it' \
-  || fail "B override must keep the steward-lands ship tail" "$(seed)"
+has 'do NOT merge it yourself' \
+  || fail "B override must keep the 'do NOT merge it yourself' ship tail" "$(seed)"
 ok "B FLEET_WORKER_PROMPT replaces the body while keeping the structural seed"
 
 # ===== C: trailing sentence-ender stripped so the seam stays clean =============
@@ -158,12 +154,15 @@ grep -q 'FLEET_WORKER_PROMPT_FILE not readable' "$WORK/spawn.err" \
   || fail "E an unreadable prompt file should warn on stderr" "$(cat "$WORK/spawn.err")"
 ok "E prompt FILE wins + is multi-line; an unreadable file warns and falls back"
 
-# ===== F: --self-land keeps the self-land tail after a custom body =============
-FLEET_WORKER_PROMPT='Ship it carefully' run_spawn 234 --self-land
-has 'Ship it carefully, then run /fleet-ship' \
-  || fail "F self-land body should flow into the ', then run /fleet-ship' tail" "$(seed)"
-has '/fleet-land-self' || fail "F self-land tail (structural) was dropped" "$(seed)"
-ok "F --self-land keeps its structural tail regardless of the body override"
+# ===== F: the ship tail arms auto-merge and carries NO retired self-land text ==
+run_spawn 234
+has 'arm GitHub auto-merge' || fail "F default ship tail must arm auto-merge" "$(seed)"
+has 'com.claude-fleet.cleanup' || fail "F ship tail should name the cleanup daemon" "$(seed)"
+for gone in '/fleet-land-self' 'FLEET_SELF_LAND' 'do NOT merge — WAIT' \
+            'triggers the land by commenting' 'the steward reviews and lands'; do
+  case "$(seed)" in *"$gone"*) fail "F retired self-land text '$gone' leaked into the seed" "$(seed)" ;; esac
+done
+ok "F the worker seed arms auto-merge and drops every retired self-land instruction"
 
 # ===== G: --scout ignores the override (own read-only seed) ====================
 FLEET_WORKER_PROMPT='THIS-MUST-NOT-APPEAR' run_spawn 234 --scout
@@ -171,39 +170,6 @@ has 'THIS-MUST-NOT-APPEAR' && fail "G a scout must ignore FLEET_WORKER_PROMPT" "
 has 'READ-ONLY scout' || fail "G scout seed missing its read-only framing" "$(seed)"
 has 'do NOT implement' || fail "G scout seed missing its no-implement rail" "$(seed)"
 ok "G --scout ignores FLEET_WORKER_PROMPT and keeps its read-only seed"
-
-# ===== H: FLEET_SELF_LAND=auto → the AUTO tail (no trigger, no wait) ============
-# Issue #270: the steward trigger becomes optional; /fleet-ship flows straight into
-# /fleet-land-self. The auto tail must NOT carry the triggered-mode WAIT language.
-FLEET_SELF_LAND=auto run_spawn 234
-has '/fleet-land-self' || fail "H auto mode must still seed the self-land tail" "$(seed)"
-has 'FLEET_SELF_LAND=auto' || fail "H auto tail should name the auto mode" "$(seed)"
-has 'No /land comment is required' \
-  || fail "H auto tail must say no /land trigger is required" "$(seed)"
-has 'run /fleet-land-self IMMEDIATELY' \
-  || fail "H auto tail must flow straight into /fleet-land-self" "$(seed)"
-case "$(seed)" in
-  *'do NOT merge — WAIT'*) fail "H auto tail must NOT carry the triggered-mode WAIT" "$(seed)" ;;
-  *'triggers the land by commenting'*) fail "H auto tail must NOT mention the /land trigger" "$(seed)" ;;
-esac
-ok "H FLEET_SELF_LAND=auto seeds the trigger-free auto self-land tail"
-
-# ===== I: FLEET_SELF_LAND=1 → the TRIGGERED tail (waits for /land) ==============
-FLEET_SELF_LAND=1 run_spawn 234
-has 'do NOT merge — WAIT' || fail "I =1 must seed the triggered wait-for-/land tail" "$(seed)"
-has 'triggers the land by commenting' || fail "I =1 tail must mention the /land trigger" "$(seed)"
-has 'FLEET_SELF_LAND=auto' && fail "I =1 must NOT emit the auto-mode tail" "$(seed)"
-ok "I FLEET_SELF_LAND=1 seeds the steward-triggered self-land tail"
-
-# ===== J: --self-land=auto flag matches the =auto conf (flag wins) =============
-run_spawn 234 --self-land=auto
-has 'run /fleet-land-self IMMEDIATELY' \
-  || fail "J --self-land=auto flag should seed the auto tail" "$(seed)"
-case "$(seed)" in *'do NOT merge — WAIT'*) fail "J --self-land=auto must not carry the WAIT" "$(seed)" ;; esac
-# ...and the bare --self-land flag stays TRIGGERED (back-compat).
-run_spawn 234 --self-land
-has 'do NOT merge — WAIT' || fail "J bare --self-land must stay steward-triggered" "$(seed)"
-ok "J --self-land=auto seeds auto; bare --self-land stays triggered"
 
 printf '\nselftest OK: %s assertions passed (per-fleet worker seed prompt)\n' "$pass"
 exit 0

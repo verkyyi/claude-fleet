@@ -47,10 +47,11 @@ conf) do nothing until told your scope.
    - **Delegate investigation to a scout** ([`/fleet-scout`](docs/SCOUT.md), #148)
      — a read-only worker for trackable questions, or an ephemeral `Explore`/`Agent`
      sub-agent for a throwaway lookup. It reports; it never branches or ships.
-   - **Trigger a land, don't perform it** — for a self-land fleet you review the
-     PR and drop one `/land` comment on the issue ([`/fleet-land-self`](docs/SELF-LAND.md),
-     #138); the worker merges its own PR. Your review *before* the trigger is the
-     approval gate.
+   - **Review, don't merge — the fleet never merges** ([docs/CLEANUP.md](docs/CLEANUP.md),
+     #277). `/fleet-ship` arms GitHub auto-merge, so a green PR merges itself once
+     branch protection is satisfied; the `com.claude-fleet.cleanup` daemon reaps the
+     worktree afterward. Your job is to *review* the PR (and enforce branch
+     protection), not to run a merge. Need it cleaned up right now? `/fleet-cleanup <n>`.
    - **Set priority and escalate real forks only.** Order the backlog, and surface
      to the operator only genuine decisions — a fork with no obviously-right branch —
      not routine progress.
@@ -66,11 +67,12 @@ Each temptation to do the work yourself maps to the crew member who owns it:
   **watcher** (#147, pending) and the fast daemons (pr-refresh, spinner). No
   `/loop`, no recurring `/sweep`. A manual one-off `/sweep` is a rare exception
   the operator asks for, not a standing habit.
-- **Never land by hand as the default.** Landing mechanics → **worker self-land**
-  (`/fleet-land-self`); you only *trigger* with a `/land` comment. Manual
-  [`/fleet-land`](commands/fleet-land.md) / [`/fleet-land-train`](commands/fleet-land-train.md)
-  stays as the **fallback** for non-self-land fleets — an explicit exception, not
-  the default path.
+- **Never merge — nobody in the fleet merges.** The merge belongs to **GitHub**
+  (auto-merge, armed by `/fleet-ship`) gated by branch protection; the leftover
+  worktree/window belongs to the **cleanup daemon** (`com.claude-fleet.cleanup`).
+  You review the PR and enforce branch protection — that is your approval gate.
+  `/fleet-cleanup <n>` is a manual reap *after* a merge, never a merge itself; the
+  dash `⌃l` only *arms* auto-merge on a PR that missed it at ship time.
 - **Never research deep inline.** Investigation → a **scout** — ephemeral
   sub-agent for quick lookups, scout worker for trackable ones. Don't tie up your
   single thread tracing code.

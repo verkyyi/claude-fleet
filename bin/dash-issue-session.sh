@@ -14,12 +14,10 @@
 # select-window, so a user attached to that session is never yanked to the new
 # window.
 set -uo pipefail
-# Parse: <issue-number> [<target-session>] [--title <t>] [--self-land] [--scout] [--force].
-# The two positionals keep their historic order (num, target-session); --self-land
-# may appear anywhere and switches the seed prompt to the worker-owned self-land
-# lifecycle (issue #138) — bare/=1 is steward-triggered, =auto (issue #270) lands
-# straight after /fleet-ship with no trigger; --scout spawns a READ-ONLY investigation worker that
-# reports and never branches/ships/lands (issue #148). --title <t> is the
+# Parse: <issue-number> [<target-session>] [--title <t>] [--scout] [--force].
+# The two positionals keep their historic order (num, target-session). --scout
+# spawns a READ-ONLY investigation worker that reports and never branches/ships/
+# lands (issue #148). --title <t> is the
 # AUTHORITATIVE window name (issue #216): a create-then-spawn caller
 # (/fleet-new-issue, the prefix+n quick-dispatch, the dash new-session box) passes
 # the title it JUST wrote so the window is named after the WORK — not the bare
@@ -29,7 +27,7 @@ set -uo pipefail
 # pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
 # dead/abandoned peer worker that left the issue assigned+marked forever), skipping
 # the claim check + claim-at-spawn entirely.
-num=""; TARGET_SESS=""; SELF_LAND_FLAG=""; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; SCOUT_FLAG=0; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -38,19 +36,13 @@ for _a in "$@"; do
     _want=""; continue
   fi
   case "$_a" in
-    # --self-land selects the worker-owned lifecycle; the OPTIONAL =mode picks the
-    # gate (issue #270): bare/=1/=trigger = steward triggers the land (back-compat),
-    # =auto = the worker lands itself straight after /fleet-ship (no /land needed).
-    --self-land|--self-land=1|--self-land=trigger) SELF_LAND_FLAG=trigger ;;
-    --self-land=auto|--self-land-auto) SELF_LAND_FLAG=auto ;;
     --scout) SCOUT_FLAG=1 ;;
     --force|--reclaim) FORCE_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
-    # An UNKNOWN dash-flag is almost always a typo (e.g. --self-lan). Do NOT let it
-    # fall through to the positional slots — treating "--self-lan" as the issue
-    # number strips to "" and silently spawns a plain steward-lands worker, so a
-    # later /land trigger no-ops. Warn loudly and ignore it instead.
+    # An UNKNOWN dash-flag is almost always a typo (e.g. --scou). Do NOT let it
+    # fall through to the positional slots — treating "--scou" as the issue number
+    # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
     --*) printf 'dash-issue-session: ignoring unknown flag %s\n' "$_a" >&2
          tmux display-message "issues: ignoring unknown flag $_a" 2>/dev/null ;;
     *) _pos=$((_pos + 1)); case "$_pos" in 1) num="$_a" ;; 2) TARGET_SESS="$_a" ;; esac ;;
@@ -201,48 +193,15 @@ G="$C/global"; mkdir -p "$G"
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Self-land lifecycle (issue #138, auto mode #270): a worker owns its ENTIRE
-# lifecycle incl. the land. Opt in per spawn (--self-land[=auto]) or per fleet
-# (FLEET_SELF_LAND=1|auto). The STEWARD-TRIGGERED form (=1) NEEDS the issue-bridge
-# (it is how the steward's /land trigger reaches the worker) — warn if the fleet
-# hasn't enabled it, since without it the trigger can't arrive and the worker falls
-# back to steward-lands. The AUTO form (=auto) lands itself with no trigger, so it
-# needs no bridge.
+# Lifecycle (issue #277): THE FLEET NEVER MERGES. Every worker runs the same
+# finish — /fleet-ship verifies, pushes, opens a PR, and ARMS GitHub auto-merge;
+# GitHub merges when the PR is green and the com.claude-fleet.cleanup daemon reaps
+# the worktree/window afterward. There is no self-land and no /land trigger — the
+# only lifecycle split left is scout (read-only, opens no PR) vs a regular worker.
 SCOUT="$SCOUT_FLAG"
-# Self-land MODE (issue #138 + #270): a per-spawn --self-land[=auto] flag wins;
-# otherwise the fleet conf's FLEET_SELF_LAND selects it. Three states —
-#   ""/0  = off (steward-lands)
-#   1     = self-land, STEWARD-TRIGGERED (worker waits for /land)   [back-compat]
-#   auto  = self-land, AUTO (worker lands itself straight after /fleet-ship)
-# Collapse to two booleans the rest of the spawn reasons over: SELF_LAND (on?) and
-# AUTO_LAND (auto vs trigger?).
-SELF_MODE="$SELF_LAND_FLAG"
-if [ -z "$SELF_MODE" ]; then
-  case "${FLEET_SELF_LAND:-0}" in
-    auto)        SELF_MODE=auto ;;
-    1|trigger)   SELF_MODE=trigger ;;
-    *)           SELF_MODE="" ;;
-  esac
-fi
-SELF_LAND=0; [ -n "$SELF_MODE" ] && SELF_LAND=1
-AUTO_LAND=0; [ "$SELF_MODE" = auto ] && AUTO_LAND=1
-# A scout is a READ-ONLY investigation: it never branches/ships/lands, so scout
-# mode supersedes self-land (issue #148). Warn if both were asked for, then drop
-# the self-land lifecycle — there is no PR to land.
-if [ "$SCOUT" = 1 ] && [ "$SELF_LAND" = 1 ]; then
-  TM display-message "note: #$num --scout supersedes --self-land (a scout opens no PR to land)" 2>/dev/null
-  SELF_LAND=0; AUTO_LAND=0
-fi
-# The STEWARD-TRIGGERED lifecycle needs the issue-bridge — it is how the /land
-# trigger reaches the worker; without it no trigger arrives and the worker falls
-# back to steward-lands. AUTO mode needs NO trigger channel (it lands itself), so
-# the bridge is not required there — warn only for the trigger lifecycle.
-if [ "$SELF_LAND" = 1 ] && [ "$AUTO_LAND" = 0 ] && [ "${FLEET_ISSUE_BRIDGE:-0}" != 1 ]; then
-  TM display-message "note: #$num spawned --self-land but FLEET_ISSUE_BRIDGE!=1 — no /land trigger channel; will fall back to steward-lands" 2>/dev/null
-fi
-# The claim ritual ("run /fleet-claim, else do it by hand") is identical for every
-# lifecycle — scout, self-land, and steward-lands — so build it ONCE here and reuse
-# it, rather than hand-maintaining three copies that can drift (issue #148).
+# The claim ritual ("run /fleet-claim, else do it by hand") is identical for both
+# the scout and the regular lifecycle — build it ONCE here and reuse it, rather
+# than hand-maintaining two copies that can drift (issue #148).
 # shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
 claim=$(printf 'Start by running /fleet-claim (it reads, claims, and plans the issue); if /fleet-claim is unavailable, do it manually: `gh issue view %s --repo %s --comments`, then `gh issue edit %s --repo %s --add-assignee @me`, and plan.' \
   "$num" "$REPO" "$num" "$REPO")
@@ -254,29 +213,17 @@ if [ "$SCOUT" = 1 ]; then
   printf 'Investigate GitHub issue #%s in this repo as a READ-ONLY scout. %s This is a SCOUT task: investigate and REPORT — do NOT implement. Make NO code edits, create NO branch, open NO PR. Read the code and run read-only commands (gh/grep/git log) to gather findings. When your investigation is complete, run /fleet-scout-report — it posts your findings as an issue comment and self-cleans this window (there is no PR to merge). If /fleet-scout-report is unavailable, post your findings via `~/.claude/fleet/bin/fleet-comment.sh %s --repo %s --note --body '"'"'<findings>'"'"'` then run `~/.claude/fleet/bin/fleet-scout-clean.sh` to tear down. If the finding should convert to ship work, leave the issue OPEN and say so (a follow-up worker implements it); otherwise close it. Never open a PR.' \
     "$num" "$claim" "$num" "$REPO" > "$tf"
 else
-  # The claim→implement→ship preamble is identical for both non-scout lifecycles;
-  # only the finish differs (steward-lands vs the worker's wait-for-trigger →
-  # self-land). Build the shared prefix once, then append the seat-appropriate tail
-  # (issue #138). The BODY between the /fleet-claim ritual and the tail is the one
-  # operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE overrides
-  # it per fleet (default = the built-in instruction). fleet_worker_prompt_body
+  # The claim→implement→ship preamble builds a shared prefix + one uniform tail
+  # (issue #277): every worker finishes with /fleet-ship, which arms auto-merge —
+  # the fleet never merges. The BODY between the /fleet-claim ritual and the tail
+  # is the one operator-customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE
+  # overrides it per fleet (default = the built-in instruction). fleet_worker_prompt_body
   # strips any trailing sentence punctuation so the body stays a clause that flows
-  # into the tail's own leading '. '/', ' — keeping the DEFAULT seed byte-identical.
+  # into the tail's own leading '. ' — keeping the DEFAULT seed byte-identical.
   # The head (issue binding), $claim, and the tail below stay structural + intact.
   body=$(fleet_worker_prompt_body "$num" "$REPO")
   prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
-  if [ "$SELF_LAND" = 1 ] && [ "$AUTO_LAND" = 1 ]; then
-    # AUTO self-land (issue #270): no /land trigger — /fleet-ship flows straight
-    # into /fleet-land-self. The worker still waits for CI green (the hold-through-
-    # green lease inside /fleet-land-self), but no steward comment is required.
-    # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
-    tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. This fleet runs FLEET_SELF_LAND=auto: after /fleet-ship opens the PR, do NOT wait for a trigger — run /fleet-land-self IMMEDIATELY to land your OWN PR (it waits for CI green via the hold-through-green lease, re-verifies, sanitizes your diff, lease-serialized squash-merge, base fast-forward, self-destruct). No /land comment is required. If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing.' "$num")
-  elif [ "$SELF_LAND" = 1 ]; then
-    # shellcheck disable=SC2016  # backticks are literal prompt text, not expansions
-    tail=$(printf ', then run /fleet-ship (verify, push, open a PR that closes #%s). You own the FULL lifecycle of this issue including the land. After /fleet-ship, do NOT merge — WAIT. The steward reviews your PR and triggers the land by commenting `/land` (or `<!-- fleet:land -->`) on the issue, relayed to you as a turn by the issue-bridge. When you receive that trigger, run /fleet-land-self to land your OWN PR (re-verify green, sanitize your diff, lease-serialized squash-merge, base fast-forward, self-destruct). If it cannot land cleanly, run /fleet-blocked with the reason instead of forcing. Never merge un-triggered.' "$num")
-  else
-    tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s). IMPORTANT: open the PR and STOP — do NOT merge it yourself; the steward reviews and lands it (/fleet-land). If /fleet-ship is unavailable, open the PR manually and still do not merge.' "$num")
-  fi
+  tail=$(printf '. To finish, run /fleet-ship (verify, push, open a PR that closes #%s, and arm GitHub auto-merge). IMPORTANT: open the PR, let /fleet-ship arm auto-merge, and STOP — do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If /fleet-ship is unavailable, open the PR manually and still do not merge. If you hit a blocker you cannot resolve, run /fleet-blocked with the reason.' "$num")
   printf '%s%s' "$prefix" "$tail" > "$tf"
 fi
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null

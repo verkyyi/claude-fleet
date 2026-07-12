@@ -306,8 +306,8 @@ bridge_find_steward() {
 # tick and pin the watermark like the hub-down case. 1 if fresh, unstamped/garbled,
 # or STUCK_SECS=0 (⇒ treat as genuinely busy, queue it).
 # CAVEAT: @claude_state_ts is coarse (only re-stamped per tool call, not mid-call),
-# so a steward inside ONE tool call longer than STUCK_SECS (e.g. a /fleet-land
-# waiting on CI) reads as stale and gets the comment delivered mid-call. Claude Code
+# so a steward inside ONE tool call longer than STUCK_SECS (e.g. a long-running
+# command) reads as stale and gets the comment delivered mid-call. Claude Code
 # QUEUES injected input during a turn (it doesn't interrupt the tool), so the wake is
 # processed when the long call finishes — degraded latency, not corruption — and the
 # alternative (no escape) is a permanently wedged channel, which is worse.

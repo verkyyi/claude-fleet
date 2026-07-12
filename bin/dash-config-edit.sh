@@ -62,9 +62,7 @@ printf '  \033[38;2;86;95;137m%s  ·  %s\033[0m\n' "$KEY" "$(fcfg_short "$KEY")"
 printf '\n  effective now : %s  (%s)\n' "${effval:-<empty>}" "$effsrc"
 printf '  in this layer : %s\n' "${cur:-<unset here>}"
 case "$EDIT" in
-  bool)  if [ "$KEY" = FLEET_SELF_LAND ]; then
-           printf '  valid input   : 0 | 1 (steward triggers the land) | auto (worker lands itself, no trigger)\n'
-         else printf '  valid input   : 0 or 1\n'; fi ;;
+  bool)  printf '  valid input   : 0 or 1\n' ;;
   int)   printf '  valid input   : a non-negative integer\n' ;;
   enum)  printf "  valid input   : opus | sonnet | haiku | opusplan | default | claude-* | - (set empty, defer to default)\n" ;;
   regex) printf "  valid input   : a valid extended regex (no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;

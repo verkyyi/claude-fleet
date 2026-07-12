@@ -134,7 +134,7 @@ win_gone w3 || fail "sibling window w3 should be gone once the guard is disabled
 
 # --- STEWARD-seat cross-window kill is ALLOWED (issue #177) --------------------
 # The operator's steward hub (its pane carries @steward=1) legitimately kills a
-# merged worker's window as the last step of /fleet-land. Build a steward window
+# merged worker's window as the last step of /fleet-cleanup. Build a steward window
 # (hub, marked) + a worker window (wk), then kill wk FROM the steward pane — a
 # cross-window kill the guard must ALLOW because the caller is the steward.
 tmux new-window -t t: -n stew 2>/dev/null || fail "could not create steward window stew"
@@ -162,7 +162,7 @@ win_gone stew && fail "steward window stew must survive a refused worker-seat ki
 # --- STEWARD exemption is FOCUS-INDEPENDENT (issue #177 reopen) ----------------
 # The reopen: the pre-fix guard read the seat from `display-message -t ""`, which
 # falls back to the *active* pane. The plan hub has two panes — dash (no @steward)
-# and steward (@steward=1). With the dash focused, the steward's own /fleet-land
+# and steward (@steward=1). With the dash focused, the steward's own /fleet-cleanup
 # was misread as a worker and REFUSED. The fix resolves the seat STRICTLY from the
 # caller's $TMUX_PANE. Prove it: focus a NON-steward window as the active pane,
 # then land FROM the steward pane — the active pane isn't the caller, yet it must
@@ -197,7 +197,7 @@ win_gone wk3 && fail "worker window wk3 must survive a refused empty-\$TMUX_PANE
 # --- FLEET_SEAT=steward env is the PRIMARY seat signal, even with EMPTY $TMUX_PANE
 # (issue #202) --------------------------------------------------------------------
 # #185's strict $TMUX_PANE read intermittently saw an empty caller pane and refused
-# the steward's own /fleet-land kill-window (the reopen this issue fixes). The fix
+# the steward's own /fleet-cleanup kill-window (the reopen this issue fixes). The fix
 # gives the steward a durable inherited env marker (FLEET_SEAT=steward, exported by
 # steward-session.sh) that the guard trusts FIRST — so a steward Bash-tool shell
 # whose $TMUX_PANE didn't get re-exported is STILL allowed. Prove it: no pane
