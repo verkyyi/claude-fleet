@@ -6,10 +6,18 @@
 # Opened by `prefix ?` (display-popup -E; see conf/tmux-attention.conf) and by a
 # `?` bind inside the dash/backlog. The popup closes on q/esc.
 #
+# Context scoping (issue #265): the global `prefix ?` shows the WHOLE sheet, but
+# when opened from INSIDE a panel it shows only the shortcuts that apply there —
+# that panel's own binds plus the global `tmux prefix` binds (which fire from any
+# pane, the dash included), not the other panels' inner binds. Pass the panel via
+# `--context dash|backlog` (default `all` = every group).
+#
 # Usage:
-#   fleet-keys.sh            # print the sheet, then wait for q/esc (popup mode)
-#   fleet-keys.sh --plain    # print once and exit (no wait) — for pipes / tests
-#                            #   also implied when stdout is not a tty
+#   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
+#   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
+#   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
+#   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
+#                                    #   also implied when stdout is not a tty
 #
 # Drift guard: bin/fleet-keys-selftest.sh cross-checks the keys listed here
 # against the binds actually shipped in conf/tmux-attention.conf + the dash/
@@ -17,7 +25,18 @@
 set -u
 
 PLAIN=""
-[ "${1:-}" = "--plain" ] && PLAIN=1
+CONTEXT="all"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --plain)      PLAIN=1 ;;
+    --context)    shift; CONTEXT="${1:-all}" ;;
+    --context=*)  CONTEXT="${1#--context=}" ;;
+    *)            ;;  # ignore unknown args (forward-compat)
+  esac
+  shift
+done
+# Unknown context ⇒ fall back to the full sheet (never render nothing).
+case "$CONTEXT" in all|dash|backlog) ;; *) CONTEXT="all" ;; esac
 # Non-interactive stdout (pipe/redirect/test) ⇒ print-and-exit, never block.
 [ -t 1 ] || PLAIN=1
 
@@ -39,10 +58,29 @@ key() {
   printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$desc"
 }
 
-print_sheet() {
-  printf '%s%s fleet keymap %s  %s(prefix = your tmux prefix, default C-b · q/esc to close)%s\n' \
-    "$B" "$CYAN" "$R" "$DIM" "$R"
+# want <group> — is this group in scope for the current $CONTEXT? The global
+# `tmux prefix` binds fire from any pane, so they show in every scope; the
+# per-panel groups (dashboard/backlog/config modal) show only in the full sheet
+# or when that panel is the active context.
+want() {
+  case "$CONTEXT" in
+    all)     return 0 ;;
+    dash)    case "$1" in prefix|dashboard) return 0 ;; *) return 1 ;; esac ;;
+    backlog) case "$1" in prefix|backlog)   return 0 ;; *) return 1 ;; esac ;;
+    *)       return 0 ;;
+  esac
+}
 
+print_sheet() {
+  local sub
+  case "$CONTEXT" in
+    dash)    sub="(dashboard panel · prefix binds work here too · q/esc to close)" ;;
+    backlog) sub="(backlog panel · prefix binds work here too · q/esc to close)" ;;
+    *)       sub="(prefix = your tmux prefix, default C-b · q/esc to close)" ;;
+  esac
+  printf '%s%s fleet keymap %s  %s%s%s\n' "$B" "$CYAN" "$R" "$DIM" "$sub" "$R"
+
+  if want prefix; then
   group "tmux prefix" "— global, from any window"
   key "prefix a" "jump to the next window that needs you (red first, then green)"
   key "prefix G" "focus the dash — jump to the hub's dash pane; press again to zoom it"
@@ -57,7 +95,9 @@ print_sheet() {
   key "F9" "(no prefix) jump back to this session's steward hub"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ⚑ N" "orange flag on the #S chip = N OTHER fleets need you; click to switch"
+  fi
 
+  if want dashboard; then
   group "dashboard" "— inside the hub dash pane (prefix G)"
   key "enter" "jump to the highlighted window"
   key "⌃g" "new session — pick an issue to spawn"
@@ -72,7 +112,9 @@ print_sheet() {
   key "⌃r" "refresh now"
   key "?" "this cheatsheet"
   key "esc" "relaunch the dash (it's the always-on hub pane)"
+  fi
 
+  if want backlog; then
   group "backlog" "— inside prefix b"
   key "space" "toggle the preview pane (body/labels/comments) — off by default"
   key "/" "filter issues (type to narrow; off by default)"
@@ -86,7 +128,9 @@ print_sheet() {
   key "⌃r" "refresh now"
   key "⌃k" "this cheatsheet"
   key "esc" "close"
+  fi
 
+  if want config; then
   group "config modal" "— inside prefix c"
   key "enter" "edit the highlighted key / expand the section"
   key "tab" "expand/collapse a section"
@@ -94,6 +138,7 @@ print_sheet() {
   key "?" "reveal the raw FLEET_* keys inline"
   key "⌃r" "refresh now"
   key "esc" "close"
+  fi
 }
 
 print_sheet
