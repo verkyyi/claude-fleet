@@ -9,7 +9,7 @@ runs from inside a session.
 They are **installed by copying** `commands/*.md` into the Claude Code user
 commands dir (`~/.claude/commands/`), appended alongside — never clobbering —
 any personal commands you already have. See the install step in
-[`CLAUDE.md`](../CLAUDE.md).
+[`docs/INSTALL.md`](../docs/INSTALL.md).
 
 > Phase 0 landed **just the contract** — this README and
 > [`_template.md`](_template.md); the functional skills (`/fleet-claim`, `/fleet-ship`,
