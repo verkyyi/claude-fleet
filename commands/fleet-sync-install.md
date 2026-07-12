@@ -2,7 +2,7 @@
 
 <!-- fleet skill · owner: steward -->
 
-The tooling-fleet-only counterpart to `/fleet-land`: after claude-fleet's *own*
+The live-install counterpart to `/fleet-land`: after claude-fleet's *own*
 changes land on master, this re-applies them to the **live install**
 (`~/.claude/fleet` — the checkout the daemons, hooks, and dash actually read).
 It **mutates the live install and this machine's Claude config**: fast-forwards
@@ -12,10 +12,13 @@ new/changed `commands/*.md` into `~/.claude/commands/` (removing any renamed or
 retired ones). Idempotent — safe to
 re-run; a no-op when the live install is already at master. Steward-only.
 
-Because it only makes sense for the fleet that *hosts this tooling*, it **refuses
-on every other fleet** (see step 1). The normal flow: land the tooling PR(s) with
-`/fleet-land` or `/fleet-land-train`, then run `/fleet-sync-install` **once** to make the live
-install match master.
+The live install is **shared, machine-global tooling** every fleet uses, so this
+**runs from ANY fleet** — not only the one whose `$FLEET_REPO` is claude-fleet
+(issue #256). It operates on `~/.claude/fleet` (always a claude-fleet checkout)
+regardless of which fleet invokes it; the only precondition is that
+`~/.claude/fleet` is a git checkout to fast-forward (see step 1). The normal flow:
+land the tooling PR(s) with `/fleet-land` or `/fleet-land-train`, then run
+`/fleet-sync-install` **once** to make the live install match master.
 
 **Argument** (`$ARGUMENTS`): none — takes no argument.
 
@@ -37,23 +40,34 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   **refuse in one line and stop**, e.g. *"/fleet-sync-install is steward-only;
   you're in the worker seat."* Never proceed from the wrong seat.
 
-## 1. Tooling-fleet guard (run BEFORE any mutation)
+## 1. Live-install check (run BEFORE any mutation)
 
-This skill only applies to the fleet whose `$FLEET_REPO` **is** the repo the live
-install tracks. Compare `$FLEET_REPO` to the origin slug of `~/.claude/fleet`:
+`/fleet-sync-install` maintains the **shared** live install (`~/.claude/fleet`) —
+machine-global tooling every fleet uses — so it runs from ANY fleet, **not only**
+the one whose `$FLEET_REPO` is claude-fleet. The only precondition is that the
+live install actually is a git checkout to fast-forward. Confirm that:
 
 ```sh
 live_slug=$(git -C ~/.claude/fleet remote get-url origin 2>/dev/null \
   | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##')
-echo "fleet_repo=${FLEET_REPO:-} live_slug=${live_slug:-none}"
+echo "live_slug=${live_slug:-none}"
 ```
 
-- If `~/.claude/fleet` is missing/not a git checkout (`live_slug` empty), or
-  `live_slug` **!=** `$FLEET_REPO` → **refuse in one line and stop**:
-  *"/fleet-sync-install re-applies the fleet tooling to the live install — only
-  runs on the claude-fleet tooling fleet."* Mutate nothing.
-- If they match → proceed. Everything below operates on `~/.claude/fleet` (the
-  live install) — not `$FLEET_MAIN`, which `/fleet-land` already fast-forwarded.
+- If `~/.claude/fleet` is missing / not a git checkout / has no origin
+  (`live_slug` empty) → **refuse gracefully in one line and stop**:
+  *"`~/.claude/fleet` isn't a git checkout — nothing to sync."* Mutate nothing.
+  (On a file-copy install `live_slug` is empty, so this path correctly refuses.)
+- Otherwise → proceed. **Do NOT compare `live_slug` to `$FLEET_REPO`** — the
+  repo-match fence was deliberately dropped (issue #256): the skill only ever
+  touches `~/.claude/fleet`, never `$FLEET_MAIN`, so the current fleet's repo is
+  irrelevant. Everything below operates on `~/.claude/fleet` (the live install) —
+  not `$FLEET_MAIN`, which `/fleet-land` already fast-forwarded.
+
+**Scope-rail note:** this is a DELIBERATE, explicit exception to the steward
+"work only on your bound repo" rail. `/fleet-sync-install` touches **machine-global
+shared tooling** (`~/.claude/fleet` + `~/.claude` config), NOT the current or any
+other fleet's repo, sessions, or ledger — it never mutates another fleet's
+checkout. That's what makes it safe to run from a fleet bound to a different repo.
 
 ## 2. Fast-forward the live install
 
@@ -246,8 +260,10 @@ report that instead with the one-line reason.
 
 ---
 
-Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
-sessions, or ledgers. `/fleet-sync-install` mutates the live install
-(`~/.claude/fleet`) and `~/.claude` config, so it is deliberately fenced to the
-self-hosting tooling fleet and refuses everywhere else. Landing is `/fleet-land`'s job;
-this only re-applies already-landed tooling to the live install.
+Rails: `/fleet-sync-install` is the one deliberate exception to the steward
+"operate on YOUR fleet's `$FLEET_REPO` only" rail — it mutates **machine-global
+shared tooling** (the live install `~/.claude/fleet` + `~/.claude` config), never
+another fleet's repo, sessions, or ledgers, so **any** fleet's steward may run it;
+it refuses only when `~/.claude/fleet` isn't a git checkout to fast-forward.
+Landing is `/fleet-land`'s job; this only re-applies already-landed tooling to the
+live install.
