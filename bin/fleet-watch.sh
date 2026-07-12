@@ -7,16 +7,15 @@
 # STATE the other daemons already maintain and pings the steward through the #146
 # control-issue channel when something needs a decision.
 #
-# ZERO-TOKEN / NO NEW POLLING. Every tick reads only local state the collector +
-# pr-refresh already wrote — window `@claude_state`/`@issue`, the per-repo
-# `prmap` (branch→PR state/ci/ready)/`issues_<slug>`/`labels_<slug>` caches, and tmux
-# session counts. It calls
+# ZERO-TOKEN / NO NEW POLLING. Every tick reads only local state the collector
+# already wrote — window `@claude_state`/`@issue` and the per-repo `labels_<slug>`
+# cache. It calls
 # NO LLM and issues NO per-tick `gh` reads; the only outbound work is a single
 # `gh issue comment` when (and only when) a NEW edge fires. So an idle fleet costs
 # nothing but a few cache reads per tick.
 #
 # EDGE-TRIGGERED + DEDUPED. We wake on TRANSITIONS, not levels. Each tick computes
-# the set of currently-firing event KEYS (e.g. `prgreen:<slug>:<pr>`); a per-repo
+# the set of currently-firing event KEYS (e.g. `stuck:<slug>:<iss>`); a per-repo
 # persisted keyset holds what was already firing. New keys (now − seen) are the
 # edges → one batched wake comment. A condition that persists stays in the set and
 # never re-fires; if it clears and later recurs it fires again. First run for a repo
@@ -29,15 +28,13 @@
 # to the steward pane directly — the bridge is its only channel, so a fleet with no
 # FLEET_STEWARD_ISSUE (or no running bridge) is simply not watched.
 #
-# Events (issue #147 initial set):
-#   prgreen    a worker PR is CI-green AND landable (prmap ready∈{ready,behind}; a
-#              conflicting/blocked/unknown-mergeability PR is suppressed, issue #187)
-#                                                              → "PR #<n> (#<iss>) green — /land <n>?"
-#   propened   a worker opened a PR (prmap gained an OPEN PR)  → "#<iss> shipped PR #<n> — review?"
+# Events (trimmed in issue #279 to the edges that stay decision-worthy once landing
+# is retired in #277 — the PR-green→/land, worker-opened-PR and free-slot edges were
+# removed: nothing triggers a land, the dash already shows an opened PR, and autofill
+# owns slot-fill):
 #   stuck      a worker looks stuck (@claude_state=looping)    → "#<iss> looks stuck (looping) — investigate?"
 #   needs      the needs-attention count ROSE                  → "<k> window(s) need attention"
 #   prodalert  a new `prod-alert`-labelled issue appeared      → "prod-alert #<n> filed — first-response?"
-#   slotfree   caps have headroom + eligible backlog (autofill off) → "slot free — spawn #<n> (<title>)?"
 #
 # OFF BY DEFAULT. A fleet opts in with FLEET_WATCH=1 in its conf. The watcher spends
 # no tokens ITSELF, but a wake makes the STEWARD take an LLM turn — so, like every
@@ -52,10 +49,6 @@
 # Env knobs (per-fleet in $FLEET_CONF_DIR/<session>.conf or the global fleet.conf):
 #   FLEET_WATCH               1 to watch this fleet                 (default 0/off)
 #   FLEET_STEWARD_ISSUE       control-issue number = wake channel   (required; #146)
-#   FLEET_AUTOFILL            if 1, the dispatcher owns slot-fill so the slotfree
-#                             event is suppressed (no double-drive) (default 0)
-#   FLEET_MAX_SESSIONS        per-fleet session ceiling (headroom)  (default 0/unlimited)
-#   FLEET_GLOBAL_MAX_SESSIONS system-wide ceiling (headroom)        (default 8)
 #   FLEET_WATCH_STATE_DIR     dedup/keyset state dir  (default ~/.config/claude-fleet/watch)
 #   FLEET_WATCH_LEASE_TTL     lease lifetime, seconds               (default 120)
 set -uo pipefail
@@ -75,7 +68,7 @@ ARGV_SESS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
-    -h|--help)    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           printf 'fleet-watch: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)            ARGV_SESS+=("$1") ;;
   esac
@@ -84,24 +77,6 @@ done
 
 now() { date +%s 2>/dev/null || echo 0; }
 log() { printf '%s fleet-watch: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
-
-# cache_key — byte-identical to bin/tmux-dash-collect.sh / tmux-pr-refresh.sh (the
-# collision-free reversible worktree key those daemons hash a pane path into).
-cache_key() { local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"; }
-
-# --- headroom (mirrors fleet-dispatch.sh) --------------------------------------
-global_headroom() {
-  local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
-  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
-  [ "$gmax" -eq 0 ] && { echo 9999; return; }
-  echo $(( gmax - $(fleet_session_count) ))
-}
-fleet_headroom() {
-  local fmax="${FLEET_MAX_SESSIONS:-0}"
-  case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
-  [ "$fmax" -eq 0 ] && { echo 9999; return; }
-  echo $(( fmax - $(fleet_session_count_for "$1") ))
-}
 
 # --- per-repo single-writer lease (mkdir; steal-if-stale). Mirrors fleet-dispatch. -
 lease_acquire() { # $1 = lease path, $2 = holder id
@@ -128,42 +103,19 @@ lease_release() { # $1 = lease path, $2 = holder id
   return 0
 }
 
-# --- PR lookup: window branch → its OPEN PR row from the per-slug prmap ----------
-# prmap line: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready. Prints
-# "#num<TAB>state<TAB>ci<TAB>ready" for the branch's PR, or empty. The `ready`
-# column (pr-refresh's mergeability verdict) is surfaced so prgreen can gate the
-# /land wake on landability, not CI alone (issue #187). Mirrors the
-# branch-normalisation in tmux-pr-refresh.
-pr_for_path() { # $1 = pane path, $2 = prmap file
-  local path="$1" prmf="$2" key branch bare
-  [ -s "$prmf" ] || return 0
-  key=$(cache_key "$path")
-  branch=$(cut -f1 "$C/global/git_$key" 2>/dev/null)
-  bare=$(printf '%s' "$branch" | sed -E 's/(\+[0-9]+)?(-[0-9]+)?$//')
-  [ -z "$bare" ] || [ "$bare" = "-" ] && return 0
-  awk -F'\t' -v x="$bare" '$1==x{print $2"\t"$3"\t"$4"\t"$5; exit}' "$prmf" 2>/dev/null
-}
-
 # =============================== per-fleet scan =================================
 # Computes this repo's firing keyset (KEY<TAB>MESSAGE lines on stdout) + the current
 # needs-attention count (printed as the FIRST line, "needs<TAB>N"). Pure w.r.t. its
 # inputs: tmux window state + the $C caches. The engine (watch_fleet) diffs the keys
 # against the persisted set and does the level-compare for needs.
-compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_headroom
-  local slug="$1" steward="$2" autofill="$3" ghhd="$4" flhd="$5"
-  # per-fleet runtime cache (issue #181): fleets/<slug>/{prmap,labels,issues}, with a
-  # dual-read fallback to the legacy flat slug-suffixed files across the migrate window.
+compute_keys() { # $1=slug
+  local slug="$1"
+  # per-fleet runtime cache (issue #181): fleets/<slug>/labels, with a dual-read
+  # fallback to the legacy flat slug-suffixed file across the migrate window.
   local FD; FD=$(fleet_cache_dir "$slug")
-  local prmf labf issf
-  if   [ -f "$FD/prmap.ts" ];      then prmf="$FD/prmap"
-  elif [ -f "$C/prmap_$slug.ts" ]; then prmf="$C/prmap_$slug"
-  else prmf="$FD/prmap"; fi
+  local labf
   labf="$FD/labels"; [ -s "$labf" ] || { [ -s "$C/labels_$slug" ] && labf="$C/labels_$slug"; }
-  if   [ -s "$FD/issues" ];        then issf="$FD/issues"
-  elif [ -s "$C/issues_$slug" ];   then issf="$C/issues_$slug"
-  else issf="$FD/issues"; fi
   local needs=0
-  local live_issues=' '     # issue numbers with a live window (for slotfree anti-collision)
   local US=$'\x1f'
 
   # Resolve THIS slug's sessions ONCE (a single sessmap read) instead of forking an
@@ -178,37 +130,11 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
   fi
 
   # ONE tmux scan of every window; keep only this repo's (slug match) worker windows.
-  while IFS="$US" read -r sess win name issue st path raw; do
+  while IFS="$US" read -r sess win name issue st raw; do
     [ -z "$sess" ] && continue
     case "$name" in plan|dash|backlog) continue;; esac   # hub panels, not workers
-    [ "$raw" = 1 ] && continue                            # raw scratch session (#214): no issue/PR/land — nothing steward-actionable
+    [ "$raw" = 1 ] && continue                            # raw scratch session (#214): no issue — nothing steward-actionable
     case "$slugsess" in *" $sess "*) : ;; *) continue;; esac
-    [ -n "$issue" ] && live_issues="$live_issues$issue "
-
-    # per-window PR events (PR number + CI + mergeability from the prmap row)
-    local prrow pnum pstate pci pready
-    prrow=$(pr_for_path "$path" "$prmf")
-    pnum=$(printf '%s' "$prrow" | cut -f1); pnum="${pnum#\#}"
-    pstate=$(printf '%s' "$prrow" | cut -f2)
-    pci=$(printf '%s' "$prrow" | cut -f3)
-    pready=$(printf '%s' "$prrow" | cut -f4)
-    if [ -n "$pnum" ] && [ "$pstate" = OPEN ]; then
-      printf 'propened:%s:%s\t#%s shipped PR #%s — review?\n' "$slug" "$pnum" "${issue:-?}" "$pnum"
-      # green + LANDABLE. Gate on the prmap `ready` column (pr-refresh's authoritative
-      # mergeability verdict from mergeStateStatus/mergeable), NOT the @prci glyph
-      # (issue #187). The glyph conflates "ready" and "mergeability-not-yet-computed"
-      # as a bare "✓" (ready="" ⇒ default glyph), so a glyph-only gate fires /land on a
-      # PR that later resolves CONFLICTING. Only ci-green PRs carry a ready verdict:
-      #   ready  → landable now                            → /land wake
-      #   behind → landable (update-branch fast-forwards it) → /land wake
-      #   conflict/blocked/"" (unknown) → NOT a /land wake (author/human/GitHub must act)
-      if [ "$pci" = "✓" ]; then
-        case "$pready" in
-          ready)  printf 'prgreen:%s:%s\tPR #%s (#%s) green — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
-          behind) printf 'prgreen:%s:%s\tPR #%s (#%s) green (behind base) — /land %s?\n' "$slug" "$pnum" "$pnum" "${issue:-?}" "$pnum" ;;
-        esac
-      fi
-    fi
 
     # worker-state events
     case "$st" in
@@ -216,7 +142,7 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
       needs)   needs=$((needs + 1)) ;;
     esac
   done < <(tmux list-windows -a -F \
-      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{pane_current_path}${US}#{@raw}" 2>/dev/null)
+      "#{session_name}${US}#{window_id}${US}#{window_name}${US}#{@issue}${US}#{@claude_state}${US}#{@raw}" 2>/dev/null)
 
   # prod-alert: any OPEN issue carrying the `prod-alert` label (from labels_<slug>).
   if [ -s "$labf" ]; then
@@ -228,55 +154,7 @@ compute_keys() { # $1=slug $2=steward_issue $3=autofill $4=gh_headroom $5=fleet_
     done < "$labf"
   fi
 
-  # slotfree: only when the dispatcher is NOT autofilling (else it double-drives),
-  # both caps have headroom, and the backlog has an eligible issue. GATED on the
-  # labels cache existing: without labels we can't exclude epic/meta/blocked, and a
-  # WRONG "spawn this" suggestion is worse than none, so we stay silent rather than
-  # suggest a disqualified issue (a transient gap — the collector writes labels_
-  # every ~GH_TTL). Suggest the highest-PRIORITY eligible issue (same ranking the
-  # dispatcher uses), so the two "what's next" pickers agree.
-  if [ "$autofill" != 1 ] && [ "$ghhd" -gt 0 ] && [ "$flhd" -gt 0 ] \
-     && [ -s "$issf" ] && [ -s "$labf" ]; then
-    local top top_num top_title
-    top=$(watch_top_eligible "$issf" "$labf" "$live_issues")
-    if [ -n "$top" ]; then
-      top_num=$(printf '%s' "$top" | cut -f1); top_title=$(printf '%s' "$top" | cut -f2)
-      printf 'slotfree:%s:%s\tslot free — spawn #%s (%s)?\n' "$slug" "$top_num" "$top_num" "$top_title"
-    fi
-  fi
-
   printf 'needs\t%s\n' "$needs"   # ALWAYS last: the level for the rise-compare
-}
-
-# The highest-PRIORITY eligible backlog issue. Prints "num<TAB>title" or empty.
-# Eligible = unassigned (issues_<slug> assignee field "·"), no live window, and no
-# disqualifying label. Ranking mirrors fleet-dispatch.sh::eligible_issues so the
-# watcher's spawn suggestion agrees with what autofill would pick: priority:p0<p1<p2
-# tier first (unlabeled last), then FIFO by issue number within a tier. prod-alert
-# is EXCLUDED here — it gets its own first-response wake, so it must not ALSO fire a
-# slotfree "spawn" wake for the same issue (that would double-drive one number).
-watch_top_eligible() { # $1=issues file $2=labels file $3=" live issues "
-  local issf="$1" labf="$2" live="$3" best='' btier='' btitle='' n labels tier
-  while IFS=$'\t' read -r _ num asg title; do
-    n="${num#\#}"
-    [ -z "$n" ] && continue
-    [ "$asg" = "·" ] || continue                       # unassigned only
-    case "$live" in *" $n "*) continue;; esac          # not already bound
-    labels=$(awk -F'\t' -v x="$n" '$1==x{print $2; exit}' "$labf" 2>/dev/null)
-    case ",$labels," in
-      *,epic,*|*,meta,*|*,blocked,*|*,steward-control,*|*,prod-alert,*) continue;;
-    esac
-    case ",$labels," in
-      *,priority:p0,*) tier=0;; *,priority:p1,*) tier=1;;
-      *,priority:p2,*) tier=2;; *) tier=3;;
-    esac
-    # better = lower tier, or same tier + lower number (FIFO)
-    if [ -z "$best" ] || [ "$tier" -lt "$btier" ] \
-       || { [ "$tier" -eq "$btier" ] && [ "$n" -lt "$best" ]; }; then
-      best="$n"; btier="$tier"; btitle="$title"
-    fi
-  done < "$issf"
-  [ -n "$best" ] && printf '%s\t%s' "$best" "$btitle"
 }
 
 # WAKE: post one batched comment to the steward issue (unmarked → bridge relays it).
@@ -319,11 +197,8 @@ watch_fleet() { (
     trap 'lease_release "$lease" "$me"' EXIT
   fi
 
-  autofill="${FLEET_AUTOFILL:-0}"
-  ghhd=$(global_headroom); flhd=$(fleet_headroom "$sess")
-
   # Compute the current firing keyset + needs level.
-  local out; out=$(compute_keys "$slug" "$steward" "$autofill" "$ghhd" "$flhd")
+  local out; out=$(compute_keys "$slug")
   local cur_needs; cur_needs=$(printf '%s\n' "$out" | awk -F'\t' '$1=="needs"{print $2; exit}')
   cur_needs="${cur_needs:-0}"
   # every non-needs line = a firing "key<TAB>message"
@@ -361,11 +236,9 @@ watch_fleet() { (
   # Assemble the new-edge wake body. `wsubs` accumulates a COALESCING SUBJECT per
   # emitted `- ` line, in the same order (issue #198) — the issue-bridge reads them
   # from a trailing marker to collapse superseded/duplicate wakes on drain. The
-  # subject KEEPS the edge kind, so semantically-distinct edges that happen to share
+  # subject KEEPS the edge KEY, so semantically-distinct edges that happen to share
   # a GitHub number (a `stuck` worker on a `prodalert` issue) never collapse into
-  # each other. The ONE deliberate exception is the PR lifecycle: `propened` and
-  # `prgreen` for the same PR map to a shared `pr:<slug>:<num>` subject so a green
-  # (landable) wake supersedes the earlier shipped-for-review wake.
+  # each other.
   local wake='' wsubs='' prev_needs
   prev_needs=$(cat "$needsf" 2>/dev/null)
   # If the .needs level is missing or garbled while the keyset EXISTS (partial state,
@@ -381,10 +254,7 @@ watch_fleet() { (
       [ -z "$key" ] && continue
       if ! grep -qxF "$key" "$keysf" 2>/dev/null; then
         wake="$wake- $msg"$'\n'
-        case "$key" in
-          prgreen:*|propened:*) wsubs="${wsubs}pr:${key#*:} " ;;  # PR lifecycle: green ≻ opened
-          *)                    wsubs="${wsubs}${key} " ;;        # every other kind stays distinct
-        esac
+        wsubs="${wsubs}${key} "   # each edge kind stays a distinct coalescing subject
       fi
     done <<EOF
 $firing
