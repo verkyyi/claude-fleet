@@ -1,0 +1,20 @@
+# claude-fleet ledger-watch daemon — Linux systemd user unit (parity with launchd
+# com.claude-fleet.ledger-watch). Oneshot driven by claude-fleet-ledger-watch.timer.
+# Records EVERY closed worker session into the history ledger — not just landed
+# ones (issue #320). Snapshot-diffs live worker windows and writes a
+# `closed-unlanded` row when one vanishes without landing, so a hand-closed /
+# crashed / abandoned worker stays browsable + resumable via /fleet-history. Pure
+# tmux snapshot + a local ledger append (no gh/LLM), so it is ON by default for
+# every fleet (opt out per fleet with FLEET_LEDGER_WATCH=0). Records only — never
+# reaps a worktree.
+[Unit]
+Description=claude-fleet ledger-watch daemon (index every closed worker session for resume)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-ledger-watch.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/ledger-watch.systemd.log
