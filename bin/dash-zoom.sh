@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-zoom.sh — prefix+G, progressive DASH focus, SCOPED TO THE CURRENT SESSION
+# dash-zoom.sh — prefix+g, progressive DASH focus, SCOPED TO THE CURRENT SESSION
 # (one dash hub per fleet), the mirror image of steward-zoom.sh:
 #   from another window : jump to THIS session's plan window and focus the dash
 #                         pane (split view — dash above, steward below)

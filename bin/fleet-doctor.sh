@@ -56,9 +56,9 @@ fi
 if command -v fzf >/dev/null 2>&1; then
   v=$(fzf --version 2>/dev/null | awk '{print $1}')
   if [ -n "$v" ] && vge "$v" 0.45; then pass fzf "$v (≥ 0.45)"
-  else fail fzf "$v — need ≥ 0.45; dash binds use \`transform\` (prefix+G breaks below)"; fi
+  else fail fzf "$v — need ≥ 0.45; dash binds use \`transform\` (prefix+g breaks below)"; fi
 else
-  fail fzf "not found — need ≥ 0.45 for the prefix+G dashboard"
+  fail fzf "not found — need ≥ 0.45 for the prefix+g dashboard"
 fi
 
 # --- gh + auth (backlog + PR/CI map) ---

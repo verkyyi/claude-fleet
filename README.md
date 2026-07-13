@@ -27,9 +27,9 @@ demo repo data.</sub>
   idle). Your view never jumps — the sorter restores focus after every move.
   `prefix+a` hops to the neediest window.
 
-- **A mission-control dashboard** (`prefix+G`): an fzf panel listing every
+- **A mission-control dashboard** (`prefix+g`): an fzf panel listing every
   session with state glyph, bound issue, model, and context %. It lives as an
-  embedded pane in the `plan` hub (dash above, steward below); `prefix+G`
+  embedded pane in the `plan` hub (dash above, steward below); `prefix+g`
   focuses it and, pressed again, zooms it fullscreen — the mirror of `F9`'s
   steward focus. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.

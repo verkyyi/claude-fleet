@@ -83,7 +83,7 @@ print_sheet() {
   if want prefix; then
   group "tmux prefix" "— global, from any window"
   key "prefix a" "jump to the next window that needs you (red first, then green)"
-  key "prefix G" "focus the dash — jump to the hub's dash pane; press again to zoom it"
+  key "prefix g" "focus the dash — jump to the hub's dash pane; press again to zoom it"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
@@ -94,7 +94,7 @@ print_sheet() {
   fi
 
   if want dashboard; then
-  group "dashboard" "— inside the hub dash pane (prefix G)"
+  group "dashboard" "— inside the hub dash pane (prefix g)"
   key "enter" "jump to the highlighted window"
   key "⌃n" "new issue — file one AND spawn its worker (quick-dispatch)"
   key "⌃s" "raw scratch session (optional name) — plain claude, no issue/worktree/PR"

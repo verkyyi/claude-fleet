@@ -189,7 +189,7 @@ Each temptation to do the work yourself maps to the crew member who owns it:
 
 ### Recovery
 
-If this session dies, `~/.claude/fleet/bin/steward-session.sh` (prefix+g / F9)
+If this session dies, `~/.claude/fleet/bin/steward-session.sh` (F9)
 respawns your fleet's hub, and crash-resume (#143) restores the live history via
 snapshot. The respawned hub re-runs `/fleet-steward` (or, after a bare `/clear`,
 `steward-readopt-hook.sh` re-injects this charter through the same

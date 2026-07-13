@@ -7,7 +7,7 @@
 # uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
 # ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, builds the
 # 'plan' hub (a dash+steward split — the embedded dash self-marks @dash=1 and is
-# reached via prefix+G; there is no standalone 'dash' window), and kicks the
+# reached via prefix+g; there is no standalone 'dash' window), and kicks the
 # collector so the dash has data immediately. See docs/ARCHITECTURE.md.
 #
 # A fleet ≡ a tmux session ≡ one repo. Run once per repo you want to work.
@@ -113,7 +113,7 @@ echo "fleet-up: wrote $CONF"
 # --- create the session + the steward HUB ---
 # 'work' is the plain work shell; the 'plan' hub (dash on top + a persistent
 # steward Claude session below) is built by steward-session.sh, scoped to THIS
-# fleet's session + checkout so prefix+g toggles this fleet's own steward.
+# fleet's session + checkout so F9 toggles this fleet's own steward.
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
 # steward-session.sh builds the hub against this fleet's socket. It resolves the
