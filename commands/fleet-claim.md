@@ -1,16 +1,15 @@
-# /fleet-claim — the worker lifecycle: claim → charter → ground → work → ship+arm
+# /fleet-claim — the worker lifecycle: claim → charter → ground → work → ship
 
 <!-- fleet skill · owner: worker -->
 
 The one skill a freshly-spawned worker runs. It formalizes the whole worker
 lifecycle that the seed prompt used to spell out across three skills: **claim**
 the bound issue, **load your charter**, **ground** yourself in the issue + code,
-then implement under a **standing contract** that ends by opening a PR and
-**arming GitHub auto-merge** (the fleet never merges) — and signals a blocker
-loudly rather than stalling. Mutates ONLY the bound issue on this fleet's
-`$FLEET_REPO` (an assignee at claim time; issue comments as you go) and — at
-ship — pushes your branch, opens/updates a PR, and arms auto-merge. It never
-touches the base checkout.
+then implement under a **standing contract** that ends by **opening a PR and
+stopping** (the fleet never merges) — and signals a blocker loudly rather than
+stalling. Mutates ONLY the bound issue on this fleet's `$FLEET_REPO` (an
+assignee at claim time; issue comments as you go) and — at ship — pushes your
+branch and opens/updates a PR. It never touches the base checkout.
 
 **Argument** (`$ARGUMENTS`): none — the seed is a bare `/fleet-claim`, so the
 issue is self-discovered from the window's `@issue` binding (fallback: the
@@ -109,22 +108,20 @@ Both files are optional; missing ones are skipped silently. With neither, you
 run on the built-in contract == the historic default. Read whatever prints and
 fold it into how you work below.
 
-## 4. Ground yourself before you edit
+## 4. Ground yourself, then implement
 
-Restate scope, then read before you write:
+Read what you need — the full issue thread (step 1's output, including any
+steward design comments) and the code the change touches — then implement. You
+decide the approach; the rails and the finish line are below.
 
-- One line restating what the issue asks for, in your own words.
-- Load the **per-fleet implementation directive** — the operator's standing
-  instruction for HOW to implement on this fleet (issue #234), the one piece the
-  old paragraph seed used to inject inline. Fold whatever it prints into your plan
-  (it defaults to *"Implement and verify per the repo conventions"*):
-  ```sh
-  source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
-  fleet_worker_prompt_body "<issue>" "$FLEET_REPO"   # FLEET_WORKER_PROMPT / _FILE, else the default
-  ```
-- Read the **full issue thread** (step 1's output — including any steward design
-  comments), then the **relevant code** the change touches, before editing.
-- Sketch a short numbered plan (the steps you'll take).
+Fold in the operator's **per-fleet implementation directive** (issue #234) — the
+one place, alongside the charter layers, where a fleet adds specific HOW-to
+guidance (it defaults to *"Implement and verify per the repo conventions"*):
+
+```sh
+source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
+fleet_worker_prompt_body "<issue>" "$FLEET_REPO"   # FLEET_WORKER_PROMPT / _FILE, else the default
+```
 
 ## 5. The standing contract (built-in charter — the base layer)
 
@@ -139,7 +136,7 @@ override them):
   so it carries the no-relay marker + worker footer).
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane.
-- **Done = ship + arm auto-merge (the fleet never merges).** When the change is
+- **Done = ship (open the PR) — the fleet never merges.** When the change is
   complete:
   1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
      discover them from its `CLAUDE.md` / `README` / `.github/workflows`; don't
@@ -150,18 +147,12 @@ override them):
      short summary + how you verified:
      `gh pr create --repo "$FLEET_REPO" --base "$FLEET_BASE_BRANCH" --fill` (or
      `gh pr edit … --body …` if one exists).
-  4. **Arm** GitHub auto-merge — this is *not* a merge; GitHub merges when the PR
-     is green and branch protection is satisfied:
-     ```sh
-     gh pr merge --repo "$FLEET_REPO" --auto --"$(fleet_merge_method)" issue-<N>
-     ```
-     `fleet_merge_method` resolves `FLEET_MERGE_METHOD` (default `squash`).
-     If arming fails because the repo has auto-merge disabled, **do not merge by
-     hand** — say so; the PR is open and reviewable, a human enables auto-merge
-     or merges on the web when green.
-  5. **Stop.** Never merge the PR yourself and never pass `--admin`. GitHub
-     merges when green; `com.claude-fleet.cleanup` reaps the worktree/window/
-     branch and records the resume ledger afterward.
+  4. **Stop.** Don't merge the PR, and don't arm auto-merge — the fleet never
+     merges. Landing is external and controlled: the label-gated auto-land
+     daemon lands a PR whose issue carries `autoland`; everything else waits for
+     the **steward** to land it. Whoever performs the merge,
+     `com.claude-fleet.cleanup` then reaps the worktree/window/branch and records
+     the resume ledger.
 - **Blocked = say why, never stall silently.** If you can't make progress, post
   a `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
   wrapper) and set the window red so the steward sees it:
@@ -171,9 +162,8 @@ override them):
 
 One line: the issue number + title, whether you just claimed it or it was
 already claimed, and which charter layers loaded (built-in only / + overlay / +
-repo). Then restate scope + the plan from step 4 and start implementing — the
-rest of the lifecycle (ship + arm, or blocked) is the contract in step 5, run it
-when the work is done.
+repo). Then start implementing — the rest of the lifecycle (ship, or blocked) is
+the contract in step 5, run it when the work is done.
 
 ---
 
