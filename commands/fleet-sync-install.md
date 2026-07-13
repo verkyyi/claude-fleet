@@ -81,7 +81,12 @@ before=$(git -C ~/.claude/fleet rev-parse HEAD)
 # stayed live on both servers. A conf that didn't exist at `before` (brand-new file)
 # legitimately yields an empty snapshot.
 beforeconf=$(mktemp)
-git -C ~/.claude/fleet show "$before:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
+# BRACE the ref: this snippet runs in the operator's shell (zsh), and unbraced
+# "$before:conf/…" makes zsh apply history/variable MODIFIER parsing to `:c`,
+# mangling the ref to `<sha>onf/…` → `git show` fails → the `|| :` truncates the
+# snapshot to EMPTY → step 8 reports "no readable before-conf" and can't diff
+# removed binds (issue #325). "${before}:…" is safe in both zsh and bash.
+git -C ~/.claude/fleet show "${before}:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
 git -C ~/.claude/fleet pull --ff-only
 after=$(git -C ~/.claude/fleet rev-parse HEAD)
 echo "before=$before after=$after beforeconf=$beforeconf"

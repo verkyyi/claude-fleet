@@ -71,7 +71,13 @@ before="${1:-}"
 after="${2:-}"
 tmux_conf="${3:-$HOME/.tmux.conf}"
 
-if [ -z "$before" ] || [ -z "$after" ]; then
+# `after` is required (it's the reload target). `before` is OPTIONAL and fails
+# OPEN: a missing/empty before-conf just means "no snapshot to diff removals
+# against" — handled below (before_usable=0) by re-sourcing anyway so ADDS still
+# apply, warning that removals couldn't be detected. Bailing here on an empty
+# before would leave every server on its old binds silently, which is exactly the
+# failure this tool exists to prevent (issues #295, #325).
+if [ -z "$after" ]; then
   echo "usage: tmux-conf-reload.sh [--print] <before-conf> <after-conf> [tmux-conf]" >&2
   exit 2
 fi
