@@ -61,6 +61,12 @@ demo repo data.</sub>
   an hourly janitor removes worktrees that are merged + clean + not attached
   to any live pane (and never anything else).
 
+- **Optional Claude Code status line** (`conf/statusline.sh`): a context-window
+  mini-bar (green → yellow → red), shortened cwd, git branch + dirty star, and
+  model name. Opt-in at install time by pointing `settings.json`'s `statusLine`
+  at the live-install path, so it improves through `land → /fleet-sync-install`;
+  jq-gated (blank without it). Never auto-wired.
+
 ## Architecture
 
 ```
@@ -126,7 +132,9 @@ use `transform`) · [gh](https://cli.github.com/) (authed) · python3 ·
 the two optional LLM daemons). Soft: perl `Time::HiRes` (sharper dash spinner).
 
 Run [`bin/fleet-doctor.sh`](bin/fleet-doctor.sh) to check all of these at once.
-(No standalone `jq` — the collector only uses `gh --jq`, which is built in.)
+(No standalone `jq` for the core — the collector only uses `gh --jq`, which is
+built in; `jq` is a soft dep only for the optional `conf/statusline.sh` status
+line, which exits silently without it.)
 
 ## Keybindings (prefix defaults to your tmux prefix)
 

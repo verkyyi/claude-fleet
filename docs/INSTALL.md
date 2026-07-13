@@ -31,6 +31,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Raw scratch session (dash `⌃s`) | opens a plain, **non-issue-bound** `claude` window in the fleet — no GitHub issue, but in its **own writable `scratch-N` git worktree** off the base branch (`bin/dash-raw-session.sh`, issues #214/#290). The counterpart to the issue-bound spawns (dash `⌃n` / backlog Enter / `dash-issue-session.sh`), for ad-hoc exploration or experiments that may need to WRITE code (the base checkout is hook-enforced read-only). A scratch that turns real just pushes its branch + opens a PR — the prmap is repo-wide, so the janitor reaps a merged `scratch-N` like any worker (zero new machinery), and the unique cwd makes its transcript resolvable. Marked `@raw=1` + `@worktree=<path>`, named `scratch-N` (or a custom name); **listed in the dash as a real session** (counts toward the session cap) but excluded from the issue machinery — no `@issue`, so the watcher (`@raw` skipped) leaves it alone, while the classifier/summarizer still show its state + summary. The **window** is ephemeral (not snapshotted/restored across a crash); its **worktree** survives on disk and is reaped by the janitor's scratch rules — clean + no unmerged work → removed silently; dirty or unmerged → kept + surfaced once (never silently delete an experiment; `dash ⌃x` disposes it) | claude |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
+| Status line (optional) | `conf/statusline.sh` — Claude Code status line: a context-window mini-bar (green < 50% < yellow < 80% < red), shortened cwd, git branch + dirty star (via `--no-optional-locks`), and model name. Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — exits silently (blank line) without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b) | jq (soft) |
 
 ## Install steps
 
@@ -231,6 +232,35 @@ assumes — this doc is only the install/uninstall procedure.
    (warn, not fail, if none — they're optional). See `commands/README.md` for
    the skill contract.
 
+8b. **Status line (optional, opt-in).** Offer to wire the Claude Code status
+   line (`conf/statusline.sh` — context-window mini-bar, cwd, git branch, model).
+   Set `~/.claude/settings.json`'s `statusLine` to point at the **live-install**
+   path (never the repo copy) so a future `land → /fleet-sync-install` flows
+   improvements through with no re-copy:
+
+   ```json
+   { "statusLine": { "type": "command", "command": "~/.claude/fleet/conf/statusline.sh" } }
+   ```
+
+   Rails:
+   - **Never clobber an existing `statusLine`.** If `settings.json` already has a
+     `statusLine` whose `command` differs, **skip and tell the user** what is set
+     — do not overwrite their status line. Only write it when the key is absent
+     (or already equals the fleet path). Back up `settings.json` first.
+   - **jq is a soft dep** here: `conf/statusline.sh` exits silently (blank status
+     line) without `jq`, so offer `brew install jq` if it's missing — but it is
+     never required to install the fleet. `fleet-doctor` soft-warns when a
+     `statusLine` is wired but `jq` is absent.
+   - **Not wired on sync.** `/fleet-sync-install` only re-merges the *hooks*
+     delta into `settings.json`; it never touches `statusLine`. Wiring is
+     strictly this install-time opt-in — so an operator who doesn't want it never
+     gets it, and one who does keeps it across syncs because the command points at
+     the live-install path the fast-forward updates in place.
+   - **Migration (this machine).** If `settings.json` currently points at a
+     pre-fleet path (e.g. `~/.claude/statusline.sh`), switching it to
+     `~/.claude/fleet/conf/statusline.sh` is the operator's one-line step — the
+     same script, now landed in the repo so it improves through `land → sync`.
+
 9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
    spinner animates; `prefix+G` focuses the hub's dash pane; `prefix+b` opens the backlog
@@ -244,7 +274,9 @@ delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
 `summarize-hook.sh` entries on `Stop`/`SessionStart`, plus the
 `steward-readopt-hook.sh` entry on `SessionStart`) from
-`~/.claude/settings.json`, delete `~/.claude/fleet/` (and, on a pre-#286 install,
+`~/.claude/settings.json`, remove the `statusLine` block from
+`~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
+personal one), delete `~/.claude/fleet/` (and, on a pre-#286 install,
 the obsolete flat charter `~/.claude/steward.md`), remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands), and clear per-window state. Each fleet

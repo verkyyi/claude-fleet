@@ -234,6 +234,23 @@ EOF
   fi
 fi
 
+# --- status line (optional: conf/statusline.sh is jq-gated) ---
+# The optional Claude Code status line (conf/statusline.sh, wired install-time
+# into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a
+# context-% mini-bar + cwd + git branch + model. It exits silently without jq, so
+# a wired-but-jq-less status line shows a blank line. Soft-warn (never fail) so the
+# operator knows why. Only fires when a statusLine is actually wired to our script
+# (match the .sh path so an unrelated custom status line isn't flagged); the
+# component is off until then, so silence otherwise.
+settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+if [ -f "$settings" ] && grep -q 'statusline\.sh' "$settings" 2>/dev/null; then
+  if command -v jq >/dev/null 2>&1; then
+    pass statusln "wired + jq present (context-% mini-bar + cwd + branch + model)"
+  else
+    warn statusln "settings.json wires statusline.sh but jq is missing — it exits silently, so the status line stays blank (\`brew install jq\`)"
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"
