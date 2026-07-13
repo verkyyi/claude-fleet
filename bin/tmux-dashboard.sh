@@ -15,6 +15,18 @@
 # the 'plan' hub (fleet-up/steward-session builds it; prefix+G focuses it). Env: REFRESH.
 set -uo pipefail
 REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady state; the spinner steps a frame per repaint
+# Pause the 1Hz repaint while a modal popup is open over the dash (issue #308).
+# A tmux display-popup is a client-side overlay that does NOT freeze the panes
+# under it — tmux keeps re-compositing them, so the dash's per-second re-render
+# flashes THROUGH the popup (worst where the popup edge clips a double-width CJK
+# cell — the underlying half-cell flickers before the popup redraws). The modal
+# popup binds (conf/tmux-attention.conf) raise a server-global @popup_open flag
+# for the lifetime of the popup; the reload loop below busy-waits on it so it
+# emits NO new frame — no under-popup churn — until the popup closes and clears
+# the flag, at which point one repaint fires and the 1Hz loop resumes. Server
+# scope (set -g) = per-fleet (one tmux server per fleet, issue #159) and can't
+# under-detect a popup opened from a sibling window/session on the same server.
+POPUP_POLL=0.2           # how often the paused reload re-checks @popup_open (≈ resume latency)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 C="${TMPDIR:-/tmp}/.claude-dash"
@@ -70,7 +82,7 @@ run_dash() {
     --prompt='▸ ' \
     --header="$HDR" \
     "${PREVIEW[@]}" \
-    --bind "load:reload-sync(sleep $REFRESH; bash $ROWS)" \
+    --bind "load:reload-sync(sleep $REFRESH; while [ \"\$(tmux show-option -gqv @popup_open 2>/dev/null)\" = 1 ]; do sleep $POPUP_POLL; done; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
     --bind "ctrl-n:execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
