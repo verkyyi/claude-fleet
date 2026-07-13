@@ -75,6 +75,13 @@ run_dash() {
   # esc-relaunch (and never hides the live session list on reopen). Per-fleet
   # keyed, matching dash-view-toggle.sh (#130).
   rm -f "$C/global/dash_view_${FLEET_SESSION:-default}"
+  # Interactive binds use execute-SILENT so fzf never suspends + clears the whole
+  # display while the bind runs — a bare `execute` blanks the entire dash for the
+  # bind's duration (⌃x reap, issue #313: its output goes to the tmux status line,
+  # so an `execute` reap left the pane BLANK the whole time). The slow tail of each
+  # action is backgrounded (dash-reap.sh → fleet_bg / `run-shell -b`, issue #304) so
+  # the bind also returns instantly. Binds that hand the terminal to an interactive
+  # popup (⌃n/⌃s/?) keep `execute` on purpose.
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -90,7 +97,7 @@ run_dash() {
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
-    --bind "ctrl-x:execute(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1
