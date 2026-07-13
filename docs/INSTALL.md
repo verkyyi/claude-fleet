@@ -15,7 +15,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
-| Dashboard (`prefix+G`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+G` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
+| Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
 | Cross-machine pre-spawn dedup | every spawn (`bin/dash-issue-session.sh`, the one choke point) consults the shared GitHub issue as a claim ledger before spawning, so two fleets on **different machines / same repo** don't both spawn `issue-<N>` (duplicate worktrees + push race + competing PRs) — the local tmux dedup only sees one machine. **The assignee IS the claim** (issue #283): taken (assignee · non-open state · open PR) ⇒ **refuse**; free ⇒ **claim AT SPAWN** by assigning `@me` (not on the worker's first `/fleet-claim` turn — that gap was the race) so a peer sees the assignee within ~1s. **NOT a mutex** (GitHub has no CAS on an issue) — it shrinks the race window, doesn't eliminate it; the old sub-second REST-comment-id tie-break was retired with the `▶ claiming` marker (workers share one gh account, so no per-attempt tie token exists). `--force`/`--reclaim` spawns past a stale claim. **ON by default** — the cost is a few gh reads/spawn (claim-at-spawn just moves `/fleet-claim`'s assign earlier; a gh outage degrades to spawn-anyway) and it self-disables when gh is absent; a single-machine fleet wanting the zero-gh fast path sets `FLEET_PRESPAWN_DEDUP=0`. `/fleet-claim` stays but no-ops when it finds the pre-claim | gh (authed) |
@@ -66,7 +66,7 @@ assumes — this doc is only the install/uninstall procedure.
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
    (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — a **fleet
-   baseline** block (issue #222) + prefix bindings on `a/G/b/n/R/A/u/c/r/?` and a
+   baseline** block (issue #222) + prefix bindings on `a/g/b/n/R/A/u/c/r/?` and a
    status-bar restyle — and comment out anything they don't want. The **fleet
    baseline** ships the tmux defaults the fleet UX assumes so a clean install is
    consistent (they used to live only in a pre-repo install.sh's `~/.tmux.conf`):
@@ -90,7 +90,7 @@ assumes — this doc is only the install/uninstall procedure.
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
    footer ranges (hub/fleet/needs/account/usage); and **double-click-to-zoom**
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
-   toggles a pane's fullscreen as the mouse counterpart to `prefix+G`/`F9` — its
+   toggles a pane's fullscreen as the mouse counterpart to `prefix+g`/`F9` — its
    trade-off is losing tmux's default double-click = select-word (copy), so call it
    out. All are overridable from the user's own `~/.tmux.conf` after the `source-file`
    line, or comment them out — the same framing as the rest of the baseline block.
@@ -293,7 +293,7 @@ assumes — this doc is only the install/uninstall procedure.
 
 9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
-   spinner animates; `prefix+G` focuses the hub's dash pane; `prefix+b` opens the backlog
+   spinner animates; `prefix+g` focuses the hub's dash pane; `prefix+b` opens the backlog
    (needs the collector to have run once — trigger it by hand:
    `bash ~/.claude/fleet/bin/tmux-dash-collect.sh`). Report each check.
 

@@ -12,7 +12,7 @@
 #   auto-merge — /fleet-ship arms it now, gh pr merge --auto covers stragglers),
 #   and ⌥x (force-reap — folded into the one confirming ⌃x).
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
-# the 'plan' hub (fleet-up/steward-session builds it; prefix+G focuses it). Env: REFRESH.
+# the 'plan' hub (fleet-up/steward-session builds it; prefix+g focuses it). Env: REFRESH.
 set -uo pipefail
 REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady state; the spinner steps a frame per repaint
 # Pause the 1Hz repaint while a modal popup is open over the dash (issue #308).
@@ -56,7 +56,7 @@ fi
 # Summary is an inline column (one line per row) — no preview panel.
 PREVIEW=( --preview-window=hidden )
 
-# POPUP=1 → run as a one-shot FULL-SCREEN modal (prefix+G peek): esc/q closes it
+# POPUP=1 → run as a one-shot FULL-SCREEN modal (prefix+g peek): esc/q closes it
 # and drops you back where you were, and a jump (enter) closes it too. Otherwise
 # it's the always-on 'dash' window that relaunches on esc. Same convention the
 # backlog panel (tmux-issues.sh) uses.

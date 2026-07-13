@@ -2,7 +2,7 @@
 # steward-session.sh — (re)create the HUB for a fleet: the plan window with the
 # dash on top (40%) and the persistent steward Claude session below, in the
 # fleet's base checkout. Idempotent PER SESSION: if a @steward-marked pane
-# already exists IN THIS SESSION, just jump to it. This is prefix+g's fallback
+# already exists IN THIS SESSION, just jump to it. This is F9's fallback
 # (steward-zoom.sh), so an accidentally closed hub window is one keypress from
 # restored. The steward picks up its standing orders by running /fleet-steward
 # (issue #286), which adopts the layered charter and the latest handoff if one exists.
@@ -164,7 +164,7 @@ tmux -L "$SOCK" set-option -u -p -t "$sp" @dash    2>/dev/null || true
 # sets pane-border-status top GLOBALLY (every window shows a top-of-window header),
 # so this is now a redundant safety net for a hub built before that conf is live.
 # pane-border-format (in the conf) labels the @steward pane "▸ STEWARD HUB · <fleet>"
-# — visible even when the pane is zoomed fullscreen (prefix+g), where the window
+# — visible even when the pane is zoomed fullscreen (F9), where the window
 # list is the only other cue — while worker/scratch windows get an index:name+#issue
 # header and the hub's dash pane stays empty.
 tmux -L "$SOCK" set-window-option -t "$win" pane-border-status top 2>/dev/null

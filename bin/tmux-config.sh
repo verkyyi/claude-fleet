@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-config.sh — prefix+c CONFIG MODAL: view + edit this fleet's config across
-# both layers (per-fleet overlay ▸ global ▸ default), mirroring the prefix+G dash
+# both layers (per-fleet overlay ▸ global ▸ default), mirroring the prefix+g dash
 # and prefix+b backlog fzf popups (issues #83, #89).
 #
 # Rows are DECLARATIVELY driven by the @label/@group/@tier/@scope/@edit/@unit

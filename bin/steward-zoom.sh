@@ -1,5 +1,5 @@
 #!/bin/bash
-# steward-zoom.sh — prefix+g, progressive steward focus, SCOPED TO THE CURRENT
+# steward-zoom.sh — F9, progressive steward focus, SCOPED TO THE CURRENT
 # SESSION (one steward hub per fleet):
 #   from another window : jump to THIS session's plan window and focus the
 #                         steward pane (split view — dash above, steward below)
