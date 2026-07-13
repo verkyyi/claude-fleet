@@ -1,26 +1,23 @@
 #!/bin/bash
-# dash-issue-session-prompt-selftest.sh — hermetic tests for the per-fleet
-# customizable worker seed prompt (issues #234, #283). Since issue #283 the seed
-# COLLAPSES to essentially "run /fleet-claim" (the skill carries the whole
-# lifecycle). The BODY of an implementing worker's one-shot seed — the clause
-# between the /fleet-claim ritual and the "open the PR + arm auto-merge, then STOP"
-# tail — is overridable per fleet via FLEET_WORKER_PROMPT / FLEET_WORKER_PROMPT_FILE,
-# while the structural pieces (issue-binding head, /fleet-claim ritual, the ship+stop
-# tail) are always kept intact. No network, no real repo, no tmux server — git/gh/tmux
-# are faked on PATH. We read the SEED the spawn wrote to its task file and assert.
+# dash-issue-session-prompt-selftest.sh — hermetic tests for the COLLAPSED worker
+# seed (issues #234, #283, #299). Since issue #299 the seed the spawn writes is a
+# BARE `/fleet-claim`: claude expands the slash command on the initial prompt and
+# the skill carries the WHOLE lifecycle (claim → charter → ground → implement →
+# open PR + arm auto-merge → STOP), self-discovering its issue from @issue. So the
+# seed no longer embeds the issue-binding head, a claim line, the per-fleet body,
+# or a ship tail — all of that moved INTO /fleet-claim.
 #
-#   A. DEFAULT (no override) joins the body into the tail with a SINGLE period:
-#      "…conventions. To finish: verify, push…" — proving a clean seam.
-#   B. FLEET_WORKER_PROMPT replaces the body; the /fleet-claim ritual + the ship
-#      tail (structural, "do NOT merge it yourself") are still present.
-#   C. a trailing sentence-ender in the override is stripped so the tail seam
-#      stays clean (no "thing.. To finish").
-#   D. {issue}/{repo} placeholders are substituted.
-#   E. FLEET_WORKER_PROMPT_FILE wins over the inline value and carries multi-line
-#      content verbatim; an unreadable file warns and falls back to the default.
-#   F. every worker seed arms auto-merge (the tail names it) and carries NEITHER a
-#      retired self-land instruction NOR a reference to the retired /fleet-ship or
-#      /fleet-blocked skills (issue #283 folded them into /fleet-claim).
+# Two layers, tested where they now live:
+#   SEED — drive the real spawn (git/gh/tmux faked on PATH, temp dirs, no network)
+#          and assert the task file it writes is EXACTLY `/fleet-claim`, is STABLE
+#          under a FLEET_WORKER_PROMPT override (the body no longer rides the seed),
+#          and carries NONE of the retired paragraph pieces or retired skills.
+#   BODY — the per-fleet customizable implementation directive (FLEET_WORKER_PROMPT
+#          / _FILE) is now woven in by the skill at runtime via
+#          fleet_worker_prompt_body, so we test that FUNCTION directly: default,
+#          override, trailing-ender strip, {issue}/{repo} substitution, a prompt
+#          FILE winning + carrying multi-line content, and an unreadable file
+#          warning + falling back to the default.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -92,10 +89,10 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # path to the seed task file it wrote. Extra FLEET_* overrides come in via env.
 run_spawn() { # $@ = args to dash-issue-session.sh
   rm -rf "$WORK/dash/.claude-dash/fleets"
-  # This test is about the SEED PROMPT, not the cross-machine claim dedup (issue
-  # #258, on by default) — opt out so the fake gh (which returns a title for any
-  # `issue view`) isn't parsed as a claim ledger and the spawn refuses. Its own
-  # selftest covers the dedup.
+  # This test is about the SEED, not the cross-machine claim dedup (issue #258, on
+  # by default) — opt out so the fake gh (which returns a title for any `issue
+  # view`) isn't parsed as a claim ledger and the spawn refuses. Its own selftest
+  # covers the dedup.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
   FLEET_PRESPAWN_DEDUP=0 \
@@ -106,64 +103,76 @@ seedfile() { ls "$WORK"/dash/.claude-dash/fleets/*/task_issue-234.txt 2>/dev/nul
 seed()     { local f; f=$(seedfile); [ -n "$f" ] && cat "$f"; }
 has()      { case "$(seed)" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-# ===== A: default seam is a clean single-period join ==========================
+# ===== SEED A: the collapsed seed is EXACTLY a bare /fleet-claim ================
 run_spawn 234
 [ -n "$(seedfile)" ] || fail "A no seed task file was written" "$(cat "$WORK/spawn.err")"
-has 'Work GitHub issue #234 in this repo.' || fail "A default seed lost the issue-binding head" "$(seed)"
-has '/fleet-claim' || fail "A default seed lost the /fleet-claim ritual" "$(seed)"
-has 'Implement and verify per the repo conventions. To finish: verify, push' \
-  || fail "A default body→tail seam changed (expected single-period join)" "$(seed)"
-ok "A default worker seed joins body→tail cleanly (single period)"
+[ "$(seed)" = "/fleet-claim" ] \
+  || fail "A the collapsed seed must be exactly the bare slash command /fleet-claim" "$(seed)"
+ok "A the worker seed collapsed to a bare /fleet-claim"
 
-# ===== B: FLEET_WORKER_PROMPT replaces the body; structure intact ==============
+# ===== SEED B: the seed is STABLE under FLEET_WORKER_PROMPT (body left the seed) =
 FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
-has 'Follow CONTRIBUTING and add coverage. To finish: verify, push' \
-  || fail "B override body should replace the default and flow into the tail" "$(seed)"
-has 'Implement and verify per the repo conventions' \
-  && fail "B override should REMOVE the default body" "$(seed)"
-has '/fleet-claim' || fail "B override must keep the /fleet-claim ritual" "$(seed)"
-has 'do NOT merge it yourself' \
-  || fail "B override must keep the 'do NOT merge it yourself' ship tail" "$(seed)"
-ok "B FLEET_WORKER_PROMPT replaces the body while keeping the structural seed"
+[ "$(seed)" = "/fleet-claim" ] \
+  || fail "B FLEET_WORKER_PROMPT must NOT change the seed — the body moved into the skill" "$(seed)"
+FLEET_WORKER_PROMPT_FILE="$WORK/whatever.txt" run_spawn 234
+[ "$(seed)" = "/fleet-claim" ] \
+  || fail "B FLEET_WORKER_PROMPT_FILE must NOT change the seed either" "$(seed)"
+ok "B the seed is stable regardless of the per-fleet body override"
 
-# ===== C: trailing sentence-ender stripped so the seam stays clean =============
-FLEET_WORKER_PROMPT='Do the thing.' run_spawn 234
-has 'Do the thing. To finish: verify, push' \
-  || fail "C a trailing period should be stripped before the tail" "$(seed)"
-has 'Do the thing.. To finish' && fail "C double-period seam not de-duplicated" "$(seed)"
-ok "C a trailing sentence-ender in the override is stripped at the seam"
-
-# ===== D: {issue}/{repo} placeholders substituted =============================
-FLEET_WORKER_PROMPT='Handle {issue} in {repo}' run_spawn 234
-has 'Handle 234 in acme/widgets. To finish' \
-  || fail "D {issue}/{repo} placeholders were not substituted" "$(seed)"
-ok "D {issue}/{repo} placeholders are substituted in the body"
-
-# ===== E: FLEET_WORKER_PROMPT_FILE wins + multi-line; bad file falls back ======
-printf 'First custom line for {issue}.\nSecond line for {repo}.\n' > "$WORK/tmpl.txt"
-FLEET_WORKER_PROMPT='inline-should-lose' FLEET_WORKER_PROMPT_FILE="$WORK/tmpl.txt" run_spawn 234
-has 'inline-should-lose' && fail "E a readable prompt FILE must win over the inline value" "$(seed)"
-has 'First custom line for 234.' || fail "E prompt file line 1 missing (subst)" "$(seed)"
-has 'Second line for acme/widgets' || fail "E prompt file line 2 missing (multi-line lost)" "$(seed)"
-# unreadable file → warn on stderr, fall back to default body
-FLEET_WORKER_PROMPT_FILE="$WORK/nope.txt" run_spawn 234
-has 'Implement and verify per the repo conventions. To finish' \
-  || fail "E an unreadable prompt file should fall back to the default body" "$(seed)"
-grep -q 'FLEET_WORKER_PROMPT_FILE not readable' "$WORK/spawn.err" \
-  || fail "E an unreadable prompt file should warn on stderr" "$(cat "$WORK/spawn.err")"
-ok "E prompt FILE wins + is multi-line; an unreadable file warns and falls back"
-
-# ===== F: the collapsed seed arms auto-merge, drops retired skills + self-land ==
+# ===== SEED C: the collapsed seed drops the retired paragraph + retired skills ==
 run_spawn 234
-has 'arm GitHub auto-merge' || fail "F default seed must arm auto-merge" "$(seed)"
-has 'com.claude-fleet.cleanup' || fail "F seed should name the cleanup daemon" "$(seed)"
-# Retired skills (issue #283 folded them into /fleet-claim) must not be named.
-for gone in '/fleet-ship' '/fleet-blocked' \
-            '/fleet-land-self' 'FLEET_SELF_LAND' 'do NOT merge — WAIT' \
-            'triggers the land by commenting' 'the steward reviews and lands'; do
-  case "$(seed)" in *"$gone"*) fail "F retired text '$gone' leaked into the collapsed seed" "$(seed)" ;; esac
+# The old assembly (issue-binding head, claim line, per-fleet body, ship tail) and
+# the retired self-land/ship/blocked text must NOT reappear in the seed.
+for gone in 'Work GitHub issue' 'To finish:' 'arm GitHub auto-merge' \
+            'do NOT merge it yourself' 'com.claude-fleet.cleanup' \
+            'Implement and verify per the repo conventions' \
+            '/fleet-ship' '/fleet-blocked' '/fleet-land-self' 'FLEET_SELF_LAND'; do
+  ! has "$gone" || fail "C retired seed text '$gone' leaked back into the collapsed seed" "$(seed)"
 done
-ok "F the worker seed arms auto-merge and drops the retired /fleet-ship, /fleet-blocked + self-land text"
+ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 
-printf '\nselftest OK: %s assertions passed (per-fleet worker seed prompt)\n' "$pass"
+# ===== BODY: fleet_worker_prompt_body (the per-fleet directive the skill weaves in)
+# The skill (/fleet-claim step 4) now calls this at runtime instead of the spawn
+# baking it into the seed — so its behaviour is tested directly here.
+# shellcheck source=/dev/null
+. "$BIN/fleet-lib.sh"
+unset FLEET_WORKER_PROMPT FLEET_WORKER_PROMPT_FILE
+
+# D: default (no override) is the built-in instruction, verbatim.
+[ "$(fleet_worker_prompt_body 234 acme/widgets)" = 'Implement and verify per the repo conventions' ] \
+  || fail "D default body should be the built-in instruction" "$(fleet_worker_prompt_body 234 acme/widgets)"
+ok "D fleet_worker_prompt_body default is the built-in instruction"
+
+# E: FLEET_WORKER_PROMPT replaces the body.
+got=$(FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' fleet_worker_prompt_body 234 acme/widgets)
+[ "$got" = 'Follow CONTRIBUTING and add coverage' ] \
+  || fail "E FLEET_WORKER_PROMPT should replace the default body" "$got"
+ok "E FLEET_WORKER_PROMPT replaces the default body"
+
+# F: a trailing sentence-ender is stripped (so it flows cleanly wherever it's woven).
+got=$(FLEET_WORKER_PROMPT='Do the thing.' fleet_worker_prompt_body 234 acme/widgets)
+[ "$got" = 'Do the thing' ] || fail "F a trailing period should be stripped" "$got"
+ok "F a trailing sentence-ender in the override is stripped"
+
+# G: {issue}/{repo} placeholders are substituted.
+got=$(FLEET_WORKER_PROMPT='Handle {issue} in {repo}' fleet_worker_prompt_body 234 acme/widgets)
+[ "$got" = 'Handle 234 in acme/widgets' ] || fail "G {issue}/{repo} were not substituted" "$got"
+ok "G {issue}/{repo} placeholders are substituted"
+
+# H: FLEET_WORKER_PROMPT_FILE wins over the inline value and carries multi-line
+#    content; an unreadable file warns on stderr and falls back to the default.
+printf 'First custom line for {issue}.\nSecond line for {repo}.\n' > "$WORK/tmpl.txt"
+got=$(FLEET_WORKER_PROMPT='inline-should-lose' FLEET_WORKER_PROMPT_FILE="$WORK/tmpl.txt" \
+        fleet_worker_prompt_body 234 acme/widgets)
+case "$got" in *inline-should-lose*) fail "H a readable prompt FILE must win over the inline value" "$got" ;; esac
+case "$got" in *'First custom line for 234.'*) : ;; *) fail "H prompt file line 1 missing (subst)" "$got" ;; esac
+case "$got" in *'Second line for acme/widgets'*) : ;; *) fail "H prompt file line 2 missing (multi-line lost)" "$got" ;; esac
+got=$(FLEET_WORKER_PROMPT_FILE="$WORK/nope.txt" fleet_worker_prompt_body 234 acme/widgets 2>"$WORK/body.err")
+[ "$got" = 'Implement and verify per the repo conventions' ] \
+  || fail "H an unreadable prompt file should fall back to the default body" "$got"
+grep -q 'FLEET_WORKER_PROMPT_FILE not readable' "$WORK/body.err" \
+  || fail "H an unreadable prompt file should warn on stderr" "$(cat "$WORK/body.err")"
+ok "H prompt FILE wins + is multi-line; an unreadable file warns and falls back"
+
+printf '\nselftest OK: %s assertions passed (collapsed /fleet-claim seed + per-fleet body)\n' "$pass"
 exit 0
