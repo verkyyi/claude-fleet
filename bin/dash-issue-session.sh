@@ -26,7 +26,14 @@ set -uo pipefail
 # pre-spawn GitHub-claim dedup (issue #258): it spawns despite a live claim (a
 # dead/abandoned peer worker that left the issue assigned+marked forever), skipping
 # the claim check + claim-at-spawn entirely.
-num=""; TARGET_SESS=""; WIN_TITLE=""; FORCE_FLAG=0; _pos=0; _want=""
+# --async (alias --detach-spawn) makes the SLOW tail — the multi-second `git
+# worktree add` full checkout + the window spawn — run detached via
+# `tmux run-shell -b`, so the caller (the fzf backlog Enter) returns instantly
+# instead of freezing the popup on a big monorepo (issue #303). The synchronous
+# GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
+# tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
+# that needs the window id back stays synchronous).
+num=""; TARGET_SESS=""; WIN_TITLE=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -36,6 +43,7 @@ for _a in "$@"; do
   fi
   case "$_a" in
     --force|--reclaim) FORCE_FLAG=1 ;;
+    --async|--detach-spawn) ASYNC_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
@@ -48,9 +56,17 @@ for _a in "$@"; do
 done
 num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
+SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
-SESS="${TARGET_SESS:-$(fleet_current_session)}"
+# Internal re-entry (issue #303): the --async dispatch below backgrounds a
+# TAIL-ONLY re-invocation of THIS script through `tmux run-shell -b`, carrying the
+# resolved session name in FLEET_SPAWN_TAIL. A non-empty FLEET_SPAWN_TAIL therefore
+# does double duty: it (1) selects tail-only mode — the synchronous gate already ran
+# + passed in the foreground, so skip it — and (2) names the target fleet, so the
+# detached helper never leans on a "current client" that a run-shell context lacks.
+TAIL_ONLY=0; [ -n "${FLEET_SPAWN_TAIL:-}" ] && TAIL_ONLY=1
+SESS="${TARGET_SESS:-${FLEET_SPAWN_TAIL:-$(fleet_current_session)}}"
 [ -z "$SESS" ] && { tmux display-message "issues: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
@@ -60,6 +76,10 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 # Naming -L is correct in-session too (it resolves to the same current socket).
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
+# POSIX single-quote a value for safe embedding in the run-shell command string
+# (the --async tail is a `sh -c` string, and an issue title can carry quotes / $ /
+# backticks). Wrap in single quotes, escaping any embedded single quote as '\''.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 slug="issue-$num"
 
@@ -96,7 +116,10 @@ fi
 # are true ceilings regardless of who spawns.
 # Passing $SESS enables the per-fleet check for THIS fleet. Exit non-zero on
 # refusal so a headless caller records an honest FAIL, not a false spawn.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"; exit 1; fi
+# Sync-only: the --async tail re-entry (TAIL_ONLY) already passed this gate in the
+# foreground — re-checking in the background could FALSE-refuse after we already
+# acked "spawning" + claimed, if a sibling raced to the cap in between.
+if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"; exit 1; fi
 
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { TM display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
@@ -119,7 +142,13 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # degrades to spawn-anyway (never a false refusal). A single-machine fleet that wants
 # the zero-gh fast path opts out with FLEET_PRESPAWN_DEDUP=0. --force/--reclaim is the
 # manual escape hatch past a stale claim.
-if [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
+# Sync-only ([ "$TAIL_ONLY" != 1 ]): the READ gates the refusal and the WRITE
+# (claim-at-spawn) is the anti-collision rail — both stay in the foreground so a
+# refusal is immediate and the claim lands within ~1s (issue #303 keeps the gating
+# synchronous + authoritative; only the slow worktree/window tail goes async). On
+# the tail re-entry this already ran, and re-reading would see OUR OWN assignee and
+# false-refuse.
+if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   # One issue read (assignee count · state) + one cheap open-PR probe. THE ASSIGNEE
   # IS THE CLAIM (issue #283): we no longer read or write a "▶ claiming" comment — its
@@ -166,6 +195,32 @@ if [ -z "$title" ]; then
 fi
 wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
 
+# --- issue #303: --async backgrounds the SLOW tail (worktree add + new-window) ----
+# The synchronous gate above has already run + passed (cap / dedup / claim-at-spawn),
+# so any refusal has ALREADY surfaced and the issue is claimed. Now hand the
+# multi-second `git worktree add` (a full checkout on a big monorepo is what froze
+# the fzf backlog popup) plus the window spawn to the tmux SERVER via `run-shell -b`
+# — the fleet's established detached-work idiom, which survives the popup closing
+# (unlike a fragile shell &/disown) — and return NOW so the popup closes instantly.
+# The detached helper is a TAIL-ONLY re-invocation of THIS script: FLEET_SPAWN_TAIL
+# carries the session (and selects tail-only mode, skipping the gate just re-run);
+# --title carries the already-resolved name so the window is still named from issue
+# content with no cache/gh round-trip. Interactive-only: a headless TARGET_SESS
+# caller needs the window id back, so it keeps today's synchronous behavior.
+if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
+  TM display-message "spawning #${num}…" 2>/dev/null
+  # run-shell -b runs in the tmux SERVER's environment, not this pane's, so any
+  # pane-scoped knob the tail needs must be BAKED into the command. FLEET_SPAWN_TAIL
+  # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
+  # so "focus the new worker when ready" still works (default no-focus otherwise).
+  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS")"
+  [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")"
+  TM run-shell -b "$_bg" 2>/dev/null \
+    || TM display-message "spawn failed for #$num: dispatch" 2>/dev/null
+  exit 0
+fi
+
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 G="$C/global"; mkdir -p "$G"
 # The seed-prompt handoff is per-fleet (keyed by issue-N, which repeats across
@@ -194,7 +249,7 @@ git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
     || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
-    || { TM display-message "issues: worktree add failed for $slug"; exit 1; }
+    || { TM display-message "spawn failed for #$num: worktree add"; exit 1; }
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
@@ -217,7 +272,7 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
 # when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { TM display-message "issues: new-window failed for $slug in $SESS"; exit 1; }
+  || { TM display-message "spawn failed for #$num: new-window"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 
 # (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
