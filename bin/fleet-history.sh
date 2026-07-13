@@ -23,7 +23,10 @@
 #   rows                             Dash US-delimited rows (landed view of the dashboard).
 #   resume  --repo R --main M <issue|#pr>   Reconstruct the worktree off the SHA and
 #           print how to resume (RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
+#           Reuses an already-present worktree (skips the slow `git worktree add`, #319).
 #   path    <issue|#pr>              Print "<transcript-dir>\t<session-id>" for a landed row.
+#   meta    <issue|#pr>              Print "<issue>\t<title>" for a landed row — lets the
+#           restorer name the resumed window from the title + bind @issue (#319).
 #
 # Shell-options policy: this is EXECUTED (not sourced), so `set -uo pipefail` is fine.
 set -uo pipefail
@@ -319,15 +322,23 @@ cmd_resume() {
   IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ <<<"$row"
 
   # Resume-by-session needs BOTH a surviving transcript AND a worktree to run in.
-  # The land cleanup removed the worktree, so establish one: use it if it's still
-  # on disk, else recreate it off the squash SHA (the branch is usually deleted
-  # post-merge — use the SHA, not the branch). Only claim RESUME once a worktree
-  # actually exists; if it can't be established (no SHA / no --main / add failed),
-  # do NOT point the steward at a directory that isn't there — degrade instead.
+  # The land cleanup removed the worktree, so establish one: REUSE it if it's still
+  # on disk (issue #319), else recreate it off the squash SHA (the branch is usually
+  # deleted post-merge — use the SHA, not the branch). Only claim RESUME once a
+  # worktree actually exists; if it can't be established (no SHA / no --main / add
+  # failed), do NOT point the steward at a directory that isn't there — degrade.
+  #
+  # Reuse-if-present is the "faster" half of #319: `git worktree add` is a full
+  # checkout (the dominant cost on a big monorepo), so when a worktree is already
+  # at the target path — a not-yet-pruned original, or a prior resume — we skip the
+  # add and open the window straight away (repeat resumes become near-instant). We
+  # reuse it AS-IS rather than resetting it to the squash SHA: a present worktree
+  # may hold in-progress state from an open resume, and the win that matters is the
+  # path (claude --resume is cwd-scoped — the transcript is keyed to this path).
   if [ -n "$sid" ] && [ "$sid" != "-" ] && [ -n "$tdir" ] && [ -d "$tdir" ]; then
     local have_wt=""
     if [ -n "$wt" ] && [ "$wt" != "-" ] && [ -d "$wt" ]; then
-      have_wt=1                                    # already on disk (not yet cleaned / already recreated)
+      have_wt=1                                    # reuse-if-present: on disk already, skip the add (#319)
     elif [ -n "$wt" ] && [ "$wt" != "-" ] && [ -n "$main" ] && [ -n "$sha" ] && [ "$sha" != "-" ]; then
       if [ -n "$do_exec" ]; then                   # recreate for real
         if git -C "$main" worktree add "$wt" "$sha" >/dev/null 2>&1 && [ -d "$wt" ]; then
@@ -368,6 +379,25 @@ cmd_path() {
   awk -F'\t' '{print $7 "\t" $8}' <<<"$row"
 }
 
+# ============================================================================
+# meta — "<issue>\t<title>" for a landed row (faithful resume naming + @issue)
+# ============================================================================
+# The restorer (bin/dash-restore-session.sh) resumes by an issue number OR a #PR,
+# but wants the resumed window to read like the ORIGINAL worker regardless: the
+# same descriptive name (kebab of the title, #216) and @issue binding. The ledger
+# row carries both the issue (col 2) and the title (col 3), so expose them for
+# EITHER key shape — a #PR resume resolves to its issue here too (issue #319).
+# Prints one TSV line; nothing when there's no matching row.
+cmd_meta() {
+  local repo="" key=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --repo) repo="${2:-}"; shift 2;; *) key="$1"; shift;; esac
+  done
+  local row; row=$(find_row "$repo" "$key")
+  [ -z "$row" ] && return 0
+  awk -F'\t' '{print $2 "\t" $3}' <<<"$row"
+}
+
 usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -379,6 +409,7 @@ case "$cmd" in
   rows)   cmd_rows "$@";;
   resume) cmd_resume "$@";;
   path)   cmd_path "$@";;
+  meta)   cmd_meta "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|list|rows|resume|path)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|list|rows|resume|path|meta)" >&2; exit 2;;
 esac

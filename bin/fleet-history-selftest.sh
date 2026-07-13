@@ -8,9 +8,12 @@
 #      TAB/newline out of free-text fields so a row can never break layout.
 #   B. list / find_row — newest-first ordering and lookup by issue# and by #PR.
 #   C. resume — verdict routing: RESUME when a transcript exists, FROM-PR when
-#      only a PR is recorded, REVIEW-ONLY when neither (and for an unknown key).
+#      only a PR is recorded, REVIEW-ONLY when neither (and for an unknown key);
+#      plus reuse-if-present (#319): a worktree already on disk is REUSED (no
+#      `git worktree add`), an absent one is reconstructed off the SHA.
 #   D. rows — the dash landed view emits a header + a row whose field1 target
 #      encodes the PR (or issue when PR-less).
+#   E. meta — "<issue>\t<title>" for a landed row, by issue# and by #PR (#319).
 #
 # Fully hermetic: no gh, no git, no tmux, no network. FLEET_HISTORY_LEDGER points
 # the ledger at a scratch file; CLAUDE_PROJECTS_DIR points the transcript lookup
@@ -154,9 +157,55 @@ vx=$(run resume 999); contains "resume: unknown key → REVIEW-ONLY"        "$vx
 # find_row by #PR (not issue): #70 → the issue-5 row.
 vpr=$(run resume '#70'); contains "resume: lookup by #PR resolves the right row" "$vpr" "sid-abc"
 
+# ---- reuse-if-present (issue #319): present worktree skips `git worktree add` ----
+# A git PATH-shim logs every git call and fakes `worktree add <path>` by creating
+# <path>, so we can assert exactly WHEN a reconstruct (add) fires under --exec.
+mkdir -p "$WORK/gitbin"
+cat > "$WORK/gitbin/git" <<'GITSHIM'
+#!/bin/bash
+printf '%s\n' "$*" >> "$GIT_LOG"
+[ "${1:-}" = "-C" ] && shift 2          # drop a leading `-C <dir>`
+if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
+  mkdir -p "$3" 2>/dev/null             # fake the checkout so [ -d "$wt" ] passes downstream
+fi
+exit 0
+GITSHIM
+chmod +x "$WORK/gitbin/git"
+GIT_LOG="$WORK/gitlog"
+FAKEMAIN="$WORK/fakemain"; mkdir -p "$FAKEMAIN"
+
+: > "$FLEET_HISTORY_LEDGER"
+# Row 900: worktree ALREADY on disk → reuse, must NOT run `git worktree add`.
+WTP="$WORK/wt-present"; mkdir -p "$WTP"
+mkdir -p "$WORK/projects/tdirP"; : > "$WORK/projects/tdirP/sid-p.jsonl"
+printf '2026-02-01T00:00:00Z\t900\tt900\t-\tSHAP\t%s\t%s\tsid-p\t-\n' \
+  "$WTP" "$WORK/projects/tdirP" >> "$FLEET_HISTORY_LEDGER"
+# Row 901: worktree ABSENT but SHA+main present → reconstruct via `git worktree add`.
+WTA="$WORK/gone/wt-absent"
+mkdir -p "$WORK/projects/tdirA"; : > "$WORK/projects/tdirA/sid-a.jsonl"
+printf '2026-02-02T00:00:00Z\t901\tt901\t-\tSHAA\t%s\t%s\tsid-a\t-\n' \
+  "$WTA" "$WORK/projects/tdirA" >> "$FLEET_HISTORY_LEDGER"
+
+: > "$GIT_LOG"
+vP=$(PATH="$WORK/gitbin:$PATH" GIT_LOG="$GIT_LOG" run resume --exec --main "$FAKEMAIN" 900)
+contains "resume: present worktree → RESUME"              "$vP" "RESUME"
+contains "resume: present worktree → RESUME points at it" "$vP" "$WTP"
+case "$(cat "$GIT_LOG")" in *"worktree add"*) fail "resume(#319): present worktree must NOT run git worktree add";; esac
+CHECKS=$((CHECKS + 1))
+
+: > "$GIT_LOG"
+vA=$(PATH="$WORK/gitbin:$PATH" GIT_LOG="$GIT_LOG" run resume --exec --main "$FAKEMAIN" 901)
+contains "resume: absent worktree → still RESUME (reconstructed)" "$vA" "RESUME"
+contains "resume(#319): absent worktree reconstructs via git worktree add" \
+  "$(cat "$GIT_LOG")" "worktree add $WTA SHAA"
+
 # ============================================================================
 # D. rows — dash landed view
 # ============================================================================
+# Self-contained ledger (one PR-bearing row: issue 5 / PR 70 / sid-abc) so this
+# section doesn't hinge on leftover state from the resume tests above.
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-01-01T00:00:00Z\t5\ttitle5\t70\tSHA5\t/w/issue-5\t/nope\tsid-abc\t-\n' >> "$FLEET_HISTORY_LEDGER"
 rows=$(run rows)
 # The landed view now shares the live list's column header (issue · window ·
 # summary · act · PR · ctx) so the two read as one table (issue #228).
@@ -177,4 +226,17 @@ contains "rows: PR-less row targets landed:issue:<n>" "$rows2" "landed:issue:8"
 rows3=$(run rows)
 contains "rows: empty ledger yields a placeholder" "$rows3" "no landed sessions"
 
-printf 'selftest OK: fleet-history (%s assertions — record/list/find/resume/rows)\n' "$CHECKS"
+# ============================================================================
+# E. meta — "<issue>\t<title>" for a landed row (faithful resume naming, #319)
+# ============================================================================
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-03-01T00:00:00Z\t42\tPolish the dash\t61\tabc1234\t-\t-\tsid-m\t-\n' >> "$FLEET_HISTORY_LEDGER"
+m=$(run meta 42)
+eq "meta: issue column by issue key" "42"              "$(printf '%s' "$m" | cut -f1)"
+eq "meta: title column by issue key" "Polish the dash" "$(printf '%s' "$m" | cut -f2)"
+# by #PR the row still resolves to its issue + title (a #PR resume binds @issue).
+eq "meta: #PR key resolves to the row's issue" "42" "$(run meta '#61' | cut -f1)"
+# unknown key → nothing (no crash, no stray row).
+eq "meta: unknown key prints nothing" "" "$(run meta 999)"
+
+printf 'selftest OK: fleet-history (%s assertions — record/list/find/resume/reuse/meta/rows)\n' "$CHECKS"

@@ -4,14 +4,20 @@
 #
 # No network, no real repo, no tmux server: the real script + fleet-lib.sh are
 # symlinked into a temp bin, fleet-history.sh is STUBBED to emit a controlled
-# resume verdict ($VERDICT), and a fake `tmux` logs new-window/set-window-option/
-# display-message/select-window so we can assert exactly what gets spawned. (The
-# reconstruct/verdict-routing logic itself is covered by fleet-history-selftest.sh.)
+# resume verdict ($VERDICT) + ledger meta ($META), and a fake `tmux` logs
+# new-window/set-window-option/display-message/select-window so we can assert
+# exactly what gets spawned. (The reconstruct/verdict-routing logic itself is
+# covered by fleet-history-selftest.sh.)
+#
+# Faithful resume (issue #319): the resumed window reuses the ORIGINAL descriptive
+# name (kebab of the ledger title, #216) and binds @issue from the ledger for BOTH
+# issue- and #PR-keyed rows; the resume-<key> name is only a fallback.
 #
 #   A. target→key parsing (--plan): landed:issue:N→N, landed:P→#P, live/hdr→empty
-#   B. RESUME (issue key)   → new-window(-n resume-N, -c <worktree>), @issue N, @restored 1
-#   C. RESUME (#PR key)     → new-window(-n resume-N, -c <worktree>), NO @issue, @restored 1
-#   D. FROM-PR              → new-window(-n resume-prN, -c FLEET_MAIN), @restored 1, NO @issue
+#   B. RESUME (issue key)   → new-window(-n <title-kebab>, -c <worktree>), @issue N, @restored 1
+#   C. RESUME (#PR key)     → new-window(-n <title-kebab>, -c <worktree>), @issue (from ledger), @restored 1
+#   D. FROM-PR              → new-window(-n <title-kebab>, -c FLEET_MAIN), @issue (from ledger), @restored 1
+#   H. title-less ledger    → name falls back to resume-<key> / resume-pr<PR>
 #   E. REVIEW-ONLY          → NO new-window, a display-message
 #   F. non-landed target    → NO new-window, a hint message
 #   G. cap refusal          → NO new-window, a capacity message
@@ -42,8 +48,12 @@ ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 # --- stub fleet-history.sh: emit the verdict the test wants (tab-delimited) ------
 cat > "$WORK/bin/fleet-history.sh" <<'HISTFAKE'
 #!/bin/bash
-# only `resume` is exercised; print $VERDICT verbatim (already tab-delimited).
-printf '%b\n' "${VERDICT:-REVIEW-ONLY\tstub}"
+# `resume` → $VERDICT (the resume verdict); `meta` → $META ("<issue>\t<title>").
+# Both are already tab-delimited; an unset $META prints nothing (row not found).
+case "${1:-}" in
+  meta) [ -n "${META:-}" ] && printf '%b\n' "$META" ;;
+  *)    printf '%b\n' "${VERDICT:-REVIEW-ONLY\tstub}" ;;
+esac
 HISTFAKE
 chmod +x "$WORK/bin/fleet-history.sh"
 
@@ -98,9 +108,12 @@ run_restore() {
 ok "A target→key parsing (landed:issue:N→N, landed:P→#P, live/hdr→none)"
 
 # ============================ B: RESUME (issue key) =========================
+# The ledger row's title drives the window name (kebab, #216) — resume-9 is only
+# a fallback (case H). @issue comes from the ledger's issue column (issue #319).
 VERDICT="RESUME\t$WORK/wt\tsid-abc\tclaude --resume sid-abc --fork-session" \
+  META="9\tFix the flaky login" \
   FLEET_MAX_SESSIONS=0 FLEET_SPAWN_FOCUS=1 run_restore 'landed:issue:9'
-grep -q -- '-n resume-9\b' "$NEWWIN_LOG"    || fail "B window not named resume-9" "$(cat "$NEWWIN_LOG")$(cat "$WORK/err")"
+grep -q -- '-n fix-the-flaky-login\b' "$NEWWIN_LOG" || fail "B window not named from the ledger title" "$(cat "$NEWWIN_LOG")$(cat "$WORK/err")"
 grep -q -- "-c $WORK/wt" "$NEWWIN_LOG"       || fail "B window not opened in the reconstructed worktree" "$(cat "$NEWWIN_LOG")"
 grep -q -- '--resume sid-abc' "$NEWWIN_LOG"  || fail "B window should run claude --resume sid-abc" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@issue 9' "$OPTS_LOG"      || fail "B resuming by issue should bind @issue 9" "$(cat "$OPTS_LOG")"
@@ -109,25 +122,43 @@ grep -q 'SELECT .*@9' "$SELECT_LOG"          || fail "B FLEET_SPAWN_FOCUS=1 shou
 # The reconstruct+spawn must be BACKGROUNDED (issue #304): dispatched via run-shell
 # -b as an --exec-bg re-exec, so ⌃o / Enter-in-landed returns before the worktree add.
 grep -q -- '--exec-bg' "$RS_LOG"             || fail "B reconstruct must be dispatched via run-shell -b (--exec-bg)" "$(cat "$RS_LOG")"
-ok "B RESUME(issue) → resume-9 window in the worktree, @issue+@restored set, backgrounded"
+ok "B RESUME(issue) → title-named window in the worktree, @issue+@restored set, backgrounded"
 
 # ============================ C: RESUME (#PR key) ==========================
+# A #PR resume still binds @issue — resolved from the ledger's issue column (#319,
+# was skipped before) — and takes its name from the ledger title.
 VERDICT="RESUME\t$WORK/wt\tsid-xyz\tclaude --resume sid-xyz --fork-session" \
+  META="5\tTune the reaper" \
   FLEET_MAX_SESSIONS=0 run_restore 'landed:70'
-grep -q -- '-n resume-70\b' "$NEWWIN_LOG"    || fail "C window not named resume-70" "$(cat "$NEWWIN_LOG")"
-grep -q 'SETOPT .*@issue' "$OPTS_LOG"        && fail "C resuming by #PR has no issue to bind" "$(cat "$OPTS_LOG")"
+grep -q -- '-n tune-the-reaper\b' "$NEWWIN_LOG" || fail "C window not named from the ledger title" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@issue 5' "$OPTS_LOG"      || fail "C a #PR resume should bind @issue from the ledger (5)" "$(cat "$OPTS_LOG")"
 grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"   || fail "C a #PR restore should still be marked @restored 1" "$(cat "$OPTS_LOG")"
-ok "C RESUME(#PR) → resume-70 window, @restored set, NO @issue"
+ok "C RESUME(#PR) → title-named window, @issue 5 (from ledger), @restored set"
 
 # ============================ D: FROM-PR ===================================
+# The PR-degrade path gets the same faithful name + @issue treatment (#319).
 VERDICT="FROM-PR\t70\tclaude --from-pr 70 --fork-session" \
+  META="5\tTune the reaper" \
   FLEET_MAX_SESSIONS=0 run_restore 'landed:70'
-grep -q -- '-n resume-pr70\b' "$NEWWIN_LOG"  || fail "D window not named resume-pr70" "$(cat "$NEWWIN_LOG")"
+grep -q -- '-n tune-the-reaper\b' "$NEWWIN_LOG" || fail "D from-pr window not named from the ledger title" "$(cat "$NEWWIN_LOG")"
 grep -q -- "-c $WORK/main" "$NEWWIN_LOG"      || fail "D from-pr window should run in FLEET_MAIN" "$(cat "$NEWWIN_LOG")"
 grep -q -- '--from-pr 70' "$NEWWIN_LOG"       || fail "D window should run claude --from-pr 70" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"    || fail "D a from-pr restore should be marked @restored 1" "$(cat "$OPTS_LOG")"
-grep -q 'SETOPT .*@issue' "$OPTS_LOG"         && fail "D from-pr binds no @issue" "$(cat "$OPTS_LOG")"
-ok "D FROM-PR → resume-pr70 window in FLEET_MAIN, @restored set"
+grep -q 'SETOPT .*@issue 5' "$OPTS_LOG"       || fail "D from-pr should bind @issue from the ledger (5)" "$(cat "$OPTS_LOG")"
+ok "D FROM-PR → title-named window in FLEET_MAIN, @issue 5 (from ledger), @restored set"
+
+# ===================== H: title-less ledger → name fallback ================
+# No usable title in the ledger (META unset ⇒ no row) → the window name falls back
+# to resume-<key> (RESUME) and resume-pr<PR> (FROM-PR), the pre-#319 names.
+VERDICT="RESUME\t$WORK/wt\tsid-abc\tclaude --resume sid-abc --fork-session" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:issue:9'
+grep -q -- '-n resume-9\b' "$NEWWIN_LOG"     || fail "H title-less issue resume should fall back to resume-9" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@issue 9' "$OPTS_LOG"      || fail "H issue resume still binds @issue 9 without a ledger title" "$(cat "$OPTS_LOG")"
+VERDICT="FROM-PR\t70\tclaude --from-pr 70 --fork-session" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:70'
+grep -q -- '-n resume-pr70\b' "$NEWWIN_LOG"  || fail "H title-less from-pr should fall back to resume-pr70" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@issue' "$OPTS_LOG"         && fail "H a title-less #PR resume has no ledger issue to bind" "$(cat "$OPTS_LOG")"
+ok "H title-less ledger → resume-<key>/resume-pr<PR> fallback names"
 
 # ============================ E: REVIEW-ONLY ===============================
 VERDICT="REVIEW-ONLY\tno resumable worktree and no PR" \
