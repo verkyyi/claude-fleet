@@ -52,7 +52,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/tmp/.claude-dash"
-NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; SELECT_LOG="$WORK/select"
+NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; SELECT_LOG="$WORK/select"; RS_LOG="$WORK/runshell"
 
 ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
@@ -75,12 +75,18 @@ reset_scratch() {   # drop every scratch-* worktree + branch so N is predictable
   git -C "$MAIN" worktree prune >/dev/null 2>&1
 }
 
-# --- fake tmux: strip -L/-S <sock>; answer session_name; log the mutations -------
+# --- fake tmux: strip -L/-S <sock>; answer session_name; LOG + EXECUTE run-shell
+# (so the backgrounded ⌃s spawn, issue #304, actually runs and its new-window/
+# worktree are observable, mirroring real `run-shell -b`); log the mutations. ----
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
 #!/bin/bash
 if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
 cmd="${1:-}"; [ "$#" -gt 0 ] && shift
 case "$cmd" in
+  run-shell)
+    [ "${1:-}" = "-b" ] && shift
+    printf '%s\n' "$1" >> "$RS_LOG"          # prove the spawn was backgrounded
+    sh -c "$1" ;;                            # mirror real run-shell: actually run it
   display-message)
     case "$*" in
       *-p*) case "$*" in *session_name*) echo "${SESS_NAME:-testsess}";; *) echo "";; esac ;;
@@ -103,11 +109,11 @@ chmod +x "$WORK/fakebin/tmux"
 # positional <target-session>); stdin is inherited, so a caller can pipe the
 # --prompt-read line in.
 run_raw() {
-  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"
+  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_GLOBAL_MAX_SESSIONS=0 \
-  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" \
+  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" RS_LOG="$RS_LOG" \
     bash "$WORK/bin/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"
 }
 
@@ -204,13 +210,17 @@ grep -q -- '-t othersess:' "$NEWWIN_LOG"  || fail "L a positional <target-sessio
 ok "L --name foo <target-session> spawns 'foo' into the target"
 
 # ==================== M: ⌃s popup phase reads name off stdin =================
+# The ⌃s popup now BACKGROUNDS the spawn (issue #304): it reads the name, then hands
+# the git fetch + worktree add + window launch to run-shell -b (via a --name-file
+# re-exec) so the popup closes instantly. The name still flows through end-to-end.
 reset_scratch
 printf 'mybox\n' | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
 grep -q -- '-n mybox\b' "$NEWWIN_LOG" || fail "M --prompt-read should read the name off stdin" "$(cat "$NEWWIN_LOG")"
+grep -q -- '--name-file=' "$RS_LOG"   || fail "M the ⌃s spawn must be dispatched via run-shell -b (--name-file)" "$(cat "$RS_LOG")"
 reset_scratch
 printf '\n'        | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG" || fail "M an empty --prompt-read line → auto scratch-N" "$(cat "$NEWWIN_LOG")"
-ok "M --prompt-read (⌃s popup) reads the name from one stdin line"
+ok "M --prompt-read (⌃s popup) reads the name from one stdin line, backgrounded"
 
 # ============================ D: restore drops @raw ==========================
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__STEWARD__|%s|-\n' \

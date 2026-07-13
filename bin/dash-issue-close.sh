@@ -33,16 +33,28 @@ printf '\n  Close issue \033[1m#%s\033[0m in %s?\n\n  [y] close    [n] cancel ' 
 read -rsn1 ans; echo
 case "$ans" in y|Y) ;; *) exit 0;; esac
 
-if gh issue close "$num" --repo "$REPO" >/dev/null 2>&1; then
-  src=$(fleet_cache issues "$FLEET_SESSION")
-  if [ -f "$src" ]; then
-    tmp="$src.$$"; grep -v $'\t#'"$num"$'\t' "$src" > "$tmp" 2>/dev/null; mv -f "$tmp" "$src"
-  fi
-  FD=$(fleet_cache_dir "$(fleet_slug "$REPO")")              # fleets/<slug>/ (issue #181)
-  rm -f "$FD/issue_${num}.json" "$FD/issue_${num}.json.ts"   # per-issue preview cache
-  rm -f "$FD/issues.ts" "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"  # force the next fetch
-  ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
-  tmux display-message "issue #$num closed ✓"
-else
-  printf '\n  \033[31mfailed to close #%s\033[0m — press any key ' "$num"; read -rsn1 _
+# Optimistic drop (SYNC, issue #304): remove the row from THIS fleet's issues cache
+# + per-issue preview cache and clear the ts so the panel's reload repaints without
+# #num AT ONCE — the background collector refetch (below) then makes it
+# authoritative. Mirrors dash-issue-new.sh's optimistic insert.
+src=$(fleet_cache issues "$FLEET_SESSION")
+if [ -f "$src" ]; then
+  tmp="$src.$$"; grep -v $'\t#'"$num"$'\t' "$src" > "$tmp" 2>/dev/null; mv -f "$tmp" "$src"
 fi
+FD=$(fleet_cache_dir "$(fleet_slug "$REPO")")              # fleets/<slug>/ (issue #181)
+rm -f "$FD/issue_${num}.json" "$FD/issue_${num}.json.ts"   # per-issue preview cache
+rm -f "$FD/issues.ts" "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"  # force the next fetch
+
+# Background the slow network close + authoritative refetch (issue #304) so the
+# popup closes INSTANTLY instead of blocking on `gh issue close`. The bg job toasts
+# its own outcome — the popup is already gone, so a failure can no longer wait on a
+# keypress; it surfaces via display-message and the same refetch RESTORES the
+# optimistically-dropped row (the issue is still open + reversible via `gh issue
+# reopen`). GH_TTL=0 forces the refetch regardless of cache age.
+fleet_bg "if gh issue close '$num' --repo '$REPO' >/dev/null 2>&1; then \
+    GH_TTL=0 bash '$BIN/tmux-dash-collect.sh' >/dev/null 2>&1; \
+    tmux display-message 'issue #$num closed ✓'; \
+  else \
+    GH_TTL=0 bash '$BIN/tmux-dash-collect.sh' >/dev/null 2>&1; \
+    tmux display-message 'failed to close #$num — row restored'; \
+  fi"

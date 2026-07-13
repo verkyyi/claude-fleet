@@ -126,6 +126,19 @@ restart_idle_claude_windows() {
 # touching account state. Only a direct run drops into the interactive picker.
 if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
 
+# Internal --restart-idle (issue #304): the BACKGROUND restart pass the account
+# picker dispatches via `run-shell -b` (the fleet's non-blocking-bind convention,
+# same as fleet_bg) so the popup CLOSES INSTANTLY instead of blocking on the
+# per-idle-window ctrl-c + up-to-3s settle loop — which scales with the # of idle
+# windows. Re-uses this file's restart_idle_claude_windows and toasts its OWN count
+# (the popup is gone by the time it runs). $TMUX is inherited from the run-shell
+# job, so restart's bare tmux calls stay on THIS fleet's server.
+if [ "${1:-}" = "--restart-idle" ]; then
+  n=$(restart_idle_claude_windows)
+  [ "${n:-0}" -gt 0 ] && tmux display-message "fleet: restarted ${n} idle session$([ "$n" = 1 ] || printf s) on the new account"
+  exit 0
+fi
+
 listing=$(bash "$BIN/fleet-account.sh" list 2>/dev/null)
 case "$listing" in
   *OFF*|'')
@@ -172,10 +185,12 @@ if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
   fi
   # Move this fleet's IDLE running sessions onto the new account too (issue #263),
   # but only when the active account actually changed — a re-pick of the current
-  # account restarts nothing.
+  # account restarts nothing. Background the restarts (issue #304): the ctrl-c +
+  # up-to-3s settle loop scales with the # of idle windows and would otherwise hold
+  # the popup OPEN. run-shell -b returns instantly; the bg job toasts its own count.
   if [ -n "$now" ] && [ "$now" != "$prev" ]; then
-    n=$(restart_idle_claude_windows)
-    [ "${n:-0}" -gt 0 ] && msg="${msg}  ·  restarted ${n} idle session$([ "$n" = 1 ] || printf s)"
+    tmux run-shell -b "bash '$0' --restart-idle"
+    msg="${msg}  ·  restarting idle sessions…"
   fi
   tmux display-message "$msg"
 fi

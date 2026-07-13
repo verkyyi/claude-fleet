@@ -77,6 +77,28 @@ for a in "$@"; do case "$a" in confirm) confirm=1;; esac; done
 
 command -v git >/dev/null 2>&1 || refuse "git not found"
 
+# --- internal --exec <full|keep> (issue #304): the BACKGROUND reap the interactive
+# path dispatches (via fleet_bg) ONCE the merged-check decision is made. Re-resolve
+# only the CHEAP locals reap_full/reap_keep need — NO `gh pr list` (the decision is
+# already made) — then run the slow tail (git worktree remove + gh issue close) off
+# the interactive ⌃x bind so it returned instantly. $TMUX is inherited from the
+# run-shell job, so the bare tmux/gh calls below stay on THIS fleet's server.
+if [ "${1:-}" = "--exec" ]; then
+  verdict="${2:-}"
+  iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"; iss="${iss//[^0-9]/}"
+  [ -z "$iss" ] && exit 0
+  FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
+  fleet_load_conf "$FLEET_SESSION"
+  REPO="${FLEET_REPO:-}"
+  _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
+  MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
+  branch="issue-$iss"
+  wtdir=""; whead=""
+  [ -n "$MAIN" ] && IFS=$'\t' read -r wtdir whead < <(fleet_worktree_head "$MAIN" "$branch")
+  case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
+  exit 0
+fi
+
 # --- raw scratch row: close the window + dispose its worktree by the gate ------
 # A raw/scratch session (@raw=1) has NO @issue, but since issue #290 it DOES own a
 # `scratch-<N>` git worktree off the base branch. So ⌃x closes the window AND
@@ -222,7 +244,11 @@ if [ "$confirm" = 0 ]; then
       tmux display-popup -w 68 -h 9 -E \
         "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
       exit 0 ;;
-    *)  reap_full; exit 0 ;;   # merged-pr | ancestor — clean+merged, no confirm
+    # merged-pr | ancestor — clean+merged, no confirm. Background the reap (issue
+    # #304): the slow git worktree remove + gh issue close run off the ⌃x bind, which
+    # returns instantly; the row clears when the bg kill-window lands + the dash
+    # refreshes.
+    *)  fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full"; exit 0 ;;
   esac
 fi
 
@@ -236,5 +262,8 @@ printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
 read -rsn1 ans; echo
 case "$ans" in y|Y) ;; *) exit 0;; esac
 
-if [ "$reason" = dirty ]; then reap_keep; else reap_full; fi
+# Background the confirmed reap too (issue #304) so the popup closes INSTANTLY
+# instead of blocking on the git remove + gh close.
+if [ "$reason" = dirty ]; then fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec keep"
+else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full"; fi
 exit 0

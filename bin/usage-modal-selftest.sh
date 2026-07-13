@@ -78,5 +78,16 @@ elig "raw flag empty = normal worker" issue-1 "done" ""
 # --- A panel that is somehow @raw is still skipped (name wins first) ---
 skip "raw + panel name"       plan "done" 1
 
+# --- issue #304: the account switch must BACKGROUND the idle-window restarts so the
+# popup returns instantly (the ctrl-c + up-to-3s settle loop scales with # idle
+# windows). Static wiring check: a run-shell -b dispatch to the --restart-idle bg
+# subcommand, which must also exist as a handler. ---
+CHECKS=$((CHECKS + 1))
+grep -Eq 'run-shell -b .*--restart-idle' "$SCRIPT" \
+  || fail "the account switch must dispatch restart_idle_claude_windows via run-shell -b (--restart-idle)"
+CHECKS=$((CHECKS + 1))
+grep -Eq '= "--restart-idle"' "$SCRIPT" \
+  || fail "usage-modal must expose the --restart-idle background subcommand"
+
 printf 'usage-modal selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

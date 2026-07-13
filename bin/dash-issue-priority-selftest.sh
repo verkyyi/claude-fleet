@@ -33,10 +33,13 @@ printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/tmux-dash-collect.sh"; chmod +x "$WO
 
 FD="$WORK/tmp/.claude-dash/fleets/fake-repo"
 LABELS="$FD/labels"
-printf '101\tenhancement,priority:p2\n102\tpriority:p0\n103\t\n' > "$LABELS"; : > "$LABELS.ts"
+# The interactive path now cycles from the labels CACHE, so each case reseeds it —
+# the fake gh view (below) is kept in agreement so the authoritative bg pass edits
+# to the same target the cache-based cycle chose.
+seed_labels() { printf '101\tenhancement,priority:p2\n102\tpriority:p0\n103\t\n' > "$LABELS"; : > "$LABELS.ts"; }
 printf 'fakesess\tfake-repo\tfake/repo\n' > "$WORK/tmp/.claude-dash/global/sessmap"
 
-GHLOG="$WORK/ghedit"
+GHLOG="$WORK/ghedit"; RSLOG="$WORK/rslog"
 # fake gh: `issue view --json labels` → canned per-issue labels; `issue edit` → logged.
 cat > "$WORK/fp/gh" <<GHFAKE
 #!/bin/bash
@@ -51,18 +54,23 @@ case "\${1:-} \${2:-}" in
 esac
 exit 0
 GHFAKE
-# fake tmux: answer session_name; swallow display-message.
-cat > "$WORK/fp/tmux" <<'TMUXFAKE'
+# fake tmux: answer session_name; LOG + EXECUTE run-shell (so the backgrounded
+# `--commit` pass runs and its gh edit is observable); swallow display-message.
+cat > "$WORK/fp/tmux" <<TMUXFAKE
 #!/bin/bash
-if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
-case "${1:-}" in
-  display-message) case "$*" in *session_name*) echo fakesess ;; *) : ;; esac ;;
+if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
+case "\${1:-}" in
+  run-shell)
+    shift; [ "\${1:-}" = "-b" ] && shift
+    printf '%s\n' "\$1" >> "$RSLOG"          # prove the dispatch happened
+    sh -c "\$1" ;;                            # mirror real run-shell: actually run it
+  display-message) case "\$*" in *session_name*) echo fakesess ;; *) : ;; esac ;;
 esac
 exit 0
 TMUXFAKE
 chmod +x "$WORK/fp/gh" "$WORK/fp/tmux"
 
-runp() { : > "$GHLOG"; PATH="$WORK/fp:$PATH" TMPDIR="$WORK/tmp" \
+runp() { : > "$GHLOG"; : > "$RSLOG"; seed_labels; PATH="$WORK/fp:$PATH" TMPDIR="$WORK/tmp" \
   bash "$WORK/bin/dash-issue-priority.sh" "$@" >/dev/null 2>&1; }
 
 # ============================ A: cycle from none =============================
@@ -75,7 +83,10 @@ ok "A cycle from none adds priority:p2"
 runp 101 cycle
 grep -q -- '--remove-label priority:p2' "$GHLOG" || fail "B p2→cycle should remove p2" "$(cat "$GHLOG")"
 grep -q -- '--add-label priority:p1'    "$GHLOG" || fail "B p2→cycle should add p1" "$(cat "$GHLOG")"
-ok "B cycle from p2 → p1 (swap)"
+# The gh work must be BACKGROUNDED (issue #304): dispatched via run-shell -b as a
+# `--commit` re-exec, never inline — so ⌃y returns instantly.
+grep -q -- '--commit' "$RSLOG" || fail "B gh view+edit must be dispatched via run-shell -b (--commit)" "$(cat "$RSLOG")"
+ok "B cycle from p2 → p1 (swap), backgrounded via run-shell -b"
 
 # ============================ C: cycle from p0 (wrap) ========================
 runp 102 cycle
@@ -89,8 +100,8 @@ runp 102 p0
 ok "D explicit set to the current tier is a no-op"
 
 # ============================ E: optimistic cache ==========================
-# Fresh cache, cycle #101 (p2→p1): its row must become enhancement,priority:p1.
-printf '101\tenhancement,priority:p2\n102\tpriority:p0\n103\t\n' > "$LABELS"
+# cycle #101 (p2→p1): its row must become enhancement,priority:p1 SYNCHRONOUSLY
+# (the repaint can't wait on the backgrounded gh pass). runp reseeds first.
 runp 101 cycle
 row=$(grep '^101' "$LABELS")
 [ "$row" = "$(printf '101\tenhancement,priority:p1')" ] \
