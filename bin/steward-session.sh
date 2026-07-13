@@ -92,8 +92,12 @@ fi
 # readiness, then go idle (no /sweep, no /loop). FRESH_INNER is that launch WITHOUT
 # the pane-keep-alive `exec $SHELL` tail (appended once below) so it can double as
 # the resume fallback. STEWARD_FLAGS (empty unless Steward Lite is on) is spliced
-# right after `claude`.
-FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} \"/fleet-steward\"}"
+# right after `claude`. The `--` before the prompt is REQUIRED: recent claude
+# builds define `--mcp-config <configs...>` as VARIADIC (space-separated), so a
+# bare trailing "/fleet-steward" gets slurped as an extra MCP config path
+# ("MCP config file not found: /fleet-steward") — `--` ends option parsing so it
+# stays the prompt. The resume path is immune (`--resume` follows the flags).
+FRESH_INNER="${FLEET_STEWARD_CMD:-claude ${STEWARD_FLAGS} -- \"/fleet-steward\"}"
 # Crash-resume (issue #143): if fleet-restore.sh captured this steward's live
 # transcript and passes its id via STEWARD_RESUME_ID, RESUME it (`claude --resume
 # <id>`) so the steward's full history survives a tmux-server crash — same as a
