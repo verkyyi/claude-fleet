@@ -164,6 +164,55 @@ If the step-2 diff touched any `commands/*.md`:
 
 If no `commands/*.md` changed, skip.
 
+## 5b. Install new/changed fleet skills — the `skills/` tree (issue #311)
+
+Fleet also ships **skills** (`skills/<name>/SKILL.md`) — repo-versioned base
+skills that a fleet command may delegate to (e.g. `/fleet-handoff` runs the base
+`handoff` skill verbatim). They install into Claude Code's user skills dir
+`~/.claude/skills/`, the mirror of the `commands/` install — same marker gate,
+same never-clobber-personal rule.
+
+If the step-2 diff touched any `skills/**` path:
+
+- **Install** each added/modified skill — every `A`/`M` path, plus the **new**
+  path of each `R` rename — by copying it into `~/.claude/skills/`, **preserving
+  the sub-path under `skills/`** (`skills/handoff/SKILL.md` →
+  `~/.claude/skills/handoff/SKILL.md`; `mkdir -p` the skill's dir first). Gate on
+  the skill's `SKILL.md` carrying the `<!-- fleet skill -->` marker — that marker
+  is how sync recognises a repo-managed skill among the operator's **personal**
+  skills, so it never touches a personal skill.
+- **Never clobber a personal skill.** Before overwriting an existing
+  `~/.claude/skills/<name>/SKILL.md`, check the destination for the
+  `<!-- fleet skill -->` marker:
+  - marker present → it's already fleet-managed; overwrite (a normal update).
+  - marker **absent** → it's a personal skill (or, on THIS machine's **first**
+    sync, the operator's pre-import `handoff` copy this issue adopted). Overwrite
+    it **only if it is byte-identical to the repo's imported version** (`cmp -s`);
+    otherwise **warn and skip** it — the old steward.md-dance: surface that a
+    personal skill diverges from the repo copy and let the operator reconcile by
+    hand, never silently replacing their edits.
+
+  ```sh
+  # per changed skill dir (e.g. rel="handoff"), src carries the marker:
+  src=~/.claude/fleet/skills/$rel/SKILL.md
+  dst=~/.claude/skills/$rel/SKILL.md
+  grep -qF '<!-- fleet skill -->' "$src" || continue          # source gate
+  if [ -f "$dst" ] && ! grep -qF '<!-- fleet skill -->' "$dst" \
+       && ! cmp -s "$src" "$dst"; then
+    echo "skills: $rel/SKILL.md is a personal skill that diverges from the repo copy — leaving it; reconcile by hand (e.g. adopt the marked repo version), then re-run" >&2
+  else
+    mkdir -p "$(dirname "$dst")" && cp "$src" "$dst"
+  fi
+  ```
+
+- **Remove** each retired skill from `~/.claude/skills/` — the **old** path of
+  every `R` rename **and** every `D` deletion — but, same as install, only when
+  the live copy still carries the `<!-- fleet skill -->` marker (never remove a
+  personal skill). Prune the skill's now-empty dir with `rmdir` (ignore failure —
+  a non-empty dir with the operator's own files stays).
+
+If no `skills/**` path changed, skip.
+
 ## 6. Steward charter — nothing extra to re-apply (issue #286)
 
 The flat `~/.claude/steward.md` is **retired**. The steward charter is now the
@@ -258,7 +307,8 @@ when a key is already gone).
 
 One line naming what synced: the `before → after` sha, and which of
 {daemons reloaded, settings re-merged, commands installed/removed (the
-`/fleet-steward` charter rides here now), dash panes refreshed (with the count),
+`/fleet-steward` charter rides here now), skills installed/removed (with any
+personal-skill-diverged warning), dash panes refreshed (with the count),
 conf reloaded (with the unbound count)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
 report that instead with the one-line reason.

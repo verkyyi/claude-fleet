@@ -106,6 +106,18 @@ else
   warn commands "$cmd_dir absent — optional fleet /skills not installed"
 fi
 
+# --- fleet skills tree (optional: repo-shipped skills/ base skills) ---
+# Some fleet commands delegate to a repo-versioned base SKILL under
+# ~/.claude/skills/ (installed by /fleet-sync-install's skills pass — see
+# docs/INSTALL.md). The load-bearing case is /fleet-handoff, which runs the base
+# `handoff` skill VERBATIM: with the command present but the skill missing,
+# /fleet-handoff points at a dependency a fresh install never shipped (issue #311).
+# So specifically flag that combination — command installed, base skill absent.
+skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+if [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
+  warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
+fi
+
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
 # The popup (bin/tmux-config.sh) sources its key list + per-key help from
 # fleet.conf.example; without that file it can't render. It lives in the repo /
