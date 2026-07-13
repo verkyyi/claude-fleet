@@ -38,6 +38,10 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 #     modal's ⌃s uses (bin/tmux-config.sh). Each helper's phase-2 (`confirm`)
 #     path reads right here in the terminal, so we call it straight.
 # Also: in POPUP mode enter spawns AND closes (+abort); windowed loops forever.
+# enter passes --async (issue #303): dash-issue-session.sh runs its synchronous
+# gate (cap / dedup / claim — refusals still surface instantly) then backgrounds the
+# slow `git worktree add` + window spawn via `run-shell -b`, so fzf's execute-silent
+# returns at once and the popup closes without freezing on a big-monorepo checkout.
 # The header is deliberately terse — the essential action (enter=work), the
 # common one (⌃n new), and a pointer to the full keymap (? keys), matching the
 # dashboard's `↵ jump · ⌃n new · … · ? keys` grammar (one `?` convention
@@ -86,7 +90,7 @@ run_fzf() {
     --bind "$N_BIND" \
     --bind "$X_BIND" \
     --bind "$P_BIND" \
-    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1})${ENTER_TAIL}" \
+    --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async)${ENTER_TAIL}" \
     >/dev/null 2>&1
 }
 
