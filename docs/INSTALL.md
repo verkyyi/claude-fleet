@@ -25,6 +25,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the steward↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. Also routes a per-fleet **steward control issue** (`FLEET_STEWARD_ISSUE`, #146) — comments on it relay into the `@steward` hub pane (the operator↔steward wake/async channel), same gates/marker/idle/dedup. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
 | Cleanup (recommended) | **THE FLEET NEVER MERGES** (issue #277, closes #260) — it arms auto-merge and cleans up after merges. The worker's `/fleet-claim` ship step opens the PR then `gh pr merge --auto --<FLEET_MERGE_METHOD>` (default `squash`, issue #283) **arms** GitHub auto-merge (never merges); GitHub (or a human on the web, or a collaborator) does the merge when green + branch-protection-satisfied. `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) then scans the `prmap` cache pr-refresh already writes (`--state all` ⇒ MERGED/CLOSED rows, ZERO extra `gh`) for a final PR whose `issue-<N>` still has a live worktree/window and drives `bin/fleet-cleanup.sh <PR>` — the mechanical, **no-merge** janitor (`fleet-land.sh` MINUS the merge): record the resume ledger FIRST, `git pull --ff-only` the base under the shared land-lease (`bin/fleet-land-lease.sh`, base-ff serialization), then ordered teardown window → worktree → branch. Merge-source-agnostic, idempotent (`skip:nothing` on an already-reaped PR). Single-writer per repo + disk-gated. **ON by default** (opt out `FLEET_CLEANUP=0`; merges nothing, relaxes no gate). Manual now: `/fleet-cleanup <n>`. See docs/CLEANUP.md | gh |
 | Watcher (optional) | `com.claude-fleet.watch` (~45s): the **zero-token event-driven steward wake** (issue #147). Sleeps on the fleet reading ONLY existing state (`@claude_state`/`@issue` + the `labels_<slug>` cache — no LLM, no per-tick `gh`) and wakes the steward ONLY on a decision-worthy **attention edge**: a worker stuck (`looping`), the needs-attention count rising, or a `prod-alert` issue appearing. (Trimmed in #279 — the PR-green→`/land`, worker-opened-PR and free-slot edges were removed once landing retired in #277: nothing triggers a land, the dash shows an opened PR, and a free slot is surfaced by the dash/backlog directly.) Edge-triggered + deduped (transitions not levels; first run seeds silently). Delivery = the steward control issue (`FLEET_STEWARD_ISSUE`, #146) → the issue-bridge relays the wake into the `@steward` pane. Single-writer per repo + disk-gated; `--dry-run` prints edges without posting. OFF by default (`FLEET_WATCH=1` per fleet; needs `FLEET_STEWARD_ISSUE` + in practice `FLEET_ISSUE_BRIDGE=1`); the watcher spends no tokens but each wake makes the steward take a turn. See docs/WATCH.md | gh + issue-bridge |
+| Webhook daemon (optional) | `com.claude-fleet.webhook` (`bin/fleet-webhook.sh`, KeepAlive supervisor like the spinner): **fresh (~1s) PR/issue/CI status via `gh webhook forward`, with NO public endpoint** (issue #315). GitHub's only real-time push is webhooks (normally need a public URL); `gh webhook forward` (the `cli/gh-webhook` extension) registers the repo webhook against **GitHub's own hosted relay**, PULLS deliveries over the authenticated `gh` token, and re-POSTs each to a **localhost** handler — no ngrok/tunnel, no exposed port. The daemon runs one python3 handler on `127.0.0.1:<port>` + one `gh webhook forward` per opted-in **live** fleet repo (fanned out like the watcher, deduped per repo, dead forwards auto-restarted). Each delivery only **TRIGGERS a targeted refresh** — it never writes a cache: `pull_request`/`check_*`/`status` → `tmux-pr-refresh.sh --repo <repo>` (the single writer of `prmap`/`@prci`), `issues` → `tmux-dash-collect.sh --issues <repo>` (the collector owns `issues_<slug>`), routed by the repo in the payload. **Polling stays the backstop** (pr-refresh ~15s + collector ~60s), so a missed delivery/dead forward only costs freshness, never correctness. Storm-coalesced (per-`(event,repo)` debounce). Optional HMAC (`FLEET_WEBHOOK_SECRET` → `--secret` + verify) is defense-in-depth only (handler binds localhost). OFF by default (`FLEET_WEBHOOK=1` per fleet); spends no LLM tokens. See docs/WEBHOOK.md | gh + python3 + `gh extension install cli/gh-webhook` |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`), plus the spinner's stuck-`working` demote kicks it for a window a Stop missed. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
 | Worktree janitor (optional) | prunes merged+clean+idle worktrees. Before each removal it **reaps any process still anchored to the worktree** (`fleet_reap_worktree_procs` — argv match + cwd match, SIGTERM→SIGKILL; issue #151) so a detached orphan can't outlive its dir and drain a core against the shared tmux server. The dash's `⌃x` reap (`dash-reap.sh`) does the same | gh |
@@ -173,6 +174,17 @@ assumes — this doc is only the install/uninstall procedure.
      makes the steward take an LLM turn — so it is OFF by default; ask before
      installing and mention that wakes cost steward tokens. `--dry-run` prints the
      edges without posting. Full design in **docs/WATCH.md**.
+     webhook (`com.claude-fleet.webhook`, KeepAlive) is the **fresh (~1s)
+     PR/issue/CI status daemon** — install it only if a fleet sets
+     `FLEET_WEBHOOK=1`, and first run `gh extension install cli/gh-webhook` (it
+     registers the repo webhook against GitHub's hosted relay — **no public
+     endpoint**). It runs a localhost python3 handler + one `gh webhook forward`
+     per opted-in live fleet repo; each delivery only kicks a targeted
+     `tmux-pr-refresh.sh --repo`/`tmux-dash-collect.sh --issues` (it never writes a
+     cache), and polling stays the backstop, so a miss costs only freshness. It
+     spends no LLM tokens (but keeps a forward process per repo). Optional
+     `FLEET_WEBHOOK_SECRET` adds HMAC verification (defense-in-depth; the handler
+     already binds localhost). Full design in **docs/WEBHOOK.md**.
      cleanup (`com.claude-fleet.cleanup`, 60s) is the **cleanup daemon** —
      **recommended** for every fleet, since **the fleet never merges** (issue #277):
      the worker's `/fleet-claim` ship step arms GitHub auto-merge and this daemon
@@ -193,7 +205,10 @@ assumes — this doc is only the install/uninstall procedure.
      `claude-fleet-collect.timer` (the required two) + the recommended
      `claude-fleet-diskguard.timer` (crash-guard) and
      `claude-fleet-pr-refresh.timer` (fast ~15s PR/CI status); the optional
-     issue-bridge/watch/cleanup/summarize/worktree-autoclean are `.timer`s too.
+     issue-bridge/watch/cleanup/summarize/worktree-autoclean are `.timer`s too,
+     and the optional **webhook** daemon is an always-on `.service`
+     (`claude-fleet-webhook.service`, parity with the KeepAlive plist — needs
+     `FLEET_WEBHOOK=1` + `gh extension install cli/gh-webhook`).
      Run `loginctl enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
@@ -303,10 +318,14 @@ kill-server`) each fleet; to clear it in place instead, run
 `tmux -L <sess> set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by
 the pr-refresh daemon) once per live fleet socket. (The `com.claude-fleet.*` bootout
 glob already covers `com.claude-fleet.pr-refresh`, `com.claude-fleet.issue-bridge`,
-`com.claude-fleet.watch`, and `com.claude-fleet.cleanup`; on Linux
-`systemctl --user disable --now claude-fleet-pr-refresh.timer` +
+`com.claude-fleet.watch`, `com.claude-fleet.cleanup`, and `com.claude-fleet.webhook`;
+on Linux `systemctl --user disable --now claude-fleet-pr-refresh.timer` +
 `claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer` +
-`claude-fleet-cleanup.timer`.) Per-fleet durable
+`claude-fleet-cleanup.timer` + `claude-fleet-webhook.service`.) If you ran the
+webhook daemon, `gh extension remove cli/gh-webhook` is optional and each opted-in
+repo may still list a `gh-webhook`-created relay webhook under its GitHub
+Settings → Webhooks — remove those by hand, and delete the daemon's forward-pidfile
+state at `~/.config/claude-fleet/webhook/`. Per-fleet durable
 state (issue #181) lives one directory per fleet under
 `~/.config/claude-fleet/fleets/<session>/` (conf, restore map, and — if you
 enabled them — the issue-bridge `bridge/` watermark+dedup and the watcher `watch/`

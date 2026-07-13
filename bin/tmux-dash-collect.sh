@@ -37,6 +37,21 @@ REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
 
+# Targeted mode (issue #315): `--issues <owner/repo>` refreshes JUST that repo's
+# issues/labels cache NOW and exits (the webhook handler's instant kick,
+# bin/fleet-webhook.sh), skipping the git/ctx/usage/snapshot work of a full 60s
+# tick. The collector stays the SINGLE writer of issues_<slug>. Normal (no-arg)
+# invocation is byte-for-byte unchanged.
+TARGET_ISSUES_REPO=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --issues) TARGET_ISSUES_REPO="${2:-}"; shift ;;
+    -*)       printf 'tmux-dash-collect: unknown flag %s\n' "$1" >&2; exit 2 ;;
+    *)        printf 'tmux-dash-collect: unexpected argument %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
 # atomic_write DEST — stream stdin to a PID-unique temp, then rename into place.
 # rename(2) is atomic on one filesystem, so a concurrent reader (the dash) always
 # sees either the old file or the complete new one, never a half-written cache.
@@ -54,6 +69,61 @@ atomic_write() {
 cache_key() {
   local k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s' "$k"
 }
+
+# fetch_issues_for REPO SLUG [FORCE] — the SINGLE issues/labels fetch, shared by the
+# per-repo TTL-gated loop below AND the targeted `--issues <repo>` webhook kick
+# (issue #315) so the two can never drift on the jq/column contract. FORCE=1
+# bypasses the TTL (the kick wants it NOW); else it fetches only when the cache is
+# older than GH_TTL. No-op (return) when gh is missing.
+#
+# ONE fetch, TWO caches. The gh --jq emits a 6-column raw line whose LEADING two
+# columns are the backlog flag + comma-joined labels, FOLLOWED by the historical 4
+# (milestone, #num, assignee, title). Putting the extra columns FIRST keeps the
+# title LAST, so a tab inside an issue title is absorbed into the title field
+# (harmless) instead of shifting the label/flag columns and dropping the issue. jq
+# does the exact `steward-control` match into the flag, so a weird label name can't
+# fool the comma-split. We then derive:
+#   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title), keeping
+#                    its contract EXACTLY (readers `cut`/`read` fields 1-4) and
+#                    DROPPING steward-control issues (#176: a relay endpoint is not a
+#                    task; spawn-eligibility excludes the same label). Filter = the jq
+#                    flag column ⇒ still one gh call + fixture-testable.
+#   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
+#                    prod-alert) for the fleet watcher (#147). It must NOT inherit the
+#                    backlog's steward-control drop — split from the unfiltered raw.
+# Deriving both from one fetch keeps the labels cache zero-extra-token. The raw temp
+# is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
+fetch_issues_for() {
+  local rp="$1" sg="$2" force="${3:-0}" FD its raw ttl
+  command -v gh >/dev/null 2>&1 || return 0
+  ttl="${GH_TTL:-${FLEET_GH_TTL:-90}}"
+  FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
+  its=$(cat "$FD/issues.ts" 2>/dev/null || echo 0)
+  if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
+    raw="$FD/issuesx.$$"
+    if gh issue list --repo "$rp" --state open --limit 300 \
+      --json number,title,milestone,assignees,labels \
+      --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
+      > "$raw" 2>/dev/null; then
+      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$FD/issues.$$" \
+        && mv "$FD/issues.$$" "$FD/issues"
+      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$FD/labels.$$" \
+        && mv "$FD/labels.$$" "$FD/labels"
+    fi
+    rm -f "$raw"
+    now > "$FD/issues.ts"
+  fi
+}
+
+# Targeted issues kick (issue #315): `--issues <owner/repo>` force-refreshes JUST
+# that repo's issues/labels cache and exits — the webhook handler's instant kick,
+# skipping all the git/ctx/usage/escalation/snapshot work a full tick does. Placed
+# BEFORE the tmux/socket enumeration so it stays cheap.
+if [ -n "$TARGET_ISSUES_REPO" ]; then
+  _tr=$(fleet_norm_repo "$TARGET_ISSUES_REPO")
+  [ -n "$_tr" ] && fetch_issues_for "$_tr" "$(fleet_slug "$_tr")" 1
+  exit 0
+fi
 
 # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
 # single shared server to probe — enumerate the live fleet sockets ONCE and fan
@@ -166,41 +236,7 @@ i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
-  FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
-  its=$(cat "$FD/issues.ts" 2>/dev/null || echo 0)
-  if [ $(( $(now) - its )) -ge "$GH_TTL" ]; then
-    # ONE fetch, TWO caches. The gh --jq emits a 6-column raw line whose LEADING two
-    # columns are the backlog flag + comma-joined labels, FOLLOWED by the historical
-    # 4 (milestone, #num, assignee, title). Putting the extra columns FIRST keeps the
-    # title LAST, so a tab inside an issue title is absorbed into the title field
-    # (harmless — exactly as before this change) instead of shifting the label/flag
-    # columns and dropping the issue. jq does the exact `steward-control` match into
-    # the flag, so a weird label name can't fool the comma-split. We then derive:
-    #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title),
-    #                    keeping its contract EXACTLY (readers `cut`/`read` fields
-    #                    1-4) and DROPPING steward-control issues (#176: a relay
-    #                    endpoint like the #169 hub is not a task; the spawn-
-    #                    eligibility filters exclude the same label). Filter = the jq flag column ⇒ still one gh
-    #                    call + fixture-testable.
-    #   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
-    #                    prod-alert) for the fleet watcher (#147). It must NOT inherit
-    #                    the backlog's steward-control drop — the watcher needs to see
-    #                    those labels — so it is split from the unfiltered raw.
-    # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw
-    # temp is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
-    raw="$FD/issuesx.$$"
-    if gh issue list --repo "$rp" --state open --limit 300 \
-      --json number,title,milestone,assignees,labels \
-      --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
-      > "$raw" 2>/dev/null; then
-      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$FD/issues.$$" \
-        && mv "$FD/issues.$$" "$FD/issues"
-      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$FD/labels.$$" \
-        && mv "$FD/labels.$$" "$FD/labels"
-    fi
-    rm -f "$raw"
-    now > "$FD/issues.ts"
-  fi
+  fetch_issues_for "$rp" "$sg" 0     # TTL-gated (see fetch_issues_for above)
 done
 
 # No flat issues mirror is written (issue #180 — all fleets equal, no primary):

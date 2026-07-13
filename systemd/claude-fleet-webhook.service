@@ -1,0 +1,30 @@
+# claude-fleet webhook daemon — Linux systemd user unit (parity with launchd
+# com.claude-fleet.webhook). Fresh (~1s) PR/issue/CI status via `gh webhook
+# forward` with NO public endpoint (issue #315): a long-lived supervisor running a
+# localhost python3 handler + one `gh webhook forward` per opted-in live fleet repo,
+# each delivery kicking a targeted pr-refresh/collector refresh. Always-on, like the
+# spinner: the launchd plist uses KeepAlive, here Restart=always (NOT a .timer — it
+# is a persistent supervisor, not an interval tick).
+#
+# OFF by default: it idles cheaply unless a fleet's conf sets FLEET_WEBHOOK=1.
+# Prereq: `gh extension install cli/gh-webhook` (see docs/WEBHOOK.md). Polling
+# (collector + pr-refresh) stays the backstop, so a missed delivery only costs
+# freshness, never correctness. Install: substitute __HOME__, drop into
+# ~/.config/systemd/user/, then `systemctl --user enable --now
+# claude-fleet-webhook.service`. See docs/INSTALL.md.
+[Unit]
+Description=claude-fleet webhook daemon (fresh PR/issue/CI status via gh webhook forward, no public endpoint)
+
+[Service]
+Type=simple
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-webhook.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+RestartSec=2
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/webhook.systemd.log
+
+[Install]
+WantedBy=default.target

@@ -32,6 +32,21 @@ trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true' EXIT
 REPO="${FLEET_REPO:-}"
 now() { date +%s; }
 
+# Targeted mode (issue #315): `--repo <owner/repo>` refreshes JUST that one repo's
+# PR/CI state NOW, bypassing both the broad session/conf fetch-queue and the TTL —
+# this is the webhook handler's instant kick (bin/fleet-webhook.sh). It stays the
+# SINGLE writer of prmap/@prci (same code path, narrowed queue + forced fetch); the
+# normal no-arg invocation is byte-for-byte unchanged.
+TARGET_REPO='' FORCE=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo) TARGET_REPO="${2:-}"; FORCE=1; shift ;;
+    -*)     printf 'tmux-pr-refresh: unknown flag %s\n' "$1" >&2; exit 2 ;;
+    *)      printf 'tmux-pr-refresh: unexpected argument %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
 # cache_key — byte-identical to bin/tmux-dash-collect.sh. Both scripts write the
 # same cache dir, so this MUST stay in lockstep (a reader can't tell which process
 # wrote a file). See that file for the full rationale (collision-free reversible
@@ -47,7 +62,10 @@ cache_key() {
 # fleet → nothing to refresh (the dash only exists inside a fleet), same as the
 # old `tmux info` gate that this replaces.
 SOCKETS=$(fleet_sockets)
-[ -n "$SOCKETS" ] || exit 0
+# Normal mode needs a live fleet to paint. A targeted --repo kick still refreshes
+# the prmap CACHE with no live fleet (fresh the moment one attaches) — the @prci
+# mapping loop below simply no-ops over an empty socket set.
+[ -n "$TARGET_REPO" ] || [ -n "$SOCKETS" ] || exit 0
 # NB: a missing gh only skips the FETCH loop below (guarded there) — the @prci
 # mapping still runs off whatever prmap cache already exists, exactly as the
 # collector did, so window glyphs don't freeze if gh is transiently unavailable.
@@ -78,19 +96,24 @@ queue() {                          # $1=repo → add once
   case "$SEEN" in *" $s "*) return;; esac
   SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
 }
-[ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
-SESSMAP=$(fleet_sessmap_file)
-if [ -f "$SESSMAP" ]; then
-  while IFS=$'\t' read -r _ _ rp; do
-    [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")"
-  done < "$SESSMAP"
+if [ -n "$TARGET_REPO" ]; then
+  # Targeted kick: JUST this repo (forced fetch below); skip the broad enumeration.
+  queue "$(fleet_norm_repo "$TARGET_REPO")"
+else
+  [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
+  SESSMAP=$(fleet_sessmap_file)
+  if [ -f "$SESSMAP" ]; then
+    while IFS=$'\t' read -r _ _ rp; do
+      [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")"
+    done < "$SESSMAP"
+  fi
+  for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
+  while IFS=$'\t' read -r _s cf; do
+    [ -f "$cf" ] || continue
+    r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+  done < <(fleet_each_conf)
 fi
-for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
-while IFS=$'\t' read -r _s cf; do
-  [ -f "$cf" ] || continue
-  r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-  [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
-done < <(fleet_each_conf)
 
 # --- per-repo PR map (TTL-gated) — the ONLY writer of prmap_<slug> ---
 i=0
@@ -99,7 +122,7 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   command -v gh >/dev/null 2>&1 || break
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=$(cat "$FD/prmap.ts" 2>/dev/null || echo 0)
-  if [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
+  if [ "$FORCE" = 1 ] || [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
     # shellcheck disable=SC2016  # $r/$ci/$ready are jq vars, not shell — keep single-quoted
     gh pr list --repo "$rp" --state all --limit 100 \
       --json number,headRefName,state,mergeable,mergeStateStatus,statusCheckRollup \

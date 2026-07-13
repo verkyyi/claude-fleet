@@ -181,6 +181,43 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Watch fleet, wake steward on edges @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_WATCH=0
 
+# --- Webhook: fresh (~1s) PR/issue/CI status via `gh webhook forward` (issue #315) -
+# OFF by default. When enabled for a fleet, the webhook daemon (bin/fleet-webhook.sh,
+# com.claude-fleet.webhook — a KeepAlive supervisor like the spinner) makes GitHub's
+# real-time webhook stream KICK the SAME single-writer refreshers the pollers use, so
+# "CI went green" / "PR merged" / a new issue surfaces in ~1s instead of on the next
+# poll tick. NO public endpoint: `gh webhook forward` (the cli/gh-webhook extension)
+# registers the repo webhook against GitHub's OWN hosted relay and PULLS deliveries
+# over the authenticated gh channel, re-POSTing each to a LOCALHOST handler — no
+# tunnel, no exposed port. The handler only TRIGGERS a targeted pr-refresh/collector
+# refresh (it never writes a cache itself), and polling stays the BACKSTOP, so a
+# missed delivery costs only freshness, never correctness.
+#
+# PREREQ: `gh extension install cli/gh-webhook` (it registers a repo webhook — needs
+# repo admin). One machine-wide daemon forwards one stream per opted-in LIVE fleet
+# repo. Spends no LLM tokens, but keeps a `gh webhook forward` process per repo. See
+# docs/WEBHOOK.md.
+# @label=Fresh status via gh webhook forward @group=bridge @tier=common @scope=fleet @edit=bool
+#FLEET_WEBHOOK=0
+# The localhost port the handler binds (127.0.0.1 ONLY) and every forward re-POSTs to.
+# GLOBAL: one handler serves every fleet. Change only on a port clash.
+# @label=Webhook handler port @group=bridge @tier=advanced @scope=global @edit=int @unit=port
+#FLEET_WEBHOOK_PORT=8917
+# Optional HMAC shared secret. When set it is passed to `gh webhook forward --secret`
+# and the handler verifies X-Hub-Signature-256 (reuses the issue-bridge --deliver
+# check) — defense-in-depth for the relay→localhost hop. The handler already binds to
+# localhost, so an unsigned delivery can at worst cause a spurious LOCAL refresh (never
+# a cache write of its own), which is why this is optional. GLOBAL: one handler. Keep
+# it out of the conf in a real deploy — the daemon reads it from the environment.
+# @label=Webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
+#FLEET_WEBHOOK_SECRET=""
+# Advanced env-only knobs (NOT in this modal; override them in the environment): the
+# forwarded event set in `FLEET_WEBHOOK_EVENTS` (default
+# pull_request,check_run,check_suite,status,issues), the supervisor rescan cadence
+# `FLEET_WEBHOOK_RESCAN` seconds (default 30), and the per-(event,repo) kick debounce
+# `FLEET_WEBHOOK_DEBOUNCE` seconds that coalesces a CI event storm (default 3; 0
+# disables). See docs/WEBHOOK.md.
+
 
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
