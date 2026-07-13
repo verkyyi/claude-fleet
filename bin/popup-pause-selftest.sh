@@ -16,9 +16,12 @@
 #               parses on a REAL, isolated tmux server (its own socket, torn down
 #               at exit — never the user's live server).
 #   • CONSUMER  the dash's reload guard BLOCKS while @popup_open=1 (no repaint
-#               under the popup) and RESUMES the instant the flag clears — driven
-#               against the isolated server through the exact bare-`tmux` predicate
-#               the dashboard uses (a PATH shim routes it to the private socket).
+#               under the popup), RESUMES the instant the flag clears, and — when
+#               the flag STICKS at 1 (a popup that leaked without clearing it,
+#               issue #323) — self-heals by repainting after a bounded cap instead
+#               of busy-waiting forever. Driven against the isolated server through
+#               the exact bare-`tmux` predicate the dashboard uses (a PATH shim
+#               routes it to the private socket).
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -41,6 +44,13 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # bash $ROWS.
 grep -Eq 'load:reload-sync\(.*@popup_open.*done;[[:space:]]*bash[[:space:]]+\$ROWS\)' "$DASH" \
   || fail "tmux-dashboard.sh reload bind no longer gates \$ROWS on @popup_open (issue #308)"
+
+# --- PRODUCER (static): the @popup_open pause is CAPPED, not unbounded ----------
+# A leaked flag (popup died before its trailing `set 0`) must not freeze the dash
+# forever (issue #323). The reload wait must carry an upper-bound counter (`-lt`)
+# alongside the @popup_open predicate, so it repaints after the cap regardless.
+grep -Eq 'load:reload-sync\(.*@popup_open.*-lt.*done;[[:space:]]*bash[[:space:]]+\$ROWS\)' "$DASH" \
+  || fail "tmux-dashboard.sh reload bind no longer CAPS the @popup_open pause (issue #323) — a stuck flag could freeze the dash forever"
 
 # --- PRODUCER (static): every modal popup in the conf is flag-bracketed -------
 # Count in CODE lines only (skip the explanatory comment block, which names the
@@ -110,5 +120,22 @@ tmux set-option -g @popup_open 0
 wait_mark || fail "guard did not resume after @popup_open cleared — the dash would stay frozen"
 wait "$gpid" 2>/dev/null || true
 
-printf 'selftest PASS: modal popups flag @popup_open; the dash pauses its repaint while set and resumes on clear\n'
+# 4) STUCK FLAG (flag=1 forever): the CAPPED guard must self-heal — repaint after
+# the cap instead of busy-waiting unbounded (issue #323). Mirror the real reload
+# predicate but with a small tick cap so the test is fast; the flag never clears.
+CAP_TICKS=4   # 4 × 0.05s ≈ 0.2s cap for the test (real default: FLEET_DASH_POPUP_MAX_PAUSE/POPUP_POLL)
+guard_capped() {
+  n=0
+  while [ "$(tmux show-option -gqv @popup_open 2>/dev/null)" = 1 ] && [ "$n" -lt "$CAP_TICKS" ]; do
+    sleep 0.05; n=$((n + 1))
+  done
+  : > "$MARK"
+}
+tmux set-option -g @popup_open 1   # leak it: stays 1 for the whole check
+rm -f "$MARK"; guard_capped & gpid=$!
+wait_mark || fail "capped guard never repainted with @popup_open STUCK at 1 — a leaked flag would freeze the dash forever (issue #323)"
+wait "$gpid" 2>/dev/null || true
+tmux set-option -gu @popup_open 2>/dev/null   # leave the isolated server tidy
+
+printf 'selftest PASS: modal popups flag @popup_open; the dash pauses its repaint while set, resumes on clear, and self-heals when the flag sticks\n'
 exit 0
