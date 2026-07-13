@@ -8,14 +8,18 @@
 #     its bound worker window (dash-issue-session.sh) — one keystroke → one line
 #     → issue filed + worker running, zero LLM tokens in the dispatch path.
 #
-# Called with no args it opens a small popup that reads a title (required) and an
-# optional body; the popup re-invokes it with `confirm` (carrying --spawn when
-# set), which runs `gh issue create` against this fleet's repo, optimistically
+# Called with no args it opens a small popup that reads just a TITLE — ^n is the
+# one-line fast filer (issue #297), so there is NO body prompt (add a body on
+# GitHub later if you need one). Esc — or an empty title — cancels the whole
+# create on the spot. The popup re-invokes it with `confirm` (carrying --spawn
+# when set), which runs `gh issue create` against this fleet's repo, optimistically
 # drops the new row into the issues cache (so the panel's reload shows it at
 # once), and kicks a background refetch to make it authoritative. In --spawn mode
-# it then spawns the worker; a session-cap refusal surfaces visibly and the issue
-# is still filed (files-without-spawning — the backlog item is never lost).
-# Empty title aborts quietly; a gh failure surfaces and doesn't wedge the modal.
+# it then spawns the worker in the BACKGROUND so the popup closes instantly
+# instead of hanging on the worktree+window+Claude launch; the spawn choke point
+# (dash-issue-session.sh) toasts its OWN outcome, and a session-cap refusal still
+# leaves the issue filed (files-without-spawning — the backlog item is never lost).
+# A gh create failure surfaces in the popup and doesn't wedge the modal.
 #
 # Args (order-independent): `confirm` = phase 2 (running inside the popup);
 # `--spawn` = quick-dispatch mode (spawn the worker after create).
@@ -51,16 +55,36 @@ if [ "$mode" != confirm ]; then
   exit 0
 fi
 
-# phase 2: running inside the popup — read a title (required) then an optional
-# body, then file the issue. Title-only is the fast path (empty body is fine).
-[ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
-printf '\n  %s in \033[1m%s\033[0m\n  (empty title = cancel)\n\n  title ▸ ' "$verb" "$REPO"
-IFS= read -r title
-[ -z "$title" ] && exit 0
-printf '  body  ▸ (optional, enter to skip) '
-IFS= read -r body
+# read_title: read the title char-by-char so Esc cancels the WHOLE create on the
+# spot (issue #297). A plain `read` only acts on Enter, so an Esc keypress would be
+# swallowed into the line instead of aborting. Enter submits, Backspace erases, Esc
+# (0x1b) cancels. We treat any Esc byte as cancel WITHOUT disambiguating arrow-key
+# escape sequences: macOS ships bash 3.2, whose `read -t` rejects the fractional
+# timeout a peek-ahead would need, and arrow keys have no meaning in a one-line
+# title field anyway (worst case: the popup closes and you press ^n again). IFS= is
+# load-bearing — it keeps a typed space as ' ', so ONLY a real newline reads back as
+# '' (Enter). Sets $title; returns 1 on Esc-cancel, 0 otherwise.
+read_title() {
+  title=""; local ch
+  while IFS= read -rsn1 ch; do
+    case "$ch" in
+      '')               printf '\n'; return 0 ;;                            # Enter → submit
+      $'\x1b')          return 1 ;;                                         # Esc → cancel
+      $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\b \b'; } ;;  # Backspace
+      *)                title="$title$ch"; printf '%s' "$ch" ;;
+    esac
+  done
+  printf '\n'; return 0                                                     # EOF → submit what we have
+}
 
-if url=$(gh issue create --repo "$REPO" --title "$title" --body "$body" 2>/dev/null); then
+# phase 2: running inside the popup — read a TITLE only (^n is the one-line fast
+# filer, issue #297; there is no body prompt). Esc or an empty title cancels.
+[ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
+printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n  title ▸ ' "$verb" "$REPO"
+read_title || exit 0                                # Esc → cancel the create directly
+[ -z "$title" ] && exit 0                           # empty title → cancel
+
+if url=$(gh issue create --repo "$REPO" --title "$title" --body "" 2>/dev/null); then
   num="${url##*/}"; num="${num//[^0-9]/}"          # trailing #num from the issue URL
   # Optimistically insert the new row into THIS fleet's issues cache so the modal's
   # reload shows it at once (mirrors dash-issue-close.sh's optimistic drop). A
@@ -74,20 +98,19 @@ if url=$(gh issue create --repo "$REPO" --title "$title" --body "$body" 2>/dev/n
   # GH_TTL=0 forces the fetch regardless of cache age.
   ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
   if [ "$spawn" = 1 ] && [ -n "$num" ]; then
-    # Quick-dispatch (prefix+n): spawn the bound worker now. dash-issue-session.sh
-    # is the shared spawn choke point — it enforces the global + per-fleet session
-    # caps and the already-spawned dedup. Pass the title as --title so the window
-    # is named after the WORK without depending on the just-written optimistic cache
-    # row surviving the background collector refetch (issue #216). It exits non-zero
-    # on a cap refusal (already surfaced via its own display-message). If it
-    # refuses, the issue is STILL filed — announce filed-without-spawning in the
-    # popup so the item is visibly not lost (acceptance (c)); it sits in the backlog
-    # for a later spawn.
-    if bash "$BIN/dash-issue-session.sh" "$num" --title "$title"; then
-      tmux display-message "filed + spawned #$num in $REPO ✓"
-    else
-      printf '\n  \033[33mfiled #%s ✓ — but NOT spawned\033[0m (session cap reached).\n  It is in the backlog; enter on its row spawns it later.\n  press any key ' "$num"; read -rsn1 _
-    fi
+    # Quick-dispatch (^n): the worktree+window+Claude launch is the slow part, so
+    # confirm the FILING now and spawn the worker in the BACKGROUND — the popup
+    # closes instantly instead of hanging (issue #297). dash-issue-session.sh stays
+    # the shared spawn choke point (global + per-fleet session caps, already-spawned
+    # dedup) and toasts its OWN outcome (spawned / cap-refused / already-claimed), so
+    # nothing is lost once the popup is gone; on a cap refusal the issue is STILL
+    # filed — the toast below plus the optimistic backlog row keep it visible
+    # (acceptance (c)). Pass --title so the window is named after the WORK without
+    # depending on the just-written optimistic row surviving the collector refetch
+    # (issue #216). Detached via ( … & ) exactly like the collector above so it
+    # outlives the popup close.
+    tmux display-message "filed #$num in $REPO ✓ — spawning worker…"
+    ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" >/dev/null 2>&1 & )
   else
     tmux display-message "filed new issue #$num in $REPO ✓"
   fi
