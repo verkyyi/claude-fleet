@@ -12,8 +12,9 @@ loudly rather than stalling. Mutates ONLY the bound issue on this fleet's
 ship — pushes your branch, opens/updates a PR, and arms auto-merge. It never
 touches the base checkout.
 
-**Argument** (`$ARGUMENTS`): none — the issue is read from the window's `@issue`
-binding, not an argument.
+**Argument** (`$ARGUMENTS`): none — the seed is a bare `/fleet-claim`, so the
+issue is self-discovered from the window's `@issue` binding (fallback: the
+`issue-<N>` worktree name), never an argument.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
@@ -36,18 +37,28 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 `$FLEET_BASE_BRANCH` — this fleet only.
 
-## 1. Read the bound issue
+## 1. Resolve + read the bound issue
 
-Get the issue number from the window (set by the spawner), then read it with its
-comments:
+The issue number is NOT an argument (the seed is a bare `/fleet-claim`). Resolve
+it from the window's `@issue` binding — the spawner sets it — falling back to the
+`issue-<N>` worktree in your cwd if the binding is somehow missing (a hand-attached
+or renamed window), mirroring `fleet_seat`. Never guess a number from anything else:
 
 ```sh
-issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}')
+issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+issue="${issue//[^0-9]/}"                          # @issue is the source of truth
+if [ -z "$issue" ]; then                           # fallback: the issue-<N> worktree
+  case "$(pwd -P)" in
+    */*issue-[0-9]*) n="$(pwd -P)"; n="${n##*issue-}"; issue="${n%%[!0-9]*}" ;;
+  esac
+fi
 echo "issue=${issue:-none}"
 ```
 
-- If `$issue` is empty, this window isn't bound to an issue — **stop** in one
-  line: *"no @issue on this window — nothing to claim."*
+- If `$issue` is STILL empty — no `@issue` on the window AND cwd isn't an
+  `issue-<N>` worktree — **fail loudly and stop** in one line: *"no issue bound
+  (no @issue and cwd isn't an issue-<N> worktree) — run /fleet-claim inside a
+  worker window."* Never guess.
 - Otherwise read it (reuse the literal number):
   `gh issue view "<issue>" --repo "$FLEET_REPO" --comments`.
 
@@ -103,6 +114,14 @@ fold it into how you work below.
 Restate scope, then read before you write:
 
 - One line restating what the issue asks for, in your own words.
+- Load the **per-fleet implementation directive** — the operator's standing
+  instruction for HOW to implement on this fleet (issue #234), the one piece the
+  old paragraph seed used to inject inline. Fold whatever it prints into your plan
+  (it defaults to *"Implement and verify per the repo conventions"*):
+  ```sh
+  source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
+  fleet_worker_prompt_body "<issue>" "$FLEET_REPO"   # FLEET_WORKER_PROMPT / _FILE, else the default
+  ```
 - Read the **full issue thread** (step 1's output — including any steward design
   comments), then the **relevant code** the change touches, before editing.
 - Sketch a short numbered plan (the steps you'll take).

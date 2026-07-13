@@ -172,25 +172,24 @@ G="$C/global"; mkdir -p "$G"
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Lifecycle (issues #277, #283): THE FLEET NEVER MERGES, and /fleet-claim now
-# carries the WHOLE worker lifecycle (claim → load charter → ground → implement →
-# open PR + ARM GitHub auto-merge). So the seed COLLAPSES to essentially "run
-# /fleet-claim": the skill owns the steps that used to live in separate /fleet-ship
-# and /fleet-blocked prompts. The manual fallback spells out the same lifecycle for
-# when the skill isn't installed. The claim is native (assign @me — no ▶ marker).
-# shellcheck disable=SC2016  # backticks/`#` are literal prompt text for the spawned session, not expansions
-claim=$(printf 'Run /fleet-claim — it claims the issue (assigns you), loads your worker charter, grounds you in the issue thread and the code, and carries the whole lifecycle through to opening the PR and arming GitHub auto-merge (the fleet never merges). If /fleet-claim is unavailable, do it by hand: `gh issue view %s --repo %s --comments`, then claim it with `gh issue edit %s --repo %s --add-assignee @me`, and implement in THIS worktree.' \
-  "$num" "$REPO" "$num" "$REPO")
-# The BODY between the /fleet-claim ritual and the tail is the one operator-
-# customizable piece (issue #234): FLEET_WORKER_PROMPT / _FILE overrides it per
-# fleet (default = the built-in instruction). fleet_worker_prompt_body strips any
-# trailing sentence punctuation so the body stays a clause that flows into the
-# tail's own leading '. '. The head (issue binding), $claim, and the tail below
-# stay structural + intact.
-body=$(fleet_worker_prompt_body "$num" "$REPO")
-prefix=$(printf 'Work GitHub issue #%s in this repo. %s %s' "$num" "$claim" "$body")
-tail=$(printf '. To finish: verify, push, and open a PR that closes #%s, then arm GitHub auto-merge with `gh pr merge --auto` — IMPORTANT: open the PR, arm auto-merge, and STOP; do NOT merge it yourself. GitHub merges the PR when it goes green, and the com.claude-fleet.cleanup daemon reaps this worktree/window afterward. If you hit a blocker you cannot resolve, say why in a comment on the issue and stop.' "$num")
-printf '%s%s' "$prefix" "$tail" > "$tf"
+# Lifecycle (issues #277, #283, #299): THE FLEET NEVER MERGES, and /fleet-claim is
+# the SINGLE SOURCE OF TRUTH for the whole worker lifecycle — claim → load charter
+# → ground → implement (weaving in the per-fleet FLEET_WORKER_PROMPT body ITSELF)
+# → open a PR closing #N → ARM GitHub auto-merge → STOP; a blocker → comment + stop.
+# So the seed COLLAPSES to a bare `/fleet-claim` (issue #299): no #<N>, no claim
+# line, no per-fleet body (issue #234) and no ship tail are duplicated here — the
+# skill self-discovers its issue from the window's @issue binding set just below
+# (fallback: the issue-<N> worktree name), reads FLEET_WORKER_PROMPT itself via
+# fleet_worker_prompt_body, and owns the steps that used to live in the separate
+# /fleet-ship and /fleet-blocked prompts. The claim stays native (assign @me).
+#
+# BARE slash on purpose: claude EXPANDS a slash command supplied as the initial
+# prompt (verified — it injects the skill's text deterministically), which is more
+# reliable than seeding a prose "Run /fleet-claim" and hoping the model chooses to
+# invoke it. If a future claude ever stops expanding a bare initial-prompt slash
+# command, the documented fallback is to seed `Run /fleet-claim` instead. Scouts
+# keep their OWN seed (read-only, never ship) and never route through this spawn.
+printf '/fleet-claim' > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
