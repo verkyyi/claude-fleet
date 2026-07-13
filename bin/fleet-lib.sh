@@ -345,6 +345,36 @@ fleet_write_conf() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
+# fleet_bg <shell-command> — the shared "background this bind body" helper (issue
+# #304). Dispatch <shell-command> as a DETACHED, server-side background job (via
+# `tmux run-shell -b`) so the interactive fzf bind / popup that invoked it returns
+# INSTANTLY instead of freezing the dash on a slow gh (network) or `git worktree`
+# op. This is the ONE place the fleet's non-blocking-bind convention lives; the
+# fix pattern is: keep the CHEAP/authoritative checks + optimistic UI synchronous
+# on the bind, hand ONLY the slow tail to fleet_bg.
+#
+# Contract for <shell-command> (it runs LATER, decoupled from the now-gone caller):
+#   • self-contained — it runs under `sh -c` with NO cwd/unexported-env guarantee,
+#     so use absolute paths (a self re-exec `bash "$0" … --bg` is the usual shape);
+#   • silent on stdout/stderr — `run-shell` surfaces any output as a view-mode
+#     overlay on the attached client (issue #192), so redirect chatter to
+#     /dev/null and report outcomes via `tmux display-message` instead;
+#   • reports its OWN outcome — the caller has already returned, so a failure must
+#     surface via `tmux display-message`, not an exit status nobody reads.
+#
+# Socket: run from INSIDE a fleet pane/popup, where $TMUX names THIS fleet's
+# server, bare `tmux run-shell` is correct and the backgrounded job inherits the
+# same $TMUX (its nested `tmux` calls stay on this fleet's socket). A HEADLESS
+# caller with no $TMUX (a daemon/selftest) passes its socket via FLEET_BG_SOCK.
+# Safe under a `set -u` caller.
+fleet_bg() {
+  if [ -n "${FLEET_BG_SOCK:-}" ]; then
+    tmux -L "$FLEET_BG_SOCK" run-shell -b "$1" 2>/dev/null
+  else
+    tmux run-shell -b "$1" 2>/dev/null
+  fi
+}
+
 # List the socket labels of all fleets with a CURRENTLY-LIVE tmux server, one per
 # line. Source of truth: the configured fleets enumerated by fleet_each_conf —
 # the new per-fleet layout (fleets/<sess>/conf, label = the DIRECTORY basename)

@@ -92,6 +92,14 @@ TMLOG="$WORK/tmlog"; GHLOG="$WORK/ghlog"; : > "$TMLOG"; : > "$GHLOG"
 # (all contain "display-message -p"); the generic MSG fallback stays last.
 cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
+# LOG + EXECUTE run-shell (so the backgrounded reap, issue #304, actually runs its
+# git worktree remove + gh close + kill-window, mirroring real `run-shell -b`).
+if [ "${1:-}" = "run-shell" ]; then
+  shift; [ "${1:-}" = "-b" ] && shift
+  printf 'RUNSHELL %s\n' "$1" >> "$TMLOG"
+  sh -c "$1"
+  exit 0
+fi
 case "$*" in
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
@@ -153,9 +161,13 @@ grep -q 'POPUP' "$TMLOG" || fail "unmerged ⌃x should open a confirm popup"
 grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before confirm"
 [ -d "$WORK/wt2" ] || fail "unmerged worktree must be kept"
 
-# B4: ⌃x on clean+merged (issue-1, ancestor) → full reap
+# B4: ⌃x on clean+merged (issue-1, ancestor) → full reap, BACKGROUNDED (issue #304):
+# the slow git remove + gh close run via run-shell -b (an --exec re-exec), so the ⌃x
+# bind returns instantly; the fake tmux runs the dispatched command so we still see
+# the effects.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap "1" "s1:1"
+grep -q 'RUNSHELL .*--exec full' "$TMLOG" || fail "merged reap must be dispatched via run-shell -b (--exec full)"
 [ -d "$WORK/wt1" ] && fail "merged worktree should be removed"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch should be deleted"
 grep -q 'CLOSE' "$GHLOG" || fail "merged reap should close the issue"

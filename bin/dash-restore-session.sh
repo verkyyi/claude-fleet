@@ -44,7 +44,16 @@ if [ "${1:-}" = "--plan" ]; then
   restore_key_for "${2:-}"; echo; exit 0
 fi
 
-TARGET="${1:-}"; TARGET_SESS="${2:-}"
+# --exec-bg (issue #304) is the BACKGROUND tail dispatched by the interactive path
+# via fleet_bg — the same run, minus the "dispatch to bg" step. A real 2nd positional
+# is the headless cross-session <target-session>, which stays synchronous (no $TMUX to
+# run-shell onto). The bg re-exec carries the resolved session in FLEET_RESTORE_SESS.
+TARGET="${1:-}"; TARGET_SESS=""; BG_EXEC=0
+case "${2:-}" in
+  --exec-bg) BG_EXEC=1 ;;
+  "")        : ;;
+  *)         TARGET_SESS="$2" ;;
+esac
 key=$(restore_key_for "$TARGET") || {
   tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
   exit 0
@@ -54,7 +63,7 @@ key=$(restore_key_for "$TARGET") || {
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
-SESS="${TARGET_SESS:-$(fleet_current_session)}"
+SESS="${TARGET_SESS:-${FLEET_RESTORE_SESS:-$(fleet_current_session)}}"
 [ -z "$SESS" ] && { tmux display-message "restore: no target tmux session" 2>/dev/null; exit 1; }
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
@@ -65,6 +74,19 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"
 
 MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
 [ -d "$MAIN/.git" ] || { TM display-message "restore: FLEET_MAIN is not a git checkout" 2>/dev/null; exit 1; }
+
+# All the CHEAP/authoritative checks (valid landed target, session cap, MAIN) have
+# passed synchronously, so a refusal was immediate. Now hand the SLOW tail — the
+# worktree reconstruct (`git worktree add` off the squash SHA, multi-second on a big
+# monorepo) + the resumed-window spawn — to the BACKGROUND (issue #304) so the ⌃o
+# bind / Enter-in-landed-view returns INSTANTLY. Re-exec ourselves with --exec-bg
+# (the same run, minus this dispatch), carrying the focus knob + resolved session.
+# The bind runs in the dash pane so bare fleet_bg lands on THIS fleet's server; the
+# headless cross-session path (TARGET_SESS set) stays synchronous.
+if [ "$BG_EXEC" != 1 ] && [ -z "$TARGET_SESS" ]; then
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' FLEET_RESTORE_SESS='$SESS' bash '$0' '$TARGET' --exec-bg"
+  exit 0
+fi
 
 # Reconstruct the worktree off the squash SHA and get the resume verdict/command.
 # --exec actually does the `git worktree add`; the printed line is one of:

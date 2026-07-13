@@ -34,7 +34,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/main/.git" "$WORK/wt" "$WORK/tmp/.claude-dash"
-NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; SELECT_LOG="$WORK/select"
+NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; SELECT_LOG="$WORK/select"; RS_LOG="$WORK/runshell"
 
 ln -s "$RST" "$WORK/bin/dash-restore-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
@@ -47,12 +47,19 @@ printf '%b\n' "${VERDICT:-REVIEW-ONLY\tstub}"
 HISTFAKE
 chmod +x "$WORK/bin/fleet-history.sh"
 
-# --- fake tmux: strip -L/-S <sock>; answer session_name; log the mutations -------
+# --- fake tmux: strip -L/-S <sock>; answer session_name; LOG + EXECUTE run-shell
+# (so the backgrounded reconstruct tail, issue #304, actually runs and its
+# new-window/setopt/select are observable, mirroring real `run-shell -b`); log the
+# mutations. ------------------------------------------------------------------
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
 #!/bin/bash
 if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
 cmd="${1:-}"; [ "$#" -gt 0 ] && shift
 case "$cmd" in
+  run-shell)
+    [ "${1:-}" = "-b" ] && shift
+    printf '%s\n' "$1" >> "$RS_LOG"          # prove the reconstruct was backgrounded
+    sh -c "$1" ;;                            # mirror real run-shell: actually run it
   display-message)
     case "$*" in
       *-p*) case "$*" in *session_name*) echo "${SESS_NAME:-testsess}";; *) echo "";; esac ;;
@@ -71,11 +78,11 @@ chmod +x "$WORK/fakebin/tmux"
 # run the restorer with a given target. Per-case env (VERDICT, WINS, caps, focus)
 # is passed as a prefix on the call so the child bash inherits it.
 run_restore() {
-  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"
+  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" \
   FLEET_GLOBAL_MAX_SESSIONS="${FLEET_GLOBAL_MAX_SESSIONS:-0}" \
-  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" \
+  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" RS_LOG="$RS_LOG" \
     bash "$WORK/bin/dash-restore-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"
 }
 
@@ -99,7 +106,10 @@ grep -q -- '--resume sid-abc' "$NEWWIN_LOG"  || fail "B window should run claude
 grep -q 'SETOPT .*@issue 9' "$OPTS_LOG"      || fail "B resuming by issue should bind @issue 9" "$(cat "$OPTS_LOG")"
 grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"   || fail "B a restored window should be marked @restored 1" "$(cat "$OPTS_LOG")"
 grep -q 'SELECT .*@9' "$SELECT_LOG"          || fail "B FLEET_SPAWN_FOCUS=1 should jump to the restored window" "$(cat "$SELECT_LOG")"
-ok "B RESUME(issue) → resume-9 window in the worktree, @issue+@restored set"
+# The reconstruct+spawn must be BACKGROUNDED (issue #304): dispatched via run-shell
+# -b as an --exec-bg re-exec, so ⌃o / Enter-in-landed returns before the worktree add.
+grep -q -- '--exec-bg' "$RS_LOG"             || fail "B reconstruct must be dispatched via run-shell -b (--exec-bg)" "$(cat "$RS_LOG")"
+ok "B RESUME(issue) → resume-9 window in the worktree, @issue+@restored set, backgrounded"
 
 # ============================ C: RESUME (#PR key) ==========================
 VERDICT="RESUME\t$WORK/wt\tsid-xyz\tclaude --resume sid-xyz --fork-session" \

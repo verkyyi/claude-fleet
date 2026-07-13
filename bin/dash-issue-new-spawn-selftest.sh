@@ -37,7 +37,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/tmp/.claude-dash"
-SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"
+SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"; RS_LOG="$WORK/runshell"
 
 # Symlink the REAL scripts under test; stub the siblings BIN resolves to.
 ln -s "$NEW" "$WORK/bin/dash-issue-new.sh"
@@ -63,11 +63,17 @@ esac
 exit 0
 GHFAKE
 
-# --- fake tmux: answer session_name via -p; log status display-message text -----
+# --- fake tmux: answer session_name via -p; log status display-message text; and
+# LOG + EXECUTE run-shell so the backgrounded create (issue #304) actually runs and
+# its gh create / spawn / toast are observable, mirroring real `run-shell -b`. ----
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash
 if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
 case "\${1:-}" in
+  run-shell)
+    shift; [ "\${1:-}" = "-b" ] && shift
+    printf '%s\n' "\$1" >> "$RS_LOG"          # prove the create was backgrounded
+    sh -c "\$1" ;;                             # mirror real run-shell: actually run it
   display-message)
     case "\$*" in
       *-p*) case "\$*" in *session_name*) echo testsess ;; *) echo '' ;; esac ;;
@@ -82,7 +88,7 @@ chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # $1 = stdin text ; rest = args to dash-issue-new.sh ; env GH_FAIL / SPAWN_RC pass through
 run_new() {
   local stdin="$1"; shift
-  : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"; : > "$GH_LOG"
+  : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"; : > "$GH_LOG"; : > "$RS_LOG"
   printf '%s' "$stdin" | \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" \
@@ -113,7 +119,10 @@ wait_spawn '^205( |$)'            || fail "A spawn not invoked for the new issue
 grep -q -- '--title Add a widget' "$SPAWN_LOG" || fail "A spawn should pass the descriptive --title (issue #216)" "$(cat "$SPAWN_LOG")"
 grep -qi 'filed' "$DISPLAY_LOG"   || fail "A success should toast that the issue was filed" "$(cat "$DISPLAY_LOG")"
 grep -qi 'New issue + worker' "$WORK/out" || fail "A --spawn popup verb should read 'New issue + worker'" "$(cat "$WORK/out")"
-ok "A --spawn files the issue AND background-spawns the bound worker (descriptive --title)"
+# The whole create must be BACKGROUNDED (issue #304): dispatched via run-shell -b as
+# a --title-file re-exec, so the popup returns before `gh issue create` runs.
+grep -q -- '--title-file=' "$RS_LOG" || fail "A create must be dispatched via run-shell -b (--title-file)" "$(cat "$RS_LOG")"
+ok "A --spawn files the issue AND background-spawns the bound worker (descriptive --title, backgrounded)"
 
 # ============================ B: cap refusal =================================
 # spawn exits non-zero (cap reached) in the background. The issue is STILL filed
@@ -134,12 +143,14 @@ grep -qi 'New issue + worker' "$WORK/out" && fail "C capture-only popup must NOT
 ok "C capture-only (no --spawn) files without spawning (⌃n behavior unchanged)"
 
 # ============================ D: gh create fails =============================
-# gh fails → surface the failure, do NOT spawn a phantom worker. 2nd char for read.
-GH_FAIL=1 run_new $'Add a widget\nx' confirm --spawn
-grep -q create "$GH_LOG"        || fail "D gh issue create should have been attempted" "$(cat "$WORK/err")"
+# gh fails → surface the failure, do NOT spawn a phantom worker. The create now runs
+# in the BACKGROUND (issue #304), so the failure toasts via display-message (the
+# popup is already gone) rather than printing to the popup's stdout.
+GH_FAIL=1 run_new $'Add a widget\n' confirm --spawn
+grep -q create "$GH_LOG"           || fail "D gh issue create should have been attempted" "$(cat "$WORK/err")"
 [ -s "$SPAWN_LOG" ] && fail "D a failed create must NOT spawn a worker" "$(cat "$SPAWN_LOG")"
-grep -qi 'failed' "$WORK/out"   || fail "D create failure should surface in the popup" "$(cat "$WORK/out")"
-ok "D a failed create surfaces and spawns nothing"
+grep -qi 'failed' "$DISPLAY_LOG"   || fail "D create failure should toast via display-message" "$(cat "$DISPLAY_LOG")"
+ok "D a failed create surfaces (toast) and spawns nothing"
 
 # ============================ F: Esc cancels (first key) =====================
 # Esc (0x1b) as the very first byte cancels the whole create on the spot (issue

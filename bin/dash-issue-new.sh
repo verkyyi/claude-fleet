@@ -22,12 +22,17 @@
 # A gh create failure surfaces in the popup and doesn't wedge the modal.
 #
 # Args (order-independent): `confirm` = phase 2 (running inside the popup);
-# `--spawn` = quick-dispatch mode (spawn the worker after create).
-mode=""; spawn=0
+# `--spawn` = quick-dispatch mode (spawn the worker after create);
+# `--title-file=<f>` = the BACKGROUND create pass (issue #304) — the interactive
+# popup has already read the title into <f> and re-execs us via fleet_bg, so we
+# skip the read and just do the (slow) create. The path comes from mktemp (no
+# metachars), so the single-token form is safe.
+mode=""; spawn=0; title_file=""
 for _a in "$@"; do
   case "$_a" in
-    confirm) mode=confirm ;;
-    --spawn) spawn=1 ;;
+    confirm)        mode=confirm ;;
+    --spawn)        spawn=1 ;;
+    --title-file=*) title_file="${_a#--title-file=}" ;;
   esac
 done
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -77,43 +82,64 @@ read_title() {
   printf '\n'; return 0                                                     # EOF → submit what we have
 }
 
-# phase 2: running inside the popup — read a TITLE only (^n is the one-line fast
-# filer, issue #297; there is no body prompt). Esc or an empty title cancels.
+# create_issue — the SLOW tail: file the issue, optimistically insert its row, kick
+# the authoritative refetch, and (in --spawn mode) background-spawn the worker. It
+# runs in the BACKGROUND (issue #304 — dispatched below), so a create failure toasts
+# via display-message rather than waiting on a keypress in a popup that has closed.
+create_issue() {
+  local url num src
+  if url=$(gh issue create --repo "$REPO" --title "$title" --body "" 2>/dev/null); then
+    num="${url##*/}"; num="${num//[^0-9]/}"          # trailing #num from the issue URL
+    # Optimistically insert the new row into THIS fleet's issues cache so the modal's
+    # reload shows it (mirrors dash-issue-close.sh's optimistic drop). A brand-new
+    # issue has no milestone + no assignee, matching the collector's row format:
+    # "<milestone>\t#<num>\t<assignee>\t<title>". fleet_cache returns the exact file
+    # the reload reads, so we never touch the .ts (no flat-cache flash).
+    src=$(fleet_cache issues "$FLEET_SESSION")
+    [ -n "$num" ] && [ -n "$src" ] && \
+      printf '%s\t#%s\t%s\t%s\n' '· no milestone' "$num" '·' "$title" >> "$src"
+    # refetch to make the cache authoritative (ordering, dedup); GH_TTL=0 forces it.
+    ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
+    if [ "$spawn" = 1 ] && [ -n "$num" ]; then
+      # Quick-dispatch (^n): spawn the worker (worktree+window+Claude) too, in its
+      # OWN background subshell so it outlives this bg pass. dash-issue-session.sh is
+      # the shared spawn choke point (global + per-fleet caps, already-spawned dedup)
+      # and toasts its OWN outcome, so on a cap refusal the issue is STILL filed
+      # (acceptance (c)). --title names the window after the WORK without depending on
+      # the optimistic row surviving the collector refetch (issue #216).
+      tmux display-message "filed #$num in $REPO ✓ — spawning worker…"
+      ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" >/dev/null 2>&1 & )
+    else
+      tmux display-message "filed new issue #$num in $REPO ✓"
+    fi
+  else
+    tmux display-message "failed to create issue in $REPO — try again"
+  fi
+}
+
+# phase 2, BACKGROUND pass: re-exec'd via fleet_bg with the title staged in a temp
+# file (issue #304). Read + delete it, then run the slow create — no popup, no stdin.
+if [ -n "$title_file" ]; then
+  title=$(cat "$title_file" 2>/dev/null); rm -f "$title_file"
+  [ -z "$title" ] && exit 0
+  create_issue
+  exit 0
+fi
+
+# phase 2, INTERACTIVE: running inside the popup — read a TITLE only (^n is the
+# one-line fast filer, issue #297; there is no body prompt). Esc or an empty title
+# cancels. Then hand the slow create off to the BACKGROUND so the popup closes
+# INSTANTLY instead of blocking on `gh issue create` (+ the worktree/window spawn).
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
 printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n  title ▸ ' "$verb" "$REPO"
 read_title || exit 0                                # Esc → cancel the create directly
 [ -z "$title" ] && exit 0                           # empty title → cancel
 
-if url=$(gh issue create --repo "$REPO" --title "$title" --body "" 2>/dev/null); then
-  num="${url##*/}"; num="${num//[^0-9]/}"          # trailing #num from the issue URL
-  # Optimistically insert the new row into THIS fleet's issues cache so the modal's
-  # reload shows it at once (mirrors dash-issue-close.sh's optimistic drop). A
-  # brand-new issue has no milestone + no assignee, matching the collector's row
-  # format: "<milestone>\t#<num>\t<assignee>\t<title>". fleet_cache returns the
-  # exact file the reload reads, so we never touch the .ts (no flat-cache flash).
-  src=$(fleet_cache issues "$FLEET_SESSION")
-  [ -n "$num" ] && [ -n "$src" ] && \
-    printf '%s\t#%s\t%s\t%s\n' '· no milestone' "$num" '·' "$title" >> "$src"
-  # kick a background refetch to make the cache authoritative (ordering, dedup);
-  # GH_TTL=0 forces the fetch regardless of cache age.
-  ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
-  if [ "$spawn" = 1 ] && [ -n "$num" ]; then
-    # Quick-dispatch (^n): the worktree+window+Claude launch is the slow part, so
-    # confirm the FILING now and spawn the worker in the BACKGROUND — the popup
-    # closes instantly instead of hanging (issue #297). dash-issue-session.sh stays
-    # the shared spawn choke point (global + per-fleet session caps, already-spawned
-    # dedup) and toasts its OWN outcome (spawned / cap-refused / already-claimed), so
-    # nothing is lost once the popup is gone; on a cap refusal the issue is STILL
-    # filed — the toast below plus the optimistic backlog row keep it visible
-    # (acceptance (c)). Pass --title so the window is named after the WORK without
-    # depending on the just-written optimistic row surviving the collector refetch
-    # (issue #216). Detached via ( … & ) exactly like the collector above so it
-    # outlives the popup close.
-    tmux display-message "filed #$num in $REPO ✓ — spawning worker…"
-    ( bash "$BIN/dash-issue-session.sh" "$num" --title "$title" >/dev/null 2>&1 & )
-  else
-    tmux display-message "filed new issue #$num in $REPO ✓"
-  fi
-else
-  printf '\n  \033[31mfailed to create issue in %s\033[0m — press any key ' "$REPO"; read -rsn1 _
-fi
+# Stage the title in a temp file — it is arbitrary user text, so it is NEVER
+# interpolated into the run-shell command string (only the mktemp path, which has no
+# metachars, is). The bg re-exec toasts its own outcome (the popup is gone by then).
+tf=$(mktemp "${TMPDIR:-/tmp}/dash-new.XXXXXX") || { tmux display-message "backlog: cannot stage the new issue"; exit 1; }
+printf '%s' "$title" > "$tf"
+spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
+fleet_bg "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg --title-file='$tf'"
+exit 0

@@ -62,6 +62,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --name=*)      NAME="${1#--name=}"; shift ;;
+    # --name-file=<f> (issue #304): the BACKGROUND spawn pass — the ⌃s popup staged
+    # the (arbitrary user) name in a temp file and re-exec'd us via fleet_bg; read +
+    # delete it. No --prompt-read, so we skip the read and just spawn.
+    --name-file=*) f="${1#--name-file=}"; NAME="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
     --prompt-read) PROMPT_READ=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
@@ -99,6 +103,22 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { TM display-message "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf" 2>/dev/null; exit 1; }
 BASE="${FLEET_BASE_BRANCH:-master}"
+
+# ⌃s popup (issue #304): the cheap/authoritative checks above (session cap, MAIN)
+# have passed synchronously, so a refusal was immediate. Now hand the SLOW spawn —
+# `git fetch` + the `git worktree add` retry loop + the window launch — to the
+# BACKGROUND so the popup CLOSES INSTANTLY instead of freezing on checkout. Re-exec
+# ourselves with the name staged in a temp file (arbitrary user text — NEVER
+# interpolated into the run-shell string) and NO --prompt-read, so the bg pass skips
+# the read and just spawns. Only the interactive popup path (PROMPT_READ) backgrounds
+# — a headless spawn (TARGET_SESS) and the bg pass itself fall straight through. The
+# popup has $TMUX on THIS fleet's server, so bare fleet_bg lands correctly.
+if [ "$PROMPT_READ" = 1 ]; then
+  nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch name" 2>/dev/null; exit 1; }
+  printf '%s' "$NAME" > "$nf"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0' --name-file='$nf'"
+  exit 0
+fi
 
 # Window name (issue #225): an optional --name wins; otherwise the auto
 # `scratch-<N>` (N == the worktree suffix, allocated below). A custom name is
