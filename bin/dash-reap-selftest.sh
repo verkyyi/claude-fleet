@@ -1,7 +1,7 @@
 #!/bin/bash
 # dash-reap-selftest.sh — hermetic smoke test for the dash reaper (issue #100).
 #
-# Two layers, no network / no tmux server / no real GitHub:
+# Three layers, no network / no tmux server / no real GitHub:
 #
 #   A. fleet_reap_ok() — the SHARED clean+merged gate (fleet-lib.sh) that BOTH
 #      the janitor (worktree-autoclean.sh) and dash-reap.sh call. Exercised
@@ -31,6 +31,11 @@
 #                                removes a clean+unmerged one; the window closes
 #            - no @worktree    → degrade: just close the window (pre-#290 behavior)
 #          Nothing issue-bound is touched; the summary-cache seed is removed.
+#
+#   C. the dash ⌃x bind wiring (issue #313) — a static check on tmux-dashboard.sh:
+#      the reap bind must be `ctrl-x:execute-silent(...)`, never a bare
+#      `ctrl-x:execute(...)`. `execute` suspends + clears fzf while dash-reap runs,
+#      blanking the whole dash for the reap; `execute-silent` keeps it visible.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -253,5 +258,23 @@ RAW=0 run_reap "" "s1:1"
 grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths (#289+#290)\n'
+# --- C. the dash ⌃x bind must be NON-BLOCKING (issue #313) --------------------
+# The blank-dash bug: `ctrl-x:execute(...)` makes fzf SUSPEND + clear the whole
+# display while dash-reap.sh runs — and dash-reap prints nothing to stdout (its
+# messages go to the tmux status line), so the pane sits BLANK for the reap.
+# `execute-silent` does not suspend fzf, so the dash stays visible. Assert the
+# bind on the launcher itself (a static wiring check, no tmux server needed).
+# Pairs with B4 above, which asserts the slow teardown is dispatched via
+# `run-shell -b` (backgrounded) rather than run inline on the bind.
+DASH="$BIN/tmux-dashboard.sh"
+[ -f "$DASH" ] || fail "tmux-dashboard.sh missing next to dash-reap.sh (#313)"
+cx="$(grep -n 'ctrl-x:' "$DASH" | head -1)"
+[ -n "$cx" ] || fail "no ctrl-x bind found in tmux-dashboard.sh (#313)"
+case "$cx" in
+  *'ctrl-x:execute-silent('*) : ;;                                  # non-blocking — correct
+  *'ctrl-x:execute('*)  fail "ctrl-x uses blocking execute() — blanks the dash; must be execute-silent (#313): $cx" ;;
+  *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
+esac
+
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths + non-blocking ⌃x bind (#289+#290+#313)\n'
 exit 0

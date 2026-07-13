@@ -46,10 +46,17 @@ close_issue() {
 
 # full reap: remove worktree + delete branch, close issue, kill window
 reap_full() {
+  # Kill the window FIRST (issue #313): the dash row is driven live by
+  # `tmux list-windows`, so dropping the window here makes the reaped row vanish
+  # on the very next repaint instead of lingering behind the slow tail below (the
+  # network `gh issue close` + `git worktree remove`). This whole function already
+  # runs backgrounded (fleet_bg / run-shell -b, #304), so it never blocks the bind.
+  tmux kill-window -t "$target" 2>/dev/null || true
   if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
     # Reap any detached process anchored to this worktree first (issue #151) — a
     # since-fixed hang left spinning would otherwise outlive the dir and drain a
-    # core against the shared tmux server.
+    # core against the shared tmux server. (Also releases the just-killed pane's
+    # shell if it was cwd'd in the worktree, so the remove below isn't blocked.)
     fleet_reap_worktree_procs "$wtdir" >/dev/null 2>&1
     # plain remove (no --force): git itself refuses a dirty worktree, so even a
     # TOCTOU race after the fleet_reap_ok check cannot delete uncommitted work.
@@ -58,14 +65,13 @@ reap_full() {
     git -C "$MAIN" worktree prune 2>/dev/null || true
   fi
   close_issue
-  tmux kill-window -t "$target" 2>/dev/null || true
   tmux display-message "reaped #$iss ✓ (window + worktree + issue)" 2>/dev/null || true
 }
 
 # dirty force reap: KEEP the worktree, close issue + kill window only
 reap_keep() {
+  tmux kill-window -t "$target" 2>/dev/null || true   # drop the row first (#313)
   close_issue
-  tmux kill-window -t "$target" 2>/dev/null || true
   tmux display-message "reaped #$iss ✓ (window + issue) — worktree kept (dirty)" 2>/dev/null || true
 }
 
