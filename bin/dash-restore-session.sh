@@ -96,6 +96,23 @@ fi
 verdict=$(bash "$BIN/fleet-history.sh" resume --exec --repo "$REPO" --main "$MAIN" "$key" 2>/dev/null)
 kind=${verdict%%$'\t'*}
 
+# Faithful naming + @issue (issue #319): the resumed window should read like the
+# ORIGINAL worker — the SAME descriptive name (kebab of the ledger title, #216)
+# and bound to the SAME @issue — for BOTH issue- and PR-keyed landed rows. The
+# ledger row carries both the issue and the title, so pull them once here (a #PR
+# key resolves to its issue too). Best-effort: a missing title falls back to a
+# resume-<key> name below; a missing issue simply skips the @issue bind.
+IFS=$'\t' read -r led_issue led_title <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+rname=""; { [ -n "$led_title" ] && [ "$led_title" != "-" ]; } && rname=$(fleet_win_name "$led_title" 2>/dev/null)
+# @issue to bind: prefer the ledger's issue column (resolves for BOTH issue- and
+# #PR-keyed rows, #319); fall back to the numeric key for an issue resume so we
+# never regress the pre-#319 issue-key binding when the ledger lookup comes up empty.
+bissue="$led_issue"
+{ [ -z "$bissue" ] || [ "$bissue" = "-" ]; } && case "$key" in \#*) bissue="";; *) bissue="$key";; esac
+bind_issue() {  # $1 = window-id — bind @issue when we resolved one
+  [ -n "$bissue" ] && TM set-window-option -t "$1" @issue "$bissue" 2>/dev/null
+}
+
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the
 # jump with FLEET_SPAWN_FOCUS=1 on an interactive (no TARGET_SESS) restore.
 detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
@@ -118,13 +135,16 @@ case "$kind" in
     # (its encoded path is where the transcript lives) — that is why resume rebuilt
     # it at the original path.
     args=${cmd#claude }
-    name="resume-${key#\#}"
+    # Same descriptive name as the original worker (kebab of the ledger title);
+    # fall back to resume-<key> when the title is missing (issue #319).
+    name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { TM display-message "restore: new-window failed for $key" 2>/dev/null; exit 1; }
-    # Bind @issue when resuming by issue number so the row reads like the original
-    # worker (dash/backlog/PR-map recognise it); a #PR resume has no issue to bind.
-    case "$key" in \#*) : ;; *) TM set-window-option -t "$win" @issue "$key" 2>/dev/null ;; esac
+    # Bind @issue from the ledger for EVERY resume — including #PR-keyed rows, which
+    # resolve to their issue via the ledger (issue #319) — so the row reads like the
+    # original worker (dash/backlog/PR-map recognise it).
+    bind_issue "$win"
     TM set-window-option -t "$win" @restored 1 2>/dev/null   # mark: a resumed landed session
     printf 'resumed %s' "$key" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
     announce "$win" "restored $key → $name"
@@ -134,10 +154,13 @@ case "$kind" in
     # Degrade path: no recreatable worktree/transcript, but a PR — `claude --from-pr`
     # checks the PR out itself, so run it from the base checkout.
     args=${cmd#claude }
-    name="resume-pr${pr}"
+    # Same name + @issue as the original worker, even on the PR-degrade path
+    # (issue #319); fall back to resume-pr<PR> when the ledger has no title.
+    name="$rname"; [ -z "$name" ] && name="resume-pr${pr}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$MAIN" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { TM display-message "restore: new-window failed for PR $pr" 2>/dev/null; exit 1; }
+    bind_issue "$win"
     TM set-window-option -t "$win" @restored 1 2>/dev/null
     printf 'resumed PR %s (from-pr)' "$pr" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
     announce "$win" "restored PR $pr (from-pr) → $name"
