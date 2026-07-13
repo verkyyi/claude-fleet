@@ -1,31 +1,53 @@
 #!/bin/bash
-# fleet-history.sh — the landed-session history ledger + its reader/actions.
+# fleet-history.sh — the closed-session history ledger + its reader/actions.
 #
 # When the cleanup daemon (bin/fleet-cleanup.sh) reaps a merged worker's PR it removes the
 # `issue-<N>` worktree and kills the window — but the worker's Claude transcript
 # SURVIVES cleanup under ~/.claude/projects/<encoded-cwd>/<session>.jsonl. This
 # tool indexes that survivor at land time (`record`) and surfaces it afterward:
-# list landed sessions (`list`/`rows`), and RESUME one by reconstructing the
+# list closed sessions (`list`/`rows`), and RESUME one by reconstructing the
 # removed worktree off the squash SHA (`resume`). See issue #130.
 #
-# Single-writer: the cleanup daemon serializes per repo (its own lease), so the
-# ledger row is written once per merge. The ledger is append-only and tolerant of
-# missing fields (a row degrades to '-' rather
-# than being dropped) — a landed session should always be listable even if its
-# PR metadata or transcript can't be resolved.
+# Two ways a session enters the ledger (the `state` column, #320, tells them apart):
+#   * landed          — recorded on the LAND path (`record`, driven by fleet-cleanup.sh)
+#                       when a merged PR is reaped: carries mergedAt/pr/sha.
+#   * closed-unlanded — recorded by the ledger-watch daemon (`record-closed`,
+#                       bin/fleet-ledger-watch.sh) when a worker window VANISHES
+#                       without landing (closed by hand, crashed, abandoned): no
+#                       mergedAt/pr/sha — its worktree usually still exists on disk
+#                       (worktree-autoclean keeps unmerged), so it stays resumable.
+# This closes the gap where a hand-closed / crashed worker left its transcript
+# unindexed (invisible to /fleet-history, not resumable).
+#
+# Single-writer: BOTH writers serialize per repo (the cleanup daemon's own lease,
+# the ledger-watch daemon's own lease) and `record-closed` is idempotent (it
+# dedups on session-id / transcript-dir), so a session is recorded at most once —
+# a landed row is never shadowed by a later closed-unlanded row for the same
+# session. The ledger is append-only and tolerant of missing fields (a row
+# degrades to '-' rather than being dropped) — a closed session should always be
+# listable even if its PR metadata or transcript can't be resolved.
 #
 # Subcommands:
 #   record  --repo R --main M --pr N --issue N --worktree W [--win ID] [--session S] [--summary S]
-#           Append one ledger row. Derives title/sha/mergedAt from `gh pr view`,
-#           and transcript-dir + session-id from the worktree path. Run it BEFORE
-#           `git worktree remove` in the cleanup teardown step.
+#           Append one LANDED ledger row. Derives title/sha/mergedAt from `gh pr
+#           view`, and transcript-dir + session-id from the worktree path. Run it
+#           BEFORE `git worktree remove` in the cleanup teardown step.
+#   record-closed --repo R --issue N --worktree W [--win ID] [--session S] [--title T] [--summary S]
+#           Append a landed-less CLOSED-UNLANDED row (mergedAt→now, pr/sha='-').
+#           Idempotent: a no-op if a row already exists for this session-id /
+#           transcript-dir (so the daemon can call it every tick, and it never
+#           shadows a landed row). Skips a window with no resolvable transcript
+#           (nothing to index). Resolves transcript-dir + session-id + summary the
+#           same way `record` does.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
-#   rows                             Dash US-delimited rows (landed view of the dashboard).
+#   rows                             Dash US-delimited rows (closed view of the dashboard).
 #   resume  --repo R --main M <issue|#pr>   Reconstruct the worktree off the SHA and
 #           print how to resume (RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
-#           Reuses an already-present worktree (skips the slow `git worktree add`, #319).
-#   path    <issue|#pr>              Print "<transcript-dir>\t<session-id>" for a landed row.
-#   meta    <issue|#pr>              Print "<issue>\t<title>" for a landed row — lets the
+#           Reuses an already-present worktree (skips the slow `git worktree add`, #319) —
+#           which is also how a closed-unlanded row (no SHA) resumes: its worktree
+#           is usually still on disk (worktree-autoclean keeps unmerged), #320.
+#   path    <issue|#pr>              Print "<transcript-dir>\t<session-id>" for a ledger row.
+#   meta    <issue|#pr>              Print "<issue>\t<title>" for a ledger row — lets the
 #           restorer name the resumed window from the title + bind @issue (#319).
 #
 # Shell-options policy: this is EXECUTED (not sourced), so `set -uo pipefail` is fine.
@@ -78,6 +100,30 @@ newest_session_in() {
   [ -n "$f" ] && basename "$f" .jsonl
 }
 
+# one-line summary from the dash summary cache for <session>/<window-id>, or empty.
+# The cache is keyed by <session>_<window-id> (issue #208), so a cross-fleet @NN
+# never renders another fleet's row. Shared by record + record-closed.
+resolve_summary() {   # $1=session  $2=window-id (@NN)
+  local sess="${1:-}" win="${2:-}" smk s=""
+  [ -z "$win" ] || [ -z "${win//[^0-9]/}" ] && return 0
+  smk=$(fleet_summary_key "$sess" "$win")
+  [ -f "$C/summary_$smk" ] && read -r s < "$C/summary_$smk"
+  printf '%s' "$s"
+}
+
+# Does the ledger already carry a row for this session? Dedup key: session-id
+# (col 8) when known, else transcript-dir (col 7). Used to keep record-closed
+# idempotent AND to stop a closed-unlanded row from shadowing an existing landed
+# row for the same session (the land path recorded the SAME session-id, resolved
+# from the same worktree). Returns 0 (true) when a matching row exists.
+ledger_has_session() {   # $1=ledger  $2=session-id  $3=transcript-dir
+  local ledger="$1" sid="$2" tdir="$3"
+  [ -f "$ledger" ] || return 1
+  awk -F'\t' -v s="$sid" -v t="$tdir" '
+    { if ((s!="" && s!="-" && $8==s) || (t!="" && t!="-" && $7==t)) { found=1; exit } }
+    END { exit(found?0:1) }' "$ledger"
+}
+
 # ============================================================================
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
@@ -126,16 +172,15 @@ cmd_record() {
   fi
 
   # summary: explicit --summary wins, else the dash summary cache for --win.
-  if [ -z "$summary" ] && [ -n "$win" ]; then
-    local smk; smk=$(fleet_summary_key "$sess" "$win")
-    [ -n "${win//[^0-9]/}" ] && [ -f "$C/summary_$smk" ] && read -r summary < "$C/summary_$smk"
-  fi
+  [ -z "$summary" ] && summary=$(resolve_summary "$sess" "$win")
 
   local ledger; ledger=$(ledger_path "$repo")
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
 
-  # 9 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  # 10 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary·state
+  # state=landed here; the ledger-watch daemon writes closed-unlanded (#320). Col 1
+  # is the merge time for a landed row / the close time for a closed-unlanded one.
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(oneline "$mergedat")" \
     "$(oneline "$issue")" \
     "$(oneline "${title:--}")" \
@@ -145,8 +190,77 @@ cmd_record() {
     "$(oneline "${tdir:--}")" \
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
+    "landed" \
     >> "$ledger"
   printf 'landed #%s → ledger %s (session %s)\n' "$issue" "$ledger" "${sid:-none}"
+}
+
+# ============================================================================
+# record-closed — append a CLOSED-UNLANDED row (idempotent; #320)
+# ============================================================================
+# The ledger-watch daemon calls this when a worker window VANISHES without
+# landing. No PR/merge, so mergedAt→close-time and pr/sha degrade to '-'; the
+# resumable fields (issue/worktree/transcript-dir/session-id/summary) are
+# populated so /fleet-history can browse + resume it (its worktree usually still
+# exists — worktree-autoclean keeps unmerged). Idempotent + non-shadowing: a
+# no-op when the ledger already has a row for this session (landed OR a prior
+# tick), and a skip when there is no resolvable transcript (nothing to index).
+cmd_record_closed() {
+  local repo="" issue="" wt="" win="" sess="" title="" summary="" closedat=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2;;
+      --issue) issue="${2:-}"; shift 2;;
+      --worktree) wt="${2:-}"; shift 2;;
+      --win) win="${2:-}"; shift 2;;
+      --session) sess="${2:-}"; shift 2;;
+      --title) title="${2:-}"; shift 2;;
+      --summary) summary="${2:-}"; shift 2;;
+      --closedat) closedat="${2:-}"; shift 2;;
+      *) shift;;
+    esac
+  done
+  [ -z "$sess" ] && sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
+  [ -z "$issue" ] && { echo "fleet-history record-closed: --issue is required" >&2; return 2; }
+
+  # transcript dir + session id from the (still-present) worktree path. A window
+  # with no transcript is nothing to index/resume → skip quietly (not an error).
+  local tdir="" sid=""
+  if [ -n "$wt" ]; then
+    tdir=$(transcript_dir_for "$wt")
+    sid=$(newest_session_in "$tdir")
+  fi
+  if [ -z "$sid" ]; then
+    printf 'closed #%s → no transcript to index (skipped)\n' "$issue"
+    return 0
+  fi
+
+  local ledger; ledger=$(ledger_path "$repo")
+  if ledger_has_session "$ledger" "$sid" "$tdir"; then
+    printf 'closed #%s → already in ledger (session %s) — skipped\n' "$issue" "$sid"
+    return 0
+  fi
+  mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
+
+  # summary: explicit --summary wins, else the dash summary cache for --win.
+  [ -z "$summary" ] && summary=$(resolve_summary "$sess" "$win")
+  # close time in col 1 so the reader's "act" (time-since) column is meaningful.
+  [ -z "$closedat" ] && closedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+
+  # 10 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary·state
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(oneline "$closedat")" \
+    "$(oneline "$issue")" \
+    "$(oneline "${title:--}")" \
+    "-" \
+    "-" \
+    "$(oneline "${wt:--}")" \
+    "$(oneline "${tdir:--}")" \
+    "$(oneline "${sid:--}")" \
+    "$(oneline "${summary:--}")" \
+    "closed-unlanded" \
+    >> "$ledger"
+  printf 'closed-unlanded #%s → ledger %s (session %s)\n' "$issue" "$ledger" "$sid"
 }
 
 # read the ledger newest-first into stdout as raw TSV (optional substring filter).
@@ -192,7 +306,7 @@ cmd_list() {
   # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
   # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
   local now; now=$(date +%s 2>/dev/null)
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state; do
     [ -z "$iss" ] && continue
     local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
     local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
@@ -200,7 +314,9 @@ cmd_list() {
     [ "${smry:--}" = "-" ] && smry=""
     [ ${#title} -gt 44 ] && title="${title:0:43}…"
     [ ${#smry}  -gt 60 ] && smry="${smry:0:59}…"
-    printf '#%-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' "$iss" "$rel" "$title" "$pr" "$short" "$smry"
+    # glyph tells landed (✓) from closed-unlanded (✗); empty state == legacy landed.
+    local glyph="✓"; [ "$state" = "closed-unlanded" ] && glyph="✗"
+    printf '%s #%-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' "$glyph" "$iss" "$rel" "$title" "$pr" "$short" "$smry"
   done
 }
 
@@ -260,11 +376,16 @@ cmd_rows() {
   printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state; do
     [ -z "$iss" ] && continue
     local target key
     key="${sid:--}"
     case "$pr" in ''|-) target="landed:issue:$iss";; *) target="landed:${pr#\#}";; esac
+    # state glyph: indigo ✓ for a landed (merged) row, muted ✗ for a closed-unlanded
+    # one (#320). Empty state == a legacy pre-#320 row → landed. The target/key
+    # scheme is identical for both so the dash's resume action is unchanged.
+    local glyph="✓" glyph_c="$IN"
+    [ "$state" = "closed-unlanded" ] && { glyph="✗"; glyph_c="$GY"; }
 
     # window column: the kebab window name the worker had (falls back to issue-<N>).
     local wname; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
@@ -292,7 +413,7 @@ cmd_rows() {
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$key" "$US" \
-      "${IN}✓${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
+      "${glyph_c}${glyph}${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
   done
 }
 
@@ -404,12 +525,13 @@ usage() {
 
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
-  record) cmd_record "$@";;
+  record)        cmd_record "$@";;
+  record-closed) cmd_record_closed "$@";;
   list)   cmd_list "$@";;
   rows)   cmd_rows "$@";;
   resume) cmd_resume "$@";;
   path)   cmd_path "$@";;
   meta)   cmd_meta "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|list|rows|resume|path|meta)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|list|rows|resume|path|meta)" >&2; exit 2;;
 esac

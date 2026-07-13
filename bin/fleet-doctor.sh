@@ -274,6 +274,27 @@ EOF
   fi
 fi
 
+# --- ledger-watch daemon (indexes every closed worker session for resume) ------
+# ON by default per fleet (opt out with FLEET_LEDGER_WATCH=0). Records a
+# `closed-unlanded` history-ledger row when a worker window vanishes without
+# landing, so a hand-closed/crashed/abandoned session stays resumable via
+# /fleet-history. Pure tmux snapshot + a local ledger append (no gh/LLM) — so no
+# tool-dependency warning; it just needs com.claude-fleet.ledger-watch installed.
+if [ -d "$conf_dir" ]; then
+  watching=0 lw_optout=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_LEDGER_WATCH[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    if [ "$val" = 0 ]; then lw_optout=$((lw_optout+1)); else watching=$((watching+1)); fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$watching" -gt 0 ]; then
+    pass ledger "$watching fleet(s) with the ledger-watch daemon on$([ "$lw_optout" -gt 0 ] && printf ' (%s opted out)' "$lw_optout") — every closed session indexed for resume"
+    printf '        note: needs com.claude-fleet.ledger-watch installed; records closed-unlanded sessions into the history ledger (no merge, no reap).\n'
+  fi
+fi
+
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time
 # into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a

@@ -67,3 +67,13 @@ The resume path is unchanged and now complete for **every** merge: `fleet-cleanu
 records the history ledger before teardown, so `/fleet-history` and the dash's
 live⇄landed **⌃t** view can resume any landed session with `claude --resume`. See
 `bin/fleet-history.sh`.
+
+**Closed-but-unlanded sessions** (issue #320): a worker window closed by hand /
+crashed / abandoned never reaches this land path, so it used to leave its
+transcript unindexed. The **ledger-watch daemon** (`com.claude-fleet.ledger-watch`,
+`bin/fleet-ledger-watch.sh`, ~60s) closes that gap — it snapshot-diffs the live
+worker windows and appends a `closed-unlanded` ledger row (via
+`fleet-history.sh record-closed`, idempotent) when one vanishes without landing,
+so it too is browsable + resumable via `/fleet-history`. Such a worktree is
+unmerged, so worktree-autoclean keeps it → resume just reuses the on-disk worktree
+(no squash SHA to reconstruct from). It **records only** — never a reaper.

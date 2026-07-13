@@ -4,8 +4,12 @@
 #
 # Covers the parts with real logic (not the gh/git-touching resume exec):
 #   A. record — derives transcript-dir + session-id (newest *.jsonl) from the
-#      worktree path, writes a well-formed 9-column TSV row, and sanitizes
-#      TAB/newline out of free-text fields so a row can never break layout.
+#      worktree path, writes a well-formed 10-column TSV row (the 10th is `state`,
+#      #320), and sanitizes TAB/newline out of free-text fields so a row can never
+#      break layout.
+#   A2. record-closed (#320) — a landed-less closed-unlanded row: idempotent (no
+#      duplicate), never shadows a landed row for the same session, skips a window
+#      with no transcript.
 #   B. list / find_row — newest-first ordering and lookup by issue# and by #PR.
 #   C. resume — verdict routing: RESUME when a transcript exists, FROM-PR when
 #      only a PR is recorded, REVIEW-ONLY when neither (and for an unknown key);
@@ -14,6 +18,7 @@
 #   D. rows — the dash landed view emits a header + a row whose field1 target
 #      encodes the PR (or issue when PR-less).
 #   E. meta — "<issue>\t<title>" for a landed row, by issue# and by #PR (#319).
+#   F. state glyph (#320) — list/rows mark a landed row ✓, a closed-unlanded ✗.
 #
 # Fully hermetic: no gh, no git, no tmux, no network. FLEET_HISTORY_LEDGER points
 # the ledger at a scratch file; CLAUDE_PROJECTS_DIR points the transcript lookup
@@ -63,11 +68,11 @@ out=$(run record --issue 9 --worktree "$WT" \
 contains "record: reports the session it captured" "$out" "new-session-2222"
 
 row=$(cat "$FLEET_HISTORY_LEDGER")
-# exactly 9 tab-separated columns (count tabs = 8)
+# exactly 10 tab-separated columns (count tabs = 9) — the 10th is `state` (#320)
 tabs=$(printf '%s' "$row" | tr -cd '\t' | wc -c | tr -d ' ')
-eq "record: row has 9 columns (8 tabs)" "8" "$tabs"
+eq "record: row has 10 columns (9 tabs)" "9" "$tabs"
 
-IFS=$'\t' read -r c_when c_iss _ c_pr c_sha c_wt c_td c_sid c_smry <<<"$row"
+IFS=$'\t' read -r c_when c_iss _ c_pr c_sha c_wt c_td c_sid c_smry c_state <<<"$row"
 eq "record: issue col"            "9"      "$c_iss"
 eq "record: pr degrades to dash"  "-"      "$c_pr"
 eq "record: sha degrades to dash" "-"      "$c_sha"
@@ -75,6 +80,7 @@ eq "record: worktree col"         "$WT"    "$c_wt"
 eq "record: transcript-dir col"   "$TDIR"  "$c_td"
 eq "record: newest session id"    "new-session-2222" "$c_sid"
 eq "record: summary tab/nl flattened to spaces" "fixed the thing" "$c_smry"
+eq "record: state column is 'landed'" "landed" "$c_state"
 # mergedAt auto-stamped (non-empty, dash-free ISO-ish) when not provided
 case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
 CHECKS=$((CHECKS + 1))
@@ -94,6 +100,49 @@ printf 'summary belonging to fleetB\n' > "$DC/summary_fleetB_77"
 run record --issue 11 --worktree "$WT" --win '@77' --session fleetB >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
 eq "record: cross-fleet @77 pulls its OWN summary, not fleetA's" "summary belonging to fleetB" "$smry_col"
+
+# ============================================================================
+# A2. record-closed — landed-less closed-unlanded row (idempotent, no-shadow) #320
+# ============================================================================
+: > "$FLEET_HISTORY_LEDGER"
+WTC="$WORK/wtc/issue-42"; mkdir -p "$WTC"
+ENCC=$(printf '%s' "$WTC" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCC"; : > "$CLAUDE_PROJECTS_DIR/$ENCC/sess-c-42.jsonl"
+
+outc=$(run record-closed --repo o/r --issue 42 --worktree "$WTC" --title "fix-widget" --summary "poking the widget")
+contains "record-closed: reports the closed-unlanded record" "$outc" "closed-unlanded #42"
+rowc=$(cat "$FLEET_HISTORY_LEDGER")
+tabsc=$(printf '%s' "$rowc" | tr -cd '\t' | wc -c | tr -d ' ')
+eq "record-closed: row has 10 columns (9 tabs)" "9" "$tabsc"
+IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state <<<"$rowc"
+eq "record-closed: issue col"       "42"                "$cc_iss"
+eq "record-closed: no pr (dash)"    "-"                 "$cc_pr"
+eq "record-closed: no sha (dash)"   "-"                 "$cc_sha"
+eq "record-closed: worktree col"    "$WTC"              "$cc_wt"
+eq "record-closed: session id"      "sess-c-42"         "$cc_sid"
+eq "record-closed: summary col"     "poking the widget" "$cc_smry"
+eq "record-closed: state marker"    "closed-unlanded"   "$cc_state"
+case "$cc_when" in ''|-) fail "record-closed: closedAt should auto-stamp, got [$cc_when]";; esac
+CHECKS=$((CHECKS + 1))
+
+# idempotent: a second record-closed for the same session adds NO new row.
+run record-closed --repo o/r --issue 42 --worktree "$WTC" >/dev/null
+eq "record-closed: idempotent (no duplicate row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+
+# no-shadow: a LANDED row already present for this session → record-closed skips
+# (dedup on session-id keeps a merged session from getting a second, closed row).
+: > "$FLEET_HISTORY_LEDGER"
+run record --repo o/r --issue 42 --worktree "$WTC" --summary "landed the widget" >/dev/null
+outs=$(run record-closed --repo o/r --issue 42 --worktree "$WTC")
+contains "record-closed: skips when a landed row exists" "$outs" "already in ledger"
+eq "record-closed: landed row not shadowed (still 1 row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+
+# no transcript → nothing to index/resume → skip (no row written), not an error.
+: > "$FLEET_HISTORY_LEDGER"
+WTN="$WORK/wtn/issue-77"; mkdir -p "$WTN"
+outn=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
+contains "record-closed: no transcript → skipped" "$outn" "no transcript"
+eq "record-closed: no-transcript writes no row" "0" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
 # ============================================================================
 # B. list / find_row — newest-first + lookup by issue and by #PR
@@ -239,4 +288,17 @@ eq "meta: #PR key resolves to the row's issue" "42" "$(run meta '#61' | cut -f1)
 # unknown key → nothing (no crash, no stray row).
 eq "meta: unknown key prints nothing" "" "$(run meta 999)"
 
-printf 'selftest OK: fleet-history (%s assertions — record/list/find/resume/reuse/meta/rows)\n' "$CHECKS"
+# ============================================================================
+# F. state glyph (#320): a landed row lists/renders ✓, a closed-unlanded row ✗. A
+# legacy pre-#320 row (9 cols, no state) is treated as landed (✓) — see section D above.
+# ============================================================================
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-01-01T00:00:00Z\t8\tt8\t-\t-\t/w/issue-8\t/nope\tsid-8\t-\tclosed-unlanded\n' >> "$FLEET_HISTORY_LEDGER"
+printf '2026-01-02T00:00:00Z\t9\tt9\t63\tabc1234\t-\t-\tsid-9\t-\tlanded\n'                 >> "$FLEET_HISTORY_LEDGER"
+lst=$(run list)
+contains "list: closed-unlanded row shows the ✗ marker" "$lst" "✗ #8"
+contains "list: landed row shows the ✓ marker"          "$lst" "✓ #9"
+rws=$(run rows)
+contains "rows: closed-unlanded row carries the ✗ glyph" "$rws" "✗"
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state)\n' "$CHECKS"
