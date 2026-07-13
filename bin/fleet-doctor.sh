@@ -222,6 +222,34 @@ EOF
   fi
 fi
 
+# --- webhook daemon (optional: fresh ~1s PR/issue/CI status via gh webhook forward) ---
+# OFF unless a fleet's conf sets FLEET_WEBHOOK=1 (issue #315). When ON it needs the
+# cli/gh-webhook extension (registers the repo webhook against GitHub's hosted relay
+# — no public endpoint) + gh + python3 (the localhost handler). Flag an armed fleet
+# missing any of them; the extension is the one that's easy to forget.
+if [ -d "$conf_dir" ]; then
+  wharmed=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_WEBHOOK[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ "$val" = 1 ] && wharmed=$((wharmed+1))
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$wharmed" -gt 0 ]; then
+    if ! command -v gh >/dev/null 2>&1; then
+      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but gh is missing — nothing to forward"
+    elif ! gh extension list 2>/dev/null | grep -q 'gh-webhook'; then
+      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but the cli/gh-webhook extension is missing — \`gh extension install cli/gh-webhook\`"
+    elif ! command -v python3 >/dev/null 2>&1; then
+      warn webhook "$wharmed fleet(s) set FLEET_WEBHOOK=1 but python3 is missing — the localhost handler can't run"
+    else
+      pass webhook "$wharmed fleet(s) with FLEET_WEBHOOK=1 — fresh ~1s PR/issue/CI status (no public endpoint)"
+    fi
+    printf '        note: needs com.claude-fleet.webhook installed (KeepAlive) + `gh extension install cli/gh-webhook`; polling (collector + pr-refresh) stays the backstop.\n'
+  fi
+fi
+
 # --- cleanup daemon (reaps worktrees + records the resume ledger after merges) ---
 # ON by default per fleet (opt out with FLEET_CLEANUP=0). THE FLEET NEVER MERGES:
 # the worker's /fleet-claim ship step arms GitHub auto-merge; this daemon reaps the leftover worktree/window/

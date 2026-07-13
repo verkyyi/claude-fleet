@@ -1,11 +1,13 @@
 # Linux systemd user units
 
-Parity with `launchd/` for Linux. One always-on service (spinner) plus the
-`.timer` + `.service` pairs matching the launchd `StartInterval`s:
+Parity with `launchd/` for Linux. Two always-on services (spinner + the optional
+webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
+`StartInterval`s:
 
 | Unit | Cadence | launchd equivalent | Optional? |
 |---|---|---|---|
 | `claude-fleet-spinner.service` | always-on (`Restart=always`) | `com.claude-fleet.spinner` (KeepAlive) | required |
+| `claude-fleet-webhook.service` | always-on (`Restart=always`) | `com.claude-fleet.webhook` (KeepAlive) | optional (fresh ~1s PR/issue/CI status via `gh webhook forward`, no public endpoint; needs FLEET_WEBHOOK=1 per fleet + the `cli/gh-webhook` extension) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
@@ -37,6 +39,7 @@ systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap 
 # optional:
 systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
 systemctl --user enable --now claude-fleet-watch.timer      # steward wake — needs FLEET_WATCH=1 + FLEET_STEWARD_ISSUE per fleet
+systemctl --user enable --now claude-fleet-webhook.service  # fresh ~1s PR/issue/CI status — needs FLEET_WEBHOOK=1 per fleet + `gh extension install cli/gh-webhook`
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 
 # 3. Keep the units running when you are not logged in (detached fleets).
@@ -54,7 +57,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 ## Uninstall
 
 ```sh
-for u in spinner.service collect.timer diskguard.timer pr-refresh.timer \
+for u in spinner.service webhook.service collect.timer diskguard.timer pr-refresh.timer \
          issue-bridge.timer watch.timer cleanup.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done
