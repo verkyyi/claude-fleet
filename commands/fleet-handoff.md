@@ -3,7 +3,7 @@
 <!-- fleet skill · owner: either -->
 
 Bridges long-running work across a context-window boundary **inside a fleet
-pane**: it stores a full handoff doc (delegating to the operator's base `handoff`
+pane**: it stores a full handoff doc (delegating to the repo-shipped base `handoff`
 skill), then arms a detached helper that waits for this turn to end, `/clear`s
 the pane, and types `/fleet-handoff pickup` so the emptied session resumes from
 the handoff — the self-clear the arming session can't do to itself. Runs from
@@ -49,12 +49,14 @@ Branch on the argument: `pickup <path>` → **§P**; anything else → **§C**.
 
 ### C1. Compose the handoff doc — delegate to the base skill
 
-Run the operator's base skill **`~/.claude/skills/handoff/SKILL.md` HAND-OFF mode
-verbatim** — ground truth first (`git status`/`git log`/branch, re-open the
+Run the repo-shipped base skill **`~/.claude/skills/handoff/SKILL.md` HAND-OFF
+mode verbatim** — ground truth first (`git status`/`git log`/branch, re-open the
 resume point so the NEXT ACTION is exact), the full doc skeleton, the NEXT ACTION
 and the dead-ends already ruled out. Do **not** copy its skeleton here — the base
-skill is the one source of truth. If that file is absent, say so and **stop**
-(nothing to arm around).
+skill is the one source of truth (repo-versioned at `skills/handoff/SKILL.md`,
+issue #311; installed by `/fleet-sync-install`'s skills pass). If that file is
+absent, say so and **stop** (nothing to arm around) — `fleet-doctor` flags this
+exact gap.
 
 Hold the composed doc text; **where** it is stored is C2's job.
 
@@ -180,7 +182,7 @@ before reading it:
 3. **File-fallback search** — the newest `~/.claude/handoff/<session>-*.md` (or the
    worktree's `doc/handoff/*.md`), the prior behavior, when neither above resolves.
 
-Then run the operator's base skill **`~/.claude/skills/handoff/SKILL.md` PICK-UP
+Then run the repo-shipped base skill **`~/.claude/skills/handoff/SKILL.md` PICK-UP
 mode verbatim** on the resolved source:
 
 1. **Announce the source on its own line** before reading it:
