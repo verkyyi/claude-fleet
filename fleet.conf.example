@@ -460,6 +460,24 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Load repo charters @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_REPO_CHARTER=0
 
+# --- Tap-first input steer (issue #328) -------------------------------------
+# When 1, BOTH seats' charters gain ONE shared "tap-first" block that steers a
+# session to OFFER a tappable AskUserQuestion menu (2–4 concrete options,
+# recommended-first) instead of an open-ended prose question when it needs a
+# BOUNDED decision from the operator:
+#   • /fleet-claim   appends it at worker charter load (via fleet_worker_charter)
+#   • /fleet-steward appends it in bin/steward-charter.sh (a machine-global tier,
+#     distinct from the per-session steward.md overlay)
+# OFF by default — most operators are on a real keyboard. Turn it on per machine
+# for an operator who drives the fleet from an iPad / Termius soft keyboard, where
+# picking an option is ~one keystroke and composing prose is the real friction.
+# GUIDANCE, never enforcement: it must not force a menu where free text is correct,
+# and must not make sessions ask MORE — it steers HOW a needed question is asked,
+# not how often. Spends no extra tokens (charter text only). Per-fleet ▸ global ▸
+# default like any @scope=fleet key.
+# @label=Tap-first option menus @group=spawn @tier=common @scope=fleet @edit=bool
+#FLEET_TAP_FIRST=0
+
 # --- Worker seed prompt (issue #234) ----------------------------------------
 # The operator-facing BODY of the one-shot prompt a newly spawned IMPLEMENTING
 # worker is seeded with. Since issue #283 the seed COLLAPSES to essentially "run

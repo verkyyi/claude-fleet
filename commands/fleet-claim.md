@@ -104,9 +104,14 @@ fleet_worker_charter "$S"    # prints the file layers that apply, low→high pre
   operator-owned and machine-local, so it is always trusted (no gate) and **wins
   on conflict**. This is the operator's per-fleet customization channel.
 
-Both files are optional; missing ones are skipped silently. With neither, you
-run on the built-in contract == the historic default. Read whatever prints and
-fold it into how you work below.
+`fleet_worker_charter` also appends a machine-global **tap-first** block when the
+fleet sets `FLEET_TAP_FIRST=1` (default OFF) — it steers you to offer a tappable
+`AskUserQuestion` menu instead of an open-ended prose question for a bounded
+decision (cheap on a soft keyboard). Guidance, not a mandate: don't ask *more*.
+
+Both files are optional; missing ones are skipped silently. With neither (and the
+flag off) you run on the built-in contract == the historic default. Read whatever
+prints and fold it into how you work below.
 
 ## 4. Ground yourself, then implement
 

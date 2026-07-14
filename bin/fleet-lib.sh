@@ -255,6 +255,32 @@ fleet_merge_method() {
   esac
 }
 
+# The shared "tap-first" charter block (issue #328) — the ONE canonical source,
+# appended to BOTH seats' charters (worker via fleet_worker_charter below; steward
+# via bin/steward-charter.sh) so they can never drift and a third consumer is a
+# one-line call. Emits the block ONLY when FLEET_TAP_FIRST=1 (default OFF); with the
+# flag unset/0 it is a silent no-op, so the default charter stays byte-identical.
+# It steers HOW a needed decision is asked (a tappable AskUserQuestion menu, cheap
+# on a soft keyboard) — guidance, never a mandate, and never about asking MORE.
+# Needs the fleet conf already sourced (FLEET_TAP_FIRST); costs no extra tokens
+# beyond the charter text itself.
+fleet_tap_first_block() {
+  [ "${FLEET_TAP_FIRST:-0}" = 1 ] || return 0
+  cat <<'EOF'
+===== tap-first input · machine-global (FLEET_TAP_FIRST=1) =====
+The operator often drives this fleet from an iPad / Termius soft keyboard, where
+composing prose is the real friction. When you genuinely need a decision from them
+and it is BOUNDED / enumerable, PREFER an `AskUserQuestion` menu of 2–4 concrete
+options — recommended option FIRST and clearly labelled — over an open-ended prose
+question: picking is ~one keystroke and the auto "Other" gives a free-text escape,
+so it collapses most operator input.
+Judgment, not a mandate: keep free text for genuinely open input, do NOT manufacture
+trivial questions, and when you would normally just proceed, still just proceed. This
+steers HOW you ask, not how OFTEN — it must not increase how often you interrupt the
+operator. It is about input latency, nothing else.
+EOF
+}
+
 # Print the LAYERED worker charter for /fleet-claim to load into a worker's
 # context (issue #283). The built-in contract lives in the skill TEXT (the base
 # layer); this emits the two FILE layers that override it, LOW→HIGH precedence so
@@ -267,9 +293,11 @@ fleet_merge_method() {
 #   2. fleet overlay $FLEET_CONF_DIR/fleets/<session>/worker.md — operator-owned
 #      and machine-local (~/.config, only the operator writes it), so it needs no
 #      gate and is always trusted; skipped silently when absent.
-# Emits NOTHING when no file layer applies (the worker then runs on the built-in
-# defaults == today's behaviour). Needs the fleet conf already sourced
-# (FLEET_MAIN / FLEET_CONF_DIR). Arg: $1 = session name (for the overlay path).
+# Then appends the shared machine-global tap-first block (fleet_tap_first_block,
+# issue #328) — emitted only when FLEET_TAP_FIRST=1. Emits NOTHING when no file
+# layer applies AND the flag is off (the worker then runs on the built-in defaults
+# == today's behaviour). Needs the fleet conf already sourced (FLEET_MAIN /
+# FLEET_CONF_DIR / FLEET_TAP_FIRST). Arg: $1 = session name (for the overlay path).
 fleet_worker_charter() {
   local sess="${1:-}" repo_md overlay_md
   repo_md="${FLEET_MAIN:-}/.fleet/worker.md"
@@ -285,6 +313,9 @@ fleet_worker_charter() {
     cat "$overlay_md"
     printf '\n'
   fi
+  # Machine-global tap-first steer, appended for BOTH seats from the one shared
+  # source; a silent no-op unless FLEET_TAP_FIRST=1.
+  fleet_tap_first_block
 }
 
 # Write a fleet's per-session conf, PRESERVING everything the operator added

@@ -65,9 +65,16 @@ authoritative where it conflicts with an earlier one:
   on conflict**. This is where your per-fleet local edits live now (the flat
   `~/.claude/steward.md` is retired).
 
-Both files are optional; missing ones are skipped silently. With neither, you run
-on the built-in charter == the historic default. `steward-readopt-hook.sh` calls
-this same resolver after a `/clear`, so a re-adopt can never drift from a spawn.
+The resolver also appends a machine-global **tap-first** block when the fleet sets
+`FLEET_TAP_FIRST=1` (default OFF) — the SAME shared block the worker gets. It steers
+you to offer a tappable `AskUserQuestion` menu instead of an open-ended prose
+question for a bounded decision (cheap on a soft keyboard). Guidance, not a mandate:
+don't ask *more*.
+
+Both files are optional; missing ones are skipped silently. With neither (and the
+flag off) you run on the built-in charter == the historic default.
+`steward-readopt-hook.sh` calls this same resolver after a `/clear`, so a re-adopt
+can never drift from a spawn.
 
 ## 2. Recover in-flight state, report readiness, then go quiet
 
