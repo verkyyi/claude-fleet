@@ -632,6 +632,48 @@ fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
 }
 
+# --- fleet provenance: role + the `<!-- fleet:from … -->` marker (issue #224) --
+# The ONE canonical source for "which fleet actor did this and from where". Born
+# in bin/fleet-comment.sh's per-role footer; extracted here so the single
+# issue-filer channel (bin/fleet-issue-file.sh, #332) stamps the SAME marker on a
+# new issue's body that a comment carries — reuse, not a second copy.
+#
+# fleet_from_role [<explicit>] — resolve the posting role: an explicit value wins
+# (a caller can force it), else the durable FLEET_SEAT env (steward-session.sh
+# exports it, surviving a Bash-tool subshell), else fleet_seat(), else the generic
+# word 'fleet'. Pure env — only the WORD carries identity (the charter scrub: never
+# $(hostname) / $USER).
+fleet_from_role() {
+  local explicit="${1:-}"
+  [ -n "$explicit" ] && { printf '%s' "$explicit"; return; }
+  [ "${FLEET_SEAT:-}" = steward ] && { printf 'steward'; return; }
+  local seat
+  seat=$(fleet_seat 2>/dev/null)
+  case "$seat" in
+    steward) printf 'steward'; return ;;
+    worker)  printf 'worker';  return ;;
+  esac
+  printf 'fleet'
+}
+
+# fleet_from_marker <role> [<repo>] — build the invisible machine marker that
+# records the SENDER's binding: role + this fleet's session (fallback: the repo
+# slug) + the window's @issue when issue-bound. session/issue are omitted when
+# empty, matching bin/fleet-comment.sh byte-for-byte so its footer selftest stays
+# green. Repo-derived only, so nothing private leaks (the charter scrub).
+fleet_from_marker() {
+  local role="$1" repo="${2:-}" f_issue f_session mk
+  f_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+  f_issue="${f_issue//[^0-9]/}"
+  f_session=$(fleet_current_session 2>/dev/null)
+  [ -z "$f_session" ] && [ -n "$repo" ] && f_session=$(fleet_slug "$repo" 2>/dev/null)
+  mk="<!-- fleet:from role=$role"
+  [ -n "$f_session" ] && mk="$mk session=$f_session"
+  [ -n "$f_issue" ]   && mk="$mk issue=$f_issue"
+  mk="$mk -->"
+  printf '%s' "$mk"
+}
+
 # issue title → short kebab window name (lowercase, ascii-alnum + single
 # hyphens, ≤32 chars, no leading/trailing hyphen). Used to name a session's
 # tmux window after the issue CONTENT instead of a bare "issue-<N>". Prints

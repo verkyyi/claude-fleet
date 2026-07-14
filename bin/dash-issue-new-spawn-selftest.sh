@@ -42,6 +42,11 @@ SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"; GH_LOG="$WORK/ghcreate"; 
 # Symlink the REAL scripts under test; stub the siblings BIN resolves to.
 ln -s "$NEW" "$WORK/bin/dash-issue-new.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+# The create now routes through the ONE issue channel (issue #332). Symlink the
+# REAL fleet-issue-file.sh so the create actually runs (title-only, so it makes
+# just the one faked `gh issue create` — no label list, no spawn from within it);
+# dash-issue-new.sh still owns the background spawn + optimistic row.
+ln -s "$BIN/fleet-issue-file.sh" "$WORK/bin/fleet-issue-file.sh"
 cat > "$WORK/bin/dash-issue-session.sh" <<SPAWNSTUB
 #!/bin/bash
 printf '%s\n' "\$*" >> "$SPAWN_LOG"

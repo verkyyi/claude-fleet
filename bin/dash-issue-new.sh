@@ -12,7 +12,8 @@
 # one-line fast filer (issue #297), so there is NO body prompt (add a body on
 # GitHub later if you need one). Esc — or an empty title — cancels the whole
 # create on the spot. The popup re-invokes it with `confirm` (carrying --spawn
-# when set), which runs `gh issue create` against this fleet's repo, optimistically
+# when set), which files via the one issue channel (bin/fleet-issue-file.sh, #332)
+# against this fleet's repo, optimistically
 # drops the new row into the issues cache (so the panel's reload shows it at
 # once), and kicks a background refetch to make it authoritative. In --spawn mode
 # it then spawns the worker in the BACKGROUND so the popup closes instantly
@@ -88,7 +89,13 @@ read_title() {
 # via display-message rather than waiting on a keypress in a popup that has closed.
 create_issue() {
   local url num src
-  if url=$(gh issue create --repo "$REPO" --title "$title" --body "" 2>/dev/null); then
+  # File through the ONE channel (issue #332): fleet-issue-file.sh owns the body /
+  # label / provenance behaviour for every filer and prints the URL just like `gh
+  # issue create` did. ⌃n is title-only (no --body, no labels), so this stays the
+  # network-free-here fast path it was — the channel only adds the invisible
+  # fleet:from provenance marker. The optimistic-row + background-spawn tail below
+  # is UNCHANGED, so the operator-visible ⌃n / prefix+n behaviour is identical.
+  if url=$("$BIN/fleet-issue-file.sh" --repo "$REPO" --title "$title" 2>/dev/null); then
     num="${url##*/}"; num="${num//[^0-9]/}"          # trailing #num from the issue URL
     # Optimistically insert the new row into THIS fleet's issues cache so the modal's
     # reload shows it (mirrors dash-issue-close.sh's optimistic drop). A brand-new

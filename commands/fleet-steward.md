@@ -220,26 +220,31 @@ issue itself (via `/fleet-claim`).
 
 1. **Dedup first** (a duplicate worker is a wasted session):
    `gh issue list --repo "$FLEET_REPO" --state open --limit 60 --search "<keywords>"`.
-   If an open issue already covers it, reuse that number and skip to the spawn.
+   If an open issue already covers it, skip the create and spawn that number
+   directly: `bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<title>"`
+   (the same choke point step 3's `--spawn` reaches), then report.
 2. **Pick a milestone** — best-fit from the LIVE list, never hardcoded:
    `gh api "repos/$FLEET_REPO/milestones?state=open" --jq '.[].title'`. Choose the
    one title that best fits and pass `--milestone "<title>"` below — only a title
    from that live list. If none fits (or there are none), file with **no**
    `--milestone` (a stale/invalid name fails the create).
-3. **Create thin** — a short imperative title (≤ ~70 chars) and a one-line brief
-   from the operator's words alone, carrying `thin by design — ground it yourself
-   before implementing` in the body:
-   `gh issue create --repo "$FLEET_REPO" --title "<title>" --body "<brief>"`
-   (add `--milestone` iff matched; add `--label` only if you know it exists).
-   Capture the new number `<N>`.
-4. **Spawn** — pass the title you just wrote as `--title` so the window is named
-   after the WORK, not the bare `issue-<N>` slug (the new issue isn't in the
-   collector cache yet, #216):
-   `bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<title>"`.
-   It enforces the global + per-fleet session caps and its own dedup — if a cap is
-   hit or the issue already has a live window it **refuses and prints why; relay
-   that verbatim and do NOT retry or force it.**
-5. **Report** one line: `#<N> <title> — worker spawned [milestone: <m> | none]`,
+3. **Create + spawn through the one channel** (issue #332) — file and hand off in
+   a single call. `bin/fleet-issue-file.sh` is the ONE issue-filer every fleet
+   actor shares (it owns the body/label/provenance behaviour and stamps the new
+   issue's window name from the title you wrote); with `--spawn` it hands the new
+   number to the **unchanged** `dash-issue-session.sh` choke point. Give it a short
+   imperative title (≤ ~70 chars) and a one-line brief from the operator's words
+   alone, carrying `thin by design — ground it yourself before implementing` in the
+   body:
+   `bash ~/.claude/fleet/bin/fleet-issue-file.sh --title "<title>" --body "<brief>" --spawn`
+   — add `--milestone "<title>"` iff you matched one in step 2, and `--label a,b` /
+   `--priority pN` only as needed (the channel **rejects an unknown label up
+   front**, so pass only real ones). It prints the new issue URL — parse `<N>` from
+   the trailing number. The spawn enforces the global + per-fleet session caps and
+   its own cross-machine dedup — if a cap is hit or the issue already has a live
+   window it **refuses and prints why (the issue is still FILED); relay that
+   verbatim and do NOT retry or force it.**
+4. **Report** one line: `#<N> <title> — worker spawned [milestone: <m> | none]`,
    or `— reused, worker spawned`, or the refusal verbatim. Then stop — the window
    owns the implementation.
 
