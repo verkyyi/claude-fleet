@@ -81,6 +81,15 @@ TM() { tmux -L "$SOCK" "$@"; }
 # backticks). Wrap in single quotes, escaping any embedded single quote as '\''.
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# A refusal (cap / claimed / worktree-add / new-window fail) is a one-shot
+# transient toast that's easy to miss — worse on iPad/Termius (issue #331). Make
+# it STICKY: red + bold + a longer display-time than the default ~750ms status
+# line, so the operator actually sees WHY nothing spawned. Additive — keeps the
+# display-message idiom, just styled + held longer (FLEET_REFUSE_MS overrides).
+REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
+case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
+refuse() { TM display-message -d "$REFUSE_MS" "#[fg=red,bold] $1 " 2>/dev/null; }
+
 slug="issue-$num"
 
 # Already spawned? Focus the existing window instead of stacking a duplicate, and
@@ -108,6 +117,16 @@ if [ -n "$existing" ]; then
   exit 0
 fi
 
+# Immediate gate ack (issue #331): on a slow network the SYNCHRONOUS cap/dedup gh
+# reads below run BEFORE the async "spawning #N…" ack — a 1–2s dead pause that
+# makes Enter feel like it did nothing (worse on iPad/Termius). Emit a
+# "checking #N…" toast at the TOP of the gate — interactive spawns only (a
+# tail-only re-entry already passed the gate; a headless TARGET_SESS caller has no
+# watcher) — so Enter always registers instantly, before any gh call.
+if [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
+  TM display-message "checking #${num}…" 2>/dev/null
+fi
+
 # Session cap (issues #28, #70): refuse to spawn once the GLOBAL cap
 # (FLEET_GLOBAL_MAX_SESSIONS, default 8, across ALL fleets) OR this fleet's
 # per-fleet cap (FLEET_MAX_SESSIONS, default 0 = unlimited) is reached. This is
@@ -119,10 +138,10 @@ fi
 # Sync-only: the --async tail re-entry (TAIL_ONLY) already passed this gate in the
 # foreground — re-checking in the background could FALSE-refuse after we already
 # acked "spawning" + claimed, if a sibling raced to the cap in between.
-if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg"; exit 1; fi
+if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 1; fi
 
 MAIN="${FLEET_MAIN:-}"
-[ -d "$MAIN/.git" ] || { TM display-message "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
+[ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
@@ -167,8 +186,8 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   if [ "${n_assignee:-0}" -gt 0 ] \
      || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
     # Refuse and DO NOT spawn. Exit non-zero so a headless caller records an honest
-    # FAIL, not a false spawn — mirroring the cap check.
-    TM display-message "#$num already claimed elsewhere — not spawning" 2>/dev/null
+    # FAIL, not a false spawn — mirroring the cap check. Sticky (issue #331).
+    refuse "#$num already claimed elsewhere — not spawning"
     exit 1
   fi
   # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
@@ -217,7 +236,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")"
   TM run-shell -b "$_bg" 2>/dev/null \
-    || TM display-message "spawn failed for #$num: dispatch" 2>/dev/null
+    || refuse "spawn failed for #$num: dispatch"
   exit 0
 fi
 
@@ -249,7 +268,7 @@ git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
     || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
-    || { TM display-message "spawn failed for #$num: worktree add"; exit 1; }
+    || { refuse "spawn failed for #$num: worktree add"; exit 1; }
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
@@ -272,7 +291,7 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
 # when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { TM display-message "spawn failed for #$num: new-window"; exit 1; }
+  || { refuse "spawn failed for #$num: new-window"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 
 # (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids

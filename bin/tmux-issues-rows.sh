@@ -55,6 +55,18 @@ prio_tag(){ # $1 = tier → a fixed 2-col colored tag (or 2 spaces for none)
   esac
 }
 
+# Pre-flight PR cross-ref (issue #331): the spawn gate refuses an issue whose
+# issue-<N> branch already has an OPEN PR (in flight elsewhere), but that PR is
+# INVISIBLE in the backlog today. The SINGLE-WRITER prmap cache
+# (branch<TAB>#num<TAB>state<TAB>ci<TAB>ready — bin/tmux-pr-refresh.sh) lets us
+# flag such a row with ZERO extra gh (no network on render). Absent/cold cache ⇒
+# no PR flags, so this degrades cleanly to today's behaviour.
+PRMAP=$(fleet_cache prmap "${FLEET_SESSION:-}")
+PRROWS=$(cat "$PRMAP" 2>/dev/null)
+open_pr(){ # $1 = bare issue number → "#<prnum>" if issue-<N> has an OPEN PR, else empty
+  printf '%s\n' "$PRROWS" | awk -F'\t' -v b="issue-$1" '$1==b && $3=="OPEN"{print $2; exit}'
+}
+
 # hide-bound state (per-fleet, keyed by session): by default an issue already
 # bound to a live worker window is hidden; the ⌃b toggle (dash-toggle-show-bound.sh)
 # creates this file to reveal them. Existence = show, absent = hide.
@@ -80,12 +92,30 @@ while IFS=$'\t' read -r ms num asg title; do
     row=$(printf '%s%-5s%s %s %s▶ %-14.14s%s %s%s%s' \
       "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
   else
+    # Pre-flight "will-refuse" flag (issue #331): the spawn gate refuses an issue
+    # that is ASSIGNED (claimed by a peer / other machine) or has an OPEN issue-<N>
+    # PR (in flight elsewhere) — but neither reads as "will-refuse" here today: a
+    # foreign claim shows a bare assignee name (no cue) and an open PR is wholly
+    # invisible. FLAG (not hide) them — dim + a marker — so a would-refuse row
+    # reads differently from a free one at a glance; you still SEE it (⌃o still
+    # opens it) and the spawn gate stays the SINGLE authority on the real refusal
+    # (a row flagged stale that has since freed still spawns fine — the gate is
+    # truth). The owner column keeps its 2-col marker + name geometry.
+    #
     # assignees are ASCII (14 bytes = 14 cols); the unassigned '·' is 1 col but 2
     # bytes (and the collector already writes it into this field), so widen its
     # byte budget by 1 to keep the 14-col visible width.
     asg_disp="${asg:-·}"; pad=14; [ "$asg_disp" = "·" ] && pad=15
-    row=$(printf "%s%-5s%s %s %s  %-${pad}.${pad}s%s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$TX")" "$asg_disp" "$R" "$(c "$GY")" "$title" "$R")
+    pr=$(open_pr "$n")
+    if [ -n "$pr" ]; then                 # OPEN PR in flight elsewhere → PR marker, dim
+      mk='⇡'; mkc="$P1"; own="$pr"; ownc="$GY"; opad=14
+    elif [ "$asg_disp" != "·" ]; then     # foreign claim (assigned) → claim marker, dim
+      mk='◦'; mkc="$GY"; own="$asg_disp"; ownc="$GY"; opad=14
+    else                                  # free → plain (unchanged: blank marker, TX name)
+      mk=' '; mkc="$TX"; own="$asg_disp"; ownc="$TX"; opad="$pad"
+    fi
+    row=$(printf "%s%-5s%s %s %s%s %s%-${opad}.${opad}s%s %s%s%s" \
+      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$mkc")" "$mk" "$(c "$ownc")" "$own" "$R" "$(c "$GY")" "$title" "$R")
   fi
   buf+="$r	$ms	$tier	$n	$row"$'\n'
 done < "$SRC"

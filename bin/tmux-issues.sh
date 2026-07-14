@@ -47,7 +47,13 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 # dashboard's `↵ jump · ⌃n new · … · ? keys` grammar (one `?` convention
 # everywhere, issue #289). Every other bind lives in the `?` cheatsheet
 # (bin/fleet-keys.sh) rather than crowding this line.
-HDR='↵ work · ⌃n new · ? keys'
+# Lead the header with a live "slots N/8" chip (issue #331) so the GLOBAL session
+# cap's fullness is visible BEFORE an Enter that the cap would silently refuse.
+# Reuses the cross-fleet count in fleet-lib.sh (pure tmux+awk, no network on
+# render); recomputed each time the panel (re)opens, so it is current at the
+# moment you go to spawn. fzf colorizes it via --ansi.
+SLOTS=$(fleet_slots_chip)
+HDR="$SLOTS · ↵ work · ⌃n new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'

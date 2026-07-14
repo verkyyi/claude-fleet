@@ -781,6 +781,29 @@ fleet_session_cap_ok() {
   return 0
 }
 
+# Compact "slots N/max" chip for the backlog header / dash (issue #331): the
+# GLOBAL session cap (FLEET_GLOBAL_MAX_SESSIONS, default 8) silently blocks EVERY
+# spawn path, but nothing surfaces fullness today — so a cap refusal is an ambush.
+# This makes it expected: reuse fleet_session_count (the SAME cross-fleet count the
+# cap measures — pure tmux+awk, no network) and render an ANSI-truecolor chip:
+# dim with headroom, orange at the last free slot, red at/over the cap. Pass a
+# precomputed count as $1 to avoid a second scan (and for hermetic tests). With the
+# cap disabled (gmax=0 ⇒ unlimited) it shows a bare "slots N" (no denominator/color).
+fleet_slots_chip() {
+  local n="${1:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset=$'\033[0m'
+  case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
+  [ -n "$n" ] || n=$(fleet_session_count)
+  case "$n" in ''|*[!0-9]*) n=0;; esac
+  if [ "$gmax" -eq 0 ]; then                     # unlimited → no denominator, no color
+    printf 'slots %s' "$n"; return
+  fi
+  if   [ "$n" -ge "$gmax" ];       then col='247;118;142'   # full      → red    (P0)
+  elif [ "$n" -ge $((gmax - 1)) ]; then col='224;175;104'   # last slot → orange (P1)
+  else                                  col='86;95;137'     # headroom  → dim    (GY)
+  fi
+  printf '\033[38;2;%sm slots %s/%s %s' "$col" "$n" "$gmax" "$reset"
+}
+
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
 # the repo has 0 rows). Keying off .ts — not file size — so a fleet whose repo
