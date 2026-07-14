@@ -141,7 +141,7 @@ line, which exits silently without it.)
 | Key | Action |
 |---|---|
 | `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix G` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen |
+| `prefix g` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen. If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
@@ -153,7 +153,7 @@ scratch sessions live on the dash's `⌃s`, and the usage / account controls (on
 usage stat or the `◉` account chip. `prefix n` / `prefix r` are back to tmux's
 stock `next-window` / `refresh-client`.
 
-The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
+The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is

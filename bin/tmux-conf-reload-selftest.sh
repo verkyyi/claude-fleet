@@ -10,9 +10,10 @@
 #      action merely changed, nor one only present in `after`.
 #   2. A full run (against a fake `tmux` on PATH) issues one `unbind-key -T
 #      <table> <key>` per removed bind AND a final `source-file`.
-#   3. A missing/EMPTY `before` conf removes nothing (no false unbinds) AND says so
-#      distinctly instead of a bare "unbound 0" — a lost snapshot must be visible,
-#      never masquerade as a clean reload (issue #295).
+#   3. An unusable `before` conf (missing path / zero-byte file / empty string)
+#      removes nothing (no false unbinds), says so distinctly instead of a bare
+#      "unbound 0" so a lost snapshot stays visible (issue #295), AND still
+#      re-sources so landed ADDS reach the server — fail open (issue #325).
 #
 # All tables/keys are covered: prefix (`bind K`), root (`bind -n K`), an explicit
 # `-T <tbl>`, and the `-r` repeat flag. No real tmux, no network.
@@ -111,22 +112,30 @@ grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
   || fail "no 'source-file' call after unbinding:
 $(cat "$work/tmux.log")"
 
-# --- 3. absent/empty `before` conf → nothing removed, AND said so honestly ------
-# A missing before-conf removes nothing (no false unbinds), but the report must NOT
-# read as a clean "unbound 0" — that silent 0 is exactly how issue #295 left A/R/u
-# stale on live servers when a caller handed in a lost/empty snapshot. The pass must
-# announce that it had no before-conf to diff, so the miss is visible.
-for bc in "$work/nonexistent.conf" "$work/empty-before.conf"; do
-  [ "$bc" = "$work/empty-before.conf" ] && : > "$bc"   # exists but zero bytes
+# --- 3. unusable `before` conf → nothing removed, said so honestly, STILL re-sources
+# A missing/empty/omitted before-conf removes nothing (no false unbinds), but the
+# report must NOT read as a clean "unbound 0" — that silent 0 is exactly how issue
+# #295 left A/R/u stale when a caller handed in a lost/empty snapshot. AND the pass
+# must FAIL OPEN: still `source-file` so landed ADDS apply, never leaving servers on
+# the old conf silently (issue #325). Three unusable shapes, incl. an empty-STRING
+# before (a caller whose $beforeconf var went empty) — that must NOT be a usage
+# error; it must fail open like the others.
+#   nonexistent path · zero-byte file · empty string ("")
+: > "$work/empty-before.conf"                          # exists but zero bytes
+for bc in "$work/nonexistent.conf" "$work/empty-before.conf" ""; do
   : > "$work/tmux.log"
   out="$(PATH="$fakebin:$PATH" bash "$SUT" "$bc" "$after" "$work/fake.tmux.conf")" \
-    || fail "run with unusable before-conf ($bc) exited non-zero"
+    || fail "run with unusable before-conf ('$bc') exited non-zero (must fail OPEN, not error)"
   printf '%s\n' "$out" | grep -q 'no readable before-conf' \
-    || fail "unusable before-conf ($bc) must report it, not a bare 'unbound 0': $out"
+    || fail "unusable before-conf ('$bc') must report it, not a bare 'unbound 0': $out"
   printf '%s\n' "$out" | grep -q 'unbound 0 removed' \
-    && fail "unusable before-conf ($bc) must NOT masquerade as 'unbound 0 removed': $out"
+    && fail "unusable before-conf ('$bc') must NOT masquerade as 'unbound 0 removed': $out"
   grep -q '^unbind-key ' "$work/tmux.log" \
-    && fail "unusable before-conf ($bc) triggered an unbind (should not)"
+    && fail "unusable before-conf ('$bc') triggered an unbind (should not)"
+  # FAIL OPEN: the re-source must still happen so landed ADDS reach the server.
+  grep -Fxq "source-file $work/fake.tmux.conf" "$work/tmux.log" \
+    || fail "unusable before-conf ('$bc') skipped the re-source — landed ADDS would be lost (issue #325):
+$(cat "$work/tmux.log")"
 done
 
 # --- 4. a malformed trailing `-T` must not spin (parser bail, not hang) --------
