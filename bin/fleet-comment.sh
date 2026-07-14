@@ -56,22 +56,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
-# Which fleet ROLE is posting? Explicit --from wins (honoured verbatim so a caller
-# can force it); else auto-detect the seat — steward via the durable FLEET_SEAT env
-# (exported by steward-session.sh, survives a Bash-tool subshell) or fleet_seat();
-# worker via fleet_seat() — else the generic word 'fleet'. Pure env; only the WORD
-# carries identity.
-resolve_role() {
-  [ -n "${from:-}" ] && { printf '%s' "$from"; return; }
-  [ "${FLEET_SEAT:-}" = steward ] && { printf 'steward'; return; }
-  local seat
-  seat=$(fleet_seat 2>/dev/null)
-  case "$seat" in
-    steward) printf 'steward'; return ;;
-    worker)  printf 'worker';  return ;;
-  esac
-  printf 'fleet'
-}
+# Which fleet ROLE is posting? Resolved by the shared fleet_from_role (issue #332
+# extracted it to fleet-lib.sh so the issue-filer channel stamps the same marker):
+# explicit --from wins, else FLEET_SEAT / fleet_seat(), else the generic 'fleet'.
+resolve_role() { fleet_from_role "${from:-}"; }
 
 num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0
 while [ "$#" -gt 0 ]; do
@@ -126,10 +114,9 @@ else
   vis="— fleet · $role${f_ctx:+ · $f_ctx}"
 fi
 # Invisible machine marker (greppable by tooling; independent of loop-safety).
-mk="${FROM_PREFIX}role=$role"
-[ -n "$f_session" ] && mk="$mk session=$f_session"
-[ -n "$f_issue" ]   && mk="$mk issue=$f_issue"
-mk="$mk -->"
+# Built by the shared fleet_from_marker (issue #332) so a filed issue's body and a
+# posted comment carry the byte-identical `<!-- fleet:from … -->` provenance.
+mk=$(fleet_from_marker "$role" "$repo")
 
 tail=''
 # Footer is idempotent: skip if the body already carries a fleet:from marker.

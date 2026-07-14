@@ -33,9 +33,14 @@ if [ $(( now - last )) -lt 5 ]; then
 fi
 echo "$now" > "$C/last_issue_create"
 
-# first line = title, rest (if any) = body
+# first line = title, rest (if any) = body. File through the ONE channel (issue
+# #332) so body/label/provenance behaviour is shared with every other filer; it
+# prints the URL exactly like `gh issue create` did. The cache-refresh +
+# exec-into-dash-issue-session.sh tail below is unchanged, so the operator-visible
+# new-session behaviour is identical (the channel only adds the invisible
+# fleet:from provenance marker to the body).
 title="${text%%$'\n'*}"
-url=$(gh issue create --repo "$REPO" --title "$title" \
+url=$("$BIN/fleet-issue-file.sh" --repo "$REPO" --title "$title" \
         --body "Created from the claude-fleet dashboard new-session box.
 
 $text" 2>/dev/null)
