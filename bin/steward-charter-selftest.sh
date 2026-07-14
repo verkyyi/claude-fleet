@@ -170,6 +170,35 @@ hook_out=$(PATH="$SHIM:$PATH" TMUX=fake TMUX_PANE=%9 FLEET_READOPT_SOURCE=startu
 [ -z "$hook_out" ] || fail "the hook must re-adopt on /clear ONLY, not on startup/resume/compact" "$hook_out"
 ok "hook gate: re-adopt fires on source=clear only"
 
+# ===== tap-first block (issue #328): appended for the steward ONLY when the flag =1
+# The SAME shared block the worker gets (fleet_tap_first_block in fleet-lib.sh),
+# emitted by bin/steward-charter.sh as a machine-global tier AFTER every file layer.
+# Off by default. (OVERLAY_MD still present from the parity section above.)
+unset FLEET_TAP_FIRST
+out=$("$BIN/steward-charter.sh" "$SESS")
+case "$out" in *AskUserQuestion*) fail "tap-first block must NOT appear when FLEET_TAP_FIRST is unset" "$out" ;; esac
+ok "tap-first off (unset) → steward charter has no tap-first block"
+
+out=$(FLEET_TAP_FIRST=0 "$BIN/steward-charter.sh" "$SESS")
+case "$out" in *AskUserQuestion*) fail "tap-first block must NOT appear when FLEET_TAP_FIRST=0" "$out" ;; esac
+ok "tap-first off (=0) → block absent"
+
+out=$(FLEET_TAP_FIRST=1 "$BIN/steward-charter.sh" "$SESS")
+case "$out" in *AskUserQuestion*) : ;; *) fail "tap-first block MUST appear when FLEET_TAP_FIRST=1" "$out" ;; esac
+case "$out" in *"FLEET_TAP_FIRST=1"*) : ;; *) fail "tap-first block should carry its machine-global header" "$out" ;; esac
+# append, not replace: the built-in + overlay tiers must remain alongside it.
+case "$out" in *BUILTIN-ORDERS*) : ;; *) fail "built-in tier must remain with the flag on" "$out" ;; esac
+case "$out" in *OVERLAY-ORDERS*) : ;; *) fail "overlay tier must remain with the flag on" "$out" ;; esac
+o_at=$(printf '%s\n' "$out" | grep -n 'OVERLAY-ORDERS'  | head -1 | cut -d: -f1)
+t_at=$(printf '%s\n' "$out" | grep -n 'AskUserQuestion' | head -1 | cut -d: -f1)
+[ -n "$o_at" ] && [ -n "$t_at" ] && [ "$o_at" -lt "$t_at" ] \
+  || fail "tap-first block must be APPENDED after the file layers" "$out"
+# no-drift: the resolver embeds the SAME canonical block both seats share.
+block=$(. "$BIN/fleet-lib.sh" >/dev/null 2>&1; FLEET_TAP_FIRST=1 fleet_tap_first_block)
+case "$out" in *"$block"*) : ;; *) fail "steward charter must embed the canonical tap-first block verbatim (DRY parity with the worker)" "$(printf 'CHARTER:\n%s\nBLOCK:\n%s' "$out" "$block")" ;; esac
+ok "tap-first on (=1) → steward charter contains the shared block verbatim (same source as the worker)"
+unset FLEET_TAP_FIRST
+
 # ===== the REAL skill file carries the charter markers (built-in tier non-empty) ==
 unset FLEET_STEWARD_SKILL
 real=$("$BIN/steward-charter.sh" "no-such-sess")

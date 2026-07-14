@@ -71,4 +71,12 @@ if [ -n "$SESS" ] && [ -r "$overlay_md" ]; then
   printf '\n'
 fi
 
+# --- 4. machine-global tap-first steer (issue #328) ----------------------------
+# The ONE shared block (fleet_tap_first_block in fleet-lib.sh) appended for BOTH
+# seats — a machine-global operator directive, distinct from the per-session overlay
+# above. Emits nothing unless FLEET_TAP_FIRST=1 (default OFF), so the default charter
+# stays byte-identical; fleet_load_conf above has already sourced the flag from this
+# fleet's conf layers.
+fleet_tap_first_block
+
 exit 0

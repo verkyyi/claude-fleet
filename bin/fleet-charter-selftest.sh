@@ -79,6 +79,34 @@ out=$(fleet_worker_charter "no-such-sess") || fail "missing files must not error
 [ -z "$out" ] || fail "unknown session with no files must emit nothing" "$out"
 ok "missing overlay/session → silent, no error"
 
+# ===== tap-first block (issue #328): appended for the worker ONLY when the flag =1 =
+# Clean slate (no file layers), so we isolate the tap-first append from the layers.
+unset FLEET_TAP_FIRST
+out=$(fleet_worker_charter "$SESS")
+case "$out" in *AskUserQuestion*) fail "tap-first block must NOT appear when FLEET_TAP_FIRST is unset" "$out" ;; esac
+[ -z "$out" ] || fail "no files + tap-first off (unset) ⇒ empty charter (byte-identical to historic default)" "$out"
+ok "tap-first off (unset) → block absent, charter unchanged"
+
+out=$(FLEET_TAP_FIRST=0 fleet_worker_charter "$SESS")
+case "$out" in *AskUserQuestion*) fail "tap-first block must NOT appear when FLEET_TAP_FIRST=0" "$out" ;; esac
+[ -z "$out" ] || fail "no files + tap-first=0 ⇒ empty charter" "$out"
+ok "tap-first off (=0) → block absent"
+
+out=$(FLEET_TAP_FIRST=1 fleet_worker_charter "$SESS")
+case "$out" in *AskUserQuestion*) : ;; *) fail "tap-first block MUST appear when FLEET_TAP_FIRST=1" "$out" ;; esac
+case "$out" in *"FLEET_TAP_FIRST=1"*) : ;; *) fail "tap-first block should carry its machine-global header" "$out" ;; esac
+# no-drift: the appended text is EXACTLY the shared fleet_tap_first_block source.
+block=$(FLEET_TAP_FIRST=1 fleet_tap_first_block)
+case "$out" in *"$block"*) : ;; *) fail "worker charter must embed the canonical block verbatim (DRY)" "$(printf 'CHARTER:\n%s\nBLOCK:\n%s' "$out" "$block")" ;; esac
+ok "tap-first on (=1) → worker charter contains the shared block verbatim"
+
+# the shared helper itself: the ONE canonical source (bare call, no session).
+[ -z "$(fleet_tap_first_block)" ] || fail "fleet_tap_first_block must be silent when the flag is off"
+[ -z "$(FLEET_TAP_FIRST=0 fleet_tap_first_block)" ] || fail "fleet_tap_first_block must be silent with FLEET_TAP_FIRST=0"
+case "$(FLEET_TAP_FIRST=1 fleet_tap_first_block)" in *AskUserQuestion*) : ;; *) fail "fleet_tap_first_block must emit the block when FLEET_TAP_FIRST=1" ;; esac
+ok "fleet_tap_first_block: silent when off, emits the canonical block when on"
+unset FLEET_TAP_FIRST
+
 # ===== merge method: default + validation =========================================
 unset FLEET_MERGE_METHOD
 [ "$(fleet_merge_method)" = squash ] || fail "unset FLEET_MERGE_METHOD must default to squash"
