@@ -88,6 +88,7 @@ print_sheet() {
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's steward hub"
+  key "click ⛶" "the zoom chip (next to ⌂, bottom-left) toggles the active pane fullscreen — single-tap, touch-friendly"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ⚑ N" "orange flag on the #S chip = N OTHER fleets need you; click to switch"
   key "click ◉ / usage" "footer account chip / usage stat — opens the usage + account modal"
