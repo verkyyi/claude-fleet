@@ -67,6 +67,16 @@ open_pr(){ # $1 = bare issue number → "#<prnum>" if issue-<N> has an OPEN PR, 
   printf '%s\n' "$PRROWS" | awk -F'\t' -v b="issue-$1" '$1==b && $3=="OPEN"{print $2; exit}'
 }
 
+# parent→child links (issue #335): the collector's per-fleet `parents` cache
+# (child<TAB>parent, from a small GraphQL sub-issues pass — bin/tmux-dash-collect.sh)
+# lets us NEST a sub-issue under its parent row (indented) in the backlog — the
+# visual "this may overlap live parent work" cue. The nesting is cosmetic only:
+# pre-spawn dedup (bin/dash-issue-session.sh) stays the single collision authority,
+# and a child keeps its own field1 issue number so Enter still spawns it. Absent/
+# cold cache ⇒ empty map ⇒ the backlog renders FLAT (pre-#335 behaviour).
+PARMAP=$(fleet_cache parents "${FLEET_SESSION:-}")
+PARENTS=$(cat "$PARMAP" 2>/dev/null)
+
 # hide-bound state (per-fleet, keyed by session): by default an issue already
 # bound to a live worker window is hidden; the ⌃b toggle (dash-toggle-show-bound.sh)
 # creates this file to reveal them. Existence = show, absent = hide.
@@ -127,6 +137,47 @@ if [ -z "$buf" ] && [ "$SHOW_BOUND" = 0 ] && [ -n "$hidden_any" ]; then
   exit 0
 fi
 
+# Nest sub-issues under their parent (issue #335). The tier column (field3) becomes
+# a MATERIALIZED-PATH sort key: for each visible row we walk the parent chain (from
+# the `parents` cache) UP through ancestors that are themselves visible AND in the
+# SAME milestone group, then emit one fixed-width `<tier><num0…>` segment per level
+# root→self. A lexical sort of that key is a pre-order DFS — a child lands directly
+# under its parent — while a top-level row (depth 0) keeps its plain tier→num order,
+# so the flat-cache case is byte-identical to before. The display is indented 2 cols
+# per level (a dim ↳ at the innermost) to show the nesting; field1 (num) is untouched
+# so Enter still spawns the child. Cross-milestone / closed / hidden parents don't
+# qualify (can't nest under a row that isn't there) → the child renders top-level.
+buf=$(printf '%s' "$buf" | awk -F'\t' -v OFS='\t' -v gy="$(c "$GY")" -v rst="$R" \
+  -v pf=<(printf '%s' "$PARENTS") '
+  # The parents map is read in BEGIN (child→parent), NOT as a second input file:
+  # the classic FNR==NR two-file idiom silently misparses ALL buf rows as parent
+  # links when the parents cache is EMPTY (an empty first file leaves NR==FNR true
+  # for the whole second file) — which is exactly the flat/degraded case. getline
+  # from a path sidesteps that: buf (stdin) is the ONE record stream.
+  BEGIN { while ((getline ln < pf) > 0) if (split(ln, a, "\t") >= 2 && a[1] != "" && a[2] != "") par[a[1]] = a[2] }
+  {
+    i++; brank[i]=$1; bms[i]=$2; bnum[i]=$4
+    disp=$5; for (f=6; f<=NF; f++) disp=disp OFS $f      # keep any tab in the title
+    bdisp[i]=disp
+    vis[$4]=1; vms[$4]=$2; vtier[$4]=$3                  # visible index, by issue number
+  }
+  END {
+    for (j=1; j<=i; j++) {
+      n=bnum[j]; m=bms[j]; cn=0; cur=n
+      while (1) {                                        # chain self→root (same-ms, visible ancestors)
+        chain[cn++]=cur; p=par[cur]
+        if (p=="" || !(p in vis) || vms[p]!=m || cn>=64) break
+        cur=p
+      }
+      depth=cn-1; path=""
+      for (k=cn-1; k>=0; k--) path=path sprintf("%d%07d", vtier[chain[k]], chain[k])
+      ind=""
+      if (depth>0) { for (k=1; k<depth; k++) ind=ind "  "; ind=ind gy "↳ " rst }
+      print brank[j], m, path, n, (ind bdisp[j])
+    }
+  }
+')
+
 # collapse state (milestone names, one per line) + per-milestone counts
 COLLAPSED=""; [ -f "$C/global/collapsed" ] && COLLAPSED=$(cat "$C/global/collapsed")
 is_collapsed(){ printf '%s\n' "$COLLAPSED" | grep -qxF "$1"; }
@@ -134,11 +185,13 @@ counts=$(printf '%s' "$buf" | awk -F'\t' 'NF>=2{c[$2]++} END{for(m in c) print m
 count_of(){ printf '%s\n' "$counts" | awk -F'\t' -v m="$1" '$1==m{print $2; exit}'; }
 
 # emit: field1=num(empty for header)·field2=display·field3=milestone(for collapse toggle)
-# buf rows are: rank<TAB>milestone<TAB>tier<TAB>num<TAB>display. Sort groups by
-# milestone rank, then by priority TIER (p0 first), then issue number (FIFO within
-# a tier) — so priority is the visible in-milestone order (issue #235 "reorder").
+# buf rows are: rank<TAB>milestone<TAB>pathkey<TAB>num<TAB>display. Sort groups by
+# milestone rank, then by the materialized PATH key — a lexical sort of which is a
+# pre-order DFS: top-level rows stay in priority-tier→number order (issue #235
+# "reorder") and a sub-issue lands directly under its parent (issue #335). The
+# path already encodes num, so -k4,4n is just a stable final tiebreak.
 last=''
-printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3n -k4,4n | while IFS='	' read -r _ ms _tier num row; do
+printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3 -k4,4n | while IFS='	' read -r _ ms _key num row; do
   [ -z "$num" ] && continue
   if [ "$MODE" != unplanned ] && [ "$ms" != "$last" ]; then
     if is_collapsed "$ms"; then ind='▸'; else ind='▾'; fi

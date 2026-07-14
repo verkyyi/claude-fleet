@@ -13,6 +13,9 @@
 #   fleets/<slug>/labels  — #num<TAB>comma-joined-labels per repo, split from the SAME
 #                           issues fetch (no extra gh call). Read by the fleet watcher
 #                           (bin/fleet-watch.sh, issue #147) for prod-alert + eligibility
+#   fleets/<slug>/parents — child<TAB>parent per repo for sub-issues (issue #335), from
+#                           a small separate GraphQL pass (parent isn't in `gh issue
+#                           list --json`). Lets the backlog nest a child under its parent
 #   global/git_<key>      — branch<TAB>dirty  per live worktree (every run). Keyed by a
 #                           globally-unique worktree path, so it lives in global/ (not
 #                           per-fleet) — the reader resolves it without a slug lookup
@@ -94,7 +97,7 @@ cache_key() {
 # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw temp
 # is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
 fetch_issues_for() {
-  local rp="$1" sg="$2" force="${3:-0}" FD its raw ttl
+  local rp="$1" sg="$2" force="${3:-0}" FD its raw ttl owner name
   command -v gh >/dev/null 2>&1 || return 0
   ttl="${GH_TTL:-${FLEET_GH_TTL:-90}}"
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
@@ -111,6 +114,26 @@ fetch_issues_for() {
         && mv "$FD/labels.$$" "$FD/labels"
     fi
     rm -f "$raw"
+    # parent→child links (issue #335): sub-issues are NOT exposed by the `gh issue
+    # list --json` field set (there's no parent field), so fetch them with a tiny
+    # SEPARATE GraphQL pass — number + parent.number only, one paginated call per
+    # repo per TTL. Best-effort + fail-closed: an old gh, a GraphQL error, or a
+    # repo without the sub-issues API just leaves parents_<slug> stale/absent and
+    # the backlog renders FLAT (bin/tmux-issues-rows.sh degrades to today's
+    # behaviour). Sibling of issues/labels under fleets/<slug>/ (no own .ts —
+    # fleet_cache's new-layout fallback serves it exactly like labels). Writes
+    # child<TAB>parent for every open issue that HAS a parent; the reader nests a
+    # child under its parent row. The <name>.$$ temp is swept by the EXIT trap.
+    owner="${rp%%/*}"; name="${rp#*/}"
+    if gh api graphql --paginate \
+      -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number}}}}}' \
+      -F owner="$owner" -F name="$name" \
+      --jq '.data.repository.issues.nodes[]|select(.parent!=null)|"\(.number)\t\(.parent.number)"' \
+      > "$FD/parents.$$" 2>/dev/null; then
+      mv "$FD/parents.$$" "$FD/parents"
+    else
+      rm -f "$FD/parents.$$"
+    fi
     now > "$FD/issues.ts"
   fi
 }
@@ -207,13 +230,13 @@ else
 fi
 
 # Prune dead pre-#180 flat mirrors (issue #203): current code writes issues/prmap/
-# labels ONLY under fleets/<slug>/ (never the flat $C root), so a leftover
-# unsuffixed issues/prmap/labels is a PRE-#180 artifact that fleet_cache's
+# labels/parents ONLY under fleets/<slug>/ (never the flat $C root), so a leftover
+# unsuffixed issues/prmap/labels/parents is a PRE-#180 artifact that fleet_cache's
 # degenerate (unresolved-session) fallback would serve as ANOTHER repo's data —
 # worse than empty. Remove them so that fallback reads absent → "loading". The flat
 # `sessmap` is deliberately NOT pruned: fleet_sessmap_file dual-reads it as the
 # cold-start fallback until global/sessmap is populated.
-for _stale in issues prmap labels; do
+for _stale in issues prmap labels parents; do
   rm -f "$C/$_stale" "$C/$_stale.ts" 2>/dev/null || true
 done
 
