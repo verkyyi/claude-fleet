@@ -18,6 +18,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
+| Label taxonomy (`bin/fleet-labels-seed.sh`) | the fleet's **fixed** canonical label set (`bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`, `docs-truth`, `scout`, `priority:p0\|p1\|p2`, `steward-control`, `blocked`, `autoland` — issue #333). ONE source of truth, `fleet_labels_canonical`/`fleet_labels_allowed` in `bin/fleet-lib.sh`. The install seed step (`gh label create --force`, **idempotent**) installs it into a fresh repo; the issue-filer channel (`bin/fleet-issue-file.sh`) validates every requested label against `fleet_labels_allowed` — the FIXED set, not the live `gh label list` — so no filer (worker or steward) can file against an off-taxonomy label even if one is minted out of band (**fixed seed, no minting**). `autoland` is stale (daemon retired #277) but kept for now | gh (authed, label-admin) |
 | Cross-machine pre-spawn dedup | every spawn (`bin/dash-issue-session.sh`, the one choke point) consults the shared GitHub issue as a claim ledger before spawning, so two fleets on **different machines / same repo** don't both spawn `issue-<N>` (duplicate worktrees + push race + competing PRs) — the local tmux dedup only sees one machine. **The assignee IS the claim** (issue #283): taken (assignee · non-open state · open PR) ⇒ **refuse**; free ⇒ **claim AT SPAWN** by assigning `@me` (not on the worker's first `/fleet-claim` turn — that gap was the race) so a peer sees the assignee within ~1s. **NOT a mutex** (GitHub has no CAS on an issue) — it shrinks the race window, doesn't eliminate it; the old sub-second REST-comment-id tie-break was retired with the `▶ claiming` marker (workers share one gh account, so no per-attempt tie token exists). `--force`/`--reclaim` spawns past a stale claim. **ON by default** — the cost is a few gh reads/spawn (claim-at-spawn just moves `/fleet-claim`'s assign earlier; a gh outage degrades to spawn-anyway) and it self-disables when gh is absent; a single-machine fleet wanting the zero-gh fast path sets `FLEET_PRESPAWN_DEDUP=0`. `/fleet-claim` stays but no-ops when it finds the pre-claim | gh (authed) |
 | Collector daemon | git/gh/usage/issues caches every ~60s | gh, python3 |
 | PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
@@ -345,7 +346,24 @@ assumes — this doc is only the install/uninstall procedure.
      `~/.claude/fleet/conf/statusline.sh` is the operator's one-line step — the
      same script, now landed in the repo so it improves through `land → sync`.
 
-9. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
+9. **Seed the label taxonomy.** Run
+   `bash ~/.claude/fleet/bin/fleet-labels-seed.sh` (resolves `FLEET_REPO` from
+   step 3's `fleet.conf`; pass `--repo owner/name` to override). It
+   `gh label create --force`s the fleet's **canonical label set** —
+   `bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`,
+   `docs-truth`, `scout`, `priority:p0|p1|p2`, `steward-control`, `blocked`,
+   `autoland` — the same fixed taxonomy `fleet_labels_allowed` (in
+   `bin/fleet-lib.sh`) the issue-filer channel validates against. Nothing else
+   seeds labels: `gh label` starts empty on a fresh repo, and the filer
+   (`bin/fleet-issue-file.sh`) **rejects any off-taxonomy label** (fixed seed, no
+   minting), so without this step a fresh-repo fleet could file no labelled issue
+   at all. Needs `gh` authed with label-admin on the repo. **Idempotent** —
+   `--force` creates-or-updates, so re-run it any time to reconcile; it never
+   prunes labels the repo already carries (GitHub's defaults stay). (`autoland`
+   is a known-stale label — its daemon retired in #277 — but is kept in the set
+   for now; retiring it is a separate follow-up.)
+
+10. **Verify.** Inside tmux: start `claude` in a window, run any tool, and
    check `tmux show-options -w @claude_state` flips to `working`; check the
    spinner animates; `prefix+g` focuses the hub's dash pane; `prefix+b` opens the backlog
    (needs the collector to have run once — trigger it by hand:

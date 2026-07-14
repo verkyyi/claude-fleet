@@ -7,7 +7,7 @@
 #      `<!-- fleet:from … -->` provenance marker; the URL is echoed on stdout.
 #   B. --label + --priority: each valid label reaches `gh issue create`, and
 #      --priority pN is mapped to the priority:pN label.
-#   C. unknown label: REJECTED up front (exit 3) with NO `gh issue create`.
+#   C. off-taxonomy label: REJECTED up front (exit 3) with NO `gh issue create`.
 #   D. bad --priority: rejected (exit 2), no create.
 #   E. missing --title: rejected (exit 2), no create.
 #   F. --parent N: links the new issue as a sub-issue of N (the sub_issues POST
@@ -15,8 +15,10 @@
 #   G. --spawn: hands the new number to dash-issue-session.sh with the --title;
 #      a spawn refusal (non-zero) still leaves the issue FILED (exit 0, URL echoed).
 #   H. --from ROLE: forces the provenance marker's role word.
-#   I. label set unreadable (gh label list empty): validation is SKIPPED and the
-#      create proceeds (degrade-to-proceed, never a false reject during an outage).
+#   I. fixed taxonomy (issue #333): validation is against the FIXED
+#      fleet_labels_allowed set, NOT the live `gh label list` — a canonical label
+#      absent from the repo's live labels is still ACCEPTED, and the channel makes
+#      NO `gh label` read at all (deterministic, offline, no minting).
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -50,14 +52,16 @@ exit "${SPAWN_RC:-0}"
 SPAWNSTUB
 chmod +x "$WORK/bin/dash-issue-session.sh"
 
-# --- fake gh: label list (canonical set) · issue create (log body + args, echo a
-# URL) · api (issue id lookup + sub_issues POST log). LABELS_EMPTY=1 makes the
-# label list empty (an outage / label-less repo). GH_CREATE_FAIL=1 fails create. --
+# --- fake gh: issue create (log body + args, echo a URL) · api (issue id lookup +
+# sub_issues POST log). GH_CREATE_FAIL=1 fails create. The filer no longer reads
+# labels (it validates against the fixed fleet_labels_allowed taxonomy, #333), so
+# any `gh label` call is logged — a regression that re-introduces a round-trip is
+# then caught by test I. --
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "$1" in
   label)
-    [ "$2" = list ] && { [ "${LABELS_EMPTY:-0}" = 1 ] || printf 'enhancement\ncleanup\nbug\npriority:p0\npriority:p1\npriority:p2\n'; }
+    printf 'label %s\n' "$*" >> "$GH_LOG"
     ;;
   issue)
     if [ "$2" = create ]; then
@@ -117,12 +121,12 @@ grep -q -- '--label cleanup' "$GH_LOG"        || fail "B --label cleanup should 
 grep -q -- '--label priority:p1' "$GH_LOG"    || fail "B --priority p1 should map to the priority:p1 label" "$(cat "$GH_LOG")"
 ok "B valid labels + --priority pN reach gh issue create"
 
-# ============================ C: unknown label rejected ====================
+# ============================ C: off-taxonomy label rejected ===============
 run_fif --title "Bad" --label "enhancement,not-a-real-label"
-[ "$RC" -eq 3 ]                    || fail "C unknown label must exit 3 (got $RC)" "$(cat "$WORK/err")"
-[ -s "$GH_LOG" ] && grep -q 'issue create' "$GH_LOG" && fail "C must NOT create when a label is unknown" "$(cat "$GH_LOG")"
-grep -qi 'unknown label' "$WORK/err" || fail "C should explain the unknown label" "$(cat "$WORK/err")"
-ok "C an unknown label is rejected up front (exit 3, no create)"
+[ "$RC" -eq 3 ]                    || fail "C off-taxonomy label must exit 3 (got $RC)" "$(cat "$WORK/err")"
+[ -s "$GH_LOG" ] && grep -q 'issue create' "$GH_LOG" && fail "C must NOT create when a label is off-taxonomy" "$(cat "$GH_LOG")"
+grep -qi 'off-taxonomy label' "$WORK/err" || fail "C should explain the off-taxonomy label" "$(cat "$WORK/err")"
+ok "C an off-taxonomy label is rejected up front (exit 3, no create)"
 
 # ============================ D: bad priority ==============================
 run_fif --title "x" --priority p9
@@ -163,12 +167,15 @@ run_fif --title "By worker" --from worker
 grep -q '<!-- fleet:from role=worker' "$BODY" || fail "H --from must force the marker role word" "$(cat "$BODY")"
 ok "H --from ROLE forces the provenance marker's role"
 
-# ============================ I: label set unreadable ======================
-# gh label list empty (outage / no labels) → validation SKIPPED, create proceeds.
-LABELS_EMPTY=1 run_fif --title "Degraded" --label "whatever-label"
-[ "$RC" -eq 0 ]                        || fail "I an unreadable label set must degrade to proceed (got $RC)" "$(cat "$WORK/err")"
-grep -q 'issue create' "$GH_LOG"       || fail "I create should still run when the label set is unreadable" "$(cat "$GH_LOG")"
-ok "I an unreadable label set degrades to proceed (no false reject)"
+# ============================ I: fixed taxonomy, no gh read ================
+# `scout` is canonical (fleet_labels_allowed) but was NOT in any live label list —
+# it must be ACCEPTED (validation is against the FIXED set, #333), and the channel
+# must make NO `gh label` call at all (deterministic, offline, no minting).
+run_fif --title "Off-list canonical" --label "scout"
+[ "$RC" -eq 0 ]                        || fail "I a canonical label must be accepted (got $RC)" "$(cat "$WORK/err")"
+grep -q -- '--label scout' "$GH_LOG"   || fail "I the canonical label must reach create" "$(cat "$GH_LOG")"
+grep -q '^label ' "$GH_LOG" && fail "I the channel must NOT read gh labels (fixed taxonomy)" "$(cat "$GH_LOG")"
+ok "I validation is the fixed taxonomy, not the live label list (no gh label read)"
 
 printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · parent · spawn)\n' "$pass"
 exit 0
