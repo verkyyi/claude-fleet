@@ -121,6 +121,17 @@ assumes — this doc is only the install/uninstall procedure.
    startup/resume/compact (already covered by the spawn seed prompt and the
    crash-resume path #143) don't pile on redundant context. No-op outside tmux and
    if the resolver emits nothing (e.g. the `/fleet-steward` skill isn't installed).
+   The `SessionStart` array also fires `handoff-latch-reset-hook.sh` (issue #330):
+   it clears the `@handoff_armed` auto-handoff debounce latch at every session
+   boundary. That latch is set by the `Stop` hook's **auto-handoff nudge**: when
+   `FLEET_AUTO_HANDOFF_PCT>0` (OFF by default) and a worker/scratch session's
+   context crosses that %, `set-claude-state.sh done` emits a Stop-hook `block`
+   decision steering the model to run `/fleet-handoff` (store → `/clear` → resume)
+   — reusing the whole existing handoff cycle, only the trigger is new. The `%` is
+   measured by `conf/statusline.sh`, which stamps it onto `@ctx_pct` each render
+   (so this needs the status line wired, step 8b). The nudge fires once per session
+   (latch), only from a clean `done` (never a needs-attention turn), and never on
+   panels or the steward hub.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
@@ -321,9 +332,9 @@ assumes — this doc is only the install/uninstall procedure.
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
-`summarize-hook.sh` entries on `Stop`/`SessionStart`, plus the
-`steward-readopt-hook.sh` entry on `SessionStart`) from
-`~/.claude/settings.json`, remove the `statusLine` block from
+`summarize-hook.sh` entries on `Stop`/`SessionStart`, the
+`steward-readopt-hook.sh` and `handoff-latch-reset-hook.sh` entries on
+`SessionStart`) from `~/.claude/settings.json`, remove the `statusLine` block from
 `~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
 personal one), delete `~/.claude/fleet/` (and, on a pre-#286 install,
 the obsolete flat charter `~/.claude/steward.md`), remove any fleet commands

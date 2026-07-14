@@ -333,6 +333,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Handoff destination (comment|file) @group=steward @tier=advanced @scope=fleet @edit=enum
 #FLEET_HANDOFF_DEST=comment
 
+# Auto-handoff threshold (issue #330). When a worker/scratch session's context
+# window crosses this %, its Stop hook (bin/set-claude-state.sh) nudges the model
+# to run the /fleet-handoff cycle automatically (store a durable handoff → /clear
+# → resume clean) instead of waiting for the operator to notice the statusline bar
+# or hitting Claude's lossy near-limit auto-compaction. Reuses the WHOLE existing
+# handoff cycle — only the trigger is new. The nudge fires once per session (a
+# @handoff_armed latch, reset at the next SessionStart), only from a clean `done`
+# (never a needs-attention turn), and only on panes that HAVE /fleet-handoff
+# (issue-bound workers + raw scratch; panels and the steward hub are excluded).
+# Spends tokens (the handoff doc + the resume). 0 = OFF (mirrors
+# FLEET_RUNAWAY_CPU_PCT); 60 auto-hands off at 60%.
+# @label=Auto-handoff percent @group=steward @tier=advanced @scope=fleet @edit=int @unit=%
+#FLEET_AUTO_HANDOFF_PCT=0        # context % that triggers an auto-handoff; 0 = OFF
+
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each
 # account as a token FILE — name = label, contents = its OAuth token from
