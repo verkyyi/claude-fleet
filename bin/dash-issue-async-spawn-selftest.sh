@@ -137,7 +137,9 @@ runshell_has 'run-shell'                && fail "REFUSE must NOT dispatch the ba
 git_has 'worktree add'                  && fail "REFUSE must NOT create a worktree for a claimed issue"
 tmux_has 'new-window'                   && fail "REFUSE must NOT spawn a window for a claimed issue"
 display_has 'already claimed elsewhere' || fail "REFUSE should announce 'already claimed elsewhere'"
-ok "REFUSE --async + claimed → immediate refuse, no run-shell / worktree / window"
+display_has 'fg=red'                    || fail "REFUSE toast must be STICKY (red) so it isn't missed (issue #331)"
+display_has 'checking #303'             || fail "REFUSE must still ack 'checking #303…' at the top of the gate (issue #331)"
+ok "REFUSE --async + claimed → immediate refuse, no run-shell / worktree / window, sticky red toast + gate ack"
 
 # ===== CAP: --async + the global session cap reached ⇒ refuse before dispatch =======
 # Configure one live fleet (legacy flat conf) so fleet_sockets yields it, and make
@@ -149,14 +151,16 @@ runshell_has 'run-shell'                && fail "CAP must NOT dispatch the backg
 git_has 'worktree add'                  && fail "CAP must NOT create a worktree when at capacity"
 tmux_has 'new-window'                   && fail "CAP must NOT spawn a window when at capacity"
 display_has 'at capacity'               || fail "CAP should announce the capacity refusal"
+display_has 'fg=red'                    || fail "CAP refusal toast must be STICKY (red) (issue #331)"
 rm -f "$WORK/conf/testsess.conf"
-ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window"
+ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window, sticky red toast"
 
 # ===== DISPATCH: --async + FREE issue ⇒ fast return, claim SYNC, tail backgrounded ==
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 303 --async
 [ "$(rc)" = 0 ]                         || fail "DISPATCH a free issue should return 0 fast under --async" "$(cat "$WORK/spawn.err")"
 gh_has '--add-assignee'                 || fail "DISPATCH must still claim AT SPAWN synchronously (the anti-collision rail stays sync)"
 display_has 'spawning #303'             || fail "DISPATCH should ack 'spawning #303…' synchronously"
+display_has 'checking #303'             || fail "DISPATCH must ack 'checking #303…' at the top of the gate, before the gh reads (issue #331)"
 runshell_has 'run-shell'                || fail "DISPATCH must hand the slow tail to run-shell -b"
 runshell_has '-b'                       || fail "DISPATCH must background the tail (run-shell -b)"
 runshell_has 'FLEET_SPAWN_TAIL='        || fail "DISPATCH's backgrounded command must carry FLEET_SPAWN_TAIL (tail-only re-entry)"
@@ -177,12 +181,14 @@ tmux_has 'async-spawn-rocks'            || fail "TAIL must name the window from 
 tmux_has '@issue 303'                   || fail "TAIL must bind the window to the issue (@issue 303)"
 gh_has '--add-assignee'                 && fail "TAIL must NOT re-claim — the gate already claimed in the foreground"
 runshell_has 'run-shell'                && fail "TAIL must NOT re-dispatch (no nested run-shell)"
-ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no re-claim / re-dispatch"
+display_has 'checking'                  && fail "TAIL re-entry must NOT emit the gate ack — it already passed the gate (issue #331)"
+ok "TAIL re-entry → worktree add + new-window named from --title + @issue bound, no re-claim / re-dispatch / gate ack"
 
 # ===== TAILFAIL: a backgrounded worktree-add failure reports the failure ============
 FLEET_SPAWN_TAIL=testsess GIT_WT_FAIL=1 run_spawn 303 --title 'Boom'
 [ "$(rc)" != 0 ]                        || fail "TAILFAIL a failed worktree add must exit non-zero"
 display_has 'spawn failed for #303: worktree add' || fail "TAILFAIL must report 'spawn failed for #303: worktree add'"
+display_has 'fg=red'                    || fail "TAILFAIL failure toast must be STICKY (red) (issue #331)"
 tmux_has 'new-window'                   && fail "TAILFAIL must NOT spawn a window after the worktree add failed"
 ok "TAILFAIL backgrounded worktree-add failure → 'spawn failed for #303: worktree add', no window"
 
