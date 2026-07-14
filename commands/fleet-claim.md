@@ -7,9 +7,10 @@ lifecycle that the seed prompt used to spell out across three skills: **claim**
 the bound issue, **load your charter**, **ground** yourself in the issue + code,
 then implement under a **standing contract** that ends by **opening a PR and
 stopping** (the fleet never merges) — and signals a blocker loudly rather than
-stalling. Mutates ONLY the bound issue on this fleet's `$FLEET_REPO` (an
-assignee at claim time; issue comments as you go) and — at ship — pushes your
-branch and opens/updates a PR. It never touches the base checkout.
+stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee at
+claim time; issue comments as you go) — and, for adjacent work it spots, MAY
+file a *new* tracked issue through the one filer channel — then, at ship, pushes
+your branch and opens/updates a PR. It never touches the base checkout.
 
 **Argument** (`$ARGUMENTS`): none — the seed is a bare `/fleet-claim`, so the
 issue is self-discovered from the window's `@issue` binding (fallback: the
@@ -139,6 +140,18 @@ override them):
   **commenting on the bound issue** (via
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
   so it carries the no-relay marker + worker footer).
+- **Spot adjacent work? File it — don't chase it.** You MAY file a tracked issue
+  through the ONE filer channel (issue #332), so a follow-up you notice lands on
+  the backlog instead of scope-creeping this PR — and the base checkout stays
+  untouched:
+  `~/.claude/fleet/bin/fleet-issue-file.sh --title "<title>" [--body "<brief>"]`.
+  **Related to your current issue N → add `--parent N`** — it files a GitHub
+  *sub-issue* linked under N; **unrelated → file top-level** (omit `--parent`).
+  A sub-issue is an ordinary issue — its own number, `@issue`, and `issue-<num>`
+  worktree/branch — plus GitHub's parent pointer, so the claim / worktree /
+  ledger flow is unchanged. **File-and-continue, not file-and-chase:** record the
+  follow-up, then stay on N and ship N — don't `--spawn` it or start it yourself
+  (the steward triages it and the fleet spawns it when it's picked up).
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane.
 - **Done = ship (open the PR) — the fleet never merges.** When the change is
