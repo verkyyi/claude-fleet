@@ -157,12 +157,20 @@ The dash (`prefix G`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
-clickable too: the **fleet name** (`#S`) opens a picker of running fleets and
-switches to the chosen one, the red **`● N` needs badge** cycles to the next
+clickable too: the **`⛶` zoom chip** (just right of the `⌂` hub icon) toggles the
+active pane fullscreen, the **fleet name** (`#S`) opens a picker of running fleets
+and switches to the chosen one, the red **`● N` needs badge** cycles to the next
 window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
 open the consolidated **usage + account modal** (usage/limit detail on top, the
 account pool as a selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
+
+The `⛶` chip is the **single-tap, touch-friendly** way to zoom a pane on iPad /
+Termius: a `DoubleClick1Pane` double-tap doesn't reliably reach tmux over touch
+(the two taps jitter a cell, the client's gesture recognizer may eat them, or SSH
+latency exceeds the ~500 ms double-click window), and `prefix z` is a chord on a
+soft keyboard — but a single click on a status range always lands. It's additive:
+desktop double-click-to-zoom stays.
 
 The `#S` chip also carries the **cross-fleet** cue: when you're attached to one
 fleet and a **different** live fleet has a needs-attention session, an orange
