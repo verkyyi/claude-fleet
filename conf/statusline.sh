@@ -37,6 +37,15 @@ CTX_PCT=$(jq -r '.context_window.used_percentage // ""' <<< "$INPUT")
 
 if [[ -n "$CTX_PCT" ]]; then
   CTX_INT=$(printf '%.0f' "$CTX_PCT")
+  # Auto-handoff measurement bus (issue #330): stamp the rounded % onto this
+  # pane's window as @ctx_pct — the same tmux-option state bus as @claude_state /
+  # @issue — so the Stop hook (bin/set-claude-state.sh) can read it. The Stop-hook
+  # stdin doesn't carry the context window, but the statusline does. No-op outside
+  # tmux; cheap set-option on every render. Panels/steward stamp too but are
+  # excluded by the nudge's scope gate, so the extra write is harmless.
+  if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+    tmux set-window-option -t "$TMUX_PANE" @ctx_pct "$CTX_INT" 2>/dev/null || true
+  fi
   if   (( CTX_INT >= 80 )); then CTX_COLOR="$RED"
   elif (( CTX_INT >= 50 )); then CTX_COLOR="$YELLOW"
   else                            CTX_COLOR="$GREEN"
