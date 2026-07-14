@@ -7,12 +7,14 @@
 # behaviour, so a change to how the fleet files an issue lives in a single place.
 #
 # Responsibilities, each a small testable step:
-#   1. VALIDATE any requested labels against this repo's canonical set — the live
-#      `gh label list`. Reject an unknown label UP FRONT with a clear message
-#      instead of an opaque `gh issue create` failure. No labels requested → no gh
-#      read and no validation, so the label-free ⌃n / new-session paths add no
-#      round-trip here. (When the taxonomy is codified — issue #333 — the repo's
-#      labels ARE that canonical set, so this validator needs no change.)
+#   1. VALIDATE any requested labels against the FIXED canonical taxonomy —
+#      fleet_labels_allowed in fleet-lib.sh (issue #333), the same set
+#      bin/fleet-labels-seed.sh installs, NOT the live `gh label list`. Reject an
+#      off-taxonomy label UP FRONT with a clear message instead of an opaque `gh
+#      issue create` failure, and reject it even if it has been minted in the
+#      repo out of band (fixed seed, no minting). The check is deterministic +
+#      offline (no gh read). No labels requested → no validation, so the
+#      label-free ⌃n / new-session paths add nothing here.
 #   2. STAMP the invisible `<!-- fleet:from role=… session=… issue=… -->`
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
@@ -88,24 +90,24 @@ fi
 [ -z "$repo" ] && { printf 'fleet-issue-file: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
 
-# --- 1. validate labels against the canonical set (reject unknown) -------------
-# Only when labels were requested — the label-free fast paths skip the gh read.
+# --- 1. validate labels against the canonical taxonomy (reject off-taxonomy) ---
+# The allowed set is the FIXED fleet_labels_allowed taxonomy (issue #333), the
+# same set bin/fleet-labels-seed.sh installs — NOT the live `gh label list`. So
+# no filer can file against a label that was minted in the repo out of band
+# (fixed seed, no minting), the check is deterministic + offline (no gh read),
+# and it holds identically for every filer including workers. Only when labels
+# were requested — the label-free fast paths (⌃n / new-session) skip it entirely.
 if [ "${#labels[@]}" -gt 0 ]; then
-  valid=$(gh label list --repo "$repo" --limit 200 --json name -q '.[].name' 2>/dev/null)
-  if [ -n "$valid" ]; then
-    unknown=()
-    for _l in "${labels[@]}"; do
-      printf '%s\n' "$valid" | grep -Fxq -- "$_l" || unknown+=("$_l")
-    done
-    if [ "${#unknown[@]}" -gt 0 ]; then
-      printf 'fleet-issue-file: unknown label(s): %s\n' "$(IFS=','; printf '%s' "${unknown[*]}")" >&2
-      printf 'fleet-issue-file: valid labels: %s\n' "$(printf '%s' "$valid" | paste -sd ',' -)" >&2
-      exit 3
-    fi
+  allowed=$(fleet_labels_allowed)
+  unknown=()
+  for _l in "${labels[@]}"; do
+    printf '%s\n' "$allowed" | grep -Fxq -- "$_l" || unknown+=("$_l")
+  done
+  if [ "${#unknown[@]}" -gt 0 ]; then
+    printf 'fleet-issue-file: off-taxonomy label(s): %s\n' "$(IFS=','; printf '%s' "${unknown[*]}")" >&2
+    printf 'fleet-issue-file: allowed labels: %s\n' "$(printf '%s' "$allowed" | paste -sd ',' -)" >&2
+    exit 3
   fi
-  # else: the label set was unreadable (gh down / repo has no labels) — skip
-  # validation and let `gh issue create` be the backstop rather than FALSE-reject
-  # during an outage, mirroring the pre-spawn dedup's degrade-to-proceed stance.
 fi
 
 # --- 2. stamp the fleet:from provenance marker into the body -------------------

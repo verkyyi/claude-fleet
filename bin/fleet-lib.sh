@@ -674,6 +674,50 @@ fleet_from_marker() {
   printf '%s' "$mk"
 }
 
+# --- fleet label taxonomy: the fixed, curated set (issue #333) -----------------
+# The ONE canonical label taxonomy for a fleet repo — the curated labels this
+# repo already uses, NOT a parallel `type:*` namespace. Two consumers share this
+# single source of truth so they can never drift:
+#   • bin/fleet-labels-seed.sh `gh label create`s every row (name/color/desc) so
+#     a fresh-repo install ends up with the full set (nothing seeds labels at
+#     install otherwise — `gh label` starts empty on a new repo).
+#   • the issue-filer channel (bin/fleet-issue-file.sh, #332) validates a
+#     requested label against fleet_labels_allowed — the FIXED set, not the live
+#     `gh label list` — so no filer (worker OR steward) can file against an
+#     off-taxonomy label even if one has been minted in the repo out of band.
+#     Fixed seed, no minting.
+# `autoland` is a known-stale label (its daemon retired in #277) but is kept in
+# the set FOR NOW; retiring it is deferred to a separate follow-up.
+#
+# fleet_labels_canonical — prints the taxonomy as `name|color|description` rows,
+# one per line (`|` never appears in a name/color/description). The seed script
+# reads all three columns; fleet_labels_allowed reads only the first.
+fleet_labels_canonical() {
+  cat <<'EOF'
+bug|D73A4A|A real defect
+enhancement|a2eeef|New feature or request
+cleanup|FEF2C0|Dead code, retirement, housekeeping
+robustness|B60205|Reliability, races, error handling
+portability|1D76DB|Cross-platform / dependency support
+ci|0E8A16|Continuous integration & linting
+docs-truth|5319E7|Docs that contradict the code
+scout|0e8a16|Read-only investigation (no PR expected)
+priority:p0|B60205|Highest priority — sorts first in the backlog (tier 0)
+priority:p1|D93F0B|High priority — backlog tier 1 (after all p0)
+priority:p2|FBCA04|Medium priority — backlog tier 2 (after all p1)
+steward-control|5319e7|Dedicated steward control/inbox issue — relayed into the @steward hub; autofill-excluded
+blocked|b60205|Blocked on another issue — excluded from autofill
+autoland|0e8a16|Opt this issue's PR into hands-off auto-land
+EOF
+}
+
+# fleet_labels_allowed — just the label NAMES from the canonical taxonomy, one
+# per line. The issue-filer channel validates against THIS fixed set (fixed
+# seed, no minting, #333) — no `gh label list` round-trip, deterministic offline.
+fleet_labels_allowed() {
+  fleet_labels_canonical | cut -d'|' -f1
+}
+
 # issue title → short kebab window name (lowercase, ascii-alnum + single
 # hyphens, ≤32 chars, no leading/trailing hyphen). Used to name a session's
 # tmux window after the issue CONTENT instead of a bare "issue-<N>". Prints
