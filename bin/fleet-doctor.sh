@@ -295,6 +295,28 @@ EOF
   fi
 fi
 
+# --- base-sync daemon (keeps the local base fast-forwarded to the remote) ------
+# ON by default per fleet (opt out with FLEET_BASE_SYNC=0). Runs the same ff-only
+# base pull the cleaner does, but on the clock — so a merge with no local reap (a
+# web/collaborator merge, a direct push, another machine) still advances the base
+# and fresh worktrees don't branch off stale code. Pure git fetch + pull --ff-only
+# under the shared land lease (no gh/LLM) — so no tool-dependency warning; it just
+# needs com.claude-fleet.base-sync installed.
+if [ -d "$conf_dir" ]; then
+  syncing=0 bs_optout=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_BASE_SYNC[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    if [ "$val" = 0 ]; then bs_optout=$((bs_optout+1)); else syncing=$((syncing+1)); fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$syncing" -gt 0 ]; then
+    pass basesync "$syncing fleet(s) with the base-sync daemon on$([ "$bs_optout" -gt 0 ] && printf ' (%s opted out)' "$bs_optout") — local base fast-forwarded to the remote (merge-independent)"
+    printf '        note: needs com.claude-fleet.base-sync installed; fetches + pulls --ff-only the base under the shared land lease (no merge, no gh).\n'
+  fi
+fi
+
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time
 # into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a

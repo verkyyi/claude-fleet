@@ -39,6 +39,44 @@ cleanup daemon reaps them all identically (**this closes #260**).
 | steward *reap now* op | The manual escape hatch, folded into the `/fleet-steward` charter (issue #286; formerly the standalone `/fleet-cleanup`): clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>`. Same mechanical core. |
 | `gh pr merge --auto --squash <PR>` | **Arm auto-merge by hand** — for a PR shipped before arming existed, or whose auto-merge got disarmed. The worker's `/fleet-claim` ship step already runs this at PR-open; the old dash `⌃l` affordance (`dash-arm-merge.sh`) was pruned in #289. It arms; GitHub merges when green. |
 | `bin/fleet-land-lease.sh` | Kept for the per-repo **base fast-forward** serialization (renamed conceptually to a base lease). `fleet-cleanup.sh` takes it only for the quick base pull — no hold-through-green. |
+| `com.claude-fleet.base-sync` (`bin/fleet-base-sync.sh`, ~60s; issue #327) | The **merge-independent base fast-forward** — see below. |
+
+## Base-sync — keep the base current between merges (issue #327)
+
+The cleanup base pull above only fires when a **merged PR still has a local
+worktree to reap**. So a merge with **no local reap** never advances the base:
+
+- a PR **merged on the web** (or by a collaborator) for an issue with no live
+  worktree here,
+- the default branch advanced by **another machine / contributor / a direct
+  push**.
+
+→ no cleanup tick → no base pull → the local base **silently lags** the remote
+until the next merge that *does* have a worktree, and fresh worktrees + `cw`
+branch off a **stale** base.
+
+`com.claude-fleet.base-sync` (`bin/fleet-base-sync.sh`, ~60s) closes that gap
+with a dedicated ff-only ticker. Each tick, one base-mover **per repo** (deduped
+on the resolved base path — two fleets sharing one base checkout move it once)
+takes the **shared land lease** (`land-<slug>.lock`, the SAME lock
+`fleet-cleanup.sh` holds — so there is **no new race**; the lease already
+serializes base movers) **non-blocking** — if a cleaner or another base-syncer
+holds it, the base is already being advanced, so it skips — and runs the exact
+same `git fetch` + `git pull --ff-only` on `$FLEET_MAIN` the cleaner does.
+
+`--ff-only` is the whole safety story: a diverged base (a stray local commit —
+which the read-only hook already forbids, but defense-in-depth) makes the pull
+**refuse**, surfaced once (*"base checkout would not fast-forward — resolve by
+hand"*) and non-fatal; never merged, rebased, or forced. It is **base only** —
+never a worktree/window/branch/issue/PR, no `gh`, no LLM, no tmux (just `git` +
+the lease). An already-current base is a cheap no-op, so a quiet repo costs one
+`fetch`/tick. Single-writer per repo + disk-gated. **ON by default** (opt out
+with `FLEET_BASE_SYNC=0`); `--dry-run` prints `would ff $MAIN <old>..<new>`
+without moving.
+
+The cleaner keeps doing its own post-reap pull (so a reap stays atomic with its
+base advance); base-sync only adds the **merge-independent** trigger for the
+same ff-only pull.
 
 ## Config
 
@@ -46,6 +84,8 @@ cleanup daemon reaps them all identically (**this closes #260**).
 |---|---|---|
 | `FLEET_CLEANUP` | `1` (on) | Set `0` to opt a fleet out of the cleanup daemon (the worktree-autoclean janitor still backstops merged worktrees). |
 | `FLEET_CLEANUP_MAX_PER_TICK` | `4` | Max PRs reaped per fleet per tick (a stampede guard). |
+| `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
+| `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
 
 ## What was retired
 

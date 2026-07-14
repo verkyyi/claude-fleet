@@ -1,0 +1,20 @@
+# claude-fleet base-sync daemon — Linux systemd user unit (parity with launchd
+# com.claude-fleet.base-sync). Oneshot driven by claude-fleet-base-sync.timer.
+# Keeps the LOCAL BASE checkout fast-forwarded to the remote default branch,
+# INDEPENDENT of merges (issue #327): a PR merged on the web / a commit from
+# another machine / a direct push advances the remote with no local reap, so the
+# cleanup daemon's post-reap base pull never fires and the base silently lags.
+# Pure `git fetch` + `git pull --ff-only` on $FLEET_MAIN under the shared land
+# lease — no gh, no merge, no LLM — so it is ON by default for every fleet (opt
+# out per fleet with FLEET_BASE_SYNC=0).
+[Unit]
+Description=claude-fleet base-sync daemon (fast-forward the local base to the remote, merge-independent)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-base-sync.sh
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/base-sync.systemd.log
