@@ -16,9 +16,12 @@ FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>
 [ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{session_name}' 2>/dev/null)
 export FLEET_SESSION
 
+# The "✕ close" header token + click-header bind give an iPad/Termius tap-to-dismiss
+# where Escape is a reach (issue #346): tapping ✕/close aborts fzf → empty pick → exit.
 num=$(bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null \
   | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --no-sort --layout=reverse \
         --prompt='new session ▸ ' \
-        --header='pick an issue to start a session · type to search · enter spawns · esc cancels' \
+        --header='pick an issue to start a session · type to search · enter spawns · esc cancels · ✕ close' \
+        --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | cut -d$'\x1f' -f1)
 [ -n "$num" ] && bash "$BIN/dash-issue-session.sh" "$num"

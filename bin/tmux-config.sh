@@ -292,12 +292,15 @@ run_fzf() {
   local savedq=''; [ -f "$QUERYF" ] && savedq=$(cat "$QUERYF" 2>/dev/null)
   rm -f "$RESTART" "$EDITKEY" "$QUERYF"
   local scope; scope=$(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]')
+  # The header carries a tappable "✕ close" token; the click-header bind below
+  # aborts (→ closes this popup) when ✕/close is tapped — an iPad/Termius dismiss
+  # that doesn't need Escape (issue #346).
   bash "$SELF" rows | fzf --ansi --delimiter="$FCFG_US" --with-nth=2 \
     --no-sort --layout=reverse-list --info=hidden --border=rounded \
     --query="$savedq" \
     --border-label=" fleet config · per-fleet edits write to the $scope layer " --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header='enter=edit/expand · tab=expand section · ⌃s=write-scope (global⇄per-fleet) · ?=raw keys · ⌃r=refresh · esc' \
+    --header='enter=edit/expand · tab=expand section · ⌃s=write-scope (global⇄per-fleet) · ?=raw keys · ⌃r=refresh · esc · ✕ close' \
     --preview "bash $SELF preview {1}" \
     --preview-window='right,54%,wrap,border-left' \
     --bind "ctrl-r:reload(bash $SELF rows)" \
@@ -306,6 +309,7 @@ run_fzf() {
     --bind "?:execute-silent(bash $SELF toggle-raw)+reload(bash $SELF rows)" \
     --bind "tab:execute-silent(bash $SELF toggle-bucket {1})+reload(bash $SELF rows)" \
     --bind "enter:transform(bash $SELF enter-action {1} '$EDITKEY' '$QUERYF' {q})" \
+    --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
     >/dev/null 2>&1
 }
 while :; do
