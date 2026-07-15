@@ -4,7 +4,10 @@
 # a worktree is removed ONLY when ALL of these hold:
 #   * it is not the main worktree
 #   * its branch is not protected (FLEET_PROTECTED_RE)
-#   * no live tmux pane is cd'd inside it   (== "not attached to a session")
+#   * no live worker is bound to it: no live pane binds @issue=<N> for an
+#     issue-<N> worktree, AND no live pane's cwd is inside it (issue #353 — the
+#     @issue identity check is cwd-independent, so a busy worker whose cwd has
+#     wandered into a subdir is not false-reaped)
 #   * it is clean (no uncommitted changes; untracked counts as dirty)
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is an ancestor of origin/<base>
@@ -61,6 +64,13 @@ if [ -z "$SOCKETS" ]; then
   say "no live fleet — skipping (cannot determine attached sessions)"; exit 0
 fi
 LIVE="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{pane_current_path}' 2>/dev/null; done)"
+# Also gather @issue across every live pane (issue #353). A worker window binds
+# @issue=<N> at spawn (a window user-option, inherited per-pane), so this is a
+# proxy for worker IDENTITY that is robust to the pane's cwd — unlike the exact
+# pane_current_path match above, which false-negatives a busy worker whenever its
+# foreground cwd has wandered into a subdir/scratch dir or has not settled right
+# after spawn, and can then false-reap the live worker's worktree.
+LIVE_ISSUES="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{@issue}' 2>/dev/null; done)"
 
 removed=0; kept=0; closed=0
 dir=""; head=""; branch=""
@@ -73,7 +83,19 @@ process() {
   if printf '%s\n' "$branch" | grep -Eq "$PROTECTED_RE"; then
     say "KEEP  $branch  (protected)"; kept=$((kept+1)); return
   fi
-  if printf '%s\n' "$LIVE" | grep -qxF "$dir"; then
+  # Liveness (issue #353): key off worker IDENTITY first, cwd only as a fallback.
+  # A worker window binds @issue=<N> and lives in the issue-<N> worktree, so an
+  # exact @issue match KEEPs it whether or not its pane cwd happens to sit at the
+  # worktree root — this is what stops a busy worker (cwd in a subdir, a scratch
+  # dir, or unsettled just after spawn) from being false-reaped. The cwd check
+  # remains for non-issue worktrees (e.g. scratch-*), now a PREFIX match so a pane
+  # cd'd into a subdir of the worktree still counts as attached.
+  local _inum=""
+  case "$branch" in issue-[0-9]*) _inum="${branch#issue-}"; _inum="${_inum%%[!0-9]*}" ;; esac
+  if [ -n "$_inum" ] && printf '%s\n' "$LIVE_ISSUES" | grep -qxF "$_inum"; then
+    say "KEEP  $branch  (live worker window @issue=$_inum)"; kept=$((kept+1)); return
+  fi
+  if printf '%s\n' "$LIVE" | grep -qxF "$dir" || printf '%s\n' "$LIVE" | grep -qF "$dir/"; then
     say "KEEP  $branch  (live tmux session)"; kept=$((kept+1)); return
   fi
   # clean + merged? — the shared gate (identical logic in dash-reap.sh).
