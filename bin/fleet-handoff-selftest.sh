@@ -20,12 +20,17 @@
 #   • KEY-SEQUENCE-COMMENT  (--issue, COMMENT storage) a marked comment round-trips →
 #                       clears and injects an ARGUMENT-FREE pickup (no doc/issue arg;
 #                       the cleared pane's @issue self-resolves it, issue #275).
-#   • VERIFY-GATE       an IDLE pane whose post-clear capture NEVER looks fresh →
-#                       clears but WITHHOLDS pickup (fail-safe: manual pickup remains).
+#   • VERIFY-GATE       an IDLE pane with NO fresh marker AND a post-clear capture
+#                       that never looks fresh → clears but WITHHOLDS pickup
+#                       (fail-safe: manual pickup remains).
+#   • VERIFY-DETERMINISTIC  the SessionStart(source=clear) marker @handoff_cleared_at
+#                       is stamped >= the cycle's clear_t0 while the capture is NOT
+#                       fresh → the cycle confirms via the marker and sends pickup,
+#                       proving the deterministic verify replaces the scrape (#345).
 #
 # The fake tmux records every send-keys to an INJECT log and answers the helper's
-# reads (pane-alive, @claude_state, capture-pane) from FAKE_* env; a fake gh answers
-# the comment-storage read from FAKE_COMMENTS. Exit 0 = pass.
+# reads (pane-alive, @claude_state, @handoff_cleared_at, capture-pane) from FAKE_*
+# env; a fake gh answers the comment-storage read from FAKE_COMMENTS. Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -51,8 +56,9 @@ case "\$verb" in
     printf '%s\n' "\$args" >> "$INJECT" ;;
   display-message)
     case "\$args" in
-      *pane_id*)      [ -n "\${FAKE_PANE_DEAD:-}" ] && exit 1; printf '%s\n' "$PANE" ;;
-      *@claude_state*) printf '%s\n' "\${FAKE_STATE:-done}" ;;
+      *pane_id*)             [ -n "\${FAKE_PANE_DEAD:-}" ] && exit 1; printf '%s\n' "$PANE" ;;
+      *@claude_state*)       printf '%s\n' "\${FAKE_STATE:-done}" ;;
+      *@handoff_cleared_at*) printf '%s\n' "\${FAKE_CLEARED_AT:-}" ;;
       *) : ;;   # a plain notify display-message (no -p) — no-op
     esac ;;
   capture-pane)
@@ -89,6 +95,7 @@ run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] -- <helper args...>
   FAKE_CAP="${FAKE_CAP:-}" \
   FAKE_PANE_DEAD="${FAKE_PANE_DEAD:-}" \
   FAKE_COMMENTS="${FAKE_COMMENTS:-}" \
+  FAKE_CLEARED_AT="${FAKE_CLEARED_AT:-}" \
   TMUX="${TMUX_OVERRIDE-fake,1,0}" \
     bash "$SRC" "$@"
 }
@@ -181,7 +188,10 @@ case "${KEYS[4]}" in *Enter*) : ;; *) fail "comment key5 must be a SEPARATE Ente
 
 printf 'selftest: comment-mode leg PASS (marker round-trip → clears → argument-free pickup)\n' >&2
 
-# ---- VERIFY-GATE (never-fresh capture) → clears but WITHHOLDS pickup ----------
+# ---- VERIFY-GATE (never-fresh capture, NO marker) → clears but WITHHOLDS pickup -
+# No @handoff_cleared_at marker AND a never-fresh capture ⇒ neither signal fires ⇒
+# the pickup is withheld (fail-safe). RETRY_AFTER defaults past this tiny VF window,
+# so the /clear is sent exactly once.
 VF=1 FAKE_STATE='done' FAKE_CAP='still churning...\n' run --pane "$PANE" --doc "$DOC" \
   || fail "verify-gate cycle must exit 0 (fail-safe)"
 cleared || fail "verify-gate: the /clear must still have been sent (idle reached)"
@@ -190,5 +200,18 @@ grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null \
 
 printf 'selftest: verify-gate leg PASS (clears, withholds pickup on unconfirmed fresh session)\n' >&2
 
-printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate verified\n'
+# ---- VERIFY-DETERMINISTIC (marker path) → confirms via @handoff_cleared_at ------
+# The fresh-session signal is now the SessionStart(source=clear) marker, not the
+# capture-pane scrape (issue #345). With a NON-fresh capture but a marker stamped
+# in the future (>= the cycle's clear_t0), the cycle must STILL confirm fresh and
+# send pickup — proving the deterministic signal works independent of the scrape.
+FAKE_STATE='done' FAKE_CAP='still churning...\n' FAKE_CLEARED_AT=9999999999 \
+  run --pane "$PANE" --doc "$DOC" || fail "deterministic-verify cycle must exit 0"
+cleared || fail "deterministic-verify: the /clear must have been sent"
+grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null \
+  || fail "deterministic-verify: a marker >= clear_t0 must confirm fresh → pickup sent (not withheld)"
+
+printf 'selftest: deterministic-verify leg PASS (@handoff_cleared_at marker confirms fresh → pickup)\n' >&2
+
+printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate + deterministic marker verified\n'
 exit 0

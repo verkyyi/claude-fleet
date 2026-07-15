@@ -15,7 +15,9 @@
 #             @handoff_armed latch; below threshold / off / needs / out-of-scope /
 #             already-armed / unstamped → NO nudge; a scratch (@raw, no @issue) pane
 #             still nudges (the cycle self-selects FILE storage downstream).
-#   RESET     bin/handoff-latch-reset-hook.sh clears @handoff_armed at SessionStart.
+#   RESET     bin/handoff-latch-reset-hook.sh clears @handoff_armed at SessionStart,
+#             and on source=clear ALSO stamps the deterministic @handoff_cleared_at
+#             marker the auto-handoff cycle polls to confirm a fresh session (#345).
 #
 # The fake tmux answers `display-message` reads from FAKE_* env and logs every
 # `set-window-option` to SETOPT_LOG (so the latch write + the @ctx_pct stamp assert
@@ -158,6 +160,31 @@ grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
 latched && fail "reset must not set the latch"
 
 printf 'selftest: RESET leg PASS (SessionStart unsets @handoff_armed)\n' >&2
+
+# ---- RESET(clear): SessionStart(source=clear) also STAMPS @handoff_cleared_at ---
+# The deterministic auto-handoff verify signal (#345): on a /clear the latch-reset
+# hook stamps a monotonic-epoch marker the cycle polls to confirm the fresh session.
+# It must STILL unset the latch, AND stamp @handoff_cleared_at <epoch>.
+: > "$SETOPT_LOG"
+PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
+  FLEET_LATCH_RESET_SOURCE=clear sh "$RESET" < /dev/null
+grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
+  || fail "source=clear reset must still unset @handoff_armed, log: $(cat "$SETOPT_LOG")"
+grep -Eq '@handoff_cleared_at [0-9]+' "$SETOPT_LOG" 2>/dev/null \
+  || fail "source=clear must stamp @handoff_cleared_at <epoch>, log: $(cat "$SETOPT_LOG")"
+
+# ---- RESET(non-clear): startup/resume/compact must NOT stamp the marker --------
+# Only a /clear is the cycle's fresh-session signal; other boundaries must reset the
+# latch WITHOUT stamping the marker (else they'd false-confirm a clear that never ran).
+: > "$SETOPT_LOG"
+PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
+  FLEET_LATCH_RESET_SOURCE=startup sh "$RESET" < /dev/null
+grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
+  || fail "startup reset must still unset @handoff_armed, log: $(cat "$SETOPT_LOG")"
+grep -q '@handoff_cleared_at' "$SETOPT_LOG" 2>/dev/null \
+  && fail "source!=clear must NOT stamp @handoff_cleared_at, log: $(cat "$SETOPT_LOG")"
+
+printf 'selftest: RESET-marker legs PASS (source=clear stamps @handoff_cleared_at; others do not)\n' >&2
 
 # ---- MEASURE: the statusline stamps @ctx_pct (skip if jq absent) --------------
 if command -v jq >/dev/null 2>&1; then

@@ -147,8 +147,12 @@ re-validates the store (marked comment fetchable, or doc non-empty) BEFORE the
 first keystroke, refuses a double-arm, aborts *without clearing* if the turn never
 goes idle, and withholds the pickup keystrokes if it can't confirm a fresh
 session — every failure degrades to *"handoff stored, context not cleared"*, and a
-manual `/fleet-handoff pickup` always still works. It self-terminates on a hard
-≤5-minute timeout (never an immortal orphan).
+manual `/fleet-handoff pickup` always still works. It confirms the `/clear` landed
+*deterministically* — the `/clear` fires `SessionStart(source=clear)`, whose hook
+(`handoff-latch-reset-hook.sh`) stamps a `@handoff_cleared_at` marker the cycle
+polls — instead of screen-scraping the live TUI (issue #345), and retries the
+`/clear` once if a dropped keystroke leaves no fresh signal. It self-terminates on
+a hard ≤5-minute timeout (never an immortal orphan).
 
 ### C4. End the turn — tell the operator, then stop
 
