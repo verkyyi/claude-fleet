@@ -5,6 +5,18 @@
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh busy" }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/bash-guard.py" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/base-readonly-guard.py" }
+        ]
       }
     ],
     "PostToolUse": [

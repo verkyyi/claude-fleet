@@ -15,6 +15,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
+| Bypass-permissions guards (issue #355) | two `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — the PreToolUse backstop the steward's `permissions.deny` rail always referenced; closes the gap for the worker seat. Both **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
 | Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
@@ -136,6 +137,29 @@ assumes — this doc is only the install/uninstall procedure.
    (so this needs the status line wired, step 8b). The nudge fires once per session
    (latch), only from a clean `done` (never a needs-attention turn), and never on
    panels or the steward hub.
+
+   The `PreToolUse` array also registers the two **bypass-permissions guard
+   hooks** (issue #355) — the fleet's last line of defense now that workers run
+   on `bypassPermissions` (Claude Code never prompts). Both ship GENERIC rails
+   and **fail OPEN** (any internal error → exit 0), so a guard bug can never
+   brick a session:
+   - `hooks/bash-guard.py` (matcher `Bash`) — a deny-list for the handful of
+     irreversible commands (`rm -rf` on `/` `~` `.git`; a force-push onto the
+     base branch). It splits a command into statement segments before matching
+     so tokens can't combine across segments, and matches the git *subcommand*,
+     not the word anywhere — keeping false positives near zero. Operator-specific
+     rails (prod hosts, DB/k8s guards) go in a **local overlay**,
+     `~/.claude/hooks/bash-guard-local.py`, that the skeleton runs if present and
+     that is NEVER shipped (see the OVERLAY section in the hook).
+   - `hooks/base-readonly-guard.py` (matcher `Edit|Write|MultiEdit|NotebookEdit`)
+     — makes the base checkout **edit-read-only for every seat**: it denies a
+     write whose target is inside `FLEET_MAIN`, while the `issue-<N>` / `scratch-N`
+     worktree siblings (which sit *next to* the base, not under it) stay writable.
+     This is the PreToolUse backstop the steward's `permissions.deny` rail
+     (`conf/steward-settings.template.json`) always referenced but that the repo
+     never actually shipped — closing the gap for the **worker** seat, which had
+     no base-checkout protection at all. A no-op outside a fleet (no `FLEET_MAIN`
+     resolvable → allow), so it's safe to add globally.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the

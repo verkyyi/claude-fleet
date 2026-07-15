@@ -16,6 +16,10 @@ on:
   push:
     paths:
       - 'bin/**'
+      # Guard hooks the selftests drive from OUTSIDE bin/ (bash-guard-selftest.sh
+      # exercises hooks/bash-guard.py + hooks/base-readonly-guard.py), so an edit
+      # to the guard logic re-runs the gate.
+      - 'hooks/**'
       # Fixtures the selftests read from OUTSIDE bin/, kept so an edit to any of
       # them still re-runs the gate: fleet.conf.example (tmux-config-selftest.sh)
       # and conf/tmux-attention.conf (fleet-keys-selftest.sh cross-checks the
@@ -26,6 +30,7 @@ on:
   pull_request:
     paths:
       - 'bin/**'
+      - 'hooks/**'
       - 'conf/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
