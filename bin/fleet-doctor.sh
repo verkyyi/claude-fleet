@@ -118,6 +118,14 @@ if [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
 fi
 
+# doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the
+# machine's tailnet, so with the skill installed but tailscale absent it's a
+# no-op (share.sh exits "tailscale is not running / logged out"), not a broken
+# install. Warn, never fail — the fleet runs fine without it (issue #354).
+if [ -f "$skills_dir/doc-preview/SKILL.md" ] && ! command -v tailscale >/dev/null 2>&1; then
+  warn skills "doc-preview skill installed but tailscale not on PATH — the skill is a no-op without it (it serves docs over the tailnet); install/enable Tailscale to use it"
+fi
+
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
 # The popup (bin/tmux-config.sh) sources its key list + per-key help from
 # fleet.conf.example; without that file it can't render. It lives in the repo /

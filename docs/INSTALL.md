@@ -35,7 +35,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Raw scratch session (dash `⌃s`) | opens a plain, **non-issue-bound** `claude` window in the fleet — no GitHub issue, but in its **own writable `scratch-N` git worktree** off the base branch (`bin/dash-raw-session.sh`, issues #214/#290). The counterpart to the issue-bound spawns (dash `⌃n` / backlog Enter / `dash-issue-session.sh`), for ad-hoc exploration or experiments that may need to WRITE code (the base checkout is hook-enforced read-only). A scratch that turns real just pushes its branch + opens a PR — the prmap is repo-wide, so the janitor reaps a merged `scratch-N` like any worker (zero new machinery), and the unique cwd makes its transcript resolvable. Marked `@raw=1` + `@worktree=<path>`, named `scratch-N` (or a custom name); **listed in the dash as a real session** (counts toward the session cap) but excluded from the issue machinery — no `@issue`, so the watcher (`@raw` skipped) leaves it alone, while the classifier/summarizer still show its state + summary. The **window** is ephemeral (not snapshotted/restored across a crash); its **worktree** survives on disk and is reaped by the janitor's scratch rules — clean + no unmerged work → removed silently; dirty or unmerged → kept + surfaced once (never silently delete an experiment; `dash ⌃x` disposes it) | claude |
 | `cw`/`cwrm`/`cwclean` | zsh worktree helpers | zsh |
 | Fleet commands (optional) | repo-shipped `/skill`s (`commands/`) — fleet-aware slash commands, appended to `~/.claude/commands/` | claude |
-| Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/SKILL.md`) a fleet command delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim (issue #311); installed into `~/.claude/skills/`, marker-gated (`<!-- fleet skill -->`) so a personal skill is never clobbered | claude |
+| Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `doc-preview` ships `share.sh`/`server.py`/`render.mjs` beside its SKILL.md (issues #311, #354); installed into `~/.claude/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude |
 | Status line (optional) | `conf/statusline.sh` — Claude Code status line: a context-window mini-bar (green < 50% < yellow < 80% < red), shortened cwd, git branch + dirty star (via `--no-optional-locks`), and model name. Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — exits silently (blank line) without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b) | jq (soft) |
 
 ## Install steps
@@ -303,19 +303,24 @@ assumes — this doc is only the install/uninstall procedure.
    (warn, not fail, if none — they're optional). See `commands/README.md` for
    the skill contract.
 
-   **Also copy the base skills tree** (issue #311): `skills/<name>/SKILL.md` →
-   `~/.claude/skills/<name>/SKILL.md` (`mkdir -p` each skill's dir; **APPEND** —
-   never clobber a personal `~/.claude/skills/*`). These are repo-versioned base
-   skills a fleet command delegates to — today `skills/handoff/SKILL.md`, the
+   **Also copy the base skills tree** (issues #311, #354): copy each **skill
+   directory** `skills/<name>/` → `~/.claude/skills/<name>/` (`mkdir -p` the dir,
+   copy every file preserving executable bits — `cp -p`; **APPEND** — never
+   clobber a personal `~/.claude/skills/*`). A skill is the whole dir, not just
+   its `SKILL.md`: `skills/handoff/` is SKILL.md-only, but `skills/doc-preview/`
+   ships `share.sh` + `server.py` + `render.mjs` beside its SKILL.md — and that
+   SKILL.md invokes them at `~/.claude/skills/doc-preview/…`, so the scripts must
+   land alongside it or the skill is a broken stub. These are repo-versioned base
+   skills a fleet command or the agent delegates to — `skills/handoff/` is the
    base that `/fleet-handoff` runs verbatim, so **install it whenever you install
    `fleet-handoff`** or the command points at a missing dependency
    (`fleet-doctor.sh` warns on exactly that combination). Each ships a
-   `<!-- fleet skill -->` marker; a fleet's own `~/.claude/skills/handoff/SKILL.md`
-   that predates this adoption is a personal file — if it differs from the repo
-   copy, leave it and reconcile by hand (adopt the marked repo version) rather
-   than overwriting operator edits. After the initial copy these flow through
-   `land → /fleet-sync-install` like `commands/*` (its skills pass, same marker
-   gate + never-clobber rule).
+   `<!-- fleet skill -->` marker **in its `SKILL.md`**; a fleet's own
+   `~/.claude/skills/<name>/SKILL.md` that predates this adoption is a personal
+   file — if it differs from the repo copy, leave it and reconcile by hand (adopt
+   the marked repo version) rather than overwriting operator edits. After the
+   initial copy these flow through `land → /fleet-sync-install` like `commands/*`
+   (its skills pass, same marker gate + never-clobber rule).
 
 8b. **Status line (optional, opt-in).** Offer to wire the Claude Code status
    line (`conf/statusline.sh` — context-window mini-bar, cwd, git branch, model).
@@ -382,8 +387,10 @@ personal one), delete `~/.claude/fleet/` (and, on a pre-#286 install,
 the obsolete flat charter `~/.claude/steward.md`), remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands) and any fleet skills you copied into
-`~/.claude/skills/` (the `<!-- fleet skill -->`-marked `<name>/SKILL.md`, e.g.
-`handoff` — leave your personal skills), and clear per-window state. Each fleet
+`~/.claude/skills/` (each `<name>/` dir whose `SKILL.md` carries the
+`<!-- fleet skill -->` marker — e.g. `handoff`, `doc-preview` — removing the
+whole dir so supporting scripts go with it; leave your personal skills), and
+clear per-window state. Each fleet
 runs on its own tmux socket now (issue #159), so per-window state lives per
 server — the simplest reset is to `fleet-down <sess>` (or `tmux -L <sess>
 kill-server`) each fleet; to clear it in place instead, run
