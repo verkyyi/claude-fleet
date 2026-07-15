@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-zoom-chip-selftest.sh — the single-tap touch pane-zoom chip contract
-# (issue #329).
+# (issue #329) + the wider iPad tap-target chip padding (issue #347).
 #
 # The gap: `bind -n DoubleClick1Pane resize-pane -Z -t=` zooms a pane on a desktop
 # trackpad but does NOT reliably fire over iPad/Termius touch — the two taps jitter
@@ -16,6 +16,10 @@
 # socket via a PATH shim, torn down at exit — never the user's live server, same
 # pattern as dash-marker-selftest.sh / popup-pause-selftest.sh):
 #   • EMITTED     status-left carries the clickable `range=user|zoom` chip.
+#   • PADDED      every status-left chip (⌂ hub, ⛶ zoom, #S fleet, ● attn) keeps
+#                 BOTH its `range=user|…` wrapper AND the wider ≥2-space tap-target
+#                 padding (issue #347) — a revert to the old tight 1-space chips
+#                 fails here, so the touch tap-zones can't silently shrink back.
 #   • PARSES      the conf sources cleanly (the new nested `if -F zoom` branch does
 #                 not break the deeply-nested MouseDown1Status dispatch).
 #   • ROUTES      the MouseDown1Status bind gates a `zoom` branch on its OWN
@@ -48,6 +52,23 @@ grep -Eq 'status-left .*range=user\|zoom' "$CONF" \
   || fail "status-left no longer emits the clickable 'range=user|zoom' chip (issue #329)"
 grep -Eq 'status-left .*⛶' "$CONF" \
   || fail "status-left no longer carries the ⛶ zoom glyph (issue #329)"
+
+# --- PADDED (static): the wider iPad tap-target padding survives (issue #347) ---
+# Each chip carries EXTRA inner padding — two spaces flanking its glyph, INSIDE the
+# range — so the clickable zone is wider on touch. Assert that ALL four status-left
+# chips still carry their range=user|… wrapper, then that each glyph is padded to
+# ≥2 spaces (a revert to the old tight 1-space chips fails). The padding must sit
+# inside the range or it isn't tappable (that's why we widen the chips, not the gaps).
+for r in hub zoom fleet attn; do
+  grep -Eq "status-left .*range=user\\|$r" "$CONF" \
+    || fail "status-left chip '$r' lost its clickable range=user|$r wrapper (issue #347)"
+done
+# ⌂ (all three hub-state branches), ⛶ and #S render with two spaces flanking the
+# glyph; ● (attn badge) has two leading spaces before the dot (the count sits after).
+for pad in '  ⌂  ' '  ⛶  ' '  #S  ' '  ● '; do
+  grep -Fq "$pad" "$CONF" \
+    || fail "a status-left chip lost its wider ≥2-space tap-target padding ('$pad') (issue #347)"
+done
 
 # --- isolated tmux server + PATH shim (never the user's live server) -----------
 # Route the plain `tmux` used below to a private socket, reaped on exit.
