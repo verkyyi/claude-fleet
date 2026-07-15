@@ -36,7 +36,7 @@ command -v claude >/dev/null 2>&1 || exit 0
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
 TM() { if [ -n "${SUMMARIZE_SOCK:-}" ]; then tmux -L "$SUMMARIZE_SOCK" "$@"; else tmux "$@"; fi; }
 
-RUBRIC='You are labeling a Claude Code session for a dashboard row. Using the bound issue (the goal) and the recent terminal screen (current activity), reply with ONE short line (max ~14 words): concretely what this session is doing now and its status — progress plus any blocker or question. No preamble, no markdown, no quotes, no trailing period. If the screen is idle or empty, reply "idle".'
+RUBRIC='You are labeling a Claude Code session for a dashboard row. Using the bound issue (the goal) and the recent terminal screen (current activity), reply with ONE plain sentence (≤12 words): what this session is doing now and its status. No preamble, no markdown, no quotes, no trailing period. If the screen is idle or empty, reply "idle".'
 
 mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 
