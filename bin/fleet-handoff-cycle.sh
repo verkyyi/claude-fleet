@@ -35,6 +35,13 @@
 #     we abort rather than clear a busy/gone pane; and if the post-clear verify
 #     fails we do NOT type pickup (a lost pickup still leaves the operator a manual
 #     `/fleet-handoff pickup [<doc>]`).
+#   • Deterministic clear-verify (issue #345) — §4 confirms the /clear landed via a
+#     marker (@handoff_cleared_at) the SessionStart(source=clear) hook stamps on this
+#     same pane, NOT by screen-scraping the live TUI (glyph/banner text is
+#     version-dependent and race-prone — the old scrape confirmed <1s on success but
+#     burned the full timeout on failure ~50% of the time). The scrape is kept only
+#     as a compat fallback (a fleet not yet synced to the marker-stamping hook), and
+#     we retry the /clear ONCE before falling through to the fail-safe.
 #   • Never an immortal orphan (the crash-#3 lesson) — a hard overall self-timeout
 #     TERMs the whole process group even if a phase wedges; the runaway-CPU
 #     watchdog is the backstop, not the plan.
@@ -48,8 +55,17 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -r "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh" 2>/dev/null || true
 
 # --- tunables (env-overridable; the selftest drives them tiny for speed) --------
-IDLE_TIMEOUT="${FLEET_HANDOFF_IDLE_TIMEOUT:-120}"   # wait-idle ceiling (s)
-VERIFY_TIMEOUT="${FLEET_HANDOFF_VERIFY_TIMEOUT:-10}" # fresh-session detect (s)
+IDLE_TIMEOUT="${FLEET_HANDOFF_IDLE_TIMEOUT:-180}"   # wait-idle ceiling (s) — a big
+                                                    # handoff turn can legitimately
+                                                    # run >2min (#345 WAIT-IDLE miss);
+                                                    # stays < HARD_TIMEOUT - VERIFY.
+VERIFY_TIMEOUT="${FLEET_HANDOFF_VERIFY_TIMEOUT:-25}" # fresh-session detect (s) — the
+                                                    # deterministic marker confirms in
+                                                    # <1s; the wider window only backs
+                                                    # the one /clear retry (#345).
+RETRY_AFTER="${FLEET_HANDOFF_RETRY_AFTER:-8}"       # re-type /clear once if no fresh
+                                                    # signal within this many s (a
+                                                    # dropped keystroke, #345).
 HARD_TIMEOUT="${FLEET_HANDOFF_HARD_TIMEOUT:-300}"    # overall self-kill (s) — ≤5min
 POLL="${FLEET_HANDOFF_POLL:-2}"                      # poll interval (s)
 PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-/fleet-handoff pickup}"
@@ -168,27 +184,58 @@ fi
 # Escape first (dismiss any open TUI menu/palette), then type `/clear`, then a
 # SEPARATE Enter — text and Enter as distinct send-keys calls so the string is
 # typed into the input line and Enter is what executes the slash command (a
-# combined send-keys would submit early / mis-fire the palette).
+# combined send-keys would submit early / mis-fire the palette). Factored into a
+# helper because §4 may retry it once on a dropped keystroke.
+send_clear() {
+  TM send-keys -t "$PANE" Escape 2>/dev/null || true
+  sleep 0.3 2>/dev/null || true
+  TM send-keys -t "$PANE" -l -- "/clear" 2>/dev/null || true
+  TM send-keys -t "$PANE" Enter 2>/dev/null || true
+}
+# Stamp t0 BEFORE the keystroke: the deterministic verify (§4) accepts only a
+# fresh-session marker stamped by THIS clear (@handoff_cleared_at >= clear_t0),
+# never a stale one left by an earlier cycle at this pane.
+clear_t0=$(date +%s 2>/dev/null || echo 0)
 log "clearing pane $PANE"
-TM send-keys -t "$PANE" Escape 2>/dev/null || true
-sleep 0.3 2>/dev/null || true
-TM send-keys -t "$PANE" -l -- "/clear" 2>/dev/null || true
-TM send-keys -t "$PANE" Enter 2>/dev/null || true
+send_clear
 
 # ============================ 4. VERIFY ========================================
-# Poll capture-pane until the fresh (post-clear) session UI shows — bounded. The
-# cleared Claude TUI drops the prior transcript and redraws the empty input row
-# (`❯`/`>`) and its shortcut hint. If it never confirms within the bound we do
-# NOT type pickup (fail-safe: the operator still has a manual pickup).
-log "verifying fresh session (≤${VERIFY_TIMEOUT}s)"
-fresh=0 vf_deadline=$(( $(date +%s 2>/dev/null || echo 0) + VERIFY_TIMEOUT ))
+# Confirm the /clear landed and a fresh session started — DETERMINISTICALLY (#345).
+# Primary signal: the SessionStart(source=clear) hook (bin/handoff-latch-reset-hook.sh)
+# stamps @handoff_cleared_at=<epoch> on this pane; a value >= clear_t0 means THIS
+# clear fired the fresh session (TUI-version-independent, unambiguous). Fallback:
+# the legacy capture-pane scrape (empty `❯`/`>` prompt row + shortcut hint, and the
+# typed `/clear` gone) — retained only for a fleet not yet synced to the stamping
+# hook. If neither confirms within RETRY_AFTER, re-type /clear ONCE (covers a
+# dropped keystroke); if neither ever confirms we do NOT type pickup (fail-safe:
+# the operator still has a manual pickup).
+log "verifying fresh session (≤${VERIFY_TIMEOUT}s, retry after ${RETRY_AFTER}s)"
+fresh=0 retried=0
+vf_start=$(date +%s 2>/dev/null || echo 0)
+vf_deadline=$(( vf_start + VERIFY_TIMEOUT ))
+retry_at=$(( vf_start + RETRY_AFTER ))
 while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$vf_deadline" ]; do
+  # Primary: the deterministic marker (>= clear_t0 ⇒ stamped by this clear).
+  mk="$(TM display-message -p -t "$PANE" '#{@handoff_cleared_at}' 2>/dev/null)"
+  case "$mk" in
+    ''|*[!0-9]*) : ;;   # unset / non-numeric → no deterministic signal yet
+    *) if [ "$mk" -ge "$clear_t0" ]; then
+         fresh=1; log "fresh session confirmed via @handoff_cleared_at=$mk (>= $clear_t0)"; break
+       fi ;;
+  esac
+  # Fallback: the legacy screen-scrape (any one signal, and the `/clear` is gone).
   cap="$(TM capture-pane -p -t "$PANE" 2>/dev/null)"
-  # Fresh signals, any one is enough (TUI-version tolerant): the empty prompt row,
-  # the shortcut hint, or the welcome banner — AND the `/clear` we typed is gone
-  # (the command was consumed, not still sitting half-typed in the palette).
   if printf '%s' "$cap" | grep -Eq '(^|[[:space:]])(❯|>)[[:space:]]|for shortcuts|Welcome to Claude'; then
-    if ! printf '%s' "$cap" | grep -q '/clear'; then fresh=1; break; fi
+    if ! printf '%s' "$cap" | grep -q '/clear'; then
+      fresh=1; log "fresh session confirmed via capture-pane fallback"; break
+    fi
+  fi
+  # Retry the /clear ONCE if nothing has confirmed within RETRY_AFTER — a dropped
+  # Escape/keystroke leaves the session uncleared and no marker is ever stamped.
+  if [ "$retried" = 0 ] && [ "$(date +%s 2>/dev/null || echo 0)" -ge "$retry_at" ]; then
+    retried=1
+    log "no fresh signal within ${RETRY_AFTER}s — retrying /clear once"
+    send_clear
   fi
   sleep 0.5 2>/dev/null || true
 done
@@ -202,6 +249,10 @@ fi
 # the emptied session's FIRST turn is `/fleet-handoff pickup [<doc>]` and it
 # resumes from the handoff's NEXT ACTION. Comment storage → argument-free (the
 # pane @issue self-resolves the marked comment); file storage → the doc path.
+# Brief settle: the marker fires at SessionStart, which can beat the input row's
+# first render by a hair — a short pause keeps the pickup keystrokes from landing
+# in a not-yet-ready TUI (the scrape path already implies a rendered prompt).
+sleep 0.5 2>/dev/null || true
 log "sending pickup: $PICKUP"
 TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
 TM send-keys -t "$PANE" Enter 2>/dev/null || true
