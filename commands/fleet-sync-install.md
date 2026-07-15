@@ -171,50 +171,60 @@ If no `commands/*.md` changed, skip.
 
 ## 5b. Install new/changed fleet skills — the `skills/` tree (issue #311)
 
-Fleet also ships **skills** (`skills/<name>/SKILL.md`) — repo-versioned base
-skills that a fleet command may delegate to (e.g. `/fleet-handoff` runs the base
-`handoff` skill verbatim). They install into Claude Code's user skills dir
-`~/.claude/skills/`, the mirror of the `commands/` install — same marker gate,
-same never-clobber-personal rule.
+Fleet also ships **skills** (`skills/<name>/` dirs) — repo-versioned base
+skills that a fleet command or the agent may delegate to (e.g. `/fleet-handoff`
+runs the base `handoff` skill verbatim). They install into Claude Code's user
+skills dir `~/.claude/skills/`, the mirror of the `commands/` install — same
+marker gate, same never-clobber-personal rule.
 
-If the step-2 diff touched any `skills/**` path:
+**A skill is a whole directory, not just its `SKILL.md`.** `skills/handoff/` is
+SKILL.md-only, but `skills/doc-preview/` ships `share.sh` + `server.py` +
+`render.mjs` beside its SKILL.md — and that SKILL.md invokes them at
+`~/.claude/skills/doc-preview/…`, so the scripts must land alongside it or the
+skill is a broken stub (issue #354). The unit of install/removal is therefore the
+whole `skills/<name>/` dir.
 
-- **Install** each added/modified skill — every `A`/`M` path, plus the **new**
-  path of each `R` rename — by copying it into `~/.claude/skills/`, **preserving
-  the sub-path under `skills/`** (`skills/handoff/SKILL.md` →
-  `~/.claude/skills/handoff/SKILL.md`; `mkdir -p` the skill's dir first). Gate on
+If the step-2 diff touched any `skills/**` path, resolve the affected skill
+`<name>`s (the second path segment) and, for each:
+
+- **Install** each added/modified skill — any skill dir with an `A`/`M` file
+  (or the **new** path of an `R` rename) — by mirroring the **entire**
+  `skills/<name>/` dir into `~/.claude/skills/<name>/` (`mkdir -p` first, copy
+  every file with `cp -p` to preserve executable bits like `share.sh`). Gate on
   the skill's `SKILL.md` carrying the `<!-- fleet skill -->` marker — that marker
-  is how sync recognises a repo-managed skill among the operator's **personal**
-  skills, so it never touches a personal skill.
+  (which lives in the SKILL.md) is how sync recognises a repo-managed skill among
+  the operator's **personal** skills, so it never touches a personal skill.
 - **Never clobber a personal skill.** Before overwriting an existing
-  `~/.claude/skills/<name>/SKILL.md`, check the destination for the
-  `<!-- fleet skill -->` marker:
+  `~/.claude/skills/<name>/`, check its `SKILL.md` for the `<!-- fleet skill -->`
+  marker:
   - marker present → it's already fleet-managed; overwrite (a normal update).
   - marker **absent** → it's a personal skill (or, on THIS machine's **first**
-    sync, the operator's pre-import `handoff` copy this issue adopted). Overwrite
-    it **only if it is byte-identical to the repo's imported version** (`cmp -s`);
-    otherwise **warn and skip** it — the old steward.md-dance: surface that a
-    personal skill diverges from the repo copy and let the operator reconcile by
-    hand, never silently replacing their edits.
+    sync, the operator's pre-import copy an adoption issue absorbed). Overwrite
+    it **only if its `SKILL.md` is byte-identical to the repo's imported version**
+    (`cmp -s`); otherwise **warn and skip** the whole dir — the old steward.md
+    dance: surface that a personal skill diverges from the repo copy and let the
+    operator reconcile by hand, never silently replacing their edits.
 
   ```sh
-  # per changed skill dir (e.g. rel="handoff"), src carries the marker:
-  src=~/.claude/fleet/skills/$rel/SKILL.md
-  dst=~/.claude/skills/$rel/SKILL.md
-  grep -qF '<!-- fleet skill -->' "$src" || continue          # source gate
-  if [ -f "$dst" ] && ! grep -qF '<!-- fleet skill -->' "$dst" \
-       && ! cmp -s "$src" "$dst"; then
-    echo "skills: $rel/SKILL.md is a personal skill that diverges from the repo copy — leaving it; reconcile by hand (e.g. adopt the marked repo version), then re-run" >&2
+  # per changed skill dir (e.g. rel="doc-preview" or "handoff"):
+  src=~/.claude/fleet/skills/$rel          # source skill DIR (marker lives in SKILL.md)
+  dst=~/.claude/skills/$rel                # dest skill DIR
+  grep -qF '<!-- fleet skill -->' "$src/SKILL.md" || continue      # source gate
+  if [ -f "$dst/SKILL.md" ] && ! grep -qF '<!-- fleet skill -->' "$dst/SKILL.md" \
+       && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
+    echo "skills: $rel is a personal skill that diverges from the repo copy — leaving it; reconcile by hand (e.g. adopt the marked repo version), then re-run" >&2
   else
-    mkdir -p "$(dirname "$dst")" && cp "$src" "$dst"
+    mkdir -p "$dst" && cp -p "$src"/* "$dst"/                      # mirror SKILL.md + any scripts
   fi
   ```
 
-- **Remove** each retired skill from `~/.claude/skills/` — the **old** path of
-  every `R` rename **and** every `D` deletion — but, same as install, only when
-  the live copy still carries the `<!-- fleet skill -->` marker (never remove a
-  personal skill). Prune the skill's now-empty dir with `rmdir` (ignore failure —
-  a non-empty dir with the operator's own files stays).
+- **Remove** each retired skill from `~/.claude/skills/` — a skill is retired
+  when its `SKILL.md` is deleted (`D`) or renamed away (the **old** path of an
+  `R`) — but, same gate as install, only when the live
+  `~/.claude/skills/<name>/SKILL.md` still carries the `<!-- fleet skill -->`
+  marker (never remove a personal skill). Remove the whole dir
+  (`rm -rf ~/.claude/skills/<name>` — the marker confirms it's fleet-managed) so
+  the supporting scripts go with it.
 
 If no `skills/**` path changed, skip.
 
