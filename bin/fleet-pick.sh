@@ -30,10 +30,13 @@ fi
 listing=$(printf '%s\n' "$rows" | awk -v cur="$cur" \
   '{ print (($2 == cur) ? $0 "  ← current" : $0) }')
 
+# "✕ close" header token + click-header bind: an iPad/Termius tap-to-dismiss where
+# Escape is a reach (issue #346) — tapping ✕/close aborts fzf → empty pick → exit.
 pick=$(printf '%s\n' "$listing" \
   | fzf --ansi --no-sort --layout=reverse --height=100% \
         --prompt='switch to fleet ▸ ' \
-        --header="jump to a running fleet  ·  enter=switch · esc=cancel   [now: ${cur:-?}]" \
+        --header="jump to a running fleet  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
+        --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | awk '{print $2}')
 
 [ -n "$pick" ] || exit 0

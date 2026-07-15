@@ -57,7 +57,11 @@ HDR="$SLOTS · ↵ work · ⌃n new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
-  HDR="$HDR · esc close"
+  # POPUP only: a tappable ✕ close for iPad/Termius, where Escape is a reach
+  # (issue #346). The click-header bind in run_fzf aborts when the ✕/close header
+  # word is tapped; abort closes the popup (windowed panes just reopen, so the ✕
+  # token is popup-only and the bind is inert there — no matching header word).
+  HDR="$HDR · esc · ✕ close"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
   X_BIND="ctrl-x:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
@@ -97,6 +101,7 @@ run_fzf() {
     --bind "$X_BIND" \
     --bind "$P_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async)${ENTER_TAIL}" \
+    --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
     >/dev/null 2>&1
 }
 
