@@ -80,10 +80,16 @@ fi
 # repaints with the fresh tag). {1} is the row's issue number.
 P_BIND="ctrl-y:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload(bash $ROWS $MODE)"
 
+# The panel is list-only by default (search off, issue #156). `--no-input` also
+# DROPS the query/prompt input row entirely (issue #361) — one less line of
+# chrome on small/iPad screens, and it never gets typed into by mistake. `/`
+# reveals it on demand: show-input un-hides the row, enable-search turns the
+# (still --disabled) filter on, change-prompt relabels it. esc closes the panel;
+# reopening (windowed loop / prefix+b) starts fresh with the row hidden again.
 run_fzf() {
   rm -f "$ACT"
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
-    --no-sort --disabled \
+    --no-sort --disabled --no-input \
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
@@ -94,7 +100,7 @@ run_fzf() {
     --bind "ctrl-r:reload(bash $ROWS $MODE)" \
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
-    --bind "/:enable-search+change-prompt(filter ▸ )" \
+    --bind "/:show-input+enable-search+change-prompt(filter ▸ )" \
     --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
