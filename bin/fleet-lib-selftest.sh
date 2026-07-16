@@ -280,6 +280,48 @@ eq "load_conf: global-only notifier NOT overridable" "/good.sh" \
 eq "load_conf: absent conf no-op" "keep" \
   "$( FLEET_CTX_WINDOW=keep; fleet_load_conf no-such-sess; printf '%s' "$FLEET_CTX_WINDOW" )"
 
+# issue #399: fleet-lib.sh AUTO-SOURCES its sibling GLOBAL fleet.conf on load and
+# EXPORTS the global-only cap, so the slots chip + spawn gate honor a configured
+# FLEET_GLOBAL_MAX_SESSIONS — and children/subshells inherit it — with NO manual
+# `export`. Build a scratch install tree (bin/ + a SIBLING fleet.conf) and source the
+# COPY so BASH_SOURCE resolves there; the real repo bin has no sibling conf (the
+# "default /8" branch depends on that). Each subshell unsets the process-wide
+# double-source guard + the skip flag + any inherited cap so the auto-source runs.
+G399="$WORK/g399"; mkdir -p "$G399/bin"; cp "$LIB" "$G399/bin/fleet-lib.sh"
+printf 'FLEET_GLOBAL_MAX_SESSIONS=20\n' > "$G399/fleet.conf"
+eq "g399: conf cap sourced on load (no export needed)" "20" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399/bin/fleet-lib.sh"; printf '%s' "${FLEET_GLOBAL_MAX_SESSIONS:-}" )"
+# EXPORTED → a CHILD process (the gate/chip run in command-substitution subshells,
+# tmux run-shell spawns fresh children) sees it WITHOUT re-sourcing the conf — the
+# exact inheritance that failed before the fix.
+eq "g399: cap EXPORTED to children" "20" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399/bin/fleet-lib.sh"; bash -c 'printf "%s" "${FLEET_GLOBAL_MAX_SESSIONS:-unset}"' )"
+# slots chip denominator reflects the sourced cap (/20, not the /8 default).
+eq "g399: slots chip shows N/20" "5/20" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399/bin/fleet-lib.sh"; fleet_slots_chip 5 | grep -oE '[0-9]+/[0-9]+' )"
+# spawn gate honors the sourced cap: refuses AT 20 (with a 20/20 message), allows below.
+eq "g399: gate refuses at cap (20/20)" "refused 20/20" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399/bin/fleet-lib.sh"; fleet_session_count() { printf 20; }
+      if msg=$(fleet_session_cap_ok); then printf allowed
+      else printf 'refused %s' "$(printf '%s' "$msg" | grep -oE '[0-9]+/[0-9]+')"; fi )"
+eq "g399: gate allows below cap (19 < 20)" "allowed" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399/bin/fleet-lib.sh"; fleet_session_count() { printf 19; }
+      if fleet_session_cap_ok >/dev/null; then printf allowed; else printf refused; fi )"
+# NO sibling fleet.conf → the load is a clean no-op → the default /8 stands.
+G399B="$WORK/g399b"; mkdir -p "$G399B/bin"; cp "$LIB" "$G399B/bin/fleet-lib.sh"
+eq "g399: no conf → default /8" "3/8" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
+      . "$G399B/bin/fleet-lib.sh"; fleet_slots_chip 3 | grep -oE '[0-9]+/[0-9]+' )"
+# FLEET_SKIP_GLOBAL_CONF=1 opts out even WITH a sibling conf (the hermetic-runner path).
+eq "g399: skip flag opts out (conf ignored)" "" \
+  "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_GLOBAL_MAX_SESSIONS; export FLEET_SKIP_GLOBAL_CONF=1
+      . "$G399/bin/fleet-lib.sh"; printf '%s' "${FLEET_GLOBAL_MAX_SESSIONS:-}" )"
+
 # fleet_each_conf enumerates each fleet ONCE, preferring the new layout. Give
 # fleet-a BOTH a new dir and a legacy flat conf — it must appear only once (new).
 printf 'FLEET_REPO="acme/stale"\n' > "$CONFROOT/fleet-a.conf"
