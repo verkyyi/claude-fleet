@@ -32,7 +32,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-webhook-selftest.XXXXXX")" || exit 2
 cleanup() {
   # kill any fake forwards this test spawned (unique path → safe), then the dir.
   local p
-  for p in "$WORK"/state*/forwards/*.pid "$WORK"/rstate/forwards/*.pid; do
+  for p in "$WORK"/*state*/forwards/*.pid; do
     [ -f "$p" ] || continue
     kill "$(cat "$p" 2>/dev/null)" 2>/dev/null || :
   done
@@ -136,7 +136,12 @@ exec sleep 600
 EOF
 chmod +x "$WORK/fakefwd.sh"
 RST="$WORK/rstate"
+# A no-hooks stub keeps every reconcile pass hermetic: wh_spawn_forward reaps the
+# repo's forwarder hook before launching (issue #391), and without this stub that
+# would fall through to a real `gh api` call. Empty output ⇒ nothing to reap.
+NOHOOKS="$WORK/hooks-none.sh"; printf '#!/bin/sh\nexit 0\n' > "$NOHOOKS"; chmod +x "$NOHOOKS"
 recon() { FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$RST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
+            FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" \
             bash "$WH" --reconcile alpha beta gamma delta >/dev/null 2>&1; }
 
 recon
@@ -161,5 +166,59 @@ recon
 [ -f "$RST/forwards/acme-gizmos.pid" ] && fail 'opted-out repo still has a forward pidfile'; ok
 kill -0 "$gp" 2>/dev/null && fail 'opted-out forward process still alive'; ok
 
-printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile)\n' "$pass"
+# --- REAP ORPHANED FORWARDER HOOK (issue #391) ------------------------------
+# Before each (re)spawn the daemon lists the repo's hooks and DELETEs any whose
+# config.url host is the relay (an orphan a slept host left registered) — leaving a
+# user's OWN webhook (different host) untouched. Stub the list + delete gh calls and
+# assert exactly the forwarder hook id is deleted.
+DELLOG="$WORK/del.log"; : > "$DELLOG"
+cat > "$WORK/hooks-list.sh" <<EOF
+#!/bin/sh
+# id \t active \t last_code \t config_url — a dead forwarder hook + a user's own hook
+printf '111\tfalse\t404\thttps://webhook-forwarder.github.com/hook\n'
+printf '222\ttrue\t200\thttps://ci.example.com/webhook\n'
+EOF
+chmod +x "$WORK/hooks-list.sh"
+cat > "$WORK/hook-del.sh" <<EOF
+#!/bin/sh
+echo "\$2" >> "$DELLOG"   # record the deleted hook id (arg 2)
+EOF
+chmod +x "$WORK/hook-del.sh"
+RPST="$WORK/rpstate"
+FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$RPST" \
+  FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
+  FLEET_WH_HOOKS_LIST_CMD="$WORK/hooks-list.sh" \
+  FLEET_WH_HOOK_DEL_CMD="$WORK/hook-del.sh" \
+  bash "$WH" --reconcile alpha >/dev/null 2>&1
+eq 'reap deletes ONLY the forwarder hook (leaves the user hook)' "$(tr '\n' ' ' < "$DELLOG")" '111 '
+
+# --- RESTART BACKOFF (issue #391) -------------------------------------------
+# A forward that keeps dying (a persistent create failure) must back off, not
+# hot-loop. We simulate a death by KILLING a long-lived fake forward (and waiting
+# for it to reap — a self-exiting fake would linger as a zombie that `kill -0`
+# still reports alive). With BASE huge, one recorded death sets a far-future
+# deadline, so the next reconcile SKIPS the respawn (pid + fail count unchanged).
+BST="$WORK/bstate"
+brecon() { FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$BST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
+             FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" FLEET_WH_BACKOFF_BASE=3600 FLEET_WH_BACKOFF_CAP=7200 \
+             bash "$WH" --reconcile alpha >/dev/null 2>&1; }
+wait_dead() { local n; for n in $(seq 1 40); do kill -0 "$1" 2>/dev/null || return 0; done; }
+brecon                                            # pass 1: first spawn (long-lived, alive)
+b1=$(cat "$BST/forwards/acme-widgets.pid")
+kill "$b1" 2>/dev/null; wait_dead "$b1"           # simulate its death
+brecon                                            # pass 2: dead → record death #1, respawn
+eq 'first death is counted' "$(cat "$BST/forwards/acme-widgets.fails" 2>/dev/null)" 1
+b2=$(cat "$BST/forwards/acme-widgets.pid")
+kill "$b2" 2>/dev/null; wait_dead "$b2"           # kill the respawn too
+brecon                                            # pass 3: within deadline → SKIP respawn
+eq 'backoff skips respawn (pid unchanged)' "$(cat "$BST/forwards/acme-widgets.pid" 2>/dev/null)" "$b2"
+eq 'backoff skip does not recount the death'  "$(cat "$BST/forwards/acme-widgets.fails" 2>/dev/null)" 1
+# a forward that recovers (seen ALIVE) clears the backoff state, starting fresh.
+printf '0' > "$BST/forwards/acme-widgets.until"   # expire the deadline so a respawn is allowed
+brecon                                            # deadline past → respawns a live fake, records death #2
+brecon                                            # now sees it alive → clears .fails/.until
+[ -f "$BST/forwards/acme-widgets.fails" ] && fail 'alive forward did not clear .fails'; ok
+[ -f "$BST/forwards/acme-widgets.until" ] && fail 'alive forward did not clear .until'; ok
+
+printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff)\n' "$pass"
 exit 0
