@@ -133,8 +133,7 @@ EOF
 i=1
 LAST='|'
 LAST_NEEDS='|'   # per-session @attn_needs counts published last frame (change-detect)
-LAST_STEWARD='|' # per-session @steward_needs flags published last frame (change-detect)
-LAST_OTHER='|'   # per-session @attn_other_fleets counts published last frame (issue #236)
+LAST_OTHER='|'   # per-session @attn_other_windows counts published last frame (issues #236, #368)
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
@@ -142,7 +141,7 @@ while :; do
   # re-probing) while no fleet is up so a freshly-spawned fleet is picked up fast.
   socc=$((socc + 1))
   if [ "$socc" -ge "$SOCK_EVERY" ] || [ -z "$SOCKETS" ]; then socc=0; SOCKETS=$(fleet_sockets); fi
-  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_STEWARD='|'; LAST_OTHER='|'; continue; fi
+  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; continue; fi
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
@@ -161,11 +160,10 @@ while :; do
   # token, so a repaint still fires exactly once per real change across the estate.
   NEW='|'
   NEW_NEEDS='|'
-  NEW_STEWARD='|'
-  AGG=''   # "sess sock need" per live fleet this frame → cross-fleet pass (issue #236)
+  AGG=''   # "sess sock count" per live fleet this frame → cross-fleet pass (issues #236, #368)
   # Each fleet is its OWN tmux server (issue #159): scan + apply PER SOCKET, each
   # with its own command file + `tmux -L … source-file`. Change-detection state
-  # (LAST/LAST_NEEDS/LAST_STEWARD) stays GLOBAL, keyed by the globally-unique
+  # (LAST/LAST_NEEDS) stays GLOBAL, keyed by the globally-unique
   # session:index token, so a repaint fires exactly once per real change estate-wide.
   for sock in $SOCKETS; do
     # Fields SPACE-separated; a '-' placeholder for an EMPTY @claude_state keeps the
@@ -205,27 +203,27 @@ while :; do
 $wins
 EOF
 
-    # --- needs signals: worker badge + steward icon (issues #105, #166) --------
-    # PER SESSION, split into two signals that never double-count a window:
-    #   @attn_needs    — WORKERS: needy windows EXCLUDING hub panels (plan/dash/
-    #                    backlog); status-left renders a red "● N" badge (hides at 0).
-    #   @steward_needs — the HUB: 1 when a panel window is needy (the steward is
-    #                    waiting on you), else 0; drives the ⌂ hub icon.
-    # Reuses this socket's scan ($wins); change-detected + batched into this
-    # socket's $cmdf so each only re-sets when it actually moves.
+    # --- needs signal: one unified "● N" badge (issues #105, #166, #368) --------
+    # PER SESSION: @attn_needs = count of needy windows, counting the plan
+    # (steward) window as a normal session alongside the workers (issue #368) and
+    # excluding only the non-claude panels dash/backlog. status-left renders it as a
+    # red "● N" badge (hidden at 0, with a render-time active-window discount).
+    # A needy steward now lands in this one number instead of the retired
+    # @steward_needs flag, so the ⌂ icon is nav-only. Reuses this socket's scan
+    # ($wins); change-detected + batched into this socket's $cmdf so it only re-sets
+    # when it actually moves.
     needs_map=$(awk '
       { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
         if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
-        if ($2 == "needs") {
-          if ($3 ~ /^(plan|dash|backlog)$/) sw[s] = 1   # hub panel  → steward icon
-          else c[s]++                                    # worker win → badge
-        } }
-      END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d %d\n", s, c[s] + 0, sw[s] + 0 } }
+        # plan(steward) + workers count into the badge; only dash/backlog (non-claude
+        # panels) are excluded (issue #368).
+        if ($2 == "needs" && $3 !~ /^(dash|backlog)$/) c[s]++ }
+      END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }
     ' <<EOF
 $wins
 EOF
 )
-    while read -r nsess ncnt nstew; do
+    while read -r nsess ncnt; do
       [ -z "$nsess" ] && continue
       ntok="$nsess=$ncnt"
       case "$LAST_NEEDS" in
@@ -233,18 +231,11 @@ EOF
         *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$cmdf"; changed=1 ;;
       esac
       NEW_NEEDS="$NEW_NEEDS$ntok|"
-      stok="$nsess=$nstew"
-      case "$LAST_STEWARD" in
-        *"|$stok|"*) : ;;
-        *) printf 'set-option -t %s @steward_needs "%s"\n' "$nsess" "$nstew" >> "$cmdf"; changed=1 ;;
-      esac
-      NEW_STEWARD="$NEW_STEWARD$stok|"
-      # Cross-fleet feed (issue #236): does THIS session need attention (a worker
-      # badge > 0 OR a needy steward hub)? Record that flag + its socket so the
-      # post-loop pass can tell every OTHER fleet how many fleets are waiting.
-      oneed=0
-      { [ "${ncnt:-0}" -gt 0 ] || [ "${nstew:-0}" -gt 0 ]; } 2>/dev/null && oneed=1
-      AGG="$AGG$nsess $sock $oneed$NL"
+      # Cross-fleet feed (issues #236, #368): record THIS session's needy-WINDOW
+      # count + its socket so the post-loop pass can tell every OTHER fleet how many
+      # needy windows wait elsewhere — the orange cross-fleet ● shows a WINDOW count
+      # (same unit as the local ● badge), not a fleet count.
+      AGG="$AGG$nsess $sock $ncnt$NL"
     done <<EOF
 $needs_map
 EOF
@@ -253,32 +244,33 @@ EOF
   done
   LAST="$NEW"
   LAST_NEEDS="$NEW_NEEDS"
-  LAST_STEWARD="$NEW_STEWARD"
 
-  # --- cross-fleet needs → @attn_other_fleets (issue #236) --------------------
+  # --- cross-fleet needs → @attn_other_windows (issues #236, #368) ------------
   # An operator attached to ONE fleet couldn't tell that a DIFFERENT fleet was
-  # waiting — the needs signal (● badge / ⌂ beacon) is scoped to this fleet only.
-  # Reuse the per-session need flags just gathered in $AGG (one "sess sock need"
-  # line per live fleet) to publish, per fleet, how many OTHER live fleets need
-  # attention. total_need = # of fleets waiting; each fleet's own count is
-  # total_need minus its OWN need, so a needy fleet never counts itself and a calm
-  # fleet sees them all. conf/tmux-attention.conf renders this into the EXISTING
-  # #S fleet-switcher chip (no new bar element) — clicking #S opens the picker to
-  # jump to the waiting fleet. Runs AFTER the socket loop because it needs the
-  # estate-wide total first; change-detected + published per socket like @attn_needs.
+  # waiting — the local needs signal (● badge) is scoped to this fleet only. Reuse
+  # the per-session needy-WINDOW counts just gathered in $AGG (one "sess sock count"
+  # line per live fleet) to publish, per fleet, how many needy windows wait in OTHER
+  # fleets: total_windows (estate-wide sum) minus this fleet's own count, so a fleet
+  # never counts its own windows and a calm fleet sees them all. Same UNIT as the
+  # local ● badge (issue #368 replaced the old ⚑ fleet-count flag with a second,
+  # ORANGE "● N" dot in conf/tmux-attention.conf) — clicking that dot one-tap jumps
+  # to the waiting fleet. Runs AFTER the socket loop because it needs the estate-wide
+  # total first; change-detected + published per socket like @attn_needs.
   NEW_OTHER='|'
   if [ -n "$AGG" ]; then
-    total_need=0
-    while read -r asess asock aneed; do
+    total_windows=0
+    while read -r asess asock acnt; do
       [ -n "$asess" ] || continue
-      [ "$aneed" = 1 ] && total_need=$((total_need + 1))
+      case "$acnt" in ''|*[!0-9]*) acnt=0 ;; esac
+      total_windows=$((total_windows + acnt))
     done <<EOF
 $AGG
 EOF
     otouched=''
-    while read -r asess asock aneed; do
+    while read -r asess asock acnt; do
       [ -n "$asess" ] || continue
-      oother=$((total_need - aneed))
+      case "$acnt" in ''|*[!0-9]*) acnt=0 ;; esac
+      oother=$((total_windows - acnt))
       otok="$asess=$oother"
       case "$LAST_OTHER" in
         *"|$otok|"*) : ;;
@@ -288,7 +280,7 @@ EOF
             *" $asock "*) : ;;
             *) : > "$ocmd"; otouched="$otouched $asock" ;;
           esac
-          printf 'set-option -t %s @attn_other_fleets "%s"\n' "$asess" "$oother" >> "$ocmd" ;;
+          printf 'set-option -t %s @attn_other_windows "%s"\n' "$asess" "$oother" >> "$ocmd" ;;
       esac
       NEW_OTHER="$NEW_OTHER$otok|"
     done <<EOF

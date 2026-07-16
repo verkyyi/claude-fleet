@@ -172,13 +172,15 @@ latency exceeds the ~500 ms double-click window), and `prefix z` is a chord on a
 soft keyboard — but a single click on a status range always lands. It's additive:
 desktop double-click-to-zoom stays.
 
-The `#S` chip also carries the **cross-fleet** cue: when you're attached to one
-fleet and a **different** live fleet has a needs-attention session, an orange
-**`⚑ N` flag** appears next to the fleet name — `N` = how many *other* fleets are
-waiting. It reuses the existing `#S` element (no new bar item), so clicking it
-opens the same picker to jump straight to the waiting fleet. Orange `⚑` means
-"another fleet needs you"; the red `●` means "*this* fleet needs you." The signal
-is produced by the spinner daemon, which already reads every live fleet's state
+The status-left also carries the **cross-fleet** cue: when you're attached to one
+fleet and a **different** live fleet has needy windows, a second **`● N` dot in
+orange** appears — `N` = how many needy *windows* are waiting across all *other*
+fleets (the same dot and unit as the local red `●`, color alone saying
+"elsewhere"). It's its own clickable range that **one-tap jumps** to the waiting
+fleet: exactly one fleet waiting detaches-and-reattaches straight to it; several
+open the fleet-picker scoped to just the waiting fleets. Orange `●` means "another
+fleet needs you"; the red `●` means "*this* fleet needs you." The signal is
+produced by the spinner daemon, which already reads every live fleet's state
 across sockets.
 
 ### tmux baseline

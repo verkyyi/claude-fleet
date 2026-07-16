@@ -15,6 +15,17 @@ cur=$(tmux display-message -p '#S' 2>/dev/null)
 # Live fleets only (● marker), from fleet-list.sh minus its header row.
 rows=$(bash "$BIN/fleet-list.sh" 2>/dev/null | tail -n +2 | grep -E '^●' || true)
 
+# Optional scoping (issue #368): FLEET_PICK_ONLY = a whitespace/newline-separated
+# set of session names to restrict the picker to — the cross-fleet ● jump
+# (fleet-xfleet-jump.sh) passes JUST the fleets that are waiting for attention.
+# Unset/empty ⇒ every live fleet (the plain #S-name picker).
+only="${FLEET_PICK_ONLY:-}"
+if [ -n "$only" ]; then
+  rows=$(printf '%s\n' "$rows" | awk -v only="$only" '
+    BEGIN { n = split(only, a, /[[:space:]]+/); for (i = 1; i <= n; i++) if (a[i] != "") keep[a[i]] = 1 }
+    ($2 in keep)')
+fi
+
 if [ -z "$rows" ]; then
   printf 'no live fleets found.\n'; sleep 2; exit 0
 fi
@@ -36,9 +47,11 @@ listing=$(printf '%s\n' "$rows" | awk -v cur="$cur" \
 # retires the now-inert --prompt (the prompt only ever rendered on that row).
 # "✕ close" header token + click-header bind: an iPad/Termius tap-to-dismiss where
 # Escape is a reach (issue #346) — tapping ✕/close aborts fzf → empty pick → exit.
+hdr="jump to a running fleet"
+[ -n "$only" ] && hdr="jump to a waiting fleet"   # scoped by the cross-fleet ● (issue #368)
 pick=$(printf '%s\n' "$listing" \
   | fzf --ansi --no-sort --layout=reverse --height=100% --no-input \
-        --header="jump to a running fleet  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
+        --header="$hdr  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
         --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | awk '{print $2}')
 

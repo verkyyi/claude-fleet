@@ -89,7 +89,7 @@ print_sheet() {
   key "prefix ?" "this cheatsheet"
   key "F9" "(no prefix) jump back to this session's steward hub"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
-  key "click ⚑ N" "orange flag on the #S chip = N OTHER fleets need you; click to switch"
+  key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
   key "click ◉ / usage" "footer account chip / usage stat — opens the usage + account modal"
   fi
 
