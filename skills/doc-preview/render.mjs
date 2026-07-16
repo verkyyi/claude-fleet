@@ -39,32 +39,40 @@ function pageHtml(title, b64, meta = {}) {
 <!-- Dark variants are scoped to screen only: print media queries can't flip prefers-color-scheme,
      so an unscoped dark stylesheet would print a dark (ink-wasting) page from a dark-themed device.
      Light variants also cover print → printing is always light, automatically. -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown-light.min.css" media="print, screen and (prefers-color-scheme: light)">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown-dark.min.css" media="screen and (prefers-color-scheme: dark)">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.min.css" media="print, screen and (prefers-color-scheme: light)">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" media="screen and (prefers-color-scheme: dark)">
 <style>
- /* 阅读/打印优先：无交互组件，只有干净的文档排版。明暗跟随系统，与索引页同一设计语言。 */
+ /* doc-preview 文档样式 —— 阅读/打印优先，明暗跟随系统，无交互组件（仅 tailnet 内公开链接开关）。
+    设计语言对齐 Claude Artifact 文档：考究字阶 + 有色偏中性色 + 单一强调色(teal) + 打印适配。 */
  :root{color-scheme:light dark;
-   --bg:#fff;--mut:#636c76;--bd:#d8dee4;--accent:#0969da}
- @media(prefers-color-scheme:dark){:root{--bg:#0d1117;--mut:#8b949e;--bd:#30363d;--accent:#4493f8}}
+   --ground:#f3f6f5;--surface:#fff;--ink:#1a2220;--mut:#5c6d68;
+   --accent:#0f9e86;--accent-soft:#e6f4ef;--hairline:#e5eae8;--bd:#e5eae8;
+   --code-bg:#f4f7f6;--code-ink:#1f2a27;--sel:#cdeee5;
+   --shadow:0 1px 2px rgba(20,40,36,.05),0 16px 40px -22px rgba(20,40,36,.28);--maxw:47rem}
+ @media(prefers-color-scheme:dark){:root{
+   --ground:#0e1413;--surface:#151d1b;--ink:#e9efec;--mut:#93a7a1;
+   --accent:#3fc9ad;--accent-soft:#123029;--hairline:#243330;--bd:#243330;
+   --code-bg:#101917;--code-ink:#d6e0dd;--sel:#1d4b41;
+   --shadow:0 1px 2px rgba(0,0,0,.3),0 22px 46px -24px rgba(0,0,0,.62)}}
  html{scroll-behavior:smooth}
- body{margin:0;background:var(--bg)}
- .hdr{max-width:860px;margin:0 auto;padding:16px 22px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-   font:12.5px/1.5 -apple-system,system-ui,"PingFang SC",sans-serif;color:var(--mut)}
- .hdr a{display:inline-flex;align-items:center;gap:5px;color:var(--accent);text-decoration:none}
+ body{margin:0;background:var(--ground);color:var(--ink);
+   font:15.5px/1.78 -apple-system,BlinkMacSystemFont,system-ui,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+ ::selection{background:var(--sel)}
+ /* 页眉 + 公开链接开关（与文档同宽居中） */
+ .hdr{max-width:var(--maxw);margin:0 auto;padding:22px 8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+   font-size:12.5px;color:var(--mut)}
+ .hdr a{display:inline-flex;align-items:center;gap:5px;color:var(--accent);text-decoration:none;font-weight:500}
  .hdr a:hover{text-decoration:underline}
  .hdr .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;overflow-wrap:anywhere}
- .hdr .sep{opacity:.55;margin:0 3px}
+ .hdr .sep{opacity:.5;margin:0 2px}
  .ico{flex:none;vertical-align:-2px}
- /* 公开链接开关：仅在 tailnet 内访问文档时出现（脚本按 /p/ 路径隐藏公网视图）。 */
  .share{display:inline-flex;align-items:center;gap:7px;margin-left:auto}
- .share[hidden]{display:none}   /* keep the hidden attr authoritative (public view never reveals it) */
+ .share[hidden]{display:none}
  .share .swlbl{font-size:12px;color:var(--mut)}
  .sw{position:relative;width:34px;height:19px;flex:none;border-radius:999px;border:1px solid var(--bd);
-   background:#e7ebf0;cursor:pointer;padding:0;transition:.15s}
- @media(prefers-color-scheme:dark){.sw{background:#21262d}}
- .sw .knob{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:50%;background:#fff;
+   background:color-mix(in srgb,var(--ink) 9%,transparent);cursor:pointer;padding:0;transition:.15s}
+ .sw .knob{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:50%;background:var(--surface);
    box-shadow:0 1px 2px rgba(0,0,0,.25);transition:.15s}
  .share.on .sw{background:var(--accent);border-color:var(--accent)}
  .share.on .sw .knob{left:16px}
@@ -75,35 +83,101 @@ function pageHtml(title, b64, meta = {}) {
  .cpy{font-size:11px;border:1px solid var(--bd);background:transparent;color:var(--mut);border-radius:6px;padding:1px 7px;cursor:pointer}
  .cpy:hover{color:var(--accent);border-color:var(--accent)}
  .spin{font-size:12px;color:var(--mut)}
- .markdown-body{box-sizing:border-box;max-width:860px;margin:0 auto;padding:26px 22px 90px}
- .markdown-body :is(h1,h2,h3,h4){scroll-margin-top:16px}
- .markdown-body h1:first-child{margin-top:2px}
- /* 表格：单元格允许换行（窄屏/打印都能完整读），过宽时容器内滚动兜底，数字用等宽数字。 */
- .tbl{overflow-x:auto;margin-bottom:16px}
- .markdown-body .tbl table{margin:0;display:table;width:100%;max-width:none;font-variant-numeric:tabular-nums}
- .markdown-body .tbl :is(th,td){white-space:normal;word-break:break-word}
+ /* 文档纸面 */
+ .markdown-body{box-sizing:border-box;max-width:var(--maxw);margin:16px auto 60px;background:var(--surface);
+   border:1px solid var(--hairline);border-radius:14px;box-shadow:var(--shadow);padding:clamp(24px,4.5vw,52px)}
+ .markdown-body>:first-child{margin-top:0}
+ .markdown-body>:last-child{margin-bottom:0}
+ .markdown-body :is(h1,h2,h3,h4,h5,h6){line-height:1.32;font-weight:700;text-wrap:balance;scroll-margin-top:16px;margin:1.85em 0 .7em}
+ .markdown-body h1{font-size:1.68em;margin:.1em 0 .5em;letter-spacing:-.01em}
+ .markdown-body h2{font-size:1.16em;letter-spacing:.005em}
+ .markdown-body :is(h2,h3).numbered{display:flex;align-items:baseline;gap:.5em}
+ .markdown-body .hn{flex:none;color:var(--accent);font-weight:700;font-size:.86em;font-variant-numeric:tabular-nums;min-width:1.3em}
+ .markdown-body .ht{text-wrap:balance;min-width:0}
+ .markdown-body h3{font-size:.98em;color:var(--mut);margin-top:1.7em}
+ .markdown-body h4{font-size:1.02em}
+ .markdown-body :is(h5,h6){font-size:.9em;color:var(--mut);letter-spacing:.02em}
+ .markdown-body p{margin:0 0 1em}
+ .markdown-body a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 32%,transparent)}
+ .markdown-body a:hover{border-bottom-color:var(--accent)}
+ .markdown-body strong{font-weight:700}
+ .markdown-body em{font-style:italic}
+ .markdown-body hr{height:1px;background:var(--hairline);border:0;margin:2em 0}
+ .markdown-body :is(ul,ol){margin:0 0 1em;padding-left:1.45em}
+ .markdown-body li{margin:.3em 0}
+ .markdown-body li::marker{color:var(--accent)}
+ .markdown-body :is(ul ul,ol ol,ul ol,ol ul){margin:.25em 0}
+ .markdown-body li.task-list-item{list-style:none;margin-left:-1.15em}
+ .markdown-body li.task-list-item input{margin:0 .5em 0 0;vertical-align:middle}
+ .markdown-body blockquote{margin:0 0 1.15em;padding:.72em 1.05em;background:var(--accent-soft);
+   border-radius:10px;border-left:3px solid var(--accent)}
+ .markdown-body blockquote>:first-child{margin-top:0}
+ .markdown-body blockquote>:last-child{margin-bottom:0}
+ .markdown-body blockquote p{font-size:.96em}
+ .markdown-body .eyebrow{display:flex;align-items:center;gap:10px;font-size:12px;letter-spacing:.12em;color:var(--mut);margin:0 0 14px}
+ .markdown-body .eyebrow .brand{color:var(--accent);font-weight:700;letter-spacing:.05em}
+ .markdown-body .eyebrow .sep{width:1px;height:12px;background:var(--hairline)}
+ .markdown-body .status{display:inline-flex;align-items:center;gap:7px;margin:.1em 0 .3em;padding:5px 13px;background:var(--accent-soft);color:var(--accent);border-radius:999px;font-size:13px;font-weight:600;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ .markdown-body .status .dot{flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}
+ .markdown-body .facts{display:grid;grid-template-columns:max-content 1fr;border-top:1px solid var(--hairline);margin:0 0 1.15em}
+ .markdown-body .facts dt{padding:11px 20px 11px 0;color:var(--mut);font-size:13px;white-space:nowrap;border-bottom:1px solid var(--hairline)}
+ .markdown-body .facts dd{margin:0;padding:11px 0;border-bottom:1px solid var(--hairline)}
+ .markdown-body .safe{color:var(--accent);font-weight:600}
+ @media(max-width:520px){.markdown-body .facts{grid-template-columns:1fr}.markdown-body .facts dt{padding-bottom:2px;border-bottom:0}.markdown-body .facts dd{padding-top:2px}.markdown-body .facts dd:not(:last-child){padding-bottom:12px}}
+ .markdown-body .doc-footer{margin:2.6em 0 .4em;padding-top:1.7em;border-top:1px solid var(--hairline);text-align:center}
+ .markdown-body .doc-footer .cta{margin:0 0 13px;font-size:14px;font-weight:600;color:var(--accent)}
+ .markdown-body .doc-footer .qr{width:128px;height:128px;border-radius:11px;border:1px solid var(--hairline);background:#fff;padding:7px;box-sizing:content-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ .markdown-body .doc-footer .org{margin:15px 0 0;font-size:13px;color:var(--mut)}
+ .markdown-body .doc-footer .co{margin:3px 0 0;font-size:12px;color:var(--mut);opacity:.82}
+ .markdown-body :not(pre)>code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.87em;
+   background:var(--code-bg);color:var(--code-ink);padding:.13em .42em;border-radius:5px;border:1px solid var(--hairline)}
+ .markdown-body pre{margin:0 0 1.15em;padding:14px 16px;background:var(--code-bg);border:1px solid var(--hairline);
+   border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.6}
+ .markdown-body pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:none;border:0;padding:0;color:var(--code-ink)}
+ .markdown-body pre code.hljs{background:none;padding:0}
+ .markdown-body img{max-width:100%;height:auto;border-radius:8px}
+ .markdown-body .mermaid{margin:0 0 1.15em;text-align:center;overflow-x:auto}
+ /* 表格：容器可横滚（窄屏/长表兜底），细线 + 斑马 + 等宽数字 */
+ .tbl{overflow-x:auto;margin:0 0 1.3em;border:1px solid var(--hairline);border-radius:10px}
+ .markdown-body .tbl table{margin:0;display:table;width:100%;max-width:none;border-collapse:collapse;
+   font-size:13.5px;line-height:1.55;font-variant-numeric:tabular-nums}
+ .markdown-body .tbl thead th{background:color-mix(in srgb,var(--accent-soft) 60%,var(--surface));
+   text-align:left;font-weight:700;color:var(--mut);font-size:12px;letter-spacing:.02em;
+   padding:9px 13px;border-bottom:1.5px solid var(--hairline);white-space:nowrap}
+ .markdown-body .tbl td{padding:8px 13px;border-bottom:1px solid var(--hairline);vertical-align:top;
+   white-space:normal}
+ /* 长 token（会员编号/哈希/URL）不折行，整体展示；过宽时表格容器横向滚动 */
+ .markdown-body .tbl :is(td,th){overflow-wrap:normal}
+ .markdown-body .tbl :is(td,th) code{white-space:nowrap;word-break:normal}
+ .markdown-body .nw{white-space:nowrap}  /* 单元格内不折行的短数据（时间/编号等） */
+ .markdown-body .tbl tbody tr:last-child td{border-bottom:0}
+ .markdown-body .tbl tbody tr:nth-child(even){background:color-mix(in srgb,var(--accent-soft) 30%,transparent)}
+ .markdown-body .tbl :is(th,td)[align=right]{text-align:right}
+ .markdown-body .tbl :is(th,td)[align=center]{text-align:center}
  @media(max-width:760px){
-   .markdown-body{padding:20px 15px 70px;font-size:15px}
-   .markdown-body h1{font-size:1.55em}.markdown-body h2{font-size:1.28em}
-   .markdown-body .tbl :is(th,td){font-size:12.5px;padding:5px 8px}
-   .hdr{padding:12px 15px 0}
+   body{font-size:15px}
+   .markdown-body{margin:10px auto 44px;padding:20px 16px;border-radius:12px}
+   .markdown-body h1{font-size:1.55em}.markdown-body h2{font-size:1.1em}
+   .markdown-body .tbl :is(th,td){font-size:12.5px;padding:6px 9px}
+   .hdr{padding:14px 13px 0}
  }
- /* Print: always a clean, light, ink-friendly page — no header/toggle, no page-break splits
-    through tables or rows, headings never orphaned at a page bottom. Applies automatically on
-    Cmd/Ctrl+P and "Save as PDF" regardless of the viewer's light/dark theme. */
  @media print{
-   :root{color-scheme:light}
+   :root{color-scheme:light;--ground:#fff;--surface:#fff}
    @page{margin:15mm}
-   html,body{background:#fff !important}
-   .hdr,.share,.spin{display:none !important}   /* header + public-link switch never print */
-   .markdown-body{max-width:none;margin:0;padding:0;font-size:12px;color:#1f2328;background:#fff}
-   .tbl{overflow:visible}
-   .markdown-body pre{white-space:pre-wrap;word-break:break-word}
-   .markdown-body :is(pre,blockquote,img,figure){break-inside:avoid}
-   .markdown-body thead{display:table-header-group}   /* repeat table headers on every page */
+   html,body{background:#fff !important;color:#1f2328}
+   .hdr,.share,.spin{display:none !important}
+   .markdown-body{max-width:none;margin:0;padding:0;border:0;border-radius:0;box-shadow:none;font-size:12px;background:#fff}
+   .markdown-body h1{border-color:#d5dbd9}
+   .tbl{overflow:visible;border-color:#d5dbd9}
+   .markdown-body pre{white-space:pre-wrap;word-break:break-word;background:#f6f8f7 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+   .markdown-body :is(pre,blockquote,img,figure,.mermaid){break-inside:avoid}
+   .markdown-body thead{display:table-header-group}
+   .markdown-body .tbl thead th{background:#eef4f2 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+   .markdown-body .tbl tbody tr:nth-child(even){background:#f6f9f8 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+   .markdown-body blockquote{background:#eef6f3 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
    .markdown-body tr{break-inside:avoid}
    .markdown-body :is(h1,h2,h3,h4){break-after:avoid-page;break-inside:avoid}
-   .markdown-body a{color:inherit;text-decoration:none}
+   .markdown-body a{color:inherit;border-bottom:0}
  }
 </style></head><body>
 <div class="hdr">
@@ -137,6 +211,15 @@ function pageHtml(title, b64, meta = {}) {
  const slug = (t) => { let s = t.trim().toLowerCase().replace(/[^\\w\\u4e00-\\u9fa5\\s-]/g,'').replace(/\\s+/g,'-') || 'section';
    if (used[s] != null) { used[s]++; s += '-' + used[s]; } else used[s] = 0; return s; };
  c.querySelectorAll('h1,h2,h3,h4').forEach(h=>{ h.id = slug(h.textContent); });
+ // 章节号（一/二/… 或 1./１．）抽成 teal 序号标记，贴近 Artifact 版式。
+ c.querySelectorAll('h2,h3').forEach(h=>{
+   const m=h.textContent.match(/^\\s*([0-9\\uFF10-\\uFF19一二三四五六七八九十百]{1,3})\\s*[、.．·)]\\s*(\\S.*)$/);
+   if(!m) return;
+   h.classList.add('numbered');
+   const hn=document.createElement('span'); hn.className='hn'; hn.textContent=m[1];
+   const ht=document.createElement('span'); ht.className='ht'; ht.textContent=m[2];
+   h.textContent=''; h.append(hn,ht);
+ });
 
  // mermaid（仅文档用到时才加载渲染）。
  if (c.querySelector('code.language-mermaid')) {
