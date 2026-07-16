@@ -175,6 +175,16 @@ cmd_record() {
   [ -z "$summary" ] && summary=$(resolve_summary "$sess" "$win")
 
   local ledger; ledger=$(ledger_path "$repo")
+  # Idempotent like record-closed (#384): record-before-remove now runs from TWO
+  # reapers — fleet-cleanup.sh on the merged PR AND worktree-autoclean.sh on its
+  # scan (both via fleet_reap_record) — so guard on the same session/transcript key
+  # to avoid a duplicate landed row when both record the same reap, or when a reaper
+  # retries after a failed `git worktree remove`. Same dedup key as ledger-watch's
+  # record-closed, so a session is recorded at most once regardless of the reaper.
+  if ledger_has_session "$ledger" "$sid" "$tdir"; then
+    printf 'landed #%s → already in ledger (session %s) — skipped\n' "$issue" "${sid:-none}"
+    return 0
+  fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
 
   # 10 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary·state

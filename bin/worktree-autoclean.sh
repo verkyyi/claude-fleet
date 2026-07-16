@@ -128,6 +128,16 @@ process() {
     case "$dr" in would\ reap:*) ex="$ex  [$dr]" ;; esac
     echo "PRUNE $branch  ($merged)  -> ${dir##*/}$ex"; removed=$((removed+1)); return
   fi
+  # Record a /fleet-history row BEFORE we remove the worktree (issue #384). The
+  # cleanup daemon is not the only reaper, so autoclean must write the row itself —
+  # else with FLEET_CLEANUP=0 (and ledger-watch unloaded) every worker reaped here
+  # silently vanishes from /fleet-history. The shared helper (also driven by
+  # fleet-cleanup.sh) maps a merged-PR reap → a `landed` row (PR resolved from the
+  # branch) and a clean-ancestor reap → a `closed-unlanded` row; it is idempotent,
+  # so it never double-records when the cleanup daemon is ALSO on. The window is
+  # already gone (this worktree passed the liveness gate), so there is no live
+  # --win/--session summary to pass — the recorded title still names the row.
+  fleet_reap_record "$merged" "$REPO" "$REPO_ROOT" "$inum" "$dir" "" "" "" "$branch"
   # Reap any detached process still anchored to this worktree BEFORE removing it —
   # otherwise a since-fixed hang can outlive the dir and peg a core against the
   # shared tmux server (issue #151). Nothing should outlive its worktree.
