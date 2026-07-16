@@ -1,23 +1,24 @@
 #!/bin/bash
-# backlog-preflight-selftest.sh — the "pre-flight will-refuse" backlog cues +
-# the "slots N/8" chip (issue #331).
+# backlog-preflight-selftest.sh — the backlog renders every issue state WITHOUT
+# the owner column (issue #389) + the "slots N/8" chip (issue #331).
 #
-# The spawn gate refuses an issue that is ASSIGNED (claimed by a peer / other
-# machine) or has an OPEN issue-<N> PR (in flight elsewhere), but the backlog
-# gave no advance warning: a foreign claim showed a bare assignee name and an
-# open PR was invisible. This drives the REAL bin/tmux-issues-rows.sh against a
-# REAL isolated tmux server (own socket, torn down at exit) with fixture issues +
-# a fixture prmap cache, and unit-tests fleet_slots_chip directly:
+# Issue #389 dropped the backlog's owner column, and with it the pre-flight
+# "will-refuse" cues it carried: the ◦ foreign-claim marker + assignee, the ⇡
+# in-flight marker + PR number (from the prmap cache), and the ▶ live-worker
+# marker. This drives the REAL bin/tmux-issues-rows.sh against a REAL isolated
+# tmux server (own socket, torn down at exit) with fixture issues + a fixture
+# prmap cache, and pins that NONE of those cues survive — plus it unit-tests
+# fleet_slots_chip directly (that chip is unrelated to the column and stays):
 #   • FREE          an unassigned issue with no PR renders plain (no marker glyph).
-#   • CLAIMED       a foreign-assigned issue is FLAGGED — a ◦ marker + its assignee.
-#   • IN-FLIGHT     an issue whose issue-<N> has an OPEN PR is FLAGGED — a ⇡ marker
-#                   + the PR number — even when it has NO assignee (invisible today).
-#   • PR WINS       assigned AND an open PR ⇒ the PR marker (the stronger in-flight
-#                   signal), not the claim marker.
-#   • MERGED PR     a MERGED/closed issue-<N> PR does NOT flag (the gate only
-#                   refuses on an OPEN PR).
+#   • CLAIMED       a foreign-assigned issue renders plain — NO ◦ marker, and its
+#                   assignee name is no longer shown.
+#   • IN-FLIGHT     an issue whose issue-<N> has an OPEN PR renders plain — NO ⇡
+#                   marker and no PR number, even with a prmap hit.
+#   • PR + CLAIM    assigned AND an open PR still renders plain — no marker, no
+#                   assignee, no PR number.
+#   • MERGED PR     a MERGED/closed issue-<N> PR renders plain (as it always did).
 #   • HIDE-BOUND    a locally-bound row stays hidden by default (unchanged).
-#   • COUNTS        milestone counts track the VISIBLE (free + flagged) rows.
+#   • COUNTS        milestone counts track the VISIBLE rows (the bound one hidden).
 #   • SLOTS CHIP    fleet_slots_chip colors dim with headroom, orange at the last
 #                   slot, red at/over the cap, and drops the denominator when the
 #                   cap is disabled (gmax=0).
@@ -95,35 +96,38 @@ r40="$(disp_of "$out" 40)"
 printf '%s' "$r40" | grep -qF '◦'      && fail "free #40 must NOT carry a claim marker" "$r40"
 printf '%s' "$r40" | grep -qF '⇡'      && fail "free #40 must NOT carry a PR marker" "$r40"
 
-# --- CLAIMED: #41 flagged with a ◦ marker + its assignee --------------------
+# --- CLAIMED: #41 renders plain — no ◦ marker, no assignee name (issue #389) --
 r41="$(disp_of "$out" 41)"
-printf '%s' "$r41" | grep -qF '◦'      || fail "foreign-claim #41 must be FLAGGED with a ◦ claim marker" "$r41"
-printf '%s' "$r41" | grep -qF 'alice'  || fail "foreign-claim #41 should still show its assignee" "$r41"
-printf '%s' "$r41" | grep -qF '⇡'      && fail "claim-only #41 must NOT carry a PR marker" "$r41"
+[ -n "$r41" ]                          || fail "foreign-claim #41 should still be listed" "$out"
+printf '%s' "$r41" | grep -qF '◦'      && fail "foreign-claim #41 must NOT carry a ◦ claim marker" "$r41"
+printf '%s' "$r41" | grep -qF 'alice'  && fail "foreign-claim #41 must NOT show its assignee (owner column dropped)" "$r41"
 
-# --- IN-FLIGHT: #43 flagged with a ⇡ marker + PR number (no assignee today) --
+# --- IN-FLIGHT: #43 renders plain — no ⇡ marker, no PR number (issue #389) ----
 r43="$(disp_of "$out" 43)"
-printf '%s' "$r43" | grep -qF '⇡'      || fail "open-PR #43 must be FLAGGED with a ⇡ PR marker" "$r43"
-printf '%s' "$r43" | grep -qF '#500'   || fail "open-PR #43 should surface the PR number" "$r43"
+[ -n "$r43" ]                          || fail "open-PR #43 should still be listed" "$out"
+printf '%s' "$r43" | grep -qF '⇡'      && fail "open-PR #43 must NOT carry a ⇡ PR marker (owner column dropped)" "$r43"
+printf '%s' "$r43" | grep -qF '#500'   && fail "open-PR #43 must NOT surface the PR number" "$r43"
 
-# --- PR WINS: #44 assigned AND open PR ⇒ PR marker (stronger in-flight cue) ---
+# --- PR + CLAIM: #44 assigned AND open PR still renders plain (issue #389) ----
 r44="$(disp_of "$out" 44)"
-printf '%s' "$r44" | grep -qF '⇡'      || fail "assigned+PR #44 must show the ⇡ PR marker (PR wins)" "$r44"
-printf '%s' "$r44" | grep -qF '#501'   || fail "assigned+PR #44 should surface the PR number" "$r44"
-printf '%s' "$r44" | grep -qF '◦'      && fail "assigned+PR #44 must NOT show the ◦ claim marker (PR wins)" "$r44"
+[ -n "$r44" ]                          || fail "assigned+PR #44 should still be listed" "$out"
+printf '%s' "$r44" | grep -qF '⇡'      && fail "assigned+PR #44 must NOT carry a ⇡ PR marker" "$r44"
+printf '%s' "$r44" | grep -qF '◦'      && fail "assigned+PR #44 must NOT carry a ◦ claim marker" "$r44"
+printf '%s' "$r44" | grep -qF '#501'   && fail "assigned+PR #44 must NOT surface the PR number" "$r44"
+printf '%s' "$r44" | grep -qF 'bob'    && fail "assigned+PR #44 must NOT show its assignee" "$r44"
 
-# --- MERGED PR: #45 does NOT flag (gate only refuses on an OPEN PR) ----------
+# --- MERGED PR: #45 renders plain, as it always did (issue #389) -------------
 r45="$(disp_of "$out" 45)"
-[ -n "$r45" ]                          || fail "merged-PR issue #45 should still be listed (free)" "$out"
-printf '%s' "$r45" | grep -qF '⇡'      && fail "merged-PR #45 must NOT be flagged as in-flight" "$r45"
-printf '%s' "$r45" | grep -qF '◦'      && fail "merged-PR #45 must NOT be flagged as claimed" "$r45"
+[ -n "$r45" ]                          || fail "merged-PR issue #45 should still be listed" "$out"
+printf '%s' "$r45" | grep -qF '⇡'      && fail "merged-PR #45 must NOT carry a ⇡ marker" "$r45"
+printf '%s' "$r45" | grep -qF '◦'      && fail "merged-PR #45 must NOT carry a ◦ marker" "$r45"
 
 # --- HIDE-BOUND: #42 stays hidden by default (unchanged) --------------------
 printf '%s\n' "$out" | grep -qF 'charlie' && fail "locally-bound #42 must remain HIDDEN by default"
 
 # --- COUNTS: 5 rows visible (#40/#41/#43/#44/#45); the bound #42 is hidden -----
 # Flat list (issue #377): no ' Week 1 (N) ' group header — tally the DATA rows
-# (numeric field1) directly to prove the flagged rows count as visible.
+# (numeric field1) directly to count what's visible.
 nvis=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^[0-9]+$/{n++} END{print n+0}')
 [ "$nvis" = 5 ] \
   || fail "expected 5 visible (free+flagged) rows, got $nvis — bound #42 must stay hidden" "$out"
@@ -153,5 +157,5 @@ printf '%s' "$c0" | grep -qF 'slots 5'   || fail "unlimited cap should render a 
 printf '%s' "$c0" | grep -qF '/'          && fail "unlimited cap must drop the denominator"
 printf '%s' "$c0" | grep -qF "$DIM"       && fail "unlimited cap must not color the chip"
 
-printf 'selftest PASS: backlog flags claimed/in-flight rows (⇡/◦), keeps free plain + bound hidden, counts track; slots chip colors + degrades\n'
+printf 'selftest PASS: backlog renders every issue state plain (no ◦/⇡/▶ owner cues, issue #389), keeps bound hidden, counts track; slots chip colors + degrades\n'
 exit 0

@@ -9,8 +9,9 @@
 # and the REAL bin/dash-toggle-show-bound.sh:
 #   • HIDE DEFAULT   a bound issue is absent from the rows; unbound ones stay.
 #   • COUNTS         milestone counts reflect the visible rows, not the hidden ones.
-#   • TOGGLE SHOW    after the toggle, the bound issue reappears with its ▶window marker
-#                    and the count grows; a second toggle hides it again (persists).
+#   • TOGGLE SHOW    after the toggle, the bound issue reappears (the ▶window
+#                    marker was dropped in #389) and the count grows; a second
+#                    toggle hides it again (persists).
 #   • ALL BOUND      every open issue bound + hide-mode ⇒ the friendly explainer line,
 #                    not a bare "(no open issues)".
 #
@@ -85,7 +86,6 @@ bash "$TOGGLE" t
 [ -f "$C/global/backlog_show_bound_t" ] || fail "toggle should create the per-fleet show-bound state file"
 out="$(rows all)"
 printf '%s\n' "$out" | grep -qF 'bravo' || fail "bound issue #42 should REAPPEAR after the toggle"
-printf '%s\n' "$out" | grep -qF '▶ wrk'       || fail "a shown bound issue keeps its ▶window marker"
 [ "$(count_rows "$out")" = 3 ] || fail "visible rows must grow to 3 when the bound row is shown, got $(count_rows "$out")"
 
 # --- TOGGLE HIDE again: back to hidden, state removed ------------------------

@@ -17,7 +17,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # this fleet's issues cache (slug'd via sessmap; flat fallback). FLEET_SESSION is
 # exported by tmux-issues.sh so reload-binds inherit it.
 SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
-GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;207;255'
+GY='86;95;137'; GN='158;206;106'
 P0='247;118;142'; P1='224;175;104'; P2='224;204;122'   # priority tier tags (red/orange/yellow)
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
@@ -76,18 +76,6 @@ prio_tag(){ # $1 = tier → a fixed 2-col colored tag (or 2 spaces for none)
   esac
 }
 
-# Pre-flight PR cross-ref (issue #331): the spawn gate refuses an issue whose
-# issue-<N> branch already has an OPEN PR (in flight elsewhere), but that PR is
-# INVISIBLE in the backlog today. The SINGLE-WRITER prmap cache
-# (branch<TAB>#num<TAB>state<TAB>ci<TAB>ready — bin/tmux-pr-refresh.sh) lets us
-# flag such a row with ZERO extra gh (no network on render). Absent/cold cache ⇒
-# no PR flags, so this degrades cleanly to today's behaviour.
-PRMAP=$(fleet_cache prmap "${FLEET_SESSION:-}")
-PRROWS=$(cat "$PRMAP" 2>/dev/null)
-open_pr(){ # $1 = bare issue number → "#<prnum>" if issue-<N> has an OPEN PR, else empty
-  printf '%s\n' "$PRROWS" | awk -F'\t' -v b="issue-$1" '$1==b && $3=="OPEN"{print $2; exit}'
-}
-
 # parent→child links (issue #335): the collector's per-fleet `parents` cache
 # (child<TAB>parent, from a small GraphQL sub-issues pass — bin/tmux-dash-collect.sh)
 # lets us NEST a sub-issue under its parent row (indented) in the backlog — the
@@ -105,7 +93,7 @@ SHOW_BOUND=0
 [ -f "$C/global/backlog_show_bound_${FLEET_SESSION:-_}" ] && SHOW_BOUND=1
 
 buf=""; hidden_any=""
-while IFS=$'\t' read -r ms num asg title; do
+while IFS=$'\t' read -r ms num _ title; do
   [ -z "$num" ] && continue
   r=$(mrank "$ms")
   case "$MODE" in roadmap) [ "$r" -ge 99 ] && continue;; unplanned) [ "$r" -lt 99 ] && continue;; esac
@@ -114,51 +102,25 @@ while IFS=$'\t' read -r ms num asg title; do
   # at emit time) keeps the milestone counts below in step with the visible rows.
   if [ -n "$awin" ] && [ "$SHOW_BOUND" = 0 ]; then hidden_any=1; continue; fi
   tier=$(prio_tier "$n"); ptag=$(prio_tag "$tier")
-  # Milestone column (issue #377): a fixed-width dim column BETWEEN owner and
-  # title so the flat list still shows each issue's milestone (grouping dropped).
-  # A real name is truncated+padded to $FLEET_BL_W_MS; a no-milestone issue shows
-  # a lone '·' — 1 col but 2 bytes, so widen its byte budget by 1 (same trick the
-  # unassigned owner '·' uses). Prebuilt with its own color+reset so it splices
-  # into either row branch as one %s ahead of the title.
+  # Milestone column (issue #377): a fixed-width dim column BETWEEN the priority
+  # tag and the title so the flat list still shows each issue's milestone (grouping
+  # dropped). A real name is truncated+padded to $FLEET_BL_W_MS; a no-milestone
+  # issue shows a lone '·' — 1 col but 2 bytes, so widen its byte budget by 1 to
+  # keep the 1-col visible width. Prebuilt with its own color+reset so it splices
+  # into the row as one %s ahead of the title.
   if [ "$ms" = "$NOMS" ]; then ms_disp='·'; mspad=$((FLEET_BL_W_MS + 1)); else ms_disp="$ms"; mspad=$FLEET_BL_W_MS; fi
   mscol=$(printf "%s%-${mspad}.${mspad}s%s" "$(c "$GY")" "$ms_disp" "$R")
-  # Fixed-width columns so the TITLE starts at the same screen column on every
-  # row (widths are the shared FLEET_BL_W_* geometry in fleet-lib.sh, which the
-  # backlog header aligns to — issue #371): num padded to $FLEET_BL_W_NUM, a
-  # 2-col priority tag ($FLEET_BL_W_PRI), then an owner column of a 2-col marker
-  # ($FLEET_BL_W_MARK) + a $FLEET_BL_W_NAME-col name (both active ▶window and idle
-  # assignee use the SAME owner width). Precision (%-N.Ns) pads *and* truncates
-  # the name; the marker and the tag sit outside it so multibyte glyphs don't skew
-  # the width.
-  if [ -n "$awin" ]; then
-    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s▶ %-${FLEET_BL_W_NAME}.${FLEET_BL_W_NAME}s%s %s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$mscol" "$(c "$GY")" "$title" "$R")
-  else
-    # Pre-flight "will-refuse" flag (issue #331): the spawn gate refuses an issue
-    # that is ASSIGNED (claimed by a peer / other machine) or has an OPEN issue-<N>
-    # PR (in flight elsewhere) — but neither reads as "will-refuse" here today: a
-    # foreign claim shows a bare assignee name (no cue) and an open PR is wholly
-    # invisible. FLAG (not hide) them — dim + a marker — so a would-refuse row
-    # reads differently from a free one at a glance; you still SEE it (⌃o still
-    # opens it) and the spawn gate stays the SINGLE authority on the real refusal
-    # (a row flagged stale that has since freed still spawns fine — the gate is
-    # truth). The owner column keeps its 2-col marker + name geometry.
-    #
-    # assignees are ASCII (14 bytes = 14 cols); the unassigned '·' is 1 col but 2
-    # bytes (and the collector already writes it into this field), so widen its
-    # byte budget by 1 to keep the 14-col visible width.
-    asg_disp="${asg:-·}"; pad=$FLEET_BL_W_NAME; [ "$asg_disp" = "·" ] && pad=$((FLEET_BL_W_NAME + 1))
-    pr=$(open_pr "$n")
-    if [ -n "$pr" ]; then                 # OPEN PR in flight elsewhere → PR marker, dim
-      mk='⇡'; mkc="$P1"; own="$pr"; ownc="$GY"; opad=$FLEET_BL_W_NAME
-    elif [ "$asg_disp" != "·" ]; then     # foreign claim (assigned) → claim marker, dim
-      mk='◦'; mkc="$GY"; own="$asg_disp"; ownc="$GY"; opad=$FLEET_BL_W_NAME
-    else                                  # free → plain (unchanged: blank marker, TX name)
-      mk=' '; mkc="$TX"; own="$asg_disp"; ownc="$TX"; opad="$pad"
-    fi
-    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s%s %s%-${opad}.${opad}s%s %s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$mkc")" "$mk" "$(c "$ownc")" "$own" "$R" "$mscol" "$(c "$GY")" "$title" "$R")
-  fi
+  # Fixed-width columns so the TITLE starts at the same screen column on every row
+  # (widths are the shared FLEET_BL_W_* geometry in fleet-lib.sh, which the backlog
+  # header aligns to — issue #371): num padded to $FLEET_BL_W_NUM, a 2-col priority
+  # tag ($FLEET_BL_W_PRI), TWO gap cols, the milestone column, then the title. The
+  # 2-col gap after the priority tag (vs 1 elsewhere) lets the 3-char `pri` HEADER
+  # label clear the `milestone` label — the fleet-lib.sh header math uses the same
+  # +2 so header and rows stay pinned. The owner column (▶window / ◦assignee / ⇡pr)
+  # was dropped in issue #389 — active and idle rows now render identically, so
+  # $awin is resolved above only to gate the hide-bound filter, never rendered.
+  row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s  %s %s%s%s" \
+    "$(c "$GN")" "$num" "$R" "$ptag" "$mscol" "$(c "$GY")" "$title" "$R")
   buf+="$r	$ms	$tier	$n	$row"$'\n'
 done < "$SRC"
 
