@@ -94,12 +94,15 @@ while IFS=$'\t' read -r ms num asg title; do
   if [ -n "$awin" ] && [ "$SHOW_BOUND" = 0 ]; then hidden_any=1; continue; fi
   tier=$(prio_tier "$n"); ptag=$(prio_tag "$tier")
   # Fixed-width columns so the TITLE starts at the same screen column on every
-  # row: num padded to 5, a 2-col priority tag, then an owner column of a 2-col
-  # marker + a 14-col name (both active ▶window and idle assignee use the SAME
-  # 16-col owner width). Precision (%-14.14s) pads *and* truncates the name; the
-  # marker and the tag sit outside it so multibyte glyphs don't skew the width.
+  # row (widths are the shared FLEET_BL_W_* geometry in fleet-lib.sh, which the
+  # backlog header aligns to — issue #371): num padded to $FLEET_BL_W_NUM, a
+  # 2-col priority tag ($FLEET_BL_W_PRI), then an owner column of a 2-col marker
+  # ($FLEET_BL_W_MARK) + a $FLEET_BL_W_NAME-col name (both active ▶window and idle
+  # assignee use the SAME owner width). Precision (%-N.Ns) pads *and* truncates
+  # the name; the marker and the tag sit outside it so multibyte glyphs don't skew
+  # the width.
   if [ -n "$awin" ]; then
-    row=$(printf '%s%-5s%s %s %s▶ %-14.14s%s %s%s%s' \
+    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s▶ %-${FLEET_BL_W_NAME}.${FLEET_BL_W_NAME}s%s %s%s%s" \
       "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
   else
     # Pre-flight "will-refuse" flag (issue #331): the spawn gate refuses an issue
@@ -115,16 +118,16 @@ while IFS=$'\t' read -r ms num asg title; do
     # assignees are ASCII (14 bytes = 14 cols); the unassigned '·' is 1 col but 2
     # bytes (and the collector already writes it into this field), so widen its
     # byte budget by 1 to keep the 14-col visible width.
-    asg_disp="${asg:-·}"; pad=14; [ "$asg_disp" = "·" ] && pad=15
+    asg_disp="${asg:-·}"; pad=$FLEET_BL_W_NAME; [ "$asg_disp" = "·" ] && pad=$((FLEET_BL_W_NAME + 1))
     pr=$(open_pr "$n")
     if [ -n "$pr" ]; then                 # OPEN PR in flight elsewhere → PR marker, dim
-      mk='⇡'; mkc="$P1"; own="$pr"; ownc="$GY"; opad=14
+      mk='⇡'; mkc="$P1"; own="$pr"; ownc="$GY"; opad=$FLEET_BL_W_NAME
     elif [ "$asg_disp" != "·" ]; then     # foreign claim (assigned) → claim marker, dim
-      mk='◦'; mkc="$GY"; own="$asg_disp"; ownc="$GY"; opad=14
+      mk='◦'; mkc="$GY"; own="$asg_disp"; ownc="$GY"; opad=$FLEET_BL_W_NAME
     else                                  # free → plain (unchanged: blank marker, TX name)
       mk=' '; mkc="$TX"; own="$asg_disp"; ownc="$TX"; opad="$pad"
     fi
-    row=$(printf "%s%-5s%s %s %s%s %s%-${opad}.${opad}s%s %s%s%s" \
+    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s%s %s%-${opad}.${opad}s%s %s%s%s" \
       "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$mkc")" "$mk" "$(c "$ownc")" "$own" "$R" "$(c "$GY")" "$title" "$R")
   fi
   buf+="$r	$ms	$tier	$n	$row"$'\n'
