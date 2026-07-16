@@ -161,22 +161,23 @@ esac
 usg=$(fleet_usage_summary_plain)
 
 active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-hdr="switch the account fleet sessions use  ·  enter=select · esc=cancel · ✕ close   [now: ${active}]"
+hdr="switch the account fleet sessions use  ·  enter=select · esc=cancel · [✕ close]   [now: ${active}]"
 [ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
 
 # --header-lines=1 pins the table's column-title row (line 1 of `list`) so it
 # stays aligned with the data rows and out of the selectable set; the usage
 # summary rides above it via --header. Data rows lead with the bare label, so
 # `awk '{print $1}'` recovers the pick even with the trailing ANSI in STATE.
-# The "✕ close" token in $hdr + the click-header bind add an iPad/Termius
+# The `[✕ close]` button chip in $hdr + the click-header bind add an iPad/Termius
 # tap-to-dismiss where Escape is a reach (issue #346): tapping ✕/close aborts fzf
-# → empty pick → exit. The pinned column-title row carries no ✕/close, so a tap
-# there never fires the bind.
+# → empty pick → exit. Bracketed as a button (issue #381), so the clicked word is
+# `[✕` or `close]` — the case globs *✕*|*close*. The pinned column-title row
+# carries no ✕/close, so a tap there never fires the bind.
 pick=$(printf '%s\n' "$listing" \
   | fzf --ansi --no-sort --layout=reverse --height=100% --header-lines=1 \
         --prompt='active account ▸ ' \
         --header="$hdr" \
-        --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
+        --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac' \
   | awk '{print $1}')
 
 [ -n "$pick" ] || exit 0

@@ -57,20 +57,29 @@ HDR="$SLOTS · ↵ work · ⌃n new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
-  # POPUP only: a tappable ✕ close for iPad/Termius, where Escape is a reach
-  # (issue #346). The click-header bind in run_fzf aborts when the ✕/close header
-  # word is tapped; abort closes the popup (windowed panes just reopen, so the ✕
-  # token is popup-only and the bind is inert there — no matching header word).
-  HDR="$HDR · esc · ✕ close"
+  # POPUP only: tappable button chips for iPad/Termius, where the keyboard is a
+  # reach (issues #346/#381). `[＋ new]` files an issue; `[✕ close]` dismisses the
+  # popup. Both ride CH_BIND's click-header:transform below (SAME mechanism):
+  #   • ＋/new  → drop the 'new' sentinel + abort — mirrors the ⌃n N_BIND, so
+  #     run_action files it in the gap (⌃n's own popup can't nest here, #123/#122).
+  #   • ✕/close → bare abort (no sentinel) → run_action finds nothing → loop exits.
+  # Chips are popup-only; windowed panes keep the ⌃n/? keyboard hints (CH_BIND is
+  # close-only + inert there — no matching header word).
+  HDR="$SLOTS · ↵ work · [＋ new] · ? keys · esc · [✕ close]"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
   X_BIND="ctrl-x:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
+  # The clicked header word is a single whitespace token, so a bracketed multi-word
+  # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
+  CH_BIND="click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*) echo abort ;; esac"
 else
   ENTER_TAIL=''
   N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
   X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
   K_BIND="?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
+  # Windowed carries no tap chips; keep the close-only click-header (inert here).
+  CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
 fi
 
 # The dim column-title line (issue #371) is NOT a --header line — that renders at
@@ -114,7 +123,7 @@ run_fzf() {
     --bind "$X_BIND" \
     --bind "$P_BIND" \
     --bind "enter:execute-silent(bash $BIN/dash-issue-session.sh {1} --async)${ENTER_TAIL}" \
-    --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
+    --bind "$CH_BIND" \
     >/dev/null 2>&1
 }
 

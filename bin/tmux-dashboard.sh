@@ -81,10 +81,14 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # Minimal header (issue #249): core actions inline, the rest deferred to the `?`
 # cheatsheet (fleet-keys.sh lists every demoted bind: ⌃s ⌃x ⌃t ⌃o). Terse
 # `key verb` form, not `key=phrase`, so it fits one line at normal widths.
-HDR='↵ jump · ⌃n new · ? keys'
+# `new` is a TAPPABLE button chip `[＋ new]` (issue #381): ⌃n is swallowed by
+# Termius/iPad (its own new-tab shortcut) with no keyboard fallback, so the chip
+# — wired in run_dash via click-header → the same file+spawn ⌃n runs — is the
+# tap-first new-SESSION path there. ⌃n stays bound (additive), listed under `?`.
+HDR='↵ jump · [＋ new] · ? keys'
 # POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
 # less obvious than esc-back on the always-on dash) — that token is the only diff.
-[ -n "$POPUP" ] && HDR='↵ jump · ⌃n new · ? keys · esc close'
+[ -n "$POPUP" ] && HDR='↵ jump · [＋ new] · ? keys · esc close'
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across
@@ -97,7 +101,9 @@ run_dash() {
   # so an `execute` reap left the pane BLANK the whole time). The slow tail of each
   # action is backgrounded (dash-reap.sh → fleet_bg / `run-shell -b`, issue #304) so
   # the bind also returns instantly. Binds that hand the terminal to an interactive
-  # popup (⌃n/⌃s/?) keep `execute` on purpose.
+  # popup (⌃n/⌃s/?) keep `execute` on purpose. The click-header bind mirrors ⌃n for
+  # the tappable `[＋ new]` chip (issue #381): tapping ＋/new transforms into the very
+  # file+spawn action string ⌃n runs — a single source of truth, additive to ⌃n.
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -109,6 +115,7 @@ run_dash() {
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
     --bind "ctrl-n:execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
+    --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)' ;; esac" \
     --bind "ctrl-s:execute(tmux display-popup -w 72 -h 10 -E \"bash $BIN/dash-raw-session.sh --prompt-read\")+reload(bash $ROWS)" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
