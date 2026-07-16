@@ -121,9 +121,12 @@ printf '%s' "$r45" | grep -qF '◦'      && fail "merged-PR #45 must NOT be flag
 # --- HIDE-BOUND: #42 stays hidden by default (unchanged) --------------------
 printf '%s\n' "$out" | grep -qF 'charlie' && fail "locally-bound #42 must remain HIDDEN by default"
 
-# --- COUNTS: Week 1 has 5 visible rows (#40/#41/#43/#44/#45; #42 hidden) -----
-printf '%s\n' "$out" | grep -qF 'Week 1 (5)' \
-  || fail "milestone count must track visible (free+flagged) rows — expected 'Week 1 (5)'" "$out"
+# --- COUNTS: 5 rows visible (#40/#41/#43/#44/#45); the bound #42 is hidden -----
+# Flat list (issue #377): no ' Week 1 (N) ' group header — tally the DATA rows
+# (numeric field1) directly to prove the flagged rows count as visible.
+nvis=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^[0-9]+$/{n++} END{print n+0}')
+[ "$nvis" = 5 ] \
+  || fail "expected 5 visible (free+flagged) rows, got $nvis — bound #42 must stay hidden" "$out"
 
 # --- SLOTS CHIP: fleet_slots_chip colors + denominator ----------------------
 . "$LIB"

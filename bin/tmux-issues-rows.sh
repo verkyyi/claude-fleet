@@ -1,12 +1,13 @@
 #!/bin/bash
 # tmux-issues-rows.sh [roadmap|unplanned|all] — emit fzf rows for a backlog panel.
-# roadmap = milestoned issues grouped by milestone; unplanned = no-milestone flat
-# list. READ-ONLY: reads THIS fleet's cache via fleet_cache (the collector writes
-# $C/issues_<slug>: milestone\t#num\tassignee\ttitle; no flat mirror — issue #180).
-# Line: <#num>US<colored display>US<milestone>. Milestone headers have empty
-# field1 (Enter no-ops on them). The FIRST line is always the column-title header
-# row (issue #374) — empty field1, dim titles in field2 — which the backlog pins
-# at the top via --header-lines=1.
+# Renders one FLAT list (issue #377): no milestone group-header rows — each issue
+# instead shows its milestone in a fixed-width dim COLUMN. roadmap = only
+# milestoned issues; unplanned = only no-milestone; all = both. READ-ONLY: reads
+# THIS fleet's cache via fleet_cache (the collector writes $C/issues_<slug>:
+# milestone\t#num\tassignee\ttitle; no flat mirror — issue #180).
+# Line: <#num>US<colored display>US<milestone>. The FIRST line is always the
+# column-title header row (issue #374) — empty field1, dim titles in field2 —
+# which the backlog pins at the top via --header-lines=1.
 set -uo pipefail
 MODE="${1:-all}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
@@ -16,7 +17,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # this fleet's issues cache (slug'd via sessmap; flat fallback). FLEET_SESSION is
 # exported by tmux-issues.sh so reload-binds inherit it.
 SRC=$(fleet_cache issues "${FLEET_SESSION:-}")
-IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;207;255'
+GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;207;255'
 P0='247;118;142'; P1='224;175;104'; P2='224;204;122'   # priority tier tags (red/orange/yellow)
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
@@ -108,6 +109,14 @@ while IFS=$'\t' read -r ms num asg title; do
   # at emit time) keeps the milestone counts below in step with the visible rows.
   if [ -n "$awin" ] && [ "$SHOW_BOUND" = 0 ]; then hidden_any=1; continue; fi
   tier=$(prio_tier "$n"); ptag=$(prio_tag "$tier")
+  # Milestone column (issue #377): a fixed-width dim column BETWEEN owner and
+  # title so the flat list still shows each issue's milestone (grouping dropped).
+  # A real name is truncated+padded to $FLEET_BL_W_MS; a no-milestone issue shows
+  # a lone '·' — 1 col but 2 bytes, so widen its byte budget by 1 (same trick the
+  # unassigned owner '·' uses). Prebuilt with its own color+reset so it splices
+  # into either row branch as one %s ahead of the title.
+  if [ "$ms" = "$NOMS" ]; then ms_disp='·'; mspad=$((FLEET_BL_W_MS + 1)); else ms_disp="$ms"; mspad=$FLEET_BL_W_MS; fi
+  mscol=$(printf "%s%-${mspad}.${mspad}s%s" "$(c "$GY")" "$ms_disp" "$R")
   # Fixed-width columns so the TITLE starts at the same screen column on every
   # row (widths are the shared FLEET_BL_W_* geometry in fleet-lib.sh, which the
   # backlog header aligns to — issue #371): num padded to $FLEET_BL_W_NUM, a
@@ -117,8 +126,8 @@ while IFS=$'\t' read -r ms num asg title; do
   # the name; the marker and the tag sit outside it so multibyte glyphs don't skew
   # the width.
   if [ -n "$awin" ]; then
-    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s▶ %-${FLEET_BL_W_NAME}.${FLEET_BL_W_NAME}s%s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$(c "$GY")" "$title" "$R")
+    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s▶ %-${FLEET_BL_W_NAME}.${FLEET_BL_W_NAME}s%s %s %s%s%s" \
+      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$CY")" "$awin" "$R" "$mscol" "$(c "$GY")" "$title" "$R")
   else
     # Pre-flight "will-refuse" flag (issue #331): the spawn gate refuses an issue
     # that is ASSIGNED (claimed by a peer / other machine) or has an OPEN issue-<N>
@@ -142,8 +151,8 @@ while IFS=$'\t' read -r ms num asg title; do
     else                                  # free → plain (unchanged: blank marker, TX name)
       mk=' '; mkc="$TX"; own="$asg_disp"; ownc="$TX"; opad="$pad"
     fi
-    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s%s %s%-${opad}.${opad}s%s %s%s%s" \
-      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$mkc")" "$mk" "$(c "$ownc")" "$own" "$R" "$(c "$GY")" "$title" "$R")
+    row=$(printf "%s%-${FLEET_BL_W_NUM}s%s %s %s%s %s%-${opad}.${opad}s%s %s %s%s%s" \
+      "$(c "$GN")" "$num" "$R" "$ptag" "$(c "$mkc")" "$mk" "$(c "$ownc")" "$own" "$R" "$mscol" "$(c "$GY")" "$title" "$R")
   fi
   buf+="$r	$ms	$tier	$n	$row"$'\n'
 done < "$SRC"
@@ -196,26 +205,16 @@ buf=$(printf '%s' "$buf" | awk -F'\t' -v OFS='\t' -v gy="$(c "$GY")" -v rst="$R"
   }
 ')
 
-# collapse state (milestone names, one per line) + per-milestone counts
-COLLAPSED=""; [ -f "$C/global/collapsed" ] && COLLAPSED=$(cat "$C/global/collapsed")
-is_collapsed(){ printf '%s\n' "$COLLAPSED" | grep -qxF "$1"; }
-counts=$(printf '%s' "$buf" | awk -F'\t' 'NF>=2{c[$2]++} END{for(m in c) print m"\t"c[m]}')
-count_of(){ printf '%s\n' "$counts" | awk -F'\t' -v m="$1" '$1==m{print $2; exit}'; }
-
-# emit: field1=num(empty for header)·field2=display·field3=milestone(for collapse toggle)
-# buf rows are: rank<TAB>milestone<TAB>pathkey<TAB>num<TAB>display. Sort groups by
+# emit ONE flat list (issue #377): field1=num · field2=display · field3=milestone.
+# Milestone grouping is gone — no ' ▾ <name> (count) ' group-header rows and no
+# collapse; every issue instead carries its milestone in the dim column built
+# above. buf rows are: rank<TAB>milestone<TAB>pathkey<TAB>num<TAB>display. Sort by
 # milestone rank, then by the materialized PATH key — a lexical sort of which is a
 # pre-order DFS: top-level rows stay in priority-tier→number order (issue #235
-# "reorder") and a sub-issue lands directly under its parent (issue #335). The
-# path already encodes num, so -k4,4n is just a stable final tiebreak.
-last=''
+# "reorder") and a sub-issue lands directly under its same-milestone parent (issue
+# #335). The path already encodes num, so -k4,4n is just a stable final tiebreak.
+# field3 of the OUTPUT stays the milestone (metadata; --with-nth=2 hides it).
 printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3 -k4,4n | while IFS='	' read -r _ ms _key num row; do
   [ -z "$num" ] && continue
-  if [ "$MODE" != unplanned ] && [ "$ms" != "$last" ]; then
-    if is_collapsed "$ms"; then ind='▸'; else ind='▾'; fi
-    printf '%s%s%s %s (%s)%s%s%s\n' "$US" "$(c "$IN")" "$ind" "$ms" "$(count_of "$ms")" "$R" "$US" "$ms"
-    last="$ms"
-  fi
-  { [ "$MODE" != unplanned ] && is_collapsed "$ms"; } && continue
   printf '%s%s%s%s%s\n' "$num" "$US" "$row" "$US" "$ms"
 done

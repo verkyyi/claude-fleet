@@ -110,11 +110,17 @@ seqA="$(seq_of "$outA")"
 [ "$seqA" = "200 100 102 101 103 300 " ] \
   || fail "A row order must be a pre-order DFS (got: $seqA)" "$outA"
 
-# CROSS-MS: #300 sits under the Week 2 header, un-nested (its parent #100 is in Week 1).
+# CROSS-MS: #300 stays un-nested (its parent #100 is in Week 1, a DIFFERENT
+# milestone) and carries 'Week 2' in its own milestone column; #100 carries 'Week 1'.
 has_nest "$(disp_of "$outA" 300)" && fail "A cross-milestone #300 must NOT nest under a Week 1 parent" "$(disp_of "$outA" 300)"
-printf '%s\n' "$outA" | grep -qF 'Week 2 (1)' || fail "A Week 2 must keep its own single-row group" "$outA"
-printf '%s\n' "$outA" | grep -qF 'Week 1 (5)' || fail "A Week 1 count must track its 5 visible rows" "$outA"
-ok "A sub-issues nest under their parent (↳), pre-order DFS, cross-ms stays top-level, still spawnable"
+printf '%s' "$(disp_of "$outA" 300)" | grep -qF 'Week 2' || fail "A #300 must show its 'Week 2' milestone in the column" "$outA"
+printf '%s' "$(disp_of "$outA" 100)" | grep -qF 'Week 1' || fail "A #100 must show its 'Week 1' milestone in the column" "$outA"
+# FLAT (issue #377): milestone grouping is gone — NO ' ▾ <name> (count) ' header
+# rows. The ONLY empty-field1 line is the column-title header, whose field2 names
+# the columns ('# … milestone title'), never a milestone VALUE like 'Week N'.
+printf '%s\n' "$outA" | awk -F"$US" '$1=="" && $2 ~ /Week [0-9]/{found=1} END{exit !found}' \
+  && fail "A milestone grouping dropped — there must be NO ' ▾ Week N ' group-header rows" "$outA"
+ok "A sub-issues nest under their parent (↳), pre-order DFS, cross-ms stays top-level w/ its own milestone column, still spawnable"
 
 # ============================ B: flat degrade (no parents) ==================
 seed_issues; rm -f "$C/parents"

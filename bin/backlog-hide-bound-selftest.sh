@@ -49,7 +49,10 @@ cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
-TAB=$'\t'
+TAB=$'\t'; US=$'\x1f'
+# count visible DATA rows (numeric field1) — the flat list (issue #377) has no
+# ' <milestone> (N) ' group-header line to read a count off, so tally rows directly.
+count_rows() { printf '%s\n' "$1" | awk -F"$US" '$1 ~ /^[0-9]+$/{n++} END{print n+0}'; }
 
 # --- fixture: three open issues, one of which we bind to a live worker window --
 # cache format (collector's $C/issues): milestone<TAB>#num<TAB>assignee<TAB>title.
@@ -74,8 +77,8 @@ printf '%s\n' "$out" | grep -qF 'alpha'   || fail "unbound issue #40 should be l
 printf '%s\n' "$out" | grep -qF 'charlie' || fail "unbound issue #50 should be listed by default"
 printf '%s\n' "$out" | grep -qF 'bravo'     && fail "bound issue #42 must be HIDDEN by default"
 
-# --- COUNTS: Week 1 has 2 open issues but only 1 is visible ------------------
-printf '%s\n' "$out" | grep -qF 'Week 1 (1)' || fail "milestone count must match VISIBLE rows (expected 'Week 1 (1)')"
+# --- COUNTS: 2 issues visible (#40 + #50); the bound #42 is hidden -----------
+[ "$(count_rows "$out")" = 2 ] || fail "expected 2 visible rows (bound #42 hidden), got $(count_rows "$out")"
 
 # --- TOGGLE SHOW: reveal bound rows -----------------------------------------
 bash "$TOGGLE" t
@@ -83,7 +86,7 @@ bash "$TOGGLE" t
 out="$(rows all)"
 printf '%s\n' "$out" | grep -qF 'bravo' || fail "bound issue #42 should REAPPEAR after the toggle"
 printf '%s\n' "$out" | grep -qF '▶ wrk'       || fail "a shown bound issue keeps its ▶window marker"
-printf '%s\n' "$out" | grep -qF 'Week 1 (2)'  || fail "count must grow to 2 when the bound row is shown"
+[ "$(count_rows "$out")" = 3 ] || fail "visible rows must grow to 3 when the bound row is shown, got $(count_rows "$out")"
 
 # --- TOGGLE HIDE again: back to hidden, state removed ------------------------
 bash "$TOGGLE" t
