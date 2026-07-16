@@ -10,6 +10,11 @@
 # future width change that touches only one side can't silently misalign them.
 # It also cross-checks both against the constants' own arithmetic.
 #
+# It further asserts (issue #374) that the producer emits the column-title line as
+# its FIRST output line in every mode — the backlog pins it at the TOP with
+# `--header-lines=1`, so a leading milestone header / status line would pin the
+# wrong row (the very bug #374 fixes, where the titles rendered at the bottom).
+#
 # tmux is isolated onto a private `-S` socket via a PATH shim (never the live
 # server, per the repo rail) and left with NO windows, so the rows producer sees
 # empty active-bindings and renders free/assigned rows (which is all we measure).
@@ -103,6 +108,26 @@ h_title=$(col_of "$hdr" 'title')
 [ "$h_title" = "$row_title" ] || fail "header title (col $h_title) misaligned from row title (col $row_title)"
 [ "$h_own"   = "$row_own" ]   || fail "header owner (col $h_own) misaligned from row owner (col $row_own)"
 
-printf 'selftest PASS: backlog column header aligns to the row widths (# %s · pri %s · owner %s · title %s)\n' \
+# --- issue #374: the column-title row LEADS the producer output, in EVERY mode --
+# The backlog pins the titles at the TOP with --header-lines=1, so the producer
+# MUST emit the column-title line FIRST — before any milestone header (roadmap) or
+# status line — or --header-lines=1 pins the wrong row (the bug this fixes, where
+# the titles rendered at the bottom). Assert the first line of each mode has an
+# EMPTY field1 (a non-spawn header, never an issue) and carries the #/pri/owner/
+# title labels in field2. unplanned yields no data rows here (the fixtures are all
+# milestoned) — the header must still lead a body-less list.
+for m in all roadmap unplanned; do
+  mo="$(FLEET_SESSION='' bash "$ROWS" "$m" 2>/dev/null)"
+  [ -n "$mo" ] || fail "mode '$m': producer emitted nothing (expected the column-title row to lead)"
+  mf1="$(printf '%s\n' "$mo" | awk -F"$US" 'NR==1{print $1; exit}')"
+  mf2="$(printf '%s\n' "$mo" | awk -F"$US" 'NR==1{print $2; exit}' | norm)"
+  [ -z "$mf1" ] || fail "mode '$m': first line field1='$mf1', expected empty (header must not be spawnable)" "$mo"
+  case "$mf2" in
+    *'#'*pri*owner*title*) : ;;
+    *) fail "mode '$m': first output line is not the column-title row (field2='$mf2')" "$mo" ;;
+  esac
+done
+
+printf 'selftest PASS: backlog column header aligns to the row widths (# %s · pri %s · owner %s · title %s) and leads every mode\n' \
   "$h_num" "$h_pri" "$h_own" "$h_title"
 exit 0

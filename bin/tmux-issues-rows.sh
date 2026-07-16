@@ -4,7 +4,9 @@
 # list. READ-ONLY: reads THIS fleet's cache via fleet_cache (the collector writes
 # $C/issues_<slug>: milestone\t#num\tassignee\ttitle; no flat mirror — issue #180).
 # Line: <#num>US<colored display>US<milestone>. Milestone headers have empty
-# field1 (Enter no-ops on them).
+# field1 (Enter no-ops on them). The FIRST line is always the column-title header
+# row (issue #374) — empty field1, dim titles in field2 — which the backlog pins
+# at the top via --header-lines=1.
 set -uo pipefail
 MODE="${1:-all}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
@@ -18,6 +20,19 @@ IN='187;154;247'; GY='86;95;137'; TX='169;177;214'; GN='158;206;106'; CY='125;20
 P0='247;118;142'; P1='224;175;104'; P2='224;204;122'   # priority tier tags (red/orange/yellow)
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'; US=$'\x1f'
 NOMS='· no milestone'
+
+# Column-title header row (issue #374). Emit it as the VERY FIRST output line —
+# before every exit path below (loading / no-issues / all-bound) and before the
+# milestone-grouped emit loop — so the backlog's `--header-lines=1` (bin/tmux-
+# issues.sh) always pins EXACTLY these titles at the TOP, heading the rows, never
+# a milestone header or a status line. fzf draws `--header-lines` at the top and
+# `--header` (the hint line) at the bottom simultaneously in --layout=reverse-list.
+# Same <#num>US<display>US<milestone> shape as a row so --with-nth=2 shows field2:
+# empty field1 (never spawns) + the dim, width-aligned titles from
+# fleet_backlog_col_header, which uses the SAME FLEET_BL_W_* geometry the rows do
+# (fleet-lib.sh) — backlog-header-cols-selftest.sh pins the two in step.
+printf '%s%s%s\n' "$US" "$(fleet_backlog_col_header)" "$US"
+
 if [ ! -s "$SRC" ]; then   # empty-but-fetched = 0 open issues; absent = not loaded yet
   [ -e "$SRC" ] && m='(no open issues)' || m='(loading issues…)'
   printf '%s%s%s%s\n' "$US" "$(c "$GY")" "$m" "$R"; exit 0
