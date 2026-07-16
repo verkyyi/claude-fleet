@@ -39,10 +39,15 @@ if [ ! -s "$SRC" ]; then   # empty-but-fetched = 0 open issues; absent = not loa
   printf '%s%s%s%s\n' "$US" "$(c "$GY")" "$m" "$R"; exit 0
 fi
 
-# rank milestones: version-sorted order (so "Week 2" < "Week 10"), no-milestone last
-MS_LIST=$(cut -f1 "$SRC" | grep -vxF "$NOMS" | sort -Vu)
+# rank milestones: version-sorted order (so "Week 2" < "Week 10"), no-milestone last.
+# Byte-safe (issue #382): cut/grep -F/sort here only SPLIT and ORDER bytes — they
+# need no UTF-8 collation (a milestone's rank is its position in MS_LIST, not CJK
+# collation), so run them under LC_ALL=C, which tolerates an invalid-UTF-8 byte in
+# the source instead of aborting with "Illegal byte sequence" (a stray bad byte in
+# the monorepo fleet's issue/milestone data crashed the whole panel).
+MS_LIST=$(LC_ALL=C cut -f1 "$SRC" | LC_ALL=C grep -vxF "$NOMS" | LC_ALL=C sort -Vu)
 mrank(){ case "$1" in "$NOMS") echo 99; return;; esac
-  local r; r=$(printf '%s\n' "$MS_LIST" | grep -nxF "$1" | cut -d: -f1)
+  local r; r=$(printf '%s\n' "$MS_LIST" | LC_ALL=C grep -nxF "$1" | LC_ALL=C cut -d: -f1)
   echo "${r:-98}"; }
 
 # active bindings: issue-number → session window name (from @issue window options)
@@ -214,7 +219,11 @@ buf=$(printf '%s' "$buf" | awk -F'\t' -v OFS='\t' -v gy="$(c "$GY")" -v rst="$R"
 # "reorder") and a sub-issue lands directly under its same-milestone parent (issue
 # #335). The path already encodes num, so -k4,4n is just a stable final tiebreak.
 # field3 of the OUTPUT stays the milestone (metadata; --with-nth=2 hides it).
-printf '%s' "$buf" | sort -t'	' -k1,1n -k3,3 -k4,4n | while IFS='	' read -r _ ms _key num row; do
+# LC_ALL=C on this final sort (issue #382): its keys (rank, path, num) are all ASCII
+# digits, so C-locale byte order == the intended numeric/lexical order, and C-locale
+# tolerates any invalid-UTF-8 byte elsewhere in the row (a colored title/milestone)
+# instead of aborting the sort with "Illegal byte sequence".
+printf '%s' "$buf" | LC_ALL=C sort -t'	' -k1,1n -k3,3 -k4,4n | while IFS='	' read -r _ ms _key num row; do
   [ -z "$num" ] && continue
   printf '%s%s%s%s%s\n' "$num" "$US" "$row" "$US" "$ms"
 done

@@ -40,6 +40,21 @@ REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
 
+# utf8_scrub — DROP invalid-UTF-8 byte sequences from stdin (issue #382). A stray
+# non-UTF-8 byte in an issue title/milestone (surfaced in the monorepo fleet) makes
+# byte-validating ops (cut/sort) abort with "Illegal byte sequence" — both in this
+# collector's OWN cut below and in every downstream reader (backlog + dash). Scrub
+# the gh fetch here, at the single source, so the issues/labels caches carry clean
+# UTF-8 and no consumer ever sees the bad byte. `iconv -c` drops only invalid
+# sequences (ASCII tabs/newlines + valid multibyte pass through, so the column/line
+# structure is preserved). Fail-open: no iconv ⇒ pass through untouched — the
+# reader's LC_ALL=C byte-shuffle ops still tolerate the raw bytes (defense in depth).
+if command -v iconv >/dev/null 2>&1; then
+  utf8_scrub() { iconv -c -f UTF-8 -t UTF-8; }
+else
+  utf8_scrub() { cat; }
+fi
+
 # Targeted mode (issue #315): `--issues <owner/repo>` refreshes JUST that repo's
 # issues/labels cache NOW and exits (the webhook handler's instant kick,
 # bin/fleet-webhook.sh), skipping the git/ctx/usage/snapshot work of a full 60s
@@ -107,7 +122,7 @@ fetch_issues_for() {
     if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
-      > "$raw" 2>/dev/null; then
+      2>/dev/null | utf8_scrub > "$raw"; then
       awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$FD/issues.$$" \
         && mv "$FD/issues.$$" "$FD/issues"
       awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$FD/labels.$$" \
