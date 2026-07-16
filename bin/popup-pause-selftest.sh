@@ -54,15 +54,16 @@ grep -Eq 'load:reload-sync\(.*@popup_open.*-lt.*done;[[:space:]]*bash[[:space:]]
 
 # --- PRODUCER (static): every modal popup in the conf is flag-bracketed -------
 # Count in CODE lines only (skip the explanatory comment block, which names the
-# flag in prose). One set-1 and one set-0 per display-popup surface; there are 6
-# (prefix b/c/? + the fleet-pick / acct / usage mouse popups).
+# flag in prose). One set-1 and one set-0 per display-popup surface; there are 7
+# (prefix b/c/? + the fleet-pick / xfleet-jump / acct / usage mouse popups — the
+# xfleet-jump popup was added with the cross-fleet ● one-tap jump, issue #368).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 npop=$(grep -c 'display-popup' "$CONF")
-[ "$npop" -ge 6 ] || fail "expected >=6 display-popup binds in conf, found $npop"
+[ "$npop" -ge 7 ] || fail "expected >=7 display-popup binds in conf, found $npop"
 nset1=$(code_only | grep -c '@popup_open 1')
 nset0=$(code_only | grep -c '@popup_open 0')
-{ [ "$nset1" -eq 6 ] && [ "$nset0" -eq 6 ]; } \
-  || fail "flag set/clear mismatch: set-1=$nset1 set-0=$nset0 (want 6 each — one per popup)"
+{ [ "$nset1" -eq 7 ] && [ "$nset0" -eq 7 ]; } \
+  || fail "flag set/clear mismatch: set-1=$nset1 set-0=$nset0 (want 7 each — one per popup)"
 
 # --- isolated tmux server + PATH shim (never the user's live server) ----------
 # A PATH shim routes the plain `tmux` the dash guard calls to a private socket,
