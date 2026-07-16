@@ -2,14 +2,15 @@
 # backlog-header-cols-selftest.sh — the backlog modal's column-title header row
 # (issue #371) stays aligned to the fixed-width columns of the rows it heads.
 #
-# The backlog (bin/tmux-issues.sh) draws a dim column-title line — `# pri owner
-# milestone title` (the milestone column arrived with the flat list, issue #377) —
-# via fleet_backlog_col_header; the rows (bin/tmux-issues-rows.sh) lay field-2 out
-# with the SAME FLEET_BL_W_* widths (fleet-lib.sh). This test renders a REAL row
-# and the REAL header, strips ANSI, and asserts each header label starts at the
-# SAME visible column where that column begins in the row — so a future width
-# change that touches only one side can't silently misalign them. It also
-# cross-checks both against the constants' own arithmetic.
+# The backlog (bin/tmux-issues.sh) draws a dim column-title line — `# pri
+# milestone title` (the owner column was dropped in issue #389; the milestone
+# column arrived with the flat list, issue #377) — via fleet_backlog_col_header;
+# the rows (bin/tmux-issues-rows.sh) lay field-2 out with the SAME FLEET_BL_W_*
+# widths (fleet-lib.sh). This test renders a REAL row and the REAL header, strips
+# ANSI, and asserts each header label starts at the SAME visible column where that
+# column begins in the row — so a future width change that touches only one side
+# can't silently misalign them. It also cross-checks both against the constants'
+# own arithmetic.
 #
 # It further asserts (issue #374) that the producer emits the column-title line as
 # its FIRST output line in every mode — the backlog pins it at the TOP with
@@ -58,11 +59,14 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 TAB=$'\t'; US=$'\x1f'
 
 # --- fixture issues (collector format: milestone<TAB>#num<TAB>assignee<TAB>title).
-# ZZTITLE / alice are distinctive ASCII markers we locate after stripping ANSI.
-# The '·' assignee is what the collector writes for unassigned (never empty).
+# ZZTITLE is a distinctive ASCII title we locate after stripping ANSI. The '·'
+# assignee is what the collector writes for unassigned (never empty). The owner
+# column was dropped in issue #389, so the assignee is no longer rendered — #41's
+# `alice` claim just confirms an assigned issue still renders (identically to a
+# free one) and stays column-aligned.
 {
-  printf 'Week 1%s#40%s·%sZZTITLE\n'     "$TAB" "$TAB" "$TAB"   # free (unassigned ·, blank marker)
-  printf 'Week 1%s#41%salice%sZZTITLE\n' "$TAB" "$TAB" "$TAB"   # foreign claim (◦ marker + name)
+  printf 'Week 1%s#40%s·%sZZTITLE\n'     "$TAB" "$TAB" "$TAB"   # free (unassigned)
+  printf 'Week 1%s#41%salice%sZZTITLE\n' "$TAB" "$TAB" "$TAB"   # assigned (owner no longer shown)
 } > "$C/issues"
 
 # strip ANSI, then collapse the 1-col multibyte glyphs to 1 ASCII byte (byte-matched
@@ -82,18 +86,15 @@ r_asg="$(disp_of "$out" 41)"
 # --- the constants' own arithmetic (the single source both sides derive from) ---
 exp_num=0
 exp_pri=$((FLEET_BL_W_NUM + 1))
-exp_own=$((exp_pri + FLEET_BL_W_PRI + 1 + FLEET_BL_W_MARK))
-exp_ms=$((exp_own + FLEET_BL_W_NAME + 1))
+exp_ms=$((exp_pri + FLEET_BL_W_PRI + 2))   # +2: 2-col gap so the 3-char 'pri' label clears 'milestone' (issue #389)
 exp_title=$((exp_ms + FLEET_BL_W_MS + 1))
 
 # --- REAL row column offsets match the constants ----------------------------
 # The fixtures live in milestone "Week 1", so 'Week' locates the milestone column.
 row_num=$(col_of "$r_free" '#40')       # num column
-row_own=$(col_of "$r_asg" 'alice')      # owner-NAME column (past the ◦ marker)
 row_ms=$(col_of "$r_free" 'Week')       # milestone column (issue #377)
 row_title=$(col_of "$r_free" 'ZZTITLE') # title column
 [ "$row_num"   = "$exp_num" ]   || fail "row #num starts at col $row_num, expected $exp_num" "$r_free"
-[ "$row_own"   = "$exp_own" ]   || fail "row owner name starts at col $row_own, expected $exp_own" "$r_asg"
 [ "$row_ms"    = "$exp_ms" ]    || fail "row milestone starts at col $row_ms, expected $exp_ms" "$r_free"
 [ "$row_title" = "$exp_title" ] || fail "row title starts at col $row_title, expected $exp_title" "$r_free"
 
@@ -102,28 +103,25 @@ hdr="$(fleet_backlog_col_header | norm)"
 [ -n "$hdr" ] || fail "fleet_backlog_col_header produced nothing"
 h_num=$(col_of "$hdr" '#')
 h_pri=$(col_of "$hdr" 'pri')
-h_own=$(col_of "$hdr" 'owner')
 h_ms=$(col_of "$hdr" 'milestone')
 h_title=$(col_of "$hdr" 'title')
 [ "$h_num"   = "$exp_num" ]   || fail "header '#' at col $h_num, expected $exp_num (num column)" "$hdr"
 [ "$h_pri"   = "$exp_pri" ]   || fail "header 'pri' at col $h_pri, expected $exp_pri (priority column)" "$hdr"
-[ "$h_own"   = "$exp_own" ]   || fail "header 'owner' at col $h_own, expected $exp_own (owner column)" "$hdr"
 [ "$h_ms"    = "$exp_ms" ]    || fail "header 'milestone' at col $h_ms, expected $exp_ms (milestone column)" "$hdr"
 [ "$h_title" = "$exp_title" ] || fail "header 'title' at col $h_title, expected $exp_title (title column)" "$hdr"
 
 # --- and, most importantly, header labels align EXACTLY with the row columns ---
 [ "$h_title" = "$row_title" ] || fail "header title (col $h_title) misaligned from row title (col $row_title)"
 [ "$h_ms"    = "$row_ms" ]    || fail "header milestone (col $h_ms) misaligned from row milestone (col $row_ms)"
-[ "$h_own"   = "$row_own" ]   || fail "header owner (col $h_own) misaligned from row owner (col $row_own)"
 
 # --- issue #374: the column-title row LEADS the producer output, in EVERY mode --
 # The backlog pins the titles at the TOP with --header-lines=1, so the producer
 # MUST emit the column-title line FIRST — before any milestone header (roadmap) or
 # status line — or --header-lines=1 pins the wrong row (the bug this fixes, where
 # the titles rendered at the bottom). Assert the first line of each mode has an
-# EMPTY field1 (a non-spawn header, never an issue) and carries the #/pri/owner/
-# title labels in field2. unplanned yields no data rows here (the fixtures are all
-# milestoned) — the header must still lead a body-less list.
+# EMPTY field1 (a non-spawn header, never an issue) and carries the #/pri/
+# milestone/title labels in field2. unplanned yields no data rows here (the
+# fixtures are all milestoned) — the header must still lead a body-less list.
 for m in all roadmap unplanned; do
   mo="$(FLEET_SESSION='' bash "$ROWS" "$m" 2>/dev/null)"
   [ -n "$mo" ] || fail "mode '$m': producer emitted nothing (expected the column-title row to lead)"
@@ -131,11 +129,11 @@ for m in all roadmap unplanned; do
   mf2="$(printf '%s\n' "$mo" | awk -F"$US" 'NR==1{print $2; exit}' | norm)"
   [ -z "$mf1" ] || fail "mode '$m': first line field1='$mf1', expected empty (header must not be spawnable)" "$mo"
   case "$mf2" in
-    *'#'*pri*owner*milestone*title*) : ;;
+    *'#'*pri*milestone*title*) : ;;
     *) fail "mode '$m': first output line is not the column-title row (field2='$mf2')" "$mo" ;;
   esac
 done
 
-printf 'selftest PASS: backlog column header aligns to the row widths (# %s · pri %s · owner %s · milestone %s · title %s) and leads every mode\n' \
-  "$h_num" "$h_pri" "$h_own" "$h_ms" "$h_title"
+printf 'selftest PASS: backlog column header aligns to the row widths (# %s · pri %s · milestone %s · title %s) and leads every mode\n' \
+  "$h_num" "$h_pri" "$h_ms" "$h_title"
 exit 0
