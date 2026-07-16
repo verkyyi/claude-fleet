@@ -47,10 +47,14 @@ listing=$(printf '%s\n' "$rows" | awk -v cur="$cur" \
 # retires the now-inert --prompt (the prompt only ever rendered on that row).
 # "✕ close" header token + click-header bind: an iPad/Termius tap-to-dismiss where
 # Escape is a reach (issue #346) — tapping ✕/close aborts fzf → empty pick → exit.
+# --layout=reverse-list bottom-anchors the instruction --header (list on top,
+# header below) so this modal matches the backlog (tmux-issues.sh) and dash
+# (tmux-dashboard.sh); --info=hidden --border=rounded mirror the backlog's frame
+# for full visual parity (issue #373).
 hdr="jump to a running fleet"
 [ -n "$only" ] && hdr="jump to a waiting fleet"   # scoped by the cross-fleet ● (issue #368)
 pick=$(printf '%s\n' "$listing" \
-  | fzf --ansi --no-sort --layout=reverse --height=100% --no-input \
+  | fzf --ansi --no-sort --layout=reverse-list --info=hidden --border=rounded --height=100% --no-input \
         --header="$hdr  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
         --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | awk '{print $2}')
