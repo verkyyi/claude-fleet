@@ -73,14 +73,12 @@ else
   K_BIND="?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
 fi
 
-# Prepend a dim column-title line (issue #371) so field-2's fixed columns read as
-# a table. fzf --header accepts multiple lines; this becomes the FIRST header line
-# (in --layout=reverse-list it sits directly under the rows), with the hint line
-# below it. fleet_backlog_col_header aligns the # / pri / owner / title labels to
-# the SAME FLEET_BL_W_* widths the rows use (bin/tmux-issues-rows.sh) — the header
-# is NOT subject to --with-nth=2, so alignment is to the visible columns by hand
-# there; backlog-header-cols-selftest.sh pins the two in step.
-HDR="$(fleet_backlog_col_header)"$'\n'"$HDR"
+# The dim column-title line (issue #371) is NOT a --header line — that renders at
+# the BOTTOM in --layout=reverse-list (issue #374), where a column header does not
+# belong. Instead the rows producer (bin/tmux-issues-rows.sh) emits it as the FIRST
+# output line and run_fzf pins it at the TOP with `--header-lines=1`. fzf draws the
+# header-line at the top and this `--header` (the hint) at the bottom at the same
+# time. So `$HDR` here stays the hint line only.
 
 # Priority cycle (⌃y): raises the highlighted issue's priority:pN label one step
 # and wraps (none→p2→p1→p0→none). It takes NO text input, so — unlike ⌃n/⌃x —
@@ -99,6 +97,7 @@ run_fzf() {
   rm -f "$ACT"
   bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
     --no-sort --disabled --no-input \
+    --header-lines=1 \
     --layout=reverse-list --info=hidden --border=rounded \
     --border-label="$LABEL" --border-label-pos=3 \
     --prompt='backlog ▸ ' \
