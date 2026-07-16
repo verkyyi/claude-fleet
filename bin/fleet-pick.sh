@@ -30,11 +30,14 @@ fi
 listing=$(printf '%s\n' "$rows" | awk -v cur="$cur" \
   '{ print (($2 == cur) ? $0 "  ← current" : $0) }')
 
+# --no-input drops the query/input row (issue #359): switching is tap-to-select on
+# iPad/Termius — you tap a fleet, you don't type to filter — so the input row was
+# dead space whose only effect was risking a soft-keyboard pop. Hiding it also
+# retires the now-inert --prompt (the prompt only ever rendered on that row).
 # "✕ close" header token + click-header bind: an iPad/Termius tap-to-dismiss where
 # Escape is a reach (issue #346) — tapping ✕/close aborts fzf → empty pick → exit.
 pick=$(printf '%s\n' "$listing" \
-  | fzf --ansi --no-sort --layout=reverse --height=100% \
-        --prompt='switch to fleet ▸ ' \
+  | fzf --ansi --no-sort --layout=reverse --height=100% --no-input \
         --header="jump to a running fleet  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
         --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | awk '{print $2}')
