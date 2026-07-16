@@ -57,7 +57,7 @@ command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot
 # --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
 if [ "$mode" != confirm ]; then
   spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
-  tmux display-popup -w 76 -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg"
+  tmux display-popup -w 90% -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg"
   exit 0
 fi
 

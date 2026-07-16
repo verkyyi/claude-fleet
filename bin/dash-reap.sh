@@ -174,7 +174,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
         tmux kill-window -t "$target" 2>/dev/null || true
         tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true ;;
       *)   # dirty | unmerged — confirm before disposing / closing
-        tmux display-popup -w 68 -h 9 -E \
+        tmux display-popup -w 90% -h 9 -E \
           "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true ;;
     esac
     exit 0
@@ -247,7 +247,7 @@ reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_P
 if [ "$confirm" = 0 ]; then
   case "$reason" in
     dirty|unmerged)
-      tmux display-popup -w 68 -h 9 -E \
+      tmux display-popup -w 90% -h 9 -E \
         "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
       exit 0 ;;
     # merged-pr | ancestor — clean+merged, no confirm. Background the reap (issue
