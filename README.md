@@ -157,20 +157,20 @@ The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
-clickable too: the **`⛶` zoom chip** (just right of the `⌂` hub icon) toggles the
-active pane fullscreen, the **fleet name** (`#S`) opens a picker of running fleets
-and switches to the chosen one, the red **`● N` needs badge** cycles to the next
-window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
+clickable too: the **`⌂` hub icon** (leftmost) jumps back to this fleet's steward
+hub — the same target as `F9` — the **fleet name** (`#S`) opens a picker of running
+fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
+next window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
 open the consolidated **usage + account modal** (usage/limit detail on top, the
 account pool as a selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
-The `⛶` chip is the **single-tap, touch-friendly** way to zoom a pane on iPad /
-Termius: a `DoubleClick1Pane` double-tap doesn't reliably reach tmux over touch
-(the two taps jitter a cell, the client's gesture recognizer may eat them, or SSH
-latency exceeds the ~500 ms double-click window), and `prefix z` is a chord on a
-soft keyboard — but a single click on a status range always lands. It's additive:
-desktop double-click-to-zoom stays.
+To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
+`prefix z`; `F9` and `prefix g` jump-and-zoom the steward hub and dash pane
+respectively (press again to toggle the zoom). On iPad / Termius the double-tap
+doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
+so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
+badge above — not a pane zoom.
 
 The status-left also carries the **cross-fleet** cue: when you're attached to one
 fleet and a **different** live fleet has needy windows, a second **`● N` dot in
