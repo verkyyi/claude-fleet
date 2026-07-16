@@ -29,6 +29,14 @@
 #     existing #S chip — shown when > 0, hidden at 0 — reusing that element (no new
 #     bar item) so an operator on one fleet sees that a DIFFERENT fleet is waiting.
 #
+#   PART D — the ACTIVE-WINDOW discount (issue #363): status-left renders in the
+#     active window's context, so the ● N badge subtracts the active window when
+#     it is itself a needy WORKER (you don't need pulling to a window you're on).
+#     Expands the REAL status-left with -t <window> to simulate each active window
+#     and asserts: a calm active window shows the full count; an active needy
+#     worker is discounted by 1; an active needy PANEL is NOT discounted (it's
+#     never in @attn_needs); and a discount to 0 hides the whole chip.
+#
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
@@ -205,5 +213,44 @@ case "$out" in *"⚑"*) fail "cross-fleet flag: must be HIDDEN when @attn_other_
 
 printf 'PART C ok: ⚑ N cross-fleet flag on the #S chip — shown >0, hidden at 0, from any window (#236)\n'
 
-printf 'selftest PASS: attention signals — ● N badge + ⌂ beacon (#166) + ⚑ N cross-fleet flag (#236)\n'
+# --- PART D: the ● N active-window discount (issue #363) -----------------------
+# The ● badge SUBTRACTS the active window when it is itself a needy WORKER — you
+# don't need to be pulled to a window you're already on. Two invariants:
+#   • a needy PANEL (plan/dash/backlog) is NEVER in @attn_needs (it drives the ⌂
+#     beacon via @steward_needs), so it must NOT be discounted — else the real
+#     workers undercount;
+#   • when the only needy worker is the one you're on, shown → 0 and the whole
+#     chip hides (same falsy-"0" path as the count-0 case).
+# status-left renders in the ACTIVE window's context, so #{@claude_state}/#W are
+# the active window's; we simulate "window X is active" by expanding the SAME
+# shipped $SL with -t fleetA:X — exactly how PART B/C simulate the active window.
+# @attn_needs is set directly per case: the discount is a render-time subtraction,
+# so the spinner's raw count is not what's under test here (PART A already covered
+# that). Reuses fleetA's windows: plan (hub panel) + issue-1/2/3 (workers).
+attn_badge() { tf fleetA display-message -p -t "fleetA:$1" "$SL" | grep -o '● [0-9]*'; }
+tf fleetA set-window-option -t fleetA:issue-1 @claude_state needs    # a needy worker
+tf fleetA set-window-option -t fleetA:issue-3 @claude_state working  # a calm worker
+tf fleetA set-window-option -t fleetA:plan    @claude_state needs    # a needy PANEL
+
+# (a) needy workers exist but you're NOT on one (on a calm worker) → full count
+tf fleetA set-option -t fleetA @attn_needs 3
+gotd="$(attn_badge issue-3)"
+[ "$gotd" = "● 3" ] || fail "discount (a): on a calm worker, 3 needy elsewhere → expected '● 3', got '${gotd:-<hidden>}'"
+
+# (b) the active window IS itself a needy worker → discounted by exactly 1
+gotd="$(attn_badge issue-1)"
+[ "$gotd" = "● 2" ] || fail "discount (b): ON a needy worker with 3 needy → expected '● 2', got '${gotd:-<hidden>}'"
+
+# (c) the active window is a needy PANEL → NOT discounted (panel isn't in @attn_needs)
+gotd="$(attn_badge plan)"
+[ "$gotd" = "● 3" ] || fail "discount (c): on a needy PANEL (plan) → expected '● 3' (no discount), got '${gotd:-<hidden>}'"
+
+# (d) the sole needy worker is the one you're on → shown hits 0 → badge HIDDEN
+tf fleetA set-option -t fleetA @attn_needs 1
+outd="$(tf fleetA display-message -p -t fleetA:issue-1 "$SL")"
+case "$outd" in *"●"*) fail "discount (d): on the sole needy worker (count 1) → badge must be HIDDEN, got a ● dot" ;; *) : ;; esac
+
+printf 'PART D ok: ● N active-window discount — calm=full, active-needy-worker −1, needy-panel NOT discounted, 0→hidden (#363)\n'
+
+printf 'selftest PASS: attention signals — ● N badge + ⌂ beacon (#166) + ⚑ N cross-fleet flag (#236) + ● active-window discount (#363)\n'
 exit 0
