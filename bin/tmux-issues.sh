@@ -73,6 +73,15 @@ else
   K_BIND="?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
 fi
 
+# Prepend a dim column-title line (issue #371) so field-2's fixed columns read as
+# a table. fzf --header accepts multiple lines; this becomes the FIRST header line
+# (in --layout=reverse-list it sits directly under the rows), with the hint line
+# below it. fleet_backlog_col_header aligns the # / pri / owner / title labels to
+# the SAME FLEET_BL_W_* widths the rows use (bin/tmux-issues-rows.sh) — the header
+# is NOT subject to --with-nth=2, so alignment is to the visible columns by hand
+# there; backlog-header-cols-selftest.sh pins the two in step.
+HDR="$(fleet_backlog_col_header)"$'\n'"$HDR"
+
 # Priority cycle (⌃y): raises the highlighted issue's priority:pN label one step
 # and wraps (none→p2→p1→p0→none). It takes NO text input, so — unlike ⌃n/⌃x —
 # it needs no popup and uses ONE bind in both windowed + popup modes (execute-silent
