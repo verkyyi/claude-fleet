@@ -87,19 +87,40 @@ CHECKS=$((CHECKS + 1))
 
 # --win path: pull the summary from the dash cache when --summary is absent.
 # Keyed by <session>_<id> (issue #208), so --session is required to resolve it.
+# Each record below uses its OWN worktree — as issue-<N> worktrees really are
+# distinct — because landed `record` is now idempotent on the session/transcript
+# key (#384): reusing issue-9's worktree here would dedup these rows away (the same
+# session already recorded) instead of appending the fresh rows these checks need.
 DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # summary_<sess>_<id> lives in global/ (#181/#208)
+WT10="/w/repo_v1.2/.claude-worktrees/issue-10"
+ENC10=$(printf '%s' "$WT10" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC10"; : > "$CLAUDE_PROJECTS_DIR/$ENC10/sess-10.jsonl"
 printf 'summary from the dash cache\n' > "$DC/summary_fleetA_77"
-run record --issue 10 --worktree "$WT" --win '@77' --session fleetA >/dev/null
+run record --issue 10 --worktree "$WT10" --win '@77' --session fleetA >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
 eq "record: --win pulls summary from dash cache" "summary from the dash cache" "$smry_col"
 
 # Cross-fleet isolation (issue #208): a DIFFERENT fleet's window @77 must NOT
 # render this fleet's row. fleetB's @77 has its own key; recording fleetB/@77
 # pulls fleetB's summary, never fleetA's.
+WT11="/w/repo_v1.2/.claude-worktrees/issue-11"
+ENC11=$(printf '%s' "$WT11" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC11"; : > "$CLAUDE_PROJECTS_DIR/$ENC11/sess-11.jsonl"
 printf 'summary belonging to fleetB\n' > "$DC/summary_fleetB_77"
-run record --issue 11 --worktree "$WT" --win '@77' --session fleetB >/dev/null
+run record --issue 11 --worktree "$WT11" --win '@77' --session fleetB >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
 eq "record: cross-fleet @77 pulls its OWN summary, not fleetA's" "summary belonging to fleetB" "$smry_col"
+
+# landed record is IDEMPOTENT (#384): record-before-remove now runs from TWO
+# reapers (fleet-cleanup.sh AND worktree-autoclean.sh, both via fleet_reap_record),
+# so recording the SAME session twice — or one reaper retrying after a failed
+# worktree remove — must NOT append a second row. Re-record issue 9 (same worktree
+# → same transcript/session) and assert the row count is unchanged + the skip noted.
+before_dup=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
+outdup=$(run record --issue 9 --worktree "$WT" --summary "second write, same session")
+after_dup=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
+contains "record: idempotent re-record is reported as skipped" "$outdup" "already in ledger"
+eq "record: idempotent (#384) — same session writes no duplicate landed row" "$before_dup" "$after_dup"
 
 # ============================================================================
 # A2. record-closed — landed-less closed-unlanded row (idempotent, no-shadow) #320

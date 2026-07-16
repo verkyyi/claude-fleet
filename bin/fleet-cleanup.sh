@@ -202,11 +202,12 @@ if [ -z "$WT" ] && [ -z "$WIN" ]; then
 fi
 
 # History ledger BEFORE teardown, while the worktree path (→ transcript dir +
-# session id) is still resolvable. Best-effort — never blocks the cleanup.
+# session id) is still resolvable. Best-effort — never blocks the cleanup. Routed
+# through the shared reap-and-record helper (issue #384) so this reaper and
+# worktree-autoclean.sh write the row the SAME way and can't drift; the PR is known
+# here, so the helper skips its branch→PR resolution and records a landed row.
 if [ -n "$ISSUE" ] && [ -n "$WT" ]; then
-  bash "$BIN/fleet-history.sh" record \
-    --repo "$REPO" --main "$MAIN" --session "$FLEET_SESSION" \
-    --pr "$PR" --issue "$ISSUE" --worktree "$WT" --win "$WIN" >/dev/null 2>&1 || true
+  fleet_reap_record "merged-pr" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "issue-$ISSUE" || true
 fi
 
 # Base fast-forward under the SHARED land lease — serialize base movers. We take

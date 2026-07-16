@@ -627,6 +627,59 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
   printf 'reaped:%s%s\n' " $list" "${survivors:+ (SIGKILL$survivors)}"
 }
 
+# The RECORD half of "record before remove" (issue #384): given a worktree a reaper
+# is ABOUT to prune, write the matching /fleet-history ledger row so the finished
+# session stays listed + resumable no matter WHICH janitor reaps it. History rows
+# used to be written ONLY by fleet-cleanup.sh (landed) and fleet-ledger-watch.sh
+# (closed-unlanded), so with the cleanup daemon off, worktree-autoclean.sh reaped
+# merged workers that then vanished from /fleet-history. Factoring the record step
+# HERE and having BOTH reapers call it means it can never again be wired to only one.
+# Idempotent: it drives fleet-history.sh record / record-closed, which BOTH dedup on
+# the session/transcript key, so two reapers recording the same reap yield ONE row.
+#
+#   $1 outcome   reap verdict — merged-pr|merged-PR|merged → a LANDED row;
+#                ancestor|ancestor-of-* → a CLOSED-UNLANDED row; anything else no-ops.
+#   $2 repo      owner/name (for gh PR resolution + the per-repo ledger)
+#   $3 main      base checkout (passed through as --main; record itself ignores it)
+#   $4 issue     N — REQUIRED; empty (e.g. a scratch-<N> worktree) is a clean no-op
+#   $5 worktree  the issue-<N> worktree path (record derives transcript-dir + session from it)
+#   $6 win       tmux window id for the summary cache, or "" (autoclean: the window is gone)
+#   $7 session   fleet session for the summary cache, or ""
+#   $8 pr        merged PR number if the caller already knows it, else "" to resolve from branch
+#   $9 branch    issue-<N> branch — used to resolve the merged PR when $8 is empty
+# Best-effort: never fails the caller (a missing fleet-history.sh / gh just skips).
+# Empty --pr/--win/--session are tolerated by fleet-history.sh (treated as unset),
+# so they are passed uniformly rather than juggling optional flags (keeps this POSIX
+# — fleet-lib is sourced by /bin/sh callers too, so no bash arrays here).
+fleet_reap_record() {
+  local outcome="${1:-}" repo="${2:-}" main="${3:-}" issue="${4:-}" \
+        wt="${5:-}" win="${6:-}" sess="${7:-}" pr="${8:-}" branch="${9:-}"
+  [ -n "$issue" ] || return 0
+  local _bin hist
+  _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  hist="$_bin/fleet-history.sh"
+  [ -f "$hist" ] || return 0
+  case "$outcome" in
+    merged-pr|merged-PR|merged)
+      # Resolve the merged PR for the branch when the caller didn't hand us one
+      # (worktree-autoclean knows the branch, not the PR number).
+      if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
+        pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
+                --json number -q '.[0].number' 2>/dev/null)"
+      fi
+      bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
+        --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+      ;;
+    ancestor|ancestor-of-*)
+      # No PR (clean, tip is an ancestor of base) → index it as closed-unlanded so
+      # it stays browsable/resumable; record-closed skips a branch with no transcript.
+      bash "$hist" record-closed --repo "$repo" --session "$sess" \
+        --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+      ;;
+  esac
+  return 0
+}
+
 # owner/name → filesystem-safe slug (owner-name).
 fleet_slug() {
   printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'
