@@ -12,8 +12,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 cur=$(tmux display-message -p '#S' 2>/dev/null)
 
-# Live fleets only (● marker), from fleet-list.sh minus its header row.
-rows=$(bash "$BIN/fleet-list.sh" 2>/dev/null | tail -n +2 | grep -E '^●' || true)
+# fleet-list.sh emits an aligned column header as its line 1 (`FLEET REPO
+# CHECKOUT`) then one row per fleet — header and rows share the SAME printf, so the
+# labels sit over their columns. Capture the header to pin it at the TOP of the
+# picker (issue #378), and DIM it so it reads as a header (fleet-list.sh prints it
+# plain for its own CLI output — we style it here only; the dim color matches the
+# backlog's muted column-title row, fleet_backlog_col_header). Take the live (●)
+# rows only for the body — switching only makes sense for a running fleet.
+all=$(bash "$BIN/fleet-list.sh" 2>/dev/null)
+header=$(printf '\033[38;2;86;95;137m%s\033[0m' "${all%%$'\n'*}")
+rows=$(printf '%s\n' "$all" | tail -n +2 | grep -E '^●' || true)
 
 # Optional scoping (issue #368): FLEET_PICK_ONLY = a whitespace/newline-separated
 # set of session names to restrict the picker to — the cross-fleet ● jump
@@ -51,10 +59,17 @@ listing=$(printf '%s\n' "$rows" | awk -v cur="$cur" \
 # header below) so this modal matches the backlog (tmux-issues.sh) and dash
 # (tmux-dashboard.sh); --info=hidden --border=rounded mirror the backlog's frame
 # for full visual parity (issue #373).
+# --header-lines=1 pins the (dimmed) column-title row at the TOP — aligned to the
+# rows and OUT of the selectable set — while the instruction --header stays at the
+# bottom under --layout=reverse-list, the same top-pin the backlog (#374) and usage
+# modal use (issue #378). The pinned row carries no ✕/close word, so a tap there
+# never fires the click-header bind; and it's not selectable, so `awk '{print $2}'`
+# below never yields it as a pick.
 hdr="jump to a running fleet"
 [ -n "$only" ] && hdr="jump to a waiting fleet"   # scoped by the cross-fleet ● (issue #368)
-pick=$(printf '%s\n' "$listing" \
+pick=$(printf '%s\n%s\n' "$header" "$listing" \
   | fzf --ansi --no-sort --layout=reverse-list --info=hidden --border=rounded --height=100% --no-input \
+        --header-lines=1 \
         --header="$hdr  ·  enter=switch · esc=cancel · ✕ close   [now: ${cur:-?}]" \
         --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in ✕|close) echo abort ;; esac' \
   | awk '{print $2}')
