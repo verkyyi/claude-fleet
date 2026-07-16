@@ -20,6 +20,11 @@
 #   • ONE `gh webhook forward` per opted-in LIVE fleet repo, all pointed at that
 #     same --url. Fanned out over every live fleet (like fleet-watch), deduped per
 #     repo (single forward per repo), dead forwards auto-restarted each rescan.
+#     SLEEP-SURVIVAL (issue #391): before each (re)spawn we REAP the repo's orphaned
+#     forwarder hook (a prior forward's hook that GitHub's relay left registered when
+#     the host slept) — else the fresh forward's create 422s "Hook already exists"
+#     and crash-loops. The restart itself backs off exponentially (capped) so a
+#     persistently-failing create can't hot-loop.
 #
 # The handler TRIGGERS A TARGETED REFRESH — it never writes a cache itself:
 #   • pull_request / check_run / check_suite / status  → tmux-pr-refresh.sh --repo
@@ -81,6 +86,18 @@ ISSUES_REFRESH_CMD="${FLEET_ISSUES_REFRESH_CMD:-$BIN/tmux-dash-collect.sh}"
 # The forward launcher. Overridable so the selftest can supervise a fake forward
 # without gh/network; empty ⇒ the real `gh webhook forward`.
 FWD_CMD="${FLEET_WH_FORWARD_CMD:-}"
+
+# Forwarder-hook reconcile + restart backoff (issue #391). `gh webhook forward`
+# registers a REAL repo hook against GitHub's relay and OWNS it for its lifetime;
+# on host sleep the forward dies but the hook LINGERS, so the next forward's create
+# hits HTTP 422 "Hook already exists" and crash-loops (zero delivery). We reap the
+# orphan before each (re)spawn, and back the restart loop off so a persistent create
+# failure can't hot-loop. Seams/knobs are overridable so the selftest needs no gh.
+FWD_HOOK_HOST="${FLEET_WH_HOOK_HOST:-webhook-forwarder.github.com}"  # relay host in a forwarder hook's config.url
+WH_HOOKS_LIST_CMD="${FLEET_WH_HOOKS_LIST_CMD:-}"  # <repo> → TSV rows: id \t active \t last_code \t config_url
+WH_HOOK_DEL_CMD="${FLEET_WH_HOOK_DEL_CMD:-}"      # <repo> <id> → delete that hook
+WH_BACKOFF_BASE="${FLEET_WH_BACKOFF_BASE:-5}";  case "$WH_BACKOFF_BASE" in ''|*[!0-9]*) WH_BACKOFF_BASE=5;; esac
+WH_BACKOFF_CAP="${FLEET_WH_BACKOFF_CAP:-300}";  case "$WH_BACKOFF_CAP"  in ''|*[!0-9]*) WH_BACKOFF_CAP=300;; esac
 
 # =============================== ingress: --route ==============================
 # Extract owner/name (+ best-effort number) from a delivery on stdin, verifying the
@@ -235,9 +252,79 @@ $sessions
 EOF
 }
 
+# =================== forwarder-hook reconcile (issue #391) =====================
+# host of a config.url ("https://webhook-forwarder.github.com/hook" → the host).
+wh_url_host() { local u="${1#*://}"; printf '%s' "${u%%/*}"; }
+
+# List repo R's hooks as TSV rows "id\tactive\tlast_code\tconfig_url". Overridable
+# for the hermetic selftest; the real path is `gh api`. Empty output when gh is
+# absent — the reap then no-ops (best-effort; the polling backstop covers freshness).
+wh_hooks_list() { # $1=repo
+  local repo="$1"
+  if [ -n "$WH_HOOKS_LIST_CMD" ]; then $WH_HOOKS_LIST_CMD "$repo"; return; fi
+  command -v gh >/dev/null 2>&1 || return 0
+  gh api "repos/$repo/hooks" \
+    --jq '.[] | [(.id|tostring), (.active|tostring), ((.last_response.code // "")|tostring), (.config.url // "")] | @tsv' \
+    2>/dev/null
+}
+
+# Delete hook <id> on repo R. Overridable for the selftest; real path is `gh api`.
+wh_hook_delete() { # $1=repo $2=id
+  local repo="$1" id="$2"
+  if [ -n "$WH_HOOK_DEL_CMD" ]; then $WH_HOOK_DEL_CMD "$repo" "$id"; return; fi
+  command -v gh >/dev/null 2>&1 || return 1
+  gh api -X DELETE "repos/$repo/hooks/$id" >/dev/null 2>&1
+}
+
+# Reap every FORWARDER hook (config.url host = the relay) for repo R. Called before
+# each (re)spawn: we only spawn when the prior forward is dead, so any surviving
+# forwarder hook is an ORPHAN whose lingering registration would 422 the fresh
+# create. Non-forwarder hooks (a user's own webhook) never match the relay host, so
+# they're left untouched. Best-effort: a list/delete failure is logged, never fatal.
+wh_reap_forwarder_hook() { # $1=repo
+  local repo="$1" id active code url host
+  while IFS=$'\t' read -r id active code url; do
+    [ -n "$id" ] || continue
+    host=$(wh_url_host "$url")
+    [ "$host" = "$FWD_HOOK_HOST" ] || continue
+    if wh_hook_delete "$repo" "$id"; then
+      log "reaped orphaned forwarder hook $id for $repo (active=$active last=$code)"
+    else
+      log "could not delete forwarder hook $id for $repo (active=$active last=$code)"
+    fi
+  done <<EOF
+$(wh_hooks_list "$repo")
+EOF
+  return 0
+}
+
+# Gate a dead forward's respawn with exponential backoff (issue #391). Returns 0
+# when it's time to (re)spawn — recording this death: bump the consecutive-fail
+# counter and set the next deadline = now + min(BASE·2^(fails-1), CAP). Returns 1
+# while still inside a prior deadline (caller skips the respawn this pass). The
+# counter is cleared by wh_reconcile the moment the forward is next seen ALIVE, so a
+# forward that recovers starts fresh; one that keeps dying fast throttles toward CAP.
+wh_backoff_ready() { # $1=repo $2=base(=pidfile without .pid) $3=deadpid
+  local repo="$1" base="$2" deadpid="$3" t deadline fails backoff i
+  t=$(now)
+  deadline=$(cat "$base.until" 2>/dev/null); case "$deadline" in ''|*[!0-9]*) deadline=0;; esac
+  [ "$deadline" -gt 0 ] && [ "$t" -lt "$deadline" ] && return 1   # still backing off
+  fails=$(cat "$base.fails" 2>/dev/null); case "$fails" in ''|*[!0-9]*) fails=0;; esac
+  fails=$((fails + 1)); echo "$fails" > "$base.fails" 2>/dev/null || :
+  backoff="$WH_BACKOFF_BASE"; i=1
+  while [ "$i" -lt "$fails" ] && [ "$backoff" -lt "$WH_BACKOFF_CAP" ]; do
+    backoff=$((backoff * 2)); i=$((i + 1))
+  done
+  [ "$backoff" -gt "$WH_BACKOFF_CAP" ] && backoff="$WH_BACKOFF_CAP"
+  echo "$((t + backoff))" > "$base.until" 2>/dev/null || :
+  log "forward for $repo died (pid $deadpid, fail #$fails) — restarting; next backoff ${backoff}s"
+  return 0
+}
+
 # ============================ forward supervision ==============================
 wh_spawn_forward() { # $1=repo $2=pidfile
   local repo="$1" pidf="$2" fl="$LOGP/webhook.forward.log"
+  wh_reap_forwarder_hook "$repo"   # delete any orphaned relay hook first (issue #391)
   if [ -n "$FWD_CMD" ]; then
     # selftest seam: a fake forward (stays alive so restart can be exercised)
     $FWD_CMD --repo "$repo" --events "$EVENTS" --url "$URL" >>"$fl" 2>&1 &
@@ -257,15 +344,21 @@ wh_spawn_forward() { # $1=repo $2=pidfile
 # (or whose forward died), and reap forwards whose repo left the desired set.
 wh_reconcile() { # [session...]
   mkdir -p "$FWD" 2>/dev/null || :
-  local want live=' ' repo slug pidf pid
+  local want live=' ' repo slug pidf base pid
   want=$(wh_desired_repos "$@")
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     slug=$(fleet_slug "$repo"); live="$live$slug "
-    pidf="$FWD/$slug.pid"
+    pidf="$FWD/$slug.pid"; base="$FWD/$slug"
     pid=$(cat "$pidf" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then continue; fi   # already forwarding
-    [ -n "$pid" ] && log "forward for $repo died (pid $pid) — restarting"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      rm -f "$base.fails" "$base.until" 2>/dev/null || :   # healthy ⇒ clear backoff state
+      continue
+    fi
+    # Dead (or never started). A forward that keeps dying fast — e.g. a persistent
+    # create failure — must NOT hot-loop respawns, so gate a *death* on exponential
+    # backoff (issue #391). A first-ever spawn (no prior pid) skips straight to launch.
+    if [ -n "$pid" ] && ! wh_backoff_ready "$repo" "$base" "$pid"; then continue; fi
     wh_spawn_forward "$repo" "$pidf"
   done <<EOF
 $want
@@ -273,11 +366,11 @@ EOF
   # reap departed repos (opted out, or fleet went down)
   for pidf in "$FWD"/*.pid; do
     [ -f "$pidf" ] || continue
-    slug=$(basename "$pidf" .pid)
+    slug=$(basename "$pidf" .pid); base="${pidf%.pid}"
     case "$live" in *" $slug "*) continue;; esac
     pid=$(cat "$pidf" 2>/dev/null)
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    rm -f "$pidf"
+    rm -f "$pidf" "$base.fails" "$base.until"
     log "forward down: $slug (no longer a live opted-in fleet)"
   done
 }
