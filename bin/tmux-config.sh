@@ -300,10 +300,11 @@ run_fzf() {
     --query="$savedq" \
     --border-label=" fleet config · per-fleet edits write to the $scope layer " --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header='enter=edit/expand · tab=expand section · ⌃s=write-scope (global⇄per-fleet) · ?=raw keys · ⌃r=refresh · esc · ✕ close' \
+    --header='enter=edit/expand · tab=expand section · space=detail · ⌃s=write-scope (global⇄per-fleet) · ?=raw keys · ⌃r=refresh · esc · ✕ close' \
     --preview "bash $SELF preview {1}" \
-    --preview-window='right,54%,wrap,border-left' \
+    --preview-window='right,54%,wrap,border-left,hidden' \
     --bind "ctrl-r:reload(bash $SELF rows)" \
+    --bind "space:toggle-preview" \
     --bind "ctrl-p:toggle-preview" \
     --bind "ctrl-s:execute-silent(bash $SELF toggle-scope; : > '$RESTART')+abort" \
     --bind "?:execute-silent(bash $SELF toggle-raw)+reload(bash $SELF rows)" \
