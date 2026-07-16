@@ -24,7 +24,7 @@ command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot
 
 # phase 1: pop a confirm dialog that re-invokes us in `confirm` mode.
 if [ "$mode" != confirm ]; then
-  tmux display-popup -w 64 -h 8 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-close.sh' '$num' confirm"
+  tmux display-popup -w 90% -h 8 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-close.sh' '$num' confirm"
   exit 0
 fi
 

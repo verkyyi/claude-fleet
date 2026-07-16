@@ -108,8 +108,8 @@ run_dash() {
     --bind "load:reload-sync(sleep $REFRESH; n=0; while [ \"\$(tmux show-option -gqv @popup_open 2>/dev/null)\" = 1 ] && [ \$n -lt $POPUP_MAX_TICKS ]; do sleep $POPUP_POLL; n=\$((n+1)); done; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
-    --bind "ctrl-n:execute(tmux display-popup -w 72 -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
-    --bind "ctrl-s:execute(tmux display-popup -w 72 -h 10 -E \"bash $BIN/dash-raw-session.sh --prompt-read\")+reload(bash $ROWS)" \
+    --bind "ctrl-n:execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
+    --bind "ctrl-s:execute(tmux display-popup -w 90% -h 10 -E \"bash $BIN/dash-raw-session.sh --prompt-read\")+reload(bash $ROWS)" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
