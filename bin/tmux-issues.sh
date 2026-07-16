@@ -93,9 +93,18 @@ P_BIND="ctrl-y:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload
 # reveals it on demand: show-input un-hides the row, enable-search turns the
 # (still --disabled) filter on, change-prompt relabels it. esc closes the panel;
 # reopening (windowed loop / prefix+b) starts fresh with the row hidden again.
+#
+# Rows are <#num>\x1f<display>\x1f<milestone>; `--with-nth=2` shows (and searches)
+# the middle DISPLAY field. Run it with NO `--nth` (issue #365): modern fzf
+# (≥~0.38, incl. 0.71) interprets `--nth` relative to the `--with-nth` output, so
+# the old `--nth=2` referenced a 2nd field of the single-field display that does
+# not exist and silently matched NOTHING — every `/` query came up empty. Dropping
+# it searches the whole visible field2 (num · pri · milestone · title all render
+# into it, so the filter matches on what you see) — the same fix tmux-config.sh
+# already carries for its own --with-nth panel.
 run_fzf() {
   rm -f "$ACT"
-  bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 --nth=2 \
+  bash "$ROWS" "$MODE" | fzf --ansi --delimiter=$'\x1f' --with-nth=2 \
     --no-sort --disabled --no-input \
     --header-lines=1 \
     --layout=reverse-list --info=hidden --border=rounded \
