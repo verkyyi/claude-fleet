@@ -925,32 +925,36 @@ fleet_slots_chip() {
 # The backlog rows (bin/tmux-issues-rows.sh) lay field-2 out as fixed-width
 # columns so every title starts at the same screen column; the backlog header
 # (bin/tmux-issues.sh) draws a matching column-title line so the modal reads as a
-# table. Both derive from these VISIBLE-column widths: the two PADDINGS (NUM/NAME)
-# are consumed directly by the row printf; the two CONTENT columns (PRI/MARK) are
-# the fixed 2-col literals it emits — a p0/p1/p2 tag / a ▶⇡◦ marker + space — that
-# these constants document. backlog-header-cols-selftest.sh pins the header
-# offsets against a REAL rendered row so a width change can't silently misalign
-# them.
+# table. Both derive from these VISIBLE-column widths: the three PADDINGS
+# (NUM/NAME/MS) are consumed directly by the row printf; the two CONTENT columns
+# (PRI/MARK) are the fixed 2-col literals it emits — a p0/p1/p2 tag / a ▶⇡◦ marker
+# + space — that these constants document. backlog-header-cols-selftest.sh pins
+# the header offsets against a REAL rendered row so a width change can't silently
+# misalign them.
 FLEET_BL_W_NUM=5      # #num         — %-5s
 FLEET_BL_W_PRI=2      # priority tag — p0/p1/p2 or 2 spaces (content-defined)
 FLEET_BL_W_MARK=2     # owner marker — ▶/⇡/◦ glyph + trailing space (content-defined)
 FLEET_BL_W_NAME=14    # owner name   — window/assignee/·, %-14.14s
+FLEET_BL_W_MS=12      # milestone    — name or ·, %-12.12s (flat list — issue #377)
 
 # The backlog column-title line (issue #371): a dim/muted header row whose labels
 # sit over field-2's fixed columns. Printed by bin/tmux-issues.sh as an extra
 # --header line above the hint line. Label start offsets are DERIVED from the
 # widths above (each `+ 1` is the inter-column space the row emits): `#` at the
 # num column, `pri` at the priority column, `owner` over the owner-NAME sub-column
-# (past the 2-col marker), `title` at the title column. fzf --ansi renders the
-# color; dim so it reads as a header, not a row.
+# (past the 2-col marker), `milestone` at the milestone column, `title` at the
+# title column. fzf --ansi renders the color; dim so it reads as a header, not a
+# row.
 fleet_backlog_col_header() {
   local dim='86;95;137' reset=$'\033[0m'
   local off_pri=$((FLEET_BL_W_NUM + 1))
   local off_own=$((off_pri + FLEET_BL_W_PRI + 1 + FLEET_BL_W_MARK))
-  local off_title=$((off_own + FLEET_BL_W_NAME + 1))
+  local off_ms=$((off_own + FLEET_BL_W_NAME + 1))
+  local off_title=$((off_ms + FLEET_BL_W_MS + 1))
   local s='#'
   while [ "${#s}" -lt "$off_pri" ];   do s="$s "; done; s="${s}pri"
   while [ "${#s}" -lt "$off_own" ];   do s="$s "; done; s="${s}owner"
+  while [ "${#s}" -lt "$off_ms" ];    do s="$s "; done; s="${s}milestone"
   while [ "${#s}" -lt "$off_title" ]; do s="$s "; done; s="${s}title"
   printf '\033[38;2;%sm%s%s' "$dim" "$s" "$reset"
 }

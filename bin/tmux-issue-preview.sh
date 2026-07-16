@@ -19,8 +19,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 GY='86;95;137'
 c(){ printf '\033[38;2;%sm' "$1"; }; R=$'\033[0m'
 
-# header rows (milestone group lines) and the loading/empty placeholders carry
-# no issue number — nothing to preview.
+# the column-title header row and the loading/empty placeholders carry no issue
+# number — nothing to preview.
 [ -z "$num" ] && { printf '%s  ↑↓ move to an issue to preview it%s\n' "$(c "$GY")" "$R"; exit 0; }
 
 # same session→repo resolution as the rows producer (FLEET_SESSION is exported

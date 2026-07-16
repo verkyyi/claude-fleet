@@ -109,7 +109,6 @@ run_fzf() {
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
     --bind "/:show-input+enable-search+change-prompt(filter ▸ )" \
-    --bind "tab:execute-silent(bash $BIN/dash-toggle-collapse.sh {3})+reload(bash $ROWS $MODE)" \
     --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
     --bind "$X_BIND" \

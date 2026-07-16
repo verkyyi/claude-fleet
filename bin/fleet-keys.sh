@@ -116,7 +116,6 @@ print_sheet() {
   key "⌃n" "file a new issue"
   key "⌃x" "close the highlighted issue (y/n confirm)"
   key "⌃y" "cycle the issue's priority label (none→p2→p1→p0→none)"
-  key "tab" "collapse/expand the milestone group"
   key "⌃o" "open the issue on the web"
   key "⌃r" "refresh now"
   key "?" "this cheatsheet"
