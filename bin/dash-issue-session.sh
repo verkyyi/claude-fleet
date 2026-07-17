@@ -234,7 +234,13 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # so "focus the new worker when ready" still works (default no-focus otherwise).
   _bg="FLEET_SPAWN_TAIL=$(shq "$SESS")"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")"
+  # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
+  # `tmux run-shell` DISPLAYS its command's stdout in an Esc-to-dismiss view, so
+  # ANY stray tail stdout (the worktree add's "HEAD is now at …", a future addition)
+  # would surface as a popup. Redirect the whole tail so nothing can. The tail's own
+  # error reporting is unaffected — refuse() surfaces via `tmux display-message`, a
+  # separate client call independent of this process's fds.
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || refuse "spawn failed for #$num: dispatch"
   exit 0
@@ -266,8 +272,12 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 printf '/fleet-claim' > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
-  git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" 2>/dev/null \
-    || git -C "$MAIN" worktree add "$wt" "$slug" 2>/dev/null \
+  # >/dev/null 2>&1 (BOTH streams), not just 2>/dev/null: `git worktree add`
+  # prints "HEAD is now at …" / "branch … set up to track …" to STDOUT, and under
+  # --async this runs in the run-shell -b tail whose stdout tmux surfaces as an
+  # Esc-to-dismiss view (issue #401). Silence both so the spawn stays silent.
+  git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" >/dev/null 2>&1 \
+    || git -C "$MAIN" worktree add "$wt" "$slug" >/dev/null 2>&1 \
     || { refuse "spawn failed for #$num: worktree add"; exit 1; }
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
