@@ -166,6 +166,7 @@ runshell_has '-b'                       || fail "DISPATCH must background the ta
 runshell_has 'FLEET_SPAWN_TAIL='        || fail "DISPATCH's backgrounded command must carry FLEET_SPAWN_TAIL (tail-only re-entry)"
 runshell_has 'dash-issue-session.sh'    || fail "DISPATCH's backgrounded command must re-invoke THIS script"
 runshell_has '--title'                  || fail "DISPATCH must pass --title so the window is still named from content"
+runshell_has '>/dev/null 2>&1'          || fail "DISPATCH's tail must redirect its output — run-shell DISPLAYS tail stdout as an Esc-to-dismiss view (issue #401)"
 git_has 'worktree add'                  && fail "DISPATCH must NOT run the worktree add in the FOREGROUND (that is the frozen tail)"
 tmux_has 'new-window'                   && fail "DISPATCH must NOT run new-window in the FOREGROUND"
 ok "DISPATCH --async + free → fast rc0, claim sync, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
