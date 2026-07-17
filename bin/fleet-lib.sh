@@ -31,6 +31,35 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # cross-checks the two so they can't drift.
 _FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET"
 
+# Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
+# ---------------------------------------------------------------------------------
+# The $_FLEET_GLOBAL_ONLY keys — headline: the SYSTEM-WIDE cap FLEET_GLOBAL_MAX_SESSIONS
+# — live in the install's global fleet.conf, a SIBLING of this bin/ dir. Historically
+# a reader saw them only where a script explicitly `. "$BIN/../fleet.conf"`, and even
+# then the assignments were NOT exported, so any value re-evaluated in a child the
+# parent spawned via tmux (run-shell) fell back to the `:-8` default. Net (issue #399):
+# an operator's FLEET_GLOBAL_MAX_SESSIONS=20 rendered as `/8` in the slots chip and
+# gated at 8 in some spawn paths. fleet-lib.sh is the ONE choke point ~every reader
+# sources (slots chip, spawn gate, daemons), so sourcing the global conf HERE — and
+# EXPORTING the global-only keys so children/subshells inherit them — fixes every
+# consumer at once. The per-fleet overlay (fleet_load_conf) still STRIPS these keys,
+# so GLOBAL still wins over any per-fleet value (issue #237). Guarded against
+# double-source; the conf is resolved relative to THIS file (via BASH_SOURCE, $0 under
+# zsh), so a dev checkout / test bin with NO sibling fleet.conf is a clean no-op.
+# FLEET_SKIP_GLOBAL_CONF=1 opts a hermetic caller out of both the source and the export
+# (run-selftests.sh sets it so the gate stays install-independent).
+if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}" ]; then
+  _FLEET_GLOBAL_CONF_SOURCED=1
+  _flib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -n "$_flib_dir" ] && [ -f "$_flib_dir/../fleet.conf" ]; then
+    . "$_flib_dir/../fleet.conf"
+  fi
+  # eval so the space-separated NAME list re-tokenizes under zsh too (an unquoted
+  # $var is NOT word-split there); export of a name the conf left unset is harmless.
+  eval "export $_FLEET_GLOBAL_ONLY"
+  unset _flib_dir
+fi
+
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
 # name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,

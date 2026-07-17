@@ -26,6 +26,16 @@ unset CDPATH  # keep `cd` from echoing/jumping via a user's CDPATH
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 cd "$script_dir" || { echo "run-selftests: cannot cd to bin dir ($script_dir)" >&2; exit 2; }
 
+# Hermetic env (issue #399): fleet-lib.sh now sources the sibling fleet.conf on load
+# and EXPORTS the global-only cap keys. In CI that's a no-op (a fresh checkout has no
+# repo-root fleet.conf), but a worker reproducing this gate from the LIVE install
+# (~/.claude/fleet/bin/run-selftests.sh) would otherwise let the machine's real
+# fleet.conf (e.g. FLEET_GLOBAL_MAX_SESSIONS=20) leak into tests that read the cap.
+# Skip the auto-source and clear any inherited global-only keys so every test starts
+# from the same pristine env it gets in CI, wherever the runner is invoked from.
+export FLEET_SKIP_GLOBAL_CONF=1
+unset FLEET_GLOBAL_MAX_SESSIONS 2>/dev/null || true
+
 total=0 passed=0 failed=0
 failures=''
 
