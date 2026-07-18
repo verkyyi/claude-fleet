@@ -157,8 +157,9 @@ The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
 in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
-clickable too: the **`⌂` hub icon** (leftmost) jumps back to this fleet's steward
-hub — the same target as `F9` — the **fleet name** (`#S`) opens a picker of running
+clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
+always lands on this fleet's steward hub in the half-dash / half-steward split
+(never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens a picker of running
 fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
 open the consolidated **usage + account modal** (usage/limit detail on top, the
