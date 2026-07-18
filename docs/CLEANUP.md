@@ -113,7 +113,10 @@ issue-bound workers (a raw `@raw` scratch → **window-close only**); panels
 (dash/plan/backlog) and the steward hub are never touched. It **reacts, never
 blocks** (SessionEnd can't veto an exit). Idempotent (`fleet_reap_record` +
 `gh issue close` dedup), so racing the cleanup daemon / ledger-watch still yields one
-row and one close. **OFF by default** — opt a fleet in with `FLEET_CLOSE_ON_EXIT=1`.
+row and one close. **ON by default, globally** — set `FLEET_CLOSE_ON_EXIT=0` in the
+**global** `~/.claude/fleet/fleet.conf` to disable it machine-wide. The value is
+**global-authoritative** (snapshotted before the per-fleet overlay), so a stray
+per-fleet `FLEET_CLOSE_ON_EXIT` is ignored — the switch is global-only, not per-fleet.
 It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
 
 ## Config
@@ -124,7 +127,7 @@ It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
 | `FLEET_CLEANUP_MAX_PER_TICK` | `4` | Max PRs reaped per fleet per tick (a stampede guard). |
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
-| `FLEET_CLOSE_ON_EXIT` | `0` (off) | Set `1` to arm the `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). |
+| `FLEET_CLOSE_ON_EXIT` | `1` (on) | **Global only** (`~/.claude/fleet/fleet.conf`). The `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). Set `0` to disable machine-wide; global-authoritative, so a per-fleet value is ignored. |
 
 ## What was retired
 
