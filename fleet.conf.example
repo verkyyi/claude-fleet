@@ -52,6 +52,9 @@ FLEET_CTX_WINDOW=200000
 # Default: opus — so a new window never silently falls back to sonnet. Set empty
 # to defer to your own `claude` default; an explicit --model in the spawn still
 # wins. Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
+# The prefix+c config modal edits this as an fzf picker of the CLI's latest-of-tier
+# aliases — opus, sonnet, haiku, fable, opusplan, default — plus a custom claude-*
+# entry, so you choose instead of type.
 # @label=Worker model @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MODEL="opus"
 
@@ -60,7 +63,8 @@ FLEET_CTX_WINDOW=200000
 # is no settings.json key). Overrides even the pinned built-ins (claude-code-guide
 # runs haiku, statusline-setup runs sonnet by default). Defaults to FLEET_MODEL
 # (so subagents follow the session onto opus). Set to "inherit" to let each
-# subagent resolve normally, or empty to leave the env var untouched.
+# subagent resolve normally, or empty to leave the env var untouched. The config
+# modal offers the same alias picker as FLEET_MODEL, plus an `inherit` entry.
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 

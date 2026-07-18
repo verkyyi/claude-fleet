@@ -296,6 +296,56 @@ fcfg_wscope()        { local f; f=$(fcfg_wscope_file "${1:-}"); if [ -f "$f" ]; 
 fcfg_wscope_set()    { local f; f=$(fcfg_wscope_file "${1:-}"); mkdir -p "$(dirname "$f")" 2>/dev/null; printf '%s' "$2" > "$f"; }
 fcfg_wscope_toggle() { if [ "$(fcfg_wscope "${1:-}")" = fleet ]; then fcfg_wscope_set "${1:-}" global; else fcfg_wscope_set "${1:-}" fleet; fi; }
 
+# --- enum option sets (issue #415) ------------------------------------------
+# The values an @edit=enum key accepts, each with a short annotation, as one
+# "<token><US><annotation>" row per line. This is the SINGLE source of truth for
+# the enum sets: BOTH the dash-config-edit picker (what you can choose) AND the
+# validator below (what it accepts) read from here, so the offered set and the
+# accepted set can never drift — they did before, when a free-text hint and the
+# validator each hardcoded their own model-alias list and both omitted `fable`.
+#
+# The three model keys are latest-of-tier CLI aliases (claude --help: "an alias
+# for the latest model … 'fable', 'opus', or 'sonnet'"), so the list stays
+# current per-tier with no API call. `fcfg_model_aliases` is key-aware: it offers
+# `inherit` only for FLEET_SUBAGENT_MODEL, the one key that accepts it. The empty
+# "defer to claude's own default" value, and (model keys only) any full claude-*
+# id, are ALSO valid but are handled as shapes by the caller — not tier aliases,
+# so not listed here.
+fcfg_is_model_key() {
+  case "$1" in FLEET_MODEL|FLEET_SUBAGENT_MODEL|FLEET_STEWARD_MODEL) return 0 ;; *) return 1 ;; esac
+}
+
+fcfg_model_aliases() {
+  printf '%s%s%s\n' \
+    opus     "$FCFG_US" 'latest Opus (largest)' \
+    sonnet   "$FCFG_US" 'latest Sonnet (balanced)' \
+    haiku    "$FCFG_US" 'latest Haiku (fastest / cheapest)' \
+    fable    "$FCFG_US" 'latest Fable' \
+    opusplan "$FCFG_US" 'Opus to plan, Sonnet to execute' \
+    default  "$FCFG_US" "claude's own default alias"
+  [ "${1:-}" = FLEET_SUBAGENT_MODEL ] && \
+    printf '%s%s%s\n' inherit "$FCFG_US" 'let each subagent resolve its own model'
+  return 0
+}
+
+# Every enum key's option set (model keys delegate to fcfg_model_aliases; the
+# small own-set enums list their tokens inline). Drives the picker for ALL enum
+# keys; the selftest cross-checks that every token it emits also validates.
+fcfg_enum_options() {
+  case "$1" in
+    FLEET_HANDOFF_DEST)
+      printf '%s%s%s\n' \
+        comment "$FCFG_US" 'store the handoff as an issue comment (default)' \
+        file    "$FCFG_US" 'store the handoff as a file' ;;
+    FLEET_MERGE_METHOD)
+      printf '%s%s%s\n' \
+        squash "$FCFG_US" 'squash-merge (default)' \
+        merge  "$FCFG_US" 'merge commit' \
+        rebase "$FCFG_US" 'rebase-merge' ;;
+    *) fcfg_model_aliases "$1" ;;
+  esac
+}
+
 # --- validation --------------------------------------------------------------
 # fcfg_validate TYPE VALUE KEY → 0 (ok, no output) or 1 + a one-line reason.
 # TYPE accepts either the coarse class (num|bool|enum|str) or an @edit type
@@ -347,12 +397,22 @@ fcfg_validate() {
         esac
         return 0
       fi
-      case "$val" in
-        ''|opus|sonnet|haiku|opusplan|default|claude-*) : ;;
-        inherit)
-          [ "$key" = FLEET_SUBAGENT_MODEL ] || { printf '%s: "inherit" is valid only for FLEET_SUBAGENT_MODEL' "$key"; return 1; } ;;
-        *) printf '%s must be a model alias (opus|sonnet|haiku|opusplan|default), a claude-* id, or empty (got: %s)' "$key" "$val"; return 1 ;;
-      esac ;;
+      # Model-alias enum (FLEET_MODEL / _SUBAGENT_MODEL / _STEWARD_MODEL). Empty
+      # (defer to claude's own default) and any full claude-* id are always fine;
+      # the tier aliases come from the ONE source of truth (fcfg_model_aliases),
+      # which is key-aware — it offers `inherit` only for FLEET_SUBAGENT_MODEL, so
+      # this stays a single list (issue #415 also adds `fable`).
+      case "$val" in ''|claude-*) return 0 ;; esac
+      local _row _tok
+      while IFS= read -r _row; do
+        _tok=${_row%%"$FCFG_US"*}
+        [ "$val" = "$_tok" ] && return 0
+      done <<EOF
+$(fcfg_model_aliases "$key")
+EOF
+      printf '%s must be a model alias (%s), a claude-* id, or empty (got: %s)' \
+        "$key" "$(fcfg_model_aliases "$key" | cut -d"$FCFG_US" -f1 | paste -sd'|' -)" "$val"
+      return 1 ;;
     *)
       # free string: reject only what would make the double-quoted assignment
       # unsafe to `source`. $VAR / ${VAR} expansion is allowed (the example relies

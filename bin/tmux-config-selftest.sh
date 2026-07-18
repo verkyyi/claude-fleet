@@ -213,6 +213,48 @@ fcfg_validate str  'a`b'       FLEET_NOTIFY_CMD >/dev/null && fail 'str with bac
 fcfg_validate str  '$(reboot)' FLEET_NOTIFY_CMD >/dev/null && fail 'str with $(…) command sub should fail'; ok
 fcfg_validate str  'a\'        FLEET_NOTIFY_CMD >/dev/null && fail 'str trailing backslash should fail'; ok
 
+# --- MODEL-ALIAS SOURCE OF TRUTH (issue #415) -------------------------------
+# `fable` is now a first-class alias on every model key — it used to be rejected
+# (the immediate bug): the validator and the picker each hardcoded a stale list.
+fcfg_validate enum fable FLEET_MODEL          >/dev/null || fail 'fable valid for FLEET_MODEL'; ok
+fcfg_validate enum fable FLEET_SUBAGENT_MODEL >/dev/null || fail 'fable valid for FLEET_SUBAGENT_MODEL'; ok
+fcfg_validate enum fable FLEET_STEWARD_MODEL  >/dev/null || fail 'fable valid for FLEET_STEWARD_MODEL'; ok
+
+# fcfg_is_model_key partitions the enum keys the model picker/validator apply to.
+fcfg_is_model_key FLEET_MODEL          || fail 'FLEET_MODEL is a model key'; ok
+fcfg_is_model_key FLEET_STEWARD_MODEL  || fail 'FLEET_STEWARD_MODEL is a model key'; ok
+fcfg_is_model_key FLEET_HANDOFF_DEST   && fail 'FLEET_HANDOFF_DEST is not a model key'; ok
+
+# fcfg_model_aliases is the ONE list, and it is key-aware: every model key offers
+# fable; only the subagent key offers `inherit`.
+ma_model=$(fcfg_model_aliases FLEET_MODEL          | cut -d"$FCFG_US" -f1 | tr '\n' ' ')
+ma_sub=$(  fcfg_model_aliases FLEET_SUBAGENT_MODEL | cut -d"$FCFG_US" -f1 | tr '\n' ' ')
+case " $ma_model " in *' fable '*)   ok ;; *) fail "fcfg_model_aliases missing fable: $ma_model" ;; esac
+case " $ma_model " in *' inherit '*) fail "FLEET_MODEL must NOT offer inherit: $ma_model" ;; *) ok ;; esac
+case " $ma_sub "   in *' inherit '*) ok ;; *) fail "FLEET_SUBAGENT_MODEL must offer inherit: $ma_sub" ;; esac
+
+# PICKER ⇔ VALIDATOR: every token the picker can offer for an enum key (from
+# fcfg_enum_options, what dash-config-edit reads) must also validate for that key.
+# Ties the offered set to the accepted set for EVERY enum key so they can't drift.
+for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_STEWARD_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD; do
+  while IFS="$FCFG_US" read -r tok _ann; do
+    [ -n "$tok" ] || continue
+    fcfg_validate enum "$tok" "$k" >/dev/null || fail "picker offers '$tok' for $k but the validator rejects it"
+    ok
+  done <<EOF
+$(fcfg_enum_options "$k")
+EOF
+done
+
+# No SECOND hardcoded alias list — the tier aliases live only in fcfg_model_aliases
+# (one token per printf line), never as a `sonnet|haiku` / `sonnet | haiku` pipe
+# list in the lib or the editor (the "exactly ONE place" acceptance, issue #415).
+for f in "$LIB" "$BIN/dash-config-edit.sh"; do
+  grep -nE 'sonnet[[:space:]]*\|[[:space:]]*haiku' "$f" >/dev/null 2>&1 \
+    && fail "stale hardcoded alias list in ${f##*/} — drive it from fcfg_model_aliases"
+  ok
+done
+
 # --- WRITE ------------------------------------------------------------------
 NEW="$WORK/new.conf"
 st=$(fcfg_write "$NEW" FLEET_MAX_SESSIONS 3 int)
