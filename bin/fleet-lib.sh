@@ -129,13 +129,16 @@ fleet_each_conf() {
 # (issue-bridge/watch) resolve which fleets/<sess>/ dir owns their state. Compares
 # on normalized owner/name so URL vs slug forms match.
 fleet_sess_for_repo() {
-  local want sess conf rp
+  local want sess conf rp tab
+  tab=$(printf '\t')                                 # POSIX tab (ANSI-C quoting is a bashism dash ignores)
   want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 0
-  while IFS=$'\t' read -r sess conf; do
+  while IFS="$tab" read -r sess conf; do
     [ -n "$sess" ] || continue
     rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
     [ "$(fleet_norm_repo "$rp")" = "$want" ] && { printf '%s' "$sess"; return 0; }
-  done < <(fleet_each_conf)
+  done <<EOF
+$(fleet_each_conf)
+EOF
   return 0
 }
 
@@ -446,12 +449,15 @@ fleet_bg() {
 # configured fleet (conf kept, server gone) is skipped, and the user's own
 # default-socket tmux is never touched. Safe under a `set -u` caller.
 fleet_sockets() {
-  local sess conf
+  local sess conf tab
   [ -d "$FLEET_CONF_DIR" ] || return 0
-  while IFS=$'\t' read -r sess conf; do
+  tab=$(printf '\t')                                 # POSIX tab (ANSI-C quoting is a bashism dash ignores)
+  while IFS="$tab" read -r sess conf; do
     [ -n "$sess" ] || continue
     tmux -L "$sess" has-session -t "$sess" 2>/dev/null && printf '%s\n' "$sess"
-  done < <(fleet_each_conf)
+  done <<EOF
+$(fleet_each_conf)
+EOF
 }
 
 # Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live
@@ -463,8 +469,11 @@ fleet_sockets() {
 fleet_list_windows_all() {
   local fmt="$1" label
   while IFS= read -r label; do
+    [ -n "$label" ] || continue
     tmux -L "$label" list-windows -a -F "$fmt" 2>/dev/null
-  done < <(fleet_sockets)
+  done <<EOF
+$(fleet_sockets)
+EOF
 }
 
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
@@ -576,7 +585,9 @@ fleet_worktree_head() {
       "HEAD "*)     h="${line#HEAD }" ;;
       "branch refs/heads/$branch") printf '%s\t%s' "$d" "$h"; return 0 ;;
     esac
-  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  done <<EOF
+$(git -C "$root" worktree list --porcelain 2>/dev/null)
+EOF
   return 0
 }
 
@@ -889,7 +900,9 @@ fleet_resolve_repo_for_session() {
     [ -n "$repo" ] && { printf '%s' "$repo"; return; }
     # -L "$sess": each fleet runs on its own named socket (== session name), so a
     # daemon/collector querying from OUTSIDE tmux must name the socket explicitly.
-  done < <(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
+  done <<EOF
+$(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
+EOF
   fleet_norm_repo "${FLEET_REPO:-}"
 }
 
@@ -998,7 +1011,8 @@ fleet_session_cap_ok() {
 # precomputed count as $1 to avoid a second scan (and for hermetic tests). With the
 # cap disabled (gmax=0 ⇒ unlimited) it shows a bare "slots N" (no denominator/color).
 fleet_slots_chip() {
-  local n="${1:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset=$'\033[0m'
+  local n="${1:-}" gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" col reset
+  reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
   case "$gmax" in ''|*[!0-9]*) gmax=8;; esac
   [ -n "$n" ] || n=$(fleet_session_count)
   case "$n" in ''|*[!0-9]*) n=0;; esac
@@ -1037,7 +1051,8 @@ FLEET_BL_W_MS=12      # milestone    — name or ·, %-12.12s (flat list — iss
 # dropped in issue #389. fzf --ansi renders the color; dim so it reads as a
 # header, not a row.
 fleet_backlog_col_header() {
-  local dim='86;95;137' reset=$'\033[0m'
+  local dim='86;95;137' reset
+  reset=$(printf '\033[0m')                          # POSIX ESC[0m — $'…' is a bashism dash ignores
   local off_pri=$((FLEET_BL_W_NUM + 1))
   local off_ms=$((off_pri + FLEET_BL_W_PRI + 2))
   local off_title=$((off_ms + FLEET_BL_W_MS + 1))
