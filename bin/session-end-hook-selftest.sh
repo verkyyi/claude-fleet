@@ -194,8 +194,9 @@ grep -q 'KILL' "$TMLOG" || fail "default-on exit must close the window"
 ok "nothing set → ON by default (#409): acts on prompt_input_exit"
 
 # T3c: a PER-FLEET FLEET_CLOSE_ON_EXIT=1 while the GLOBAL value is 0 → STILL a no-op.
-# The knob is global-authoritative: the hook snapshots the global 0 BEFORE the
-# per-fleet overlay (fleet_load_conf) sets 1, then gates on the snapshot. If the
+# Global-authoritative on TWO layers: fleet_load_conf STRIPS a per-fleet
+# FLEET_CLOSE_ON_EXIT (it is in fleet-lib's $_FLEET_GLOBAL_ONLY, issue #237), AND the
+# hook snapshots the global 0 BEFORE the overlay and gates on that snapshot. If the
 # per-fleet value were honored this would dispatch — so no-dispatch proves global wins.
 PFCONF="$WORK/pfconf"; mkdir -p "$PFCONF/fleets/s1"
 printf 'FLEET_CLOSE_ON_EXIT=1\n' > "$PFCONF/fleets/s1/conf"
