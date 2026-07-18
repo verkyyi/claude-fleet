@@ -25,6 +25,14 @@
 #     the host slept) — else the fresh forward's create 422s "Hook already exists"
 #     and crash-loops. The restart itself backs off exponentially (capped) so a
 #     persistently-failing create can't hot-loop.
+#     WAKE-TRIGGERED RESTORE (issue #410): finishes the sleep-survival story. The
+#     supervisor idles in short chunks and infers a host SUSPEND from the wall-clock
+#     gap across a chunk (bash has no monotonic clock), so on wake it reconciles
+#     within SECONDS instead of up to a full rescan later. And every forward
+#     (re)spawn is paired with a one-shot CATCH-UP (pr-refresh + collect --issues)
+#     for that repo — `gh webhook forward` never replays deliveries missed while it
+#     was down, so this reconciles whatever changed during the gap the moment the
+#     forward is back, with no manual --issues kick.
 #
 # The handler TRIGGERS A TARGETED REFRESH — it never writes a cache itself:
 #   • pull_request / check_run / check_suite / status  → tmux-pr-refresh.sh --repo
@@ -49,7 +57,8 @@
 #   --handler           run the localhost python3 receiver (spawned by supervise)
 #   --desired [sess..]  print the repos to forward (opted-in, deduped); default set
 #                       is the live fleet sockets, or the given sessions
-#   --reconcile [sess..] one reconcile pass: start missing forwards, reap departed
+#   --reconcile [sess..] one reconcile pass: start missing forwards (each paired
+#                       with a catch-up refresh on (re)connect), reap departed
 #   --once              with supervise: run a single handler-start + reconcile, then
 #                       exit (used by the selftest / a manual poke)
 set -uo pipefail
@@ -60,7 +69,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 LOGP="$BIN/../logs"; mkdir -p "$LOGP" 2>/dev/null || :
 log() { printf '%s fleet-webhook: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
-now() { date +%s 2>/dev/null || echo 0; }
+now() {  # wall-clock seconds; FLEET_WH_NOW_FILE overrides with a scripted clock (selftest)
+  local f="${FLEET_WH_NOW_FILE:-}" v
+  if [ -n "$f" ]; then v=$(cat "$f" 2>/dev/null); case "$v" in ''|*[!0-9]*) v=0;; esac; printf '%s\n' "$v"; return; fi
+  date +%s 2>/dev/null || echo 0
+}
 
 # --- config (globals: one machine-wide daemon; opt-in is per-fleet) ------------
 PORT="${FLEET_WEBHOOK_PORT:-8917}";        case "$PORT" in ''|*[!0-9]*) PORT=8917;; esac
@@ -98,6 +111,19 @@ WH_HOOKS_LIST_CMD="${FLEET_WH_HOOKS_LIST_CMD:-}"  # <repo> → TSV rows: id \t a
 WH_HOOK_DEL_CMD="${FLEET_WH_HOOK_DEL_CMD:-}"      # <repo> <id> → delete that hook
 WH_BACKOFF_BASE="${FLEET_WH_BACKOFF_BASE:-5}";  case "$WH_BACKOFF_BASE" in ''|*[!0-9]*) WH_BACKOFF_BASE=5;; esac
 WH_BACKOFF_CAP="${FLEET_WH_BACKOFF_CAP:-300}";  case "$WH_BACKOFF_CAP"  in ''|*[!0-9]*) WH_BACKOFF_CAP=300;; esac
+
+# Wake-triggered reconcile (issue #410). The supervisor idles between reconcile
+# passes in WH_TICK-second chunks and treats a chunk whose WALL-clock overran its
+# sleep by >= WH_WAKE_SLACK as a host suspend (bash has no monotonic clock), waking
+# to reconcile immediately rather than up to a full RESCAN later. WH_SLEEP_CMD is the
+# chunk sleeper — overridable so the hermetic selftest drives the loop with a
+# scripted clock and no real waiting. WH_TICK is floored at 1 and clamped to RESCAN.
+WH_TICK="${FLEET_WEBHOOK_WAKE_TICK:-5}";        case "$WH_TICK"       in ''|*[!0-9]*) WH_TICK=5;; esac
+[ "$WH_TICK" -lt 1 ] && WH_TICK=1
+[ "$RESCAN" -ge 1 ] && [ "$WH_TICK" -gt "$RESCAN" ] && WH_TICK="$RESCAN"
+WH_WAKE_SLACK="${FLEET_WEBHOOK_WAKE_SLACK:-5}";  case "$WH_WAKE_SLACK" in ''|*[!0-9]*) WH_WAKE_SLACK=5;; esac
+[ "$WH_WAKE_SLACK" -lt 1 ] && WH_WAKE_SLACK=1
+WH_SLEEP_CMD="${FLEET_WH_SLEEP_CMD:-sleep}"
 
 # =============================== ingress: --route ==============================
 # Extract owner/name (+ best-effort number) from a delivery on stdin, verifying the
@@ -340,6 +366,21 @@ wh_spawn_forward() { # $1=repo $2=pidfile
   return 0
 }
 
+# Catch-up reconcile after a forward (re)connects (issue #410). `gh webhook
+# forward` NEVER replays deliveries that fired while it was down (a host sleep, a
+# network blip), so once it's back the repo's caches are still stale for whatever
+# changed during the gap. Pair each (re)spawn with ONE kick of the SAME two
+# single-writers the live route path uses — pr-refresh (PR/CI) + collect --issues —
+# so the gap is reconciled the instant the forward returns, with no manual --issues
+# kick. Best-effort (a failed kick is logged, never fatal); the ~15s/~60s pollers
+# stay the backstop.
+wh_catchup() { # $1=repo
+  local repo="$1"
+  log "catch-up on (re)connect for $repo → pr-refresh + collect --issues"
+  "$PR_REFRESH_CMD"     --repo   "$repo" >/dev/null 2>&1 || log "catch-up: pr-refresh kick failed for $repo"
+  "$ISSUES_REFRESH_CMD" --issues "$repo" >/dev/null 2>&1 || log "catch-up: issues collect failed for $repo"
+}
+
 # One reconcile pass: start a forward for every desired repo not already running
 # (or whose forward died), and reap forwards whose repo left the desired set.
 wh_reconcile() { # [session...]
@@ -359,7 +400,9 @@ wh_reconcile() { # [session...]
     # create failure — must NOT hot-loop respawns, so gate a *death* on exponential
     # backoff (issue #391). A first-ever spawn (no prior pid) skips straight to launch.
     if [ -n "$pid" ] && ! wh_backoff_ready "$repo" "$base" "$pid"; then continue; fi
-    wh_spawn_forward "$repo" "$pidf"
+    # (re)connect: launch the forward, then catch up its caches for anything that
+    # changed while it was down (issue #410) — gh webhook forward never replays it.
+    if wh_spawn_forward "$repo" "$pidf"; then wh_catchup "$repo"; fi
   done <<EOF
 $want
 EOF
@@ -391,6 +434,36 @@ wh_shutdown() {
     rm -f "$pidf"
   done
 }
+# Decide whether a sleep chunk that ASKED for $1 seconds but saw $2 seconds of
+# wall-clock pass straddled a host SUSPEND (issue #410). A normal chunk sees ~$1
+# (±scheduler jitter); a suspend inflates the wall delta far past it. Flag a wake
+# once the overrun reaches WH_WAKE_SLACK — chosen above jitter, well below any real
+# suspend gap — so jitter never false-fires but a real sleep always does.
+wh_is_wake() { # $1=tick $2=wall_delta → 0 (wake) when delta >= tick + slack
+  [ "$2" -ge $(( $1 + WH_WAKE_SLACK )) ]
+}
+
+# Idle between reconcile passes in WH_TICK-second chunks, watching each chunk's
+# wall-clock delta for a host-suspend gap (issue #410). Bash has no monotonic clock,
+# so we infer a suspend from the mismatch between how long we asked to sleep and how
+# much wall-clock actually passed. Returns 1 the instant a wake is detected (the
+# caller reconciles NOW — restore ≈ seconds, not up to a full RESCAN, after wake);
+# returns 0 when the full RESCAN elapsed uneventfully.
+wh_sleep_or_wake() {
+  local remaining="$RESCAN" tick t0 t1 delta
+  while [ "$remaining" -gt 0 ]; do
+    tick="$WH_TICK"; [ "$tick" -gt "$remaining" ] && tick="$remaining"
+    t0=$(now); "$WH_SLEEP_CMD" "$tick"; t1=$(now)
+    delta=$(( t1 - t0 )); [ "$delta" -lt 0 ] && delta=0
+    if wh_is_wake "$tick" "$delta"; then
+      log "wake detected (slept ${tick}s, wall +${delta}s) — reconciling now"
+      return 1
+    fi
+    remaining=$(( remaining - tick ))
+  done
+  return 0
+}
+
 wh_supervise() {
   # Singleton is guaranteed in production by launchd KeepAlive / systemd, so a stale
   # handler pidfile from a killed run is the only real hazard — a second bind fails
@@ -398,15 +471,30 @@ wh_supervise() {
   wh_handler_alive || rm -f "$HANDLER_PIDF" 2>/dev/null || :
   trap 'wh_shutdown' EXIT INT TERM
   wh_start_handler
+  local woke=0
   while :; do
     wh_handler_alive || { log "handler not alive — restarting"; wh_start_handler; }
+    if [ "$woke" = 1 ]; then
+      # A host wake was just detected (issue #410): clear any backoff deadline so a
+      # forward the sleep killed respawns immediately — not gated by a pre-sleep
+      # deadline — then let wh_reconcile reap the orphan hook, recreate the forward,
+      # and catch its caches up, all within seconds of wake.
+      rm -f "$FWD"/*.until "$FWD"/*.fails 2>/dev/null || :
+      woke=0
+    fi
     wh_reconcile
     [ "${WEBHOOK_ONCE:-0}" = 1 ] && break
-    sleep "$RESCAN"
+    wh_sleep_or_wake || woke=1
   done
 }
 
 # =============================== dispatch ======================================
+# When SOURCED (the hermetic selftest sources this file to unit-test wh_is_wake /
+# wh_sleep_or_wake without kicking off the supervisor), stop here: defining the
+# functions + config above is all a source wants. `return` is valid only in a
+# sourced context, and the guard runs it only when sourced (BASH_SOURCE != $0).
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
+
 MODE=supervise EVENT=''
 ARGS=()
 while [ "$#" -gt 0 ]; do
