@@ -1,6 +1,6 @@
 #!/bin/bash
-# dash-issue-new-utf8-backspace-selftest.sh — the "⌃n popup survives CJK backspace"
-# rail (issue #408).
+# dash-issue-new-utf8-backspace-selftest.sh — the "⌃n popup survives CJK" rail
+# (issues #408 backspace, #419 paste, #422 whole-char echo).
 #
 # dash-issue-new.sh is the ONLY text popup with a hand-rolled per-character input
 # loop (read_title). On an SSH/Termius popup whose server started without a UTF-8
@@ -9,15 +9,24 @@
 # broken half-character in the buffer — and `printf '\b \b'` erased only 1 of the 2
 # cells a CJK glyph occupies, so the cursor desynced and the popup appeared to hang.
 #
+# A THIRD path (issue #422) is the per-character input ECHO: bash 3.2 reads one BYTE
+# per `read -rsn1` even in a UTF-8 locale, so echoing each byte split a multibyte glyph
+# across terminal/tmux writes — rendering tofu boxes (□) / duplicated cells. The fix
+# assembles a whole glyph (utf8_len + continuation reads) and echoes it in ONE write.
+#
 # The fix is two parts, both lifted from the REAL script and driven here (not a
 # copy):
 #   1. force a UTF-8 locale up top, so `${title%?}` strips a WHOLE character;
 #   2. redraw the whole input line on backspace (\r + prefix+title + \033[K)
 #      instead of the width-broken incremental `\b \b`.
 #
-# We extract JUST the locale export + read_title out of dash-issue-new.sh, source
-# them, reproduce the bug's C-locale popup env (LC_ALL/LC_CTYPE/LANG unset — as SSH
-# leaves them), then feed read_title raw byte sequences and assert:
+# We extract JUST the locale export + utf8_len + read_title + read_paste out of
+# dash-issue-new.sh, source them, reproduce the bug's C-locale popup env (LC_ALL/
+# LC_CTYPE/LANG unset — as SSH leaves them), then feed read_title raw byte sequences
+# and assert:
+#   • UTF8LEN  utf8_len classifies ASCII/2/3/4-byte lead bytes as 1/2/3/4 (issue #422).
+#   • WHOLECHAR read_title's ECHO of a mixed ASCII+CJK+emoji title is byte-identical to
+#              the input and valid UTF-8 — whole glyphs, never a split write (issue #422).
 #   • VALID    a CJK title + N backspaces leaves `title` VALID UTF-8 (iconv round
 #              trip), never a partial-byte remnant, and empties cleanly.
 #   • EVERYSTEP a mixed ASCII+CJK+emoji title stays valid UTF-8 after every backspace.
@@ -30,8 +39,9 @@
 #              lands a single-line paste verbatim, does NOT auto-submit (issue #419) —
 #              and a lone Esc after a paste still cancels.
 #   • STRUCTURE the shipped code still carries the locale export, redraws the line (no
-#              `\b \b`), and keeps the paste path (?2004h enable + ESC[200~ hand-off +
-#              ESC[201~ end marker), so a refactor dropping any of them trips this test.
+#              `\b \b`), keeps the paste path (?2004h enable + ESC[200~ hand-off +
+#              ESC[201~ end marker), and assembles whole glyphs (utf8_len) in both input
+#              paths, so a refactor dropping any of them trips this test.
 #
 # No network, no tmux server, no real repo — read_title reads from a byte file. Runs
 # genuinely only where a UTF-8 locale is installed (so the forced locale can engage);
@@ -59,11 +69,13 @@ skip() { printf 'SKIP %s\n' "$1"; exit 0; }
 SHIM="$WORK/shim.sh"
 {
   grep -E '^export LANG=.*LC_ALL=' "$NEW"                          # part 1: forced UTF-8 locale
-  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 2: read_title
-  awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 3: read_paste (issue #419)
+  awk '/^utf8_len\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"     # part 2: utf8_len (issue #422) — defined before read_title uses it
+  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 3: read_title
+  awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 4: read_paste (issue #419)
 } > "$SHIM"
 
 grep -q 'LC_ALL='      "$SHIM" || fail "no UTF-8 locale export found in $NEW (part 1 regressed or moved?)"
+grep -q 'utf8_len()'   "$SHIM" || fail "could not extract utf8_len() from $NEW (issue #422 helper moved/renamed?)"
 grep -q 'read_title()' "$SHIM" || fail "could not extract read_title() from $NEW (moved/renamed?)"
 grep -q 'read_paste()' "$SHIM" || fail "could not extract read_paste() from $NEW (moved/renamed?)"
 # STRUCTURE: backspace must redraw the line (\033[K), NOT the old incremental erase.
@@ -78,6 +90,16 @@ grep -qF '2004h' "$NEW"  || fail "bracketed-paste enable (\\033[?2004h) dropped 
 grep -qF '200~'  "$SHIM" || fail "read_title no longer hands ESC[200~ paste-start to read_paste — regressed" "$(cat "$SHIM")"
 grep -qF '201~'  "$SHIM" || fail "read_paste no longer detects the ESC[201~ end marker — regressed" "$(cat "$SHIM")"
 ok "STRUCTURE the paste path is intact (?2004h enable + ESC[200~ hand-off + ESC[201~ end marker)"
+# STRUCTURE (issue #422): the INPUT echo must assemble a WHOLE glyph before writing —
+# read_title's ordinary-char case (and read_paste's) read the continuation bytes via
+# utf8_len instead of echoing each byte, so a multibyte sequence never splits across a
+# terminal/tmux write and renders □/dupes. A refactor back to per-byte echo drops the
+# utf8_len call from these functions and trips this.
+awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW" > "$WORK/rt.sh"
+awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW" > "$WORK/rp.sh"
+grep -q 'utf8_len' "$WORK/rt.sh" || fail "read_title no longer assembles whole UTF-8 chars (utf8_len) — per-byte echo regressed (issue #422)" "$(cat "$WORK/rt.sh")"
+grep -q 'utf8_len' "$WORK/rp.sh" || fail "read_paste no longer assembles whole UTF-8 chars (utf8_len) — per-byte echo regressed (issue #422)" "$(cat "$WORK/rp.sh")"
+ok "STRUCTURE both input paths assemble whole UTF-8 glyphs (utf8_len) before echoing — no per-byte echo (issue #422)"
 
 # ============================ reproduce the C-locale popup ===================
 # SSH/Termius forward LANG but usually not LC_CTYPE/LC_ALL, so a popup off a server
@@ -105,17 +127,45 @@ valid_utf8() { # 0 = valid UTF-8. Falls back to a permissive pass if iconv is ab
 
 # drive the REAL read_title on a raw byte string. read_title assigns the GLOBAL
 # `title`; we call it in THIS shell (no pipe/subshell), so $title + $rt_rc survive.
-INF="$WORK/in"
+INF="$WORK/in"; ECHOF="$WORK/echo"
 drive() { # $1 = raw input bytes (\0ooo octal escapes honored via %b)
   printf '%b' "$1" > "$INF"
   title=""
-  read_title 'title ▸ ' < "$INF" >/dev/null 2>&1
+  # Capture the ECHO (stdout) too, into $ECHOF, so the whole-char echo assertion
+  # (issue #422) can inspect exactly what read_title wrote to the terminal. title/rc
+  # assertions are unaffected — they never read stdout.
+  read_title 'title ▸ ' < "$INF" > "$ECHOF" 2>/dev/null
   rt_rc=$?
 }
 DEL='\0177'; ESC='\033'; NL='\n'; CR='\r'   # 0x7f backspace · 0x1b esc · 0x0a enter · 0x0d CR
 PS='\033[200~'; PE='\033[201~'      # bracketed-paste start / end markers (issue #419)
 CJK='中文标题'                       # 4 CJK glyphs, 3 bytes each
 MIX='ab中😀c'                        # ASCII + CJK + 4-byte emoji + ASCII
+
+# ============================ UTF8LEN: lead-byte length (issue #422) =========
+# utf8_len classifies a LEAD byte into its glyph's total byte length (1..4). Passing the
+# whole char is fine: in the C locale `printf '%d' "'X"` reads only the FIRST byte, which
+# is the lead byte read_title actually hands it.
+for pair in 'a:1' '£:2' '中:3' '😀:4'; do
+  c="${pair%%:*}"; want="${pair##*:}"; got=$(utf8_len "$c")
+  [ "$got" = "$want" ] || fail "utf8_len lead byte of [$c] must be $want, got $got"
+done
+ok "UTF8LEN classifies ASCII/2/3/4-byte lead bytes as 1/2/3/4 (a/£/中/😀)"
+
+# ============================ WHOLECHAR: whole-glyph echo (issue #422) =======
+# bash 3.2 reads one BYTE per `read -rsn1`, so the OLD code echoed each byte separately —
+# splitting a multibyte glyph across terminal/tmux writes → □/duplicated cells. The fix
+# assembles the whole glyph and writes it ONCE. Drive a mixed title and assert the ECHO
+# (stdout, trailing \n stripped) is byte-identical to the input and valid UTF-8, and that
+# $title matches. (Byte content equals the old code; the STRUCTURE anchor above guards the
+# write-atomicity a pipe can't observe.)
+drive "ab中文😀c${NL}"
+[ "$rt_rc" -eq 0 ]            || fail "WHOLECHAR Enter must submit (rc 0), got $rt_rc"
+echo_out=$(cat "$ECHOF")      # $(...) strips the single trailing newline read_title emits on submit
+[ "$echo_out" = "ab中文😀c" ] || fail "echo must be byte-identical to 'ab中文😀c' (whole glyphs), got [$echo_out]" "$(printf '%s' "$echo_out" | (xxd 2>/dev/null || od -An -tx1))"
+valid_utf8 "$echo_out"        || fail "the echoed bytes must be valid UTF-8 (no split multibyte sequence)" "$(printf '%s' "$echo_out" | (xxd 2>/dev/null || od -An -tx1))"
+[ "$title" = "ab中文😀c" ]    || fail "WHOLECHAR \$title must be 'ab中文😀c', got [$title]"
+ok "WHOLECHAR read_title echoes whole UTF-8 glyphs (ab中文😀c) — byte-identical + valid UTF-8"
 
 # ============================ VALID: CJK + partial backspace ================
 # 中文标题 then 2 backspaces (EOF) → the buffer holds 中文, VALID UTF-8, no half-char.
@@ -200,6 +250,15 @@ valid_utf8 "$title"         || fail "CJK paste must stay valid UTF-8" "$(printf 
 [ "$title" = $'中文 标题' ] || fail "CJK paste must fold to '中文 标题', got [$title]"
 ok "PASTE-CJK a paste containing CJK folds correctly and stays valid UTF-8"
 
+# ============================ PASTE-CJK-2: single-line CJK paste (issue #422) =
+# A single-line CJK paste with an embedded literal space lands verbatim and stays valid
+# UTF-8 — exercises read_paste's whole-glyph echo (utf8_len assembly) on the paste path.
+drive "${PS}北京 上海${PE}${NL}"
+[ "$rt_rc" -eq 0 ]         || fail "single-line CJK paste must submit on Enter (rc 0), got $rt_rc"
+valid_utf8 "$title"        || fail "single-line CJK paste must stay valid UTF-8" "$(printf '%s' "$title" | (xxd 2>/dev/null || od -An -tx1))"
+[ "$title" = $'北京 上海' ] || fail "single-line CJK paste must land verbatim → '北京 上海', got [$title]"
+ok "PASTE-CJK-2 a single-line CJK paste (北京 上海) lands verbatim and stays valid UTF-8"
+
 # ============================ PASTE-SINGLE: single-line paste ================
 # A single-line bracketed paste (no newline) lands verbatim, keeping its literal
 # space — this ALSO proves 2004h isn't cancelling pastes: without the ESC[200~
@@ -215,5 +274,5 @@ drive "${PS}foo${PE}${ESC}"
 [ "$rt_rc" -eq 1 ] || fail "a lone Esc after a paste must still cancel (rc 1), got $rt_rc"
 ok "PASTE then lone Esc still cancels (rc 1) — read_title regains control after read_paste"
 
-printf '\nselftest OK: %s assertions passed (⌃n popup survives CJK backspace + folds bracketed paste to one line, controls intact)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (⌃n popup echoes whole UTF-8 glyphs + survives CJK backspace + folds bracketed paste to one line, controls intact)\n' "$pass"
 exit 0
