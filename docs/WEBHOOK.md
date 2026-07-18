@@ -63,6 +63,34 @@ forward process, or a relay hiccup can therefore only cost **freshness**, never
 **correctness** — the next poll tick still repaints. The webhook is a freshness
 optimization, not a replacement.
 
+## Surviving sleep → wake
+
+On host **sleep** a `gh webhook forward` dies but the **relay hook it registered
+lingers**, and no deliveries replay for the gap. Three things restore fresh status
+fast after wake — with no manual intervention:
+
+1. **Reap the orphaned hook before each (re)spawn** (issue #391). The lingering
+   hook would make the fresh forward's create `422 "Hook already exists"` and
+   crash-loop; the supervisor deletes any hook whose `config.url` host is the relay
+   (a user's own webhook, different host, is left untouched) so the recreate is
+   clean. The restart also backs off exponentially (capped) so a persistent create
+   failure can't hot-loop.
+2. **Wake-triggered reconcile** (issue #410). Bash has no monotonic clock, so the
+   supervisor idles between rescans in short `FLEET_WEBHOOK_WAKE_TICK`-second chunks
+   and infers a host suspend from the **wall-clock gap** across a chunk (a chunk that
+   overran its sleep by ≥ `FLEET_WEBHOOK_WAKE_SLACK` seconds = the host slept). On
+   detecting it, it clears any backoff deadline and reconciles **immediately** —
+   reconnect lands within ~a tick of wake instead of up to a full `RESCAN` later.
+3. **Catch-up on every (re)connect** (issue #410). `gh webhook forward` never
+   replays what fired while it was down, so each (re)spawn is paired with **one kick
+   of both single-writers** — `tmux-pr-refresh.sh --repo <repo>` +
+   `tmux-dash-collect.sh --issues <repo>` — reconciling whatever changed during the
+   gap the instant the forward is back. This is the piece that closes the
+   "missed during sleep" hole; the pollers remain the backstop for anything else.
+
+Keeping the WS alive *during* sleep is physically impossible; fast restore + catch-up
+covers it.
+
 ## Storm coalescing
 
 A single CI run fires many `check_run`/`status` deliveries per PR. The handler
@@ -111,6 +139,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.webhook
 | `FLEET_WEBHOOK_SECRET` | global | — | optional HMAC secret (`--secret` + verify) |
 | `FLEET_WEBHOOK_EVENTS` | env | `pull_request,check_run,check_suite,status,issues` | events forwarded |
 | `FLEET_WEBHOOK_RESCAN` | env | `30` | supervisor rescan cadence (seconds) |
+| `FLEET_WEBHOOK_WAKE_TICK` | env | `5` | wake-detect chunk granularity (seconds); reconnect lands ≤ ~this after wake (clamped to `RESCAN`) |
+| `FLEET_WEBHOOK_WAKE_SLACK` | env | `5` | a sleep chunk overrunning by ≥ this many seconds is treated as a host suspend (above jitter, below a real sleep) |
 | `FLEET_WEBHOOK_DEBOUNCE` | env | `3` | per-(event,repo) kick debounce, seconds (0 disables) |
 | `FLEET_WEBHOOK_STATE_DIR` | env | `~/.config/claude-fleet/webhook` | forward pidfiles + debounce state |
 

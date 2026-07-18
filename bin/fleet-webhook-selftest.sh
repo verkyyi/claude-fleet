@@ -59,6 +59,12 @@ echo "\$*" >> "$REC"
 EOF
 chmod +x "$WORK/recorder.sh"
 
+# A no-op stub for a refresher a test does NOT want to observe. The catch-up on
+# (re)connect (issue #410) fires PR_REFRESH_CMD + ISSUES_REFRESH_CMD on every
+# forward (re)spawn, so tests asserting forward LIFECYCLE (reconcile/reap/backoff)
+# rather than the catch-up itself point those seams here to stay hermetic.
+NOOP="$WORK/noop.sh"; printf '#!/bin/sh\nexit 0\n' > "$NOOP"; chmod +x "$NOOP"
+
 # route DELIVERY_JSON EVENT [SECRET] [SIG] — feed one delivery to --route with the
 # recorders wired in, into a FRESH state dir + cache TMPDIR (debounce off).
 route() {
@@ -142,6 +148,7 @@ RST="$WORK/rstate"
 NOHOOKS="$WORK/hooks-none.sh"; printf '#!/bin/sh\nexit 0\n' > "$NOHOOKS"; chmod +x "$NOHOOKS"
 recon() { FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$RST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
             FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" \
+            FLEET_PR_REFRESH_CMD="$NOOP" FLEET_ISSUES_REFRESH_CMD="$NOOP" \
             bash "$WH" --reconcile alpha beta gamma delta >/dev/null 2>&1; }
 
 recon
@@ -189,6 +196,7 @@ FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$RPST" \
   FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
   FLEET_WH_HOOKS_LIST_CMD="$WORK/hooks-list.sh" \
   FLEET_WH_HOOK_DEL_CMD="$WORK/hook-del.sh" \
+  FLEET_PR_REFRESH_CMD="$NOOP" FLEET_ISSUES_REFRESH_CMD="$NOOP" \
   bash "$WH" --reconcile alpha >/dev/null 2>&1
 eq 'reap deletes ONLY the forwarder hook (leaves the user hook)' "$(tr '\n' ' ' < "$DELLOG")" '111 '
 
@@ -201,6 +209,7 @@ eq 'reap deletes ONLY the forwarder hook (leaves the user hook)' "$(tr '\n' ' ' 
 BST="$WORK/bstate"
 brecon() { FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$BST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
              FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" FLEET_WH_BACKOFF_BASE=3600 FLEET_WH_BACKOFF_CAP=7200 \
+             FLEET_PR_REFRESH_CMD="$NOOP" FLEET_ISSUES_REFRESH_CMD="$NOOP" \
              bash "$WH" --reconcile alpha >/dev/null 2>&1; }
 wait_dead() { local n; for n in $(seq 1 40); do kill -0 "$1" 2>/dev/null || return 0; done; }
 brecon                                            # pass 1: first spawn (long-lived, alive)
@@ -220,5 +229,79 @@ brecon                                            # now sees it alive → clears
 [ -f "$BST/forwards/acme-widgets.fails" ] && fail 'alive forward did not clear .fails'; ok
 [ -f "$BST/forwards/acme-widgets.until" ] && fail 'alive forward did not clear .until'; ok
 
-printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff)\n' "$pass"
+# --- CATCH-UP COLLECT ON (RE)CONNECT (issue #410) ---------------------------
+# Every forward (re)spawn pairs with ONE kick of BOTH single-writers (pr-refresh
+# + collect --issues) for that repo, so events missed while it was down (sleep /
+# blip — gh webhook forward never replays them) are reconciled the instant it
+# returns. Wire the recorders and assert both fire with the right repo on the first
+# connect AND again on a restart after a death — and NOT while it's already alive
+# (no reconnect ⇒ no catch-up).
+CST="$WORK/cstate"; CREC="$WORK/catchup.log"; : > "$CREC"
+cat > "$WORK/catchup-rec.sh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$CREC"
+EOF
+chmod +x "$WORK/catchup-rec.sh"
+crecon() { FLEET_CONF_DIR="$CD" FLEET_WEBHOOK_STATE_DIR="$CST" FLEET_WH_FORWARD_CMD="$WORK/fakefwd.sh" \
+             FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" \
+             FLEET_PR_REFRESH_CMD="$WORK/catchup-rec.sh" FLEET_ISSUES_REFRESH_CMD="$WORK/catchup-rec.sh" \
+             bash "$WH" --reconcile alpha >/dev/null 2>&1; }
+crecon                                            # first connect → catch-up fires
+grep -qx -- '--repo acme/widgets'   "$CREC" || fail 'catch-up did not kick pr-refresh on first connect'; ok
+grep -qx -- '--issues acme/widgets' "$CREC" || fail 'catch-up did not kick collect --issues on first connect'; ok
+: > "$CREC"; crecon                               # forward already alive → NO reconnect, NO catch-up
+eq 'no catch-up when forward already alive' "$(cat "$CREC")" ''
+cwp=$(cat "$CST/forwards/acme-widgets.pid"); kill "$cwp" 2>/dev/null; wait_dead "$cwp"
+: > "$CREC"; crecon                               # restart after a death → catch-up fires again
+grep -qx -- '--repo acme/widgets'   "$CREC" || fail 'catch-up did not re-kick pr-refresh on reconnect'; ok
+grep -qx -- '--issues acme/widgets' "$CREC" || fail 'catch-up did not re-kick collect on reconnect'; ok
+
+# --- WAKE DETECTION (issue #410) --------------------------------------------
+# The supervisor idles in short chunks and infers a host SUSPEND from the gap
+# between how long it asked to sleep and how much wall-clock actually passed (bash
+# has no monotonic clock). Source the daemon (its dispatch is source-guarded, so a
+# source does NOT start the supervisor) to unit-test the pure decision wh_is_wake,
+# then drive wh_sleep_or_wake with a scripted clock + an instant fake sleep to prove
+# an uneventful idle returns 0 and a simulated suspend returns early (1).
+SRCST="$WORK/srcstate"
+( FLEET_WEBHOOK_STATE_DIR="$SRCST" FLEET_WEBHOOK_WAKE_SLACK=5 . "$WH" 2>/dev/null
+  wh_is_wake 5 6  && exit 20    # +1s jitter, well under slack → NOT wake
+  wh_is_wake 5 9  && exit 21    # +4s, still under slack(5) → NOT wake
+  wh_is_wake 5 10 || exit 22    # +5s == slack → wake
+  wh_is_wake 5 999 || exit 23   # huge gap → wake
+  exit 0 )
+case $? in
+  0)  ok ;;
+  20) fail 'wh_is_wake false-fired on +1s jitter' ;;
+  21) fail 'wh_is_wake false-fired on +4s jitter' ;;
+  22) fail 'wh_is_wake missed a +5s (==slack) suspend' ;;
+  23) fail 'wh_is_wake missed a large suspend gap' ;;
+  *)  fail 'wh_is_wake unit test errored' ;;
+esac
+
+# a virtual clock + instant fake sleep: normally advance the clock by exactly the
+# chunk; with the suspend marker present, add a big one-shot jump (host slept).
+CLK="$WORK/clock"; MARK="$WORK/suspend.mark"
+cat > "$WORK/fakesleep.sh" <<EOF
+#!/bin/sh
+c=\$(cat "$CLK" 2>/dev/null); case "\$c" in ''|*[!0-9]*) c=0;; esac
+adv="\$1"
+[ -f "$MARK" ] && { adv=\$(( adv + 3600 )); rm -f "$MARK"; }
+echo \$(( c + adv )) > "$CLK"
+EOF
+chmod +x "$WORK/fakesleep.sh"
+# export (not a command-prefix): FLEET_WH_NOW_FILE is read by now() at CALL time
+# inside wh_sleep_or_wake, so it must stay live past the `. "$WH"` source line.
+wsw() { (
+  export FLEET_WEBHOOK_STATE_DIR="$SRCST" FLEET_WH_NOW_FILE="$CLK" FLEET_WH_SLEEP_CMD="$WORK/fakesleep.sh" \
+         FLEET_WEBHOOK_RESCAN=30 FLEET_WEBHOOK_WAKE_TICK=5 FLEET_WEBHOOK_WAKE_SLACK=5
+  . "$WH"
+  wh_sleep_or_wake
+) 2>/dev/null; }
+echo 1000 > "$CLK"; rm -f "$MARK"; wsw
+eq 'uneventful idle returns 0 (no wake)'          "$?" 0
+echo 1000 > "$CLK"; : > "$MARK"; wsw
+eq 'suspend across a chunk returns 1 (early wake)' "$?" 1
+
+printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff · catch-up · wake)\n' "$pass"
 exit 0
