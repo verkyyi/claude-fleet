@@ -12,7 +12,8 @@
 # A THIRD path (issue #422) is the per-character input ECHO: bash 3.2 reads one BYTE
 # per `read -rsn1` even in a UTF-8 locale, so echoing each byte split a multibyte glyph
 # across terminal/tmux writes — rendering tofu boxes (□) / duplicated cells. The fix
-# assembles a whole glyph (utf8_len + continuation reads) and echoes it in ONE write.
+# assembles a whole glyph (utf8_len + continuation reads, gated on bytelen so it stays
+# portable to bash 5 where read -rsn1 already returns a whole char) and echoes it once.
 #
 # The fix is two parts, both lifted from the REAL script and driven here (not a
 # copy):
@@ -20,11 +21,12 @@
 #   2. redraw the whole input line on backspace (\r + prefix+title + \033[K)
 #      instead of the width-broken incremental `\b \b`.
 #
-# We extract JUST the locale export + utf8_len + read_title + read_paste out of
-# dash-issue-new.sh, source them, reproduce the bug's C-locale popup env (LC_ALL/
+# We extract JUST the locale export + utf8_len + bytelen + read_title + read_paste out
+# of dash-issue-new.sh, source them, reproduce the bug's C-locale popup env (LC_ALL/
 # LC_CTYPE/LANG unset — as SSH leaves them), then feed read_title raw byte sequences
 # and assert:
 #   • UTF8LEN  utf8_len classifies ASCII/2/3/4-byte lead bytes as 1/2/3/4 (issue #422).
+#   • BYTELEN  bytelen counts BYTES under the forced UTF-8 locale (issue #422).
 #   • WHOLECHAR read_title's ECHO of a mixed ASCII+CJK+emoji title is byte-identical to
 #              the input and valid UTF-8 — whole glyphs, never a split write (issue #422).
 #   • VALID    a CJK title + N backspaces leaves `title` VALID UTF-8 (iconv round
@@ -40,7 +42,8 @@
 #              and a lone Esc after a paste still cancels.
 #   • STRUCTURE the shipped code still carries the locale export, redraws the line (no
 #              `\b \b`), keeps the paste path (?2004h enable + ESC[200~ hand-off +
-#              ESC[201~ end marker), and assembles whole glyphs (utf8_len) in both input
+#              ESC[201~ end marker), and assembles whole glyphs gated on bytelen (utf8_len
+#              + bytelen, NOT a fixed-count loop that over-reads on bash 5) in both input
 #              paths, so a refactor dropping any of them trips this test.
 #
 # No network, no tmux server, no real repo — read_title reads from a byte file. Runs
@@ -70,12 +73,14 @@ SHIM="$WORK/shim.sh"
 {
   grep -E '^export LANG=.*LC_ALL=' "$NEW"                          # part 1: forced UTF-8 locale
   awk '/^utf8_len\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"     # part 2: utf8_len (issue #422) — defined before read_title uses it
-  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 3: read_title
-  awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 4: read_paste (issue #419)
+  awk '/^bytelen\(\) \{/{print}' "$NEW"                           # part 3: bytelen (issue #422) — one-liner, byte-count under C locale
+  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 4: read_title
+  awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 5: read_paste (issue #419)
 } > "$SHIM"
 
 grep -q 'LC_ALL='      "$SHIM" || fail "no UTF-8 locale export found in $NEW (part 1 regressed or moved?)"
 grep -q 'utf8_len()'   "$SHIM" || fail "could not extract utf8_len() from $NEW (issue #422 helper moved/renamed?)"
+grep -q 'bytelen()'    "$SHIM" || fail "could not extract bytelen() from $NEW (issue #422 helper moved/renamed?)"
 grep -q 'read_title()' "$SHIM" || fail "could not extract read_title() from $NEW (moved/renamed?)"
 grep -q 'read_paste()' "$SHIM" || fail "could not extract read_paste() from $NEW (moved/renamed?)"
 # STRUCTURE: backspace must redraw the line (\033[K), NOT the old incremental erase.
@@ -94,12 +99,25 @@ ok "STRUCTURE the paste path is intact (?2004h enable + ESC[200~ hand-off + ESC[
 # read_title's ordinary-char case (and read_paste's) read the continuation bytes via
 # utf8_len instead of echoing each byte, so a multibyte sequence never splits across a
 # terminal/tmux write and renders □/dupes. A refactor back to per-byte echo drops the
-# utf8_len call from these functions and trips this.
+# utf8_len call from these functions and trips this. The continuation loop must also
+# gate on BYTES-in-hand (bytelen), NOT a fixed read count: on bash 5 `read -rsn1`
+# returns a whole CHARACTER, so a fixed-count loop over-reads the following glyphs
+# (broke CI once). Requiring bytelen and forbidding the old `-lt "$clen"` fixed-count
+# form pins the portable shape.
 awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW" > "$WORK/rt.sh"
 awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW" > "$WORK/rp.sh"
 grep -q 'utf8_len' "$WORK/rt.sh" || fail "read_title no longer assembles whole UTF-8 chars (utf8_len) — per-byte echo regressed (issue #422)" "$(cat "$WORK/rt.sh")"
 grep -q 'utf8_len' "$WORK/rp.sh" || fail "read_paste no longer assembles whole UTF-8 chars (utf8_len) — per-byte echo regressed (issue #422)" "$(cat "$WORK/rp.sh")"
-ok "STRUCTURE both input paths assemble whole UTF-8 glyphs (utf8_len) before echoing — no per-byte echo (issue #422)"
+grep -q 'bytelen'  "$WORK/rt.sh" || fail "read_title glyph assembly must gate on bytelen (portable), not a fixed count — regressed (issue #422)" "$(cat "$WORK/rt.sh")"
+grep -q 'bytelen'  "$WORK/rp.sh" || fail "read_paste glyph assembly must gate on bytelen (portable), not a fixed count — regressed (issue #422)" "$(cat "$WORK/rp.sh")"
+# Forbid the COUNTER form specifically (`"$i" -lt` / `i=$((i+1))`): a fixed-count loop
+# over-reads on bash 5 where read -rsn1 returns a whole char. The portable byte-gated
+# loop legitimately uses `-lt "$clen"` (against bytelen), so we can't forbid `-lt` itself.
+# shellcheck disable=SC2016  # the $-tokens are literal grep patterns, not shell expansions
+grep -qE '"\$i"[[:space:]]*-lt|i=\$\(\(i\+1\)\)' "$WORK/rt.sh" && fail "read_title uses a FIXED-COUNT continuation loop (counter -lt \$clen) — over-reads on bash 5 (issue #422)" "$(cat "$WORK/rt.sh")"
+# shellcheck disable=SC2016  # the $-tokens are literal grep patterns, not shell expansions
+grep -qE '"\$i"[[:space:]]*-lt|i=\$\(\(i\+1\)\)' "$WORK/rp.sh" && fail "read_paste uses a FIXED-COUNT continuation loop (counter -lt \$clen) — over-reads on bash 5 (issue #422)" "$(cat "$WORK/rp.sh")"
+ok "STRUCTURE both input paths assemble whole UTF-8 glyphs, gated on bytelen (portable across bash 3.2 / bash 5) — no per-byte echo, no fixed-count over-read (issue #422)"
 
 # ============================ reproduce the C-locale popup ===================
 # SSH/Termius forward LANG but usually not LC_CTYPE/LC_ALL, so a popup off a server
@@ -151,6 +169,16 @@ for pair in 'a:1' '£:2' '中:3' '😀:4'; do
   [ "$got" = "$want" ] || fail "utf8_len lead byte of [$c] must be $want, got $got"
 done
 ok "UTF8LEN classifies ASCII/2/3/4-byte lead bytes as 1/2/3/4 (a/£/中/😀)"
+
+# ============================ BYTELEN: byte count under forced UTF-8 (issue #422)
+# bytelen must return the BYTE length even though the script forces a UTF-8 locale
+# where the bare ${#s} would count CHARACTERS — it's what makes the glyph-assembly loop
+# gate on bytes-in-hand (portable) instead of a fixed read count that over-reads on bash 5.
+for pair in 'a:1' '£:2' '中:3' '😀:4' '中文:6'; do
+  s="${pair%%:*}"; want="${pair##*:}"; got=$(bytelen "$s")
+  [ "$got" = "$want" ] || fail "bytelen [$s] must be $want bytes, got $got"
+done
+ok "BYTELEN counts BYTES under the forced UTF-8 locale (1/2/3/4/6 for a/£/中/😀/中文)"
 
 # ============================ WHOLECHAR: whole-glyph echo (issue #422) =======
 # bash 3.2 reads one BYTE per `read -rsn1`, so the OLD code echoed each byte separately —

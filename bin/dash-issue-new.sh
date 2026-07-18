@@ -85,6 +85,15 @@ utf8_len() {
   else echo 1; fi
 }
 
+# bytelen <string> -> BYTE length of the string. The forced UTF-8 locale up top makes
+# the bare `${#s}` count CHARACTERS, so we take the length under a local C locale where
+# each byte is its own char. Load-bearing for portability (issue #422): the glyph
+# assembly below gates on bytes-in-hand, not a fixed read count, so it is correct on
+# BOTH macOS bash 3.2 (read -rsn1 → one BYTE) and Linux/CI bash 5 (read -rsn1 → one
+# whole CHARACTER already, so the inner loop no-ops instead of over-reading the next
+# glyphs).
+bytelen() { local LC_ALL=C; printf %s "${#1}"; }
+
 # read_title <prompt-prefix>: read the title char-by-char so Esc cancels the WHOLE
 # create on the spot (issue #297) and a multi-line PASTE folds into one line instead
 # of the first embedded newline truncating + submitting it (issue #419). A plain
@@ -117,9 +126,12 @@ utf8_len() {
 # reads one BYTE per `read -rsn1`, so echoing each byte split a multibyte sequence
 # across tmux's pane-read boundaries and rendered □/duplicated cells. We read the
 # lead byte's continuation bytes (utf8_len) and `printf '%s'` the complete char once.
-# ASCII is unchanged (utf8_len 1, inner loop skipped), so the fast path is untouched.
+# The continuation loop gates on the BYTES already assembled (bytelen), not a fixed
+# read count, so it is portable: on bash 5 (CI) `read -rsn1` already returns a whole
+# CHARACTER, so bytelen>=clen at once and the loop no-ops (a fixed-count loop would
+# over-read the FOLLOWING glyphs). ASCII is unchanged (utf8_len 1, loop skipped).
 read_title() {
-  local prefix="$1" ch seq c2 cbuf clen i
+  local prefix="$1" ch seq c2 cbuf clen
   title=""
   while IFS= read -rsn1 ch; do
     case "$ch" in
@@ -139,9 +151,9 @@ read_title() {
           return 1                                                         # lone Esc (nothing followed within 1s / EOF) → cancel
         fi ;;
       $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\r%s%s\033[K' "$prefix" "$title"; } ;;  # Backspace → width-correct redraw
-      *)                # assemble the WHOLE glyph (read its continuation bytes) before echoing it once (issue #422)
-        cbuf="$ch"; clen=$(utf8_len "$ch"); i=1
-        while [ "$i" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; i=$((i+1)); done
+      *)                # assemble the WHOLE glyph (read continuation bytes until it's complete) before echoing it once (issue #422)
+        cbuf="$ch"; clen=$(utf8_len "$ch")
+        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
         title="$title$cbuf"; printf '%s' "$cbuf" ;;
     esac
   done
@@ -161,7 +173,7 @@ read_title() {
 # '201~'. Does NOT auto-submit: it returns to
 # read_title so the operator reviews the pasted title and presses Enter (or edits it).
 read_paste() {
-  local prefix="$1" ch seq c2 pending=0 cbuf clen i
+  local prefix="$1" ch seq c2 pending=0 cbuf clen
   while IFS= read -rsn1 ch; do
     case "$ch" in
       $'\x1b')                                                              # maybe the ESC[201~ end marker
@@ -180,9 +192,9 @@ read_paste() {
           [ -n "$title" ] && { title="$title "; printf ' '; }
           pending=0
         fi
-        # assemble the WHOLE glyph before echoing it once (issue #422) — same as read_title
-        cbuf="$ch"; clen=$(utf8_len "$ch"); i=1
-        while [ "$i" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; i=$((i+1)); done
+        # assemble the WHOLE glyph before echoing it once (issue #422) — same byte-gated loop as read_title
+        cbuf="$ch"; clen=$(utf8_len "$ch")
+        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
         title="$title$cbuf"; printf '%s' "$cbuf" ;;
     esac
   done
