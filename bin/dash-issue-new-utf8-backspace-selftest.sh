@@ -25,8 +25,13 @@
 #   • CONTROL  Esc (0x1b) still cancels (rc 1); Enter (newline) still submits (rc 0)
 #              with the typed title; an empty title still reads back empty; a typed
 #              space is preserved; the ASCII fast path is unregressed.
-#   • STRUCTURE the shipped code still carries the locale export and redraws the line
-#              (no `\b \b`), so a future refactor that drops either trips this test.
+#   • PASTE    a bracketed multi-line paste (ESC[200~ … ESC[201~) folds every newline
+#              to a SINGLE space (no leading/run/trailing), stays valid UTF-8 for CJK,
+#              lands a single-line paste verbatim, does NOT auto-submit (issue #419) —
+#              and a lone Esc after a paste still cancels.
+#   • STRUCTURE the shipped code still carries the locale export, redraws the line (no
+#              `\b \b`), and keeps the paste path (?2004h enable + ESC[200~ hand-off +
+#              ESC[201~ end marker), so a refactor dropping any of them trips this test.
 #
 # No network, no tmux server, no real repo — read_title reads from a byte file. Runs
 # genuinely only where a UTF-8 locale is installed (so the forced locale can engage);
@@ -53,16 +58,26 @@ skip() { printf 'SKIP %s\n' "$1"; exit 0; }
 # either anchor moves so a future refactor trips this test instead of no-op'ing.
 SHIM="$WORK/shim.sh"
 {
-  grep -E '^export LANG=.*LC_ALL=' "$NEW"                          # part 1
-  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 2
+  grep -E '^export LANG=.*LC_ALL=' "$NEW"                          # part 1: forced UTF-8 locale
+  awk '/^read_title\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 2: read_title
+  awk '/^read_paste\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$NEW"   # part 3: read_paste (issue #419)
 } > "$SHIM"
 
 grep -q 'LC_ALL='      "$SHIM" || fail "no UTF-8 locale export found in $NEW (part 1 regressed or moved?)"
 grep -q 'read_title()' "$SHIM" || fail "could not extract read_title() from $NEW (moved/renamed?)"
+grep -q 'read_paste()' "$SHIM" || fail "could not extract read_paste() from $NEW (moved/renamed?)"
 # STRUCTURE: backspace must redraw the line (\033[K), NOT the old incremental erase.
 grep -qF '[K'    "$SHIM" || fail "read_title backspace no longer redraws the line (\\033[K) — part 2 regressed" "$(cat "$SHIM")"
 grep -qF '\b \b' "$SHIM" && fail "read_title still uses the width-broken '\\b \\b' erase — part 2 regressed" "$(cat "$SHIM")"
 ok "STRUCTURE the shipped read_title carries the UTF-8 export + line-redraw erase (no \\b \\b)"
+# STRUCTURE (issue #419): the paste fix must keep (a) the ?2004h enable that makes the
+# terminal bracket a paste, (b) read_title's ESC[200~ paste-start hand-off, and (c)
+# read_paste's ESC[201~ end-marker detection. Dropping any one silently reintroduces
+# the first-newline truncation, so trip the test instead of no-op'ing.
+grep -qF '2004h' "$NEW"  || fail "bracketed-paste enable (\\033[?2004h) dropped from $NEW — paste fix regressed"
+grep -qF '200~'  "$SHIM" || fail "read_title no longer hands ESC[200~ paste-start to read_paste — regressed" "$(cat "$SHIM")"
+grep -qF '201~'  "$SHIM" || fail "read_paste no longer detects the ESC[201~ end marker — regressed" "$(cat "$SHIM")"
+ok "STRUCTURE the paste path is intact (?2004h enable + ESC[200~ hand-off + ESC[201~ end marker)"
 
 # ============================ reproduce the C-locale popup ===================
 # SSH/Termius forward LANG but usually not LC_CTYPE/LC_ALL, so a popup off a server
@@ -97,7 +112,8 @@ drive() { # $1 = raw input bytes (\0ooo octal escapes honored via %b)
   read_title 'title ▸ ' < "$INF" >/dev/null 2>&1
   rt_rc=$?
 }
-DEL='\0177'; ESC='\033'; NL='\n'    # 0x7f backspace · 0x1b esc · 0x0a enter
+DEL='\0177'; ESC='\033'; NL='\n'; CR='\r'   # 0x7f backspace · 0x1b esc · 0x0a enter · 0x0d CR
+PS='\033[200~'; PE='\033[201~'      # bracketed-paste start / end markers (issue #419)
 CJK='中文标题'                       # 4 CJK glyphs, 3 bytes each
 MIX='ab中😀c'                        # ASCII + CJK + 4-byte emoji + ASCII
 
@@ -159,5 +175,45 @@ drive "widget${DEL}${DEL}${NL}"          # widg after 2 ASCII backspaces
 [ "$title" = "widg" ] || fail "ASCII backspace regressed, expected 'widg', got [$title]"
 ok "ASCII fast path (type + backspace + submit) is unregressed"
 
-printf '\nselftest OK: %s assertions passed (⌃n popup survives CJK backspace — valid-UTF-8 buffer + width-correct erase, controls intact)\n' "$pass"
+# ============================ PASTE: multi-line → single line ================
+# A bracketed multi-line paste folds EVERY newline to a single space; nothing is
+# truncated at the first newline (issue #419). The paste does NOT auto-submit — the
+# trailing real Enter does, so the operator can review/edit first.
+drive "${PS}foo${NL}bar${NL}baz${PE}${NL}"
+[ "$rt_rc" -eq 0 ]           || fail "PASTE multi-line must submit on the trailing Enter (rc 0), got $rt_rc"
+[ "$title" = "foo bar baz" ] || fail "multi-line paste must fold newlines to single spaces → 'foo bar baz', got [$title]"
+ok "PASTE multi-line bracketed paste folds newlines to spaces (foo bar baz) — no first-newline truncation"
+
+# ============================ PASTE-CRLF: \r\n → ONE space ===================
+drive "${PS}foo${CR}${NL}bar${PE}${NL}"
+[ "$title" = "foo bar" ] || fail "CRLF paste must fold \\r\\n to a SINGLE space → 'foo bar', got [$title]"
+ok "PASTE-CRLF a \\r\\n paste folds to a single space (no run, no double space)"
+
+# ============================ PASTE-TRAILING-NL: no trailing space ==========
+drive "${PS}foo${NL}${PE}${NL}"
+[ "$title" = "foo" ] || fail "a paste ending in a newline must leave NO trailing space → 'foo', got [$title]"
+ok "PASTE-TRAILING-NL a paste ending in a newline leaves no trailing space"
+
+# ============================ PASTE-CJK: stays valid UTF-8 ==================
+drive "${PS}中文${NL}标题${PE}${NL}"
+valid_utf8 "$title"         || fail "CJK paste must stay valid UTF-8" "$(printf '%s' "$title" | (xxd 2>/dev/null || od -An -tx1))"
+[ "$title" = $'中文 标题' ] || fail "CJK paste must fold to '中文 标题', got [$title]"
+ok "PASTE-CJK a paste containing CJK folds correctly and stays valid UTF-8"
+
+# ============================ PASTE-SINGLE: single-line paste ================
+# A single-line bracketed paste (no newline) lands verbatim, keeping its literal
+# space — this ALSO proves 2004h isn't cancelling pastes: without the ESC[200~
+# handler, enabling 2004h would make this paste's leading ESC cancel the popup.
+drive "${PS}hello world${PE}${NL}"
+[ "$rt_rc" -eq 0 ]           || fail "single-line paste must submit on Enter (rc 0), got $rt_rc"
+[ "$title" = "hello world" ] || fail "single-line paste must land verbatim → 'hello world', got [$title]"
+ok "PASTE-SINGLE a single-line bracketed paste lands as the title (literal space kept, no cancel)"
+
+# ============================ PASTE then Esc still cancels ===================
+# After a paste, read_title is back in control: a lone Esc must still cancel cleanly.
+drive "${PS}foo${PE}${ESC}"
+[ "$rt_rc" -eq 1 ] || fail "a lone Esc after a paste must still cancel (rc 1), got $rt_rc"
+ok "PASTE then lone Esc still cancels (rc 1) — read_title regains control after read_paste"
+
+printf '\nselftest OK: %s assertions passed (⌃n popup survives CJK backspace + folds bracketed paste to one line, controls intact)\n' "$pass"
 exit 0

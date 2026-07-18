@@ -72,15 +72,23 @@ if [ "$mode" != confirm ]; then
 fi
 
 # read_title <prompt-prefix>: read the title char-by-char so Esc cancels the WHOLE
-# create on the spot (issue #297). A plain `read` only acts on Enter, so an Esc
-# keypress would be swallowed into the line instead of aborting. Enter submits,
-# Backspace erases, Esc (0x1b) cancels. We treat any Esc byte as cancel WITHOUT
-# disambiguating arrow-key escape sequences: macOS ships bash 3.2, whose `read -t`
-# rejects the fractional timeout a peek-ahead would need, and arrow keys have no
-# meaning in a one-line title field anyway (worst case: the popup closes and you
-# press ^n again). IFS= is load-bearing — it keeps a typed space as ' ', so ONLY a
-# real newline reads back as '' (Enter). Sets $title; returns 1 on Esc-cancel, 0
-# otherwise.
+# create on the spot (issue #297) and a multi-line PASTE folds into one line instead
+# of the first embedded newline truncating + submitting it (issue #419). A plain
+# `read` only acts on Enter, so an Esc keypress would be swallowed into the line
+# instead of aborting. Enter submits, Backspace erases, Esc (0x1b) cancels. IFS= is
+# load-bearing — it keeps a typed space as ' ', so ONLY a real newline reads back as
+# '' (Enter). Sets $title; returns 1 on Esc-cancel, 0 otherwise.
+#
+# Esc is disambiguated by a one-byte PEEK (issue #419): bracketed-paste markers and
+# arrow keys both START with ESC, so a bare `$'\x1b') return 1` would make every paste
+# (which the terminal brackets as ESC[200~ … ESC[201~ once we enable DEC mode 2004)
+# cancel the popup. So on ESC we peek the next byte with `read -t 1`:
+#   • nothing follows within 1s (a real lone Esc, or EOF) → cancel (return 1);
+#   • ESC '[' … CSI → read it to its final byte: '200~' is a paste-start, so hand the
+#     body to read_paste; any other CSI (arrow keys, …) has no meaning in a one-line
+#     field → ignore. A non-'[' escape (Alt / SS3) is likewise ignored.
+# `-t 1` is an INTEGER timeout because macOS ships bash 3.2.57 (no sub-second `-t`):
+# a lone-Esc cancel waits ≤1s, a pasted/arrow burst returns instantly.
 #
 # Backspace REDRAWS the whole input line — \r to column 0, reprint <prefix>$title,
 # then \033[K to clear the tail — instead of the old incremental `printf '\b \b'`
@@ -93,17 +101,67 @@ fi
 # INPUT path keeps its incremental echo (`printf '%s'`): the issue's only defect is
 # the erase path — accumulation already works, so the ASCII fast path is untouched.
 read_title() {
-  local prefix="$1" ch
+  local prefix="$1" ch seq c2
   title=""
   while IFS= read -rsn1 ch; do
     case "$ch" in
       '')               printf '\n'; return 0 ;;                            # Enter → submit
-      $'\x1b')          return 1 ;;                                         # Esc → cancel
+      $'\x1b')                                                              # Esc → peek: lone-Esc cancel vs a paste/CSI marker
+        if IFS= read -rsn1 -t 1 seq; then                                   # a byte followed → an escape sequence, not a lone Esc
+          if [ "$seq" = '[' ]; then
+            seq=""                                                          # accumulate the CSI params after '['
+            while IFS= read -rsn1 -t 1 c2; do
+              seq="$seq$c2"
+              case "$c2" in [~a-zA-Z]) break ;; esac                        # CSI final byte
+            done
+            [ "$seq" = '200~' ] && read_paste "$prefix"                     # paste start → consume the body; other CSI → ignore
+          fi
+          # non-'[' escape (Alt / SS3) → ignore: no meaning in a one-line field
+        else
+          return 1                                                         # lone Esc (nothing followed within 1s / EOF) → cancel
+        fi ;;
       $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\r%s%s\033[K' "$prefix" "$title"; } ;;  # Backspace → width-correct redraw
       *)                title="$title$ch"; printf '%s' "$ch" ;;
     esac
   done
   printf '\n'; return 0                                                     # EOF → submit what we have
+}
+
+# read_paste <prompt-prefix>: consume a bracketed-paste body — we're already past the
+# ESC[200~ start marker — up to the ESC[201~ end marker, folding it into the one-line
+# title (issue #419). Every embedded newline (''), CR ($'\r'), and tab folds to a
+# SINGLE space with no leading space, no runs, and no trailing space: a lazy `pending`
+# flag is set on whitespace and flushed only just before the next real char (and only
+# when $title already holds content), so a paste that ends in a newline drops its
+# trailing space cleanly. Ordinary bytes accumulate onto the GLOBAL $title and echo
+# like the typed fast path; multibyte UTF-8 continuation bytes accumulate transparently
+# (never split a glyph). The end marker is spotted the same way read_title spots the
+# start — ESC → `-t 1` peek → '[' → CSI → '201~'. Does NOT auto-submit: it returns to
+# read_title so the operator reviews the pasted title and presses Enter (or edits it).
+read_paste() {
+  local prefix="$1" ch seq c2 pending=0
+  while IFS= read -rsn1 ch; do
+    case "$ch" in
+      $'\x1b')                                                              # maybe the ESC[201~ end marker
+        if IFS= read -rsn1 -t 1 seq && [ "$seq" = '[' ]; then
+          seq=""
+          while IFS= read -rsn1 -t 1 c2; do
+            seq="$seq$c2"
+            case "$c2" in [~a-zA-Z]) break ;; esac
+          done
+          [ "$seq" = '201~' ] && break                                     # end of paste → back to read_title
+          # any other CSI inside a paste → ignore, keep consuming
+        fi ;;                                                              # lone Esc / non-'[' inside a paste → ignore
+      ''|$'\r'|$'\t')   pending=1 ;;                                        # embedded newline/CR/tab → lazy single space
+      *)                                                                    # ordinary byte → flush a pending space (never leading), then accumulate
+        if [ "$pending" = 1 ]; then
+          [ -n "$title" ] && { title="$title "; printf ' '; }
+          pending=0
+        fi
+        title="$title$ch"; printf '%s' "$ch" ;;
+    esac
+  done
+  printf '\r%s%s\033[K' "$prefix" "$title"                                  # normalize the shown line to $title (folded, markers stripped)
 }
 
 # create_issue — the SLOW tail: file the issue, optimistically insert its row, kick
@@ -165,6 +223,14 @@ fi
 # read_title so its backspace redraw reprints the exact same leader (issue #408).
 title_prefix='  title ▸ '
 printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n%s' "$verb" "$REPO" "$title_prefix"
+# Bracketed paste (issue #419): enable DEC mode 2004 so the terminal brackets a paste
+# as ESC[200~ … ESC[201~ — read_title folds that into a single-line title instead of
+# the first embedded newline truncating + submitting it. Disable on EVERY exit path;
+# this phase always ends in `exit`, so a trap EXIT is the clean guarantee (arm it
+# BEFORE enabling so cleanup can never be skipped). Terminals without bracketed paste
+# send the paste raw → identical to before (first line kept), no regression.
+trap 'printf "\033[?2004l"' EXIT
+printf '\033[?2004h'
 read_title "$title_prefix" || exit 0                # Esc → cancel the create directly
 [ -z "$title" ] && exit 0                           # empty title → cancel
 
