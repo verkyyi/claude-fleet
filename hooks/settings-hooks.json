@@ -57,6 +57,14 @@
           { "type": "command", "command": "sh ~/.claude/fleet/bin/handoff-latch-reset-hook.sh" }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "prompt_input_exit|logout",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/session-end-hook.sh" }
+        ]
+      }
     ]
   }
 }

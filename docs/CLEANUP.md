@@ -78,6 +78,44 @@ The cleaner keeps doing its own post-reap pull (so a reap stays atomic with its
 base advance); base-sync only adds the **merge-independent** trigger for the
 same ff-only pull.
 
+## Close the window + reap on manual exit — the SessionEnd hook (issue #403)
+
+The daemons above are POLLERS: `com.claude-fleet.cleanup` reaps a merged PR's
+worktree within ~60s, and `com.claude-fleet.ledger-watch` records a hand-closed
+worker within ~60s of noticing its window vanished. When an operator **manually
+exits** a worker (Ctrl-D / `/exit`, or logout), `bin/session-end-hook.sh` — wired
+to the Claude Code **`SessionEnd`** hook — closes that ~60s gap by reacting **at
+exit**:
+
+1. **Close the tmux window** — no leftover shell to exit by hand.
+2. **Apply the shared reap gate** (`fleet_reap_ok`) and act on the worktree by
+   verdict (committed ≠ merged):
+
+   | verdict | action |
+   |---|---|
+   | `merged-pr` (clean, a merged PR exists) | reap worktree + branch, **close the issue**, record a `landed` row |
+   | `ancestor` (clean, tip is an ancestor of base) | reap worktree + branch, record a `closed-unlanded` row — the **issue is kept open** (no merged work) |
+   | `unmerged` (clean, committed but not merged) | **KEEP** the worktree + issue, record a `closed-unlanded` row (resumable) |
+   | `dirty` (uncommitted/untracked) | **KEEP** the worktree (plain `git worktree remove` refuses it), record a `closed-unlanded` row |
+
+3. **Record the `/fleet-history` row now** (via the shared `fleet_reap_record`), so
+   the session is indexed + resumable the instant it ends — not ~60s later.
+
+It is the **event-driven twin of ledger-watch**, reusing the *same* shared reap
+primitives (`fleet_reap_ok` / `fleet_reap_record` / `fleet_reap_worktree_procs`) so
+it never diverges from the other reapers. SessionEnd runs **inside the dying pane**,
+so the gate + reap + close run in a **detached `tmux run-shell -b` job** (server-side)
+that survives the pane vanishing and can remove the cwd it stood in — mirroring
+`dash-reap.sh`'s `--exec` pattern. A `/clear` or a `/fleet-handoff` cycle
+(`reason=clear`/`resume`) is a **no-op** — the same window continues — so it never
+fires on a handoff; only a genuine `prompt_input_exit`/`logout` acts. Scoped to
+issue-bound workers (a raw `@raw` scratch → **window-close only**); panels
+(dash/plan/backlog) and the steward hub are never touched. It **reacts, never
+blocks** (SessionEnd can't veto an exit). Idempotent (`fleet_reap_record` +
+`gh issue close` dedup), so racing the cleanup daemon / ledger-watch still yields one
+row and one close. **OFF by default** — opt a fleet in with `FLEET_CLOSE_ON_EXIT=1`.
+It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
+
 ## Config
 
 | Key | Default | Meaning |
@@ -86,6 +124,7 @@ same ff-only pull.
 | `FLEET_CLEANUP_MAX_PER_TICK` | `4` | Max PRs reaped per fleet per tick (a stampede guard). |
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
+| `FLEET_CLOSE_ON_EXIT` | `0` (off) | Set `1` to arm the `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). |
 
 ## What was retired
 

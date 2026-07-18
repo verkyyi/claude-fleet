@@ -160,6 +160,24 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
 #FLEET_CLEANUP_MAX_PER_TICK=4
 
+# --- Close-on-exit hook (bin/session-end-hook.sh, SessionEnd) --------------------
+# OFF by default. When enabled for a fleet, the SessionEnd Claude Code hook reacts
+# the instant an operator MANUALLY exits a worker (Ctrl-D / /exit, or logout): it
+# closes the tmux window (no leftover shell), applies the SHARED reap gate
+# (fleet_reap_ok) and acts on the worktree by verdict, and records the /fleet-history
+# row NOW — so the session is indexed + resumable at once, not ~60s later when
+# ledger-watch's snapshot-diff notices. The event-driven twin of FLEET_LEDGER_WATCH
+# (issue #403), reusing the same shared reap primitives so it never diverges from the
+# other reapers. Merged PR → reap worktree+branch, close the issue, `landed` row;
+# ancestor-of-base → reap worktree+branch, `closed-unlanded` row (issue kept OPEN);
+# committed-but-unmerged / dirty → KEEP the worktree + issue (resumable),
+# `closed-unlanded` row. A /clear or /fleet-handoff cycle (reason=clear|resume) is a
+# no-op, so it never fires on a handoff. Scoped to issue-bound workers (+ @raw scratch
+# → window-close only); panels and the steward hub are never touched. Reacts, never
+# blocks (SessionEnd can't veto). Set to 1 to opt a fleet IN. See docs/CLEANUP.md.
+# @label=Close window + reap on manual exit @group=bridge @tier=advanced @scope=fleet @edit=bool
+#FLEET_CLOSE_ON_EXIT=0
+
 # --- Fleet watcher: zero-token event-driven steward wake (issue #147) ------------
 # OFF by default. When enabled for a fleet, the watch daemon (bin/fleet-watch.sh,
 # com.claude-fleet.watch, ~45s) sleeps on the fleet and wakes the STEWARD only on a
