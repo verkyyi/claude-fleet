@@ -667,7 +667,14 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
 # the session/transcript key, so two reapers recording the same reap yield ONE row.
 #
 #   $1 outcome   reap verdict — merged-pr|merged-PR|merged → a LANDED row;
-#                ancestor|ancestor-of-* → a CLOSED-UNLANDED row; anything else no-ops.
+#                ancestor|ancestor-of-*|unmerged|dirty → a CLOSED-UNLANDED row;
+#                anything else no-ops. The unmerged|dirty verdicts index a KEPT (not
+#                removed) worktree so a hand-closed worker is browsable + resumable
+#                the instant it ends (issue #403's SessionEnd hook — the only reaper
+#                that records the resumable worktree it deliberately KEEPS; the other
+#                reapers only ever pass a reaped merged-pr/ancestor). record-closed
+#                needs the worktree present to resolve its transcript, so a keep-case
+#                caller records BEFORE nothing / while the worktree still stands.
 #   $2 repo      owner/name (for gh PR resolution + the per-repo ledger)
 #   $3 main      base checkout (passed through as --main; record itself ignores it)
 #   $4 issue     N — REQUIRED; empty (e.g. a scratch-<N> worktree) is a clean no-op
@@ -699,9 +706,11 @@ fleet_reap_record() {
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
         --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
       ;;
-    ancestor|ancestor-of-*)
-      # No PR (clean, tip is an ancestor of base) → index it as closed-unlanded so
-      # it stays browsable/resumable; record-closed skips a branch with no transcript.
+    ancestor|ancestor-of-*|unmerged|dirty)
+      # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
+      # worktree the SessionEnd hook indexes on hand-exit, #403) → record it as
+      # closed-unlanded so it stays browsable/resumable. record-closed skips a
+      # branch with no transcript and dedups on session-id (idempotent).
       bash "$hist" record-closed --repo "$repo" --session "$sess" \
         --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
       ;;
