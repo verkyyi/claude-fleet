@@ -61,21 +61,62 @@ printf '\n  \033[1m%s\033[0m  [%s]   →  writing to the \033[1m%s\033[0m layer\
 printf '  \033[38;2;86;95;137m%s  ·  %s\033[0m\n' "$KEY" "$(fcfg_short "$KEY")"
 printf '\n  effective now : %s  (%s)\n' "${effval:-<empty>}" "$effsrc"
 printf '  in this layer : %s\n' "${cur:-<unset here>}"
-case "$EDIT" in
-  bool)  printf '  valid input   : 0 or 1\n' ;;
-  int)   printf '  valid input   : a non-negative integer\n' ;;
-  enum)  printf "  valid input   : opus | sonnet | haiku | opusplan | default | claude-* | - (set empty, defer to default)\n" ;;
-  regex) printf "  valid input   : a valid extended regex (no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
-  path)  printf "  valid input   : a path (\$HOME/\${VAR} ok; no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
-  *)     printf "  valid input   : free text (no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
-esac
-# Bare empty input cancels (the standard for these popups); a lone '-' is the
-# explicit "set this key empty" sentinel — enums/strings document empty as a
-# real, meaningful value ("defer to the default"), which bare-empty can't express.
-printf '\n  new value  (empty = cancel · - = set empty) ▸ '
-IFS= read -r val
-[ -n "$val" ] || exit 0
-[ "$val" = '-' ] && val=''
+# An @edit=enum key is a CHOICE, not free text (issue #415): pick it from an fzf
+# menu instead of typing an alias you have to remember. The options come from the
+# ONE source of truth in fleet-config-lib (fcfg_enum_options → fcfg_model_aliases
+# for the model keys), the SAME data the validator accepts, so the offered set and
+# the accepted set can't drift — and `fable` is finally offered. The picker runs
+# full-screen in THIS popup pty (like the outer modal's own fzf), not a nested
+# popup; on exit fzf restores the context above. Falls back to the free-text read
+# if fzf is somehow absent (dash-config-edit run outside the fzf-gated modal).
+if [ "$EDIT" = enum ] && command -v fzf >/dev/null 2>&1; then
+  US="$FCFG_US"
+  is_model=no; fcfg_is_model_key "$KEY" && is_model=yes
+  # Field1 = the literal token (or a :sentinel:); field2 = the annotated display
+  # (fzf shows + searches only field2). `:defer:` writes empty; `:custom:` (model
+  # keys only) drops to the free-text read so any full claude-* id still works.
+  rows=$(
+    fcfg_enum_options "$KEY" | while IFS="$US" read -r tok ann; do
+      printf '%s%s\033[1m%-9s\033[0m  \033[38;2;86;95;137m— %s\033[0m\n' "$tok" "$US" "$tok" "$ann"
+    done
+    printf '%s%s\033[36m%-9s\033[0m  \033[38;2;86;95;137m— unset (defer to the default)\033[0m\n' ':defer:' "$US" '(empty)'
+    [ "$is_model" = yes ] && \
+      printf '%s%s\033[36m%-9s\033[0m  \033[38;2;86;95;137m— type a full claude-* id\033[0m\n' ':custom:' "$US" 'custom…'
+  )
+  sel=$(printf '%s\n' "$rows" | fzf --ansi --delimiter="$US" --with-nth=2 \
+          --no-sort --layout=reverse-list --info=hidden --border=rounded \
+          --border-label=" pick $(fcfg_label "$KEY") → $scope_up layer " --border-label-pos=3 \
+          --prompt='choose ▸ ' \
+          --header="effective now: ${effval:-<empty>} ($effsrc)   ·   enter=choose · esc=cancel") \
+        || exit 0                                # esc / no selection = cancel
+  tok=${sel%%"$US"*}
+  case "$tok" in
+    ':defer:')  val='' ;;
+    ':custom:')
+      printf '\n  full model id  (empty = cancel · - = set empty) ▸ '
+      IFS= read -r val
+      [ -n "$val" ] || exit 0
+      [ "$val" = '-' ] && val='' ;;
+    '')  exit 0 ;;                               # defensive: empty selection = cancel
+    *)   val="$tok" ;;
+  esac
+else
+  case "$EDIT" in
+    bool)  printf '  valid input   : 0 or 1\n' ;;
+    int)   printf '  valid input   : a non-negative integer\n' ;;
+    enum)  printf "  valid input   : one of the documented values (see the config preview) · - (set empty, defer to default)\n" ;;
+    regex) printf "  valid input   : a valid extended regex (no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
+    path)  printf "  valid input   : a path (\$HOME/\${VAR} ok; no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
+    *)     printf "  valid input   : free text (no double-quotes, backticks, or \$(…)) · - = set empty\n" ;;
+  esac
+  # Bare empty input cancels (the standard for these popups); a lone '-' is the
+  # explicit "set this key empty" sentinel — enums/strings document empty as a
+  # real, meaningful value ("defer to the default"), which bare-empty can't express.
+  printf '\n  new value  (empty = cancel · - = set empty) ▸ '
+  IFS= read -r val
+  [ -n "$val" ] || exit 0
+  [ "$val" = '-' ] && val=''
+fi
 
 if ! reason=$(fcfg_validate "$EDIT" "$val" "$KEY"); then
   printf '\n  \033[31m✗ rejected:\033[0m %s\n  (nothing written — press any key)' "$reason"
