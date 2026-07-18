@@ -28,6 +28,16 @@
 # popup has already read the title into <f> and re-execs us via fleet_bg, so we
 # skip the read and just do the (slow) create. The path comes from mktemp (no
 # metachars), so the single-token form is safe.
+
+# Force a UTF-8 locale so read_title's per-char loop strips a WHOLE character on
+# backspace, not a single byte (issue #408). SSH/Termius forward LANG but usually
+# not LC_CTYPE/LC_ALL, so a tmux popup off a server started without them runs in the
+# C locale — where `${title%?}` over a CJK glyph leaves a broken half-char and the
+# popup appears to hang. Matches the sibling tmux-*-rows.sh exports; en_US.UTF-8 is
+# universal on macOS (C.UTF-8 doesn't exist there). Set before the phase split so
+# BOTH the interactive read and any re-exec inherit it.
+export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
+
 mode=""; spawn=0; title_file=""
 for _a in "$@"; do
   case "$_a" in
@@ -61,22 +71,35 @@ if [ "$mode" != confirm ]; then
   exit 0
 fi
 
-# read_title: read the title char-by-char so Esc cancels the WHOLE create on the
-# spot (issue #297). A plain `read` only acts on Enter, so an Esc keypress would be
-# swallowed into the line instead of aborting. Enter submits, Backspace erases, Esc
-# (0x1b) cancels. We treat any Esc byte as cancel WITHOUT disambiguating arrow-key
-# escape sequences: macOS ships bash 3.2, whose `read -t` rejects the fractional
-# timeout a peek-ahead would need, and arrow keys have no meaning in a one-line
-# title field anyway (worst case: the popup closes and you press ^n again). IFS= is
-# load-bearing — it keeps a typed space as ' ', so ONLY a real newline reads back as
-# '' (Enter). Sets $title; returns 1 on Esc-cancel, 0 otherwise.
+# read_title <prompt-prefix>: read the title char-by-char so Esc cancels the WHOLE
+# create on the spot (issue #297). A plain `read` only acts on Enter, so an Esc
+# keypress would be swallowed into the line instead of aborting. Enter submits,
+# Backspace erases, Esc (0x1b) cancels. We treat any Esc byte as cancel WITHOUT
+# disambiguating arrow-key escape sequences: macOS ships bash 3.2, whose `read -t`
+# rejects the fractional timeout a peek-ahead would need, and arrow keys have no
+# meaning in a one-line title field anyway (worst case: the popup closes and you
+# press ^n again). IFS= is load-bearing — it keeps a typed space as ' ', so ONLY a
+# real newline reads back as '' (Enter). Sets $title; returns 1 on Esc-cancel, 0
+# otherwise.
+#
+# Backspace REDRAWS the whole input line — \r to column 0, reprint <prefix>$title,
+# then \033[K to clear the tail — instead of the old incremental `printf '\b \b'`
+# (issue #408). Byte-wise cursor math can't erase a WIDE glyph: a CJK char occupies
+# 2 terminal cells but '\b \b' backs up only 1, so the cursor desynced and the popup
+# appeared to hang. A full redraw needs no cursor width math — the terminal re-lays
+# the current (valid) $title — so wide CJK/full-width chars, emoji, and mixed
+# ASCII+CJK all erase correctly. Pairs with the forced UTF-8 locale up top, which
+# makes `${title%?}` strip a whole character (not a byte) before the redraw. The
+# INPUT path keeps its incremental echo (`printf '%s'`): the issue's only defect is
+# the erase path — accumulation already works, so the ASCII fast path is untouched.
 read_title() {
-  title=""; local ch
+  local prefix="$1" ch
+  title=""
   while IFS= read -rsn1 ch; do
     case "$ch" in
       '')               printf '\n'; return 0 ;;                            # Enter → submit
       $'\x1b')          return 1 ;;                                         # Esc → cancel
-      $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\b \b'; } ;;  # Backspace
+      $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\r%s%s\033[K' "$prefix" "$title"; } ;;  # Backspace → width-correct redraw
       *)                title="$title$ch"; printf '%s' "$ch" ;;
     esac
   done
@@ -138,8 +161,11 @@ fi
 # cancels. Then hand the slow create off to the BACKGROUND so the popup closes
 # INSTANTLY instead of blocking on `gh issue create` (+ the worktree/window spawn).
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
-printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n  title ▸ ' "$verb" "$REPO"
-read_title || exit 0                                # Esc → cancel the create directly
+# The prompt prefix is shared: printed once here to draw the field, and handed to
+# read_title so its backspace redraw reprints the exact same leader (issue #408).
+title_prefix='  title ▸ '
+printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n%s' "$verb" "$REPO" "$title_prefix"
+read_title "$title_prefix" || exit 0                # Esc → cancel the create directly
 [ -z "$title" ] && exit 0                           # empty title → cancel
 
 # Stage the title in a temp file — it is arbitrary user text, so it is NEVER
