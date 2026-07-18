@@ -26,13 +26,16 @@
 #     the body ONCE with an empty line, not zero times. Every converted loop is
 #     guarded against that spurious pass (the `[ -n "$label" ] || continue` added
 #     to fleet_list_windows_all closes the one site that lacked a guard). Part 2
-#     drives the converted functions under BOTH sh and bash against hermetic
-#     fixtures and asserts identical, correct output — so the sh path #414
-#     exposed can never silently regress again (acceptance item 4).
+#     drives the converted functions under sh, bash AND real dash against hermetic
+#     fixtures and asserts identical, correct output. The dash arm also catches
+#     RUNTIME bashisms `sh -n` can't see: ANSI-C quoting like `IFS=$'\t'` parses
+#     fine but, under dash, IFS never becomes a tab — so `read` fails to split the
+#     TSV and fleet_sess_for_repo/fleet_sockets return garbage (the CI failure on
+#     PR #418). So the sh path #414 exposed can never silently regress (item 4).
 #
 # Fully hermetic: a fake `tmux` on PATH, temp conf trees, a throwaway git repo.
 # No network, no live tmux. Exit 0 = pass, non-zero = fail (prints what diverged).
-# git/bash absent → the parts that need them SKIP cleanly (still exit 0).
+# git/bash/dash absent → the parts that need them SKIP cleanly (still exit 0).
 set -u
 
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -47,6 +50,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh'
 
 have_bash=0; command -v bash >/dev/null 2>&1 && have_bash=1
+have_dash=0; command -v dash >/dev/null 2>&1 && have_dash=1
 
 # ============================================================================
 # PART 1 — PARSE guard: each lib parses under strict POSIX sh (and bash --posix)
@@ -84,7 +88,7 @@ for lib in $LIBS; do
 done
 
 # ============================================================================
-# PART 2 — functional equivalence of the converted call sites under sh AND bash
+# PART 2 — functional equivalence of the converted call sites under sh/bash/dash
 # ============================================================================
 LIB="$BIN/fleet-lib.sh"
 export FLEET_SKIP_GLOBAL_CONF=1   # keep the load hermetic (issue #399 auto-source off)
@@ -114,10 +118,15 @@ TMUXFAKE
 chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH"
 
-# Run a snippet (with fleet-lib sourced) under BOTH sh and bash; both must equal
-# the expected value AND each other. Exported env (PATH, FAKE_DOWN) reaches the
-# children; per-case FLEET_CONF_DIR is set INSIDE the snippet, after sourcing, so
-# the lib's own default can't clobber it.
+# Run a snippet (with fleet-lib sourced) under sh, bash, AND real dash; every one
+# must equal the expected value (sh vs bash must also agree). The explicit `dash`
+# arm is the point: on a macOS dev box `sh` is bash-in-POSIX-mode, which HONORS
+# ANSI-C quoting ($'\t'), so a runtime bashism like `IFS=$'\t'` passes there and
+# would only fail on CI (where /bin/sh is dash). Driving `dash` directly catches
+# that class locally too — it is what surfaced the tab-IFS bug fixed alongside the
+# process substitutions. Exported env (PATH, FAKE_DOWN) reaches the children;
+# per-case FLEET_CONF_DIR is set INSIDE the snippet, after sourcing, so the lib's
+# own default can't clobber it.
 both() {  # <desc> <expected> <snippet>
   _d=$1; _e=$2; _s=$3
   _osh=$(sh   -c ". \"$LIB\"; $_s" 2>/dev/null)
@@ -126,6 +135,11 @@ both() {  # <desc> <expected> <snippet>
     _oba=$(bash -c ". \"$LIB\"; $_s" 2>/dev/null)
     [ "$_oba" = "$_e" ] || fail "$_d [bash]: expected [$_e] got [$_oba]"
     [ "$_osh" = "$_oba" ] || fail "$_d: sh and bash diverged ([$_osh] vs [$_oba])"
+    ok
+  fi
+  if [ "$have_dash" = 1 ]; then
+    _oda=$(dash -c ". \"$LIB\"; $_s" 2>/dev/null)
+    [ "$_oda" = "$_e" ] || fail "$_d [dash]: expected [$_e] got [$_oda] (runtime bashism — e.g. IFS=\$'\\t')"
     ok
   fi
   ok
@@ -187,5 +201,5 @@ fi
 # and is covered by the PART 1 parse guard; a hermetic drive would need a fake
 # tmux emitting pane paths plus a git remote — out of proportion here.
 
-printf 'selftest OK: posix-lib-parse (%s checks — sh -n + bash --posix parse guard over %s libs; converted call sites equivalent under sh & bash; #414)\n' \
+printf 'selftest OK: posix-lib-parse (%s checks — sh -n + bash --posix parse guard over %s libs; converted call sites equivalent under sh/bash/dash; #414)\n' \
   "$CHECKS" "$(printf '%s' "$LIBS" | wc -w | tr -d ' ')"

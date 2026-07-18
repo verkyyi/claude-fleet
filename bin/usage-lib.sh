@@ -31,13 +31,14 @@ fleet_usage_proxy() { cat "$(fleet_usage_cache_dir)/usage" 2>/dev/null; }
 # when the line has no leading number). Echoes NOTHING when the cache is
 # absent / stale / has a non-numeric epoch — a stale limit % is worse than none.
 fleet_usage_ratelimit() {
-  local f ts line pct
+  local f ts line pct tab
+  tab=$(printf '\t')                             # POSIX tab (ANSI-C quoting is a bashism dash ignores)
   f="$(fleet_usage_cache_dir)/ratelimit"
   [ -f "$f" ] || return 0
   # The collector writes "epoch<TAB>line" with NO trailing newline, so `read`
   # returns non-zero at EOF even though it assigned ts/line — don't treat that
   # as failure (the case guard below rejects a genuinely empty/garbage epoch).
-  IFS=$'\t' read -r ts line < "$f" 2>/dev/null
+  IFS="$tab" read -r ts line < "$f" 2>/dev/null
   case "$ts" in ''|*[!0-9]*) return 0 ;; esac   # missing / non-numeric epoch → skip
   [ -n "$line" ] || return 0
   [ "$(( $(date +%s) - ts ))" -lt "${FLEET_RATELIMIT_TTL:-21600}" ] || return 0
@@ -60,12 +61,13 @@ fleet_usage_severity() {
 # for the usage-modal.sh picker header. Empty when neither cache has anything to
 # show.
 fleet_usage_summary_plain() {
-  local proxy rl line out=""
+  local proxy rl line out="" tab
+  tab=$(printf '\t')                             # POSIX tab (ANSI-C quoting is a bashism dash ignores)
   proxy=$(fleet_usage_proxy)
   [ -n "$proxy" ] && out="this machine · rolling  ${proxy}"
   rl=$(fleet_usage_ratelimit)
   if [ -n "$rl" ]; then
-    line="${rl#*$'\t'}"
+    line="${rl#*"$tab"}"
     if [ -n "$out" ]; then out="${out}  ·  ${line}"; else out="$line"; fi
   fi
   printf '%s' "$out"
