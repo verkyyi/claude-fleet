@@ -71,6 +71,29 @@ if [ "$mode" != confirm ]; then
   exit 0
 fi
 
+# utf8_len <byte> -> total byte length (1..4) of the char this LEAD byte starts;
+# 1 for ASCII/stray. C-locale byte value so high bytes are unsigned 128..255,
+# folded (+256) to survive printf signedness. macOS bash 3.2 reads bytes, not
+# chars, so we reassemble the glyph ourselves and echo it atomically — a per-byte
+# echo splits a multibyte sequence across tmux read boundaries and renders □/dupes
+# (issue #422).
+utf8_len() {
+  local b; b=$(LC_ALL=C printf '%d' "'$1" 2>/dev/null); [ "$b" -lt 0 ] && b=$((b+256))
+  if   [ "$b" -ge 240 ]; then echo 4
+  elif [ "$b" -ge 224 ]; then echo 3
+  elif [ "$b" -ge 192 ]; then echo 2
+  else echo 1; fi
+}
+
+# bytelen <string> -> BYTE length of the string. The forced UTF-8 locale up top makes
+# the bare `${#s}` count CHARACTERS, so we take the length under a local C locale where
+# each byte is its own char. Load-bearing for portability (issue #422): the glyph
+# assembly below gates on bytes-in-hand, not a fixed read count, so it is correct on
+# BOTH macOS bash 3.2 (read -rsn1 → one BYTE) and Linux/CI bash 5 (read -rsn1 → one
+# whole CHARACTER already, so the inner loop no-ops instead of over-reading the next
+# glyphs).
+bytelen() { local LC_ALL=C; printf %s "${#1}"; }
+
 # read_title <prompt-prefix>: read the title char-by-char so Esc cancels the WHOLE
 # create on the spot (issue #297) and a multi-line PASTE folds into one line instead
 # of the first embedded newline truncating + submitting it (issue #419). A plain
@@ -97,11 +120,18 @@ fi
 # appeared to hang. A full redraw needs no cursor width math — the terminal re-lays
 # the current (valid) $title — so wide CJK/full-width chars, emoji, and mixed
 # ASCII+CJK all erase correctly. Pairs with the forced UTF-8 locale up top, which
-# makes `${title%?}` strip a whole character (not a byte) before the redraw. The
-# INPUT path keeps its incremental echo (`printf '%s'`): the issue's only defect is
-# the erase path — accumulation already works, so the ASCII fast path is untouched.
+# makes `${title%?}` strip a whole character (not a byte) before the redraw.
+#
+# The INPUT echo assembles a WHOLE glyph before writing it (issue #422): bash 3.2
+# reads one BYTE per `read -rsn1`, so echoing each byte split a multibyte sequence
+# across tmux's pane-read boundaries and rendered □/duplicated cells. We read the
+# lead byte's continuation bytes (utf8_len) and `printf '%s'` the complete char once.
+# The continuation loop gates on the BYTES already assembled (bytelen), not a fixed
+# read count, so it is portable: on bash 5 (CI) `read -rsn1` already returns a whole
+# CHARACTER, so bytelen>=clen at once and the loop no-ops (a fixed-count loop would
+# over-read the FOLLOWING glyphs). ASCII is unchanged (utf8_len 1, loop skipped).
 read_title() {
-  local prefix="$1" ch seq c2
+  local prefix="$1" ch seq c2 cbuf clen
   title=""
   while IFS= read -rsn1 ch; do
     case "$ch" in
@@ -121,7 +151,10 @@ read_title() {
           return 1                                                         # lone Esc (nothing followed within 1s / EOF) → cancel
         fi ;;
       $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\r%s%s\033[K' "$prefix" "$title"; } ;;  # Backspace → width-correct redraw
-      *)                title="$title$ch"; printf '%s' "$ch" ;;
+      *)                # assemble the WHOLE glyph (read continuation bytes until it's complete) before echoing it once (issue #422)
+        cbuf="$ch"; clen=$(utf8_len "$ch")
+        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
+        title="$title$cbuf"; printf '%s' "$cbuf" ;;
     esac
   done
   printf '\n'; return 0                                                     # EOF → submit what we have
@@ -134,12 +167,13 @@ read_title() {
 # flag is set on whitespace and flushed only just before the next real char (and only
 # when $title already holds content), so a paste that ends in a newline drops its
 # trailing space cleanly. Ordinary bytes accumulate onto the GLOBAL $title and echo
-# like the typed fast path; multibyte UTF-8 continuation bytes accumulate transparently
-# (never split a glyph). The end marker is spotted the same way read_title spots the
-# start — ESC → `-t 1` peek → '[' → CSI → '201~'. Does NOT auto-submit: it returns to
+# like the typed fast path — assembling a whole UTF-8 glyph before the single echo
+# (issue #422), so a multibyte char is never split across writes. The end marker is
+# spotted the same way read_title spots the start — ESC → `-t 1` peek → '[' → CSI →
+# '201~'. Does NOT auto-submit: it returns to
 # read_title so the operator reviews the pasted title and presses Enter (or edits it).
 read_paste() {
-  local prefix="$1" ch seq c2 pending=0
+  local prefix="$1" ch seq c2 pending=0 cbuf clen
   while IFS= read -rsn1 ch; do
     case "$ch" in
       $'\x1b')                                                              # maybe the ESC[201~ end marker
@@ -158,7 +192,10 @@ read_paste() {
           [ -n "$title" ] && { title="$title "; printf ' '; }
           pending=0
         fi
-        title="$title$ch"; printf '%s' "$ch" ;;
+        # assemble the WHOLE glyph before echoing it once (issue #422) — same byte-gated loop as read_title
+        cbuf="$ch"; clen=$(utf8_len "$ch")
+        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
+        title="$title$cbuf"; printf '%s' "$cbuf" ;;
     esac
   done
   printf '\r%s%s\033[K' "$prefix" "$title"                                  # normalize the shown line to $title (folded, markers stripped)
