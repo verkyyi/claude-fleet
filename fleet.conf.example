@@ -83,6 +83,30 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Max sessions — this fleet @group=caps @tier=common @scope=fleet @edit=int @unit=sessions
 #FLEET_MAX_SESSIONS=0
 
+# --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
+# OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
+# fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps
+# above have headroom — auto-spawning the highest-priority ELIGIBLE issue so you
+# don't hand-spawn every one.
+#
+# OPT-IN PER ISSUE (issue #421): an issue is only auto-spawned if it carries the
+# canonical `autofill` label — the steward tags exactly the issues that may fill
+# idle slots hands-off (like `autoland` opts a PR into hands-off land). So it is a
+# TWO-key gate: this fleet armed (FLEET_AUTOFILL=1) AND the issue labelled. Full
+# eligibility = open, unassigned, carries `autofill`, no live window bound, not
+# labelled blocked/steward-control. Priority = a `priority:p0|p1|p2` label tier
+# (p0 first), then FIFO by issue number; unlabeled issues go last.
+#
+# COST: each auto-spawn launches a real Claude session that spends LLM tokens and
+# opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
+# (best per-fleet in $FLEET_CONF_DIR/<session>.conf).
+# @label=Auto-fill idle slots from labelled backlog @group=autofill @tier=common @scope=fleet @edit=bool
+#FLEET_AUTOFILL=0
+# Max issues auto-spawned per fleet per tick (rate-limit against a thundering
+# herd; the ~60s interval is the cooldown between ticks). Default 1.
+# @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
+#FLEET_AUTOFILL_MAX_PER_TICK=1
+
 # --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
 # OFF by default. When enabled for a fleet, the issue-bridge daemon
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)

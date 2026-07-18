@@ -11,6 +11,7 @@ webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
+| `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill `autofill`-labelled backlog; needs FLEET_AUTOFILL=1 per fleet; LLM tokens) |
 | `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
 | `claude-fleet-watch.timer` | every 45s, +5s after start | `com.claude-fleet.watch` | optional (zero-token steward wake; wakes spend steward tokens) |
 | `claude-fleet-cleanup.timer` | every 60s, +25s after start | `com.claude-fleet.cleanup` | recommended (reap worktrees after merges; the fleet never merges) |
@@ -41,6 +42,7 @@ systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap 
 systemctl --user enable --now claude-fleet-ledger-watch.timer # recommended: index every closed worker session for resume; ON per fleet unless FLEET_LEDGER_WATCH=0
 systemctl --user enable --now claude-fleet-base-sync.timer  # recommended: keep the local base fast-forwarded to the remote (merge-independent); ON per fleet unless FLEET_BASE_SYNC=0
 # optional:
+systemctl --user enable --now claude-fleet-dispatch.timer   # autofill — needs FLEET_AUTOFILL=1 per fleet + the `autofill` label on issues
 systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
 systemctl --user enable --now claude-fleet-watch.timer      # steward wake — needs FLEET_WATCH=1 + FLEET_STEWARD_ISSUE per fleet
 systemctl --user enable --now claude-fleet-webhook.service  # fresh ~1s PR/issue/CI status — needs FLEET_WEBHOOK=1 per fleet + `gh extension install cli/gh-webhook`
@@ -62,7 +64,7 @@ journalctl --user -u claude-fleet-collect.service --since '5 min ago'
 
 ```sh
 for u in spinner.service webhook.service collect.timer diskguard.timer pr-refresh.timer \
-         issue-bridge.timer watch.timer cleanup.timer ledger-watch.timer \
+         dispatch.timer issue-bridge.timer watch.timer cleanup.timer ledger-watch.timer \
          base-sync.timer worktree-autoclean.timer; do
   systemctl --user disable --now "claude-fleet-$u" 2>/dev/null
 done

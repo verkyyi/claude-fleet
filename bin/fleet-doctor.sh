@@ -202,6 +202,32 @@ _fleet_confs() {
   done
 }
 
+# --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
+# OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
+# auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
+# so surface the armed fleets and the cost. A missing daemon/config is not a fault
+# (opt-in), so this only speaks up when at least one fleet has enabled it.
+if [ -d "$conf_dir" ]; then
+  armed=0
+  # here-doc (not a pipe) so the `while` runs in THIS shell and `armed` survives.
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    # FLEET_AUTOFILL=1, tolerating quotes/spaces (FLEET_AUTOFILL = "1").
+    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ "$val" = 1 ] && armed=$((armed+1))
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$armed" -gt 0 ]; then
+    if command -v gh >/dev/null 2>&1; then
+      pass autofill "$armed fleet(s) with FLEET_AUTOFILL=1 — dispatcher auto-spawns \`autofill\`-labelled issues (spends LLM tokens)"
+    else
+      warn autofill "$armed fleet(s) set FLEET_AUTOFILL=1 but gh is missing — the dispatcher can't read the backlog"
+    fi
+    printf '        note: needs the com.claude-fleet.dispatch daemon installed + the `autofill` label on issues; each auto-spawn opens a real Claude session + PR.\n'
+  fi
+fi
+
 # --- fleet watcher (optional: zero-token edge-driven steward wake, issue #147) ---
 # OFF unless a fleet's conf sets FLEET_WATCH=1. When ON, the watch daemon reads only
 # existing caches (no tokens) but each wake makes the steward take a turn, and it can

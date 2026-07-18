@@ -810,6 +810,7 @@ priority:p2|FBCA04|Medium priority — backlog tier 2 (after all p1)
 steward-control|5319e7|Dedicated steward control/inbox issue — relayed into the @steward hub; autofill-excluded
 blocked|b60205|Blocked on another issue — excluded from autofill
 autoland|0e8a16|Opt this issue's PR into hands-off auto-land
+autofill|0e8a16|Opt this issue into hands-off auto-spawn (the autofill dispatcher)
 EOF
 }
 
