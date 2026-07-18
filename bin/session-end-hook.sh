@@ -48,8 +48,11 @@
 #   • Scoped — only a numeric @issue worker (or @raw scratch → window-close only);
 #     panels (dash/plan/backlog) carry no @issue/@raw and the steward hub is bailed on
 #     defensively (@steward), so neither is ever touched.
-#   • Opt-in per fleet: FLEET_CLOSE_ON_EXIT=1 (default off), matching the fleet-knob
-#     idiom (FLEET_CLEANUP, FLEET_LEDGER_WATCH, FLEET_AUTO_HANDOFF_PCT).
+#   • Default ON, GLOBALLY: reacts unless the GLOBAL fleet.conf sets
+#     FLEET_CLOSE_ON_EXIT=0 (a machine-wide opt-out). The value is
+#     GLOBAL-AUTHORITATIVE — it is snapshotted BEFORE the per-fleet overlay, so a
+#     stray per-fleet conf value is ignored. Mirrors the default-on/opt-out idiom of
+#     FLEET_CLEANUP / FLEET_LEDGER_WATCH, but the switch is global-only, not per-fleet.
 #
 # Testable seam: FLEET_SESSION_END_REASON overrides the stdin reason (the selftest
 # has no real hook payload). Always exits 0 — SessionEnd cannot block.
@@ -58,6 +61,12 @@ set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+# Snapshot the GLOBAL close-on-exit value NOW — the moment the global fleet.conf is
+# sourced, BEFORE any per-fleet overlay (fleet_load_conf, below) can change it. The
+# knob is GLOBAL-AUTHORITATIVE: default ON, and ONLY the global fleet.conf may turn it
+# off (FLEET_CLOSE_ON_EXIT=0); a stray per-fleet conf value is ignored. The in-pane
+# gate (step 3) decides on this snapshot; the --exec path never re-reads it.
+_close_on_exit="${FLEET_CLOSE_ON_EXIT:-1}"       # default ON; global fleet.conf may set 0
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
@@ -190,13 +199,16 @@ case "$reason" in
   *) exit 0 ;;
 esac
 
-# 3. Resolve THIS fleet + honor the opt-in. FLEET_CLOSE_ON_EXIT defaults OFF, so an
-#    un-opted fleet is a COMPLETE no-op (matches the FLEET_CLEANUP / FLEET_LEDGER_WATCH
-#    knob idiom). Resolve the session, overlay its conf, then read the knob.
+# 3. Resolve THIS fleet, then honor the GLOBAL-AUTHORITATIVE gate. Default ON: skip
+#    ONLY when the GLOBAL fleet.conf set FLEET_CLOSE_ON_EXIT=0 (captured in
+#    $_close_on_exit above, before the per-fleet overlay). fleet_load_conf is still
+#    needed to resolve FLEET_MAIN/REPO/BASE for the reap, but its per-fleet
+#    FLEET_CLOSE_ON_EXIT (if any) is deliberately ignored — the switch is global-only.
+#    Matches the default-on/opt-out idiom of FLEET_CLEANUP / FLEET_LEDGER_WATCH.
 sess=$(fleet_current_session)
 [ -n "$sess" ] || exit 0
-fleet_load_conf "$sess"
-[ "${FLEET_CLOSE_ON_EXIT:-0}" = 1 ] || exit 0
+fleet_load_conf "$sess"                          # still needed for FLEET_MAIN/REPO/BASE
+[ "$_close_on_exit" = 0 ] && exit 0              # global opt-out only; per-fleet ignored
 
 # 4. Scope: read this pane's window role markers. A worker window carries a numeric
 #    @issue; a raw scratch carries @raw=1; the steward hub carries @steward=1; a

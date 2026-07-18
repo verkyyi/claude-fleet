@@ -9,9 +9,11 @@
 # a REAL local git repo provides the worktrees, and FLEET_HISTORY_LEDGER +
 # CLAUDE_PROJECTS_DIR scope the /fleet-history ledger + transcript lookups to $WORK.
 #
-# The acceptance checklist (issue #403):
+# The acceptance checklist (issues #403, #409):
 #   * clear / resume                → NO-OP (window survives, no ledger row, no reap)
-#   * FLEET_CLOSE_ON_EXIT off/unset → COMPLETE no-op (the hook is opt-in)
+#   * nothing set (default)         → ON: acts on prompt_input_exit (default-on, #409)
+#   * global FLEET_CLOSE_ON_EXIT=0  → COMPLETE no-op (the global opt-out)
+#   * per-fleet =1 while global =0  → still a NO-OP (global-authoritative, #409)
 #   * steward hub (@steward=1)      → never touched (defensive bail)
 #   * panel (no @issue, no @raw)    → never touched (no dispatch)
 #   * prompt_input_exit on MERGED   → worktree+branch removed, issue closed, a
@@ -79,6 +81,7 @@ WT2="$(add_wt 2 commit)"    # not merged            → unmerged  → KEEP
 WT3="$(add_wt 3 dirty)"     # dirty                 → dirty     → KEEP
 WT4="$(add_wt 4 ancestor)"  # tip == base           → ancestor  → reap, issue kept open
 WT5="$(add_wt 5 commit)"    # not merged (stdin test)→ unmerged  → KEEP
+WT6="$(add_wt 6 commit)"    # not merged (default-on) → unmerged  → KEEP
 
 # --- fake tmux: answers the window queries, executes run-shell -b inline -------
 # @issue / @raw / @steward / window_id / session_name are read from env (ISS / RAW /
@@ -141,7 +144,7 @@ run_hook() {
   FLEET_SESSION_END_REASON="${REASON:-}" \
   FLEET_CLOSE_ON_EXIT="${CLOSE:-1}" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
-  FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
+  FLEET_CONF_DIR="${CONFDIR:-$WORK/noconf}" TMPDIR="$WORK/rt" \
   FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
   TMUX="fake-sock" TMUX_PANE="%1" \
   PATH="$WORK/fakepath:$PATH" \
@@ -165,24 +168,43 @@ clr; REASON=resume ISS=2 WID='@2' run_hook
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "resume must be a no-op" "$(cat "$TMLOG")"
 ok "reason=resume → complete no-op"
 
-# T3: FLEET_CLOSE_ON_EXIT=0 (opt-out) + a real exit reason → complete no-op.
+# T3: GLOBAL FLEET_CLOSE_ON_EXIT=0 (the machine-wide opt-out) + a real exit reason →
+# complete no-op. run_hook passes the value in the env, snapshotted as the global one.
 clr; REASON=prompt_input_exit CLOSE=0 ISS=2 WID='@2' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "FLEET_CLOSE_ON_EXIT off must be a no-op" "$(cat "$TMLOG")"
-[ -d "$WT2" ] || fail "opt-out must not touch the worktree"
-ok "FLEET_CLOSE_ON_EXIT=0 → complete no-op (the hook is opt-in)"
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "global FLEET_CLOSE_ON_EXIT=0 must be a no-op" "$(cat "$TMLOG")"
+[ -d "$WT2" ] || fail "global opt-out must not touch the worktree"
+ok "global FLEET_CLOSE_ON_EXIT=0 → complete no-op (the machine-wide opt-out)"
 
-# T3b: FLEET_CLOSE_ON_EXIT genuinely UNSET → complete no-op (the :-0 default path).
+# T3b: NOTHING set (FLEET_CLOSE_ON_EXIT genuinely UNSET, no global conf) → the hook is
+# ON BY DEFAULT (#409) and ACTS. Fires on the unmerged #6 → KEEP worktree + issue,
+# closed-unlanded row, window closed. (Inverts #403's old opt-in default-off case.)
 clr
 ( unset FLEET_CLOSE_ON_EXIT
-  env ISS=2 WID='@2' TMLOG="$TMLOG" GHLOG="$GHLOG" \
+  env ISS=6 WID='@6' TMLOG="$TMLOG" GHLOG="$GHLOG" \
       FLEET_SESSION_END_REASON=prompt_input_exit \
       FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
       FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
       FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
       TMUX="fake-sock" TMUX_PANE="%1" PATH="$WORK/fakepath:$PATH" \
       bash "$SRC" )
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "unset FLEET_CLOSE_ON_EXIT must be a no-op" "$(cat "$TMLOG")"
-ok "FLEET_CLOSE_ON_EXIT unset → complete no-op"
+grep -q 'RUNSHELL' "$TMLOG" || fail "default-on: unset FLEET_CLOSE_ON_EXIT must ACT" "$(cat "$TMLOG")"
+grep -q 'KILL' "$TMLOG" || fail "default-on exit must close the window"
+[ -d "$WT6" ] || fail "default-on unmerged #6 worktree must be KEPT (resumable)"
+[ "$(rows 6 closed-unlanded)" = 1 ] || fail "default-on exit must write ONE closed-unlanded row for #6" "$(cat "$LEDGER")"
+ok "nothing set → ON by default (#409): acts on prompt_input_exit"
+
+# T3c: a PER-FLEET FLEET_CLOSE_ON_EXIT=1 while the GLOBAL value is 0 → STILL a no-op.
+# Global-authoritative on TWO layers: fleet_load_conf STRIPS a per-fleet
+# FLEET_CLOSE_ON_EXIT (it is in fleet-lib's $_FLEET_GLOBAL_ONLY, issue #237), AND the
+# hook snapshots the global 0 BEFORE the overlay and gates on that snapshot. If the
+# per-fleet value were honored this would dispatch — so no-dispatch proves global wins.
+PFCONF="$WORK/pfconf"; mkdir -p "$PFCONF/fleets/s1"
+printf 'FLEET_CLOSE_ON_EXIT=1\n' > "$PFCONF/fleets/s1/conf"
+clr; REASON=prompt_input_exit CLOSE=0 CONFDIR="$PFCONF" ISS=2 WID='@2' run_hook
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "per-fleet=1 while global=0 must STILL be a no-op (global-authoritative)" "$(cat "$TMLOG")"
+[ -d "$WT2" ] || fail "global-authoritative no-op must not touch the worktree"
+[ "$(rows 2 closed-unlanded)" = 0 ] || fail "global-authoritative no-op must write no ledger row" "$(cat "$LEDGER")"
+ok "per-fleet FLEET_CLOSE_ON_EXIT=1 while global=0 → still a no-op (global wins)"
 
 # T4: steward hub (@steward=1) → defensive bail (no dispatch), even opted-in.
 clr; REASON=prompt_input_exit STEW=1 ISS='' WID='@1' run_hook
@@ -283,5 +305,5 @@ printf '{"reason":"clear"}' | \
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "stdin reason=clear must be a no-op" "$(cat "$TMLOG")"
 ok "stdin JSON reason=clear → no-op"
 
-printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, opt-in, seat scope, gate-reap by verdict, record-now, idempotent, @raw window-close, stdin parse) [#403]\n' "$pass"
+printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw window-close, stdin parse) [#403, #409]\n' "$pass"
 exit 0
