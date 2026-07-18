@@ -15,6 +15,11 @@
 # forces every tmux call onto that socket, including fleet_steward_pane's explicit
 # `tmux -L <label> …` (it strips a leading -L/-S so the lookup can't escape).
 #
+# It also drives via `bash --posix` (see run_zoom below) to reproduce the
+# production /bin/sh the conf actually uses — closing the issue #414 fidelity gap
+# where the old `bash "$SCRIPT"` harness masked a fleet-lib.sh bashism that broke
+# the ⌂ under real sh. The POSIX-parse net itself lives in posix-lib-parse-selftest.sh.
+#
 #   --home (the ⌂ tap) is CONSISTENT — from another window, from the split, from a
 #     dash-zoomed hub, from a steward-zoomed hub: it always ends on the SPLIT
 #     (window_zoomed_flag=0) with the steward pane focused. A tap never zooms.
@@ -88,7 +93,17 @@ set_plan() {
   return 0
 }
 
-run_zoom() { bash "$SCRIPT" "$@"; }   # the shim on PATH pins tmux to the isolated socket
+# FIDELITY (issue #414): the conf invokes this via `run-shell "sh …/steward-zoom.sh"`,
+# and the operator's production /bin/sh is bash in POSIX MODE — where process
+# substitution `<(…)` is DISABLED. steward-zoom.sh sources fleet-lib.sh, so a
+# `<(…)` in the lib is a syntax error there, sourcing aborts, and fleet_steward_pane
+# is left undefined → the ⌂ falls into the hub-rebuild path and never unzooms. The
+# old harness ran `bash "$SCRIPT"`, where `<(…)` is valid, so the lib parsed and H4
+# passed against the BROKEN lib — a false green. Drive through `bash --posix`, which
+# reproduces that production shell on ANY host: it disables `<(…)` (so H4 fails
+# against the un-fixed lib, as it must) yet supports steward-zoom.sh's own
+# `set -o pipefail` — unlike a literal `sh`, which is dash on CI and has no pipefail.
+run_zoom() { bash --posix "$SCRIPT" "$@"; }   # PATH shim pins tmux to the isolated socket
 
 # A run that must end on the SPLIT with the steward focused (the home invariant).
 assert_home_split() {

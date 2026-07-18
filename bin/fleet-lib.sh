@@ -135,7 +135,9 @@ fleet_sess_for_repo() {
     [ -n "$sess" ] || continue
     rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
     [ "$(fleet_norm_repo "$rp")" = "$want" ] && { printf '%s' "$sess"; return 0; }
-  done < <(fleet_each_conf)
+  done <<EOF
+$(fleet_each_conf)
+EOF
   return 0
 }
 
@@ -451,7 +453,9 @@ fleet_sockets() {
   while IFS=$'\t' read -r sess conf; do
     [ -n "$sess" ] || continue
     tmux -L "$sess" has-session -t "$sess" 2>/dev/null && printf '%s\n' "$sess"
-  done < <(fleet_each_conf)
+  done <<EOF
+$(fleet_each_conf)
+EOF
 }
 
 # Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live
@@ -463,8 +467,11 @@ fleet_sockets() {
 fleet_list_windows_all() {
   local fmt="$1" label
   while IFS= read -r label; do
+    [ -n "$label" ] || continue
     tmux -L "$label" list-windows -a -F "$fmt" 2>/dev/null
-  done < <(fleet_sockets)
+  done <<EOF
+$(fleet_sockets)
+EOF
 }
 
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
@@ -576,7 +583,9 @@ fleet_worktree_head() {
       "HEAD "*)     h="${line#HEAD }" ;;
       "branch refs/heads/$branch") printf '%s\t%s' "$d" "$h"; return 0 ;;
     esac
-  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  done <<EOF
+$(git -C "$root" worktree list --porcelain 2>/dev/null)
+EOF
   return 0
 }
 
@@ -889,7 +898,9 @@ fleet_resolve_repo_for_session() {
     [ -n "$repo" ] && { printf '%s' "$repo"; return; }
     # -L "$sess": each fleet runs on its own named socket (== session name), so a
     # daemon/collector querying from OUTSIDE tmux must name the socket explicitly.
-  done < <(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
+  done <<EOF
+$(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null | awk '!seen[$0]++')
+EOF
   fleet_norm_repo "${FLEET_REPO:-}"
 }
 
