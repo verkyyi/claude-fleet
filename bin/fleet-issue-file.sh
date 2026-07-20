@@ -19,7 +19,10 @@
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
 #      convention lives in fleet-lib.sh now; this reuses it, #224/#332).
-#   3. `gh issue create` (title · body · labels · milestone).
+#   3. `gh issue create` (title · body · labels · milestone). When no --milestone
+#      is given and FLEET_DEFAULT_MILESTONE is set for the fleet, default to it —
+#      auto-creating the milestone if absent — so nothing lands unsorted (issue
+#      #433). Best-effort: milestone plumbing never wedges the fast path.
 #   4. --parent N → link the new issue as a SUB-ISSUE of N (GitHub sub-issues API);
 #      best-effort — a link failure never loses the just-filed issue.
 #   5. --spawn → hand the new number to the UNCHANGED bin/dash-issue-session.sh
@@ -119,6 +122,36 @@ if [ -n "$body" ]; then
   body="$body"$'\n\n'"$marker"
 else
   body="$marker"
+fi
+
+# --- 2b. default milestone: guarantee every filing gets one (issue #433) --------
+# A fleet opts in by setting FLEET_DEFAULT_MILESTONE (empty/unset = off, current
+# behaviour unchanged). The knob lives in this fleet's per-fleet conf, which our
+# callers (bin/dash-issue-new.sh, the steward) source with fleet_load_conf — but
+# that DOESN'T export, so as a spawned child we wouldn't inherit it. Load this
+# fleet's conf ourselves to pick it up; an already-set env value (a test, an
+# explicit export) wins and skips the load. An explicit --milestone always wins.
+if [ -z "${FLEET_DEFAULT_MILESTONE+set}" ]; then
+  fleet_load_conf "$(fleet_current_session)" 2>/dev/null
+fi
+if [ -z "$milestone" ] && [ -n "${FLEET_DEFAULT_MILESTONE:-}" ]; then
+  default_ms="$FLEET_DEFAULT_MILESTONE"
+  owner="${repo%%/*}"; name="${repo#*/}"
+  # Ensure the milestone exists so `gh issue create --milestone` can't fail on a
+  # missing one: idempotently POST it (a 422 "already_exists" just means it's
+  # already there — confirm via the list). BEST-EFFORT (issue #297): on ANY
+  # failure WARN and file WITHOUT a milestone rather than wedge the fast path —
+  # ⌃n must never fail to file because of milestone plumbing.
+  if gh api --method POST "repos/$owner/$name/milestones" \
+        -f title="$default_ms" -f state=open >/dev/null 2>&1; then
+    milestone="$default_ms"                       # freshly created
+  elif gh api "repos/$owner/$name/milestones" --paginate -q '.[].title' 2>/dev/null \
+        | grep -Fxq -- "$default_ms"; then
+    milestone="$default_ms"                       # already existed (create 422'd)
+  else
+    printf 'fleet-issue-file: could not ensure milestone %s — filing without one\n' \
+      "$default_ms" >&2
+  fi
 fi
 
 # --- 3. create -----------------------------------------------------------------
