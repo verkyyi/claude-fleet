@@ -27,9 +27,12 @@ For every new comment the bridge decides, in order:
 
 1. **dedup** — a comment id handled once is never re-injected (GitHub redelivers
    on any non-2xx; the poll and webhook ingresses can overlap).
-2. **marker** — the comment is **suppressed** if its body carries
-   `<!-- fleet:no-relay -->`. Feed-by-default: only fleet-internal-not-for-worker
-   comments are marked (see *Loop-safety* below).
+2. **self / marker** — the comment is **suppressed** if it is fleet-internal, by
+   *either* signal: (a) its body carries `<!-- fleet:no-relay -->` (the intent
+   flag), or (b) it is the bound worker talking to itself — a
+   `<!-- fleet:from role=worker … issue=<N> -->` provenance marker whose issue
+   equals the comment's own issue (the positive self-ID backstop). Feed-by-default:
+   an external human's unmarked comment relays. See *Loop-safety* below.
 3. **gate** — relay only from a **trusted `author_association`** (default floor
    `OWNER MEMBER COLLABORATOR`, via `FLEET_ISSUE_BRIDGE_ASSOC_FLOOR`). `NONE` /
    `CONTRIBUTOR` are never relayed.
@@ -64,18 +67,46 @@ For every new comment the bridge decides, in order:
 
 The worker and the steward both act as the repo `OWNER`, so **author-filtering
 cannot tell them apart** — if the bridge relayed every OWNER comment, the
-worker's own progress comments would loop back into itself.
-
-The fix is a **marker convention**, not an author filter:
+worker's own progress comments would loop back into itself. So the bridge decides
+self-vs-3rd-party by **marker**, not by author:
 
 - Every fleet-internal comment (worker progress, PR links, steward record notes)
   is posted through **`bin/fleet-comment.sh`**, which stamps
   `<!-- fleet:no-relay -->` (an invisible HTML comment). The bridge suppresses
-  those.
+  those. This is the **intent flag** — "don't drive a worker with this."
 - A comment **meant** to drive the worker is posted with
   `fleet-comment.sh <issue> --to-worker` (left unmarked → relayed once), or by an
   external human (unmarked by default → relayed, subject to the gate).
-- Dedup on comment id is the backstop if a marker is ever forgotten.
+
+### The positive self-ID backstop (issue #425)
+
+The no-relay flag is a *convention*: it works only as long as every fleet-internal
+write goes through `fleet-comment.sh`. A worker's own comment posted some other way
+— a raw `gh issue comment`, a future tool that forgets the wrapper — carries no
+flag, so it looks exactly like a 3rd-party OWNER comment and would be **relayed
+back into that worker once**. Dedup does **not** cover this: it only suppresses the
+*second* delivery of a comment id, never the *first*, so the spurious self-turn
+still fires.
+
+So the bridge also reads the **provenance** marker `fleet-comment.sh` already
+stamps — `<!-- fleet:from role=… session=… issue=<N> -->` — and suppresses a
+comment whose marker is `role=worker` with an `issue=<N>` **equal to the issue it
+is being relayed to**. That is, definitionally, the bound worker talking to
+itself — flag or no flag. It is scoped tightly so nothing legitimate is caught:
+
+- **steward `--to-worker`** carries `role=steward` (and the steward hub pane has no
+  `@issue`, so its marker has no `issue=` field at all) → not matched → still relays.
+- an **external human** has no `fleet:from` marker → not matched → relays.
+- a **cross-worker** comment (worker A driving worker B's issue) has `issue=A` ≠ B
+  → not matched → relays.
+- the `issue=` compare is space-anchored, so `issue=10` never matches `issue=100`.
+
+Because suppression is the **safe** direction — a comment that isn't relayed can't
+drive a worker — this backstop can only ever make a comment *more* suppressed,
+never bypass the trust gate to relay something. (A 3rd party who pastes a fake
+`fleet:from` marker only gets their *own* comment dropped; they can't smuggle a
+relay.) So it runs **before** the association gate, ungated. Dedup on comment id
+remains the last-ditch guard against a comment being *re-*delivered.
 
 ```sh
 # steward hands work back to the worker (relayed):

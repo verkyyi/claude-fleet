@@ -24,11 +24,19 @@
 # RELAY CORE (identical for both ingresses), for each new comment:
 #   1. dedup      — skip if this comment id was already handled (redeliveries,
 #                   poll/webhook overlap). GitHub redelivers on any non-2xx.
-#   2. marker     — SUPPRESS if the body carries `<!-- fleet:no-relay -->`. Feed by
-#                   default; only fleet-internal-not-for-worker comments are marked
-#                   (bin/fleet-comment.sh --note stamps it). Worker+steward share the
-#                   OWNER identity, so author-filtering can't separate them — the
-#                   marker is the loop guard; dedup is the backstop.
+#   2. self/marker — SUPPRESS a fleet-internal comment, by EITHER signal. (a) the
+#                   body carries `<!-- fleet:no-relay -->` (the intent flag
+#                   bin/fleet-comment.sh --note stamps). (b) it is the bound worker
+#                   talking to ITSELF — a `<!-- fleet:from role=worker … issue=<N> -->`
+#                   provenance marker whose issue equals THIS comment's issue (the
+#                   positive-self-ID backstop, issue #425). Worker+steward share the
+#                   OWNER identity, so author-filtering can't separate them — (a) is
+#                   the loop guard. (b) is the backstop for a worker comment that
+#                   skipped the wrapper (raw `gh issue comment`) and so lacks (a):
+#                   without it that comment passes the OWNER gate and is relayed back
+#                   into the worker once (dedup only stops the SECOND relay, not the
+#                   first). Steward `--to-worker` (role=steward, no issue=) and an
+#                   external human (no fleet:from) are NOT matched by (b) — both relay.
 #   3. gate       — relay only from a trusted author_association (default floor
 #                   OWNER/MEMBER/COLLABORATOR). A comment becomes autonomous tool-use
 #                   in a bypass-permissions worker ⇒ treat as RCE; never relay
@@ -51,6 +59,8 @@
 set -uo pipefail
 
 MARKER='<!-- fleet:no-relay -->'
+FROM_PREFIX='<!-- fleet:from '   # provenance marker prefix (issue #224/#332), read
+                                 # by the self-authored backstop (issue #425)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
@@ -106,6 +116,27 @@ log() { printf '%s issue-bridge: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '
 
 # 0 if the comment body carries the no-relay marker (⇒ suppress), 1 otherwise.
 bridge_marked() { case "$1" in *"$MARKER"*) return 0;; *) return 1;; esac; }
+
+# 0 if the comment is the bound worker talking to ITSELF (issue #425): the body
+# carries a `<!-- fleet:from role=worker … issue=<N> … -->` provenance marker whose
+# issue equals <route_issue> (the issue this comment is being relayed TO). This is
+# the positive-self-ID BACKSTOP for the no-relay marker — a worker's own comment
+# posted WITHOUT the loop-safety flag (e.g. a raw `gh issue comment` that bypassed
+# bin/fleet-comment.sh) would otherwise pass the OWNER gate and be injected back
+# into that worker once (dedup only stops the SECOND relay, never the first). The
+# steward's `--to-worker` (role=steward, and its hub pane has no @issue so the
+# marker carries no issue=) and an external human (no fleet:from at all) are NOT
+# matched, so both still relay. The issue= compare is space-anchored so issue=10
+# never matches issue=100. Suppression is the SAFE direction — like the no-relay
+# marker, a spoofed fleet:from can only make a comment more suppressed, never
+# bypass the assoc gate to get relayed — so this runs before the gate, unguarded.
+bridge_self_authored() {
+  local body="$1" route_issue="$2" mk
+  case "$body" in *"$FROM_PREFIX"*) ;; *) return 1 ;; esac
+  mk=" ${body#*"$FROM_PREFIX"}"; mk="${mk%%-->*} "     # isolate the marker fields, space-pad both ends
+  case "$mk" in *' role=worker '*) ;; *) return 1 ;; esac
+  case "$mk" in *" issue=$route_issue "*) return 0 ;; *) return 1 ;; esac
+}
 
 # 0 if <assoc> is in the trusted floor, 1 otherwise. Word-boundary match against
 # the space-separated ASSOC_FLOOR so "OWNER" never matches inside a longer token.
@@ -511,6 +542,7 @@ bridge_relay() {
   [ -n "$STEWARD_ISSUE" ] && [ "$issue" = "$STEWARD_ISSUE" ] && chan=steward
   if bridge_seen_has "$slug" "$cid" "$chan"; then echo "dup"; return 0; fi
   if bridge_marked "$body"; then echo "suppress:marker"; return 0; fi
+  if bridge_self_authored "$body" "$issue"; then echo "suppress:self"; return 0; fi
   if ! bridge_assoc_ok "$assoc"; then echo "suppress:assoc($assoc)"; return 0; fi
 
   # Steward control-issue route (issue #146): a comment on THIS repo's
