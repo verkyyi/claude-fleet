@@ -2,13 +2,15 @@
   "//": "RENDERED, DO NOT EDIT — bin/steward-session.sh writes a per-fleet copy to ~/.config/claude-fleet/fleets/<session>/steward-settings.json at spawn (issue #284), substituting __DENY_BASE__ (this fleet's base checkout), __DENY_WORKTREES__ (its issue-worktree sibling glob) and __BIN__ (the install bin dir). Launched with `claude --settings <that copy>`. Edit the template here; it re-renders on the next hub respawn.",
   "//rail": "The no-code rail: the steward is a dispatcher, never a coder. deny Edit/Write across the fleet's base checkout AND its issue-<N> worktree siblings so a steward turn can never touch the fleet's code (that is a worker's job). NotebookEdit is denied outright. Path-scoped ON PURPOSE — the steward still Writes its own memory files (~/.claude/projects/*/memory) and scratchpad. deny overrides bypassPermissions (deny always wins), so the rail holds even though the fleet runs bypass; the PreToolUse hooks/base-readonly-guard.py backstop (issue #355) enforces the same base-checkout read-only rail for EVERY seat (notably the worker, which has no permissions.deny), and a Bash subprocess that writes via redirection/python is out of scope (accident rail, not a sandbox).",
   "//allow": "Pre-approve the steward's routine read-only command set so a non-bypass steward stops stalling on prompts — plus spawning (dash-issue-session.sh) and reaping (fleet-cleanup.sh), which ARE the steward's job. Redundant under bypassPermissions (everything is allowed there), harmless, and the whitelist the moment an operator runs the hub in a stricter mode.",
+  "//sendkeys": "Bash(tmux send-keys:*) — inter-agent messaging goes through fleet-comment.sh --to-worker (the issue-bridge), never raw `tmux send-keys` into a live Claude TUI (issue #437). This deny is a COARSE settings belt: prefix-matched, so `tmux -L <sock> send-keys` (what the fleet's own plumbing uses) slips past it — hooks/bash-guard.py (Layer 2) is the real rail that matches send-keys on ANY socket, and shell/cw.zsh (Layer 4) is the shell belt. Redundant under bypassPermissions, harmless, and live the moment the hub runs stricter. FLEET_ALLOW_SENDKEYS=1 is the sanctioned override for fleet plumbing. The WORKER has no permissions.deny template (base-readonly is hook-only for it), so it gets no settings-belt entry — Layer 2 (which runs for every seat) is what covers the worker.",
   "permissions": {
     "deny": [
       "Edit(__DENY_BASE__/**)",
       "Write(__DENY_BASE__/**)",
       "Edit(__DENY_WORKTREES__/**)",
       "Write(__DENY_WORKTREES__/**)",
-      "NotebookEdit"
+      "NotebookEdit",
+      "Bash(tmux send-keys:*)"
     ],
     "allow": [
       "Bash(gh issue list:*)",

@@ -186,11 +186,14 @@ fi
 # typed into the input line and Enter is what executes the slash command (a
 # combined send-keys would submit early / mis-fire the palette). Factored into a
 # helper because §4 may retry it once on a dropped keystroke.
+# FLEET_ALLOW_SENDKEYS=1 prefixes each send-keys: this is sanctioned fleet
+# plumbing, exempt from the issue-bridge send-keys rail (issue #437). Prefixed,
+# not exported, so nothing this cycle drives inherits the hatch.
 send_clear() {
-  TM send-keys -t "$PANE" Escape 2>/dev/null || true
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Escape 2>/dev/null || true
   sleep 0.3 2>/dev/null || true
-  TM send-keys -t "$PANE" -l -- "/clear" 2>/dev/null || true
-  TM send-keys -t "$PANE" Enter 2>/dev/null || true
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "/clear" 2>/dev/null || true
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Enter 2>/dev/null || true
 }
 # Stamp t0 BEFORE the keystroke: the deterministic verify (§4) accepts only a
 # fresh-session marker stamped by THIS clear (@handoff_cleared_at >= clear_t0),
@@ -254,8 +257,8 @@ fi
 # in a not-yet-ready TUI (the scrape path already implies a rendered prompt).
 sleep 0.5 2>/dev/null || true
 log "sending pickup: $PICKUP"
-TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
-TM send-keys -t "$PANE" Enter 2>/dev/null || true
+FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" -l -- "$PICKUP" 2>/dev/null || true
+FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" Enter 2>/dev/null || true
 
 log "cycle complete — pane $PANE cleared and resumed from $STORE"
 exit 0

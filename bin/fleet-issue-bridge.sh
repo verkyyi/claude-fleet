@@ -513,7 +513,10 @@ bridge_inject() {
   local sock="$1" win="$2" text="$3" buf="fleet-relay-$$"
   tmux -L "$sock" set-buffer -b "$buf" -- "$text" 2>/dev/null || return 1
   tmux -L "$sock" paste-buffer -t "$win" -b "$buf" -d -p 2>/dev/null || { tmux -L "$sock" delete-buffer -b "$buf" 2>/dev/null; return 1; }
-  tmux -L "$sock" send-keys -t "$win" Enter 2>/dev/null || return 1
+  # FLEET_ALLOW_SENDKEYS=1: this IS the sanctioned issue-bridge, exempt from the
+  # send-keys rail (issue #437). Prefixed (not exported) so a revive spawn below
+  # never inherits the hatch and loses its own shell-guard belt.
+  FLEET_ALLOW_SENDKEYS=1 tmux -L "$sock" send-keys -t "$win" Enter 2>/dev/null || return 1
   return 0
 }
 

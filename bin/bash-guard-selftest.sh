@@ -89,6 +89,20 @@ assert_exit 0 "cross-segment split" "$GUARD" "$(bash_json "$(jstr 'git commit -m
 # but a REAL dangerous statement AFTER a harmless one still fires
 assert_exit 2 "block in 2nd segment" "$GUARD" "$(bash_json "$(jstr 'echo hi && rm -rf /')")"
 
+# BLOCK: a raw `tmux send-keys` into a live Claude TUI — inter-agent messaging
+# must go through the issue-bridge (issue #437), on ANY server flavour.
+assert_exit 2 "send-keys (bare)"    "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
+assert_exit 2 "send-keys -L sock"   "$GUARD" "$(bash_json "$(jstr 'tmux -L fleet-x send-keys -t win C-c')")"
+assert_exit 2 "send-keys -S path"   "$GUARD" "$(bash_json "$(jstr 'tmux -S /tmp/s send-keys -t win -l hi')")"
+# ALLOW: the FLEET_ALLOW_SENDKEYS=1 hatch (sanctioned fleet plumbing)
+assert_exit 0 "send-keys + hatch"   "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t win Enter')")"
+# ALLOW: a script wrapping send-keys — the hook never sees the subprocess
+assert_exit 0 "bash cycle script"   "$GUARD" "$(bash_json "$(jstr 'bash ~/.claude/fleet/bin/fleet-handoff-cycle.sh')")"
+# ALLOW: unrelated tmux (a read/list is not send-keys)
+assert_exit 0 "tmux list-windows"   "$GUARD" "$(bash_json "$(jstr 'tmux list-windows')")"
+# ALLOW: send-keys as a quoted literal to another subcommand isn't the subcommand
+assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buffer -- "send-keys demo"')")"
+
 # fail OPEN on malformed input, and no-op on a non-Bash tool
 assert_exit 0 "malformed json"      "$GUARD" 'not json at all'
 assert_exit 0 "non-Bash tool"       "$GUARD" '{"tool_name":"Read","tool_input":{}}'
