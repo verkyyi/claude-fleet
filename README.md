@@ -100,9 +100,11 @@ Design rules that made it work:
   backlog (typed tasks auto-file an issue), so nothing runs untracked.
 
 Deeper reference: **[docs/TERMS.md](docs/TERMS.md)** defines every term (what
-the collector/steward/dash actually are), and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+the collector/steward/dash actually are), **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 covers the shared-vs-per-fleet split and the path to running **many fleets on
-one machine** (one tmux session per repo).
+one machine** (one tmux session per repo), and **[docs/STATE.md](docs/STATE.md)**
+traces how each window's Claude state (`working`/`done`/`needs`/`looping`) is set,
+rendered, and corrected.
 
 ## Install
 
