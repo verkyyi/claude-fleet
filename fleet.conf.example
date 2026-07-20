@@ -107,6 +107,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
 
+# --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
+# Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,
+# the one issue-filer channel (⌃n, the dash new-session box, the steward's file+spawn
+# — all route through bin/fleet-issue-file.sh, #332) defaults a filing that passes no
+# --milestone to THIS milestone; the steward re-buckets it to a proper theme during
+# triage. The milestone is AUTO-CREATED if absent (idempotent), and it is BEST-EFFORT
+# (issue #297): if the milestone plumbing fails the issue still files WITHOUT one, so
+# ⌃n never fails to file. An explicit --milestone always wins. Empty/unset = OFF
+# (current behaviour — filings stay milestone-less). Per-fleet: e.g. verkyyi/claude-fleet
+# already has a `Triage` milestone; set it here to auto-sort every filing into Triage.
+# @label=Default milestone for filed issues @group=backlog @tier=common @scope=fleet @edit=str
+#FLEET_DEFAULT_MILESTONE=""
+
 # --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
 # OFF by default. When enabled for a fleet, the issue-bridge daemon
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)

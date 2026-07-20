@@ -19,6 +19,13 @@
 #      fleet_labels_allowed set, NOT the live `gh label list` — a canonical label
 #      absent from the repo's live labels is still ACCEPTED, and the channel makes
 #      NO `gh label` read at all (deterministic, offline, no minting).
+#   J. default milestone (issue #433): with FLEET_DEFAULT_MILESTONE set and NO
+#      --milestone, the channel idempotently ensures the milestone exists and
+#      passes `--milestone <default>` to `gh issue create`.
+#   K. explicit --milestone WINS over the default (no ensure call for the default).
+#   L. unset FLEET_DEFAULT_MILESTONE: unregressed — no ensure, no --milestone.
+#   M. ensure-failure is BEST-EFFORT (issue #297): the milestone can't be created
+#      and isn't present, so the issue still FILES (exit 0) WITHOUT a --milestone.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -76,6 +83,18 @@ case "$1" in
     ;;
   api)
     printf 'api %s\n' "$*" >> "$GH_LOG"
+    # --- milestones (issue #433): POST create vs GET list. The path can sit after
+    # `--method POST` so it isn't $2 — match anywhere in the args. MS_CREATE_FAIL=1
+    # fails the idempotent create; MS_MISSING=1 makes the list omit it (together =
+    # ensure-failure). Otherwise the list echoes MS_TITLE so the filer confirms it.
+    if printf '%s ' "$@" | grep -q 'milestones'; then
+      if printf '%s ' "$@" | grep -q -- '--method POST'; then
+        [ "${MS_CREATE_FAIL:-0}" = 1 ] && exit 1        # create failed (perms/etc.)
+      else
+        [ "${MS_MISSING:-0}" = 1 ] || printf '%s\n' "${MS_TITLE:-Triage}"
+      fi
+      exit 0
+    fi
     case "$2" in
       repos/*/issues/*) case "$2" in */sub_issues) : ;; *) echo "${CHILD_ID:-999888}" ;; esac ;;
     esac
@@ -99,8 +118,11 @@ chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # / NEW_NUM / CHILD_ID) passes through. Records exit code in $RC, stdout/stderr.
 run_fif() {
   : > "$GH_LOG"; : > "$SPAWN_LOG"; : > "$BODY"
+  # FLEET_CONF_DIR points at an empty temp dir so the filer's per-fleet conf load
+  # (issue #433, FLEET_DEFAULT_MILESTONE) finds nothing — the knob is driven only
+  # by the env we pass, keeping every case hermetic.
   PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BODY="$BODY" \
-  FLEET_REPO="acme/widgets" \
+  FLEET_REPO="acme/widgets" FLEET_CONF_DIR="$WORK/conf" \
     bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out" 2>"$WORK/err"
   RC=$?
 }
@@ -177,5 +199,40 @@ grep -q -- '--label scout' "$GH_LOG"   || fail "I the canonical label must reach
 grep -q '^label ' "$GH_LOG" && fail "I the channel must NOT read gh labels (fixed taxonomy)" "$(cat "$GH_LOG")"
 ok "I validation is the fixed taxonomy, not the live label list (no gh label read)"
 
-printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · parent · spawn)\n' "$pass"
+# ============================ J: default milestone applied ================
+# FLEET_DEFAULT_MILESTONE set + NO --milestone → ensure the milestone (idempotent
+# create) and pass --milestone <default> to create.
+FLEET_DEFAULT_MILESTONE=Triage run_fif --title "Unsorted"
+[ "$RC" -eq 0 ]                                        || fail "J default milestone should succeed" "$(cat "$WORK/err")"
+grep -q 'api --method POST repos/acme/widgets/milestones' "$GH_LOG" \
+  || fail "J must idempotently ensure the milestone (POST milestones)" "$(cat "$GH_LOG")"
+grep -q -- '--milestone Triage' "$GH_LOG"             || fail "J create must carry --milestone Triage" "$(cat "$GH_LOG")"
+ok "J FLEET_DEFAULT_MILESTONE defaults a milestone-less filing (ensured + applied)"
+
+# ============================ K: explicit --milestone wins ================
+FLEET_DEFAULT_MILESTONE=Triage run_fif --title "Has one" --milestone Roadmap
+[ "$RC" -eq 0 ]                                        || fail "K explicit milestone should succeed" "$(cat "$WORK/err")"
+grep -q -- '--milestone Roadmap' "$GH_LOG"            || fail "K explicit --milestone must reach create" "$(cat "$GH_LOG")"
+grep -q -- '--milestone Triage' "$GH_LOG" && fail "K the default must NOT override an explicit --milestone" "$(cat "$GH_LOG")"
+grep -q 'milestones' "$GH_LOG" && fail "K must NOT ensure the default when --milestone is explicit" "$(cat "$GH_LOG")"
+ok "K an explicit --milestone wins over FLEET_DEFAULT_MILESTONE (no ensure)"
+
+# ============================ L: unset default = unregressed ===============
+run_fif --title "Plain"
+[ "$RC" -eq 0 ]                                        || fail "L plain filing should succeed" "$(cat "$WORK/err")"
+grep -q -- '--milestone' "$GH_LOG" && fail "L must NOT add a milestone when the knob is unset" "$(cat "$GH_LOG")"
+grep -q 'milestones' "$GH_LOG" && fail "L must NOT touch the milestones API when the knob is unset" "$(cat "$GH_LOG")"
+ok "L an unset FLEET_DEFAULT_MILESTONE is unregressed (no milestone, no API)"
+
+# ============================ M: ensure-failure is best-effort =============
+# The milestone can't be created (MS_CREATE_FAIL) and isn't present (MS_MISSING):
+# the issue must still FILE (exit 0), just without a --milestone (issue #297).
+MS_CREATE_FAIL=1 MS_MISSING=1 FLEET_DEFAULT_MILESTONE=Triage run_fif --title "Best effort"
+[ "$RC" -eq 0 ]                                        || fail "M a milestone-ensure failure must still exit 0" "$(cat "$WORK/err")"
+grep -q 'github.com/acme/widgets/issues/777' "$WORK/out" || fail "M the issue must still be FILED (URL echoed)" "$(cat "$WORK/out")"
+grep -q -- '--milestone' "$GH_LOG" && fail "M must NOT pass --milestone when ensure failed" "$(cat "$GH_LOG")"
+grep -qi 'could not ensure milestone' "$WORK/err"     || fail "M should warn that the milestone was skipped" "$(cat "$WORK/err")"
+ok "M an ensure-failure files-without-milestone (fast path never wedged)"
+
+printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn)\n' "$pass"
 exit 0
