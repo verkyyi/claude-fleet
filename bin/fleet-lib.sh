@@ -1039,7 +1039,56 @@ fleet_slots_chip() {
 # row so a width change can't silently misalign them.
 FLEET_BL_W_NUM=5      # #num         — %-5s
 FLEET_BL_W_PRI=2      # priority tag — p0/p1/p2 or 2 spaces (content-defined)
-FLEET_BL_W_MS=12      # milestone    — name or ·, %-12.12s (flat list — issue #377)
+FLEET_BL_W_MS=12      # milestone    — name or ·, DISPLAY-cell-padded (flat list — issue #377)
+
+# fleet_pad_display <string> <cells> — the display-CELL-aware analogue of
+# `printf "%-<cells>.<cells>s"`, for the CJK-bearing backlog milestone column.
+# `printf`'s width/precision count BYTES: a CJK glyph is 3 UTF-8 bytes but 2
+# screen cells, so `%-12.12s` sizes a Chinese milestone by bytes and every column
+# after it drifts off the header (issue #432). This left-justifies <string> into
+# EXACTLY <cells> terminal columns — truncating on a glyph boundary (never mid
+# wide-glyph) and right-padding with spaces — so the title always starts at the
+# header's title offset on ASCII and CJK rows alike. Cell rules mirror the
+# dashboard summary clip (bin/tmux-dashboard-rows.sh): East-Asian wide / fullwidth
+# = 2, zero-width combining = 0, else 1. Fast path — a pure-ASCII arg has
+# width == byte count, so it forks nothing and renders byte-identical to the old
+# printf; a non-ASCII arg pays one `perl -CO` fork. The `[:ascii:]` test is a
+# bash/glibc class (this file's live callers are all #!/bin/bash); should it ever
+# run under a shell that lacks it, or perl be missing, it falls back to the old
+# byte-count printf — degraded (may misalign CJK) but never crashing or splitting
+# a glyph into garbage.
+fleet_pad_display() {
+  local s="$1" cells="$2" out
+  [ "$cells" -le 0 ] && return 0
+  case $s in
+    *[![:ascii:]]*)
+      out=$(S="$s" N="$cells" perl -CO -MEncode -e '
+        my $s = decode_utf8($ENV{S}); my $n = $ENV{N} + 0;
+        my ($w, $o) = (0, "");
+        for my $c (split //, $s) {
+          my $x = ord $c;
+          my $cw =
+            ($x == 0x200B || ($x >= 0x0300 && $x <= 0x036F) || ($x >= 0x1AB0 && $x <= 0x1AFF) ||
+             ($x >= 0x1DC0 && $x <= 0x1DFF) || ($x >= 0x20D0 && $x <= 0x20FF) ||
+             ($x >= 0xFE20 && $x <= 0xFE2F)) ? 0 :
+            ($x >= 0x1100 && (
+               $x <= 0x115F || $x == 0x2329 || $x == 0x232A ||
+               ($x >= 0x2E80 && $x <= 0x303E) || ($x >= 0x3041 && $x <= 0x33FF) ||
+               ($x >= 0x3400 && $x <= 0x4DBF) || ($x >= 0x4E00 && $x <= 0x9FFF) ||
+               ($x >= 0xA000 && $x <= 0xA4CF) || ($x >= 0xAC00 && $x <= 0xD7A3) ||
+               ($x >= 0xF900 && $x <= 0xFAFF) || ($x >= 0xFE10 && $x <= 0xFE19) ||
+               ($x >= 0xFE30 && $x <= 0xFE6F) || ($x >= 0xFF00 && $x <= 0xFF60) ||
+               ($x >= 0xFFE0 && $x <= 0xFFE6) || ($x >= 0x1F000 && $x <= 0x1FAFF) ||
+               ($x >= 0x20000 && $x <= 0x3FFFD))) ? 2 : 1;
+          last if $w + $cw > $n;
+          $w += $cw; $o .= $c;
+        }
+        print $o . (" " x ($n - $w));' 2>/dev/null)
+      if [ -n "$out" ]; then printf '%s' "$out"; else printf '%-*.*s' "$cells" "$cells" "$s"; fi
+      ;;
+    *) printf '%-*.*s' "$cells" "$cells" "$s" ;;
+  esac
+}
 
 # The backlog column-title line (issue #371): a dim/muted header row whose labels
 # sit over field-2's fixed columns. Printed by bin/tmux-issues.sh as an extra

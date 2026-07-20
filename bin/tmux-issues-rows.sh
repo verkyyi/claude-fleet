@@ -104,12 +104,15 @@ while IFS=$'\t' read -r ms num _ title; do
   tier=$(prio_tier "$n"); ptag=$(prio_tag "$tier")
   # Milestone column (issue #377): a fixed-width dim column BETWEEN the priority
   # tag and the title so the flat list still shows each issue's milestone (grouping
-  # dropped). A real name is truncated+padded to $FLEET_BL_W_MS; a no-milestone
-  # issue shows a lone '·' — 1 col but 2 bytes, so widen its byte budget by 1 to
-  # keep the 1-col visible width. Prebuilt with its own color+reset so it splices
-  # into the row as one %s ahead of the title.
-  if [ "$ms" = "$NOMS" ]; then ms_disp='·'; mspad=$((FLEET_BL_W_MS + 1)); else ms_disp="$ms"; mspad=$FLEET_BL_W_MS; fi
-  mscol=$(printf "%s%-${mspad}.${mspad}s%s" "$(c "$GY")" "$ms_disp" "$R")
+  # dropped). Truncated+padded to $FLEET_BL_W_MS *display cells* via
+  # fleet_pad_display — NOT `printf %-N.Ns`, which counts BYTES and so mis-sizes a
+  # CJK milestone (3 bytes but 2 cells/glyph), drifting every following column off
+  # the header on repos with Chinese milestone names (issue #432). A no-milestone
+  # issue shows a lone '·'; the cell-aware pad handles its 1-col/2-byte width with
+  # no special budget. Prebuilt with its own color+reset so it splices into the row
+  # as one %s ahead of the title.
+  if [ "$ms" = "$NOMS" ]; then ms_disp='·'; else ms_disp="$ms"; fi
+  mscol=$(printf '%s%s%s' "$(c "$GY")" "$(fleet_pad_display "$ms_disp" "$FLEET_BL_W_MS")" "$R")
   # Fixed-width columns so the TITLE starts at the same screen column on every row
   # (widths are the shared FLEET_BL_W_* geometry in fleet-lib.sh, which the backlog
   # header aligns to — issue #371): num padded to $FLEET_BL_W_NUM, a 2-col priority
