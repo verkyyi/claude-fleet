@@ -81,8 +81,10 @@ EOF
 # --- 3. the popup wiring is present -------------------------------------------
 grep -q 'bin/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
 # The `?` bind opens a display-popup; since issue #308 it is wrapped with a
-# `set -g @popup_open 1 \; … \; set -g @popup_open 0` flag (pause the dash repaint
-# under the modal), so allow anything between the key and `display-popup`.
+# `run-shell "tmux set -g @popup_open $(date +%s)" \; … \; set -g @popup_open 0`
+# flag (pause the dash repaint under the modal — the open stamps an epoch so a
+# stranded flag self-heals, issue #431), so allow anything between the key and
+# `display-popup`.
 grep -Eq '^bind[[:space:]]+\?[[:space:]].*display-popup' "$CONF" \
   || fail "conf 'prefix ?' does not open a display-popup"
 # The in-panel opens are scoped to their own panel (issue #265): the dash `?`
