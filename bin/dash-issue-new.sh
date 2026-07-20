@@ -28,14 +28,22 @@
 # popup has already read the title into <f> and re-execs us via fleet_bg, so we
 # skip the read and just do the (slow) create. The path comes from mktemp (no
 # metachars), so the single-token form is safe.
+#
+# The interactive title read is `fzf --print-query` (issue #429): fzf owns its own
+# UTF-8/IME/paste-aware echo (so a CJK/IME commit is never double-drawn), cancels on
+# Esc/Ctrl-C INSTANTLY (exit 130), and folds a pasted block into its single-line query
+# — fixing the CJK double-echo, the 1-second-Esc, and the paste bugs the old hand-rolled
+# `read -rsn1` loop (read_title/read_paste + utf8_len/bytelen) structurally couldn't. The
+# fleet already mandates fzf (≥0.45) and uses it for the dash/backlog/config popups.
 
-# Force a UTF-8 locale so read_title's per-char loop strips a WHOLE character on
-# backspace, not a single byte (issue #408). SSH/Termius forward LANG but usually
-# not LC_CTYPE/LC_ALL, so a tmux popup off a server started without them runs in the
-# C locale — where `${title%?}` over a CJK glyph leaves a broken half-char and the
-# popup appears to hang. Matches the sibling tmux-*-rows.sh exports; en_US.UTF-8 is
-# universal on macOS (C.UTF-8 doesn't exist there). Set before the phase split so
-# BOTH the interactive read and any re-exec inherit it.
+# Force a UTF-8 locale so any title handling below (the create channel, the window/branch
+# naming, the optimistic cache row) treats a CJK/emoji title as whole CHARACTERS, not raw
+# bytes (issue #408). SSH/Termius forward LANG but usually not LC_CTYPE/LC_ALL, so a tmux
+# popup off a server started without them would otherwise run in the C locale. Matches the
+# sibling tmux-*-rows.sh exports; en_US.UTF-8 is universal on macOS (C.UTF-8 doesn't exist
+# there). Set before the phase split so BOTH the interactive read and any re-exec inherit
+# it. (fzf owns the interactive editing itself now — issue #429 — but this stays useful for
+# the non-interactive create/naming paths.)
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
 mode=""; spawn=0; title_file=""
@@ -62,6 +70,9 @@ _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
 [ -n "${CF_REPO:-}" ] && REPO="$CF_REPO"
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot create issue"; exit 1; }
+# fzf is the interactive title widget now (issue #429), so this path requires it. Guard up
+# top like `gh` so BOTH phases fail with a toast instead of a broken popup if it's absent.
+command -v fzf >/dev/null 2>&1 || { tmux display-message "fzf not found — cannot create issue"; exit 1; }
 
 # phase 1: pop the input dialog that re-invokes us in `confirm` mode. Carry
 # --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
@@ -70,136 +81,6 @@ if [ "$mode" != confirm ]; then
   tmux display-popup -w 90% -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg"
   exit 0
 fi
-
-# utf8_len <byte> -> total byte length (1..4) of the char this LEAD byte starts;
-# 1 for ASCII/stray. C-locale byte value so high bytes are unsigned 128..255,
-# folded (+256) to survive printf signedness. macOS bash 3.2 reads bytes, not
-# chars, so we reassemble the glyph ourselves and echo it atomically — a per-byte
-# echo splits a multibyte sequence across tmux read boundaries and renders □/dupes
-# (issue #422).
-utf8_len() {
-  local b; b=$(LC_ALL=C printf '%d' "'$1" 2>/dev/null); [ "$b" -lt 0 ] && b=$((b+256))
-  if   [ "$b" -ge 240 ]; then echo 4
-  elif [ "$b" -ge 224 ]; then echo 3
-  elif [ "$b" -ge 192 ]; then echo 2
-  else echo 1; fi
-}
-
-# bytelen <string> -> BYTE length of the string. The forced UTF-8 locale up top makes
-# the bare `${#s}` count CHARACTERS, so we take the length under a local C locale where
-# each byte is its own char. Load-bearing for portability (issue #422): the glyph
-# assembly below gates on bytes-in-hand, not a fixed read count, so it is correct on
-# BOTH macOS bash 3.2 (read -rsn1 → one BYTE) and Linux/CI bash 5 (read -rsn1 → one
-# whole CHARACTER already, so the inner loop no-ops instead of over-reading the next
-# glyphs).
-bytelen() { local LC_ALL=C; printf %s "${#1}"; }
-
-# read_title <prompt-prefix>: read the title char-by-char so Esc cancels the WHOLE
-# create on the spot (issue #297) and a multi-line PASTE folds into one line instead
-# of the first embedded newline truncating + submitting it (issue #419). A plain
-# `read` only acts on Enter, so an Esc keypress would be swallowed into the line
-# instead of aborting. Enter submits, Backspace erases, Esc (0x1b) cancels. IFS= is
-# load-bearing — it keeps a typed space as ' ', so ONLY a real newline reads back as
-# '' (Enter). Sets $title; returns 1 on Esc-cancel, 0 otherwise.
-#
-# Esc is disambiguated by a one-byte PEEK (issue #419): bracketed-paste markers and
-# arrow keys both START with ESC, so a bare `$'\x1b') return 1` would make every paste
-# (which the terminal brackets as ESC[200~ … ESC[201~ once we enable DEC mode 2004)
-# cancel the popup. So on ESC we peek the next byte with `read -t 1`:
-#   • nothing follows within 1s (a real lone Esc, or EOF) → cancel (return 1);
-#   • ESC '[' … CSI → read it to its final byte: '200~' is a paste-start, so hand the
-#     body to read_paste; any other CSI (arrow keys, …) has no meaning in a one-line
-#     field → ignore. A non-'[' escape (Alt / SS3) is likewise ignored.
-# `-t 1` is an INTEGER timeout because macOS ships bash 3.2.57 (no sub-second `-t`):
-# a lone-Esc cancel waits ≤1s, a pasted/arrow burst returns instantly.
-#
-# Backspace REDRAWS the whole input line — \r to column 0, reprint <prefix>$title,
-# then \033[K to clear the tail — instead of the old incremental `printf '\b \b'`
-# (issue #408). Byte-wise cursor math can't erase a WIDE glyph: a CJK char occupies
-# 2 terminal cells but '\b \b' backs up only 1, so the cursor desynced and the popup
-# appeared to hang. A full redraw needs no cursor width math — the terminal re-lays
-# the current (valid) $title — so wide CJK/full-width chars, emoji, and mixed
-# ASCII+CJK all erase correctly. Pairs with the forced UTF-8 locale up top, which
-# makes `${title%?}` strip a whole character (not a byte) before the redraw.
-#
-# The INPUT echo assembles a WHOLE glyph before writing it (issue #422): bash 3.2
-# reads one BYTE per `read -rsn1`, so echoing each byte split a multibyte sequence
-# across tmux's pane-read boundaries and rendered □/duplicated cells. We read the
-# lead byte's continuation bytes (utf8_len) and `printf '%s'` the complete char once.
-# The continuation loop gates on the BYTES already assembled (bytelen), not a fixed
-# read count, so it is portable: on bash 5 (CI) `read -rsn1` already returns a whole
-# CHARACTER, so bytelen>=clen at once and the loop no-ops (a fixed-count loop would
-# over-read the FOLLOWING glyphs). ASCII is unchanged (utf8_len 1, loop skipped).
-read_title() {
-  local prefix="$1" ch seq c2 cbuf clen
-  title=""
-  while IFS= read -rsn1 ch; do
-    case "$ch" in
-      '')               printf '\n'; return 0 ;;                            # Enter → submit
-      $'\x1b')                                                              # Esc → peek: lone-Esc cancel vs a paste/CSI marker
-        if IFS= read -rsn1 -t 1 seq; then                                   # a byte followed → an escape sequence, not a lone Esc
-          if [ "$seq" = '[' ]; then
-            seq=""                                                          # accumulate the CSI params after '['
-            while IFS= read -rsn1 -t 1 c2; do
-              seq="$seq$c2"
-              case "$c2" in [~a-zA-Z]) break ;; esac                        # CSI final byte
-            done
-            [ "$seq" = '200~' ] && read_paste "$prefix"                     # paste start → consume the body; other CSI → ignore
-          fi
-          # non-'[' escape (Alt / SS3) → ignore: no meaning in a one-line field
-        else
-          return 1                                                         # lone Esc (nothing followed within 1s / EOF) → cancel
-        fi ;;
-      $'\x7f'|$'\x08')  [ -n "$title" ] && { title="${title%?}"; printf '\r%s%s\033[K' "$prefix" "$title"; } ;;  # Backspace → width-correct redraw
-      *)                # assemble the WHOLE glyph (read continuation bytes until it's complete) before echoing it once (issue #422)
-        cbuf="$ch"; clen=$(utf8_len "$ch")
-        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
-        title="$title$cbuf"; printf '%s' "$cbuf" ;;
-    esac
-  done
-  printf '\n'; return 0                                                     # EOF → submit what we have
-}
-
-# read_paste <prompt-prefix>: consume a bracketed-paste body — we're already past the
-# ESC[200~ start marker — up to the ESC[201~ end marker, folding it into the one-line
-# title (issue #419). Every embedded newline (''), CR ($'\r'), and tab folds to a
-# SINGLE space with no leading space, no runs, and no trailing space: a lazy `pending`
-# flag is set on whitespace and flushed only just before the next real char (and only
-# when $title already holds content), so a paste that ends in a newline drops its
-# trailing space cleanly. Ordinary bytes accumulate onto the GLOBAL $title and echo
-# like the typed fast path — assembling a whole UTF-8 glyph before the single echo
-# (issue #422), so a multibyte char is never split across writes. The end marker is
-# spotted the same way read_title spots the start — ESC → `-t 1` peek → '[' → CSI →
-# '201~'. Does NOT auto-submit: it returns to
-# read_title so the operator reviews the pasted title and presses Enter (or edits it).
-read_paste() {
-  local prefix="$1" ch seq c2 pending=0 cbuf clen
-  while IFS= read -rsn1 ch; do
-    case "$ch" in
-      $'\x1b')                                                              # maybe the ESC[201~ end marker
-        if IFS= read -rsn1 -t 1 seq && [ "$seq" = '[' ]; then
-          seq=""
-          while IFS= read -rsn1 -t 1 c2; do
-            seq="$seq$c2"
-            case "$c2" in [~a-zA-Z]) break ;; esac
-          done
-          [ "$seq" = '201~' ] && break                                     # end of paste → back to read_title
-          # any other CSI inside a paste → ignore, keep consuming
-        fi ;;                                                              # lone Esc / non-'[' inside a paste → ignore
-      ''|$'\r'|$'\t')   pending=1 ;;                                        # embedded newline/CR/tab → lazy single space
-      *)                                                                    # ordinary byte → flush a pending space (never leading), then accumulate
-        if [ "$pending" = 1 ]; then
-          [ -n "$title" ] && { title="$title "; printf ' '; }
-          pending=0
-        fi
-        # assemble the WHOLE glyph before echoing it once (issue #422) — same byte-gated loop as read_title
-        cbuf="$ch"; clen=$(utf8_len "$ch")
-        while [ "$(bytelen "$cbuf")" -lt "$clen" ]; do IFS= read -rsn1 ch || break; cbuf="$cbuf$ch"; done
-        title="$title$cbuf"; printf '%s' "$cbuf" ;;
-    esac
-  done
-  printf '\r%s%s\033[K' "$prefix" "$title"                                  # normalize the shown line to $title (folded, markers stripped)
-}
 
 # create_issue — the SLOW tail: file the issue, optimistically insert its row, kick
 # the authoritative refetch, and (in --spawn mode) background-spawn the worker. It
@@ -252,24 +133,24 @@ if [ -n "$title_file" ]; then
 fi
 
 # phase 2, INTERACTIVE: running inside the popup — read a TITLE only (^n is the
-# one-line fast filer, issue #297; there is no body prompt). Esc or an empty title
-# cancels. Then hand the slow create off to the BACKGROUND so the popup closes
-# INSTANTLY instead of blocking on `gh issue create` (+ the worktree/window spawn).
+# one-line fast filer, issue #297; there is no body prompt). Then hand the slow create
+# off to the BACKGROUND so the popup closes INSTANTLY instead of blocking on the create
+# (+ the worktree/window spawn).
 [ "$spawn" = 1 ] && verb="New issue + worker" || verb="New issue"
-# The prompt prefix is shared: printed once here to draw the field, and handed to
-# read_title so its backspace redraw reprints the exact same leader (issue #408).
 title_prefix='  title ▸ '
-printf '\n  %s in \033[1m%s\033[0m\n  (empty title or Esc = cancel)\n\n%s' "$verb" "$REPO" "$title_prefix"
-# Bracketed paste (issue #419): enable DEC mode 2004 so the terminal brackets a paste
-# as ESC[200~ … ESC[201~ — read_title folds that into a single-line title instead of
-# the first embedded newline truncating + submitting it. Disable on EVERY exit path;
-# this phase always ends in `exit`, so a trap EXIT is the clean guarantee (arm it
-# BEFORE enabling so cleanup can never be skipped). Terminals without bracketed paste
-# send the paste raw → identical to before (first line kept), no regression.
-trap 'printf "\033[?2004l"' EXIT
-printf '\033[?2004h'
-read_title "$title_prefix" || exit 0                # Esc → cancel the create directly
-[ -z "$title" ] && exit 0                           # empty title → cancel
+hdr="$verb in $REPO — type a title · Enter = file · Esc = cancel"
+# fzf as a pure text input (issue #429): empty candidate list (< /dev/null), --print-query
+# echoes the typed line. Exit 130 = Esc/Ctrl-C → cancel; 0/1 = accepted (1 = Enter with no
+# match, our normal case — --print-query still prints the query). fzf reads keys from
+# /dev/tty, so it works inside `display-popup -E`; it owns UTF-8/IME/paste echo, so there is
+# no double-echo (issue #422), Esc is instant (no 1s wait — issue #419), and a multi-line
+# paste folds into the single-line query.
+title=$(fzf --print-query --no-multi --layout=reverse --no-info --no-separator \
+            --height=100% --border=none --prompt="$title_prefix" --header="$hdr" \
+            < /dev/null 2>/dev/null); rc=$?
+[ "$rc" -eq 130 ] && exit 0          # Esc / Ctrl-C → cancel the create
+title=${title%%$'\n'*}               # the query is the first (only) line
+[ -z "$title" ] && exit 0            # empty title (incl. fzf error) → cancel
 
 # Stage the title in a temp file — it is arbitrary user text, so it is NEVER
 # interpolated into the run-shell command string (only the mktemp path, which has no
