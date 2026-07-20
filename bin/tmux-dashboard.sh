@@ -21,30 +21,28 @@ REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady 
 # flashes THROUGH the popup (worst where the popup edge clips a double-width CJK
 # cell — the underlying half-cell flickers before the popup redraws). The modal
 # popup binds (conf/tmux-attention.conf) raise a server-global @popup_open flag
-# for the lifetime of the popup; the reload loop below busy-waits on it so it
-# emits NO new frame — no under-popup churn — until the popup closes and clears
-# the flag, at which point one repaint fires and the 1Hz loop resumes. Server
-# scope (set -g) = per-fleet (one tmux server per fleet, issue #159) and can't
-# under-detect a popup opened from a sibling window/session on the same server.
-# The pause is CAPPED (FLEET_DASH_POPUP_MAX_PAUSE, below) so a leaked flag — a
-# popup that dies without running its trailing `set 0` (client detach mid-popup,
-# crash) — can't freeze the dash forever (issue #323); after the cap the loop
-# repaints anyway, treating the flag as stuck.
-POPUP_POLL=0.2           # how often the paused reload re-checks @popup_open (≈ resume latency)
-# Upper bound on that pause (issue #323): if @popup_open sticks at 1 with no popup
-# actually open, an unbounded busy-wait would pause the 1Hz repaint FOREVER — the
-# window status stops refreshing until the flag is cleared by hand (observed live).
-# Cap it: pause at most FLEET_DASH_POPUP_MAX_PAUSE seconds, then repaint regardless
-# (the flag is treated as leaked). A genuine popup held open past the cap costs at
-# most one flicker frame per cap window — the flag is still honoured WHILE set, we
-# only refuse to trust it unbounded — so a stuck flag self-heals in ≤ cap, never.
-FLEET_DASH_POPUP_MAX_PAUSE="${FLEET_DASH_POPUP_MAX_PAUSE:-20}"
-# ticks = ceil(cap / POPUP_POLL), baked into the reload bind as an integer literal
-# so the per-reload sh just counts iterations (no float math in the hot path).
-POPUP_MAX_TICKS=$(awk -v m="$FLEET_DASH_POPUP_MAX_PAUSE" -v p="$POPUP_POLL" \
-  'BEGIN{ t=(p>0)?m/p:0; i=int(t); if(i<t)i++; if(i<1)i=1; print i }')
+# for the lifetime of the popup; the reload loop below waits on it (bin/dash-popup-
+# wait.sh) so it emits NO new frame — no under-popup churn — until the popup
+# closes and clears the flag, at which point one repaint fires and the 1Hz loop
+# resumes. Server scope (set -g) = per-fleet (one tmux server per fleet, issue
+# #159) and can't under-detect a popup opened from a sibling window on the server.
+#
+# THE FLAG IS AN EPOCH, NOT A BOOLEAN (issue #431). Each popup OPEN stamps it with
+# `date +%s`; the wait trusts the flag only while it is FRESH (now - flag < MAX_AGE).
+# The one path that leaks the flag is the popup dying before its trailing `set 0`
+# — the client detaches / switches fleets / disconnects mid-popup (a Termius drop,
+# a `detach-client -E` fleet-switch) and the whole key-command chain is cut, so the
+# flag STRANDS at a value that used to be a bare 1 and every subsequent reload
+# stalled ~20s (the reported freeze, issue #323/#431). Now a `client-detached` hook
+# (conf/tmux-attention.conf) clears the flag on that dominant path, and the epoch is
+# the backstop: a stranded value simply ages out, so a leaked flag can NEVER stall
+# the dash more than MAX_AGE — it self-heals, instead of freezing per reload forever.
+FLEET_DASH_POPUP_MAX_AGE="${FLEET_DASH_POPUP_MAX_AGE:-30}"  # seconds a set flag is trusted (issue #431 example N)
+FLEET_DASH_POPUP_POLL="${FLEET_DASH_POPUP_POLL:-0.2}"       # wait re-check interval ≈ resume latency
+export FLEET_DASH_POPUP_MAX_AGE FLEET_DASH_POPUP_POLL       # inherited by the reload-sync wait
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
+WAIT="$BIN/dash-popup-wait.sh"   # pauses the reload while @popup_open is fresh (issue #308/#431)
 C="${TMPDIR:-/tmp}/.claude-dash"
 
 # Scope rows to THIS fleet's tmux session (strict per-fleet). The rows producer and
@@ -111,7 +109,7 @@ run_dash() {
     --prompt='▸ ' \
     --header="$HDR" \
     "${PREVIEW[@]}" \
-    --bind "load:reload-sync(sleep $REFRESH; n=0; while [ \"\$(tmux show-option -gqv @popup_open 2>/dev/null)\" = 1 ] && [ \$n -lt $POPUP_MAX_TICKS ]; do sleep $POPUP_POLL; n=\$((n+1)); done; bash $ROWS)" \
+    --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
     --bind "ctrl-n:execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
@@ -132,12 +130,13 @@ if [ -n "$POPUP" ]; then run_dash; exit 0; fi
 # Defensive clear of any STALE @popup_open before the always-on dash starts
 # painting (issue #323). If a prior dash/popup died without running its trailing
 # `set -g @popup_open 0` (crash, client detached mid-popup), the flag can stick at
-# 1; a freshly (re)spawned dash must never inherit that or its very first reload
-# would pause. The cap above bounds a leak that happens WHILE this dash loops;
-# this clears one carried over from BEFORE it started. Looping dash only (the
-# freeze-prone consumer) — the one-shot POPUP peek above never busy-waits. Safe:
-# a dash process only (re)starts on spawn/respawn, not while a sibling popup is
-# genuinely open (and if one ever were, its own trailing `set 0` re-clears).
+# a stale value; a freshly (re)spawned dash must never inherit that or its very
+# first reload would pause. The epoch self-expiry (dash-popup-wait.sh) bounds a
+# leak that happens WHILE this dash loops; this clears one carried over from
+# BEFORE it started. Looping dash only (the freeze-prone consumer) — the one-shot
+# POPUP peek above never waits. Safe: a dash process only (re)starts on
+# spawn/respawn, not while a sibling popup is genuinely open (and if one ever
+# were, its own trailing `set 0` re-clears).
 tmux set-option -g @popup_open 0 2>/dev/null || true
 
 # Loop so Esc/q just relaunches — the window stays a live dashboard.
