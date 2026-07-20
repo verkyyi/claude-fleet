@@ -5,6 +5,10 @@
 # network, no tmux server, no real injection):
 #   • RELAY          a trusted comment on an IDLE bound worker is injected once.
 #   • MARKER         a body carrying `<!-- fleet:no-relay -->` is SUPPRESSED.
+#   • SELF (#425)    an OWNER comment carrying `<!-- fleet:from role=worker
+#                    issue=<N> -->` on issue N (a worker's own comment that skipped
+#                    the no-relay wrapper) is SUPPRESSED — the positive self-ID
+#                    backstop, so it is never relayed back into that worker.
 #   • ASSOCIATION    a NONE/CONTRIBUTOR comment is SUPPRESSED (the RCE gate).
 #   • IDLE-GATE      a comment on a WORKING worker is QUEUED (not injected) and
 #                    the watermark holds it for retry — while a LATER comment on
@@ -22,8 +26,9 @@
 #
 # The scenario (repo fake/repo): worker windows for #10 (idle=done) and #11
 # (working). Comments, ascending: c100 #10 OWNER→relay, c101 #10 marker→suppress,
-# c102 #10 NONE→suppress, c103 #11 OWNER→queued(busy), c104 #10 COLLABORATOR→relay.
-# Expected injections after one poll: exactly two, both into #10 (c100, c104).
+# c102 #10 NONE→suppress, c103 #11 OWNER→queued(busy), c104 #10 COLLABORATOR→relay,
+# c105 #10 OWNER+fleet:from-role=worker-issue=10→suppress(self). Expected injections
+# after one poll: exactly two, both into #10 (c100, c104).
 #
 # Needs `jq` (the fake gh applies the bridge's real --jq through it) — SKIPs
 # cleanly if jq is absent. The --deliver HMAC leg also needs python3; it SKIPs
@@ -146,7 +151,8 @@ cat > "$CANNED" <<JSON
  {"id":101,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:02Z","body":"record only $MARK"},
  {"id":102,"author_association":"NONE","user":{"login":"rando"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:03Z","body":"sneaky rm -rf"},
  {"id":103,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/11","updated_at":"2026-07-09T00:00:04Z","body":"for the busy one"},
- {"id":104,"author_association":"COLLABORATOR","user":{"login":"pal"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:05Z","body":"another instruction"}
+ {"id":104,"author_association":"COLLABORATOR","user":{"login":"pal"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:05Z","body":"another instruction"},
+ {"id":105,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:06Z","body":"worker self note, no no-relay flag\n\n<!-- fleet:from role=worker session=fake-repo issue=10 -->"}
 ]
 JSON
 
@@ -205,10 +211,16 @@ grep -qF 'another instruction' "$INJECT" || fail "c104 (COLLABORATOR, idle) shou
 grep -qF 'record only' "$INJECT"    && fail "c101 (no-relay marker) must be suppressed"
 grep -qF 'sneaky' "$INJECT"         && fail "c102 (NONE assoc) must be suppressed"
 grep -qF 'for the busy one' "$INJECT" && fail "c103 (worker WORKING) must be queued, not injected"
+# c105 carries `<!-- fleet:from role=worker issue=10 -->` on ITS OWN issue (#10) but
+# NO no-relay flag — the self-authored backstop (issue #425) must suppress it, so a
+# worker comment that skipped fleet-comment.sh isn't relayed back into itself. It is
+# OWNER (passes the assoc gate), proving it's the self-ID check — not the gate — that
+# stops it. Without the backstop it would be a THIRD injection into @1.
+grep -qF 'worker self note' "$INJECT" && fail "c105 (self-authored, fleet:from issue=10) must be suppressed"
 
 # seen set: relayed+suppressed are recorded; the queued (busy) one is NOT.
 SEEN="$WORK/state/bridge_fake-repo.seen"
-for id in 100 101 102 104; do grep -qxF "$id" "$SEEN" || fail "c$id should be marked seen"; done
+for id in 100 101 102 104 105; do grep -qxF "$id" "$SEEN" || fail "c$id should be marked seen"; done
 grep -qxF 103 "$SEEN" && fail "c103 (queued busy) must NOT be marked seen (retry next tick)"
 # c103 is queued (pending), so the watermark must be HELD at its pre-tick value
 # (GitHub's ?since= is exclusive — advancing to c103's own timestamp would never
