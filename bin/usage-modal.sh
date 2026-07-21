@@ -93,8 +93,10 @@ restart_idle_claude_windows() {
 
     # Double ctrl-c exits the Claude TUI (it needs two); harmless if the pane is
     # already sitting at a shell.
-    tmux send-keys -t "$wid" C-c 2>/dev/null || continue
-    tmux send-keys -t "$wid" C-c 2>/dev/null
+    # FLEET_ALLOW_SENDKEYS=1: sanctioned auto-continue plumbing (issue #437),
+    # prefixed (not exported) so the resumed pane never inherits the hatch.
+    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null || continue
+    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null
 
     # Wait (up to ~3s) for the pane to drop to its shell (spawns end with
     # `; exec $SHELL`) before typing. If it never reaches a shell — e.g. a modal
@@ -111,8 +113,8 @@ restart_idle_claude_windows() {
     # Text and Enter as SEPARATE send-keys calls (an inline Enter gets eaten by
     # bracketed paste). Re-wrap with `; exec $SHELL` so the pane survives a later
     # Claude exit, exactly like the original spawn (dash-issue-session.sh).
-    tmux send-keys -t "$wid" "'$BIN/fleet-claude.sh' --continue; exec \$SHELL" 2>/dev/null
-    tmux send-keys -t "$wid" Enter 2>/dev/null
+    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" "'$BIN/fleet-claude.sh' --continue; exec \$SHELL" 2>/dev/null
+    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" Enter 2>/dev/null
     restarted=$((restarted + 1))
   done < <(
     # Real tab separators via $'\t' (tmux does NOT expand a literal \t in -F).

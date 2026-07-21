@@ -115,6 +115,44 @@ fleet-comment.sh 132 --to-worker --body "rebase on master and re-push"
 fleet-comment.sh 132 --note --body "landed in a train with #130"
 ```
 
+## Bridge-only: raw `tmux send-keys` is blocked (issue #437)
+
+Inter-agent messaging — worker↔worker and steward↔worker — goes **only through
+the bridge** (`fleet-comment.sh --to-worker`), **never** a raw `tmux send-keys`
+into another agent's pane. Driving a live Claude TUI with `send-keys` is racy:
+bracketed-paste swallows the standalone Enter, the composer may be mid-turn, and
+the keystrokes can interleave with a render. The bridge sidesteps all of it — it
+idle-gates, checks the input row, pastes as one bracketed buffer, and submits a
+**separate** Enter (see *The relay pipeline* above) — so a comment always lands as
+the target's next **clean** turn.
+
+This is enforced with **defense-in-depth**, so an agent can't fall back to
+`send-keys` by habit:
+
+1. **Charter guidance (soft)** — both the worker (`/fleet-claim`) and steward
+   (`/fleet-steward`) charters say to message via the bridge, never `send-keys`.
+2. **`hooks/bash-guard.py` (the hard rail)** — the bypass-perms PreToolUse hook
+   (runs for **every** seat) blocks any `tmux send-keys` segment on **any** server
+   (`tmux …`, `tmux -L sock …`, `tmux -S path …`). It inspects only the command
+   string, so `bash fleet-handoff-cycle.sh` (no *inline* send-keys) passes and its
+   internal send-keys stays invisible — script plumbing is unaffected.
+3. **`permissions.deny` (settings belt)** — the steward template denies
+   `Bash(tmux send-keys:*)`. It's coarse (prefix-matched, so `tmux -L <sock>
+   send-keys` slips past it — which is why Layer 2 is the real rail). The worker
+   has no `permissions.deny` template, so Layer 2 is what covers it.
+4. **`shell/cw.zsh` `tmux()` guard (shell belt)** — refuses a bare `send-keys`
+   typed in any interactive/sourced zsh that loaded `cw.zsh` (a `command tmux …`
+   bypasses — belt, not sandbox).
+
+**The sanctioned override is `FLEET_ALLOW_SENDKEYS=1`** (mirroring
+`FLEET_ALLOW_TMUX_DESTROY=1`), for the fleet's own mechanical plumbing only. The
+scripts that legitimately drive a pane —
+`fleet-issue-bridge.sh` (the injector itself), `fleet-handoff-cycle.sh` (the
+`/clear`+pickup cycle), and `usage-modal.sh` (`--continue`) — **prefix** their
+send-keys calls with it (prefixed, not exported, so a worker they spawn/revive
+never inherits the hatch). `fleet-restore.sh` uses no `send-keys` at all (it
+hands the resume nudge to `claude` as a prompt arg), so it needs no override.
+
 ## Steward control issue (the wake / async channel)
 
 > Answers issue #146.

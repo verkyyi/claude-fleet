@@ -269,7 +269,10 @@ restore() {
       # re-orient NUDGE as its initial prompt arg — the same delivery the spawner
       # uses for a fresh seed (`claude "<prompt>"`), so it submits as the next turn
       # once the transcript loads. This sidesteps the send-keys/bracketed-paste
-      # boot-timing race of injecting after the TUI comes up. The nudge only makes
+      # boot-timing race of injecting after the TUI comes up. (So fleet-restore
+      # uses NO `tmux send-keys` at all — it needs no FLEET_ALLOW_SENDKEYS hatch
+      # for the issue-#437 rail, and must NOT export one: a restored worker would
+      # inherit it and forfeit its own shell-guard send-keys belt.) The nudge only makes
       # sense when we actually have a transcript to RESUME — a window with no
       # transcript comes back as a FRESH, context-less claude, and telling that
       # session it was "restored … continue the task" would have it act on a task

@@ -174,6 +174,22 @@ tmux() {
     (( i++ ))
   done
 
+  # Inter-agent messaging rail (issue #437). A raw `send-keys` into a live Claude
+  # TUI is racy — bracketed-paste swallows the Enter — so worker↔worker /
+  # steward↔worker messages must go through fleet-comment.sh --to-worker (the
+  # issue-bridge), which the bash-guard.py hook enforces as the real rail. This is
+  # the shell belt: it catches a bare `tmux send-keys` typed in any interactive/
+  # sourced zsh that loaded cw.zsh. Refused on ANY server — unlike the kill-*
+  # rails below, send-keys carries no cross-fleet blast radius, so the isolated-
+  # socket exemption doesn't apply; the concern is the racy drive, not the server.
+  # FLEET_ALLOW_SENDKEYS=1 is the sanctioned override (mirrors FLEET_ALLOW_TMUX_
+  # DESTROY above); `command tmux send-keys` also bypasses (belt, not sandbox).
+  if [[ "$sub" == send-keys ]]; then
+    [[ "${FLEET_ALLOW_SENDKEYS:-}" == 1 ]] && { command tmux "$@"; return; }
+    print -ru2 -- "tmux: refusing 'send-keys' — inter-agent messaging must go through fleet-comment.sh --to-worker (the issue-bridge), not raw send-keys (bracketed-paste eats the Enter). Set FLEET_ALLOW_SENDKEYS=1 for sanctioned fleet plumbing."
+    return 1
+  fi
+
   local dest=""
   case "$sub" in
     kill-ser*) dest=server ;;   # kill-server (prefixes: tmux accepts abbreviations)

@@ -139,7 +139,12 @@ override them):
   hook-enforced read-only). Converse with the steward/collaborators by
   **commenting on the bound issue** (via
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
-  so it carries the no-relay marker + worker footer).
+  so it carries the no-relay marker + worker footer). To message another worker or
+  the steward, use `fleet-comment.sh --to-worker` (the issue-bridge). NEVER drive
+  another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
+  the Enter) and is hook-blocked (#437). The bridge relays your comment as the
+  target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
+  for fleet plumbing only.
 - **Spot adjacent work? File it — don't chase it.** You MAY file a tracked issue
   through the ONE filer channel (issue #332), so a follow-up you notice lands on
   the backlog instead of scope-creeping this PR — and the base checkout stays

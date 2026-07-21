@@ -216,6 +216,31 @@ FLEET_SEAT=steward guard "" kill-window -t "$WK4" 2>/dev/null \
   || fail "FLEET_SEAT=steward must ALLOW kill-window @sibling even with an empty \$TMUX_PANE (#202)"
 win_gone wk4 || fail "worker window wk4 should be gone after a FLEET_SEAT=steward kill (#202)"
 
+# --- send-keys is REFUSED (issue #437 shell belt); the hatch passes it through --
+# A raw `send-keys` into a live Claude TUI is racy — inter-agent messaging must go
+# through fleet-comment.sh --to-worker (the issue-bridge), not the guard. w1 is a
+# plain (unmarked) pane that survived every kill above.
+if guard "$PANE_W1" send-keys -t "$PANE_W1" -l x 2>/dev/null; then
+  fail "send-keys must be REFUSED by the shell guard (#437)"
+fi
+# refused on an ISOLATED socket too — send-keys has no cross-fleet blast radius, so
+# the isolated-server exemption the kill-* rails use does NOT apply to it.
+if guard "$PANE_W1" -L "sk-iso-$$" send-keys -t "$PANE_W1" -l x 2>/dev/null; then
+  fail "send-keys on an isolated -L socket must STILL be REFUSED (#437)"
+fi
+# the refusal names the FLEET_ALLOW_SENDKEYS escape hatch (one-line explanation)
+skmsg="$(guard "$PANE_W1" send-keys -t "$PANE_W1" -l x 2>&1 1>/dev/null || true)"
+case "$skmsg" in
+  *FLEET_ALLOW_SENDKEYS*) : ;;
+  *) fail "send-keys refusal must name the FLEET_ALLOW_SENDKEYS hatch (got: $skmsg)" ;;
+esac
+# with the hatch set, send-keys passes straight through to the real tmux (delivers)
+FLEET_ALLOW_SENDKEYS=1 guard "$PANE_W1" send-keys -t "$PANE_W1" -l x 2>/dev/null \
+  || fail "FLEET_ALLOW_SENDKEYS=1 must ALLOW send-keys through the guard (#437)"
+# a non-send-keys tmux (a read) is untouched by the send-keys rail
+guard "$PANE_W1" list-windows -t t >/dev/null 2>&1 \
+  || fail "a read (list-windows) must NOT be caught by the send-keys rail"
+
 # --- a command on an ISOLATED server (-L <name>) passes straight through -------
 # There is no server on that label, so real tmux errors — but the KEY assertion
 # is that the GUARD didn't block it (its refusal text must be absent).

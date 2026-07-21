@@ -193,6 +193,13 @@ Each temptation to do the work yourself maps to the crew member who owns it:
   server on its own socket — a stray `kill-server` / cross-fleet `kill-session`
   takes down a whole fleet at once (#158). Test tmux tooling on an isolated socket
   (`tmux -L scratch …`).
+- **Message a worker through the issue-bridge, never `tmux send-keys`.** To hand
+  work back to a worker (or drive any agent's turn) use
+  `fleet-comment.sh <issue> --to-worker` — the
+  [issue-bridge](../docs/ISSUE-BRIDGE.md) relays your comment as the worker's next
+  clean turn. NEVER drive a worker's pane with `tmux send-keys`: it's racy
+  (bracketed-paste swallows the Enter) and is hook-blocked (#437).
+  `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override, for fleet plumbing only.
 
 ### Recovery
 

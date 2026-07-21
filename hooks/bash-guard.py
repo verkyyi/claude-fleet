@@ -103,6 +103,25 @@ def check_segment(seg):
             if re.search(r"(?:^|\s)\S*\.git(?:\s|/|$)", seg):
                 block("rm -rf touching a .git directory (use `git worktree remove`)")
 
+    # 3) Inter-agent messaging must go through the issue-bridge, not a raw
+    #    `tmux send-keys` into a live Claude TUI — send-keys is racy
+    #    (bracketed-paste swallows the Enter). Block a tmux command whose
+    #    subcommand is `send-keys`, on ANY server (bare `tmux`, `tmux -L sock`,
+    #    `tmux -S path`) — cmd_is skips the socket flags for us. The sanctioned
+    #    fleet plumbing prefixes FLEET_ALLOW_SENDKEYS=1 to opt out, mirroring the
+    #    FLEET_ALLOW_TMUX_DESTROY hatch in shell/cw.zsh. (seg is lower-cased, so
+    #    the env-var name is matched in lower case.) This layer never sees a
+    #    subprocess, so `bash fleet-handoff-cycle.sh` — no inline send-keys —
+    #    passes and its internal send-keys stays invisible: no per-script hatch.
+    if cmd_is(seg, "tmux") and re.search(r"(?:^|\s)send-keys(?=\s|$)", seg):
+        if not re.search(r"(?:^|\s)fleet_allow_sendkeys=1(?=\s|$)", seg):
+            block(
+                "inter-agent messaging must go through `fleet-comment.sh "
+                "--to-worker` (the issue-bridge), not `tmux send-keys` "
+                "(bracketed-paste eats the Enter). Prefix FLEET_ALLOW_SENDKEYS=1 "
+                "only for sanctioned fleet plumbing"
+            )
+
     # Operator-specific rails, if the local overlay defines any (never shipped).
     _run_overlay(seg)
 
