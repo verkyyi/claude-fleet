@@ -6,11 +6,18 @@ The one skill a freshly-spawned worker runs. It formalizes the whole worker
 lifecycle that the seed prompt used to spell out across three skills: **claim**
 the bound issue, **load your charter**, **ground** yourself in the issue + code,
 then implement under a **standing contract** that ends by **opening a PR and
-stopping** (the fleet never merges) — and signals a blocker loudly rather than
-stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee at
-claim time; issue comments as you go) — and, for adjacent work it spots, MAY
-file a *new* tracked issue through the one filer channel — then, at ship, pushes
-your branch and opens/updates a PR. It never touches the base checkout.
+landing it yourself once the gate is green** — and signals a blocker loudly rather
+than stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee
+at claim time; issue comments as you go) — and, for adjacent work it spots, MAY
+file a *new* tracked issue through the one filer channel, and spawn a worker for
+it — then, at ship, pushes your branch, opens a PR, and merges it when the checks
+go green. It never touches the base checkout.
+
+**You are a full agent, not a deckhand** (issue #441). The rails below are safety
+rails — the read-only base checkout, the one filer channel, bridge-only messaging,
+branch protection — and they are absolute. Everything *else* is your call: how to
+implement it, when it's done, whether a follow-up is worth a worker now, and when
+to land. Nothing in this fleet is waiting to approve your work.
 
 **Argument** (`$ARGUMENTS`): none — the seed is a bare `/fleet-claim`, so the
 issue is self-discovered from the window's `@issue` binding (fallback: the
@@ -97,10 +104,10 @@ fleet_worker_charter "$S"    # prints the file layers that apply, low→high pre
 
 - **repo charter** `$FLEET_MAIN/.fleet/worker.md` — printed **only when the
   fleet opts in** with `FLEET_REPO_CHARTER=1` (default OFF, fail-closed). It is
-  an injection surface: PRs auto-merge on green CI with no human review, so a PR
-  could rewrite the charter every future worker obeys — hence the gate. A fleet
-  that arms it on a public repo should protect `.fleet/` with CODEOWNERS +
-  required review.
+  an injection surface: a worker lands its own PR on green CI with no human
+  review, so a PR could rewrite the charter every future worker obeys — hence the
+  gate. A fleet that arms it on a public repo should protect `.fleet/` with
+  CODEOWNERS + required review.
 - **fleet overlay** `~/.config/claude-fleet/fleets/<session>/worker.md` —
   operator-owned and machine-local, so it is always trusted (no gate) and **wins
   on conflict**. This is the operator's per-fleet customization channel.
@@ -145,22 +152,27 @@ override them):
   the Enter) and is hook-blocked (#437). The bridge relays your comment as the
   target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
   for fleet plumbing only.
-- **Spot adjacent work? File it — don't chase it.** You MAY file a tracked issue
+- **Spot adjacent work? File it — and spawn it if it's worth doing now.** File
   through the ONE filer channel (issue #332), so a follow-up you notice lands on
   the backlog instead of scope-creeping this PR — and the base checkout stays
   untouched:
-  `~/.claude/fleet/bin/fleet-issue-file.sh --title "<title>" [--body "<brief>"]`.
+  `~/.claude/fleet/bin/fleet-issue-file.sh --title "<title>" [--body "<brief>"] [--spawn]`.
   **Related to your current issue N → add `--parent N`** — it files a GitHub
   *sub-issue* linked under N; **unrelated → file top-level** (omit `--parent`).
   A sub-issue is an ordinary issue — its own number, `@issue`, and `issue-<num>`
   worktree/branch — plus GitHub's parent pointer, so the claim / worktree /
-  ledger flow is unchanged. **File-and-continue, not file-and-chase:** record the
-  follow-up, then stay on N and ship N — don't `--spawn` it or start it yourself
-  (the operator triages it and the fleet spawns it when it's picked up).
+  ledger flow is unchanged.
+  **`--spawn` is yours to use** (issue #441): it hands the new number to the same
+  spawn choke point the hub uses, so the session caps + cross-machine pre-spawn
+  dedup still apply and a cap refusal just leaves the issue filed. Spawn when the
+  follow-up is genuinely independent and worth a worker *now*; otherwise file it
+  bare and let it sit on the backlog. What stays fixed either way: **don't chase
+  it in THIS worktree** — one worktree, one issue, one PR. A spawned worker
+  claims and ships it on its own.
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane.
-- **Done = ship (open the PR) — the fleet never merges.** When the change is
-  complete:
+- **Done = ship it AND land it.** You own the change end to end — nobody is
+  queued up to merge it for you (issue #441). When the change is complete:
   1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
      discover them from its `CLAUDE.md` / `README` / `.github/workflows`; don't
      hardcode one project's commands). Don't ship red.
@@ -170,35 +182,69 @@ override them):
      short summary + how you verified:
      `gh pr create --repo "$FLEET_REPO" --base "$FLEET_BASE_BRANCH" --fill` (or
      `gh pr edit … --body …` if one exists).
-  4. **Stop.** Don't merge the PR, and don't arm auto-merge — the fleet never
-     merges. Landing is external and controlled: the label-gated auto-land
-     daemon lands a PR whose issue carries `autoland`; everything else waits for
-     the **operator** to land it from the hub. Whoever performs the merge,
-     `com.claude-fleet.cleanup` then reaps the worktree/window/branch and records
-     the resume ledger.
-- **Blocked = say why, never stall silently.** If you can't make progress, post
-  a `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
-  wrapper) and set the window red so the operator sees it:
+  4. **Land it once the gate is green.** READ the gate, never eyeball it — one
+     command folds state + mergeability + every check into one verdict
+     (exit 0 ⇔ `READY`):
+
+     ```sh
+     ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"
+     ```
+
+     - **`READY`** → merge it, with this fleet's method (`FLEET_MERGE_METHOD`,
+       default `squash`) and the remote branch deleted, then **confirm**:
+
+       ```sh
+       source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
+       gh pr merge <PR> --repo "$FLEET_REPO" "--$(fleet_merge_method)" --delete-branch
+       ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"   # → MERGED
+       ```
+
+       `--delete-branch` removes the *remote* branch; your local branch +
+       worktree are the cleanup daemon's to reap, and gh may decline or fail to
+       delete the local one (you're standing on it) — harmless, which is why the
+       confirming read above, not gh's exit code, is what tells you it landed.
+     - **`PENDING`** → CI is still running. Wait and re-read (minutes between
+       reads — don't busy-poll). If it never resolves, treat it as blocked below.
+     - **`BEHIND`** → `gh pr update-branch <PR> --repo "$FLEET_REPO"`, then re-read.
+     - **`FAILING` / `CONFLICT`** → yours to fix: fix, push, re-read. Never merge
+       red, never `--admin`, never force-push the base.
+     - **`BLOCKED`** → branch protection (a required review) refuses the merge.
+       That is a real gate, not a hedge — you can't and shouldn't force it: say so
+       on the issue (blocked, below) and stop.
+  5. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
+     and records the resume ledger, so expect this window to vanish a minute or
+     so after the merge — that's the reap, not a crash. Don't start new work in a
+     landed worktree; a follow-up gets its own issue (and, if it's worth one now,
+     its own worker via `--spawn` above).
+- **Blocked = say why, never stall silently.** Blocked means *actually* stuck —
+  a required review you can't grant, credentials you don't have, a decision only
+  the operator can make — not "I'd like a second opinion". Post a
+  `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
+  wrapper) and set the window red so it's visible on the dash:
   `sh ~/.claude/fleet/bin/set-claude-state.sh needs`. Then stop — don't spin.
+  This is visibility, not permission-seeking: everything you *can* unblock
+  yourself, you should.
 
 ## 6. Report + proceed
 
 One line: the issue number + title, whether you just claimed it or it was
 already claimed, and which charter layers loaded (built-in only / + overlay / +
-repo). Then start implementing — the rest of the lifecycle (ship, or blocked) is
-the contract in step 5, run it when the work is done.
+repo). Then start implementing — the rest of the lifecycle (ship + land, or
+blocked) is the contract in step 5, run it when the work is done. Don't ask
+whether to proceed; the claim IS the go-ahead.
 
 ---
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
-edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
-from the hub and hands implementation to a worker.
+edits inside its `issue-<N>` worktree and lands its own PR; the operator files and
+triages from the hub, and is a collaborator here — not a gate you wait on.
 
-**Never run destructive tmux on the live server.** Every fleet shares ONE tmux
-server on the `default` socket, so a stray `tmux kill-server` (or a
-`kill-session`/`kill-window` aimed at a sibling) takes down *every* fleet on the
-machine at once (issue #158). If you're developing or testing tmux tooling, run
+**Never run destructive tmux on the live server.** Your fleet runs its own tmux
+server on its own named socket (`tmux -L <session>`, issue #159), so a stray
+`tmux kill-server` (or a `kill-session`/`kill-window` aimed at a sibling window)
+takes down every window in THIS fleet at once — every worker beside you, mid-turn
+(issue #158). If you're developing or testing tmux tooling, run
 it on an **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim
 pattern the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
 `shell/cw.zsh` refuses the common accidental forms from a worker shell (it's an

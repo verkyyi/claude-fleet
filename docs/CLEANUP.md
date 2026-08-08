@@ -1,22 +1,27 @@
-# Cleanup — the fleet never merges; it cleans up after merges (issue #277)
+# Cleanup — cleaning up after merges, whoever made them (issues #277, #441)
 
 The organizing principle of the fleet's PR lifecycle:
 
-> **The fleet never merges. It arms auto-merge, and it cleans up after merges —
-> keeping every session resumable.**
+> **Cleanup is merge-source-agnostic. Whoever merged — the worker itself, a human
+> on the web, a collaborator — the janitor reaps what's left and keeps every
+> session resumable.**
 
-GitHub does the merge (branch protection is the whole gate); the fleet's job is to
-(1) arm auto-merge when it opens the PR and (2) reap the leftover worktree/window/
-branch and record a resume ledger once the PR is final. This replaces the retired
-land / self-land / auto-land machinery — nobody in the fleet self-merges anymore.
+The cleanup half has never merged anything and still doesn't: its job is to reap
+the leftover worktree/window/branch and record a resume ledger once the PR is
+final. What changed in **#441** is who does the merge. Issue #277 retired the
+land / self-land / auto-land *machinery*; #441 gave the decision back to the
+worker as plain judgment: a worker reads the gate
+(`bin/fleet-pr-verdict.sh` → `READY`) and squash-merges its own PR. Branch
+protection is still the hard gate — a `BLOCKED` verdict is not something a worker
+may force.
 
 ## The lifecycle
 
 ```
-worker: /fleet-claim → implement → ship step (same skill)
+worker: /fleet-claim → implement → ship + land (same skill)
                        ├─ verify + push + open PR (Closes #N)
-                       └─ gh pr merge --auto --<FLEET_MERGE_METHOD>   ← ARM (not merge)
-GitHub:  PR goes green + branch protection satisfied → squash-merge
+                       ├─ fleet-pr-verdict.sh <PR>            ← READ the gate
+                       └─ READY ⇒ gh pr merge --<FLEET_MERGE_METHOD> --delete-branch
 cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
          → bin/fleet-cleanup.sh <PR>
               ├─ record the resume ledger (fleet-history.sh) BEFORE teardown
@@ -25,19 +30,24 @@ cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
 resume:  /fleet-history (or the dash ⌃t landed view) → claude --resume <session>
 ```
 
-The merge source does not matter: GitHub auto-merge, a human clicking **Merge** on
-the web, or a collaborator — all leave a MERGED PR with a stale worktree, and the
-cleanup daemon reaps them all identically (**this closes #260**).
+The merge source does not matter: the worker's own `gh pr merge`, a human clicking
+**Merge** on the web, or a collaborator — all leave a MERGED PR with a stale
+worktree, and the cleanup daemon reaps them all identically (**this closes #260**).
+A worker that merges its own PR is reaped by the same path: `fleet-cleanup.sh`
+detaches its teardown into the tmux server when the caller stands on the worktree
+being removed, and the daemon (which runs outside every window) kills the window
+first, then the worktree, then the branch.
 
 ## The pieces
 
 | Piece | What |
 |---|---|
-| `/fleet-claim` ship step | After opening the PR, runs `gh pr merge --auto --<FLEET_MERGE_METHOD>` (default `squash`). If the repo has auto-merge disabled, it says so instead of failing — the PR stays open and reviewable. It **never** merges. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
+| `/fleet-claim` ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force — it says so on the issue and stops. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
+| `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch. Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each. Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | *reap now* from the hub | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>` from the hub pane. Same mechanical core. |
-| `gh pr merge --auto --squash <PR>` | **Arm auto-merge by hand** — for a PR shipped before arming existed, or whose auto-merge got disarmed. The worker's `/fleet-claim` ship step already runs this at PR-open; the old dash `⌃l` affordance (`dash-arm-merge.sh`) was pruned in #289. It arms; GitHub merges when green. |
+| `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green; the old dash `⌃l` arming affordance (`dash-arm-merge.sh`) was pruned in #289. Either way the cleanup daemon reaps afterwards. |
 | `bin/fleet-land-lease.sh` | Kept for the per-repo **base fast-forward** serialization (renamed conceptually to a base lease). `fleet-cleanup.sh` takes it only for the quick base pull — no hold-through-green. |
 | `com.claude-fleet.base-sync` (`bin/fleet-base-sync.sh`, ~60s; issue #327) | The **merge-independent base fast-forward** — see below. |
 
@@ -128,11 +138,14 @@ It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
 | `FLEET_CLOSE_ON_EXIT` | `1` (on) | **Global only** (`~/.claude/fleet/fleet.conf`). The `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). Set `0` to disable machine-wide; global-authoritative, so a per-fleet value is ignored. |
+| `FLEET_MERGE_METHOD` | `squash` | `squash` · `merge` · `rebase` — the strategy a worker lands its own PR with (`bin/fleet-lib.sh` `fleet_merge_method`; an unset/typo'd value falls back to `squash`). |
 
 ## What was retired
 
-- **Skills**: `/fleet-land`, `/fleet-land-self`, `/fleet-land-train` — deleted. The
-  manual merge escape hatch is now `gh pr merge` by hand (`--auto --squash` to arm);
+- **Skills**: `/fleet-land`, `/fleet-land-self`, `/fleet-land-train` — deleted. A
+  worker now lands its own PR from `/fleet-claim` (#441) with a plain `gh pr merge`
+  behind `bin/fleet-pr-verdict.sh`; no lease-hold-through-green, no land train. The
+  hub's escape hatch is the same `gh pr merge` by hand (`--auto` to let GitHub do it);
   the cleanup daemon handles the rest.
 - **Config**: `FLEET_AUTOLAND` (+ `FLEET_AUTOLAND_MAX_PER_TICK` / `FLEET_AUTOLAND_LABEL`)
   and `FLEET_SELF_LAND` — removed. A migration that applies this change should flip

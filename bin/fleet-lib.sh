@@ -228,7 +228,7 @@ fleet_load_conf() {
 # (issue #234). A spawned worker is seeded (in dash-issue-session.sh) with:
 #   Work GitHub issue #<n> in this repo. <run /fleet-claim …> <BODY><ship+stop tail>
 # The head (issue binding), the /fleet-claim ritual (which since issue #283 carries
-# the whole lifecycle), and the "open the PR + arm auto-merge, then STOP" tail are
+# the whole lifecycle), and the "open the PR, land it on green, then STOP" tail are
 # STRUCTURAL — the machinery depends on them, so they are always kept. Only <BODY>
 # is operator-customizable per fleet, letting different fleets seed workers
 # differently. Resolution (highest precedence
@@ -273,12 +273,12 @@ fleet_worker_prompt_body() {
   printf '%s' "$body"
 }
 
-# The GitHub auto-merge strategy the fleet ARMS (issue #283). The fleet never
-# merges — /fleet-ship (folded into /fleet-claim) and the dash ⌃l arm
-# `gh pr merge --auto --<method>`; GitHub performs the merge when green. Reads
-# FLEET_MERGE_METHOD from the already-sourced conf env (fleet_load_conf first).
+# The merge strategy this fleet lands with (issues #283, #441). A worker's
+# /fleet-claim ship+land step runs `gh pr merge --<method> --delete-branch` once
+# bin/fleet-pr-verdict.sh reads READY. Reads FLEET_MERGE_METHOD from the
+# already-sourced conf env (fleet_load_conf first).
 # squash (default) | merge | rebase — an unset/typo'd value falls back to squash
-# so arming never breaks on a bad key. Kept in lockstep with the enum validation
+# so landing never breaks on a bad key. Kept in lockstep with the enum validation
 # in fleet-config-lib.sh (fcfg_validate) via tmux-config-selftest.sh.
 fleet_merge_method() {
   case "${FLEET_MERGE_METHOD:-}" in

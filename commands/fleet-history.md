@@ -9,8 +9,9 @@ PR it removes the `issue-<N>` worktree and kills the window — but the worker's
 history ledger (`bin/fleet-history.sh`): **list** what closed, **open**
 a PR, **review** the recorded transcript, and — the point — **resume** a session.
 It reads the ledger and may recreate a worktree in the fleet's base checkout
-(`$FLEET_MAIN`); it never merges or mutates `$FLEET_REPO`. Browsing/landing is an
-operator concern, so this skill runs from the **hub pane**, never a worker.
+(`$FLEET_MAIN`); it never merges or mutates `$FLEET_REPO`. Browsing *finished*
+sessions is an operator concern — a live worker lands its own PR and has no reason
+to trawl the ledger — so this skill runs from the **hub pane**, never a worker.
 
 Two kinds of row live in the ledger (the `state` column, #320, distinguishes them
 — `✓` vs `✗` in the list):
