@@ -16,13 +16,6 @@
 #   • DEDUP          re-running relays nothing already handled.
 #   • HMAC (--deliver) a correctly-signed delivery injects; a bad signature does
 #                    NOT (and exits non-zero).
-#   • STEWARD (#146)  a comment on FLEET_STEWARD_ISSUE relays into the @steward
-#                    pane (not a worker), honoring the marker/assoc gates; a busy
-#                    steward queues, a STALE 'working' (missed Stop) is escaped so
-#                    the channel can't wedge, a down hub DROPS terminally (so the
-#                    watermark advances — no worker starvation), an empty-state
-#                    (cold-boot) steward is still found, and without
-#                    FLEET_STEWARD_ISSUE the same comment routes nowhere.
 #
 # The scenario (repo fake/repo): worker windows for #10 (idle=done) and #11
 # (working). Comments, ascending: c100 #10 OWNER→relay, c101 #10 marker→suppress,
@@ -83,10 +76,6 @@ chmod +x "$WORK/fakepath/gh"
 
 # --- fake tmux: window table for find_window/fleet_for_repo; records injection --
 # find_window format contains @claude_state; fleet_for_repo contains window_name.
-# For the steward route (issue #146): bridge_find_steward does ONE `list-panes -a`
-# returning session<TAB>pane_id<TAB>@claude_state<TAB>@claude_state_ts<TAB>@steward,
-# so the fake yields s1's @steward=1 pane (%9) idle (state=done) — it resolves to
-# session s1 → pane %9, idle.
 cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
 # real tmux accepts a global -L/-S <socket> before the subcommand; each fleet now
@@ -105,15 +94,6 @@ case "\$1" in
       *window_name*)   printf 's1 plan\ns1 dash\n' ;;
     esac
     exit 0 ;;
-  list-panes)   # emits @steward<TAB>session<TAB>pane<TAB>@claude_state<TAB>@claude_state_ts
-                # (marker FIRST so empty state/ts trail). FAKE_NO_STEWARD ⇒ hub down;
-                # FAKE_STEWARD_COLD ⇒ empty state/ts (cold boot); FAKE_STEWARD_WORKING_TS
-                # ⇒ working stamped at <n>; else idle (done).
-    if [ -n "\$FAKE_NO_STEWARD" ]; then :
-    elif [ -n "\$FAKE_STEWARD_SESS1" ]; then printf '\t1\t%s\tworking\t0\n' '%12'  # NON-steward pane in a session named "1" (empty @steward, leading field)
-    elif [ -n "\$FAKE_STEWARD_COLD" ]; then printf '1\ts1\t%s\t\t\n' '%9'
-    elif [ -n "\$FAKE_STEWARD_WORKING_TS" ]; then printf '1\ts1\t%s\tworking\t%s\n' '%9' "\$FAKE_STEWARD_WORKING_TS"
-    else printf '1\ts1\t%s\tdone\t0\n' '%9'; fi ;;
   capture-pane)  # emulate the Claude TUI: the LAST \`❯\` line is the live input
                  # row (index 2, so cursor_y=2 sits on it). FAKE_INPUT_ROW (raw,
                  # may embed \\033 escapes for a dim ghost) wins if set — used with
@@ -160,17 +140,6 @@ JSON
 printf '2026-07-09T00:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 
 runbridge() {
-  # Steward routing is now resolved PER-FLEET CONF (issue #180 dropped the global
-  # PRIMARY_STEWARD_ISSUE short-circuit), so materialize the leg's FLEET_STEWARD_ISSUE
-  # into fake/repo's per-fleet conf — exactly how production resolves it. The env
-  # var stays the ergonomic per-leg toggle: set ⇒ the steward route resolves; unset
-  # ⇒ no conf ⇒ no route (mirrors an install that never wired a steward issue).
-  if [ -n "${FLEET_STEWARD_ISSUE:-}" ]; then
-    printf 'FLEET_REPO="fake/repo"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=%s\n' \
-      "$FLEET_STEWARD_ISSUE" > "$WORK/conf/fake.conf"
-  else
-    rm -f "$WORK/conf/fake.conf"
-  fi
   # Forward SECRET/SIG from this call's prefix-assignment env into the child bash
   # (a prefix assignment to a shell FUNCTION isn't exported to its grandchildren).
   PATH="$WORK/fakepath:$PATH" \
@@ -179,11 +148,6 @@ runbridge() {
   FLEET_ISSUE_BRIDGE_STATE_DIR="$WORK/state" \
   FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
   FLEET_ISSUE_BRIDGE_REVIVE=0 \
-  FLEET_STEWARD_ISSUE="${FLEET_STEWARD_ISSUE:-}" \
-  FAKE_NO_STEWARD="${FAKE_NO_STEWARD:-}" \
-  FAKE_STEWARD_SESS1="${FAKE_STEWARD_SESS1:-}" \
-  FAKE_STEWARD_COLD="${FAKE_STEWARD_COLD:-}" \
-  FAKE_STEWARD_WORKING_TS="${FAKE_STEWARD_WORKING_TS:-}" \
   FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
   FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
   FAKE_INPUT_ROW="${FAKE_INPUT_ROW:-}" \
@@ -296,14 +260,14 @@ JSON
 G=$'\033'   # ESC, for building realistic SGR-styled ghost rows
 # DELIVER — a dim ghost with cursor parked at input-start, across the encodings a
 # real Claude TUI actually emits (a brittle span-regex strip would miss most):
-ghost_expect deliver "${G}[2mThe steward will land it via /land${G}[0m"  '2 2' "bare dim \\e[2m…\\e[0m"
-ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   '2 2' "combined dim+256 \\e[2;38;5;244m"
+ghost_expect deliver "${G}[2mThe operator will land it via gh pr merge${G}[0m"  '2 2' "bare dim \\e[2m…\\e[0m"
+ghost_expect deliver "${G}[2;38;5;244mThe operator will land it${G}[0m"   '2 2' "combined dim+256 \\e[2;38;5;244m"
 ghost_expect deliver "${G}[2;90msome gray ghost text${G}[22m"           '2 2' "combined dim+color, \\e[22m off"
 ghost_expect deliver "${G}[2m${G}[38;5;244mghost then color${G}[0m"     '2 2' "dim then SEPARATE color SGR"
 ghost_expect deliver "${G}[2mghost via bare reset${G}[m"                '2 2' "\\e[m bare-reset terminator"
 # DELIVER on the awk fallback ALONE — cursor unresolvable (old tmux / copy-mode),
 # so the faint-state parse is the only signal and must still see the ghost as dim:
-ghost_expect deliver "${G}[2;38;5;244mThe steward will land it${G}[0m"   ''   "combined dim, NO cursor (awk fallback)"
+ghost_expect deliver "${G}[2;38;5;244mThe operator will land it${G}[0m"   ''   "combined dim, NO cursor (awk fallback)"
 # DEFER — genuinely typed input in each of the two independent ways:
 ghost_expect defer   'git lo'                                           '8 2' "typed, cursor past input-start"
 ghost_expect defer   'git lo'                                           ''    "typed, NO cursor (awk sees non-dim)"
@@ -465,286 +429,6 @@ printf '%s' "$PAYLOAD" | FAKE_TMUX_DOWN=1 FLEET_ISSUE_BRIDGE_SECRET="$SECRET" FL
 [ "$rc" = 75 ] || fail "--deliver with tmux down must exit 75 (retry), got $rc"
 grep -qF 'delivered via webhook' "$INJECT" && fail "a tmux-down delivery must NOT inject"
 
-# ===================== steward control-issue leg (issue #146) ==================
-# A comment on the repo's FLEET_STEWARD_ISSUE (here #20) must relay into the
-# @steward=1 pane (%9), NOT a worker window — and still honor the marker + assoc
-# gates. The steward channel now has its OWN watermark/seen-set (issue #198), so
-# seed BOTH the worker and steward watermarks. The seen files are kept PRESENT-but-
-# EMPTY (`: >`, not rm) so bridge_state_file dual-reads the legacy flat path (issue
-# #181) — the leg assertions below read those flat paths, not the per-fleet dir.
-seed_steward() {  # reset the steward channel's own watermark + seen-set for a leg
-  # Clear any per-fleet bridge state (issue #181 layout) — e.g. a typing counter a
-  # prior leg wrote there — so each leg starts clean and the flat files below win the
-  # dual-read.
-  rm -rf "$WORK/conf/fleets/fake/bridge" 2>/dev/null
-  : > "$WORK/state/bridge_fake-repo.seen"
-  : > "$WORK/state/bridge_fake-repo.steward.seen"
-  printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
-  printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.steward.since"
-}
-SSEEN="$WORK/state/bridge_fake-repo.steward.seen"
-seed_steward
-cat > "$CANNED" <<JSON
-[
- {"id":200,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:01Z","body":"ping steward"},
- {"id":201,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:02Z","body":"steward note $MARK"},
- {"id":202,"author_association":"NONE","user":{"login":"rando"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:03Z","body":"untrusted poke"}
-]
-JSON
-: > "$INJECT"
-FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-route poll exited non-zero"
-
-# exactly one Enter into the steward pane (%9), carrying the trusted comment.
-senters=$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)
-[ "$senters" = 1 ] || fail "expected 1 injection into the steward pane %9, got $senters"
-grep -qF 'ping steward' "$INJECT"    || fail "c200 (OWNER, steward issue) should relay to the steward"
-grep -qF 'steward inbox' "$INJECT"   || fail "the steward injection should carry the steward-inbox header"
-grep -qF 'steward note' "$INJECT"    && fail "c201 (no-relay marker) must be suppressed"
-grep -qF 'untrusted poke' "$INJECT"  && fail "c202 (NONE assoc) must be suppressed"
-# a worker window (@1/@2) must NOT be driven by a steward-issue comment
-grep -qF 'send-keys -t @1' "$INJECT" && fail "steward-issue comment must not inject into a worker window"
-
-seed_steward
-: > "$INJECT"
-FAKE_STEWARD_SESS1=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-sess1 poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
-  && fail "session-named-1: a non-steward pane must not be misread as the steward and injected"
-
-# COLD BOOT: a steward pane with EMPTY @claude_state (marker-first field order must
-# survive the empty trailing fields) is idle → the comment relays. Guards the
-# IFS-collapse misparse regression.
-seed_steward
-: > "$INJECT"
-FAKE_STEWARD_COLD=1 FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "steward-cold poll exited non-zero"
-[ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
-  || fail "steward-cold: an empty-@claude_state steward must still be found (idle) and relayed"
-
-# STEWARD BUSY (fresh @claude_state_ts): a working steward queues the comment — not
-# injected, not marked seen (retry next tick).
-seed_steward
-: > "$INJECT"
-FAKE_STEWARD_WORKING_TS="$(date +%s)" FLEET_STEWARD_ISSUE=20 runbridge --poll \
-  || fail "steward-busy poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] && fail "steward-busy: must not inject into a working steward"
-grep -qxF 200 "$SSEEN" 2>/dev/null \
-  && fail "steward-busy: c200 must NOT be marked seen (queued for retry)"
-# The steward watermark must be HELD while the wake is queued (issue #198) — else
-# next tick's exclusive ?since= would skip the un-delivered comment.
-[ "$(cat "$WORK/state/bridge_fake-repo.steward.since")" = '2026-07-09T01:00:00Z' ] \
-  || fail "steward-busy: the steward watermark must be held while a wake is queued"
-
-# STEWARD STALE (missed Stop — @claude_state=working stamped long ago): the idle-gate
-# must ESCAPE and relay, so the co-resident-dash-pane pollution can't wedge the
-# channel. ts=0 ⇒ age ≫ FLEET_STUCK_WORKING_SECS ⇒ stale ⇒ relay.
-seed_steward
-: > "$INJECT"
-FAKE_STEWARD_WORKING_TS=0 FLEET_STEWARD_ISSUE=20 runbridge --poll \
-  || fail "steward-stale poll exited non-zero"
-[ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
-  || fail "steward-stale: a stale 'working' must be escaped and relayed (channel must not wedge)"
-
-# STEWARD half-typed input (issue #191): the operator types into the @steward pane
-# too, and a keystroke doesn't flip its state — so an idle steward with a non-empty
-# input row must DEFER (no inject, c200 not marked seen), mirroring the worker gate.
-seed_steward
-: > "$INJECT"
-FAKE_INPUT_TEXT='half typed' FLEET_STEWARD_ISSUE=20 runbridge --poll \
-  || fail "steward-typing poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'send-keys -t %9 Enter' "$INJECT")" != 0 ] \
-  && fail "steward-typing: a relay must NOT inject onto the steward's half-typed line"
-grep -qxF 200 "$SSEEN" 2>/dev/null \
-  && fail "steward-typing: c200 must NOT be marked seen while deferred (retry next tick)"
-
-# STEWARD typing defer is BOUNDED (issue #195 composed with #198): a persistently
-# non-empty steward input row must not wedge the control channel forever. With a tiny
-# cap N=2 and a persistent partial, the channel defers twice then FORCE-DELIVERS the
-# coalesced digest + WARNs on the 3rd tick. The typing counter is channel-level (keyed
-# steward.<issue>, not per-cid) so it accrues across ticks as new wakes arrive, and is
-# reaped on the forced drain — this is the exact interaction the rebase had to preserve.
-seed_steward
-SMAX=2; i=1
-while [ "$i" -le "$SMAX" ]; do
-  : > "$INJECT"
-  FLEET_BRIDGE_MAX_TYPING_DEFERS="$SMAX" FAKE_INPUT_TEXT='typing…' FLEET_STEWARD_ISSUE=20 \
-    runbridge --poll || fail "steward-bound poll (defer #$i) exited non-zero"
-  grep -q 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null \
-    && fail "steward-bound: must DEFER on tick $i (≤ N), not inject"
-  grep -qxF 200 "$SSEEN" 2>/dev/null \
-    && fail "steward-bound: c200 must NOT be seen while deferred (tick $i)"
-  i=$((i + 1))
-done
-: > "$INJECT"; : > "$WORK/log"
-FLEET_BRIDGE_MAX_TYPING_DEFERS="$SMAX" FAKE_INPUT_TEXT='typing…' FLEET_STEWARD_ISSUE=20 \
-  runbridge --poll || fail "steward-bound deliver-anyway poll exited non-zero"
-grep -qF 'ping steward' "$INJECT" \
-  || fail "steward-bound: after N defers the steward wake must deliver anyway (avoid a wedge)"
-grep -qF 'delivering to avoid a wedge' "$WORK/log" \
-  || fail "steward-bound: the force-deliver must emit the WARNING log"
-grep -qxF 200 "$SSEEN" 2>/dev/null \
-  || fail "steward-bound: the force-delivered wake must be marked seen"
-printf 'selftest: steward-bound leg PASS (steward typing-defer bounded — force-deliver+warn after N)\n' >&2
-
-# WITHOUT FLEET_STEWARD_ISSUE, the same comment on #20 has no worker window and
-# no steward route → it must be dropped (gone), never injected anywhere.
-: > "$WORK/state/bridge_fake-repo.seen"   # keep present (empty) so bridge dual-reads the legacy path (issue 181)
-printf '2026-07-09T01:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
-: > "$INJECT"
-runbridge --poll || fail "no-steward-issue poll exited non-zero"
-[ -s "$INJECT" ] && [ "$(grep -c 'Enter' "$INJECT")" != 0 ] \
-  && fail "with no FLEET_STEWARD_ISSUE, a #20 comment must not inject anywhere"
-
-printf 'selftest: steward-route leg PASS (relay/busy/stale/cold/hub-down/typing/no-config, per-channel watermark)\n' >&2
-
-# ================ per-channel decoupling (issue #198, acceptance A) =============
-# THE headline fix: a BUSY steward must not block a fresh WORKER relay on the same
-# repo. The steward (issue #20) is `working` and its wake queues in the STEWARD
-# channel; meanwhile a brand-new worker comment on #10 (idle worker @1) must still
-# relay via the independent WORKER channel. Old single-watermark: the busy steward
-# would pin the shared watermark and the worker comment would sit queued too.
-seed_steward
-cat > "$CANNED" <<JSON
-[
- {"id":400,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:01Z","body":"🛰️ fleet-watch — fake-repo\n\n- PR #196 (#181) green — /land 196?\n\n<!-- fleet:wake fake-repo:196 -->"},
- {"id":401,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T01:00:02Z","body":"worker do this now"}
-]
-JSON
-: > "$INJECT"
-FAKE_STEWARD_WORKING_TS="$(date +%s)" FLEET_STEWARD_ISSUE=20 runbridge --poll \
-  || fail "decouple poll exited non-zero"
-# the worker comment relayed into @1 despite the busy steward
-grep -qF 'worker do this now' "$INJECT" \
-  || fail "decouple: a busy steward must NOT block a fresh worker relay (per-channel watermark)"
-grep -qxF 401 "$WORK/state/bridge_fake-repo.seen" 2>/dev/null \
-  || fail "decouple: the relayed worker comment must be marked seen in the WORKER channel"
-# the steward wake was NOT injected (steward busy) and NOT marked seen (queued)
-grep -q 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null \
-  && fail "decouple: the busy steward must not be injected into"
-grep -qxF 400 "$SSEEN" 2>/dev/null \
-  && fail "decouple: the queued steward wake must NOT be marked seen (retry next tick)"
-# and the steward watermark held while the WORKER watermark advanced past c401
-[ "$(cat "$WORK/state/bridge_fake-repo.steward.since")" = '2026-07-09T01:00:00Z' ] \
-  || fail "decouple: steward watermark must hold while its wake is queued"
-[ "$(cat "$WORK/state/bridge_fake-repo.since")" = '2026-07-09T01:00:02Z' ] \
-  || fail "decouple: worker watermark must advance independently of the busy steward"
-printf 'selftest: decoupling leg PASS (busy steward, worker still relayed)\n' >&2
-
-# ================ coalesce-on-drain (issue #198, acceptance B) ==================
-# THREE queued wakes for the SAME PR (#168) drain to an IDLE steward as ONE line
-# (the newest), not a 3× replay. Distinct attempt tags let us assert newest-wins.
-seed_steward
-cat > "$CANNED" <<JSON
-[
- {"id":500,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:01Z","body":"🛰️ fleet-watch — fake-repo\n\n- PR #168 green (attempt one)\n\n<!-- fleet:wake fake-repo:168 -->"},
- {"id":501,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:02Z","body":"🛰️ fleet-watch — fake-repo\n\n- PR #168 green (attempt two)\n\n<!-- fleet:wake fake-repo:168 -->"},
- {"id":502,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:03Z","body":"🛰️ fleet-watch — fake-repo\n\n- PR #168 green (attempt three)\n\n<!-- fleet:wake fake-repo:168 -->"}
-]
-JSON
-: > "$INJECT"
-FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "coalesce poll exited non-zero"
-# exactly ONE injection into the steward pane
-[ "$(grep -c 'send-keys -t %9 Enter' "$INJECT" 2>/dev/null || echo 0)" = 1 ] \
-  || fail "coalesce: 3 same-PR wakes must drain as exactly ONE injection"
-# it carries the NEWEST wake and drops the superseded ones
-grep -qF 'attempt three' "$INJECT" || fail "coalesce: the delivered wake must be the newest (attempt three)"
-grep -qF 'attempt one' "$INJECT"   && fail "coalesce: superseded wake (attempt one) must be dropped"
-grep -qF 'attempt two' "$INJECT"   && fail "coalesce: superseded wake (attempt two) must be dropped"
-# all three comments are marked seen (no re-delivery next tick)
-for id in 500 501 502; do grep -qxF "$id" "$SSEEN" 2>/dev/null || fail "coalesce: c$id must be marked seen after drain"; done
-printf 'selftest: coalesce-on-drain leg PASS (3 same-PR wakes → 1, newest wins)\n' >&2
-
-# ============ subject keying: kind-distinct vs PR-lifecycle (issue #198) ========
-# Two edges that share a GitHub number but are SEMANTICALLY DISTINCT (a stuck worker
-# on a prod-alert issue #60) must NOT collapse — dropping one would silently lose a
-# decision-worthy wake. The ONLY deliberate cross-kind collapse is the PR lifecycle:
-# a `propened` then a `prgreen` for one PR (both subject `pr:<slug>:<num>`) collapse
-# to the newer (green/land) wake. c600 carries the distinct pair; c601/c602 the PR
-# pair. Idle steward drains all in one digest.
-seed_steward
-cat > "$CANNED" <<JSON
-[
- {"id":600,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:01Z","body":"🛰️ fleet-watch — fake-repo\n\n- prod-alert #60 filed — first-response?\n- #60 looks stuck (looping) — investigate?\n\n<!-- fleet:wake prodalert:fake-repo:60 stuck:fake-repo:60 -->"},
- {"id":601,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:02Z","body":"🛰️ fleet-watch — fake-repo\n\n- #7 shipped PR #70 — review?\n\n<!-- fleet:wake pr:fake-repo:70 -->"},
- {"id":602,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T01:00:03Z","body":"🛰️ fleet-watch — fake-repo\n\n- PR #70 (#7) green — /land 70?\n\n<!-- fleet:wake pr:fake-repo:70 -->"}
-]
-JSON
-: > "$INJECT"
-FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "subject-keying poll exited non-zero"
-# distinct kinds on #60 both survive (no false collapse)
-grep -qF 'prod-alert #60 filed' "$INJECT" \
-  || fail "subject-keying: a prod-alert edge must not be collapsed away by a same-number stuck edge"
-grep -qF '#60 looks stuck' "$INJECT" \
-  || fail "subject-keying: a stuck edge must not be collapsed away by a same-number prod-alert edge"
-# PR lifecycle #70 collapses to the newest (green ≻ shipped-for-review)
-grep -qF 'PR #70 (#7) green — /land 70?' "$INJECT" \
-  || fail "subject-keying: the newest PR-lifecycle wake (green) must survive"
-grep -qF 'shipped PR #70' "$INJECT" \
-  && fail "subject-keying: the superseded PR-lifecycle wake (shipped) must be collapsed"
-printf 'selftest: subject-keying leg PASS (kind-distinct kept, PR-lifecycle collapsed)\n' >&2
-
-# ============ steward watermark migration at cutover (issue #198) ===============
-# Before the split there was ONE shared watermark. On the first tick after the daemon
-# upgrade, the steward channel must INHERIT the old shared watermark (bridge_<slug>.
-# since) rather than seed to NOW — else a steward wake that was queued under the old
-# mark (steward busy at cutover) is skipped forever. Set ONLY the worker .since to an
-# old time, remove ONLY .steward.since, and a newer steward wake must still deliver.
-# Keep the seen files present-empty so bridge_state_file dual-reads the flat path
-# (issue #181); .steward.since ABSENT is what triggers the migration under test.
-rm -rf "$WORK/conf/fleets/fake/bridge" 2>/dev/null
-: > "$WORK/state/bridge_fake-repo.seen"
-: > "$WORK/state/bridge_fake-repo.steward.seen"
-rm -f "$WORK/state/bridge_fake-repo.steward.since"
-printf '2026-07-09T03:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"   # old SHARED mark
-cat > "$CANNED" <<JSON
-[
- {"id":800,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/20","updated_at":"2026-07-09T03:00:05Z","body":"queued under the old shared mark"}
-]
-JSON
-: > "$INJECT"
-FLEET_STEWARD_ISSUE=20 runbridge --poll || fail "migration poll exited non-zero"
-grep -qF 'queued under the old shared mark' "$INJECT" \
-  || fail "migration: a steward wake under the OLD shared watermark must be inherited, not seed-to-now-skipped"
-# end-to-end proof it processed: the inherited-then-delivered wake is marked seen.
-grep -qxF 800 "$SSEEN" 2>/dev/null \
-  || fail "migration: the inherited-and-delivered wake must be marked seen"
-printf 'selftest: watermark-migration leg PASS (steward channel inherits the old shared mark)\n' >&2
-
-# ============ steward-issue resolver: no cross-fleet leak (issue #146/#180) =====
-# bridge_steward_issue_for_repo must map a repo → its OWN FLEET_STEWARD_ISSUE and
-# NEVER inherit another fleet's value (the subtle bug where a conf-sourcing subshell
-# inherits the global). All fleets are equal (issue #180 — the PRIMARY_* snapshot +
-# short-circuit are gone), so EVERY fleet — including what used to be the "primary" —
-# is just a per-fleet <session>.conf. Extract the real function body and exercise it
-# against those confs.
-RES_CONF="$WORK/resconf"; mkdir -p "$RES_CONF"
-printf 'FLEET_REPO="me/alpha"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=20\n' > "$RES_CONF/alpha.conf"
-printf 'FLEET_REPO="me/other"\nFLEET_ISSUE_BRIDGE=1\n' > "$RES_CONF/other.conf"
-printf 'FLEET_REPO="me/beta"\nFLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=77\n' > "$RES_CONF/beta.conf"
-(
-  set -uo pipefail
-  . "$BIN/fleet-lib.sh"
-  FLEET_CONF_DIR="$RES_CONF"
-  : "$FLEET_CONF_DIR"  # read via the eval below (opaque to shellcheck)
-  eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
-  [ "$(bridge_steward_issue_for_repo me/alpha)" = 20 ] || { echo "resolver: me/alpha should resolve its OWN 20" >&2; exit 1; }
-  [ -z "$(bridge_steward_issue_for_repo me/other)" ]   || { echo "resolver: me/other (no own issue) must NOT inherit another fleet's (cross-fleet leak)" >&2; exit 1; }
-  [ "$(bridge_steward_issue_for_repo me/beta)" = 77 ]  || { echo "resolver: me/beta should resolve its OWN 77" >&2; exit 1; }
-  [ -z "$(bridge_steward_issue_for_repo me/nope)" ]    || { echo "resolver: unknown repo should be empty" >&2; exit 1; }
-) || fail "steward-issue resolver leaked / mis-resolved across fleets"
-# A conf that sets FLEET_STEWARD_ISSUE but NOT its own FLEET_REPO must be ignored,
-# not mis-attributed to another fleet's repo: me/alpha must keep its own 20, never
-# the rogue conf's 99.
-printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_STEWARD_ISSUE=99\n' > "$RES_CONF/norepo.conf"
-(
-  set -uo pipefail
-  . "$BIN/fleet-lib.sh"
-  FLEET_CONF_DIR="$RES_CONF"
-  : "$FLEET_CONF_DIR"
-  eval "$(awk '/^bridge_steward_issue_for_repo\(\) \{/,/^}/' "$SRC")"
-  [ "$(bridge_steward_issue_for_repo me/alpha)" = 20 ] \
-    || { echo "resolver: a repo-less conf's steward issue must NOT clobber another fleet's" >&2; exit 1; }
-) || fail "steward-issue resolver mis-attributed a repo-less conf across fleets"
-printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no primary)\n' >&2
-
 # --- per-fleet state layout (issue #181): bridge_state_file must resolve the dedup/
 # watermark to fleets/<sess>/bridge/{seen,since} when the slug maps to a configured
 # fleet, dual-read a legacy flat file in place, and fall back to the flat
@@ -777,5 +461,5 @@ printf 'selftest: resolver leg PASS (no cross-fleet steward-issue leak, no prima
 ) || fail "per-fleet bridge state layout (issue #181) resolution wrong"
 printf 'selftest: layout leg PASS (per-fleet bridge state under fleets/<sess>/bridge/ + dual-read + flat fallback — issue #181)\n' >&2
 
-printf 'selftest PASS: relay core + idle-gate + input-content-gate + ghost-detect + max-typing-defer + dedup + HMAC (+fail-closed) + steward-route (relay/busy/stale/cold/hub-down/typing/no-config) + resolver-no-leak + per-fleet-layout verified\n'
+printf 'selftest PASS: relay core + idle-gate + input-content-gate + ghost-detect + max-typing-defer + dedup + HMAC (+fail-closed) + per-fleet-layout verified\n'
 exit 0

@@ -137,15 +137,14 @@ cwclean() {
 # or signal the pid directly; nothing at the shell level can stop arbitrary code.
 # It only closes the everyday footguns, which is where the real crashes came from.
 #
-#   • kill-server                    → always refused (even for the steward).
+#   • kill-server                    → always refused (even from the hub).
 #   • kill-session / kill-window     → refused unless the target is THIS worker's
 #                                      own window (self-teardown is allowed), OR
-#                                      the caller is the STEWARD hub (issue #177:
-#                                      the operator's hub legitimately kills a
-#                                      merged worker's window in /fleet-cleanup). The
-#                                      steward seat is read from the inherited
-#                                      FLEET_SEAT=steward env (issue #202), with
-#                                      the $TMUX_PANE→@steward pane read as backup.
+#                                      the caller is the operator HUB pane (issue
+#                                      #177: the operator's hub legitimately kills a
+#                                      merged worker's window). The hub is read from
+#                                      the inherited FLEET_HUB=1 env (issue #202),
+#                                      with the $TMUX_PANE→@hub pane read as backup.
 #   • anything on an isolated server (a global -L/-S is present) → allowed: that
 #                                      is exactly the safe testing convention.
 #   • FLEET_ALLOW_TMUX_DESTROY=1     → guard disabled entirely (maintenance, and
@@ -176,7 +175,7 @@ tmux() {
 
   # Inter-agent messaging rail (issue #437). A raw `send-keys` into a live Claude
   # TUI is racy — bracketed-paste swallows the Enter — so worker↔worker /
-  # steward↔worker messages must go through fleet-comment.sh --to-worker (the
+  # operator↔worker messages must go through fleet-comment.sh --to-worker (the
   # issue-bridge), which the bash-guard.py hook enforces as the real rail. This is
   # the shell belt: it catches a bare `tmux send-keys` typed in any interactive/
   # sourced zsh that loaded cw.zsh. Refused on ANY server — unlike the kill-*
@@ -199,44 +198,44 @@ tmux() {
   # Isolated server, or a subcommand we don't guard → straight through.
   if (( isolated )) || [[ -z "$dest" ]]; then command tmux "$@"; return; fi
 
-  # Steward exemption — issue #177. The operator's steward hub legitimately
-  # manages fleet windows/sessions: /fleet-cleanup (and the cleanup daemon) kill a
+  # Hub exemption — issue #177. The operator's hub pane legitimately
+  # manages fleet windows/sessions: a manual reap (and the cleanup daemon) kill a
   # just-merged worker's window as their final teardown step, which is exactly a
   # cross-window kill this guard would otherwise refuse — leaving a zombie
-  # window (worktree gone, claude still in a deleted dir). The steward pane
-  # carries @steward=1; a WORKER pane never does, so the #158 guarantee is
+  # window (worktree gone, claude still in a deleted dir). The hub pane
+  # carries @hub=1; a WORKER pane never does, so the #158 guarantee is
   # untouched — a worker is still fully guarded. Scoped to kill-window /
   # kill-session (the legit window/session management); kill-server and the -a
-  # all-but-current sweep stay refused for EVERYONE below, steward included —
+  # all-but-current sweep stay refused for EVERYONE below, the hub included —
   # they always take down sibling fleets and are never window management (use
   # FLEET_ALLOW_TMUX_DESTROY for a deliberate whole-server destroy).
   #
-  # Resolve the caller's seat. The PRIMARY signal is a durable, inherited env
-  # marker: steward-session.sh spawns the steward's claude with FLEET_SEAT=steward
+  # Resolve the caller's pane role. The PRIMARY signal is a durable, inherited env
+  # marker: hub-session.sh spawns the operator's claude with FLEET_HUB=1
   # in its environment, so EVERY Bash-tool shell that claude runs inherits it —
   # unconditionally, without depending on tmux re-exporting $TMUX_PANE per shell.
   # That per-shell $TMUX_PANE turned out to be unreliable across tool-shell
   # invocations (issue #202): #185's strict pane read intermittently saw an empty
-  # $TMUX_PANE and refused the steward's own /fleet-cleanup kill-window, forcing the
-  # FLEET_ALLOW_TMUX_DESTROY override. A worker is NEVER spawned with FLEET_SEAT
+  # $TMUX_PANE and refused the hub's own kill-window, forcing the
+  # FLEET_ALLOW_TMUX_DESTROY override. A worker is NEVER spawned with FLEET_HUB
   # (dash-issue-session.sh sets nothing), so the #158 worker guarantee is intact.
   #
-  # The $TMUX_PANE→@steward pane read stays as a SECONDARY/confirming path (for a
-  # steward shell that somehow lacks the env but does have a resolvable pane).
+  # The $TMUX_PANE→@hub pane read stays as a SECONDARY/confirming path (for a
+  # hub shell that somehow lacks the env but does have a resolvable pane).
   # NEVER fall back to the active pane: `display-message -t ''` resolves to
   # whichever pane is *focused*, and the plan hub has two panes — dash (no
-  # @steward) and steward (@steward=1). With the dash focused, an active-pane
-  # read misclassifies the steward's own land as a worker and refuses it — the
-  # #177 reopen. A session-level "does this session own a @steward pane?" check
+  # @hub) and the operator pane (@hub=1). With the dash focused, an active-pane
+  # read misclassifies the hub's own kill as a worker and refuses it — the
+  # #177 reopen. A session-level "does this session own a @hub pane?" check
   # is also wrong: a worker window lives in the SAME fleet session as the hub, so
-  # it would exempt workers and break #158. Empty FLEET_SEAT + empty/unresolvable
-  # $TMUX_PANE → conservatively NOT steward (require the FLEET_ALLOW_TMUX_DESTROY
+  # it would exempt workers and break #158. Empty FLEET_HUB + empty/unresolvable
+  # $TMUX_PANE → conservatively NOT the hub (require the FLEET_ALLOW_TMUX_DESTROY
   # override), never an active-pane guess.
-  local seat_steward=0
-  if [[ "${FLEET_SEAT:-}" == steward ]]; then
-    seat_steward=1
+  local is_hub=0
+  if [[ "${FLEET_HUB:-}" == 1 ]]; then
+    is_hub=1
   elif [[ -n "${TMUX_PANE:-}" ]]; then
-    [[ "$(command tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)" == 1 ]] && seat_steward=1
+    [[ "$(command tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)" == 1 ]] && is_hub=1
   fi
 
   local hint="test on an isolated socket (tmux -L scratch …) or set FLEET_ALLOW_TMUX_DESTROY=1 to override"
@@ -268,7 +267,7 @@ tmux() {
     local tw
     if [[ -z "$target" ]]; then tw="$ownwin"   # default target = the current window
     else tw="$(command tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null)"; fi
-    if [[ -n "$ownwin" && "$tw" == "$ownwin" ]] || (( seat_steward )); then command tmux "$@"; return; fi
+    if [[ -n "$ownwin" && "$tw" == "$ownwin" ]] || (( is_hub )); then command tmux "$@"; return; fi
     print -ru2 -- "tmux: refusing to kill-window '${target:-current}' — not this worker's own window. $hint"
     return 1
   fi
@@ -280,7 +279,7 @@ tmux() {
   else sess="$(command tmux display-message -p -t "${TMUX_PANE:-}" '#{session_id}' 2>/dev/null)"; fi
   local -a wins
   wins=( ${(f)"$(command tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null)"} )
-  if [[ -n "$ownwin" && ${#wins} -eq 1 && "${wins[1]}" == "$ownwin" ]] || (( seat_steward )); then command tmux "$@"; return; fi
+  if [[ -n "$ownwin" && ${#wins} -eq 1 && "${wins[1]}" == "$ownwin" ]] || (( is_hub )); then command tmux "$@"; return; fi
   print -ru2 -- "tmux: refusing kill-session '${target:-current}' — it would kill sibling fleet windows. $hint"
   return 1
 }

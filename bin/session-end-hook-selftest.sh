@@ -14,7 +14,7 @@
 #   * nothing set (default)         → ON: acts on prompt_input_exit (default-on, #409)
 #   * global FLEET_CLOSE_ON_EXIT=0  → COMPLETE no-op (the global opt-out)
 #   * per-fleet =1 while global =0  → still a NO-OP (global-authoritative, #409)
-#   * steward hub (@steward=1)      → never touched (defensive bail)
+#   * operator hub pane (@hub=1)    → never touched (defensive bail)
 #   * panel (no @issue, no @raw)    → never touched (no dispatch)
 #   * prompt_input_exit on MERGED   → worktree+branch removed, issue closed, a
 #                                     `landed` row (PR resolved), window gone
@@ -84,8 +84,8 @@ WT5="$(add_wt 5 commit)"    # not merged (stdin test)→ unmerged  → KEEP
 WT6="$(add_wt 6 commit)"    # not merged (default-on) → unmerged  → KEEP
 
 # --- fake tmux: answers the window queries, executes run-shell -b inline -------
-# @issue / @raw / @steward / window_id / session_name are read from env (ISS / RAW /
-# STEW / WID). run-shell runs its command via `sh -c` so the dispatched --exec reap
+# @issue / @raw / @hub / window_id / session_name are read from env (ISS / RAW /
+# HUB / WID). run-shell runs its command via `sh -c` so the dispatched --exec reap
 # executes (like a real server-side background job); kill-window is logged.
 mkdir -p "$WORK/fakepath"
 cat > "$WORK/fakepath/tmux" <<'FAKE'
@@ -99,7 +99,7 @@ fi
 case "$*" in
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
-  *@steward*)     printf '%s\n' "${STEW:-}" ;;
+  *@hub*)         printf '%s\n' "${HUB:-}" ;;
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
@@ -133,12 +133,12 @@ FAKE
 chmod +x "$WORK/fakepath/gh"
 
 # --- run the hook (the in-pane gate) with the fakes + a scoped estate ----------
-# ISS/RAW/STEW/WID feed the fake tmux; REASON drives the reason gate (via the
+# ISS/RAW/HUB/WID feed the fake tmux; REASON drives the reason gate (via the
 # FLEET_SESSION_END_REASON test seam); CLOSE drives FLEET_CLOSE_ON_EXIT. GH_* drive
 # the fake gh. FLEET_CONF_DIR points at nothing so fleet_load_conf is a no-op and the
 # FLEET_REPO/MAIN/BASE env below win (matching dash-reap-selftest).
 run_hook() {
-  ISS="${ISS:-}" RAW="${RAW:-}" STEW="${STEW:-}" WID="${WID:-@9}" \
+  ISS="${ISS:-}" RAW="${RAW:-}" HUB="${HUB:-}" WID="${WID:-@9}" \
   TMLOG="$TMLOG" GHLOG="$GHLOG" \
   GH_MERGED_HEAD="${GH_MERGED_HEAD:-}" GH_MERGED_PR="${GH_MERGED_PR:-}" GH_ISSUE_STATE="${GH_ISSUE_STATE:-OPEN}" \
   FLEET_SESSION_END_REASON="${REASON:-}" \
@@ -206,13 +206,16 @@ grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "per-fleet=1 while global=0 must STILL
 [ "$(rows 2 closed-unlanded)" = 0 ] || fail "global-authoritative no-op must write no ledger row" "$(cat "$LEDGER")"
 ok "per-fleet FLEET_CLOSE_ON_EXIT=1 while global=0 → still a no-op (global wins)"
 
-# T4: steward hub (@steward=1) → defensive bail (no dispatch), even opted-in.
-clr; REASON=prompt_input_exit STEW=1 ISS='' WID='@1' run_hook
-grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "steward hub must never be touched" "$(cat "$TMLOG")"
-ok "steward hub (@steward=1) → never touched"
+# T4: operator hub pane (@hub=1) → defensive bail (no dispatch), even opted-in.
+# Give it a numeric @issue too: the real hub pane carries none, but WITHOUT the
+# @hub bail this row would dispatch a worker reap — so it's what makes this a
+# test of the bail itself rather than of the panel fall-through T5 already covers.
+clr; REASON=prompt_input_exit HUB=1 ISS=6 WID='@1' run_hook
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "the hub pane must never be touched" "$(cat "$TMLOG")"
+ok "operator hub pane (@hub=1) → never touched (bails even with an @issue)"
 
-# T5: panel (no @issue, no @raw, no @steward) → no dispatch.
-clr; REASON=prompt_input_exit ISS='' RAW='' STEW='' WID='@1' run_hook
+# T5: panel (no @issue, no @raw, no @hub) → no dispatch.
+clr; REASON=prompt_input_exit ISS='' RAW='' HUB='' WID='@1' run_hook
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a panel row must not dispatch" "$(cat "$TMLOG")"
 ok "panel (no @issue/@raw) → never touched"
 

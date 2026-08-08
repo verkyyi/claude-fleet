@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-down-selftest.sh — hermetic test for bin/fleet-down.sh's path-traversal
-# guard (steward review, PR #196 / issue #181).
+# guard (review of PR #196 / issue #181).
 #
 # fleet-down --purge does `rm -rf "$FLEET_CONF_DIR/fleets/$NAME"` with the raw CLI
 # arg, so a typo like `fleet-down ..` or `fleet-down a/b` must NOT be allowed to

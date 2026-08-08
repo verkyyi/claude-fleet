@@ -42,7 +42,7 @@
 #                        removed silently; a dirty/unpushed one is KEPT and surfaced
 #                        once — an experiment is never silently deleted. `dash ⌃x`
 #                        force-reap covers manual disposal.
-#   * watcher     — SKIPS @raw windows (no issue/PR/land → nothing steward-actionable),
+#   * reapers     — SKIP @raw windows (no issue/PR/land → nothing to act on),
 #                   and it holds a slot so headroom checks see one fewer free slot.
 #   * fleet-restore — the WINDOW is NOT snapshotted or restored (@raw is excluded):
 #                     scratch windows are ephemeral. Its WORKTREE, however, survives

@@ -96,7 +96,7 @@ if [ "$sem" = "done" ]; then
     # (bin/handoff-latch-reset-hook.sh) clears it in the fresh, cleared session.
     _armed=$(tmux display-message -p -t "$TMUX_PANE" '#{@handoff_armed}' 2>/dev/null)
     # Scope: only a worker (@issue) or scratch (@raw) pane HAS /fleet-handoff.
-    # Panels (dash/plan/backlog) and the steward hub carry neither → never nudged.
+    # Panels (dash/plan/backlog) and the operator hub carry neither → never nudged.
     _issue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)
     _raw=$(tmux display-message -p -t "$TMUX_PANE" '#{@raw}' 2>/dev/null)
     # Measure: the statusline (conf/statusline.sh) stamps the rounded context %

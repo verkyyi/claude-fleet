@@ -5,7 +5,7 @@
 # The bug: fleet-up.sh regenerated the conf with a truncating `cat >` that wrote
 # ONLY the three derived keys (FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH). A crash +
 # `cf`/restore re-runs fleet-up → every custom knob the operator set (FLEET_ISSUE_BRIDGE,
-# FLEET_CLEANUP, FLEET_MAX_SESSIONS, FLEET_STEWARD_ISSUE, …) was
+# FLEET_CLEANUP, FLEET_MAX_SESSIONS, FLEET_AUTOFILL, …) was
 # silently wiped and the feature went OFF undetected. The fix preserves every
 # non-derived FLEET_* key while still refreshing the derived three, atomically.
 #
@@ -78,7 +78,7 @@ FLEET_REPO="acme/OLD"
 FLEET_MAIN="/old/path"
 FLEET_BASE_BRANCH="develop"
 FLEET_ISSUE_BRIDGE=1
-FLEET_STEWARD_ISSUE=169
+FLEET_AUTOFILL=1
 FLEET_CLEANUP=0
 FLEET_MAX_SESSIONS=3
 FLEET_CTX_WINDOW=1
@@ -97,7 +97,7 @@ hasnt "refresh: old base gone" "$CONF" 'FLEET_BASE_BRANCH="develop"'
 
 # every custom key survives verbatim — this is the core regression guard
 has "preserve: FLEET_ISSUE_BRIDGE" "$CONF" "FLEET_ISSUE_BRIDGE=1"
-has "preserve: FLEET_STEWARD_ISSUE" "$CONF" "FLEET_STEWARD_ISSUE=169"
+has "preserve: FLEET_AUTOFILL" "$CONF" "FLEET_AUTOFILL=1"
 has "preserve: FLEET_CLEANUP"      "$CONF" "FLEET_CLEANUP=0"
 has "preserve: FLEET_MAX_SESSIONS" "$CONF" "FLEET_MAX_SESSIONS=3"
 has "preserve: FLEET_CTX_WINDOW"   "$CONF" "FLEET_CTX_WINDOW=1"

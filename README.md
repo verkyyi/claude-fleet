@@ -29,9 +29,9 @@ demo repo data.</sub>
 
 - **A mission-control dashboard** (`prefix+g`): an fzf panel listing every
   session with state glyph, bound issue, model, and context %. It lives as an
-  embedded pane in the `plan` hub (dash above, steward below); `prefix+g`
-  focuses it and, pressed again, zooms it fullscreen — the mirror of `F9`'s
-  steward focus. `Enter` jumps. **Type a task and press Enter** —
+  embedded pane in the `plan` hub (dash above, your Claude session below);
+  `prefix+g` focuses it and, pressed again, zooms it fullscreen — the mirror of
+ `F9`'s hub focus. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-S` opens a raw scratch session (plain `claude`, no issue — but in its
   own writable `scratch-N` worktree, so an experiment can push a branch and open
@@ -100,7 +100,7 @@ Design rules that made it work:
   backlog (typed tasks auto-file an issue), so nothing runs untracked.
 
 Deeper reference: **[docs/TERMS.md](docs/TERMS.md)** defines every term (what
-the collector/steward/dash actually are), **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+the collector/hub/dash actually are), **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 covers the shared-vs-per-fleet split and the path to running **many fleets on
 one machine** (one tmux session per repo), and **[docs/STATE.md](docs/STATE.md)**
 traces how each window's Claude state (`working`/`done`/`needs`/`looping`) is set,
@@ -147,7 +147,7 @@ line, which exits silently without it.)
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
-| `F9` | (no prefix) jump back to this session's steward hub |
+| `F9` | (no prefix) jump back to this session's hub |
 
 The shortcut surface was pruned in #289 (one keyboard home per action): raw
 scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
@@ -160,7 +160,7 @@ in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
-always lands on this fleet's steward hub in the half-dash / half-steward split
+always lands on this fleet's hub in the half-dash / half-Claude split
 (never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens a picker of running
 fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
@@ -169,7 +169,7 @@ account pool as a selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
-`prefix z`; `F9` and `prefix g` jump-and-zoom the steward hub and dash pane
+`prefix z`; `F9` and `prefix g` jump-and-zoom the hub pane and dash pane
 respectively (press again to toggle the zoom). On iPad / Termius the double-tap
 doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
 so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
@@ -239,19 +239,16 @@ args it forwards them straight to `fleet-up.sh` to bring a named fleet up.
 
 Each fleet keeps its durable state in **one directory per fleet** —
 `~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,
-issue-bridge/watch state), so `ls ~/.config/claude-fleet/fleets/` is the list of
+issue-bridge state), so `ls ~/.config/claude-fleet/fleets/` is the list of
 running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
-still works as a one-fleet default. Every fleet gets a steward pane in its `plan`
-hub; set `FLEET_STEWARD_CMD` (global or per-fleet conf) to override the command it
-runs. By default the hub launches under the **Steward Lite** profile
-(`FLEET_STEWARD_LITE=1`, issue #284): `bin/steward-session.sh` renders a per-fleet
-`--settings` file that **denies `Edit`/`Write` across this fleet's base checkout and
-its `issue-<N>` worktree siblings** (the steward is a dispatcher, never a coder —
-`deny` overrides bypass-perms, and it still Writes its own memory/scratchpad), and
-launches with `--strict-mcp-config` so personal MCP connectors never mount into the
-hub. Tune it per fleet with `FLEET_STEWARD_LITE` / `FLEET_STEWARD_MCP` /
-`FLEET_STEWARD_MODEL`; running stewards keep their old profile until the next hub
-respawn. Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
+still works as a one-fleet default. Every fleet gets a **hub pane** in its `plan`
+window — a plain `claude` in the base checkout, with your own model/MCP/settings
+(issue #439). That is where you file, triage, spawn workers, hand work back and
+land PRs; there is no resident orchestrator agent. Set `FLEET_HUB_CMD` (global or
+per-fleet conf) to launch something else there, or a plain shell to opt out.
+The base checkout stays edit-read-only for every pane (`hooks/base-readonly-guard.py`),
+so the hub can drive the fleet without ever committing to it.
+Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
 `bin/fleet-migrate-layout.sh` once (idempotent; readers dual-read both layouts).
 
 ## Multiple subscription accounts (auto-failover)
@@ -286,21 +283,20 @@ design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
 
 Optional repo-shipped Claude Code slash commands that operate on the current
 fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
-`~/.claude/commands/`. Each declares an owner seat (`worker` / `steward`) and
-refuses from the wrong one. Live so far:
+`~/.claude/commands/`. Each declares an owner seat (`worker` / `hub` / `either`)
+and refuses from the wrong one. Live so far:
 
-- **`/fleet-steward`** (steward) — the steward mirror of `/fleet-claim`: the one
-  skill the `plan` hub runs at spawn. It resolves the fleet, adopts a **layered
-  steward charter** (built-in ▸ gated repo `.fleet/steward.md` ▸ operator overlay,
-  via `bin/steward-charter.sh` — the same resolver the `/clear` re-adopt hook uses,
-  so they can't drift), reports readiness, then goes idle. Its built-in charter
-  carries the three responsibilities (watch/converse/dispatch), the shall-nots +
-  rails, and the everyday steward ops folded in from the retired `/fleet-new-issue`
-  (file + spawn a worker), `/fleet-status` (estate digest), and `/fleet-cleanup`
-  (manual reap — **the fleet never merges**: the worker's `/fleet-claim` ship step
-  arms GitHub auto-merge and the `com.claude-fleet.cleanup` daemon reaps the
-  leftovers; see [docs/CLEANUP.md](docs/CLEANUP.md)).
-- **`/fleet-sync-install`** (steward, any fleet) — after claude-fleet's
+- **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
+  freshly-spawned worker runs: claim the bound issue via the **assignee**, load a
+  layered worker charter, ground in the issue + code, then implement under a
+  standing contract that ends by **opening a PR and stopping** — **the fleet never
+  merges** (see [docs/CLEANUP.md](docs/CLEANUP.md)).
+- **`/fleet-history`** (hub) — browse & resume closed worker sessions (landed +
+  unlanded) from the history ledger, reconstructing a reaped worktree off the
+  squash SHA so `claude --resume` still works.
+- **`/fleet-handoff`** (either) — bridge long-running work across a context-window
+  boundary: write a durable handoff, then `/clear` and pick it up clean.
+- **`/fleet-sync-install`** (either, any fleet) — after claude-fleet's
   own PRs land, re-applies them to the shared live install (`~/.claude/fleet`): pull +
   reload changed daemons + re-merge the hooks delta + install changed commands.
   Maintains machine-global tooling, so it runs from any fleet; refuses only if

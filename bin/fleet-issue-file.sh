@@ -2,8 +2,8 @@
 # fleet-issue-file.sh — the ONE channel every fleet actor files a GitHub issue
 # through (issue #332). Consolidates the three historical `gh issue create` sites
 # — the backlog ⌃n / prefix+n filer (bin/dash-issue-new.sh), the dash new-session
-# box (bin/dash-new-session.sh), and the steward's file+spawn op
-# (commands/fleet-steward.md) — behind one script with one body/label/provenance
+# box (bin/dash-new-session.sh), and the operator's file+spawn op from the hub
+# — behind one script with one body/label/provenance
 # behaviour, so a change to how the fleet files an issue lives in a single place.
 #
 # Responsibilities, each a small testable step:
@@ -127,7 +127,7 @@ fi
 # --- 2b. default milestone: guarantee every filing gets one (issue #433) --------
 # A fleet opts in by setting FLEET_DEFAULT_MILESTONE (empty/unset = off, current
 # behaviour unchanged). The knob lives in this fleet's per-fleet conf, which our
-# callers (bin/dash-issue-new.sh, the steward) source with fleet_load_conf — but
+# callers (bin/dash-issue-new.sh, the hub) source with fleet_load_conf — but
 # that DOESN'T export, so as a spawned child we wouldn't inherit it. Load this
 # fleet's conf ourselves to pick it up; an already-set env value (a test, an
 # explicit export) wins and skips the load. An explicit --milestone always wins.

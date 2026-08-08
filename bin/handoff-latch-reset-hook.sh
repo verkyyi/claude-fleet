@@ -44,7 +44,7 @@ tmux set-window-option -u -t "$TMUX_PANE" @handoff_armed 2>/dev/null || true
 
 # 2. Resolve the SessionStart source. Prefer the test override; else parse the hook's
 #    stdin JSON ({"...","source":"clear",...}). Guard against a tty so a manual
-#    invocation without a piped payload never hangs on cat (mirrors steward-readopt).
+#    invocation without a piped payload never hangs on cat.
 if [ -n "${FLEET_LATCH_RESET_SOURCE:-}" ]; then
   src="$FLEET_LATCH_RESET_SOURCE"
 elif [ ! -t 0 ]; then

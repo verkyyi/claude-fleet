@@ -205,17 +205,17 @@ EOF
 
     # --- needs signal: one unified "● N" badge (issues #105, #166, #368) --------
     # PER SESSION: @attn_needs = count of needy windows, counting the plan
-    # (steward) window as a normal session alongside the workers (issue #368) and
+    # (hub) window as a normal session alongside the workers (issue #368) and
     # excluding only the non-claude panels dash/backlog. status-left renders it as a
     # red "● N" badge (hidden at 0, with a render-time active-window discount).
-    # A needy steward now lands in this one number instead of the retired
-    # @steward_needs flag, so the ⌂ icon is nav-only. Reuses this socket's scan
+    # A needy hub now lands in this one number instead of the retired
+    # per-fleet beacon flag, so the ⌂ icon is nav-only. Reuses this socket's scan
     # ($wins); change-detected + batched into this socket's $cmdf so it only re-sets
     # when it actually moves.
     needs_map=$(awk '
       { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
         if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
-        # plan(steward) + workers count into the badge; only dash/backlog (non-claude
+        # plan(hub) + workers count into the badge; only dash/backlog (non-claude
         # panels) are excluded (issue #368).
         if ($2 == "needs" && $3 !~ /^(dash|backlog)$/) c[s]++ }
       END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }

@@ -1,25 +1,25 @@
 #!/bin/bash
-# fleet-restore-selftest.sh — the steward snapshot+resume contract (issue #143).
+# fleet-restore-selftest.sh — the hub snapshot+resume contract (issue #143).
 #
 # Workers survive a tmux-server crash: snapshot() records each work window's
 # worktree + newest Claude transcript id, and restore() reopens them with
-# `claude --resume <id>`. The STEWARD pane lives in the 'plan' PANEL window,
+# `claude --resume <id>`. The HUB pane lives in the 'plan' PANEL window,
 # which WIN rows exclude — so before #143 its transcript was never captured and
-# a crash brought the steward back FRESH, losing its live conversation.
+# a crash brought the hub back FRESH, losing its live conversation.
 #
 # The fix, exercised end-to-end here against a REAL isolated tmux server (its own
 # socket, torn down at exit — never the user's live server) plus PATH-shimmed
 # `tmux`/`claude` stubs so nothing real is launched:
-#   • RESOLVER      the __STEWARD__ sentinel → a STEWARD row (path + newest id);
+#   • RESOLVER      the __HUB__ sentinel → a HUB row (path + newest id);
 #                   panels drop to nothing; a work window still yields a WIN row.
-#   • SNAPSHOT      a @steward-marked pane in a 'plan' window IS captured as a
-#                   STEWARD row (path + id), even though the window is a panel.
-#   • RESUME        steward-session.sh with STEWARD_RESUME_ID launches
-#                   `claude --resume <id>`, NOT a fresh steward.
-#   • FALLBACK      with no id it launches a FRESH steward that runs /fleet-steward
+#   • SNAPSHOT      a @hub-marked pane in a 'plan' window IS captured as a
+#                   HUB row (path + id), even though the window is a panel.
+#   • RESUME        hub-session.sh with HUB_RESUME_ID launches
+#                   `claude --resume <id>`, NOT a fresh hub.
+#   • FALLBACK      with no id it launches a FRESH, bare `claude`
 #                   (the first-boot path — no regression).
 #   • STALE ID      when `--resume` itself FAILS (pruned id), it falls back to a
-#                   fresh steward via `||`, never a bare shell.
+#                   fresh hub via `||`, never a bare shell.
 #
 # Also covers the per-window runtime-state restore (issue #153): the
 # @claude_state|@prci|@pfg trio rides each WIN row (RESOLVER pass-through +
@@ -41,8 +41,8 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 RESOLVE="$BIN/.fleet-restore-resolve.py"
 RESTORE="$BIN/fleet-restore.sh"
-STEWARDSH="$BIN/steward-session.sh"
-for f in "$RESOLVE" "$RESTORE" "$STEWARDSH"; do
+HUBSH="$BIN/hub-session.sh"
+for f in "$RESOLVE" "$RESTORE" "$HUBSH"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 absent — SKIP\n' >&2; exit 0; }
@@ -50,9 +50,9 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
 # Hermeticity: scrub ambient vars that would skew the scripts under test. QUIET
-# silences restore()'s `say` (we assert on that output); the FLEET_*/STEWARD_*
+# silences restore()'s `say` (we assert on that output); the FLEET_*/HUB_*
 # knobs would override the per-fleet conf / launch command we set up below.
-unset QUIET FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_STEWARD_CMD STEWARD_CMD STEWARD_RESUME_ID STEWARD_SESSION STEWARD_CWD
+unset QUIET FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_HUB_CMD HUB_CMD HUB_RESUME_ID HUB_SESSION HUB_CWD
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fr-selftest.XXXXXX")" || exit 2
 # Resolve to the physical path: tmux reports pane_current_path with symlinks
@@ -73,9 +73,8 @@ EOF
 # file $WORK/fail-resume exists AND this invocation is a `--resume`, it records
 # and EXITS NON-ZERO instead — simulating a stale/pruned transcript id, so we can
 # assert the `|| fresh` fallback fires rather than leaving a bare shell.
-# NB: match --resume ANYWHERE in argv, not just \$1 — the Steward Lite profile
-# (issue #284) prepends --settings/--strict-mcp-config before --resume, exactly as
-# the real `claude` accepts flags in any order.
+# NB: match --resume ANYWHERE in argv, not just \$1 — the real `claude` accepts
+# flags in any order, so the assertions must not depend on argv position.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$WORK/claude-argv"
@@ -105,7 +104,7 @@ seed_transcript() {
 }
 
 # ============================================================ 1. RESOLVER ======
-# The steward pane's project dir gets a transcript; a panel and a work window too.
+# The hub pane's project dir gets a transcript; a panel and a work window too.
 # Input rows are PIPE-delimited (matching tmux -F output); output rows are TAB.
 STEW_PATH="$WORK/main"; mkdir -p "$STEW_PATH"; seed_transcript "$STEW_PATH" "stew-abc123"
 WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PATH" "wrk-def456"
@@ -113,28 +112,28 @@ WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PA
 # issue-9  : a bare 3-field row → the state trio defaults to '-' (nothing to restore).
 # issue-9b : carries the @claude_state|@prci|@pfg trio (issue #153) → passed through.
 out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a\n%s|%s|-\n' \
-        "__STEWARD__" "$STEW_PATH" \
+        "__HUB__" "$STEW_PATH" \
         "issue-9" "$WORK_PATH" \
         "issue-9b" "$WORK_PATH" \
         "dash" "$WORK/whatever" \
       | python3 "$RESOLVE")
 
-printf '%s\n' "$out" | grep -qxF "STEWARD	$STEW_PATH	stew-abc123" \
-  || fail "resolver: __STEWARD__ should emit a STEWARD row with the newest id (got: $out)"
+printf '%s\n' "$out" | grep -qxF "HUB	$STEW_PATH	stew-abc123" \
+  || fail "resolver: __HUB__ should emit a HUB row with the newest id (got: $out)"
 printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9	-	-	-" \
   || fail "resolver: a bare work window WIN row should default the state trio to '-' (got: $out)"
 printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH	wrk-def456	9	working	✓	#9ece6a" \
   || fail "resolver: the @claude_state|@prci|@pfg trio should pass through onto the WIN row (got: $out)"
 printf '%s\n' "$out" | grep -q '^WIN	dash' \
   && fail "resolver: a panel (dash) must NOT emit a WIN row (got: $out)"
-# a steward pane with no transcript yet → id '-'
-noid=$(printf '__STEWARD__|%s|-\n' "$WORK/fresh" | python3 "$RESOLVE")
-[ "$noid" = "STEWARD	$WORK/fresh	-" ] \
-  || fail "resolver: a steward pane with no transcript should resolve id '-' (got: $noid)"
+# a hub pane with no transcript yet → id '-'
+noid=$(printf '__HUB__|%s|-\n' "$WORK/fresh" | python3 "$RESOLVE")
+[ "$noid" = "HUB	$WORK/fresh	-" ] \
+  || fail "resolver: a hub pane with no transcript should resolve id '-' (got: $noid)"
 
 # ============================================================ 2. SNAPSHOT ======
-# A real fleet layout: a 'plan' window with a @steward pane + a work window.
-# snapshot() must capture the steward as a STEWARD row despite the panel name.
+# A real fleet layout: a 'plan' window with a @hub pane + a work window.
+# snapshot() must capture the hub pane as a HUB row despite the panel name.
 cat > "$FLEET_CONF_DIR/snap.conf" <<EOF
 FLEET_REPO=acme/widgets
 FLEET_MAIN=$STEW_PATH
@@ -153,18 +152,18 @@ tmux set-window-option -t snap:issue-9 @pfg "#9ece6a"
 tmux new-window -t snap: -n issue-10 -c "$WORK_PATH"
 tmux set-window-option -t snap:issue-10 @issue 10
 tmux set-window-option -t snap:issue-10 @claude_state "done"
-# the hub 'plan' window: dash pane + a split @steward pane rooted at the base checkout
+# the hub 'plan' window: dash pane + a split @hub pane rooted at the base checkout
 tmux new-window -t snap: -n plan -c "$WORK/whatever"
 sp=$(tmux split-window -P -F '#{pane_id}' -t snap:plan -c "$STEW_PATH")
-tmux set-option -p -t "$sp" @steward 1
+tmux set-option -p -t "$sp" @hub 1
 
 bash "$RESTORE" --snapshot 2>/dev/null || fail "fleet-restore.sh --snapshot exited non-zero"
 # One directory per fleet (issue #181): the snapshot writes fleets/<sess>/restore.map.
 MAP="$FLEET_CONF_DIR/fleets/snap/restore.map"
 [ -f "$MAP" ] || fail "snapshot wrote no map at $MAP"
 
-grep -qxF "STEWARD	$STEW_PATH	stew-abc123" "$MAP" \
-  || fail "snapshot: the @steward pane should be captured as a STEWARD row (map: $(cat "$MAP"))"
+grep -qxF "HUB	$STEW_PATH	stew-abc123" "$MAP" \
+  || fail "snapshot: the @hub pane should be captured as a HUB row (map: $(cat "$MAP"))"
 grep -q '^WIN	issue-9	' "$MAP" \
   || fail "snapshot: the work window should still be a WIN row (map: $(cat "$MAP"))"
 grep -q '^WIN	plan	' "$MAP" \
@@ -175,15 +174,15 @@ grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a$' "$MAP" \
 grep -qE '^WIN	issue-10	.*	done	-	-$' "$MAP" \
   || fail "snapshot: issue-10's 'done' state should be captured, unset prci/pfg as '-' (map: $(cat "$MAP"))"
 
-# restore() must PARSE that STEWARD row and route the id into the steward launch.
+# restore() must PARSE that HUB row and route the id into the hub launch.
 # --dry-run exercises the parse+wiring without spawning fleet-up/claude, but only
 # for a fleet that is DOWN — so drop the live snap session first.
 tmux kill-session -t snap 2>/dev/null
 dry=$(bash "$RESTORE" --dry-run 2>/dev/null)
 # the display truncates the id at the first '-' (mirrors the worker line), so the
-# 'stew…' prefix from 'stew-abc123' confirms restore parsed the STEWARD row's id.
-printf '%s\n' "$dry" | grep -q 'steward → claude --resume stew' \
-  || fail "restore --dry-run should report resuming the steward from the STEWARD row (got: $dry)"
+# 'stew…' prefix from 'stew-abc123' confirms restore parsed the HUB row's id.
+printf '%s\n' "$dry" | grep -q 'hub → claude --resume stew' \
+  || fail "restore --dry-run should report resuming the hub from the HUB row (got: $dry)"
 # issue #153: a 'working' window is flagged for auto-continue; a 'done' one is not.
 printf '%s\n' "$dry" | grep 'issue-9 ' | grep -q '(auto-continue)' \
   || fail "restore --dry-run should mark the 'working' issue-9 window for auto-continue (got: $dry)"
@@ -213,7 +212,7 @@ printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q '(auto-continue)' \
   && fail "restore: a no-transcript 'working' window must NOT be nudged as if resumed (got: $dry2)"
 
 # ============================================================ 3. RESUME/FALLBACK
-# steward-session.sh builds the hub; assert the steward pane's launch command.
+# hub-session.sh builds the hub; assert the hub pane's launch command.
 # poll for the claude stub's recorded argv (the pane starts asynchronously).
 wait_argv() {
   # ~20s budget: the pane launch is async and a loaded CI box can lag well past
@@ -227,44 +226,52 @@ wait_argv() {
   return 1
 }
 
-# --- RESUME: STEWARD_RESUME_ID present ⇒ `claude --resume <id>` ---------------
+# --- RESUME: HUB_RESUME_ID present ⇒ `claude --resume <id>` ------------------
 : > "$WORK/claude-argv"
 tmux new-session -d -s res -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session res"
-env -u STEWARD_CMD -u FLEET_STEWARD_CMD \
-  STEWARD_SESSION=res STEWARD_CWD="$STEW_PATH" STEWARD_RESUME_ID="stew-abc123" \
-  bash "$STEWARDSH" >/dev/null 2>&1 || fail "steward-session.sh (resume) exited non-zero"
-wait_argv res || fail "resume: the steward pane never launched claude (no recorded argv)"
+env -u HUB_CMD -u FLEET_HUB_CMD \
+  HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (resume) exited non-zero"
+wait_argv res || fail "resume: the hub pane never launched claude (no recorded argv)"
 grep -q -- '--resume stew-abc123' "$WORK/claude-argv" \
-  || fail "resume: steward should launch 'claude --resume stew-abc123' (got: $(cat "$WORK/claude-argv"))"
+  || fail "resume: the hub should launch 'claude --resume stew-abc123' (got: $(cat "$WORK/claude-argv"))"
 
-# --- FALLBACK: no id ⇒ a FRESH steward that runs /fleet-steward ---------------
+# --- FALLBACK: no id ⇒ a FRESH, BARE `claude` (issue #439) -------------------
+# The stub records "$*", so a bare `claude` shows up as an EMPTY argv line.
 : > "$WORK/claude-argv"
 tmux new-session -d -s fresh -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session fresh"
-env -u STEWARD_CMD -u FLEET_STEWARD_CMD -u STEWARD_RESUME_ID \
-  STEWARD_SESSION=fresh STEWARD_CWD="$STEW_PATH" \
-  bash "$STEWARDSH" >/dev/null 2>&1 || fail "steward-session.sh (fresh) exited non-zero"
-wait_argv fresh || fail "fallback: the steward pane never launched claude (no recorded argv)"
+env -u HUB_CMD -u FLEET_HUB_CMD -u HUB_RESUME_ID \
+  HUB_SESSION=fresh HUB_CWD="$STEW_PATH" \
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (fresh) exited non-zero"
+# wait_argv gates on a NON-EMPTY file, but a bare launch writes only a blank line
+# — poll the line COUNT instead so this leg can never race.
+for _n in $(seq 1 200); do
+  [ "$(wc -l < "$WORK/claude-argv")" -ge 1 ] && break
+  tmux run-shell -t fresh 'true' 2>/dev/null
+  perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
+done
+[ "$(wc -l < "$WORK/claude-argv")" -ge 1 ] || fail "fallback: the hub pane never launched claude (no recorded argv)"
 grep -q -- '--resume' "$WORK/claude-argv" \
-  && fail "fallback: a steward with no id must NOT use --resume (got: $(cat "$WORK/claude-argv"))"
-grep -q -- '/fleet-steward' "$WORK/claude-argv" \
-  || fail "fallback: a fresh steward should run /fleet-steward (got: $(cat "$WORK/claude-argv"))"
+  && fail "fallback: a hub with no id must NOT use --resume (got: $(cat "$WORK/claude-argv"))"
+grep -qx '' "$WORK/claude-argv" \
+  || fail "fallback: a fresh hub should launch a BARE claude, no args (got: $(cat "$WORK/claude-argv"))"
 
-# --- STALE ID: `--resume` fails ⇒ fall back to a FRESH steward, not a bare shell
+# --- STALE ID: `--resume` fails ⇒ fall back to a FRESH hub, not a bare shell -
 : > "$WORK/claude-argv"; : > "$WORK/fail-resume"   # make the stub fail on --resume
 tmux new-session -d -s stale -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session stale"
-env -u STEWARD_CMD -u FLEET_STEWARD_CMD \
-  STEWARD_SESSION=stale STEWARD_CWD="$STEW_PATH" STEWARD_RESUME_ID="stew-gone-77" \
-  bash "$STEWARDSH" >/dev/null 2>&1 || fail "steward-session.sh (stale) exited non-zero"
-# both should appear: the attempted resume, THEN the fresh fallback (|| path)
+env -u HUB_CMD -u FLEET_HUB_CMD \
+  HUB_SESSION=stale HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-gone-77" \
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale) exited non-zero"
+# both should appear: the attempted resume, THEN the bare fresh fallback (|| path)
 for _n in $(seq 1 200); do
-  grep -q -- '/fleet-steward' "$WORK/claude-argv" && break
+  [ "$(wc -l < "$WORK/claude-argv")" -ge 2 ] && break
   tmux run-shell -t stale 'true' 2>/dev/null
   perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
 done
 grep -q -- '--resume stew-gone-77' "$WORK/claude-argv" \
-  || fail "stale: the steward should first attempt --resume (got: $(cat "$WORK/claude-argv"))"
-grep -q -- '/fleet-steward' "$WORK/claude-argv" \
-  || fail "stale: a FAILED resume must fall back to a fresh steward, not a bare shell (got: $(cat "$WORK/claude-argv"))"
+  || fail "stale: the hub should first attempt --resume (got: $(cat "$WORK/claude-argv"))"
+grep -qx '' "$WORK/claude-argv" \
+  || fail "stale: a FAILED resume must fall back to a fresh bare claude, not a bare shell (got: $(cat "$WORK/claude-argv"))"
 rm -f "$WORK/fail-resume"
 
 # ================================= 4. HUB-ONLY RECOVERY (issue #160) ============
@@ -293,10 +300,10 @@ mkdir -p "$FLEET_CONF_DIR/restore"
   printf 'FLEET\thubonly\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
   printf 'WIN\tissue-9\t%s\twrk-def456\t9\n'  "$WORK_PATH"
   printf 'WIN\tissue-11\t%s\twrk-xyz789\t11\n' "$W11"
-  printf 'STEWARD\t%s\tstew-abc123\n' "$STEW_PATH"
+  printf 'HUB\t%s\tstew-abc123\n' "$STEW_PATH"
 } > "$HMAP"
 
-# A LIVE hub-only session: just the 'plan' panel with a @steward pane, no work
+# A LIVE hub-only session: just the 'plan' panel with a @hub pane, no work
 # windows — exactly the mid-restore shape that used to destroy the map. Create it
 # on the SAME isolated server the earlier sections are still using; do NOT
 # kill-server first and restart — that races the socket teardown and flaked
@@ -307,7 +314,7 @@ tmux new-session -d -s hubonly -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null \
   || fail "could not start hub-only session"
 tmux rename-window -t hubonly plan
 hsp=$(tmux split-window -P -F '#{pane_id}' -t hubonly:plan -c "$STEW_PATH")
-tmux set-option -p -t "$hsp" @steward 1
+tmux set-option -p -t "$hsp" @hub 1
 for _s in res fresh stale; do tmux kill-session -t "$_s" 2>/dev/null; done
 
 # --- SHRINK GUARD: a hub-only snapshot must keep the richer prior WIN rows ------
@@ -343,5 +350,5 @@ dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF i
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
 
-printf 'selftest PASS: steward snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — STEWARD row captured & resumed, working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
+printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — HUB row captured & resumed, working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
 exit 0

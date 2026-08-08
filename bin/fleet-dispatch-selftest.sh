@@ -9,7 +9,7 @@
 #   • PRIORITY ORDER   priority:p0 spawns before p1 before unlabeled.
 #   • RATE-LIMIT       at most min(headroom, MAX_PER_TICK) spawns per tick.
 #   • PER-FLEET CAP    FLEET_MAX_SESSIONS bounds the fill independent of global.
-#   • ELIGIBILITY      assigned / blocked / steward-control issues are never
+#   • ELIGIBILITY      assigned / blocked issues are never
 #                      spawned even when they carry `autofill`. (Assigned is also
 #                      the cross-machine pre-filter for issue #258: with
 #                      FLEET_PRESPAWN_DEDUP the spawn claims AT SPAWN, so a peer's
@@ -22,10 +22,10 @@
 # and issue-15 (slug-named window, @issue cleared) — cap 5, 2 spawns/tick.
 # Backlog (all p0 unless noted; `autofill` unless noted):
 #   #10 live via @issue, #15 live via slug name, #20 p1, #25 p0 NO autofill,
-#   #30 p0 assigned, #35 p0 blocked, #40 p0 steward-control, #50 autofill-only.
+#   #30 p0 assigned, #35 p0 blocked, #50 autofill-only.
 # Live count = 2 → slots = min(6,3,2)=2.
 # Expected spawns, in order: #20 (p1) then #50 (unlabeled tier) — every eligible
-# p0 is live / assigned / blocked / steward-control / un-opted-in, so the two
+# p0 is live / assigned / blocked / un-opted-in, so the two
 # free slots fall to the next tiers.
 #
 # Needs `jq` (the fake gh applies the dispatcher's real --jq filter through it) —
@@ -120,7 +120,6 @@ cat > "$CANNED" <<'JSON'
   {"number":25,"labels":[{"name":"priority:p0"}],"assignees":[]},
   {"number":30,"labels":[{"name":"priority:p0"},{"name":"autofill"}],"assignees":[{"login":"someone"}]},
   {"number":35,"labels":[{"name":"priority:p0"},{"name":"autofill"},{"name":"blocked"}],"assignees":[]},
-  {"number":40,"labels":[{"name":"priority:p0"},{"name":"autofill"},{"name":"steward-control"}],"assignees":[]},
   {"number":50,"labels":[{"name":"autofill"}],"assignees":[]}
 ]
 JSON
@@ -151,7 +150,6 @@ grep -qxF 15 "$SPAWN_LOG" && fail "#15 has a live issue-15 window (slug) — mus
 grep -qxF 25 "$SPAWN_LOG" && fail "#25 lacks the autofill label (not opted in, #421) — must NOT spawn"
 grep -qxF 30 "$SPAWN_LOG" && fail "#30 is assigned (== claimed elsewhere, #258) — must NOT spawn"
 grep -qxF 35 "$SPAWN_LOG" && fail "#35 is blocked (autofill-excluded even with the label) — must NOT spawn"
-grep -qxF 40 "$SPAWN_LOG" && fail "#40 is steward-control (a bridge endpoint) — must NOT spawn"
 
 printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision\n' "$got"
 exit 0

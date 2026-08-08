@@ -41,7 +41,7 @@ if [[ -n "$CTX_PCT" ]]; then
   # pane's window as @ctx_pct — the same tmux-option state bus as @claude_state /
   # @issue — so the Stop hook (bin/set-claude-state.sh) can read it. The Stop-hook
   # stdin doesn't carry the context window, but the statusline does. No-op outside
-  # tmux; cheap set-option on every render. Panels/steward stamp too but are
+  # tmux; cheap set-option on every render. Panels/the hub stamp too but are
   # excluded by the nudge's scope gate, so the extra write is harmless.
   if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
     tmux set-window-option -t "$TMUX_PANE" @ctx_pct "$CTX_INT" 2>/dev/null || true

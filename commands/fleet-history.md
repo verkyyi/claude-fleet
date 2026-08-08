@@ -1,16 +1,16 @@
 # /fleet-history — browse & resume closed worker sessions (landed + unlanded)
 
-<!-- fleet skill · owner: steward -->
+<!-- fleet skill · owner: hub -->
 
-When the cleanup daemon (or the steward's manual reap op) reaps a merged worker's
+When the cleanup daemon (or a manual reap from the hub) reaps a merged worker's
 PR it removes the `issue-<N>` worktree and kills the window — but the worker's Claude transcript
 **survives** under
 `~/.claude/projects/`. This skill surfaces those finished sessions from the
 history ledger (`bin/fleet-history.sh`): **list** what closed, **open**
 a PR, **review** the recorded transcript, and — the point — **resume** a session.
 It reads the ledger and may recreate a worktree in the fleet's base checkout
-(`$FLEET_MAIN`); it never merges or mutates `$FLEET_REPO`. Browsing/landing is a
-steward concern, so this skill is **steward-only**.
+(`$FLEET_MAIN`); it never merges or mutates `$FLEET_REPO`. Browsing/landing is an
+operator concern, so this skill runs from the **hub pane**, never a worker.
 
 Two kinds of row live in the ledger (the `state` column, #320, distinguishes them
 — `✓` vs `✗` in the list):
@@ -36,15 +36,15 @@ reuse the literal values it prints:
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
+SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
 echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
 ```
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — this skill is `owner: steward`. If `$SEAT` isn't `steward`,
-  **refuse in one line and stop**, e.g. *"/fleet-history is steward-only; you're in
-  the worker seat."*
+- **Wrong seat** — this skill is `owner: hub`. If `$SEAT` IS `worker`,
+  **refuse in one line and stop**, e.g. *"/fleet-history runs from the hub pane;
+  you're in a worker seat."*
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` — this
 fleet only.
@@ -136,7 +136,7 @@ Rails: operate on YOUR fleet's `$FLEET_REPO` / `$FLEET_MAIN` only — never anot
 fleet's repo, sessions, or ledger. This skill never merges, force-pushes, or
 edits history; it reads the ledger and, on resume, recreates a **throwaway**
 worktree at an already-merged SHA (landed rows) or reuses the surviving worktree
-(closed-unlanded rows). The ledger has two writers — the cleanup daemon (or the
-steward's manual reap op) records **landed** rows at reap time, and the
+(closed-unlanded rows). The ledger has two writers — the cleanup daemon (or a
+manual reap from the hub) records **landed** rows at reap time, and the
 ledger-watch daemon records **closed-unlanded** rows when a worker window vanishes
 (#320); this skill only reads and acts on them.

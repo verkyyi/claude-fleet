@@ -2,7 +2,7 @@
 
 The dash and status bar learn of "CI went green" / "PR merged" / a new issue only
 when the pollers next tick — the collector (~60s, issues) and pr-refresh (~15s,
-PR/CI). That is exactly the moment the steward is watching a PR go green (to review
+PR/CI). That is exactly the moment you are watching a PR go green (to review
 / land) and the cleanup daemon is waiting to reap it. The **webhook daemon**
 (`bin/fleet-webhook.sh`, `com.claude-fleet.webhook`) makes those edges near-instant
 (~1s) by wiring GitHub's real-time webhook stream to the SAME single-writer
@@ -34,8 +34,8 @@ com.claude-fleet.webhook  (KeepAlive supervisor)
           --url http://127.0.0.1:<port>
 ```
 
-- The supervisor fans out over **every live fleet** (like `fleet-watch.sh` iterates
-  the sockets/confs), deduped **per repo** — a single forward per repo, even if two
+- The supervisor fans out over **every live fleet** (iterating the sockets/confs
+  like the other fan-out daemons), deduped **per repo** — a single forward per repo, even if two
   sessions serve it. Dead forwards are auto-restarted each rescan; a repo that opts
   out or whose fleet goes down has its forward reaped.
 - The handler binds to **127.0.0.1 only**. It is threaded, so a slow kick never
@@ -148,8 +148,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.webhook
 
 claude-fleet's own daemons need a live-install re-apply after landing: sync the
 merged files and install the new daemon (`launchctl`/`systemctl`), plus
-`gh extension install cli/gh-webhook`. The steward handles the sync + daemon install
-separately (see the auto-land + sync-install flow).
+`gh extension install cli/gh-webhook`. Run `/fleet-sync-install` from the hub for
+the sync; install the daemon separately (see docs/INSTALL.md).
 
 ## Verify
 

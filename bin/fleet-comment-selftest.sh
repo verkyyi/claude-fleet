@@ -15,7 +15,7 @@
 #   (e) explicit --from overrides auto-detection;
 #   (f) --no-footer suppresses the footer but KEEPS no-relay;
 #   (g) no $(hostname) / $USER leak;
-#   plus role auto-detection (worker/steward/generic), idempotency, and the
+#   plus role auto-detection (worker/operator/generic), idempotency, and the
 #   watcher path preserving the separate `<!-- fleet:wake … -->` coalescing marker
 #   + never inflating the bridge's `- ` wake-line count.
 #
@@ -74,7 +74,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf '\n--- end ---\n' >&2; exit 1; }
 
 # Run fleet-comment.sh in a controlled env. Per-test knobs are shell vars set by
-# the caller: RUNDIR (cwd), FAKE_ISSUE/FAKE_SESSION, FLEET_SEAT. The
+# the caller: RUNDIR (cwd), FAKE_ISSUE/FAKE_SESSION, FLEET_HUB. The
 # vars are explicitly forwarded (a prefix assignment to a function is NOT exported
 # to its grandchild bash). BODYFILE goes into the env so the fake gh can find it.
 fc() {
@@ -86,13 +86,13 @@ fc() {
     BODYFILE="$BODYFILE" \
     FAKE_ISSUE="${FAKE_ISSUE:-}" \
     FAKE_SESSION="${FAKE_SESSION:-}" \
-    FLEET_SEAT="${FLEET_SEAT:-}" \
+    FLEET_HUB="${FLEET_HUB:-}" \
       bash "$FCS" "$@" >/dev/null 2>&1
   )
 }
 
 # Reset the per-test knobs to a neutral baseline (no seat signals, a session name).
-reset() { RUNDIR="$WORK"; FAKE_ISSUE=''; FAKE_SESSION='fleet-testrepo'; FLEET_SEAT=''; }
+reset() { RUNDIR="$WORK"; FAKE_ISSUE=''; FAKE_SESSION='fleet-testrepo'; FLEET_HUB=''; }
 
 # Assert the visible signature line has no emoji/glyph: strip the two ALLOWED
 # separators (em-dash U+2014 = \342\200\224, middle-dot U+00B7 = \302\267) byte-wise
@@ -126,17 +126,17 @@ grep -qF "$MARKER" "$BODYFILE" || fail "(c) worker: no-relay marker missing on a
 grep -q '^- ' "$BODYFILE" && fail "worker: the footer must not introduce a '- ' line (would inflate the bridge wake count)"
 printf 'selftest: worker leg PASS (auto-detect, visible+marker+no-relay-last, no emoji)\n' >&2
 
-# ============================== steward (auto via FLEET_SEAT) ==================
-# The steward hub exports FLEET_SEAT=steward (steward-session.sh); it has no @issue,
+# ============================== operator hub (auto via FLEET_HUB) =============
+# The hub pane exports FLEET_HUB=1 (hub-session.sh); it has no @issue,
 # so the context falls to the fleet session name.
-reset; FLEET_SEAT=steward
-fc 30 --note --body 'triaged #30' || fail "steward --note exited non-zero"
-grep -qxF '— fleet · steward · fleet-testrepo' "$BODYFILE" \
-  || fail "steward: visible signature '— fleet · steward · fleet-testrepo' missing (no @issue → session context)"
-printf '%s' "$(grep -F '<!-- fleet:from ' "$BODYFILE")" | grep -qF 'role=steward' \
-  || fail "steward: marker role should be steward"
-assert_no_emoji "steward"
-printf 'selftest: steward leg PASS (FLEET_SEAT=steward → steward, session context)\n' >&2
+reset; FLEET_HUB=1
+fc 30 --note --body 'triaged #30' || fail "operator --note exited non-zero"
+grep -qxF '— fleet · operator · fleet-testrepo' "$BODYFILE" \
+  || fail "operator: visible signature '— fleet · operator · fleet-testrepo' missing (no @issue → session context)"
+printf '%s' "$(grep -F '<!-- fleet:from ' "$BODYFILE")" | grep -qF 'role=operator' \
+  || fail "operator: marker role should be operator"
+assert_no_emoji "operator"
+printf 'selftest: operator leg PASS (FLEET_HUB=1 → operator, session context)\n' >&2
 
 # ============================== generic fallback ==============================
 # No seat signals at all + no session name → generic 'fleet', context = repo slug.
@@ -163,10 +163,10 @@ printf 'selftest: --from override leg PASS (explicit role beats auto-detect)\n' 
 
 # ============================== (d) --to-worker (relayed) =====================
 # A relayed comment gets the footer but must stay RELAYABLE → no no-relay marker.
-reset; FLEET_SEAT=steward
-fc 40 --to-worker --body 'the steward instructs you' || fail "--to-worker exited non-zero"
+reset; FLEET_HUB=1
+fc 40 --to-worker --body 'the operator instructs you' || fail "--to-worker exited non-zero"
 grep -qF '<!-- fleet:from ' "$BODYFILE" || fail "(d) --to-worker should still carry the footer marker"
-grep -q '^— fleet · steward' "$BODYFILE" || fail "(d) --to-worker should carry the visible signature"
+grep -q '^— fleet · operator' "$BODYFILE" || fail "(d) --to-worker should carry the visible signature"
 grep -qF "$MARKER" "$BODYFILE" && fail "(d) --to-worker must NOT carry the no-relay marker (stays relayable)"
 printf 'selftest: --to-worker leg PASS (footer present, no no-relay)\n' >&2
 
@@ -200,20 +200,20 @@ HN=$(hostname 2>/dev/null); UN=$(id -un 2>/dev/null)
 [ -n "$UN" ] && grep -qF "$UN" "$BODYFILE" && fail "(g) the footer leaked the OS user ($UN)"
 printf 'selftest: no-leak leg PASS (no hostname / OS-user in the footer)\n' >&2
 
-# ============================== watcher path (coalesce-safe) ==================
-# The watcher posts via --to-worker --from watcher. The footer must NOT disturb the
-# body's `- ` wake-edge lines nor the separate `<!-- fleet:wake … -->` coalescing
-# marker the issue-bridge greps + counts (constraint #1 / issue #198).
-reset; FLEET_SEAT=''   # watcher runs headless (no seat env)
-wakebody=$'- PR #196 (#181) green — /land 196?\n- #7 shipped PR #70 — review?\n<!-- fleet:wake test-repo:196 pr:test-repo:70 -->'
-fc 146 --to-worker --from watcher --body "$wakebody" || fail "watcher wake exited non-zero"
-grep -q '^— fleet · watcher' "$BODYFILE" || fail "watcher: visible signature missing"
-grep -qF "$MARKER" "$BODYFILE" && fail "watcher: a relayed wake must not carry no-relay"
-grep -qF '<!-- fleet:wake test-repo:196 pr:test-repo:70 -->' "$BODYFILE" \
-  || fail "watcher: the separate fleet:wake coalescing marker must be preserved verbatim"
-edges=$(grep -c '^- ' "$BODYFILE")
-[ "$edges" = 2 ] || fail "watcher: expected exactly 2 '- ' wake lines (footer must not add/remove any), got $edges"
-printf 'selftest: watcher leg PASS (footer preserves wake edges + fleet:wake marker)\n' >&2
+# ============================== body preserved verbatim ======================
+# The footer APPENDS — it must never rewrite the body. A multi-line body with `- `
+# list lines and a trailing HTML comment of its own must come back byte-identical,
+# with only the footer block added underneath.
+reset; FLEET_HUB=''   # a headless poster (no hub env)
+listbody=$'- PR #196 (#181) green — land it?\n- #7 shipped PR #70 — review?\n<!-- caller:own-marker -->'
+fc 146 --to-worker --from daemon --body "$listbody" || fail "verbatim-body post exited non-zero"
+grep -q '^— fleet · daemon' "$BODYFILE" || fail "verbatim: visible signature missing"
+grep -qF "$MARKER" "$BODYFILE" && fail "verbatim: a --to-worker comment must not carry no-relay"
+grep -qF '<!-- caller:own-marker -->' "$BODYFILE" \
+  || fail "verbatim: the body's own HTML comment must be preserved untouched"
+lines=$(grep -c '^- ' "$BODYFILE")
+[ "$lines" = 2 ] || fail "verbatim: expected exactly 2 '- ' body lines (footer must not add/remove any), got $lines"
+printf 'selftest: verbatim-body leg PASS (footer appends, never rewrites)\n' >&2
 
-printf 'selftest PASS: footer role-resolution (worker/steward/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + watcher-coalesce-safe verified\n'
+printf 'selftest PASS: footer role-resolution (worker/operator/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + body-verbatim verified\n'
 exit 0

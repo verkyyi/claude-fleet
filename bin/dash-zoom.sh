@@ -1,20 +1,20 @@
 #!/bin/bash
 # dash-zoom.sh — prefix+g, progressive DASH focus, SCOPED TO THE CURRENT SESSION
-# (one dash hub per fleet), the mirror image of steward-zoom.sh:
+# (one dash hub per fleet), the mirror image of hub-zoom.sh:
 #   from another window : jump to THIS session's plan window and focus the dash
-#                         pane (split view — dash above, steward below)
+#                         pane (split view — dash above, hub below)
 #   already in that window: toggle the dash pane fullscreen (zoom) — press again
 #                         to restore the split
 # The dash pane = pane option @dash=1 (tmux-dashboard.sh marks its OWN pane via
 # fleet_mark_role — never the active pane, issue #135). No marked pane IN THIS
-# SESSION → fall back to building this fleet's hub (steward-session.sh builds the
-# dash+steward split), passing the current session so the hub lands here, not in
+# SESSION → fall back to building this fleet's hub (hub-session.sh builds the
+# dash+hub split), passing the current session so the hub lands here, not in
 # another fleet.
 set -uo pipefail
 SESS=$(tmux display-message -p '#{session_name}' 2>/dev/null)
 target=$(tmux list-panes -s -t "$SESS" -F '#{pane_id} #{@dash}' 2>/dev/null | awk '$2=="1"{print $1; exit}')
 if [ -z "$target" ]; then
-  exec env STEWARD_SESSION="$SESS" bash "$(dirname "$0")/steward-session.sh"
+  exec env HUB_SESSION="$SESS" bash "$(dirname "$0")/hub-session.sh"
 fi
 
 tw=$(tmux display-message -p -t "$target" '#{window_id}')

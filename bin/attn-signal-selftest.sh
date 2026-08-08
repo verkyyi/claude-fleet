@@ -2,12 +2,12 @@
 # attn-signal-selftest.sh — the unified attention signal (issues #166, #368).
 #
 # History: #166 split one 'needs' state into two signals — @attn_needs (workers,
-# hub panels excluded) drove a "● N" badge, @steward_needs drove a red ⌂ beacon.
-# #368 UNIFIES them back into ONE number and adds cross-fleet reach:
-#   @attn_needs         — count of needy windows, now counting the plan (steward)
+# hub panels excluded) drove a "● N" badge, and a now-RETIRED per-fleet flag drove
+# a red ⌂ beacon. #368 UNIFIES them back into ONE number and adds cross-fleet reach:
+#   @attn_needs         — count of needy windows, now counting the plan (hub)
 #                         window as a normal session and excluding ONLY the
-#                         non-claude panels dash/backlog. A needy steward lands in
-#                         this one badge; @steward_needs is RETIRED (the ⌂ is
+#                         non-claude panels dash/backlog. A needy hub lands in
+#                         this one badge; the old beacon flag is gone (the ⌂ is
 #                         nav-only). status-left renders it as a red "● N" with a
 #                         render-time ACTIVE-WINDOW DISCOUNT (you don't count the
 #                         needy window you're already on — plan included).
@@ -24,7 +24,7 @@
 #     an isolated FLEET_CONF_DIR) over a fixture of sessions in known @claude_state
 #     values, then read back the @attn_needs / @attn_other_windows it published.
 #     Asserts: plan counts, dash/backlog excluded, stateless windows named like state
-#     keywords never miscount, @steward_needs is gone, and the cross-fleet WINDOW
+#     keywords never miscount, the retired beacon flag is gone, and the cross-fleet WINDOW
 #     aggregation ("total minus own").
 #
 #   PART B — the ⌂ hub icon is NAV-ONLY: expand the REAL status-left and assert the
@@ -108,7 +108,7 @@ tf fleetD new-session -d -s fleetD -n plan
 tf fleetD new-window -t fleetD: -n issue-5
 
 setst() { local f="${1%%:*}"; tf "$f" set-window-option -t "$1" @claude_state "$2"; }
-setst fleetA:plan   needs      # hub/steward now counts INTO the badge (issue #368)
+setst fleetA:plan   needs      # the hub now counts INTO the badge (issue #368)
 setst fleetA:issue-1 needs      # worker → badge
 setst fleetA:issue-2 needs      # worker → badge
 setst fleetA:issue-3 working    # not needy
@@ -153,9 +153,12 @@ d_badge="$(opt fleetD @attn_needs)"
 [ "$c_badge" = 0 ] || fail "fleetC badge: expected 0 (needy dash+backlog panels are excluded), got '${c_badge}'"
 [ "$d_badge" = 0 ] || fail "fleetD badge: expected 0, got '${d_badge}'"
 
-# @steward_needs is RETIRED (issue #368) — the spinner must no longer publish it.
-[ -z "$(opt fleetA @steward_needs)" ] || fail "fleetA: @steward_needs must be retired (unset), got '$(opt fleetA @steward_needs)'"
-[ -z "$(opt fleetC @steward_needs)" ] || fail "fleetC: @steward_needs must be retired (unset), got '$(opt fleetC @steward_needs)'"
+# The pre-#368 red-⌂ beacon flag is RETIRED — the spinner must no longer publish it.
+# Its historical option name is spelled out here because that is what the assertion
+# has to look for; nothing in the fleet writes or reads it any more.
+RETIRED_BEACON=@steward_needs
+[ -z "$(opt fleetA "$RETIRED_BEACON")" ] || fail "fleetA: the ⌂ beacon flag must be retired (unset), got '$(opt fleetA "$RETIRED_BEACON")'"
+[ -z "$(opt fleetC "$RETIRED_BEACON")" ] || fail "fleetC: the ⌂ beacon flag must be retired (unset), got '$(opt fleetC "$RETIRED_BEACON")'"
 
 # Cross-fleet WINDOW count (issue #368): total needy windows = 4 (A:3 + B:1); each
 # fleet sees that total minus its own count — proving the aggregation is over WINDOWS
@@ -172,7 +175,7 @@ d_other="$(opt fleetD @attn_other_windows)"
 [ -z "$(opt fleetA @attn_other_fleets)" ] || fail "fleetA: @attn_other_fleets must be retired (unset)"
 
 kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
-printf 'PART A ok: unified badge — A●3(plan+2), B●1, C●0(dash/backlog excl), D●0; @steward_needs retired\n'
+printf 'PART A ok: unified badge — A●3(plan+2), B●1, C●0(dash/backlog excl), D●0; ⌂ beacon flag retired\n'
 printf 'PART A ok: cross-fleet WINDOW count — A1 B3 C4 D4 (total 4 minus own), @attn_other_fleets retired (#368)\n'
 
 # --- shared render helper: expand the REAL status-left as seen FROM a window ---
@@ -186,7 +189,7 @@ sl_at() { tf "$1" display-message -p -t "$1:$2" "$SL"; }
 
 # --- PART B: the ⌂ hub icon is NAV-ONLY (issue #368) --------------------------
 # Even with the hub itself needy, the ⌂ must be blue (on hub) / dim (off hub) and
-# NEVER a red block (bg=#f7768e) — the red steward beacon is retired. (The red local
+# NEVER a red block (bg=#f7768e) — the red ⌂ beacon is retired. (The red local
 # ● uses fg=#f7768e, so we grep the bg= form to isolate the icon block.)
 tf fleetB set-option -t fleetB @attn_needs 1
 tf fleetB set-option -t fleetB @attn_other_windows 0
@@ -209,8 +212,8 @@ tf fleetA set-option -t fleetA @attn_needs 3
 case "$(sl_at fleetA issue-3)" in *"● 3"*) : ;; *) fail "discount(a): non-needy active window must show the full ● 3" ;; esac
 # (b) active needy WORKER (issue-1=needs) → discount by 1
 case "$(sl_at fleetA issue-1)" in *"● 2"*) : ;; *) fail "discount(b): active needy worker must discount to ● 2" ;; esac
-# (c) active needy PLAN/steward (plan=needs) → ALSO discounts (issue #368)
-case "$(sl_at fleetA plan)" in *"● 2"*) : ;; *) fail "discount(c): active needy plan/steward must discount to ● 2 (#368)" ;; esac
+# (c) active needy PLAN/hub (plan=needs) → ALSO discounts (issue #368)
+case "$(sl_at fleetA plan)" in *"● 2"*) : ;; *) fail "discount(c): active needy plan/hub must discount to ● 2 (#368)" ;; esac
 # (d) active needy dash/backlog PANEL → NOT discounted (never in the badge)
 tf fleetC set-option -t fleetC @attn_needs 3
 case "$(sl_at fleetC backlog)" in *"● 3"*) : ;; *) fail "discount(d): active needy backlog must NOT discount (● 3)" ;; esac

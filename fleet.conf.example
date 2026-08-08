@@ -90,11 +90,11 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # don't hand-spawn every one.
 #
 # OPT-IN PER ISSUE (issue #421): an issue is only auto-spawned if it carries the
-# canonical `autofill` label — the steward tags exactly the issues that may fill
+# canonical `autofill` label — you tag exactly the issues that may fill
 # idle slots hands-off (like `autoland` opts a PR into hands-off land). So it is a
 # TWO-key gate: this fleet armed (FLEET_AUTOFILL=1) AND the issue labelled. Full
 # eligibility = open, unassigned, carries `autofill`, no live window bound, not
-# labelled blocked/steward-control. Priority = a `priority:p0|p1|p2` label tier
+# labelled `blocked`. Priority = a `priority:p0|p1|p2` label tier
 # (p0 first), then FIFO by issue number; unlabeled issues go last.
 #
 # COST: each auto-spawn launches a real Claude session that spends LLM tokens and
@@ -109,9 +109,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 
 # --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
 # Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,
-# the one issue-filer channel (⌃n, the dash new-session box, the steward's file+spawn
+# the one issue-filer channel (⌃n, the dash new-session box, the hub's file+spawn
 # — all route through bin/fleet-issue-file.sh, #332) defaults a filing that passes no
-# --milestone to THIS milestone; the steward re-buckets it to a proper theme during
+# --milestone to THIS milestone; you re-bucket it to a proper theme during
 # triage. The milestone is AUTO-CREATED if absent (idempotent), and it is BEST-EFFORT
 # (issue #297): if the milestone plumbing fails the issue still files WITHOUT one, so
 # ⌃n never fails to file. An explicit --milestone always wins. Empty/unset = OFF
@@ -125,13 +125,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/ISSUE-BRIDGE.md)
 # relays a trusted comment on a bound issue INTO that worker as its next turn.
 # The issue thread becomes the single durable channel for driving a worker
-# (steward→worker, external-collaborator→worker), replacing flaky send-keys.
+# (operator→worker, worker→worker, external-collaborator→worker), replacing send-keys.
 #
 # SECURITY: a relayed comment becomes autonomous tool-use in a bypass-permissions
 # worker — treat it as remote code execution. The author_association gate below is
 # the headline control; un-gated relay on a PUBLIC repo is unsafe. Loop-safety: the
 # bridge relays every comment from a trusted author UNLESS it carries the marker
-# `<!-- fleet:no-relay -->` — fleet-internal comments (worker progress, steward
+# `<!-- fleet:no-relay -->` — fleet-internal comments (worker progress, an operator
 # record) MUST be posted via bin/fleet-comment.sh (which stamps the marker), so
 # nothing the fleet writes loops back in. See docs/ISSUE-BRIDGE.md.
 # @label=Relay issue comments to worker @group=bridge @tier=common @scope=fleet @edit=bool
@@ -157,8 +157,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # bridge DEFERS a relay while the target's ❯ input row holds un-submitted text (so it
 # never prepends onto a human's half-typed line, issue #191). That defer is otherwise
 # UNBOUNDED: a row that reads non-empty persistently (a stuck render, a future TUI
-# placeholder, a capture-pane quirk) would wedge the channel forever — for the
-# @steward control channel that silently drops operator messages AND watcher wakes.
+# placeholder, a capture-pane quirk) would wedge the channel forever, silently
+# dropping a handback you are waiting on.
 # After this many consecutive defers of the SAME comment, the bridge delivers anyway
 # and logs a WARNING; the counter resets the moment the input clears, so a real
 # partial is never clobbered. TRADE-OFF: keep it GENEROUS enough that a human pausing
@@ -166,24 +166,6 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Default 20 ≈ 5 min at the 15s poll. Per-comment, persisted in the bridge state dir.
 # @label=Bridge: max typing-defers @group=bridge @tier=advanced @scope=fleet @edit=int @unit=ticks
 #FLEET_BRIDGE_MAX_TYPING_DEFERS=20
-
-# --- Steward control issue: relay its comments INTO the steward (issue #146) -----
-# The steward lives in the 'plan' hub (a pane with NO @issue), so the issue-bridge
-# has no route to it by default. Bind a long-lived control/inbox issue here and the
-# bridge relays trusted comments on it INTO the @steward pane as its next turn — the
-# steward becomes a bridge endpoint like a worker, giving you (a) an async
-# operator↔steward channel (comment from anywhere → the steward takes a turn), (b) an
-# event sink for the fleet watcher, and (c) a durable audit log of wake-events. Every
-# bridge gate still applies (author_association floor, the <!-- fleet:no-relay -->
-# marker, idle-gate on the hub's @claude_state, dedup) — so the steward's OWN notes
-# (posted via bin/fleet-comment.sh, which stamps the marker) never loop back into it.
-# Create ONE non-closing issue per fleet (e.g. titled "🛰 steward · <fleet>") and
-# record its number here. It is a DEDICATED bridge endpoint, never a worker task —
-# label it `steward-control` (a control label the spawn-eligibility filters exclude
-# so a worker is never spawned on it). Requires FLEET_ISSUE_BRIDGE=1; empty ⇒ no steward
-# route (worker relay unchanged). See docs/ISSUE-BRIDGE.md.
-# @label=Steward control issue @group=bridge @tier=common @scope=fleet @edit=int
-#FLEET_STEWARD_ISSUE=
 
 # --- Cleanup daemon (bin/fleet-cleanup-daemon.sh, com.claude-fleet.cleanup) ------
 # ON by default. THE FLEET NEVER MERGES — /fleet-ship arms GitHub auto-merge and
@@ -214,7 +196,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # dirty → KEEP the worktree + issue (resumable), `closed-unlanded` row. A /clear or
 # /fleet-handoff cycle (reason=clear|resume) is a no-op, so it never fires on a
 # handoff. Scoped to issue-bound workers (+ @raw scratch → window-close only); panels
-# and the steward hub are never touched. Reacts, never blocks (SessionEnd can't veto).
+# and the hub pane are never touched. Reacts, never blocks (SessionEnd can't veto).
 #
 # GLOBAL-authoritative off-switch: this knob is read machine-wide (snapshotted from
 # THIS global fleet.conf before any per-fleet overlay). Set FLEET_CLOSE_ON_EXIT=0 here
@@ -223,27 +205,6 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # global-only, not per-fleet. See docs/CLEANUP.md.
 # @label=Close window + reap on manual exit @group=bridge @tier=advanced @scope=global @edit=bool
 #FLEET_CLOSE_ON_EXIT=1
-
-# --- Fleet watcher: zero-token event-driven steward wake (issue #147) ------------
-# OFF by default. When enabled for a fleet, the watch daemon (bin/fleet-watch.sh,
-# com.claude-fleet.watch, ~45s) sleeps on the fleet and wakes the STEWARD only on a
-# decision-worthy EDGE — a PR going green (`/land <n>?`), a worker opening a PR, a
-# worker stuck (looping), the needs-attention count rising, a prod-alert issue
-# appearing, or a free slot with eligible backlog. It replaces the steward
-# hand-running PR-green pollers.
-#
-# ZERO-TOKEN: every tick reads only the state the collector + pr-refresh already
-# maintain (@claude_state / @prci / @issue, prmap, issues_<slug> + labels_<slug>,
-# session counts) — no LLM, no per-tick gh reads. It is edge-triggered + deduped
-# (wakes on transitions, not levels; first run seeds silently, no backfill flood).
-#
-# COST: the watcher itself spends no tokens, but each wake makes the STEWARD take an
-# LLM turn — so, like the issue-bridge, it is opt-in per fleet. DELIVERY is the
-# steward control issue: the watcher posts the wake to FLEET_STEWARD_ISSUE and the
-# issue-bridge relays it into the @steward pane. So it REQUIRES FLEET_STEWARD_ISSUE
-# set and, in practice, FLEET_ISSUE_BRIDGE=1. See docs/WATCH.md.
-# @label=Watch fleet, wake steward on edges @group=bridge @tier=common @scope=fleet @edit=bool
-#FLEET_WATCH=0
 
 # --- Webhook: fresh (~1s) PR/issue/CI status via `gh webhook forward` (issue #315) -
 # OFF by default. When enabled for a fleet, the webhook daemon (bin/fleet-webhook.sh,
@@ -300,8 +261,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
 # PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
 # OWN fast daemon, decoupled from the 60s collector, so "CI went green" / "PR
-# merged" surfaces within ~this many seconds — which is when the steward is
-# watching to /land. Default 15. This value gates the script's own gh-fetch
+# merged" surfaces within ~this many seconds — which is when you are
+# watching to land it. Default 15. This value gates the script's own gh-fetch
 # dedup; the DAEMON fire cadence is set in the launchd plist (StartInterval) /
 # systemd timer (OnUnitActiveSec) — keep all three in step if you change it.
 # GLOBAL: one daemon serves every fleet and its cadence is tied to the plist —
@@ -347,45 +308,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Ratelimit staleness @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_RATELIMIT_TTL=21600
 
-# Optional: the command each fleet's steward pane runs (the bottom pane of the
-# always-on 'plan' hub). Unset → the built-in default (run /fleet-steward to adopt
-# the layered steward charter — issue #286 — as an on-demand steward scoped to this
-# fleet's repo, resuming the newest handoff if one exists). Set it to drive your own
-# steward, or to a plain shell to opt out of the auto-driven one.
+# Optional: the command each fleet's HUB pane runs (the bottom pane of the
+# always-on 'plan' hub, in the fleet's base checkout). Unset → a plain `claude`:
+# your own session, with your normal model/MCP/settings, from which you file,
+# spawn, hand back and land (issue #439). Set it to launch something else, or to a
+# plain shell to opt out of a Claude session in the hub entirely.
 # Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
-# @label=Steward launch command @group=steward @tier=advanced @scope=fleet @edit=str
-#FLEET_STEWARD_CMD='claude "…your standing orders…"; exec $SHELL'
-
-# --- Steward Lite profile (issue #284) --------------------------------------
-# Minimum fixed context + hard no-code rails for the hub, applied at spawn/respawn
-# in bin/steward-session.sh. ON by default. The rendered per-fleet settings
-# (~/.config/claude-fleet/fleets/<session>/steward-settings.json, from
-# conf/steward-settings.template.json) DENY Edit/Write across this fleet's base
-# checkout AND its issue-<N> worktree siblings (the steward is a dispatcher, never
-# a coder — deny overrides bypassPermissions) while still letting it Write its own
-# memory/scratchpad; the hub also launches with --strict-mcp-config so personal MCP
-# servers never mount (per-turn overhead for a dispatcher). Set =0 to revert to the
-# bare spawn. Applies to the built-in launch only — a FLEET_STEWARD_CMD override
-# owns its whole command line and is left untouched. Existing running stewards keep
-# their old profile until their next hub respawn.
-# @label=Steward Lite profile @group=steward @tier=common @scope=fleet @edit=bool
-#FLEET_STEWARD_LITE=1
-# Keep personal MCP servers (mail/calendar/etc. connectors) mounted in the hub
-# despite Steward Lite — set =1 to skip the --strict-mcp-config MCP diet for an
-# operator who wants connectors in the steward pane. Default 0 (no MCP in the hub).
-# @label=Keep MCP in steward hub @group=steward @tier=advanced @scope=fleet @edit=bool
-#FLEET_STEWARD_MCP=0
-# Model the steward hub launches with (a dispatcher doesn't need the biggest
-# model). Defaults to FLEET_MODEL; set to route the hub onto a cheaper tier
-# independently of the workers. Same alias set as FLEET_MODEL; empty defers to
-# claude's own default. Only honored when Steward Lite is on.
-# @label=Steward model @group=steward @tier=advanced @scope=fleet @edit=enum
-#FLEET_STEWARD_MODEL="opus"
+# @label=Hub launch command @group=hub @tier=advanced @scope=fleet @edit=str
+#FLEET_HUB_CMD='claude "…your standing orders…"; exec $SHELL'
 
 # Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
 # Where the handoff doc is STORED so a cleared session can resume from it:
-#   comment  (default) — when the pane is issue-bound (a worker's @issue, or a
-#            steward's FLEET_STEWARD_ISSUE), post the doc as a durable
+#   comment  (default) — when the pane is issue-bound (a worker's @issue),
+#            post the doc as a durable
 #            `<!-- fleet:handoff -->`-marked issue COMMENT. It outlives the
 #            worktree teardown a committed doc/handoff/*.md does not, and pickup
 #            self-resolves it from the pane's @issue (no path to remember). A raw
@@ -394,7 +329,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #            Use on a SENSITIVE repo where even a scrubbed handoff must not be
 #            pushed to a public issue thread.
 # Empty is treated as the default (comment).
-# @label=Handoff destination (comment|file) @group=steward @tier=advanced @scope=fleet @edit=enum
+# @label=Handoff destination (comment|file) @group=handoff @tier=advanced @scope=fleet @edit=enum
 #FLEET_HANDOFF_DEST=comment
 
 # Auto-handoff threshold (issue #330). When a worker/scratch session's context
@@ -405,10 +340,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # handoff cycle — only the trigger is new. The nudge fires once per session (a
 # @handoff_armed latch, reset at the next SessionStart), only from a clean `done`
 # (never a needs-attention turn), and only on panes that HAVE /fleet-handoff
-# (issue-bound workers + raw scratch; panels and the steward hub are excluded).
+# (issue-bound workers + raw scratch; panels and the hub pane are excluded).
 # Spends tokens (the handoff doc + the resume). 0 = OFF (mirrors
 # FLEET_RUNAWAY_CPU_PCT); 60 auto-hands off at 60%.
-# @label=Auto-handoff percent @group=steward @tier=advanced @scope=fleet @edit=int @unit=%
+# @label=Auto-handoff percent @group=handoff @tier=advanced @scope=fleet @edit=int @unit=%
 #FLEET_AUTO_HANDOFF_PCT=0        # context % that triggers an auto-handoff; 0 = OFF
 
 # Multiple subscription accounts, with auto-failover when one hits its usage
@@ -523,29 +458,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-merge method @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MERGE_METHOD="squash"
 
-# --- Repo charter gate (issues #283 worker, #286 steward) -------------------
-# When 1, the fleet loads repo-shipped CHARTERS from $FLEET_MAIN/.fleet/ and layers
-# each UNDER its fleet overlay (operator) charter:
-#   • /fleet-claim   loads .fleet/worker.md  (issue #283)
-#   • /fleet-steward loads .fleet/steward.md (issue #286)
-# OFF by default (fail-closed): a .fleet/*.md is an INJECTION SURFACE — PRs
-# auto-merge on green CI with no human review, so a PR could rewrite the charter
-# every future worker/steward then obeys (and the steward is the higher-value
-# target — it reviews and dispatches). Opt in ONLY on a repo where you trust what
+# --- Repo charter gate (issue #283) -----------------------------------------
+# When 1, /fleet-claim loads the repo-shipped worker CHARTER from
+# $FLEET_MAIN/.fleet/worker.md and layers it UNDER the fleet overlay (operator)
+# charter.
+# OFF by default (fail-closed): a .fleet/*.md is an INJECTION SURFACE — a PR that
+# lands without human review could rewrite the charter every future worker then
+# obeys. Opt in ONLY on a repo where you trust what
 # lands, and on a public repo protect .fleet/ with CODEOWNERS + required review.
-# The fleet OVERLAY charters (~/.config/.../fleets/<session>/{worker,steward}.md)
-# need no gate — only the operator writes them, and they win on conflict.
+# The fleet OVERLAY charter (~/.config/.../fleets/<session>/worker.md)
+# needs no gate — only the operator writes it, and it wins on conflict.
 # @label=Load repo charters @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_REPO_CHARTER=0
 
 # --- Tap-first input steer (issue #328) -------------------------------------
-# When 1, BOTH seats' charters gain ONE shared "tap-first" block that steers a
+# When 1, the worker charter gains a shared "tap-first" block that steers a
 # session to OFFER a tappable AskUserQuestion menu (2–4 concrete options,
 # recommended-first) instead of an open-ended prose question when it needs a
-# BOUNDED decision from the operator:
-#   • /fleet-claim   appends it at worker charter load (via fleet_worker_charter)
-#   • /fleet-steward appends it in bin/steward-charter.sh (a machine-global tier,
-#     distinct from the per-session steward.md overlay)
+# BOUNDED decision from the operator — /fleet-claim appends it at worker charter
+# load (via fleet_worker_charter).
 # OFF by default — most operators are on a real keyboard. Turn it on per machine
 # for an operator who drives the fleet from an iPad / Termius soft keyboard, where
 # picking an option is ~one keystroke and composing prose is the real friction.

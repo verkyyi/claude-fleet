@@ -37,9 +37,9 @@ repo-specific pieces are **per-fleet**.
 | `prmap` / `issues` cache | **per-repo** | the only per-repo data → written under `fleets/<slug>/` (issue #181) |
 | **Config (`fleet.conf`)** | **per-fleet** | each fleet = a different repo + checkout → `fleets/<session>/conf` |
 | **Dash / status / backlog** | **per-fleet view** | reads shared globals **+** its own repo's `fleets/<slug>/` files |
-| **Steward** | **per-fleet** | triage / ledger are stateful per repo; "one writer per ledger" |
+| **Hub** | **per-fleet** | triage / ledger are stateful per repo; "one writer per ledger" |
 
-*Collector shared, steward not* is the right split — remember it that way.
+*Collector shared, hub not* is the right split — remember it that way.
 
 ### Why the collector is shared (not one-per-session)
 
@@ -59,7 +59,7 @@ not a hand-maintained list**:
 
 Open a fleet (session) → its repo enters the fetch loop automatically. Close it
 → it drops out. An optional `FLEET_REPOS` pin covers the rare case of wanting a
-repo fetched with **no** session open (e.g. a steward watching a repo you're
+repo fetched with **no** session open (e.g. a repo you're watching but
 not actively working).
 
 ### Config + durable-state layout — one directory per fleet (issue #181)
@@ -73,7 +73,6 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
     conf              # per-fleet overlay — same keys as fleet.conf.example
     restore.map       # crash-recovery snapshot (fleet-restore.sh)
     bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
-    watch/{keys,needs}    # fleet-watcher edge-dedup keyset + needs level
     sweep.due         # /sweep scheduling ledger
   accounts/           # GLOBAL — multi-account tokens (unchanged)
   diskguard/          # GLOBAL — disk-guard forensics (unchanged)
@@ -139,8 +138,8 @@ Where "existing or newly-created checkout" is handled:
 3. Write `$FLEET_CONF_DIR/fleets/<session>/conf` (`FLEET_REPO`, `FLEET_MAIN`,
    base branch from the repo's default branch).
 4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
-   `work` shell + the `plan` hub, whose steward pane runs `FLEET_STEWARD_CMD`
-   or the built-in default).
+   `work` shell + the `plan` hub, whose operator pane runs `FLEET_HUB_CMD`
+   or the built-in default, a plain `claude`).
 5. Kick the collector so the dash has data on first paint.
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
@@ -156,8 +155,8 @@ state) + this fleet's `fleets/<slug>/` runtime cache.
 | `fleet-down.sh <session> [--purge]` | kill the session; `--purge` also drops the conf + slug'd cache |
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout |
 
-`FLEET_CONF_DIR` (default `~/.config/claude-fleet`) and `FLEET_STEWARD_CMD`
-(optional override for the steward pane's command) are the two knobs.
+`FLEET_CONF_DIR` (default `~/.config/claude-fleet`) and `FLEET_HUB_CMD`
+(optional override for the hub pane's command) are the two knobs.
 
 ## Migration phases — all shipped ✅
 
@@ -171,7 +170,7 @@ fallback and is never written.
 **Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
 overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
 session-spawn (`dash-new-session`/`dash-issue-session`) targets the current
-fleet's repo+checkout; per-fleet steward-command override via `FLEET_STEWARD_CMD`.
+fleet's repo+checkout; per-fleet hub-command override via `FLEET_HUB_CMD`.
 
 **Phase 3 ✅ — reach + robustness.** `FLEET_REPOS` + configured-conf **pin**
 (fetch repos with no live session); the janitor loops every fleet's checkout;

@@ -128,7 +128,7 @@ while IFS=$'\t' read -r ms num _ title; do
 done < "$SRC"
 
 # All open issues (in this MODE) are bound + hidden → a friendly line instead of
-# a bare blank/"(no open issues)", so the steward knows why the panel is empty.
+# a bare blank/"(no open issues)", so you know why the panel is empty.
 if [ -z "$buf" ] && [ "$SHOW_BOUND" = 0 ] && [ -n "$hidden_any" ]; then
   printf '%s%s%s%s\n' "$US" "$(c "$GY")" '(all open issues have a live worker — ⌃b to show)' "$R"
   exit 0

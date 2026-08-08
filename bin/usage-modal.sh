@@ -60,8 +60,8 @@ render_usage_detail() {
 
 # _ap_restart_eligible <name> <state> <raw> — 0 iff this window is an idle,
 # issue-bound Claude worker we can safely restart in place (issue #263):
-#   • skip the hub/backlog PANELS by name (dash/plan/backlog) — the steward lives
-#     in the `plan` hub, so this also leaves the steward alone;
+#   • skip the hub/backlog PANELS by name (dash/plan/backlog) — the operator pane
+#     lives in the `plan` hub, so this also leaves the hub alone;
 #   • skip @raw scratch sessions — they share FLEET_MAIN as their cwd, so a
 #     `--continue` there can't reliably resolve WHICH transcript to resume (issue
 #     #214); they are ephemeral anyway and a fresh dash `⌃s` uses the new account;

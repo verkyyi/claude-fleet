@@ -6,7 +6,7 @@
 # infers it from the current checkout: run it from inside a git worktree and it
 # uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
 # ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, builds the
-# 'plan' hub (a dash+steward split — the embedded dash self-marks @dash=1 and is
+# 'plan' hub (a dash+hub split — the embedded dash self-marks @dash=1 and is
 # reached via prefix+g; there is no standalone 'dash' window), and kicks the
 # collector so the dash has data immediately. See docs/ARCHITECTURE.md.
 #
@@ -110,17 +110,17 @@ fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
 
-# --- create the session + the steward HUB ---
-# 'work' is the plain work shell; the 'plan' hub (dash on top + a persistent
-# steward Claude session below) is built by steward-session.sh, scoped to THIS
-# fleet's session + checkout so F9 toggles this fleet's own steward.
+# --- create the session + the HUB ---
+# 'work' is the plain work shell; the 'plan' hub (dash on top + the operator's
+# persistent Claude session below) is built by hub-session.sh, scoped to THIS
+# fleet's session + checkout so F9 toggles this fleet's own hub.
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
-# steward-session.sh builds the hub against this fleet's socket. It resolves the
+# hub-session.sh builds the hub against this fleet's socket. It resolves the
 # same SOCK from the session name, so it needs no explicit socket argument.
-STEWARD_SESSION="$NAME" STEWARD_CWD="$DIR" bash "$BIN/steward-session.sh"
+HUB_SESSION="$NAME" HUB_CWD="$DIR" bash "$BIN/hub-session.sh"
 # The 'plan' hub is the whole fleet UI — retire the throwaway 'work' shell so the
-# session starts with ONLY the hub (steward-session.sh already selected it). tmux
+# session starts with ONLY the hub (hub-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
 tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 

@@ -7,8 +7,8 @@
 # global/sessmap that SHADOWED the still-good legacy flat sessmap → fleet_slug_cached
 # returned empty → fleet_cache fell back to a stale flat $C/issues (another repo's
 # data) → the backlog rendered the WRONG repo's issues. Discovery itself is fixed +
-# unit-tested in fleet-lib-selftest.sh; THIS test pins the collector-side guards the
-# steward asked for on top of it:
+# unit-tested in fleet-lib-selftest.sh; THIS test pins the collector-side guards
+# layered on top of it:
 #
 #   1. DISCOVERY + WRITE  — a resolvable live fleet → global/sessmap gets its row.
 #   2. PRUNE              — dead pre-#180 flat issues/prmap/labels mirrors are removed

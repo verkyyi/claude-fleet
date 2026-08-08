@@ -13,7 +13,6 @@ webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
 | `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill `autofill`-labelled backlog; needs FLEET_AUTOFILL=1 per fleet; LLM tokens) |
 | `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
-| `claude-fleet-watch.timer` | every 45s, +5s after start | `com.claude-fleet.watch` | optional (zero-token steward wake; wakes spend steward tokens) |
 | `claude-fleet-cleanup.timer` | every 60s, +25s after start | `com.claude-fleet.cleanup` | recommended (reap worktrees after merges; the fleet never merges) |
 | `claude-fleet-ledger-watch.timer` | every 60s, +30s after start | `com.claude-fleet.ledger-watch` | recommended (index every closed worker session for `/fleet-history` resume) |
 | `claude-fleet-base-sync.timer` | every 60s, +35s after start | `com.claude-fleet.base-sync` | recommended (keep the local base fast-forwarded to the remote, merge-independent; ON per fleet unless `FLEET_BASE_SYNC=0`) |
@@ -44,7 +43,6 @@ systemctl --user enable --now claude-fleet-base-sync.timer  # recommended: keep 
 # optional:
 systemctl --user enable --now claude-fleet-dispatch.timer   # autofill — needs FLEET_AUTOFILL=1 per fleet + the `autofill` label on issues
 systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
-systemctl --user enable --now claude-fleet-watch.timer      # steward wake — needs FLEET_WATCH=1 + FLEET_STEWARD_ISSUE per fleet
 systemctl --user enable --now claude-fleet-webhook.service  # fresh ~1s PR/issue/CI status — needs FLEET_WEBHOOK=1 per fleet + `gh extension install cli/gh-webhook`
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 

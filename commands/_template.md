@@ -1,6 +1,6 @@
 # /NAME — one-line description of what this skill does
 
-<!-- fleet skill · owner: worker|steward|either -->
+<!-- fleet skill · owner: worker|hub|either -->
 
 <!--
   This is the fleet-skill TEMPLATE. To add a skill: copy me to commands/NAME.md,
@@ -25,16 +25,17 @@ reuse the literal values it prints:
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
+SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
 echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
 ```
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — this skill's `owner` is the one on the marker line above. If
-  it isn't `either` and `$SEAT` doesn't match, **refuse in one line and stop**,
-  e.g. *"/NAME is worker-only; you're in the steward seat."* Never proceed from
-  the wrong seat.
+- **Wrong seat** — this skill's `owner` is the one on the marker line above.
+  `worker` needs `$SEAT` = `worker`; `hub` needs `$SEAT` NOT to be `worker` (the
+  operator's hub pane); `either` accepts both. On a mismatch, **refuse in one
+  line and stop**, e.g. *"/NAME is worker-only; you're in the hub pane."* Never
+  proceed from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 `$FLEET_BASE_BRANCH` — this fleet only.
@@ -55,5 +56,5 @@ hook, surface only what changed.
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
-edits inside its `issue-<N>` worktree and lands via PR; a steward files/triages
-and hands implementation to a worker.
+edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
+from the hub and hands implementation to a worker.

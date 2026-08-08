@@ -3,12 +3,12 @@
 #
 # Keeps each opt-in fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY,
 # whenever capacity exists under BOTH caps — automating the manual "file issue →
-# hold for cap → spawn when a slot frees" loop the steward does today. Run as an
+# hold for cap → spawn when a slot frees" loop the operator does by hand. Run as an
 # interval daemon (com.claude-fleet.dispatch, ~60s) or by hand for one fleet.
 #
 # OPT-IN ON A SPECIFIC LABEL (issue #421). An issue is auto-spawned ONLY when it
 # carries the canonical `autofill` label — the per-issue opt-in gate. So autofill
-# never touches the whole backlog; the steward tags exactly the issues that may
+# never touches the whole backlog; the operator tags exactly the issues that may
 # fill idle slots hands-off (mirrors how `autoland` opts a PR into hands-off land).
 #
 # OFF BY DEFAULT per fleet, TOO. A fleet auto-spawns only when its conf sets
@@ -22,7 +22,7 @@
 #     acquire a per-fleet LEASE (mkdir, steal-if-stale)   → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate) → never fill a full disk
 #     slots = min(global headroom, per-fleet headroom, MAX_PER_TICK)  → rate-limit
-#     eligible = open, UNASSIGNED, carries `autofill`, not blocked/steward-control,
+#     eligible = open, UNASSIGNED, carries `autofill`, not `blocked`,
 #                no live @issue window already bound                 → anti-collision
 #     rank eligible by priority:p{0,1,2} tier then issue# (FIFO)      → priority
 #     spawn the top `slots` via dash-issue-session.sh <N> <sess>      → reuse guards
@@ -34,7 +34,7 @@
 #
 # Priority signal: the `priority:p0|p1|p2` label tier (p0 highest); FIFO by issue
 # number within a tier; unlabeled issues sort last (tier 3), still FIFO. This
-# needs no schema — the labels are just GitHub labels the steward already sets.
+# needs no schema — the labels are just GitHub labels the operator already sets.
 #
 # Anti-collision: the assignee IS the claim (issue #283) — /fleet-claim assigns the
 # worker, and the pre-spawn dedup assigns AT SPAWN, so "has any assignee" is the
@@ -99,10 +99,9 @@ fleet_headroom() {
 }
 
 # Rank the eligible backlog: TSV "tier<TAB>number", priority tier then issue#.
-# Requires the `autofill` opt-in label (issue #421); excludes assigned / blocked /
-# steward-control (the #146 control issue is a bridge endpoint, never a worker
-# task — and `blocked` is documented autofill-excluded, so an issue tagged BOTH
-# autofill AND blocked still waits). One `gh issue list` call; jq does all the
+# Requires the `autofill` opt-in label (issue #421); excludes assigned / blocked
+# (`blocked` is documented autofill-excluded, so an issue tagged BOTH autofill
+# AND blocked still waits). One `gh issue list` call; jq does all the
 # filtering + tiering. --limit is generous so FIFO isn't broken by a created-desc
 # fetch dropping old (low-numbered, high-priority) issues at scale.
 eligible_issues() {
@@ -114,7 +113,7 @@ eligible_issues() {
       | select((.assignees|length)==0)
       | (.labels|map(.name)) as $l
       | select($l|any(.=="autofill"))
-      | select(($l|any(.=="blocked" or .=="steward-control"))|not)
+      | select(($l|any(.=="blocked"))|not)
       | ( if   ($l|any(.=="priority:p0")) then 0
           elif ($l|any(.=="priority:p1")) then 1
           elif ($l|any(.=="priority:p2")) then 2

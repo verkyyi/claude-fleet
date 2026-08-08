@@ -5,8 +5,8 @@
 # issue loops back into the bound worker as a turn.
 #
 # The bridge relays every issue comment from a trusted author into the bound
-# worker UNLESS the comment carries `<!-- fleet:no-relay -->`. Worker + steward
-# share the OWNER identity, so author-filtering cannot separate them — the marker
+# worker UNLESS the comment carries `<!-- fleet:no-relay -->`. Every fleet actor
+# shares the OWNER identity, so author-filtering cannot separate them — the marker
 # is the only reliable discriminator. This wrapper puts it on (or deliberately
 # off) so no hand-written `gh issue comment` can accidentally feed a worker.
 #
@@ -20,9 +20,9 @@
 #
 # Modes:
 #   --note       fleet-internal comment for the record/humans (worker progress,
-#                PR links, steward triage) → stamped no-relay. THE DEFAULT: a
+#                PR links, operator triage) → stamped no-relay. THE DEFAULT: a
 #                bare fleet comment must never accidentally drive a worker.
-#   --to-worker  a message MEANT to become the worker's next turn (the steward's
+#   --to-worker  a message MEANT to become the worker's next turn (the operator's
 #                handback, an instruction) → left UNMARKED so the bridge relays it
 #                once. External/human commenters need no wrapper at all (their
 #                comments are unmarked by default = relayed, subject to the gate).
@@ -36,9 +36,9 @@
 #                                               issue-bound, else the fleet slug)
 #   • an invisible machine marker for tooling:
 #       <!-- fleet:from role=<role> session=<slug> issue=<n> -->
-# Role resolution: explicit --from <role> wins → else auto-detect (steward via the
-# FLEET_SEAT env / fleet_seat(); worker via fleet_seat()) → else the generic word
-# 'fleet'. The footer identifies role + fleet ONLY
+# Role resolution: explicit --from <role> wins → else auto-detect (operator via the
+# FLEET_HUB env the hub pane exports; worker via fleet_seat()) → else the generic
+# word 'fleet'. The footer identifies role + fleet ONLY
 # — never $(hostname), $USER, or any other private identifier (the charter scrub).
 # --no-footer is an escape hatch that drops the signature+marker but NEVER the
 # no-relay loop-safety marker (that stays independent, verbatim, and last).
@@ -58,7 +58,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 # Which fleet ROLE is posting? Resolved by the shared fleet_from_role (issue #332
 # extracted it to fleet-lib.sh so the issue-filer channel stamps the same marker):
-# explicit --from wins, else FLEET_SEAT / fleet_seat(), else the generic 'fleet'.
+# explicit --from wins, else FLEET_HUB / fleet_seat(), else the generic 'fleet'.
 resolve_role() { fleet_from_role "${from:-}"; }
 
 num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0
@@ -98,7 +98,7 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2;
 # it as a verbatim substring) must stay LAST for a --note/default comment.
 role=$(resolve_role)
 # Context = the SENDER's own binding: a worker window carries @issue → '#<n>'
-# + marker issue=<n>; otherwise (steward hub, watcher/dash daemon) fall to the fleet
+# + marker issue=<n>; otherwise (the operator hub, a dash daemon) fall to the fleet
 # slug/session name — repo-derived, so NO private identifier leaks (charter scrub).
 f_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
 f_issue="${f_issue//[^0-9]/}"

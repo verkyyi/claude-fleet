@@ -11,7 +11,7 @@
 # _ap_restart_eligible <name> <state> <raw> returns 0 iff a window is an idle,
 # issue-bound Claude worker safe to restart in place:
 #   • hub/backlog panels (dash/plan/backlog) are skipped by name — this also
-#     leaves the steward alone (it lives in the `plan` hub);
+#     leaves the operator hub alone (it lives in the `plan` window);
 #   • @raw scratch sessions are skipped (shared FLEET_MAIN cwd → `--continue`
 #     can't resolve their transcript, issue #214);
 #   • non-Claude windows (no @claude_state) are skipped;
@@ -64,9 +64,9 @@ skip "looping is /loop"       issue-263 "looping" ""
 skip "empty state (non-Claude window)" issue-263 "" ""
 skip "unknown state"          issue-263 "zombie"  ""
 
-# --- Skipped by panel name (the hub/backlog; steward lives in `plan`) ---
+# --- Skipped by panel name (the hub/backlog; the operator pane lives in `plan`) ---
 skip "dash panel"             dash    "done"  ""
-skip "plan hub (steward)"     plan    "done"  ""
+skip "plan hub (operator)"    plan    "done"  ""
 skip "backlog panel"          backlog "needs" ""
 
 # --- Skipped: @raw scratch session (shared cwd, unresolvable transcript) ---
