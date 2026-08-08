@@ -12,7 +12,7 @@ nests three levels, and this is where the confusing vocabulary starts:
   session = one fleet = one GitHub repo** (see [ARCHITECTURE](ARCHITECTURE.md)).
 - **tmux window** — a tab inside a session. Each window usually holds one Claude
   session working one task in its own worktree, plus a few special windows (the
-  dashboard, the steward).
+  dashboard, the hub).
 - **tmux pane** — a split within a window.
 
 > ⚠️ **"session" is overloaded.** Two different things:
@@ -33,15 +33,13 @@ nests three levels, and this is where the confusing vocabulary starts:
   cheap read of the files the collector produced, which is why the UI is
   instant. See [ARCHITECTURE](ARCHITECTURE.md) for why there is exactly **one,
   shared** collector even when you run many fleets.
-- **Steward** — a long-lived **Claude session** that runs a whole repo's estate
-  instead of working a single task. It's the fleet's **first mate**: it
-  **dispatches, decides, escalates, and reports — it never does the work itself.**
-  Watch (event-driven, not polling) · Converse (the operator's one channel) ·
-  Dispatch & decide (file issues, spawn workers, review PRs). **One steward
-  per fleet** (per repo). Its charter is the layered
-  [`/fleet-steward`](../commands/fleet-steward.md) skill (built-in ▸ gated repo
-  `.fleet/steward.md` ▸ operator overlay), resolved at spawn by
-  [`bin/steward-charter.sh`](../bin/steward-charter.sh) (issue #286).
+- **Hub** — the always-on `plan` window: the dash on top, and below it the
+  **operator's own Claude session** in the base checkout (a plain `claude`, no
+  charter). This is where you file, triage, spawn workers, hand work back and
+  land PRs. **One hub per fleet** (per repo); its pane carries `@hub=1` and F9 /
+  the ⌂ icon jump to it. There is no resident orchestrator agent — the fleet is
+  operator-driven (issue #439). Built by
+  [`bin/hub-session.sh`](../bin/hub-session.sh).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).
@@ -74,8 +72,8 @@ they repaint instantly:
   - **`usage`** — token-consumption proxy (5h / 7d).
   - **`ratelimit`** — last-seen weekly-% line + timestamp.
   - `*.ts` siblings are fetch timestamps for TTL throttling.
-- **Ledger** — a steward's private notes file (last-seen repo HEAD, last-triaged
-  issue, armed fixes). **One writer per ledger** — only that steward edits it.
+- **Ledger** — the operator's private notes file for a fleet (last-seen repo
+  HEAD, last-triaged issue, armed fixes). **One writer per ledger.**
   Lives in the operator's memory store, not in this repo.
 
 ## Concepts / mechanisms
@@ -93,9 +91,9 @@ they repaint instantly:
   threshold **and no tmux client is attached** (you're away), the collector runs
   `FLEET_NOTIFY_CMD` with the message. So you're pinged only when you're not
   looking. A ready WeCom notifier ships in `extras/`.
-- **Context rotation** — when a Claude session's context fills (≥ ~50%), the
-  steward can hand it off (write a state doc) → clear → pick up fresh, so a
-  long-running `/loop` doesn't die at the context limit.
+- **Context rotation** — when a Claude session's context fills (≥ ~50%), it can
+  hand itself off (`/fleet-handoff`: write a state doc → clear → pick up fresh),
+  so long-running work doesn't die at the context limit.
 - **Handoff** — a doc that lets a fresh Claude session continue the same work
   from where another left off.
 - **Account pool / failover** — an optional set of Claude *subscription* accounts

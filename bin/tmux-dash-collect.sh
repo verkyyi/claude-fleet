@@ -11,8 +11,8 @@
 #   global/sessmap        — session<TAB>slug<TAB>repo  (one row per live tmux session)
 #   fleets/<slug>/issues  — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
 #   fleets/<slug>/labels  — #num<TAB>comma-joined-labels per repo, split from the SAME
-#                           issues fetch (no extra gh call). Read by the fleet watcher
-#                           (bin/fleet-watch.sh, issue #147) for prod-alert + eligibility
+#                           issues fetch (no extra gh call). Read by the dash's
+#                           priority sort (bin/dash-issue-priority.sh)
 #   fleets/<slug>/parents — child<TAB>parent per repo for sub-issues (issue #335), from
 #                           a small separate GraphQL pass (parent isn't in `gh issue
 #                           list --json`). Lets the backlog nest a child under its parent
@@ -94,21 +94,15 @@ cache_key() {
 # bypasses the TTL (the kick wants it NOW); else it fetches only when the cache is
 # older than GH_TTL. No-op (return) when gh is missing.
 #
-# ONE fetch, TWO caches. The gh --jq emits a 6-column raw line whose LEADING two
-# columns are the backlog flag + comma-joined labels, FOLLOWED by the historical 4
-# (milestone, #num, assignee, title). Putting the extra columns FIRST keeps the
-# title LAST, so a tab inside an issue title is absorbed into the title field
-# (harmless) instead of shifting the label/flag columns and dropping the issue. jq
-# does the exact `steward-control` match into the flag, so a weird label name can't
-# fool the comma-split. We then derive:
+# ONE fetch, TWO caches. The gh --jq emits a 5-column raw line whose LEADING column
+# is the comma-joined labels, FOLLOWED by the historical 4 (milestone, #num,
+# assignee, title). Putting the extra column FIRST keeps the title LAST, so a tab
+# inside an issue title is absorbed into the title field (harmless) instead of
+# shifting the label column and dropping the issue. We then derive:
 #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title), keeping
-#                    its contract EXACTLY (readers `cut`/`read` fields 1-4) and
-#                    DROPPING steward-control issues (#176: a relay endpoint is not a
-#                    task; spawn-eligibility excludes the same label). Filter = the jq
-#                    flag column ⇒ still one gh call + fixture-testable.
-#   labels_<slug>  — #num<TAB>labels for EVERY open issue (incl. steward-control /
-#                    prod-alert) for the fleet watcher (#147). It must NOT inherit the
-#                    backlog's steward-control drop — split from the unfiltered raw.
+#                    its contract EXACTLY (readers `cut`/`read` fields 1-4).
+#   labels_<slug>  — #num<TAB>labels for EVERY open issue, read by the dash's
+#                    priority sort (bin/dash-issue-priority.sh).
 # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw temp
 # is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
 fetch_issues_for() {
@@ -121,11 +115,11 @@ fetch_issues_for() {
     raw="$FD/issuesx.$$"
     if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
-      --jq '.[] | (.labels|map(.name)) as $l | (if ($l|any(.=="steward-control")) then "0" else "1" end)+"\t"+($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
+      --jq '.[] | (.labels|map(.name)) as $l | ($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       2>/dev/null | utf8_scrub > "$raw"; then
-      awk -F'\t' '$1=="1"' "$raw" | cut -f3-6 > "$FD/issues.$$" \
+      cut -f2-5 "$raw" > "$FD/issues.$$" \
         && mv "$FD/issues.$$" "$FD/issues"
-      awk -F'\t' '{n=$4; sub(/^#/,"",n); print n"\t"$2}' "$raw" > "$FD/labels.$$" \
+      awk -F'\t' '{n=$3; sub(/^#/,"",n); print n"\t"$1}' "$raw" > "$FD/labels.$$" \
         && mv "$FD/labels.$$" "$FD/labels"
     fi
     rm -f "$raw"
@@ -255,8 +249,8 @@ for _stale in issues prmap labels parents; do
   rm -f "$C/$_stale" "$C/$_stale.ts" 2>/dev/null || true
 done
 
-# pin repos with NO live session so their caches stay fresh (a steward watching a
-# repo you haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +
+# pin repos with NO live session so their caches stay fresh (a repo you're
+# watching but haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +
 # every configured per-fleet conf.
 for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
 while IFS=$'\t' read -r _s cf; do

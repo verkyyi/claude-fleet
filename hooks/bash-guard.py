@@ -13,7 +13,7 @@ overlay, `~/.claude/hooks/bash-guard-local.py`, that this skeleton runs if
 present and NEVER ships (see the OVERLAY section at the bottom).
 
 Register it (matcher "Bash") — see hooks/settings-hooks.json. It is merged into
-`~/.claude/settings.json`, so it runs for every seat: worker, steward, scratch.
+`~/.claude/settings.json`, so it runs everywhere: worker, operator hub, scratch.
 
 Contract (Claude Code hooks):
   - stdin: JSON with {tool_name, tool_input:{command,...}}

@@ -108,11 +108,6 @@ live jobs today:
 > in sync with `bin/fleet-lib.sh`) and applies one batched `tmux -L <sock>
 > source-file` per fleet per frame.
 
-### 3. The watcher
-
-The zero-token watcher ([docs/WATCH.md](WATCH.md)) reads `@claude_state` off the
-same bus to fire its `stuck` / `needs` edges — it never polls GitHub for this.
-
 ## The slow path — the haiku classifier (corrects what hooks can't know)
 
 A hook cannot tell a **clean finish** from a `/loop` paused **between iterations**
@@ -183,8 +178,8 @@ set-claude-state.sh  ──►  @claude_state  +  @claude_state_ts   (tmux windo
 LLM classifier (haiku)         │                 self-contained glyph renderer
   classify-sessions.sh         ├──────────────► spinner daemon (tmux-spinner.sh, 0.12s)
   · on Stop (classify-hook.sh) │                 needs tally  →  ● N badge  (@attn_needs)
-  · change-gated + locked      │                 cross-fleet  →  ● N orange (@attn_other_windows)
-      ▲                        └──────────────► watcher (fleet-watch.sh)  stuck/needs edges
+  · change-gated + locked      └──────────────► cross-fleet  →  ● N orange (@attn_other_windows)
+      ▲
       │
    stuck-working demote (spinner, #101): a working pane frozen ≥120s → done → re-classify
 ```
@@ -200,5 +195,4 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
   `set-claude-state.sh`.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
-- [WATCH.md](WATCH.md) — the zero-token steward wake that reads this state bus.
-- [TERMS.md](TERMS.md) — definitions of collector / steward / dash.
+- [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

@@ -18,7 +18,7 @@
 #   • ONE local handler on http://127.0.0.1:<port> (python3, a fleet dep) that
 #     receives each delivery and hands it to `--route`.
 #   • ONE `gh webhook forward` per opted-in LIVE fleet repo, all pointed at that
-#     same --url. Fanned out over every live fleet (like fleet-watch), deduped per
+#     same --url. Fanned out over every live fleet, deduped per
 #     repo (single forward per repo), dead forwards auto-restarted each rescan.
 #     SLEEP-SURVIVAL (issue #391): before each (re)spawn we REAP the repo's orphaned
 #     forwarder hook (a prior forward's hook that GitHub's relay left registered when
@@ -263,7 +263,7 @@ wh_opted_in_repo() { # $1=session
 
 # The repos to forward: opted-in, one line each, DEDUPED per repo (single forward
 # per repo — two sessions on one repo don't double-forward). Default session set is
-# the live fleet sockets (like fleet-watch); explicit sessions override (selftest).
+# the live fleet sockets; explicit sessions override (selftest).
 wh_desired_repos() { # [session...]
   local sessions seen=' ' sess repo
   if [ "$#" -gt 0 ]; then sessions=$(printf '%s\n' "$@"); else sessions=$(fleet_sockets); fi

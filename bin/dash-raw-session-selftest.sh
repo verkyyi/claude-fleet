@@ -223,12 +223,12 @@ grep -q -- '-n scratch-1\b' "$NEWWIN_LOG" || fail "M an empty --prompt-read line
 ok "M --prompt-read (⌃s popup) reads the name from one stdin line, backgrounded"
 
 # ============================ D: restore drops @raw ==========================
-out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__STEWARD__|%s|-\n' \
+out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\n' \
         "$WORK/main-scratch-1" "$WORK/main-issue-7" "$WORK/main" | python3 "$RESOLVE")
 printf '%s\n' "$out" | grep -q $'^WIN\tissue-7\t'  || fail "D a normal WIN row must survive" "$out"
-printf '%s\n' "$out" | grep -q $'^STEWARD\t'       || fail "D the STEWARD row must survive" "$out"
+printf '%s\n' "$out" | grep -q $'^HUB\t'           || fail "D the HUB row must survive" "$out"
 printf '%s\n' "$out" | grep -q 'scratch'           && fail "D a @raw=1 row must be DROPPED (never restored)" "$out"
-ok "D the restore resolver drops @raw=1 rows, keeps normal + steward rows"
+ok "D the restore resolver drops @raw=1 rows, keeps normal + hub rows"
 
 # ============================ E: old-map back-compat ========================
 # a pre-#214 WIN row has only 6 fields (no @raw) — raw defaults to '' → kept.

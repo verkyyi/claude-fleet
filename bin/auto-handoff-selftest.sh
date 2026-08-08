@@ -112,9 +112,9 @@ out="$(PCT=60 FAKE_CTX=95 FAKE_ISSUE=330 FAKE_PREV='needs' run_state 'done')"
 nudged "$out" && fail "prior state 'needs' must NOT be hijacked by an auto-handoff"
 latched && fail "needs-turn must not set the latch"
 
-# ---- SCOPE: panel/steward (no @issue, no @raw) → excluded ---------------------
+# ---- SCOPE: panel/hub (no @issue, no @raw) → excluded -------------------------
 out="$(PCT=60 FAKE_CTX=95 FAKE_ISSUE='' FAKE_RAW='' run_state 'done')"
-nudged "$out" && fail "a pane with neither @issue nor @raw (panel/steward) must be excluded"
+nudged "$out" && fail "a pane with neither @issue nor @raw (panel/hub) must be excluded"
 latched && fail "out-of-scope pane must not set the latch"
 
 # ---- SCRATCH (@raw=1, no @issue) → STILL nudges (issue #330 scratch case) ------

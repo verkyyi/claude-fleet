@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
 base-readonly-guard.py — a PreToolUse hook that makes the fleet's base checkout
-edit-read-only for EVERY seat (issue #355).
+edit-read-only for EVERY pane — worker, operator hub, scratch (issue #355).
 
-Why it exists: CLAUDE.md and every worker/steward charter promise a
+Why it exists: CLAUDE.md and the worker charter promise a
 "hook-enforced edit-read-only base checkout" — the load-bearing rail of the
-steward/worker model (a worker edits inside its `issue-<N>` worktree and lands
-via PR; a steward files/triages and never codes). Auditing that rail found it
-only HALF shipped:
-  * The STEWARD gets it via `permissions.deny` in conf/steward-settings.template.json.
-  * The WORKER got NOTHING — it runs on bypassPermissions and inherits the plain
-    ~/.claude/settings.json, so a stray Edit/Write into the base checkout was
-    unguarded. (The steward template comment even claimed a "PreToolUse
-    read-only-base-checkout hook remains the backstop" — this is that hook.)
+fleet model (a worker edits inside its `issue-<N>` worktree and lands via PR;
+the operator files/triages and hands implementation to a worker). Before this
+hook the worker got NOTHING — it runs on bypassPermissions and inherits the
+plain ~/.claude/settings.json, so a stray Edit/Write into the base checkout was
+unguarded.
 
 This closes the gap generically: deny Edit/Write/MultiEdit/NotebookEdit whose
 target is inside the fleet's base checkout (FLEET_MAIN). Worktree siblings
@@ -47,7 +44,7 @@ def block(path, base):
         "  %s\n"
         "is inside the fleet base checkout (%s), which is edit-read-only.\n"
         "Workers edit inside their issue-<N> git worktree and land via PR; the\n"
-        "steward files/triages and hands implementation to a worker. Never edit\n"
+        "operator files/triages and hands implementation to a worker. Never edit\n"
         "the base checkout directly.\n"
         % (path, base)
     )

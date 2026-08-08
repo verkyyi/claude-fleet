@@ -6,7 +6,7 @@
 #
 # Agreed disables: the fleet scripts source runtime config and sibling libs by
 # path (`. "$BIN/../fleet.conf"`, `. "$BIN/fleet-lib.sh"`, and dynamic
-# `$FLEET_STEWARD_CMD`-style paths). shellcheck can't resolve those at lint
+# `$FLEET_HUB_CMD`-style paths). shellcheck can't resolve those at lint
 # time, so it emits SC1090/SC1091 for every one. They're expected, not bugs —
 # silence them globally and keep the rest of the tree clean.
 disable=SC1090,SC1091

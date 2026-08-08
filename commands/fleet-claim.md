@@ -24,7 +24,7 @@ reuse the literal values it prints:
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
+SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
 echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
 ```
 
@@ -32,7 +32,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   fleet — run this from a fleet session."* Never guess a repo.
 - **Wrong seat** — `/fleet-claim` is `owner: worker`. If `$SEAT` isn't `worker`,
   **refuse in one line and stop**, e.g. *"/fleet-claim is worker-only; you're in the
-  steward seat."* Never proceed from the wrong seat.
+  hub pane."* Never proceed from the wrong seat.
 
 Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
 `$FLEET_BASE_BRANCH` — this fleet only.
@@ -117,7 +117,7 @@ prints and fold it into how you work below.
 ## 4. Ground yourself, then implement
 
 Read what you need — the full issue thread (step 1's output, including any
-steward design comments) and the code the change touches — then implement. You
+any design comments) and the code the change touches — then implement. You
 decide the approach; the rails and the finish line are below.
 
 Fold in the operator's **per-fleet implementation directive** (issue #234) — the
@@ -136,11 +136,11 @@ override them):
 
 - **Work only in this worktree.** You are in the `issue-<N>` git worktree off
   `$FLEET_BASE_BRANCH`; never commit to or edit the base checkout (it's
-  hook-enforced read-only). Converse with the steward/collaborators by
+  hook-enforced read-only). Converse with the operator/collaborators by
   **commenting on the bound issue** (via
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
-  so it carries the no-relay marker + worker footer). To message another worker or
-  the steward, use `fleet-comment.sh --to-worker` (the issue-bridge). NEVER drive
+  so it carries the no-relay marker + worker footer). To message another worker,
+  use `fleet-comment.sh --to-worker` (the issue-bridge). NEVER drive
   another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
   the Enter) and is hook-blocked (#437). The bridge relays your comment as the
   target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
@@ -156,7 +156,7 @@ override them):
   worktree/branch — plus GitHub's parent pointer, so the claim / worktree /
   ledger flow is unchanged. **File-and-continue, not file-and-chase:** record the
   follow-up, then stay on N and ship N — don't `--spawn` it or start it yourself
-  (the steward triages it and the fleet spawns it when it's picked up).
+  (the operator triages it and the fleet spawns it when it's picked up).
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane.
 - **Done = ship (open the PR) — the fleet never merges.** When the change is
@@ -173,12 +173,12 @@ override them):
   4. **Stop.** Don't merge the PR, and don't arm auto-merge — the fleet never
      merges. Landing is external and controlled: the label-gated auto-land
      daemon lands a PR whose issue carries `autoland`; everything else waits for
-     the **steward** to land it. Whoever performs the merge,
+     the **operator** to land it from the hub. Whoever performs the merge,
      `com.claude-fleet.cleanup` then reaps the worktree/window/branch and records
      the resume ledger.
 - **Blocked = say why, never stall silently.** If you can't make progress, post
   a `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
-  wrapper) and set the window red so the steward sees it:
+  wrapper) and set the window red so the operator sees it:
   `sh ~/.claude/fleet/bin/set-claude-state.sh needs`. Then stop — don't spin.
 
 ## 6. Report + proceed
@@ -192,8 +192,8 @@ the contract in step 5, run it when the work is done.
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
-edits inside its `issue-<N>` worktree and lands via PR; a steward files/triages
-and hands implementation to a worker.
+edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
+from the hub and hands implementation to a worker.
 
 **Never run destructive tmux on the live server.** Every fleet shares ONE tmux
 server on the `default` socket, so a stray `tmux kill-server` (or a

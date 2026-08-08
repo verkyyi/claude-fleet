@@ -18,7 +18,7 @@ set -uo pipefail
 # The two positionals keep their historic order (num, target-session). --title <t>
 # is the
 # AUTHORITATIVE window name (issue #216): a create-then-spawn caller
-# (the steward's file+spawn op, the prefix+n quick-dispatch, the dash new-session box) passes
+# (the operator's file+spawn op, the prefix+n quick-dispatch, the dash new-session box) passes
 # the title it JUST wrote so the window is named after the WORK — not the bare
 # issue-<N> slug it otherwise falls back to when the brand-new issue isn't in the
 # collector cache yet and a post-create `gh issue view` lags or fails.
@@ -283,7 +283,7 @@ fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
 # "$SESS:$slug" name would bind/select the wrong window the moment that name
-# collides (tmux errors "can't find window"); matches steward-session.sh /
+# collides (tmux errors "can't find window"); matches hub-session.sh /
 # fleet-up.sh. Create in the fleet's session explicitly (the trailing ':' picks
 # the next free window index) so it works headless with no client attached.
 # Route through fleet-claude.sh so the session launches under the active

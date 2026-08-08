@@ -15,22 +15,21 @@ assumes — this doc is only the install/uninstall procedure.
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
-| Bypass-permissions guards (issue #355) | two `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — the PreToolUse backstop the steward's `permissions.deny` rail always referenced; closes the gap for the worker seat. Both **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
-| Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub (dash above, steward below); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's steward focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
+| Bypass-permissions guards (issue #355) | two `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. Both **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
+| Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub (dash above, the operator's Claude session below); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`, the mirror of F9's hub focus). No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
-| Label taxonomy (`bin/fleet-labels-seed.sh`) | the fleet's **fixed** canonical label set (`bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`, `docs-truth`, `scout`, `priority:p0\|p1\|p2`, `steward-control`, `blocked`, `autoland`, `autofill` — issues #333, #421). ONE source of truth, `fleet_labels_canonical`/`fleet_labels_allowed` in `bin/fleet-lib.sh`. The install seed step (`gh label create --force`, **idempotent**) installs it into a fresh repo; the issue-filer channel (`bin/fleet-issue-file.sh`) validates every requested label against `fleet_labels_allowed` — the FIXED set, not the live `gh label list` — so no filer (worker or steward) can file against an off-taxonomy label even if one is minted out of band (**fixed seed, no minting**). A fleet can also opt into a **default milestone** so nothing lands unsorted: set `FLEET_DEFAULT_MILESTONE` (e.g. `Triage`) and every filing that passes no `--milestone` auto-lands there for the steward to re-bucket — the milestone is **auto-created if absent** (idempotent) and it's best-effort, so a milestone hiccup never blocks a filing (issue #433). `autoland` is stale (daemon retired #277) but kept for now; `autofill` opts an issue into hands-off auto-spawn by the dispatcher (issue #421) | gh (authed, label-admin) |
+| Label taxonomy (`bin/fleet-labels-seed.sh`) | the fleet's **fixed** canonical label set (`bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`, `docs-truth`, `scout`, `priority:p0\|p1\|p2`, `blocked`, `autoland`, `autofill` — issues #333, #421). ONE source of truth, `fleet_labels_canonical`/`fleet_labels_allowed` in `bin/fleet-lib.sh`. The install seed step (`gh label create --force`, **idempotent**) installs it into a fresh repo; the issue-filer channel (`bin/fleet-issue-file.sh`) validates every requested label against `fleet_labels_allowed` — the FIXED set, not the live `gh label list` — so no filer can file against an off-taxonomy label even if one is minted out of band (**fixed seed, no minting**). A fleet can also opt into a **default milestone** so nothing lands unsorted: set `FLEET_DEFAULT_MILESTONE` (e.g. `Triage`) and every filing that passes no `--milestone` auto-lands there for you to re-bucket — the milestone is **auto-created if absent** (idempotent) and it's best-effort, so a milestone hiccup never blocks a filing (issue #433). `autoland` is stale (daemon retired #277) but kept for now; `autofill` opts an issue into hands-off auto-spawn by the dispatcher (issue #421) | gh (authed, label-admin) |
 | Cross-machine pre-spawn dedup | every spawn (`bin/dash-issue-session.sh`, the one choke point) consults the shared GitHub issue as a claim ledger before spawning, so two fleets on **different machines / same repo** don't both spawn `issue-<N>` (duplicate worktrees + push race + competing PRs) — the local tmux dedup only sees one machine. **The assignee IS the claim** (issue #283): taken (assignee · non-open state · open PR) ⇒ **refuse**; free ⇒ **claim AT SPAWN** by assigning `@me` (not on the worker's first `/fleet-claim` turn — that gap was the race) so a peer sees the assignee within ~1s. **NOT a mutex** (GitHub has no CAS on an issue) — it shrinks the race window, doesn't eliminate it; the old sub-second REST-comment-id tie-break was retired with the `▶ claiming` marker (workers share one gh account, so no per-attempt tie token exists). `--force`/`--reclaim` spawns past a stale claim. **ON by default** — the cost is a few gh reads/spawn (claim-at-spawn just moves `/fleet-claim`'s assign earlier; a gh outage degrades to spawn-anyway) and it self-disables when gh is absent; a single-machine fleet wanting the zero-gh fast path sets `FLEET_PRESPAWN_DEDUP=0`. `/fleet-claim` stays but no-ops when it finds the pre-claim | gh (authed) |
 | Collector daemon | git/gh/usage/issues caches every ~60s | gh, python3 |
 | PR-status refresher (recommended) | `com.claude-fleet.pr-refresh` (~15s): owns PR/CI state (`prmap` + window `@prci`/`@pfg`) on a fast tick so CI-green/merged shows within ~15s instead of riding the 60s collector; single writer, no collector race (`FLEET_PR_REFRESH_INTERVAL`) | gh |
 | Disk guard daemon (recommended) | disk circuit-breaker + runaway-writer forensics; stops a full disk from crashing a fleet's tmux server (each fleet has its OWN socket now — issue #159 — but a full volume still ENOSPCs every server on it). Its `--watch` tick also runs a **runaway-CPU watchdog** (issue #151): our-user, no-controlling-tty processes held ≥`FLEET_RUNAWAY_CPU_PCT`% for ≥`FLEET_RUNAWAY_CPU_SECS`s → forensic incident + notify, optionally SIGTERM/KILL (`FLEET_RUNAWAY_CPU_ACTION`). Protects each tmux server from a detached orphan spinning a core; the server + launchd/systemd are excluded, live worker panes have a tty so are never touched. OFF by default (`PCT=0`) | — |
-| Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (`bin/fleet-dispatch.sh`, ~60s; issues #70, #421): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom — automating the "file → hold for cap → spawn when a slot frees" loop. **Opt-in per issue**: only issues carrying the canonical `autofill` label are eligible (the steward tags exactly which issues may fill idle slots hands-off, like `autoland` for landing), so it never touches the whole backlog. Eligible = open, unassigned, `autofill`-labelled, no live `issue-<N>` window bound, not `blocked`/`steward-control`. Priority = the `priority:pN` tier (p0 first), then FIFO by issue number. Single-writer per repo (lease) + disk-gated + rate-limited (`FLEET_AUTOFILL_MAX_PER_TICK`). OFF by default — a two-key gate: the fleet armed (`FLEET_AUTOFILL=1`) **and** the issue labelled; spends LLM tokens (one real Claude session + PR per spawn). `--dry-run` prints intended spawns without spawning | gh |
-| Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the steward↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. Also routes a per-fleet **steward control issue** (`FLEET_STEWARD_ISSUE`, #146) — comments on it relay into the `@steward` hub pane (the operator↔steward wake/async channel), same gates/marker/idle/dedup. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
+| Autofill dispatcher (optional) | `com.claude-fleet.dispatch` (`bin/fleet-dispatch.sh`, ~60s; issues #70, #421): auto-spawns the highest-priority eligible backlog issue whenever both caps have headroom — automating the "file → hold for cap → spawn when a slot frees" loop. **Opt-in per issue**: only issues carrying the canonical `autofill` label are eligible (you tag exactly which issues may fill idle slots hands-off, like `autoland` for landing), so it never touches the whole backlog. Eligible = open, unassigned, `autofill`-labelled, no live `issue-<N>` window bound, not `blocked`. Priority = the `priority:pN` tier (p0 first), then FIFO by issue number. Single-writer per repo (lease) + disk-gated + rate-limited (`FLEET_AUTOFILL_MAX_PER_TICK`). OFF by default — a two-key gate: the fleet armed (`FLEET_AUTOFILL=1`) **and** the issue labelled; spends LLM tokens (one real Claude session + PR per spawn). `--dry-run` prints intended spawns without spawning | gh |
+| Issue-bridge (optional) | `com.claude-fleet.issue-bridge` (~15s poll, or a webhook via `--deliver`+HMAC): relays a trusted issue comment INTO the bound worker as its next turn — the issue thread becomes the operator↔worker↔collaborator channel (replaces flaky send-keys). Single shared instance. Loop-safe via the `<!-- fleet:no-relay -->` marker (`bin/fleet-comment.sh`); gated by `author_association` (relayed comment = RCE on a bypass-perms worker); idle-gated; deduped. OFF by default (`FLEET_ISSUE_BRIDGE=1` per fleet); spends LLM tokens. See docs/ISSUE-BRIDGE.md | gh (+ python3 for `--deliver`) |
 | Cleanup (recommended) | **THE FLEET NEVER MERGES** (issue #277, closes #260) — it arms auto-merge and cleans up after merges. The worker's `/fleet-claim` ship step opens the PR then `gh pr merge --auto --<FLEET_MERGE_METHOD>` (default `squash`, issue #283) **arms** GitHub auto-merge (never merges); GitHub (or a human on the web, or a collaborator) does the merge when green + branch-protection-satisfied. `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) then scans the `prmap` cache pr-refresh already writes (`--state all` ⇒ MERGED/CLOSED rows, ZERO extra `gh`) for a final PR whose `issue-<N>` still has a live worktree/window and drives `bin/fleet-cleanup.sh <PR>` — the mechanical, **no-merge** janitor (`fleet-land.sh` MINUS the merge): record the resume ledger FIRST, `git pull --ff-only` the base under the shared land-lease (`bin/fleet-land-lease.sh`, base-ff serialization), then ordered teardown window → worktree → branch. Merge-source-agnostic, idempotent (`skip:nothing` on an already-reaped PR). Single-writer per repo + disk-gated. **ON by default** (opt out `FLEET_CLEANUP=0`; merges nothing, relaxes no gate). Manual now: `/fleet-cleanup <n>`. See docs/CLEANUP.md | gh |
 | Ledger-watch (recommended) | `com.claude-fleet.ledger-watch` (`bin/fleet-ledger-watch.sh`, ~60s; issue #320): records EVERY closed worker session into the history ledger, not just landed ones. The cleanup daemon records a session only when it LANDS, so a worker window closed by hand / crashed / abandoned left its transcript UNINDEXED (invisible to `/fleet-history`, not resumable). It can't inspect a window after it's gone, so it **snapshot-diffs**: each tick it snapshots the live issue-bound worker windows (keyed by ISSUE — `/fleet-handoff` cycles the session-id in place, so keying on the issue avoids a spurious row per handoff; `@raw` scratch + panels excluded) and diffs vs the durable prior snapshot; a worker whose window VANISHED and isn't already in the ledger gets one `closed-unlanded` row (`bin/fleet-history.sh record-closed`, **idempotent** — dedups on session-id so a landed session is never double-recorded). Its worktree usually still exists (worktree-autoclean keeps unmerged), so resume just reuses it. Pure tmux snapshot + a local ledger append (no `gh`, no LLM), **records only** (never reaps), single-writer per repo + disk-gated. **ON by default** (opt out `FLEET_LEDGER_WATCH=0`); spends no tokens. `--dry-run` prints intent. A whole-fleet crash is handled by fleet-restore (`--if-down`), so this targets a single window vanishing while its fleet stays up. See docs/CLEANUP.md | — |
-| Close-on-exit hook | `bin/session-end-hook.sh` wired to the Claude Code **`SessionEnd`** hook (issue #403): the **event-driven twin of ledger-watch**. On a MANUAL worker exit (Ctrl-D / `/exit` / logout) it reacts AT EXIT instead of waiting the ~60s poll — closes the tmux window, applies the SHARED reap gate (`fleet_reap_ok`) and acts on the worktree by verdict (merged-pr → reap wt+branch + close issue + `landed` row; ancestor → reap wt+branch + `closed-unlanded` row, issue kept open; committed-but-unmerged / dirty → KEEP the worktree + issue + `closed-unlanded` row), and records the `/fleet-history` row NOW via the shared `fleet_reap_record` so the session is indexed + resumable at once. SessionEnd runs INSIDE the dying pane, so the gate+reap+close run in a DETACHED `tmux run-shell -b` job (server-side) that survives the pane vanishing (mirrors `dash-reap.sh`'s `--exec`). `/clear` + every `/fleet-handoff` cycle (`reason=clear`/`resume`) is a NO-OP — only `prompt_input_exit`/`logout` act (the `matcher` pre-filters). Scoped to issue-bound workers (+ `@raw` scratch → window-close only); panels + the steward hub are never touched. Reacts, never blocks; idempotent vs the cleanup daemon / ledger-watch (one row, one close). **ON by default, globally** — the `SessionEnd` wiring below is merged at install, so it works out of the box; set `FLEET_CLOSE_ON_EXIT=0` in the **global** `fleet.conf` to disable machine-wide (global-authoritative — a per-fleet value is ignored). Spends no tokens. See docs/CLEANUP.md | — |
+| Close-on-exit hook | `bin/session-end-hook.sh` wired to the Claude Code **`SessionEnd`** hook (issue #403): the **event-driven twin of ledger-watch**. On a MANUAL worker exit (Ctrl-D / `/exit` / logout) it reacts AT EXIT instead of waiting the ~60s poll — closes the tmux window, applies the SHARED reap gate (`fleet_reap_ok`) and acts on the worktree by verdict (merged-pr → reap wt+branch + close issue + `landed` row; ancestor → reap wt+branch + `closed-unlanded` row, issue kept open; committed-but-unmerged / dirty → KEEP the worktree + issue + `closed-unlanded` row), and records the `/fleet-history` row NOW via the shared `fleet_reap_record` so the session is indexed + resumable at once. SessionEnd runs INSIDE the dying pane, so the gate+reap+close run in a DETACHED `tmux run-shell -b` job (server-side) that survives the pane vanishing (mirrors `dash-reap.sh`'s `--exec`). `/clear` + every `/fleet-handoff` cycle (`reason=clear`/`resume`) is a NO-OP — only `prompt_input_exit`/`logout` act (the `matcher` pre-filters). Scoped to issue-bound workers (+ `@raw` scratch → window-close only); panels + the hub pane are never touched. Reacts, never blocks; idempotent vs the cleanup daemon / ledger-watch (one row, one close). **ON by default, globally** — the `SessionEnd` wiring below is merged at install, so it works out of the box; set `FLEET_CLOSE_ON_EXIT=0` in the **global** `fleet.conf` to disable machine-wide (global-authoritative — a per-fleet value is ignored). Spends no tokens. See docs/CLEANUP.md | — |
 | Base-sync (recommended) | `com.claude-fleet.base-sync` (`bin/fleet-base-sync.sh`, ~60s; issue #327): keeps the LOCAL base checkout (`$FLEET_MAIN`) fast-forwarded to the remote default branch, **independent of merges**. Today the base only advances as a side-effect of the cleanup daemon reaping a merged PR (`bin/fleet-cleanup.sh` does the `git pull --ff-only`), so a merge with **no local reap** — a PR merged on the web, a commit from another machine/contributor, a **direct push** to the default branch — never triggers a base pull and the local base **silently lags** the remote until the next merge that does have a worktree; fresh worktrees + `cw` then branch off a **stale** base. This daemon runs the EXACT same ff-only pull the cleaner does, just on the clock: each tick, one base-mover **per repo** (deduped on the resolved base path, not per fleet) takes the **shared land lease** (`bin/fleet-land-lease.sh`, `land-<slug>.lock` — the SAME lock every base-mover holds, so **no new race** with the cleaner) **non-blocking** (busy ⇒ another base-mover has it ⇒ skip) and runs `git fetch` + `git pull --ff-only` on `$FLEET_MAIN`. `--ff-only` is the whole safety story: a diverged base (a stray local commit) makes the pull refuse — surfaced once (*"base checkout would not fast-forward — resolve by hand"*), never merged/rebased/forced. **Base only** — never touches worktrees/windows/branches/issues/PRs; needs no tmux (just `git` + the lease). An already-current base is a cheap no-op, so a quiet repo costs one `fetch`/tick, no `gh`, no LLM. Single-writer per repo + disk-gated. **ON by default** (opt out `FLEET_BASE_SYNC=0`); spends no tokens. `--dry-run` prints `would ff $MAIN <old>..<new>` without moving. See docs/CLEANUP.md | — |
-| Watcher (optional) | `com.claude-fleet.watch` (~45s): the **zero-token event-driven steward wake** (issue #147). Sleeps on the fleet reading ONLY existing state (`@claude_state`/`@issue` + the `labels_<slug>` cache — no LLM, no per-tick `gh`) and wakes the steward ONLY on a decision-worthy **attention edge**: a worker stuck (`looping`), the needs-attention count rising, or a `prod-alert` issue appearing. (Trimmed in #279 — the PR-green→`/land`, worker-opened-PR and free-slot edges were removed once landing retired in #277: nothing triggers a land, the dash shows an opened PR, and a free slot is surfaced by the dash/backlog directly.) Edge-triggered + deduped (transitions not levels; first run seeds silently). Delivery = the steward control issue (`FLEET_STEWARD_ISSUE`, #146) → the issue-bridge relays the wake into the `@steward` pane. Single-writer per repo + disk-gated; `--dry-run` prints edges without posting. OFF by default (`FLEET_WATCH=1` per fleet; needs `FLEET_STEWARD_ISSUE` + in practice `FLEET_ISSUE_BRIDGE=1`); the watcher spends no tokens but each wake makes the steward take a turn. See docs/WATCH.md | gh + issue-bridge |
 | Webhook daemon (optional) | `com.claude-fleet.webhook` (`bin/fleet-webhook.sh`, KeepAlive supervisor like the spinner): **fresh (~1s) PR/issue/CI status via `gh webhook forward`, with NO public endpoint** (issue #315). GitHub's only real-time push is webhooks (normally need a public URL); `gh webhook forward` (the `cli/gh-webhook` extension) registers the repo webhook against **GitHub's own hosted relay**, PULLS deliveries over the authenticated `gh` token, and re-POSTs each to a **localhost** handler — no ngrok/tunnel, no exposed port. The daemon runs one python3 handler on `127.0.0.1:<port>` + one `gh webhook forward` per opted-in **live** fleet repo (fanned out like the watcher, deduped per repo, dead forwards auto-restarted). Each delivery only **TRIGGERS a targeted refresh** — it never writes a cache: `pull_request`/`check_*`/`status` → `tmux-pr-refresh.sh --repo <repo>` (the single writer of `prmap`/`@prci`), `issues` → `tmux-dash-collect.sh --issues <repo>` (the collector owns `issues_<slug>`), routed by the repo in the payload. **Polling stays the backstop** (pr-refresh ~15s + collector ~60s), so a missed delivery/dead forward only costs freshness, never correctness. Storm-coalesced (per-`(event,repo)` debounce). Optional HMAC (`FLEET_WEBHOOK_SECRET` → `--secret` + verify) is defense-in-depth only (handler binds localhost). OFF by default (`FLEET_WEBHOOK=1` per fleet); spends no LLM tokens. See docs/WEBHOOK.md | gh + python3 + `gh extension install cli/gh-webhook` |
 | Classifier (optional) | Stop-hook does real-time single-window state fix (detects `looping`), plus the spinner's stuck-`working` demote kicks it for a window a Stop missed. It only refines `done`/`needs`/`looping` (trusts the hook for `working`) — so a window stuck at `working` from a missed Stop is handled upstream by the spinner's demote check, which flips it to `done` and then kicks the classifier to refine it | `claude` CLI |
 | Summarizer daemon + hooks (optional) | one-line LLM summary per session → dash summary column; refreshed on Stop/SessionStart hooks + a ~180s catch-all daemon | `claude` CLI |
@@ -56,12 +55,7 @@ assumes — this doc is only the install/uninstall procedure.
    `conf/`, `shell/`, `fleet.conf.example` there; `mkdir -p ~/.claude/fleet/logs`;
    `chmod +x ~/.claude/fleet/bin/*.sh`. If the user wants a different dir,
    also rewrite the `~/.claude/fleet` paths inside `conf/tmux-attention.conf`
-   and `hooks/settings-hooks.json` to match. (The steward's charter is **no longer
-   a flat file to copy up** — since issue #286 it ships as the `/fleet-steward`
-   skill installed in step 8, resolved at spawn by `bin/steward-charter.sh`. Any
-   per-fleet local edits go in the operator overlay
-   `~/.config/claude-fleet/fleets/<session>/steward.md`, not a flat
-   `~/.claude/steward.md`.)
+   and `hooks/settings-hooks.json` to match.
 
 3. **Write `~/.claude/fleet/fleet.conf`.** Ask the user (or infer from their
    current repo) the values in `fleet.conf.example`: `FLEET_REPO`
@@ -92,7 +86,7 @@ assumes — this doc is only the install/uninstall procedure.
    clobber nothing; the usage/account controls live on the footer clicks (the
    `◉` chip / usage stat → `bin/usage-modal.sh`), not the keyboard. There are also **root-table** binds (`bind -n …`)
    that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
-   jumps back to this session's steward hub (`steward-zoom.sh`) — safe because the
+   jumps back to this session's hub (`hub-zoom.sh`) — safe because the
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable
    footer ranges (hub/fleet/needs/account/usage); and **double-click-to-zoom**
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
@@ -115,18 +109,7 @@ assumes — this doc is only the install/uninstall procedure.
    ambiguous `done` is resolved to `looping`/`needs`/`done` within ~1-2s instead
    of waiting for the daemon backstop. Also backgrounded + self-disabling; a
    no-op if you skip the classifier. The `SessionStart` array also fires
-   `steward-readopt-hook.sh` (issue #155): a `/clear` keeps the same steward
-   process alive but wipes its context, so it forgets it's the steward and — since
-   CC reloads the cwd `CLAUDE.md` — could drift off its first-mate charter. The
-   hook re-injects the **layered steward charter** (plus a newest-handoff pointer)
-   back into context via the shared `bin/steward-charter.sh` resolver — the SAME
-   path `/fleet-steward` uses at spawn (issue #286), so a `/clear` re-adopt can't
-   drift — but ONLY when the pane is `@steward=1` **and** the SessionStart `source`
-   is `clear` — so a worker `/clear` is never handed steward identity, and
-   startup/resume/compact (already covered by the spawn seed prompt and the
-   crash-resume path #143) don't pile on redundant context. No-op outside tmux and
-   if the resolver emits nothing (e.g. the `/fleet-steward` skill isn't installed).
-   The `SessionStart` array also fires `handoff-latch-reset-hook.sh` (issue #330):
+   `handoff-latch-reset-hook.sh` (issue #330):
    it clears the `@handoff_armed` auto-handoff debounce latch at every session
    boundary. That latch is set by the `Stop` hook's **auto-handoff nudge**: when
    `FLEET_AUTO_HANDOFF_PCT>0` (OFF by default) and a worker/scratch session's
@@ -136,7 +119,7 @@ assumes — this doc is only the install/uninstall procedure.
    measured by `conf/statusline.sh`, which stamps it onto `@ctx_pct` each render
    (so this needs the status line wired, step 8b). The nudge fires once per session
    (latch), only from a clean `done` (never a needs-attention turn), and never on
-   panels or the steward hub.
+   panels or the hub pane.
 
    The `SessionEnd` array fires `session-end-hook.sh` (issue #403) — the
    event-driven twin of the ledger-watch daemon. Its `matcher`
@@ -166,9 +149,7 @@ assumes — this doc is only the install/uninstall procedure.
      — makes the base checkout **edit-read-only for every seat**: it denies a
      write whose target is inside `FLEET_MAIN`, while the `issue-<N>` / `scratch-N`
      worktree siblings (which sit *next to* the base, not under it) stay writable.
-     This is the PreToolUse backstop the steward's `permissions.deny` rail
-     (`conf/steward-settings.template.json`) always referenced but that the repo
-     never actually shipped — closing the gap for the **worker** seat, which had
+     This closes the gap for the **worker** seat, which had
      no base-checkout protection at all. A no-op outside a fleet (no `FLEET_MAIN`
      resolvable → allow), so it's safe to add globally.
 
@@ -193,7 +174,7 @@ assumes — this doc is only the install/uninstall procedure.
      The **pr-refresh** daemon (`com.claude-fleet.pr-refresh`, 15s) is also
      recommended — it owns PR/CI status (`prmap` + window `@prci`/`@pfg`) on its
      own fast tick, decoupled from the 60s collector, so a PR going green or
-     merging shows within ~15s (when the steward is reviewing / the cleanup daemon
+     merging shows within ~15s (when you are reviewing / the cleanup daemon
      is waiting to reap it) instead
      of up to a minute. It's the single writer of that state (the collector no
      longer touches it), disk work is trivial, and only `gh` is needed;
@@ -216,15 +197,6 @@ assumes — this doc is only the install/uninstall procedure.
      faster webhook ingress (`--deliver`) additionally needs `python3` + an HMAC
      secret. Full setup + loop-safety (the `fleet-comment.sh` marker) in
      **docs/ISSUE-BRIDGE.md**.
-     watch (`com.claude-fleet.watch`, 45s) is the **zero-token fleet watcher** —
-     install it only if a fleet sets `FLEET_WATCH=1` (which needs
-     `FLEET_STEWARD_ISSUE` + in practice `FLEET_ISSUE_BRIDGE=1`). It reads only the
-     state the collector + pr-refresh already cache and wakes the steward on
-     decision-worthy edges (PR green, worker stuck, needs-attention rise, …) via
-     the #146 control-issue channel. The daemon spends no tokens, but each wake
-     makes the steward take an LLM turn — so it is OFF by default; ask before
-     installing and mention that wakes cost steward tokens. `--dry-run` prints the
-     edges without posting. Full design in **docs/WATCH.md**.
      webhook (`com.claude-fleet.webhook`, KeepAlive) is the **fresh (~1s)
      PR/issue/CI status daemon** — install it only if a fleet sets
      `FLEET_WEBHOOK=1`, and first run `gh extension install cli/gh-webhook` (it
@@ -241,7 +213,7 @@ assumes — this doc is only the install/uninstall procedure.
      highest-priority eligible backlog issue under both caps (per-fleet
      `FLEET_MAX_SESSIONS` + global), single-writer + disk-gated + rate-limited.
      It is **opt-in per issue** (issue #421): only issues carrying the `autofill`
-     label are auto-spawned, so the steward tags exactly which ones may fill idle
+     label are auto-spawned, so you tag exactly which ones may fill idle
      slots hands-off — it never drains the whole backlog. OFF by default; it spends
      LLM tokens (one real Claude session + PR per spawn), so ask before installing
      and mention the cost. `--dry-run` prints the intended spawns without spawning.
@@ -335,11 +307,8 @@ assumes — this doc is only the install/uninstall procedure.
    `fleet-claim` (the whole worker lifecycle — claim via the assignee, load a
    layered charter, ground, implement, then open the PR + arm GitHub auto-merge;
    the fleet never merges — issue #283 folded the retired `fleet-ship` +
-   `fleet-blocked` into it), `fleet-steward` (the steward mirror — the hub's
-   spawn ritual: adopt a layered steward charter via `bin/steward-charter.sh`,
-   then dispatch; issue #286 folded the retired `fleet-new-issue`, `fleet-status`,
-   and `fleet-cleanup` into its charter as hot-path ops),
-   `fleet-sync-install`, and `fleet-handoff`
+   `fleet-blocked` into it), `fleet-history` (hub pane: browse & resume closed
+   worker sessions), `fleet-sync-install`, and `fleet-handoff`
    (either seat: writes a handoff doc, then a detached helper auto-`/clear`s the
    pane and resumes from it — `bin/fleet-handoff-cycle.sh`) (plus the
    contract/template — `commands/README.md`,
@@ -400,7 +369,7 @@ assumes — this doc is only the install/uninstall procedure.
    step 3's `fleet.conf`; pass `--repo owner/name` to override). It
    `gh label create --force`s the fleet's **canonical label set** —
    `bug`, `enhancement`, `cleanup`, `robustness`, `portability`, `ci`,
-   `docs-truth`, `scout`, `priority:p0|p1|p2`, `steward-control`, `blocked`,
+   `docs-truth`, `scout`, `priority:p0|p1|p2`, `blocked`,
    `autoland` — the same fixed taxonomy `fleet_labels_allowed` (in
    `bin/fleet-lib.sh`) the issue-filer channel validates against. Nothing else
    seeds labels: `gh label` starts empty on a fresh repo, and the filer
@@ -424,11 +393,10 @@ Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
 delete the plists), delete the `source-file …tmux-attention.conf` line from
 `~/.tmux.conf`, remove the five `set-claude-state.sh` hook entries (and the two
 `summarize-hook.sh` entries on `Stop`/`SessionStart`, the
-`steward-readopt-hook.sh` and `handoff-latch-reset-hook.sh` entries on
+`handoff-latch-reset-hook.sh` entry on
 `SessionStart`) from `~/.claude/settings.json`, remove the `statusLine` block from
 `~/.claude/settings.json` **only if** it points at `conf/statusline.sh` (leave a
-personal one), delete `~/.claude/fleet/` (and, on a pre-#286 install,
-the obsolete flat charter `~/.claude/steward.md`), remove any fleet commands
+personal one), delete `~/.claude/fleet/`, remove any fleet commands
 you copied into `~/.claude/commands/` (the ones with a `<!-- fleet skill … -->`
 marker — leave your personal commands) and any fleet skills you copied into
 `~/.claude/skills/` (each `<name>/` dir whose `SKILL.md` carries the
@@ -441,10 +409,10 @@ kill-server`) each fleet; to clear it in place instead, run
 `tmux -L <sess> set-window-option -g @claude_state ""` (and `@prci`/`@pfg`, set by
 the pr-refresh daemon) once per live fleet socket. (The `com.claude-fleet.*` bootout
 glob already covers `com.claude-fleet.pr-refresh`, `com.claude-fleet.issue-bridge`,
-`com.claude-fleet.watch`, `com.claude-fleet.cleanup`, `com.claude-fleet.ledger-watch`,
+`com.claude-fleet.cleanup`, `com.claude-fleet.ledger-watch`,
 `com.claude-fleet.base-sync`, `com.claude-fleet.dispatch`, and `com.claude-fleet.webhook`; on Linux
 `systemctl --user disable --now claude-fleet-pr-refresh.timer` +
-`claude-fleet-issue-bridge.timer` + `claude-fleet-watch.timer` +
+`claude-fleet-issue-bridge.timer` +
 `claude-fleet-cleanup.timer` + `claude-fleet-ledger-watch.timer` +
 `claude-fleet-base-sync.timer` + `claude-fleet-dispatch.timer` + `claude-fleet-webhook.service`.) If you ran the
 webhook daemon, `gh extension remove cli/gh-webhook` is optional and each opted-in

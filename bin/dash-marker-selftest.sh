@@ -1,11 +1,11 @@
 #!/bin/bash
-# dash-marker-selftest.sh — the @dash / @steward pane-marker contract (issue #135).
+# dash-marker-selftest.sh — the @dash / @hub pane-marker contract (issue #135).
 #
 # The bug: bin/tmux-dashboard.sh marked its pane with a bare `set-option -p @dash 1`.
 # `-p` WITHOUT an explicit `-t` targets the *active* pane, not the pane the script
-# runs in — so an embedded dash relaunching while the steward pane was focused
-# tagged the STEWARD pane instead. Both zoom scripts and /fleet-sync-install key
-# off these markers, and a pane must never carry both @dash and @steward.
+# runs in — so an embedded dash relaunching while the hub pane was focused
+# tagged the HUB pane instead. Both zoom scripts key
+# off these markers, and a pane must never carry both @dash and @hub.
 #
 # This drives the REAL fleet_mark_role() (fleet-lib.sh) against a REAL, isolated
 # tmux server (its own socket, torn down at exit — never the user's live server):
@@ -70,13 +70,13 @@ tmux set-option -u -p -t "$paneB" @dash 2>/dev/null
 TMUX_PANE="$paneB" fleet_mark_role dash
 [ "$(opt "$paneB" @dash)" = 1 ] || fail "default target (\$TMUX_PANE) should mark pane B"
 
-# --- MUTUAL EXCLUSION: a pane is never both @dash and @steward --------------
-fleet_mark_role steward "$paneB"
-[ "$(opt "$paneB" @steward)" = 1 ] || fail "steward marker should be set on pane B"
-[ -z "$(opt "$paneB" @dash)" ]     || fail "@dash must be cleared when @steward is set"
+# --- MUTUAL EXCLUSION: a pane is never both @dash and @hub ------------------
+fleet_mark_role hub "$paneB"
+[ "$(opt "$paneB" @hub)" = 1 ] || fail "hub marker should be set on pane B"
+[ -z "$(opt "$paneB" @dash)" ] || fail "@dash must be cleared when @hub is set"
 fleet_mark_role dash "$paneB"
 [ "$(opt "$paneB" @dash)" = 1 ]    || fail "dash marker should be set on pane B"
-[ -z "$(opt "$paneB" @steward)" ]  || fail "@steward must be cleared when @dash is set"
+[ -z "$(opt "$paneB" @hub)" ]  || fail "@hub must be cleared when @dash is set"
 
 # --- invalid role ⇒ non-zero, no marker written -----------------------------
 tmux set-option -u -p -t "$paneB" @dash 2>/dev/null
@@ -97,5 +97,5 @@ if grep -Eq 'set-option +-p +@dash' "$BIN/tmux-dashboard.sh"; then
   fail "tmux-dashboard.sh still marks @dash with a bare 'set-option -p' (no -t) — regression"
 fi
 
-printf 'selftest PASS: @dash/@steward markers target the named pane, stay mutually exclusive\n'
+printf 'selftest PASS: @dash/@hub markers target the named pane, stay mutually exclusive\n'
 exit 0

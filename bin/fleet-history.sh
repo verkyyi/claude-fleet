@@ -457,7 +457,7 @@ cmd_resume() {
   # on disk (issue #319), else recreate it off the squash SHA (the branch is usually
   # deleted post-merge — use the SHA, not the branch). Only claim RESUME once a
   # worktree actually exists; if it can't be established (no SHA / no --main / add
-  # failed), do NOT point the steward at a directory that isn't there — degrade.
+  # failed), do NOT point at a directory that isn't there — degrade.
   #
   # Reuse-if-present is the "faster" half of #319: `git worktree add` is a full
   # checkout (the dominant cost on a big monorepo), so when a worktree is already

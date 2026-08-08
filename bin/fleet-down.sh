@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$NAME" ] || die "usage: fleet-down.sh <session> [--purge]"
 
-# Path-traversal guard (steward review, PR #196). $NAME becomes a path SEGMENT in
+# Path-traversal guard (review of PR #196). $NAME becomes a path SEGMENT in
 # several rm targets — rm -rf "$FLEET_CONF_DIR/fleets/$NAME", "$NAME.conf",
 # "restore/$NAME.map". A raw operator typo like `fleet-down ..` or `fleet-down a/b`
 # would escape fleets/<sess>/ and rm -rf a PARENT, wiping accounts/ (OAuth tokens),

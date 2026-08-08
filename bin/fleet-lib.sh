@@ -288,9 +288,8 @@ fleet_merge_method() {
 }
 
 # The shared "tap-first" charter block (issue #328) — the ONE canonical source,
-# appended to BOTH seats' charters (worker via fleet_worker_charter below; steward
-# via bin/steward-charter.sh) so they can never drift and a third consumer is a
-# one-line call. Emits the block ONLY when FLEET_TAP_FIRST=1 (default OFF); with the
+# appended to the worker charter (fleet_worker_charter below) so a second consumer
+# is a one-line call. Emits the block ONLY when FLEET_TAP_FIRST=1 (default OFF); with the
 # flag unset/0 it is a silent no-op, so the default charter stays byte-identical.
 # It steers HOW a needed decision is asked (a tappable AskUserQuestion menu, cheap
 # on a soft keyboard) — guidance, never a mandate, and never about asking MORE.
@@ -345,15 +344,15 @@ fleet_worker_charter() {
     cat "$overlay_md"
     printf '\n'
   fi
-  # Machine-global tap-first steer, appended for BOTH seats from the one shared
-  # source; a silent no-op unless FLEET_TAP_FIRST=1.
+  # Machine-global tap-first steer, from the one shared source; a silent no-op
+  # unless FLEET_TAP_FIRST=1.
   fleet_tap_first_block
 }
 
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
 # truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_CLEANUP /
-# FLEET_MAX_SESSIONS / FLEET_STEWARD_ISSUE / … — anything outside
+# FLEET_MAX_SESSIONS / FLEET_AUTOFILL / … — anything outside
 # the derived three. Here we rewrite ONLY the three derived keys (repo/main/base)
 # and re-emit every OTHER line from the existing conf verbatim — not just custom
 # FLEET_* keys but comments, `source` includes, and plain vars too (dropping any
@@ -480,13 +479,13 @@ EOF
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside an
 #             issue-<N> git worktree (a session bound to one issue)
-#   steward — no @issue on the window AND cwd is the fleet base checkout
-#             ($FLEET_MAIN — the hub session that triages, doesn't implement)
-#   ""      — neither (ambiguous: a stray shell, or cwd elsewhere)
-# Needs FLEET_MAIN in the environment to recognise the steward seat, so call
-# fleet_load_conf first. Pure tmux + shell builtins, no git/gh forks.
+#   ""      — not a worker (the operator's hub pane, a panel, or a stray shell)
+# Since issue #439 the fleet has ONE seat: `worker`. The hub pane is the
+# operator's own Claude session, not a fleet role — it is identified by the @hub
+# pane marker / FLEET_HUB env (see fleet_hub_pane), never by a seat.
+# Pure tmux + shell builtins, no git/gh forks.
 fleet_seat() {
-  local issue cwd main
+  local issue cwd
   issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
   cwd=$(pwd -P 2>/dev/null)
   # Match both the bare `issue-<N>` worktree name and the `<repo>-issue-<N>`
@@ -497,50 +496,42 @@ fleet_seat() {
     */*issue-[0-9]*)
       [ -n "$issue" ] && { printf 'worker'; return; } ;;
   esac
-  if [ -z "$issue" ] && [ -n "${FLEET_MAIN:-}" ]; then
-    main=$(cd "$FLEET_MAIN" 2>/dev/null && pwd -P)
-    [ -n "$main" ] && [ "$cwd" = "$main" ] && { printf 'steward'; return; }
-  fi
   return 0
 }
 
-# Mark a pane with exactly ONE of the mutually-exclusive fleet role markers —
-# @dash (the mission-control dashboard) or @steward (the steward hub). Both
-# dash-/steward-zoom AND /fleet-sync-install key off these, so a pane must never
-# carry both at once (it would read as both a dash to respawn and a steward hub).
+# Mark a pane with exactly ONE of the mutually-exclusive fleet pane markers —
+# @dash (the mission-control dashboard) or @hub (the operator's Claude pane).
+# Both dash-/hub-zoom key off these, so a pane must never carry both at once (it
+# would read as both a dash to respawn and a hub pane).
 # This sets the chosen role to 1 and UNSETS the other, on the pane the caller
 # names — defaulting to the caller's OWN pane ($TMUX_PANE), NEVER the active
 # pane. tmux's `set-option -p` alone targets the *active* pane, which is wrong
 # when the dash relaunches while another pane is focused (issue #135): the marker
 # would land on whatever pane happens to be active. Passing `-t <pane>` pins it.
-# Args: <dash|steward> [pane-id]   (pane-id defaults to $TMUX_PANE)
+# Args: <dash|hub> [pane-id]   (pane-id defaults to $TMUX_PANE)
 fleet_mark_role() {
   local role="${1:-}" pane="${2:-${TMUX_PANE:-}}" on off
   [ -n "$pane" ] || return 0
   case "$role" in
-    dash)    on='@dash';    off='@steward' ;;
-    steward) on='@steward'; off='@dash' ;;
+    dash) on='@dash'; off='@hub'  ;;
+    hub)  on='@hub';  off='@dash' ;;
     *) return 1 ;;
   esac
   tmux set-option -p -t "$pane" "$on" 1  2>/dev/null || true
   tmux set-option -u -p -t "$pane" "$off" 2>/dev/null || true
 }
 
-# CHEAP: the @steward=1 pane_id in <session> (that fleet's steward hub pane), or
+# CHEAP: the @hub=1 pane_id in <session> (that fleet's operator hub pane), or
 # empty if the session has none. The shared marker lookup for the SESSION-scoped
-# callers steward-zoom.sh and steward-session.sh (issue #146). The issue-bridge
-# does NOT use this — it scans @steward panes across ALL sessions in one pass and
-# needs @claude_state(_ts) + repo-match in the same row, so it has its own
-# machine-wide scan (bridge_find_steward); keep the @steward=1 marker semantics in
-# step between the two. Scoped with -s so it never leaks a pane from another fleet.
-# Pure tmux + awk, no git/gh forks.
-fleet_steward_pane() {
+# callers hub-zoom.sh and hub-session.sh (issue #146). Scoped with -s so it never
+# leaks a pane from another fleet. Pure tmux + awk, no git/gh forks.
+fleet_hub_pane() {
   [ -n "${1:-}" ] || return 0
   # -L "$(fleet_socket "$1")": each fleet is its own tmux server (issue #159); the
   # session arg IS the socket label, so this resolves correctly whether the caller
-  # is in-session (steward-zoom via $TMUX → same socket) or out-of-session
-  # (steward-session from fleet-up, which has no $TMUX for this fleet's server).
-  tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@steward}' 2>/dev/null \
+  # is in-session (hub-zoom via $TMUX → same socket) or out-of-session
+  # (hub-session from fleet-up, which has no $TMUX for this fleet's server).
+  tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@hub}' 2>/dev/null \
     | awk '$2=="1"{print $1; exit}'
 }
 
@@ -741,18 +732,17 @@ fleet_slug() {
 # new issue's body that a comment carries — reuse, not a second copy.
 #
 # fleet_from_role [<explicit>] — resolve the posting role: an explicit value wins
-# (a caller can force it), else the durable FLEET_SEAT env (steward-session.sh
-# exports it, surviving a Bash-tool subshell), else fleet_seat(), else the generic
-# word 'fleet'. Pure env — only the WORD carries identity (the charter scrub: never
-# $(hostname) / $USER).
+# (a caller can force it), else the durable FLEET_HUB env (hub-session.sh exports
+# it, surviving a Bash-tool subshell) ⇒ 'operator', else fleet_seat() ⇒ 'worker',
+# else the generic word 'fleet'. Pure env — only the WORD carries identity (the
+# charter scrub: never $(hostname) / $USER).
 fleet_from_role() {
   local explicit="${1:-}"
   [ -n "$explicit" ] && { printf '%s' "$explicit"; return; }
-  [ "${FLEET_SEAT:-}" = steward ] && { printf 'steward'; return; }
+  [ "${FLEET_HUB:-}" = 1 ] && { printf 'operator'; return; }
   local seat
   seat=$(fleet_seat 2>/dev/null)
   case "$seat" in
-    steward) printf 'steward'; return ;;
     worker)  printf 'worker';  return ;;
   esac
   printf 'fleet'
@@ -785,7 +775,7 @@ fleet_from_marker() {
 #     install otherwise — `gh label` starts empty on a new repo).
 #   • the issue-filer channel (bin/fleet-issue-file.sh, #332) validates a
 #     requested label against fleet_labels_allowed — the FIXED set, not the live
-#     `gh label list` — so no filer (worker OR steward) can file against an
+#     `gh label list` — so no filer can file against an
 #     off-taxonomy label even if one has been minted in the repo out of band.
 #     Fixed seed, no minting.
 # `autoland` is a known-stale label (its daemon retired in #277) but is kept in
@@ -807,7 +797,6 @@ scout|0e8a16|Read-only investigation (no PR expected)
 priority:p0|B60205|Highest priority — sorts first in the backlog (tier 0)
 priority:p1|D93F0B|High priority — backlog tier 1 (after all p0)
 priority:p2|FBCA04|Medium priority — backlog tier 2 (after all p1)
-steward-control|5319e7|Dedicated steward control/inbox issue — relayed into the @steward hub; autofill-excluded
 blocked|b60205|Blocked on another issue — excluded from autofill
 autoland|0e8a16|Opt this issue's PR into hands-off auto-land
 autofill|0e8a16|Opt this issue into hands-off auto-spawn (the autofill dispatcher)

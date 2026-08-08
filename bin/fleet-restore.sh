@@ -64,7 +64,7 @@ each_restore_map() {
     printf '%s\t%s\n' "$sess" "$mf"
   done
 }
-# window names that are fleet UI panels (rebuilt by fleet-up/steward-session),
+# window names that are fleet UI panels (rebuilt by fleet-up/hub-session),
 # NOT Claude work sessions — never snapshotted or restored as sessions.
 PANEL_RE='^(plan|dash|backlog)$'
 
@@ -76,11 +76,11 @@ say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 #   FLEET   <TAB> session <TAB> repo <TAB> main-checkout-dir <TAB> base-branch
 #   WIN     <TAB> window-name <TAB> worktree-path <TAB> claude-session-id <TAB> issue
 #                 <TAB> @claude_state <TAB> @prci <TAB> @pfg   (state trio: issue #153)
-#   STEWARD <TAB> steward-pane-cwd <TAB> claude-session-id   (0 or 1 per fleet)
+#   HUB     <TAB> hub-pane-cwd <TAB> claude-session-id       (0 or 1 per fleet)
 # claude-session-id = newest transcript for that worktree/pane ('-' if none).
-# The STEWARD row (issue #143) captures the hub's persistent steward session,
+# The HUB row (issue #143) captures the operator's persistent hub session,
 # which lives in the 'plan' PANEL window (excluded from WIN rows) — so a crash
-# can `claude --resume` the steward with its live history, like a worker.
+# can `claude --resume` the hub with its live history, like a worker.
 snapshot() {
   # No single-server liveness gate anymore: each fleet has its OWN socket (issue
   # #159), so the loop below fans out over fleet_sockets (per-conf has-session,
@@ -121,10 +121,10 @@ snapshot() {
     local sdir; sdir="$(fleet_state_dir "$sess")"       # fleets/<sess>/ (issue #181)
     tmp="$sdir/.restore.$$.map"
     printf 'FLEET\t%s\t%s\t%s\t%s\n' "$sess" "$repo" "$main" "$base" > "$tmp"
-    # steward hub pane (issue #143): find it by its @steward=1 marker, NOT the
+    # operator hub pane (issue #143): find it by its @hub=1 marker, NOT the
     # 'plan' window name (panels are excluded by the resolver). Emit it as a
-    # __STEWARD__ sentinel row appended to the window list so BOTH resolve in a
-    # SINGLE python3 pass → a STEWARD row + the per-window WIN rows, newest
+    # __HUB__ sentinel row appended to the window list so BOTH resolve in a
+    # SINGLE python3 pass → a HUB row + the per-window WIN rows, newest
     # transcript id resolved for each.
     #
     # Delimiter INSIDE tmux -F formats: a pipe '|', NOT a tab. tmux < 3.5
@@ -138,21 +138,21 @@ snapshot() {
     # itself stays TAB-delimited — it's written by printf/python, never through
     # tmux, and read back with awk -F'\t'.
     local spath
-    spath=$(tmux -L "$sock" list-panes -s -t "$sess" -F '#{@steward}|#{pane_current_path}' 2>/dev/null \
+    spath=$(tmux -L "$sock" list-panes -s -t "$sess" -F '#{@hub}|#{pane_current_path}' 2>/dev/null \
             | awk -F'|' '$1=="1"{print $2; exit}')
     # Trailing @claude_state|@prci|@pfg (issue #153) are per-window runtime state.
     # restore() re-stamps @claude_state after resume — without it a restored worker
     # comes back with a blank state the attention layer reads as "stuck idle" — and
     # uses a 'working' snapshot to auto-continue a mid-turn session. @prci/@pfg are
     # carried for map completeness/forensics but NOT replayed on restore (the
-    # pr-refresh daemon is their single writer). The __STEWARD__ row omits the trio
+    # pr-refresh daemon is their single writer). The __HUB__ row omits the trio
     # (it's the hub, not a work window); the resolver defaults the missing fields to '-'.
     # Trailing @raw (issue #214): a raw scratch window is ephemeral (no issue/
     # worktree/PR) and its transcript can't be reliably resolved from the shared
     # base checkout — the resolver drops @raw=1 rows so they are never snapshotted
     # or restored. Older maps (pre-#214, no @raw field) default it to '' → kept.
     { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}' 2>/dev/null
-      [ -n "$spath" ] && printf '__STEWARD__|%s|-\n' "$spath"
+      [ -n "$spath" ] && printf '__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
@@ -212,7 +212,7 @@ restore() {
     # never reopened the work windows (e.g. fleet-up ran, restore was interrupted,
     # or the hub was brought up by hand). Treating any live session as fully
     # restored stranded those windows. So when the session is live we skip only
-    # the hub/steward REBUILD and still reconcile the work windows below,
+    # the hub REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
     local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
     local live=0 livewins=""
@@ -223,24 +223,24 @@ restore() {
     else
       say "▸ restoring fleet $sess ($repo)"
     fi
-    # steward resume id (issue #143): if snapshot captured the steward's
-    # transcript, hand it to fleet-up → steward-session.sh via STEWARD_RESUME_ID
+    # hub resume id (issue #143): if snapshot captured the hub pane's
+    # transcript, hand it to fleet-up → hub-session.sh via HUB_RESUME_ID
     # so the hub comes back with `claude --resume`, not a fresh session. Absent
     # id ('-'/missing) falls through to the fresh + newest-handoff path.
     local sid
-    sid=$(awk -F'\t' '$1=="STEWARD"{print $3; exit}' "$mf")
+    sid=$(awk -F'\t' '$1=="HUB"{print $3; exit}' "$mf")
     [ "$sid" = "-" ] && sid=""
-    log "restore fleet $sess repo=$repo main=$main base=$base steward=${sid:-none} live=$live dry=${dry:-0}"
+    log "restore fleet $sess repo=$repo main=$main base=$base hub=${sid:-none} live=$live dry=${dry:-0}"
     if [ "$live" = 0 ]; then
       if [ -n "$dry" ]; then
         say "    would: fleet-up.sh $repo ${main:-<clone>} --name $sess ${base:+--base $base}"
-        [ -n "$sid" ] && say "    would: steward → claude --resume ${sid%%-*}…"
+        [ -n "$sid" ] && say "    would: hub → claude --resume ${sid%%-*}…"
       else
-        # rebuild hub + steward. fleet-up refuses if the session exists (it doesn't).
+        # rebuild the hub. fleet-up refuses if the session exists (it doesn't).
         local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
         args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
-        [ -n "$sid" ] && say "    ↻ steward → claude --resume ${sid%%-*}…"
-        env -u TMUX ${sid:+STEWARD_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
+        [ -n "$sid" ] && say "    ↻ hub → claude --resume ${sid%%-*}…"
+        env -u TMUX ${sid:+HUB_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
           || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
       fi
     fi
@@ -292,7 +292,7 @@ restore() {
       local launch="'$BIN/fleet-claude.sh'"
       local cmd
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
-        # `|| fleet-claude.sh` fallback (mirrors steward-session.sh): a stale/pruned
+        # `|| fleet-claude.sh` fallback (mirrors hub-session.sh): a stale/pruned
         # id makes `--resume` exit non-zero — fall back to a FRESH (parked, un-nudged)
         # session instead of stranding the pane at a bare shell.
         cmd="$launch --resume '$wid'${nudge:+ '$nudge'} || $launch; exec \$SHELL"
@@ -323,7 +323,7 @@ restore() {
         # @prci/@pfg are deliberately NOT re-stamped: the pr-refresh daemon is their
         # single writer (CLAUDE.md) and re-derives them within ~15s. Replaying the
         # snapshot-time glyph could show a stale 'CI green / open PR' after the PR
-        # merged or went red mid-crash — misleading the steward's arm/review — and a brief blank
+        # merged or went red mid-crash — misleading your review — and a brief blank
         # until the daemon ticks is the safe failure mode. (They still ride the WIN
         # row for map completeness + forensics.)
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then

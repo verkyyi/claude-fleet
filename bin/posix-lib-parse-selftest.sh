@@ -4,9 +4,9 @@
 # #414: fleet-lib.sh grew five `done < <(cmd)` process substitutions. `<(…)` is a
 # bash-ism and a SYNTAX ERROR under POSIX sh (macOS /bin/sh = bash in POSIX mode,
 # CI's /bin/sh = dash). But the conf wires the ⌂ hub tap / F9 to
-# `run-shell "sh …/steward-zoom.sh --home"`, which sources fleet-lib.sh under
+# `run-shell "sh …/hub-zoom.sh --home"`, which sources fleet-lib.sh under
 # `sh` — so sourcing aborted at the first `<(…)` and every later function
-# (fleet_steward_pane, …) was left UNDEFINED. The ⌂ went dead when zoomed.
+# (fleet_hub_pane, …) was left UNDEFINED. The ⌂ went dead when zoomed.
 #
 # Two nets, both here so a re-introduced bashism fails loudly the moment it lands:
 #
@@ -44,7 +44,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
 
 # The libs whose PARSE must stay POSIX-sh clean. fleet-lib.sh is MANDATORY — it is
-# the one sourced under `sh` by the conf's steward-zoom path (the #414 failure).
+# the one sourced under `sh` by the conf's hub-zoom path (the #414 failure).
 # The siblings are guarded defensively to keep the shared lib layer free of the
 # same syntax-error class. Extend this list when a new sourceable lib lands.
 LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh'

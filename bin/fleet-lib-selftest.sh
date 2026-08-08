@@ -100,8 +100,9 @@ eq "seat: cw.zsh <repo>-issue-<N> worktree with @issue" worker \
 eq "seat: bare issue-<N> worktree with @issue" worker \
   "$( cd "$WORK/issue-111" && FAKE_ISSUE=111 fleet_seat )"
 
-# 3. Base checkout (== FLEET_MAIN) + NO @issue → steward.
-eq "seat: base checkout, no @issue" steward \
+# 3. Base checkout (== FLEET_MAIN) + NO @issue → NOT a worker (issue #439 retired
+#    the steward seat; the hub pane is identified by @hub / FLEET_HUB, not a seat).
+eq "seat: base checkout, no @issue" "" \
   "$( cd "$WORK/base" && FLEET_MAIN="$WORK/base" FAKE_ISSUE='' fleet_seat )"
 
 # 4. Unrelated cwd, no @issue, cwd != FLEET_MAIN → empty (ambiguous).
@@ -113,8 +114,8 @@ eq "seat: unrelated cwd" "" \
 eq "seat: issue worktree but @issue empty" "" \
   "$( cd "$WORK/claude-fleet-issue-118" && FLEET_MAIN="$WORK/base" FAKE_ISSUE='' fleet_seat )"
 
-# 6. @issue set but cwd is the base checkout (not an issue dir) → NOT worker,
-#    and NOT steward (steward requires @issue empty) → empty.
+# 6. @issue set but cwd is the base checkout (not an issue dir) → NOT worker
+#    (the path shape is required too) → empty.
 eq "seat: @issue set while sitting in base checkout" "" \
   "$( cd "$WORK/base" && FLEET_MAIN="$WORK/base" FAKE_ISSUE=42 fleet_seat )"
 
@@ -339,11 +340,11 @@ eq "sess_for_repo: URL form matches"  "fleet-a" "$(fleet_sess_for_repo https://g
 eq "sess_for_repo: legacy fleet"      "fleet-b" "$(fleet_sess_for_repo acme/legacy)"
 eq "sess_for_repo: unknown → empty"   ""        "$(fleet_sess_for_repo acme/nope)"
 
-# DETERMINISM GUARD: the issue-bridge + fleet-watch key their per-repo state to the
+# DETERMINISM GUARD: the issue-bridge keys its per-repo state to the
 # CANONICAL session (fleet_sess_for_repo) so two sessions serving ONE repo share it
 # rather than re-seeding. With two fleets on the same repo, the mapping must be
-# STABLE (first-enumerated wins, same every call) — else the watcher/bridge would
-# flip which dir they read and spuriously re-seed an already-firing edge.
+# STABLE (first-enumerated wins, same every call) — else the bridge would
+# flip which dir it reads and spuriously re-seed already-handled state.
 mkdir -p "$CONFROOT/fleets/dup-1" "$CONFROOT/fleets/dup-2"
 printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-1/conf"
 printf 'FLEET_REPO="shared/repo"\n' > "$CONFROOT/fleets/dup-2/conf"

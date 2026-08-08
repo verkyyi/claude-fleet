@@ -2,8 +2,8 @@
 # pane-header-selftest.sh — the top-of-window header contract (issue #267).
 #
 # Every window shows a top-of-pane header naming its session — "index:name" plus
-# the bound ##{@issue} when issue-bound — EXCEPT the hub, whose steward pane keeps
-# its "▸ STEWARD HUB" cue and whose dash pane stays empty. That behaviour lives in
+# the bound ##{@issue} when issue-bound — EXCEPT the hub, whose operator pane keeps
+# its "▸ FLEET HUB" cue and whose dash pane stays empty. That behaviour lives in
 # ONE line of conf/tmux-attention.conf: `set -g pane-border-format "…"`. This test
 # takes that REAL line, applies it on a private tmux server, and asserts the
 # three-way role routing so a future edit can't silently drop the hub exemption
@@ -53,12 +53,12 @@ ww="$(tmux display-message -p '#{window_id}')"
 tmux rename-window -t "$ww" issue-267
 tmux set-window-option -t "$ww" @issue 267
 
-# the hub window: dash pane (top) + steward pane (bottom)
+# the hub window: dash pane (top) + operator hub pane (bottom)
 hw="$(tmux new-window -P -F '#{window_id}' -t s: -n plan)"
 dp="$(tmux display-message -p -t "$hw" '#{pane_id}')"
 tmux set-option -p -t "$dp" @dash 1
 sp="$(tmux split-window -P -F '#{pane_id}' -v -t "$hw")"
-tmux set-option -p -t "$sp" @steward 1
+tmux set-option -p -t "$sp" @hub 1
 
 # a raw/scratch window (no @issue)
 rw="$(tmux new-window -P -F '#{window_id}' -t s: -n scratch)"
@@ -71,13 +71,13 @@ case "$worker" in
   *) fail "worker header missing name/issue — got [$worker]" ;;
 esac
 
-steward="$(render "$sp")"
-case "$steward" in
-  *"STEWARD HUB"*) : ;;                            # hub keeps its own cue
-  *) fail "steward pane lost its hub cue — got [$steward]" ;;
+hubpane="$(render "$sp")"
+case "$hubpane" in
+  *"FLEET HUB"*) : ;;                              # hub keeps its own cue
+  *) fail "hub pane lost its hub cue — got [$hubpane]" ;;
 esac
-case "$steward" in
-  *"plan"*) fail "steward pane leaked the window name — got [$steward]" ;;
+case "$hubpane" in
+  *"plan"*) fail "hub pane leaked the window name — got [$hubpane]" ;;
 esac
 
 dash="$(render "$dp")"
@@ -93,4 +93,4 @@ case "$raw" in
   *"#"*[0-9]*) fail "raw (no @issue) should show no issue number — got [$raw]" ;;
 esac
 
-printf 'selftest OK: top-of-window header routes worker/steward/dash/raw correctly (issue #267)\n'
+printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (issue #267)\n'

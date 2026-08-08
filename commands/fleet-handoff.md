@@ -31,15 +31,15 @@ reuse the literal values it prints:
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
+SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
 echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} session=$S pane=${TMUX_PANE:-none}"
 ```
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Seat** — `owner: either`, so both `worker` and `steward` may run it. Only the
-  **doc path** differs by seat (below). If `$SEAT` is `""` (ambiguous — a stray
-  shell), still refuse: *"/fleet-handoff needs a worker or steward seat."*
+- **Seat** — `owner: either`, so a worker pane and the operator hub pane may both
+  run it. Only the **doc path** differs by seat (below): a `worker` seat stores
+  against its bound issue, anything else stores to a local file.
 
 Branch on the argument: `pickup <path>` → **§P**; anything else → **§C**.
 
@@ -70,15 +70,14 @@ destination once, store it, and **verify** before arming anything.
 ```sh
 DEST="${FLEET_HANDOFF_DEST:-comment}"                                  # comment (default) | file
 ISSUE=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null | tr -dc 0-9)
-# a steward pane has no @issue; its bound thread is the fleet control issue:
-[ -z "$ISSUE" ] && [ "$SEAT" = steward ] && ISSUE="${FLEET_STEWARD_ISSUE//[^0-9]/}"
-echo "dest=$DEST issue=${ISSUE:-none} seat=$SEAT"
+# the hub pane has no @issue — it always takes the file path below.
+echo "dest=$DEST issue=${ISSUE:-none} seat=${SEAT:-hub}"
 ```
 
 Then take the FIRST matching case:
 
 1. **`DEST=comment` AND `$ISSUE` non-empty** → **COMMENT storage** (the primary
-   case — a worker's `@issue`, or a steward's `FLEET_STEWARD_ISSUE`). Post the
+   case — a worker's `@issue`). Post the
    SCRUBBED doc (see the scrub rule below) as a comment carrying the pickup marker
    `<!-- fleet:handoff -->`, via `bin/fleet-comment.sh --note` so it also gets the
    `<!-- fleet:no-relay -->` marker (the issue-bridge must NOT relay a handoff back
@@ -94,8 +93,8 @@ Then take the FIRST matching case:
    no URL, DO NOT arm comment-mode** — fall through to file storage (case 3) so the
    handoff is never lost.
 
-2. **`DEST=comment` but the pane is NOT issue-bound** (raw scratch / no `@issue` /
-   steward without `FLEET_STEWARD_ISSUE`) → **file storage** (case 3). Comment mode
+2. **`DEST=comment` but the pane is NOT issue-bound** (the hub pane, a raw scratch,
+   any pane with no `@issue`) → **file storage** (case 3). Comment mode
    needs a thread to post to; without one, fall back to a local file.
 
 3. **`DEST=file`, OR any fall-through from above** → **FILE storage** (the prior
@@ -103,7 +102,7 @@ Then take the FIRST matching case:
    - **worker** — write `doc/handoff/<slug>.md` **inside your `issue-<N>`
      worktree** and **commit** it (the base checkout is read-only, your worktree is
      not). `<slug>` = short kebab task name. `DOC="$(pwd)/doc/handoff/<slug>.md"`.
-   - **steward / raw** — the cwd is the hook-enforced read-only base checkout, so
+   - **hub / raw** — the cwd is the hook-enforced read-only base checkout, so
      do NOT write into it. Use the flat convention
      `~/.claude/handoff/<session>-<YYYY-MM-DD>.md` (create the dir). No commit.
 
@@ -172,13 +171,11 @@ before reading it:
 
 1. **Explicit `<source>` argument** — a local file path, a comment URL, or a bare
    issue number. Use it directly.
-2. **Newest `<!-- fleet:handoff -->`-marked comment** on this pane's `@issue`
-   (then, for a `@steward` pane, `FLEET_STEWARD_ISSUE`). This is what an
-   argument-free pickup resolves to after a comment-mode cycle:
+2. **Newest `<!-- fleet:handoff -->`-marked comment** on this pane's `@issue`.
+   This is what an argument-free pickup resolves to after a comment-mode cycle:
 
    ```sh
    ISSUE=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null | tr -dc 0-9)
-   [ -z "$ISSUE" ] && [ "$SEAT" = steward ] && ISSUE="${FLEET_STEWARD_ISSUE//[^0-9]/}"
    # newest comment carrying the handoff marker:
    gh issue view "$ISSUE" --repo "$FLEET_REPO" --json comments \
      -q 'last(.comments[] | select(.body | contains("<!-- fleet:handoff -->"))) | .body'
@@ -198,10 +195,8 @@ mode verbatim** on the resolved source:
 4. **Resume from the NEXT ACTION** — don't redo finished work or re-investigate
    ruled-out dead-ends.
 
-This composes cleanly with the steward re-adopt hook: on a `@steward` pane the
-`/clear` fires `SessionStart(source=clear)` → `steward-readopt-hook.sh` re-injects
-the charter FIRST, then this pickup arrives as the first user turn (identity from
-the hook, task state from the doc). No special-casing beyond the doc path.
+The hub pane needs no special-casing beyond the doc path: its `/clear` leaves a
+plain `claude` session, and this pickup arrives as its first user turn.
 
 ## N. Report (keep it short)
 
@@ -212,6 +207,6 @@ the hook, task state from the doc). No special-casing beyond the doc path.
 
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
-edits inside its `issue-<N>` worktree and lands via PR; a steward files/triages
-and hands implementation to a worker. The detached helper drives ONLY this pane,
+edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
+from the hub and hands implementation to a worker. The detached helper drives ONLY this pane,
 on this fleet's own tmux socket (it inherits `$TMUX` from the arming pane).

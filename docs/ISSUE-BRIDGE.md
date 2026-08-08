@@ -7,11 +7,12 @@ A worker is bound one-to-one to a GitHub issue (`@issue`). The **issue-bridge**
 turns a comment on that issue into the worker's **next turn** — so the issue
 thread becomes the single durable, auditable channel for driving a worker:
 
-- **steward → worker** — the steward comments a handback instead of a flaky
+- **operator → worker** — you comment a handback from the hub instead of a flaky
   `tmux send-keys`.
+- **worker → worker** — one worker nudges another through its bound issue.
 - **external collaborator / teammate → worker** — anyone GitHub trusts
   (`author_association`) can nudge the worker by commenting.
-- **worker → steward** — already exists, via the PR + issue comments.
+- **worker → operator** — already exists, via the PR + issue comments.
 
 One shared daemon (`com.claude-fleet.issue-bridge`, like `pr-refresh` — NOT
 per-worker) receives comments and injects the qualifying ones.
@@ -65,12 +66,12 @@ For every new comment the bridge decides, in order:
 
 ## Loop-safety (the shared-identity problem)
 
-The worker and the steward both act as the repo `OWNER`, so **author-filtering
+Every fleet actor acts as the repo `OWNER`, so **author-filtering
 cannot tell them apart** — if the bridge relayed every OWNER comment, the
 worker's own progress comments would loop back into itself. So the bridge decides
 self-vs-3rd-party by **marker**, not by author:
 
-- Every fleet-internal comment (worker progress, PR links, steward record notes)
+- Every fleet-internal comment (worker progress, PR links, operator record notes)
   is posted through **`bin/fleet-comment.sh`**, which stamps
   `<!-- fleet:no-relay -->` (an invisible HTML comment). The bridge suppresses
   those. This is the **intent flag** — "don't drive a worker with this."
@@ -94,7 +95,7 @@ comment whose marker is `role=worker` with an `issue=<N>` **equal to the issue i
 is being relayed to**. That is, definitionally, the bound worker talking to
 itself — flag or no flag. It is scoped tightly so nothing legitimate is caught:
 
-- **steward `--to-worker`** carries `role=steward` (and the steward hub pane has no
+- **the operator's `--to-worker`** carries `role=operator` (and the hub pane has no
   `@issue`, so its marker has no `issue=` field at all) → not matched → still relays.
 - an **external human** has no `fleet:from` marker → not matched → relays.
 - a **cross-worker** comment (worker A driving worker B's issue) has `issue=A` ≠ B
@@ -109,7 +110,7 @@ relay.) So it runs **before** the association gate, ungated. Dedup on comment id
 remains the last-ditch guard against a comment being *re-*delivered.
 
 ```sh
-# steward hands work back to the worker (relayed):
+# the operator hands work back to the worker (relayed):
 fleet-comment.sh 132 --to-worker --body "rebase on master and re-push"
 # fleet records a note for humans (NOT relayed):
 fleet-comment.sh 132 --note --body "landed in a train with #130"
@@ -117,7 +118,7 @@ fleet-comment.sh 132 --note --body "landed in a train with #130"
 
 ## Bridge-only: raw `tmux send-keys` is blocked (issue #437)
 
-Inter-agent messaging — worker↔worker and steward↔worker — goes **only through
+Inter-agent messaging — worker↔worker and operator↔worker — goes **only through
 the bridge** (`fleet-comment.sh --to-worker`), **never** a raw `tmux send-keys`
 into another agent's pane. Driving a live Claude TUI with `send-keys` is racy:
 bracketed-paste swallows the standalone Enter, the composer may be mid-turn, and
@@ -129,18 +130,14 @@ the target's next **clean** turn.
 This is enforced with **defense-in-depth**, so an agent can't fall back to
 `send-keys` by habit:
 
-1. **Charter guidance (soft)** — both the worker (`/fleet-claim`) and steward
-   (`/fleet-steward`) charters say to message via the bridge, never `send-keys`.
+1. **Charter guidance (soft)** — the worker charter (`/fleet-claim`) says to
+   message via the bridge, never `send-keys`.
 2. **`hooks/bash-guard.py` (the hard rail)** — the bypass-perms PreToolUse hook
    (runs for **every** seat) blocks any `tmux send-keys` segment on **any** server
    (`tmux …`, `tmux -L sock …`, `tmux -S path …`). It inspects only the command
    string, so `bash fleet-handoff-cycle.sh` (no *inline* send-keys) passes and its
    internal send-keys stays invisible — script plumbing is unaffected.
-3. **`permissions.deny` (settings belt)** — the steward template denies
-   `Bash(tmux send-keys:*)`. It's coarse (prefix-matched, so `tmux -L <sock>
-   send-keys` slips past it — which is why Layer 2 is the real rail). The worker
-   has no `permissions.deny` template, so Layer 2 is what covers it.
-4. **`shell/cw.zsh` `tmux()` guard (shell belt)** — refuses a bare `send-keys`
+3. **`shell/cw.zsh` `tmux()` guard (shell belt)** — refuses a bare `send-keys`
    typed in any interactive/sourced zsh that loaded `cw.zsh` (a `command tmux …`
    bypasses — belt, not sandbox).
 
@@ -153,89 +150,6 @@ send-keys calls with it (prefixed, not exported, so a worker they spawn/revive
 never inherits the hatch). `fleet-restore.sh` uses no `send-keys` at all (it
 hands the resume nudge to `claude` as a prompt arg), so it needs no override.
 
-## Steward control issue (the wake / async channel)
-
-> Answers issue #146.
-
-A worker is reachable because it is bound to an issue (`@issue`). The **steward**
-lives in the `plan` hub — a pane with **no `@issue`** — so the bridge has no route
-to it by default. Give the steward its own long-lived **control / inbox issue** and
-it becomes a bridge endpoint like a worker: a comment on that issue is relayed
-**into the `@steward` pane** as its next turn. That buys you
-
-- an **operator ↔ steward async channel** — comment from anywhere (phone, laptop,
-  a teammate) and the steward takes a turn, no attached tmux client required;
-- an **event sink** for a fleet watcher (a daemon can comment to wake the steward);
-- a durable **audit log** of wake-events + steward decisions, on one issue thread.
-
-Bind it per fleet with **`FLEET_STEWARD_ISSUE`** (its issue number):
-
-```sh
-# in ~/.config/claude-fleet/<session>.conf (or global fleet.conf):
-FLEET_ISSUE_BRIDGE=1
-FLEET_STEWARD_ISSUE=146      # a long-lived, non-closing control issue for THIS fleet
-```
-
-Create **one non-closing issue per fleet** (e.g. titled `🛰 steward · <fleet>`,
-label `steward-control`) and record its number. It is a **dedicated bridge
-endpoint, never a worker task** — a comment on it always routes to the steward, so
-it must not also be a backlog issue a worker binds to. Give it the `steward-control`
-label: the spawn-eligibility filters exclude that label so a worker is never spawned
-on the control issue. The steward route reuses the whole relay pipeline unchanged:
-
-- **same gates** — `author_association` floor, the `<!-- fleet:no-relay -->`
-  marker, dedup. The steward posts its own record notes through
-  `bin/fleet-comment.sh` (marked no-relay), so its comments on its **own** control
-  issue never loop back into it.
-- **its own channel + watermark (issue #198)** — the steward control issue is
-  polled on its **own per-issue endpoint** with its **own watermark + seen-set**,
-  fully decoupled from the worker relay stream. A busy steward pins **only** the
-  steward watermark; worker relays on the same repo advance independently. This
-  fixes the head-of-line jam where a continuously-busy steward, holding the single
-  shared per-repo watermark, starved unrelated worker relays too — and, because the
-  repo-wide comment fetch is a single non-paginated 100-comment page, silently lost
-  newer worker comments once >100 comments accrued past the pinned mark.
-- **idle-gate (+ staleness escape)** — the steward is the only Claude session in
-  the `plan` window, so its window `@claude_state` is the gate: a comment lands
-  only when the steward is **not** `working`; a busy steward's wakes are queued to
-  a later tick (holding only the steward watermark). The `plan` window's
-  `#{window_activity}` is kept fresh by the co-resident dash pane, so the spinner's
-  stuck-working demote never fires there — to stop a **missed `Stop` hook** wedging
-  the channel forever, a `working` state whose `@claude_state_ts` is older than
-  `FLEET_STUCK_WORKING_SECS` is treated as stale and relayed anyway. The same
-  **input-content check** as a worker applies: the operator types into the
-  `@steward` pane too, so an idle steward whose input row holds an un-submitted line
-  defers the relay rather than prepending onto it (issue #191) — and, like the worker
-  gate, that defer is **bounded** by `FLEET_BRIDGE_MAX_TYPING_DEFERS` (issue #195, a
-  channel-level counter for the coalesced batch) so a persistently non-empty read
-  can't silently wedge the control channel.
-- **coalesce-on-drain (issue #198)** — when a queue of steward wakes finally drains
-  to an idle steward, superseded/duplicate wakes are **collapsed to one line per
-  subject** (newest wins) and delivered as a single digest, so the steward wakes to
-  **current state** — not a temporal replay of "PR #168 green ×3" or a stale
-  "shipped #196" ahead of a fresh "#196 green". The subject of each wake line is
-  read from a trailing `<!-- fleet:wake <slug>:<num> … -->` marker that `fleet-watch`
-  stamps (subjects aligned, in order, with the `- ` lines); a comment that isn't a
-  parseable watcher wake — an operator note — is kept whole and never collapsed. No
-  distinct current subject is ever dropped (still at-least-once); only stale
-  duplicates are.
-- **hub-down holds, not drops (no revive)** — if no `@steward` pane exists this tick
-  (the hub is mid-respawn on a `/clear`/restart, or misconfigured) the queued wakes
-  are **held** (not marked seen, steward watermark not advanced) and retried next
-  tick. Pre-#198 this dropped terminally, because a held *shared* watermark would
-  starve worker relays; now the steward channel has its **own** watermark + a
-  paginated per-issue fetch, so holding costs only a cheap re-fetch and survives a
-  transient absence — a drop would silently lose every queued wake (the watcher's
-  edges are deduped, so they never re-fire). A genuinely down/misconfigured hub just
-  re-holds each tick until it comes back. (A present-but-*stuck* steward is handled by
-  the staleness escape above, so this path is genuinely "no pane", not "busy".)
-
-Routing is by issue number: a comment whose issue **is** the repo's
-`FLEET_STEWARD_ISSUE` goes to the steward; everything else routes to the bound
-worker exactly as before. A same-numbered control issue in another fleet never
-collides — the pane is matched to the repo by the same slug logic worker routing
-uses.
-
 ## Ingress A — poll (default, no inbound port)
 
 The daemon lists new issue comments across every enabled fleet's repo via
@@ -244,14 +158,11 @@ The daemon lists new issue comments across every enabled fleet's repo via
 to expose, no secret required. It is installed as `com.claude-fleet.issue-bridge`
 (launchd `StartInterval=15`) or the `claude-fleet-issue-bridge.timer` on Linux.
 
-Per repo the tick runs **two independent channels** (issue #198), each with its
-own `since` watermark + dedup seen-set so neither can head-of-line-block the
-other: a **worker** channel (the repo-wide comment stream minus the steward
-control issue) and a **steward** channel (the control issue's own per-issue
-stream, coalesced on drain — see above). Per fleet (issue #181) the channel state
-lives at `~/.config/claude-fleet/fleets/<session>/bridge/` as `{since,seen}`
-(worker) and `{steward.since,steward.seen}` (steward), with the legacy flat
-`bridge_<slug>.*` under `FLEET_ISSUE_BRIDGE_STATE_DIR` dual-read as a fallback.
+Per repo the tick reads the whole comment stream against one `since` watermark +
+dedup seen-set. Per fleet (issue #181) that state lives at
+`~/.config/claude-fleet/fleets/<session>/bridge/` as `{since,seen}`, with the
+legacy flat `bridge_<slug>.*` under `FLEET_ISSUE_BRIDGE_STATE_DIR` dual-read as a
+fallback.
 
 Enable it per fleet:
 
@@ -309,7 +220,6 @@ set tight and don't wire a chatty bot to comment on bound issues.
 | `FLEET_ISSUE_BRIDGE_SECRET` | *(unset)* | webhook HMAC secret (`--deliver` only) |
 | `FLEET_ISSUE_BRIDGE_REVIVE` | `0` | re-spawn a gone worker for an open issue |
 | `FLEET_BRIDGE_MAX_TYPING_DEFERS` | `20` | consecutive typing-defers before a relay is delivered anyway (≈5 min at 15s poll, issue #195) |
-| `FLEET_STEWARD_ISSUE` | *(unset)* | control/inbox issue relayed into the `@steward` pane (#146) |
 | `FLEET_ISSUE_BRIDGE_STATE_DIR` | `~/.config/claude-fleet/issue-bridge` | legacy flat watermark+dedup dir. Since issue #181, state lives per fleet at `~/.config/claude-fleet/fleets/<session>/bridge/{seen,since}`; this dir is only the fallback for a repo with no configured fleet, and is dual-read until `bin/fleet-migrate-layout.sh` moves it |
 
 ## Verify

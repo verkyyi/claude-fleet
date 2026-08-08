@@ -312,7 +312,7 @@ fcfg_wscope_toggle() { if [ "$(fcfg_wscope "${1:-}")" = fleet ]; then fcfg_wscop
 # id, are ALSO valid but are handled as shapes by the caller — not tier aliases,
 # so not listed here.
 fcfg_is_model_key() {
-  case "$1" in FLEET_MODEL|FLEET_SUBAGENT_MODEL|FLEET_STEWARD_MODEL) return 0 ;; *) return 1 ;; esac
+  case "$1" in FLEET_MODEL|FLEET_SUBAGENT_MODEL) return 0 ;; *) return 1 ;; esac
 }
 
 fcfg_model_aliases() {
@@ -397,7 +397,7 @@ fcfg_validate() {
         esac
         return 0
       fi
-      # Model-alias enum (FLEET_MODEL / _SUBAGENT_MODEL / _STEWARD_MODEL). Empty
+      # Model-alias enum (FLEET_MODEL / FLEET_SUBAGENT_MODEL). Empty
       # (defer to claude's own default) and any full claude-* id are always fine;
       # the tier aliases come from the ONE source of truth (fcfg_model_aliases),
       # which is key-aware — it offers `inherit` only for FLEET_SUBAGENT_MODEL, so

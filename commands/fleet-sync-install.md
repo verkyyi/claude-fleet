@@ -1,6 +1,6 @@
 # /fleet-sync-install — re-apply the merged fleet tooling to the live install
 
-<!-- fleet skill · owner: steward -->
+<!-- fleet skill · owner: either -->
 
 The live-install maintenance skill: after claude-fleet's *own*
 changes land on master, this re-applies them to the **live install**
@@ -10,7 +10,8 @@ It **mutates the live install and this machine's Claude config**: fast-forwards
 `settings-hooks.json` delta into `~/.claude/settings.json`, and installs
 new/changed `commands/*.md` into `~/.claude/commands/` (removing any renamed or
 retired ones). Idempotent — safe to
-re-run; a no-op when the live install is already at master. Steward-only.
+re-run; a no-op when the live install is already at master. Normally run from the
+hub pane, but it has no seat gate (issue #439) — the live install is machine-global.
 
 The live install is **shared, machine-global tooling** every fleet uses, so this
 **runs from ANY fleet** — not only the one whose `$FLEET_REPO` is claude-fleet
@@ -22,7 +23,7 @@ then run `/fleet-sync-install` **once** to make the live install match master.
 
 **Argument** (`$ARGUMENTS`): none — takes no argument.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve fleet (run FIRST, every time)
 
 Env vars do NOT persist across separate Bash tool calls — run this once, then
 reuse the literal values it prints:
@@ -30,15 +31,14 @@ reuse the literal values it prints:
 ```sh
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | steward | "" (ambiguous)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master}"
 ```
 
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
   fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — this skill is `owner: steward`. If `$SEAT` isn't `steward`,
-  **refuse in one line and stop**, e.g. *"/fleet-sync-install is steward-only;
-  you're in the worker seat."* Never proceed from the wrong seat.
+- **No seat gate** (issue #439). The live install is shared machine-global
+  tooling, so any fleet pane may run this — in practice the operator runs it from
+  the hub after the tooling PRs land.
 
 ## 1. Live-install check (run BEFORE any mutation)
 
@@ -63,7 +63,7 @@ echo "live_slug=${live_slug:-none}"
   irrelevant. Everything below operates on `~/.claude/fleet` (the live install) —
   not `$FLEET_MAIN`, which the cleanup daemon already fast-forwarded.
 
-**Scope-rail note:** this is a DELIBERATE, explicit exception to the steward
+**Scope-rail note:** this is a DELIBERATE, explicit exception to the
 "work only on your bound repo" rail. `/fleet-sync-install` touches **machine-global
 shared tooling** (`~/.claude/fleet` + `~/.claude` config), NOT the current or any
 other fleet's repo, sessions, or ledger — it never mutates another fleet's
@@ -163,9 +163,8 @@ If the step-2 diff touched any `commands/*.md`:
   files, so a renamed skill would linger under **both** names; delete the stale
   bare-named one with `rm -f ~/.claude/commands/<old-basename>`. (Worked examples:
   the #283 renames `claim.md → fleet-claim.md`, likewise `ship.md`, `blocked.md`,
-  `land.md`, `land-train.md` → `fleet-*.md`; and the #286 **deletions**
-  `fleet-new-issue.md`, `fleet-status.md`, `fleet-cleanup.md` — folded into the new
-  `/fleet-steward` charter — whose live copies must be `rm -f`'d, same D-pass.)
+  `land.md`, `land-train.md` → `fleet-*.md`; and the #439 **deletion** of
+  `fleet-steward.md` — whose live copy must be `rm -f`'d, same D-pass.)
 
 If no `commands/*.md` changed, skip.
 
@@ -201,8 +200,8 @@ If the step-2 diff touched any `skills/**` path, resolve the affected skill
   - marker **absent** → it's a personal skill (or, on THIS machine's **first**
     sync, the operator's pre-import copy an adoption issue absorbed). Overwrite
     it **only if its `SKILL.md` is byte-identical to the repo's imported version**
-    (`cmp -s`); otherwise **warn and skip** the whole dir — the old steward.md
-    dance: surface that a personal skill diverges from the repo copy and let the
+    (`cmp -s`); otherwise **warn and skip** the whole dir: surface that a personal
+    skill diverges from the repo copy and let the
     operator reconcile by hand, never silently replacing their edits.
 
   ```sh
@@ -228,28 +227,6 @@ If the step-2 diff touched any `skills/**` path, resolve the affected skill
 
 If no `skills/**` path changed, skip.
 
-## 6. Steward charter — nothing extra to re-apply (issue #286)
-
-The flat `~/.claude/steward.md` is **retired**. The steward charter is now the
-`/fleet-steward` skill's built-in text (installed/updated by **step 5** like any
-other `commands/*.md`), layered at spawn by `bin/steward-charter.sh` over an
-optional gated repo `.fleet/steward.md` (synced with the bound repo, not by this)
-and an operator overlay `~/.config/claude-fleet/fleets/<session>/steward.md`
-(machine-local, never touched by sync — local edits live here now). So there is
-**no separate charter copy-up step** — step 5 already carried it, and the old
-local-edits dance is gone (the overlay is the proper home for edits).
-
-One migration nicety: if a pre-#286 install still has a stale flat charter, point
-it out (don't auto-delete — it may hold edits the operator wants to move to the
-overlay):
-
-```sh
-[ -f ~/.claude/steward.md ] && echo "steward.md: obsolete flat charter present (issue #286) — the charter is now the /fleet-steward skill; move any local edits to ~/.config/claude-fleet/fleets/<session>/steward.md, then rm ~/.claude/steward.md"
-```
-
-A running steward re-adopts the charter on its next `/fleet-steward` (spawn/respawn
-or `/clear`); it won't retroactively change a live session's already-adopted orders.
-
 ## 7 + 8. Refresh the UI on ALL live fleet servers — only what changed
 
 Steps 7 (respawn stale dash panes) and 8 (unbind-aware conf reload) both re-apply
@@ -262,8 +239,8 @@ pane + stale server binds until respawned by hand (issue #248). `bin/fleet-ui-re
 per-server against its own `-L <label>`.
 
 **Why fan out here but nowhere else:** the one-fleet scoping rail stays for
-everything NON-UI (daemons in step 3, settings in step 4, commands in step 5,
-charter in step 6) — those touch machine-global or current-fleet state. Only the
+everything NON-UI (daemons in step 3, settings in step 4, commands + skills in
+step 5) — those touch machine-global or current-fleet state. Only the
 open dash pane and the server binds are held *per tmux server*, so only these two
 refreshes fan out across sockets.
 
@@ -271,7 +248,7 @@ refreshes fan out across sockets.
 - **Dash panes (step 7):** an already-open dash keeps running the **old**
   `bin/tmux-dashboard.sh` — fzf reads its `--bind`/`--header` **once at launch**, so
   new binds don't appear until it's reopened. The most-used dash is often the
-  **embedded pane in the steward/`plan` split** (not a `dash` window), so panes are
+  **embedded pane in the hub/`plan` split** (not a `dash` window), so panes are
   found by the `@dash=1` marker (`bin/tmux-dashboard.sh` sets it on launch), not a
   name. NOTE: the `dash-*.sh` bind **targets** are re-exec'd on each keypress (fresh
   `bash`), so they're live without a respawn — only the launcher needs one. The
@@ -321,8 +298,8 @@ when a key is already gone).
 ## 9. Report — keep it short
 
 One line naming what synced: the `before → after` sha, and which of
-{daemons reloaded, settings re-merged, commands installed/removed (the
-`/fleet-steward` charter rides here now), skills installed/removed (with any
+{daemons reloaded, settings re-merged, commands installed/removed, skills
+installed/removed (with any
 personal-skill-diverged warning), dash panes refreshed (with the count),
 conf reloaded (with the unbound count)} actually ran.
 If you stopped at step 1 (wrong fleet) or step 2 (diverged / already current),
@@ -330,10 +307,10 @@ report that instead with the one-line reason.
 
 ---
 
-Rails: `/fleet-sync-install` is the one deliberate exception to the steward
+Rails: `/fleet-sync-install` is the one deliberate exception to the
 "operate on YOUR fleet's `$FLEET_REPO` only" rail — it mutates **machine-global
 shared tooling** (the live install `~/.claude/fleet` + `~/.claude` config), never
-another fleet's repo, sessions, or ledgers, so **any** fleet's steward may run it;
+another fleet's repo, sessions, or ledgers, so **any** fleet may run it;
 it refuses only when `~/.claude/fleet` isn't a git checkout to fast-forward.
 Merging is GitHub auto-merge's job (the fleet never merges); this only re-applies
 already-merged tooling to the live install.

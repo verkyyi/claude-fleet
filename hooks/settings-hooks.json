@@ -53,7 +53,6 @@
       {
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/summarize-hook.sh" },
-          { "type": "command", "command": "sh ~/.claude/fleet/bin/steward-readopt-hook.sh" },
           { "type": "command", "command": "sh ~/.claude/fleet/bin/handoff-latch-reset-hook.sh" }
         ]
       }

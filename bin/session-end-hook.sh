@@ -46,8 +46,8 @@
 #   • Idempotent — fleet_reap_record + `gh issue close` dedup, so racing the cleanup
 #     daemon / ledger-watch yields one row and one close.
 #   • Scoped — only a numeric @issue worker (or @raw scratch → window-close only);
-#     panels (dash/plan/backlog) carry no @issue/@raw and the steward hub is bailed on
-#     defensively (@steward), so neither is ever touched.
+#     panels (dash/plan/backlog) carry no @issue/@raw and the operator hub pane is
+#     bailed on defensively (@hub), so neither is ever touched.
 #   • Default ON, GLOBALLY: reacts unless the GLOBAL fleet.conf sets
 #     FLEET_CLOSE_ON_EXIT=0 (a machine-wide opt-out). The value is
 #     GLOBAL-AUTHORITATIVE — it is snapshotted BEFORE the per-fleet overlay, so a
@@ -181,7 +181,7 @@ fi
 # 1. Resolve the SessionEnd reason. Prefer the test override; else parse the hook's
 #    stdin JSON ({"...","reason":"prompt_input_exit",...}). Guard against a tty so a
 #    manual invocation without a piped payload never hangs on cat (mirrors the
-#    SessionStart hooks steward-readopt / handoff-latch-reset).
+#    SessionStart hook handoff-latch-reset).
 if [ -n "${FLEET_SESSION_END_REASON:-}" ]; then
   reason="$FLEET_SESSION_END_REASON"
 elif [ ! -t 0 ]; then
@@ -211,16 +211,16 @@ fleet_load_conf "$sess"                          # still needed for FLEET_MAIN/R
 [ "$_close_on_exit" = 0 ] && exit 0              # global opt-out only; per-fleet ignored
 
 # 4. Scope: read this pane's window role markers. A worker window carries a numeric
-#    @issue; a raw scratch carries @raw=1; the steward hub carries @steward=1; a
+#    @issue; a raw scratch carries @raw=1; the operator hub pane carries @hub=1; a
 #    panel (dash/plan/backlog) carries none.
 win=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
 [ -n "$win" ] || exit 0
 issue=$(strip_num "$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)")
 raw=$(tmux display-message -p -t "$TMUX_PANE" '#{@raw}' 2>/dev/null)
-steward=$(tmux display-message -p -t "$TMUX_PANE" '#{@steward}' 2>/dev/null)
+hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)
 
-# Never touch the steward hub (defensive — it carries no @issue/@raw anyway).
-[ "$steward" = 1 ] && exit 0
+# Never touch the operator hub pane (defensive — it carries no @issue/@raw anyway).
+[ "$hub" = 1 ] && exit 0
 
 # 5. Dispatch the DETACHED reap. A numeric @issue → worker gate-reap; @raw=1 → close
 #    the scratch window only; anything else (a panel/hub) → no-op. `run-shell -b` runs

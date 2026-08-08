@@ -12,7 +12,7 @@
 #   auto-merge — /fleet-ship arms it now, gh pr merge --auto covers stragglers),
 #   and ⌥x (force-reap — folded into the one confirming ⌃x).
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
-# the 'plan' hub (fleet-up/steward-session builds it; prefix+g focuses it). Env: REFRESH.
+# the 'plan' hub (fleet-up/hub-session builds it; prefix+g focuses it). Env: REFRESH.
 set -uo pipefail
 REFRESH="${REFRESH:-1}"   # 1Hz repaint: 4Hz burned ~10% CPU per dash in steady state; the spinner steps a frame per repaint
 # Pause the 1Hz repaint while a modal popup is open over the dash (issue #308).
@@ -51,15 +51,15 @@ C="${TMPDIR:-/tmp}/.claude-dash"
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
 FLEET_SESSION=$(fleet_current_session 2>/dev/null); export FLEET_SESSION
 
-# Mark this pane as a dash (mirrors how steward-session.sh marks @steward=1) so
+# Mark this pane as a dash (mirrors how hub-session.sh marks @hub=1) so
 # /fleet-sync-install can find EVERY dash pane to respawn on a launcher change —
-# the standalone 'dash' window AND an embedded dash pane in the plan/steward
+# the standalone 'dash' window AND an embedded dash pane in the plan/hub
 # split. Set early (before fzf) so even a freshly-launched dash is discoverable;
 # the pane just runs `bash`, so a marker is far more robust than name/command
 # heuristics. Mark THIS pane explicitly ($TMUX_PANE) — a bare `set-option -p`
-# marks the *active* pane, so an embedded dash relaunching while the steward pane
-# is focused would wrongly tag the steward (issue #135). fleet_mark_role also
-# clears @steward here, keeping the two markers mutually exclusive.
+# marks the *active* pane, so an embedded dash relaunching while the hub pane
+# is focused would wrongly tag the hub (issue #135). fleet_mark_role also
+# clears @hub here, keeping the two markers mutually exclusive.
 fleet_mark_role dash "${TMUX_PANE:-}" 2>/dev/null || \
   tmux set-option -p -t "${TMUX_PANE:-}" @dash 1 2>/dev/null || true
 

@@ -33,8 +33,8 @@ Do not install from memory: read the doc and work from it.
     **Ad-hoc sessions on the `default` socket are NOT fleets** — a fleet is created
     by `fleet-up` (which writes its conf + spins its socket).
 - **The base checkout is edit-read-only** (hook-enforced): a worker edits inside
-  its `issue-<N>` git worktree and lands via PR; a steward files/triages and hands
-  implementation to a worker. Never commit to the base checkout.
+  its `issue-<N>` git worktree and lands via PR; the operator files/triages from
+  the hub and hands implementation to a worker. Never commit to the base checkout.
 - **One tmux session ↔ one GitHub repo.** The PR map is one repo-wide
   `gh pr list`; multi-repo fleets need per-window repo detection (not built).
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are
