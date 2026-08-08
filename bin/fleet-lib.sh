@@ -521,17 +521,32 @@ fleet_mark_role() {
   tmux set-option -u -p -t "$pane" "$off" 2>/dev/null || true
 }
 
-# CHEAP: the @hub=1 pane_id in <session> (that fleet's operator hub pane), or
-# empty if the session has none. The shared marker lookup for the SESSION-scoped
-# callers hub-zoom.sh and hub-session.sh (issue #146). Scoped with -s so it never
-# leaks a pane from another fleet. Pure tmux + awk, no git/gh forks.
+# CHEAP: the @hub=1 pane_id in <session> (a pane the OPERATOR marked by hand), or
+# empty if the session has none. Since the hub went dash-only nothing SETS @hub
+# automatically — hub-session.sh no longer splits a Claude pane in — so this
+# normally returns empty. It is kept because the marker still confers the cw.zsh
+# kill-window exemption (#177/#202) and the session-end-hook bail on any pane an
+# operator marks deliberately (`tmux set-option -p @hub 1`). Scoped with -s so it
+# never leaks a pane from another fleet. Pure tmux + awk, no git/gh forks.
 fleet_hub_pane() {
   [ -n "${1:-}" ] || return 0
   # -L "$(fleet_socket "$1")": each fleet is its own tmux server (issue #159); the
   # session arg IS the socket label, so this resolves correctly whether the caller
-  # is in-session (hub-zoom via $TMUX → same socket) or out-of-session
-  # (hub-session from fleet-up, which has no $TMUX for this fleet's server).
+  # is in-session (via $TMUX → same socket) or out-of-session (from fleet-up,
+  # which has no $TMUX for this fleet's server).
   tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@hub}' 2>/dev/null \
+    | awk '$2=="1"{print $1; exit}'
+}
+
+# CHEAP: the @dash=1 pane_id in <session> (that fleet's dashboard pane), or empty
+# if the session has none. The dash IS the hub now, so this is the shared lookup
+# for every SESSION-scoped focus caller — hub-zoom.sh (⌂ / F9), dash-zoom.sh
+# (prefix+g) and hub-session.sh's idempotency check. Same socket reasoning and
+# same -s scoping as fleet_hub_pane above; replaces the hand-rolled list-panes
+# that dash-zoom.sh used to inline.
+fleet_dash_pane() {
+  [ -n "${1:-}" ] || return 0
+  tmux -L "$(fleet_socket "$1")" list-panes -s -t "$1" -F '#{pane_id} #{@dash}' 2>/dev/null \
     | awk '$2=="1"{print $1; exit}'
 }
 

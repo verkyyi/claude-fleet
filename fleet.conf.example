@@ -308,14 +308,19 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Ratelimit staleness @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_RATELIMIT_TTL=21600
 
-# Optional: the command each fleet's HUB pane runs (the bottom pane of the
-# always-on 'plan' hub, in the fleet's base checkout). Unset → a plain `claude`:
-# your own session, with your normal model/MCP/settings, from which you file,
-# spawn, hand back and land (issue #439). Set it to launch something else, or to a
-# plain shell to opt out of a Claude session in the hub entirely.
-# Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
-# @label=Hub launch command @group=hub @tier=advanced @scope=fleet @edit=str
-#FLEET_HUB_CMD='claude "…your standing orders…"; exec $SHELL'
+# RETIRED — FLEET_HUB_CMD is no longer read; leaving it set does nothing.
+# It named the command the hub's bottom pane ran (default: a plain `claude`).
+# The hub is now the DASH AND NOTHING ELSE: that Claude pane restored itself
+# unasked — the ⌂ home tap, F9 and prefix+g all rebuild the hub when they find no
+# pane to focus, and fleet-up/fleet-restore rebuilt it on every fresh fleet and
+# every crash recovery — so a pane you closed came back on the next tap. Run your
+# own `claude` in whatever window you like instead; nothing will replace it, and
+# nothing spawns one for you.
+#
+# No assignment line follows ON PURPOSE: a `#FLEET_*=` line here is a REGISTRY
+# entry for the prefix+c config modal (it must carry @label/@group/@edit tags, and
+# tmux-config-selftest.sh enforces that). Listing a retired key would put a dead
+# knob in the modal. bin/hub-session-selftest.sh pins that setting it does nothing.
 
 # Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
 # Where the handoff doc is STORED so a cleared session can resume from it:

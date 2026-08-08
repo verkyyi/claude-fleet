@@ -111,9 +111,10 @@ fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M
 echo "fleet-up: wrote $CONF"
 
 # --- create the session + the HUB ---
-# 'work' is the plain work shell; the 'plan' hub (dash on top + the operator's
-# persistent Claude session below) is built by hub-session.sh, scoped to THIS
-# fleet's session + checkout so F9 toggles this fleet's own hub.
+# 'work' is the plain work shell; the 'plan' hub (the dash, and ONLY the dash —
+# a fresh fleet no longer comes up with a hub Claude session) is built by
+# hub-session.sh, scoped to THIS fleet's session + checkout so F9 toggles this
+# fleet's own hub.
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
 # hub-session.sh builds the hub against this fleet's socket. It resolves the

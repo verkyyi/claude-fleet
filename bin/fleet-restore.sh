@@ -127,6 +127,14 @@ snapshot() {
     # SINGLE python3 pass → a HUB row + the per-window WIN rows, newest
     # transcript id resolved for each.
     #
+    # Since the hub went DASH-ONLY nothing sets @hub automatically, so this
+    # normally finds no pane, emits no __HUB__ row, and the map carries no HUB
+    # row — the capture self-disables rather than needing a flag. It still fires
+    # for a pane an operator marked @hub by hand, which is the only case where a
+    # hub transcript exists to be worth preserving. The RESUME side is gone
+    # regardless (see restore() below): hub-session.sh no longer accepts
+    # HUB_RESUME_ID, because a dash-only hub has no session to resume.
+    #
     # Delimiter INSIDE tmux -F formats: a pipe '|', NOT a tab. tmux < 3.5
     # sanitizes CONTROL characters in format OUTPUT — a literal tab becomes '_'
     # and other controls become octal escapes (verified on 3.4) — which collapsed
@@ -223,24 +231,21 @@ restore() {
     else
       say "▸ restoring fleet $sess ($repo)"
     fi
-    # hub resume id (issue #143): if snapshot captured the hub pane's
-    # transcript, hand it to fleet-up → hub-session.sh via HUB_RESUME_ID
-    # so the hub comes back with `claude --resume`, not a fresh session. Absent
-    # id ('-'/missing) falls through to the fresh + newest-handoff path.
-    local sid
-    sid=$(awk -F'\t' '$1=="HUB"{print $3; exit}' "$mf")
-    [ "$sid" = "-" ] && sid=""
-    log "restore fleet $sess repo=$repo main=$main base=$base hub=${sid:-none} live=$live dry=${dry:-0}"
+    # NO hub resume (was issue #143). The hub is DASH-ONLY: it has no Claude
+    # session, so there is nothing to bring back with `claude --resume` and
+    # hub-session.sh no longer accepts HUB_RESUME_ID. A HUB row left in an OLD
+    # map by a pre-change snapshot is simply ignored — restoring a fleet rebuilds
+    # the dash and stops there, instead of silently re-spawning the hub Claude an
+    # operator had closed on purpose.
+    log "restore fleet $sess repo=$repo main=$main base=$base live=$live dry=${dry:-0}"
     if [ "$live" = 0 ]; then
       if [ -n "$dry" ]; then
         say "    would: fleet-up.sh $repo ${main:-<clone>} --name $sess ${base:+--base $base}"
-        [ -n "$sid" ] && say "    would: hub → claude --resume ${sid%%-*}…"
       else
-        # rebuild the hub. fleet-up refuses if the session exists (it doesn't).
+        # rebuild the hub (dash only). fleet-up refuses if the session exists (it doesn't).
         local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
         args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
-        [ -n "$sid" ] && say "    ↻ hub → claude --resume ${sid%%-*}…"
-        env -u TMUX ${sid:+HUB_RESUME_ID="$sid"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
+        env -u TMUX bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
           || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
       fi
     fi
