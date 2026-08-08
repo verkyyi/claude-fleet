@@ -2,10 +2,12 @@
 # fleet-cleanup-daemon.sh [--dry-run] [session...] — the CLEANUP daemon
 # (com.claude-fleet.cleanup, ~60s; issue #277, closes #260).
 #
-# THE FLEET NEVER MERGES — it cleans up AFTER merges and keeps sessions resumable.
-# the worker /fleet-claim ship step arms GitHub auto-merge; GitHub (or a human on the web, or a
-# collaborator) does the merge; this daemon is what reaps the leftover worktree +
-# window + branch and records the resume ledger once the PR is final. It replaces
+# THIS DAEMON NEVER MERGES — it cleans up AFTER merges and keeps sessions resumable.
+# The worker's /fleet-claim ship+land step merges its own PR on a green gate (#441) —
+# or a human on the web, or a collaborator, does; this daemon is what reaps the
+# leftover worktree + window + branch and records the resume ledger once the PR is
+# final. It runs OUTSIDE every window, so reaping the window whose worker just
+# merged is the ordinary case, not a special one. It replaces
 # the retired auto-land daemon: same single-writer + disk-gated shape, but it
 # drives bin/fleet-cleanup.sh (no merge) instead of bin/fleet-land.sh (merge).
 #

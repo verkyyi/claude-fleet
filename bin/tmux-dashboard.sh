@@ -9,7 +9,7 @@
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
 #   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning), ⌃e
 #   (rename — windows take their name from the issue title, #216), ⌃l (arm
-#   auto-merge — /fleet-ship arms it now, gh pr merge --auto covers stragglers),
+#   auto-merge — the worker lands its own PR now, #441; gh pr merge covers strays),
 #   and ⌥x (force-reap — folded into the one confirming ⌃x).
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
 # the 'plan' hub (fleet-up/hub-session builds it; prefix+g focuses it). Env: REFRESH.

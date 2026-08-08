@@ -1,8 +1,9 @@
 #!/bin/bash
 # fleet-cleanup.sh <PR> [--dry-run] — the SEAT-AGNOSTIC, no-LLM, no-merge janitor
-# (issue #277). The fleet NEVER merges: GitHub auto-merge (armed by the worker ship step),
-# a human clicking Merge on the web, or a collaborator does the merge; this script
-# is what runs AFTER a merge to clean up and keep the session resumable. It is the
+# (issue #277). THIS script never merges: the worker that shipped the PR merges it
+# itself on a green gate (issue #441), or a human clicks Merge on the web, or a
+# collaborator does; this script is what runs AFTER a merge to clean up and keep the
+# session resumable. It is the
 # mechanical core the cleanup daemon (com.claude-fleet.cleanup) and the manual
 # /fleet-cleanup command both drive.
 #
@@ -22,7 +23,7 @@
 #      detaches into the tmux server so it can't saw off the branch it sits on.
 #      worktree-autoclean.sh stays the backstop.
 #
-# Merge-source-agnostic: it reaps the same whether GitHub auto-merge, a web merge,
+# Merge-source-agnostic: it reaps the same whether the worker itself, a web merge,
 # or a collaborator did the merge — it reads the PR's final state, it does not
 # merge. Idempotent + safe on already-half-cleaned state: an already-torn-down PR
 # is a no-op (skip:nothing). An OPEN PR is not final — nothing to clean yet.

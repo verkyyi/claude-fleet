@@ -252,10 +252,10 @@ G="$C/global"; mkdir -p "$G"
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
 tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
-# Lifecycle (issues #277, #283, #299): THE FLEET NEVER MERGES, and /fleet-claim is
-# the SINGLE SOURCE OF TRUTH for the whole worker lifecycle — claim → load charter
-# → ground → implement (weaving in the per-fleet FLEET_WORKER_PROMPT body ITSELF)
-# → open a PR closing #N → ARM GitHub auto-merge → STOP; a blocker → comment + stop.
+# Lifecycle (issues #277, #283, #299, #441): /fleet-claim is the SINGLE SOURCE OF
+# TRUTH for the whole worker lifecycle — claim → load charter → ground → implement
+# (weaving in the per-fleet FLEET_WORKER_PROMPT body ITSELF) → open a PR closing #N
+# → merge it once the gate reads READY → STOP; a blocker → comment + stop.
 # So the seed COLLAPSES to a bare `/fleet-claim` (issue #299): no #<N>, no claim
 # line, no per-fleet body (issue #234) and no ship tail are duplicated here — the
 # skill self-discovers its issue from the window's @issue binding set just below

@@ -3,8 +3,9 @@
 # lock that serializes advancing ONE repo's base branch, so two base-movers can
 # never fast-forward the same base under each other.
 #
-# Since issue #277 the fleet never merges — GitHub auto-merge (armed by the worker ship step)
-# does the merge, and bin/fleet-cleanup.sh reaps + fast-forwards the base afterward.
+# Since issue #277 no DAEMON merges — the worker that shipped the PR merges it itself
+# on a green gate (issue #441, bin/fleet-pr-verdict.sh), and bin/fleet-cleanup.sh reaps
+# + fast-forwards the base afterward.
 # This lease is what serializes that base fast-forward across concurrent cleaners
 # (the cleanup daemon + a manual reap from the hub), using the mkdir-atomic acquire +
 # steal-if-stale semantics that used to serialize the (retired) landers.
@@ -174,4 +175,31 @@ land_classify() {
     BLOCKED)         case "$ck" in fail) echo FAILING ;; pending|none) echo PENDING ;; *) echo BLOCKED ;; esac ;;
     *)               case "$ck" in fail) echo FAILING ;; *) echo PENDING ;; esac ;;  # UNKNOWN → give CI a beat
   esac
+}
+
+# The MERGE GATE a self-landing worker switches on (issue #441) — land_classify
+# plus the strictness a GATE needs that a glance doesn't:
+#   * a RED check is FAILING even when mergeStateStatus says CLEAN. GitHub reports
+#     CLEAN whenever nothing REQUIRED blocks the merge, so a repo whose CI is not a
+#     required status check (this one) shows CLEAN with a failing run — and
+#     "don't ship red" is the entire point of the gate.
+#   * a still-RUNNING check is PENDING for the same reason: wait for CI, never race it.
+#   * no checks at all (`none`) stays READY — nothing to wait for.
+# Non-OPEN states report as THEMSELVES (MERGED / CLOSED) rather than folding to
+# GONE, so a caller can tell "already landed" (the confirm-after-merge read) from
+# "closed unmerged". Same five fields as land_classify, same one-token stdout.
+land_verdict() {
+  local st="${1:-}" mg="${2:-}" ms="${3:-}" dr="${4:-}" ck="${5:-}" v
+  case "$st" in
+    MERGED) echo MERGED; return ;;
+    CLOSED) echo CLOSED; return ;;
+  esac
+  v=$(land_classify "$st" "$mg" "$ms" "$dr" "$ck")
+  if [ "$v" = READY ]; then
+    case "$ck" in
+      fail)    v=FAILING ;;
+      pending) v=PENDING ;;
+    esac
+  fi
+  echo "$v"
 }

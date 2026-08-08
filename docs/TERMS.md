@@ -36,7 +36,8 @@ nests three levels, and this is where the confusing vocabulary starts:
 - **Hub** — the always-on `plan` window: the dash on top, and below it the
   **operator's own Claude session** in the base checkout (a plain `claude`, no
   charter). This is where you file, triage, spawn workers, hand work back and
-  land PRs. **One hub per fleet** (per repo); its pane carries `@hub=1` and F9 /
+  land whatever a worker couldn't — a worker lands its own PR on a green gate
+  (issue #441), so the hub only steps in for the strays. **One hub per fleet** (per repo); its pane carries `@hub=1` and F9 /
   the ⌂ icon jump to it. There is no resident orchestrator agent — the fleet is
   operator-driven (issue #439). Built by
   [`bin/hub-session.sh`](../bin/hub-session.sh).

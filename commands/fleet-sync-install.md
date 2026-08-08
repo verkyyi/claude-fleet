@@ -18,7 +18,8 @@ The live install is **shared, machine-global tooling** every fleet uses, so this
 (issue #256). It operates on `~/.claude/fleet` (always a claude-fleet checkout)
 regardless of which fleet invokes it; the only precondition is that
 `~/.claude/fleet` is a git checkout to fast-forward (see step 1). The normal flow:
-get the tooling PR(s) merged (auto-merge, armed at ship; or `gh pr merge` by hand),
+get the tooling PR(s) merged (the shipping worker lands its own on green, #441; or
+`gh pr merge` by hand),
 then run `/fleet-sync-install` **once** to make the live install match master.
 
 **Argument** (`$ARGUMENTS`): none — takes no argument.
@@ -312,5 +313,5 @@ Rails: `/fleet-sync-install` is the one deliberate exception to the
 shared tooling** (the live install `~/.claude/fleet` + `~/.claude` config), never
 another fleet's repo, sessions, or ledgers, so **any** fleet may run it;
 it refuses only when `~/.claude/fleet` isn't a git checkout to fast-forward.
-Merging is GitHub auto-merge's job (the fleet never merges); this only re-applies
-already-merged tooling to the live install.
+Merging belongs to the worker that shipped the PR (or the operator, by hand); this
+only re-applies already-merged tooling to the live install.

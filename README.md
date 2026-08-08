@@ -244,7 +244,8 @@ running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
 still works as a one-fleet default. Every fleet gets a **hub pane** in its `plan`
 window — a plain `claude` in the base checkout, with your own model/MCP/settings
 (issue #439). That is where you file, triage, spawn workers, hand work back and
-land PRs; there is no resident orchestrator agent. Set `FLEET_HUB_CMD` (global or
+land whatever a worker couldn't (workers land their own PRs on green, #441);
+there is no resident orchestrator agent. Set `FLEET_HUB_CMD` (global or
 per-fleet conf) to launch something else there, or a plain shell to opt out.
 The base checkout stays edit-read-only for every pane (`hooks/base-readonly-guard.py`),
 so the hub can drive the fleet without ever committing to it.
@@ -289,8 +290,9 @@ and refuses from the wrong one. Live so far:
 - **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
   freshly-spawned worker runs: claim the bound issue via the **assignee**, load a
   layered worker charter, ground in the issue + code, then implement under a
-  standing contract that ends by **opening a PR and stopping** — **the fleet never
-  merges** (see [docs/CLEANUP.md](docs/CLEANUP.md)).
+  standing contract that ends by **opening a PR and landing it** once the gate
+  reads green (`bin/fleet-pr-verdict.sh` → `READY`); the cleanup daemon reaps
+  afterwards (see [docs/CLEANUP.md](docs/CLEANUP.md)).
 - **`/fleet-history`** (hub) — browse & resume closed worker sessions (landed +
   unlanded) from the history ledger, reconstructing a reaped worktree off the
   squash SHA so `claude --resume` still works.
