@@ -1,21 +1,28 @@
 #!/bin/bash
-# hub-session-selftest.sh — the hub pane's launch contract (issue #439).
+# hub-session-selftest.sh — the hub's launch contract: DASH-ONLY, never a Claude.
 #
-# Since #439 the fleet is operator-driven: the 'plan' hub's bottom pane runs a
-# PLAIN `claude` in the base checkout — no charter seed, no settings profile, no
-# MCP diet, no model override. This test drives the REAL bin/hub-session.sh
-# through its HUB_PRINT_CMD debug seam (which builds the launch command and exits
-# BEFORE any tmux spawn — so no live claude/hub/socket is needed) against a
-# throwaway FLEET_CONF_DIR, and asserts:
+# The 'plan' hub used to split a persistent `claude` in below the dash (the "hub
+# pane", issue #439, successor to the steward seat). That pane restored itself
+# unasked — the ⌂ home tap, F9 and prefix+g all fall back to hub-session.sh when
+# they find no pane to focus, and fleet-up/fleet-restore rebuilt it on every fresh
+# fleet and every crash recovery — so an operator who closed it got it back on the
+# next tap. The hub is now the dash and NOTHING else.
 #
-#   • default: the launch is a bare `claude` + the pane-keep-alive `exec $SHELL`,
-#     with NONE of the retired Steward-Lite flags and no `/fleet-steward` seed.
-#   • FLEET_HUB=1 is exported into the pane command (the durable hub marker the
-#     shell/cw.zsh destroy-guard trusts first, issue #202).
-#   • resume (HUB_RESUME_ID): `claude --resume <id>` with a `||` fallback to the
-#     fresh launch, so a stale/pruned id never strands the pane at a bare shell.
-#   • FLEET_HUB_CMD override: owns its whole command line — nothing injected.
-#   • no per-fleet settings/mcp files are rendered any more.
+# This test drives the REAL bin/hub-session.sh through its HUB_PRINT_CMD debug
+# seam (which builds the launch command and exits BEFORE any tmux spawn — so no
+# live tmux/dash/socket is needed) against a throwaway FLEET_CONF_DIR, and asserts:
+#
+#   • the launch is the DASHBOARD, and the word `claude` appears nowhere in it.
+#   • the retired knobs are INERT: HUB_RESUME_ID (crash-resume of the hub
+#     transcript) and FLEET_HUB_CMD (the per-fleet override) are both ignored, so
+#     neither a stale restore.map nor a leftover conf key can reintroduce a hub
+#     Claude. These are the regression guards — they are the exact paths that
+#     used to bring the pane back.
+#   • FLEET_HUB is NOT exported by the launch (nothing is auto-marked as the hub
+#     any more). The @hub marker itself still EXISTS for a pane an operator marks
+#     by hand — that contract lives in tmux-guard-selftest.sh / dash-marker-selftest.sh
+#     and is deliberately unchanged here.
+#   • no per-fleet settings/mcp files are rendered.
 #
 # Hermetic: its own temp FLEET_CONF_DIR, no tmux, no network.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -50,50 +57,63 @@ run() {
       "$@" bash "$SCRIPT"
 }
 
-# --- 1. default: a plain `claude`, no injected flags, no seed prompt ----------
+# no_claude <label> <cmd> — the headline guarantee: no route back to a Claude
+# session. The install path itself legitimately contains the string "claude"
+# (~/.claude/fleet/bin, or a claude-fleet checkout), so strip $BIN before
+# matching — otherwise every run trivially "fails" on its own directory name.
+# What survives the strip is real command text: `claude`, `claude --resume`,
+# `fleet-claude.sh`, …
+no_claude() {
+  case "${2//"$BIN"/}" in *claude*) fail "$1: the hub must NEVER launch a claude session: $2" ;; esac
+}
+
+# --- 1. the hub launches the DASH, and no Claude at all ----------------------
 out=$(run) || fail "default run exited non-zero"
-case "$out" in *"claude"*)   : ;; *) fail "default: expected a bare claude launch: $out" ;; esac
-case "$out" in *'exec $SHELL'*) : ;; *) fail "default: pane-keep-alive 'exec \$SHELL' tail missing: $out" ;; esac
-# None of the retired Steward-Lite rails may appear.
-case "$out" in *"--settings"*)          fail "default: --settings must not appear (Steward Lite retired, #439)" ;; esac
-case "$out" in *"--strict-mcp-config"*) fail "default: --strict-mcp-config must not appear (#439)" ;; esac
-case "$out" in *"--mcp-config"*)        fail "default: --mcp-config must not appear (#439)" ;; esac
-case "$out" in *"--model"*)             fail "default: --model must not appear — the hub inherits your own claude config" ;; esac
-case "$out" in *"/fleet-steward"*)      fail "default: the retired /fleet-steward seed must not be launched (#439)" ;; esac
-# FLEET_MODEL must NOT leak into the hub launch either (the workers own that knob).
+# Fully deterministic, so pin it exactly — this is the whole hub command line.
+[ "$out" = "bash '$BIN/tmux-dashboard.sh'" ] \
+  || fail "default: the hub must launch the dash ALONE, got: $out"
+no_claude default "$out"
+# Retired rails must not reappear by any route.
+case "$out" in *"--settings"*)     fail "default: --settings must not appear: $out" ;; esac
+case "$out" in *"--mcp-config"*)   fail "default: --mcp-config must not appear: $out" ;; esac
+case "$out" in *"--model"*)        fail "default: --model must not appear: $out" ;; esac
+case "$out" in *"/fleet-steward"*) fail "default: the retired /fleet-steward seed must not appear: $out" ;; esac
+# FLEET_MODEL is the workers' knob and must not reach the hub either.
 out=$(run FLEET_MODEL=haiku) || fail "FLEET_MODEL run exited non-zero"
-case "$out" in *"--model"*) fail "FLEET_MODEL must not be injected into the hub launch (#439)" ;; esac
+case "$out" in *"--model"*) fail "FLEET_MODEL must not be injected into the hub launch" ;; esac
 
-# --- 2. the durable hub marker is exported into the pane command --------------
+# --- 2. no hub marker is exported (nothing is auto-marked @hub) --------------
 out=$(run) || fail "marker run exited non-zero"
-case "$out" in "export FLEET_HUB=1; "*) : ;;
-  *) fail "hub marker: the command must start with 'export FLEET_HUB=1; ' (#202): $out" ;; esac
-case "$out" in *"FLEET_SEAT"*) fail "hub marker: the retired FLEET_SEAT env must not be exported (#439)" ;; esac
+case "$out" in *"FLEET_HUB=1"*)
+  fail "the dash-only hub must not export FLEET_HUB=1 — nothing is auto-marked as hub: $out" ;; esac
+case "$out" in *"FLEET_SEAT"*) fail "the retired FLEET_SEAT env must not be exported (#439)" ;; esac
 
-# --- 3. nothing is rendered on disk any more ---------------------------------
+# --- 3. nothing is rendered on disk ------------------------------------------
 run >/dev/null || fail "render-check run exited non-zero"
-[ -e "$CONF/fleets/$SESS/steward-settings.json" ] && fail "no per-fleet settings file may be rendered (#439)"
-[ -e "$CONF/fleets/$SESS/hub-settings.json" ]     && fail "no per-fleet settings file may be rendered (#439)"
-[ -e "$CONF/fleets/$SESS/steward-mcp.json" ]      && fail "no per-fleet mcp config may be rendered (#439)"
+[ -e "$CONF/fleets/$SESS/steward-settings.json" ] && fail "no per-fleet settings file may be rendered"
+[ -e "$CONF/fleets/$SESS/hub-settings.json" ]     && fail "no per-fleet settings file may be rendered"
+[ -e "$CONF/fleets/$SESS/steward-mcp.json" ]      && fail "no per-fleet mcp config may be rendered"
 
-# --- 4. resume: --resume <id>, with a fallback to the fresh launch ------------
+# --- 4. REGRESSION: HUB_RESUME_ID is inert -----------------------------------
+# fleet-restore.sh no longer passes this, but an OLD restore.map still carries a
+# HUB row; a fleet restored from one must NOT come back with the hub Claude the
+# operator closed on purpose.
 out=$(run HUB_RESUME_ID=abc123) || fail "resume run exited non-zero"
-case "$out" in *"claude --resume 'abc123'"*) : ;;
-  *) fail "resume: expected \`claude --resume 'abc123'\`: $out" ;; esac
-case "$out" in *"--resume 'abc123' || { claude; }"*) : ;;
-  *) fail "resume: a stale id must fall back to the fresh launch with ||: $out" ;; esac
-# The '-' sentinel means "no id captured" → a plain fresh launch, never --resume.
-out=$(run HUB_RESUME_ID=-) || fail "resume-sentinel run exited non-zero"
-case "$out" in *"--resume"*) fail "resume: the '-' sentinel must NOT produce a --resume: $out" ;; esac
+case "$out" in *"--resume"*) fail "HUB_RESUME_ID must be IGNORED — no --resume in a dash-only hub: $out" ;; esac
+no_claude HUB_RESUME_ID "$out"
+case "$out" in *"abc123"*)   fail "HUB_RESUME_ID must not reach the launch command at all: $out" ;; esac
 
-# --- 5. FLEET_HUB_CMD override owns its whole command line -------------------
+# --- 5. REGRESSION: FLEET_HUB_CMD is inert -----------------------------------
+# The old per-fleet override could name ANY command. A leftover key in a live
+# fleet's conf must not be a back door to a hub Claude.
 out=$(run FLEET_HUB_CMD='claude "my own orders"; exec $SHELL') || fail "override run exited non-zero"
-case "$out" in *"my own orders"*) : ;; *) fail "override: FLEET_HUB_CMD not honored: $out" ;; esac
-case "$out" in *"--settings"*|*"--model"*) fail "override: nothing may be injected into a FLEET_HUB_CMD override" ;; esac
-# Resume still beats the override (that is what fleet-restore announces).
+case "$out" in *"my own orders"*) fail "FLEET_HUB_CMD must be IGNORED, not honored: $out" ;; esac
+no_claude FLEET_HUB_CMD "$out"
+case "$out" in *"tmux-dashboard.sh"*) : ;;
+  *) fail "override: the hub must still launch the dash: $out" ;; esac
+# Both retired knobs together — still just the dash.
 out=$(run HUB_RESUME_ID=xyz789 FLEET_HUB_CMD='claude "my own orders"; exec $SHELL')
-case "$out" in "export FLEET_HUB=1; claude --resume 'xyz789' || { claude \"my own orders\"; exec \$SHELL; };"*) : ;;
-  *) fail "override+resume: resume must lead, with the override as the fallback: $out" ;; esac
+no_claude resume+override "$out"
 
-printf 'PASS: hub-session launches a plain claude (no Steward Lite rails), exports FLEET_HUB, resumes with a fallback\n'
+printf 'PASS: hub-session launches the dash ALONE — HUB_RESUME_ID and FLEET_HUB_CMD are inert, no claude by any route\n'
 exit 0

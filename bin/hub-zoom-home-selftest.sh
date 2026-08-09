@@ -69,15 +69,20 @@ trap 'exit 130' INT TERM HUP
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-# --- build the hub: session 't', a 'plan' window (dash pane top / hub pane
-#     bottom) + a plain 'worker' window to jump from --------------------------
+# --- build the hub: session 't', a 'plan' window + a plain 'worker' window to
+#     jump from.
+# The hub is DASH-ONLY, so there is no @hub pane to target. The second pane here
+# is NOT a hub Claude - it stands in for a pane the OPERATOR split in by hand, and
+# carries no marker. It exists so the zoom half of the contract stays testable
+# (tmux will not set window_zoomed_flag on a single-pane window), and so the
+# assertions below actually prove hub-zoom homes on the DASH rather than on
+# "whatever pane happens to be there". -------------------------------------
 tmux new-session -d -s t -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
 tmux new-window -d -t t: -n worker
 dashp="$(tmux list-panes -t t:plan -F '#{pane_id}' | head -n1)"
-hubp="$(tmux split-window -d -P -F '#{pane_id}' -t "$dashp")"
-[ -n "$dashp" ] && [ -n "$hubp" ] && [ "$dashp" != "$hubp" ] || fail "could not build the dash/hub split"
+sidep="$(tmux split-window -d -P -F '#{pane_id}' -t "$dashp")"
+[ -n "$dashp" ] && [ -n "$sidep" ] && [ "$dashp" != "$sidep" ] || fail "could not build the plan window"
 tmux set-option -p -t "$dashp" @dash 1
-tmux set-option -p -t "$hubp" @hub 1
 
 # --- helpers ----------------------------------------------------------------
 zflag()   { tmux display-message -p -t t:plan '#{window_zoomed_flag}'; }
@@ -105,12 +110,13 @@ set_plan() {
 # `set -o pipefail` — unlike a literal `sh`, which is dash on CI and has no pipefail.
 run_zoom() { bash --posix "$SCRIPT" "$@"; }   # PATH shim pins tmux to the isolated socket
 
-# A run that must end on the SPLIT with the hub pane focused (the home invariant).
+# A run that must end on the plan window, UNZOOMED, with the DASH focused (the
+# home invariant). It used to require the hub pane focused; the dash is the hub now.
 assert_home_split() {
   local why="$1"
-  [ "$(curwin)" = plan ]     || fail "$why: expected to land on the plan hub, got '$(curwin)'"
-  [ "$(zflag)" = 0 ]         || fail "$why: expected the half-dash/half-hub SPLIT, but it's zoomed"
-  [ "$(planact)" = "$hubp" ] || fail "$why: expected the hub pane focused, got '$(planact)'"
+  [ "$(curwin)" = plan ]      || fail "$why: expected to land on the plan hub, got '$(curwin)'"
+  [ "$(zflag)" = 0 ]          || fail "$why: expected an UNZOOMED hub, but it is zoomed"
+  [ "$(planact)" = "$dashp" ] || fail "$why: expected the dash pane focused, got '$(planact)'"
 }
 
 # =====================  --home : ALWAYS the split  ==========================
@@ -120,19 +126,19 @@ run_zoom --home
 assert_home_split "H1 --home from worker"
 
 # H2 — already on the split (the bug): a home tap must STAY on the split, not zoom.
-set_plan "$hubp" no
+set_plan "$sidep" no
 run_zoom --home
-assert_home_split "H2 --home on the split (must not zoom)"
+assert_home_split "H2 --home already on the hub (must not zoom)"
 
-# H3 — dash pane zoomed: home unzooms and focuses the hub pane.
+# H3 — dash pane zoomed: home unzooms, dash still focused.
 set_plan "$dashp" yes
 run_zoom --home
 assert_home_split "H3 --home with the dash zoomed"
 
-# H4 — hub pane zoomed: home unzooms back to the split.
-set_plan "$hubp" yes
+# H4 — another pane zoomed: home unzooms and returns focus to the dash.
+set_plan "$sidep" yes
 run_zoom --home
-assert_home_split "H4 --home with the hub pane zoomed"
+assert_home_split "H4 --home with another pane zoomed"
 
 # =====================  default (F9) : PROGRESSIVE toggle  ===================
 # F1 — cross-window press still lands on the split (unchanged jump).
@@ -140,17 +146,17 @@ tmux select-window -t t:worker
 run_zoom
 assert_home_split "F1 F9 from worker"
 
-# F2 — on the split, a press ZOOMS to fullscreen-hub. SAME start state as H2,
-# opposite result — the difference the fix introduces.
-set_plan "$hubp" no
+# F2 — already on the hub, a press ZOOMS the dash to fullscreen. SAME start state
+# as H2, opposite result — the difference #405 introduced.
+set_plan "$sidep" no
 run_zoom
 [ "$(curwin)" = plan ]      || fail "F2: expected to stay on the plan hub"
-[ "$(zflag)" = 1 ]          || fail "F2: F9 on the split must toggle to fullscreen (progressive zoom)"
-[ "$(planact)" = "$hubp" ] || fail "F2: F9 should focus the hub pane"
+[ "$(zflag)" = 1 ]          || fail "F2: F9 on the hub must toggle to fullscreen (progressive zoom)"
+[ "$(planact)" = "$dashp" ] || fail "F2: F9 should focus the dash pane"
 
-# F3 — pressed again while zoomed, F9 restores the split.
+# F3 — pressed again while zoomed, F9 restores the unzoomed hub.
 run_zoom
-[ "$(zflag)" = 0 ] || fail "F3: a second F9 press must restore the split"
+[ "$(zflag)" = 0 ] || fail "F3: a second F9 press must restore the unzoomed hub"
 
 # =====================  STATIC GUARD : the shipped wiring  ==================
 grep -qF 'hub-zoom.sh --home' "$CONF" \
@@ -163,5 +169,5 @@ grep -E 'bind -n F9 .*hub-zoom\.sh' "$CONF" | grep -q -- '--home' \
 grep -qF -- '--home' "$SCRIPT" \
   || fail "hub-zoom.sh no longer understands --home (issue #405)"
 
-printf 'selftest PASS: ⌂ --home always lands on the split; F9 keeps the progressive zoom toggle (#405)\n'
+printf 'selftest PASS: ⌂ --home always lands unzoomed on the DASH; F9 keeps the progressive zoom toggle (#405)\n'
 exit 0

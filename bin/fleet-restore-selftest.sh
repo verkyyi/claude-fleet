@@ -1,5 +1,6 @@
 #!/bin/bash
-# fleet-restore-selftest.sh — the hub snapshot+resume contract (issue #143).
+# fleet-restore-selftest.sh — the snapshot+resume contract (issue #143), and the
+# dash-only hub guarantee that replaced the hub-resume leg.
 #
 # Workers survive a tmux-server crash: snapshot() records each work window's
 # worktree + newest Claude transcript id, and restore() reopens them with
@@ -174,15 +175,19 @@ grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a$' "$MAP" \
 grep -qE '^WIN	issue-10	.*	done	-	-$' "$MAP" \
   || fail "snapshot: issue-10's 'done' state should be captured, unset prci/pfg as '-' (map: $(cat "$MAP"))"
 
-# restore() must PARSE that HUB row and route the id into the hub launch.
-# --dry-run exercises the parse+wiring without spawning fleet-up/claude, but only
-# for a fleet that is DOWN — so drop the live snap session first.
+# restore() must IGNORE the HUB row: the hub is dash-only, so there is no Claude
+# session to bring back. --dry-run exercises the parse+wiring without spawning
+# fleet-up/claude, but only for a fleet that is DOWN — so drop the live snap first.
 tmux kill-session -t snap 2>/dev/null
 dry=$(bash "$RESTORE" --dry-run 2>/dev/null)
-# the display truncates the id at the first '-' (mirrors the worker line), so the
-# 'stew…' prefix from 'stew-abc123' confirms restore parsed the HUB row's id.
-printf '%s\n' "$dry" | grep -q 'hub → claude --resume stew' \
-  || fail "restore --dry-run should report resuming the hub from the HUB row (got: $dry)"
+# REGRESSION: a map carrying a HUB row (this one does — section 2 just wrote it)
+# must NOT make restore announce or perform a hub resume. This is the exact path
+# that used to bring back a hub Claude the operator had closed on purpose.
+printf '%s\n' "$dry" | grep -q 'hub → claude --resume' \
+  && fail "restore must NOT resume a hub Claude from a HUB row (got: $dry)"
+# The work windows must still resume — only the hub leg is gone.
+printf '%s\n' "$dry" | grep 'issue-9 ' | grep -q 'claude --resume wrk' \
+  || fail "restore --dry-run should still resume the WORK windows (got: $dry)"
 # issue #153: a 'working' window is flagged for auto-continue; a 'done' one is not.
 printf '%s\n' "$dry" | grep 'issue-9 ' | grep -q '(auto-continue)' \
   || fail "restore --dry-run should mark the 'working' issue-9 window for auto-continue (got: $dry)"
@@ -211,68 +216,62 @@ printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q 'no transcript found' \
 printf '%s\n' "$dry2" | grep 'issue-77 ' | grep -q '(auto-continue)' \
   && fail "restore: a no-transcript 'working' window must NOT be nudged as if resumed (got: $dry2)"
 
-# ============================================================ 3. RESUME/FALLBACK
-# hub-session.sh builds the hub; assert the hub pane's launch command.
-# poll for the claude stub's recorded argv (the pane starts asynchronously).
-wait_argv() {
-  # ~20s budget: the pane launch is async and a loaded CI box can lag well past
-  # a couple seconds — a stingy timeout would flake, not catch a real regression.
+# ====================================== 3. THE HUB NEVER LAUNCHES A CLAUDE =====
+# hub-session.sh builds the hub; assert it builds the DASH ALONE. The old contract
+# here was the opposite — resume by id, bare fresh launch, stale-id fallback — all
+# of which spawned a Claude in a second pane. That pane restored itself unasked on
+# every ⌂ tap / F9 / fleet-up / crash recovery, so it is gone.
+#
+# This is the LIVE counterpart to hub-session-selftest.sh's hermetic check: a stub
+# `claude` on PATH records its argv, so "no claude was launched" is proven by the
+# recording staying EMPTY rather than by inspecting a command string.
+
+# Give an errant launch a real chance to show up before declaring the file empty —
+# the pane starts asynchronously, so asserting immediately would pass vacuously.
+settle() {
   local _n
-  for _n in $(seq 1 200); do
-    [ -s "$WORK/claude-argv" ] && return 0
-    tmux run-shell -t "$1" 'true' 2>/dev/null   # nudge the server; ~0.1s/iter
+  for _n in $(seq 1 20); do
+    [ -s "$WORK/claude-argv" ] && return 0     # something launched — fail fast
+    tmux run-shell -t "$1" 'true' 2>/dev/null  # nudge the server; ~0.1s/iter
     perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
   done
   return 1
 }
 
-# --- RESUME: HUB_RESUME_ID present ⇒ `claude --resume <id>` ------------------
+# assert_dash_only <session> <label>
+assert_dash_only() {
+  local sess="$1" why="$2" panes
+  settle "$sess" && fail "$why: the hub launched a claude (argv: $(cat "$WORK/claude-argv"))"
+  [ ! -s "$WORK/claude-argv" ] \
+    || fail "$why: no claude may be launched by the hub (argv: $(cat "$WORK/claude-argv"))"
+  panes=$(tmux list-panes -t "$sess:plan" -F x 2>/dev/null | wc -l | tr -d ' ')
+  [ "$panes" = 1 ] || fail "$why: the hub must be ONE pane (the dash), got $panes"
+}
+
+# --- REGRESSION: HUB_RESUME_ID from an OLD map must not resurrect anything ----
 : > "$WORK/claude-argv"
 tmux new-session -d -s res -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session res"
 env -u HUB_CMD -u FLEET_HUB_CMD \
   HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" \
-  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (resume) exited non-zero"
-wait_argv res || fail "resume: the hub pane never launched claude (no recorded argv)"
-grep -q -- '--resume stew-abc123' "$WORK/claude-argv" \
-  || fail "resume: the hub should launch 'claude --resume stew-abc123' (got: $(cat "$WORK/claude-argv"))"
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale-id) exited non-zero"
+assert_dash_only res "HUB_RESUME_ID"
 
-# --- FALLBACK: no id ⇒ a FRESH, BARE `claude` (issue #439) -------------------
-# The stub records "$*", so a bare `claude` shows up as an EMPTY argv line.
+# --- a plain build is likewise dash-only -------------------------------------
 : > "$WORK/claude-argv"
 tmux new-session -d -s fresh -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session fresh"
 env -u HUB_CMD -u FLEET_HUB_CMD -u HUB_RESUME_ID \
   HUB_SESSION=fresh HUB_CWD="$STEW_PATH" \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (fresh) exited non-zero"
-# wait_argv gates on a NON-EMPTY file, but a bare launch writes only a blank line
-# — poll the line COUNT instead so this leg can never race.
-for _n in $(seq 1 200); do
-  [ "$(wc -l < "$WORK/claude-argv")" -ge 1 ] && break
-  tmux run-shell -t fresh 'true' 2>/dev/null
-  perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
-done
-[ "$(wc -l < "$WORK/claude-argv")" -ge 1 ] || fail "fallback: the hub pane never launched claude (no recorded argv)"
-grep -q -- '--resume' "$WORK/claude-argv" \
-  && fail "fallback: a hub with no id must NOT use --resume (got: $(cat "$WORK/claude-argv"))"
-grep -qx '' "$WORK/claude-argv" \
-  || fail "fallback: a fresh hub should launch a BARE claude, no args (got: $(cat "$WORK/claude-argv"))"
+assert_dash_only fresh "fresh build"
 
-# --- STALE ID: `--resume` fails ⇒ fall back to a FRESH hub, not a bare shell -
-: > "$WORK/claude-argv"; : > "$WORK/fail-resume"   # make the stub fail on --resume
-tmux new-session -d -s stale -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session stale"
-env -u HUB_CMD -u FLEET_HUB_CMD \
-  HUB_SESSION=stale HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-gone-77" \
-  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale) exited non-zero"
-# both should appear: the attempted resume, THEN the bare fresh fallback (|| path)
-for _n in $(seq 1 200); do
-  [ "$(wc -l < "$WORK/claude-argv")" -ge 2 ] && break
-  tmux run-shell -t stale 'true' 2>/dev/null
-  perl -e 'select undef,undef,undef,0.1' 2>/dev/null || sleep 1
-done
-grep -q -- '--resume stew-gone-77' "$WORK/claude-argv" \
-  || fail "stale: the hub should first attempt --resume (got: $(cat "$WORK/claude-argv"))"
-grep -qx '' "$WORK/claude-argv" \
-  || fail "stale: a FAILED resume must fall back to a fresh bare claude, not a bare shell (got: $(cat "$WORK/claude-argv"))"
-rm -f "$WORK/fail-resume"
+# --- REGRESSION: a leftover FLEET_HUB_CMD in a conf is not a back door -------
+: > "$WORK/claude-argv"
+tmux new-session -d -s ovr -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session ovr"
+env -u HUB_CMD -u HUB_RESUME_ID \
+  FLEET_HUB_CMD='claude "my own orders"; exec $SHELL' \
+  HUB_SESSION=ovr HUB_CWD="$STEW_PATH" \
+  bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (override) exited non-zero"
+assert_dash_only ovr "FLEET_HUB_CMD override"
 
 # ================================= 4. HUB-ONLY RECOVERY (issue #160) ============
 # A snapshot of a hub-only session must NOT shrink a richer map, and restore must
@@ -350,5 +349,5 @@ dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF i
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
 
-printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — HUB row captured & resumed, working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
+printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
 exit 0

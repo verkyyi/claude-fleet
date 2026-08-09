@@ -29,9 +29,9 @@ demo repo data.</sub>
 
 - **A mission-control dashboard** (`prefix+g`): an fzf panel listing every
   session with state glyph, bound issue, model, and context %. It lives as an
-  embedded pane in the `plan` hub (dash above, your Claude session below);
-  `prefix+g` focuses it and, pressed again, zooms it fullscreen — the mirror of
- `F9`'s hub focus. `Enter` jumps. **Type a task and press Enter** —
+  embedded pane in the `plan` hub, which holds the dash and nothing else;
+  `prefix+g` focuses it and, pressed again, zooms it fullscreen — as does
+ `F9`. `Enter` jumps. **Type a task and press Enter** —
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-S` opens a raw scratch session (plain `claude`, no issue — but in its
   own writable `scratch-N` worktree, so an experiment can push a branch and open
@@ -160,7 +160,7 @@ in a header; `prefix ?` is the one place that shows **all** of them together.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
-always lands on this fleet's hub in the half-dash / half-Claude split
+always lands on this fleet's hub, unzoomed
 (never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens a picker of running
 fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
 next window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
@@ -169,8 +169,8 @@ account pool as a selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
-`prefix z`; `F9` and `prefix g` jump-and-zoom the hub pane and dash pane
-respectively (press again to toggle the zoom). On iPad / Termius the double-tap
+`prefix z`; `F9` and `prefix g` both jump to the hub's dash and toggle its
+zoom (press again to restore). On iPad / Termius the double-tap
 doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
 so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs
 badge above — not a pane zoom.
@@ -241,12 +241,14 @@ Each fleet keeps its durable state in **one directory per fleet** —
 `~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,
 issue-bridge state), so `ls ~/.config/claude-fleet/fleets/` is the list of
 running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
-still works as a one-fleet default. Every fleet gets a **hub pane** in its `plan`
-window — a plain `claude` in the base checkout, with your own model/MCP/settings
-(issue #439). That is where you file, triage, spawn workers, hand work back and
-land whatever a worker couldn't (workers land their own PRs on green, #441);
-there is no resident orchestrator agent. Set `FLEET_HUB_CMD` (global or
-per-fleet conf) to launch something else there, or a plain shell to opt out.
+still works as a one-fleet default. Every fleet gets a **`plan` hub** window holding
+the **dash alone**. The hub used to split a persistent `claude` in below it, but
+that pane rebuilt itself on every ⌂ tap, `F9`, fresh fleet and crash recovery —
+closing it never stuck — so it is gone, along with the `FLEET_HUB_CMD` knob that
+configured it. Run your own `claude` in whatever window you like: that is where
+you file, triage, spawn workers, hand work back and land whatever a worker
+couldn't (workers land their own PRs on green, #441). There is no resident
+orchestrator agent, and nothing spawns a Claude session for you.
 The base checkout stays edit-read-only for every pane (`hooks/base-readonly-guard.py`),
 so the hub can drive the fleet without ever committing to it.
 Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
