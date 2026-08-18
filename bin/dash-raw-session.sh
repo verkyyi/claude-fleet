@@ -49,24 +49,30 @@
 #                     a crash on disk and is reapable by the janitor's scratch rules.
 #
 # With no <target-session> the window is created in the CALLER's fleet (the
-# interactive prefix/dash path). Pass <target-session> to spawn into a specific
-# fleet you are not attached to (headless) — in that mode focus never moves.
+# interactive dash path). Pass <target-session> to spawn into a specific fleet you
+# are not attached to (headless) — in that mode focus never moves.
+#
+# The dash's ⌃s is a ONE-KEYSTROKE spawn (issue #444): no name popup, no confirm —
+# press it and the scratch window is on its way. Naming was a prompt nobody filled
+# in (the auto `scratch-<N>` matches the worktree and reads better in the dash), and
+# a popup on the tap-first path cost a keyboard round-trip for an empty line. A name
+# is still available non-interactively via --name, and any window can be renamed
+# after the fact.
 set -uo pipefail
 
 # Args (order-independent): --name <n> / --name=<n> is the optional display-only
-# window name (issue #225); --prompt-read is the dash ⌃s popup phase (read the
-# name off one line of stdin, then fall through to the normal spawn); the lone
-# positional is the headless <target-session>.
-NAME=""; TARGET_SESS=""; PROMPT_READ=0
+# window name (issue #225); --bg backgrounds the slow half of the spawn (the dash
+# ⌃s path — see below); the lone positional is the headless <target-session>.
+NAME=""; TARGET_SESS=""; BG=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --name=*)      NAME="${1#--name=}"; shift ;;
-    # --name-file=<f> (issue #304): the BACKGROUND spawn pass — the ⌃s popup staged
+    # --name-file=<f> (issue #304): the BACKGROUND spawn pass — the --bg pass staged
     # the (arbitrary user) name in a temp file and re-exec'd us via fleet_bg; read +
-    # delete it. No --prompt-read, so we skip the read and just spawn.
+    # delete it. No --bg on that pass, so it falls straight through and spawns.
     --name-file=*) f="${1#--name-file=}"; NAME="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
-    --prompt-read) PROMPT_READ=1; shift ;;
+    --bg)          BG=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -76,15 +82,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
-
-# dash ⌃s popup phase: running INSIDE a `tmux display-popup -E` (see
-# tmux-dashboard.sh), read ONE optional line as the name and fall through to the
-# spawn below. Empty input keeps the auto scratch[-N] name (the common case is
-# one keystroke + Enter). Mirrors dash-issue-new.sh's confirm-box read.
-if [ "$PROMPT_READ" = 1 ]; then
-  printf '\n  New raw (scratch) session\n  (empty name = auto \342\200\230scratch\342\200\231)\n\n  name \342\226\270 '
-  IFS= read -r NAME || NAME=""
-fi
 
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }
@@ -104,19 +101,23 @@ MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { TM display-message "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf" 2>/dev/null; exit 1; }
 BASE="${FLEET_BASE_BRANCH:-master}"
 
-# ⌃s popup (issue #304): the cheap/authoritative checks above (session cap, MAIN)
-# have passed synchronously, so a refusal was immediate. Now hand the SLOW spawn —
-# `git fetch` + the `git worktree add` retry loop + the window launch — to the
-# BACKGROUND so the popup CLOSES INSTANTLY instead of freezing on checkout. Re-exec
-# ourselves with the name staged in a temp file (arbitrary user text — NEVER
-# interpolated into the run-shell string) and NO --prompt-read, so the bg pass skips
-# the read and just spawns. Only the interactive popup path (PROMPT_READ) backgrounds
-# — a headless spawn (TARGET_SESS) and the bg pass itself fall straight through. The
-# popup has $TMUX on THIS fleet's server, so bare fleet_bg lands correctly.
-if [ "$PROMPT_READ" = 1 ]; then
-  nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch name" 2>/dev/null; exit 1; }
-  printf '%s' "$NAME" > "$nf"
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0' --name-file='$nf'"
+# Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
+# cap, MAIN) have passed synchronously, so a refusal is immediate and lands on the
+# status line. Now hand the SLOW half — `git fetch` + the `git worktree add` retry
+# loop + the window launch — to the BACKGROUND so the ⌃s keypress returns INSTANTLY
+# instead of freezing the dash on checkout. Re-exec ourselves with no --bg (so the
+# bg pass just spawns) and any name staged in a temp file (arbitrary user text —
+# NEVER interpolated into the run-shell string). Only --bg backgrounds; a headless
+# CLI call falls straight through and spawns in the foreground. The dash pane has
+# $TMUX on THIS fleet's server, so bare fleet_bg lands correctly.
+if [ "$BG" = 1 ]; then
+  nfarg=""
+  if [ -n "$NAME" ]; then
+    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch name" 2>/dev/null; exit 1; }
+    printf '%s' "$NAME" > "$nf"
+    nfarg=" --name-file='$nf'"
+  fi
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg${TARGET_SESS:+ '$TARGET_SESS'}"
   exit 0
 fi
 

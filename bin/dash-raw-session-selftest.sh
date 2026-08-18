@@ -29,7 +29,9 @@
 #   J. empties-after-sanitize → --name '###' → fallback `scratch-N` + note
 #   K. sanitization        → control chars / `#` stripped, case/spacing kept, ≤24 chars
 #   L. positional target   → --name foo <sess> still spawns `foo` into <sess>
-#   M. ⌃s popup phase      → --prompt-read reads the name off one stdin line
+#   M. dash ⌃s (--bg, #444) → spawns instantly with NO prompt: the slow half is
+#                           dispatched via run-shell -b and still lands scratch-N
+#                           (a --bg --name still flows through, via --name-file)
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -105,9 +107,8 @@ chmod +x "$WORK/fakebin/tmux"
 # run the raw spawner. The per-case env (WINS, FLEET_MAX_SESSIONS,
 # FLEET_SPAWN_FOCUS) is set as a prefix on the `run_raw` call — bash exports those
 # into the function's command environment, so the child `bash` inherits them. Any
-# args passed to run_raw are forwarded to the script (--name / --prompt-read /
-# positional <target-session>); stdin is inherited, so a caller can pipe the
-# --prompt-read line in.
+# args passed to run_raw are forwarded to the script (--name / --bg / positional
+# <target-session>).
 run_raw() {
   : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
@@ -209,18 +210,29 @@ grep -q -- '-n foo\b' "$NEWWIN_LOG"       || fail "L --name foo <sess> should st
 grep -q -- '-t othersess:' "$NEWWIN_LOG"  || fail "L a positional <target-session> should still be honored" "$(cat "$NEWWIN_LOG")"
 ok "L --name foo <target-session> spawns 'foo' into the target"
 
-# ==================== M: ⌃s popup phase reads name off stdin =================
-# The ⌃s popup now BACKGROUNDS the spawn (issue #304): it reads the name, then hands
-# the git fetch + worktree add + window launch to run-shell -b (via a --name-file
-# re-exec) so the popup closes instantly. The name still flows through end-to-end.
+# ==================== M: dash ⌃s spawns instantly (--bg) =====================
+# ⌃s has NO name popup any more (issue #444): the keypress runs the cheap refusals
+# inline and hands the fetch + worktree add + window launch to run-shell -b (#304),
+# so the dash returns instantly and the scratch lands in the background. --bg with
+# a --name still stages the (arbitrary user) text through a --name-file re-exec
+# rather than interpolating it into the run-shell string.
 reset_scratch
-printf 'mybox\n' | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
-grep -q -- '-n mybox\b' "$NEWWIN_LOG" || fail "M --prompt-read should read the name off stdin" "$(cat "$NEWWIN_LOG")"
-grep -q -- '--name-file=' "$RS_LOG"   || fail "M the ⌃s spawn must be dispatched via run-shell -b (--name-file)" "$(cat "$RS_LOG")"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg
+grep -q -- '-n scratch-1\b' "$NEWWIN_LOG" || fail "M --bg should still land an auto scratch-N window" "$(cat "$NEWWIN_LOG")"
+grep -q 'dash-raw-session.sh' "$RS_LOG"    || fail "M the ⌃s spawn must be dispatched via run-shell -b" "$(cat "$RS_LOG")"
+grep -q -- '--name-file=' "$RS_LOG"        && fail "M an unnamed --bg spawn should stage no name file" "$(cat "$RS_LOG")"
+[ -d "$WORK/main-scratch-1" ]              || fail "M --bg must create the real scratch worktree" "$(git -C "$MAIN" worktree list)"
 reset_scratch
-printf '\n'        | WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt-read
-grep -q -- '-n scratch-1\b' "$NEWWIN_LOG" || fail "M an empty --prompt-read line → auto scratch-N" "$(cat "$NEWWIN_LOG")"
-ok "M --prompt-read (⌃s popup) reads the name from one stdin line, backgrounded"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --name mybox
+grep -q -- '-n mybox\b' "$NEWWIN_LOG" || fail "M --bg --name should carry the name through" "$(cat "$NEWWIN_LOG")"
+grep -q -- '--name-file=' "$RS_LOG"   || fail "M a named --bg spawn must pass the name via --name-file" "$(cat "$RS_LOG")"
+# a cap refusal is still synchronous (visible), and never reaches the background.
+reset_scratch
+WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw --bg
+[ -s "$RS_LOG" ]      && fail "M a cap refusal must NOT dispatch a background spawn" "$(cat "$RS_LOG")"
+[ -s "$NEWWIN_LOG" ]  && fail "M a cap refusal must NOT create a window" "$(cat "$NEWWIN_LOG")"
+grep -qi 'capacity' "$DISPLAY_LOG" || fail "M a --bg cap refusal should still surface a message" "$(cat "$DISPLAY_LOG")"
+ok "M dash ⌃s (--bg) spawns instantly — backgrounded, no prompt, refusals stay sync"
 
 # ============================ D: restore drops @raw ==========================
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\n' \
