@@ -4,8 +4,9 @@
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
 #   ↑/↓ move · Enter jump to that window · ⌃n file an issue + spawn its worker ·
-#   ⌃s raw scratch session · ⌃x reap a finished worker (confirms when the row
-#   isn't merged+clean) · ⌃t live⇄landed · ⌃o restore a landed session ·
+#   ⌃s raw scratch session (instant — no prompt) · ⌃x reap a finished worker
+#   (confirms when the row isn't merged+clean) · ⌃t live⇄landed · ⌃o restore a
+#   landed session ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
 #   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning), ⌃e
 #   (rename — windows take their name from the issue title, #216), ⌃l (arm
@@ -99,9 +100,13 @@ run_dash() {
   # so an `execute` reap left the pane BLANK the whole time). The slow tail of each
   # action is backgrounded (dash-reap.sh → fleet_bg / `run-shell -b`, issue #304) so
   # the bind also returns instantly. Binds that hand the terminal to an interactive
-  # popup (⌃n/⌃s/?) keep `execute` on purpose. The click-header bind mirrors ⌃n for
-  # the tappable `[＋ new]` chip (issue #381): tapping ＋/new transforms into the very
-  # file+spawn action string ⌃n runs — a single source of truth, additive to ⌃n.
+  # popup (⌃n/?) keep `execute` on purpose. ⌃s is no longer one of them (issue #444):
+  # a scratch now spawns ON THE KEYSTROKE — no name popup, no confirm (that prompt was
+  # an empty line to dismiss; `--name` still exists off the dash) — so it takes the same
+  # silent + backgrounded (`--bg`) form as the other instant actions. The click-header
+  # bind mirrors ⌃n for the tappable `[＋ new]` chip (issue #381): tapping ＋/new
+  # transforms into the very file+spawn action string ⌃n runs — a single source of
+  # truth, additive to ⌃n.
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -114,7 +119,7 @@ run_dash() {
     --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
     --bind "ctrl-n:execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
     --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)' ;; esac" \
-    --bind "ctrl-s:execute(tmux display-popup -w 90% -h 10 -E \"bash $BIN/dash-raw-session.sh --prompt-read\")+reload(bash $ROWS)" \
+    --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
