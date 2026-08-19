@@ -98,6 +98,7 @@ print_sheet() {
   key "enter" "jump to the highlighted window"
   key "⌃n" "new issue — file one AND spawn its worker (quick-dispatch)"
   key "⌃s" "raw scratch session — spawns instantly (plain claude in its own scratch-N worktree, no issue)"
+  key "⌃e" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)"
   key "⌃x" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean"
   key "⌃t" "toggle live ⇄ landed (finished sessions)"
   key "⌃o" "restore the highlighted landed session into a new window (claude --resume)"

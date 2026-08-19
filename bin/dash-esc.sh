@@ -7,7 +7,8 @@ set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"
 if [ -f "$C/rename_target" ] || [ -f "$C/bind_target" ]; then
   rm -f "$C/rename_target" "$C/bind_target"
-  echo "hide-input+change-prompt(▸ )+clear-query"   # back out, no relaunch
+  # rebind(?) undoes dash-rename.sh's unbind — see the note in dash-enter.sh.
+  echo "hide-input+rebind(?)+change-prompt(▸ )+clear-query"   # back out, no relaunch
 else
   echo "abort"
 fi

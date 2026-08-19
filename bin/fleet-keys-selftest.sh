@@ -14,6 +14,10 @@
 #   4. The sheet renders non-empty in --plain mode and lists all four groups.
 #   5. Context scoping (issue #265): `--context dash`/`--context backlog` show
 #      that panel + the global `tmux prefix` group, and drop the OTHER panels.
+#   6. Every `⌃<k>` row in the DASHBOARD group is bound as `--bind "ctrl-<k>:"`
+#      in tmux-dashboard.sh, and every such dash bind has a sheet row — both
+#      directions, so neither a new key nor a pruned one can drift (issue #449,
+#      which re-wired ⌃e rename and is asserted by name below).
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
 set -uo pipefail
@@ -118,5 +122,46 @@ printf '%s\n' "$BSHEET" | grep -qi '^backlog '      || fail "--context backlog m
 printf '%s\n' "$BSHEET" | grep -qi '^dashboard '    && fail "--context backlog should NOT list the 'dashboard' group"
 printf '%s\n' "$BSHEET" | grep -qi '^config modal ' && fail "--context backlog should NOT list the 'config modal' group"
 
-printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys checked)\n' \
-  "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)"
+# --- 6. dashboard ⌃-keys ⇄ the dash's own fzf --binds --------------------------
+# Section 1/2 guard the `prefix` binds; the DASHBOARD group had no such guard, so
+# a ⌃-key could be bound with no sheet row (undiscoverable) or listed with no bind
+# (a lie — exactly what ⌃e was between #289 and #449). Cross-check both ways.
+# The sheet's dashboard block: rows are two-space indented, the next group header
+# is flush-left, and blank lines inside the block are kept.
+dash_block="$(printf '%s\n' "$SHEET" | awk '/^dashboard /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
+[ -n "$dash_block" ] || fail "could not parse the sheet's dashboard group"
+# `⌃X` is the first token of the key column; the `⌃` prefix is matched literally,
+# so the capture is the plain ASCII letter after it (byte- and UTF-8-locale safe).
+sheet_dash_keys="$(printf '%s\n' "$dash_block" | sed -n 's/^  ⌃\(.\).*/\1/p' | sort -u)"
+[ -n "$sheet_dash_keys" ] || fail "no '⌃X' rows parsed from the sheet's dashboard group"
+dash_binds="$(grep -oE -- '--bind "ctrl-[a-z]:' "$DASH" | sed 's/.*ctrl-\(.\):.*/\1/' | sort -u)"
+[ -n "$dash_binds" ] || fail "no 'ctrl-X' --binds parsed from tmux-dashboard.sh"
+
+while IFS= read -r k; do
+  [ -n "$k" ] || continue
+  printf '%s\n' "$dash_binds" | grep -Fxq "$k" \
+    || fail "sheet lists dashboard '⌃$k' but tmux-dashboard.sh has no --bind ctrl-$k"
+done <<EOF
+$sheet_dash_keys
+EOF
+while IFS= read -r k; do
+  [ -n "$k" ] || continue
+  printf '%s\n' "$sheet_dash_keys" | grep -Fxq "$k" \
+    || fail "tmux-dashboard.sh binds ctrl-$k but the dashboard sheet does not document it"
+done <<EOF
+$dash_binds
+EOF
+
+# ⌃e rename by name (issue #449): the bijection above passes if BOTH sides drop a
+# key, so pin the one this guard was extended for — sheet row, bind, and the
+# transform helper the bind calls (an inline action would break on a ')' in a
+# window name, which is why dash-rename.sh is a script).
+printf '%s\n' "$dash_block" | grep -q '⌃e' \
+  || fail "dashboard sheet is missing the ⌃e (rename window) row"
+grep -Eq -- '--bind "ctrl-e:transform\(bash [^)]*dash-rename\.sh' "$DASH" \
+  || fail "dashboard ⌃e is not bound to a transform(dash-rename.sh ...) action"
+[ -x "$BIN/dash-rename.sh" ] || fail "bin/dash-rename.sh missing or not executable"
+
+printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
+  "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \
+  "$(printf '%s\n' "$sheet_dash_keys" | grep -c .)"
