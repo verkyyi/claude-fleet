@@ -32,6 +32,13 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 # So the binds are POPUP-conditional:
 #   • windowed (no POPUP): keep the original in-place binds — nesting a popup is
 #     fine here, and fzf's +reload/+refresh-preview preserve the filter/cursor.
+#     The `?` bind opens its popup through bin/dash-popup.sh, NOT `tmux
+#     display-popup` directly (issue #448): a popup has to draw on a CLIENT, and an
+#     fzf `execute()` bind runs from a PANE PROCESS that reaches tmux with no client
+#     of its own — so tmux has to guess one, and when it can't it exits 1 with
+#     "no current client" and draws nothing, invisibly. That made the dash's twin of
+#     this bind silently dead across a Termius drop / reconnect. The helper resolves
+#     the live client itself and, failing that, runs the sheet INLINE in the pane.
 #   • POPUP: each sub-action drops an intent sentinel + ABORTs fzf; the loop
 #     below runs it in the gap — directly in THIS shell, which owns the terminal,
 #     no nested popup — then relaunches fzf. Same non-nesting pattern the config
@@ -77,7 +84,7 @@ else
   ENTER_TAIL=''
   N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
   X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
-  K_BIND="?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context backlog\")"
+  K_BIND="?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
   CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
 fi

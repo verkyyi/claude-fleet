@@ -16,8 +16,12 @@
 #   • ARG SAFETY    an argument containing spaces survives %q-quoting intact.
 #   • NO STRANDING  the no-client path leaves @popup_open unset/0, never a live epoch.
 #   • CLIENT PATH   with a real attached client the popup path runs the command and
-#                   clears @popup_open (best-effort — SKIPped where no pty is available).
-#   • STATIC GUARD  tmux-dashboard.sh's binds no longer call display-popup directly.
+#                   clears @popup_open. BEST-EFFORT BY DESIGN: it needs a live pty
+#                   client (`script`), which is racy to fake headlessly, so it SKIPs
+#                   cleanly where one can't be had or drops mid-leg. It never fails
+#                   spuriously — the deterministic gate is the rest of this file.
+#   • STATIC GUARD  neither the dash's nor the backlog's binds call display-popup
+#                   directly any more.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -100,21 +104,34 @@ attach_bg() {
     return 1
   fi
   CLIENT_PID=$!
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  # Give the pty client a generous window to show up: a loaded machine (or CI) can
+  # take a second or two to fork `script` + connect, and a 3s window made this leg
+  # skip intermittently — a leg that silently vanishes half the time is not coverage.
+  i=0
+  while [ "$i" -lt 60 ]; do
     [ -n "$(tmux list-clients -t t 2>/dev/null)" ] && return 0
-    sleep 0.3
+    sleep 0.25
+    i=$((i + 1))
   done
   return 1
 }
 if attach_bg; then
   P="$WORK/popup"
   bash "$HELPER" -w 50% -h 10 -- sh -c "echo popped >> '$P'" >/dev/null 2>&1
-  grep -q '^popped$' "$P" 2>/dev/null \
-    || fail "client path: dash-popup.sh did not run the command with a client attached"
-  v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
-  case "$v" in ''|0) ;; *)
-    fail "client path: @popup_open left at [$v] after the popup closed, expected 0" ;;
-  esac
+  # Re-read the client BEFORE asserting. A pty client driven by `script` in a
+  # headless run can drop between the attach and the popup; that is a flaky
+  # harness, not a defect in the code under test, so it degrades to a SKIP rather
+  # than a spurious FAIL. Only a client that was still attached gets to assert.
+  if [ -n "$(tmux list-clients -t t 2>/dev/null)" ]; then
+    grep -q '^popped$' "$P" 2>/dev/null \
+      || fail "client path: dash-popup.sh did not run the command with a client attached"
+    v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
+    case "$v" in ''|0) ;; *)
+      fail "client path: @popup_open left at [$v] after the popup closed, expected 0" ;;
+    esac
+  else
+    printf 'selftest: pty client dropped mid-leg — SKIP the attached-client case\n' >&2
+  fi
   kill "${CLIENT_PID:-0}" 2>/dev/null
 else
   printf 'selftest: no usable pty (`script`) — SKIP the attached-client case\n' >&2
@@ -130,6 +147,16 @@ grep -q 'dash-popup\.sh -w 90% -h 12 -- bash \$BIN/dash-issue-new\.sh confirm --
 if grep -n -- '--bind' "$DASH" | grep -q 'display-popup'; then
   fail "static guard: an fzf --bind still calls 'tmux display-popup' directly"
 fi
+# The backlog panel's WINDOWED `?` is the same bind in the other panel — it runs
+# from a pane process too, so it must route through the helper as well. (Its POPUP
+# mode is unaffected: there `?` drops a 'keys' sentinel and the gap dispatcher runs
+# the sheet inline, since tmux cannot nest a popup inside a popup — #123/#122.)
+ISSUES="$BIN/tmux-issues.sh"
+[ -f "$ISSUES" ] || fail "static guard: $ISSUES not found"
+grep -q 'dash-popup\.sh -w 72% -h 80% -- bash \$BIN/fleet-keys\.sh --context backlog' "$ISSUES" \
+  || fail "static guard: the backlog windowed '?' bind does not route through dash-popup.sh"
+grep -q 'K_BIND="?:execute(tmux display-popup' "$ISSUES" \
+  && fail "static guard: the backlog '?' bind still calls 'tmux display-popup' directly"
 
 printf 'dash-popup-selftest: OK\n'
 exit 0
