@@ -23,122 +23,68 @@ to land. Nothing in this fleet is waiting to approve your work.
 issue is self-discovered from the window's `@issue` binding (fallback: the
 `issue-<N>` worktree name), never an argument.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve fleet + guard seat + read the issue — ONE call (run FIRST)
 
-Env vars do NOT persist across separate Bash tool calls — run this once, then
-reuse the literal values it prints:
-
-```sh
-source ~/.claude/fleet/bin/fleet-lib.sh
-S=$(fleet_current_session); fleet_load_conf "$S"   # → FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
-SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown}"
-```
-
-- **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a
-  fleet — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — `/fleet-claim` is `owner: worker`. If `$SEAT` isn't `worker`,
-  **refuse in one line and stop**, e.g. *"/fleet-claim is worker-only; you're in the
-  hub pane."* Never proceed from the wrong seat.
-
-Everything below operates on the resolved `$FLEET_REPO` / `$FLEET_MAIN` /
-`$FLEET_BASE_BRANCH` — this fleet only.
-
-## 1. Resolve + read the bound issue
-
-The issue number is NOT an argument (the seed is a bare `/fleet-claim`). Resolve
-it from the window's `@issue` binding — the spawner sets it — falling back to the
-`issue-<N>` worktree in your cwd if the binding is somehow missing (a hand-attached
-or renamed window), mirroring `fleet_seat`. Never guess a number from anything else:
+Everything the preamble used to take four steps and ~13 turns to assemble comes
+out of a single command (issue #458). One shell, one `gh` round-trip, one atomic
+block — so no piece of it can be half-run, and "env vars don't persist between
+Bash calls" stops mattering:
 
 ```sh
-issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
-issue="${issue//[^0-9]/}"                          # @issue is the source of truth
-if [ -z "$issue" ]; then                           # fallback: the issue-<N> worktree
-  case "$(pwd -P)" in
-    */*issue-[0-9]*) n="$(pwd -P)"; n="${n##*issue-}"; issue="${n%%[!0-9]*}" ;;
-  esac
-fi
-echo "issue=${issue:-none}"
+~/.claude/fleet/bin/fleet-claim-brief.sh
 ```
 
-- If `$issue` is STILL empty — no `@issue` on the window AND cwd isn't an
-  `issue-<N>` worktree — **fail loudly and stop** in one line: *"no issue bound
-  (no @issue and cwd isn't an issue-<N> worktree) — run /fleet-claim inside a
-  worker window."* Never guess.
-- Otherwise read it (reuse the literal number):
-  `gh issue view "<issue>" --repo "$FLEET_REPO" --comments`.
+It prints, in order: the **fleet** (session / repo / base branch / read-only base
+checkout / merge method / seat), the **issue** it resolved from your window's
+`@issue` binding — falling back to the `issue-<N>` worktree in cwd for a window
+that lost the binding — with its title, state, labels, **assignees**, body and
+every comment; the **claim** verdict; your **charter layers**; and this fleet's
+**implementation directive**.
 
-## 2. Claim it — natively, via the assignee (the anti-collision rail)
+Act on the exit code — these are the rails, one code each, each printed on stderr:
 
-**The assignee IS the claim** (issue #283). Assign yourself; that's the whole
-claim — there is no `▶ claiming` comment convention anymore (it false-fired
-whenever a comment merely mentioned the marker string).
+- **0** — worker seat, fleet resolved, issue read. Everything you need is in the
+  brief; go.
+- **2 `ABORT`** — not inside a fleet. Say so in one line and stop. Never guess a repo.
+- **3 `REFUSE`** — wrong seat: `/fleet-claim` is worker-only and you're in the hub
+  pane or a stray shell. Refuse in one line and stop.
+- **4 `FAIL`** — no issue bound (no `@issue`, and cwd isn't an `issue-<N>`
+  worktree). Say so in one line and stop. Never guess a number.
+- **5** — the fleet + charter half printed, but the `gh` read failed (gh missing /
+  auth / no such issue). Fix or report that; never implement off a half-read issue.
 
-> Cross-machine dedup (issues #258, #283): the pre-spawn dedup is **ON by
-> default** (unless the fleet sets `FLEET_PRESPAWN_DEDUP=0`), so the **spawn
-> already pre-claimed** this issue by assigning you the instant it passed the
-> pre-spawn check. So this step normally finds you already the assignee and
-> **no-ops**. That is by design — the check below makes it idempotent.
+Two lines in the brief want something from you:
 
-```sh
-# Am I already the assignee? (empty output = not yet mine)
-mine=$(gh issue view "<issue>" --repo "$FLEET_REPO" \
-  --json assignees -q '.assignees[].login' 2>/dev/null | grep -Fx "$(gh api user -q .login)")
-echo "mine=${mine:-no}"
-```
+- **`claim:`** — the assignee IS the claim (issue #283), and the spawn already
+  pre-claimed the issue for you, so this normally reads `HELD` ⇒ **do nothing,
+  never re-assign**. On the rare `UNCLAIMED`, run the exact
+  `gh issue edit … --add-assignee @me` the brief prints.
+- **the charter layers** — the built-in contract (step 2 below) is the base; the
+  gated repo charter (`$FLEET_MAIN/.fleet/worker.md`, printed only when the fleet
+  sets `FLEET_REPO_CHARTER=1` — it's an injection surface, so it's fail-closed)
+  and the operator's always-trusted fleet overlay
+  (`~/.config/claude-fleet/fleets/<session>/worker.md`) print **low→high
+  precedence**: a later layer wins where it conflicts with an earlier one. Fold
+  whatever printed into how you work. Nothing printed = the built-in contract,
+  which is the historic default.
 
-- Assign yourself only if not already yours:
-  `gh issue edit "<issue>" --repo "$FLEET_REPO" --add-assignee @me`.
-- If you were already the assignee, say so and skip the write — don't re-assign.
+Everything below operates on the repo the brief resolved — this fleet only. (If
+the brief is missing, on an install predating issue #458, do it by hand:
+`source ~/.claude/fleet/bin/fleet-lib.sh`, then `fleet_load_conf
+"$(fleet_current_session)"`, `fleet_seat`, `gh issue view`,
+`fleet_worker_charter`, `fleet_worker_prompt_body`.)
 
-## 3. Load your charter (layered — later wins on conflict)
+## 1. Ground yourself, then implement
 
-Your standing orders come in up to three layers. The **built-in contract**
-(step 5 below) is the base. Two optional FILE layers override it — load them and
-treat a later layer as authoritative where it conflicts with an earlier one:
+Read what you need — the full issue thread the brief printed (design comments
+included) and the code the change touches — then implement. You decide the
+approach; the rails and the finish line are below. The brief's **implementation
+directive** section is the operator's per-fleet HOW-to guidance (issue #234;
+default *"Implement and verify per the repo conventions"*) — fold it in.
 
-```sh
-fleet_worker_charter "$S"    # prints the file layers that apply, low→high precedence
-```
+## 2. The standing contract (built-in charter — the base layer)
 
-- **repo charter** `$FLEET_MAIN/.fleet/worker.md` — printed **only when the
-  fleet opts in** with `FLEET_REPO_CHARTER=1` (default OFF, fail-closed). It is
-  an injection surface: a worker lands its own PR on green CI with no human
-  review, so a PR could rewrite the charter every future worker obeys — hence the
-  gate. A fleet that arms it on a public repo should protect `.fleet/` with
-  CODEOWNERS + required review.
-- **fleet overlay** `~/.config/claude-fleet/fleets/<session>/worker.md` —
-  operator-owned and machine-local, so it is always trusted (no gate) and **wins
-  on conflict**. This is the operator's per-fleet customization channel.
-
-`fleet_worker_charter` also appends a machine-global **tap-first** block when the
-fleet sets `FLEET_TAP_FIRST=1` (default OFF) — it steers you to offer a tappable
-`AskUserQuestion` menu instead of an open-ended prose question for a bounded
-decision (cheap on a soft keyboard). Guidance, not a mandate: don't ask *more*.
-
-Both files are optional; missing ones are skipped silently. With neither (and the
-flag off) you run on the built-in contract == the historic default. Read whatever
-prints and fold it into how you work below.
-
-## 4. Ground yourself, then implement
-
-Read what you need — the full issue thread (step 1's output, including any
-any design comments) and the code the change touches — then implement. You
-decide the approach; the rails and the finish line are below.
-
-Fold in the operator's **per-fleet implementation directive** (issue #234) — the
-one place, alongside the charter layers, where a fleet adds specific HOW-to
-guidance (it defaults to *"Implement and verify per the repo conventions"*):
-
-```sh
-source ~/.claude/fleet/bin/fleet-lib.sh; fleet_load_conf "$(fleet_current_session)"
-fleet_worker_prompt_body "<issue>" "$FLEET_REPO"   # FLEET_WORKER_PROMPT / _FILE, else the default
-```
-
-## 5. The standing contract (built-in charter — the base layer)
-
-Implement under these invariants (a charter layer from step 3 may extend or
+Implement under these invariants (a charter layer from the brief may extend or
 override them):
 
 - **Work only in this worktree.** You are in the `issue-<N>` git worktree off
@@ -225,12 +171,12 @@ override them):
   This is visibility, not permission-seeking: everything you *can* unblock
   yourself, you should.
 
-## 6. Report + proceed
+## 3. Report + proceed
 
 One line: the issue number + title, whether you just claimed it or it was
 already claimed, and which charter layers loaded (built-in only / + overlay / +
 repo). Then start implementing — the rest of the lifecycle (ship + land, or
-blocked) is the contract in step 5, run it when the work is done. Don't ask
+blocked) is the contract in step 2, run it when the work is done. Don't ask
 whether to proceed; the claim IS the go-ahead.
 
 ---
