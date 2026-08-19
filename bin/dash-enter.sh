@@ -26,12 +26,25 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 # with ⌃p (dash-open-pr.sh) — the pre-#261 Enter behavior (#130), relocated so Enter can jump.
 # Per-fleet keyed (FLEET_SESSION), matching dash-view-toggle.sh. Clear any half-set rename/bind
 # flag first so a mode toggled in landed view can't leak into the next live-view Enter.
+#
+# Dropping the flag is NOT the whole undo (issue #454). Arming rename also SHOWED the
+# query line and UNBOUND `?` — the dash's cheatsheet key, which fzf otherwise keeps
+# firing instead of typing (dash-rename.sh). Only an explicit rebind puts it back, and
+# this branch used to emit none: arm ⌃e → toggle ⌃t → Enter left `?` DEAD (and the
+# `rename ▸ ` prompt up) for the rest of that fzf's life, one of the two ways `?`
+# silently stopped opening the cheatsheet. So carry the same restore the Enter/Esc
+# rename branches emit — but only when a flag was actually live, so a plain landed
+# Enter keeps emitting exactly what it always did.
+RESTORE=""
 if [ "$(cat "$C/global/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+  if [ -f "$flag" ] || [ -f "$bindflag" ]; then
+    RESTORE="hide-input+rebind(?)+change-prompt($PROMPT)+"
+  fi
   rm -f "$flag" "$bindflag"
   case "$target" in
     landed:*)   # landed:<pr> or landed:issue:<n> — resume the finished session (= ⌃o, #261)
       bash "$BIN/dash-restore-session.sh" "$target" >/dev/null 2>&1
-      echo "clear-query+reload(bash $ROWS)"; exit 0 ;;
+      echo "${RESTORE}clear-query+reload(bash $ROWS)"; exit 0 ;;
   esac
 fi
 
@@ -47,6 +60,9 @@ elif [ -f "$flag" ]; then                         # rename mode
     echo "hide-input+rebind(?)+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
   else echo "hide-input+rebind(?)+change-prompt($PROMPT)+clear-query"; fi
 else                                              # jump (typed query is ignored)
+  # $RESTORE is empty on every normal jump; it is non-empty only for the landed-view
+  # fall-through above (a non-`landed:` row while a rename/bind was armed), which must
+  # put `?` and the prompt back just like the branches that own those modes (#454).
   tmux select-window -t "$target" 2>/dev/null
-  echo "clear-query"
+  echo "${RESTORE}clear-query"
 fi
