@@ -9,6 +9,12 @@ set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
 target="${1:-}"; q="${2:-}"
 PROMPT='▸ '
+# `rebind(?)` pairs with the `unbind(?)` dash-rename.sh emits when it shows the
+# query line: `?` is the dash's cheatsheet bind, and a bound printable key keeps
+# firing its action instead of typing while the input is visible (fzf 0.74.3), so
+# it is unbound for the length of the edit and restored here. Rebinding a key that
+# was never unbound (a stale flag inherited by a freshly relaunched dash) is a
+# harmless no-op.
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 
@@ -32,12 +38,14 @@ fi
 if [ -f "$bindflag" ]; then                       # bind-issue mode (empty q unbinds)
   t=$(cat "$bindflag"); rm -f "$bindflag"
   tmux set-window-option -t "$t" @issue "$q" 2>/dev/null
-  echo "hide-input+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
+  echo "hide-input+rebind(?)+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
 elif [ -f "$flag" ]; then                         # rename mode
   t=$(cat "$flag"); rm -f "$flag"
-  if [ -n "$q" ]; then tmux rename-window -t "$t" "$q" 2>/dev/null
-    echo "hide-input+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
-  else echo "hide-input+change-prompt($PROMPT)+clear-query"; fi
+  # `--` ends the flag list: without it a name starting with `-` is parsed as a
+  # tmux flag ("unknown flag -d") and the rename silently fails.
+  if [ -n "$q" ]; then tmux rename-window -t "$t" -- "$q" 2>/dev/null
+    echo "hide-input+rebind(?)+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
+  else echo "hide-input+rebind(?)+change-prompt($PROMPT)+clear-query"; fi
 else                                              # jump (typed query is ignored)
   tmux select-window -t "$target" 2>/dev/null
   echo "clear-query"

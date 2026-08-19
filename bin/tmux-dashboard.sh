@@ -4,14 +4,16 @@
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
 #   ↑/↓ move · Enter jump to that window · ⌃n file an issue + spawn its worker ·
-#   ⌃s raw scratch session (instant — no prompt) · ⌃x reap a finished worker
-#   (confirms when the row isn't merged+clean) · ⌃t live⇄landed · ⌃o restore a
-#   landed session ·
+#   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
+#   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
+#   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
+#   ⌃o restore a landed session ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
-#   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning), ⌃e
-#   (rename — windows take their name from the issue title, #216), ⌃l (arm
-#   auto-merge — the worker lands its own PR now, #441; gh pr merge covers strays),
-#   and ⌥x (force-reap — folded into the one confirming ⌃x).
+#   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning) and ⌃l
+#   (arm auto-merge — the worker lands its own PR now, #441; gh pr merge covers
+#   strays), plus ⌥x (force-reap — folded into the one confirming ⌃x). ⌃e was
+#   pruned there too but its handlers never were — #449 re-wires the key to the
+#   rename mode dash-enter.sh/dash-esc.sh have carried all along.
 # Auto-reloads every REFRESH sec (default 3). Runs as the embedded dash pane in
 # the 'plan' hub (fleet-up/hub-session builds it; prefix+g focuses it). Env: REFRESH.
 set -uo pipefail
@@ -124,6 +126,7 @@ run_dash() {
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
     --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "ctrl-e:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh)" \
     >/dev/null 2>&1
