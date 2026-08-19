@@ -290,11 +290,14 @@ fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
 and refuses from the wrong one. Live so far:
 
 - **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
-  freshly-spawned worker runs: claim the bound issue via the **assignee**, load a
-  layered worker charter, ground in the issue + code, then implement under a
-  standing contract that ends by **opening a PR and landing it** once the gate
-  reads green (`bin/fleet-pr-verdict.sh` → `READY`); the cleanup daemon reaps
-  afterwards (see [docs/CLEANUP.md](docs/CLEANUP.md)).
+  freshly-spawned worker runs. Its whole preamble is ONE call
+  (`bin/fleet-claim-brief.sh`, issue #458): fleet + seat + the bound issue read
+  once (thread, comments and the **assignee** that IS the claim) + the layered
+  worker charter + this fleet's implementation directive, in a single `gh`
+  round-trip — atomic, so no half of it can be skipped. Then ground in the issue +
+  code and implement under a standing contract that ends by **opening a PR and
+  landing it** once the gate reads green (`bin/fleet-pr-verdict.sh` → `READY`);
+  the cleanup daemon reaps afterwards (see [docs/CLEANUP.md](docs/CLEANUP.md)).
 - **`/fleet-history`** (hub) — browse & resume closed worker sessions (landed +
   unlanded) from the history ledger, reconstructing a reaped worktree off the
   squash SHA so `claude --resume` still works.
