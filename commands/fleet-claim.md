@@ -82,6 +82,33 @@ approach; the rails and the finish line are below. The brief's **implementation
 directive** section is the operator's per-fleet HOW-to guidance (issue #234;
 default *"Implement and verify per the repo conventions"*) — fold it in.
 
+### Ground cheaply — keep the broad sweep out of the main context
+
+Grounding is the most expensive phase of a worker session by an order of
+magnitude: across the 10 real worker sessions on this repo it cost a median 53k
+output tokens against the preamble's 4.9k, and the first file write landed with
+91k of context already loaded (issue #460). That is context spent before any
+work exists, so the window fills sooner and `/fleet-handoff` fires earlier — and
+a handoff is itself expensive, since the fresh session re-grounds from a doc.
+
+Three habits buy most of it back:
+
+- **Delegate the broad sweep.** "Which files touch X, and where" is a fan-out
+  search — hand it to the `Explore` subagent and you get back the conclusion
+  instead of every file it read on the way. Keep the main window for the code
+  you are actually changing.
+- **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
+  symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
+  `cat -n` — read the function, not the file that contains it.
+- **Ground from the diff, not the tree.** For a fix that builds on prior work,
+  `git log -p --follow <file>` (or `git log -S '<symbol>'`) is usually smaller
+  and far more informative than reading every caller.
+
+Judgment, not a mandate: **you are a full agent, not a deckhand** (issue #441) —
+what to read is your call, and *under*-grounding ships the wrong change, which
+costs more than any dump. This steers HOW you load context, not how much you are
+allowed to know.
+
 ## 2. The standing contract (built-in charter — the base layer)
 
 Implement under these invariants (a charter layer from the brief may extend or
