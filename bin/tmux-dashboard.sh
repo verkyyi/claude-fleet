@@ -107,6 +107,17 @@ run_dash() {
   # bind mirrors ⌃n for the tappable `[＋ new]` chip (issue #381): tapping ＋/new
   # transforms into the very file+spawn action string ⌃n runs — a single source of
   # truth, additive to ⌃n.
+  # The two popup binds (⌃n/?) do NOT call `tmux display-popup` directly — they go
+  # through bin/dash-popup.sh (issue #448). A popup needs a CLIENT to draw on, and a
+  # command run from a pane process (which is what an fzf `execute()` bind is) reaches
+  # tmux with no client of its own, so tmux has to guess one; when it can't it exits 1
+  # with "no current client" and draws NOTHING. Inside `execute()` that error is
+  # invisible — our stdout/stderr are /dev/null — so the keystroke just looked dead,
+  # intermittently, exactly across a Termius drop / reconnect / detached hub. The helper
+  # resolves the live client itself, raises @popup_open for the popup's lifetime (the
+  # #308/#431 rail the prefix binds always had and these two skipped), and falls back to
+  # running the command INLINE in the pane when there is no client — so a dash popup
+  # bind can never silently do nothing again.
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-input --no-sort \
@@ -116,9 +127,9 @@ run_dash() {
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
-    --bind "?:execute(tmux display-popup -E -w 72% -h 80% \"bash $BIN/fleet-keys.sh --context dash\")" \
-    --bind "ctrl-n:execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)" \
-    --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(tmux display-popup -w 90% -h 12 -E \"bash $BIN/dash-issue-new.sh confirm --spawn\")+reload(bash $ROWS)' ;; esac" \
+    --bind "?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)" \
+    --bind "ctrl-n:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
+    --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)' ;; esac" \
     --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
