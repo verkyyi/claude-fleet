@@ -207,7 +207,10 @@ TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve
 # placeholder once real content exists). The session prefix keeps per-fleet servers
 # from colliding on the bare window id (issue #208).
 C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"; mkdir -p "$G"
-printf '%s (raw session)' "$name" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
+rawseed="$name (raw session)"
+printf '%s' "$rawseed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
+# …and as a window option, so the pane header carries it too (issue #455).
+TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$rawseed")" 2>/dev/null || :
 
 if [ -z "$TARGET_SESS" ]; then
   # Surface a reserved-name fallback note regardless of the focus path so the user

@@ -91,6 +91,15 @@ do_window() {
       echo "$h" > "$hf"
       if [ -n "$sum" ]; then
         printf '%s' "$sum" > "$out"
+        # Also publish the SAME one-liner as a window option so the pane border can
+        # render it (issue #455) — the dash reads the file, the header reads @summary,
+        # and both come from this one already-paid-for LLM call. Window-scoped, so it
+        # dies with the window (no cleanup path, unlike the summary_* file
+        # dash-reap.sh removes). Sanitized first: the border re-parses the expanded
+        # format string, so '#' and newlines must not survive (fleet_summary_sanitize).
+        # TM() routes this at the right server in BOTH modes — the daemon sweep's
+        # per-fleet SUMMARIZE_SOCK and --window's $TMUX-inherited socket (#159).
+        TM set-window-option -t "$wid" @summary "$(fleet_summary_sanitize "$sum")" 2>/dev/null || :
         printf '%s  %-12s %s\n' "$(date +%H:%M:%S)" "$name" "$(printf '%s' "$sum" | tr '\n' ' ' | cut -c1-70)" >> "$LOG"
         rc=0
       fi

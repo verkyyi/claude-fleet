@@ -147,6 +147,7 @@ case "$kind" in
     bind_issue "$win"
     TM set-window-option -t "$win" @restored 1 2>/dev/null   # mark: a resumed landed session
     printf 'resumed %s' "$key" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
+    TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed $key")" 2>/dev/null || :   # pane header too (#455)
     announce "$win" "restored $key → $name"
     ;;
   FROM-PR)
@@ -163,6 +164,7 @@ case "$kind" in
     bind_issue "$win"
     TM set-window-option -t "$win" @restored 1 2>/dev/null
     printf 'resumed PR %s (from-pr)' "$pr" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
+    TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed PR $pr (from-pr)")" 2>/dev/null || :   # pane header too (#455)
     announce "$win" "restored PR $pr (from-pr) → $name"
     ;;
   *)

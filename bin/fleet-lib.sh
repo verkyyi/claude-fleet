@@ -177,6 +177,30 @@ fleet_summary_key() {
   printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"
 }
 
+# fleet_summary_sanitize <text> — make a session one-liner safe to hand tmux as the
+# @summary WINDOW OPTION the pane border renders (issue #455). The dash column keeps
+# reading the raw summary FILE; only this option-bound copy is scrubbed, because the
+# border takes a second parsing pass the file never does:
+#   • ONE LINE      pane-border-format draws a single row, so CR/LF/TAB → space (a
+#                   raw newline would truncate or smear the border).
+#   • NO '#'        tmux re-parses the EXPANDED border string in format_draw, so a
+#                   '#[' or '#{' arriving from an LLM one-liner would leak a style
+#                   or a format token into the header. Substituted values are not
+#                   re-expanded, so ',', '{', '%' are inert and stay readable —
+#                   '#' is the one byte that must go.
+#   • CLIPPED       ~60 chars, an upper bound on what any window option can carry;
+#                   the format clips again to the width it can actually draw.
+# Squeeze/trim keeps the double spaces a collapsed newline leaves behind out of the
+# header. Pure builtins — no forks, and safe under a `set -u` caller.
+fleet_summary_sanitize() {
+  local s="${1:-}"
+  s="${s//$'\n'/ }"; s="${s//$'\r'/ }"; s="${s//$'\t'/ }"
+  s="${s//'#'/}"
+  while [ "$s" != "${s//  / }" ]; do s="${s//  / }"; done
+  s="${s# }"; s="${s% }"
+  printf '%s' "${s:0:60}"
+}
+
 # Path to the sessmap for READING, dual-layout: the new global/sessmap if present,
 # else the legacy flat one (cold start / pre-#181). Writers always write the new
 # global/ path via fleet_cache_global.
