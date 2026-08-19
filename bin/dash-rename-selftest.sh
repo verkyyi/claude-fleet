@@ -28,6 +28,10 @@
 #   J. ESC CANCEL   Esc drops the flag and backs out WITHOUT aborting the dash
 #   K. @issue KEEPS the window's @issue binding survives the rename (what
 #                   dash-issue-session.sh's "survives a ctrl-e rename" match relies on)
+#   N. LANDED UNDO  Enter in the LANDED view drops a rename armed back in live view —
+#                   and must REBIND `?` while it does. Dropping the flag alone left the
+#                   dash's cheatsheet key unbound for the rest of that fzf's life, so
+#                   `?` silently opened nothing (issue #454).
 #   M. LEADING '-'  a name starting with '-' commits (dash-enter.sh passes `--`,
 #                   or tmux parses the name as a flag and the rename silently fails)
 #   L. SHELLCHECK   dash-rename.sh is shellcheck-clean (skipped if absent)
@@ -163,6 +167,38 @@ case "$out" in *hide-input*) ;; *) fail "J: Esc must hide the input again" "$out
 case "$out" in *"rebind(?)"*) ;; *) fail "J: Esc must rebind '?' when it hides the input" "$out" ;; esac
 case "$out" in *abort*) fail "J: Esc in rename mode must back out, not abort the dash" "$out" ;; esac
 ok "J Esc cancels rename mode without aborting the dash"
+
+# --- N. LANDED-VIEW ENTER UNDOES THE ARM, `?` INCLUDED (issue #454) -----------
+# ⌃e arms in LIVE view, ⌃t flips to LANDED, then Enter. dash-enter.sh drops the flag
+# there (a mode from live view is inert on landed rows) — but the arm also emitted
+# show-input + unbind(?), so an Enter that drops the flag WITHOUT rebinding leaves `?`
+# dead until the dash relaunches. Both landed exits are covered: a `landed:` row and a
+# stray live row falling through to the jump branch.
+for lrow in "landed:99" "$T"; do
+  printf '' > "$VIEW"          # arm in LIVE view, exactly as the operator does
+  bash "$REN" "$T" >/dev/null
+  [ -f "$FLAG" ] || fail "N: precondition — ⌃e should have armed in the live view"
+  printf 'landed
+' > "$VIEW"  # ⌃t
+  out="$(bash "$ENT" "$lrow" '')"
+  [ -f "$FLAG" ] && fail "N: landed-view Enter must drop the rename flag ($lrow)"
+  case "$out" in *"rebind(?)"*) ;; *)
+    fail "N: landed-view Enter dropped the arm without rebinding '?' — the cheatsheet key stays dead (issue #454, row $lrow)" "$out" ;;
+  esac
+  case "$out" in *hide-input*) ;; *)
+    fail "N: landed-view Enter must hide the query line it left showing ($lrow)" "$out" ;;
+  esac
+done
+# …and a landed Enter with NO mode armed must stay exactly as it was — no stray
+# hide-input/rebind noise on the overwhelmingly common path.
+printf 'landed
+' > "$VIEW"
+out="$(bash "$ENT" 'landed:99' '')"
+case "$out" in *rebind*|*hide-input*)
+  fail "N: a landed Enter with nothing armed must not emit mode-undo actions" "$out" ;;
+esac
+printf '' > "$VIEW"
+ok "N landed-view Enter undoes an armed rename, '?' rebound, and is inert otherwise"
 
 # --- M. LEADING '-' -----------------------------------------------------------
 bash "$REN" "$T" >/dev/null

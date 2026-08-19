@@ -9,6 +9,12 @@
 # /dev/null, so that error was invisible: the keystroke silently did nothing,
 # intermittently, exactly across a Termius drop / reconnect / detached hub.
 #
+# The SECOND half of the same bug (issue #454): resolving a client is not enough,
+# because tmux does not report a popup it REFUSES to open — it exits 0, prints
+# nothing, and never runs the command (a client may hold exactly ONE overlay, so
+# any popup already up on it makes the next one a no-op). Ending the popup path on
+# `&& exit 0` therefore scored a dropped popup as a success and `?` was dead again.
+#
 # This drives the REAL bin/dash-popup.sh against a REAL, isolated tmux server
 # (its own socket, torn down at exit — never the user's live server):
 #   • BUG REPRO     a raw `tmux display-popup` with no client fails AND runs nothing.
@@ -20,6 +26,11 @@
 #                   client (`script`), which is racy to fake headlessly, so it SKIPs
 #                   cleanly where one can't be had or drops mid-leg. It never fails
 #                   spuriously — the deterministic gate is the rest of this file.
+#   • REFUSED POPUP the second silent no-op (issue #454): a display-popup tmux
+#                   DECLINES to open exits 0, prints nothing, and runs nothing, so
+#                   the exit status can't tell "shown" from "dropped". The helper
+#                   must run the command anyway. Deterministic — a PATH shim plays
+#                   the refusal, so no pty is needed.
 #   • STATIC GUARD  neither the dash's nor the backlog's binds call display-popup
 #                   directly any more.
 #
@@ -137,7 +148,40 @@ else
   printf 'selftest: no usable pty (`script`) — SKIP the attached-client case\n' >&2
 fi
 
-# --- 6. STATIC GUARD: the binds route through the helper ---------------------
+# --- 6. REFUSED POPUP: rc 0 + nothing ran must NOT count as success (#454) ---
+# The real refusal (nesting a popup on a client that already holds an overlay) needs
+# a live pty client AND a popup held open on it — too racy to gate CI on. What the
+# helper must survive is exactly reproducible without either: a `tmux` whose
+# display-popup exits 0 and does nothing, while list-clients reports a client so the
+# helper takes the popup path at all. Matching on $1 (the subcommand) keeps the shim
+# from mangling the display-message / set-option calls it forwards to real tmux.
+REFUSE="$WORK/refuse"; mkdir -p "$REFUSE"
+cat > "$REFUSE/tmux" <<EOF
+#!/bin/sh
+case "\$1" in
+  display-popup) exit 0 ;;                        # refuse, exactly as tmux does
+  list-clients)  echo "9 /dev/ttyFAKE"; exit 0 ;; # => the helper takes the popup path
+esac
+exec "$REAL_TMUX" -S "$SOCK" "\$@"
+EOF
+chmod +x "$REFUSE/tmux"
+
+# Private TMPDIR so the did-it-run marker can be asserted on without colliding with
+# anything else on the machine.
+RTMP="$WORK/refuse-tmp"; mkdir -p "$RTMP"
+R="$WORK/refused"
+PATH="$REFUSE:$PATH" TMPDIR="$RTMP" bash "$HELPER" -w 72% -h 80% -- \
+  sh -c "echo refused-ran >> '$R'" >/dev/null 2>&1
+grep -q '^refused-ran$' "$R" 2>/dev/null \
+  || fail "refused popup: dash-popup.sh scored a silently-refused popup as success — the keystroke did nothing (issue #454)"
+# …and it must not strand the repaint pause or leave its marker behind.
+v="$(tmux show-option -gqv @popup_open 2>/dev/null)"
+case "$v" in ''|0) ;; *) fail "refused popup: @popup_open left at [$v], expected 0" ;; esac
+if ls "$RTMP"/.dash-popup-ran.* >/dev/null 2>&1; then
+  fail "refused popup: the did-it-run marker leaked into TMPDIR"
+fi
+
+# --- 7. STATIC GUARD: the binds route through the helper ---------------------
 [ -f "$DASH" ] || fail "static guard: $DASH not found"
 grep -q 'dash-popup\.sh -w 72% -h 80% -- bash \$BIN/fleet-keys\.sh --context dash' "$DASH" \
   || fail "static guard: the dash '?' bind does not route through dash-popup.sh"
