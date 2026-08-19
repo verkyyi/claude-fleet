@@ -30,8 +30,9 @@
 #   K. sanitization        → control chars / `#` stripped, case/spacing kept, ≤24 chars
 #   L. positional target   → --name foo <sess> still spawns `foo` into <sess>
 #   M. dash ⌃s (--bg, #444) → spawns instantly with NO prompt: the slow half is
-#                           dispatched via run-shell -b and still lands scratch-N
-#                           (a --bg --name still flows through, via --name-file)
+#                           dispatched via run-shell -b (SILENCED — stdout would
+#                           become a view-mode overlay on the dash, #446) and still
+#                           lands scratch-N (a --bg --name flows through --name-file)
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -134,6 +135,11 @@ git -C "$MAIN" show-ref --verify -q refs/heads/scratch-1 || fail "A a scratch-1 
 # worktree is off the base branch (its HEAD == base tip)
 [ "$(git -C "$WORK/main-scratch-1" rev-parse HEAD)" = "$(git -C "$MAIN" rev-parse "$BASE_BR")" ] \
   || fail "A scratch worktree must be created off the base branch"
+# SILENCE (issue #446): a spawn must print NOTHING on stdout. Under `run-shell -b`
+# (the ⌃s path) tmux turns a backgrounded job's stdout into a VIEW-MODE overlay on
+# the invoking pane — i.e. one stray line (`git worktree add`'s "HEAD is now at …")
+# covers the dash until the user presses Esc.
+[ -s "$WORK/out" ] && fail "A the spawn must be silent on stdout (run-shell would overlay it on the dash)" "$(cat "$WORK/out")"
 ok "A raw spawn creates a @raw scratch-1 WORKTREE off base, @worktree set, no @issue"
 
 # ============================ B: cap refusal ================================
@@ -221,6 +227,8 @@ WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG" || fail "M --bg should still land an auto scratch-N window" "$(cat "$NEWWIN_LOG")"
 grep -q 'dash-raw-session.sh' "$RS_LOG"    || fail "M the ⌃s spawn must be dispatched via run-shell -b" "$(cat "$RS_LOG")"
 grep -q -- '--name-file=' "$RS_LOG"        && fail "M an unnamed --bg spawn should stage no name file" "$(cat "$RS_LOG")"
+grep -q -- '>/dev/null 2>&1' "$RS_LOG"     || fail "M the backgrounded spawn must be redirected (run-shell stdout = view-mode overlay on the dash, #446)" "$(cat "$RS_LOG")"
+[ -s "$WORK/out" ]                         && fail "M --bg must print nothing on stdout" "$(cat "$WORK/out")"
 [ -d "$WORK/main-scratch-1" ]              || fail "M --bg must create the real scratch worktree" "$(git -C "$MAIN" worktree list)"
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --name mybox

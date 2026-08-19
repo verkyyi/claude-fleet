@@ -110,6 +110,13 @@ BASE="${FLEET_BASE_BRANCH:-master}"
 # NEVER interpolated into the run-shell string). Only --bg backgrounds; a headless
 # CLI call falls straight through and spawns in the foreground. The dash pane has
 # $TMUX on THIS fleet's server, so bare fleet_bg lands correctly.
+#
+# The trailing `>/dev/null 2>&1` is REQUIRED, not tidiness (issues #192, #446):
+# `run-shell` surfaces a backgrounded job's STDOUT as a view-mode overlay on the
+# INVOKING pane — which is now the dash itself, not a popup that closes. One stray
+# line (`git worktree add`'s "HEAD is now at …") therefore covered the dash until
+# the user pressed Esc. Outcomes are reported via `tmux display-message`, so the
+# job has nothing to say on stdout; the redirect keeps it that way for good.
 if [ "$BG" = 1 ]; then
   nfarg=""
   if [ -n "$NAME" ]; then
@@ -117,7 +124,7 @@ if [ "$BG" = 1 ]; then
     printf '%s' "$NAME" > "$nf"
     nfarg=" --name-file='$nf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg${TARGET_SESS:+ '$TARGET_SESS'}"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
   exit 0
 fi
 
@@ -159,8 +166,11 @@ while [ "$N" -le 999 ]; do
   if git -C "$MAIN" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
     N=$((N + 1)); continue
   fi
-  if git -C "$MAIN" worktree add -b "$cand" "$cwt" "origin/$BASE" 2>/dev/null \
-     || git -C "$MAIN" worktree add -b "$cand" "$cwt" "$BASE" 2>/dev/null; then
+  # >/dev/null 2>&1, not just 2>/dev/null: `git worktree add` reports "Preparing
+  # worktree …" on stderr but "HEAD is now at <sha>" on STDOUT, and under
+  # `run-shell -b` any stdout becomes a view-mode overlay over the dash (#446).
+  if git -C "$MAIN" worktree add -b "$cand" "$cwt" "origin/$BASE" >/dev/null 2>&1 \
+     || git -C "$MAIN" worktree add -b "$cand" "$cwt" "$BASE" >/dev/null 2>&1; then
     slug="$cand"; wt="$cwt"; break
   fi
   N=$((N + 1))
