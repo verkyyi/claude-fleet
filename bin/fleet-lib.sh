@@ -697,6 +697,36 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
   printf 'reaped:%s%s\n' " $list" "${survivors:+ (SIGKILL$survivors)}"
 }
 
+# path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
+# empty when the argument is not a scratch identity (issue #466).
+#
+# A scratch has no GitHub issue, so the ledger keys it by the `scratch-<N>` slug
+# dash-raw-session.sh allocates — the one identity stable across the session's whole
+# life: the branch IS `scratch-<N>`, the worktree IS `<repo-dir>-scratch-<N>`, and
+# both outlive a /clear (which cycles the session id) and a window rename. Accepts
+# either shape:
+#   scratch-4                      (branch)         → scratch-4
+#   /repos/claude-fleet-scratch-4  (worktree path)  → scratch-4
+#   /repos/claude-fleet-scratch-4/docs (wandered cwd) → ""   (strict — see below)
+#   /repos/claude-fleet-issue-9, /main, ""           → ""
+# STRICT by design: only a basename ending in `scratch-<digits>` matches, so a pane
+# whose cwd wandered into a SUBDIR of a scratch worktree yields NO key rather than a
+# bogus one (`scratch-4-docs`) that would never resolve back to a worktree. Callers
+# pass @worktree — which dash-raw-session.sh always binds — so the strict rule costs
+# nothing real and keeps every scratch key in the ledger reconstructable.
+fleet_scratch_key() {
+  local s="${1:-}"
+  [ -n "$s" ] || return 0
+  s="${s%/}"; s="${s##*/}"                     # basename (a branch has no slash)
+  case "$s" in
+    scratch-*)   s="${s#scratch-}" ;;
+    *-scratch-*) s="${s##*-scratch-}" ;;
+    *)           return 0 ;;
+  esac
+  case "$s" in ''|*[!0-9]*) return 0 ;; esac    # digits only → a real scratch-<N>
+  printf 'scratch-%s' "$s"
+}
+
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
 # is ABOUT to prune, write the matching /fleet-history ledger row so the finished
 # session stays listed + resumable no matter WHICH janitor reaps it. History rows
@@ -718,12 +748,16 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
 #                caller records BEFORE nothing / while the worktree still stands.
 #   $2 repo      owner/name (for gh PR resolution + the per-repo ledger)
 #   $3 main      base checkout (passed through as --main; record itself ignores it)
-#   $4 issue     N — REQUIRED; empty (e.g. a scratch-<N> worktree) is a clean no-op
-#   $5 worktree  the issue-<N> worktree path (record derives transcript-dir + session from it)
+#   $4 issue     N — the ledger KEY for a worker row. May be empty for a SCRATCH
+#                reap (@raw has no issue): the key is then derived from $9/$5 via
+#                fleet_scratch_key, so a scratch session is indexed + resumable
+#                like any worker (issue #466). No key at all → a clean no-op.
+#   $5 worktree  the issue-<N>/scratch-<N> worktree path (record derives transcript-dir + session from it)
 #   $6 win       tmux window id for the summary cache, or "" (autoclean: the window is gone)
 #   $7 session   fleet session for the summary cache, or ""
 #   $8 pr        merged PR number if the caller already knows it, else "" to resolve from branch
-#   $9 branch    issue-<N> branch — used to resolve the merged PR when $8 is empty
+#   $9 branch    issue-<N> / scratch-<N> branch — used to resolve the merged PR when
+#                $8 is empty, and to derive the scratch key when $4 is empty
 # Best-effort: never fails the caller (a missing fleet-history.sh / gh just skips).
 # Empty --pr/--win/--session are tolerated by fleet-history.sh (treated as unset),
 # so they are passed uniformly rather than juggling optional flags (keeps this POSIX
@@ -731,7 +765,16 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
 fleet_reap_record() {
   local outcome="${1:-}" repo="${2:-}" main="${3:-}" issue="${4:-}" \
         wt="${5:-}" win="${6:-}" sess="${7:-}" pr="${8:-}" branch="${9:-}"
-  [ -n "$issue" ] || return 0
+  # KEY: the issue number for a worker; for a SCRATCH reap (no issue) the
+  # `scratch-<N>` slug, derived from the branch first (authoritative — the reaper
+  # knows it) and the worktree path second (the SessionEnd hook has no branch).
+  # Ledger col 2 holds either shape (issue #466).
+  local key="$issue"
+  if [ -z "$key" ]; then
+    key=$(fleet_scratch_key "$branch")
+    [ -z "$key" ] && key=$(fleet_scratch_key "$wt")
+  fi
+  [ -n "$key" ] || return 0
   local _bin hist
   _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   hist="$_bin/fleet-history.sh"
@@ -745,7 +788,7 @@ fleet_reap_record() {
                 --json number -q '.[0].number' 2>/dev/null)"
       fi
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
-        --pr "$pr" --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+        --pr "$pr" --key "$key" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
       ;;
     ancestor|ancestor-of-*|unmerged|dirty)
       # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
@@ -753,7 +796,7 @@ fleet_reap_record() {
       # closed-unlanded so it stays browsable/resumable. record-closed skips a
       # branch with no transcript and dedups on session-id (idempotent).
       bash "$hist" record-closed --repo "$repo" --session "$sess" \
-        --issue "$issue" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+        --key "$key" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
       ;;
   esac
   return 0

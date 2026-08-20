@@ -18,9 +18,9 @@
 #   clean + merged       reap wt+branch+issue+window   (no confirm)
 #   clean + NOT merged   confirm → reap all (issue closed)
 #   dirty (any)          confirm → close window+issue, KEEP wt
-#   raw scratch, merged  dispose wt+branch, close window (no confirm)
-#   raw scratch, else    confirm → dispose (dirty KEEPs the wt), close window
-#   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic)
+#   raw scratch, merged  record row, dispose wt+branch, close window (no confirm)
+#   raw scratch, else    confirm → record row, dispose (dirty KEEPs the wt), close window
+#   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic — nothing to record)
 #   hub/panel (no issue) refuse
 #
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
@@ -164,12 +164,26 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     git -C "$MAIN" worktree prune 2>/dev/null || true
   }
 
+  # RECORD the /fleet-history row BEFORE any removal (issue #466). Both halves of a
+  # resumable row come from the worktree while it still stands: the transcript dir is
+  # derived from its PATH, and the HEAD sha is what lets `resume` rebuild it after
+  # this ⌃x deletes it. Reap-then-record would strand the scratch's transcript —
+  # indexed ~60s later by ledger-watch, but with no sha, i.e. REVIEW-ONLY forever.
+  # The shared helper keys the row by the scratch branch (no issue) and dedups, so a
+  # confirm-popup re-invocation records once. Deliberately NOT called on the cancel
+  # path: a scratch whose window survives ⌃x is not a closed session.
+  scratch_record() {
+    fleet_reap_record "$sreason" "${FLEET_REPO:-}" "$MAIN" "" \
+      "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch"
+  }
+
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
   # dirty/unmerged one opens a y/n confirm popup FIRST (a dirty worktree stays
   # KEPT). The initial keypress (no `confirm` arg) decides which.
   if [ "$confirm" = 0 ]; then
     case "$sreason" in
       merged-pr|ancestor)
+        scratch_record
         scratch_remove
         tmux kill-window -t "$target" 2>/dev/null || true
         tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true ;;
@@ -190,6 +204,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
   read -rsn1 ans; echo
   case "$ans" in y|Y) ;; *) exit 0;; esac
+  scratch_record
   [ "$sreason" = dirty ] || scratch_remove
   tmux kill-window -t "$target" 2>/dev/null || true
   if [ "$sreason" = dirty ]; then

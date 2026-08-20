@@ -13,7 +13,8 @@
 # name (kebab of the ledger title, #216) and binds @issue from the ledger for BOTH
 # issue- and #PR-keyed rows; the resume-<key> name is only a fallback.
 #
-#   A. target→key parsing (--plan): landed:issue:N→N, landed:P→#P, live/hdr→empty
+#   A. target→key parsing (--plan): landed:issue:N→N, landed:P→#P,
+#      landed:scratch:scratch-N→scratch-N (#466), live/hdr→empty
 #   B. RESUME (issue key)   → new-window(-n <title-kebab>, -c <worktree>), @issue N, @restored 1
 #   C. RESUME (#PR key)     → new-window(-n <title-kebab>, -c <worktree>), @issue (from ledger), @restored 1
 #   D. FROM-PR              → new-window(-n <title-kebab>, -c FLEET_MAIN), @issue (from ledger), @restored 1
@@ -21,6 +22,7 @@
 #   E. REVIEW-ONLY          → NO new-window, a display-message
 #   F. non-landed target    → NO new-window, a hint message
 #   G. cap refusal          → NO new-window, a capacity message
+#   I. RESUME (scratch key) → new-window, @raw 1 + @worktree (NOT @issue), #466
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -101,11 +103,13 @@ run_restore() {
   || fail "A landed:issue:9 should resolve to key 9"
 [ "$(bash "$WORK/bin/dash-restore-session.sh" --plan 'landed:70')" = "#70" ] \
   || fail "A landed:70 should resolve to key #70"
+[ "$(bash "$WORK/bin/dash-restore-session.sh" --plan 'landed:scratch:scratch-7')" = "scratch-7" ] \
+  || fail "A landed:scratch:scratch-7 should resolve to key scratch-7 (#466)"
 [ -z "$(bash "$WORK/bin/dash-restore-session.sh" --plan 'fleet:2')" ] \
   || fail "A a live-row target must resolve to no key"
 [ -z "$(bash "$WORK/bin/dash-restore-session.sh" --plan 'hdr')" ] \
   || fail "A the header target must resolve to no key"
-ok "A target→key parsing (landed:issue:N→N, landed:P→#P, live/hdr→none)"
+ok "A target→key parsing (landed:issue:N→N, landed:P→#P, landed:scratch:K→K, live/hdr→none)"
 
 # ============================ B: RESUME (issue key) =========================
 # The ledger row's title drives the window name (kebab, #216) — resume-9 is only
@@ -182,5 +186,28 @@ VERDICT="RESUME\t$WORK/wt\tsid\tclaude --resume sid --fork-session" \
 grep -qi 'capacity' "$DISPLAY_LOG"           || fail "G cap refusal should surface a capacity message" "$(cat "$DISPLAY_LOG")"
 ok "G restore honours the session cap (refuses, no window)"
 
-printf '\nselftest OK: %s assertions passed (restore landed session → new window, #228)\n' "$pass"
+# ===================== I: RESUME (scratch key), issue #466 =================
+# A scratch row has NO issue: the restored window must be marked the way a fresh
+# scratch is — @raw=1 + @worktree — and must NOT bind @issue (which would hand it
+# to the issue machinery: reapers, the PR map, the janitor's auto-close).
+VERDICT="RESUME\t$WORK/wt\tsid-scr\tclaude --resume sid-scr --fork-session" \
+  META="scratch-7\tscratch-7" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:scratch:scratch-7'
+grep -q -- "-c $WORK/wt" "$NEWWIN_LOG"        || fail "I scratch resume should open in the rebuilt worktree" "$(cat "$NEWWIN_LOG")$(cat "$WORK/err")"
+grep -q -- '--resume sid-scr' "$NEWWIN_LOG"   || fail "I scratch window should run claude --resume sid-scr" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"         || fail "I a restored scratch must be marked @raw 1" "$(cat "$OPTS_LOG")"
+grep -q "SETOPT .*@worktree $WORK/wt" "$OPTS_LOG" || fail "I a restored scratch must carry @worktree (⌃x needs it)" "$(cat "$OPTS_LOG")"
+grep -q 'SETOPT .*@issue' "$OPTS_LOG"         && fail "I a restored scratch must NOT bind @issue" "$(cat "$OPTS_LOG")"
+grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"    || fail "I a restored scratch should still be marked @restored 1" "$(cat "$OPTS_LOG")"
+ok "I RESUME(scratch) → @raw+@worktree marked, no @issue bound (#466)"
+
+# A title-less scratch row still resumes; the name falls back to resume-scratch-<n>.
+VERDICT="RESUME\t$WORK/wt\tsid-scr\tclaude --resume sid-scr --fork-session" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:scratch:scratch-7'
+grep -q -- '-n resume-scratch-7\b' "$NEWWIN_LOG" || fail "I title-less scratch resume should fall back to resume-scratch-7" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"         || fail "I a title-less scratch resume is still marked @raw" "$(cat "$OPTS_LOG")"
+grep -q 'SETOPT .*@issue' "$OPTS_LOG"         && fail "I a title-less scratch resume must NOT bind @issue" "$(cat "$OPTS_LOG")"
+ok "I title-less scratch → resume-scratch-<n> fallback, still @raw"
+
+printf '\nselftest OK: %s assertions passed (restore landed session → new window, #228 + scratch #466)\n' "$pass"
 exit 0

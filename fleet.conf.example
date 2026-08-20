@@ -193,7 +193,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # shared reap primitives so it never diverges from the other reapers. Merged PR → reap
 # worktree+branch, close the issue, `landed` row; ancestor-of-base → reap
 # worktree+branch, `closed-unlanded` row (issue kept OPEN); committed-but-unmerged /
-# dirty → KEEP the worktree + issue (resumable), `closed-unlanded` row. A /clear or
+# dirty → KEEP the worktree + issue (resumable), `closed-unlanded` row. An @raw
+# scratch is RECORDED into the ledger (keyed by its scratch-<N> slug, #466) and its
+# window closed, but never reaped — disposal stays with ⌃x / the janitor. A /clear or
 # /fleet-handoff cycle (reason=clear|resume) is a no-op, so it never fires on a
 # handoff. Scoped to issue-bound workers (+ @raw scratch → window-close only); panels
 # and the hub pane are never touched. Reacts, never blocks (SessionEnd can't veto).

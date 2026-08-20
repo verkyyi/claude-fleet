@@ -167,8 +167,22 @@ live⇄landed **⌃t** view can resume any landed session with `claude --resume`
 crashed / abandoned never reaches this land path, so it used to leave its
 transcript unindexed. The **ledger-watch daemon** (`com.claude-fleet.ledger-watch`,
 `bin/fleet-ledger-watch.sh`, ~60s) closes that gap — it snapshot-diffs the live
-worker windows and appends a `closed-unlanded` ledger row (via
+session windows and appends a `closed-unlanded` ledger row (via
 `fleet-history.sh record-closed`, idempotent) when one vanishes without landing,
 so it too is browsable + resumable via `/fleet-history`. Such a worktree is
-unmerged, so worktree-autoclean keeps it → resume just reuses the on-disk worktree
-(no squash SHA to reconstruct from). It **records only** — never a reaper.
+unmerged, so worktree-autoclean keeps it → resume just reuses the on-disk worktree.
+It **records only** — never a reaper.
+
+**Scratch sessions** (issue #466): an `@raw` scratch has no issue, so nothing keyed
+by an issue number could index it — its transcript used to be dropped on the floor
+the moment its window closed (and its clean worktree pruned silently). It is now
+recorded like any worker, keyed by its `scratch-<N>` slug (the name of both its
+branch and its worktree) in the same ledger column, and shows in `/fleet-history` +
+the dash ⌃t view as `~<N>`. Every reaper records it before disposing of anything:
+the ledger-watch daemon, the SessionEnd hook, the dash **⌃x** reaper and the
+worktree janitor all go through `fleet_reap_record`. Because a scratch's worktree is
+usually the thing that gets removed (a clean scratch is pruned silently by #290's
+rules), the closed row also stores the worktree's **HEAD sha** — captured while it
+still stands — so `resume` can rebuild the worktree at its original path and
+`claude --resume` still finds the transcript. That sha applies to worker
+closed-unlanded rows too: a reaped-clean session no longer degrades to REVIEW-ONLY.

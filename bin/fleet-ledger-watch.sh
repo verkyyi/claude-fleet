@@ -2,20 +2,31 @@
 # fleet-ledger-watch.sh [--dry-run] [session...] — the LEDGER-WATCH daemon
 # (com.claude-fleet.ledger-watch, ~60s; issue #320).
 #
-# Records EVERY closed worker session into the history ledger — not just the
-# landed ones. The land path (bin/fleet-cleanup.sh → fleet-history.sh record)
-# only indexes a session when its merged PR is reaped, so a worker window you
-# close BY HAND (or that crashes, or an abandoned/blocked one that never lands)
-# leaves its Claude transcript UNINDEXED: invisible to /fleet-history, not
-# resumable. This daemon closes that gap.
+# Records EVERY closed session into the history ledger — not just the landed ones,
+# and (issue #466) not just the issue-bound ones. The land path
+# (bin/fleet-cleanup.sh → fleet-history.sh record) only indexes a session when its
+# merged PR is reaped, so a window you close BY HAND (or that crashes, or an
+# abandoned/blocked one that never lands) leaves its Claude transcript UNINDEXED:
+# invisible to /fleet-history, not resumable. This daemon closes that gap.
 #
 # It can't inspect a window AFTER it's gone, so it SNAPSHOT-DIFFS: each tick it
-# snapshots every live issue-bound worker window in each fleet to a durable
-# per-fleet snapshot, then diffs against the PREVIOUS snapshot. A worker whose
-# window VANISHED and that is NOT already in the ledger → one `closed-unlanded`
-# ledger row (issue/title/worktree/transcript-dir/session-id/summary), so its
-# transcript is browsable + resumable. Its worktree usually still exists on disk
-# (worktree-autoclean keeps unmerged), so resume just reuses it.
+# snapshots every live SESSION window in each fleet to a durable per-fleet
+# snapshot, then diffs against the PREVIOUS snapshot. A session whose window
+# VANISHED and that is NOT already in the ledger → one `closed-unlanded` ledger row
+# (key/title/worktree/transcript-dir/session-id/summary), so its transcript is
+# browsable + resumable. Its worktree usually still exists on disk
+# (worktree-autoclean keeps unmerged — including a dirty scratch experiment), so
+# resume just reuses it; a later reap is covered by the HEAD sha record-closed
+# stores while the worktree is still there.
+#
+# TWO KINDS of window are snapshotted, under one KEY column:
+#   * issue-bound WORKER  → key = the numeric @issue
+#   * @raw SCRATCH (#466) → key = the `scratch-<N>` slug of its @worktree
+#     (fleet_scratch_key). A scratch has no issue, but it does have its own
+#     worktree + transcript (#290), so it indexes and resumes like any worker.
+#     A @raw window with no resolvable scratch worktree has nothing to index →
+#     skipped, exactly as every @raw window was before this.
+# Panels (dash/plan/backlog — no @issue, no @raw) are never snapshotted.
 #
 # Design (mirrors the other single-writer, disk-gated fleet daemons — the cleanup
 # daemon it sits beside):
@@ -24,19 +35,21 @@
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer (it
 #                                                             WRITES the ledger)
 #     honor the diskguard GATE (fleet-diskguard.sh --gate)  → never append on a full disk
-#     snapshot the live worker windows (issue/win/worktree/title/summary), keyed
-#       by ISSUE (one worker window ≡ one issue) — @raw scratch + panels excluded
+#     snapshot the live session windows (key/win/worktree/title/summary), keyed by
+#       ISSUE for a worker and by SCRATCH SLUG for an @raw one — panels excluded
 #     diff vs the durable prior snapshot: for every issue that VANISHED, drive
 #       bin/fleet-history.sh record-closed (idempotent — dedups on session-id, so
 #       a landed session or a prior tick is never double-recorded)
 #     overwrite the snapshot with the fresh one
 #
-# KEY = ISSUE, not session-id: /fleet-handoff cycles a worker through a fresh
-# session-id in the SAME window (a `/clear`), so keying on session-id would emit a
-# spurious row on every handoff. Keying on the issue records only when the whole
-# window goes away, capturing its FINAL session (the newest transcript in the
-# worktree). Trade-off: a kill-then-respawn of the SAME issue inside one tick is
-# missed (rare); the common hand-close / crash / abandon is caught.
+# KEY = ISSUE / SCRATCH SLUG, not session-id: /fleet-handoff cycles a session
+# through a fresh session-id in the SAME window (a `/clear`), so keying on
+# session-id would emit a spurious row on every handoff. Both chosen keys are the
+# window's DURABLE identity — an issue number, or the scratch-<N> slug that names
+# its branch AND its worktree — so a row is recorded only when the whole window
+# goes away, capturing its FINAL session (the newest transcript in the worktree).
+# Trade-off: a kill-then-respawn of the SAME key inside one tick is missed (rare);
+# the common hand-close / crash / abandon is caught.
 #
 # WHY NO gh / LLM: detection is pure tmux snapshot + a local transcript lookup;
 # the append is a shell `record-closed` (no gh). So — like the collector — it is
@@ -44,7 +57,9 @@
 #
 # NOT a reaper: it RECORDS ONLY (transcript indexing). It never removes a worktree
 # or closes an issue — a recorded unlanded session leaves its worktree in place for
-# resume; worktree-autoclean/cleanup stay the sole reapers.
+# resume; worktree-autoclean/cleanup stay the sole reapers. That matters doubly for
+# a scratch: #290's rule is that an experiment is never silently deleted, and this
+# daemon only ever writes a ledger row about one.
 #
 # SCOPE: only fleets that are currently LIVE (own a hub window) are diffed. A
 # whole-fleet tmux-server crash is handled by fleet-restore.sh (--if-down resumes
@@ -159,55 +174,67 @@ watch_fleet() { (
     trap 'lease_release "$lease" "$me"' EXIT
   fi
 
-  # Build the CURRENT snapshot of worker windows, keyed by issue. A worker window
-  # is one with a NUMERIC @issue and @raw != 1 (this also excludes hub panels,
-  # which carry no @issue, and @raw scratch sessions per issue #214). Snapshot row
-  # (TAB-delimited on disk): issue · window-id · worktree · title · summary. The
-  # summary is captured WHILE LIVE (from the dash cache) — the whole point of a
-  # snapshot-diff daemon is that the window can't be inspected once it's gone.
+  # Build the CURRENT snapshot of session windows, keyed by the window's DURABLE
+  # key: the NUMERIC @issue for a worker, the `scratch-<N>` slug for an @raw scratch
+  # (issue #466). Hub panels carry neither → skipped. Snapshot row (TAB-delimited on
+  # disk): key · window-id · worktree · title · summary. The summary is captured
+  # WHILE LIVE (from the dash cache) — the whole point of a snapshot-diff daemon is
+  # that the window can't be inspected once it's gone.
   cur=$(fleet_state_dir "$sess")/.ledgerwatch.$$.snap
-  cur_issues=$'\n'
+  cur_keys=$'\n'
   : > "$cur"
   while IFS='|' read -r wid iss rawf wt cwd wname; do
-    case "$iss" in ''|*[!0-9]*) continue ;; esac      # numeric @issue only (skips panels)
-    [ "$rawf" = 1 ] && continue                        # skip @raw scratch (issue #214)
-    # dedup within a tick: one worker window ≡ one issue — first seen wins.
-    case "$cur_issues" in *$'\n'"$iss"$'\n'*) continue ;; esac
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
+    if [ "$rawf" = 1 ]; then
+      # @raw SCRATCH: no issue to key on — use the scratch-<N> slug of its worktree
+      # (#466). fleet_scratch_key is STRICT, so a @raw window that is not in a real
+      # scratch worktree (nothing to index or reconstruct) is skipped, exactly as
+      # every @raw window was before — @raw is never keyed by a stray @issue.
+      key=$(fleet_scratch_key "$local_wt")
+      [ -z "$key" ] && continue
+    else
+      case "$iss" in ''|*[!0-9]*) continue ;; esac    # numeric @issue only (skips panels)
+      key="$iss"
+    fi
+    # dedup within a tick: one window ≡ one key — first seen wins.
+    case "$cur_keys" in *$'\n'"$key"$'\n'*) continue ;; esac
     smry=""
     smk=$(fleet_summary_key "$sess" "$wid")
     [ -f "$DASHC/summary_$smk" ] && read -r smry < "$DASHC/summary_$smk"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$iss" "$wid" "$local_wt" "$wname" "$smry" >> "$cur"
-    cur_issues="${cur_issues}${iss}"$'\n'
+    printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" >> "$cur"
+    cur_keys="${cur_keys}${key}"$'\n'
   done <<EOF
 $raw
 EOF
 
   snap=$(fleet_state_dir "$sess")/ledgerwatch.snap
 
-  # DIFF vs the prior snapshot: every issue present LAST tick but gone NOW vanished.
-  # Its worker window closed; unless the ledger already carries that session (a
-  # landed row, or a prior closed-unlanded row — record-closed dedups), record it.
+  # DIFF vs the prior snapshot: every key present LAST tick but gone NOW vanished.
+  # Its window closed; unless the ledger already carries that session (a landed row,
+  # or a prior closed-unlanded row — record-closed dedups), record it.
   recorded=0; vanished=0
   if [ -f "$snap" ]; then
-    while IFS=$'\t' read -r p_iss p_wid p_wt p_title p_smry; do
-      [ -z "$p_iss" ] && continue
-      case "$cur_issues" in *$'\n'"$p_iss"$'\n'*) continue ;; esac   # still live → not vanished
+    while IFS=$'\t' read -r p_key p_wid p_wt p_title p_smry; do
+      [ -z "$p_key" ] && continue
+      case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
       vanished=$((vanished + 1))
+      # log label: `#<issue>` for a worker, the bare `scratch-<N>` for a scratch (#466).
+      lbl="$p_key"; case "$p_key" in [0-9]*) lbl="#$p_key" ;; esac
       if [ "$DRY" = 1 ]; then
-        log "$sess: would record closed-unlanded issue #$p_iss (win $p_wid, wt ${p_wt##*/})"
+        log "$sess: would record closed-unlanded $lbl (win $p_wid, wt ${p_wt##*/})"
         recorded=$((recorded + 1))
         continue
       fi
-      # Drive the ledger owner. It resolves transcript-dir + session-id from the
-      # worktree, dedups (idempotent), and skips a window with no transcript.
+      # Drive the ledger owner. It resolves transcript-dir + session-id (and the
+      # worktree's HEAD sha, so the row survives a later reap) from the worktree,
+      # dedups (idempotent), and skips a window with no transcript.
       tok=$(bash "$BIN/fleet-history.sh" record-closed \
-              --repo "$repo" --session "$sess" --issue "$p_iss" \
+              --repo "$repo" --session "$sess" --key "$p_key" \
               --worktree "$p_wt" --win "$p_wid" \
               --title "$p_title" --summary "$p_smry" 2>/dev/null)
       case "$tok" in
         closed-unlanded*) log "$sess: $tok"; recorded=$((recorded + 1)) ;;
-        *)                log "$sess: issue #$p_iss — ${tok:-record-closed: no output}" ;;
+        *)                log "$sess: $lbl — ${tok:-record-closed: no output}" ;;
       esac
     done < "$snap"
   fi
@@ -221,7 +248,7 @@ EOF
   fi
 
   if [ "$vanished" -eq 0 ]; then
-    log "$sess: no worker window vanished since last tick"
+    log "$sess: no session window vanished since last tick"
   else
     log "$sess: $vanished vanished → recorded $recorded closed-unlanded row(s)$([ "$DRY" = 1 ] && echo ' (dry-run)')"
   fi

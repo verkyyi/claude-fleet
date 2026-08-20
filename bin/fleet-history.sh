@@ -8,6 +8,13 @@
 # list closed sessions (`list`/`rows`), and RESUME one by reconstructing the
 # removed worktree off the squash SHA (`resume`). See issue #130.
 #
+# WHAT gets indexed: every closed session in the fleet — issue-bound WORKERS and
+# @raw SCRATCH sessions alike (issue #466). A scratch has no GitHub issue, so ledger
+# column 2 is a KEY, not an issue number: `<N>` for a worker, `scratch-<N>` for a
+# scratch (fleet_scratch_key). Everything downstream — list/rows/resume/path/meta —
+# keys off that column, so a scratch row browses and RESUMES exactly like a worker
+# row; the renderers print `#<N>` vs `~<N>` so the two kinds stay tellable apart.
+#
 # Two ways a session enters the ledger (the `state` column, #320, tells them apart):
 #   * landed          — recorded on the LAND path (`record`, driven by fleet-cleanup.sh)
 #                       when a merged PR is reaped: carries mergedAt/pr/sha.
@@ -28,12 +35,14 @@
 # listable even if its PR metadata or transcript can't be resolved.
 #
 # Subcommands:
-#   record  --repo R --main M --pr N --issue N --worktree W [--win ID] [--session S] [--summary S]
+#   record  --repo R --main M --pr N --key K --worktree W [--win ID] [--session S] [--summary S]
 #           Append one LANDED ledger row. Derives title/sha/mergedAt from `gh pr
 #           view`, and transcript-dir + session-id from the worktree path. Run it
 #           BEFORE `git worktree remove` in the cleanup teardown step.
-#   record-closed --repo R --issue N --worktree W [--win ID] [--session S] [--title T] [--summary S]
-#           Append a landed-less CLOSED-UNLANDED row (mergedAt→now, pr/sha='-').
+#   record-closed --repo R --key K --worktree W [--win ID] [--session S] [--title T] [--summary S] [--sha SHA]
+#           Append a landed-less CLOSED-UNLANDED row (mergedAt→now, pr='-'). Records
+#           the worktree's HEAD sha so the row stays RESUMABLE even after a later
+#           reap removes that worktree (issue #466) — resume rebuilds it off the sha.
 #           Idempotent: a no-op if a row already exists for this session-id /
 #           transcript-dir (so the daemon can call it every tick, and it never
 #           shadows a landed row). Skips a window with no resolvable transcript
@@ -41,14 +50,17 @@
 #           same way `record` does.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
 #   rows                             Dash US-delimited rows (closed view of the dashboard).
-#   resume  --repo R --main M <issue|#pr>   Reconstruct the worktree off the SHA and
+#   resume  --repo R --main M <key|#pr>     Reconstruct the worktree off the SHA and
 #           print how to resume (RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
 #           Reuses an already-present worktree (skips the slow `git worktree add`, #319) —
 #           which is also how a closed-unlanded row (no SHA) resumes: its worktree
 #           is usually still on disk (worktree-autoclean keeps unmerged), #320.
-#   path    <issue|#pr>              Print "<transcript-dir>\t<session-id>" for a ledger row.
-#   meta    <issue|#pr>              Print "<issue>\t<title>" for a ledger row — lets the
+#   path    <key|#pr>                Print "<transcript-dir>\t<session-id>" for a ledger row.
+#   meta    <key|#pr>                Print "<key>\t<title>" for a ledger row — lets the
 #           restorer name the resumed window from the title + bind @issue (#319).
+# <key> is an issue number (a worker) or a `scratch-<N>` slug (a scratch, #466).
+# `--key` is the flag name for it; `--issue` remains accepted as its alias so an
+# older/live install's call sites keep working across a partial sync.
 #
 # Shell-options policy: this is EXECUTED (not sourced), so `set -uo pipefail` is fine.
 set -uo pipefail
@@ -80,6 +92,19 @@ ledger_path() {
 
 # strip TAB/CR/LF so a free-text field can't break the TSV row layout.
 oneline() { printf '%s' "${1:-}" | tr '\t\r\n' '   ' ; }
+
+# ledger key (col 2) → the label the renderers and log lines print: `#<N>` for a
+# worker row, `~<N>` for a scratch one (issue #466). `~` is the one-glyph tell that
+# a row has no GitHub issue behind it, and it keeps the SAME width as `#<N>` — so
+# the dash's 5-wide key column and the CLI list stay aligned for either kind.
+key_label() {
+  case "${1:-}" in
+    scratch-*) printf '~%s' "${1#scratch-}" ;;
+    *)         printf '#%s' "${1:-}" ;;
+  esac
+}
+# is this ledger key a scratch (@raw) session rather than an issue-bound worker?
+is_scratch_key() { case "${1:-}" in scratch-*) return 0 ;; *) return 1 ;; esac; }
 
 # worktree path → transcript dir under ~/.claude/projects. Claude Code encodes a
 # cwd into its project-dir name by replacing EVERY non-alphanumeric byte with '-'
@@ -128,13 +153,16 @@ ledger_has_session() {   # $1=ledger  $2=session-id  $3=transcript-dir
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
 cmd_record() {
-  local repo="" main="" pr="" issue="" wt="" win="" summary="" mergedat="" sess=""
+  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
       --main) main="${2:-}"; shift 2;;
       --pr) pr="${2:-}"; shift 2;;
-      --issue) issue="${2:-}"; shift 2;;
+      # col-2 key: an issue number (worker) or a scratch-<N> slug (#466). --issue
+      # is the pre-#466 spelling, kept as an alias so a partially-synced install
+      # (older caller + newer script, or the reverse) never silently drops a row.
+      --key|--issue) key="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
       --win) win="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
@@ -148,7 +176,7 @@ cmd_record() {
   # (in-pane) caller didn't pass --session: land runs in the fleet whose window
   # we're recording, so both resolve to the same session.
   [ -z "$sess" ] && sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
-  [ -z "$issue" ] && { echo "fleet-history record: --issue is required" >&2; return 2; }
+  [ -z "$key" ] && { echo "fleet-history record: --key is required" >&2; return 2; }
 
   # Derive PR metadata from GitHub (best-effort; tolerate a missing/removed PR).
   local title="" sha="" mergedat_gh=""
@@ -182,17 +210,17 @@ cmd_record() {
   # retries after a failed `git worktree remove`. Same dedup key as ledger-watch's
   # record-closed, so a session is recorded at most once regardless of the reaper.
   if ledger_has_session "$ledger" "$sid" "$tdir"; then
-    printf 'landed #%s → already in ledger (session %s) — skipped\n' "$issue" "${sid:-none}"
+    printf 'landed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "${sid:-none}"
     return 0
   fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
 
-  # 10 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary·state
+  # 10 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state
   # state=landed here; the ledger-watch daemon writes closed-unlanded (#320). Col 1
   # is the merge time for a landed row / the close time for a closed-unlanded one.
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(oneline "$mergedat")" \
-    "$(oneline "$issue")" \
+    "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
     "$(oneline "${pr:--}")" \
     "$(oneline "${sha:--}")" \
@@ -202,25 +230,30 @@ cmd_record() {
     "$(oneline "${summary:--}")" \
     "landed" \
     >> "$ledger"
-  printf 'landed #%s → ledger %s (session %s)\n' "$issue" "$ledger" "${sid:-none}"
+  printf 'landed %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "${sid:-none}"
 }
 
 # ============================================================================
 # record-closed — append a CLOSED-UNLANDED row (idempotent; #320)
 # ============================================================================
-# The ledger-watch daemon calls this when a worker window VANISHES without
-# landing. No PR/merge, so mergedAt→close-time and pr/sha degrade to '-'; the
-# resumable fields (issue/worktree/transcript-dir/session-id/summary) are
-# populated so /fleet-history can browse + resume it (its worktree usually still
-# exists — worktree-autoclean keeps unmerged). Idempotent + non-shadowing: a
-# no-op when the ledger already has a row for this session (landed OR a prior
-# tick), and a skip when there is no resolvable transcript (nothing to index).
+# The ledger-watch daemon (and the SessionEnd hook, and worktree-autoclean) calls
+# this when a session's window VANISHES without landing — an issue-bound WORKER or
+# an @raw SCRATCH alike (issue #466; --key carries which). No PR/merge, so
+# mergedAt→close-time and pr degrades to '-'; the resumable fields
+# (key/worktree/sha/transcript-dir/session-id/summary) are populated so
+# /fleet-history can browse + resume it. Its worktree usually still exists
+# (worktree-autoclean keeps unmerged/dirty, incl. scratch experiments) → resume
+# reuses it; when a later reap DOES remove it, the recorded HEAD sha rebuilds it.
+# Idempotent + non-shadowing: a no-op when the ledger already has a row for this
+# session (landed OR a prior tick), and a skip when there is no resolvable
+# transcript (nothing to index).
 cmd_record_closed() {
-  local repo="" issue="" wt="" win="" sess="" title="" summary="" closedat=""
+  local repo="" key="" wt="" win="" sess="" title="" summary="" closedat="" sha=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
-      --issue) issue="${2:-}"; shift 2;;
+      --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466)
+      --sha) sha="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
       --win) win="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
@@ -231,7 +264,7 @@ cmd_record_closed() {
     esac
   done
   [ -z "$sess" ] && sess="${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}"
-  [ -z "$issue" ] && { echo "fleet-history record-closed: --issue is required" >&2; return 2; }
+  [ -z "$key" ] && { echo "fleet-history record-closed: --key is required" >&2; return 2; }
 
   # transcript dir + session id from the (still-present) worktree path. A window
   # with no transcript is nothing to index/resume → skip quietly (not an error).
@@ -241,13 +274,13 @@ cmd_record_closed() {
     sid=$(newest_session_in "$tdir")
   fi
   if [ -z "$sid" ]; then
-    printf 'closed #%s → no transcript to index (skipped)\n' "$issue"
+    printf 'closed %s → no transcript to index (skipped)\n' "$(key_label "$key")"
     return 0
   fi
 
   local ledger; ledger=$(ledger_path "$repo")
   if ledger_has_session "$ledger" "$sid" "$tdir"; then
-    printf 'closed #%s → already in ledger (session %s) — skipped\n' "$issue" "$sid"
+    printf 'closed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "$sid"
     return 0
   fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
@@ -257,20 +290,31 @@ cmd_record_closed() {
   # close time in col 1 so the reader's "act" (time-since) column is meaningful.
   [ -z "$closedat" ] && closedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
 
-  # 10 columns: mergedAt·issue·title·pr·sha·worktree·transcript-dir·session-id·summary·state
+  # HEAD sha of the STILL-PRESENT worktree (issue #466). There is no merge commit to
+  # record here, but the tip sha is what keeps this row resumable AFTER a later reaper
+  # removes the worktree: `resume` reuses a worktree that is still on disk and rebuilds
+  # one that is gone off this sha, at the SAME path (the path is what the transcript is
+  # keyed to). Without it a reaped-clean session degraded to REVIEW-ONLY — the common
+  # fate of a scratch, whose clean worktree worktree-autoclean prunes silently. Cheap
+  # and best-effort: no worktree on disk / no git → '-', exactly as before.
+  if [ -z "$sha" ] && [ -n "$wt" ] && [ -d "$wt" ] && command -v git >/dev/null 2>&1; then
+    sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
+  fi
+
+  # 10 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(oneline "$closedat")" \
-    "$(oneline "$issue")" \
+    "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
     "-" \
-    "-" \
+    "$(oneline "${sha:--}")" \
     "$(oneline "${wt:--}")" \
     "$(oneline "${tdir:--}")" \
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "closed-unlanded" \
     >> "$ledger"
-  printf 'closed-unlanded #%s → ledger %s (session %s)\n' "$issue" "$ledger" "$sid"
+  printf 'closed-unlanded %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "$sid"
 }
 
 # read the ledger newest-first into stdout as raw TSV (optional substring filter).
@@ -326,19 +370,23 @@ cmd_list() {
     [ ${#smry}  -gt 60 ] && smry="${smry:0:59}…"
     # glyph tells landed (✓) from closed-unlanded (✗); empty state == legacy landed.
     local glyph="✓"; [ "$state" = "closed-unlanded" ] && glyph="✗"
-    printf '%s #%-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' "$glyph" "$iss" "$rel" "$title" "$pr" "$short" "$smry"
+    # key cell: `#<issue>` for a worker, `~<N>` for a scratch (#466) — same width.
+    printf '%s %-5s  %-8s  %-44s  PR %-5s  %-7s  %s\n' \
+      "$glyph" "$(key_label "$iss")" "$rel" "$title" "$pr" "$short" "$smry"
   done
 }
 
 # ============================================================================
-# rows — dash US-delimited landed rows (field1=landed:<pr|issue>, field3=display)
+# rows — dash US-delimited closed rows (field1=landed:<pr|issue|scratch>, field3=display)
 # ============================================================================
 # The landed view shares the SAME aligned column skeleton as the live dash list
 # (glyph·issue·window·summary·act·PR·ctx) so toggling ⌃t reads as ONE list, not a
 # separate ad-hoc format (issue #228). Finished-session specifics: the glyph is an
 # indigo ✓ (merged/archived, vs live green ✓ = done); "window" mirrors the tmux
 # window name the worker had (kebab of the title); "act" is time-since-merge; PR
-# is the merged number; ctx has no live meaning → a muted dot (skeleton parity).
+# is the merged number; ctx has no live meaning → a muted dot (skeleton parity). A
+# SCRATCH row (#466) fills the same skeleton: `~<N>` in the key column instead of
+# `#<issue>`, its scratch-<N>/custom window name, and an em-dash PR.
 # Column widths MUST match tmux-dashboard-rows.sh (LEFTW/ACTW/RIGHTW) or the two
 # lists won't line up.
 cmd_rows() {
@@ -388,18 +436,26 @@ cmd_rows() {
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state; do
     [ -z "$iss" ] && continue
-    local target key
-    key="${sid:--}"
-    case "$pr" in ''|-) target="landed:issue:$iss";; *) target="landed:${pr#\#}";; esac
+    local target fzfkey
+    fzfkey="${sid:--}"
+    # field1 target — what ⌃o / Enter hand to dash-restore-session.sh. A scratch row
+    # is addressed by its own key (#466) even when it escalated into a PR, so the
+    # restorer knows to rebuild an @raw window rather than bind a nonexistent @issue.
+    if is_scratch_key "$iss"; then target="landed:scratch:$iss"
+    else case "$pr" in ''|-) target="landed:issue:$iss";; *) target="landed:${pr#\#}";; esac
+    fi
     # state glyph: indigo ✓ for a landed (merged) row, muted ✗ for a closed-unlanded
     # one (#320). Empty state == a legacy pre-#320 row → landed. The target/key
     # scheme is identical for both so the dash's resume action is unchanged.
     local glyph="✓" glyph_c="$IN"
     [ "$state" = "closed-unlanded" ] && { glyph="✗"; glyph_c="$GY"; }
 
-    # window column: the kebab window name the worker had (falls back to issue-<N>).
+    # window column: the kebab window name the session had (falls back to the
+    # conventional one — issue-<N> for a worker, the scratch-<N> slug for a scratch).
     local wname; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
-    [ -z "${wname:-}" ] && wname="issue-$iss"
+    if [ -z "${wname:-}" ]; then
+      if is_scratch_key "$iss"; then wname="$iss"; else wname="issue-$iss"; fi
+    fi
     # summary column: the recorded one-line summary, else the title so it's not blank.
     local dsmry="$smry"; { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="$title"
     [ "${dsmry:--}" = "-" ] && dsmry="(untitled)"
@@ -408,7 +464,7 @@ cmd_rows() {
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
     local prcell; case "$pr" in ''|-) prcell="—";; *) prcell="#${pr#\#}";; esac
 
-    local issd="#$iss"
+    local issd; issd=$(key_label "$iss")     # `#<issue>` | `~<N>` for a scratch (#466)
     local f_iss f_name f_act f_pr f_ctx
     fld 5  "$issd";   f_iss=$fld_out
     fld 22 "$wname";  f_name=$fld_out
@@ -422,7 +478,7 @@ cmd_rows() {
     local pad=$(( USABLE - LEFTW - ${#dsmry} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
-      "$target" "$US" "$key" "$US" \
+      "$target" "$US" "$fzfkey" "$US" \
       "${glyph_c}${glyph}${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
   done
 }
@@ -446,16 +502,18 @@ cmd_resume() {
       *) key="$1"; shift;;
     esac
   done
-  [ -z "$key" ] && { echo "fleet-history resume: need an <issue|#pr>" >&2; return 2; }
+  [ -z "$key" ] && { echo "fleet-history resume: need a <key|#pr> (issue number, scratch-<N>, or #PR)" >&2; return 2; }
   local row; row=$(find_row "$repo" "$key")
-  [ -z "$row" ] && { printf 'REVIEW-ONLY\tno landed row for %s\n' "$key"; return 0; }
+  [ -z "$row" ] && { printf 'REVIEW-ONLY\tno ledger row for %s\n' "$key"; return 0; }
   local iss pr sha wt tdir sid
   IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ <<<"$row"
 
   # Resume-by-session needs BOTH a surviving transcript AND a worktree to run in.
   # The land cleanup removed the worktree, so establish one: REUSE it if it's still
-  # on disk (issue #319), else recreate it off the squash SHA (the branch is usually
-  # deleted post-merge — use the SHA, not the branch). Only claim RESUME once a
+  # on disk (issue #319), else recreate it off the recorded SHA — the squash commit
+  # for a landed row, the session's own HEAD for a closed-unlanded one (#466). Either
+  # way it is the SHA, not the branch: the branch is usually deleted post-merge (a
+  # landed worker) or on reap (a pruned scratch). Only claim RESUME once a
   # worktree actually exists; if it can't be established (no SHA / no --main / add
   # failed), do NOT point at a directory that isn't there — degrade.
   #
@@ -494,7 +552,7 @@ cmd_resume() {
     printf 'FROM-PR\t%s\tclaude --from-pr %s %s\n' "${pr#\#}" "${pr#\#}" "$fork"
     return 0
   fi
-  printf 'REVIEW-ONLY\tno resumable worktree and no PR recorded for #%s\n' "$iss"
+  printf 'REVIEW-ONLY\tno resumable worktree and no PR recorded for %s\n' "$(key_label "$iss")"
 }
 
 # ============================================================================
@@ -511,13 +569,15 @@ cmd_path() {
 }
 
 # ============================================================================
-# meta — "<issue>\t<title>" for a landed row (faithful resume naming + @issue)
+# meta — "<key>\t<title>" for a ledger row (faithful resume naming + @issue)
 # ============================================================================
-# The restorer (bin/dash-restore-session.sh) resumes by an issue number OR a #PR,
-# but wants the resumed window to read like the ORIGINAL worker regardless: the
-# same descriptive name (kebab of the title, #216) and @issue binding. The ledger
-# row carries both the issue (col 2) and the title (col 3), so expose them for
-# EITHER key shape — a #PR resume resolves to its issue here too (issue #319).
+# The restorer (bin/dash-restore-session.sh) resumes by an issue number, a
+# `scratch-<N>` key, OR a #PR, but wants the resumed window to read like the
+# ORIGINAL session regardless: the same descriptive name (kebab of the title, #216)
+# and @issue binding. The ledger row carries both the key (col 2) and the title
+# (col 3), so expose them for EVERY key shape — a #PR resume resolves to its key
+# here too (issue #319). A `scratch-<N>` key tells the restorer to rebuild an @raw
+# window instead of binding @issue (#466).
 # Prints one TSV line; nothing when there's no matching row.
 cmd_meta() {
   local repo="" key=""

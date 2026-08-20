@@ -7,8 +7,9 @@
 # claude window resumed onto the surviving transcript — no cd/paste dance.
 #
 # <landed-target> is the dash landed-row's field1 (what the ⌃o bind passes as {1}):
-#   landed:issue:<n>   PR-less landed row  → resume by issue number <n>
-#   landed:<pr>        PR-bearing row      → resume by #<pr>
+#   landed:issue:<n>          PR-less landed row  → resume by issue number <n>
+#   landed:<pr>               PR-bearing row      → resume by #<pr>
+#   landed:scratch:scratch-<n> scratch row (#466) → resume by its scratch key
 # Anything else (a live-view row, the header) is a no-op with a hint — restore only
 # applies to the landed view (⌃t).
 #
@@ -17,11 +18,14 @@
 #   * session-cap gated (a restored session is a real Claude session);
 #   * non-invasive focus — the new window surfaces in the dash; it never yanks the
 #     operator over (matches ⌃g/⌃s). FLEET_SPAWN_FOCUS=1 opts into the jump.
-# The reconstructed worktree is a THROWAWAY at the merged SHA: while the restored
+# The reconstructed worktree is a THROWAWAY at the recorded SHA: while the restored
 # window is live the janitor keeps it (a live pane is cd'd inside — see
 # worktree-autoclean.sh); once the window closes it is merged+clean+unattached
 # again and the janitor prunes it. Binding @issue is safe — the bound issue is
 # already closed, so the janitor's auto-close ("only if still open") is a no-op.
+# A restored SCRATCH (#466) has no issue to bind, so it is marked the way
+# dash-raw-session.sh marks a fresh one — @raw=1 + @worktree — which keeps it out of
+# the issue machinery and lets dash ⌃x resolve its worktree for disposal.
 #
 # --plan <target>: print the resolved resume key and exit (no tmux/git). For the
 # hermetic selftest — the reconstruct/verdict logic itself is covered by
@@ -29,13 +33,16 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-# landed-row target → resume key (issue number, or #PR). Prints the key; returns
-# non-zero when the target isn't a landed row (live row / header / empty).
+# landed-row target → resume key (issue number, scratch-<n>, or #PR). Prints the
+# key; returns non-zero when the target isn't a closed row (live row / header /
+# empty). The scratch case must precede the `landed:*` catch-all, which would
+# otherwise read the whole `scratch:scratch-<n>` tail as a PR number.
 restore_key_for() {
   case "${1:-}" in
-    landed:issue:*) printf '%s' "${1#landed:issue:}" ;;
-    landed:*)       printf '#%s' "${1#landed:}" ;;
-    *)              return 1 ;;
+    landed:scratch:*) printf '%s' "${1#landed:scratch:}" ;;   # scratch-<n> (#466)
+    landed:issue:*)   printf '%s' "${1#landed:issue:}" ;;
+    landed:*)         printf '#%s' "${1#landed:}" ;;
+    *)                return 1 ;;
   esac
 }
 
@@ -96,21 +103,36 @@ fi
 verdict=$(bash "$BIN/fleet-history.sh" resume --exec --repo "$REPO" --main "$MAIN" "$key" 2>/dev/null)
 kind=${verdict%%$'\t'*}
 
-# Faithful naming + @issue (issue #319): the resumed window should read like the
-# ORIGINAL worker — the SAME descriptive name (kebab of the ledger title, #216)
-# and bound to the SAME @issue — for BOTH issue- and PR-keyed landed rows. The
-# ledger row carries both the issue and the title, so pull them once here (a #PR
-# key resolves to its issue too). Best-effort: a missing title falls back to a
-# resume-<key> name below; a missing issue simply skips the @issue bind.
-IFS=$'\t' read -r led_issue led_title <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+# Faithful naming + markers (issue #319): the resumed window should read like the
+# ORIGINAL session — the SAME descriptive name (kebab of the ledger title, #216)
+# and the same window markers — for every closed-row shape. The ledger row carries
+# both the key (col 2) and the title (col 3), so pull them once here (a #PR key
+# resolves to its key too). Best-effort: a missing title falls back to a
+# resume-<key> name below; a missing key simply skips the bind.
+IFS=$'\t' read -r led_key led_title <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
 rname=""; { [ -n "$led_title" ] && [ "$led_title" != "-" ]; } && rname=$(fleet_win_name "$led_title" 2>/dev/null)
-# @issue to bind: prefer the ledger's issue column (resolves for BOTH issue- and
-# #PR-keyed rows, #319); fall back to the numeric key for an issue resume so we
-# never regress the pre-#319 issue-key binding when the ledger lookup comes up empty.
-bissue="$led_issue"
-{ [ -z "$bissue" ] || [ "$bissue" = "-" ]; } && case "$key" in \#*) bissue="";; *) bissue="$key";; esac
-bind_issue() {  # $1 = window-id — bind @issue when we resolved one
-  [ -n "$bissue" ] && TM set-window-option -t "$1" @issue "$bissue" 2>/dev/null
+# Which marker set? A `scratch-<n>` key (from the target OR the ledger) is a SCRATCH
+# row (#466): it has no issue, and binding one would hand the restored window to
+# issue machinery it must stay out of (reapers, the PR map, the janitor's
+# auto-close). Mark it @raw=1 + @worktree instead — what dash-raw-session.sh binds on
+# a fresh scratch — so ⌃x can resolve its worktree and every issue path skips it.
+is_scratch=0
+case "$key$led_key" in *scratch-*) is_scratch=1 ;; esac
+# @issue to bind (worker rows): prefer the ledger's key column (resolves for BOTH
+# issue- and #PR-keyed rows, #319); fall back to the numeric key for an issue resume
+# so we never regress the pre-#319 issue-key binding when the lookup comes up empty.
+bissue=""
+if [ "$is_scratch" = 0 ]; then
+  bissue="$led_key"
+  { [ -z "$bissue" ] || [ "$bissue" = "-" ]; } && case "$key" in \#*) bissue="";; *) bissue="$key";; esac
+fi
+bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the restored window
+  if [ "$is_scratch" = 1 ]; then
+    TM set-window-option -t "$1" @raw 1 2>/dev/null
+    [ -n "${2:-}" ] && TM set-window-option -t "$1" @worktree "$2" 2>/dev/null
+  else
+    [ -n "$bissue" ] && TM set-window-option -t "$1" @issue "$bissue" 2>/dev/null
+  fi
 }
 
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the
@@ -141,10 +163,11 @@ case "$kind" in
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { TM display-message "restore: new-window failed for $key" 2>/dev/null; exit 1; }
-    # Bind @issue from the ledger for EVERY resume — including #PR-keyed rows, which
-    # resolve to their issue via the ledger (issue #319) — so the row reads like the
-    # original worker (dash/backlog/PR-map recognise it).
-    bind_issue "$win"
+    # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
+    # which resolve to their key via the ledger (issue #319) — so the row reads like
+    # the original session (dash/backlog/PR-map recognise a worker; a scratch is
+    # marked @raw + @worktree instead, #466).
+    bind_marks "$win" "$wt"
     TM set-window-option -t "$win" @restored 1 2>/dev/null   # mark: a resumed landed session
     printf 'resumed %s' "$key" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
     TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed $key")" 2>/dev/null || :   # pane header too (#455)
@@ -161,7 +184,7 @@ case "$kind" in
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$MAIN" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
       || { TM display-message "restore: new-window failed for PR $pr" 2>/dev/null; exit 1; }
-    bind_issue "$win"
+    bind_marks "$win" ""
     TM set-window-option -t "$win" @restored 1 2>/dev/null
     printf 'resumed PR %s (from-pr)' "$pr" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
     TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed PR $pr (from-pr)")" 2>/dev/null || :   # pane header too (#455)

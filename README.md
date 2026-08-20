@@ -298,9 +298,9 @@ and refuses from the wrong one. Live so far:
   code and implement under a standing contract that ends by **opening a PR and
   landing it** once the gate reads green (`bin/fleet-pr-verdict.sh` → `READY`);
   the cleanup daemon reaps afterwards (see [docs/CLEANUP.md](docs/CLEANUP.md)).
-- **`/fleet-history`** (hub) — browse & resume closed worker sessions (landed +
-  unlanded) from the history ledger, reconstructing a reaped worktree off the
-  squash SHA so `claude --resume` still works.
+- **`/fleet-history`** (hub) — browse & resume closed sessions (landed + unlanded,
+  workers **and** `scratch-<N>` sessions) from the history ledger, reconstructing a
+  reaped worktree off the recorded SHA so `claude --resume` still works.
 - **`/fleet-handoff`** (either) — bridge long-running work across a context-window
   boundary: write a durable handoff, then `/clear` and pick it up clean.
 - **`/fleet-sync-install`** (either, any fleet) — after claude-fleet's
