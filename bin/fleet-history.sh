@@ -65,7 +65,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" 2>/dev/null || true
 
 C="${TMPDIR:-/tmp}/.claude-dash/global"   # dash summary cache lives here (summary_<winid>, issue #181)
-PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 # --- ledger location: per-fleet (a fleet ≡ a repo), durable across reboots -----
 # ~/.claude/fleet/logs survives a TMPDIR wipe; keyed by repo slug so two fleets
@@ -81,15 +80,12 @@ ledger_path() {
 # strip TAB/CR/LF so a free-text field can't break the TSV row layout.
 oneline() { printf '%s' "${1:-}" | tr '\t\r\n' '   ' ; }
 
-# worktree path → transcript dir under ~/.claude/projects. Claude Code encodes a
-# cwd into its project-dir name by replacing EVERY non-alphanumeric byte with '-'
-# (verified on-disk: '/', '.', '_' and spaces all collapse to '-'), not just '/'.
-# LC_ALL=C so tr's class is byte-wise ASCII — matches the CLI's per-char rule for
-# the (near-universal) ASCII path case.
+# worktree path → transcript dir under ~/.claude/projects. The encoding rule
+# lives in fleet_transcript_dir (bin/fleet-lib.sh) so this and bin/fleet-context.sh
+# share ONE copy of it; the helper honours the same CLAUDE_PROJECTS_DIR override
+# this script used to read directly.
 transcript_dir_for() {
-  local wt="${1:-}"; [ -z "$wt" ] && return 0
-  local enc; enc=$(printf '%s' "$wt" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
-  printf '%s/%s' "$PROJECTS" "$enc"
+  fleet_transcript_dir "${1:-}"
 }
 
 # newest *.jsonl session id in a transcript dir (basename sans .jsonl), or empty.

@@ -47,6 +47,14 @@ Branch on the argument: `pickup <path>` → **§P**; anything else → **§C**.
 
 ## §C. Cycle mode (no argument) — hand off, then arm the auto-clear
 
+> **Not sure it's time yet?** You can't see your own context meter — Claude Code
+> shows it to the human, not to the model — so don't estimate it. Read it:
+> `~/.claude/fleet/bin/fleet-context.sh` (or [`/fleet-context`](fleet-context.md),
+> issue #464) prints the percentage and a verdict on the same bands the
+> auto-handoff nudge uses. `HANDOFF` ⇒ proceed with C1 below; `OK` ⇒ you have room,
+> keep working. This is a check *before* handing off, never a gate on one the
+> operator or the Stop hook already asked for.
+
 ### C1. Compose the handoff doc — delegate to the base skill
 
 Run the repo-shipped base skill **`~/.claude/skills/handoff/SKILL.md` HAND-OFF

@@ -143,7 +143,13 @@ override them):
   it in THIS worktree** — one worktree, one issue, one PR. A spawned worker
   claims and ships it on its own.
 - **Hand off before you run out of context.** When the window fills, run
-  `/fleet-handoff` — it writes a durable handoff and cycles the pane.
+  `/fleet-handoff` — it writes a durable handoff and cycles the pane. You can't
+  see your own context meter (Claude Code shows it to the human, not the model),
+  so when you're unsure whether there's room for one more expensive sweep, **ask**
+  — `/fleet-context`, or its one-line read
+  `~/.claude/fleet/bin/fleet-context.sh` (issue #464). It prints a verdict on the
+  same bands the auto-handoff nudge uses: `WATCH` means finish this thread and
+  hand off rather than starting a broad sweep, `HANDOFF` means do it now.
 - **Done = ship it AND land it.** You own the change end to end — nobody is
   queued up to merge it for you (issue #441). When the change is complete:
   1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
