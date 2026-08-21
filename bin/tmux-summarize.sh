@@ -37,8 +37,11 @@ command -v claude >/dev/null 2>&1 || exit 0
 # and settings intact (`--bare` is faster still but drops the login). Both call sites
 # swallow stderr, so FLEET_HELPER_NO_MCP=0 is the no-edit escape hatch if a future
 # CLI ever changes what these flags mean.
+# =form, not two words: --mcp-config is variadic and would otherwise swallow a
+# following positional (issue #476). Harmless here (the prompt arrives on stdin),
+# kept identical to fleet-claude.sh so the safe shape is the one shape.
 NOMCP=()
-[ "${FLEET_HELPER_NO_MCP:-1}" = 1 ] && NOMCP=(--strict-mcp-config --mcp-config '{"mcpServers":{}}')
+[ "${FLEET_HELPER_NO_MCP:-1}" = 1 ] && NOMCP=(--strict-mcp-config '--mcp-config={"mcpServers":{}}')
 
 # Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. In
 # --window mode the socket is inherited from $TMUX (the Stop/SessionStart hook

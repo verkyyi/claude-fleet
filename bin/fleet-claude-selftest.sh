@@ -16,6 +16,16 @@
 #   #473 — FLEET_MCP_CONFIG selects which MCP servers a fleet's sessions boot:
 #          unset → everything (unchanged), `none` → nothing, else → only those.
 #
+#   #476 — and it must not EAT THE SEED PROMPT. `--mcp-config <configs...>` is
+#          VARIADIC: in the separated form it reaches past its own value and
+#          swallows the following positional. Every issue-bound spawn passes the
+#          seed prompt positionally (`fleet-claude.sh "$(cat …)"`), so #473 shipped
+#          with every worker dying at launch on `MCP config file not found:
+#          /fleet-claim` — while a raw ⌃s scratch, which passes NO positional, kept
+#          working. That asymmetry is why it got through: the pre-landing check and
+#          this selftest both exercised the no-positional path only. The fix is the
+#          =form (`--mcp-config=<v>`), which cannot reach past the flag.
+#
 # Both must stay INERT by default (an unset key changes no argv) and must yield to
 # an explicit caller flag, the rule --model already follows.
 #
@@ -129,8 +139,8 @@ ok "an inline-JSON allowlist passes through with --strict-mcp-config"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s/mcp.json"\n' "$WORK" > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
-has "$argv" "--mcp-config $WORK/mcp.json" || fail "a file path was not passed through verbatim" "$argv"
-ok "a file path passes through verbatim (the CLI takes either form)"
+has "$argv" "--mcp-config=$WORK/mcp.json" || fail "a file path was not passed through verbatim" "$argv"
+ok "a file path passes through verbatim, in the =form (the CLI takes either value shape)"
 
 # an explicit caller flag wins over the conf
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
@@ -143,4 +153,26 @@ argv="$(run --strict-mcp-config)"
 case "$argv" in *'{"mcpServers":{}}'*) fail "the conf added its own config despite --strict-mcp-config" "$argv" ;; esac
 ok "an explicit --strict-mcp-config from the caller is left alone"
 
-printf 'selftest OK: %s checks — the launcher reads the per-fleet conf and honours FLEET_MCP_CONFIG (issues #472, #473)\n' "$pass"
+# --- #476: the seed prompt must survive, in EVERY config form ----------------
+# `--mcp-config <v>` (separated) is variadic and ate the positional that follows —
+# which is the seed prompt on every issue-bound spawn. Assert the prompt arrives
+# intact, and that the flag is emitted in the =form that makes that structural.
+SEED='/fleet-claim'
+for cfg in none '{"mcpServers":{}}' "$WORK/mcp.json"; do
+  printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG=%s\n' "'$cfg'" > "$WORK/conf/fleets/f1/conf"
+  argv="$(run "$SEED")"
+  has "$argv" "$SEED" || fail "the seed prompt was swallowed with FLEET_MCP_CONFIG=$cfg" "$argv"
+  case "$argv" in
+    *"--mcp-config="*) : ;;
+    *) fail "--mcp-config must use the =form or it eats the positional (FLEET_MCP_CONFIG=$cfg)" "$argv" ;;
+  esac
+done
+ok "the seed prompt survives every FLEET_MCP_CONFIG form (=form, not separated)"
+
+# a multi-word prompt with spaces stays ONE argument
+printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$(run 'Work GitHub issue #2109 in this repo')"
+case "$argv" in *"Work GitHub issue #2109 in this repo"*) : ;; *) fail "a multi-word prompt was mangled" "$argv" ;; esac
+ok "a multi-word seed prompt passes through intact"
+
+printf 'selftest OK: %s checks — the launcher reads the per-fleet conf and honours FLEET_MCP_CONFIG (issues #472, #473, #476)\n' "$pass"

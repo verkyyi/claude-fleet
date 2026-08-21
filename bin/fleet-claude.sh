@@ -73,7 +73,15 @@ if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
     *)
       _fc_mcp="$FLEET_MCP_CONFIG"
       [ "$_fc_mcp" = none ] && _fc_mcp='{"mcpServers":{}}'
-      mcp_flag=(--strict-mcp-config --mcp-config "$_fc_mcp")
+      # --mcp-config=<v>, NOT --mcp-config <v>: the option is VARIADIC
+      # (`--mcp-config <configs...>`), so in the separated form it swallows
+      # whatever positional follows it. Every issue-bound spawn passes the seed
+      # prompt positionally (dash-issue-session.sh: `fleet-claude.sh "$(cat …)"`),
+      # so the separated form read the PROMPT as a second config path and every
+      # worker died at launch with `MCP config file not found: /fleet-claim`. The
+      # =form binds the value to the flag and cannot reach past it, whatever
+      # follows. Do not "tidy" it back into two words.
+      mcp_flag=(--strict-mcp-config "--mcp-config=$_fc_mcp")
       unset _fc_mcp
       ;;
   esac
