@@ -8,7 +8,10 @@
 #   • SELF (#425)    an OWNER comment carrying `<!-- fleet:from role=worker
 #                    issue=<N> -->` on issue N (a worker's own comment that skipped
 #                    the no-relay wrapper) is SUPPRESSED — the positive self-ID
-#                    backstop, so it is never relayed back into that worker.
+#                    backstop, so it is never relayed back into that worker. A
+#                    role=worker marker with NO issue= field is also suppressed
+#                    (#483, unattributable), while a DIFFERENT issue= (genuine
+#                    cross-worker mail) still relays.
 #   • ASSOCIATION    a NONE/CONTRIBUTOR comment is SUPPRESSED (the RCE gate).
 #   • IDLE-GATE      a comment on a WORKING worker is QUEUED (not injected) and
 #                    the watermark holds it for retry — while a LATER comment on
@@ -20,8 +23,10 @@
 # The scenario (repo fake/repo): worker windows for #10 (idle=done) and #11
 # (working). Comments, ascending: c100 #10 OWNER→relay, c101 #10 marker→suppress,
 # c102 #10 NONE→suppress, c103 #11 OWNER→queued(busy), c104 #10 COLLABORATOR→relay,
-# c105 #10 OWNER+fleet:from-role=worker-issue=10→suppress(self). Expected injections
-# after one poll: exactly two, both into #10 (c100, c104).
+# c105 #10 OWNER+fleet:from-role=worker-issue=10→suppress(self), c106 #10
+# OWNER+fleet:from-role=worker-NO-issue=→suppress(self, issue #483), c107 #10
+# OWNER+fleet:from-role=worker-issue=11→relay (cross-worker). Expected injections
+# after one poll: exactly three, all into #10 (c100, c104, c107).
 #
 # Needs `jq` (the fake gh applies the bridge's real --jq through it) — SKIPs
 # cleanly if jq is absent. The --deliver HMAC leg also needs python3; it SKIPs
@@ -132,7 +137,9 @@ cat > "$CANNED" <<JSON
  {"id":102,"author_association":"NONE","user":{"login":"rando"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:03Z","body":"sneaky rm -rf"},
  {"id":103,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/11","updated_at":"2026-07-09T00:00:04Z","body":"for the busy one"},
  {"id":104,"author_association":"COLLABORATOR","user":{"login":"pal"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:05Z","body":"another instruction"},
- {"id":105,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:06Z","body":"worker self note, no no-relay flag\n\n<!-- fleet:from role=worker session=fake-repo issue=10 -->"}
+ {"id":105,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:06Z","body":"worker self note, no no-relay flag\n\n<!-- fleet:from role=worker session=fake-repo issue=10 -->"},
+ {"id":106,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:07Z","body":"unattributable worker note, no issue field\n\n<!-- fleet:from role=worker session=fake-repo -->"},
+ {"id":107,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/10","updated_at":"2026-07-09T00:00:08Z","body":"cross-worker instruction from eleven\n\n<!-- fleet:from role=worker session=fake-repo issue=11 -->"}
 ]
 JSON
 
@@ -166,9 +173,9 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
 : > "$WORK/log"
 runbridge --poll || fail "poll run exited non-zero"
 
-# exactly two Enter submissions (one per relayed comment)
+# exactly three Enter submissions (one per relayed comment: c100, c104, c107)
 enters=$(grep -c 'send-keys -t @1 Enter' "$INJECT" 2>/dev/null || echo 0)
-[ "$enters" = 2 ] || fail "expected 2 injections into @1, got $enters"
+[ "$enters" = 3 ] || fail "expected 3 injections into @1, got $enters"
 # the two relayed bodies are present, the suppressed/queued ones are not
 grep -qF 'please do X' "$INJECT"        || fail "c100 (OWNER, idle) should relay"
 grep -qF 'another instruction' "$INJECT" || fail "c104 (COLLABORATOR, idle) should relay"
@@ -181,10 +188,17 @@ grep -qF 'for the busy one' "$INJECT" && fail "c103 (worker WORKING) must be que
 # OWNER (passes the assoc gate), proving it's the self-ID check — not the gate — that
 # stops it. Without the backstop it would be a THIRD injection into @1.
 grep -qF 'worker self note' "$INJECT" && fail "c105 (self-authored, fleet:from issue=10) must be suppressed"
+# c106 is `role=worker` with NO issue= field (issue #483): unattributable — it can't
+# prove it is NOT the bound worker's own comment, so it must be suppressed. c107 is
+# genuine cross-worker mail (`role=worker issue=11` on issue #10 — worker 11 driving
+# worker 10) and must still RELAY — proving the #483 hardening keys on the MISSING
+# field, not on role=worker itself.
+grep -qF 'unattributable worker note' "$INJECT" && fail "c106 (role=worker, no issue= field) must be suppressed (issue #483)"
+grep -qF 'cross-worker instruction from eleven' "$INJECT" || fail "c107 (cross-worker, issue=11 → #10) must relay"
 
 # seen set: relayed+suppressed are recorded; the queued (busy) one is NOT.
 SEEN="$WORK/state/bridge_fake-repo.seen"
-for id in 100 101 102 104 105; do grep -qxF "$id" "$SEEN" || fail "c$id should be marked seen"; done
+for id in 100 101 102 104 105 106 107; do grep -qxF "$id" "$SEEN" || fail "c$id should be marked seen"; done
 grep -qxF 103 "$SEEN" && fail "c103 (queued busy) must NOT be marked seen (retry next tick)"
 # c103 is queued (pending), so the watermark must be HELD at its pre-tick value
 # (GitHub's ?since= is exclusive — advancing to c103's own timestamp would never

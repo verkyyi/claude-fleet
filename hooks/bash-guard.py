@@ -8,7 +8,9 @@ Claude Code never prompts before a Bash call. For the handful of commands that
 are genuinely irreversible, this deny-list is the only thing between a stray
 token and a destroyed working tree. It ships GENERIC rails only — the ones that
 are dangerous in ANY repo (rm -rf on / ~ .git; a force-push onto the base
-branch). Operator-specific rails (prod hosts, DB/k8s guards) live in a local
+branch) — plus the fleet messaging rails (raw `tmux send-keys`, issue #437; raw
+`gh issue comment` from a fleet pane, issue #483), which self-scope to fleet
+context. Operator-specific rails (prod hosts, DB/k8s guards) live in a local
 overlay, `~/.claude/hooks/bash-guard-local.py`, that this skeleton runs if
 present and NEVER ships (see the OVERLAY section at the bottom).
 
@@ -32,7 +34,7 @@ FALSE-POSITIVE DISCIPLINE — the hard-won engineering this skeleton keeps:
   * The guard fails OPEN on any internal error — a deny-list bug must never take
     every session down with it.
 """
-import sys, re, json, os
+import sys, re, json, os, subprocess
 
 
 def allow():
@@ -72,6 +74,38 @@ def _base_branches():
     if bb:
         names.add(bb)
     return names
+
+
+# Is this hook running inside a FLEET pane? True when the seat exports FLEET_MAIN
+# (free), else when the pane's tmux session owns a fleet conf — a fleet is created
+# by fleet-up, which writes fleets/<sess>/conf (or the legacy <sess>.conf); an
+# ad-hoc tmux session on the default socket is NOT a fleet. Only consulted after a
+# rule's cheap regex already matched, so the tmux subprocess stays off the hot
+# path. Any failure ⇒ False (fail open — a non-fleet session keeps raw gh).
+def _in_fleet_pane():
+    if os.environ.get("FLEET_MAIN", "").strip():
+        return True
+    if not os.environ.get("TMUX"):
+        return False
+    cmd = ["tmux", "display-message", "-p"]
+    pane = os.environ.get("TMUX_PANE", "")
+    if pane:
+        cmd += ["-t", pane]
+    cmd.append("#{session_name}")
+    try:
+        sess = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+    except Exception:
+        return False
+    if not sess:
+        return False
+    conf_dir = os.environ.get("FLEET_CONF_DIR", "").strip() or os.path.expanduser(
+        "~/.config/claude-fleet"
+    )
+    return os.path.isfile(
+        os.path.join(conf_dir, "fleets", sess, "conf")
+    ) or os.path.isfile(os.path.join(conf_dir, sess + ".conf"))
 
 
 def check_segment(seg):
@@ -120,6 +154,31 @@ def check_segment(seg):
                 "--to-worker` (the issue-bridge), not `tmux send-keys` "
                 "(bracketed-paste eats the Enter). Prefix FLEET_ALLOW_SENDKEYS=1 "
                 "only for sanctioned fleet plumbing"
+            )
+
+    # 4) A raw `gh issue comment` from a FLEET pane must go through
+    #    `fleet-comment.sh` instead (issue #483). Every fleet actor comments as
+    #    the SAME gh account, so the issue-bridge cannot tell a worker's own
+    #    unmarked comment from a real human handback — an unmarked comment on the
+    #    worker's bound issue passes the trust gate and is relayed BACK into that
+    #    worker as a spurious self-turn. The wrapper stamps the no-relay /
+    #    provenance markers the bridge filters on, so provenance must be stamped
+    #    at the SOURCE — this rail is what guarantees it. Anchored right after
+    #    the gh command (tolerating flag tokens) so `issue comment` inside a
+    #    quoted body never trips it; scoped to fleet panes so non-fleet sessions
+    #    keep raw gh. FLEET_ALLOW_RAW_COMMENT=1 is the sanctioned hatch (e.g. a
+    #    comment on a repo no fleet serves), mirroring FLEET_ALLOW_SENDKEYS.
+    #    (fleet-comment.sh's own internal `gh issue comment` runs in a script
+    #    subprocess this layer never sees — no per-script hatch needed.)
+    if re.match(r"\s*(?:sudo\s+|\w+=\S+\s+)*gh\b(?:\s+(?:-\S+|\S+=\S+))*\s+issue\s+comment\b", seg):
+        if not re.search(r"(?:^|\s)fleet_allow_raw_comment=1(?=\s|$)", seg) and _in_fleet_pane():
+            block(
+                "raw `gh issue comment` from a fleet pane — post through "
+                "`~/.claude/fleet/bin/fleet-comment.sh <issue> --note --body …` "
+                "(or --to-worker to deliberately drive the bound worker). An "
+                "unmarked comment relays back into the bound worker as a "
+                "spurious turn (issue #483). Prefix FLEET_ALLOW_RAW_COMMENT=1 "
+                "only for a repo no fleet serves"
             )
 
     # Operator-specific rails, if the local overlay defines any (never shipped).
