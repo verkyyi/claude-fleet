@@ -173,6 +173,18 @@ so it too is browsable + resumable via `/fleet-history`. Such a worktree is
 unmerged, so worktree-autoclean keeps it → resume just reuses the on-disk worktree.
 It **records only** — never a reaper.
 
+**The dash ⌃x reaper** (issue #471): ⌃x is the one disposal path no other writer
+covers in time — the SessionEnd hook does not fire (a `kill-window` is not a
+walk-away exit) and ledger-watch only notices ~60s later, by which point the
+worktree is gone and the row it writes has no sha to rebuild from. So ⌃x records
+the row itself, before it removes anything: a merged-PR reap writes a `landed`
+row (PR resolved from the branch), and ancestor / force-reaped-unmerged / dirty
+write `closed-unlanded`. The gate verdict is computed on the interactive pass and
+**threaded into** the backgrounded reap rather than re-derived there — a second
+`fleet_reap_ok` could disagree with what the operator just confirmed. Caveat: on a
+force-reaped *unmerged* row the recorded sha is unreachable once the branch is
+deleted, so the rebuild works only until `git gc` prunes it (~2 weeks).
+
 **Scratch sessions** (issue #466): an `@raw` scratch has no issue, so nothing keyed
 by an issue number could index it — its transcript used to be dropped on the floor
 the moment its window closed (and its clean worktree pruned silently). It is now

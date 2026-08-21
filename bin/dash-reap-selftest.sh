@@ -23,6 +23,13 @@
 #        • confirm y on dirty                  → KEEP worktree, close + kill only
 #        • confirm y on clean+unmerged         → FULL reap
 #        • confirm n                           → no side effects
+#        • EVERY worker reap RECORDS a /fleet-history row before disposing (#471):
+#          the gate verdict is threaded into the backgrounded --exec dispatch, so a
+#          merged-PR reap writes a `landed` row (PR resolved from the branch) and
+#          ancestor/unmerged/dirty write `closed-unlanded` — each carrying the HEAD
+#          sha, which is the proof the row was written pre-removal. A verdict-less
+#          dispatch (pre-#471 string in flight) records nothing; a CANCELLED reap
+#          records nothing.
 #        • ⌃x on a raw scratch row (@raw=1, no @issue) — the session is RECORDED into
 #          the /fleet-history ledger before any disposal (#466); issue #290 the scratch owns
 #          a `scratch-<N>` worktree (resolved via @worktree), reaped by the SAME
@@ -46,7 +53,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dr-selftest.XXXXXX")" || exit 2
+# Physical path (macOS /var → /private/var): git reports worktrees by their real
+# path, and the /fleet-history assertions (#471) encode that path into a
+# transcript-dir name — a symlinked $WORK would encode to a dir that never matches.
 trap 'rm -rf "$WORK"' EXIT
+WORK="$(cd "$WORK" && pwd -P)"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
@@ -70,6 +81,13 @@ git -C "$BASEDIR" worktree add -q -b issue-3 "$WORK/wt3" >/dev/null 2>&1
 printf 'y\n' > "$WORK/wt3/h"; git -C "$WORK/wt3" add h; git -C "$WORK/wt3" commit -qm work3
 printf 'dirt\n' > "$WORK/wt3/untracked"
 H3="$(git -C "$WORK/wt3" rev-parse HEAD)"
+# issue-7: clean, divergent commit, and the fake gh reports a MERGED PR for its
+# branch ⇒ merged-pr — the only verdict that records a `landed` row (#471).
+git -C "$BASEDIR" worktree add -q -b issue-7 "$WORK/wt7" >/dev/null 2>&1
+printf 'z\n' > "$WORK/wt7/i"; git -C "$WORK/wt7" add i; git -C "$WORK/wt7" commit -qm work7
+# issue-8: clean, tip == base ⇒ ancestor. Used only to prove that a dispatch with
+# NO verdict (an in-flight pre-#471 bg string) records nothing.
+git -C "$BASEDIR" worktree add -q -b issue-8 "$WORK/wt8" >/dev/null 2>&1
 
 # --- A. fleet_reap_ok direct assertions ---------------------------------------
 . "$BIN/fleet-lib.sh"
@@ -121,11 +139,22 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 
-# fake gh: pr list → empty (rely on ancestor); issue view → OPEN; issue close → log.
+# fake gh: a MERGED PR exists only for issue-7 (headRefName for the reap gate,
+# number 7700 for fleet_reap_record's branch→PR resolution, #471); every other
+# branch gets nothing, so the gate falls through to ancestor/unmerged as before.
+# issue view → OPEN; issue close → log.
 cat > "$WORK/fakepath/gh" <<'FAKE'
 #!/bin/bash
 case "$*" in
-  *"pr list"*)     : ;;
+  *"pr list"*)
+    head=""; prev=""
+    for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
+    if [ "$head" = issue-7 ]; then
+      case "$*" in
+        *"--json number"*)      printf '7700\n' ;;
+        *"--json headRefName"*) printf 'issue-7\n' ;;
+      esac
+    fi ;;
   *"issue view"*)  printf 'OPEN\n' ;;
   *"issue close"*) printf 'CLOSE %s\n' "$*" >> "$GHLOG" ;;
 esac
@@ -143,6 +172,16 @@ PROJECTS="$WORK/projects"; mkdir -p "$PROJECTS"
 enc() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9' '-'; }
 transcript_for() { mkdir -p "$PROJECTS/$(enc "$1")"; : > "$PROJECTS/$(enc "$1")/sess-$2.jsonl"; }
 srows() { awk -F'\t' -v k="$1" '$2==k' "$LEDGER" | wc -l | tr -d ' '; }
+# state (col 10) / pr (col 4) / sha (col 5) of the row for a key.
+scol() { awk -F'\t' -v k="$1" -v c="$2" '$2==k{print $c}' "$LEDGER"; }
+# Surviving transcripts for the WORKER fixtures too (#471): record-closed / record
+# skip a worktree with no resolvable session, so without these the ledger
+# assertions below would pass vacuously.
+transcript_for "$WORK/wt1" 1
+transcript_for "$WORK/wt2" 2
+transcript_for "$WORK/wt3" 3
+transcript_for "$WORK/wt7" 7
+transcript_for "$WORK/wt8" 8
 
 run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base checkout
   local iss="$1"; shift
@@ -190,6 +229,38 @@ grep -q 'RUNSHELL .*--exec full' "$TMLOG" || fail "merged reap must be dispatche
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch should be deleted"
 grep -q 'CLOSE' "$GHLOG" || fail "merged reap should close the issue"
 grep -q 'KILL' "$TMLOG" || fail "merged reap should kill the window"
+# #471: the GATE verdict rides along to the bg pass, which records the row BEFORE
+# the removal. issue-1 is an ancestor (no PR) → a closed-unlanded row carrying the
+# HEAD sha — the sha is the proof it was written while the worktree still stood.
+grep -qE "RUNSHELL .*--exec full '?ancestor'?" "$TMLOG" || fail "the gate verdict must be threaded into the bg dispatch" "$(cat "$TMLOG")"
+[ "$(srows 1)" = 1 ] || fail "⌃x on a worker must record ONE /fleet-history row" "$(cat "$LEDGER")"
+[ "$(scol 1 10)" = closed-unlanded ] || fail "an ancestor reap must record a closed-unlanded row (got [$(scol 1 10)])" "$(cat "$LEDGER")"
+case "$(scol 1 5)" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fail "the row must carry the worktree HEAD sha (recorded pre-removal)" "$(cat "$LEDGER")" ;; esac
+
+# B4b (#471): ⌃x on a clean row whose branch HAS a merged PR → `merged-pr` verdict →
+# a LANDED row with the PR resolved from the branch (7700), recorded before the
+# worktree is removed. This is the path that must not be re-derived in the bg pass.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap "7" "s1:7"
+grep -qE "RUNSHELL .*--exec full '?merged-pr'?" "$TMLOG" || fail "a merged-PR reap must thread the merged-pr verdict" "$(cat "$TMLOG")"
+[ -d "$WORK/wt7" ] && fail "merged-PR worktree should be removed"
+[ "$(srows 7)" = 1 ] || fail "a merged-PR ⌃x must record ONE row" "$(cat "$LEDGER")"
+[ "$(scol 7 10)" = landed ] || fail "a merged-PR reap must record a LANDED row (got [$(scol 7 10)])" "$(cat "$LEDGER")"
+[ "$(scol 7 4)" = 7700 ] || fail "the landed row must carry the branch's resolved PR 7700 (got [$(scol 7 4)])" "$(cat "$LEDGER")"
+
+# B4c (#471): a dispatch with NO verdict — an --exec string queued by a pre-#471
+# install — records NOTHING rather than inventing a row kind. The reap itself still
+# happens, so the upgrade is never a behavior regression.
+: > "$TMLOG"; : > "$GHLOG"
+ISS=8 TMLOG="$TMLOG" GHLOG="$GHLOG" \
+FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
+FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
+FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
+PATH="$WORK/fakepath:$PATH" \
+  bash "$BIN/dash-reap.sh" "s1:8" --exec full
+[ -d "$WORK/wt8" ] && fail "a verdict-less --exec must still reap the worktree"
+[ "$(srows 8)" = 0 ] || fail "a verdict-less --exec must record NO row (no invented state)" "$(cat "$LEDGER")"
 
 # B5: confirm y on dirty (issue-3) → KEEP worktree, close + kill only
 : > "$TMLOG"; : > "$GHLOG"
@@ -197,6 +268,11 @@ printf 'y' | run_reap "3" "s1:3" confirm
 [ -d "$WORK/wt3" ] || fail "confirmed reap on dirty must KEEP the worktree"
 grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap on dirty should close the issue"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on dirty should kill the window"
+# #471: the confirm path threads its verdict too — a KEPT dirty worktree is exactly
+# the resumable case the ledger row exists for.
+grep -qE "RUNSHELL .*--exec keep '?dirty'?" "$TMLOG" || fail "the confirm path must thread the dirty verdict" "$(cat "$TMLOG")"
+[ "$(srows 3)" = 1 ] || fail "a confirmed dirty reap must record ONE closed-unlanded row" "$(cat "$LEDGER")"
+[ "$(scol 3 10)" = closed-unlanded ] || fail "a dirty reap row must be closed-unlanded (got [$(scol 3 10)])"
 
 # B6: confirm y on clean+unmerged (issue-2) → full reap (relaxes merged)
 : > "$TMLOG"; : > "$GHLOG"
@@ -204,6 +280,12 @@ printf 'y' | run_reap "2" "s1:2" confirm
 [ -d "$WORK/wt2" ] && fail "confirmed reap on clean+unmerged should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
 grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap should close the issue"
+# #471: a force-reaped unmerged worker is indexed WITH its sha before the removal.
+# (That sha lives only until git gc prunes the now-unreachable commit — documented
+# in dash-reap.sh's reap_record; the row is still strictly better than none.)
+[ "$(srows 2)" = 1 ] || fail "a confirmed unmerged reap must record ONE row" "$(cat "$LEDGER")"
+case "$(scol 2 5)" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fail "the unmerged reap row must carry the HEAD sha (recorded pre-removal)" "$(cat "$LEDGER")" ;; esac
 
 # B7: confirm 'n' (cancel) → no side effects
 git -C "$BASEDIR" worktree add -q -b issue-4 "$WORK/wt4" >/dev/null 2>&1
@@ -212,6 +294,7 @@ printf 'n' | run_reap "4" "s1:4" confirm
 [ -d "$WORK/wt4" ] || fail "cancelled reap must keep the worktree"
 grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
 [ -s "$GHLOG" ] && fail "cancelled reap must not touch gh"
+[ "$(srows 4)" = 0 ] || fail "a CANCELLED reap must not record a row (the session is still live)" "$(cat "$LEDGER")"
 
 # B8: ⌃x on a raw scratch row (@raw=1, no @issue, no @worktree) → DEGRADE to the
 # pre-#290 behavior: just close the window. No refuse, the dash summary-cache seed
@@ -220,13 +303,15 @@ grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
 CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
 SEED="$CACHE/summary_s1_9"; printf 'scratch (raw session)' > "$SEED"
 : > "$TMLOG"; : > "$GHLOG"
+rows_before="$(wc -l < "$LEDGER" | tr -d ' ')"   # the worker cases above populated it (#471)
 RAW=1 WID='@9' WT='' run_reap "" "s1:9"
 grep -q 'KILL' "$TMLOG" || fail "raw ⌃x (no worktree) should kill the scratch window"
 grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothing to reap')"
 grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
 [ -e "$SEED" ] && fail "raw ⌃x should remove the summary-cache seed"
 [ -s "$GHLOG" ] && fail "raw ⌃x (no worktree) must not touch gh (no issue/PR lifecycle)"
-[ -s "$LEDGER" ] && fail "raw ⌃x with no worktree has nothing to index — no ledger row" "$(cat "$LEDGER")"
+[ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$rows_before" ] \
+  || fail "raw ⌃x with no worktree has nothing to index — no NEW ledger row" "$(cat "$LEDGER")"
 
 # B8b: ⌃x on a scratch row WITH a clean+ancestor worktree (issue #290) → close the
 # window AND remove the scratch worktree + branch. No issue/gh close (scratch has
@@ -301,5 +386,5 @@ case "$cx" in
   *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
 esac
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths (recorded before disposal) + non-blocking ⌃x bind (#289+#290+#313+#466)\n'
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + worker & scratch rows recorded before disposal + non-blocking ⌃x bind (#289+#290+#313+#466+#471)\n'
 exit 0
