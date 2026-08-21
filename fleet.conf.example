@@ -353,6 +353,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-handoff percent @group=handoff @tier=advanced @scope=fleet @edit=int @unit=%
 #FLEET_AUTO_HANDOFF_PCT=0        # context % that triggers an auto-handoff; 0 = OFF
 
+# The size of the model's context window, in tokens — the denominator
+# bin/fleet-context.sh (/fleet-context, issue #464) uses when it DERIVES a
+# percentage from the session transcript. Only a fallback: when conf/statusline.sh
+# has stamped @ctx_pct on the pane, Claude Code's own percentage wins and this is
+# ignored. Raise it for a long-context model (e.g. 1000000) so the derived figure
+# and the WATCH/HANDOFF bands stay honest; the default matches the standard window.
+# @label=Context window tokens @group=handoff @tier=advanced @scope=fleet @edit=int
+#FLEET_CONTEXT_LIMIT=200000      # context-window size used to derive a % from the transcript
+
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each
 # account as a token FILE — name = label, contents = its OAuth token from

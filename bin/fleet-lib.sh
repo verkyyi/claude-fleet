@@ -499,6 +499,22 @@ $(fleet_sockets)
 EOF
 }
 
+# A Claude session's transcript lives at
+# `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Claude Code encodes a
+# cwd into that project-dir name by replacing EVERY non-alphanumeric byte with
+# '-' (verified on-disk: '/', '.', '_' and spaces all collapse to '-'), not just
+# '/'. LC_ALL=C so tr's class is byte-wise ASCII — matches the CLI's per-char rule
+# for the (near-universal) ASCII path case. Honours CLAUDE_PROJECTS_DIR so a test
+# can point the whole lookup at a temp tree.
+# Shared by bin/fleet-history.sh (resolve a REAPED worker's surviving transcript)
+# and bin/fleet-context.sh (resolve the CALLER's own live one, issue #464) — one
+# copy of the encoding rule, so the two can't drift.
+fleet_transcript_dir() {
+  local wt="${1:-}"; [ -z "$wt" ] && return 0
+  local enc; enc=$(printf '%s' "$wt" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+  printf '%s/%s' "${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}" "$enc"
+}
+
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside an
