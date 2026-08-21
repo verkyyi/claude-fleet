@@ -15,13 +15,27 @@
 #                conf/statusline.sh on every render (issue #330's measurement
 #                bus). Authoritative — it accounts for the autocompact reserve —
 #                but only present once a statusline has rendered in this pane.
+#                @ctx_limit rides the same bus (#477): the window SIZE, which
+#                Claude Code hands to the statusline and to nothing else.
 #   transcript   the session's own ~/.claude/projects/<enc-cwd>/<sid>.jsonl. The
 #                LAST main-thread assistant record's usage block sums to the live
 #                context (input + cache_creation + cache_read + output); that is
 #                exactly what the next request re-sends. Always available, and it
 #                also yields turn count, session output tokens and the pre-compact
-#                peak — but its percentage is DERIVED against FLEET_CONTEXT_LIMIT,
-#                so it reads a little LOWER than Claude Code's own number.
+#                peak — but its percentage is DERIVED against a denominator this
+#                script has to be told, so it reads a little LOWER than Claude
+#                Code's own number (which reserves headroom for autocompact).
+#
+# The denominator, best first (issue #477): @ctx_limit (stamped, follows the
+# model) → FLEET_CONTEXT_LIMIT (a per-fleet constant) → 200000. Getting it wrong
+# is not a rounding error: a 1M-window session measured against 200k reads 197%
+# and a false HANDOFF, so the `context` line always names which one it used.
+#
+# A DEAD BUS is reported, not silently absorbed (issue #477). Inside tmux with no
+# @ctx_pct stamp, this pane's statusline is not the fleet's stamping one — which
+# also means bin/set-claude-state.sh reads -1 at every Stop and the auto-handoff
+# nudge (#330) CANNOT fire. That failure is invisible by construction, so the
+# `bus` line says so.
 # Sidechain (subagent) records are excluded: a fanned-out Explore agent's context
 # is not this session's. A `/clear` or an autocompact simply moves the last
 # record, so the live figure follows it down with no special case.
@@ -65,13 +79,12 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# --- the context window denominator ------------------------------------------
-# Only ever used for the DERIVED percentage (the @ctx_pct stamp needs no
-# denominator). Default 200k = the standard window; a fleet running a long-context
-# model sets FLEET_CONTEXT_LIMIT to match.
-LIMIT="${FLEET_CONTEXT_LIMIT:-200000}"
-case "$LIMIT" in ''|*[!0-9]*) LIMIT=200000 ;; esac
-[ "$LIMIT" -gt 0 ] || LIMIT=200000
+# --- the context window denominator (resolved below, after the stamps are read) -
+# Only ever used for the DERIVED percentage (the @ctx_pct stamp needs none). The
+# conf value is the MIDDLE of the chain — see resolve-the-limit further down.
+CONF_LIMIT="${FLEET_CONTEXT_LIMIT:-}"
+case "$CONF_LIMIT" in ''|*[!0-9]*) CONF_LIMIT="" ;; esac
+[ -n "$CONF_LIMIT" ] && [ "$CONF_LIMIT" -le 0 ] && CONF_LIMIT=""
 
 # --- resolve the transcript ---------------------------------------------------
 # 1) an explicit --transcript wins (the selftest's path, and a hand inspection).
@@ -91,12 +104,27 @@ if [ -z "$tpath" ]; then
   fi
 fi
 
-# --- read the pane's statusline stamp ----------------------------------------
-stamp=""
-if [ -n "${TMUX:-}" ] && [ -n "$pane" ]; then
+# --- read the pane's statusline stamps ---------------------------------------
+# in_tmux tells "no stamp because we are not in a pane" from "no stamp because the
+# statusline is not the stamping one" — only the second is a dead bus (#477).
+in_tmux=0
+[ -n "${TMUX:-}" ] && [ -n "$pane" ] && in_tmux=1
+stamp="" stamp_limit=""
+if [ "$in_tmux" = 1 ]; then
   stamp=$(tmux display-message -p -t "$pane" '#{@ctx_pct}' 2>/dev/null)
+  stamp_limit=$(tmux display-message -p -t "$pane" '#{@ctx_limit}' 2>/dev/null)
 fi
 case "$stamp" in ''|*[!0-9]*) stamp="" ;; esac
+case "$stamp_limit" in ''|*[!0-9]*) stamp_limit="" ;; esac
+[ -n "$stamp_limit" ] && [ "$stamp_limit" -le 0 ] && stamp_limit=""
+
+# Bus state (issue #477): `ok` when this pane carries a stamp; `unstamped` when we
+# ARE in a pane and it does not — the silent failure that also switches off the
+# auto-handoff nudge; `n/a` outside tmux, where there is nothing to expect.
+if   [ "$in_tmux" != 1 ]; then bus="n/a"
+elif [ -n "$stamp" ];     then bus="ok"
+else                           bus="unstamped"
+fi
 armed=""
 if [ -n "${TMUX:-}" ] && [ -n "$pane" ]; then
   armed=$(tmux display-message -p -t "$pane" '#{@handoff_armed}' 2>/dev/null)
@@ -131,6 +159,17 @@ case "$turns"     in ''|*[!0-9]*) turns=0 ;; esac
 case "$out_total" in ''|*[!0-9]*) out_total=0 ;; esac
 case "$peak"      in ''|*[!0-9]*) peak=0 ;; esac
 
+# --- resolve the DENOMINATOR: stamp → conf → default (issue #477) -------------
+# The stamp wins: it comes from Claude Code itself, so it follows the model with
+# no operator action. FLEET_CONTEXT_LIMIT stays as the override for a pane with no
+# stamping statusline. 200000 is the last resort — and the value that is silently
+# wrong on a long-context model, which is exactly why limit_src is reported rather
+# than hidden behind a number that looks authoritative.
+if   [ -n "$stamp_limit" ]; then LIMIT="$stamp_limit"; limit_src="stamp"
+elif [ -n "$CONF_LIMIT" ];  then LIMIT="$CONF_LIMIT";  limit_src="conf"
+else                             LIMIT=200000;         limit_src="default"
+fi
+
 # --- resolve ONE percentage + say which source it came from -------------------
 derived=-1
 [ "$live" -gt 0 ] && derived=$(( (live * 100 + LIMIT / 2) / LIMIT ))
@@ -161,13 +200,14 @@ fi
 # --- render -------------------------------------------------------------------
 _k() { awk -v n="${1:-0}" 'BEGIN {
   if (n < 1000)              printf "%d", n
+  else if (n >= 1000000)     printf "%.1fM", n/1000000   # a 1M window reads "1.0M", not "1000k"
   else if (n % 1000 == 0)    printf "%dk", n/1000
   else                       printf "%.1fk", n/1000
 }'; }
 
 if [ "$as_json" = "1" ]; then
-  printf '{"verdict":"%s","pct":%s,"source":"%s","live_tokens":%s,"limit":%s,' \
-    "$verdict" "$pct" "$src" "$live" "$LIMIT"
+  printf '{"verdict":"%s","pct":%s,"source":"%s","live_tokens":%s,"limit":%s,"limit_source":"%s","bus":"%s",' \
+    "$verdict" "$pct" "$src" "$live" "$LIMIT" "$limit_src" "$bus"
   printf '"derived_pct":%s,"stamp_pct":%s,"turns":%s,"output_tokens":%s,"peak_tokens":%s,' \
     "$derived" "${stamp:--1}" "$turns" "$out_total" "$peak"
   printf '"warn_pct":%s,"handoff_pct":%s,"auto_handoff_pct":%s,"armed":%s,"transcript":"%s"}\n' \
@@ -177,19 +217,35 @@ fi
 
 if [ "$pct" -ge 0 ]; then
   if [ "$live" -gt 0 ]; then
-    printf 'context   %s%%  (%s / %s tokens)   src=%s\n' \
-      "$pct" "$(_k "$live")" "$(_k "$LIMIT")" "$src"
+    # Name the denominator's provenance: a `limit=default` line is the one to
+    # distrust on a long-context model (issue #477).
+    printf 'context   %s%%  (%s / %s tokens)   src=%s  limit=%s\n' \
+      "$pct" "$(_k "$live")" "$(_k "$LIMIT")" "$src" "$limit_src"
   else
     printf 'context   %s%%   src=%s\n' "$pct" "$src"
   fi
-  # Both readings, when both exist — they legitimately differ (Claude Code's own
-  # number counts the autocompact reserve), and seeing both beats trusting one.
+  # Both readings, when both exist. A SMALL gap is expected — Claude Code's own
+  # number reserves headroom for autocompact. A LARGE one means the derived figure
+  # was measured against the wrong window, so say that instead of offering an
+  # explanation that cannot account for it (issue #477).
   if [ -n "$stamp" ] && [ "$derived" -ge 0 ] && [ "$stamp" != "$derived" ]; then
-    printf 'cross     statusline %s%% vs transcript-derived %s%% (the stamp counts the autocompact reserve)\n' \
-      "$stamp" "$derived"
+    _gap=$(( stamp - derived )); [ "$_gap" -lt 0 ] && _gap=$(( -_gap ))
+    if [ "$_gap" -le 10 ]; then
+      printf 'cross     statusline %s%% vs transcript-derived %s%% (the stamp counts the autocompact reserve)\n' \
+        "$stamp" "$derived"
+    else
+      printf 'cross     statusline %s%% vs transcript-derived %s%% — the derived figure used the %s limit (%s); trust the stamp\n' \
+        "$stamp" "$derived" "$limit_src" "$(_k "$LIMIT")"
+    fi
   fi
 else
   printf 'context   unknown — no statusline stamp on this pane and no usage record in the transcript\n'
+fi
+# A dead measurement bus is a SILENT failure everywhere else, so surface it here.
+if [ "$bus" = "unstamped" ]; then
+  printf 'bus       @ctx_pct is not stamped on this pane — the statusline is not the fleet'"'"'s stamping one'
+  [ "$thr" -gt 0 ] && printf ', so auto-handoff at %s%% cannot fire either' "$thr"
+  printf '\n'
 fi
 if [ "$turns" -gt 0 ]; then
   printf 'session   %s assistant turns · %s output tokens' "$turns" "$(_k "$out_total")"
