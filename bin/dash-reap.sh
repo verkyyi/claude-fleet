@@ -15,13 +15,19 @@
 # `scratch-<N>` row (issue #290 gave scratch its own writable worktree).
 #
 #   Row state            ⌃x
-#   clean + merged       reap wt+branch+issue+window   (no confirm)
-#   clean + NOT merged   confirm → reap all (issue closed)
-#   dirty (any)          confirm → close window+issue, KEEP wt
+#   clean + merged       record row, reap wt+branch+issue+window   (no confirm)
+#   clean + NOT merged   confirm → record row, reap all (issue closed)
+#   dirty (any)          confirm → record row, close window+issue, KEEP wt
 #   raw scratch, merged  record row, dispose wt+branch, close window (no confirm)
 #   raw scratch, else    confirm → record row, dispose (dirty KEEPs the wt), close window
 #   raw scratch, no wt   close window (ephemeral, pre-#290 / hermetic — nothing to record)
 #   hub/panel (no issue) refuse
+#
+# EVERY ⌃x records a /fleet-history row before it disposes of anything (issue #471
+# for a worker row, #466 for a scratch one) — ⌃x is the one path the SessionEnd hook
+# can't cover (a `kill-window` is not a walk-away exit), and ledger-watch only
+# notices ~60s later, by which time the worktree is gone and the row it writes has
+# no sha to rebuild from. See reap_record() for the ordering rules.
 #
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
 # worktree/issue. gh issue close is idempotent (a merge may have closed it
@@ -44,6 +50,35 @@ close_issue() {
     >/dev/null 2>&1 || true
 }
 
+# RECORD this reap into the /fleet-history ledger (issue #471). ⌃x used to be the
+# one reaper that wrote nothing — see the header note — so a ⌃x'd worker was only
+# indexed later, worktree-less and therefore unresumable.
+#
+# ORDERING, both halves load-bearing: called AFTER the kill-window (so #313's
+# instant row-vanish is untouched — the dash summary-cache FILE outlives the window,
+# so the summary column still resolves) and BEFORE any `git worktree remove` (#384 —
+# the row's transcript dir is derived from the worktree PATH, and its rebuild sha is
+# read out of the worktree itself).
+#
+# $reason is the verdict the INTERACTIVE pass already decided, threaded in through
+# the --exec dispatch. It is deliberately NOT re-derived here: a second
+# fleet_reap_ok can disagree with what the operator just confirmed (a merge landing
+# in between; the worktree turning dirty) and would record a verdict nobody agreed
+# to — besides re-paying the `gh pr list` #304 moved off the bind. Empty (an
+# in-flight pre-#471 dispatch string) → the helper no-ops, i.e. exactly the old
+# behavior, never an invented row. Idempotent, so racing the cleanup daemon /
+# ledger-watch still yields ONE row.
+#
+# Caveat, deliberate: on a FORCE-reaped `unmerged` row the recorded sha is neither
+# in base nor on a surviving branch, so `resume` can rebuild it only until git gc
+# prunes that unreachable object (~2 weeks by default). Strictly better than the
+# no-sha row ledger-watch used to leave, and the degrade path is already handled
+# (worktree add fails → REVIEW-ONLY).
+reap_record() {
+  fleet_reap_record "${reason:-}" "$REPO" "$MAIN" "$iss" "$wtdir" "${wid:-}" \
+    "${FLEET_SESSION:-}" "" "$branch"
+}
+
 # full reap: remove worktree + delete branch, close issue, kill window
 reap_full() {
   # Kill the window FIRST (issue #313): the dash row is driven live by
@@ -52,6 +87,7 @@ reap_full() {
   # network `gh issue close` + `git worktree remove`). This whole function already
   # runs backgrounded (fleet_bg / run-shell -b, #304), so it never blocks the bind.
   tmux kill-window -t "$target" 2>/dev/null || true
+  reap_record                                          # index it BEFORE the remove (#471)
   if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
     # Reap any detached process anchored to this worktree first (issue #151) — a
     # since-fixed hang left spinning would otherwise outlive the dir and drain a
@@ -71,6 +107,7 @@ reap_full() {
 # dirty force reap: KEEP the worktree, close issue + kill window only
 reap_keep() {
   tmux kill-window -t "$target" 2>/dev/null || true   # drop the row first (#313)
+  reap_record                                          # the KEPT worktree is resumable (#471)
   close_issue
   tmux display-message "reaped #$iss ✓ (window + issue) — worktree kept (dirty)" 2>/dev/null || true
 }
@@ -83,14 +120,19 @@ for a in "$@"; do case "$a" in confirm) confirm=1;; esac; done
 
 command -v git >/dev/null 2>&1 || refuse "git not found"
 
-# --- internal --exec <full|keep> (issue #304): the BACKGROUND reap the interactive
-# path dispatches (via fleet_bg) ONCE the merged-check decision is made. Re-resolve
-# only the CHEAP locals reap_full/reap_keep need — NO `gh pr list` (the decision is
-# already made) — then run the slow tail (git worktree remove + gh issue close) off
-# the interactive ⌃x bind so it returned instantly. $TMUX is inherited from the
-# run-shell job, so the bare tmux/gh calls below stay on THIS fleet's server.
+# --- internal --exec <full|keep> [<gate-verdict>] (issue #304): the BACKGROUND reap
+# the interactive path dispatches (via fleet_bg) ONCE the merged-check decision is
+# made. Re-resolve only the CHEAP locals reap_full/reap_keep need — NO `gh pr list`
+# (the decision is already made) — then run the slow tail (git worktree remove + gh
+# issue close) off the interactive ⌃x bind so it returned instantly. $TMUX is
+# inherited from the run-shell job, so the bare tmux/gh calls below stay on THIS
+# fleet's server.
+#
+# $3 carries the GATE verdict (merged-pr|ancestor|unmerged|dirty) the interactive
+# pass already computed — the one thing this pass cannot cheaply re-derive and the
+# one thing the ledger row needs (issue #471). $2 stays the ACTION (full|keep).
 if [ "${1:-}" = "--exec" ]; then
-  verdict="${2:-}"
+  verdict="${2:-}"; reason="${3:-}"
   iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"; iss="${iss//[^0-9]/}"
   [ -z "$iss" ] && exit 0
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
@@ -101,6 +143,10 @@ if [ "${1:-}" = "--exec" ]; then
   branch="issue-$iss"
   wtdir=""; whead=""
   [ -n "$MAIN" ] && IFS=$'\t' read -r wtdir whead < <(fleet_worktree_head "$MAIN" "$branch")
+  # Window id for the ledger row's summary column — read BEFORE reap_* kills the
+  # window (the cache FILE it keys survives; the window id would not be resolvable
+  # afterwards). Empty is tolerated: the row just records no summary.
+  wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
   case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
   exit 0
 fi
@@ -269,7 +315,9 @@ if [ "$confirm" = 0 ]; then
     # #304): the slow git worktree remove + gh issue close run off the ⌃x bind, which
     # returns instantly; the row clears when the bg kill-window lands + the dash
     # refreshes.
-    *)  fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full"; exit 0 ;;
+    # The verdict rides along so the bg pass can record the right row kind (#471);
+    # it is a fixed token from fleet_reap_ok, so it is shell-safe to interpolate.
+    *)  fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; exit 0 ;;
   esac
 fi
 
@@ -285,6 +333,6 @@ case "$ans" in y|Y) ;; *) exit 0;; esac
 
 # Background the confirmed reap too (issue #304) so the popup closes INSTANTLY
 # instead of blocking on the git remove + gh close.
-if [ "$reason" = dirty ]; then fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec keep"
-else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full"; fi
+if [ "$reason" = dirty ]; then fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec keep '$reason'"
+else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; fi
 exit 0
