@@ -23,7 +23,8 @@
 #        • confirm y on dirty                  → KEEP worktree, close + kill only
 #        • confirm y on clean+unmerged         → FULL reap
 #        • confirm n                           → no side effects
-#        • ⌃x on a raw scratch row (@raw=1, no @issue) — issue #290 the scratch owns
+#        • ⌃x on a raw scratch row (@raw=1, no @issue) — the session is RECORDED into
+#          the /fleet-history ledger before any disposal (#466); issue #290 the scratch owns
 #          a `scratch-<N>` worktree (resolved via @worktree), reaped by the SAME
 #          one-key ⌃x rule (issue #289):
 #            - clean+ancestor  → window closed + worktree/branch removed (no confirm)
@@ -132,6 +133,17 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/gh"
 
+# /fleet-history plumbing (issue #466): the scratch path records a ledger row before
+# it disposes of a worktree, so the ledger + transcript lookups are scoped to $WORK —
+# a selftest must never append to the operator's real history.
+LEDGER="$WORK/history.tsv"; : > "$LEDGER"
+PROJECTS="$WORK/projects"; mkdir -p "$PROJECTS"
+# worktree path → transcript-dir name, encoded the way Claude Code (and
+# fleet-history.sh) do: every non-alnum byte → '-'.
+enc() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9' '-'; }
+transcript_for() { mkdir -p "$PROJECTS/$(enc "$1")"; : > "$PROJECTS/$(enc "$1")/sess-$2.jsonl"; }
+srows() { awk -F'\t' -v k="$1" '$2==k' "$LEDGER" | wc -l | tr -d ' '; }
+
 run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base checkout
   local iss="$1"; shift
   # RAW/WID feed the fake tmux's @raw/window_id answers (empty RAW ⇒ not a raw row).
@@ -140,6 +152,7 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
   ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" WT="${WT:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
+  FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
   PATH="$WORK/fakepath:$PATH" \
     bash "$BIN/dash-reap.sh" "$@"
 }
@@ -213,11 +226,13 @@ grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothi
 grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
 [ -e "$SEED" ] && fail "raw ⌃x should remove the summary-cache seed"
 [ -s "$GHLOG" ] && fail "raw ⌃x (no worktree) must not touch gh (no issue/PR lifecycle)"
+[ -s "$LEDGER" ] && fail "raw ⌃x with no worktree has nothing to index — no ledger row" "$(cat "$LEDGER")"
 
 # B8b: ⌃x on a scratch row WITH a clean+ancestor worktree (issue #290) → close the
 # window AND remove the scratch worktree + branch. No issue/gh close (scratch has
 # no issue). Build a real `scratch-9` worktree, clean, tip == base ⇒ ancestor.
 git -C "$BASEDIR" worktree add -q -b scratch-9 "$WORK/scr9" >/dev/null 2>&1
+transcript_for "$WORK/scr9" 9
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr9" run_reap "" "s1:9"
 grep -q 'KILL' "$TMLOG" || fail "scratch ⌃x should kill the window"
@@ -225,6 +240,12 @@ grep -qi 'MSG.*worktree reaped' "$TMLOG" || fail "scratch ⌃x (clean) should re
 [ -d "$WORK/scr9" ] && fail "clean scratch ⌃x should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-9 && fail "clean scratch ⌃x should delete the branch"
 grep -q 'CLOSE' "$GHLOG" && fail "scratch reap must NOT close any issue (no @issue)"
+# …and the session is INDEXED before that disposal (issue #466): one row keyed by the
+# scratch slug, carrying the HEAD sha `resume` rebuilds the worktree from. Recording
+# after the remove would strand the transcript — hence "record before remove".
+[ "$(srows scratch-9)" = 1 ] || fail "clean scratch ⌃x must record ONE /fleet-history row (scratch-9)" "$(cat "$LEDGER")"
+awk -F'\t' '$2=="scratch-9"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
+  || fail "the scratch-9 row must carry the worktree HEAD sha (recorded pre-removal)" "$(cat "$LEDGER")"
 
 # B8c: ⌃x on a scratch row WITH a DIRTY worktree → open a confirm POPUP first (#289
 # one-key rule); do NOT close the window or touch the worktree yet.
@@ -239,17 +260,21 @@ grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window be
 # B8d: confirm y on the DIRTY scratch → still KEEP the worktree, close the window
 # only (git refuses a dirty remove; a confirmed reap never destroys uncommitted work).
 : > "$TMLOG"; : > "$GHLOG"
+transcript_for "$WORK/scr10" 10
 printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9" confirm
 [ -d "$WORK/scr10" ] || fail "confirmed reap on a dirty scratch must KEEP the worktree"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on a dirty scratch should close the window"
+[ "$(srows scratch-10)" = 1 ] || fail "a confirmed dirty-scratch reap must still index the session" "$(cat "$LEDGER")"
 
 # B8e: confirm y on a clean+unmerged scratch → remove worktree + branch, close window.
 git -C "$BASEDIR" worktree add -q -b scratch-11 "$WORK/scr11" >/dev/null 2>&1
 printf 'x\n' > "$WORK/scr11/g"; git -C "$WORK/scr11" add g; git -C "$WORK/scr11" commit -qm work
+transcript_for "$WORK/scr11" 11
 : > "$TMLOG"; : > "$GHLOG"
 printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "s1:9" confirm
 [ -d "$WORK/scr11" ] && fail "confirmed reap on a clean+unmerged scratch should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "confirmed reap should delete the scratch branch"
+[ "$(srows scratch-11)" = 1 ] || fail "a confirmed scratch reap must index the session before disposing of it" "$(cat "$LEDGER")"
 
 # B9: hub/panel row with @raw explicitly 0 (not a scratch) still refuses — the
 # raw early-return keys on @raw=1 exactly, not merely "@raw set".
@@ -276,5 +301,5 @@ case "$cx" in
   *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
 esac
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths + non-blocking ⌃x bind (#289+#290+#313)\n'
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + raw/scratch paths (recorded before disposal) + non-blocking ⌃x bind (#289+#290+#313+#466)\n'
 exit 0

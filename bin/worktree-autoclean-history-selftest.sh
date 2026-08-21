@@ -9,6 +9,9 @@
 #
 #   * a merged-PR reap        → a `landed` row (PR resolved from the branch) BEFORE removal
 #   * a clean-ancestor reap   → a `closed-unlanded` row (indexed/resumable)
+#   * a SCRATCH reap (#466)   → a `closed-unlanded` row keyed by the `scratch-<N>`
+#     slug, carrying the HEAD sha — so the silent prune of a clean scratch worktree
+#     leaves a browsable, RESUMABLE row instead of an orphaned transcript
 #   * both worktrees + branches are actually reaped after the rows are written
 #   * fleet_reap_record is idempotent — TWO calls for one reap (as BOTH reapers
 #     would, racing) write ONE row, and the merged path resolves the branch's PR
@@ -69,10 +72,17 @@ printf 'work\n' > "$WT500/g"; git -C "$WT500" add g; git -C "$WT500" commit -qm 
 WT600="$WORK/wt-600"
 git -C "$BASE" worktree add -q -b issue-600 "$WT600" >/dev/null 2>&1
 
-# Surviving transcripts (outside the worktree, under CLAUDE_PROJECTS_DIR) so both
-# record paths resolve a session id (record-closed SKIPS a branch with no transcript).
+# scratch-900 (issue #466): a SCRATCH worktree, clean and sitting at base HEAD →
+# the janitor prunes it silently by the scratch rules. It has NO issue, so the row
+# it must leave behind is keyed by its `scratch-<N>` slug.
+SWT900="$WORK/base-scratch-900"
+git -C "$BASE" worktree add -q -b scratch-900 "$SWT900" >/dev/null 2>&1
+
+# Surviving transcripts (outside the worktree, under CLAUDE_PROJECTS_DIR) so every
+# record path resolves a session id (record-closed SKIPS a branch with no transcript).
 mkdir -p "$PROJECTS/$(enc "$WT500")"; : > "$PROJECTS/$(enc "$WT500")/sess-500.jsonl"
 mkdir -p "$PROJECTS/$(enc "$WT600")"; : > "$PROJECTS/$(enc "$WT600")/sess-600.jsonl"
+mkdir -p "$PROJECTS/$(enc "$SWT900")"; : > "$PROJECTS/$(enc "$SWT900")/sess-900.jsonl"
 
 # --- fake tmux: a live socket, but NO live pane binds either issue → both reaped -
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
@@ -125,6 +135,7 @@ run_wac --dry-run >/dev/null
 [ -s "$LEDGER" ] && fail "dry-run must not write any history row" "$(cat "$LEDGER")"
 [ -d "$WT500" ] || fail "dry-run must not remove the issue-500 worktree"
 [ -d "$WT600" ] || fail "dry-run must not remove the issue-600 worktree"
+[ -d "$SWT900" ] || fail "dry-run must not remove the scratch-900 worktree"
 ok "dry-run previews only — no history row written, no worktree removed"
 
 # ================= PART 1: real reap writes the row, THEN removes ==============
@@ -146,9 +157,22 @@ cp=$(printf '%s' "$cu_row" | awk -F'\t' '{print $4}')
 [ "$cp" = "-" ] || fail "closed-unlanded #600 row must have no PR (got [$cp])" "$cu_row"
 ok "clean-ancestor reap → closed-unlanded row for #600 (indexed, no PR)"
 
-# the rows were written BEFORE removal: both worktrees + branches are now gone.
+# scratch reap (#466) → a closed-unlanded row keyed by the slug, with the HEAD sha
+# recorded while the worktree still stood (that sha is what makes it resumable after
+# this very prune). Silent disposal must never mean a lost transcript.
+sc_row=$(awk -F'\t' '$2=="scratch-900" && $10=="closed-unlanded"' "$LEDGER")
+[ -n "$sc_row" ] || fail "a scratch reap must leave a 'closed-unlanded' row keyed scratch-900" "$(cat "$LEDGER")"
+ss=$(printf '%s' "$sc_row" | awk -F'\t' '{print $8}')
+[ "$ss" = sess-900 ] || fail "the scratch row must carry its surviving session id (got [$ss])" "$sc_row"
+ssha=$(printf '%s' "$sc_row" | awk -F'\t' '{print $5}')
+case "$ssha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fail "the scratch row must carry the worktree HEAD sha (got [$ssha])" "$sc_row" ;; esac
+ok "scratch reap → closed-unlanded row keyed scratch-900, with the sha resume rebuilds from"
+
+# the rows were written BEFORE removal: every worktree + branch is now gone.
 [ -d "$WT500" ] && fail "issue-500 worktree must be reaped after its row is recorded"
 [ -d "$WT600" ] && fail "issue-600 worktree must be reaped after its row is recorded"
+[ -d "$SWT900" ] && fail "the clean scratch-900 worktree must be reaped after its row is recorded"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-500 && fail "issue-500 branch should be deleted"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-600 && fail "issue-600 branch should be deleted"
 ok "both worktrees + branches reaped (record ran BEFORE remove)"
@@ -170,11 +194,20 @@ n=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
 [ "$n" = 1 ] || fail "fleet_reap_record: two calls for one reap must write ONE landed row (got $n)" "$(cat "$FLEET_HISTORY_LEDGER")"
 prc=$(awk -F'\t' '$2==700{print $4}' "$FLEET_HISTORY_LEDGER")
 [ "$prc" = 5500 ] || fail "fleet_reap_record: merged path must resolve the branch's PR (got [$prc])"
-# an empty issue (e.g. a scratch-<N> worktree) is a clean no-op — writes nothing.
-fleet_reap_record "merged-PR" "fake/repo" "$BASE" "" "$WT700" "" "" "" "scratch-9"
-n2=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
-[ "$n2" = 1 ] || fail "fleet_reap_record: empty issue must record nothing (got $n2 rows)"
-ok "fleet_reap_record: merged path resolves the PR, is idempotent, no-ops on empty issue"
+# An empty issue is no longer a dead end (#466): with a `scratch-<N>` BRANCH the
+# helper derives the ledger key from it and records the row. Use a distinct worktree
+# + transcript so the assertion can't pass on the session dedup instead.
+WT900="$WORK/base-scratch-901"; mkdir -p "$WT900"
+mkdir -p "$PROJECTS/$(enc "$WT900")"; : > "$PROJECTS/$(enc "$WT900")/sess-901.jsonl"
+fleet_reap_record "unmerged" "fake/repo" "$BASE" "" "$WT900" "" "" "" "scratch-901"
+sk=$(awk -F'\t' '$2=="scratch-901"{print $2}' "$FLEET_HISTORY_LEDGER")
+[ "$sk" = "scratch-901" ] || fail "fleet_reap_record: an empty issue + scratch branch must record under the slug" "$(cat "$FLEET_HISTORY_LEDGER")"
+# …and with NEITHER an issue nor a scratch identity there is still nothing to key on.
+n3=$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')
+fleet_reap_record "unmerged" "fake/repo" "$BASE" "" "$WORK/plain-dir" "" "" "" "feature-x"
+[ "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')" = "$n3" ] \
+  || fail "fleet_reap_record: no issue and no scratch identity must record nothing"
+ok "fleet_reap_record: PR resolved, idempotent, keys a scratch branch, no-ops with no key"
 
-printf '\nselftest OK: %s assertions passed (worktree-autoclean record-before-remove, #384)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (worktree-autoclean record-before-remove, #384 + scratch #466)\n' "$pass"
 exit 0

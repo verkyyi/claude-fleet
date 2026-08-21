@@ -25,7 +25,9 @@
 #   * prompt_input_exit on DIRTY    → worktree KEPT (not force-removed),
 #                                     `closed-unlanded` row, window gone
 #   * idempotent vs cleanup/ledger-watch — a second fire records ONE row
-#   * @raw scratch                  → window closed only (no ledger row, no gh)
+#   * @raw scratch in a scratch-<N> worktree → a `closed-unlanded` ledger row keyed
+#                                     by the slug + window closed, worktree KEPT (#466)
+#   * @raw with NO scratch worktree → window closed only (nothing to record)
 #   * stdin JSON reason parse works both ways (acts on prompt_input_exit; no-op on clear)
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged).
@@ -83,6 +85,14 @@ WT4="$(add_wt 4 ancestor)"  # tip == base           → ancestor  → reap, issu
 WT5="$(add_wt 5 commit)"    # not merged (stdin test)→ unmerged  → KEEP
 WT6="$(add_wt 6 commit)"    # not merged (default-on) → unmerged  → KEEP
 
+# A scratch worktree (issue #466): same shape dash-raw-session.sh creates — branch
+# `scratch-<N>`, dir `<base>-scratch-<N>` — with an unmerged commit, so the shared
+# gate says `unmerged` → the row is recorded and the EXPERIMENT IS KEPT.
+SWT="$WORK/base-scratch-3"
+git -C "$BASEDIR" worktree add -q -b scratch-3 "$SWT" >/dev/null 2>&1
+printf 'x\n' > "$SWT/g"; git -C "$SWT" add g; git -C "$SWT" commit -qm "scratch work"
+mkdir -p "$PROJECTS/$(enc "$SWT")"; : > "$PROJECTS/$(enc "$SWT")/sess-scr.jsonl"
+
 # --- fake tmux: answers the window queries, executes run-shell -b inline -------
 # @issue / @raw / @hub / window_id / session_name are read from env (ISS / RAW /
 # HUB / WID). run-shell runs its command via `sh -c` so the dispatched --exec reap
@@ -98,6 +108,8 @@ if [ "${1:-}" = "run-shell" ]; then
 fi
 case "$*" in
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
+  *@worktree*)    printf '%s\n' "${WT:-}" ;;
+  *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@hub*)         printf '%s\n' "${HUB:-}" ;;
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
@@ -139,6 +151,7 @@ chmod +x "$WORK/fakepath/gh"
 # FLEET_REPO/MAIN/BASE env below win (matching dash-reap-selftest).
 run_hook() {
   ISS="${ISS:-}" RAW="${RAW:-}" HUB="${HUB:-}" WID="${WID:-@9}" \
+  WT="${WT:-}" PCWD="${PCWD:-}" \
   TMLOG="$TMLOG" GHLOG="$GHLOG" \
   GH_MERGED_HEAD="${GH_MERGED_HEAD:-}" GH_MERGED_PR="${GH_MERGED_PR:-}" GH_ISSUE_STATE="${GH_ISSUE_STATE:-OPEN}" \
   FLEET_SESSION_END_REASON="${REASON:-}" \
@@ -266,7 +279,8 @@ clr; REASON=prompt_input_exit ISS=2 WID='@2' run_hook
 [ "$(rows 2 closed-unlanded)" = 1 ] || fail "a second fire must NOT add a duplicate row for #2 (idempotent)" "$(cat "$LEDGER")"
 ok "idempotent — a second fire records ONE row (dedup vs cleanup/ledger-watch)"
 
-# T11: @raw scratch → close the window ONLY (no ledger row, no gh). A summary-cache
+# T11: @raw scratch with NO resolvable scratch worktree (a pre-#290 window, or one
+# whose cwd wandered) → close the window ONLY, nothing to record. A summary-cache
 # seed under the dash cache is dropped. fleet_summary_key s1/@9 = s1_9.
 CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
 SEED="$CACHE/summary_s1_9"; printf 'scratch' > "$SEED"
@@ -274,10 +288,26 @@ before="$(wc -l < "$LEDGER" | tr -d ' ')"
 clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' run_hook
 grep -q 'RUNSHELL' "$TMLOG" || fail "raw scratch exit must dispatch (window close)" "$(cat "$TMLOG")"
 grep -q 'KILL' "$TMLOG" || fail "raw scratch exit must close the window"
-[ -s "$GHLOG" ] && fail "raw scratch exit must not touch gh"
+[ -s "$GHLOG" ] && fail "a worktree-less raw exit must not touch gh"
 [ -e "$SEED" ] && fail "raw scratch exit should drop the dash summary-cache seed"
-[ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$before" ] || fail "raw scratch exit must write NO ledger row" "$(cat "$LEDGER")"
-ok "@raw scratch → window closed only (no ledger row, no gh)"
+[ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$before" ] || fail "a worktree-less raw exit must write NO ledger row" "$(cat "$LEDGER")"
+ok "@raw with no scratch worktree → window closed only (nothing to record)"
+
+# T11b (issue #466): @raw scratch IN its scratch-<N> worktree → ONE closed-unlanded
+# row keyed `scratch-3` (not an issue number), window closed, and the WORKTREE KEPT —
+# SessionEnd records a scratch, it never reaps one (#290: never silently delete an
+# experiment). A second fire must not duplicate the row.
+clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' WT="$SWT" run_hook
+grep -q 'KILL' "$TMLOG" || fail "scratch exit must close the window"
+[ -d "$SWT" ] || fail "SessionEnd must KEEP the scratch worktree (never reaps an experiment)"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-3 || fail "the scratch branch must survive"
+[ "$(rows scratch-3 closed-unlanded)" = 1 ] || fail "scratch exit must write ONE closed-unlanded row keyed scratch-3" "$(cat "$LEDGER")"
+# the row must be resumable: worktree + transcript + a HEAD sha to rebuild from.
+awk -F'\t' '$2=="scratch-3"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
+  || fail "the scratch row must carry the worktree HEAD sha (resume rebuilds off it)" "$(cat "$LEDGER")"
+clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' WT="$SWT" run_hook
+[ "$(rows scratch-3 closed-unlanded)" = 1 ] || fail "a second scratch exit must NOT duplicate the row" "$(cat "$LEDGER")"
+ok "@raw scratch → closed-unlanded row keyed scratch-3 (idempotent), worktree KEPT, window closed"
 
 # ======================= STDIN JSON REASON PARSE =============================
 # T12: no FLEET_SESSION_END_REASON — the reason comes from the piped hook payload.
@@ -308,5 +338,5 @@ printf '{"reason":"clear"}' | \
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "stdin reason=clear must be a no-op" "$(cat "$TMLOG")"
 ok "stdin JSON reason=clear → no-op"
 
-printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw window-close, stdin parse) [#403, #409]\n' "$pass"
+printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw record+window-close, stdin parse) [#403, #409, #466]\n' "$pass"
 exit 0

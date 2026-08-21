@@ -45,7 +45,8 @@
 #   • Dirty is never deleted — plain `git worktree remove` (no --force) refuses it.
 #   • Idempotent — fleet_reap_record + `gh issue close` dedup, so racing the cleanup
 #     daemon / ledger-watch yields one row and one close.
-#   • Scoped — only a numeric @issue worker (or @raw scratch → window-close only);
+#   • Scoped — only a numeric @issue worker, or an @raw scratch (which is RECORDED
+#     into the ledger and closed, but never reaped — see the raw branch below);
 #     panels (dash/plan/backlog) carry no @issue/@raw and the operator hub pane is
 #     bailed on defensively (@hub), so neither is ever touched.
 #   • Default ON, GLOBALLY: reacts unless the GLOBAL fleet.conf sets
@@ -78,19 +79,56 @@ strip_num() { printf '%s' "${1:-}" | tr -cd '0-9'; }
 # `tmux run-shell -b`. It runs in the tmux server (not the dying pane), so it
 # outlives the pane and can remove the very cwd the pane stood in. Everything it
 # needs is passed as ARGS (the window may already be gone — it can't re-read it):
-#   --exec <kind> <session> <window-id> <issue|->
+#   --exec <kind> <session> <window-id> <issue|scratch-N|->
 #     kind = worker → gate-reap the issue-<N> worktree by verdict, then close window
-#     kind = raw    → close the scratch window only (+ drop its dash summary seed)
+#     kind = raw    → record the scratch session into the ledger, then close the
+#                     window (+ drop its dash summary seed). NEVER reaps (#466).
 # $TMUX is inherited from the run-shell job, so bare tmux/gh stay on THIS fleet's
 # server/socket. Re-resolves conf from <session> — the server env carries no FLEET_*.
 # ============================================================================
 if [ "${1:-}" = "--exec" ]; then
+  # $5 is kind-dependent: the issue number for a worker, the scratch-<N> key for a
+  # raw one (#466) — so it is read raw here and interpreted per branch below.
   kind="${2:-}"; sess="${3:-}"; win="${4:-}"; iss=$(strip_num "${5:-}")
 
-  # raw scratch → close the window ONLY (issue #403 scopes SessionEnd to a
-  # window-close for @raw; a scratch worktree, if any, is left to the dash ⌃x /
-  # worktree-autoclean). Drop the dash summary-cache seed so no stale row lingers.
+  # raw scratch → RECORD it into the /fleet-history ledger, then close the window
+  # (issue #466). A scratch has no issue, so the ledger keys it by the `scratch-<N>`
+  # slug that names BOTH its branch and its worktree — which is also how we find the
+  # worktree here: $5 carries the KEY (shell-safe by construction, unlike a path),
+  # and the branch→worktree lookup is authoritative. Recording FIRST, while the
+  # worktree still stands, is what captures the transcript path and the HEAD sha the
+  # row needs to stay resumable after a later prune.
+  #
+  # What this deliberately does NOT do is REAP. #290's rule is that an experiment is
+  # never silently deleted, and #403 scoped SessionEnd's scratch handling to the
+  # window: disposal stays with worktree-autoclean's scratch rules (clean → pruned
+  # silently; dirty/unmerged → kept + surfaced once) or a deliberate dash ⌃x. The
+  # shared gate runs here only to pick the ROW KIND — a scratch that escalated into a
+  # merged PR records `landed`, anything else `closed-unlanded` — never a removal.
   if [ "$kind" = raw ]; then
+    key=$(fleet_scratch_key "${5:-}")
+    if [ -n "$key" ]; then
+      FLEET_SESSION="$sess"; export FLEET_SESSION
+      fleet_load_conf "$sess"
+      REPO="${FLEET_REPO:-}"
+      _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && REPO="$_r"
+      MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
+      BASE="${FLEET_BASE_BRANCH:-master}"
+      wtdir=""; whead=""; MASTER=""; MERGED_PRS=""
+      if [ -n "$MAIN" ]; then
+        wl=$(fleet_worktree_head "$MAIN" "$key")     # branch scratch-<N> → its worktree
+        case "$wl" in *"$TAB"*) wtdir=${wl%%"$TAB"*}; whead=${wl#*"$TAB"} ;; esac
+        MASTER=$(git -C "$MAIN" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
+          || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)
+      fi
+      command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(gh -R "$REPO" pr list \
+        --state merged --head "$key" --json headRefName -q '.[].headRefName' 2>/dev/null)
+      verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$key" "$whead" "$MASTER" "$MERGED_PRS")
+      # No issue → pass an empty one; fleet_reap_record derives the scratch key from
+      # the branch. record-closed skips a worktree with no transcript, so a scratch
+      # that never produced one simply gets no row.
+      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key"
+    fi
     [ -n "$sess" ] && [ -n "$win" ] && \
       rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$win")" 2>/dev/null
     [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
@@ -222,14 +260,22 @@ hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)
 # Never touch the operator hub pane (defensive — it carries no @issue/@raw anyway).
 [ "$hub" = 1 ] && exit 0
 
-# 5. Dispatch the DETACHED reap. A numeric @issue → worker gate-reap; @raw=1 → close
-#    the scratch window only; anything else (a panel/hub) → no-op. `run-shell -b` runs
-#    server-side so the reap outlives this pane; pass everything as args (the window
-#    may be gone by the time it runs). Values are shell-safe (session = sanitized
-#    label, win = @<num>, issue = digits) — same quoting as dash-reap.sh's fleet_bg.
+# 5. Dispatch the DETACHED reap. A numeric @issue → worker gate-reap; @raw=1 → record
+#    the scratch + close its window (#466); anything else (a panel/hub) → no-op.
+#    `run-shell -b` runs server-side so the work outlives this pane; pass everything as
+#    args (the window may be gone by the time it runs). Every value is shell-safe by
+#    construction (session = sanitized label, win = @<num>, issue = digits, scratch key
+#    = scratch-<digits> — which is WHY the raw path passes the key and not the raw
+#    @worktree path) — same quoting as dash-reap.sh's fleet_bg.
 if [ -n "$issue" ]; then
   tmux run-shell -b "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue'" 2>/dev/null
 elif [ "$raw" = 1 ]; then
-  tmux run-shell -b "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' -" 2>/dev/null
+  # @worktree is what dash-raw-session.sh binds at spawn; the pane cwd is the fallback
+  # for a window that predates it. A key that doesn't resolve → the exec just closes
+  # the window, exactly as it did before this.
+  wt=$(tmux display-message -p -t "$TMUX_PANE" '#{@worktree}' 2>/dev/null)
+  [ -z "$wt" ] && wt=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_current_path}' 2>/dev/null)
+  skey=$(fleet_scratch_key "$wt")
+  tmux run-shell -b "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}'" 2>/dev/null
 fi
 exit 0

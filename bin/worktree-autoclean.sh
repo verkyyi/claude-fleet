@@ -137,6 +137,12 @@ process() {
   # so it never double-records when the cleanup daemon is ALSO on. The window is
   # already gone (this worktree passed the liveness gate), so there is no live
   # --win/--session summary to pass — the recorded title still names the row.
+  # Scratch too (issue #466): $inum is empty for a `scratch-<N>` branch, and the
+  # helper then keys the row by that slug — so the silent prune of a clean scratch
+  # worktree below leaves an indexed, resumable /fleet-history row behind instead of
+  # dropping the experiment's transcript on the floor. Order matters as ever: this
+  # runs BEFORE the remove, which is where the row's transcript path and rebuild sha
+  # come from.
   fleet_reap_record "$merged" "$REPO" "$REPO_ROOT" "$inum" "$dir" "" "" "" "$branch"
   # Reap any detached process still anchored to this worktree BEFORE removing it —
   # otherwise a since-fixed hang can outlive the dir and peg a core against the

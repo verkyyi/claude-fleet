@@ -15,9 +15,10 @@
 #      opens a PR (`fixes #N` optional). The prmap is repo-wide, so the janitor
 #      reaps a merged `scratch-<N>` like any worker on merge — zero new machinery.
 #   3. RESOLVABLE TRANSCRIPTS — the unique cwd fixes the "can't resolve the
-#      transcript from the shared base checkout" limit (#214): a scratch can now be
-#      summarized correctly and is eligible for ledger capture/resume later (out of
-#      scope here — noted).
+#      transcript from the shared base checkout" limit (#214): a scratch can be
+#      summarized correctly, and (issue #466) it is now CAPTURED in the
+#      /fleet-history ledger when its window closes — keyed by the `scratch-<N>`
+#      slug this script allocates below — so it browses and RESUMES like a worker.
 #
 # The window:
 #   * runs in a fresh `<repo-parent>/<repo-dir>-scratch-<N>` worktree on a new
@@ -47,6 +48,8 @@
 #   * fleet-restore — the WINDOW is NOT snapshotted or restored (@raw is excluded):
 #                     scratch windows are ephemeral. Its WORKTREE, however, survives
 #                     a crash on disk and is reapable by the janitor's scratch rules.
+#   * /fleet-history — INDEXED on close and resumable (#466): keyed `scratch-<N>`,
+#                     listed as `~<N>`, restored with ⌃o into a fresh @raw window.
 #
 # With no <target-session> the window is created in the CALLER's fleet (the
 # interactive dash path). Pass <target-session> to spawn into a specific fleet you

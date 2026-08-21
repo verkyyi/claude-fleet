@@ -18,11 +18,12 @@ PROMPT='▸ '
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 
-# LANDED view (dash ⌃t): rows carry a `landed:<pr>` / `landed:issue:<n>` target, not a
+# LANDED view (dash ⌃t): rows carry a `landed:<pr>` / `landed:issue:<n>` /
+# `landed:scratch:scratch-<n>` (#466) target, not a
 # live window — Enter RESUMES that finished session, identical to ⌃o: it hands the target
 # to dash-restore-session.sh, which reconstructs the removed worktree off the squash SHA and
-# reopens a `claude --resume` window (#261). Both row shapes resume (dash-restore-session.sh's
-# restore_key_for handles landed:issue:<n> and landed:<pr>). Open the row's PR in the browser
+# reopens a `claude --resume` window (#261). Every row shape resumes (dash-restore-session.sh's
+# restore_key_for handles landed:issue:<n>, landed:<pr> and landed:scratch:<key>). Open the row's PR in the browser
 # with ⌃p (dash-open-pr.sh) — the pre-#261 Enter behavior (#130), relocated so Enter can jump.
 # Per-fleet keyed (FLEET_SESSION), matching dash-view-toggle.sh. Clear any half-set rename/bind
 # flag first so a mode toggled in landed view can't leak into the next live-view Enter.
@@ -42,7 +43,7 @@ if [ "$(cat "$C/global/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = land
   fi
   rm -f "$flag" "$bindflag"
   case "$target" in
-    landed:*)   # landed:<pr> or landed:issue:<n> — resume the finished session (= ⌃o, #261)
+    landed:*)   # landed:<pr> | landed:issue:<n> | landed:scratch:<key> — resume it (= ⌃o, #261)
       bash "$BIN/dash-restore-session.sh" "$target" >/dev/null 2>&1
       echo "${RESTORE}clear-query+reload(bash $ROWS)"; exit 0 ;;
   esac

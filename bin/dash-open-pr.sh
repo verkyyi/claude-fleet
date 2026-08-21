@@ -2,15 +2,16 @@
 # dash-open-pr.sh <landed-target> — open a landed row's PR in the browser (dash ⌃p).
 #
 # The pre-#261 landed-view Enter behavior (#130), extracted to its own key when Enter was
-# repurposed to RESUME the finished session (= ⌃o). No-op on PR-less rows (landed:issue:<n>),
-# non-landed rows (a live-view row / header), and empty input — so it's safe to bind
-# unconditionally; it only fires on a numeric-PR landed row.
+# repurposed to RESUME the finished session (= ⌃o). No-op on PR-less rows
+# (landed:issue:<n>, landed:scratch:<key> — a scratch is addressed by its own key even
+# when it escalated into a PR, #466), non-landed rows (a live-view row / header), and
+# empty input — so it's safe to bind unconditionally; it only fires on a numeric-PR row.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 target="${1:-}"
 
 case "$target" in
-  landed:issue:*|'') exit 0 ;;               # PR-less landed row / empty — nothing to open
+  landed:issue:*|landed:scratch:*|'') exit 0 ;;   # PR-less / scratch row / empty — nothing to open
   landed:*)          pr="${target#landed:}" ;;
   *)                 exit 0 ;;               # not a landed row (live view / header)
 esac

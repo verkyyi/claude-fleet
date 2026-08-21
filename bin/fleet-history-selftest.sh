@@ -19,6 +19,10 @@
 #      encodes the PR (or issue when PR-less).
 #   E. meta — "<issue>\t<title>" for a landed row, by issue# and by #PR (#319).
 #   F. state glyph (#320) — list/rows mark a landed row ✓, a closed-unlanded ✗.
+#   G. SCRATCH rows (#466) — a session with no issue: col 2 carries its
+#      `scratch-<N>` key, list/rows render `~<N>` and target landed:scratch:<key>,
+#      record-closed stores the HEAD sha, and resume rebuilds off that sha (or
+#      degrades to REVIEW-ONLY without one). Plus: --issue is still an alias of --key.
 #
 # Fully hermetic: no gh, no git, no tmux, no network. FLEET_HISTORY_LEDGER points
 # the ledger at a scratch file; CLAUDE_PROJECTS_DIR points the transcript lookup
@@ -322,4 +326,72 @@ contains "list: landed row shows the ✓ marker"          "$lst" "✓ #9"
 rws=$(run rows)
 contains "rows: closed-unlanded row carries the ✗ glyph" "$rws" "✗"
 
-printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state)\n' "$CHECKS"
+# ============================================================================
+# G. SCRATCH rows (#466) — an @raw session has NO issue: the ledger keys it by the
+#    `scratch-<N>` slug, prints it `~<N>` (never `#<N>`, which would read as an
+#    issue that doesn't exist), targets it `landed:scratch:<key>` in the dash, and
+#    keeps it RESUMABLE after its worktree is reaped via the recorded HEAD sha.
+# ============================================================================
+: > "$FLEET_HISTORY_LEDGER"
+SWT="/w/repo-scratch-7"
+SENC=$(printf '%s' "$SWT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+STDIR="$CLAUDE_PROJECTS_DIR/$SENC"
+mkdir -p "$STDIR"; : > "$STDIR/sess-scr.jsonl"
+
+out=$(run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" \
+        --summary "trying a thing" --sha deadbee1234)
+contains "scratch: record-closed labels the row ~<N>, not #<N>" "$out" "~7"
+IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state \
+  <<<"$(cat "$FLEET_HISTORY_LEDGER")"
+eq "scratch: col 2 carries the scratch key"          "scratch-7"       "$g_key"
+eq "scratch: pr degrades to dash (no PR)"            "-"               "$g_pr"
+eq "scratch: sha column carries the recorded HEAD"   "deadbee1234"     "$g_sha"
+eq "scratch: worktree column"                        "$SWT"            "$g_wt"
+eq "scratch: transcript dir resolved from the path"  "$STDIR"          "$g_td"
+eq "scratch: session id is the newest transcript"    "sess-scr"        "$g_sid"
+eq "scratch: state is closed-unlanded"               "closed-unlanded" "$g_state"
+
+# list + rows render it as a scratch, not as issue #7.
+lst=$(run list)
+contains "scratch: list marks the key ~7"            "$lst" "✗ ~7"
+rws=$(run rows)
+contains "scratch: dash row targets landed:scratch:" "$rws" "landed:scratch:scratch-7"
+contains "scratch: dash row key cell is ~7"          "$rws" "~7"
+contains "scratch: dash row names the scratch window" "$rws" "scratch-7"
+
+# RESUME: the worktree is gone (never existed here), but the recorded sha means it
+# is reconstructable — the verdict points at the ORIGINAL path (where the transcript
+# is keyed) and the recorded session id. This is the reaped-clean-scratch case.
+v=$(run resume --main /w/main scratch-7)
+eq "scratch: resume verdict RESUME (rebuild off the recorded sha)" "RESUME" "$(printf '%s' "$v" | cut -f1)"
+eq "scratch: resume targets the original worktree path"           "$SWT"      "$(printf '%s' "$v" | cut -f2)"
+eq "scratch: resume carries the recorded session id"              "sess-scr"  "$(printf '%s' "$v" | cut -f3)"
+# meta feeds the restorer the key + title for BOTH shapes.
+eq "scratch: meta returns the scratch key"   "scratch-7" "$(run meta scratch-7 | cut -f1)"
+eq "scratch: meta returns the scratch title" "scratch-7" "$(run meta scratch-7 | cut -f2)"
+# an issue lookup must never match a scratch row (keys share one column).
+eq "scratch: issue key 7 does not match scratch-7" "" "$(run meta 7)"
+
+# No sha and no PR (a pre-#466 row, or a worktree that was already gone at record
+# time) → nothing to rebuild from: REVIEW-ONLY, never a pointer to a missing dir.
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-04-01T00:00:00Z\tscratch-8\tscratch-8\t-\t-\t%s\t%s\tsess-scr\t-\tclosed-unlanded\n' \
+  "$SWT" "$STDIR" >> "$FLEET_HISTORY_LEDGER"
+v2=$(run resume --main /w/main scratch-8)
+eq "scratch: no sha + no PR degrades to REVIEW-ONLY" "REVIEW-ONLY" "$(printf '%s' "$v2" | cut -f1)"
+contains "scratch: REVIEW-ONLY names the row ~8, not #8" "$v2" "~8"
+
+# --sha is optional: with no worktree on disk to read a HEAD from, it degrades to '-'
+# (the auto-capture only fires for a worktree that is still there).
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" >/dev/null
+eq "scratch: sha degrades to dash when the worktree is gone" "-" \
+   "$(cut -f5 "$FLEET_HISTORY_LEDGER")"
+
+# --issue remains an accepted ALIAS for --key (a partially-synced install keeps working).
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --issue scratch-7 --worktree "$SWT" --title "alias" >/dev/null
+eq "scratch: --issue is still accepted as an alias of --key" "scratch-7" \
+   "$(cut -f2 "$FLEET_HISTORY_LEDGER")"
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state/scratch)\n' "$CHECKS"
