@@ -134,7 +134,6 @@ retire() {
 #     covers the ~1.1s input-mount flush with room to spare.
 # Warming happens minutes before anyone presses ⌃s, so being generous here is free.
 POOL_SETTLE_MIN="${FLEET_POOL_SETTLE_MIN:-10}"
-POOL_QUIET_CPU="${FLEET_POOL_QUIET_CPU:-8}"
 POOL_STABLE_HITS="${FLEET_POOL_STABLE_HITS:-8}"   # x0.5s of an unchanging screen
 
 input_line() { TM capture-pane -p -t "$1" 2>/dev/null | LC_ALL=C grep -m1 '❯'; }
@@ -156,15 +155,20 @@ claude_pid() {
 # here; the gate has to be right, because a keystroke that lands during mount
 # bricks the session for good (see warm_input).
 #
-# "CPU is quiet" alone is NOT enough — measured the hard way: mount spends most of
-# its time in I/O waits (MCP connects) at ~0% CPU, so a CPU-only gate fires early,
-# the warm-up keystroke lands mid-mount, and the entry is dead. The load-bearing
-# signal is that the SCREEN HAS STOPPED CHANGING: a mounting TUI repaints
-# (banner → status → MCP warnings → footer), a mounted idle one does not repaint at
-# all. So: box painted, screen hash unchanged for POOL_STABLE_HITS samples, CPU
-# quiet, and a floor of POOL_SETTLE_MIN seconds since the box first appeared.
+# The load-bearing signal is that the SCREEN HAS STOPPED CHANGING: a mounting TUI
+# repaints (banner → status → MCP warnings → footer), a mounted idle one does not
+# repaint at all. So: box painted, screen hash unchanged for POOL_STABLE_HITS
+# samples, and a floor of POOL_SETTLE_MIN seconds since the box first appeared.
+#
+# Deliberately NOT gated on CPU. Two measurements killed that idea from both ends:
+# mount is mostly I/O wait at ~0% CPU, so a CPU-quiet gate fires EARLY (and an early
+# warm-up keystroke bricks the session); and `ps -o %cpu` on macOS is a decaying
+# AVERAGE since process start, so after a heavy boot — the operator's real fleet
+# config, with its full MCP set — it stays above any sane threshold for minutes and
+# the gate never opens at all. Warming timed out at 120s twice on the live fleet
+# for exactly that reason, while that pane's screen had been stable since t=3s.
 wait_settled() {
-  local wid="$1" deadline rendered_at="" pid cpu h last="" stable=0
+  local wid="$1" deadline rendered_at="" h last="" stable=0
   deadline=$(( $(NOW) + PTIMEOUT ))
   while [ "$(NOW)" -lt "$deadline" ]; do
     TM has-session -t "$POOL" 2>/dev/null || return 1
@@ -176,10 +180,8 @@ wait_settled() {
     h=$(screen_hash "$wid")
     if [ -n "$h" ] && [ "$h" = "$last" ]; then stable=$((stable + 1)); else stable=0; fi
     last="$h"
-    pid=$(claude_pid "$wid") || { sleep 0.5; continue; }
-    cpu=$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' '); cpu=${cpu%%.*}
-    case "$cpu" in ''|*[!0-9]*) cpu=99;; esac
-    if [ "$stable" -ge "$POOL_STABLE_HITS" ] && [ "$cpu" -lt "$POOL_QUIET_CPU" ] \
+    claude_pid "$wid" >/dev/null || { sleep 0.5; continue; }   # still coming up
+    if [ "$stable" -ge "$POOL_STABLE_HITS" ] \
        && [ $(( $(NOW) - rendered_at )) -ge "$POOL_SETTLE_MIN" ]; then
       return 0                                    # mounted; warm_input decides ready
     fi
