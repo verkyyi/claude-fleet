@@ -227,9 +227,10 @@ TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$rawseed")" 2
 # claimed is the one moment it hurts: on a box already running several sessions
 # that contention pushed the first keystroke's echo from sub-second to tens of
 # seconds — reintroducing, from the other end, exactly the stall this removes.
-# So the refill sleeps first (FLEET_POOL_REFILL_DELAY, default 45s). run-shell -b
-# because it is slow either way; a no-op when FLEET_SCRATCH_POOL is 0.
-TM run-shell -b "sleep ${FLEET_POOL_REFILL_DELAY:-45}; bash '$BIN/scratch-pool.sh' ensure '$SESS' >/dev/null 2>&1" 2>/dev/null
+# So the refill waits first — `--delay`, which scratch-pool.sh applies INSIDE the
+# pool-enabled gate so that with the pool off this whole line costs nothing.
+# run-shell -b because it is slow either way.
+TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
 
 if [ -z "$TARGET_SESS" ]; then
   # Surface a reserved-name fallback note regardless of the focus path so the user

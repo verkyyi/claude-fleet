@@ -63,8 +63,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-CMD="${1:-}"; SESS="${2:-}"
-[ -n "$CMD" ] || { echo "usage: scratch-pool.sh {ensure|claim|reap|status} <session>" >&2; exit 2; }
+CMD="${1:-}"; SESS="${2:-}"; DELAY=0
+[ "${3:-}" = "--delay" ] && DELAY=1
+[ -n "$CMD" ] || { echo "usage: scratch-pool.sh {ensure|claim|reap|status} <session> [--delay]" >&2; exit 2; }
 [ -n "$SESS" ] || { echo "scratch-pool: no session" >&2; exit 2; }
 
 fleet_load_conf "$SESS"
@@ -296,6 +297,15 @@ cmd_reap() {
 cmd_ensure() {
   local have n
   [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
+  # --delay: wait before rebuilding. Warming is a full cold claude boot, and the
+  # caller is the ⌃s spawn — firing it at the instant the operator starts typing
+  # into the window they just claimed is the one moment that contention is felt
+  # (measured: first-keystroke echo went from sub-second to tens of seconds).
+  # The sleep lives HERE, behind the pool-enabled gate, and not in the caller's
+  # run-shell string: with the pool off this must cost nothing, and the spawner's
+  # selftest executes run-shell synchronously — a sleep there added 45s to EVERY
+  # spawn case and blew the CI job's 10-minute budget.
+  [ "$DELAY" = 1 ] && sleep "${FLEET_POOL_REFILL_DELAY:-45}"
   cmd_reap
   have=0; for wid in $(pool_windows); do usable "$wid" && have=$((have + 1)); done
   n=$(( WANT - have ))
