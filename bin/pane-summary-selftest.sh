@@ -26,6 +26,10 @@
 #                not re-expanded) — no broken border, no format leakage.
 #   • GUARD      a window with no @summary renders the pre-#455 header exactly (no
 #                dangling ' · ' separator).
+#   • NO-MCP     the `claude -p` it shells out to carries --strict-mcp-config with an
+#                empty config (issue #468) — a screen classifier must not boot the
+#                operator's MCP set on every Stop hook — and FLEET_HELPER_NO_MCP=0
+#                still drops the flags for a no-edit rollback.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -59,6 +63,7 @@ chmod +x "$WORK/bin/tmux"
 # fixture the current assertion parked in \$WORK/claude-out. No network, no tokens.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/sh
+printf '%s\n' "\$*" > "$WORK/claude-argv"
 cat >/dev/null
 cat "$WORK/claude-out"
 EOF
@@ -257,6 +262,29 @@ meta="$(render "$ww")"
 case "$meta" in
   *"landed 3 PRs, {rebasing} 50% done"*) ok "',' '{' '%' render literally in the border" ;;
   *) fail "punctuation did not render literally — got [$meta]" ;;
+esac
+
+# --- NO-MCP: the helper `claude -p` boots no MCP server (issue #468) ---------
+summarize 'no mcp on the classifier call'
+argv="$(cat "$WORK/claude-argv" 2>/dev/null)"
+case "$argv" in
+  *--strict-mcp-config*) : ;;
+  *) fail "helper claude -p is missing --strict-mcp-config" "$argv" ;;
+esac
+case "$argv" in
+  *'"mcpServers":{}'*|*'{"mcpServers": {}}'*) : ;;
+  *) fail "--strict-mcp-config was passed without an empty --mcp-config to pin it to" "$argv" ;;
+esac
+ok "the helper claude -p call carries --strict-mcp-config + an empty --mcp-config"
+
+FLEET_HELPER_NO_MCP=0 summarize 'escape hatch'
+argv="$(cat "$WORK/claude-argv" 2>/dev/null)"
+case "$argv" in
+  *--strict-mcp-config*) fail "FLEET_HELPER_NO_MCP=0 did not drop the MCP flags" "$argv" ;;
+esac
+case "$argv" in
+  *--model*) ok "FLEET_HELPER_NO_MCP=0 drops the MCP flags and still passes --model" ;;
+  *) fail "the escape hatch dropped more than the MCP flags" "$argv" ;;
 esac
 
 printf 'selftest OK: %s checks — pane header carries @summary and never renames a window (issue #455)\n' "$pass"

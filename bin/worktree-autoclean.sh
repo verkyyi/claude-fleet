@@ -14,6 +14,14 @@
 # On prune of a merged `issue-<N>` worktree, the bound issue #N is AUTO-CLOSED
 # (if still open) with a pointer to the merge — the net for a PR that landed
 # without a `Closes #N` keyword.
+# A KEPT worktree still gets its detached processes swept (issue #469): the
+# liveness gate above has already established that no window is bound to it, so a
+# dev/mock server still anchored to the worktree — or to that session's scratchpad
+# dir outside it — is by definition an orphan and would otherwise run forever (11
+# were found alive 2 days after their window closed, two of them pegging a core).
+# Only the KEEP-because-dirty/unmerged paths sweep; a worktree kept as PROTECTED
+# never reaches the liveness gate and is never touched. Set FLEET_REAP_KEPT_PROCS=0
+# to leave an intentionally long-lived preview server alone.
 # Fail-safe: if tmux is not running we cannot tell what's attached, so we SKIP.
 # Pass --dry-run to print decisions (incl. would-close) without removing anything.
 #
@@ -72,6 +80,27 @@ LIVE="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{pane_current_pa
 # after spawn, and can then false-reap the live worker's worktree.
 LIVE_ISSUES="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{@issue}' 2>/dev/null; done)"
 
+# --- orphan procs of a KEPT worktree, issue #469 -------------------------------
+# #151 reaps a worktree's detached processes when it is PRUNED. A dirty/unmerged
+# worktree is KEPT forever (correctly — #290 must never silently delete an
+# experiment), so before #469 its processes were never swept at all. Call this ONLY
+# from past the liveness gate, where "no window is bound to $dir" already holds.
+# The age gate matters here in a way it does not at prune time: this runs hourly
+# against a live machine, and the reaper's argv matcher would otherwise catch a
+# live session's transient command that merely mentions the path.
+REAP_MINAGE="${FLEET_REAP_KEPT_MINAGE:-600}"
+reap_detached() {   # $1=worktree-dir  $2=branch
+  [ "${FLEET_REAP_KEPT_PROCS:-1}" = 1 ] || return 0
+  local rp
+  if [ "$DRY" = 1 ]; then
+    rp="$(fleet_reap_worktree_procs "$1" dry 2 "$REAP_MINAGE")"
+    case "$rp" in would\ reap:*) echo "      $rp  (window gone — kept worktree)" ;; esac
+    return 0
+  fi
+  rp="$(fleet_reap_worktree_procs "$1" kill 2 "$REAP_MINAGE")"
+  case "$rp" in no\ orphan\ procs) ;; *) log "REAP  $2 — $rp (kept worktree, window gone)" ;; esac
+}
+
 removed=0; kept=0; closed=0
 dir=""; head=""; branch=""
 REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""
@@ -104,10 +133,13 @@ process() {
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
   case "$merged" in
     dirty)
+      # The worktree stays, its orphaned processes do not (#469).
+      reap_detached "$dir" "$branch"
       # scratch: never silently delete an experiment — keep + surface once (#290).
       if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "dirty"; return; fi
       say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
     unmerged)
+      reap_detached "$dir" "$branch"
       if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "unmerged work"; return; fi
       say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
     ancestor) merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
