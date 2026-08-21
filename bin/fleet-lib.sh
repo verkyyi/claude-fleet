@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -621,6 +621,22 @@ EOF
   return 0
 }
 
+# Age of a process in SECONDS, portably (issue #469). macOS `ps` has no `etimes`
+# (Linux does), so parse the POSIX `etime` field — [[dd-]hh:]mm:ss. Prints 0 for a
+# pid that is gone or unparseable, which makes an age gate fail CLOSED (the process
+# is treated as brand new and therefore skipped).
+fleet_proc_age() {
+  local et
+  et="$(ps -o etime= -p "${1:-0}" 2>/dev/null | tr -d ' ')"
+  [ -n "$et" ] || { printf '0\n'; return 0; }
+  printf '%s' "$et" | awk -F'[-:]' '
+    { if (NF==4)      s=$1*86400 + $2*3600 + $3*60 + $4
+      else if (NF==3) s=$1*3600 + $2*60 + $3
+      else if (NF==2) s=$1*60 + $2
+      else            s=0
+      printf "%d\n", s }'
+}
+
 # Reap any processes still anchored to a worktree BEFORE it is removed (issue
 # #151). A worker can detach processes — selftest tmux servers, backgrounded
 # scripts, hung pipes — that outlive `git worktree remove`: reparented to init,
@@ -631,15 +647,32 @@ EOF
 #   $1  worktree dir (required; a broad root like / or $HOME is refused)
 #   $2  mode: "kill" (default) SIGTERM→grace→SIGKILL, or "dry" (report only)
 #   $3  grace seconds before SIGKILL (default 2; ignored in dry mode)
+#   $4  minimum process age in seconds (default 0 = no age gate) — see below
 #
-# Finds them two ways because the crash-#3 orphan had a RELATIVE argv but its cwd
-# was inside the worktree: (1) argv references the path (pgrep -f — catches e.g. a
-# selftest `tmux -S <dir>/sock`), and (2) cwd is inside the path (lsof, or /proc
-# on Linux). Never touches this process, its parent, pid≤1, or the shared tmux
-# server. Prints a one-line summary to stdout (the caller logs it). Best-effort:
-# absent pgrep/lsof simply narrow the search; it never fails the caller.
+# Finds them THREE ways, because each earlier pair missed a real orphan:
+#   (1) argv references the worktree path (pgrep -f — catches e.g. a selftest
+#       `tmux -S <dir>/sock`);
+#   (2) cwd is inside the worktree (lsof, or /proc on Linux) — the crash-#3 orphan
+#       had a RELATIVE argv but its cwd was in the worktree;
+#   (3) cwd/argv is inside the Claude Code SESSION SCRATCHPAD anchored to this
+#       worktree (issue #469). That dir lives OUTSIDE the worktree, at
+#       …/claude-<uid>/<worktree-path-with-/-turned-to->/<session-uuid>/scratchpad,
+#       so a mock server started there (`node mock-yaya-server.js`) matches neither
+#       (1) nor (2). Eleven such orphans were found alive 2 days after their window
+#       closed. Matched on the mangled component with BOTH delimiters, so
+#       `…-scratch-1/` cannot swallow `…-scratch-11/`.
+#
+# The AGE GATE ($4) exists because (1) greps argv: a live session's transient
+# command that merely MENTIONS the path (a `grep`, an `ls`) must never be caught.
+# Prune-time callers pass nothing (the dir is going away anyway); the recurring
+# kept-worktree sweep in worktree-autoclean.sh passes ~600 so only something that
+# has genuinely settled in is eligible.
+#
+# Never touches this process, its parent, pid≤1, or the shared tmux server. Prints
+# a one-line summary to stdout (the caller logs it). Best-effort: absent pgrep/lsof
+# simply narrow the search; it never fails the caller.
 fleet_reap_worktree_procs() {
-  local dir="${1:-}" mode="${2:-kill}" grace="${3:-2}"
+  local dir="${1:-}" mode="${2:-kill}" grace="${3:-2}" minage="${4:-0}"
   [ -n "$dir" ] || { printf 'no worktree dir\n'; return 0; }
   dir="${dir%/}"
   # Never sweep a broad root — a bad caller must not turn this into a mass kill.
@@ -650,26 +683,51 @@ fleet_reap_worktree_procs() {
   # keeps the path as passed (that's how the process references it on its cmdline).
   local cdir; cdir="$(cd "$dir" 2>/dev/null && pwd -P)"; [ -n "$cdir" ] || cdir="$dir"
 
-  local pids="" p re
+  # Scratchpad patterns (issue #469): the mangled worktree path, delimited on both
+  # sides. Both the canonical and the as-passed form are tried — Claude Code mangles
+  # the path it was LAUNCHED with, which may or may not be symlink-resolved; on macOS
+  # a $TMPDIR worktree differs between the two (/var → /private/var). They stay TWO
+  # scalars rather than one joined list because macOS awk rejects a literal newline
+  # inside a -v assignment ("awk: newline in string"), which silently killed the whole
+  # cwd matcher when the two forms diverged.
+  local mp1 mp2
+  mp1="/$(printf '%s' "$cdir" | tr '/' '-')/"
+  mp2="/$(printf '%s' "$dir" | tr '/' '-')/"
+  [ "$mp2" = "$mp1" ] && mp2=""
+
+  local pids="" p re pat
   # 1) argv references the worktree path. Escape ERE metacharacters so a `.` in
   #    the path can't over-match an unrelated process (pgrep -f is a regex).
   if command -v pgrep >/dev/null 2>&1; then
-    re="$(printf '%s' "$dir" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-    pids="$(pgrep -f "$re" 2>/dev/null)"
+    for pat in "$dir" "$mp1" "$mp2"; do
+      [ -n "$pat" ] || continue
+      re="$(printf '%s' "$pat" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+      pids="$pids
+$(pgrep -f "$re" 2>/dev/null)"
+    done
   fi
   # 2) cwd is inside the worktree. One lsof lists every process's cwd (macOS +
   #    Linux); fall back to /proc where lsof is absent. Exact prefix match on $cdir.
   if command -v lsof >/dev/null 2>&1; then
     pids="$pids
-$(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
+$(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" -v m1="$mp1" -v m2="$mp2" '
         /^p/ { pid=substr($0,2) }
         /^n/ { path=substr($0,2)
-               if (path==d || substr(path,1,length(d)+1)==d"/") print pid }')"
+               if (path==d || substr(path,1,length(d)+1)==d"/") { print pid; next }
+               if (m1 != "" && index(path, m1)) { print pid; next }
+               if (m2 != "" && index(path, m2)) { print pid } }')"
   elif [ -d /proc ]; then
+    local cw hit
     for p in /proc/[0-9]*/cwd; do
-      case "$(readlink "$p" 2>/dev/null)" in
-        "$cdir"|"$cdir"/*) p="${p#/proc/}"; pids="$pids ${p%/cwd}" ;;
-      esac
+      cw="$(readlink "$p" 2>/dev/null)"; hit=0
+      case "$cw" in "$cdir"|"$cdir"/*) hit=1 ;; esac
+      if [ "$hit" = 0 ]; then
+        for pat in "$mp1" "$mp2"; do
+          [ -n "$pat" ] || continue
+          case "$cw" in *"$pat"*) hit=1; break ;; esac
+        done
+      fi
+      [ "$hit" = 1 ] && { p="${p#/proc/}"; pids="$pids ${p%/cwd}"; }
     done
   fi
 
@@ -681,6 +739,12 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" '
     [ "$p" = "$self" ] && continue
     [ "$p" = "$parent" ] && continue
     printf '%s\n' $tmuxpid | grep -qx "$p" && continue
+    # Age gate (issue #469): skip anything younger than $minage seconds — matcher
+    # (1) greps argv, so a live session's transient command that merely names the
+    # path would otherwise be caught by a recurring sweep. 0 = gate off.
+    if [ "$minage" -gt 0 ] 2>/dev/null; then
+      [ "$(fleet_proc_age "$p")" -ge "$minage" ] 2>/dev/null || continue
+    fi
     list="$list $p"
   done
   list="${list# }"

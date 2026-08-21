@@ -43,6 +43,36 @@ FLEET_BASE_BRANCH="main"
 # @label=Protected-branch pattern @group=janitor @tier=advanced @scope=fleet @edit=regex
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 
+# --- Orphan-process reap for KEPT worktrees (issue #469) ------------------------
+# ON by default, GLOBALLY. #151 already reaps a worktree's detached processes when
+# the janitor PRUNES it. But a dirty/unmerged worktree is KEPT forever (a scratch
+# experiment must never be silently deleted — #290), so before #469 its dev/mock
+# servers ran on indefinitely: eleven were found alive two DAYS after their window
+# closed, two of them pegging a core. The janitor now also sweeps a worktree it is
+# KEEPING, but only past the liveness gate — i.e. only once no window is bound to
+# it. A PROTECTED worktree never reaches that gate and is never touched. Set to 0
+# if you deliberately leave a preview server running behind a closed window.
+# @label=Reap orphan procs of kept worktrees @group=janitor @tier=advanced @scope=global @edit=bool
+#FLEET_REAP_KEPT_PROCS=1
+# Minimum process age (seconds) for that recurring sweep. The reaper also matches
+# argv, so a live session's transient command that merely NAMES the worktree path
+# must not be eligible; only something that has genuinely settled in is. Prune-time
+# reaping is unaffected (the directory is going away anyway). Default 600.
+# @label=Kept-worktree reap min age @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+#FLEET_REAP_KEPT_MINAGE=600
+
+# --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
+# ON by default, GLOBALLY. bin/tmux-summarize.sh and bin/classify-sessions.sh read a
+# pane and answer in one line/one word. Left unflagged, EVERY such call boots the
+# operator's whole MCP set — 4+ node children, the remote connectors, and a cold `rg`
+# scan: measured at 5.2s and up to 517MB RSS, on every Stop hook in every window. They
+# now pass --strict-mcp-config with an empty config (auth and settings stay intact,
+# unlike --bare, which drops the login). Set to 0 to restore the unflagged calls if a
+# future CLI changes what those flags mean — both call sites swallow stderr, so a
+# silent breakage would simply stop the summaries.
+# @label=Strip MCP from helper claude -p @group=status @tier=advanced @scope=global @edit=bool
+#FLEET_HELPER_NO_MCP=1
+
 # Context window used for the dash's ctx% column (tokens). 200000 for standard
 # plans; 1000000 if your sessions run 1M-context models.
 # @label=Context window size @group=cache @tier=advanced @scope=fleet @edit=int @unit=tokens

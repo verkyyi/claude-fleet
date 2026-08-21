@@ -28,6 +28,18 @@ MAXW="${SUMMARIZE_MAX:-8}"
 DEBOUNCE="${SUMMARIZE_DEBOUNCE:-15}"   # min seconds between summaries of ONE window
 command -v claude >/dev/null 2>&1 || exit 0
 
+# Helper `claude -p` calls carry NO MCP (issue #468). This is a screen classifier,
+# not an agent: it needs the model and nothing else. Left unflagged, every call boots
+# the operator's whole MCP set — 4+ node children (npx-resolved gmail/mcp-image/…),
+# the remote connectors over the network, and a cold `rg` scan — measured at 5.2s and
+# up to 517MB RSS for a one-word haiku answer, on EVERY Stop hook in EVERY window.
+# `--strict-mcp-config` with an empty config pins MCP to nothing while leaving auth
+# and settings intact (`--bare` is faster still but drops the login). Both call sites
+# swallow stderr, so FLEET_HELPER_NO_MCP=0 is the no-edit escape hatch if a future
+# CLI ever changes what these flags mean.
+NOMCP=()
+[ "${FLEET_HELPER_NO_MCP:-1}" = 1 ] && NOMCP=(--strict-mcp-config --mcp-config '{"mcpServers":{}}')
+
 # Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. In
 # --window mode the socket is inherited from $TMUX (the Stop/SessionStart hook
 # fires in-pane); the daemon sweep fans out over every live fleet socket, setting
@@ -86,7 +98,7 @@ do_window() {
       # tolerant: `head -1` closes the pipe early, so claude/sed may exit via
       # SIGPIPE (141) under pipefail — harmless, only the captured text is used.
       sum=$(printf '%s\n\n%s\n\nRecent screen:\n-----\n%s\n' "$RUBRIC" "$meta" "$cap" \
-            | claude -p --model "$MODEL" 2>/dev/null \
+            | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null \
             | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
       echo "$h" > "$hf"
       if [ -n "$sum" ]; then

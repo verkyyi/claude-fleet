@@ -28,6 +28,18 @@ SETTLE="${CLASSIFY_SETTLE:-0.5}"   # let the "scheduled/waiting" line render bef
 
 command -v claude >/dev/null 2>&1 || exit 0
 
+# Helper `claude -p` calls carry NO MCP (issue #468). This is a screen classifier,
+# not an agent: it needs the model and nothing else. Left unflagged, every call boots
+# the operator's whole MCP set — 4+ node children (npx-resolved gmail/mcp-image/…),
+# the remote connectors over the network, and a cold `rg` scan — measured at 5.2s and
+# up to 517MB RSS for a one-word haiku answer, on EVERY Stop hook in EVERY window.
+# `--strict-mcp-config` with an empty config pins MCP to nothing while leaving auth
+# and settings intact (`--bare` is faster still but drops the login). Both call sites
+# swallow stderr, so FLEET_HELPER_NO_MCP=0 is the no-edit escape hatch if a future
+# CLI ever changes what these flags mean.
+NOMCP=()
+[ "${FLEET_HELPER_NO_MCP:-1}" = 1 ] && NOMCP=(--strict-mcp-config --mcp-config '{"mcpServers":{}}')
+
 # Per-fleet tmux sockets (issue #159): each fleet is its own tmux server. The
 # socket is inherited from $TMUX (the Stop hook fires in-pane) or handed in via
 # CLASSIFY_SOCK (the spinner's stuck-demote fires out-of-band). TM() routes every
@@ -69,7 +81,7 @@ classify_one() {
   hf="$CACHE/$key.hash"
   [ "$h" = "$(cat "$hf" 2>/dev/null)" ] && return 0    # unchanged screen -> no LLM call
 
-  raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p --model "$MODEL" 2>/dev/null)
+  raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
   label=$(printf '%s' "$raw" | tr -d '[:space:].' | tr '[:lower:]' '[:upper:]')
   echo "$h" > "$hf"     # remember we've seen this screen regardless of parse
 
