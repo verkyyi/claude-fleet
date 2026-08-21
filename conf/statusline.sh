@@ -7,6 +7,8 @@
 #   .cwd                    — fallback CWD
 #   .model.display_name     — human-readable model name
 #   .context_window.used_percentage  — % of context window consumed (null before first message)
+#   .context_window.context_window_size — the window's own size in tokens (the ONLY
+#                             place the fleet can learn it; see the stamp below)
 #
 # Git commands use --no-optional-locks to avoid touching lock files.
 # Requires: jq  (silently exits if absent)
@@ -33,7 +35,10 @@ SEGMENTS=()
 
 # ── 1. Context usage % ───────────────────────────────────────────────────────
 # .context_window.used_percentage is pre-calculated (0-100); null before first message.
+# .context_window.context_window_size is the window itself — read alongside it so
+# the stamp below can publish a denominator that follows the model (issue #477).
 CTX_PCT=$(jq -r '.context_window.used_percentage // ""' <<< "$INPUT")
+CTX_SIZE=$(jq -r '.context_window.context_window_size // ""' <<< "$INPUT")
 
 if [[ -n "$CTX_PCT" ]]; then
   CTX_INT=$(printf '%.0f' "$CTX_PCT")
@@ -43,8 +48,16 @@ if [[ -n "$CTX_PCT" ]]; then
   # stdin doesn't carry the context window, but the statusline does. No-op outside
   # tmux; cheap set-option on every render. Panels/the hub stamp too but are
   # excluded by the nudge's scope gate, so the extra write is harmless.
+  # @ctx_limit rides along (issue #477): the window SIZE is handed to the
+  # statusline and nowhere else, so without this stamp bin/fleet-context.sh has to
+  # guess a denominator — its 200k default read 197% (and a false HANDOFF) on a 1M
+  # window. Stamping it makes the derived percentage follow the model instead of a
+  # constant an operator has to remember to set per fleet.
   if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
     tmux set-window-option -t "$TMUX_PANE" @ctx_pct "$CTX_INT" 2>/dev/null || true
+    if [[ -n "$CTX_SIZE" && "$CTX_SIZE" != null ]]; then
+      tmux set-window-option -t "$TMUX_PANE" @ctx_limit "${CTX_SIZE%%.*}" 2>/dev/null || true
+    fi
   fi
   if   (( CTX_INT >= 80 )); then CTX_COLOR="$RED"
   elif (( CTX_INT >= 50 )); then CTX_COLOR="$YELLOW"

@@ -410,7 +410,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # ignored. Raise it for a long-context model (e.g. 1000000) so the derived figure
 # and the WATCH/HANDOFF bands stay honest; the default matches the standard window.
 # @label=Context window tokens @group=handoff @tier=advanced @scope=fleet @edit=int
-#FLEET_CONTEXT_LIMIT=200000      # context-window size used to derive a % from the transcript
+#FLEET_CONTEXT_LIMIT=200000      # FALLBACK context-window size for the derived %
+# Only consulted when this pane carries no @ctx_limit stamp (issue #477).
+# conf/statusline.sh stamps the REAL window size every render — Claude Code hands
+# it to the statusline and to nothing else — so a fleet whose panes run that
+# statusline needs no value here, and one set by hand goes stale the moment the
+# model changes. Set it only for panes with no stamping statusline; with neither,
+# bin/fleet-context.sh falls back to 200000 and SAYS so (`limit=default`), because
+# a 1M-window session measured against 200k reads 197% and a false HANDOFF.
 
 # Multiple subscription accounts, with auto-failover when one hits its usage
 # limit (the rolling 5-hour "session" window or the weekly cap). Register each
