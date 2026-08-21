@@ -1132,6 +1132,49 @@ fleet_session_count_for() {
 #              global-only behaviour unchanged) AND the cap is a positive number.
 # On refusal, prints a human-readable reason on stdout for the caller to surface
 # (tmux display-message); prints nothing when allowed.
+# ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
+# fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch
+# and its sibling worktree off origin/<base> (falling back to the local base ref
+# when there is no origin). `git worktree add -b` IS the serialization point — it
+# FAILS if the branch or dir already exists — so concurrent callers retry with the
+# next N rather than trusting a check-then-create gap. Prints "<slug>\t<worktree>".
+fleet_scratch_alloc() {
+  local main="$1" base="$2" dir bse cand cwt n=1
+  dir="$(dirname "$main")"; bse="$(basename "$main")"
+  git -C "$main" fetch origin "$base" --quiet 2>/dev/null
+  while [ "$n" -le 999 ]; do
+    cand="scratch-$n"; cwt="$dir/$bse-$cand"
+    if git -C "$main" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
+      n=$((n + 1)); continue
+    fi
+    # >/dev/null 2>&1, not just 2>/dev/null: `git worktree add` reports "Preparing
+    # worktree …" on stderr but "HEAD is now at <sha>" on STDOUT, and under
+    # `run-shell -b` any stdout becomes a view-mode overlay over the dash (#446).
+    if git -C "$main" worktree add -b "$cand" "$cwt" "origin/$base" >/dev/null 2>&1 \
+       || git -C "$main" worktree add -b "$cand" "$cwt" "$base" >/dev/null 2>&1; then
+      printf '%s\t%s\n' "$cand" "$cwt"; return 0
+    fi
+    n=$((n + 1))
+  done
+  return 1
+}
+
+# fleet_scratch_free <main> <slug> <worktree> — undo an allocation (failed spawn,
+# or a warm-pool entry retired unclaimed). Never fails the caller.
+fleet_scratch_free() {
+  git -C "$1" worktree remove --force "$3" >/dev/null 2>&1
+  git -C "$1" branch -D "$2" >/dev/null 2>&1
+  git -C "$1" worktree prune >/dev/null 2>&1
+  return 0
+}
+
+# fleet_pool_session <sess> — the HOLDING session that parks pre-warmed scratch
+# windows for <sess>, on the same socket. It deliberately has NO plan/dash window:
+# that is what keeps warm entries invisible to fleet_session_count (which only
+# counts sessions that HAVE a hub), to fleet_session_count_for (fleet-scoped) and
+# to the dash rows (scoped by FLEET_SESSION) — no per-consumer opt-out to forget.
+fleet_pool_session() { printf '%s-pool\n' "$1"; }
+
 fleet_session_cap_ok() {
   local sess="${1:-}"
   local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n

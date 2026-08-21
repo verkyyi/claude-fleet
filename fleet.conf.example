@@ -491,6 +491,36 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Jump to new worker windows @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_SPAWN_FOCUS=0
 
+# --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
+# How many pre-started scratch sessions to keep parked and ready. 0 (default) = OFF.
+#
+# Why: pressing ⌃s cold costs ~7s before you can type — `git fetch` + `git worktree
+# add` (~3.2s), claude's boot (~1.7s), and then a ~1.1s window in which Claude Code's
+# TUI has ALREADY painted its `❯` box but silently DISCARDS everything you type
+# (its input handler flushes whatever is in flight when it mounts). The box looking
+# ready is the trap. With a warm entry, ⌃s is a `move-window` + rename of a session
+# that finished all of that minutes ago: measured 0.46s to the window and 0.30s for
+# the first keystroke — 2.9s end to end including the dash's own 3s refresh tick.
+#
+# Cost: each warm entry is a real idle claude (~550MB RSS) plus its worktree. They
+# are parked in a `<fleet>-pool` holding session, which has no plan/dash window, so
+# they are invisible to the dash and to every session count. Warming refuses to
+# start one when the fleet is already at its session cap.
+# @label=Warm scratch sessions @group=spawn @tier=common @scope=fleet @edit=int
+#FLEET_SCRATCH_POOL=0
+
+# Seconds before an unclaimed warm entry is retired and rebuilt. Its worktree is a
+# snapshot of origin/<base> taken when it was created, so handing out an old one
+# silently branches your work off a stale master.
+# @label=Warm entry max age (s) @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_POOL_MAX_AGE=1800
+
+# How long ⌃s waits before rebuilding the entry it just consumed. Warming is a full
+# cold claude boot; firing it at the instant you start typing into the window you
+# just claimed is the one moment that contention is felt.
+# @label=Warm pool refill delay (s) @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_POOL_REFILL_DELAY=45
+
 # --- Cross-machine pre-spawn dedup (bin/dash-issue-session.sh, issue #258) --------
 # ON by default (set to 0 to opt out). The local spawn dedup only sees THIS machine's
 # tmux server. When two fleets run on DIFFERENT machines against the SAME repo, a
