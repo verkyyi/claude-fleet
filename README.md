@@ -35,7 +35,11 @@ demo repo data.</sub>
   it files a GitHub issue and spawns a new worktree session bound to it.
   `Ctrl-S` opens a raw scratch session (plain `claude`, no issue — but in its
   own writable `scratch-N` worktree, so an experiment can push a branch and open
-  a PR like any worker).
+  a PR like any worker). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
+  ready: `⌃s` then hands you a session you can type into immediately (0.46s to
+  the window, 0.30s to the first keystroke) instead of one that spends ~7s
+  booting — the last second of which paints a `❯` box that silently swallows
+  whatever you type.
 
 ![backlog](docs/img/backlog.svg)
 

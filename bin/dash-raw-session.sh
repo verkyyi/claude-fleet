@@ -153,32 +153,33 @@ if [ -n "$NAME" ]; then
   esac
 fi
 
+# --- get a scratch window: WARM POOL first, cold spawn otherwise --------------
+# With FLEET_SCRATCH_POOL>0 the slow half of a spawn already happened, minutes ago,
+# to a window parked in the `<sess>-pool` holding session: worktree built, claude
+# booted, and — the part that actually bites — PAST the TUI's input-mount flush,
+# the ~1s window in which Claude Code silently discards whatever you type even
+# though the `❯` box is already on screen. Claiming one is a `move-window` +
+# rename: the pane, its pty and the running claude survive untouched, so the
+# window is typeable in the same tick (measured 0.29s vs 7.0s cold).
+# An empty claim (pool off, cold, stale, or account-rotated) falls straight
+# through to the original cold path below — the pool is never load-bearing.
+warm=0; win=""; slug=""; wt=""
+claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+if [ -n "$claimed" ]; then
+  warm=1
+  win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
+fi
+
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
 # The branch `scratch-<N>` + worktree `<repo-parent>/<repo-dir>-scratch-<N>` mirror
-# dash-issue-session.sh's mechanics. N is allocated atomic-ish vs concurrent ⌃s
-# presses: `git worktree add -b` is itself the serialization point — it FAILS if the
-# branch (or dir) already exists — so we retry with the next N on any loser, rather
-# than trust a check-then-create gap. The cheap pre-checks (branch ref / dir exists)
-# just skip obviously-taken candidates before the authoritative add. git/fs
-# uniqueness is durable (a worktree outlives its window), unlike live window names.
-MAIN_DIR="$(dirname "$MAIN")"; MAIN_BASE="$(basename "$MAIN")"
-git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
-slug=""; wt=""; N=1
-while [ "$N" -le 999 ]; do
-  cand="scratch-$N"; cwt="$MAIN_DIR/$MAIN_BASE-$cand"
-  if git -C "$MAIN" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
-    N=$((N + 1)); continue
-  fi
-  # >/dev/null 2>&1, not just 2>/dev/null: `git worktree add` reports "Preparing
-  # worktree …" on stderr but "HEAD is now at <sha>" on STDOUT, and under
-  # `run-shell -b` any stdout becomes a view-mode overlay over the dash (#446).
-  if git -C "$MAIN" worktree add -b "$cand" "$cwt" "origin/$BASE" >/dev/null 2>&1 \
-     || git -C "$MAIN" worktree add -b "$cand" "$cwt" "$BASE" >/dev/null 2>&1; then
-    slug="$cand"; wt="$cwt"; break
-  fi
-  N=$((N + 1))
-done
-[ -n "$slug" ] || { TM display-message "raw: could not create a scratch worktree" 2>/dev/null; exit 1; }
+# dash-issue-session.sh's mechanics. The allocator lives in fleet-lib.sh
+# (fleet_scratch_alloc) because the warm pool allocates identically; `git worktree
+# add -b` is itself the serialization point vs concurrent ⌃s presses.
+if [ "$warm" = 0 ]; then
+  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || alloc=""
+  if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
+  [ -n "$slug" ] || { TM display-message "raw: could not create a scratch worktree" 2>/dev/null; exit 1; }
+fi
 
 # Distinct, stable-ish window name. Default is the worktree slug `scratch-<N>` so a
 # window and its worktree read alike; a custom --name is deduped against THIS
@@ -197,13 +198,18 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="${custom:-$slug}-$
 # subscription account + the fleet's default model (transparent when single-account).
 # On a new-window failure, roll back the just-created worktree + branch so a failed
 # spawn leaves no orphan (the janitor would otherwise inherit it).
-win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "'$BIN/fleet-claude.sh'; exec \$SHELL") \
-  || { git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1
-       git -C "$MAIN" branch -D "$slug" >/dev/null 2>&1
-       git -C "$MAIN" worktree prune >/dev/null 2>&1
-       TM display-message "raw: new-window failed in $SESS" 2>/dev/null; exit 1; }
-TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
-TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
+if [ "$warm" = 1 ]; then
+  # already spawned + already warm: it only needs this fleet's name on it. @raw /
+  # @worktree were stamped when it was warmed; the @pool_* marks were cleared by
+  # the claim, so from here on it is indistinguishable from a cold scratch window.
+  TM rename-window -t "$win" -- "$name" 2>/dev/null
+else
+  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "'$BIN/fleet-claude.sh'; exec \$SHELL") \
+    || { fleet_scratch_free "$MAIN" "$slug" "$wt"
+         TM display-message "raw: new-window failed in $SESS" 2>/dev/null; exit 1; }
+  TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
+  TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
+fi
 
 # Seed the dash summary column so the row isn't blank until the session renders
 # content (same key/format the readers expect; the LLM summarizer overwrites this
@@ -214,6 +220,16 @@ rawseed="$name (raw session)"
 printf '%s' "$rawseed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
 # …and as a window option, so the pane header carries it too (issue #455).
 TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$rawseed")" 2>/dev/null || :
+
+# Refill the pool in the background, so the NEXT ⌃s is instant too — but NOT right
+# now. Warming costs a whole cold claude boot (node + the fleet's MCP set), and
+# firing it at the instant the operator starts typing into the window they just
+# claimed is the one moment it hurts: on a box already running several sessions
+# that contention pushed the first keystroke's echo from sub-second to tens of
+# seconds — reintroducing, from the other end, exactly the stall this removes.
+# So the refill sleeps first (FLEET_POOL_REFILL_DELAY, default 45s). run-shell -b
+# because it is slow either way; a no-op when FLEET_SCRATCH_POOL is 0.
+TM run-shell -b "sleep ${FLEET_POOL_REFILL_DELAY:-45}; bash '$BIN/scratch-pool.sh' ensure '$SESS' >/dev/null 2>&1" 2>/dev/null
 
 if [ -z "$TARGET_SESS" ]; then
   # Surface a reserved-name fallback note regardless of the focus path so the user
