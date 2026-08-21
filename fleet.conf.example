@@ -113,6 +113,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Max sessions — this fleet @group=caps @tier=common @scope=fleet @edit=int @unit=sessions
 #FLEET_MAX_SESSIONS=0
 
+# --- MCP allowlist for spawned sessions (bin/fleet-claude.sh, issue #473) -------
+# Unset by default = UNCHANGED: a session boots every MCP server the operator has
+# configured. That is the right default and the wrong bill for most fleets — a
+# 30-day census of every mcp__* call across 4690 transcripts on one machine found
+# all of it in three servers (playwright 426, seedance 36, mcp-image 31) used by ONE
+# fleet, while the other fleet made ZERO MCP calls and still paid ~2s of startup and
+# 4-5 resident node children per session for thirteen servers. Being @scope=fleet,
+# this lets each fleet pay only for what it uses. Values:
+#   (unset/empty)  every configured MCP server loads — today's behaviour
+#   none           no MCP server at all
+#   <path|JSON>    ONLY these servers; the CLI takes a file path OR inline JSON
+# --strict-mcp-config is what also drops the REMOTE (claude.ai connector) servers,
+# not just local stdio ones. An explicit --mcp-config/--strict-mcp-config from the
+# caller always wins. Trade-off worth knowing: a census measures what was USED, not
+# what may be NEEDED — a trimmed fleet session won't have the server it never asked
+# for before. It takes effect on the next spawned session, and plain `claude` outside
+# a fleet is untouched, so the full set is always one ordinary session away.
+# @label=MCP servers for this fleet @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_MCP_CONFIG=""
+
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
 # OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
 # fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps

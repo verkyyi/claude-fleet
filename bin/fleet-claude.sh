@@ -10,7 +10,26 @@
 # attribute a "hit your … limit" banner back to the right account and rotate.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
+# shellcheck source=/dev/null
+[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"   # kept for a lib-less install
+
+# Per-fleet overlay (issue #472). Until now this script read the GLOBAL fleet.conf
+# only — and nothing else carried the per-fleet conf into a spawned window either
+# (`tmux new-window`'s command string does not inherit the spawner's shell env, and
+# the fleet never set-environments the conf onto its server). So every @scope=fleet
+# key that ONLY this script reads was silently inert: two fleets configured
+# FLEET_MODEL="fable" and every session they spawned ran `--model opus`, this
+# script's default for an unset value — a miss that fails quietly UPWARD, toward the
+# most expensive model. fleet_load_conf strips $_FLEET_GLOBAL_ONLY (#237), so global
+# still wins where it must; fleet_current_session reads $TMUX_PANE, which is set in
+# the spawned pane. No tmux / no conf / no lib → clean no-op, as before.
+if command -v fleet_load_conf >/dev/null 2>&1; then
+  _fc_sess="$(fleet_current_session 2>/dev/null)"
+  [ -n "$_fc_sess" ] && fleet_load_conf "$_fc_sess"
+  unset _fc_sess
+fi
 
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to
@@ -33,6 +52,33 @@ fi
 if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="$FLEET_MODEL"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
 
+# MCP allowlist (issue #473). A fleet session boots the operator's ENTIRE MCP set —
+# on the machine this was measured on, 13 servers: 5 local stdio (3 resolved through
+# npx, one pinned @latest so it hits the registry) plus 8 remote connectors over the
+# network. That is ~2s of the ~5s before a new session accepts input, plus 4-5
+# resident node children per session. A 30-day census of every mcp__* call across
+# 4690 transcripts found ALL of it concentrated in three servers, in one fleet; the
+# other fleet made zero MCP calls at all. This lets each fleet pay for what it uses:
+#
+#   unset/empty  every configured MCP server loads (unchanged — the default)
+#   none         no MCP at all
+#   <path|json>  ONLY these servers (the CLI takes a file path or inline JSON)
+#
+# --strict-mcp-config is what drops the REMOTE connectors too, not just local stdio.
+# An explicit --mcp-config/--strict-mcp-config from the caller wins, same as --model.
+mcp_flag=()
+if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
+  case " $* " in
+    *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) : ;;   # caller already chose
+    *)
+      _fc_mcp="$FLEET_MCP_CONFIG"
+      [ "$_fc_mcp" = none ] && _fc_mcp='{"mcpServers":{}}'
+      mcp_flag=(--strict-mcp-config --mcp-config "$_fc_mcp")
+      unset _fc_mcp
+      ;;
+  esac
+fi
+
 label=$("$BIN/fleet-account.sh" active 2>/dev/null)
 if [ -n "$label" ]; then
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
@@ -42,4 +88,4 @@ if [ -n "$label" ]; then
   fi
 fi
 
-exec claude ${model_flag[@]+"${model_flag[@]}"} "$@"
+exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} "$@"
