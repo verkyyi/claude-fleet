@@ -25,14 +25,22 @@
 #                   bin/fleet-comment.sh --note stamps). (b) it is the bound worker
 #                   talking to ITSELF — a `<!-- fleet:from role=worker … issue=<N> -->`
 #                   provenance marker whose issue equals THIS comment's issue (the
-#                   positive-self-ID backstop, issue #425). Every fleet actor shares
-#                   the OWNER identity, so author-filtering can't separate them — (a)
-#                   is the loop guard. (b) is the backstop for a worker comment that
-#                   skipped the wrapper (raw `gh issue comment`) and so lacks (a):
-#                   without it that comment passes the OWNER gate and is relayed back
-#                   into the worker once (dedup only stops the SECOND relay, not the
-#                   first). The operator's `--to-worker` (role=operator, no issue=) and
-#                   an external human (no fleet:from) are NOT matched by (b) — both relay.
+#                   positive-self-ID backstop, issue #425) — or whose marker carries
+#                   NO issue= at all (issue #483: unattributable ⇒ suppress; genuine
+#                   cross-worker mail always carries the sender's issue=). Every fleet
+#                   actor shares the OWNER identity, so author-filtering can't separate
+#                   them — (a) is the loop guard. (b) is the backstop for a worker
+#                   comment that carries provenance but skipped the no-relay flag
+#                   (e.g. `--to-worker` aimed at its own issue): without it that
+#                   comment passes the OWNER gate and is relayed back into the worker
+#                   once (dedup only stops the SECOND relay, not the first). A comment
+#                   with NEITHER marker (a truly raw `gh issue comment`) is
+#                   indistinguishable from a human handback on the shared account —
+#                   that hole is closed at the SOURCE: hooks/bash-guard.py blocks raw
+#                   `gh issue comment` in fleet panes (issue #483), steering every
+#                   fleet write through the marker-stamping wrapper. The operator's
+#                   `--to-worker` (role=operator, no issue=) and an external human
+#                   (no fleet:from) are NOT matched by (b) — both relay.
 #   3. gate       — relay only from a trusted author_association (default floor
 #                   OWNER/MEMBER/COLLABORATOR). A comment becomes autonomous tool-use
 #                   in a bypass-permissions worker ⇒ treat as RCE; never relay
@@ -105,15 +113,22 @@ bridge_marked() { case "$1" in *"$MARKER"*) return 0;; *) return 1;; esac; }
 # operator's `--to-worker` (role=operator, and the hub pane has no @issue so the
 # marker carries no issue=) and an external human (no fleet:from at all) are NOT
 # matched, so both still relay. The issue= compare is space-anchored so issue=10
-# never matches issue=100. Suppression is the SAFE direction — like the no-relay
-# marker, a spoofed fleet:from can only make a comment more suppressed, never
-# bypass the assoc gate to get relayed — so this runs before the gate, unguarded.
+# never matches issue=100. A role=worker marker with NO issue= field at all is
+# ALSO suppressed (issue #483): it can't prove it is NOT the bound worker's own
+# comment, and a genuine cross-worker message always carries the sender's issue=
+# (fleet-comment.sh stamps the sender's @issue binding) — so an unattributable
+# worker comment must never drive a worker. Suppression is the SAFE direction —
+# like the no-relay marker, a spoofed fleet:from can only make a comment more
+# suppressed, never bypass the assoc gate to get relayed — so this runs before
+# the gate, unguarded.
 bridge_self_authored() {
   local body="$1" route_issue="$2" mk
   case "$body" in *"$FROM_PREFIX"*) ;; *) return 1 ;; esac
   mk=" ${body#*"$FROM_PREFIX"}"; mk="${mk%%-->*} "     # isolate the marker fields, space-pad both ends
   case "$mk" in *' role=worker '*) ;; *) return 1 ;; esac
-  case "$mk" in *" issue=$route_issue "*) return 0 ;; *) return 1 ;; esac
+  # exact issue match ⇒ self; a DIFFERENT issue= ⇒ cross-worker mail (relay);
+  # no issue= at all ⇒ unattributable worker comment ⇒ suppress (issue #483).
+  case "$mk" in *" issue=$route_issue "*) return 0 ;; *' issue='*) return 1 ;; *) return 0 ;; esac
 }
 
 # 0 if <assoc> is in the trusted floor, 1 otherwise. Word-boundary match against

@@ -89,6 +89,14 @@ back into that worker once**. Dedup does **not** cover this: it only suppresses 
 *second* delivery of a comment id, never the *first*, so the spurious self-turn
 still fires.
 
+The backstop below catches the *marker-bearing* half of that hole (provenance
+stamped, no-relay flag missing). A comment carrying **neither** marker is
+byte-indistinguishable from a real human handback on the shared account — no
+bridge-side rule can filter it — so that half is closed **at the source**:
+`hooks/bash-guard.py` blocks a raw `gh issue comment` from any fleet pane and
+steers it through the marker-stamping wrapper (issue #483; the
+`FLEET_ALLOW_RAW_COMMENT=1` prefix is the hatch for a repo no fleet serves).
+
 So the bridge also reads the **provenance** marker `fleet-comment.sh` already
 stamps — `<!-- fleet:from role=… session=… issue=<N> -->` — and suppresses a
 comment whose marker is `role=worker` with an `issue=<N>` **equal to the issue it
@@ -100,6 +108,10 @@ itself — flag or no flag. It is scoped tightly so nothing legitimate is caught
 - an **external human** has no `fleet:from` marker → not matched → relays.
 - a **cross-worker** comment (worker A driving worker B's issue) has `issue=A` ≠ B
   → not matched → relays.
+- a `role=worker` marker with **no `issue=` field at all** (a worker pane that lost
+  its `@issue` binding, or a forced `--from worker` outside one) **is** matched →
+  suppressed (issue #483): it can't prove it is *not* the bound worker's own
+  comment, and genuine cross-worker mail always carries the sender's `issue=`.
 - the `issue=` compare is space-anchored, so `issue=10` never matches `issue=100`.
 
 Because suppression is the **safe** direction — a comment that isn't relayed can't

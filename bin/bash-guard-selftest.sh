@@ -103,6 +103,32 @@ assert_exit 0 "tmux list-windows"   "$GUARD" "$(bash_json "$(jstr 'tmux list-win
 # ALLOW: send-keys as a quoted literal to another subcommand isn't the subcommand
 assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buffer -- "send-keys demo"')")"
 
+# BLOCK: a raw `gh issue comment` from a FLEET pane — fleet writes must go through
+# fleet-comment.sh so the issue-bridge's markers are stamped at the source
+# (issue #483). Fleet context is pinned hermetically via FLEET_MAIN (env is
+# authoritative, no tmux consulted); outside a fleet raw gh stays allowed.
+( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
+  assert_exit 2 "gh issue comment (fleet)"  "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
+  assert_exit 2 "gh --repo= issue comment"  "$GUARD" "$(bash_json "$(jstr 'gh --repo=o/r issue comment 483 -F body.md')")"
+  assert_exit 2 "gh comment in 2nd segment" "$GUARD" "$(bash_json "$(jstr 'echo hi && gh issue comment 12 --body x')")"
+  # ALLOW: the FLEET_ALLOW_RAW_COMMENT=1 hatch (a repo no fleet serves)
+  assert_exit 0 "gh comment + hatch"        "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 gh issue comment 483 --body x')")"
+  # ALLOW: the sanctioned wrapper (its internal gh runs in a subprocess this
+  # layer never sees), and non-comment gh issue verbs
+  # shellcheck disable=SC2088  # the tilde is a literal test payload, as typed in a pane
+  assert_exit 0 "fleet-comment wrapper"     "$GUARD" "$(bash_json "$(jstr '~/.claude/fleet/bin/fleet-comment.sh 483 --note --body "progress"')")"
+  assert_exit 0 "gh issue view"             "$GUARD" "$(bash_json "$(jstr 'gh issue view 483 --json state')")"
+  assert_exit 0 "gh pr comment"             "$GUARD" "$(bash_json "$(jstr 'gh pr comment 484 --body "verified"')")"
+  # FALSE-POSITIVE discipline: `issue comment` inside a quoted body / another
+  # command's args must not trip the anchored rule
+  assert_exit 0 "issue comment in body"     "$GUARD" "$(bash_json "$(jstr 'gh issue create --title x --body "never run gh issue comment raw"')")"
+  assert_exit 0 "issue comment in echo"     "$GUARD" "$(bash_json "$(jstr 'echo gh issue comment')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
+# ALLOW: the same raw comment OUTSIDE a fleet (no FLEET_MAIN, no TMUX)
+( fails=0; unset FLEET_MAIN; unset TMUX
+  assert_exit 0 "gh comment (no fleet)"     "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
+
 # fail OPEN on malformed input, and no-op on a non-Bash tool
 assert_exit 0 "malformed json"      "$GUARD" 'not json at all'
 assert_exit 0 "non-Bash tool"       "$GUARD" '{"tool_name":"Read","tool_input":{}}'
