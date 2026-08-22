@@ -124,7 +124,11 @@ override them):
   another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
   the Enter) and is hook-blocked (#437). The bridge relays your comment as the
   target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
-  for fleet plumbing only.
+  for fleet plumbing only. Closing the issue with a final comment (a
+  research/no-PR task) goes through the same wrapper —
+  `fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --close --body '…'` — never a
+  bare `gh issue close --comment`: that posts an UNMARKED comment the bridge
+  relays straight back into your own pane as a turn (issue #486).
 - **Spot adjacent work? File it — and spawn it if it's worth doing now.** File
   through the ONE filer channel (issue #332), so a follow-up you notice lands on
   the backlog instead of scope-creeping this PR — and the base checkout stays

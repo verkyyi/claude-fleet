@@ -16,6 +16,7 @@
 #   fleet-comment.sh <issue> --to-worker --body "<text>" # RELAYED into the worker
 #   fleet-comment.sh <issue> --from <role> --body "..." # force the footer's role
 #   fleet-comment.sh <issue> --no-footer --body "..."   # suppress the footer
+#   fleet-comment.sh <issue> --close --body "<text>"    # marked comment, THEN close
 #   printf '%s' "$text" | fleet-comment.sh <issue> --note # body on stdin
 #
 # Modes:
@@ -26,6 +27,11 @@
 #                handback, an instruction) → left UNMARKED so the bridge relays it
 #                once. External/human commenters need no wrapper at all (their
 #                comments are unmarked by default = relayed, subject to the gate).
+#   --close      close the issue AFTER posting the (marked) comment — the wrapper
+#                for a no-PR wrap-up. A bare `gh issue close --comment` posts an
+#                UNMARKED comment the bridge relays straight back into the closing
+#                worker's own pane (issue #486); this keeps the close comment on
+#                the marker rail. Composes with the mode flags (default --note).
 #
 # Footer (issue #224): every posted comment gets a per-role SENDER footer so a
 # reader can tell which fleet actor posted it, even though all comments share the
@@ -61,16 +67,17 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # explicit --from wins, else FLEET_HUB / fleet_seat(), else the generic 'fleet'.
 resolve_role() { fleet_from_role "${from:-}"; }
 
-num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0
+num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0 do_close=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --note)      relay=0 ;;
     --to-worker) relay=1 ;;
+    --close)     do_close=1 ;;
     --body)      shift; body="${1:-}"; have_body=1 ;;
     --repo)      shift; repo="${1:-}" ;;
     --from)      shift; from="${1:-}" ;;
     --no-footer) no_footer=1 ;;
-    -h|--help)   sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-comment: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           num="${1//[^0-9]/}" ;;
   esac
@@ -136,4 +143,10 @@ if [ "$relay" -eq 0 ]; then
 fi
 [ -n "$tail" ] && body="$body$NL$NL$tail"
 
+# --close: comment first (marked), THEN close — so the wrap-up note exists even if
+# the close itself fails, and the bridge never sees an unmarked close comment (#486).
+if [ "$do_close" -eq 1 ]; then
+  gh issue comment "$num" --repo "$repo" --body "$body" || exit "$?"
+  exec gh issue close "$num" --repo "$repo"
+fi
 exec gh issue comment "$num" --repo "$repo" --body "$body"

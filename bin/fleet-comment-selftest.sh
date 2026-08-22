@@ -33,6 +33,7 @@ mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/wt/issue-10"
 FAKEPATH="$WORK/fakepath"
 FCS="$WORK/bin/fleet-comment.sh"
 BODYFILE="$WORK/body.txt"; : > "$BODYFILE"
+CLOSEFILE="$WORK/close.txt"; : > "$CLOSEFILE"
 MARKER='<!-- fleet:no-relay -->'
 
 # real fleet-comment.sh + lib, run from $WORK/bin so BIN resolves the copies and
@@ -40,7 +41,8 @@ MARKER='<!-- fleet:no-relay -->'
 cp "$SRC" "$FCS"; cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
 chmod +x "$FCS"
 
-# --- fake gh: record the --body of `gh issue comment` into $BODYFILE -----------
+# --- fake gh: record the --body of `gh issue comment` into $BODYFILE; log an
+# `issue close` into $CLOSEFILE (with a marker of whether the comment came first) --
 cat > "$FAKEPATH/gh" <<'FAKE'
 #!/bin/bash
 if [ "$1" = issue ] && [ "$2" = comment ]; then
@@ -48,6 +50,11 @@ if [ "$1" = issue ] && [ "$2" = comment ]; then
   while [ "$#" -gt 0 ]; do case "$1" in --body) shift; body="$1";; esac; shift; done
   printf '%s' "$body" > "$BODYFILE"
   echo "https://example.test/issue/comment/1"
+  exit 0
+fi
+if [ "$1" = issue ] && [ "$2" = close ]; then
+  had_comment=no; [ -s "$BODYFILE" ] && had_comment=yes
+  printf 'close %s comment-first=%s\n' "$3" "$had_comment" >> "$CLOSEFILE"
   exit 0
 fi
 exit 0
@@ -78,12 +85,13 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
 # vars are explicitly forwarded (a prefix assignment to a function is NOT exported
 # to its grandchild bash). BODYFILE goes into the env so the fake gh can find it.
 fc() {
-  : > "$BODYFILE"
+  : > "$BODYFILE"; : > "$CLOSEFILE"
   ( cd "${RUNDIR:-$WORK}" 2>/dev/null || exit 3
     PATH="$FAKEPATH:$PATH" \
     FLEET_REPO="test/repo" \
     TMUX_PANE="" \
     BODYFILE="$BODYFILE" \
+    CLOSEFILE="$CLOSEFILE" \
     FAKE_ISSUE="${FAKE_ISSUE:-}" \
     FAKE_SESSION="${FAKE_SESSION:-}" \
     FLEET_HUB="${FLEET_HUB:-}" \
@@ -199,6 +207,20 @@ HN=$(hostname 2>/dev/null); UN=$(id -un 2>/dev/null)
 [ -n "$HN" ] && grep -qF "$HN" "$BODYFILE" && fail "(g) the footer leaked the hostname ($HN)"
 [ -n "$UN" ] && grep -qF "$UN" "$BODYFILE" && fail "(g) the footer leaked the OS user ($UN)"
 printf 'selftest: no-leak leg PASS (no hostname / OS-user in the footer)\n' >&2
+
+# ============================== --close (issue #486) ==========================
+# --close posts the MARKED comment first, then closes the issue — the wrapper for
+# a no-PR wrap-up. Assert: no-relay marker present (default --note semantics),
+# the close was issued for the right number, and the comment landed BEFORE it.
+reset; RUNDIR="$WORK/wt/issue-10"; FAKE_ISSUE=10
+fc 10 --close --body 'evaluation delivered; closing' || fail "--close exited non-zero"
+grep -qF "$MARKER" "$BODYFILE" || fail "--close: the close comment must carry the no-relay marker (the whole point of #486)"
+grep -qxF 'close 10 comment-first=yes' "$CLOSEFILE" \
+  || fail "--close: expected exactly 'close 10 comment-first=yes' in the close log, got '$(cat "$CLOSEFILE")'"
+# a plain --note must NOT close anything
+fc 10 --note --body 'just a note' || fail "--note (close-guard) exited non-zero"
+[ -s "$CLOSEFILE" ] && fail "--close guard: a plain --note must never close the issue"
+printf 'selftest: --close leg PASS (marked comment first, then close; --note never closes)\n' >&2
 
 # ============================== body preserved verbatim ======================
 # The footer APPENDS — it must never rewrite the body. A multi-line body with `- `
