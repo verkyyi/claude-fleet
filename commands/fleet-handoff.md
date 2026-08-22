@@ -119,14 +119,21 @@ Then take the FIRST matching case:
    test -s "$DOC" && echo "doc OK (non-empty)" || echo "DOC MISSING/EMPTY — do not arm"
    ```
 
-> **PUBLIC-repo scrub — a HARD rule for COMMENT storage (this repo is public).**
-> A handoff comment is world-readable, so before posting scrub the base skeleton's
-> "How to operate" / "Live state" / environment sections: **NO credential values
-> or their locations, NO internal hostnames (including tailnet names like
-> `*.ts.net`), and prefer repo-relative paths** over absolute machine paths. Any
-> line you cannot safely scrub does NOT go in the comment — keep it in the local
-> **file fallback** instead and have the comment link it as `(local: <path>)`. This
-> scrub applies to comment storage only; a private local file needs no scrub.
+> **Scrub before COMMENT storage — a HARD rule at any repo visibility.**
+> Never assume the fleet's repo is public or private. If a decision turns on it,
+> read it: `gh repo view "$FLEET_REPO" --json visibility`. (An earlier revision of
+> this file asserted "this repo is public" as fact; that was wrong for at least one
+> fleet, and an agent that trusted it mis-rated a routine hygiene finding as an
+> urgent public-credential leak.) The scrub below stands either way — a comment is
+> readable by everyone with repo access, is retained indefinitely, and travels into
+> clones, CI logs and exports.
+> Before posting, scrub the base skeleton's "How to operate" / "Live state" /
+> environment sections: **NO credential values or their locations, NO internal
+> hostnames (including tailnet names like `*.ts.net`), and prefer repo-relative
+> paths** over absolute machine paths. Any line you cannot safely scrub does NOT go
+> in the comment — keep it in the local **file fallback** instead and have the
+> comment link it as `(local: <path>)`. This scrub applies to comment storage only;
+> a private local file needs no scrub.
 
 ### C3. Arm the detached clear+resume — the LAST tool call of this turn
 
