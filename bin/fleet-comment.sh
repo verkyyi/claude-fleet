@@ -10,6 +10,22 @@
 # is the only reliable discriminator. This wrapper puts it on (or deliberately
 # off) so no hand-written `gh issue comment` can accidentally feed a worker.
 #
+# ⚠️ THE ONE MISTAKE THIS TOOL INVITES: the default is RECORD-ONLY. A bare call
+# posts a comment the bound worker will NEVER see. If you are writing an
+# INSTRUCTION for a worker, you want `--to-worker` (or SendMessage, below) — a
+# bare call will look like it worked (URL printed, exit 0) and deliver nothing.
+# Since issue #489 the script says which of the two happened on stderr; read it.
+#
+# Picking a channel for agent → worker traffic:
+#   • SendMessage (preferred for instructions) — direct to the worker's session,
+#     immediate, returns a delivery receipt, and no bridge gate can silently drop
+#     it. Use when you just need the worker to act.
+#   • `--to-worker` — use when the instruction ALSO belongs in the issue record
+#     (an audit trail the operator/next worker will read). Still subject to the
+#     bridge's assoc gate and self-authored suppression.
+#   • default/`--note` — the comment is FOR THE RECORD (progress, PR links,
+#     findings). Not a delivery mechanism.
+#
 # Usage:
 #   fleet-comment.sh <issue> --body "<text>"            # DEFAULT: record/no-relay
 #   fleet-comment.sh <issue> --note --body "<text>"     # explicit no-relay
@@ -143,10 +159,40 @@ if [ "$relay" -eq 0 ]; then
 fi
 [ -n "$tail" ] && body="$body$NL$NL$tail"
 
+# DELIVERY VERDICT (issue #489) — the two modes post identically-shaped comments
+# whose SEMANTICS are opposite (archive vs drive-the-worker), and both used to
+# print just the URL and exit 0. An agent that wanted `--to-worker` but called
+# bare got a success-looking result and a silently-undelivered instruction (one
+# real incident: five consecutive instructions to four workers, all suppressed,
+# all reported upstream as "delivered"). So SAY which one happened, and — in the
+# one case where the mistake is most likely and most costly (a live worker is
+# bound to this issue, yet the comment is record-only) — say it loudly.
+# stderr only: stdout stays exactly the `gh` URL so callers parsing it are unaffected.
+comment_verdict() {
+  if [ "$relay" -eq 1 ]; then
+    printf 'fleet-comment: 已发并将转达 #%s 的 worker（bridge 下轮拾取；仍受 assoc 门与自发抑制约束）\n' "$num" >&2
+    return 0
+  fi
+  printf 'fleet-comment: 已发（记录模式 · 不会送达 worker；要驱动 worker 用 --to-worker）\n' >&2
+  # Loud warning only when a live worker is actually bound to this issue. Best
+  # effort: no tmux / not in a fleet session ⇒ silent (never fail the post).
+  local sess=''
+  command -v tmux >/dev/null 2>&1 && sess=$(fleet_current_session 2>/dev/null)
+  if [ -n "$sess" ]; then
+    if tmux -L "$(fleet_socket "$sess")" list-panes -s -t "$sess" -F '#{@issue}' 2>/dev/null \
+         | grep -qx "$num"; then
+      printf '⚠️  #%s 上有活跃 worker，但本条是记录模式，它不会看到。\n' "$num" >&2
+      printf '   要下达指令：--to-worker，或直接用 SendMessage 投给该 worker 会话（即时、有送达回执）。\n' >&2
+    fi
+  fi
+}
+
 # --close: comment first (marked), THEN close — so the wrap-up note exists even if
 # the close itself fails, and the bridge never sees an unmarked close comment (#486).
 if [ "$do_close" -eq 1 ]; then
   gh issue comment "$num" --repo "$repo" --body "$body" || exit "$?"
+  comment_verdict
   exec gh issue close "$num" --repo "$repo"
 fi
-exec gh issue comment "$num" --repo "$repo" --body "$body"
+gh issue comment "$num" --repo "$repo" --body "$body" || exit "$?"
+comment_verdict

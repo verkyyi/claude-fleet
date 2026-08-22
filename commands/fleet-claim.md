@@ -119,8 +119,15 @@ override them):
   hook-enforced read-only). Converse with the operator/collaborators by
   **commenting on the bound issue** (via
   `~/.claude/fleet/bin/fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --note --body '…'`
-  so it carries the no-relay marker + worker footer). To message another worker,
-  use `fleet-comment.sh --to-worker` (the issue-bridge). NEVER drive
+  so it carries the no-relay marker + worker footer). ⚠️ **`--note` is the DEFAULT
+  and it is RECORD-ONLY — a bare `fleet-comment.sh` posts something the target
+  worker will NEVER see, while printing a URL and exiting 0.** To actually reach
+  another worker, pick a channel: **SendMessage** for a pure instruction (direct
+  to that worker's session, immediate, returns a delivery receipt — preferred),
+  or `fleet-comment.sh --to-worker` when the instruction also belongs in the
+  issue record. Since #489 the wrapper prints which of the two happened on
+  stderr, and warns when you post record-only to an issue that has a live
+  worker — read that line instead of assuming delivery. NEVER drive
   another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
   the Enter) and is hook-blocked (#437). The bridge relays your comment as the
   target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
