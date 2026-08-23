@@ -418,8 +418,8 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/rate
 US=$'\x1f'
 if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   for sock in $SOCKETS; do
-  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{@cc_account}" 2>/dev/null | \
-  while IFS="$US" read -r win acct; do
+  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_id}${US}#{@cc_account}" 2>/dev/null | \
+  while IFS="$US" read -r win wid acct; do
     [ -n "$acct" ] || continue
     # match the core signal ("hit your <session|weekly|Opus> limit"); the trailing
     # "· resets …" is not required to match, but IS what mark-limited benches to
@@ -428,11 +428,21 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
       | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
     [ -n "$banner" ] || continue
     newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
-    # exit 10 = this call rotated the active account away → notify once
-    if [ "$rc" -eq 10 ] && [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
-      $FLEET_NOTIFY_CMD "# subscription limit reached
-account **$acct** hit its usage limit — new sessions now use **${newact:-?}**
+    # exit 10 = this call rotated the active account away → fires ONCE per bench.
+    # A running session cannot hot-swap its token (apiKeyHelper only carries
+    # API-key credentials, not subscription OAuth tokens — verified on #495), so
+    # following the rotation means restarting sessions: hand the banner window +
+    # this fleet's idle windows to usage-modal.sh's restart pass (issue #263
+    # machinery), backgrounded via run-shell -b so the collector never blocks on
+    # the per-window ctrl-c settle loops. run-shell sets $TMUX for the job, so
+    # the pass's bare tmux calls stay on THIS fleet's server.
+    if [ "$rc" -eq 10 ]; then
+      tmux -L "$sock" run-shell -b "bash '$BIN/usage-modal.sh' --restart-after-rotate '$wid' '${newact:-}'" 2>/dev/null
+      if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+        $FLEET_NOTIFY_CMD "# subscription limit reached
+account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; the limited window and this fleet's idle sessions are being restarted onto it (\`--continue\`)
 > ${banner}" >/dev/null 2>&1
+      fi
     fi
   done
   done

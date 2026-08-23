@@ -77,49 +77,74 @@ _ap_restart_eligible() {
   case "$state" in done|needs) return 0;; *) return 1;; esac
 }
 
-# restart_idle_claude_windows — for every eligible window in THIS fleet's session,
-# exit its live Claude TUI and relaunch it under the now-active account. A running
-# `claude` baked its OAuth token in at launch and cannot rotate in place, so the
-# only way to move it is a restart; `fleet-claude.sh --continue` re-exports the
-# fresh token, re-stamps @cc_account (collector attribution), applies the fleet
-# model flag, and resumes the pane's most-recent transcript from its cwd. Prints
-# the number of windows it restarted. bare `tmux` inherits $TMUX → this fleet's
-# own socket (issue #159), and `list-windows` (no -a) stays scoped to this session.
+# _ap_restart_window <wid> [nudge] — exit the live Claude TUI in ONE window and
+# relaunch it under the now-active account. A running `claude` baked its OAuth
+# token in at launch and cannot rotate in place, so the only way to move it is a
+# restart; `fleet-claude.sh --continue` re-exports the fresh token, re-stamps
+# @cc_account (collector attribution), applies the fleet model flag, and resumes
+# the pane's most-recent transcript from its cwd. An optional <nudge> rides along
+# as the resumed session's first prompt (fleet-restore.sh's interrupted-turn
+# pattern) — keep it apostrophe-free, it is single-quoted into the typed command.
+# Returns 0 iff the relaunch was typed.
+_ap_restart_window() {
+  local wid="$1" nudge="${2:-}" cmd
+  # Double ctrl-c exits the Claude TUI (it needs two); harmless if the pane is
+  # already sitting at a shell.
+  # FLEET_ALLOW_SENDKEYS=1: sanctioned auto-continue plumbing (issue #437),
+  # prefixed (not exported) so the resumed pane never inherits the hatch.
+  FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null || return 1
+  FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null
+
+  # Wait (up to ~3s) for the pane to drop to its shell (spawns end with
+  # `; exec $SHELL`) before typing. If it never reaches a shell — e.g. a modal
+  # dialog swallowed the ctrl-c — SKIP: typing here would land in the still-live
+  # Claude as an LLM turn.
+  cmd=""
+  for _ in $(seq 1 10); do
+    cmd=$(tmux display-message -p -t "$wid" '#{pane_current_command}' 2>/dev/null)
+    case "$cmd" in *zsh|*bash|sh|dash|fish) break;; esac
+    sleep 0.3
+  done
+  case "$cmd" in *zsh|*bash|sh|dash|fish) ;; *) return 1;; esac
+
+  # Drop the scrollback BEFORE relaunching (issue #495): the pane's history may
+  # still hold the "hit your … limit" banner that benched the OLD account. The
+  # relaunch re-stamps @cc_account to the NEW label, and the collector reads
+  # banners out of scrollback — leave it and the stale banner gets attributed to
+  # the fresh account, benching it too (a false cascade through the whole pool).
+  tmux clear-history -t "$wid" 2>/dev/null || true
+
+  # Text and Enter as SEPARATE send-keys calls (an inline Enter gets eaten by
+  # bracketed paste). Re-wrap with `; exec $SHELL` so the pane survives a later
+  # Claude exit, exactly like the original spawn (dash-issue-session.sh).
+  FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" "'$BIN/fleet-claude.sh' --continue${nudge:+ '$nudge'}; exec \$SHELL" 2>/dev/null
+  FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" Enter 2>/dev/null
+}
+
+# restart_idle_claude_windows [skip_wid] [skip_acct] — _ap_restart_window every
+# eligible window in THIS fleet's session. Prints the number of windows it
+# restarted. bare `tmux` inherits $TMUX → this fleet's own socket (issue #159),
+# and `list-windows` (no -a) stays scoped to this session. skip_wid drops a
+# window something else already restarted (the banner window in the
+# --restart-after-rotate pass); skip_acct drops windows whose @cc_account is
+# ALREADY the target label — restarting those is pure churn.
 restart_idle_claude_windows() {
-  local wid name state raw cmd restarted=0
-  while IFS=$'\t' read -r wid name state raw; do
+  local skip_wid="${1:-}" skip_acct="${2:-}" wid name state raw acct restarted=0
+  while IFS=$'\t' read -r wid name state raw acct; do
     [ -n "$wid" ] || continue
+    [ -n "$skip_wid" ] && [ "$wid" = "$skip_wid" ] && continue
+    [ -n "$skip_acct" ] && [ "$acct" = "$skip_acct" ] && continue
     _ap_restart_eligible "$name" "$state" "$raw" || continue
-
-    # Double ctrl-c exits the Claude TUI (it needs two); harmless if the pane is
-    # already sitting at a shell.
-    # FLEET_ALLOW_SENDKEYS=1: sanctioned auto-continue plumbing (issue #437),
-    # prefixed (not exported) so the resumed pane never inherits the hatch.
-    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null || continue
-    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null
-
-    # Wait (up to ~3s) for the pane to drop to its shell (spawns end with
-    # `; exec $SHELL`) before typing. If it never reaches a shell — e.g. a modal
-    # dialog swallowed the ctrl-c — SKIP: typing here would land in the still-live
-    # Claude as an LLM turn.
-    cmd=""
-    for _ in $(seq 1 10); do
-      cmd=$(tmux display-message -p -t "$wid" '#{pane_current_command}' 2>/dev/null)
-      case "$cmd" in *zsh|*bash|sh|dash|fish) break;; esac
-      sleep 0.3
-    done
-    case "$cmd" in *zsh|*bash|sh|dash|fish) ;; *) continue;; esac
-
-    # Text and Enter as SEPARATE send-keys calls (an inline Enter gets eaten by
-    # bracketed paste). Re-wrap with `; exec $SHELL` so the pane survives a later
-    # Claude exit, exactly like the original spawn (dash-issue-session.sh).
-    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" "'$BIN/fleet-claude.sh' --continue; exec \$SHELL" 2>/dev/null
-    FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" Enter 2>/dev/null
+    _ap_restart_window "$wid" || continue
     restarted=$((restarted + 1))
   done < <(
     # Real tab separators via $'\t' (tmux does NOT expand a literal \t in -F).
+    # Tab is IFS *whitespace*, so `read` COLLAPSES consecutive tabs — an empty
+    # middle field shifts every later one left. Hence sentinels for the fields
+    # that can be unset: state '-' (never done/needs → skipped) and raw '0'
+    # (never "1" → not raw); @cc_account stays last, where empty is safe.
     tmux list-windows -F \
-      "#{window_id}"$'\t'"#{window_name}"$'\t'"#{@claude_state}"$'\t'"#{?@raw,#{@raw},}" 2>/dev/null
+      "#{window_id}"$'\t'"#{window_name}"$'\t'"#{?@claude_state,#{@claude_state},-}"$'\t'"#{?@raw,#{@raw},0}"$'\t'"#{@cc_account}" 2>/dev/null
   )
   printf '%s' "$restarted"
 }
@@ -136,8 +161,42 @@ if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
 # (the popup is gone by the time it runs). $TMUX is inherited from the run-shell
 # job, so restart's bare tmux calls stay on THIS fleet's server.
 if [ "${1:-}" = "--restart-idle" ]; then
-  n=$(restart_idle_claude_windows)
+  # Optional $2 = the new active label: windows already stamped with it are skipped.
+  n=$(restart_idle_claude_windows "" "${2:-}")
   [ "${n:-0}" -gt 0 ] && tmux display-message "fleet: restarted ${n} idle session$([ "$n" = 1 ] || printf s) on the new account"
+  exit 0
+fi
+
+# Internal --restart-after-rotate <wid> <new-label> (issue #495): the background
+# pass the COLLECTOR dispatches when a limit banner auto-rotates the active
+# account (tmux-dash-collect.sh, mark-limited exit 10) — running sessions cannot
+# hot-swap their token (apiKeyHelper only carries API-key credentials, not
+# subscription OAuth tokens; verified empirically on #495), so following the
+# rotation means restarting them. Two steps:
+#   1. the BANNER window itself — the window that hit the limit. Its turn is
+#      already dead (every request on the benched account fails until reset), so
+#      the idle-only gate does not apply: restart it even in `working` state,
+#      with a nudge so the resumed session re-orients and continues on its own.
+#      Panels (dash/plan/backlog) and @raw scratch sessions still never restart
+#      (same reasons as _ap_restart_eligible — @raw cwd can't resolve --continue).
+#   2. the usual idle pass — minus that window (just restarted) and minus
+#      windows already stamped with the new label (nothing to move).
+if [ "${1:-}" = "--restart-after-rotate" ]; then
+  wid="${2:-}"; newacct="${3:-}"; bumped=0
+  if [ -n "$wid" ]; then
+    name=$(tmux display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
+    raw=$(tmux display-message -p -t "$wid" '#{?@raw,#{@raw},}' 2>/dev/null)
+    case "$name" in
+      dash|plan|backlog|'') : ;;
+      *) if [ "$raw" != "1" ]; then
+           nudge="This session hit its subscription account usage limit mid-turn; the fleet rotated to a fresh account and restarted you here with --continue. Re-check git status, your branch, and your PR to see where the interrupted turn left off, then continue the task — or just stop if it is already complete."
+           _ap_restart_window "$wid" "$nudge" && bumped=1
+         fi ;;
+    esac
+  fi
+  n=$(restart_idle_claude_windows "$wid" "$newacct")
+  total=$(( ${n:-0} + bumped ))
+  [ "$total" -gt 0 ] && tmux display-message "fleet: moved ${total} running session$([ "$total" = 1 ] || printf s) onto ${newacct:-the new account} (--continue)"
   exit 0
 fi
 
@@ -197,7 +256,7 @@ if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
   # up-to-3s settle loop scales with the # of idle windows and would otherwise hold
   # the popup OPEN. run-shell -b returns instantly; the bg job toasts its own count.
   if [ -n "$now" ] && [ "$now" != "$prev" ]; then
-    tmux run-shell -b "bash '$0' --restart-idle"
+    tmux run-shell -b "bash '$0' --restart-idle '$now'"
     msg="${msg}  ·  restarting idle sessions…"
   fi
   tmux display-message "$msg"
