@@ -15,12 +15,15 @@
 # whose CONTENTS are that account's OAuth token (one line, chmod 600). No files
 # there → multi-account is OFF and every command below is a no-op, so the fleet
 # behaves exactly as a single-account install. An OPTIONAL companion conf
-# "<label>.conf" (same dir) may set LIMIT_TTL=<N>[smhd] — this account's bench
-# window after a usage-limit hit (default: FLEET_ACCOUNT_LIMIT_TTL).
+# "<label>.conf" (same dir) may set LIMIT_TTL=<N>[smhd] — the FALLBACK bench
+# window after a usage-limit hit whose banner carries no reset time (default:
+# FLEET_ACCOUNT_LIMIT_TTL).
 #
 # State (account-wide, like usage/ratelimit → the global/ cache dir, issue #181):
 #   global/account.active   — one line: the label new sessions should use
-#   global/account.limited  — label<TAB>until-epoch<TAB>banner  (one row per limited acct)
+#   global/account.limited  — label<TAB>until-epoch<TAB>banner  (one row per limited acct);
+#                             until-epoch is the banner's own "resets …" instant when it
+#                             carries one, else now+LIMIT_TTL (issue #490)
 #
 # Commands:
 #   active               — print the label new sessions should use (rotating past
@@ -32,9 +35,11 @@
 #   use <label>          — pin <label> active
 #   rotate               — advance active to the next eligible account
 #   mark-limited <label> [banner]
-#                        — record <label> limited for its bench window (per-account
-#                          LIMIT_TTL in <label>.conf, else FLEET_ACCOUNT_LIMIT_TTL); if it
-#                          was the active one, rotate. Prints the (new) active label.
+#                        — record <label> limited until its window actually refreshes:
+#                          the banner's "resets <time> (<zone>)" instant when it has one,
+#                          else now + the bench duration (per-account LIMIT_TTL in
+#                          <label>.conf, else FLEET_ACCOUNT_LIMIT_TTL). If it was the
+#                          active one, rotate. Prints the (new) active label.
 #                          Exit 10 iff this call rotated the active account away
 #                          (the collector uses that to notify exactly once).
 #   clear [label]        — drop the limit flag for <label> (or all)
@@ -46,6 +51,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out (5h)
+RESET_BUFFER=60                             # grace past a banner-parsed reset, so an
+                                            # account is not un-benched seconds early
 # ANSI for the `list` table (rendered by fzf --ansi in usage-modal.sh, and by a
 # terminal when run directly). Always emitted: the modal pipes us and needs the
 # codes, so gating on [ -t 1 ] would strip colour exactly where it's wanted.
@@ -91,6 +98,79 @@ human_dur() { local s="$1"
   if   [ "$s" -ge 86400 ]; then printf '%sd' $(( s/86400 ))
   elif [ "$s" -ge 3600 ];  then printf '%sh' $(( s/3600 ))
   else printf '%sm' $(( s/60 )); fi; }
+
+# --- the account's REAL refresh instant, read off the limit banner (issue #490) -
+# The banner Claude prints when a subscription runs out already carries the
+# moment the window refreshes ("… · resets 10:20pm (America/Los_Angeles)").
+# Benching for a DURATION instead throws that away and is wrong in both
+# directions: a limit hit partway into a 5h window benches ~2-3h past the real
+# refresh (idle capacity, silent), while a weekly cap benched for 5h is released
+# early and walks straight back into the same wall. So parse the instant when it
+# is there, and keep LIMIT_TTL as the fallback for when it is not.
+#
+# STRICT by design: a wrong epoch is worse than the conservative TTL, so anything
+# unexpected (no clock time, an unknown zone, a `date` that won't parse) returns
+# empty and the caller falls back.
+
+# One-shot dialect probe: BSD/macOS `date` takes -j/-f/-r, GNU takes -d. Probed
+# with the harmless -j form — the GNU `-d` probe would be `date -d` on BSD, which
+# is the SET-daylight-saving flag, not a parse.
+DATE_BSD=0
+date -j -f '%Y-%m-%d %H:%M' '2000-01-01 00:00' +%s >/dev/null 2>&1 && DATE_BSD=1
+
+# `date` with TZ applied only when a zone was parsed. TZ="" does NOT mean "local"
+# — it means UTC — so an empty zone must not reach the environment at all.
+_tz_date() { local z="$1"; shift
+  if [ -n "$z" ]; then TZ="$z" date "$@"; else date "$@"; fi
+}
+# Wall-clock date (%F) at <epoch>, as seen in <zone> (empty zone = host local).
+tz_ymd() { local z="$1" e="$2"
+  if [ "$DATE_BSD" = 1 ]; then _tz_date "$z" -r "$e" +%F
+  else                        _tz_date "$z" -d "@$e" +%F; fi
+}
+# "<Y-m-d> <H:M>" read as a wall clock in <zone> → epoch (empty if unparseable).
+# Seconds are spelled out: BSD `date -j` leaves any field the FORMAT omits at its
+# current value, so a "%H:%M" parse silently inherits the wall clock's seconds
+# (a 0-59s jitter that makes the result untestable and the bench end fuzzy).
+tz_epoch() { local z="$1" ymd="$2" hm="$3"
+  if [ "$DATE_BSD" = 1 ]; then _tz_date "$z" -j -f '%Y-%m-%d %H:%M:%S' "$ymd $hm:00" +%s 2>/dev/null
+  else                        _tz_date "$z" -d "$ymd $hm:00" +%s 2>/dev/null; fi
+}
+
+# <banner> <now-epoch> → the epoch the account's window refreshes, or EMPTY when
+# the banner doesn't carry one (caller then falls back to acct_ttl).
+banner_reset_epoch() {
+  local b hm h m ap zone ymd e i
+  b=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')   # lowercase once: BSD sed has no //I
+  local now_s="$2"
+  # A clock time is REQUIRED. "resets monday" (the weekly banner) carries no
+  # instant, so it falls back by design rather than guessing a weekday boundary.
+  hm=$(printf '%s' "$b" | grep -aoE 'resets +[0-9]{1,2}(:[0-9]{2})? *[ap]\.?m\.?' | tail -1)
+  [ -n "$hm" ] || return 0
+  h=$(printf '%s' "$hm" | sed -nE 's/^resets +([0-9]{1,2}).*/\1/p')
+  m=$(printf '%s' "$hm" | sed -nE 's/^resets +[0-9]{1,2}:([0-9]{2}).*/\1/p')
+  ap=$(printf '%s' "$hm" | sed -nE 's/.*([ap])\.?m\.?$/\1/p')
+  [ -n "$h" ] && [ -n "$ap" ] || return 0
+  h=$((10#$h)); m=$((10#${m:-0}))
+  [ "$h" -ge 1 ] && [ "$h" -le 12 ] && [ "$m" -lt 60 ] || return 0
+  case "$ap" in p) [ "$h" -lt 12 ] && h=$((h + 12));; a) [ "$h" -eq 12 ] && h=0;; esac
+  # The zone travels WITH the banner ("(America/Los_Angeles)") and is not the
+  # host's. Validate it: an unknown TZ silently resolves to UTC on both glibc and
+  # macOS, which is exactly the wrong-epoch failure this must not produce.
+  zone=$(printf '%s' "$1" | sed -nE 's/.*\(([A-Za-z]+\/[A-Za-z_+-]+(\/[A-Za-z_+-]+)?)\).*/\1/p' | tail -1)
+  [ -z "$zone" ] || [ -f "/usr/share/zoneinfo/$zone" ] || return 0
+  # Today's or tomorrow's wall clock, whichever lands in the future: a banner
+  # seen at 11pm saying "resets 12:30am" means tomorrow. Both candidates are
+  # formatted FROM an epoch, so a DST day can't shift the answer by an hour.
+  for i in 0 86400; do
+    ymd=$(tz_ymd "$zone" "$((now_s + i))")
+    [ -n "$ymd" ] || return 0
+    e=$(tz_epoch "$zone" "$ymd" "$(printf '%02d:%02d' "$h" "$m")")
+    [ -n "$e" ] || return 0
+    [ "$e" -gt "$now_s" ] && { printf '%s' "$e"; return 0; }
+  done
+  return 0
+}
 
 # Per-account bench duration after a limit hit: LIMIT_TTL from the account's
 # companion conf ($ACCT_DIR/<label>.conf), else the global FLEET_ACCOUNT_LIMIT_TTL.
@@ -186,7 +266,11 @@ cmd_mark_limited() {
   local label="$1" banner="${2:-}" until cur nxt rotated=0
   [ -n "$label" ] || { echo "mark-limited: usage: mark-limited <label> [banner]" >&2; return 1; }
   acct_labels | grep -qx "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
-  until=$(( $(now) + $(acct_ttl "$label") ))
+  # Bench until the account's REAL refresh instant when the banner carries one
+  # (issue #490); LIMIT_TTL is the fallback for banners that do not.
+  until=$(banner_reset_epoch "$banner" "$(now)")
+  if [ -n "$until" ]; then until=$(( until + RESET_BUFFER ))
+  else                    until=$(( $(now) + $(acct_ttl "$label") )); fi
   mkdir -p "$STATE_DIR"; acct_lock
   # Rewrite: drop this label's old row + any expired rows, then add the fresh one.
   { [ -f "$STATE_LIMITED" ] && awk -F'\t' -v l="$label" -v now="$(now)" '$1!=l && ($2+0)>now' "$STATE_LIMITED"
@@ -222,7 +306,9 @@ cmd_clear() {
 # in the marker glyph (fixed 1-col) and the trailing STATE field (no padding after
 # it), so the ANSI bytes never throw the column widths off. Row 1 is the column
 # header (fzf pins it via --header-lines=1). Columns:
-#   ACCOUNT  ●(active)  WINDOW(rotation/bench TTL)  STATE(ok | limited · back in ~Nm | NO TOKEN)
+#   ACCOUNT  ●(active)  FALLBACK(bench TTL used only when a banner carries no
+#   reset time — a live bench ends at the banner's instant, shown in STATE)
+#   STATE(ok | limited · back in ~Nm | NO TOKEN)
 cmd_list() {
   local labels active l until state tok w now_s hdr
   local fmt='%-*s  %s  %-7s %s\n'
@@ -241,7 +327,7 @@ $labels
 EOF
   # Header row (dimmed whole-line — wrapped OUTSIDE the padded fields so the
   # dim/reset bytes can't shift any column).
-  hdr=$(printf "$fmt" "$w" ACCOUNT ' ' WINDOW STATE)
+  hdr=$(printf "$fmt" "$w" ACCOUNT ' ' FALLBACK STATE)
   printf '%s%s%s\n' "$A_DIM" "$hdr" "$A_RST"
   while IFS= read -r l; do
     [ -n "$l" ] || continue

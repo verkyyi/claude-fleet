@@ -14,6 +14,12 @@
 #                  duplicate rows → the furthest-future epoch wins).
 #   • pick_active — keep-current-if-eligible, rotate-past-limited round-robin
 #                  (incl. wraparound), and the all-limited best-effort fallback.
+#   • banner_reset_epoch — the limit banner's "resets <time> (<zone>)" → epoch:
+#                  zone travels with the banner (host TZ must not change it),
+#                  midnight wrap, 12h-clock edges, a DST-transition day, and
+#                  every unparseable form falling back instead of guessing.
+#   • cmd_mark_limited — benches to that instant (+RESET_BUFFER) when there is
+#                  one, and to now+LIMIT_TTL (per-account conf included) when not.
 #
 # Sourced (not run): fleet-account.sh guards its bottom dispatch with
 # `[ "${BASH_SOURCE[0]}" = "$0" ]`, so sourcing defines the helpers WITHOUT
@@ -164,4 +170,87 @@ eq "pick_active: all limited, keep current" b "$(pick_active b)"
 # 8. ALL limited, current NOT in pool → fall back to the first label.
 eq "pick_active: all limited, unknown current → L[0]" a "$(pick_active zzz)"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active)\n' "$CHECKS"
+# ── banner_reset_epoch + its wiring into mark-limited (issue #490) ────────────
+# The banner carries the account's real refresh instant; benching for a duration
+# instead is wrong in both directions (idle past the refresh, or released early
+# into the same wall). Epochs below are pinned constants computed independently
+# (python zoneinfo), NOT re-derived from the code under test.
+#
+# Zone note: every expectation is an ABSOLUTE epoch, so these hold whatever the
+# host TZ is — and the "host in another zone" case pins that explicitly.
+
+Z='(America/Los_Angeles)'
+B_1020="hit your session limit · resets 10:20pm $Z"
+
+# 2026-08-22 20:08 PDT → the banner's 22:20 PDT the same day.
+eq "banner: resets 10:20pm + zone" 1787462400 "$(banner_reset_epoch "$B_1020" 1787454480)"
+
+# The zone travels with the BANNER: a host in Shanghai must land on the same
+# instant, not on 22:20 local. This is the case a naive local-time parse breaks.
+eq "banner: host TZ ≠ account TZ" 1787462400 \
+   "$(TZ=Asia/Shanghai banner_reset_epoch "$B_1020" 1787454480)"
+eq "banner: host TZ = UTC" 1787462400 \
+   "$(TZ=UTC banner_reset_epoch "$B_1020" 1787454480)"
+
+# 23:00 seeing "12:30am" means TOMORROW — not 22.5h in the past.
+eq "banner: midnight wrap → tomorrow" 1787470200 \
+   "$(banner_reset_epoch "hit your session limit · resets 12:30am $Z" 1787464800)"
+
+# 12-hour clock edges: 12pm is noon, 12am is midnight (the h=12 special cases).
+eq "banner: 12:00pm is noon" 1787425200 \
+   "$(banner_reset_epoch "hit your session limit · resets 12:00pm $Z" 1787410800)"
+
+# No zone in the banner → host local time. Pin TZ so the expectation is stable.
+eq "banner: no zone → host local" 1787436000 \
+   "$(TZ=America/Los_Angeles banner_reset_epoch 'hit your 5-hour limit · resets 3pm' 1787410800)"
+
+# A DST-transition day (2026-11-01, US fall-back): formatting the candidate date
+# FROM an epoch keeps the answer on the right side of the shift.
+eq "banner: DST fall-back day" 1793604600 \
+   "$(banner_reset_epoch "hit your session limit · resets 11:30pm $Z" 1793592000)"
+
+# --- everything below must FALL BACK (empty), never guess an epoch ------------
+eq "banner: weekly banner has no clock time" '' \
+   "$(banner_reset_epoch 'hit your weekly limit · resets Monday' 1787454480)"
+eq "banner: no banner at all" '' "$(banner_reset_epoch '' 1787454480)"
+eq "banner: limit banner without a resets clause" '' \
+   "$(banner_reset_epoch 'hit your Opus limit' 1787454480)"
+# An unknown zone resolves to UTC on both glibc and macOS — silently the WRONG
+# instant. Strict validation turns that into a fallback instead.
+eq "banner: unknown zone → fallback, not silent UTC" '' \
+   "$(banner_reset_epoch 'hit your session limit · resets 10:20pm (Mars/Olympus)' 1787454480)"
+eq "banner: 24h clock without am/pm" '' \
+   "$(banner_reset_epoch "hit your session limit · resets 22:20 $Z" 1787454480)"
+eq "banner: hour out of 12h range" '' \
+   "$(banner_reset_epoch "hit your session limit · resets 13:20pm $Z" 1787454480)"
+
+# --- wiring: mark-limited must bench to the PARSED instant, not now+TTL -------
+# Repoint the write-side state too (the read-side already is), and pin now() so
+# the assertion is exact.
+STATE_ACTIVE="$FLEET_C/account.active"
+# shellcheck disable=SC2034  # both read by the sourced cmd_mark_limited at CALL time
+STATE_DIR="$FLEET_C"
+# shellcheck disable=SC2034
+LOCK="$FLEET_C/account.lock"
+now() { printf '%s' "${NOW_FIXED:-1787454480}"; }
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+
+cmd_mark_limited a "$B_1020" >/dev/null
+eq "mark-limited: benches to the banner instant + buffer" \
+   "$((1787462400 + RESET_BUFFER))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
+
+# Same call, banner with no parseable instant → the LIMIT_TTL path, unchanged.
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+cmd_mark_limited a 'hit your weekly limit · resets Monday' >/dev/null
+eq "mark-limited: no instant → now + LIMIT_TTL (unchanged)" \
+   "$((1787454480 + TTL))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
+
+# And a per-account LIMIT_TTL still wins on that fallback path.
+printf 'LIMIT_TTL=7d\n' > "$ACCT_DIR/a.conf"
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+cmd_mark_limited a '' >/dev/null
+eq "mark-limited: fallback still honours per-account LIMIT_TTL" \
+   "$((1787454480 + 604800))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
+rm -f "$ACCT_DIR/a.conf"; : > "$STATE_LIMITED"
+
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant)\n' "$CHECKS"
