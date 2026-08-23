@@ -57,9 +57,12 @@ rc_is "systemd: neither → 1"                1 "$(probe com.claude-fleet.base-s
 # ---- neither init system → "can't tell", never a fabricated verdict ---------
 mkshim uname 'echo Plan9'
 rm -f "$SHIM/systemctl"
-# (PATH still carries the real shell dir — only the two init CLIs are absent,
-#  which is the case being modelled.)
-rc_is "no init system → 2 (unknown, not a guess)" 2 "$(probe com.claude-fleet.ledger-watch)"
+# PATH must be the shim dir ALONE here: on a Linux runner the real systemctl is on
+# the normal PATH, so merely deleting the shim models nothing (that is how this
+# case passed on macOS and failed in CI). /bin/sh is invoked by absolute path so
+# the stripped PATH can't break the run itself.
+rc_is "no init system → 2 (unknown, not a guess)" 2 \
+      "$(PATH="$SHIM" /bin/sh "$P" com.claude-fleet.ledger-watch; printf '%s' $?)"
 
 # ---- argument guard ---------------------------------------------------------
 mkshim uname 'echo Darwin'
