@@ -176,6 +176,19 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
   fi
 fi
 
+# Report an optional daemon whose fleets have it enabled in conf. Turns what used
+# to be an unconditional PASS (conf flag only) into a verdict that can actually
+# fail — see bin/fleet-daemon-loaded.sh for why (issue #492).
+daemon_verdict() {   # $1=tag $2=label $3=pass-msg $4=what-is-lost-when-missing
+  tag="$1"; label="$2"; msg="$3"; lost="$4"
+  sh "$(dirname "$0")/fleet-daemon-loaded.sh" "$label"
+  case $? in
+    0) pass "$tag" "$msg" ;;
+    1) warn "$tag" "$label is NOT installed — $lost (conf says on, but nothing is running)" ;;
+    *) pass "$tag" "$msg (could not verify $label is loaded on this platform)" ;;
+  esac
+}
+
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
 conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 
@@ -274,7 +287,9 @@ EOF
     if ! command -v gh >/dev/null 2>&1; then
       warn cleanup "$cleaning fleet(s) rely on the cleanup daemon but gh is missing — it can't read PR state to reap"
     else
-      pass cleanup "$cleaning fleet(s) with the cleanup daemon on$([ "$optout" -gt 0 ] && printf ' (%s opted out)' "$optout") — worktrees reaped after merges"
+      daemon_verdict cleanup com.claude-fleet.cleanup \
+        "$cleaning fleet(s) with the cleanup daemon on$([ "$optout" -gt 0 ] && printf ' (%s opted out)' "$optout") — worktrees reaped after merges" \
+        "merged worktrees are NOT being reaped and landed sessions are NOT being recorded"
     fi
     printf '        note: needs com.claude-fleet.cleanup installed; this daemon merges nothing — the worker lands its own PR (#441) and this cleans up after it.\n'
   fi
@@ -296,7 +311,9 @@ if [ -d "$conf_dir" ]; then
 $(_fleet_confs "$conf_dir")
 EOF
   if [ "$watching" -gt 0 ]; then
-    pass ledger "$watching fleet(s) with the ledger-watch daemon on$([ "$lw_optout" -gt 0 ] && printf ' (%s opted out)' "$lw_optout") — every closed session indexed for resume"
+    daemon_verdict ledger com.claude-fleet.ledger-watch \
+      "$watching fleet(s) with the ledger-watch daemon on$([ "$lw_optout" -gt 0 ] && printf ' (%s opted out)' "$lw_optout") — every closed session indexed for resume" \
+      "closed-unlanded sessions are NOT being indexed (invisible to /fleet-history, unresumable)"
     printf '        note: needs com.claude-fleet.ledger-watch installed; records closed-unlanded sessions into the history ledger (no merge, no reap).\n'
   fi
 fi
@@ -318,7 +335,9 @@ if [ -d "$conf_dir" ]; then
 $(_fleet_confs "$conf_dir")
 EOF
   if [ "$syncing" -gt 0 ]; then
-    pass basesync "$syncing fleet(s) with the base-sync daemon on$([ "$bs_optout" -gt 0 ] && printf ' (%s opted out)' "$bs_optout") — local base fast-forwarded to the remote (merge-independent)"
+    daemon_verdict basesync com.claude-fleet.base-sync \
+      "$syncing fleet(s) with the base-sync daemon on$([ "$bs_optout" -gt 0 ] && printf ' (%s opted out)' "$bs_optout") — local base fast-forwarded to the remote (merge-independent)" \
+      "the local base is NOT being fast-forwarded (new worktrees fork off a stale base)"
     printf '        note: needs com.claude-fleet.base-sync installed; fetches + pulls --ff-only the base under the shared land lease (no merge, no gh).\n'
   fi
 fi

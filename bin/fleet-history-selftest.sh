@@ -19,6 +19,13 @@
 #      encodes the PR (or issue when PR-less).
 #   E. meta — "<issue>\t<title>" for a landed row, by issue# and by #PR (#319).
 #   F. state glyph (#320) — list/rows mark a landed row ✓, a closed-unlanded ✗.
+#   H. Ledger defects (#492) — a BUSY transcript dir (400 sessions) still
+#      resolves (the SIGPIPE-under-pipefail drop); the fleet's OWN classifier /
+#      summarizer transcripts (same project dir, usually newer) are skipped, and
+#      a dir holding only those is not indexed at all; a transcript-less row
+#      dedups on key + pr/sha/worktree instead of duplicating, and never poisons
+#      the transcript key for the real session that follows; newest-first is by
+#      TIMESTAMP rather than append order.
 #   G. SCRATCH rows (#466) — a session with no issue: col 2 carries its
 #      `scratch-<N>` key, list/rows render `~<N>` and target landed:scratch:<key>,
 #      record-closed stores the HEAD sha, and resume rebuilds off that sha (or
@@ -394,4 +401,118 @@ run record-closed --issue scratch-7 --worktree "$SWT" --title "alias" >/dev/null
 eq "scratch: --issue is still accepted as an alias of --key" "scratch-7" \
    "$(cut -f2 "$FLEET_HISTORY_LEDGER")"
 
-printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state/scratch)\n' "$CHECKS"
+# ============================================================================
+# H. issue #492 — the ledger's four silent defects
+# ============================================================================
+
+# H1. A BUSY transcript dir must still resolve (the SIGPIPE regression).
+# `f=$(ls -t … | head -n1) || return 0` inherited ls's SIGPIPE death (141) under
+# pipefail and returned EMPTY — but only once ls wrote enough to still be writing
+# when head exited. So it dropped exactly the busiest dirs: 300+ sessions →
+# skipped, 3 sessions → fine. The fixture MUST be big enough to trip that, or the
+# test passes against the broken code too.
+WTBUSY="/w/repo-scratch-busy"
+ENCB=$(printf '%s' "$WTBUSY" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+TDIRB="$CLAUDE_PROJECTS_DIR/$ENCB"
+mkdir -p "$TDIRB"
+i=0; while [ "$i" -lt 400 ]; do : > "$TDIRB/sess-$i.jsonl"; i=$((i + 1)); done
+touch -t 203001010000 "$TDIRB/sess-399.jsonl"     # newest by mtime
+: > "$FLEET_HISTORY_LEDGER"
+out=$(run record --key 4242 --worktree "$WTBUSY" --summary 'busy dir')
+contains "busy transcript dir (400 sessions) still resolves its session" "$out" "sess-399"
+eq "busy dir: session-id landed in col 8" "sess-399" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+
+# H2. Dedup when the transcript CANNOT be resolved. sid AND tdir both land as '-'
+# (the observed shape: a caller that passed no --worktree), so the primary dedup
+# key can never match and every retry appended another row — two `scratch-1` rows
+# in the wild, identical but for sid/tdir. The fallback matches on key + one
+# corroborating identity (pr / sha / worktree).
+: > "$FLEET_HISTORY_LEDGER"
+mkrow() {   # <key> <pr> <sha> <worktree> — a transcript-less row, as recorded in the wild
+  printf '2026-08-01T00:00:00Z\t%s\tt\t%s\t%s\t%s\t-\t-\t-\tlanded\n' "$1" "$2" "$3" "$4" \
+    >> "$FLEET_HISTORY_LEDGER"
+}
+mkrow scratch-1 1088 27e8a9b5 -
+eq "fixture: one transcript-less row" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+run record --key scratch-1 --pr 1088 --summary 'retry, no worktree' >/dev/null 2>&1
+eq "transcript-less retry dedups on key+pr (not appended twice)" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+# A DIFFERENT pr under the same reused scratch key is a different session → recorded.
+run record --key scratch-1 --pr 2222 --summary 'later reuse of the slot' >/dev/null 2>&1
+eq "same key, different PR → still recorded (scratch slots are reused)" 2 \
+   "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+# The worktree corroborator covers the no-PR shape.
+: > "$FLEET_HISTORY_LEDGER"
+mkrow scratch-9 - - /w/repo-scratch-9
+run record --key scratch-9 --worktree /w/repo-scratch-9 --summary 'again' >/dev/null 2>&1
+eq "transcript-less retry dedups on key+worktree too" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+
+# H2b. A transcript-less row must not POISON the worktree's transcript key: it
+# used to store the speculative encoded path, and the later REAL session at that
+# same worktree then matched it and was skipped as "already in ledger".
+: > "$FLEET_HISTORY_LEDGER"
+WTP2="/w/repo-late-transcript"
+run record --key 55 --worktree "$WTP2" --summary 'no transcript yet' >/dev/null 2>&1
+eq "transcript-less row stores no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
+ENCP2=$(printf '%s' "$WTP2" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCP2"; : > "$CLAUDE_PROJECTS_DIR/$ENCP2/real-sid.jsonl"
+out=$(run record --key 55 --pr 9 --worktree "$WTP2" --summary 'now it has one')
+contains "the later REAL session at that worktree is still recorded" "$out" "real-sid"
+eq "  …as its own row" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+
+# H2c. The fleet's OWN helper transcripts must not be indexed as "the session".
+# The status classifier and the dashboard summarizer run `claude -p` from inside a
+# window's worktree, so their transcripts land in the same project dir and — running
+# every ~60s — are usually the NEWEST file there. Indexing one makes resume drop you
+# into the classifier's context. (A warm scratch-pool worktree is ALL of these: one
+# real dir held 21 transcripts, every one a helper call.)
+WTH="/w/repo-scratch-helper"
+ENCH=$(printf '%s' "$WTH" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+TDIRH="$CLAUDE_PROJECTS_DIR/$ENCH"; mkdir -p "$TDIRH"
+# the strings below are the fleet's own rubrics — pinned against their source files
+# at the end of this block so a reworded prompt can't silently unteach the filter.
+CLS='You are a status classifier for a Claude Code terminal session.'
+SUM='You are labeling a Claude Code session for a dashboard row.'
+printf '{"type":"user","message":{"content":"%s reply with one word"}}\n' "$CLS" > "$TDIRH/helper-new.jsonl"
+printf '{"type":"user","message":{"content":"%s"}}\n' "$SUM" > "$TDIRH/helper-mid.jsonl"
+printf '{"type":"user","message":{"content":"real work here"}}\n'        > "$TDIRH/real-session.jsonl"
+touch -t 200001010000 "$TDIRH/real-session.jsonl"     # OLDEST — the helpers are newer
+touch -t 202001010000 "$TDIRH/helper-mid.jsonl"
+touch -t 203001010000 "$TDIRH/helper-new.jsonl"
+: > "$FLEET_HISTORY_LEDGER"
+out=$(run record --key 66 --worktree "$WTH" --summary 'skip the helpers')
+contains "helper transcripts are skipped for the real session" "$out" "real-session"
+eq "  …and the real session id is what lands in the row" "real-session" \
+   "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+
+# A dir with ONLY helper transcripts has nothing to index → record-closed skips it.
+WTHO="/w/repo-scratch-pool-slot"
+ENCHO=$(printf '%s' "$WTHO" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCHO"
+printf '{"type":"user","message":{"content":"%s"}}\n' "$CLS" > "$CLAUDE_PROJECTS_DIR/$ENCHO/only-helper.jsonl"
+: > "$FLEET_HISTORY_LEDGER"
+out=$(run record-closed --key scratch-77 --worktree "$WTHO")
+contains "an all-helper dir is skipped, not indexed" "$out" "no transcript to index"
+eq "  …and writes no row" 0 "$(grep -c . "$FLEET_HISTORY_LEDGER" || true)"
+
+# Two-way lock: the markers above must still be the text those daemons actually send.
+for _pair in "classify-sessions.sh|$CLS" "tmux-summarize.sh|$SUM"; do
+  _f="$BIN/${_pair%%|*}"; _needle="${_pair#*|}"
+  CHECKS=$((CHECKS + 1))
+  grep -qF -- "$_needle" "$_f" || \
+    fail "the transcript filter's marker is no longer in $(basename "$_f") — reword it in both places"
+done
+
+# H3. Newest-first is by TIMESTAMP, not append order. A row appended LAST but
+# stamped a month earlier (a backfill / a late closed-unlanded row) must not float
+# to the top — that is the `~1 · 1 mo` row that sat above rows from 3 hours ago.
+: > "$FLEET_HISTORY_LEDGER"
+{ printf '2026-08-20T00:00:00Z\t11\tmid\t-\t-\t-\t-\t-\t-\tlanded\n'
+  printf '2026-08-22T00:00:00Z\t22\tnewest\t-\t-\t-\t-\t-\t-\tlanded\n'
+  printf '2026-07-01T00:00:00Z\t33\toldest-but-appended-last\t-\t-\t-\t-\t-\t-\tlanded\n'
+} >> "$FLEET_HISTORY_LEDGER"
+eq "list is ordered newest-first by timestamp" "22 11 33" \
+   "$(run list --repo o/r | sed -n 's/^. *#\([0-9]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+# find_row's "newest wins" rides on the same order.
+contains "find_row picks by the same time order" "$(run meta --repo o/r 22)" "newest"
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order)\n' "$CHECKS"

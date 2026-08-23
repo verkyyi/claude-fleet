@@ -1328,3 +1328,56 @@ fleet_cache() {
   fi
   printf '%s' "$FLEET_C/$base"              # unresolved session: degenerate fallback
 }
+
+# ── display-width clip (shared by the live dash + /fleet-history producers) ────
+# Clip <string> to at most <avail> TERMINAL COLUMNS and report the width it really
+# occupies → $clip_out / $clip_w. A CJK or emoji glyph is ONE ${#} char but TWO
+# columns, so a code-point clip lets through ~2x the intended width AND under-counts
+# the pad computed from it — which shoved the right-pinned columns off the line
+# (32 of 256 rows on a Chinese-language ledger, up to 142 cols against a 116 target).
+# Both row producers used to carry their own copy of this reasoning and only one of
+# them had the fix; the single implementation here is what stops the drift.
+#
+# Fast path: a pure-ASCII string has width == ${#}, so it stays fork-free and renders
+# byte-identical to the old builtin clip (this is a 4Hz hot path for the live dash).
+# Only a string carrying non-ASCII pays one perl/wcwidth fork.
+# shellcheck disable=SC2034  # clip_out/clip_w are caller-facing OUTPUT globals
+# (read cross-file by the dash + history row producers), like reltime_out above.
+clip_out=""; clip_w=0
+fleet_clip_display() {
+  local avail="${1:-0}" s="${2:-}" res
+  case "$avail" in ''|*[!0-9]*) avail=0 ;; esac
+  case "$s" in
+    *[![:ascii:]]*) ;;
+    *) [ "${#s}" -gt "$avail" ] && s="${s:0:$avail}"
+       clip_out="$s"; clip_w=${#s}; return 0 ;;
+  esac
+  res=$(S="$s" A="$avail" perl -CO -MEncode -e '
+    my $s = decode_utf8($ENV{S}); my $a = $ENV{A} + 0;
+    my ($w, $out) = (0, "");
+    for my $c (split //, $s) {
+      my $o = ord $c;
+      my $cw = ($o >= 0x1100 && (
+          $o <= 0x115F || $o == 0x2329 || $o == 0x232A ||
+          ($o >= 0x2E80 && $o <= 0x303E) || ($o >= 0x3041 && $o <= 0x33FF) ||
+          ($o >= 0x3400 && $o <= 0x4DBF) || ($o >= 0x4E00 && $o <= 0x9FFF) ||
+          ($o >= 0xA000 && $o <= 0xA4CF) || ($o >= 0xAC00 && $o <= 0xD7A3) ||
+          ($o >= 0xF900 && $o <= 0xFAFF) || ($o >= 0xFE10 && $o <= 0xFE19) ||
+          ($o >= 0xFE30 && $o <= 0xFE6F) || ($o >= 0xFF00 && $o <= 0xFF60) ||
+          ($o >= 0xFFE0 && $o <= 0xFFE6) || ($o >= 0x1F000 && $o <= 0x1FAFF) ||
+          ($o >= 0x20000 && $o <= 0x3FFFD))) ? 2 : 1;
+      last if $w + $cw > $a;
+      $w += $cw; $out .= $c;
+    }
+    print "$w\t$out";' 2>/dev/null)
+  if [ -n "$res" ]; then
+    clip_w=${res%%$'\t'*}; clip_out=${res#*$'\t'}
+  else
+    # no perl: clip to avail/2 glyphs (each <=2 cols => never exceeds avail) and
+    # OVER-estimate the width so any pad computed from it only shrinks — degrades,
+    # never overruns.
+    clip_out="${s:0:$(( avail / 2 ))}"
+    # shellcheck disable=SC2034  # output global, read by the row producers
+    clip_w=$(( ${#clip_out} * 2 ))
+  fi
+}

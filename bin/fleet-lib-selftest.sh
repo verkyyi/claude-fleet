@@ -465,4 +465,30 @@ eq "epoch_from_iso: empty → ''"            "" "$(fleet_epoch_from_iso '')"
 _ep=$(fleet_epoch_from_iso '2026-01-01T00:00:00Z')
 fleet_reltime "$_ep" $((_ep + 7200)); eq "reltime: ISO round-trip → 2 hours" "2 hours" "${reltime_out:-}"
 
-printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, summary-key #208, reltime #228)\n' "$CHECKS"
+# fleet_clip_display (#492): clip + measure by TERMINAL COLUMNS, not code points.
+# A CJK glyph is one ${#} char but two columns; clipping by chars let ~2x the
+# intended width through AND under-counted the pad computed from it, which shoved
+# the right-pinned columns off the line (32 of 256 rows on a real ledger).
+fleet_clip_display 10 "hello"
+eq "clip: ASCII under the limit is untouched"      "hello" "$clip_out"
+eq "clip: …and its width is its length"            "5"     "$clip_w"
+fleet_clip_display 3 "hello"
+eq "clip: ASCII over the limit is cut to avail"    "hel"   "$clip_out"
+eq "clip: …width follows the cut"                  "3"     "$clip_w"
+fleet_clip_display 0 "hello"
+eq "clip: avail 0 → empty"                         ""      "$clip_out"
+eq "clip: …width 0"                                "0"     "$clip_w"
+# 中文 is 3 chars / 6 columns. At avail=6 all three fit; at 5 only two do.
+fleet_clip_display 6 "中文字"
+eq "clip: CJK exactly filling avail is kept whole" "中文字" "$clip_out"
+eq "clip: …and measures 2 columns per glyph"       "6"      "$clip_w"
+fleet_clip_display 5 "中文字"
+eq "clip: CJK is cut on a COLUMN budget"           "中文"   "$clip_out"
+eq "clip: …reporting the columns it really uses"   "4"      "$clip_w"
+# Mixed run: the width is what a terminal shows, not ${#}.
+fleet_clip_display 20 "ab中文"
+eq "clip: mixed ASCII+CJK width"                   "6"      "$clip_w"
+CHECKS=$((CHECKS + 1))
+[ "${#clip_out}" -eq 4 ] || fail "clip: mixed string should be 4 CHARS but 6 columns"
+
+printf 'selftest OK: fleet-lib (%s assertions — seat incl. #118 guard, reap gate, sessmap/cache routing, 2-fleet no-leak #180, per-fleet layout #181, per-fleet sockets #159, summary-key #208, reltime #228, display-width clip #492)\n' "$CHECKS"

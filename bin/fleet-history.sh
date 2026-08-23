@@ -113,12 +113,57 @@ transcript_dir_for() {
   fleet_transcript_dir "${1:-}"
 }
 
+# Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
+# a human ran? The status classifier and the dashboard summarizer run from INSIDE a
+# window's worktree, so their transcripts land in the SAME project dir as the
+# session they describe — and they run every ~60s, so they are usually the NEWEST
+# file there. Indexing one makes /fleet-history offer to resume the classifier's
+# context instead of the work. Recognise them by their own rubric text (RUBRIC= in
+# bin/classify-sessions.sh / bin/tmux-summarize.sh; the selftest pins both strings
+# against those files so they cannot drift apart silently).
+#
+# Read into a variable, then match — `head -c … | grep -q` would exit 141 under
+# pipefail when grep closes the pipe early, which is the same trap that broke
+# newest_session_in below.
+fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a real session
+  local head_bytes; head_bytes=$(head -c 16384 "${1:-}" 2>/dev/null)
+  case "$head_bytes" in
+    *"You are a status classifier for a Claude Code"*)         return 0 ;;
+    *"You are labeling a Claude Code session for a dashboard"*) return 0 ;;
+  esac
+  return 1
+}
+
 # newest *.jsonl session id in a transcript dir (basename sans .jsonl), or empty.
+#
+# NO `| head` here, deliberately. With `set -o pipefail` an early-closing consumer
+# makes `ls` die of SIGPIPE and the substitution reports 141 — so
+# `f=$(ls -t … | head -n1) || return 0` returned EMPTY, and did it only for dirs
+# holding enough files for `ls` to still be writing when `head` exits. That silently
+# dropped exactly the BUSIEST transcript dirs (331 sessions → skipped, 3 → fine):
+# no session id ⇒ no ledger row ⇒ invisible to /fleet-history and unresumable.
 newest_session_in() {
-  local dir="${1:-}" f
+  local dir="${1:-}" list f n=0
   [ -d "$dir" ] || return 0
-  f=$(ls -t "$dir"/*.jsonl 2>/dev/null | head -n1) || return 0
-  [ -n "$f" ] && basename "$f" .jsonl
+  list=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+  [ -n "$list" ] || return 0
+  # Newest first, skipping the fleet's own helper transcripts. Bounded: a dir where
+  # the classifier has been busy for days should not cost an unbounded scan.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -gt 200 ] && break
+    fleet_internal_transcript "$f" && continue
+    basename "$f" .jsonl
+    return 0
+  done <<EOF
+$list
+EOF
+  # Every transcript here is fleet-internal ⇒ nothing a human ran. That is a real
+  # case, not an edge one: a warm scratch-pool worktree only ever hosts helper
+  # calls, and all 21 transcripts in one such dir were classifier/summarizer runs.
+  # Report nothing, so record-closed skips it instead of indexing a row whose
+  # "resume" would drop you into the classifier's context.
+  return 0
 }
 
 # one-line summary from the dash summary cache for <session>/<window-id>, or empty.
@@ -137,12 +182,27 @@ resolve_summary() {   # $1=session  $2=window-id (@NN)
 # idempotent AND to stop a closed-unlanded row from shadowing an existing landed
 # row for the same session (the land path recorded the SAME session-id, resolved
 # from the same worktree). Returns 0 (true) when a matching row exists.
-ledger_has_session() {   # $1=ledger  $2=session-id  $3=transcript-dir
-  local ledger="$1" sid="$2" tdir="$3"
+ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=worktree $6=pr $7=sha]
+  local ledger="$1" sid="$2" tdir="$3" key="${4:-}" wt="${5:-}" pr="${6:-}" sha="${7:-}"
   [ -f "$ledger" ] || return 1
-  awk -F'\t' -v s="$sid" -v t="$tdir" '
-    { if ((s!="" && s!="-" && $8==s) || (t!="" && t!="-" && $7==t)) { found=1; exit } }
-    END { exit(found?0:1) }' "$ledger"
+  # Primary key: session-id, else transcript-dir.
+  #
+  # FALLBACK for a TRANSCRIPT-LESS record (both of those land as '-'): the primary
+  # key can then never match, so every retry appended ANOTHER row for the same
+  # session — in the wild, two `scratch-1` rows identical but for sid/tdir, the
+  # second recorded by a caller that passed no --worktree. Match instead on the
+  # key PLUS one corroborating identity (pr / sha / worktree), and only against a
+  # row that is itself transcript-less. Key alone would be wrong: a scratch slot is
+  # reused, so `scratch-1` legitimately recurs. And a row we suppress here has no
+  # transcript by definition — there is nothing in it to resume.
+  awk -F'\t' -v s="$sid" -v t="$tdir" -v k="$key" -v w="$wt" -v p="$pr" -v h="$sha" '
+    function blank(v) { return (v == "" || v == "-") }
+    { if (!blank(s) && $8 == s) { found = 1; exit }
+      if (!blank(t) && $7 == t) { found = 1; exit }
+      if (blank(s) && blank(t) && !blank(k) && $2 == k && blank($8) && blank($7) &&
+          ((!blank(p) && $4 == p) || (!blank(h) && $5 == h) || (!blank(w) && $6 == w))) {
+        found = 1; exit } }
+    END { exit(found ? 0 : 1) }' "$ledger"
 }
 
 # ============================================================================
@@ -193,6 +253,12 @@ cmd_record() {
   if [ -n "$wt" ]; then
     tdir=$(transcript_dir_for "$wt")
     sid=$(newest_session_in "$tdir")
+    # transcript_dir_for only ENCODES a path — it does not check that anything is
+    # there. Storing that speculative path when no session resolved made the row
+    # claim a transcript it doesn't have, and worse: the dir key is a dedup key, so
+    # a later REAL session at the same worktree matched it and was skipped as
+    # "already in ledger" (issue #492). No session ⇒ no transcript dir.
+    [ -z "$sid" ] && tdir=""
   fi
 
   # summary: explicit --summary wins, else the dash summary cache for --win.
@@ -205,7 +271,7 @@ cmd_record() {
   # to avoid a duplicate landed row when both record the same reap, or when a reaper
   # retries after a failed `git worktree remove`. Same dedup key as ledger-watch's
   # record-closed, so a session is recorded at most once regardless of the reaper.
-  if ledger_has_session "$ledger" "$sid" "$tdir"; then
+  if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
     printf 'landed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "${sid:-none}"
     return 0
   fi
@@ -275,7 +341,7 @@ cmd_record_closed() {
   fi
 
   local ledger; ledger=$(ledger_path "$repo")
-  if ledger_has_session "$ledger" "$sid" "$tdir"; then
+  if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
     printf 'closed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "$sid"
     return 0
   fi
@@ -315,15 +381,28 @@ cmd_record_closed() {
 
 # read the ledger newest-first into stdout as raw TSV (optional substring filter).
 # usage: read_ledger <repo> [filter]
+# stdin → rows sorted newest-first by col 1 (ISO-8601, so lexical == chronological),
+# ties broken by reversed append order. Rows with an unparseable/empty col 1 sort
+# last but are never dropped (the ledger is tolerant of missing fields by design).
+ledger_sort_desc() {
+  awk -F'\t' '{ printf "%s\t%s\n", NR, $0 }' \
+    | sort -t"$(printf '\t')" -k2,2r -k1,1nr \
+    | cut -f2-
+}
+
 read_ledger() {
   local repo="${1:-}" filter="${2:-}" ledger
   ledger=$(ledger_path "$repo")
   [ -f "$ledger" ] || return 0
-  # newest first: the file is append-order (oldest→newest), so reverse it.
+  # Newest first BY TIMESTAMP (col 1), not by file order. Append order is not
+  # chronological: a row recorded late for an older session — a backfill, or a
+  # closed-unlanded row written long after the window vanished — used to float to
+  # the top of the list (a `~1 · 1 mo` row sitting above rows from 3 hours ago).
+  # Ties keep append order (reversed), so same-second rows stay stable.
   if [ -n "$filter" ]; then
-    grep -iF -- "$filter" "$ledger" 2>/dev/null | awk '{a[NR]=$0} END{for(i=NR;i>=1;i--)print a[i]}'
+    grep -iF -- "$filter" "$ledger" 2>/dev/null | ledger_sort_desc
   else
-    awk '{a[NR]=$0} END{for(i=NR;i>=1;i--)print a[i]}' "$ledger"
+    ledger_sort_desc < "$ledger"
   fi
 }
 
@@ -467,11 +546,14 @@ cmd_rows() {
     fld "$ACTW" "$act"; f_act=$fld_out
     fld 7  "$prcell"; f_pr=$fld_out
     fld 4  "·";       f_ctx=$fld_out
-    # summary flexes into the gap; clip to the same avail the live list uses. Char
-    # clip (ASCII-fast); a rare wide glyph may run a hair short — never overruns.
+    # summary flexes into the gap; clip to the same avail the live list uses — by
+    # DISPLAY width, via the shared helper the live producer uses (fleet-lib.sh).
+    # The old char-clip's comment claimed it "may run a hair short — never
+    # overruns"; the opposite was true (a CJK glyph is 1 char / 2 columns, so the
+    # clip passed ~2x the width and the pad was computed from the short count).
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
-    [ ${#dsmry} -gt "$avail" ] && dsmry="${dsmry:0:$avail}"
-    local pad=$(( USABLE - LEFTW - ${#dsmry} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
+    fleet_clip_display "$avail" "$dsmry"; dsmry="${clip_out:-}"
+    local pad=$(( USABLE - LEFTW - ${clip_w:-0} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$fzfkey" "$US" \
