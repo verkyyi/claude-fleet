@@ -89,5 +89,32 @@ CHECKS=$((CHECKS + 1))
 grep -Eq '= "--restart-idle"' "$SCRIPT" \
   || fail "usage-modal must expose the --restart-idle background subcommand"
 
+# --- issue #495: auto-rotation must be able to move RUNNING sessions too. ---
+# The collector dispatches --restart-after-rotate on a mark-limited rotation
+# (exit 10); the mode must exist here, and the collector must actually wire it.
+CHECKS=$((CHECKS + 1))
+grep -Eq '= "--restart-after-rotate"' "$SCRIPT" \
+  || fail "usage-modal must expose the --restart-after-rotate subcommand (issue #495)"
+CHECKS=$((CHECKS + 1))
+grep -Eq 'run-shell -b .*--restart-after-rotate' "$BIN/tmux-dash-collect.sh" \
+  || fail "the collector must dispatch --restart-after-rotate via run-shell -b on a rotation (issue #495)"
+
+# The per-window restart must clear-history BEFORE relaunching: the relaunch
+# re-stamps @cc_account to the NEW label while scrollback may still hold the
+# limit banner that benched the OLD one — leave it and the collector attributes
+# the stale banner to the fresh account and benches that too (a false cascade).
+CHECKS=$((CHECKS + 1))
+command -v _ap_restart_window >/dev/null 2>&1 \
+  || fail "_ap_restart_window not defined after sourcing (issue #495 refactor)"
+CHECKS=$((CHECKS + 1))
+grep -Eq 'clear-history' "$SCRIPT" \
+  || fail "_ap_restart_window must clear-history before relaunching (stale-banner cascade guard, issue #495)"
+
+# restart_idle_claude_windows must take the skip args the rotate pass relies on
+# (skip the just-restarted banner window; skip windows already on the new label).
+CHECKS=$((CHECKS + 1))
+grep -Eq 'skip_wid' "$SCRIPT" && grep -Eq 'skip_acct' "$SCRIPT" \
+  || fail "restart_idle_claude_windows must support skip_wid/skip_acct (issue #495)"
+
 printf 'usage-modal selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

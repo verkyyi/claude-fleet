@@ -134,7 +134,12 @@ collector (every ~60s) ── scrapes each window ┘
         └─ (if FLEET_NOTIFY_CMD set) pings you once: "work hit its limit → personal"
         │
         ▼
-   the NEXT spawned session launches under personal
+   the NEXT spawned session launches under personal, AND (issue #495) the
+   collector dispatches usage-modal.sh --restart-after-rotate in the background:
+   the banner window restarts immediately (its turn is already dead on the
+   benched account) with a resume nudge, and the fleet's idle windows restart
+   via `fleet-claude.sh --continue` — so RUNNING sessions follow the rotation
+   too, without a manual /login
 ```
 
 - **`bin/fleet-account.sh`** is the single owner of the rotation state
@@ -166,14 +171,20 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
 - ✅ Works on **macOS and Linux** (token env var, not config-dir juggling).
 - ✅ **Zero cost when off** — no token files ⇒ every code path is a no-op and the
   fleet is byte-for-byte its old single-account self.
-- ⚠️ **A live process cannot hot-swap its token.** Claude Code binds its
-  credential at launch. The manual picker (the footer `◉` chip / usage stat →
-  usage + account modal) compensates by
-  restarting idle windows with `--continue` (they resume their transcript on
-  the new account), but a session that is mid-turn — including one parked on a
-  limit banner mid-response — keeps its old account until it is restarted.
-  The automatic limit-hit rotation only redirects *new* spawns; it never
-  restarts windows itself.
+- ⚠️ **A live process cannot hot-swap its token — restarts are how sessions
+  follow a rotation.** Claude Code binds its credential at launch, and every
+  in-place alternative was falsified on issue #495: `settings.json`'s
+  `apiKeyHelper` (the only documented periodically-re-run credential hook) is an
+  **API-key** path — its output is sent as both `X-Api-Key` and `Bearer`, but a
+  subscription OAuth token fed through it just 401-loops, while the *same* token
+  works via `CLAUDE_CODE_OAUTH_TOKEN`; env vars are never re-read mid-session.
+  So both switch paths restart sessions with `fleet-claude.sh --continue` (each
+  resumes its own transcript on the new account): the manual picker (the footer
+  `◉` chip / usage stat → usage + account modal) restarts idle windows, and the
+  automatic limit-hit rotation (issue #495) additionally restarts the banner
+  window itself — its turn is already dead on the benched account — with a nudge
+  so it re-orients and continues. Sessions mid-turn on *other* accounts, and
+  `/loop` windows, keep their account until their next natural restart.
 - ⚠️ **The usage proxy (`5h/7d` in the status bar) is aggregate**, summed across
   *all* accounts' transcripts — it can't attribute past tokens to an account
   after the fact. Treat it as total fleet consumption, not per-subscription.
