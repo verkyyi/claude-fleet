@@ -285,6 +285,13 @@ assumes — this doc is only the install/uninstall procedure.
      Run `loginctl enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
+   **Verify what you actually loaded.** `bin/fleet-doctor.sh` checks each optional
+   daemon's agent, not just the fleet conf flag that asks for it (issue #492) — a
+   fleet that wants ledger-watch but never had `com.claude-fleet.ledger-watch`
+   installed now WARNs instead of passing. Re-run the doctor after this step and
+   after any upgrade that adds a daemon: an agent added upstream is NOT installed
+   retroactively on a machine that installed the fleet before it existed.
+
 7. **Shell helpers.** Offer to add `source ~/.claude/fleet/shell/cw.zsh` to
    `~/.zshrc` (bash users: the functions are zsh-flavored; port on request).
    Sourcing it also installs a `tmux()` **destroy-guard** (issue #158): from a
