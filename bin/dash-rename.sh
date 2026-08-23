@@ -2,25 +2,25 @@
 # dash-rename.sh <target sess:idx> — the ⌃e (rename window) handler for the dash
 # (issue #449). Called from an fzf `transform` binding: it arms RENAME MODE by
 # stashing the highlighted row's target, then emits the fzf actions that turn the
-# dash's own (normally hidden) query line into the name editor:
+# dash's own query line — the always-visible quick-scratch prompt — into the name
+# editor for the length of the edit:
 #
-#   ⌃e  → this script: stash target, `show-input` + `change-prompt(rename ▸ )`
+#   ⌃e  → this script: stash target, `change-prompt(rename ▸ )`
 #         + `change-query(<current name>)` — type to edit the pre-filled name
 #   ↵   → dash-enter.sh rename branch: `tmux rename-window`, drop the flag,
-#         `hide-input` + restore the `▸ ` prompt (an EMPTY name cancels)
+#         restore the `▸ ` prompt (an EMPTY name cancels)
 #   esc → dash-esc.sh: drop the flag, restore the prompt, rename nothing
 #
 # The dash's query line already IS an fzf-owned input (UTF-8 / IME / paste
 # correct — the same reason ⌃n moved to `fzf --print-query` in #429), so rename
-# needs no display-popup and no @popup_open bookkeeping. `--no-input` is what
-# hides it; `show-input` toggles that off so keys type into the query.
+# needs no display-popup and no @popup_open bookkeeping. While the flag is armed,
+# dash-enter.sh treats the query as the NAME, not as a task to seed a scratch with.
 #
-# `unbind(?)` is NOT optional. show-input does not demote a PRINTABLE key that
-# --bind already claimed: with `?` still bound (the dash's cheatsheet popup),
-# typing `?` into a window name fires the popup instead of inserting a character
-# — verified on fzf 0.74.3. `?` is the dash's only printable bind, so unbinding
-# it for the duration is what makes the query line accept every character; the
-# Enter/Esc handlers `rebind(?)` when they hide the input again.
+# `unbind(?)` is NOT optional. A PRINTABLE key that --bind claimed fires its action
+# instead of typing — verified on fzf 0.74.3. The dash binds `?` as a transform
+# that only opens the cheatsheet on an EMPTY query, but a name being edited can be
+# emptied mid-way, so for the duration of a rename it is unbound outright; the
+# Enter/Esc handlers `rebind(?)` when they restore the prompt.
 #
 # NB: this must be a SCRIPT, not an inline action — fzf matches the FIRST ')' in
 # `transform(...)`, and a window name containing ')' would truncate the binding
@@ -59,4 +59,4 @@ name=$(tmux list-windows -t "${target%%:*}" -F '#{window_index} #{window_name}' 
 mkdir -p "$C" 2>/dev/null || true
 printf '%s\n' "$target" > "$flag" || exit 0
 name=${name//[()]/}   # keep change-query(...) parseable (fzf stops at the first ')')
-printf 'show-input+unbind(?)+change-prompt(rename ▸ )+change-query(%s)\n' "$name"
+printf 'unbind(?)+change-prompt(rename ▸ )+change-query(%s)\n' "$name"

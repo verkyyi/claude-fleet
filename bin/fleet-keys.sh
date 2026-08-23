@@ -96,8 +96,9 @@ print_sheet() {
   if want dashboard; then
   group "dashboard" "— inside the hub dash pane (prefix g)"
   key "enter" "jump to the highlighted window"
+  key "type a task, enter" "scratch session SEEDED with the typed text (the prompt line at the bottom; esc clears it)"
   key "⌃n" "new issue — file one AND spawn its worker (quick-dispatch)"
-  key "⌃s" "raw scratch session — spawns instantly (plain claude in its own scratch-N worktree, no issue)"
+  key "⌃s" "raw scratch session — spawns instantly (plain claude in its own scratch-N worktree, no issue, no prompt)"
   key "⌃e" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)"
   key "⌃x" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean"
   key "⌃t" "toggle live ⇄ closed (finished sessions + scratch)"

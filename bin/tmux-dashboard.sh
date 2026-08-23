@@ -3,7 +3,10 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · Enter jump to that window · ⌃n file an issue + spawn its worker ·
+#   ↑/↓ move · Enter jump to that window · type a task + Enter → a SEEDED scratch
+#   session (the prompt line at the bottom is always visible; dash-enter.sh hands
+#   the text to dash-raw-session.sh --prompt) ·
+#   ⌃n file an issue + spawn its worker ·
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
@@ -90,6 +93,14 @@ HDR='↵ jump · [＋ new] · ? keys'
 # POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
 # less obvious than esc-back on the always-on dash) — that token is the only diff.
 [ -n "$POPUP" ] && HDR='↵ jump · [＋ new] · ? keys · esc close'
+# The prompt line at the bottom is ALWAYS visible (no --no-input): it is the
+# quick-scratch box — type a task, ↵ → a scratch session seeded with it
+# (dash-enter.sh → dash-raw-session.sh --prompt). The hint lives in the input's
+# ghost text, not the header, so it vanishes the moment you start typing and the
+# header stays one line wide. Typing never filters (--disabled); ↵ on an EMPTY
+# line is still plain jump. --no-separator: the header line already divides the
+# list from the prompt, so the input costs ONE row, not two (iPad-height panes).
+GHOST='type a task, ↵ → scratch session'
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across
@@ -120,16 +131,22 @@ run_dash() {
   # #308/#431 rail the prefix binds always had and these two skipped), and falls back to
   # running the command INLINE in the pane when there is no client — so a dash popup
   # bind can never silently do nothing again.
+  # `?` is the dash's one PRINTABLE bind, and a bound printable key fires its action
+  # instead of typing (fzf 0.74.3) — so with the input always visible it is a
+  # transform: an EMPTY query → the cheatsheet popup (the key as documented); a
+  # non-empty one → `put(?)`, i.e. the character goes into the task you're typing.
+  # (dash-rename.sh still unbinds it outright for the length of a rename, where the
+  # query is pre-filled and may be emptied mid-edit.)
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
-    --disabled --no-input --no-sort \
-    --layout=reverse-list --info=hidden --border=none \
-    --prompt='▸ ' \
+    --disabled --no-sort \
+    --layout=reverse-list --info=hidden --no-separator --border=none \
+    --prompt='▸ ' --ghost="$GHOST" \
     --header="$HDR" \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
-    --bind "?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)" \
+    --bind "?:transform:[ -n \"\$FZF_QUERY\" ] && echo 'put(?)' || echo 'execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)'" \
     --bind "ctrl-n:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
     --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)' ;; esac" \
     --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
@@ -139,7 +156,7 @@ run_dash() {
     --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "ctrl-e:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
-    --bind "esc:transform(bash $BIN/dash-esc.sh)" \
+    --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1
 }
 

@@ -242,6 +242,53 @@ WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw --bg
 grep -qi 'capacity' "$DISPLAY_LOG" || fail "M a --bg cap refusal should still surface a message" "$(cat "$DISPLAY_LOG")"
 ok "M dash ⌃s (--bg) spawns instantly — backgrounded, no prompt, refusals stay sync"
 
+# ==================== N: --prompt seeds the scratch (dash prompt line) ========
+# The dash's always-visible prompt line hands its text over as --prompt (via
+# dash-enter.sh). The seed rides in a task file read at launch — `fleet-claude.sh
+# "$(cat <tf>)"`, the worker-seed handoff — never inline in the command string; a
+# --bg --prompt stages it through --prompt-file (never into the run-shell string);
+# the summary column is seeded with the task; a seeded scratch never claims a
+# warm-pool window; a whitespace-only prompt is a plain scratch.
+POOL_LOG="$WORK/pool"
+cat > "$WORK/bin/scratch-pool.sh" <<POOLFAKE
+#!/bin/bash
+printf '%s\n' "\$*" >> "$POOL_LOG"    # log the call; answer with an EMPTY claim (cold path)
+exit 0
+POOLFAKE
+chmod +x "$WORK/bin/scratch-pool.sh"
+reset_scratch; : > "$POOL_LOG"; rm -rf "$WORK/tmp/.claude-dash/fleets" "$WORK/tmp/.claude-dash/global"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt $'audit the dash binds for "$(injection)" risks'
+grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N --prompt must still land a scratch-N window" "$(cat "$NEWWIN_LOG")"
+grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"      || fail "N a seeded scratch is still @raw=1" "$(cat "$OPTS_LOG")"
+grep -q '@issue' "$OPTS_LOG"               && fail "N a seeded scratch must NOT get an @issue" "$(cat "$OPTS_LOG")"
+grep -qF -- "fleet-claude.sh' \"\$(cat '" "$NEWWIN_LOG" || fail "N the seed must ride in a task file read at launch (\"\$(cat <tf>)\")" "$(cat "$NEWWIN_LOG")"
+grep -qF -- 'injection' "$NEWWIN_LOG"      && fail "N the prompt text must NEVER be interpolated into the new-window command" "$(cat "$NEWWIN_LOG")"
+tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
+[ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"
+[ "$(cat "$tf")" = $'audit the dash binds for "$(injection)" risks' ] || fail "N the task file must hold the prompt verbatim" "$(cat "$tf")"
+grep -qs 'claim' "$POOL_LOG"               && fail "N a seeded scratch must never claim a warm-pool window (the seed is a launch arg)" "$(cat "$POOL_LOG")"
+grep -qs 'scratch-1: audit the dash binds' "$WORK/tmp/.claude-dash/global"/summary_* || fail "N the summary column must be seeded with the task" "$(ls "$WORK/tmp/.claude-dash/global" 2>/dev/null)"
+grep -q 'seeded' "$DISPLAY_LOG"            || fail "N the status line should say the scratch was seeded" "$(cat "$DISPLAY_LOG")"
+# …while an UNSEEDED spawn does consult the pool first
+reset_scratch; : > "$POOL_LOG"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
+grep -qs 'claim' "$POOL_LOG"               || fail "N a plain scratch should still try the warm pool first" "$(cat "$POOL_LOG")"
+# --bg --prompt: staged through --prompt-file, lands, and the text never touches run-shell
+reset_scratch
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --prompt 'bg seeded task'
+grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N --bg --prompt must land the scratch" "$(cat "$NEWWIN_LOG")"
+grep -q -- '--prompt-file=' "$RS_LOG"      || fail "N a --bg --prompt spawn must stage the prompt via --prompt-file" "$(cat "$RS_LOG")"
+grep -qF 'bg seeded task' "$RS_LOG"        && fail "N the prompt text must not be interpolated into the run-shell string" "$(cat "$RS_LOG")"
+tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
+[ "$(cat "$tf" 2>/dev/null)" = 'bg seeded task' ] || fail "N the --bg seed must reach the task file" "$(cat "$NEWWIN_LOG")"
+# whitespace-only prompt → plain scratch (no task file, plain launch)
+reset_scratch
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt '   '
+grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N a blank --prompt must still spawn" "$(cat "$NEWWIN_LOG")"
+grep -qF -- '$(cat' "$NEWWIN_LOG"          && fail "N a blank --prompt is a PLAIN scratch — no task-file launch" "$(cat "$NEWWIN_LOG")"
+rm -f "$WORK/bin/scratch-pool.sh"
+ok "N --prompt seeds the scratch via a task file (never inline), skips the pool, --bg stages it"
+
 # ============================ D: restore drops @raw ==========================
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\n' \
         "$WORK/main-scratch-1" "$WORK/main-issue-7" "$WORK/main" | python3 "$RESOLVE")

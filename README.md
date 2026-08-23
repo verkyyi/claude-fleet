@@ -31,11 +31,14 @@ demo repo data.</sub>
   session with state glyph, bound issue, model, and context %. It lives as an
   embedded pane in the `plan` hub, which holds the dash and nothing else;
   `prefix+g` focuses it and, pressed again, zooms it fullscreen — as does
- `F9`. `Enter` jumps. **Type a task and press Enter** —
-  it files a GitHub issue and spawns a new worktree session bound to it.
-  `Ctrl-S` opens a raw scratch session (plain `claude`, no issue — but in its
-  own writable `scratch-N` worktree, so an experiment can push a branch and open
-  a PR like any worker). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
+ `F9`. `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
+  **type a task and press Enter** — it spawns a scratch session (own writable
+  `scratch-N` worktree, no issue) **seeded with that text**, so it starts working
+  at once. `Ctrl-N` (or the `[＋ new]` chip) is the issue-bound path: it files a
+  GitHub issue and spawns a worker session bound to it.
+  `Ctrl-S` opens an unseeded raw scratch session (plain `claude`, no issue — but
+  in its own writable `scratch-N` worktree, so an experiment can push a branch and
+  open a PR like any worker). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
   ready: `⌃s` then hands you a session you can type into immediately (0.46s to
   the window, 0.30s to the first keystroke) instead of one that spends ~7s
   booting — the last second of which paints a `❯` box that silently swallows
