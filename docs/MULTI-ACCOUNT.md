@@ -65,9 +65,15 @@ API credits, **not** your subscription — the opposite of what this is for.)
    chmod 600 ~/.config/claude-fleet/accounts/*
    ```
 
-   **Different windows per account?** If your accounts are on different tiers
-   (Pro vs Max 5×/20×) whose limits reset over different windows, give an account
-   its own bench duration with a companion `<label>.conf` next to its token:
+   **Different windows per account?** Usually you need nothing: the limit banner
+   carries the account's own refresh instant (`… · resets 10:20pm
+   (America/Los_Angeles)`), and a benched account comes back exactly then — so
+   accounts on different tiers, or on the same tier with windows that started
+   hours apart, each keep their own schedule for free.
+
+   The duration knob below is the **fallback** for banners that carry no clock
+   time (the weekly `resets Monday` form). Give such an account its own bench
+   duration with a companion `<label>.conf` next to its token:
 
    ```sh
    printf 'LIMIT_TTL=7d\n' > ~/.config/claude-fleet/accounts/max20x.conf   # weekly-capped
@@ -77,13 +83,18 @@ API credits, **not** your subscription — the opposite of what this is for.)
    `LIMIT_TTL` takes `<N>[smhd]` or bare seconds; accounts without a `.conf` use
    `FLEET_ACCOUNT_LIMIT_TTL` (default 5h). This stops a weekly-limited account
    from being un-benched every 5h and thrashing straight back into the same wall.
+   It only applies when the banner had no instant to parse — a duration is a
+   guess, and it is wrong in both directions: too long and the account sits out
+   hours past its real refresh (silent idle capacity), too short and it is
+   released early into the same wall.
 
 3. **(Optional) tune it in `fleet.conf`:**
 
    ```sh
    FLEET_ACCOUNTS_DIR="$HOME/.config/claude-fleet/accounts"  # default; override to relocate
    FLEET_ACCOUNTS="work personal"        # pin order/subset (default: all files, sorted)
-   FLEET_ACCOUNT_LIMIT_TTL=18000         # how long a limited acct sits out (5h)
+   FLEET_ACCOUNT_LIMIT_TTL=18000         # FALLBACK bench window (5h), used only when
+                                         # the banner carries no "resets …" time
    ```
 
 4. **Verify:** `sh ~/.claude/fleet/bin/fleet-doctor.sh` reports the token count
@@ -117,7 +128,8 @@ collector (every ~60s) ── scrapes each window ┘
         │
         ▼
    bin/fleet-account.sh mark-limited work
-        ├─ records: work is limited for FLEET_ACCOUNT_LIMIT_TTL
+        ├─ records: work is limited until the banner's "resets …" instant
+        │            (no instant in the banner? → now + FLEET_ACCOUNT_LIMIT_TTL)
         ├─ rotates the active pointer → personal
         └─ (if FLEET_NOTIFY_CMD set) pings you once: "work hit its limit → personal"
         │
@@ -134,10 +146,17 @@ collector (every ~60s) ── scrapes each window ┘
   which is why every spawn path can route through it safely.
 - The **collector** (`bin/tmux-dash-collect.sh`) does the detection. It already
   scrapes each pane for the usage-% line; this adds the "hit your … limit"
-  banner match, attributes it to the window's `@cc_account`, and rotates.
+  banner match, attributes it to the window's `@cc_account`, and rotates. The
+  whole banner is passed through, because its `· resets …` tail is what sets the
+  bench end.
+- **The bench ends when the account's window actually refreshes.** The zone in
+  the banner is the *account's*, not the host's, so a fleet running in another
+  timezone still lands on the right instant. Anything the parser can't read
+  strictly — no clock time, an unknown zone — falls back to the duration rather
+  than guessing, because a wrong epoch is worse than a conservative one.
 
 Rotation is **round-robin over eligible accounts**: a limited one is skipped
-until its TTL passes (or you clear it with `fleet-account.sh clear <label>`). If
+until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
 *every* account is limited, the active pointer stays put so sessions still launch
 (they'll just wait on the limit like a single-account fleet would).
 

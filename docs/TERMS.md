@@ -117,6 +117,8 @@ they repaint instantly:
   - `FLEET_STATUS_CONTAINER` — optional docker container to show as ●/○.
   - `FLEET_ACCOUNTS_DIR` / `FLEET_ACCOUNTS` / `FLEET_ACCOUNT_LIMIT_TTL` — multi-account
     failover pool (see [MULTI-ACCOUNT](MULTI-ACCOUNT.md)); off unless token files exist.
+    A benched account returns at the limit banner's own `resets …` instant; the TTL
+    is the fallback for banners that carry no clock time.
 - **`FLEET_ID`** — the fleet's identity = its tmux session name. In the
   multi-fleet model this is the key that scopes a fleet's config and cache. See
   [ARCHITECTURE](ARCHITECTURE.md).

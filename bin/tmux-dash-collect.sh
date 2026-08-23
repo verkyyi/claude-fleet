@@ -422,7 +422,8 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   while IFS="$US" read -r win acct; do
     [ -n "$acct" ] || continue
     # match the core signal ("hit your <session|weekly|Opus> limit"); the trailing
-    # "· resets …" (when present) is captured for the notification but not required.
+    # "· resets …" is not required to match, but IS what mark-limited benches to
+    # when present (issue #490) — so capture the whole banner, not just the head.
     banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null \
       | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
     [ -n "$banner" ] || continue
