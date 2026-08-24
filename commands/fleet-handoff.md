@@ -105,14 +105,20 @@ Then take the FIRST matching case:
    any pane with no `@issue`) → **file storage** (case 3). Comment mode
    needs a thread to post to; without one, fall back to a local file.
 
-3. **`DEST=file`, OR any fall-through from above** → **FILE storage** (the prior
-   behavior). The path is by seat:
-   - **worker** — write `doc/handoff/<slug>.md` **inside your `issue-<N>`
-     worktree** and **commit** it (the base checkout is read-only, your worktree is
-     not). `<slug>` = short kebab task name. `DOC="$(pwd)/doc/handoff/<slug>.md"`.
-   - **hub / raw** — the cwd is the hook-enforced read-only base checkout, so
-     do NOT write into it. Use the flat convention
-     `~/.claude/handoff/<session>-<YYYY-MM-DD>.md` (create the dir). No commit.
+3. **`DEST=file`, OR any fall-through from above** → **FILE storage**, always
+   **OUTSIDE the repo**, same convention for every seat:
+   `~/.claude/handoff/<session>-<YYYY-MM-DD>.md` (create the dir). **Never commit it.**
+   Add a `-<slug>` suffix when a session hands off more than one task.
+
+   > A handoff written *into* the repo used to be the worker path
+   > (`doc/handoff/<slug>.md`, committed in the `issue-<N>` worktree). It is
+   > **retired** — measured on 24haowan-monorepo (its issue #2656): 20 committed
+   > handoffs, **24 citations from production code comments**, 2 of them pointing at
+   > files deleted months earlier. A handoff is scaffolding; committed scaffolding
+   > never gets removed, it just gets cited. That repo now fails CI on any tracked
+   > file under `doc/handoff/` or `docs/handoff/`, and others may too. If the content
+   > is durable *project* knowledge, it is not a handoff — write it as a normal repo
+   > doc under that repo's own convention and say so.
 
    ```sh
    echo "DOC=$DOC"
@@ -195,8 +201,10 @@ before reading it:
    gh issue view "$ISSUE" --repo "$FLEET_REPO" --json comments \
      -q 'last(.comments[] | select(.body | contains("<!-- fleet:handoff -->"))) | .body'
    ```
-3. **File-fallback search** — the newest `~/.claude/handoff/<session>-*.md` (or the
-   worktree's `doc/handoff/*.md`), the prior behavior, when neither above resolves.
+3. **File-fallback search** — the newest `~/.claude/handoff/<session>-*.md`, when
+   neither above resolves. An old repo-committed handoff may still exist in a repo
+   that has not been cleaned up (`git grep -lI 'Handoff:' -- doc`); read it as
+   history, never write a new one there.
 
 Then run the repo-shipped base skill **`~/.claude/skills/handoff/SKILL.md` PICK-UP
 mode verbatim** on the resolved source:
