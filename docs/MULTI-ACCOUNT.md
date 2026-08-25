@@ -118,6 +118,21 @@ on).
 
 ## How it runs
 
+Two things authenticate against the pool, not one. The obvious one is a **worker
+session**. The other is the fleet's own **helper `claude -p` calls** — the dash
+summary column (`bin/tmux-summarize.sh`) and the looping-detector
+(`bin/classify-sessions.sh`) — which route through `fleet_helper_claude_auth`
+(`bin/fleet-lib.sh`) and pick up the same ACTIVE-account token, *unless* one is
+already in the environment: the Stop-hook path runs as a child of a worker's
+claude and must keep THAT worker's account rather than re-resolving `active`
+mid-turn.
+
+Those helpers used to run bare, on the machine's ambient login — the one
+credential nothing else in the fleet depends on. When it lapsed (issue #497) all
+the workers kept running and only the summary column and the looping-detector
+went dark, which is a confusing shape of failure to walk into. With multi-account
+OFF the helpers fall back to that ambient login, which is then correct.
+
 ```
 spawn a session ──► bin/fleet-claude.sh ──► exports CLAUDE_CODE_OAUTH_TOKEN
    (dash/backlog/cw)   (the launcher)        for the ACTIVE account, stamps the
