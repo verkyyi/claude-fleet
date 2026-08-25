@@ -49,6 +49,16 @@ NOMCP=()
 # tmux call to the right server accordingly.
 TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else tmux "$@"; fi; }
 
+# Authenticate the helper `claude -p` off the account POOL (issue #497). Bare, it
+# rides the machine's AMBIENT login, which is the ONE credential no worker depends
+# on — bin/fleet-claude.sh puts every worker on a pool token. When that ambient login
+# lapsed on 2026-08-25 the fleet kept working and only this classifier and the dash's
+# summary column went dark. No-op when multi-account is off, or when a token is
+# already inherited (the Stop-hook path runs inside a worker's claude).
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+fleet_helper_claude_auth 2>/dev/null || :
+
 RUBRIC='You are a status classifier for a Claude Code terminal session. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
 WORKING - Claude is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
 WAITING - Claude EXPLICITLY posed a question, requested specific input, or is blocked on a permission/confirmation prompt that stops progress until the user answers (e.g. "Do you want to proceed?", "Please provide the target path.", a numbered choice list awaiting a selection, "Allow this tool to run?"). This takes precedence: if the screen shows a real pending question OR permission prompt, it is WAITING even if a caret or chips are also visible. A bare idle prompt with only a recap and suggested commands is NOT waiting.
@@ -85,8 +95,20 @@ classify_one() {
   [ "$h" = "$(cat "$hf" 2>/dev/null)" ] && return 0    # unchanged screen -> no LLM call
 
   raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
+  crc=$?
+  # rc != 0 is NOT an unparseable answer, it is NO answer (issue #497) — `claude`
+  # prints its auth failure on stdout, so the two are indistinguishable by text. Bail
+  # before the hash is stamped: writing it would mark this screen "seen" and retire it
+  # from every producer until the pane redraws, which is how a dead credential turned
+  # a per-call failure into a permanently dark looping-detector.
+  if [ "$crc" -ne 0 ]; then
+    printf '%s  %-10s helper claude -p failed (rc=%s) — left unhashed for retry\n' \
+      "$(date +%H:%M:%S)" "$target" "$crc" >> "$LOG"
+    return 0
+  fi
   label=$(printf '%s' "$raw" | tr -d '[:space:].' | tr '[:lower:]' '[:upper:]')
-  echo "$h" > "$hf"     # remember we've seen this screen regardless of parse
+  echo "$h" > "$hf"     # rc=0 but unparseable: still "seen" — the model answered, we
+                        # just could not use it, and re-asking the SAME screen won't help
 
   new=""
   case "$label" in

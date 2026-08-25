@@ -201,6 +201,36 @@ fleet_summary_sanitize() {
   printf '%s' "${s:0:60}"
 }
 
+# --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
+# The two screen-classifier helpers (bin/tmux-summarize.sh, bin/classify-sessions.sh)
+# shell out to `claude -p`. Left bare, that call authenticates from the machine's
+# AMBIENT login — the macOS Keychain entry / ~/.claude credentials — which is a
+# DIFFERENT credential from the one every worker runs on: bin/fleet-claude.sh exports
+# CLAUDE_CODE_OAUTH_TOKEN for the active pool account before exec'ing claude, exactly
+# as fleet-account.sh's header describes. So when the ambient login lapsed on
+# 2026-08-25, all eleven workers kept running and only the dash's summary column and
+# the looping-detector died — the one credential nothing else in the fleet depends on
+# was the one credential these two helpers depended on.
+#
+# This is that missing wire, and only that: the pool token when there IS one, silence
+# when multi-account is off (then a bare `claude -p` and its ambient login is still
+# exactly right, and this is a no-op). An INHERITED token always wins — the Stop-hook
+# path runs as a child of a worker's claude, which already carries the right account's
+# token, and re-resolving 'active' there could hand a hook the OTHER account mid-turn.
+# Sourced-library rules apply: no `set`, every expansion defaulted, always returns 0.
+fleet_helper_claude_auth() {
+  [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && return 0    # inherited (hook path) — keep it
+  local _bin label tok
+  _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -n "$_bin" ] && [ -x "$_bin/fleet-account.sh" ] || return 0
+  label="$(bash "$_bin/fleet-account.sh" active 2>/dev/null)"
+  [ -n "$label" ] || return 0                          # multi-account off → ambient login
+  tok="$(bash "$_bin/fleet-account.sh" token "$label" 2>/dev/null)"
+  [ -n "$tok" ] || return 0
+  export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+  return 0
+}
+
 # Path to the sessmap for READING, dual-layout: the new global/sessmap if present,
 # else the legacy flat one (cold start / pre-#181). Writers always write the new
 # global/ path via fleet_cache_global.

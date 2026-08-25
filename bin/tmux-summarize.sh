@@ -51,6 +51,13 @@ NOMCP=()
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
 TM() { if [ -n "${SUMMARIZE_SOCK:-}" ]; then tmux -L "$SUMMARIZE_SOCK" "$@"; else tmux "$@"; fi; }
 
+# Authenticate the helper `claude -p` off the account POOL (issue #497). Bare, it
+# rides the machine's AMBIENT login — the one credential no worker depends on, and
+# the one that lapsed on 2026-08-25 and turned every row of the summary column into
+# "Failed to authenticate". No-op when multi-account is off, or when a token is
+# already inherited (the Stop-hook path runs inside a worker's claude).
+fleet_helper_claude_auth 2>/dev/null || :
+
 RUBRIC='You are labeling a Claude Code session for a dashboard row. Using the bound issue (the goal) and the recent terminal screen (current activity), reply with ONE plain sentence (≤12 words): what this session is doing now and its status. No preamble, no markdown, no quotes, no trailing period. If the screen is idle or empty, reply "idle".'
 
 mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
@@ -72,7 +79,7 @@ issue_title() {
 # screens (hash), and very recent re-summaries (debounce). A per-window lock keeps
 # the daemon sweep and a hook-fired run (or two rapid hooks) from racing.
 do_window() {
-  local wid="$1" name="$2" state="$3" sess="$4" iss="$5" id key out lock cap h hf sum meta ititle rc=1
+  local wid="$1" name="$2" state="$3" sess="$4" iss="$5" id key out lock cap h hf raw sum meta ititle crc rc=1
   case "$name" in dash|plan|backlog) return 1;; esac
   [ -z "$state" ] && return 1                       # non-Claude window
   id=${wid//[^0-9]/}; [ -z "$id" ] && return 1
@@ -98,11 +105,27 @@ do_window() {
         ititle=$(issue_title "$sess" "$iss")
         meta="${meta}"$'\n'"Bound GitHub issue #${iss}${ititle:+: ${ititle}}"
       fi
-      # tolerant: `head -1` closes the pipe early, so claude/sed may exit via
-      # SIGPIPE (141) under pipefail — harmless, only the captured text is used.
-      sum=$(printf '%s\n\n%s\n\nRecent screen:\n-----\n%s\n' "$RUBRIC" "$meta" "$cap" \
-            | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null \
-            | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
+      # The LLM call is captured on its OWN, not mid-pipeline, so its EXIT STATUS
+      # survives (issue #497). It used to be stage one of a `| sed | head -1` chain,
+      # which threw the status away — and `claude` prints its auth failure on stdout,
+      # so a dead credential read as a perfectly good one-line answer and got written
+      # to the summary file AND pushed to the pane border, verbatim, on every window.
+      raw=$(printf '%s\n\n%s\n\nRecent screen:\n-----\n%s\n' "$RUBRIC" "$meta" "$cap" \
+            | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null); crc=$?
+      if [ "$crc" -ne 0 ]; then
+        # No answer at all — NOT a summary that happens to say "expired". Leave the
+        # hash unwritten so the next producer retries this same screen: the change
+        # gate is shared, and stamping it here is how ONE broken producer silently
+        # switches off a healthy one. That is precisely what happened — the tokenless
+        # launchd sweep kept winning the race and marking screens "seen", so the
+        # Stop-hook path (which DOES carry a worker's token) never ran at all, and a
+        # half-broken summarizer presented as a totally broken one.
+        printf '%s  %-12s helper claude -p failed (rc=%s) — screen left unhashed for retry\n' \
+          "$(date +%H:%M:%S)" "$name" "$crc" >> "$LOG"
+        rmdir "$lock" 2>/dev/null
+        return 1
+      fi
+      sum=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//; /^[[:space:]]*$/d' | head -1 | cut -c1-120)
       echo "$h" > "$hf"
       if [ -n "$sum" ]; then
         printf '%s' "$sum" > "$out"
