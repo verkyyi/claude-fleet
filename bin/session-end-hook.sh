@@ -126,8 +126,12 @@ if [ "${1:-}" = "--exec" ]; then
       verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$key" "$whead" "$MASTER" "$MERGED_PRS")
       # No issue → pass an empty one; fleet_reap_record derives the scratch key from
       # the branch. record-closed skips a worktree with no transcript, so a scratch
-      # that never produced one simply gets no row.
-      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key"
+      # that never produced one simply gets no row. The window NAME rides along as
+      # the row's title — the window is still alive here (killed below), and without
+      # it this instant record deduped away ledger-watch's later titled row, leaving
+      # every hand-exited scratch "(untitled)" in /fleet-history.
+      wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
+      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname"
     fi
     [ -n "$sess" ] && [ -n "$win" ] && \
       rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$win")" 2>/dev/null
@@ -171,8 +175,11 @@ if [ "${1:-}" = "--exec" ]; then
   # transcript-dir is derived from the worktree PATH). The shared helper maps the
   # verdict to the right row: merged-pr → landed; ancestor/unmerged/dirty →
   # closed-unlanded. Idempotent (dedups on session-id), so racing the cleanup daemon
-  # / ledger-watch still yields ONE row.
-  fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch"
+  # / ledger-watch still yields ONE row. The window name rides along as a fallback
+  # title (the window is still alive — killed just below), so a closed-unlanded row
+  # recorded here is never "(untitled)"; on the landed path gh's PR title still wins.
+  wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
+  fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch" "$wname"
 
   # CLOSE THE WINDOW FIRST (mirrors dash-reap reap_full, #313): it frees the pane's
   # shell if it was cwd'd inside the worktree, so the remove below isn't blocked, and

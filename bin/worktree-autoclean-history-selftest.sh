@@ -157,25 +157,27 @@ cp=$(printf '%s' "$cu_row" | awk -F'\t' '{print $4}')
 [ "$cp" = "-" ] || fail "closed-unlanded #600 row must have no PR (got [$cp])" "$cu_row"
 ok "clean-ancestor reap → closed-unlanded row for #600 (indexed, no PR)"
 
-# scratch reap (#466) → a closed-unlanded row keyed by the slug, with the HEAD sha
-# recorded while the worktree still stood (that sha is what makes it resumable after
-# this very prune). Silent disposal must never mean a lost transcript.
+# scratch with a HUMAN transcript (#466 + the conversation-keep rule) → a
+# closed-unlanded row keyed by the slug, with the HEAD sha — but the worktree is
+# now KEPT (the transcript proves a session ran here; a conversation writes no
+# files yet still is the work). Indexing must never depend on disposal.
 sc_row=$(awk -F'\t' '$2=="scratch-900" && $10=="closed-unlanded"' "$LEDGER")
-[ -n "$sc_row" ] || fail "a scratch reap must leave a 'closed-unlanded' row keyed scratch-900" "$(cat "$LEDGER")"
+[ -n "$sc_row" ] || fail "a conversation scratch must still get a 'closed-unlanded' row keyed scratch-900" "$(cat "$LEDGER")"
 ss=$(printf '%s' "$sc_row" | awk -F'\t' '{print $8}')
 [ "$ss" = sess-900 ] || fail "the scratch row must carry its surviving session id (got [$ss])" "$sc_row"
 ssha=$(printf '%s' "$sc_row" | awk -F'\t' '{print $5}')
 case "$ssha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
   *) fail "the scratch row must carry the worktree HEAD sha (got [$ssha])" "$sc_row" ;; esac
-ok "scratch reap → closed-unlanded row keyed scratch-900, with the sha resume rebuilds from"
+ok "conversation scratch → closed-unlanded row keyed scratch-900, with the sha resume rebuilds from"
 
-# the rows were written BEFORE removal: every worktree + branch is now gone.
+# the rows were written BEFORE removal: both ISSUE worktrees + branches are now
+# gone; the conversation scratch worktree is KEPT (surfaced for a deliberate ⌃x).
 [ -d "$WT500" ] && fail "issue-500 worktree must be reaped after its row is recorded"
 [ -d "$WT600" ] && fail "issue-600 worktree must be reaped after its row is recorded"
-[ -d "$SWT900" ] && fail "the clean scratch-900 worktree must be reaped after its row is recorded"
+[ -d "$SWT900" ] || fail "the conversation scratch-900 worktree must be KEPT (a session ran in it)"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-500 && fail "issue-500 branch should be deleted"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-600 && fail "issue-600 branch should be deleted"
-ok "both worktrees + branches reaped (record ran BEFORE remove)"
+ok "issue worktrees + branches reaped (record BEFORE remove); conversation scratch kept + indexed"
 
 # ================= PART 2: fleet_reap_record is idempotent =====================
 # BOTH reapers (fleet-cleanup.sh + worktree-autoclean.sh) can record the SAME reap

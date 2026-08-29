@@ -545,6 +545,54 @@ fleet_transcript_dir() {
   printf '%s/%s' "${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}" "$enc"
 }
 
+# Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
+# a human ran? The status classifier and the dashboard summarizer run from INSIDE a
+# window's worktree, so their transcripts land in the SAME project dir as the
+# session they describe — and they run every ~60s, so they are usually the NEWEST
+# file there. Recognise them by their own rubric text (RUBRIC= in
+# bin/classify-sessions.sh / bin/tmux-summarize.sh; fleet-history-selftest.sh pins
+# both strings against those files so they cannot drift apart silently).
+# Canonical copy — bin/fleet-history.sh (indexing) and bin/worktree-autoclean.sh
+# (the conversation-scratch keep gate) both key off it.
+#
+# Read into a variable, then match — `head -c … | grep -q` would exit 141 under
+# pipefail when grep closes the pipe early.
+fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a real session
+  local head_bytes; head_bytes=$(head -c 16384 "${1:-}" 2>/dev/null)
+  case "$head_bytes" in
+    *"You are a status classifier for a Claude Code"*)          return 0 ;;
+    *"You are labeling a Claude Code session for a dashboard"*) return 0 ;;
+  esac
+  return 1
+}
+
+# newest HUMAN *.jsonl session id in a transcript dir (basename sans .jsonl), or
+# empty when the dir holds nothing but the fleet's own helper transcripts (a warm
+# scratch-pool worktree is exactly that — all 21 transcripts in one such dir were
+# classifier/summarizer runs).
+#
+# NO `| head` here, deliberately. With `set -o pipefail` an early-closing consumer
+# makes `ls` die of SIGPIPE and the substitution reports 141 — which silently
+# dropped exactly the BUSIEST transcript dirs (331 sessions → skipped, 3 → fine).
+fleet_newest_human_session() {
+  local dir="${1:-}" list f n=0
+  [ -d "$dir" ] || return 0
+  list=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+  [ -n "$list" ] || return 0
+  # Newest first, skipping the fleet's own helper transcripts. Bounded: a dir where
+  # the classifier has been busy for days should not cost an unbounded scan.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -gt 200 ] && break
+    fleet_internal_transcript "$f" && continue
+    basename "$f" .jsonl
+    return 0
+  done <<EOF
+$list
+EOF
+  return 0
+}
+
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside an
@@ -868,13 +916,20 @@ fleet_scratch_key() {
 #   $8 pr        merged PR number if the caller already knows it, else "" to resolve from branch
 #   $9 branch    issue-<N> / scratch-<N> branch — used to resolve the merged PR when
 #                $8 is empty, and to derive the scratch key when $4 is empty
+#   $10 title    optional display title for the row — the SessionEnd hook passes the
+#                window NAME here (the one human-readable identity it has at exit),
+#                so an exit-recorded row is never "(untitled)": before this the hook
+#                recorded first with NO title and then DEDUPED away ledger-watch's
+#                titled row for the same session. record/record-closed use it as a
+#                fallback only (a gh-resolved PR title still wins on the landed path).
 # Best-effort: never fails the caller (a missing fleet-history.sh / gh just skips).
 # Empty --pr/--win/--session are tolerated by fleet-history.sh (treated as unset),
 # so they are passed uniformly rather than juggling optional flags (keeps this POSIX
 # — fleet-lib is sourced by /bin/sh callers too, so no bash arrays here).
 fleet_reap_record() {
   local outcome="${1:-}" repo="${2:-}" main="${3:-}" issue="${4:-}" \
-        wt="${5:-}" win="${6:-}" sess="${7:-}" pr="${8:-}" branch="${9:-}"
+        wt="${5:-}" win="${6:-}" sess="${7:-}" pr="${8:-}" branch="${9:-}" \
+        title="${10:-}"
   # KEY: the issue number for a worker; for a SCRATCH reap (no issue) the
   # `scratch-<N>` slug, derived from the branch first (authoritative — the reaper
   # knows it) and the worktree path second (the SessionEnd hook has no branch).
@@ -898,7 +953,8 @@ fleet_reap_record() {
                 --json number -q '.[0].number' 2>/dev/null)"
       fi
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
-        --pr "$pr" --key "$key" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+        --pr "$pr" --key "$key" --worktree "$wt" --win "$win" \
+        --title "$title" >/dev/null 2>&1 || return 0
       ;;
     ancestor|ancestor-of-*|unmerged|dirty)
       # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
@@ -906,7 +962,8 @@ fleet_reap_record() {
       # closed-unlanded so it stays browsable/resumable. record-closed skips a
       # branch with no transcript and dedups on session-id (idempotent).
       bash "$hist" record-closed --repo "$repo" --session "$sess" \
-        --key "$key" --worktree "$wt" --win "$win" >/dev/null 2>&1 || return 0
+        --key "$key" --worktree "$wt" --win "$win" \
+        --title "$title" >/dev/null 2>&1 || return 0
       ;;
   esac
   return 0
