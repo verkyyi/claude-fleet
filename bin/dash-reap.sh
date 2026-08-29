@@ -75,8 +75,12 @@ close_issue() {
 # no-sha row ledger-watch used to leave, and the degrade path is already handled
 # (worktree add fails → REVIEW-ONLY).
 reap_record() {
+  # ${wname:-} = the window name, read alongside $wid BEFORE reap_* kills the
+  # window — it becomes the row's fallback title (⌃e renames included), so a
+  # ⌃x-recorded closed-unlanded row isn't "(untitled)". On the landed path gh's
+  # PR title still wins inside fleet-history.
   fleet_reap_record "${reason:-}" "$REPO" "$MAIN" "$iss" "$wtdir" "${wid:-}" \
-    "${FLEET_SESSION:-}" "" "$branch"
+    "${FLEET_SESSION:-}" "" "$branch" "${wname:-}"
 }
 
 # full reap: remove worktree + delete branch, close issue, kill window
@@ -143,10 +147,11 @@ if [ "${1:-}" = "--exec" ]; then
   branch="issue-$iss"
   wtdir=""; whead=""
   [ -n "$MAIN" ] && IFS=$'\t' read -r wtdir whead < <(fleet_worktree_head "$MAIN" "$branch")
-  # Window id for the ledger row's summary column — read BEFORE reap_* kills the
-  # window (the cache FILE it keys survives; the window id would not be resolvable
-  # afterwards). Empty is tolerated: the row just records no summary.
+  # Window id + NAME for the ledger row — read BEFORE reap_* kills the window
+  # (the summary cache FILE the id keys survives; neither would be resolvable
+  # afterwards). Empty is tolerated: the row just records no summary / no title.
   wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
+  wname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
   case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
   exit 0
 fi
@@ -218,9 +223,15 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # The shared helper keys the row by the scratch branch (no issue) and dedups, so a
   # confirm-popup re-invocation records once. Deliberately NOT called on the cancel
   # path: a scratch whose window survives ⌃x is not a closed session.
+  # The window NAME rides along as the row's title (10th arg) — it's the one
+  # human-readable identity a scratch has (⌃e renames land here too), and without
+  # it a ⌃x-disposed scratch rendered as the bare `scratch-<N>` fallback while the
+  # SessionEnd/ledger-watch paths already record the name. Read it NOW: the window
+  # is still alive at every scratch_record call site (killed after).
+  swname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
   scratch_record() {
     fleet_reap_record "$sreason" "${FLEET_REPO:-}" "$MAIN" "" \
-      "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch"
+      "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch" "$swname"
   }
 
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
