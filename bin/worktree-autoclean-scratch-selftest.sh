@@ -2,7 +2,10 @@
 # worktree-autoclean-scratch-selftest.sh — hermetic tests for the janitor's SCRATCH
 # reap rules (issue #290). A `scratch-<N>` worktree (dash-raw-session.sh) has no
 # issue/PR, so worktree-autoclean must:
-#   * clean + no unmerged work (tip is an ancestor of base)  → PRUNE silently
+#   * clean + no unmerged work + NO human transcript          → PRUNE silently
+#     (a never-used spawn / warm-pool slot — helper-only transcripts count as none)
+#   * clean + no unmerged work + a REAL session ran in it     → KEEP + surface ONCE
+#     (a Q&A/research conversation writes no files; the conversation IS the work)
 #   * escalated + merged (branch in the merged-PR list)       → PRUNE (like a worker)
 #   * dirty (uncommitted/untracked)                           → KEEP + surface ONCE
 #   * clean but unmerged local commits                        → KEEP + surface ONCE
@@ -59,12 +62,26 @@ build_trees() {   # (re)create the five scratch worktrees + one issue worktree
   printf 'y\n' > "$WORK/base-scratch-4/h"; git -C "$WORK/base-scratch-4" add h; git -C "$WORK/base-scratch-4" commit -qm landed
   # scratch-5: live pane inside it ⇒ KEEP (attached)
   git -C "$BASE" worktree add -q -b scratch-5 "$WORK/base-scratch-5" >/dev/null 2>&1
+  # scratch-6: clean, tip == base, but a REAL session ran in it ⇒ KEEP + surface
+  # (the conversation-only scratch — no file writes, still not disposable)
+  git -C "$BASE" worktree add -q -b scratch-6 "$WORK/base-scratch-6" >/dev/null 2>&1
   # issue-7: dirty ⇒ KEEP, but with the ISSUE wording (not the scratch surface)
   git -C "$BASE" worktree add -q -b issue-7 "$WORK/base-issue-7" >/dev/null 2>&1
   printf 'dirt\n' > "$WORK/base-issue-7/untracked"
   printf '%s\n' "$WORK/base-scratch-5" > "$LIVE_FILE"   # scratch-5 is the only "live" pane
 }
 build_trees
+
+# --- fake transcript tree (CLAUDE_PROJECTS_DIR) --------------------------------
+# scratch-6 gets a HUMAN transcript → the ancestor arm must KEEP it. scratch-1 gets
+# a HELPER-ONLY dir (the classifier rubric) → still counts as never-used → PRUNE.
+PROJ="$WORK/projects"
+enc() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9' '-'; }
+mkdir -p "$PROJ/$(enc "$WORK/base-scratch-6")" "$PROJ/$(enc "$WORK/base-scratch-1")"
+printf '{"type":"user","message":{"content":"a real conversation happened here"}}\n' \
+  > "$PROJ/$(enc "$WORK/base-scratch-6")/sess-conv.jsonl"
+printf '{"type":"user","message":{"content":"You are a status classifier for a Claude Code terminal session."}}\n' \
+  > "$PROJ/$(enc "$WORK/base-scratch-1")/helper-only.jsonl"
 
 # --- fake tmux: has-session ok, list-panes → LIVE_FILE, display-message → NOTIFY_LOG
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
@@ -102,22 +119,24 @@ FLEET_PROTECTED_RE='^(master|main|develop|test)\$'
 EOF
 
 run_wac() {   # run worktree-autoclean.sh with the fakes; args forwarded (--dry-run)
-  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" \
+  PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" CLAUDE_PROJECTS_DIR="$PROJ" \
     bash "$WORK/bin/worktree-autoclean.sh" "$@" 2>"$WORK/err"
 }
 
 # ============================ DRY RUN: decisions ============================
 out="$(run_wac --dry-run)"
-printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 ' || fail "clean+ancestor scratch-1 should PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-1 ' || fail "clean+ancestor scratch-1 (helper-only transcripts) should PRUNE" "$out"
 printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-4 ' || fail "merged scratch-4 should PRUNE (escalation)" "$out"
 printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-2 .*unmerged work — scratch experiment' || fail "unmerged scratch-2 should KEEP + surface" "$out"
 printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-3 .*dirty — scratch experiment' || fail "dirty scratch-3 should KEEP + surface" "$out"
 printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-5 .*live tmux session' || fail "live scratch-5 should KEEP (attached)" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-6 .*session ran here — scratch experiment' || fail "clean scratch-6 with a HUMAN transcript should KEEP + surface (conversation-only)" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-6 ' && fail "conversation-only scratch-6 must never PRUNE" "$out"
 printf '%s\n' "$out" | grep -Eq 'KEEP +issue-7 .*dirty — uncommitted changes' || fail "issue-7 must keep the ISSUE wording, not scratch" "$out"
 printf '%s\n' "$out" | grep -Eq 'issue-7 .*scratch experiment' && fail "issue-7 must NOT be treated as a scratch experiment" "$out"
 # dry run mutates nothing
 [ -d "$WORK/base-scratch-1" ] || fail "dry run must not remove scratch-1"
-ok "DRY: clean/merged scratch → PRUNE; dirty/unmerged → KEEP+surface; live → KEEP; issue unaffected"
+ok "DRY: pristine/merged scratch → PRUNE; conversation/dirty/unmerged → KEEP+surface; live → KEEP; issue unaffected"
 
 # ============================ REAL RUN: reap + surface once ================
 run_wac >/dev/null
@@ -127,15 +146,17 @@ git -C "$BASE" show-ref --verify -q refs/heads/scratch-1 && fail "real run shoul
 [ -d "$WORK/base-scratch-2" ] || fail "real run must KEEP unmerged scratch-2"
 [ -d "$WORK/base-scratch-3" ] || fail "real run must KEEP dirty scratch-3"
 [ -d "$WORK/base-scratch-5" ] || fail "real run must KEEP live scratch-5"
+[ -d "$WORK/base-scratch-6" ] || fail "real run must KEEP conversation-only scratch-6"
 [ -d "$WORK/base-issue-7" ]   || fail "real run must KEEP dirty issue-7"
-# surface markers exist for the two kept experiments
+# surface markers exist for the three kept experiments
 SURF="$WORK/logs/.scratch-surfaced"
-[ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 2 ] || fail "exactly two scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
-# notify fired for scratch-2 + scratch-3
+[ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] || fail "exactly three scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
+# notify fired for scratch-2 + scratch-3 + scratch-6
 grep -q 'NOTIFY.*scratch-2 kept (unmerged work)' "$NOTIFY_LOG" || fail "scratch-2 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
 grep -q 'NOTIFY.*scratch-3 kept (dirty)' "$NOTIFY_LOG" || fail "scratch-3 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
+grep -q 'NOTIFY.*scratch-6 kept (clean, but a session ran here)' "$NOTIFY_LOG" || fail "scratch-6 should have surfaced a notify" "$(cat "$NOTIFY_LOG")"
 n1="$(wc -l < "$NOTIFY_LOG" | tr -d ' ')"
-ok "REAL: clean/merged scratch reaped; dirty/unmerged kept + surfaced once (markers + notify)"
+ok "REAL: pristine/merged scratch reaped; conversation/dirty/unmerged kept + surfaced once (markers + notify)"
 
 # ============================ SURFACE-ONCE dedup ===========================
 run_wac >/dev/null

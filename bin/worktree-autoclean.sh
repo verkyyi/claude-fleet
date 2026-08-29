@@ -43,11 +43,14 @@ say() { if [ "$DRY" = 1 ]; then echo "$*"; else log "$*"; fi; }
 
 # --- scratch (@raw) worktrees, issue #290 -------------------------------------
 # A `scratch-<N>` worktree (dash-raw-session.sh) has no issue/PR, so the ancestor/
-# merged-PR gate below already reaps a pristine or landed one for free. What it must
-# NOT do is silently delete an EXPERIMENT: a scratch worktree that is dirty or has
+# merged-PR gate below reaps a PRISTINE (never-used) or landed one for free. What it
+# must NOT do is silently delete WORK: a scratch worktree that is dirty or has
 # unmerged local commits is KEPT and surfaced ONCE (a deduped, best-effort notify to
 # whatever fleet client is attached), so the operator knows to dispose of it with
-# `dash ⌃x`. The surface marker lives outside the worktree (a marker inside would
+# `dash ⌃x` — and a CLEAN scratch where a real session ran (a Q&A / research
+# conversation writes no files, but the conversation IS the work) is kept + surfaced
+# the same way rather than silently pruned; see the ancestor arm in process().
+# The surface marker lives outside the worktree (a marker inside would
 # itself read as untracked → forever "dirty").
 SURF_DIR="$LOGDIR/.scratch-surfaced"
 scratch_key() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_'; }
@@ -142,11 +145,32 @@ process() {
       reap_detached "$dir" "$branch"
       if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "unmerged work"; return; fi
       say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
-    ancestor) merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
+    ancestor)
+      # A clean scratch whose tip never moved off base is NOT disposable when a
+      # REAL session ran in it: "no file writes" describes most Q&A / research
+      # scratches, and the conversation IS the work. The git-state gate alone
+      # can't tell that apart from a never-used worktree, so consult the
+      # transcript dir: a human session there → KEEP + surface (⌃x remains the
+      # deliberate disposal path); helper-only or no transcripts (a warm-pool
+      # slot, a spawn nobody typed into) → still pruned silently, as ever.
+      if [ "$is_scratch" = 1 ]; then
+        local hsid; hsid="$(fleet_newest_human_session "$(fleet_transcript_dir "$dir")")"
+        if [ -n "$hsid" ]; then
+          # Still RECORD the /fleet-history row (#466's safety net — SessionEnd /
+          # ledger-watch usually beat us here, but a crashed window may have
+          # missed both; idempotent, so at most one row). Recording while the
+          # worktree stands captures the transcript path + HEAD sha as ever.
+          [ "$DRY" = 1 ] || fleet_reap_record "ancestor" "$REPO" "$REPO_ROOT" "" "$dir" "" "" "" "$branch"
+          reap_detached "$dir" "$branch"
+          scratch_surface "$dir" "$branch" "clean, but a session ran here"
+          return
+        fi
+      fi
+      merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
     merged-pr) merged="merged-PR" ;;
   esac
-  # Past the gate: this is a clean+no-unmerged-work (scratch, silently) OR a
-  # clean+merged (issue or escalated scratch) worktree → prune below.
+  # Past the gate: this is a clean+no-unmerged-work scratch NOBODY used (silently) OR
+  # a clean+merged (issue or escalated scratch) worktree → prune below.
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac

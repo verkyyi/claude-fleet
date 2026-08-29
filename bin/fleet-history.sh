@@ -35,9 +35,10 @@
 # listable even if its PR metadata or transcript can't be resolved.
 #
 # Subcommands:
-#   record  --repo R --main M --pr N --key K --worktree W [--win ID] [--session S] [--summary S]
+#   record  --repo R --main M --pr N --key K --worktree W [--win ID] [--session S] [--summary S] [--title T]
 #           Append one LANDED ledger row. Derives title/sha/mergedAt from `gh pr
-#           view`, and transcript-dir + session-id from the worktree path. Run it
+#           view` (--title is a fallback for when the PR doesn't resolve), and
+#           transcript-dir + session-id from the worktree path. Run it
 #           BEFORE `git worktree remove` in the cleanup teardown step.
 #   record-closed --repo R --key K --worktree W [--win ID] [--session S] [--title T] [--summary S] [--sha SHA]
 #           Append a landed-less CLOSED-UNLANDED row (mergedAt→now, pr='-'). Records
@@ -113,57 +114,14 @@ transcript_dir_for() {
   fleet_transcript_dir "${1:-}"
 }
 
-# Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
-# a human ran? The status classifier and the dashboard summarizer run from INSIDE a
-# window's worktree, so their transcripts land in the SAME project dir as the
-# session they describe — and they run every ~60s, so they are usually the NEWEST
-# file there. Indexing one makes /fleet-history offer to resume the classifier's
-# context instead of the work. Recognise them by their own rubric text (RUBRIC= in
-# bin/classify-sessions.sh / bin/tmux-summarize.sh; the selftest pins both strings
-# against those files so they cannot drift apart silently).
-#
-# Read into a variable, then match — `head -c … | grep -q` would exit 141 under
-# pipefail when grep closes the pipe early, which is the same trap that broke
-# newest_session_in below.
-fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a real session
-  local head_bytes; head_bytes=$(head -c 16384 "${1:-}" 2>/dev/null)
-  case "$head_bytes" in
-    *"You are a status classifier for a Claude Code"*)         return 0 ;;
-    *"You are labeling a Claude Code session for a dashboard"*) return 0 ;;
-  esac
-  return 1
-}
-
-# newest *.jsonl session id in a transcript dir (basename sans .jsonl), or empty.
-#
-# NO `| head` here, deliberately. With `set -o pipefail` an early-closing consumer
-# makes `ls` die of SIGPIPE and the substitution reports 141 — so
-# `f=$(ls -t … | head -n1) || return 0` returned EMPTY, and did it only for dirs
-# holding enough files for `ls` to still be writing when `head` exits. That silently
-# dropped exactly the BUSIEST transcript dirs (331 sessions → skipped, 3 → fine):
-# no session id ⇒ no ledger row ⇒ invisible to /fleet-history and unresumable.
+# newest HUMAN *.jsonl session id in a transcript dir, skipping the fleet's own
+# helper (classifier/summarizer) transcripts. The logic — including the
+# SIGPIPE-under-pipefail trap and the helper-rubric filter — moved to
+# fleet_newest_human_session in fleet-lib.sh so worktree-autoclean.sh (the
+# conversation-scratch keep gate) shares ONE copy of it; this local name stays for
+# the call sites below (record / record-closed).
 newest_session_in() {
-  local dir="${1:-}" list f n=0
-  [ -d "$dir" ] || return 0
-  list=$(ls -t "$dir"/*.jsonl 2>/dev/null)
-  [ -n "$list" ] || return 0
-  # Newest first, skipping the fleet's own helper transcripts. Bounded: a dir where
-  # the classifier has been busy for days should not cost an unbounded scan.
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    n=$((n + 1)); [ "$n" -gt 200 ] && break
-    fleet_internal_transcript "$f" && continue
-    basename "$f" .jsonl
-    return 0
-  done <<EOF
-$list
-EOF
-  # Every transcript here is fleet-internal ⇒ nothing a human ran. That is a real
-  # case, not an edge one: a warm scratch-pool worktree only ever hosts helper
-  # calls, and all 21 transcripts in one such dir were classifier/summarizer runs.
-  # Report nothing, so record-closed skips it instead of indexing a row whose
-  # "resume" would drop you into the classifier's context.
-  return 0
+  fleet_newest_human_session "${1:-}"
 }
 
 # one-line summary from the dash summary cache for <session>/<window-id>, or empty.
@@ -209,7 +167,7 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
 cmd_record() {
-  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess=""
+  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess="" title_fb=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -223,6 +181,10 @@ cmd_record() {
       --win) win="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
+      # FALLBACK title only (e.g. the window name the SessionEnd hook passes): the
+      # gh-resolved PR title below still wins — it names the landed work, the
+      # window name merely labels where it ran.
+      --title) title_fb="${2:-}"; shift 2;;
       --mergedat) mergedat="${2:-}"; shift 2;;
       *) shift;;
     esac
@@ -247,6 +209,8 @@ cmd_record() {
   fi
   # mergedAt fallback: now (UTC). date is fine here — this is a shell tool.
   [ -z "$mergedat" ] && mergedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  # title fallback: gh's PR title won above when it resolved; else --title.
+  [ -z "$title" ] && title="$title_fb"
 
   # transcript dir + session id from the (still-present) worktree path.
   local tdir="" sid=""
@@ -527,7 +491,11 @@ cmd_rows() {
 
     # window column: the kebab window name the session had (falls back to the
     # conventional one — issue-<N> for a worker, the scratch-<N> slug for a scratch).
-    local wname; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
+    # `local wname=""` — the EMPTY assignment matters: a bare `local wname` inside
+    # this loop does not clear the previous iteration's value (all iterations share
+    # one function scope), so every untitled row inherited the row ABOVE's window
+    # name and the scratch-<N> fallback below never fired.
+    local wname=""; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
     if [ -z "${wname:-}" ]; then
       if is_scratch_key "$iss"; then wname="$iss"; else wname="issue-$iss"; fi
     fi

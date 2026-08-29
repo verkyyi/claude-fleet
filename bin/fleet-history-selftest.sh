@@ -401,6 +401,18 @@ run record-closed --issue scratch-7 --worktree "$SWT" --title "alias" >/dev/null
 eq "scratch: --issue is still accepted as an alias of --key" "scratch-7" \
    "$(cut -f2 "$FLEET_HISTORY_LEDGER")"
 
+# An UNTITLED row rendered right after a titled one must fall back to its OWN
+# conventional window name — never inherit the previous row's. (A bare `local
+# wname` in cmd_rows' loop kept the prior iteration's value, so every untitled
+# scratch row wore the window name of the row above it.)
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-01-02T00:00:00Z\t5\tPolish the dash\t70\tSHA5\t/w/issue-5\t/nope\tsid-abc\t-\tlanded\n' >> "$FLEET_HISTORY_LEDGER"
+printf '2026-01-01T00:00:00Z\tscratch-9\t-\t-\t-\t/w/repo-scratch-9\t/nope\tsid-s9\t-\tclosed-unlanded\n' >> "$FLEET_HISTORY_LEDGER"
+rw_untitled=$(run rows | grep 'landed:scratch:scratch-9')
+contains "scratch: untitled row falls back to its own scratch-<N> name" "$rw_untitled" "scratch-9"
+CHECKS=$((CHECKS + 1))
+case "$rw_untitled" in *polish-the-dash*) fail "untitled scratch row must not inherit the previous row's window name";; esac
+
 # ============================================================================
 # H. issue #492 — the ledger's four silent defects
 # ============================================================================
