@@ -363,7 +363,11 @@ lst=$(run list)
 contains "scratch: list marks the key ~7"            "$lst" "✗ ~7"
 rws=$(run rows)
 contains "scratch: dash row targets landed:scratch:" "$rws" "landed:scratch:scratch-7"
-contains "scratch: dash row key cell is ~7"          "$rws" "~7"
+# The dash issue cell is EMPTY for a scratch — same rule as the live view (a @raw
+# window has no @issue), so a scratch never reads as issue-bound. `~<N>` stays the
+# label in `list`/log lines only; the row is addressed via the field1 target.
+CHECKS=$((CHECKS + 1))
+case "$rws" in *"~7"*) fail "dash row must NOT print ~7 in the issue cell (blank for a scratch)";; esac
 contains "scratch: dash row names the scratch window" "$rws" "scratch-7"
 
 # RESUME: the worktree is gone (never existed here), but the recorded sha means it
