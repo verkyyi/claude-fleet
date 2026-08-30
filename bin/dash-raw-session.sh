@@ -1,8 +1,8 @@
 #!/bin/bash
-# dash-raw-session.sh [--name <name>] [<target-session>] — open a RAW (non-issue-
-# bound) scratch Claude window in a fleet: plain `claude` on the fleet's socket,
-# with NO GitHub issue and NO seed prompt, but in its OWN git worktree off the base
-# branch (issue #290). It is the counterpart to the issue-bound spawners
+# dash-raw-session.sh [--name <name>] [--prompt <text>] [<target-session>] — open a
+# RAW (non-issue-bound) scratch Claude window in a fleet: plain `claude` on the
+# fleet's socket, with NO GitHub issue and (unless --prompt) NO seed prompt, but in
+# its OWN git worktree off the base branch (issue #290). It is the counterpart to the issue-bound spawners
 # (dash-issue-session.sh / backlog Enter / prefix+n), every one of which binds a
 # window to exactly one issue (issue #214). Use it for ad-hoc exploration,
 # experiments, or throwaway commands that may need to WRITE code.
@@ -61,12 +61,24 @@
 # a popup on the tap-first path cost a keyboard round-trip for an empty line. A name
 # is still available non-interactively via --name, and any window can be renamed
 # after the fact.
+#
+# --prompt <text>: a SEEDED scratch — the dash's always-visible prompt line (type a
+# task, ↵ — dash-enter.sh). The text is handed to `claude` as its initial prompt,
+# exactly how dash-issue-session.sh seeds a worker, so the session starts WORKING on
+# it instead of sitting at an empty `❯`. Everything else — worktree, @raw, cap,
+# naming, reaping — is the plain scratch. A seeded scratch always takes the COLD
+# path (never a warm-pool window): the pool's value is an instantly TYPEABLE `❯`,
+# which a seeded session has no use for, and delivering a prompt into a running
+# TUI would mean `send-keys` — the TUI's bracketed paste eats the trailing Enter
+# (the same reason inter-agent messaging never send-keys), so the only prompt
+# channel that is deterministic is the launch argument.
 set -uo pipefail
 
 # Args (order-independent): --name <n> / --name=<n> is the optional display-only
-# window name (issue #225); --bg backgrounds the slow half of the spawn (the dash
-# ⌃s path — see below); the lone positional is the headless <target-session>.
-NAME=""; TARGET_SESS=""; BG=0
+# window name (issue #225); --prompt <t> / --prompt=<t> is the optional seed prompt;
+# --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
+# below); the lone positional is the headless <target-session>.
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -75,10 +87,17 @@ while [ "$#" -gt 0 ]; do
     # the (arbitrary user) name in a temp file and re-exec'd us via fleet_bg; read +
     # delete it. No --bg on that pass, so it falls straight through and spawns.
     --name-file=*) f="${1#--name-file=}"; NAME="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
+    --prompt)      PROMPT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --prompt=*)    PROMPT="${1#--prompt=}"; shift ;;
+    # --prompt-file=<f>: same staging as --name-file — the seed is arbitrary user
+    # text and is NEVER interpolated into the run-shell string.
+    --prompt-file=*) f="${1#--prompt-file=}"; PROMPT="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
     --bg)          BG=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
+# Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
+PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -121,13 +140,18 @@ BASE="${FLEET_BASE_BRANCH:-master}"
 # the user pressed Esc. Outcomes are reported via `tmux display-message`, so the
 # job has nothing to say on stdout; the redirect keeps it that way for good.
 if [ "$BG" = 1 ]; then
-  nfarg=""
+  nfarg=""; pfarg=""
   if [ -n "$NAME" ]; then
     nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch name" 2>/dev/null; exit 1; }
     printf '%s' "$NAME" > "$nf"
     nfarg=" --name-file='$nf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
+  if [ -n "$PROMPT" ]; then
+    pf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch prompt" 2>/dev/null; exit 1; }
+    printf '%s' "$PROMPT" > "$pf"
+    pfarg=" --prompt-file='$pf'"
+  fi
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
   exit 0
 fi
 
@@ -163,8 +187,11 @@ fi
 # window is typeable in the same tick (measured 0.29s vs 7.0s cold).
 # An empty claim (pool off, cold, stale, or account-rotated) falls straight
 # through to the original cold path below — the pool is never load-bearing.
+# A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
+# argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
-claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+claimed=""
+[ -z "$PROMPT" ] && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
@@ -204,7 +231,18 @@ if [ "$warm" = 1 ]; then
   # the claim, so from here on it is indistinguishable from a cold scratch window.
   TM rename-window -t "$win" -- "$name" 2>/dev/null
 else
-  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "'$BIN/fleet-claude.sh'; exec \$SHELL") \
+  # A seed prompt rides in a file read AT LAUNCH (`"$(cat …)"`), never inline in the
+  # new-window command string — same handoff dash-issue-session.sh uses, so
+  # arbitrary user text (quotes, `$`, backticks) can't break or inject into it.
+  # Keyed by the scratch slug under this fleet's cache dir; left in place like the
+  # worker seed (tiny, and the path is the debug trail for "what did I seed?").
+  launch="'$BIN/fleet-claude.sh'"
+  if [ -n "$PROMPT" ]; then
+    tf="$(fleet_cache_dir "$(fleet_slug "${FLEET_REPO:-$SESS}")")/task_$slug.txt"
+    printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
+      && launch="'$BIN/fleet-claude.sh' \"\$(cat '$tf')\""
+  fi
+  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$launch; exec \$SHELL") \
     || { fleet_scratch_free "$MAIN" "$slug" "$wt"
          TM display-message "raw: new-window failed in $SESS" 2>/dev/null; exit 1; }
   TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
@@ -216,7 +254,13 @@ fi
 # placeholder once real content exists). The session prefix keeps per-fleet servers
 # from colliding on the bare window id (issue #208).
 C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"; mkdir -p "$G"
-rawseed="$name (raw session)"
+# A seeded scratch shows its task (first line, clipped) — the same "what is this
+# row doing" the worker seed gives ("starting #N: title") — not the bare label.
+if [ -n "$PROMPT" ]; then
+  rawseed="$name: $(printf '%s' "${PROMPT%%$'\n'*}" | cut -c1-80)"
+else
+  rawseed="$name (raw session)"
+fi
 printf '%s' "$rawseed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
 # …and as a window option, so the pane header carries it too (issue #455).
 TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$rawseed")" 2>/dev/null || :
@@ -239,7 +283,8 @@ if [ -z "$TARGET_SESS" ]; then
     TM select-window -t "$win" 2>/dev/null
     [ -n "$note" ] && TM display-message "$note" 2>/dev/null
   else
-    msg="spawned raw session → $name"; [ -n "$note" ] && msg="$msg ($note)"
+    msg="spawned raw session → $name"; [ -n "$PROMPT" ] && msg="spawned scratch → $name (seeded)"
+    [ -n "$note" ] && msg="$msg ($note)"
     TM display-message "$msg" 2>/dev/null
   fi
 fi

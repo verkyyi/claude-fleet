@@ -7,9 +7,9 @@
 # ISOLATED tmux server on its own socket — never the user's live server — via the
 # `-S <sock>` PATH shim the sibling dash selftests use (dash-marker-selftest.sh):
 #
-#   A. ARM          a live row → stashes the target, emits show-input +
+#   A. ARM          a live row → stashes the target, emits
 #                   change-prompt(rename ▸ ) + change-query(<current name>)
-#   A2. UNBIND ?    show-input does NOT demote a PRINTABLE key that --bind claimed:
+#   A2. UNBIND ?    a PRINTABLE key that --bind claimed fires instead of typing:
 #                   with `?` (the dash cheatsheet) still bound, typing `?` into a
 #                   name fires the popup instead of inserting a character (verified
 #                   live on fzf 0.74.3). ⌃e must unbind it; Enter/Esc must rebind it.
@@ -23,7 +23,7 @@
 #   G. PARENS       a window name containing parens is stripped, so the emitted
 #                   change-query(...) stays parseable (fzf stops at the first ')')
 #   H. COMMIT       Enter renames the STASHED target to the typed query, drops the
-#                   flag, and restores hide-input + the '▸ ' prompt
+#                   flag, and restores the '▸ ' prompt
 #   I. EMPTY CANCEL an empty query cancels — the window keeps its name
 #   J. ESC CANCEL   Esc drops the flag and backs out WITHOUT aborting the dash
 #   K. @issue KEEPS the window's @issue binding survives the rename (what
@@ -36,19 +36,39 @@
 #                   or tmux parses the name as a flag and the rename silently fails)
 #   L. SHELLCHECK   dash-rename.sh is shellcheck-clean (skipped if absent)
 #
+# The query line is ALWAYS visible — it doubles as the quick-scratch box (type a
+# task, ↵ → a scratch session seeded with it). Rename borrows it; the two must
+# not bleed into each other:
+#   P. TYPED TASK   Enter with a non-empty query and NO mode armed spawns a seeded
+#                   scratch (dash-raw-session.sh --bg --prompt <q>), clears the
+#                   query, never jumps/renames
+#   P2. BLANK TASK  a whitespace-only query is a plain jump (no spawn)
+#   Q. ESC CLEARS   Esc with a half-typed task clears it (no abort); an empty line
+#                   still aborts (relaunch)
+#   R. MODE WINS    a typed query while rename is armed is the NAME — no scratch
+#
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-REN="$BIN/dash-rename.sh"; ENT="$BIN/dash-enter.sh"; ESC="$BIN/dash-esc.sh"
-for f in "$REN" "$ENT" "$ESC"; do
-  [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
+for f in dash-rename.sh dash-enter.sh dash-esc.sh; do
+  [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dr-selftest.XXXXXX")" || exit 2
+
+# The scripts resolve their siblings off their own dirname, so run them from a
+# stub dir: the three under test are symlinked in, and dash-raw-session.sh (what a
+# typed task spawns through) is a FAKE that logs its argv — no worktree, no claude.
+mkdir -p "$WORK/sbin"
+for f in dash-rename.sh dash-enter.sh dash-esc.sh; do ln -s "$BIN/$f" "$WORK/sbin/$f"; done
+RAW_LOG="$WORK/raw.log"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$RAW_LOG" > "$WORK/sbin/dash-raw-session.sh"
+chmod +x "$WORK/sbin/dash-raw-session.sh"
+REN="$WORK/sbin/dash-rename.sh"; ENT="$WORK/sbin/dash-enter.sh"; ESC="$WORK/sbin/dash-esc.sh"
 
 # Route every bare `tmux` (the scripts call it unqualified) to a private socket.
 SOCK="$WORK/tmux.sock"
@@ -85,7 +105,6 @@ T="t:$(tmux list-windows -t t -F '#{window_index}' | head -n1)"
 
 # --- A. ARM -------------------------------------------------------------------
 out="$(bash "$REN" "$T")"
-case "$out" in *show-input*) ;; *) fail "A: ⌃e must emit show-input" "$out" ;; esac
 case "$out" in *"change-prompt(rename ▸ )"*) ;; *) fail "A: ⌃e must switch the prompt to 'rename ▸ '" "$out" ;; esac
 case "$out" in *"change-query(one)"*) ;; *) fail "A: ⌃e must pre-fill the current window name" "$out" ;; esac
 case "$out" in *"unbind(?)"*) ;; *) fail "A2: ⌃e must unbind '?' so it types instead of opening the cheatsheet" "$out" ;; esac
@@ -139,8 +158,7 @@ bash "$REN" "$T" >/dev/null
 out="$(bash "$ENT" "$T" 'issue-449')"
 [ "$(wname "$T")" = 'issue-449' ] || fail "H: Enter must rename the stashed target"
 [ -f "$FLAG" ] && fail "H: Enter must drop the rename_target flag"
-case "$out" in *hide-input*) ;; *) fail "H: Enter must hide the input again" "$out" ;; esac
-case "$out" in *"rebind(?)"*) ;; *) fail "H: Enter must rebind '?' when it hides the input" "$out" ;; esac
+case "$out" in *"rebind(?)"*) ;; *) fail "H: Enter must rebind '?' when it restores the prompt" "$out" ;; esac
 case "$out" in *"change-prompt(▸ )"*) ;; *) fail "H: Enter must restore the '▸ ' prompt" "$out" ;; esac
 ok "H Enter commits the rename and restores the dash prompt"
 
@@ -154,8 +172,8 @@ bash "$REN" "$T" >/dev/null
 out="$(bash "$ENT" "$T" '')"
 [ "$(wname "$T")" = 'issue-449' ] || fail "I: an empty query must NOT rename the window"
 [ -f "$FLAG" ] && fail "I: an empty query must still drop the rename_target flag"
-case "$out" in *hide-input*) ;; *) fail "I: an empty query must hide the input again" "$out" ;; esac
-case "$out" in *"rebind(?)"*) ;; *) fail "I: an empty query must rebind '?' when it hides the input" "$out" ;; esac
+case "$out" in *"change-prompt(▸ )"*) ;; *) fail "I: an empty query must restore the '▸ ' prompt" "$out" ;; esac
+case "$out" in *"rebind(?)"*) ;; *) fail "I: an empty query must rebind '?' when it restores the prompt" "$out" ;; esac
 ok "I an empty name cancels the rename"
 
 # --- J. ESC CANCELS -----------------------------------------------------------
@@ -163,16 +181,16 @@ bash "$REN" "$T" >/dev/null
 out="$(bash "$ESC")"
 [ "$(wname "$T")" = 'issue-449' ] || fail "J: Esc must not rename the window"
 [ -f "$FLAG" ] && fail "J: Esc must drop the rename_target flag"
-case "$out" in *hide-input*) ;; *) fail "J: Esc must hide the input again" "$out" ;; esac
-case "$out" in *"rebind(?)"*) ;; *) fail "J: Esc must rebind '?' when it hides the input" "$out" ;; esac
+case "$out" in *"change-prompt(▸ )"*) ;; *) fail "J: Esc must restore the '▸ ' prompt" "$out" ;; esac
+case "$out" in *"rebind(?)"*) ;; *) fail "J: Esc must rebind '?' when it restores the prompt" "$out" ;; esac
 case "$out" in *abort*) fail "J: Esc in rename mode must back out, not abort the dash" "$out" ;; esac
 ok "J Esc cancels rename mode without aborting the dash"
 
 # --- N. LANDED-VIEW ENTER UNDOES THE ARM, `?` INCLUDED (issue #454) -----------
 # ⌃e arms in LIVE view, ⌃t flips to LANDED, then Enter. dash-enter.sh drops the flag
 # there (a mode from live view is inert on landed rows) — but the arm also emitted
-# show-input + unbind(?), so an Enter that drops the flag WITHOUT rebinding leaves `?`
-# dead until the dash relaunches. Both landed exits are covered: a `landed:` row and a
+# unbind(?) + the rename prompt, so an Enter that drops the flag WITHOUT rebinding
+# leaves `?` dead until the dash relaunches. Both landed exits are covered: a `landed:` row and a
 # stray live row falling through to the jump branch.
 for lrow in "landed:99" "$T"; do
   printf '' > "$VIEW"          # arm in LIVE view, exactly as the operator does
@@ -185,16 +203,16 @@ for lrow in "landed:99" "$T"; do
   case "$out" in *"rebind(?)"*) ;; *)
     fail "N: landed-view Enter dropped the arm without rebinding '?' — the cheatsheet key stays dead (issue #454, row $lrow)" "$out" ;;
   esac
-  case "$out" in *hide-input*) ;; *)
-    fail "N: landed-view Enter must hide the query line it left showing ($lrow)" "$out" ;;
+  case "$out" in *"change-prompt(▸ )"*) ;; *)
+    fail "N: landed-view Enter must restore the '▸ ' prompt it left relabelled ($lrow)" "$out" ;;
   esac
 done
 # …and a landed Enter with NO mode armed must stay exactly as it was — no stray
-# hide-input/rebind noise on the overwhelmingly common path.
+# prompt/rebind noise on the overwhelmingly common path.
 printf 'landed
 ' > "$VIEW"
 out="$(bash "$ENT" 'landed:99' '')"
-case "$out" in *rebind*|*hide-input*)
+case "$out" in *rebind*|*change-prompt*)
   fail "N: a landed Enter with nothing armed must not emit mode-undo actions" "$out" ;;
 esac
 printf '' > "$VIEW"
@@ -207,10 +225,45 @@ bash "$ENT" "$T" '-dashy' >/dev/null
 [ -f "$FLAG" ] && fail "M: the rename_target flag must be dropped"
 ok "M a window name starting with '-' renames instead of tripping tmux flag parsing"
 
+# --- P. TYPED TASK → seeded scratch -------------------------------------------
+rm -f "$FLAG" "$RAW_LOG"
+out="$(bash "$ENT" "$T" 'fix the flaky dash selftest')"
+[ -s "$RAW_LOG" ] || fail "P: a typed task must spawn through dash-raw-session.sh" "$out"
+argv="$(cat "$RAW_LOG")"
+case "$argv" in *--bg*) ;; *) fail "P: the typed-task spawn must be backgrounded (--bg)" "$argv" ;; esac
+case "$argv" in *"--prompt fix the flaky dash selftest"*) ;; *) fail "P: the typed task must be handed over as --prompt <q>" "$argv" ;; esac
+case "$out" in *clear-query*) ;; *) fail "P: a typed task must clear the query after spawning" "$out" ;; esac
+case "$out" in *reload*) ;; *) fail "P: a typed task must reload the rows" "$out" ;; esac
+[ "$(wname "$T")" = '-dashy' ] || fail "P: a typed task must not rename the highlighted window"
+ok "P Enter with a typed task spawns a seeded scratch (--bg --prompt), clears the line"
+
+# --- P2. BLANK TASK is a plain jump -------------------------------------------
+rm -f "$RAW_LOG"
+out="$(bash "$ENT" "$T" '   ')"
+[ -f "$RAW_LOG" ] && fail "P2: a whitespace-only query must not spawn a scratch" "$(cat "$RAW_LOG")"
+case "$out" in *clear-query*) ;; *) fail "P2: a blank query is the plain jump (clear-query)" "$out" ;; esac
+ok "P2 a blank query is a plain jump, no spawn"
+
+# --- Q. ESC with a typed task clears it; on an empty line it aborts -----------
+out="$(bash "$ESC" 'half a thought')"
+[ "$out" = clear-query ] || fail "Q: Esc over a half-typed task must just clear it" "$out"
+out="$(bash "$ESC" '')"
+[ "$out" = abort ] || fail "Q: Esc on an empty line must still abort (relaunch)" "$out"
+ok "Q Esc clears a typed task, aborts only on an empty line"
+
+# --- R. RENAME ARMED → the typed query is the name, not a task ----------------
+rm -f "$RAW_LOG"
+bash "$REN" "$T" >/dev/null
+[ -f "$FLAG" ] || fail "R: precondition — ⌃e should have armed"
+out="$(bash "$ENT" "$T" 'renamed-not-seeded')"
+[ -f "$RAW_LOG" ] && fail "R: a typed query while rename is armed must NOT spawn a scratch" "$(cat "$RAW_LOG")"
+[ "$(wname "$T")" = 'renamed-not-seeded' ] || fail "R: the armed rename must win over the typed-task path"
+ok "R an armed rename owns the query line — no scratch spawn"
+
 # --- L. SHELLCHECK ------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  sc="$(shellcheck -x "$REN" 2>&1)" || fail "L: dash-rename.sh is not shellcheck-clean" "$sc"
-  ok "L dash-rename.sh is shellcheck-clean"
+  sc="$(shellcheck -x "$BIN/dash-rename.sh" "$BIN/dash-enter.sh" "$BIN/dash-esc.sh" 2>&1)" || fail "L: rename/enter/esc not shellcheck-clean" "$sc"
+  ok "L dash-rename.sh / dash-enter.sh / dash-esc.sh are shellcheck-clean"
 else
   printf 'skip L shellcheck absent\n'
 fi
