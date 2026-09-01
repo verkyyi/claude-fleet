@@ -125,6 +125,11 @@ type Agent struct {
 	// noisy fleet be backed off centrally without editing every machine.
 	serverInterval time.Duration
 
+	// lastStampLimits is the newest statusLine timestamp already reported as a
+	// limits reading, per subscription. Without it every scan would re-send the
+	// same reading and limit_snapshots would fill with duplicates.
+	lastStampLimits map[string]time.Time
+
 	// stamps maps sessions to the subscription they ran on, when the
 	// statusLine hook is installed.
 	stamps *sessions.Index
@@ -438,8 +443,15 @@ func (a *Agent) cycle(ctx context.Context) error {
 			attribution.DroppedBeyondBackfill, attribution.BackfillLimit)
 	}
 
+	// Utilization for every subscription a session is running under. Computed
+	// BEFORE the early return below: an idle machine has no new turns but its
+	// sessions are still reporting their accounts' rate limits every few
+	// seconds, and that is precisely the case this exists to capture.
+	stampLimits := a.limitsFromStamps(time.Now().UTC())
+
 	// Nothing new and nothing to report: skip the round trip entirely.
-	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() {
+	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() &&
+		len(stampLimits) == 0 {
 		return a.drain(ctx)
 	}
 
@@ -531,6 +543,33 @@ func (a *Agent) cycle(ctx context.Context) error {
 				queuedAll = false
 				break
 			}
+		}
+	}
+
+	// Utilization for every subscription a session is running under, including
+	// ones with no new turns to file and ones this machine cannot authenticate
+	// as. This is the only source that works when the stored token has expired,
+	// which on an idle machine it always eventually has.
+	for _, snap := range stampLimits {
+		lid := *id
+		lid.AccountUUID = snap.AccountUUID
+		lid.Email, lid.DisplayName, lid.OrgUUID, lid.OrgName = "", "", "", ""
+		lid.AccountCreatedAt = time.Time{}
+		lid.SubscriptionType, lid.RateLimitTier = "", ""
+		origin := model.OriginSession
+		if snap.AccountUUID == id.AccountUUID {
+			// This machine's own login, observed through a session rather than
+			// through the credentials API. Same account, so say so.
+			lid = *id
+			origin = model.OriginLogin
+		}
+		if err := a.spool.Enqueue(model.Batch{
+			AgentVersion:  a.cfg.Version,
+			Identity:      lid,
+			Limits:        snap,
+			AccountOrigin: origin,
+		}); err != nil {
+			log.Printf("could not queue a limits reading for %s: %v", snap.AccountUUID, err)
 		}
 	}
 

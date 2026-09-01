@@ -292,6 +292,14 @@ machine logs out and into a different account, rows already ingested keep the ol
 attribution. ccquota records the switch so the seam is visible in the UI rather
 than silently wrong — but it cannot retroactively fix history.
 
+**Utilization is only known where a session runs.** Anthropic reports current
+utilization, never past utilization, so there is no history to fetch — ccquota
+knows only what it sampled. It reads that two ways: from the credentials API on
+a machine logged into the account, and from the rate limits Claude Code puts in
+every session's statusLine. The second needs no credentials and works when a
+machine's stored token has expired, which on an idle machine it eventually has.
+Neither can observe a subscription that nobody is currently using.
+
 **A subscription with no login is identified by a guess.** A session's own
 statusLine reports its rate-limit windows, so a subscription that has never been
 logged in on a monitored machine is identified by the phase of its **seven-day**
