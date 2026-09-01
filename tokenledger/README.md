@@ -80,6 +80,55 @@ it carries a token.
 ccquota report --days 7 --no-limits
 ```
 
+## Several subscriptions, several people
+
+One hub holds any number of subscriptions. You do not configure which account an
+endpoint belongs to — the agent reads it from that machine's `~/.claude.json`
+every cycle and reports it. Enrollment is per *machine*; the hub learns the
+pairing from the first push.
+
+```
+me@personal.example    pro   default_claude_pro       1 endpoint
+team@acme.example      max   default_claude_max_20x   2 endpoints
+```
+
+The dashboard grows a subscription switcher as soon as a second one reports, and
+every query is scoped to one account. With more than one on the hub, a query
+that names none is **refused** rather than answered for whichever came first:
+
+```
+GET /v1/usage?by=endpoint
+→ 400  this hub holds several subscriptions; pass ?account=<uuid> (see /v1/accounts)
+```
+
+The MCP tools behave the same way, returning an error that lists the available
+accounts so the model can retry correctly instead of guessing.
+
+### Several users on one machine
+
+An endpoint maps to **one account at a time**, because credentials and
+transcripts are per-user. For a shared box, run one agent per user — each with
+its own enrollment token and its own state directory:
+
+```bash
+# On the hub, once per person:
+ccquota enroll --name build-server-alice
+ccquota enroll --name build-server-bob
+
+# On the box, as each user (or as root with --home pointed at theirs):
+ccquota agent --home /home/alice --state /home/alice/.ccquota
+ccquota agent --home /home/bob   --state /home/bob/.ccquota
+```
+
+They can be on the same subscription or different ones; the hub does not care.
+Do not try to cover two accounts with one agent process — it has one
+`~/.claude.json` to read, so it would simply report whichever account that file
+names.
+
+If someone logs out and into a *different* account on a machine, ccquota records
+the switch and shows it in the UI. Rows already ingested keep their old
+attribution and cannot be corrected — see the known limits below.
+
 ## MCP
 
 Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer.
