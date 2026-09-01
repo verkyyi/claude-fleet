@@ -95,10 +95,23 @@ func batchFor(account, host string, uuids []string, cwd string) model.Batch {
 		Identity: model.Identity{
 			AccountUUID: account, Email: account + "@example.com",
 			Hostname: host, OS: "linux", Arch: "amd64",
-			SubscriptionType: "max",
+			SubscriptionType: "max", OSUser: "ci",
 		},
 		Events: evs,
+		// The machine's own login, which is what most fixtures mean. Batches
+		// for a subscription merely seen running on the box use
+		// sessionBatchFor.
+		AccountOrigin: model.OriginLogin,
 	}
+}
+
+// sessionBatchFor is a batch for a subscription observed in a session on the
+// machine, rather than the account the machine is logged into. A scan emits
+// several of these alongside the login batch, one per subscription in play.
+func sessionBatchFor(account, host string, uuids []string, cwd string) model.Batch {
+	b := batchFor(account, host, uuids, cwd)
+	b.AccountOrigin = model.OriginSession
+	return b
 }
 
 // The end-to-end shape: two subscriptions, two endpoints, and no leakage
@@ -665,5 +678,141 @@ func TestIngest_SuccessfulReadingClearsAnOldReason(t *testing.T) {
 	}
 	if reason != "" {
 		t.Errorf("stale reason %q survived a successful reading", reason)
+	}
+}
+
+// The bug this replaced, in its measured shape.
+//
+// A laptop was running two subscriptions at once, so every scan emitted a login
+// batch for one and a session batch for the other. The hub wrote both to the
+// endpoint's single account column and logged a switch on each change: 83
+// "switches" in four hours, in exactly balanced A->B/B->A pairs as little as
+// 0.003s apart, none of which happened.
+//
+// The control for this assertion is TestIngest_RecordsAccountSwitch above — it
+// proves a genuine login change is still recorded, so a zero here means
+// concurrency was distinguished, not that the feature was turned off.
+func TestIngest_ConcurrentSubscriptionsAreNotSwitches(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	for i := 0; i < 5; i++ {
+		h.push(t, tok, batchFor("acct-a", "laptop", []string{fmt.Sprintf("a%d", i)}, "/a"))
+		h.push(t, tok, sessionBatchFor("acct-b", "laptop", []string{fmt.Sprintf("b%d", i)}, "/b"))
+	}
+
+	switches, err := h.srv.Store.AccountSwitches(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(switches) != 0 {
+		t.Fatalf("switches = %d, want 0: two subscriptions running side by side is "+
+			"not a machine changing account (%+v)", len(switches), switches)
+	}
+
+	// Both must still be visible — the fix is to record concurrency, not to
+	// drop the second subscription on the floor.
+	eas, err := h.srv.Store.EndpointAccounts(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, ea := range eas {
+		seen[ea.AccountUUID] = ea.Origin
+	}
+	if seen["acct-a"] != "login" {
+		t.Errorf("acct-a origin = %q, want login", seen["acct-a"])
+	}
+	if seen["acct-b"] != "session" {
+		t.Errorf("acct-b origin = %q, want session", seen["acct-b"])
+	}
+}
+
+// A subscription merely seen running on a machine must not become the machine's
+// login. If it does, the endpoint's account flips on every scan and every
+// account-scoped query follows it.
+func TestIngest_SessionBatchDoesNotMoveTheEndpointLogin(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	h.push(t, tok, batchFor("acct-a", "laptop", []string{"a1"}, "/a"))
+	h.push(t, tok, sessionBatchFor("acct-b", "laptop", []string{"b1"}, "/b"))
+
+	eps, err := h.srv.Store.ListEndpoints("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 {
+		t.Fatalf("endpoints = %d, want 1", len(eps))
+	}
+	if eps[0].AccountUUID != "acct-a" {
+		t.Errorf("endpoint login = %q, want acct-a — a guest subscription took the slot",
+			eps[0].AccountUUID)
+	}
+}
+
+// An endpoint that has never reported takes whatever arrives first, even from
+// an agent too old to declare an origin. Leaving it NULL would make the
+// endpoint invisible to every account-scoped query, limits included.
+func TestIngest_FirstReportEstablishesTheLoginEvenWithoutAnOrigin(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "old-agent")
+
+	b := batchFor("acct-a", "old-agent", []string{"x1"}, "/a")
+	b.AccountOrigin = "" // an agent from before the field existed
+	h.push(t, tok, b)
+
+	eps, err := h.srv.Store.ListEndpoints("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eps[0].AccountUUID != "acct-a" {
+		t.Fatalf("endpoint login = %q, want acct-a", eps[0].AccountUUID)
+	}
+	// ...and correcting that provisional guess later is not a "switch".
+	h.push(t, tok, batchFor("acct-b", "old-agent", []string{"x2"}, "/a"))
+	switches, err := h.srv.Store.AccountSwitches(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(switches) != 0 {
+		t.Errorf("switches = %d, want 0: the first value was a guess, not a login", len(switches))
+	}
+}
+
+// Spend must be attributable to the OS login it ran under. On a shared machine
+// this is the axis an operator asks about, and no other column carries it.
+func TestUsageByUser(t *testing.T) {
+	h := newHarness(t)
+
+	alice := h.enroll(t, "buildbox-alice")
+	a := batchFor("acct-a", "buildbox", []string{"u1", "u2"}, "/proj")
+	a.Identity.OSUser = "alice"
+	h.push(t, alice, a)
+
+	bob := h.enroll(t, "buildbox-bob")
+	b := batchFor("acct-a", "buildbox", []string{"u3"}, "/proj")
+	b.Identity.OSUser = "bob"
+	h.push(t, bob, b)
+
+	_, body := h.get(t, "/v1/usage?account=acct-a&by=user&since=-24h")
+	var out struct {
+		By      string `json:"by"`
+		Buckets []struct {
+			Key    string `json:"key"`
+			Events int64  `json:"events"`
+			Tokens int64  `json:"tokens"`
+		} `json:"buckets"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, b := range out.Buckets {
+		got[b.Key] = b.Events
+	}
+	if got["alice"] != 2 || got["bob"] != 1 {
+		t.Fatalf("by-user events = %v, want alice:2 bob:1 — the two logins on one "+
+			"machine were not separated", got)
 	}
 }

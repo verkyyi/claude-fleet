@@ -351,6 +351,21 @@ func (s *Server) handleAccountLabel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEndpointAccounts answers "which subscriptions is each machine running",
+// which on a machine running several at once is a list, not a single value.
+func (s *Server) handleEndpointAccounts(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	eas, err := s.Store.EndpointAccounts(limit)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if eas == nil {
+		eas = []store.EndpointAccount{}
+	}
+	writeJSON(w, http.StatusOK, eas)
+}
+
 func (s *Server) handleSwitches(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	sw, err := s.Store.AccountSwitches(limit)

@@ -59,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))
 	mux.Handle("/v1/history", s.viewerOnly(http.HandlerFunc(s.handleHistory)))
 	mux.Handle("/v1/account-switches", s.viewerOnly(http.HandlerFunc(s.handleSwitches)))
+	mux.Handle("/v1/endpoint-accounts", s.viewerOnly(http.HandlerFunc(s.handleEndpointAccounts)))
 	mux.Handle("/v1/accounts/label", s.viewerOnly(http.HandlerFunc(s.handleAccountLabel)))
 	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
 	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))

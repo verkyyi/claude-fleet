@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS endpoints (
   agent_version TEXT NOT NULL DEFAULT '',
   token_hash    TEXT NOT NULL,          -- enrollment token, hashed; never the plaintext
   label         TEXT NOT NULL DEFAULT '',
+
+  -- The OS login the agent runs as. An endpoint is a (machine, user) pair:
+  -- every OS account has its own ~/.claude, its own transcripts and its own
+  -- credentials, and on a shared box the other homes are unreadable.
+  os_user       TEXT NOT NULL DEFAULT '',
   enrolled_at   TEXT NOT NULL,
   last_seen     TEXT,
 
@@ -78,6 +83,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   cost_usd               REAL,
 
   cwd                    TEXT NOT NULL DEFAULT '',
+  os_user                TEXT NOT NULL DEFAULT '',
   git_branch             TEXT NOT NULL DEFAULT '',
   entrypoint             TEXT NOT NULL DEFAULT '',
   effort                 TEXT NOT NULL DEFAULT '',
@@ -112,9 +118,33 @@ CREATE TABLE IF NOT EXISTS limit_snapshots (
 CREATE INDEX IF NOT EXISTS idx_snapshots_account_time
   ON limit_snapshots(account_uuid, observed_at DESC);
 
+-- Which subscriptions an endpoint has been seen running, and when.
+--
+-- This is many-to-many on purpose. Claude Code takes its account from the
+-- environment per process, so one machine+user runs several subscriptions AT
+-- THE SAME TIME -- measured here: three. endpoints.account_uuid holds only the
+-- machine's own login; every subscription observed in a session lands here
+-- instead, and neither displaces the other.
+CREATE TABLE IF NOT EXISTS endpoint_accounts (
+  endpoint_id  TEXT NOT NULL,
+  account_uuid TEXT NOT NULL,
+  origin       TEXT NOT NULL DEFAULT 'session',  -- 'login' | 'session'
+  first_seen   TEXT NOT NULL,
+  last_seen    TEXT NOT NULL,
+  PRIMARY KEY (endpoint_id, account_uuid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoint_accounts_account
+  ON endpoint_accounts(account_uuid, last_seen DESC);
+
 -- A machine that logs out and into a different account creates a seam: rows
 -- already ingested keep the old attribution and cannot be corrected. Recording
 -- the transition makes the seam visible in the UI instead of silent.
+--
+-- Only a change of the endpoint's OWN login is a switch. Writing a row every
+-- time the reported account differed from the last one turned concurrency into
+-- history: 83 "switches" in four hours on one laptop, in exactly balanced
+-- A->B/B->A pairs 0.003s apart, none of which happened.
 CREATE TABLE IF NOT EXISTS account_switches (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   endpoint_id  TEXT NOT NULL,

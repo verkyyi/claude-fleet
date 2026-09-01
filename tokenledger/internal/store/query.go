@@ -221,6 +221,13 @@ const (
 	// whole page is stuck in. "Which of my subscriptions is this spend on" is
 	// the same shape of question as "which machine" or "which project".
 	ByAccount Dimension = "account"
+
+	// ByUser is the OS login the spend happened under. On a shared box that is
+	// the axis an operator actually asks about ("who on the build server is
+	// burning the quota"), and it is not derivable from any other column:
+	// hostname is the machine, cwd is a project path, and one machine's users
+	// cannot read each other's transcripts.
+	ByUser Dimension = "user"
 )
 
 // AllAccounts asks for every subscription at once.
@@ -247,6 +254,8 @@ func (d Dimension) column() (string, error) {
 		return "model", nil
 	case ByBranch:
 		return "git_branch", nil
+	case ByUser:
+		return "os_user", nil
 	default:
 		return "", fmt.Errorf("unknown dimension %q", d)
 	}
@@ -469,6 +478,63 @@ func (s *Store) AccountSwitches(limit int) ([]AccountSwitch, error) {
 		}
 		a.ObservedAt, _ = time.Parse(rfc, at)
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// EndpointAccount is one subscription seen running on one endpoint.
+//
+// Concurrent, not sequential: a machine+user can appear here several times over
+// overlapping windows because Claude Code takes its account from the process
+// environment. Reading two rows as "it switched" is the mistake this type
+// replaced.
+type EndpointAccount struct {
+	EndpointID   string `json:"endpoint_id"`
+	EndpointName string `json:"endpoint_name"`
+	OSUser       string `json:"os_user"`
+	AccountUUID  string `json:"account_uuid"`
+	AccountName  string `json:"account_name"`
+	// Origin is "login" for the endpoint's own Claude Code login, "session"
+	// for a subscription observed running in a session on it.
+	Origin    string    `json:"origin"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+// EndpointAccounts lists which subscriptions each endpoint has been seen
+// running, most recently active first.
+func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT ea.endpoint_id,
+		       COALESCE(NULLIF(ep.label, ''), NULLIF(ep.hostname, ''), ea.endpoint_id),
+		       COALESCE(ep.os_user, ''),
+		       ea.account_uuid,
+		       COALESCE(NULLIF(a.display_name, ''), NULLIF(a.email, ''), ea.account_uuid),
+		       ea.origin, ea.first_seen, ea.last_seen
+		FROM endpoint_accounts ea
+		LEFT JOIN endpoints ep ON ep.endpoint_id = ea.endpoint_id
+		LEFT JOIN accounts  a  ON a.account_uuid  = ea.account_uuid
+		ORDER BY ea.last_seen DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EndpointAccount
+	for rows.Next() {
+		var e EndpointAccount
+		var first, last string
+		if err := rows.Scan(&e.EndpointID, &e.EndpointName, &e.OSUser, &e.AccountUUID,
+			&e.AccountName, &e.Origin, &first, &last); err != nil {
+			return nil, err
+		}
+		e.FirstSeen, _ = time.Parse(rfc, first)
+		e.LastSeen, _ = time.Parse(rfc, last)
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

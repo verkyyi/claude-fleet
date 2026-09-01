@@ -43,7 +43,7 @@ func seed(t *testing.T, st *store.Store, account, endpoint, cwd string, uuids ..
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.TouchEndpoint(endpoint, id, "test"); err != nil {
+	if _, _, err := st.TouchEndpoint(endpoint, id, "test", true); err != nil {
 		t.Fatal(err)
 	}
 	evs := make([]model.UsageEvent, len(uuids))
@@ -113,15 +113,16 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 9 {
-		t.Fatalf("tools = %d, want 9", len(tools))
+	if len(tools) != 11 {
+		t.Fatalf("tools = %d, want 11", len(tools))
 	}
 
 	want := map[string]bool{
 		"list_accounts": false, "get_limits": false, "list_endpoints": false,
-		"list_account_switches": false,
-		"usage_by_account":      false, "usage_by_endpoint": false,
-		"usage_by_project": false, "usage_by_session": false, "usage_history": false,
+		"list_account_switches": false, "list_endpoint_accounts": false,
+		"usage_by_account": false, "usage_by_endpoint": false,
+		"usage_by_user": false, "usage_by_project": false,
+		"usage_by_session": false, "usage_history": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)

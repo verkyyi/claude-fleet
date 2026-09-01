@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -73,6 +74,7 @@ func Detect(home string) (*model.Identity, error) {
 		Hostname:    hostname,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
+		OSUser:      osUser(),
 	}
 	// The account boundary. Turns older than this cannot belong to this
 	// subscription, whatever the transcripts imply.
@@ -94,4 +96,21 @@ func Detect(home string) (*model.Identity, error) {
 // ProjectsDir is where Claude Code writes transcripts.
 func ProjectsDir(home string) string {
 	return filepath.Join(home, ".claude", "projects")
+}
+
+// osUser is the OS login this agent runs as.
+//
+// It reports the login rather than the uid because the uid is not portable and
+// not what anyone asks about; and it prefers the real account database over
+// $USER, which an agent started by a service manager may not have at all.
+//
+// An unreadable user is left empty rather than guessed. "" is rendered as
+// unknown; a wrong name would attribute one person's spend to another.
+func osUser() string {
+	if u, err := user.Current(); err == nil {
+		if u.Username != "" {
+			return u.Username
+		}
+	}
+	return os.Getenv("USER")
 }

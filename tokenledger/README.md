@@ -117,9 +117,10 @@ accounts so the model can retry correctly instead of guessing.
 
 ### Several users on one machine
 
-An endpoint maps to **one account at a time**, because credentials and
-transcripts are per-user. For a shared box, run one agent per user — each with
-its own enrollment token and its own state directory:
+An endpoint is a **(machine, user) pair**, not a machine: every OS login has its
+own `~/.claude`, its own transcripts and its own credentials, and on a shared box
+they cannot read each other's. So for a shared box, run one agent per user — each
+with its own enrollment token and its own state directory:
 
 ```bash
 # On the hub, once per person:
@@ -132,13 +133,29 @@ ccquota agent --home /home/bob   --state /home/bob/.ccquota
 ```
 
 They can be on the same subscription or different ones; the hub does not care.
-Do not try to cover two accounts with one agent process — it has one
-`~/.claude.json` to read, so it would simply report whichever account that file
-names.
+Do not try to cover two users with one agent process — it reads one home
+directory, and on most systems it could not read the others anyway.
+
+Spend is then queryable **by OS login** (`usage_by_user`, and a card on the
+dashboard), which on a shared machine is usually the question actually being
+asked. "Which machine" and "who" are different axes.
+
+### Several subscriptions at the same time
+
+One login can run several subscriptions **concurrently**: Claude Code reads
+`CLAUDE_CODE_OAUTH_TOKEN` per process, so two sessions side by side on one
+machine can be on two different plans. Measured on the development machine:
+three at once.
+
+So an endpoint has a *list* of subscriptions, not a current one — that is what
+`list_endpoint_accounts` and the "what each machine is running" card show. The
+endpoint's own login (from `~/.claude.json`) is tracked separately, and only a
+change of *that* is a switch.
 
 If someone logs out and into a *different* account on a machine, ccquota records
 the switch and shows it in the UI. Rows already ingested keep their old
-attribution and cannot be corrected — see the known limits below.
+attribution and cannot be corrected — see the known limits below. Two plans
+running side by side is **not** a switch, and is not recorded as one.
 
 ## MCP
 
@@ -152,9 +169,10 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Nine read-only tools: `list_accounts`, `get_limits`, `list_endpoints`,
-`usage_by_account`, `list_account_switches`, `usage_by_endpoint`,
-`usage_by_project`, `usage_by_session`, `usage_history`.
+Eleven read-only tools: `list_accounts`, `get_limits`, `list_endpoints`,
+`usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
+`usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
+`usage_history`.
 
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security

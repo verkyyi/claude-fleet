@@ -220,11 +220,35 @@ func toolSpecs() []toolSpec {
 		{
 			Name:  "list_account_switches",
 			Title: "Machines that changed subscription",
-			Description: "Occasions when a machine logged out of one subscription and into " +
+			Description: "Occasions when a machine logged OUT of one subscription and INTO " +
 				"another. Turns recorded before a switch keep their old attribution and cannot " +
 				"be corrected, so these are the seams where historical figures become " +
-				"unreliable. Use it to explain a total that looks wrong for a period.",
+				"unreliable. Use it to explain a total that looks wrong for a period. " +
+				"This is rare: running several subscriptions side by side is NOT a switch — " +
+				"for that, call list_endpoint_accounts.",
 			InputSchema: obj(map[string]any{"limit": limitProp}),
+		},
+		{
+			Name:  "list_endpoint_accounts",
+			Title: "Which subscriptions each machine runs",
+			Description: "The subscriptions seen running on each machine, with the window each " +
+				"was active over and whether it is that machine's own login or merely a " +
+				"subscription observed in a session on it. A machine can run several AT THE " +
+				"SAME TIME — Claude Code takes its account from the process environment — so " +
+				"this is a list per machine, not one value.",
+			InputSchema: obj(map[string]any{"limit": limitProp}),
+		},
+		{
+			Name:  "usage_by_user",
+			Title: "Spend by operating-system login",
+			Description: "Token and cost totals grouped by the OS account the work ran under — " +
+				"who on a shared machine is consuming the subscription. Every OS login has its " +
+				"own Claude Code install, transcripts and credentials, so this is a different " +
+				"axis from by-machine, and on a multi-user box it is usually the one you " +
+				"want." + caveat,
+			InputSchema: obj(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			}),
 		},
 		{
 			Name:  "usage_by_endpoint",
@@ -355,8 +379,21 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			"since":   args["since"], "until": args["until"], "limit": args["limit"],
 		}, store.ByAccount)
 
+	case "list_endpoint_accounts":
+		eas, err := s.api.Store.EndpointAccounts(intArg(args, "limit"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"endpoint_accounts": eas,
+			"note": "Several rows for one endpoint mean it ran those subscriptions " +
+				"concurrently, not that it switched between them.",
+		}, nil
+
 	case "usage_by_endpoint":
 		return s.usage(args, store.ByEndpoint)
+	case "usage_by_user":
+		return s.usage(args, store.ByUser)
 	case "usage_by_project":
 		return s.usage(args, store.ByProject)
 	case "usage_by_session":

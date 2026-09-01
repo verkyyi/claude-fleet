@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -66,6 +67,8 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "dropped_beyond_backfill", "INTEGER NOT NULL DEFAULT 0"},
 		{"endpoints", "backfill_limit", "TEXT NOT NULL DEFAULT ''"},
 		{"accounts", "label_locked", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "os_user", "TEXT NOT NULL DEFAULT ''"},
+		{"usage_events", "os_user", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -240,17 +243,20 @@ func (s *Store) SetAccountLabel(account, label string) error {
 
 // Endpoint is a registered collector.
 type Endpoint struct {
-	ID           string     `json:"endpoint_id"`
-	AccountUUID  string     `json:"account_uuid"`
-	Label        string     `json:"label"`
-	Hostname     string     `json:"hostname"`
-	OS           string     `json:"os"`
-	Arch         string     `json:"arch"`
-	MachineID    string     `json:"machine_id"`
-	CCVersion    string     `json:"cc_version"`
-	AgentVersion string     `json:"agent_version"`
-	EnrolledAt   time.Time  `json:"enrolled_at"`
-	LastSeen     *time.Time `json:"last_seen"`
+	ID           string `json:"endpoint_id"`
+	AccountUUID  string `json:"account_uuid"`
+	Label        string `json:"label"`
+	Hostname     string `json:"hostname"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+	MachineID    string `json:"machine_id"`
+	CCVersion    string `json:"cc_version"`
+	AgentVersion string `json:"agent_version"`
+	// OSUser is the OS login the agent runs as. An endpoint is a (machine,
+	// user) pair, not a machine.
+	OSUser     string     `json:"os_user"`
+	EnrolledAt time.Time  `json:"enrolled_at"`
+	LastSeen   *time.Time `json:"last_seen"`
 
 	// What this endpoint could not attribute. Surfaced so a total that
 	// excludes history says so, instead of just looking smaller.
@@ -284,7 +290,7 @@ func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 // drifted apart once already when a column was added.
 const endpointColumns = `
 	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
-	       cc_version, agent_version, enrolled_at, last_seen,
+	       cc_version, agent_version, os_user, enrolled_at, last_seen,
 	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
 	       backfill_limit, limits_unavailable`
 
@@ -295,7 +301,7 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	var enrolled string
 	var lastSeen, account, earliest sql.NullString
 	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
-		&e.MachineID, &e.CCVersion, &e.AgentVersion, &enrolled, &lastSeen,
+		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &enrolled, &lastSeen,
 		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
 		&e.BackfillLimit, &e.LimitsUnavailable)
 	if err != nil {
@@ -314,28 +320,100 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 
 // TouchEndpoint records what an endpoint reported about itself on this push.
 //
-// It returns the previous account uuid so the caller can detect and record a
-// login switch.
-func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string) (prevAccount string, err error) {
+// login says whether this batch carries the endpoint's OWN Claude Code login.
+// Only such a batch may CHANGE endpoints.account_uuid: a batch for a
+// subscription merely observed running on the machine says nothing about what
+// the machine is logged into, and letting it write there is what manufactured a
+// switch history out of ordinary concurrency.
+//
+// An endpoint that has never reported is the exception — it takes whatever
+// arrives first, including from an agent too old to say. Refusing to fill an
+// empty slot would leave the endpoint with no account at all, and every
+// account-scoped query (limits above all) silently blind to it.
+//
+// prevWasLogin says whether the outgoing account had itself been established by
+// a login batch. Only then is a change a real logout/login; otherwise it is a
+// provisional guess being corrected, which is not a seam in the history.
+func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string, login bool) (prevAccount string, prevWasLogin bool, err error) {
 	var prev sql.NullString
 	if err := s.db.QueryRow(`SELECT account_uuid FROM endpoints WHERE endpoint_id = ?`,
 		endpointID).Scan(&prev); err != nil {
-		return "", fmt.Errorf("look up endpoint: %w", err)
+		return "", false, fmt.Errorf("look up endpoint: %w", err)
 	}
 	prevAccount = prev.String
-	_, err = s.db.Exec(`
-		UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
-		       machine_id = ?, cc_version = ?, agent_version = ?, last_seen = ?
-		WHERE endpoint_id = ?`,
-		id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
-		id.CCVersion, agentVersion, fmtTime(time.Now()), endpointID)
-	if err != nil {
-		return "", fmt.Errorf("touch endpoint: %w", err)
+
+	if prevAccount != "" {
+		var origin string
+		switch err := s.db.QueryRow(`
+			SELECT origin FROM endpoint_accounts
+			WHERE endpoint_id = ? AND account_uuid = ?`, endpointID, prevAccount).Scan(&origin); {
+		case err == nil:
+			prevWasLogin = origin == string(model.OriginLogin)
+		case errors.Is(err, sql.ErrNoRows):
+			// Recorded before this table existed. Treat it as a login: that is
+			// what the old code meant by endpoints.account_uuid.
+			prevWasLogin = true
+		default:
+			return "", false, fmt.Errorf("look up endpoint account origin: %w", err)
+		}
 	}
-	return prevAccount, nil
+
+	if login || prevAccount == "" {
+		_, err = s.db.Exec(`
+			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
+			       machine_id = ?, cc_version = ?, agent_version = ?, os_user = ?,
+			       last_seen = ?
+			WHERE endpoint_id = ?`,
+			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+	} else {
+		// Everything except the account: the machine is still reporting, and
+		// its hardware facts are just as true on a secondary batch.
+		_, err = s.db.Exec(`
+			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
+			       machine_id = ?, cc_version = ?, agent_version = ?, os_user = ?,
+			       last_seen = ?
+			WHERE endpoint_id = ?`,
+			id.Hostname, id.OS, id.Arch, id.MachineID,
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("touch endpoint: %w", err)
+	}
+	return prevAccount, prevWasLogin, nil
 }
 
-// RecordAccountSwitch notes that an endpoint changed subscription.
+// RecordEndpointAccount notes that this endpoint was seen running account,
+// extending the window rather than replacing anything. Several accounts on one
+// endpoint are normal and concurrent, so these rows accumulate; they never
+// compete.
+func (s *Store) RecordEndpointAccount(endpointID, account string, origin model.AccountOrigin) error {
+	if account == "" {
+		return nil
+	}
+	now := fmtTime(time.Now())
+	if origin == "" {
+		origin = model.OriginSession
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO endpoint_accounts (endpoint_id, account_uuid, origin, first_seen, last_seen)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(endpoint_id, account_uuid) DO UPDATE SET
+		  last_seen = excluded.last_seen,
+		  -- 'login' is the stronger claim: once an account has been seen as
+		  -- this endpoint's own login, a later session sighting must not
+		  -- demote it back to a guest.
+		  origin = CASE WHEN endpoint_accounts.origin = 'login' THEN 'login'
+		                ELSE excluded.origin END`,
+		endpointID, account, string(origin), now, now)
+	if err != nil {
+		return fmt.Errorf("record endpoint account: %w", err)
+	}
+	return nil
+}
+
+// RecordAccountSwitch notes that an endpoint changed the account it is logged
+// into. Call it only for a login-origin batch — see TouchEndpoint.
 func (s *Store) RecordAccountSwitch(endpointID, from, to string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO account_switches (endpoint_id, from_account, to_account, observed_at)
@@ -365,8 +443,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
-		  cost_usd, cwd, git_branch, entrypoint, effort, is_sidechain
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
@@ -383,7 +461,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			fmtTime(e.TS), e.Model,
 			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
-			cost, e.CWD, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain)
+			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain)
 		if err != nil {
 			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
 		}

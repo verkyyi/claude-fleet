@@ -545,18 +545,22 @@ async function load() {
   const a = encodeURIComponent(state.account), r = state.range;
   const gran = (r === "1d") ? "hour" : "day";
   try {
-    const [limits, endpoints, byEndpoint, byProject, bySession, history, byAccount, switches] =
+    const [limits, endpoints, byEndpoint, byUser, byProject, bySession, history,
+           byAccount, switches, endpointAccounts] =
       await Promise.all([
         api(`/v1/limits?account=${a}`),
         api(`/v1/endpoints?account=${a}`),
         api(`/v1/usage?account=${a}&by=endpoint&since=${r}&limit=20`),
+        api(`/v1/usage?account=${a}&by=user&since=${r}&limit=20`),
         api(`/v1/usage?account=${a}&by=project&since=${r}&limit=12`),
         api(`/v1/usage?account=${a}&by=session&since=${r}&limit=12`),
         api(`/v1/history?account=${a}&since=${r}&granularity=${gran}`),
         spanning() ? api(`/v1/usage?account=all&by=account&since=${r}&limit=20`) : null,
         api(`/v1/account-switches?limit=20`),
+        api(`/v1/endpoint-accounts?limit=200`),
       ]);
-    state.data = { limits, endpoints, byEndpoint, byProject, bySession, history, byAccount, switches };
+    state.data = { limits, endpoints, byEndpoint, byUser, byProject, bySession, history,
+                   byAccount, switches, endpointAccounts };
     render();
   } catch (err) {
     $("#banners").replaceChildren(banner("err", "Query failed.", String(err.message)));
@@ -616,8 +620,10 @@ function render() {
     wallCard(d.limits),
     d.byAccount ? accountCard(d.byAccount) : null,
     el("div", { class: "grid2" }, endpointCard(d), historyCard(d.history)),
+    userCard(d.byUser),
     projectCard(d.byProject, d.bySession),
     endpointRosterCard(d.endpoints),
+    endpointAccountsCard(d.endpointAccounts),
     switchesCard(d.switches),
   );
 
@@ -747,6 +753,76 @@ function accountCard(byAccount) {
   return card;
 }
 
+/* ------------------------------------------ by OS login (a dimension) */
+
+// One machine is not one person. Every OS account has its own Claude Code
+// install, its own transcripts and its own credentials, so on a shared box
+// "which machine" and "who" are different questions and only this card answers
+// the second.
+function userCard(byUser) {
+  const buckets = (byUser && byUser.buckets || []).filter((b) => b.key !== "" || b.events);
+  const card = el("div", { class: "card" },
+    el("h2", {}, "Which login is burning it"),
+    el("p", { class: "hint" },
+      `Spend grouped by operating-system account · ${state.range}. ` +
+      `A machine with several logins reports one endpoint per login.`));
+
+  if (!buckets.length) {
+    card.appendChild(el("div", { class: "empty" }, "No usage in this range."));
+    return card;
+  }
+  const named = buckets.map((b) => ({ ...b, key: b.key || "(unknown login)" }));
+  if (state.tables) { card.appendChild(bucketTable(named, "OS login")); return card; }
+
+  card.appendChild(rankedBars(named.map((b, i) => ({
+    key: b.key,
+    value: b.tokens,
+    right: `${fmtInt(b.tokens)} · ${fmtUSD(b.cost_usd)}`,
+    color: seriesColor(i),
+    tip: `<b>${escapeHTML(b.key)}</b><br>${fmtFull(b.tokens)} tokens<br>` +
+         `${fmtFull(b.events)} turns · ${fmtUSD(b.cost_usd)} notional`,
+  }))));
+  return card;
+}
+
+/* ----------------------------- what each machine runs (concurrent, not a switch) */
+
+// Deliberately a list per machine. Claude Code takes its account from the
+// process environment, so one machine+login runs several subscriptions at the
+// same time; collapsing that into a single "current account" is what used to
+// manufacture a switch history out of ordinary concurrency.
+function endpointAccountsCard(rows) {
+  if (!rows || !rows.length) return null;
+
+  const byEndpoint = new Map();
+  for (const r of rows) {
+    if (!byEndpoint.has(r.endpoint_id)) byEndpoint.set(r.endpoint_id, []);
+    byEndpoint.get(r.endpoint_id).push(r);
+  }
+  const concurrent = [...byEndpoint.values()].filter((v) => v.length > 1).length;
+
+  const card = el("div", { class: "card" },
+    el("h2", {}, "What each machine is running"),
+    el("p", { class: "hint" },
+      concurrent
+        ? `${concurrent} of ${byEndpoint.size} endpoint(s) run more than one subscription at once. ` +
+          `That is normal — the account comes from each process's environment, not the machine.`
+        : `Each endpoint is running a single subscription.`));
+
+  card.appendChild(el("div", { class: "scroll" }, el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", {}, "Machine"), el("th", {}, "Login"), el("th", {}, "Subscription"),
+      el("th", {}, "How"), el("th", {}, "First seen"), el("th", {}, "Last seen"))),
+    el("tbody", {}, rows.map((r) => el("tr", {},
+      el("td", {}, r.endpoint_name || r.endpoint_id),
+      el("td", {}, r.os_user || "—"),
+      el("td", { title: r.account_uuid }, r.account_name || r.account_uuid),
+      el("td", {}, r.origin === "login" ? "its own login" : "seen in a session"),
+      el("td", {}, new Date(r.first_seen).toLocaleString()),
+      el("td", {}, new Date(r.last_seen).toLocaleString())))))));
+  return card;
+}
+
 /* ------------------------------------- account switches (a regular view) */
 
 function switchesCard(switches) {
@@ -755,9 +831,10 @@ function switchesCard(switches) {
   const card = el("div", { class: "card" },
     el("h2", {}, "Subscription switches"),
     el("p", { class: "hint" },
-      "Machines that logged out of one subscription and into another. Turns recorded " +
+      "Machines that logged OUT of one subscription and INTO another. Turns recorded " +
       "before a switch keep their old attribution and cannot be corrected — these are " +
-      "the seams where historical figures stop being reliable."));
+      "the seams where historical figures stop being reliable. Running several " +
+      "subscriptions side by side is not a switch; see what each machine is running."));
 
   const epByID = {};
   for (const e of (state.data.endpoints || [])) epByID[e.endpoint_id] = e.label || e.hostname;

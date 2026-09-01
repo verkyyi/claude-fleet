@@ -43,7 +43,7 @@ func seedAccount(t *testing.T, s *Store, account, endpoint string) {
 	if err := s.Enroll(endpoint, endpoint, "hash-"+endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TouchEndpoint(endpoint, ident(account), "test"); err != nil {
+	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,20 +165,29 @@ func TestTouchEndpoint_ReportsPreviousAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prev, err := s.TouchEndpoint("ep-1", ident("acct-a"), "v1")
+	prev, prevWasLogin, err := s.TouchEndpoint("ep-1", ident("acct-a"), "v1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if prev != "" {
 		t.Fatalf("first touch previous account = %q, want empty", prev)
 	}
+	if prevWasLogin {
+		t.Error("nothing preceded the first touch, so there was no login to succeed")
+	}
+	if err := s.RecordEndpointAccount("ep-1", "acct-a", model.OriginLogin); err != nil {
+		t.Fatal(err)
+	}
 
-	prev, err = s.TouchEndpoint("ep-1", ident("acct-b"), "v1")
+	prev, prevWasLogin, err = s.TouchEndpoint("ep-1", ident("acct-b"), "v1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if prev != "acct-a" {
 		t.Fatalf("previous account = %q, want acct-a — the switch would otherwise be invisible", prev)
+	}
+	if !prevWasLogin {
+		t.Error("acct-a was this endpoint's own login, so replacing it IS a switch")
 	}
 }
 

@@ -43,6 +43,12 @@ type UsageEvent struct {
 	Effort      string `json:"effort"`
 	IsSidechain bool   `json:"is_sidechain"` // true = subagent turn
 
+	// OSUser is the operating-system login the turn was spent under, stamped
+	// by the hub from the reporting endpoint. Denormalised onto the event for
+	// the same reason CWD is: the dimension has to survive an endpoint being
+	// re-enrolled or relabelled, and history must not move when it is.
+	OSUser string `json:"os_user"`
+
 	// TranscriptPath is where this turn was read from. It is the join key for
 	// per-session attribution — a statusLine stamp reports the same path — and
 	// is local bookkeeping, never sent to the hub.
@@ -80,6 +86,14 @@ type Identity struct {
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`
 	CCVersion string `json:"cc_version"`
+
+	// OSUser is the operating-system account the agent runs as.
+	//
+	// One machine is not one Claude Code user: every OS login has its own
+	// ~/.claude, its own transcripts and its own credentials, and a home
+	// directory the others cannot read. An endpoint is therefore a (machine,
+	// user) pair, and this is the half that makes it one.
+	OSUser string `json:"os_user"`
 }
 
 // Window is one rate-limit bucket as Anthropic reports it.
@@ -162,7 +176,31 @@ type Batch struct {
 	// LimitsUnavailable explains why Limits is nil, so the hub can render an
 	// honest banner instead of a stale gauge. Empty when Limits is present.
 	LimitsUnavailable string `json:"limits_unavailable,omitempty"`
+
+	// AccountOrigin says where Identity.AccountUUID came from, which decides
+	// whether this batch may move the endpoint's own login.
+	//
+	// A scan emits one batch per subscription observed on the machine, because
+	// several run side by side. Without this field the hub cannot tell "this
+	// machine logged into a different account" from "this machine is running
+	// two accounts at once", and treats the second as an endless stream of the
+	// first — 83 fabricated switches in four hours, here, before it was added.
+	AccountOrigin AccountOrigin `json:"account_origin,omitempty"`
 }
+
+// AccountOrigin distinguishes the endpoint's own Claude Code login from a
+// subscription merely observed running on it.
+type AccountOrigin string
+
+const (
+	// OriginLogin — the account this machine+user is logged into, read from
+	// ~/.claude.json and the local credentials. At most one at a time, so a
+	// change here is a real logout/login.
+	OriginLogin AccountOrigin = "login"
+	// OriginSession — a subscription identified from a session's own
+	// statusLine. Several are normal and concurrent; a change means nothing.
+	OriginSession AccountOrigin = "session"
+)
 
 // IngestResponse lets the hub steer the fleet centrally.
 type IngestResponse struct {

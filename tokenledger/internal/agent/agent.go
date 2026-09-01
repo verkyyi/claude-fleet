@@ -416,7 +416,15 @@ func (a *Agent) cycle(ctx context.Context) error {
 	chunks := chunkEvents(evs, maxEventsPerBatch, a.batchByteLimit())
 	queuedAll := true
 	for i, chunk := range chunks {
-		batch := model.Batch{AgentVersion: a.cfg.Version, Identity: *id, Events: chunk}
+		batch := model.Batch{
+			AgentVersion: a.cfg.Version,
+			Identity:     *id,
+			Events:       chunk,
+			// This is the machine's own login, read from ~/.claude.json. Only
+			// these batches are allowed to move the endpoint's account, so
+			// only a change here counts as a real logout/login.
+			AccountOrigin: model.OriginLogin,
+		}
 		if i == 0 {
 			// The limits reading and the attribution report ride along with the
 			// first chunk so they are not duplicated across every one of them.
@@ -470,7 +478,16 @@ func (a *Agent) cycle(ctx context.Context) error {
 		gid.SubscriptionType, gid.RateLimitTier = "", ""
 
 		for i, chunk := range chunkEvents(g.events, maxEventsPerBatch, a.batchByteLimit()) {
-			b := model.Batch{AgentVersion: a.cfg.Version, Identity: gid, Events: chunk}
+			b := model.Batch{
+				AgentVersion: a.cfg.Version,
+				Identity:     gid,
+				Events:       chunk,
+				// A subscription observed in a session's statusLine, not what
+				// the machine is logged into. Several of these are live at
+				// once; the hub must not read them as the machine changing
+				// account back and forth.
+				AccountOrigin: model.OriginSession,
+			}
 			if i == 0 && g.limits != nil {
 				b.Limits = g.limits
 			}

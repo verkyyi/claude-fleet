@@ -66,14 +66,28 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		return nil, err
 	}
 
-	prev, err := s.Store.TouchEndpoint(ep.ID, id, batch.AgentVersion)
+	// A scan emits one batch per subscription running on the machine, and
+	// several run at once. Only the batch carrying the endpoint's own Claude
+	// Code login may move endpoints.account_uuid; the rest are guests.
+	//
+	// An agent too old to say which is which sends no origin at all. Treat
+	// that as a guest: under-recording a real logout is a gap, while trusting
+	// it turns every scan cycle into a fabricated switch.
+	login := batch.AccountOrigin == model.OriginLogin
+
+	prev, prevWasLogin, err := s.Store.TouchEndpoint(ep.ID, id, batch.AgentVersion, login)
 	if err != nil {
+		return nil, err
+	}
+	// Every subscription seen on this endpoint is recorded, concurrently.
+	// This is the honest answer to "what is this machine running".
+	if err := s.Store.RecordEndpointAccount(ep.ID, id.AccountUUID, batch.AccountOrigin); err != nil {
 		return nil, err
 	}
 	// A machine that logged out and into another account creates a seam:
 	// everything already ingested keeps the old attribution. Record it so the
 	// UI can show the seam rather than let history quietly misattribute.
-	if prev != "" && prev != id.AccountUUID {
+	if login && prevWasLogin && prev != "" && prev != id.AccountUUID {
 		if err := s.Store.RecordAccountSwitch(ep.ID, prev, id.AccountUUID); err != nil {
 			return nil, err
 		}
@@ -81,9 +95,18 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 
 	// Stamp identity server-side. The agent reports which account it belongs
 	// to, but the endpoint id is whatever the token resolved to.
+	//
+	// os_user is stamped here rather than trusted per event: it is a property
+	// of the reporting agent's process, and an event cannot claim to have been
+	// spent under a login other than the one that read it.
+	osUser := id.OSUser
+	if osUser == "" {
+		osUser = ep.OSUser
+	}
 	for i := range batch.Events {
 		batch.Events[i].AccountUUID = id.AccountUUID
 		batch.Events[i].EndpointID = ep.ID
+		batch.Events[i].OSUser = osUser
 	}
 	// Price on the hub, not the agent: one pricing table for the whole fleet
 	// means a rate correction applies everywhere at once instead of waiting
