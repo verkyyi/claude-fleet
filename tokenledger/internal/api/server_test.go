@@ -477,3 +477,66 @@ func TestLimits_NoReasonReportedFallsBackToTheGenericMessage(t *testing.T) {
 		t.Error("an unavailable reading must still carry some reason")
 	}
 }
+
+// Regression from a live two-machine hub: a scan is split across many batches
+// and the limits verdict rides on the first one. Recording unconditionally let
+// every later batch overwrite the real reason with an empty string, so the UI
+// fell back to "nobody managed to read them" — the exact message the reason
+// plumbing exists to replace.
+func TestIngest_LaterBatchesDoNotEraseTheLimitsReason(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "macmini")
+
+	first := batchFor("acct-a", "macmini", []string{"c1"}, "/a")
+	first.LimitsUnavailable = "the local OAuth token has expired"
+	if resp := h.push(t, tok, first); resp.StatusCode != 200 {
+		t.Fatalf("HTTP %d", resp.StatusCode)
+	}
+
+	// The rest of the same scan: no limits verdict, just more events.
+	for i := 2; i <= 4; i++ {
+		rest := batchFor("acct-a", "macmini", []string{fmt.Sprintf("c%d", i)}, "/a")
+		if resp := h.push(t, tok, rest); resp.StatusCode != 200 {
+			t.Fatalf("chunk %d: HTTP %d", i, resp.StatusCode)
+		}
+	}
+
+	_, body := h.get(t, "/v1/limits?account=acct-a")
+	var view LimitsView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view.Reason, "expired") {
+		t.Fatalf("reason = %q; the later chunks erased what the first one reported", view.Reason)
+	}
+	if !strings.Contains(view.Reason, "macmini") {
+		t.Errorf("reason = %q; it no longer names the machine to go fix", view.Reason)
+	}
+}
+
+// Control: a successful reading must CLEAR a previously recorded failure,
+// otherwise a stale complaint would outlive the problem.
+func TestIngest_SuccessfulReadingClearsAnOldReason(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "flaky")
+
+	bad := batchFor("acct-a", "flaky", []string{"f1"}, "/a")
+	bad.LimitsUnavailable = "temporary network failure"
+	h.push(t, tok, bad)
+
+	reset := time.Now().UTC().Add(time.Hour)
+	good := batchFor("acct-a", "flaky", []string{"f2"}, "/a")
+	good.Limits = &model.LimitsSnapshot{
+		ObservedAt: time.Now().UTC(),
+		FiveHour:   model.Window{Utilization: 11, ResetsAt: &reset},
+	}
+	h.push(t, tok, good)
+
+	_, reason, err := h.srv.Store.LimitsReason("acct-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != "" {
+		t.Errorf("stale reason %q survived a successful reading", reason)
+	}
+}

@@ -98,8 +98,16 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	// Remember the endpoint's own explanation even when it could not read the
 	// limits — it is the only thing that can tell an operator WHICH machine to
 	// go fix.
-	if err := s.Store.RecordLimitsUnavailable(ep.ID, batch.LimitsUnavailable); err != nil {
-		return nil, err
+	//
+	// Only when this batch actually carries a limits verdict. A large scan is
+	// split across many batches and the reading rides on the FIRST one; writing
+	// unconditionally let the silent remainder overwrite the real reason with
+	// an empty string, which is exactly what happened on a live two-machine
+	// hub.
+	if batch.Limits != nil || batch.LimitsUnavailable != "" {
+		if err := s.Store.RecordLimitsUnavailable(ep.ID, batch.LimitsUnavailable); err != nil {
+			return nil, err
+		}
 	}
 
 	if batch.Limits != nil {
