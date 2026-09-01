@@ -74,6 +74,15 @@ type Config struct {
 
 	// Once runs a single cycle and returns, for cron-driven deployments.
 	Once bool
+
+	// AccountsDir holds one file per subscription, named for the account and
+	// containing an OAuth token (the shape `claude setup-token` produces).
+	//
+	// Opt-in and empty by default. Reading a meter this way costs an inference
+	// call against that subscription, so it happens only for accounts an
+	// operator has explicitly handed over, and only when nothing cheaper has
+	// observed them.
+	AccountsDir string
 }
 
 // Defaults for the intervals.
@@ -124,6 +133,9 @@ type Agent struct {
 	// serverInterval is the poll interval the hub asked for, if any. It lets a
 	// noisy fleet be backed off centrally without editing every machine.
 	serverInterval time.Duration
+
+	// lastAccountProbe throttles the inference-header probe, per token file.
+	lastAccountProbe map[string]time.Time
 
 	// lastStampLimits is the newest statusLine timestamp already reported as a
 	// limits reading, per subscription. Without it every scan would re-send the
@@ -448,6 +460,15 @@ func (a *Agent) cycle(ctx context.Context) error {
 	// sessions are still reporting their accounts' rate limits every few
 	// seconds, and that is precisely the case this exists to capture.
 	stampLimits := a.limitsFromStamps(time.Now().UTC())
+
+	// Anything already covered for free this cycle must not be probed: a probe
+	// is an inference call, and paying for a reading somebody else just gave us
+	// would make watching a subscription part of what consumes it.
+	observed := map[string]bool{id.AccountUUID: snap != nil}
+	for _, l := range stampLimits {
+		observed[l.AccountUUID] = true
+	}
+	stampLimits = append(stampLimits, a.probeAccounts(ctx, observed)...)
 
 	// Nothing new and nothing to report: skip the round trip entirely.
 	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() &&

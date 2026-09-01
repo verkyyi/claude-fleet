@@ -292,6 +292,38 @@ machine logs out and into a different account, rows already ingested keep the ol
 attribution. ccquota records the switch so the seam is visible in the UI rather
 than silently wrong — but it cannot retroactively fix history.
 
+### Watching a subscription nothing is using
+
+Utilization has two free sources and both have gaps. The credentials API needs a
+token with the `user:profile` scope — only an interactive login has one, and it
+expires on a machine nobody uses. A session's statusLine reports its own
+account, which covers a subscription only while someone is working on it.
+
+A token from `claude setup-token` cannot call the usage endpoint at all:
+
+```
+403  OAuth token does not meet scope requirement user:profile
+```
+
+but the same token receives full rate-limit headers from an ordinary inference
+call. The scope gate is on the endpoint, not on the numbers. So point one agent
+at a directory of tokens:
+
+```bash
+ccquota agent --accounts-dir ~/.config/claude-fleet/accounts   # label -> token, one file each
+```
+
+Those headers are **account-wide**, not per-connection: read one account through
+two different credentials at the same moment and the endpoint says 18.0% / 4.0%
+while the headers say 0.17 / 0.04 for the same reset instants — the same numbers,
+in different units (the endpoint is a percentage, the header a fraction).
+
+**A reading costs an inference call**, so measuring the meter moves it. It is
+opt-in, runs only for a subscription nothing cheaper observed this cycle, and at
+most once per five minutes. Run it on ONE always-on agent: the cost is per agent,
+and six agents probing the same three accounts is six times the price of the same
+answer.
+
 **Utilization is only known where a session runs.** Anthropic reports current
 utilization, never past utilization, so there is no history to fetch — ccquota
 knows only what it sampled. It reads that two ways: from the credentials API on

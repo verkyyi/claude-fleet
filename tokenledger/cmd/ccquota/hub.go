@@ -256,6 +256,12 @@ func runAgent(args []string) error {
 	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
 	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
 	liveEvery := fs.Duration("live-interval", agent.DefaultLiveInterval, "how often to report running sessions")
+	accountsDir := fs.String("accounts-dir", os.Getenv("CCQUOTA_ACCOUNTS_DIR"),
+		"directory of `label -> OAuth token` files, one per subscription.\n"+
+			"Lets this agent read the meter for subscriptions nothing else can see:\n"+
+			"an idle account, or one whose local credentials have expired. Each\n"+
+			"reading costs one minimal inference call against that subscription,\n"+
+			"so it is opt-in and only runs when no cheaper source has reported")
 	spoolMB := fs.Int64("spool-mb", 64, "cap on the on-disk queue, in MB")
 	maxBackfill := fs.Duration("max-backfill", 0,
 		"ignore turns older than this (e.g. 720h). Turns older than the account\n"+
@@ -293,6 +299,7 @@ func runAgent(args []string) error {
 		MaxBackfill:    *maxBackfill,
 		Version:        Version,
 		Once:           *once,
+		AccountsDir:    *accountsDir,
 	})
 	if err != nil {
 		return err
