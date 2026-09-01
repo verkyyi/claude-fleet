@@ -78,11 +78,16 @@ set -uo pipefail
 # window name (issue #225); --prompt <t> / --prompt=<t> is the optional seed prompt;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <target-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --name=*)      NAME="${1#--name=}"; shift ;;
+    # --origin (issue #503): spawn provenance. Stated by a caller that knows it;
+    # empty → auto-detected from the calling pane in the FOREGROUND pass below
+    # (the --bg re-exec has no caller pane, so the value rides this flag through).
+    --origin)      ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --origin=*)    ORIGIN="${1#--origin=}"; shift ;;
     # --name-file=<f> (issue #304): the BACKGROUND spawn pass — the --bg pass staged
     # the (arbitrary user) name in a temp file and re-exec'd us via fleet_bg; read +
     # delete it. No --bg on that pass, so it falls straight through and spawns.
@@ -113,6 +118,13 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 # explicitly — correct in-session ($TMUX set) and headless alike.
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
+# Spawn provenance (issue #503): detect BEFORE the --bg re-exec below — the
+# backgrounded pass runs under run-shell -b with no caller pane, so this
+# foreground detect is the only chance; the value rides --origin through.
+# issue-<N>/scratch-<N> when a worker or scratch spawned us; empty ≡ hub (⌃s,
+# the dash PROMPT line). Sanitized to the key charset (window option + re-exec embed).
+[ -z "$ORIGIN" ] && ORIGIN=$(fleet_origin_key)
+ORIGIN=$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
@@ -151,7 +163,7 @@ if [ "$BG" = 1 ]; then
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
   exit 0
 fi
 
@@ -248,6 +260,9 @@ else
   TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
   TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
 fi
+# Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
+# pre-warmed with no requester, so its origin is decided at CLAIM time, here.
+[ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
 
 # Seed the dash summary column so the row isn't blank until the session renders
 # content (same key/format the readers expect; the LLM summarizer overwrites this

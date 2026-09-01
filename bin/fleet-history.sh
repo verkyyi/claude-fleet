@@ -167,7 +167,7 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
 cmd_record() {
-  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess="" title_fb=""
+  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess="" title_fb="" origin=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -186,6 +186,9 @@ cmd_record() {
       # window name merely labels where it ran.
       --title) title_fb="${2:-}"; shift 2;;
       --mergedat) mergedat="${2:-}"; shift 2;;
+      # spawn provenance (issue #503): who spawned the session this row records —
+      # issue-<N> | scratch-<N> | autofill | bridge; absent/empty ≡ hub.
+      --origin) origin="${2:-}"; shift 2;;
       *) shift;;
     esac
   done
@@ -241,10 +244,12 @@ cmd_record() {
   fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
 
-  # 10 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state
+  # 11 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state·origin
   # state=landed here; the ledger-watch daemon writes closed-unlanded (#320). Col 1
   # is the merge time for a landed row / the close time for a closed-unlanded one.
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  # Col 11 (issue #503) is the spawn provenance ('-' ≡ hub); pre-#503 rows have 10
+  # columns and every reader tolerates the missing field as empty.
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(oneline "$mergedat")" \
     "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
@@ -255,6 +260,7 @@ cmd_record() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "landed" \
+    "$(oneline "${origin:--}")" \
     >> "$ledger"
   printf 'landed %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "${sid:-none}"
 }
@@ -274,7 +280,7 @@ cmd_record() {
 # session (landed OR a prior tick), and a skip when there is no resolvable
 # transcript (nothing to index).
 cmd_record_closed() {
-  local repo="" key="" wt="" win="" sess="" title="" summary="" closedat="" sha=""
+  local repo="" key="" wt="" win="" sess="" title="" summary="" closedat="" sha="" origin=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -286,6 +292,8 @@ cmd_record_closed() {
       --title) title="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
       --closedat) closedat="${2:-}"; shift 2;;
+      # spawn provenance (issue #503) — see cmd_record.
+      --origin) origin="${2:-}"; shift 2;;
       *) shift;;
     esac
   done
@@ -327,8 +335,8 @@ cmd_record_closed() {
     sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
   fi
 
-  # 10 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  # 11 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state·origin (#503)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(oneline "$closedat")" \
     "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
@@ -339,6 +347,7 @@ cmd_record_closed() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "closed-unlanded" \
+    "$(oneline "${origin:--}")" \
     >> "$ledger"
   printf 'closed-unlanded %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "$sid"
 }
@@ -399,7 +408,7 @@ cmd_list() {
   # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
   # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
   local now; now=$(date +%s 2>/dev/null)
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
     [ -z "$iss" ] && continue
     local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
     local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
@@ -473,7 +482,7 @@ cmd_rows() {
   printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
     [ -z "$iss" ] && continue
     local target fzfkey
     fzfkey="${sid:--}"
@@ -526,13 +535,26 @@ cmd_rows() {
     # The old char-clip's comment claimed it "may run a hair short — never
     # overruns"; the opposite was true (a CJK glyph is 1 char / 2 columns, so the
     # clip passed ~2x the width and the pad was computed from the short count).
+    # spawn provenance (issue #503): same ↳ tag grammar as the live dash, before
+    # the summary. col 11 absent (pre-#503 row) / '-' ≡ hub → no tag. The tag
+    # borrows its width from the summary flex span so act/PR/ctx stay pinned.
+    local tagd='' tagpfx=''
+    case "${origin:-}" in
+      ''|-) : ;;
+      issue-*)   tagd="↳#${origin#issue-}" ;;
+      scratch-*) tagd="↳~${origin#scratch-}" ;;
+      *)         tagd="↳$origin" ;;
+    esac
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
+    [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
     fleet_clip_display "$avail" "$dsmry"; dsmry="${clip_out:-}"
-    local pad=$(( USABLE - LEFTW - ${clip_w:-0} - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
+    local dw=${clip_w:-0}
+    [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dw=$(( dw + ${#tagd} + 1 )); }
+    local pad=$(( USABLE - LEFTW - dw - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$fzfkey" "$US" \
-      "${glyph_c}${glyph}${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
+      "${glyph_c}${glyph}${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
   done
 }
 
@@ -639,7 +661,7 @@ cmd_meta() {
   done
   local row; row=$(find_row "$repo" "$key")
   [ -z "$row" ] && return 0
-  awk -F'\t' '{print $2 "\t" $3}' <<<"$row"
+  awk -F'\t' '{print $2 "\t" $3 "\t" $11}' <<<"$row"
 }
 
 usage() {

@@ -885,6 +885,36 @@ fleet_scratch_key() {
   printf 'scratch-%s' "$s"
 }
 
+# fleet_origin_key — spawn provenance (issue #503): which fleet session is running
+# THIS script? Prints the CALLER's own ledger key — `issue-<N>` when the calling
+# pane's window carries @issue, `scratch-<N>` when it is an @raw scratch (key
+# derived from @worktree, else the pane cwd, via the STRICT fleet_scratch_key) —
+# and prints NOTHING for everything else: the dash/backlog/plan panels, the hub,
+# a headless caller (no $TMUX). Empty ≡ "hub" everywhere downstream (@origin
+# unset, blank ledger column), so the operator's own spawns stay untagged.
+# Spawn scripts call this in their FOREGROUND pass — a run-shell -b / fleet_bg
+# tail has no caller pane, so the detected value must ride a --origin flag into
+# any backgrounded re-invocation. Bare tmux on purpose: inside a pane $TMUX
+# already names the right per-fleet socket (the CLAUDE.md socket rail).
+fleet_origin_key() {
+  [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+  local o iss raw owt path
+  o=$(tmux display-message -p -t "$TMUX_PANE" \
+        '#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+  [ -n "$o" ] || return 0
+  iss=${o%%|*}; o=${o#*|}; raw=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  case "$iss" in
+    ''|*[!0-9]*) : ;;
+    *) printf 'issue-%s' "$iss"; return 0 ;;
+  esac
+  if [ "$raw" = 1 ]; then
+    local k; k=$(fleet_scratch_key "$owt")
+    [ -z "$k" ] && k=$(fleet_scratch_key "$path")
+    [ -n "$k" ] && printf '%s' "$k"
+  fi
+  return 0
+}
+
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
 # is ABOUT to prune, write the matching /fleet-history ledger row so the finished
 # session stays listed + resumable no matter WHICH janitor reaps it. History rows
@@ -922,6 +952,10 @@ fleet_scratch_key() {
 #                recorded first with NO title and then DEDUPED away ledger-watch's
 #                titled row for the same session. record/record-closed use it as a
 #                fallback only (a gh-resolved PR title still wins on the landed path).
+#   $11 origin   optional spawn provenance (issue #503) — the window's @origin
+#                (issue-<N> | scratch-<N> | autofill | bridge), read by the caller
+#                BEFORE the window dies, exactly like $10. Empty ≡ hub-spawned;
+#                a caller with no window left to ask (worktree-autoclean) omits it.
 # Best-effort: never fails the caller (a missing fleet-history.sh / gh just skips).
 # Empty --pr/--win/--session are tolerated by fleet-history.sh (treated as unset),
 # so they are passed uniformly rather than juggling optional flags (keeps this POSIX
@@ -929,7 +963,7 @@ fleet_scratch_key() {
 fleet_reap_record() {
   local outcome="${1:-}" repo="${2:-}" main="${3:-}" issue="${4:-}" \
         wt="${5:-}" win="${6:-}" sess="${7:-}" pr="${8:-}" branch="${9:-}" \
-        title="${10:-}"
+        title="${10:-}" origin="${11:-}"
   # KEY: the issue number for a worker; for a SCRATCH reap (no issue) the
   # `scratch-<N>` slug, derived from the branch first (authoritative — the reaper
   # knows it) and the worktree path second (the SessionEnd hook has no branch).
@@ -954,7 +988,7 @@ fleet_reap_record() {
       fi
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
         --pr "$pr" --key "$key" --worktree "$wt" --win "$win" \
-        --title "$title" >/dev/null 2>&1 || return 0
+        --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
       ;;
     ancestor|ancestor-of-*|unmerged|dirty)
       # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
@@ -963,7 +997,7 @@ fleet_reap_record() {
       # branch with no transcript and dedups on session-id (idempotent).
       bash "$hist" record-closed --repo "$repo" --session "$sess" \
         --key "$key" --worktree "$wt" --win "$win" \
-        --title "$title" >/dev/null 2>&1 || return 0
+        --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
       ;;
   esac
   return 0

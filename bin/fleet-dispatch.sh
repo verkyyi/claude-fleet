@@ -213,7 +213,7 @@ dispatch_fleet() { (
       [ "$spawned" -ge "$slots" ] && break
       continue
     fi
-    if "$BIN/dash-issue-session.sh" "$num" "$sess" >/dev/null 2>&1; then
+    if "$BIN/dash-issue-session.sh" "$num" "$sess" --origin autofill >/dev/null 2>&1; then
       log "$sess: spawned #$num (p$tier)  [slot $((spawned + 1))/$slots]"
       spawned=$((spawned + 1))
     else
