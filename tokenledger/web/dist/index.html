@@ -368,8 +368,9 @@ function renderLive(snap) {
         tile("lv-sessions", "active sessions"),
         tile("lv-tpm", "tokens / min"),
         tile("lv-uph", "$ / hour (notional)"),
-        tile("lv-ctx", "busiest context"),
-        tile("lv-lines", "lines changed")),
+        tile("lv-stok", "tokens in flight"),
+        tile("lv-total", "tokens (range)"),
+        tile("lv-spend", "spend (range)")),
       el("div", { class: "live-rows", id: "live-rows" })));
   }
 
@@ -379,14 +380,11 @@ function renderLive(snap) {
     : "no sessions reporting — install `ccquota stamp` as your statusLine to see live activity";
 
   if (!snap) return;
-  const busiestCtx = snap.sessions.reduce((m, s) => Math.max(m, s.context_used_pct || 0), 0);
-
   tween($("#lv-sessions"), snap.active_sessions, (v) => String(Math.round(v)));
   tween($("#lv-tpm"), snap.tokens_per_min, (v) => fmtInt(Math.round(v)));
   tween($("#lv-uph"), snap.usd_per_hour, (v) => "$" + v.toFixed(2));
-  tween($("#lv-ctx"), busiestCtx, (v) => Math.round(v) + "%");
-  tween($("#lv-lines"), (snap.lines_added || 0) + (snap.lines_removed || 0),
-    (v) => fmtInt(Math.round(v)));
+  tween($("#lv-stok"), snap.session_tokens || 0, (v) => fmtInt(Math.round(v)));
+  renderStoredTotals();
 
   const rows = snap.sessions.slice(0, 8).map((s) => {
     const where = s.worktree || shortProject(s.cwd) || s.session_id.slice(0, 8);
@@ -396,11 +394,37 @@ function renderLive(snap) {
         el("b", {}, where), " ",
         el("span", {}, `${s.model || "?"}${s.effort ? " · " + s.effort : ""} · ${s.endpoint}`)),
       el("div", { class: "rate" },
-        s.tokens_per_min > 0 ? `${fmtInt(Math.round(s.tokens_per_min))}/min` : "idle"),
+        `${fmtInt((s.input_tokens || 0) + (s.output_tokens || 0))}` +
+        (s.tokens_per_min > 0 ? ` · ${fmtInt(Math.round(s.tokens_per_min))}/min` : " · idle")),
       el("div", { class: "ctxbar", title: `context ${ctx}%` },
         el("i", { style: `width:${Math.min(100, ctx)}%` })));
   });
   $("#live-rows").replaceChildren(...rows);
+}
+
+/** renderStoredTotals fills the two tiles backed by the DURABLE store rather
+ *  than the live heartbeat.
+ *
+ *  These are the numbers that only ever go up: the live tiles describe what is
+ *  in flight and fall when a session ends, while these accumulate for the
+ *  selected range and scope. Kept visibly separate because they are different
+ *  measurements — summing them would double-count the work in progress. */
+function renderStoredTotals() {
+  const d = state.data;
+  if (!d || !d.byEndpoint) return;
+  const buckets = d.byEndpoint.buckets || [];
+  const tokens = buckets.reduce((a, b) => a + (b.tokens || 0), 0);
+  const cost = buckets.reduce((a, b) => a + (b.cost_usd || 0), 0);
+
+  const t = $("#lv-total"), c = $("#lv-spend");
+  if (t) tween(t, tokens, (v) => fmtInt(Math.round(v)));
+  if (c) tween(c, cost, (v) => "$" + Math.round(v).toLocaleString());
+
+  const labels = document.querySelectorAll(".tile .l");
+  labels.forEach((el) => {
+    if (el.textContent.startsWith("tokens (")) el.textContent = `tokens (${state.range})`;
+    if (el.textContent.startsWith("spend (")) el.textContent = `spend (${state.range})`;
+  });
 }
 
 /** connectLive subscribes to the hub's event stream, falling back to polling
@@ -431,6 +455,30 @@ function connectLive() {
 const state = { account: null, accounts: [], range: "7d", tables: false, data: null };
 const ALL = "all";
 const spanning = () => state.account === ALL;
+
+/** accountLabel is THE display name for a subscription, everywhere.
+ *
+ *  Every surface must resolve it identically or the same account shows up
+ *  under two names on one page — the switcher saying one thing while a table
+ *  says another. The server exposes the same precedence; this mirrors it for
+ *  the places that only hold a uuid. */
+function accountLabel(uuid) {
+  if (!uuid) return "—";
+  const a = state.accounts.find((x) => x.account_uuid === uuid);
+  if (!a) return uuid;
+  return a.email || a.display_name || a.account_uuid;
+}
+
+/** accountSuffix marks a subscription identified by its reset schedule rather
+ *  than by a login, so a heuristic never reads as a fact. */
+function accountSuffix(uuid) {
+  const a = state.accounts.find((x) => x.account_uuid === uuid);
+  if (!a) return "";
+  const bits = [];
+  if (a.subscription_type) bits.push(a.subscription_type);
+  if (String(a.account_uuid).startsWith("win_")) bits.push("inferred");
+  return bits.length ? " · " + bits.join(" · ") : "";
+}
 
 /* --------------------------------------------------------------- controls */
 
@@ -472,7 +520,7 @@ async function boot() {
   const sel = $("#account");
   const opts = state.accounts.map((a) =>
     el("option", { value: a.account_uuid },
-      `${a.email || a.display_name || a.account_uuid}${a.subscription_type ? " · " + a.subscription_type : ""}`));
+      accountLabel(a.account_uuid) + accountSuffix(a.account_uuid)));
   if (state.accounts.length > 1) {
     // Spanning is the default with several subscriptions: showing everything
     // and labelling it beats silently picking one the viewer cannot tell is
@@ -522,6 +570,7 @@ function render() {
   if (!d) return;
 
   const acct = state.accounts.find((x) => x.account_uuid === state.account) || {};
+  void acct;
   const online = d.endpoints.filter((e) => e.last_seen &&
     (Date.now() - new Date(e.last_seen)) < 10 * 60_000).length;
   $("#sub").textContent =
@@ -571,6 +620,8 @@ function render() {
     endpointRosterCard(d.endpoints),
     switchesCard(d.switches),
   );
+
+  renderStoredTotals();
 
   $("#footer").replaceChildren(el("div", {}, (d.limits && d.limits.disclaimer) ||
     "The account-wide utilization is exact and already covers every device. " +
@@ -708,8 +759,6 @@ function switchesCard(switches) {
       "before a switch keep their old attribution and cannot be corrected — these are " +
       "the seams where historical figures stop being reliable."));
 
-  const byID = {};
-  for (const a of state.accounts) byID[a.account_uuid] = a.email || a.display_name || a.account_uuid;
   const epByID = {};
   for (const e of (state.data.endpoints || [])) epByID[e.endpoint_id] = e.label || e.hostname;
 
@@ -719,8 +768,8 @@ function switchesCard(switches) {
     el("tbody", {}, switches.map((s) => el("tr", {},
       el("td", {}, new Date(s.observed_at).toLocaleString()),
       el("td", {}, epByID[s.endpoint_id] || s.endpoint_id),
-      el("td", { title: s.from_account }, byID[s.from_account] || s.from_account || "—"),
-      el("td", { title: s.to_account }, byID[s.to_account] || s.to_account || "—")))))));
+      el("td", { title: s.from_account }, accountLabel(s.from_account)),
+      el("td", { title: s.to_account }, accountLabel(s.to_account))))))));
   return card;
 }
 
@@ -921,9 +970,6 @@ function endpointRosterCard(endpoints) {
     card.appendChild(el("div", { class: "empty" }, "No endpoints enrolled yet."));
     return card;
   }
-  const acctLabel = {};
-  for (const a of state.accounts) acctLabel[a.account_uuid] = a.email || a.display_name || a.account_uuid;
-
   card.appendChild(el("div", { class: "scroll" }, el("table", {},
     el("thead", {}, el("tr", {},
       el("th", {}, "Name"), el("th", {}, "Subscription"), el("th", {}, "Platform"),
@@ -935,7 +981,7 @@ function endpointRosterCard(endpoints) {
       const dropped = (e.dropped_pre_account || 0) + (e.dropped_beyond_backfill || 0);
       return el("tr", {},
         el("td", { title: e.hostname || "" }, e.label || e.endpoint_id),
-        el("td", { title: e.account_uuid || "" }, acctLabel[e.account_uuid] || "—"),
+        el("td", { title: e.account_uuid || "" }, accountLabel(e.account_uuid)),
         el("td", {}, e.os ? `${e.os}/${e.arch}` : "—"),
         el("td", {}, e.cc_version || "—"),
         el("td", {}, e.agent_version || "—"),

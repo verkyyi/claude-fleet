@@ -35,6 +35,8 @@ func main() {
 		err = runEnroll(os.Args[2:])
 	case "stamp":
 		err = runStamp(os.Args[2:])
+	case "name":
+		err = runName(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -61,6 +63,7 @@ Usage:
   ccquota enroll [flags]    Mint an enrollment token for a new endpoint
   ccquota stamp  [flags]    Record which subscription a session is on
                             (install as Claude Code's statusLine)
+  ccquota name   [flags]    List subscriptions, or name one permanently
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

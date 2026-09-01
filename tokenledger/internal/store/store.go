@@ -65,6 +65,7 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "earliest_dropped", "TEXT"},
 		{"endpoints", "dropped_beyond_backfill", "INTEGER NOT NULL DEFAULT 0"},
 		{"endpoints", "backfill_limit", "TEXT NOT NULL DEFAULT ''"},
+		{"accounts", "label_locked", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -185,18 +186,54 @@ func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 		                      account_created_at, first_seen, last_seen)
 		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(account_uuid) DO UPDATE SET
-		  email             = CASE WHEN excluded.email             <> '' THEN excluded.email             ELSE accounts.email             END,
+		  -- A name set by hand is never overwritten by an automatic one. The
+		  -- automatic sources (a tmux window option, an env var) are hints that
+		  -- come and go; a deliberate name is the operator's answer and must
+		  -- outlive them.
+		  email             = CASE WHEN accounts.label_locked = 1 THEN accounts.email
+		                          WHEN excluded.email <> '' THEN excluded.email
+		                          ELSE accounts.email END,
 		  org_uuid          = CASE WHEN excluded.org_uuid          <> '' THEN excluded.org_uuid          ELSE accounts.org_uuid          END,
 		  org_name          = CASE WHEN excluded.org_name          <> '' THEN excluded.org_name          ELSE accounts.org_name          END,
 		  subscription_type = CASE WHEN excluded.subscription_type <> '' THEN excluded.subscription_type ELSE accounts.subscription_type END,
 		  rate_limit_tier   = CASE WHEN excluded.rate_limit_tier   <> '' THEN excluded.rate_limit_tier   ELSE accounts.rate_limit_tier   END,
-		  display_name      = CASE WHEN excluded.display_name      <> '' THEN excluded.display_name      ELSE accounts.display_name      END,
+		  display_name      = CASE WHEN accounts.label_locked = 1 THEN accounts.display_name
+		                          WHEN excluded.display_name <> '' THEN excluded.display_name
+		                          ELSE accounts.display_name END,
 		  account_created_at = COALESCE(excluded.account_created_at, accounts.account_created_at),
 		  last_seen         = excluded.last_seen`,
 		id.AccountUUID, id.Email, id.OrgUUID, id.OrgName,
 		subType, tier, id.DisplayName, created, now, now)
 	if err != nil {
 		return fmt.Errorf("upsert account: %w", err)
+	}
+	return nil
+}
+
+// SetAccountLabel names a subscription for good.
+//
+// Fingerprinted subscriptions have no email to discover — the reset schedule
+// identifies them correctly but cannot say who they belong to. This records the
+// operator's answer and locks it, so the next automatic report cannot quietly
+// replace it with a hint or blank it out.
+//
+// Passing an empty label unlocks the account and lets automatic naming resume.
+func (s *Store) SetAccountLabel(account, label string) error {
+	if account == "" {
+		return fmt.Errorf("account is required")
+	}
+	locked := 1
+	if label == "" {
+		locked = 0
+	}
+	res, err := s.db.Exec(
+		`UPDATE accounts SET email = ?, label_locked = ? WHERE account_uuid = ?`,
+		label, locked, account)
+	if err != nil {
+		return fmt.Errorf("set account label: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no such subscription %q on this hub", account)
 	}
 	return nil
 }

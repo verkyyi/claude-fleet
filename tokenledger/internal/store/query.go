@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
@@ -19,17 +20,40 @@ type Account struct {
 	RateLimitTier    string     `json:"rate_limit_tier"`
 	DisplayName      string     `json:"display_name"`
 	AccountCreatedAt *time.Time `json:"account_created_at,omitempty"`
+	LabelLocked      bool       `json:"label_locked"`
 	FirstSeen        time.Time  `json:"first_seen"`
 	LastSeen         time.Time  `json:"last_seen"`
 	EndpointCount    int        `json:"endpoint_count"`
 }
+
+// Label is THE display name for a subscription, everywhere.
+//
+// Every surface must resolve it the same way or the same account appears under
+// two names on one page. Preference order: a name set by hand, then whatever
+// the login reported, then the identifier itself — never blank, because a blank
+// row is unclickable and unreadable.
+func (a Account) Label() string {
+	switch {
+	case a.Email != "":
+		return a.Email
+	case a.DisplayName != "":
+		return a.DisplayName
+	default:
+		return a.AccountUUID
+	}
+}
+
+// Inferred reports whether this subscription was identified by its rate-limit
+// schedule rather than by a login. The UI says so rather than presenting a
+// heuristic as a fact.
+func (a Account) Inferred() bool { return strings.HasPrefix(a.AccountUUID, "win_") }
 
 // ListAccounts returns every subscription on this hub.
 func (s *Store) ListAccounts() ([]Account, error) {
 	rows, err := s.db.Query(`
 		SELECT a.account_uuid, a.email, a.org_uuid, a.org_name,
 		       a.subscription_type, a.rate_limit_tier, a.display_name,
-		       a.account_created_at, a.first_seen, a.last_seen,
+		       a.account_created_at, a.label_locked, a.first_seen, a.last_seen,
 		       (SELECT COUNT(*) FROM endpoints e WHERE e.account_uuid = a.account_uuid)
 		FROM accounts a
 		ORDER BY a.last_seen DESC`)
@@ -45,7 +69,7 @@ func (s *Store) ListAccounts() ([]Account, error) {
 		var created sql.NullString
 		if err := rows.Scan(&a.AccountUUID, &a.Email, &a.OrgUUID, &a.OrgName,
 			&a.SubscriptionType, &a.RateLimitTier, &a.DisplayName,
-			&created, &first, &last, &a.EndpointCount); err != nil {
+			&created, &a.LabelLocked, &first, &last, &a.EndpointCount); err != nil {
 			return nil, err
 		}
 		a.AccountCreatedAt = parseNullTime(created)
@@ -316,11 +340,7 @@ func (s *Store) labelAccounts(bs []Bucket) {
 	}
 	byID := make(map[string]string, len(accts))
 	for _, a := range accts {
-		label := a.Email
-		if label == "" {
-			label = a.DisplayName
-		}
-		byID[a.AccountUUID] = label
+		byID[a.AccountUUID] = a.Label()
 	}
 	for i := range bs {
 		if l := byID[bs[i].Key]; l != "" {

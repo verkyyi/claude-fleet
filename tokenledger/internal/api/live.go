@@ -127,6 +127,16 @@ type Snapshot struct {
 	LinesAdded     int64   `json:"lines_added"`
 	LinesRemoved   int64   `json:"lines_removed"`
 
+	// Running totals across the sessions currently alive. A rate answers "how
+	// fast", these answer "how much so far" — and unlike a rate they only ever
+	// climb while a session lives, which is what makes them worth watching.
+	//
+	// They fall when a session ends and leaves the window. That is honest:
+	// this is "in flight right now", not a cumulative ledger. The durable
+	// totals live in the store.
+	SessionTokens int64   `json:"session_tokens"`
+	SessionCost   float64 `json:"session_cost_usd"`
+
 	Note string `json:"note"`
 }
 
@@ -149,6 +159,8 @@ func (l *Live) Snapshot() Snapshot {
 		out.USDPerHour += s.USDPerHour
 		out.LinesAdded += s.LinesAdded
 		out.LinesRemoved += s.LinesRemoved
+		out.SessionTokens += s.InputTokens + s.OutputTokens
+		out.SessionCost += s.CostUSD
 		if s.Billing == "api" {
 			out.APISessions++
 		}

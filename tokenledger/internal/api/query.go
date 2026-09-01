@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/recon"
@@ -157,14 +159,7 @@ func (s *Server) LimitsForAll() (*LimitsAcross, error) {
 		if err != nil {
 			return nil, err
 		}
-		label := a.Email
-		if label == "" {
-			label = a.DisplayName
-		}
-		if label == "" {
-			label = a.AccountUUID
-		}
-		entry := AccountLimits{AccountUUID: a.AccountUUID, Label: label, Limits: v}
+		entry := AccountLimits{AccountUUID: a.AccountUUID, Label: a.Label(), Limits: v}
 		out.PerAccount = append(out.PerAccount, entry)
 
 		// "Worst" compares readings we actually have; an unavailable one is
@@ -326,6 +321,33 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		"series":       series,
 		"by_model":     models,
 		"scope_note":   scopeNote(account),
+	})
+}
+
+// handleAccountLabel names a subscription for good.
+//
+// Fingerprinted subscriptions have no email to discover, so the operator's
+// answer is the only source of a readable name — and it has to survive every
+// later automatic report, or naming it would be a chore repeated forever.
+func (s *Server) handleAccountLabel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var body struct {
+		Account string `json:"account"`
+		Label   string `json:"label"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
+		return
+	}
+	if err := s.Store.SetAccountLabel(body.Account, strings.TrimSpace(body.Label)); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account": body.Account, "label": body.Label, "locked": body.Label != "",
 	})
 }
 

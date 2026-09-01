@@ -241,3 +241,118 @@ func TestPruneEvents(t *testing.T) {
 		t.Fatalf("remaining = %d, want 1", remaining)
 	}
 }
+
+// A name given by hand must survive every later automatic report, or naming a
+// fingerprinted subscription becomes a chore repeated after each restart —
+// which is not a workflow anyone keeps up with.
+func TestSetAccountLabel_SurvivesAutomaticReports(t *testing.T) {
+	s := newStore(t)
+	if err := s.UpsertAccount(ident("win_abc"), "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountLabel("win_abc", "ly297@georgetown.edu"); err != nil {
+		t.Fatal(err)
+	}
+
+	// An agent reports again, carrying a different (automatic) email and, on a
+	// later cycle, no email at all.
+	other := ident("win_abc")
+	other.Email = "wrong@example.com"
+	if err := s.UpsertAccount(other, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	blank := ident("win_abc")
+	blank.Email = ""
+	if err := s.UpsertAccount(blank, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	accts, err := s.ListAccounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(accts))
+	}
+	if got := accts[0].Label(); got != "ly297@georgetown.edu" {
+		t.Fatalf("label = %q; an automatic report overwrote a deliberate name", got)
+	}
+	if !accts[0].LabelLocked {
+		t.Error("the name should be marked as deliberate")
+	}
+}
+
+// Control: an UNNAMED account must still accept automatic naming, or the lock
+// would be indistinguishable from never updating anything.
+func TestUpsertAccount_UnlockedStillTakesAutomaticNames(t *testing.T) {
+	s := newStore(t)
+	blank := ident("acct-x")
+	blank.Email = ""
+	if err := s.UpsertAccount(blank, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	named := ident("acct-x")
+	named.Email = "discovered@example.com"
+	if err := s.UpsertAccount(named, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	accts, _ := s.ListAccounts()
+	if accts[0].Label() != "discovered@example.com" {
+		t.Fatalf("label = %q; an unnamed account should accept what the login reports", accts[0].Label())
+	}
+}
+
+func TestSetAccountLabel_ClearUnlocks(t *testing.T) {
+	s := newStore(t)
+	if err := s.UpsertAccount(ident("win_abc"), "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountLabel("win_abc", "chosen"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountLabel("win_abc", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	auto := ident("win_abc")
+	auto.Email = "auto@example.com"
+	if err := s.UpsertAccount(auto, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	accts, _ := s.ListAccounts()
+	if accts[0].Label() != "auto@example.com" {
+		t.Fatalf("label = %q; clearing should let automatic naming resume", accts[0].Label())
+	}
+}
+
+func TestSetAccountLabel_UnknownAccountIsAnError(t *testing.T) {
+	s := newStore(t)
+	if err := s.SetAccountLabel("nope", "x"); err == nil {
+		t.Fatal("naming a subscription this hub has never seen should fail loudly")
+	}
+}
+
+// Every surface resolves the name the same way, or one page shows one account
+// under two names.
+func TestAccount_LabelPrecedence(t *testing.T) {
+	cases := []struct {
+		a    Account
+		want string
+	}{
+		{Account{AccountUUID: "u", Email: "e@x", DisplayName: "d"}, "e@x"},
+		{Account{AccountUUID: "u", DisplayName: "d"}, "d"},
+		{Account{AccountUUID: "u"}, "u"},
+	}
+	for _, c := range cases {
+		if got := c.a.Label(); got != c.want {
+			t.Errorf("Label() = %q, want %q", got, c.want)
+		}
+	}
+	if !(Account{AccountUUID: "win_x"}).Inferred() {
+		t.Error("a fingerprinted account must report as inferred")
+	}
+	if (Account{AccountUUID: "uuid"}).Inferred() {
+		t.Error("a login-identified account must not report as inferred")
+	}
+}
