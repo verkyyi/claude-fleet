@@ -478,10 +478,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # unreadable limit proceeds and says why, like the disk guard.
 #
 #   bin/fleet-quotaguard.sh --status    # what it would decide right now
+# @label=Stop autofill near the quota ceiling @group=quota @tier=advanced @scope=global @edit=bool
 #FLEET_QUOTA_GATE=0           # 1 to arm (default 0 = report only, never blocks)
+# @label=Quota ceiling @group=quota @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_QUOTA_CEILING=90       # hold at/above this utilization %
+# @label=Subscription to judge @group=quota @tier=advanced @scope=global @edit=str
 #FLEET_QUOTA_ACCOUNT=         # a subscription uuid, or `all`; default: the
 #                             # account this machine is logged into
+# @label=Path to ccquota @group=quota @tier=advanced @scope=global @edit=path
+#FLEET_QUOTA_BIN=             # default: whatever `ccquota` resolves to on PATH
 # @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
 # (The volume the guard measures and the min seconds between incident captures are
