@@ -100,6 +100,11 @@ type Agent struct {
 	// statusLine hook is installed.
 	stamps *sessions.Index
 
+	// machineFingerprint is the reset-phase identity of the machine's own
+	// login. Sessions matching it are not a separate subscription, they are
+	// the default one seen through the heuristic.
+	machineFingerprint string
+
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
 	// re-reads everything — cheap once, wasteful every minute for an hour.
@@ -250,6 +255,11 @@ func (a *Agent) cycle(ctx context.Context) error {
 		snap, unavailable = a.pollLimits(ctx, creds, credErr)
 		a.lastLimitsPoll = time.Now()
 	}
+	// Learn the machine login's own reset phase, so sessions on that same
+	// subscription are not mistaken for a different one.
+	if snap != nil {
+		a.machineFingerprint = sessions.FingerprintFor(snap.FiveHour.ResetsAt, snap.SevenDay.ResetsAt)
+	}
 
 	// Nothing new and nothing to report: skip the round trip entirely.
 	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() {
@@ -367,6 +377,10 @@ type subGroup struct {
 	events []model.UsageEvent
 	label  string
 	limits *model.LimitsSnapshot
+
+	// inferred marks a group identified by the reset-phase heuristic rather
+	// than by a token. The hub labels these so nobody reads a guess as a fact.
+	inferred bool
 }
 
 func (g subGroup) name(key string) string {
@@ -392,16 +406,20 @@ func (a *Agent) groupBySubscription(evs []model.UsageEvent, id *model.Identity) 
 	var unstamped []model.UsageEvent
 	for _, e := range evs {
 		st, ok := a.stamps.ByTranscript[e.TranscriptPath]
-		// A stamp with no account key means that session had no per-session
-		// token: it used the machine login, which is the default path.
-		if !ok || st.AccountKey == "" || st.AccountKey == id.AccountUUID {
+		key := ""
+		if ok {
+			key = st.Account()
+		}
+		// No usable identifier means the session looked like the machine login,
+		// which is the default path.
+		if key == "" || key == id.AccountUUID || key == a.machineFingerprint {
 			unstamped = append(unstamped, e)
 			continue
 		}
-		g := groups[st.AccountKey]
+		g := groups[key]
 		if g == nil {
-			g = &subGroup{label: st.Label, limits: limitsFromStamp(st, st.AccountKey)}
-			groups[st.AccountKey] = g
+			g = &subGroup{label: st.Label, limits: limitsFromStamp(st, key), inferred: st.AccountIsInferred()}
+			groups[key] = g
 		}
 		g.events = append(g.events, e)
 	}

@@ -62,16 +62,78 @@ type Stamp struct {
 	CCVersion   string     `json:"cc_version,omitempty"`
 }
 
-// AccountKeyFor derives the stable, non-secret identifier for a token.
+// AccountKeyFor derives a stable, non-secret identifier from a token.
 //
 // The token itself is never written anywhere: a monitoring tool that leaves
 // credentials on disk is a worse problem than the one it solves.
+//
+// In practice this is usually empty. Claude Code does NOT pass
+// CLAUDE_CODE_OAUTH_TOKEN down to hook processes — verified across 17 live
+// sessions on a machine that definitely had per-session tokens — so the
+// fingerprint below is what actually identifies an account. This remains as the
+// stronger signal for any context where the token IS visible.
 func AccountKeyFor(token string) string {
 	if token == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(token))
 	return "tok_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// Rate-limit window lengths, used to reduce a reset timestamp to its phase.
+const (
+	fiveHourWindow = 5 * time.Hour
+	sevenDayWindow = 7 * 24 * time.Hour
+)
+
+// FingerprintFor identifies a subscription from its rate-limit reset times.
+//
+// The token is unreachable from a hook, but the statusLine payload reports the
+// session's own rate_limits — and every session on one subscription shares that
+// subscription's reset schedule, while different subscriptions almost never
+// do. Measured on a live machine: 17 sessions collapsed into exactly two
+// groups, matching what the account supervisor independently reported, with
+// 7-day resets three days apart.
+//
+// The PHASE is used, not the timestamp: a reset advances every window, so the
+// raw value would change identity every five hours. The offset within the
+// window is a property of the account.
+//
+// This is a heuristic and is labelled as one wherever it surfaces. Two accounts
+// collide only if BOTH windows align — 18,000 × 604,800 possible phase pairs —
+// but "unlikely" is not "impossible", so it never overrides a token-derived key.
+func FingerprintFor(fiveHourResets, sevenDayResets *time.Time) string {
+	if fiveHourResets == nil && sevenDayResets == nil {
+		return ""
+	}
+	phase := func(t *time.Time, window time.Duration) int64 {
+		if t == nil {
+			return -1
+		}
+		p := t.Unix() % int64(window/time.Second)
+		if p < 0 {
+			p += int64(window / time.Second)
+		}
+		return p
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d",
+		phase(fiveHourResets, fiveHourWindow), phase(sevenDayResets, sevenDayWindow))))
+	return "win_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// Account returns the best available identifier for this session's
+// subscription, preferring the token-derived key when one exists.
+func (s Stamp) Account() string {
+	if s.AccountKey != "" {
+		return s.AccountKey
+	}
+	return FingerprintFor(s.FiveHourAt, s.SevenDayAt)
+}
+
+// AccountIsInferred reports whether the identifier came from the reset-phase
+// heuristic rather than from the token. Callers must say so.
+func (s Stamp) AccountIsInferred() bool {
+	return s.AccountKey == "" && s.Account() != ""
 }
 
 // Dir is where stamps live.
@@ -222,11 +284,12 @@ func Prune(stateDir string, maxAge time.Duration) (int, error) {
 func (i *Index) Accounts() map[string]string {
 	out := map[string]string{}
 	for _, s := range i.BySession {
-		if s.AccountKey == "" {
+		k := s.Account()
+		if k == "" {
 			continue
 		}
-		if s.Label != "" || out[s.AccountKey] == "" {
-			out[s.AccountKey] = s.Label
+		if s.Label != "" || out[k] == "" {
+			out[k] = s.Label
 		}
 	}
 	return out

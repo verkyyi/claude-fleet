@@ -180,3 +180,61 @@ func TestIndex_Accounts(t *testing.T) {
 
 func readDirNames(p string) ([]string, error) { return nil, nil }
 func fileExists(p string) bool                { _, err := os.Stat(p); return err == nil }
+
+// The token is unreachable from a hook, so the reset schedule is what actually
+// identifies a subscription. Verified on a live machine: 17 sessions collapsed
+// into exactly two groups matching the account supervisor's own view.
+func TestFingerprintFor_SameScheduleSameAccount(t *testing.T) {
+	base5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	base7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+
+	a := FingerprintFor(&base5, &base7)
+	if a == "" {
+		t.Fatal("no fingerprint from a full reading")
+	}
+
+	// The SAME account one window later: both resets have advanced, but the
+	// phase has not. A raw-timestamp fingerprint would change identity every
+	// five hours.
+	next5 := base5.Add(5 * time.Hour)
+	next7 := base7.Add(7 * 24 * time.Hour)
+	if b := FingerprintFor(&next5, &next7); b != a {
+		t.Fatalf("fingerprint changed when the window rolled over: %s -> %s", a, b)
+	}
+
+	// A different account: the real second one from that machine, whose 7-day
+	// reset sat three days away.
+	other5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
+	other7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
+	if c := FingerprintFor(&other5, &other7); c == a {
+		t.Fatal("two subscriptions with different reset schedules produced one fingerprint")
+	}
+}
+
+func TestFingerprintFor_NoReadingNoFingerprint(t *testing.T) {
+	if got := FingerprintFor(nil, nil); got != "" {
+		t.Errorf("got %q; a session with no rate-limit reading cannot be identified", got)
+	}
+}
+
+// A token, when one is visible, is authoritative and must win over the guess.
+func TestStamp_AccountPrefersTheTokenOverTheHeuristic(t *testing.T) {
+	r5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	r7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+
+	withTok := Stamp{AccountKey: "tok_real", FiveHourAt: &r5, SevenDayAt: &r7}
+	if withTok.Account() != "tok_real" {
+		t.Errorf("Account() = %q, want the token-derived key", withTok.Account())
+	}
+	if withTok.AccountIsInferred() {
+		t.Error("a token-derived key must not be reported as inferred")
+	}
+
+	noTok := Stamp{FiveHourAt: &r5, SevenDayAt: &r7}
+	if noTok.Account() == "" {
+		t.Fatal("no identifier at all without a token")
+	}
+	if !noTok.AccountIsInferred() {
+		t.Error("a reset-phase key MUST be reported as inferred; it is a heuristic")
+	}
+}
