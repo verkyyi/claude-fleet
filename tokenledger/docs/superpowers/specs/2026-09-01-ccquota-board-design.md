@@ -2,9 +2,9 @@
 
 **Date:** 2026-09-01
 **Status:** proposed design, pre-implementation
-**Approach:** two roles on the existing binary — `ccquota board` (self-hosted,
-internal, token auth) and `ccquota badges` (public, GitHub OAuth, per-person) —
-sharing a badge renderer and one submission payload type
+**Approach:** a local `ccquota badge` command as the foundation — no service
+required — plus two optional roles: `ccquota board` (self-hosted, internal,
+token auth) and `ccquota badges` (public, GitHub OAuth, per-person)
 
 ---
 
@@ -33,8 +33,9 @@ needed two authentication models was a single service doing two jobs.
 
 ## 2. Goals
 
-- A **badge** at a stable URL, renderable on a GitHub profile README, a project
-  README, a GitHub Pages site, or anywhere that renders an image.
+- A **badge** renderable on a GitHub profile README, a project README, a GitHub
+  Pages site, or anywhere that renders an image — **without requiring a hosted
+  service**, because for this use case none is needed.
 - A **public per-person page** the badge links to.
 - An **internal wall** a company self-hosts, with no GitHub dependency and no
   public exposure.
@@ -56,42 +57,69 @@ needed two authentication models was a single service doing two jobs.
 
 ## 4. Architecture
 
-Two roles on the same binary, alongside `report` / `agent` / `hub`:
+**A hosted service is not required for the headline use case.** Measured:
+
+| URL | content-type | usable as a README image |
+|---|---|---|
+| `raw.githubusercontent.com/<u>/<u>/main/x.svg` | `image/svg+xml` | yes |
+| `gist.githubusercontent.com/.../raw` | `text/plain` | no — fine as data, not as the image |
+| `img.shields.io/...` | `image/svg+xml` | yes, rendered from a URL you supply |
+
+So the design is three layers, and only the first is required.
+
+### Layer 1 — `ccquota badge` (local, no network)
 
 ```
-ccquota board  --addr :8080 --db board.db          # internal, token auth
-ccquota badges --addr :8080 --db badges.db \       # public, GitHub OAuth
-               --github-client-id ... --github-client-secret-file ...
+ccquota badge --out ccquota.svg --theme dark --period all
+ccquota badge --json --out ccquota.json      # shields.io endpoint schema
 ```
 
-One binary keeps the install story. A company runs `board` and never touches
-the OAuth code path; the public instance runs `badges`.
+Renders from the local hub's own totals. No server, no account, no submission.
+This is the foundation: every other layer is a way of *publishing* what this
+produces, and building it first means the feature is useful before any service
+exists.
+
+### Layer 2 — publishing (pick one, all serverless)
+
+| target | how | trade-off |
+|---|---|---|
+| own profile repo | commit the SVG; reference it relatively or via `raw.githubusercontent.com` | you own everything; needs a commit on a schedule |
+| gist + shields.io | write the JSON to a gist; README points shields at it | no repo churn; depends on shields.io |
+| own hub | serve it from a hub that is already publicly reachable | nothing new to run; most hubs are not public |
+
+### Layer 3 — `ccquota badges` (optional hosted instance)
+
+Buys exactly two things: **zero setup** — no token, no repo push, no scheduled
+job — and a canonical **`/u/<handle>` page** for the badge to link to. It is
+sugar, not a prerequisite, and every open question in §11 applies only to it.
+
+### Alongside — `ccquota board` (self-hosted, internal)
+
+Unchanged and independent: operator-minted tokens, a wall of colleagues,
+`/u/<handle>`, and badges from the same renderer. No GitHub dependency, so it
+works air-gapped.
 
 ```
-  a person's hub                     board OR badges
-  ──────────────                     ───────────────
-  holds the totals                   identity: enrolled token | GitHub OAuth
-       │  POST /v1/submit                    │
-       │  Bearer <submit-token>              ▼
-       └────────────────────────────►  aggregates (SQLite)
-                                             │
-                    ┌────────────────────────┼────────────────────────┐
-                    ▼                        ▼                        ▼
-            GET / (wall, board only)   GET /u/<handle>        GET /badge/<handle>.svg
+  a person's hub
+  ──────────────
+  holds the totals
+       │
+       ├── ccquota badge ──► an SVG file ──► committed / gisted / served locally
+       │                                     (no service anywhere)
+       │
+       └── POST /v1/submit ──► board (internal, token)  or  badges (public, OAuth)
+                                    │                            │
+                              wall + /u/ + badge            /u/ + badge
 ```
 
 ### 4.1 Shared code
 
 | package | used by | responsibility |
 |---|---|---|
-| `internal/submit` | both | the `Entry` payload type and its validation |
-| `internal/badge` | both | SVG rendering, self-contained |
+| `internal/badge` | `badge`, `board`, `badges` | SVG + shields JSON rendering, self-contained |
+| `internal/submit` | `board`, `badges` | the `Entry` payload type and its validation |
 | `internal/board` | `board` | token auth, wall |
 | `internal/badges` | `badges` | GitHub OAuth, per-person page |
-
-The badge renderer is shared deliberately: a company wanting a badge on an
-internal repo README is a real use, and it costs nothing beyond wiring the same
-renderer to the internal store.
 
 ## 5. Submission contract
 
@@ -178,6 +206,8 @@ Cache-Control: public, max-age=300
 | payload | a submission carrying project paths / machine names / emails is rejected, asserted against a seeded fixture — the `/share` pattern, with a control that a legitimate submission still succeeds |
 | handle | a body claiming a different handle cannot overwrite another row |
 | badge | contains no external reference at all — no `@import`, no `href` to a font or image; a known input renders a stable SVG |
+| local badge | `ccquota badge` produces a valid SVG with no network access at all, asserted by running it against a store with no hub configured |
+| shields JSON | matches the documented endpoint schema |
 | badge caching | cache headers present and bounded |
 | wall ordering | sorted by recency; a control asserts a high-token stale row does not float to the top |
 | role separation | `badges` exposes no wall route; `board` requires no GitHub configuration to start |
