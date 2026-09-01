@@ -25,7 +25,10 @@ import (
 
 func runHub(args []string) error {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8787", "listen address")
+	addr := fs.String("addr", "127.0.0.1:8787",
+		"listen address(es), comma-separated. Binding a tailnet address alone\n"+
+			"means localhost does not work from the machine itself, which is\n"+
+			"where you usually are: `127.0.0.1:8787,100.x.y.z:8787` gives both")
 	dbPath := fs.String("db", "ccquota.db", "path to the SQLite database")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
@@ -37,8 +40,14 @@ func runHub(args []string) error {
 		return err
 	}
 
-	if err := checkExposure(*addr, *token, *noAuth, *insecurePublic); err != nil {
-		return err
+	addrs := splitAddrs(*addr)
+	if len(addrs) == 0 {
+		return errors.New("--addr is empty")
+	}
+	for _, a := range addrs {
+		if err := checkExposure(a, *token, *noAuth, *insecurePublic); err != nil {
+			return err
+		}
 	}
 
 	st, err := store.Open(*dbPath)
@@ -71,27 +80,56 @@ func runHub(args []string) error {
 		go pruneLoop(ctx, st, *retentionDays)
 	}
 
-	httpSrv := &http.Server{
-		Addr:              *addr,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
+	handler := srv.Handler()
+	servers := make([]*http.Server, 0, len(addrs))
+	errCh := make(chan error, len(addrs))
+
+	for _, a := range addrs {
+		// Listen before serving, so a bad address fails here with a clear
+		// message rather than in a goroutine nobody is reading.
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", a, err)
+		}
+		hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, hs)
+
+		log.Printf("ccquota hub listening on %s (db %s)", a, *dbPath)
+		if *token != "" {
+			log.Printf("  dashboard: http://%s/?token=%s", a, *token)
+		}
+		go func() { errCh <- hs.Serve(ln) }()
 	}
 
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		for _, hs := range servers {
+			_ = hs.Shutdown(shutdownCtx)
+		}
 	}()
 
-	log.Printf("ccquota hub listening on %s (db %s)", *addr, *dbPath)
-	if *token != "" {
-		log.Printf("dashboard: http://%s/?token=%s", *addr, *token)
-	}
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	// Any listener dying unexpectedly takes the hub down: a half-bound hub
+	// that answers on one address and not another is worse than a dead one,
+	// because the missing half looks like a network problem.
+	for range servers {
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
 	return nil
+}
+
+// splitAddrs parses a comma-separated listen list, ignoring blanks.
+func splitAddrs(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // checkExposure refuses the combination that quietly puts an unauthenticated
