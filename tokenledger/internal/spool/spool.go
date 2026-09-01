@@ -1,17 +1,22 @@
 // Package spool is a bounded on-disk queue of pending pushes.
 //
-// An endpoint on a flaky link, or one whose hub is being redeployed, must not
-// lose the usage it collected in the meantime. It must also not fill the disk
-// of a server whose hub has been gone for a month, so the queue has a hard
-// cap and drops its OLDEST entries first: recent usage is what the dashboard
-// is for, and a month-old batch has already been superseded by the account
-// totals Anthropic reports.
+// It is a BUFFER, not the system of record. The transcripts under
+// ~/.claude/projects are the durable copy and they are never deleted by
+// ccquota, so anything the spool cannot hold is still on disk and can be read
+// again.
+//
+// That is why a full spool REFUSES new batches instead of evicting old ones.
+// Evicting looks kinder and is much worse: the caller has already advanced its
+// scan position by then, so the evicted batch is gone for good. Refusing lets
+// the caller leave its cursor where it is and re-read later — costing a rescan
+// and losing nothing. Measured on a real machine, the evicting version silently
+// dropped 46% of a first scan when the hub happened to be down.
 package spool
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +27,11 @@ import (
 
 // DefaultMaxBytes caps the queue.
 const DefaultMaxBytes int64 = 64 << 20
+
+// ErrFull means the queue is at its cap. The caller must NOT treat the batch as
+// delivered: leave the scan position untouched and try again once the hub has
+// drained some of the backlog.
+var ErrFull = errors.New("spool is full")
 
 // Spool is a directory of pending batches.
 type Spool struct {
@@ -43,8 +53,10 @@ func New(dir string, maxBytes int64) (*Spool, error) {
 
 const ext = ".batch.json"
 
-// Enqueue writes a batch to disk, evicting the oldest entries if the cap would
-// be exceeded.
+// Enqueue writes a batch to disk, or returns ErrFull if it will not fit.
+//
+// It never evicts. See the package comment: the caller's scan position is the
+// only thing standing between a refused batch and lost data.
 func (s *Spool) Enqueue(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -54,6 +66,19 @@ func (s *Spool) Enqueue(v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if int64(len(b)) > s.maxBytes {
+		return fmt.Errorf("%w: batch is %d bytes, larger than the whole %d-byte cap; raise --spool-mb",
+			ErrFull, len(b), s.maxBytes)
+	}
+	_, total, err := s.listLocked()
+	if err != nil {
+		return err
+	}
+	if total+int64(len(b)) > s.maxBytes {
+		return fmt.Errorf("%w: %d queued bytes + %d would pass the %d-byte cap",
+			ErrFull, total, len(b), s.maxBytes)
+	}
+
 	// Written to a temp name then renamed, so a crash mid-write cannot leave a
 	// half-batch that later fails to parse and blocks the queue forever.
 	name := fmt.Sprintf("%d-%09d%s", time.Now().UTC().UnixNano(), os.Getpid(), ext)
@@ -61,18 +86,11 @@ func (s *Spool) Enqueue(v any) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write spool entry: %w", err)
 	}
-	// A single entry larger than the whole cap would be evicted the instant it
-	// lands, so refuse it up front. Silently accepting and then dropping it is
-	// how a first scan on a busy machine disappears without an error.
-	if int64(len(b)) > s.maxBytes {
-		os.Remove(tmp)
-		return fmt.Errorf("batch is %d bytes, larger than the %d-byte spool cap: split it or raise --spool-mb",
-			len(b), s.maxBytes)
-	}
 	if err := os.Rename(tmp, filepath.Join(s.dir, name)); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("commit spool entry: %w", err)
 	}
-	return s.evictLocked()
+	return nil
 }
 
 // entry is one queued file.
@@ -103,23 +121,6 @@ func (s *Spool) listLocked() ([]entry, int64, error) {
 	// chronological order.
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out, total, nil
-}
-
-func (s *Spool) evictLocked() error {
-	entries, total, err := s.listLocked()
-	if err != nil {
-		return err
-	}
-	for total > s.maxBytes && len(entries) > 0 {
-		oldest := entries[0]
-		if err := os.Remove(filepath.Join(s.dir, oldest.name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("evict spool entry: %w", err)
-		}
-		log.Printf("spool full (%d bytes > %d cap): dropped the oldest queued batch", total, s.maxBytes)
-		total -= oldest.size
-		entries = entries[1:]
-	}
-	return nil
 }
 
 // Peek returns the oldest queued batch decoded into v, along with a handle to

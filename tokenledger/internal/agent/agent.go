@@ -53,13 +53,21 @@ const (
 	DefaultLimitsInterval = 120 * time.Second
 )
 
-// maxEventsPerBatch bounds one push.
+// maxEventsPerBatch bounds one push by count.
 //
-// A first scan on a busy machine can yield tens of thousands of turns, which
-// as a single JSON document runs to hundreds of megabytes — past the hub's
-// request cap and past the spool's. Chunking keeps every batch comfortably
-// inside both, and the hub dedups so the split costs nothing.
+// A first scan on a busy machine can yield tens of thousands of turns, which as
+// a single JSON document runs to hundreds of megabytes — past the hub's request
+// cap and past the spool's. The hub dedups, so splitting costs nothing.
 const maxEventsPerBatch = 2000
+
+// maxBatchBytes bounds one push by size, which is the limit that actually
+// matters: a count-only split still produces a batch too big for the spool when
+// turns are large, and a batch that cannot ever fit wedges the agent forever.
+const maxBatchBytes = 4 << 20
+
+// spoolFraction keeps a single batch to at most this fraction of the spool, so
+// several always fit and the queue can never be blocked by one entry.
+const spoolFraction = 4
 
 // Agent is a running collector.
 type Agent struct {
@@ -76,7 +84,15 @@ type Agent struct {
 	// serverInterval is the poll interval the hub asked for, if any. It lets a
 	// noisy fleet be backed off centrally without editing every machine.
 	serverInterval time.Duration
+
+	// consecutiveFailures backs the scan cadence off while the hub is
+	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
+	// re-reads everything — cheap once, wasteful every minute for an hour.
+	consecutiveFailures int
 }
+
+// maxBackoffFactor caps how far a failing agent stretches its scan interval.
+const maxBackoffFactor = 16
 
 // New builds an Agent.
 func New(cfg Config) (*Agent, error) {
@@ -125,13 +141,27 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		case <-timer.C:
 			if err := a.cycle(ctx); err != nil {
-				// A failed cycle is normal on a flaky link; the spool holds the
-				// data and the next tick retries.
+				// A failed cycle is normal on a flaky link; the transcripts
+				// still hold the data and the next tick retries.
 				log.Printf("collection cycle: %v", err)
+				if a.consecutiveFailures < 30 {
+					a.consecutiveFailures++
+				}
+			} else {
+				a.consecutiveFailures = 0
 			}
-			timer.Reset(jitter(a.cfg.ScanInterval))
+			timer.Reset(jitter(a.backoffInterval()))
 		}
 	}
+}
+
+// backoffInterval doubles the scan interval per consecutive failure, capped.
+func (a *Agent) backoffInterval() time.Duration {
+	factor := 1 << min(a.consecutiveFailures, 4)
+	if factor > maxBackoffFactor {
+		factor = maxBackoffFactor
+	}
+	return a.cfg.ScanInterval * time.Duration(factor)
 }
 
 // jitter spreads a fleet's requests by ±20%.
@@ -175,46 +205,101 @@ func (a *Agent) cycle(ctx context.Context) error {
 		return a.drain(ctx)
 	}
 
-	// Queue every chunk before advancing the cursor. If any enqueue fails the
-	// cursor stays put and the whole scan is retried next cycle — losing a
-	// batch silently is the one outcome worth paying a re-read to avoid.
-	for i, chunk := range chunkEvents(evs, maxEventsPerBatch) {
+	// Queue every chunk, then advance the cursor ONLY if every one of them
+	// landed. The transcripts are the durable copy; the scan position is the
+	// only thing that decides whether unqueued events can still be recovered.
+	// Advancing it after a partial enqueue is how a first scan against a down
+	// hub loses half its data with nothing but a log line to show for it.
+	chunks := chunkEvents(evs, maxEventsPerBatch, a.batchByteLimit())
+	queuedAll := true
+	for i, chunk := range chunks {
 		batch := model.Batch{AgentVersion: a.cfg.Version, Identity: *id, Events: chunk}
 		if i == 0 {
 			// The limits reading rides along with the first chunk so it is not
 			// duplicated across every one of them.
 			batch.Limits, batch.LimitsUnavailable = snap, unavailable
 		}
-		if err := a.spool.Enqueue(batch); err != nil {
-			return fmt.Errorf("queue batch: %w", err)
+
+		err := a.spool.Enqueue(batch)
+		if errors.Is(err, spool.ErrFull) {
+			// A full spool is not necessarily a dead hub — a large first scan
+			// fills it faster than one drain empties it. Push what is queued,
+			// then try this batch once more.
+			if derr := a.drain(ctx); derr != nil {
+				log.Printf("spool full and the hub is unreachable (%v); holding the scan "+
+					"position at batch %d/%d so nothing is lost", derr, i+1, len(chunks))
+				queuedAll = false
+				break
+			}
+			err = a.spool.Enqueue(batch)
+		}
+		if err != nil {
+			log.Printf("could not queue batch %d/%d: %v; holding the scan position", i+1, len(chunks), err)
+			queuedAll = false
+			break
 		}
 	}
 
-	if err := a.scanner.Commit(); err != nil {
-		// The events are queued and will still be delivered; the cost of a
-		// failed commit is re-sending them, which the hub dedups.
-		log.Printf("could not save scan position: %v", err)
+	if queuedAll {
+		if err := a.scanner.Commit(); err != nil {
+			// The events are queued and will still be delivered; the cost of a
+			// failed commit is re-sending them, which the hub dedups.
+			log.Printf("could not save scan position: %v", err)
+		}
 	}
 	return a.drain(ctx)
 }
 
-// chunkEvents splits events into batches of at most n.
+// batchByteLimit keeps one batch small enough that several fit in the spool.
+func (a *Agent) batchByteLimit() int {
+	limit := maxBatchBytes
+	if a.cfg.SpoolMaxBytes > 0 {
+		if share := int(a.cfg.SpoolMaxBytes) / spoolFraction; share < limit {
+			limit = share
+		}
+	}
+	if limit < 4<<10 {
+		limit = 4 << 10 // a floor, so a pathological config still makes progress
+	}
+	return limit
+}
+
+// chunkEvents splits events into batches bounded by BOTH a count and a
+// serialized byte size.
+//
+// The byte bound is the one that matters. Splitting on count alone produced
+// batches larger than the spool whenever turns were big, and a batch that can
+// never fit is not a slow path — it wedges the agent permanently.
 //
 // Always returns at least one chunk, so a cycle carrying only a limits reading
 // still produces a batch.
-func chunkEvents(evs []model.UsageEvent, n int) [][]model.UsageEvent {
+func chunkEvents(evs []model.UsageEvent, maxCount, maxBytes int) [][]model.UsageEvent {
 	if len(evs) == 0 {
 		return [][]model.UsageEvent{nil}
 	}
 	var out [][]model.UsageEvent
-	for start := 0; start < len(evs); start += n {
-		end := start + n
-		if end > len(evs) {
-			end = len(evs)
+	start, bytes := 0, 0
+	for i := range evs {
+		size := approxSize(&evs[i])
+		// Break before adding this event if it would push the batch past
+		// either bound — but never emit an empty chunk.
+		if i > start && (i-start >= maxCount || bytes+size > maxBytes) {
+			out = append(out, evs[start:i])
+			start, bytes = i, 0
 		}
-		out = append(out, evs[start:end])
+		bytes += size
 	}
-	return out
+	return append(out, evs[start:])
+}
+
+// approxSize estimates an event's JSON size without marshalling it. Exactness
+// is not needed: the bound only has to keep batches comfortably under the
+// spool's cap, and marshalling every event twice would double the cost of a
+// scan on a busy machine.
+func approxSize(e *model.UsageEvent) int {
+	const fixed = 420 // field names, numbers, punctuation
+	return fixed + len(e.MessageUUID) + len(e.SessionID) + len(e.RequestID) +
+		len(e.Model) + len(e.CWD) + len(e.GitBranch) + len(e.Entrypoint) + len(e.Effort)
 }
 
 func (a *Agent) shouldPollLimits() bool {

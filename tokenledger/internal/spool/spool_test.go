@@ -1,6 +1,7 @@
 package spool
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,16 +84,32 @@ func TestPeek_ReturnsOldestFirst(t *testing.T) {
 	}
 }
 
-// A hub that has been gone for a month must not fill the endpoint's disk.
-func TestEnqueue_EvictsOldestPastTheCap(t *testing.T) {
+// A hub that has been gone for a month must not fill the endpoint's disk — but
+// the queue refuses new work rather than discarding accepted work, because the
+// caller has already moved its scan position past anything it handed over.
+func TestEnqueue_RefusesPastTheCapAndKeepsWhatItAccepted(t *testing.T) {
 	const cap = 4096
 	s := newSpool(t, cap)
 
 	big := strings.Repeat("x", 1000)
+	accepted := 0
+	var lastErr error
 	for i := 1; i <= 20; i++ {
 		if err := s.Enqueue(payload{N: i, Blob: big}); err != nil {
-			t.Fatal(err)
+			lastErr = err
+			break
 		}
+		accepted++
+	}
+
+	if lastErr == nil {
+		t.Fatal("the queue accepted 20 oversized batches without ever hitting its cap")
+	}
+	if !errors.Is(lastErr, ErrFull) {
+		t.Errorf("err = %v, want ErrFull so the caller knows to hold its cursor", lastErr)
+	}
+	if accepted == 0 {
+		t.Fatal("nothing was accepted at all")
 	}
 
 	total, err := s.Bytes()
@@ -103,14 +120,39 @@ func TestEnqueue_EvictsOldestPastTheCap(t *testing.T) {
 		t.Fatalf("spool grew to %d bytes, past its %d cap", total, cap)
 	}
 
-	// What survives must be the NEWEST batches; recent usage is what the
-	// dashboard is for.
+	// Everything accepted is still there, in order, starting from the FIRST.
+	// The evicting version used to answer N=15 here.
 	var got payload
 	if _, ok, err := s.Peek(&got); err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if got.N < 15 {
-		t.Errorf("oldest surviving batch is N=%d; eviction kept stale data over recent", got.N)
+	if got.N != 1 {
+		t.Errorf("oldest queued batch is N=%d, want 1 — accepted work was discarded", got.N)
+	}
+	if n, _ := s.Len(); n != accepted {
+		t.Errorf("queued %d batches, accepted %d — some were dropped after acceptance", n, accepted)
+	}
+}
+
+// Once the backlog drains, the queue takes work again.
+func TestEnqueue_RecoversAfterDraining(t *testing.T) {
+	s := newSpool(t, 4096)
+	big := strings.Repeat("x", 1000)
+	for i := 1; ; i++ {
+		if err := s.Enqueue(payload{N: i, Blob: big}); err != nil {
+			break
+		}
+	}
+	var got payload
+	ack, ok, err := s.Peek(&got)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if err := ack(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enqueue(payload{N: 99, Blob: big}); err != nil {
+		t.Fatalf("the queue stayed full after a batch was acked: %v", err)
 	}
 }
 
@@ -192,8 +234,8 @@ func TestEnqueue_OversizedBatchIsRefusedNotSilentlyDropped(t *testing.T) {
 	if err == nil {
 		t.Fatal("an oversized batch was accepted; it would have vanished on eviction")
 	}
-	if !strings.Contains(err.Error(), "spool cap") {
-		t.Errorf("error should explain the cap, got %v", err)
+	if !errors.Is(err, ErrFull) {
+		t.Errorf("err = %v, want ErrFull", err)
 	}
 	if n, _ := s.Len(); n != 0 {
 		t.Errorf("queued = %d, want 0", n)
