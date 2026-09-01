@@ -207,6 +207,9 @@ func (s *Scanner) readLines(r io.Reader, path string) (evs []model.UsageEvent, c
 			continue
 		}
 		if ok {
+			// Which file a turn came from is how a per-session account stamp
+			// is matched back to it; the transcript itself names no account.
+			ev.TranscriptPath = path
 			evs = append(evs, *ev)
 		}
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/verkyyi/ccquota/internal/limits"
 	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/scan"
+	"github.com/verkyyi/ccquota/internal/sessions"
 	"github.com/verkyyi/ccquota/internal/spool"
 )
 
@@ -95,6 +96,10 @@ type Agent struct {
 	// noisy fleet be backed off centrally without editing every machine.
 	serverInterval time.Duration
 
+	// stamps maps sessions to the subscription they ran on, when the
+	// statusLine hook is installed.
+	stamps *sessions.Index
+
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
 	// re-reads everything — cheap once, wasteful every minute for an hour.
@@ -103,6 +108,13 @@ type Agent struct {
 
 // maxBackoffFactor caps how far a failing agent stretches its scan interval.
 const maxBackoffFactor = 16
+
+// stampMaxAge is how long a session stamp is trusted.
+//
+// A stamp says which subscription a session was on when it was written. Long
+// after the session ends, that is history rather than fact — and a session that
+// stopped stamping may have been restarted on a different account.
+const stampMaxAge = 7 * 24 * time.Hour
 
 // New builds an Agent.
 func New(cfg Config) (*Agent, error) {
@@ -187,6 +199,14 @@ func (a *Agent) cycle(ctx context.Context) error {
 		return fmt.Errorf("identify this machine: %w", err)
 	}
 
+	// Reloaded every cycle: sessions start, stop and change subscription while
+	// the agent runs.
+	if idx, err := sessions.Load(a.cfg.StateDir, stampMaxAge); err != nil {
+		log.Printf("read session stamps: %v", err)
+	} else {
+		a.stamps = idx
+	}
+
 	evs, err := a.scanner.Scan()
 	if err != nil {
 		return fmt.Errorf("scan transcripts: %w", err)
@@ -195,7 +215,17 @@ func (a *Agent) cycle(ctx context.Context) error {
 		log.Printf("transcript warning: %v", e)
 	}
 
-	evs, attribution := a.filterAttributable(evs, id)
+	// Split by the subscription each SESSION actually ran on, not by the
+	// machine's login. Claude Code takes CLAUDE_CODE_OAUTH_TOKEN from the
+	// environment, so sessions on one machine can be on different
+	// subscriptions at the same moment; ~/.claude.json only records the last
+	// interactive login and cannot see them.
+	groups, unstamped := a.groupBySubscription(evs, id)
+	if len(groups) > 1 {
+		log.Printf("this machine has %d subscriptions in play; attributing per session", len(groups))
+	}
+
+	evs, attribution := a.filterAttributable(unstamped, id)
 	if attribution.DroppedPreAccount > 0 {
 		log.Printf("dropped %d turn(s) older than this account (earliest %s): they cannot belong to %s",
 			attribution.DroppedPreAccount,
@@ -264,6 +294,35 @@ func (a *Agent) cycle(ctx context.Context) error {
 		}
 	}
 
+	// Sessions stamped as belonging to another subscription go out under that
+	// identity. Their events were already excluded from the default group.
+	for key, g := range groups {
+		if key == "" {
+			continue
+		}
+		gid := *id
+		gid.AccountUUID = key
+		if g.label != "" {
+			gid.Email = g.label
+		}
+		// The account-creation boundary belongs to the machine login, not to
+		// this subscription; applying it here would drop the wrong turns.
+		gid.AccountCreatedAt = time.Time{}
+		gid.SubscriptionType, gid.RateLimitTier = "", ""
+
+		for i, chunk := range chunkEvents(g.events, maxEventsPerBatch, a.batchByteLimit()) {
+			b := model.Batch{AgentVersion: a.cfg.Version, Identity: gid, Events: chunk}
+			if i == 0 && g.limits != nil {
+				b.Limits = g.limits
+			}
+			if err := a.spool.Enqueue(b); err != nil {
+				log.Printf("could not queue a batch for %s: %v; holding the scan position", g.name(key), err)
+				queuedAll = false
+				break
+			}
+		}
+	}
+
 	if queuedAll {
 		if err := a.scanner.Commit(); err != nil {
 			// The events are queued and will still be delivered; the cost of a
@@ -301,6 +360,72 @@ func (a *Agent) batchByteLimit() int {
 		limit = 4 << 10 // a floor, so a pathological config still makes progress
 	}
 	return limit
+}
+
+// subGroup is one subscription's share of a scan.
+type subGroup struct {
+	events []model.UsageEvent
+	label  string
+	limits *model.LimitsSnapshot
+}
+
+func (g subGroup) name(key string) string {
+	if g.label != "" {
+		return g.label
+	}
+	return key
+}
+
+// groupBySubscription splits a scan by the account each session was signed in
+// to, using stamps written by `ccquota stamp` from inside those sessions.
+//
+// Returns the stamped groups plus the events that carry no stamp, which the
+// caller attributes to the machine-wide login as before. An unstamped machine
+// therefore behaves exactly as it did — the hook is opt-in — but a stamped one
+// stops misfiling other subscriptions' spend.
+func (a *Agent) groupBySubscription(evs []model.UsageEvent, id *model.Identity) (map[string]*subGroup, []model.UsageEvent) {
+	groups := map[string]*subGroup{}
+	if a.stamps == nil || len(a.stamps.ByTranscript) == 0 {
+		return groups, evs
+	}
+
+	var unstamped []model.UsageEvent
+	for _, e := range evs {
+		st, ok := a.stamps.ByTranscript[e.TranscriptPath]
+		// A stamp with no account key means that session had no per-session
+		// token: it used the machine login, which is the default path.
+		if !ok || st.AccountKey == "" || st.AccountKey == id.AccountUUID {
+			unstamped = append(unstamped, e)
+			continue
+		}
+		g := groups[st.AccountKey]
+		if g == nil {
+			g = &subGroup{label: st.Label, limits: limitsFromStamp(st, st.AccountKey)}
+			groups[st.AccountKey] = g
+		}
+		g.events = append(g.events, e)
+	}
+	return groups, unstamped
+}
+
+// limitsFromStamp turns the rate_limits Claude Code reports in the statusLine
+// payload into a snapshot.
+//
+// This is the only way to learn a per-session subscription's true utilization:
+// the agent cannot read that session's token, so it cannot call the usage
+// endpoint on its behalf.
+func limitsFromStamp(st sessions.Stamp, key string) *model.LimitsSnapshot {
+	if st.FiveHourPct == nil && st.SevenDayPct == nil {
+		return nil
+	}
+	snap := &model.LimitsSnapshot{AccountUUID: key, ObservedAt: st.StampedAt}
+	if st.FiveHourPct != nil {
+		snap.FiveHour = model.Window{Utilization: *st.FiveHourPct, ResetsAt: st.FiveHourAt}
+	}
+	if st.SevenDayPct != nil {
+		snap.SevenDay = model.Window{Utilization: *st.SevenDayPct, ResetsAt: st.SevenDayAt}
+	}
+	return snap
 }
 
 // filterAttributable removes turns this account provably did not produce.

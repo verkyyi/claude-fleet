@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/sessions"
 )
 
 // fakeHome builds a Claude Code home containing n billable turns.
@@ -380,4 +381,93 @@ func uuidsOf(evs []model.UsageEvent) []string {
 		out[i] = e.MessageUUID
 	}
 	return out
+}
+
+// THE per-session attribution test.
+//
+// Claude Code takes CLAUDE_CODE_OAUTH_TOKEN from the environment, so two
+// sessions on ONE machine can be on different subscriptions at the same
+// instant. Measured on a real laptop: three accounts live at once. Attributing
+// by the machine's login files two of them under the wrong subscription.
+func TestGroupBySubscription_SplitsByStamp(t *testing.T) {
+	a := &Agent{cfg: Config{}}
+	id := &model.Identity{AccountUUID: "machine-login"}
+
+	pct := 19.0
+	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
+		"/p/other.jsonl": {
+			SessionID: "s2", TranscriptPath: "/p/other.jsonl",
+			AccountKey: "tok_other", Label: "other@example.com",
+			FiveHourPct: &pct, StampedAt: time.Now(),
+		},
+	}}
+
+	evs := []model.UsageEvent{
+		{MessageUUID: "a", TranscriptPath: "/p/mine.jsonl"},
+		{MessageUUID: "b", TranscriptPath: "/p/other.jsonl"},
+		{MessageUUID: "c", TranscriptPath: "/p/other.jsonl"},
+		{MessageUUID: "d", TranscriptPath: "/p/unknown.jsonl"},
+	}
+	groups, unstamped := a.groupBySubscription(evs, id)
+
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d, want 1 other subscription", len(groups))
+	}
+	g := groups["tok_other"]
+	if g == nil || len(g.events) != 2 {
+		t.Fatalf("the other subscription got %v, want its 2 turns", g)
+	}
+	if g.label != "other@example.com" {
+		t.Errorf("label = %q", g.label)
+	}
+	// Everything unstamped stays with the machine login — the old behaviour,
+	// unchanged for machines without the hook.
+	if len(unstamped) != 2 {
+		t.Fatalf("unstamped = %v, want the 2 turns with no stamp", uuidsOf(unstamped))
+	}
+
+	// The statusLine reports rate limits for THAT session's account, which is
+	// the only way to learn them: the agent cannot read another session's token.
+	if g.limits == nil || g.limits.FiveHour.Utilization != 19 {
+		t.Errorf("limits = %+v, want the stamped 19%%", g.limits)
+	}
+}
+
+// Control: with no stamps at all, nothing is split and every turn keeps the
+// machine login. Otherwise the test above could pass on an agent that
+// misfiles everything.
+func TestGroupBySubscription_NoStampsChangesNothing(t *testing.T) {
+	a := &Agent{cfg: Config{}}
+	evs := []model.UsageEvent{
+		{MessageUUID: "a", TranscriptPath: "/p/x.jsonl"},
+		{MessageUUID: "b", TranscriptPath: "/p/y.jsonl"},
+	}
+	groups, unstamped := a.groupBySubscription(evs, &model.Identity{AccountUUID: "acct"})
+	if len(groups) != 0 {
+		t.Fatalf("groups = %v, want none without stamps", groups)
+	}
+	if len(unstamped) != 2 {
+		t.Fatalf("unstamped = %v, want everything", uuidsOf(unstamped))
+	}
+}
+
+// A stamp whose account matches the machine login is not a different
+// subscription and must not be split off.
+func TestGroupBySubscription_SameAccountIsNotSplit(t *testing.T) {
+	a := &Agent{cfg: Config{}}
+	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
+		"/p/x.jsonl": {AccountKey: "acct", StampedAt: time.Now()},
+		"/p/y.jsonl": {AccountKey: "", StampedAt: time.Now()}, // no per-session token
+	}}
+	evs := []model.UsageEvent{
+		{MessageUUID: "a", TranscriptPath: "/p/x.jsonl"},
+		{MessageUUID: "b", TranscriptPath: "/p/y.jsonl"},
+	}
+	groups, unstamped := a.groupBySubscription(evs, &model.Identity{AccountUUID: "acct"})
+	if len(groups) != 0 {
+		t.Fatalf("groups = %v; a session on the machine's own account is not a separate one", groups)
+	}
+	if len(unstamped) != 2 {
+		t.Fatalf("unstamped = %v, want both", uuidsOf(unstamped))
+	}
 }

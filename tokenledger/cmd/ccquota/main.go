@@ -33,6 +33,8 @@ func main() {
 		err = runHub(os.Args[2:])
 	case "enroll":
 		err = runEnroll(os.Args[2:])
+	case "stamp":
+		err = runStamp(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -57,6 +59,8 @@ Usage:
   ccquota agent  [flags]    Collect on this endpoint and push to a hub
   ccquota hub    [flags]    Run the collector, dashboard and MCP server
   ccquota enroll [flags]    Mint an enrollment token for a new endpoint
+  ccquota stamp  [flags]    Record which subscription a session is on
+                            (install as Claude Code's statusLine)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

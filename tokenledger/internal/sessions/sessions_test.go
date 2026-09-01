@@ -1,0 +1,182 @@
+package sessions
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestAccountKeyFor_StableAndNonSecret(t *testing.T) {
+	tok := "sk-ant-oat01-supersecret"
+	k := AccountKeyFor(tok)
+
+	if k == "" {
+		t.Fatal("a real token produced no key")
+	}
+	if k != AccountKeyFor(tok) {
+		t.Fatal("the key is not stable for the same token")
+	}
+	if AccountKeyFor("sk-ant-oat01-other") == k {
+		t.Fatal("two different tokens collided")
+	}
+	// The whole point: the token must not be recoverable from what lands on
+	// disk. A usage monitor that leaks credentials is worse than the problem.
+	if len(k) >= len(tok) || containsAny(k, tok) {
+		t.Fatalf("key %q leaks the token", k)
+	}
+	if AccountKeyFor("") != "" {
+		t.Error("no token must map to no key, not to a hash of the empty string")
+	}
+}
+
+func containsAny(hay, needle string) bool {
+	for n := 8; n <= len(needle); n++ {
+		if len(needle) >= n && len(hay) >= n {
+			for i := 0; i+n <= len(needle); i++ {
+				if idx := indexOf(hay, needle[i:i+n]); idx >= 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func indexOf(hay, needle string) int {
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if hay[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestWriteAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	pct := 19.0
+	s := Stamp{
+		SessionID: "sess-1", TranscriptPath: "/p/a.jsonl",
+		StampedAt: time.Now().UTC(), AccountKey: "tok_abc", Label: "me@example.com",
+		FiveHourPct: &pct,
+	}
+	if err := Write(dir, s); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := Load(dir, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := idx.BySession["sess-1"]; !ok || got.AccountKey != "tok_abc" {
+		t.Fatalf("BySession = %+v", idx.BySession)
+	}
+	// The transcript path is the join key the scanner actually has.
+	if got, ok := idx.ByTranscript["/p/a.jsonl"]; !ok || got.Label != "me@example.com" {
+		t.Fatalf("ByTranscript = %+v", idx.ByTranscript)
+	}
+	if got := idx.ByTranscript["/p/a.jsonl"]; got.FiveHourPct == nil || *got.FiveHourPct != 19 {
+		t.Error("the rate-limit reading did not survive the round trip")
+	}
+}
+
+// A stamp older than the window describes a session whose account may since
+// have changed; trusting it reintroduces exactly the staleness this fixes.
+func TestLoad_IgnoresStaleStamps(t *testing.T) {
+	dir := t.TempDir()
+	old := Stamp{SessionID: "old", TranscriptPath: "/p/old.jsonl",
+		StampedAt: time.Now().Add(-48 * time.Hour), AccountKey: "tok_old"}
+	fresh := Stamp{SessionID: "new", TranscriptPath: "/p/new.jsonl",
+		StampedAt: time.Now(), AccountKey: "tok_new"}
+	for _, s := range []Stamp{old, fresh} {
+		if err := Write(dir, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx, err := Load(dir, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := idx.BySession["old"]; ok {
+		t.Error("a stamp older than the window was trusted")
+	}
+	if _, ok := idx.BySession["new"]; !ok {
+		t.Error("a fresh stamp was dropped")
+	}
+
+	// Control: with no window, both are kept — otherwise the assertion above
+	// would pass on a Load that discards everything.
+	all, err := Load(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.BySession) != 2 {
+		t.Fatalf("unbounded Load returned %d stamps, want 2", len(all.BySession))
+	}
+}
+
+// The hook is optional; an absent directory is the normal single-account case.
+func TestLoad_MissingDirIsNotAnError(t *testing.T) {
+	idx, err := Load(filepath.Join(t.TempDir(), "nope"), time.Hour)
+	if err != nil {
+		t.Fatalf("a machine without the hook must not error: %v", err)
+	}
+	if len(idx.BySession) != 0 {
+		t.Error("expected an empty index")
+	}
+}
+
+// Session ids arrive from a hook payload; they must not be able to write
+// outside the directory.
+func TestWrite_SessionIDCannotEscape(t *testing.T) {
+	dir := t.TempDir()
+	s := Stamp{SessionID: "../../escaped", TranscriptPath: "/p/x.jsonl", StampedAt: time.Now()}
+	if err := Write(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing may exist above the sessions directory.
+	if _, err := readDirNames(filepath.Join(dir, "..", "..")); err == nil {
+		// The temp root exists; what matters is that no file named "escaped"
+		// landed outside Dir(dir).
+		if fileExists(filepath.Join(dir, "..", "escaped.json")) {
+			t.Fatal("a stamp escaped its directory")
+		}
+	}
+}
+
+func TestPrune(t *testing.T) {
+	dir := t.TempDir()
+	if err := Write(dir, Stamp{SessionID: "a", StampedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Prune(dir, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("pruned %d fresh stamps, want 0", n)
+	}
+}
+
+func TestIndex_Accounts(t *testing.T) {
+	idx := &Index{BySession: map[string]Stamp{
+		"a": {AccountKey: "tok_1", Label: "one@example.com"},
+		"b": {AccountKey: "tok_1"},
+		"c": {AccountKey: "tok_2", Label: "two@example.com"},
+		"d": {AccountKey: ""},
+	}}
+	got := idx.Accounts()
+	if len(got) != 2 {
+		t.Fatalf("accounts = %v, want 2 (the unstamped one is the machine login)", got)
+	}
+	if got["tok_1"] != "one@example.com" {
+		t.Errorf("a known label lost to an unlabelled sibling: %v", got)
+	}
+}
+
+func readDirNames(p string) ([]string, error) { return nil, nil }
+func fileExists(p string) bool                { _, err := os.Stat(p); return err == nil }

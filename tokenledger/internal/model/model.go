@@ -42,6 +42,11 @@ type UsageEvent struct {
 	Entrypoint  string `json:"entrypoint"`
 	Effort      string `json:"effort"`
 	IsSidechain bool   `json:"is_sidechain"` // true = subagent turn
+
+	// TranscriptPath is where this turn was read from. It is the join key for
+	// per-session attribution — a statusLine stamp reports the same path — and
+	// is local bookkeeping, never sent to the hub.
+	TranscriptPath string `json:"-"`
 }
 
 // TotalTokens is the raw, unweighted sum. Useful for display; not the right
