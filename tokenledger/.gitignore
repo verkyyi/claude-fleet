@@ -1,0 +1,4 @@
+web/dist/
+ccquota
+*.db
+*.sqlite
