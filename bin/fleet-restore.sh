@@ -201,7 +201,10 @@ snapshot() {
           | wc -l | tr -d ' ')
         local max_age="${FLEET_RESTORE_MAP_MAX_AGE:-86400}" age=0 mts now
         case "$max_age" in ''|*[!0-9]*) max_age=86400;; esac
-        mts=$(stat -f %m "$prior" 2>/dev/null || stat -c %Y "$prior" 2>/dev/null)
+        # GNU first, BSD fallback — the other order breaks on Linux: GNU stat
+        # accepts `-f %m` too but prints the MOUNT POINT (non-numeric ⇒ age=0),
+        # silently disabling this hatch; BSD stat cleanly rejects `-c`.
+        mts=$(stat -c %Y "$prior" 2>/dev/null || stat -f %m "$prior" 2>/dev/null)
         now=$(date +%s)
         case "$mts" in ''|*[!0-9]*) ;; *) age=$(( now - mts ));; esac
         if [ "${new_wins:-0}" -ge "${old_live:-0}" ]; then
