@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"net/http"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/identity"
@@ -247,8 +248,23 @@ func (a *Agent) cycle(ctx context.Context) error {
 			log.Printf("could not save scan position: %v", err)
 		}
 	}
-	return a.drain(ctx)
+	err = a.drain(ctx)
+
+	// A first scan holds every event of a busy machine's history in memory at
+	// once, and Go does not hand that back on its own — measured at 344 MB RSS
+	// still resident long after the scan finished. Steady-state cycles are
+	// tiny, so this daemon has no business sitting on a third of a gigabyte
+	// for the rest of the day.
+	if len(evs) > memoryReleaseThreshold {
+		debug.FreeOSMemory()
+	}
+	return err
 }
+
+// memoryReleaseThreshold is the batch size past which returning memory to the
+// OS is worth the pause. Ordinary cycles move a handful of events and should
+// not pay for a forced GC.
+const memoryReleaseThreshold = 5000
 
 // batchByteLimit keeps one batch small enough that several fit in the spool.
 func (a *Agent) batchByteLimit() int {
