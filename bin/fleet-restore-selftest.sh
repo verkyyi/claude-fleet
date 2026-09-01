@@ -323,6 +323,95 @@ grep -q "^WIN${TAB}issue-9${TAB}" "$HMAP" \
 grep -q "^WIN${TAB}issue-11${TAB}" "$HMAP" \
   || fail "shrink-guard: a hub-only snapshot erased the issue-11 WIN row (map: $(cat "$HMAP"))"
 
+# ------------------- STALENESS ESCAPES + REJECT ALARM (issue #504) --------------
+# Row-count-only rejection froze a real fleet's map at a week-dead layout: a fleet
+# that permanently shrinks never "grows back", so every snapshot was rejected with
+# one silent log line per cycle. The guard now (a) counts consecutive rejections
+# and alarms via FLEET_NOTIFY_CMD, (b) ignores stored WIN rows whose worktree is
+# gone, and (c) accepts the live layout once the stored map is over-age.
+
+# The hub-only rejection above must have been COUNTED (visible-freeze contract).
+# NB: counts here are ≥1, not ==1 — the tmux stub collapses every fleet_sockets
+# entry onto ONE real socket, so one --snapshot can walk a session several times.
+is_pos() { case "$1" in (''|0|*[!0-9]*) return 1;; (*) return 0;; esac; }
+REJF="$FLEET_CONF_DIR/fleets/hubonly/.snapshot-rejects"
+is_pos "$(cat "$REJF" 2>/dev/null)" \
+  || fail "reject-count: a guarded rejection should be counted in $REJF (got: '$(cat "$REJF" 2>/dev/null)')"
+
+# A dedicated fixture fleet (retired before the reconcile below): ONE live work
+# window, a stored map claiming THREE.
+SA="$WORK/repo-issue-21"; mkdir -p "$SA"
+SB="$WORK/repo-issue-22"                    # never created — a DEAD stored row
+SC="$WORK/repo-issue-23"                    # never created — a DEAD stored row
+cat > "$FLEET_CONF_DIR/shrinky.conf" <<EOF
+FLEET_REPO=acme/widgets
+FLEET_MAIN=$STEW_PATH
+FLEET_BASE_BRANCH=main
+EOF
+tmux new-session -d -s shrinky -x 200 -y 50 -c "$SA" 2>/dev/null \
+  || fail "could not start shrinky session"
+tmux rename-window -t shrinky issue-21
+tmux set-window-option -t shrinky:issue-21 @issue 21
+SMAP="$FLEET_CONF_DIR/fleets/shrinky/restore.map"
+SREJF="$FLEET_CONF_DIR/fleets/shrinky/.snapshot-rejects"
+mkdir -p "${SMAP%/*}"
+mkmap() {  # (re)write the stored shrinky map with a WIN row per worktree path
+  { printf 'FLEET\tshrinky\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
+    local p n=21
+    for p in "$@"; do printf 'WIN\tissue-%s\t%s\t-\t%s\n' "$n" "$p" "$n"; n=$((n+1)); done
+  } > "$SMAP"
+}
+win_rows() { awk -F'\t' '$1=="WIN"' "$SMAP" 2>/dev/null | wc -l | tr -d ' '; }
+
+# DEAD-ROW escape: stored 3 rows, only 1 worktree still exists → live 1 ≥ 1 —
+# the shrink is ACCEPTED and the dead rows drop out.
+mkmap "$SA" "$SB" "$SC"
+bash "$RESTORE" --snapshot 2>/dev/null || fail "snapshot (dead-row) exited non-zero"
+[ "$(win_rows)" = 1 ] \
+  || fail "dead-row escape: stored rows with no worktree must not block the overwrite (map: $(cat "$SMAP"))"
+grep -q "issue-22" "$SMAP" \
+  && fail "dead-row escape: the dead issue-22 row should be gone (map: $(cat "$SMAP"))"
+
+# AGE escape: stored 3 rows, ALL worktrees live → a FRESH map still rejects
+# (the #160 mid-restore protection is intact) …
+SD="$WORK/repo-issue-24"; SE="$WORK/repo-issue-25"; mkdir -p "$SD" "$SE"
+mkmap "$SA" "$SD" "$SE"
+bash "$RESTORE" --snapshot 2>/dev/null
+[ "$(win_rows)" = 3 ] \
+  || fail "shrink-guard: a FRESH all-live-worktree map must still reject the shrink (map: $(cat "$SMAP"))"
+is_pos "$(cat "$SREJF" 2>/dev/null)" \
+  || fail "reject-count: shrinky's rejection should be counted (got: '$(cat "$SREJF" 2>/dev/null)')"
+# … but an over-age map is stale, not mid-restore — the live layout wins.
+touch -t 202001010000 "$SMAP" || fail "could not age the stored map"
+FLEET_RESTORE_STALE_MAP_AGE=3600 bash "$RESTORE" --snapshot 2>/dev/null
+[ "$(win_rows)" = 1 ] \
+  || fail "age escape: an over-age stored map should accept the live shrink (map: $(cat "$SMAP"))"
+[ -f "$SREJF" ] \
+  && fail "reject-count: a successful snapshot write must reset the reject streak"
+
+# REJECT ALARM: hitting FLEET_RESTORE_REJECT_ALARM consecutive rejects fires
+# FLEET_NOTIFY_CMD once — not before the threshold.
+cat > "$WORK/bin/notify-stub" <<EOF
+#!/bin/sh
+printf '%s\n' "\$1" >> "$WORK/notified"
+EOF
+chmod +x "$WORK/bin/notify-stub"
+mkmap "$SA" "$SD" "$SE"
+FLEET_RESTORE_REJECT_ALARM=100 FLEET_NOTIFY_CMD="$WORK/bin/notify-stub" \
+  bash "$RESTORE" --snapshot 2>/dev/null
+[ -f "$WORK/notified" ] \
+  && fail "alarm: must NOT fire before the reject threshold (got: $(cat "$WORK/notified"))"
+rm -f "$SREJF"           # deterministic streak start for the threshold-1 run
+FLEET_RESTORE_REJECT_ALARM=1 FLEET_NOTIFY_CMD="$WORK/bin/notify-stub" \
+  bash "$RESTORE" --snapshot 2>/dev/null
+grep -q "restore.map frozen: shrinky" "$WORK/notified" 2>/dev/null \
+  || fail "alarm: crossing the reject threshold should notify via FLEET_NOTIFY_CMD (got: '$(cat "$WORK/notified" 2>/dev/null)')"
+
+# Retire the fixture BEFORE the reconcile below: kill its session AND drop its
+# map/conf, so restore() can't wander onto a down 'shrinky' fleet (real fleet-up).
+tmux kill-session -t shrinky 2>/dev/null
+rm -rf "$FLEET_CONF_DIR/fleets/shrinky" "$FLEET_CONF_DIR/shrinky.conf"
+
 # --- RECONCILE: restore an up-but-hub-only fleet reopens the missing windows ----
 : > "$WORK/claude-argv"
 out=$(bash "$RESTORE" 2>/dev/null)
@@ -349,5 +438,5 @@ dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF i
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
 
-printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
+printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) + shrink-guard staleness escapes & reject alarm (#504) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map (dead-row/age escapes unfreeze it, rejects counted+alarmed), restore reconciles missing windows idempotently\n'
 exit 0
