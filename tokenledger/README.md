@@ -61,11 +61,20 @@ ccquota hub --addr 127.0.0.1:8787 --db /var/lib/ccquota/ccquota.db
 Put TLS in front of it, or bind it to a tailnet. The hub refuses to serve a
 public address with no token unless you pass `--insecure-public`.
 
+The database defaults to `~/.ccquota/ccquota.db`, or `$CCQUOTA_DB`. If you point
+`--db` somewhere else, set `CCQUOTA_DB` to the same path for the shell you run
+`enroll` and `name` from — they act on that same file.
+
 **Enroll each endpoint** (on the hub — the token is shown once):
 
 ```bash
 ccquota enroll --name web-01
 ```
+
+`enroll` and `name` change the hub's own database and will **not** create one:
+against a database that does not exist they fail rather than mint a token that
+no hub has ever heard of. (Only `ccquota hub` creates a database, and it logs
+when it does.)
 
 **On that endpoint:**
 

@@ -29,7 +29,7 @@ func runHub(args []string) error {
 		"listen address(es), comma-separated. Binding a tailnet address alone\n"+
 			"means localhost does not work from the machine itself, which is\n"+
 			"where you usually are: `127.0.0.1:8787,100.x.y.z:8787` gives both")
-	dbPath := fs.String("db", "ccquota.db", "path to the SQLite database")
+	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
@@ -38,6 +38,20 @@ func runHub(args []string) error {
 	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	dbFile, err := resolveDB(*dbPath)
+	if err != nil {
+		return err
+	}
+	// The hub is the one command allowed to bring a database into being, so
+	// say when it does. A hub silently starting on an empty database looks
+	// exactly like a hub that has lost everything.
+	if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(dbFile), 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Dir(dbFile), err)
+		}
+		log.Printf("no database at %s yet; creating an empty one", dbFile)
 	}
 
 	addrs := splitAddrs(*addr)
@@ -50,7 +64,7 @@ func runHub(args []string) error {
 		}
 	}
 
-	st, err := store.Open(*dbPath)
+	st, err := store.Open(dbFile)
 	if err != nil {
 		return err
 	}
@@ -94,7 +108,7 @@ func runHub(args []string) error {
 		hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		servers = append(servers, hs)
 
-		log.Printf("ccquota hub listening on %s (db %s)", a, *dbPath)
+		log.Printf("ccquota hub listening on %s (db %s)", a, dbFile)
 		if *token != "" {
 			log.Printf("  dashboard: http://%s/?token=%s", a, *token)
 		}
@@ -187,7 +201,7 @@ func pruneLoop(ctx context.Context, st *store.Store, days int) {
 
 func runEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
-	dbPath := fs.String("db", "ccquota.db", "path to the SQLite database")
+	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	label := fs.String("name", "", "a human name for this endpoint, e.g. web-01")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -196,7 +210,13 @@ func runEnroll(args []string) error {
 		return errors.New("--name is required")
 	}
 
-	st, err := store.Open(*dbPath)
+	// Refuses to create one: a token minted into a fresh database is printed
+	// exactly like a real one and fails only later, on another machine.
+	dbFile, err := resolveExistingDB(*dbPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(dbFile)
 	if err != nil {
 		return err
 	}
@@ -211,7 +231,7 @@ func runEnroll(args []string) error {
 		return err
 	}
 
-	fmt.Printf(`Enrolled %q as %s.
+	fmt.Printf(`Enrolled %q as %s (in %s).
 
 Run this on that endpoint (the token is shown once and is not recoverable):
 
@@ -219,7 +239,7 @@ Run this on that endpoint (the token is shown once and is not recoverable):
   export CCQUOTA_TOKEN=%s
   ccquota agent
 
-`, *label, id, tok)
+`, *label, id, dbFile, tok)
 	return nil
 }
 
