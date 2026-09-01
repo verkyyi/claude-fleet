@@ -36,8 +36,12 @@ func seed(t *testing.T, st *store.Store, account, endpoint, cwd string, uuids ..
 	if err := st.UpsertAccount(id, "max", "default_claude_max_20x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Enroll(endpoint, endpoint, "hash-"+endpoint); err != nil {
-		t.Fatal(err)
+	// Enrolling is once per machine; seeding the same machine again (a
+	// subscription switch) must not try to re-enrol it.
+	if _, err := st.EndpointByTokenHash("hash-" + endpoint); err != nil {
+		if err := st.Enroll(endpoint, endpoint, "hash-"+endpoint); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := st.TouchEndpoint(endpoint, id, "test"); err != nil {
 		t.Fatal(err)
@@ -101,7 +105,7 @@ func TestInitialize(t *testing.T) {
 	}
 }
 
-func TestToolsList_AllSevenWithCaveats(t *testing.T) {
+func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	ts, _ := newMCP(t)
 	out := rpc(t, ts, "tools/list", nil)
 
@@ -109,14 +113,15 @@ func TestToolsList_AllSevenWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 7 {
-		t.Fatalf("tools = %d, want 7", len(tools))
+	if len(tools) != 9 {
+		t.Fatalf("tools = %d, want 9", len(tools))
 	}
 
 	want := map[string]bool{
 		"list_accounts": false, "get_limits": false, "list_endpoints": false,
-		"usage_by_endpoint": false, "usage_by_project": false,
-		"usage_by_session": false, "usage_history": false,
+		"list_account_switches": false,
+		"usage_by_account":      false, "usage_by_endpoint": false,
+		"usage_by_project": false, "usage_by_session": false, "usage_history": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
@@ -188,21 +193,80 @@ func TestCall_EmptyHubExplainsItself(t *testing.T) {
 	}
 }
 
-// The ambiguity must surface as a tool error the model can act on, not a
-// silently-wrong account.
-func TestCall_AmbiguousAccountIsAToolErrorNamingTheOptions(t *testing.T) {
+// With several subscriptions and none named, the answer spans all of them and
+// says so. Erroring used to be the safe option; it made the subscription a mode
+// rather than an axis, and left no way to ask about the fleet as a whole.
+func TestCall_NoAccountSpansEverything(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct-a", "ep-1", "/a", "a1")
 	seed(t, st, "acct-b", "ep-2", "/b", "b1")
 
 	out := call(t, ts, "usage_by_endpoint", nil)
 	res := out["result"].(map[string]any)
-	if res["isError"] != true {
-		t.Fatalf("expected a tool error, got %v", res)
+	if res["isError"] == true {
+		t.Fatalf("unexpected tool error: %v", res)
 	}
-	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "acct-a") || !strings.Contains(text, "acct-b") {
-		t.Errorf("the error should name the available accounts, got %q", text)
+	sc := res["structuredContent"].(map[string]any)
+	if len(sc["buckets"].([]any)) != 2 {
+		t.Fatalf("buckets = %v, want both machines", sc["buckets"])
+	}
+	if sc["scope_note"] == nil || sc["scope_note"] == "" {
+		t.Error("a cross-subscription answer must state what it spans")
+	}
+}
+
+// Subscription as an ordinary axis.
+func TestCall_UsageByAccount(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+	seed(t, st, "acct-b", "ep-2", "/b", "b1")
+
+	out := call(t, ts, "usage_by_account", nil)
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if len(sc["buckets"].([]any)) != 2 {
+		t.Fatalf("buckets = %v, want one per subscription", sc["buckets"])
+	}
+}
+
+// Cross-subscription limits must arrive as a list, never a total.
+func TestCall_GetLimitsAcrossIsAList(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1")
+	seed(t, st, "acct-b", "ep-2", "/b", "b1")
+
+	out := call(t, ts, "get_limits", map[string]any{"account": "all"})
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if _, ok := sc["per_account"]; !ok {
+		t.Fatalf("no per_account list: %v", sc)
+	}
+	for k := range sc {
+		if k != "per_account" && k != "worst" && k != "note" {
+			t.Errorf("unexpected key %q; utilization must have nowhere to be totalled", k)
+		}
+	}
+}
+
+// The switch log is a regular view now, not a table nobody can see.
+func TestCall_ListAccountSwitches(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "shared", "/a", "s1")
+	seed(t, st, "acct-b", "shared", "/b", "s2")
+	if err := st.RecordAccountSwitch("shared", "acct-a", "acct-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	out := call(t, ts, "list_account_switches", nil)
+	sc := out["result"].(map[string]any)["structuredContent"].(map[string]any)
+	sw := sc["switches"].([]any)
+	if len(sw) != 1 {
+		t.Fatalf("switches = %d, want 1", len(sw))
+	}
+	if sc["note"] == nil || sc["note"] == "" {
+		t.Error("the switch log must explain why historical figures near a seam are unreliable")
 	}
 }
 

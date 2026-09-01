@@ -61,7 +61,7 @@ func (s *Store) ListAccounts() ([]Account, error) {
 func (s *Store) ListEndpoints(account string) ([]Endpoint, error) {
 	q := endpointColumns + ` FROM endpoints`
 	var args []any
-	if account != "" {
+	if account != "" && account != AllAccounts {
 		q += ` WHERE account_uuid = ?`
 		args = append(args, account)
 	}
@@ -137,14 +137,15 @@ func parseNullTime(ns sql.NullString) *time.Time {
 // EventsInRange returns the raw events for an account within a period.
 // Reconciliation needs the individual rows, not an aggregate.
 func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.UsageEvent, error) {
-	rows, err := s.db.Query(`
+	q := fmt.Sprintf(`
 		SELECT endpoint_id, session_id, message_uuid, ts, model,
 		       input_tokens, output_tokens, cache_create_5m_tokens,
 		       cache_create_1h_tokens, cache_read_tokens, thinking_tokens,
-		       cost_usd, cwd, git_branch, is_sidechain
+		       cost_usd, cwd, git_branch, is_sidechain, account_uuid
 		FROM usage_events
-		WHERE account_uuid = ? AND ts >= ? AND ts < ?`,
-		account, fmtTime(start), fmtTime(end))
+		WHERE %s ts >= ? AND ts < ?`, accountClause(account))
+
+	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end))...)
 	if err != nil {
 		return nil, fmt.Errorf("events in range: %w", err)
 	}
@@ -157,10 +158,10 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 		var cost sql.NullFloat64
 		if err := rows.Scan(&e.EndpointID, &e.SessionID, &e.MessageUUID, &ts, &e.Model,
 			&e.InputTokens, &e.OutputTokens, &e.CacheCreate5m, &e.CacheCreate1h,
-			&e.CacheRead, &e.Thinking, &cost, &e.CWD, &e.GitBranch, &e.IsSidechain); err != nil {
+			&e.CacheRead, &e.Thinking, &cost, &e.CWD, &e.GitBranch, &e.IsSidechain,
+			&e.AccountUUID); err != nil {
 			return nil, err
 		}
-		e.AccountUUID = account
 		e.TS, _ = time.Parse(rfc, ts)
 		if cost.Valid {
 			c := cost.Float64
@@ -191,12 +192,27 @@ const (
 	BySession  Dimension = "session"
 	ByModel    Dimension = "model"
 	ByBranch   Dimension = "branch"
+
+	// ByAccount makes the subscription an ordinary axis rather than a mode the
+	// whole page is stuck in. "Which of my subscriptions is this spend on" is
+	// the same shape of question as "which machine" or "which project".
+	ByAccount Dimension = "account"
 )
+
+// AllAccounts asks for every subscription at once.
+//
+// It is a distinct sentinel rather than the empty string on purpose: "" is
+// what an uninitialised variable looks like, and answering that with a
+// silently blended total across subscriptions is the failure this guard
+// exists for. Spanning subscriptions has to be something the caller typed.
+const AllAccounts = "*"
 
 // column maps a dimension to its SQL expression. Whitelisting rather than
 // interpolating the caller's string is what keeps this injection-proof.
 func (d Dimension) column() (string, error) {
 	switch d {
+	case ByAccount:
+		return "account_uuid", nil
 	case ByEndpoint:
 		return "endpoint_id", nil
 	case ByProject:
@@ -212,14 +228,17 @@ func (d Dimension) column() (string, error) {
 	}
 }
 
-// UsageBy aggregates an account's spend along one dimension.
+// UsageBy aggregates spend along one dimension.
 //
-// account is required. Every query path in this package filters by it: on a
-// hub holding several subscriptions, an unfiltered aggregate would show one
-// team's spend to another.
+// Pass a specific account uuid to scope to one subscription, or AllAccounts to
+// span every one. The empty string is refused: see AllAccounts for why the
+// distinction matters.
+//
+// Token and cost figures are additive and may be summed across subscriptions.
+// Rate-limit utilization is NOT — see LimitsAcross.
 func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
 	if account == "" {
-		return nil, fmt.Errorf("account is required: an unscoped aggregate would mix subscriptions")
+		return nil, fmt.Errorf("account is required: pass a uuid, or store.AllAccounts to span every subscription")
 	}
 	col, err := d.column()
 	if err != nil {
@@ -241,12 +260,12 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		                 + cache_create_1h_tokens + cache_read_tokens
 		            ELSE 0 END), 0)
 		FROM usage_events
-		WHERE account_uuid = ? AND ts >= ? AND ts < ?
+		WHERE %s ts >= ? AND ts < ?
 		GROUP BY k
 		ORDER BY 3 DESC
-		LIMIT ?`, col)
+		LIMIT ?`, col, accountClause(account))
 
-	rows, err := s.db.Query(q, account, fmtTime(start), fmtTime(end), limit)
+	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end), limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by %s: %w", d, err)
 	}
@@ -263,10 +282,51 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if d == ByEndpoint {
+	switch d {
+	case ByEndpoint:
 		s.labelEndpoints(out)
+	case ByAccount:
+		s.labelAccounts(out)
 	}
 	return out, nil
+}
+
+// accountClause returns the WHERE fragment that scopes to one subscription, or
+// nothing at all for AllAccounts.
+func accountClause(account string) string {
+	if account == AllAccounts {
+		return ""
+	}
+	return "account_uuid = ? AND"
+}
+
+// accountArgs prepends the account argument unless the query spans all of them.
+func accountArgs(account string, rest ...any) []any {
+	if account == AllAccounts {
+		return rest
+	}
+	return append([]any{account}, rest...)
+}
+
+// labelAccounts replaces account uuids with the email they belong to.
+func (s *Store) labelAccounts(bs []Bucket) {
+	accts, err := s.ListAccounts()
+	if err != nil {
+		return
+	}
+	byID := make(map[string]string, len(accts))
+	for _, a := range accts {
+		label := a.Email
+		if label == "" {
+			label = a.DisplayName
+		}
+		byID[a.AccountUUID] = label
+	}
+	for i := range bs {
+		if l := byID[bs[i].Key]; l != "" {
+			bs[i].Label = l
+		}
+	}
 }
 
 // labelEndpoints replaces opaque endpoint ids with their human labels.
@@ -310,17 +370,17 @@ func (g Granularity) format() (string, error) {
 	}
 }
 
-// History returns a time series of an account's spend.
+// History returns a time series of spend, for one subscription or all of them.
 func (s *Store) History(account string, g Granularity, start, end time.Time) ([]Bucket, error) {
 	if account == "" {
-		return nil, fmt.Errorf("account is required: an unscoped history would mix subscriptions")
+		return nil, fmt.Errorf("account is required: pass a uuid, or store.AllAccounts to span every subscription")
 	}
 	f, err := g.format()
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := s.db.Query(`
+	q := fmt.Sprintf(`
 		SELECT strftime(?, ts) AS k,
 		       COUNT(*),
 		       SUM(input_tokens + output_tokens + cache_create_5m_tokens
@@ -329,9 +389,13 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
 		       0
 		FROM usage_events
-		WHERE account_uuid = ? AND ts >= ? AND ts < ?
-		GROUP BY k ORDER BY k`,
-		f, account, fmtTime(start), fmtTime(end))
+		WHERE %s ts >= ? AND ts < ?
+		GROUP BY k ORDER BY k`, accountClause(account))
+
+	// The strftime pattern is the first placeholder, so it leads the argument
+	// list ahead of the optional account scope.
+	args := append([]any{f}, accountArgs(account, fmtTime(start), fmtTime(end))...)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("history: %w", err)
 	}

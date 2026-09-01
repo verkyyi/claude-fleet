@@ -160,8 +160,10 @@ func obj(props map[string]any, required ...string) map[string]any {
 
 var accountProp = map[string]any{
 	"type": "string",
-	"description": "Subscription (account uuid) to report on. Optional when the hub " +
-		"holds exactly one; required when it holds several — call list_accounts first.",
+	"description": `Subscription to report on: an account uuid, or "all" to span every ` +
+		`subscription on this hub. Omitted means "all" when the hub holds several, ` +
+		`and the single subscription when it holds one. Token and cost figures are ` +
+		`additive across subscriptions; rate-limit utilization is not.`,
 }
 
 var sinceProp = map[string]any{
@@ -204,6 +206,25 @@ func toolSpecs() []toolSpec {
 			Description: "The machines reporting into this hub: hostname, OS, agent version and when " +
 				"each was last heard from. Useful for spotting an agent that has stopped reporting.",
 			InputSchema: obj(map[string]any{"account": accountProp}),
+		},
+		{
+			Name:  "usage_by_account",
+			Title: "Spend by subscription",
+			Description: "Token and cost totals grouped by subscription — which of several " +
+				"Claude plans a period's spend landed on. Subscription is an ordinary axis here, " +
+				"the same shape of question as by-machine or by-project." + caveat,
+			InputSchema: obj(map[string]any{
+				"since": sinceProp, "until": untilProp, "limit": limitProp,
+			}),
+		},
+		{
+			Name:  "list_account_switches",
+			Title: "Machines that changed subscription",
+			Description: "Occasions when a machine logged out of one subscription and into " +
+				"another. Turns recorded before a switch keep their old attribution and cannot " +
+				"be corrected, so these are the seams where historical figures become " +
+				"unreliable. Use it to explain a total that looks wrong for a period.",
+			InputSchema: obj(map[string]any{"limit": limitProp}),
 		},
 		{
 			Name:  "usage_by_endpoint",
@@ -292,18 +313,47 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return map[string]any{"accounts": accts}, nil
 
 	case "get_limits":
+		// Spanning subscriptions returns a LIST, never a total: separate quota
+		// pools with separate resets cannot be added.
+		if a := str(args, "account"); a == "all" || a == store.AllAccounts {
+			return s.api.LimitsForAll()
+		}
 		account, err := s.account(args)
 		if err != nil {
 			return nil, err
 		}
+		if account == store.AllAccounts {
+			return s.api.LimitsForAll()
+		}
 		return s.api.LimitsFor(account)
 
 	case "list_endpoints":
-		eps, err := s.api.Store.ListEndpoints(str(args, "account"))
+		account := str(args, "account")
+		if account == "all" || account == store.AllAccounts {
+			account = ""
+		}
+		eps, err := s.api.Store.ListEndpoints(account)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"endpoints": eps, "now": time.Now().UTC()}, nil
+
+	case "list_account_switches":
+		sw, err := s.api.Store.AccountSwitches(intArg(args, "limit"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"switches": sw,
+			"note": "Turns recorded before a switch keep the earlier subscription's " +
+				"attribution and cannot be corrected retroactively.",
+		}, nil
+
+	case "usage_by_account":
+		return s.usage(map[string]any{
+			"account": store.AllAccounts,
+			"since":   args["since"], "until": args["until"], "limit": args["limit"],
+		}, store.ByAccount)
 
 	case "usage_by_endpoint":
 		return s.usage(args, store.ByEndpoint)
@@ -330,12 +380,17 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{
+		hist := map[string]any{
 			"account_uuid": account, "granularity": string(g),
 			"since": start, "until": end,
 			"series": series, "by_model": models,
 			"disclaimer": strings.TrimSpace(caveat),
-		}, nil
+		}
+		if note := scopeNote(account); note != "" {
+			hist["all_accounts"] = true
+			hist["scope_note"] = note
+		}
+		return hist, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
@@ -352,11 +407,28 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"account_uuid": account, "by": string(d),
 		"since": start, "until": end, "buckets": buckets,
 		"disclaimer": strings.TrimSpace(caveat),
-	}, nil
+	}
+	// An agent relaying a blended total without saying it is blended is the
+	// same failure as a dashboard doing it.
+	if note := scopeNote(account); note != "" {
+		out["all_accounts"] = true
+		out["scope_note"] = note
+	}
+	return out, nil
+}
+
+// scopeNote states what a figure spans, so a cross-subscription total is never
+// mistaken for one subscription's.
+func scopeNote(account string) string {
+	if account != store.AllAccounts {
+		return ""
+	}
+	return "Totals span every subscription on this hub. Tokens and notional costs are " +
+		"additive; rate-limit utilization is not and is reported per subscription."
 }
 
 // account resolves the subscription, inferring it only when unambiguous.
@@ -365,6 +437,9 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 // number for the wrong account with no way to tell.
 func (s *mcpServer) account(args map[string]any) (string, error) {
 	if a := str(args, "account"); a != "" {
+		if a == "all" {
+			return store.AllAccounts, nil
+		}
 		return a, nil
 	}
 	accts, err := s.api.Store.ListAccounts()
@@ -377,16 +452,9 @@ func (s *mcpServer) account(args map[string]any) (string, error) {
 	case 1:
 		return accts[0].AccountUUID, nil
 	default:
-		names := make([]string, 0, len(accts))
-		for _, a := range accts {
-			label := a.Email
-			if label == "" {
-				label = a.DisplayName
-			}
-			names = append(names, fmt.Sprintf("%s (%s)", a.AccountUUID, label))
-		}
-		return "", fmt.Errorf("this hub holds %d subscriptions; pass `account` explicitly. Available: %s",
-			len(accts), strings.Join(names, ", "))
+		// Everything, labelled — the same default the HTTP API takes. Refusing
+		// made the subscription a mode rather than an axis.
+		return store.AllAccounts, nil
 	}
 }
 

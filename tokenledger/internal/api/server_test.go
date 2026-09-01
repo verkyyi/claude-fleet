@@ -137,19 +137,146 @@ func TestEndToEnd_TwoSubscriptionsStayIsolated(t *testing.T) {
 	}
 }
 
-// With more than one subscription the hub must refuse to guess which one is
-// meant, rather than silently answering for the wrong account.
-func TestQuery_AmbiguousAccountIsRefused(t *testing.T) {
+// With several subscriptions and no choice made, the honest answer is
+// everything, labelled as everything. Refusing used to be the safe option; it
+// turned the subscription into a mode the whole page was stuck in, and left no
+// way to ask "how much across all of them".
+func TestQuery_NoAccountSpansEverythingAndSaysSo(t *testing.T) {
 	h := newHarness(t)
 	h.push(t, h.enroll(t, "a"), batchFor("acct-a", "a", []string{"a1"}, "/a"))
 	h.push(t, h.enroll(t, "b"), batchFor("acct-b", "b", []string{"b1"}, "/b"))
 
-	resp, body := h.get(t, "/v1/usage?by=endpoint")
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("HTTP %d, want 400 when the account is ambiguous", resp.StatusCode)
+	resp, body := h.get(t, "/v1/usage?by=endpoint&since=1d")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "account") {
-		t.Errorf("the error should tell the caller to pass ?account=: %s", body)
+	var out struct {
+		AllAccounts bool           `json:"all_accounts"`
+		ScopeNote   string         `json:"scope_note"`
+		Buckets     []store.Bucket `json:"buckets"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.AllAccounts {
+		t.Error("a cross-subscription answer must be flagged as such")
+	}
+	if out.ScopeNote == "" {
+		t.Error("a cross-subscription total must state what it spans")
+	}
+	if len(out.Buckets) != 2 {
+		t.Fatalf("buckets = %d, want both machines", len(out.Buckets))
+	}
+}
+
+// Account is now an ordinary axis: "which subscription" is the same shape of
+// question as "which machine".
+func TestQuery_ByAccountDimension(t *testing.T) {
+	h := newHarness(t)
+	h.push(t, h.enroll(t, "a"), batchFor("acct-a", "a", []string{"a1"}, "/a"))
+	h.push(t, h.enroll(t, "b"), batchFor("acct-b", "b", []string{"b1"}, "/b"))
+
+	resp, body := h.get(t, "/v1/usage?account=all&by=account&since=1d")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Buckets []store.Bucket `json:"buckets"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Buckets) != 2 {
+		t.Fatalf("buckets = %d, want one per subscription", len(out.Buckets))
+	}
+}
+
+// THE constraint. Two pools at 4% and 19% are not 23% of anything; the
+// cross-subscription shape is a list with no aggregate field to misread.
+func TestLimits_AcrossAccountsIsNeverSummed(t *testing.T) {
+	h := newHarness(t)
+	tokA, tokB := h.enroll(t, "a"), h.enroll(t, "b")
+
+	mk := func(acct, host, uuid string, util float64) model.Batch {
+		b := batchFor(acct, host, []string{uuid}, "/"+host)
+		reset := time.Now().UTC().Add(time.Hour)
+		b.Limits = &model.LimitsSnapshot{
+			ObservedAt: time.Now().UTC(),
+			FiveHour:   model.Window{Utilization: util, ResetsAt: &reset},
+			SevenDay:   model.Window{Utilization: util / 2},
+		}
+		return b
+	}
+	h.push(t, tokA, mk("acct-a", "a", "a1", 4))
+	h.push(t, tokB, mk("acct-b", "b", "b1", 19))
+
+	_, body := h.get(t, "/v1/limits?account=all")
+
+	// The shape itself must offer nowhere to put a total. Substring-matching
+	// for "23" was the first attempt and it is worthless — timestamps contain
+	// it. Asserting the key set is exact means an aggregate field cannot be
+	// added later without this failing.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"per_account": true, "worst": true, "note": true}
+	for k := range raw {
+		if !allowed[k] {
+			t.Errorf("unexpected top-level key %q in a cross-subscription reading; "+
+				"utilization must have nowhere to be totalled", k)
+		}
+	}
+
+	var across LimitsAcross
+	if err := json.Unmarshal(body, &across); err != nil {
+		t.Fatal(err)
+	}
+	if len(across.PerAccount) != 2 {
+		t.Fatalf("per_account = %d, want one entry per subscription", len(across.PerAccount))
+	}
+	for _, e := range across.PerAccount {
+		if e.Limits == nil || !e.Limits.Available {
+			t.Fatalf("%s has no reading", e.Label)
+		}
+	}
+	if across.Worst == nil {
+		t.Fatal("no worst subscription identified")
+	}
+	if across.Worst.Limits.FiveHour.Utilization != 19 {
+		t.Errorf("worst = %v%%, want the 19%% pool", across.Worst.Limits.FiveHour.Utilization)
+	}
+	if across.Note == "" {
+		t.Error("the response must say why there is no total")
+	}
+}
+
+// An unavailable reading is unknown, not zero, and must not be crowned "worst"
+// nor suppress a real one.
+func TestLimits_AcrossIgnoresUnavailableWhenPickingWorst(t *testing.T) {
+	h := newHarness(t)
+	tokA, tokB := h.enroll(t, "a"), h.enroll(t, "b")
+
+	known := batchFor("acct-a", "a", []string{"a1"}, "/a")
+	reset := time.Now().UTC().Add(time.Hour)
+	known.Limits = &model.LimitsSnapshot{ObservedAt: time.Now().UTC(),
+		FiveHour: model.Window{Utilization: 7, ResetsAt: &reset}}
+	h.push(t, tokA, known)
+
+	blind := batchFor("acct-b", "b", []string{"b1"}, "/b")
+	blind.LimitsUnavailable = "token expired"
+	h.push(t, tokB, blind)
+
+	_, body := h.get(t, "/v1/limits?account=all")
+	var across LimitsAcross
+	if err := json.Unmarshal(body, &across); err != nil {
+		t.Fatal(err)
+	}
+	if across.Worst == nil || across.Worst.AccountUUID != "acct-a" {
+		t.Fatalf("worst = %+v, want the only subscription with a real reading", across.Worst)
+	}
+	if len(across.PerAccount) != 2 {
+		t.Error("a subscription with no reading must still appear, so its gap is visible")
 	}
 }
 

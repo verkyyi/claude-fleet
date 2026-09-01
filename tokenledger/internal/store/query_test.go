@@ -175,3 +175,119 @@ func TestListAccounts_CountsEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// Account is now an ordinary axis, not a mode the whole hub is stuck in.
+func TestUsageBy_Account(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	bs, err := s.UsageBy(AllAccounts, ByAccount, base.Add(-time.Hour), base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 2 {
+		t.Fatalf("buckets = %d, want one per subscription", len(bs))
+	}
+	byKey := map[string]Bucket{}
+	for _, b := range bs {
+		byKey[b.Key] = b
+	}
+	if byKey["acct-a"].Tokens != 150 {
+		t.Errorf("acct-a tokens = %d, want 150", byKey["acct-a"].Tokens)
+	}
+	if byKey["acct-b"].Tokens != 999999 {
+		t.Errorf("acct-b tokens = %d, want 999999", byKey["acct-b"].Tokens)
+	}
+	if byKey["acct-a"].Label == "" {
+		t.Error("account buckets should be labelled with the email, not just a uuid")
+	}
+}
+
+// Spanning subscriptions is allowed, but only when asked for by name.
+func TestUsageBy_AllAccountsSpansEverything(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	bs, err := s.UsageBy(AllAccounts, ByEndpoint, base.Add(-time.Hour), base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 2 {
+		t.Fatalf("endpoints = %d, want both machines regardless of subscription", len(bs))
+	}
+	var total int64
+	for _, b := range bs {
+		total += b.Tokens
+	}
+	if total != 150+999999 {
+		t.Errorf("total = %d, want the sum across subscriptions", total)
+	}
+}
+
+// The empty string is what an uninitialised variable looks like; blending
+// subscriptions on an accident is the failure the guard exists for.
+func TestUsageBy_EmptyAccountIsStillRefused(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	if _, err := s.UsageBy("", ByEndpoint, base, base.Add(time.Hour), 10); err == nil {
+		t.Fatal("an empty account was accepted; only AllAccounts may span subscriptions")
+	}
+	if _, err := s.History("", Daily, base, base.Add(time.Hour)); err == nil {
+		t.Fatal("History accepted an empty account")
+	}
+}
+
+func TestHistory_AllAccounts(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	h, err := s.History(AllAccounts, Daily, base.Add(-time.Hour), base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, b := range h {
+		total += b.Tokens
+	}
+	if total != 150+999999 {
+		t.Errorf("history total = %d, want both subscriptions", total)
+	}
+}
+
+// Scoping to one subscription must still exclude the other — the new
+// cross-account capability must not have loosened the default.
+func TestUsageBy_ScopedStillIsolates(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	bs, err := s.UsageBy("acct-a", ByProject, base.Add(-time.Hour), base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bs {
+		if b.Key == "/srv/other-company/secret" {
+			t.Fatal("scoping to acct-a leaked acct-b's directory")
+		}
+	}
+}
+
+func TestEventsInRange_AllAccountsStampsEachRow(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+
+	evs, err := s.EventsInRange(AllAccounts, base.Add(-time.Hour), base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, e := range evs {
+		if e.AccountUUID == "" {
+			t.Fatal("a cross-account row came back with no subscription on it")
+		}
+		seen[e.AccountUUID] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("saw %d subscriptions, want 2", len(seen))
+	}
+}

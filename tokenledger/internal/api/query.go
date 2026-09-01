@@ -57,6 +57,36 @@ type ScopedView struct {
 const shareDisclaimer = "The account-wide utilization is exact and already covers every device. " +
 	"Per-endpoint shares are proportional estimates. Costs are notional API-equivalent figures, not a bill."
 
+// LimitsAcross is the answer to "am I about to hit the wall" when more than one
+// subscription is in view.
+//
+// It is a LIST, never a total. Two subscriptions at 4% and 19% are not 23% of
+// anything — they are separate quota pools with separate resets, and adding
+// them produces a number that means nothing while looking authoritative.
+// Tokens and notional cost are additive; utilization is not, and the type
+// enforces that rather than trusting a convention.
+type LimitsAcross struct {
+	// PerAccount holds one entry per subscription, each with its own exact
+	// utilization. There is deliberately no aggregate field.
+	PerAccount []AccountLimits `json:"per_account"`
+
+	// Worst names the subscription closest to its limit — the only meaningful
+	// single answer across several pools.
+	Worst *AccountLimits `json:"worst,omitempty"`
+
+	Note string `json:"note"`
+}
+
+// AccountLimits pairs a subscription with its own reading.
+type AccountLimits struct {
+	AccountUUID string      `json:"account_uuid"`
+	Label       string      `json:"label"`
+	Limits      *LimitsView `json:"limits"`
+}
+
+const acrossNote = "Utilization is per subscription and is never summed: separate quota pools " +
+	"with separate resets. Tokens and notional costs are additive and may be compared across them."
+
 // LimitsFor builds the view for one account.
 func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 	view := &LimitsView{AccountUUID: account, Disclaimer: shareDisclaimer}
@@ -115,6 +145,40 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 	return view, nil
 }
 
+// LimitsForAll builds one reading per subscription.
+func (s *Server) LimitsForAll() (*LimitsAcross, error) {
+	accts, err := s.Store.ListAccounts()
+	if err != nil {
+		return nil, err
+	}
+	out := &LimitsAcross{Note: acrossNote}
+	for _, a := range accts {
+		v, err := s.LimitsFor(a.AccountUUID)
+		if err != nil {
+			return nil, err
+		}
+		label := a.Email
+		if label == "" {
+			label = a.DisplayName
+		}
+		if label == "" {
+			label = a.AccountUUID
+		}
+		entry := AccountLimits{AccountUUID: a.AccountUUID, Label: label, Limits: v}
+		out.PerAccount = append(out.PerAccount, entry)
+
+		// "Worst" compares readings we actually have; an unavailable one is
+		// unknown, not zero, and must not win by default.
+		if v.Available && v.FiveHour != nil {
+			if out.Worst == nil || v.FiveHour.Utilization > out.Worst.Limits.FiveHour.Utilization {
+				w := entry
+				out.Worst = &w
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *Server) endpointLabels(account string) (map[string]string, error) {
 	eps, err := s.Store.ListEndpoints(account)
 	if err != nil {
@@ -146,6 +210,17 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
+	// Spanning subscriptions returns a different SHAPE — a list, not a total —
+	// because utilization cannot be added up. Callers must handle both.
+	if isAllAccounts(r.URL.Query().Get("account")) {
+		across, err := s.LimitsForAll()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, across)
+		return
+	}
 	account, ok := s.requireAccount(w, r)
 	if !ok {
 		return
@@ -158,8 +233,17 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// isAllAccounts recognises the ways a caller asks to span subscriptions.
+func isAllAccounts(v string) bool {
+	return v == store.AllAccounts || v == "all"
+}
+
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
-	eps, err := s.Store.ListEndpoints(r.URL.Query().Get("account"))
+	account := r.URL.Query().Get("account")
+	if isAllAccounts(account) {
+		account = ""
+	}
+	eps, err := s.Store.ListEndpoints(account)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -194,11 +278,13 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_uuid": account,
+		"all_accounts": account == store.AllAccounts,
 		"by":           string(dim),
 		"since":        start,
 		"until":        end,
 		"buckets":      buckets,
 		"disclaimer":   shareDisclaimer,
+		"scope_note":   scopeNote(account),
 	})
 }
 
@@ -233,11 +319,13 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_uuid": account,
+		"all_accounts": account == store.AllAccounts,
 		"granularity":  string(g),
 		"since":        start,
 		"until":        end,
 		"series":       series,
 		"by_model":     models,
+		"scope_note":   scopeNote(account),
 	})
 }
 
@@ -256,12 +344,16 @@ func (s *Server) handleSwitches(w http.ResponseWriter, r *http.Request) {
 
 // requireAccount resolves the ?account= parameter.
 //
-// When the hub holds exactly one subscription it is inferred, which keeps the
-// single-user case frictionless. With several, an explicit choice is required:
-// silently picking one would show a number the caller did not ask for and has
-// no way to notice is the wrong account.
+// A specific uuid scopes to one subscription; "all" spans every one. When the
+// hub holds exactly one subscription it is inferred, which keeps the
+// single-user case frictionless. With several and no choice made, spanning is
+// the honest default — it shows everything and labels it as such, rather than
+// silently picking one the caller has no way to notice is wrong.
 func (s *Server) requireAccount(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if a := r.URL.Query().Get("account"); a != "" {
+		if isAllAccounts(a) {
+			return store.AllAccounts, true
+		}
 		return a, true
 	}
 	accts, err := s.Store.ListAccounts()
@@ -276,10 +368,20 @@ func (s *Server) requireAccount(w http.ResponseWriter, r *http.Request) (string,
 	case 1:
 		return accts[0].AccountUUID, true
 	default:
-		httpError(w, http.StatusBadRequest,
-			"this hub holds several subscriptions; pass ?account=<uuid> (see /v1/accounts)")
-		return "", false
+		// Everything, explicitly labelled. Refusing used to be the safe answer;
+		// it turned the subscription into a mode the whole page was stuck in.
+		return store.AllAccounts, true
 	}
+}
+
+// scopeNote states what a figure spans, so a cross-subscription total is never
+// mistaken for one subscription's.
+func scopeNote(account string) string {
+	if account == store.AllAccounts {
+		return "Totals span every subscription on this hub. Tokens and notional costs are " +
+			"additive; rate-limit utilization is not and is reported per subscription."
+	}
+	return ""
 }
 
 // defaultRange is how far back a query looks when not told otherwise.
