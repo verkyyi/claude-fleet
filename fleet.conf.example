@@ -465,6 +465,23 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #     drops below FLEET_DISK_WARN_GB. Defaults shown:
 # @label=Stop spawning below disk GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_FLOOR_GB=12       # gate refusal threshold
+
+# --- Quota guard (autofill only; OFF by default) -----------------------------
+# Autofill spends the subscription its spawned sessions run on. Without this the
+# dispatcher keeps filling slots while a weekly window closes, and the operator
+# finds out when their OWN session is refused.
+#
+# Needs ccquota (https://github.com/verkyyi/ccquota) with a hub configured —
+# CCQUOTA_HUB_URL / CCQUOTA_VIEWER_TOKEN in the daemon's environment. With
+# ccquota absent or no hub set, every mode is a no-op and the fleet behaves
+# exactly as it did before. The gate FAILS OPEN: an unreachable hub or an
+# unreadable limit proceeds and says why, like the disk guard.
+#
+#   bin/fleet-quotaguard.sh --status    # what it would decide right now
+#FLEET_QUOTA_GATE=0           # 1 to arm (default 0 = report only, never blocks)
+#FLEET_QUOTA_CEILING=90       # hold at/above this utilization %
+#FLEET_QUOTA_ACCOUNT=         # a subscription uuid, or `all`; default: the
+#                             # account this machine is logged into
 # @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
 # (The volume the guard measures and the min seconds between incident captures are

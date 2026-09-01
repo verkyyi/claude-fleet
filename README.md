@@ -289,6 +289,25 @@ macOS Keychain ignores). One caveat: an **already-running** session can't
 hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full
 design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
 
+### Stop autofill before the window closes (optional)
+
+The failover above is **reactive** — it rotates once a session has already been
+refused. If you run [ccquota](https://github.com/verkyyi/ccquota), the dispatcher
+can also stop *proactively*, before the last of a window goes to whatever
+happened to be labelled `autofill`:
+
+```sh
+bin/fleet-quotaguard.sh --status     # what it would decide right now
+# then, in fleet.conf:
+FLEET_QUOTA_GATE=1                   # off by default
+FLEET_QUOTA_CEILING=90
+```
+
+`fleet-dispatch.sh` consults it once per tick, exactly like the disk guard, and
+it fails **open**: no ccquota, no hub, an unreachable hub or an unreadable limit
+all proceed and say why. This only gates **autofill** — your own spawns, and
+every already-running session, are untouched.
+
 ## Fleet commands (`/skill`s)
 
 Optional repo-shipped Claude Code slash commands that operate on the current
