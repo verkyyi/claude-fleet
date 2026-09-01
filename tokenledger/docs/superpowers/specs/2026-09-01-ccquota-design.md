@@ -369,7 +369,7 @@ internal/pricing/    model pricing table + refresh
 internal/api/        ingest + query HTTP handlers
 internal/mcp/        MCP tool implementations
 internal/recon/      §7 reconciliation math
-web/                 SPA source; web/dist embedded
+web/dist/index.html  the dashboard, hand-written and embedded
 docs/                this spec, README, deployment guides
 ```
 
