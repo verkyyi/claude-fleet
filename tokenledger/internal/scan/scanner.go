@@ -42,7 +42,10 @@ func NewScanner(root, cursorPath string) *Scanner {
 	return &Scanner{root: root, cursor: loadCursor(cursorPath)}
 }
 
-// Scan returns events appended since the previous call.
+// Scan returns events appended since the last COMMITTED position.
+//
+// The caller must call Commit once the events are safely handed off; until
+// then a repeated Scan returns them again.
 //
 // Events carry no AccountUUID or EndpointID: the transcripts do not record
 // them. The caller stamps identity — see internal/identity and spec §10.2 for
@@ -70,13 +73,18 @@ func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 		out = append(out, evs...)
 	}
 
-	if err := s.cursor.save(); err != nil {
-		// The events are real and worth returning even if we failed to record
-		// our position; the cost of a failed save is re-sending them later,
-		// which dedup absorbs.
-		s.Errs = append(s.Errs, err)
-	}
 	return out, nil
+}
+
+// Commit persists the position reached by the last Scan.
+//
+// It is separate from Scan on purpose. If the caller fails to hand the events
+// off — the hub is down, the queue is full — the cursor must NOT have moved,
+// or that batch is gone with nothing to show for it. Commit is what says "these
+// are safely somewhere else now"; re-reading and re-sending is free because
+// the hub dedups.
+func (s *Scanner) Commit() error {
+	return s.cursor.save()
 }
 
 // transcripts lists *.jsonl under root, sorted for deterministic ordering.

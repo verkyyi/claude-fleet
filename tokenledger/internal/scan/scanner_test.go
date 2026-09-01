@@ -77,6 +77,9 @@ func TestScanner_RescanIsNoOp(t *testing.T) {
 	if _, err := s.Scan(); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
 	evs, err := s.Scan()
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +94,9 @@ func TestScanner_AppendReadsOnlyNewBytes(t *testing.T) {
 	p := filepath.Join(root, "proj-a", "sess1.jsonl")
 	writeFile(t, p, line("u1", 10))
 	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,6 +122,9 @@ func TestScanner_TruncationForcesFullRescan(t *testing.T) {
 	if _, err := s.Scan(); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
 
 	writeFile(t, p, line("v1", 5)) // shorter than before
 	evs, err := s.Scan()
@@ -137,6 +146,9 @@ func TestScanner_CursorPersistsAcrossRestart(t *testing.T) {
 
 	s1 := NewScanner(root, cursor)
 	if _, err := s1.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.Commit(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,6 +218,9 @@ func TestScanner_PartialTrailingLineIsRetried(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("got %d events, want 1 (the complete line only)", len(evs))
 	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Now the rest of the line arrives.
 	appendLines(t, p, partial[len(partial)/2:])
@@ -224,4 +239,45 @@ func uuids(evs []model.UsageEvent) []string {
 		out[i] = e.MessageUUID
 	}
 	return out
+}
+
+// Regression: Scan used to persist the cursor itself, so a caller that failed
+// to hand the events off lost them permanently. The position now only moves on
+// an explicit Commit.
+func TestScanner_UncommittedScanIsRepeated(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "projects")
+	cursor := filepath.Join(dir, "cursor.json")
+	writeFile(t, filepath.Join(root, "proj-a", "sess1.jsonl"), line("u1", 10), line("u2", 20))
+
+	s1 := NewScanner(root, cursor)
+	evs, err := s1.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("first scan returned %d events, want 2", len(evs))
+	}
+	// Deliberately do NOT commit: this stands in for "the hub was down".
+
+	s2 := NewScanner(root, cursor)
+	evs, err = s2.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("after an uncommitted scan, a fresh scanner returned %d events, want 2 — the batch was lost", len(evs))
+	}
+
+	if err := s2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s3 := NewScanner(root, cursor)
+	evs, err = s3.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("after Commit a fresh scanner returned %d events, want 0", len(evs))
+	}
 }

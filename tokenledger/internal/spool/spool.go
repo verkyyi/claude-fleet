@@ -11,6 +11,7 @@ package spool
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -60,6 +61,14 @@ func (s *Spool) Enqueue(v any) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write spool entry: %w", err)
 	}
+	// A single entry larger than the whole cap would be evicted the instant it
+	// lands, so refuse it up front. Silently accepting and then dropping it is
+	// how a first scan on a busy machine disappears without an error.
+	if int64(len(b)) > s.maxBytes {
+		os.Remove(tmp)
+		return fmt.Errorf("batch is %d bytes, larger than the %d-byte spool cap: split it or raise --spool-mb",
+			len(b), s.maxBytes)
+	}
 	if err := os.Rename(tmp, filepath.Join(s.dir, name)); err != nil {
 		return fmt.Errorf("commit spool entry: %w", err)
 	}
@@ -106,6 +115,7 @@ func (s *Spool) evictLocked() error {
 		if err := os.Remove(filepath.Join(s.dir, oldest.name)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("evict spool entry: %w", err)
 		}
+		log.Printf("spool full (%d bytes > %d cap): dropped the oldest queued batch", total, s.maxBytes)
 		total -= oldest.size
 		entries = entries[1:]
 	}

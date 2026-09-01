@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01
 **Status:** approved design, pre-implementation
-**Approach:** single Go binary, two roles (`agent` / `hub`), embedded dashboard, read-only MCP
+**Approach:** single Go binary (Go 1.25+; floor set by modernc.org/sqlite), two roles (`agent` / `hub`), embedded dashboard, read-only MCP
 
 ---
 
@@ -278,8 +278,12 @@ all — see §9.
 
 ### 8.1 Dashboard (embedded SPA)
 
-Vite + React + TypeScript, built to `web/dist`, embedded. All four approved
-views, with a subscription switcher plus an all-subscriptions overview:
+Hand-written HTML/CSS/JS in `web/dist/index.html`, embedded via `embed.FS`.
+(Changed during implementation from the planned Vite + React: dropping the npm
+pipeline means a contributor needs only a Go toolchain to build the complete
+binary, which is most of why an OSS tool of this shape gets used.) All four
+approved views, with a subscription switcher plus an all-subscriptions
+overview:
 
 1. **Wall** — 5h and 7d gauges per account, countdown to reset, burn rate,
    projected time-to-limit at current rate.

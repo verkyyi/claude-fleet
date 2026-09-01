@@ -1,4 +1,7 @@
-web/dist/
-ccquota
+bin/
+dist/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
+.playwright-mcp/

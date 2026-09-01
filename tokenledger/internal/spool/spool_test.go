@@ -181,3 +181,26 @@ func TestPeek_IgnoresPartialWrites(t *testing.T) {
 		t.Fatal("a .tmp file was treated as a committed batch")
 	}
 }
+
+// Regression: a batch bigger than the whole cap used to be written, instantly
+// evicted, and reported as success. On a busy machine that silently threw away
+// the entire first scan.
+func TestEnqueue_OversizedBatchIsRefusedNotSilentlyDropped(t *testing.T) {
+	s := newSpool(t, 1024)
+
+	err := s.Enqueue(payload{N: 1, Blob: strings.Repeat("x", 4096)})
+	if err == nil {
+		t.Fatal("an oversized batch was accepted; it would have vanished on eviction")
+	}
+	if !strings.Contains(err.Error(), "spool cap") {
+		t.Errorf("error should explain the cap, got %v", err)
+	}
+	if n, _ := s.Len(); n != 0 {
+		t.Errorf("queued = %d, want 0", n)
+	}
+	// The temp file must be cleaned up, not left to accumulate.
+	des, _ := os.ReadDir(s.dir)
+	if len(des) != 0 {
+		t.Errorf("left %d files behind after refusing the batch", len(des))
+	}
+}

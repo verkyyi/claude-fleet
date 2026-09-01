@@ -53,6 +53,14 @@ const (
 	DefaultLimitsInterval = 120 * time.Second
 )
 
+// maxEventsPerBatch bounds one push.
+//
+// A first scan on a busy machine can yield tens of thousands of turns, which
+// as a single JSON document runs to hundreds of megabytes — past the hub's
+// request cap and past the spool's. Chunking keeps every batch comfortably
+// inside both, and the hub dedups so the split costs nothing.
+const maxEventsPerBatch = 2000
+
 // Agent is a running collector.
 type Agent struct {
 	cfg     Config
@@ -147,31 +155,66 @@ func (a *Agent) cycle(ctx context.Context) error {
 		log.Printf("transcript warning: %v", e)
 	}
 
-	batch := model.Batch{AgentVersion: a.cfg.Version, Identity: *id, Events: evs}
-
 	// Credentials give the account tier as well as the token, so read them even
 	// when it is not yet time to poll.
 	creds, credErr := identity.LoadCredentials(a.cfg.Home)
 	if creds != nil {
-		batch.Identity.SubscriptionType = creds.SubscriptionType
-		batch.Identity.RateLimitTier = creds.RateLimitTier
+		id.SubscriptionType = creds.SubscriptionType
+		id.RateLimitTier = creds.RateLimitTier
 	}
 
+	var snap *model.LimitsSnapshot
+	var unavailable string
 	if a.shouldPollLimits() {
-		snap, reason := a.pollLimits(ctx, creds, credErr)
-		batch.Limits, batch.LimitsUnavailable = snap, reason
+		snap, unavailable = a.pollLimits(ctx, creds, credErr)
 		a.lastLimitsPoll = time.Now()
 	}
 
 	// Nothing new and nothing to report: skip the round trip entirely.
-	if len(batch.Events) == 0 && batch.Limits == nil && batch.LimitsUnavailable == "" {
+	if len(evs) == 0 && snap == nil && unavailable == "" {
 		return a.drain(ctx)
 	}
 
-	if err := a.spool.Enqueue(batch); err != nil {
-		return fmt.Errorf("queue batch: %w", err)
+	// Queue every chunk before advancing the cursor. If any enqueue fails the
+	// cursor stays put and the whole scan is retried next cycle — losing a
+	// batch silently is the one outcome worth paying a re-read to avoid.
+	for i, chunk := range chunkEvents(evs, maxEventsPerBatch) {
+		batch := model.Batch{AgentVersion: a.cfg.Version, Identity: *id, Events: chunk}
+		if i == 0 {
+			// The limits reading rides along with the first chunk so it is not
+			// duplicated across every one of them.
+			batch.Limits, batch.LimitsUnavailable = snap, unavailable
+		}
+		if err := a.spool.Enqueue(batch); err != nil {
+			return fmt.Errorf("queue batch: %w", err)
+		}
+	}
+
+	if err := a.scanner.Commit(); err != nil {
+		// The events are queued and will still be delivered; the cost of a
+		// failed commit is re-sending them, which the hub dedups.
+		log.Printf("could not save scan position: %v", err)
 	}
 	return a.drain(ctx)
+}
+
+// chunkEvents splits events into batches of at most n.
+//
+// Always returns at least one chunk, so a cycle carrying only a limits reading
+// still produces a batch.
+func chunkEvents(evs []model.UsageEvent, n int) [][]model.UsageEvent {
+	if len(evs) == 0 {
+		return [][]model.UsageEvent{nil}
+	}
+	var out [][]model.UsageEvent
+	for start := 0; start < len(evs); start += n {
+		end := start + n
+		if end > len(evs) {
+			end = len(evs)
+		}
+		out = append(out, evs[start:end])
+	}
+	return out
 }
 
 func (a *Agent) shouldPollLimits() bool {
