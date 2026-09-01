@@ -512,7 +512,12 @@ func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
 		       COALESCE(NULLIF(ep.label, ''), NULLIF(ep.hostname, ''), ea.endpoint_id),
 		       COALESCE(ep.os_user, ''),
 		       ea.account_uuid,
-		       COALESCE(NULLIF(a.display_name, ''), NULLIF(a.email, ''), ea.account_uuid),
+		       -- Email first, like every other account label on the page.
+		       -- display_name is NOT unique: two of this hub's three
+		       -- subscriptions are both called "Lee", so preferring it renders
+		       -- two different plans under one name and the card silently
+		       -- claims a machine runs the same subscription twice.
+		       COALESCE(NULLIF(a.email, ''), NULLIF(a.display_name, ''), ea.account_uuid),
 		       ea.origin, ea.first_seen, ea.last_seen
 		FROM endpoint_accounts ea
 		LEFT JOIN endpoints ep ON ep.endpoint_id = ea.endpoint_id

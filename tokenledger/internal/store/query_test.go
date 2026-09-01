@@ -291,3 +291,43 @@ func TestEventsInRange_AllAccountsStampsEachRow(t *testing.T) {
 		t.Fatalf("saw %d subscriptions, want 2", len(seen))
 	}
 }
+
+// Two subscriptions can carry the same display name — on the hub this was
+// written against, two of three were both "Lee". Labelling by display name
+// renders them identically, so a machine running both looks like it is running
+// one subscription twice. Emails are unique; names are not.
+func TestEndpointAccounts_DistinguishesAccountsSharingADisplayName(t *testing.T) {
+	s := newStore(t)
+
+	for _, a := range []struct{ uuid, email string }{
+		{"acct-a", "one@example.com"},
+		{"acct-b", "two@example.com"},
+	} {
+		id := ident(a.uuid)
+		id.Email = a.email
+		id.DisplayName = "Lee" // the same human, two subscriptions
+		if err := s.UpsertAccount(id, "max", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Enroll("ep-1", "laptop", "h"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"acct-a", "acct-b"} {
+		if err := s.RecordEndpointAccount("ep-1", a, model.OriginSession); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := s.EndpointAccounts(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0].AccountName == rows[1].AccountName {
+		t.Fatalf("both subscriptions rendered as %q — the card cannot tell them apart",
+			rows[0].AccountName)
+	}
+}
