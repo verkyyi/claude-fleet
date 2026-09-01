@@ -193,6 +193,10 @@ func runAgent(args []string) error {
 	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
 	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
 	spoolMB := fs.Int64("spool-mb", 64, "cap on the on-disk queue, in MB")
+	maxBackfill := fs.Duration("max-backfill", 0,
+		"ignore turns older than this (e.g. 720h). Turns older than the account\n"+
+			"itself are always ignored; this narrows the window further, because\n"+
+			"attribution gets less trustworthy the further back a scan reaches")
 	once := fs.Bool("once", false, "run a single cycle and exit (for cron)")
 	install := fs.Bool("install", false, "print a service unit for this platform and exit")
 	if err := fs.Parse(args); err != nil {
@@ -220,6 +224,7 @@ func runAgent(args []string) error {
 		ScanInterval:   *scanEvery,
 		LimitsInterval: *limitsEvery,
 		SpoolMaxBytes:  *spoolMB << 20,
+		MaxBackfill:    *maxBackfill,
 		Version:        Version,
 		Once:           *once,
 	})

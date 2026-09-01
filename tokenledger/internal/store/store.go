@@ -60,6 +60,11 @@ func migrate(db *sql.DB) error {
 	adds := []struct{ table, column, spec string }{
 		{"endpoints", "limits_unavailable", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "limits_checked_at", "TEXT"},
+		{"accounts", "account_created_at", "TEXT"},
+		{"endpoints", "dropped_pre_account", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "earliest_dropped", "TEXT"},
+		{"endpoints", "dropped_beyond_backfill", "INTEGER NOT NULL DEFAULT 0"},
+		{"endpoints", "backfill_limit", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -95,6 +100,26 @@ func hasColumn(db *sql.DB, table, column string) (bool, error) {
 		}
 	}
 	return false, rows.Err()
+}
+
+// RecordAttribution stores what an endpoint excluded and why.
+//
+// Zero is a meaningful value here: an endpoint that used to drop history and
+// no longer does must stop being reported as lossy.
+func (s *Store) RecordAttribution(endpointID string, a model.Attribution) error {
+	var earliest any
+	if a.EarliestDropped != nil {
+		earliest = fmtTime(*a.EarliestDropped)
+	}
+	_, err := s.db.Exec(`
+		UPDATE endpoints SET dropped_pre_account = ?, earliest_dropped = ?,
+		       dropped_beyond_backfill = ?, backfill_limit = ?
+		WHERE endpoint_id = ?`,
+		a.DroppedPreAccount, earliest, a.DroppedBeyondBackfill, a.BackfillLimit, endpointID)
+	if err != nil {
+		return fmt.Errorf("record attribution: %w", err)
+	}
+	return nil
 }
 
 // RecordLimitsUnavailable stores an endpoint's own explanation of why it could
@@ -150,11 +175,15 @@ func fmtTimePtr(t *time.Time) any {
 // must not blank out the tier another endpoint already established.
 func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 	now := fmtTime(time.Now())
+	var created any
+	if !id.AccountCreatedAt.IsZero() {
+		created = fmtTime(id.AccountCreatedAt)
+	}
 	_, err := s.db.Exec(`
 		INSERT INTO accounts (account_uuid, email, org_uuid, org_name,
 		                      subscription_type, rate_limit_tier, display_name,
-		                      first_seen, last_seen)
-		VALUES (?,?,?,?,?,?,?,?,?)
+		                      account_created_at, first_seen, last_seen)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(account_uuid) DO UPDATE SET
 		  email             = CASE WHEN excluded.email             <> '' THEN excluded.email             ELSE accounts.email             END,
 		  org_uuid          = CASE WHEN excluded.org_uuid          <> '' THEN excluded.org_uuid          ELSE accounts.org_uuid          END,
@@ -162,9 +191,10 @@ func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 		  subscription_type = CASE WHEN excluded.subscription_type <> '' THEN excluded.subscription_type ELSE accounts.subscription_type END,
 		  rate_limit_tier   = CASE WHEN excluded.rate_limit_tier   <> '' THEN excluded.rate_limit_tier   ELSE accounts.rate_limit_tier   END,
 		  display_name      = CASE WHEN excluded.display_name      <> '' THEN excluded.display_name      ELSE accounts.display_name      END,
+		  account_created_at = COALESCE(excluded.account_created_at, accounts.account_created_at),
 		  last_seen         = excluded.last_seen`,
 		id.AccountUUID, id.Email, id.OrgUUID, id.OrgName,
-		subType, tier, id.DisplayName, now, now)
+		subType, tier, id.DisplayName, created, now, now)
 	if err != nil {
 		return fmt.Errorf("upsert account: %w", err)
 	}
@@ -184,6 +214,15 @@ type Endpoint struct {
 	AgentVersion string     `json:"agent_version"`
 	EnrolledAt   time.Time  `json:"enrolled_at"`
 	LastSeen     *time.Time `json:"last_seen"`
+
+	// What this endpoint could not attribute. Surfaced so a total that
+	// excludes history says so, instead of just looking smaller.
+	DroppedPreAccount     int64      `json:"dropped_pre_account"`
+	EarliestDropped       *time.Time `json:"earliest_dropped,omitempty"`
+	DroppedBeyondBackfill int64      `json:"dropped_beyond_backfill"`
+	BackfillLimit         string     `json:"backfill_limit,omitempty"`
+
+	LimitsUnavailable string `json:"limits_unavailable,omitempty"`
 }
 
 // Enroll registers a new endpoint and stores only the hash of its token.
@@ -200,21 +239,28 @@ func (s *Store) Enroll(endpointID, label, tokenHash string) error {
 
 // EndpointByTokenHash resolves an enrollment token to its endpoint.
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
-	row := s.db.QueryRow(`
-		SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
-		       cc_version, agent_version, enrolled_at, last_seen
-		FROM endpoints WHERE token_hash = ?`, hash)
+	row := s.db.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)
 	return scanEndpoint(row)
 }
+
+// endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they
+// drifted apart once already when a column was added.
+const endpointColumns = `
+	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
+	       cc_version, agent_version, enrolled_at, last_seen,
+	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
+	       backfill_limit, limits_unavailable`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	var e Endpoint
 	var enrolled string
-	var lastSeen, account sql.NullString
+	var lastSeen, account, earliest sql.NullString
 	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
-		&e.MachineID, &e.CCVersion, &e.AgentVersion, &enrolled, &lastSeen)
+		&e.MachineID, &e.CCVersion, &e.AgentVersion, &enrolled, &lastSeen,
+		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
+		&e.BackfillLimit, &e.LimitsUnavailable)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +271,7 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 			e.LastSeen = &t
 		}
 	}
+	e.EarliestDropped = parseNullTime(earliest)
 	return &e, nil
 }
 

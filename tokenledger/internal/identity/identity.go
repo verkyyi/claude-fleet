@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
 )
@@ -29,6 +30,7 @@ type claudeConfig struct {
 		OrganizationUUID string `json:"organizationUuid"`
 		OrganizationName string `json:"organizationName"`
 		DisplayName      string `json:"displayName"`
+		AccountCreatedAt string `json:"accountCreatedAt"`
 	} `json:"oauthAccount"`
 	LastReleaseNotesSeen string `json:"lastReleaseNotesSeen"`
 }
@@ -72,6 +74,14 @@ func Detect(home string) (*model.Identity, error) {
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 	}
+	// The account boundary. Turns older than this cannot belong to this
+	// subscription, whatever the transcripts imply.
+	if ts := cfg.OAuthAccount.AccountCreatedAt; ts != "" {
+		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			id.AccountCreatedAt = t.UTC()
+		}
+	}
+
 	// Approximate: Claude Code records the version whose release notes were
 	// last shown, which tracks the installed version closely enough to tell
 	// "this fleet is on 2.1.x" without shelling out to the CLI on every poll.

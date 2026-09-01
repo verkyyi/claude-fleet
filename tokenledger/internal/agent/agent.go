@@ -44,6 +44,15 @@ type Config struct {
 	SpoolMaxBytes  int64
 	Version        string
 
+	// MaxBackfill optionally narrows how far back a scan reaches. Zero means
+	// "as far as the account boundary allows".
+	//
+	// Attribution gets less trustworthy the further back you go — the login
+	// that produced a turn six months ago is unknowable — so an operator who
+	// only cares about recent spend can cut the uncertainty out entirely
+	// rather than have it silently attributed to today's account.
+	MaxBackfill time.Duration
+
 	// Once runs a single cycle and returns, for cron-driven deployments.
 	Once bool
 }
@@ -186,6 +195,17 @@ func (a *Agent) cycle(ctx context.Context) error {
 		log.Printf("transcript warning: %v", e)
 	}
 
+	evs, attribution := a.filterAttributable(evs, id)
+	if attribution.DroppedPreAccount > 0 {
+		log.Printf("dropped %d turn(s) older than this account (earliest %s): they cannot belong to %s",
+			attribution.DroppedPreAccount,
+			attribution.EarliestDropped.Format("2006-01-02"), id.Email)
+	}
+	if attribution.DroppedBeyondBackfill > 0 {
+		log.Printf("dropped %d turn(s) beyond the %s backfill window",
+			attribution.DroppedBeyondBackfill, attribution.BackfillLimit)
+	}
+
 	// Credentials give the account tier as well as the token, so read them even
 	// when it is not yet time to poll.
 	creds, credErr := identity.LoadCredentials(a.cfg.Home)
@@ -202,7 +222,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 	}
 
 	// Nothing new and nothing to report: skip the round trip entirely.
-	if len(evs) == 0 && snap == nil && unavailable == "" {
+	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() {
 		return a.drain(ctx)
 	}
 
@@ -216,9 +236,12 @@ func (a *Agent) cycle(ctx context.Context) error {
 	for i, chunk := range chunks {
 		batch := model.Batch{AgentVersion: a.cfg.Version, Identity: *id, Events: chunk}
 		if i == 0 {
-			// The limits reading rides along with the first chunk so it is not
-			// duplicated across every one of them.
+			// The limits reading and the attribution report ride along with the
+			// first chunk so they are not duplicated across every one of them.
 			batch.Limits, batch.LimitsUnavailable = snap, unavailable
+			if !attribution.IsZero() {
+				batch.Attribution = &attribution
+			}
 		}
 
 		err := a.spool.Enqueue(batch)
@@ -278,6 +301,54 @@ func (a *Agent) batchByteLimit() int {
 		limit = 4 << 10 // a floor, so a pathological config still makes progress
 	}
 	return limit
+}
+
+// filterAttributable removes turns this account provably did not produce.
+//
+// Transcripts carry no account, so a first scan would otherwise stamp a
+// machine's ENTIRE history with whichever login happens to be active — the
+// single largest source of wrong attribution in this system. Two cuts:
+//
+//   - Turns older than the account itself. Provably not this subscription's;
+//     dropped unconditionally, because ingesting them would be a known lie.
+//   - Turns older than an operator-chosen --max-backfill window. Not provably
+//     wrong, just not worth trusting.
+//
+// What is dropped is counted and reported, never silently discarded: a total
+// that quietly excludes history is its own kind of lie.
+func (a *Agent) filterAttributable(evs []model.UsageEvent, id *model.Identity) ([]model.UsageEvent, model.Attribution) {
+	var att model.Attribution
+	if a.cfg.MaxBackfill > 0 {
+		att.BackfillLimit = a.cfg.MaxBackfill.String()
+	}
+
+	accountFloor := id.AccountCreatedAt
+	var backfillFloor time.Time
+	if a.cfg.MaxBackfill > 0 {
+		backfillFloor = time.Now().Add(-a.cfg.MaxBackfill)
+	}
+
+	kept := evs[:0]
+	for _, e := range evs {
+		// A zero timestamp cannot be judged against either floor; keep it and
+		// let it be visible rather than silently vanish.
+		if !e.TS.IsZero() {
+			if !accountFloor.IsZero() && e.TS.Before(accountFloor) {
+				att.DroppedPreAccount++
+				if att.EarliestDropped == nil || e.TS.Before(*att.EarliestDropped) {
+					t := e.TS
+					att.EarliestDropped = &t
+				}
+				continue
+			}
+			if !backfillFloor.IsZero() && e.TS.Before(backfillFloor) {
+				att.DroppedBeyondBackfill++
+				continue
+			}
+		}
+		kept = append(kept, e)
+	}
+	return kept, att
 }
 
 // chunkEvents splits events into batches bounded by BOTH a count and a

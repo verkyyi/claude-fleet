@@ -110,6 +110,14 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		}
 	}
 
+	// Like the limits verdict, the attribution report rides on the first chunk
+	// of a scan; later chunks must not reset it to zero.
+	if batch.Attribution != nil {
+		if err := s.Store.RecordAttribution(ep.ID, *batch.Attribution); err != nil {
+			return nil, err
+		}
+	}
+
 	if batch.Limits != nil {
 		batch.Limits.AccountUUID = id.AccountUUID
 		batch.Limits.EndpointID = ep.ID

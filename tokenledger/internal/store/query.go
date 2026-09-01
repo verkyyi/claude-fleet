@@ -11,16 +11,17 @@ import (
 
 // Account is a subscription tracked by this hub.
 type Account struct {
-	AccountUUID      string    `json:"account_uuid"`
-	Email            string    `json:"email"`
-	OrgUUID          string    `json:"org_uuid"`
-	OrgName          string    `json:"org_name"`
-	SubscriptionType string    `json:"subscription_type"`
-	RateLimitTier    string    `json:"rate_limit_tier"`
-	DisplayName      string    `json:"display_name"`
-	FirstSeen        time.Time `json:"first_seen"`
-	LastSeen         time.Time `json:"last_seen"`
-	EndpointCount    int       `json:"endpoint_count"`
+	AccountUUID      string     `json:"account_uuid"`
+	Email            string     `json:"email"`
+	OrgUUID          string     `json:"org_uuid"`
+	OrgName          string     `json:"org_name"`
+	SubscriptionType string     `json:"subscription_type"`
+	RateLimitTier    string     `json:"rate_limit_tier"`
+	DisplayName      string     `json:"display_name"`
+	AccountCreatedAt *time.Time `json:"account_created_at,omitempty"`
+	FirstSeen        time.Time  `json:"first_seen"`
+	LastSeen         time.Time  `json:"last_seen"`
+	EndpointCount    int        `json:"endpoint_count"`
 }
 
 // ListAccounts returns every subscription on this hub.
@@ -28,7 +29,7 @@ func (s *Store) ListAccounts() ([]Account, error) {
 	rows, err := s.db.Query(`
 		SELECT a.account_uuid, a.email, a.org_uuid, a.org_name,
 		       a.subscription_type, a.rate_limit_tier, a.display_name,
-		       a.first_seen, a.last_seen,
+		       a.account_created_at, a.first_seen, a.last_seen,
 		       (SELECT COUNT(*) FROM endpoints e WHERE e.account_uuid = a.account_uuid)
 		FROM accounts a
 		ORDER BY a.last_seen DESC`)
@@ -41,11 +42,13 @@ func (s *Store) ListAccounts() ([]Account, error) {
 	for rows.Next() {
 		var a Account
 		var first, last string
+		var created sql.NullString
 		if err := rows.Scan(&a.AccountUUID, &a.Email, &a.OrgUUID, &a.OrgName,
 			&a.SubscriptionType, &a.RateLimitTier, &a.DisplayName,
-			&first, &last, &a.EndpointCount); err != nil {
+			&created, &first, &last, &a.EndpointCount); err != nil {
 			return nil, err
 		}
+		a.AccountCreatedAt = parseNullTime(created)
 		a.FirstSeen, _ = time.Parse(rfc, first)
 		a.LastSeen, _ = time.Parse(rfc, last)
 		out = append(out, a)
@@ -56,9 +59,7 @@ func (s *Store) ListAccounts() ([]Account, error) {
 // ListEndpoints returns the endpoints for one account, or all when account is
 // empty.
 func (s *Store) ListEndpoints(account string) ([]Endpoint, error) {
-	q := `SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
-	             cc_version, agent_version, enrolled_at, last_seen
-	      FROM endpoints`
+	q := endpointColumns + ` FROM endpoints`
 	var args []any
 	if account != "" {
 		q += ` WHERE account_uuid = ?`

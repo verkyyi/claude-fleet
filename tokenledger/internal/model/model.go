@@ -60,6 +60,16 @@ type Identity struct {
 	RateLimitTier    string `json:"rate_limit_tier"`   // "default_claude_max_20x", ...
 	DisplayName      string `json:"display_name"`
 
+	// AccountCreatedAt is the hard boundary for attribution.
+	//
+	// Transcripts record no account, so the agent stamps whichever one is
+	// logged in when it scans. On a first scan that means the ENTIRE history
+	// of a machine gets attributed to today's login — including turns spent
+	// under a different subscription. Nothing in the data can detect that in
+	// general, but one case is provable: a turn older than the account itself
+	// cannot possibly belong to it.
+	AccountCreatedAt time.Time `json:"account_created_at"`
+
 	MachineID string `json:"machine_id"`
 	Hostname  string `json:"hostname"`
 	OS        string `json:"os"`
@@ -103,12 +113,46 @@ type LimitsSnapshot struct {
 	RawJSON        string `json:"raw_json"`
 }
 
+// Attribution reports what the agent refused to attribute, and why.
+//
+// Silence here would be the worst outcome: a hub showing a confident total
+// that quietly excludes — or quietly includes — turns from another
+// subscription. Both the count and the reason travel with the batch.
+type Attribution struct {
+	// DroppedPreAccount counts turns older than AccountCreatedAt. These
+	// provably belong to some other subscription and are never ingested.
+	DroppedPreAccount int64 `json:"dropped_pre_account"`
+
+	// EarliestDropped is the oldest turn dropped for that reason, so the UI can
+	// say how far back the excluded history reaches.
+	EarliestDropped *time.Time `json:"earliest_dropped,omitempty"`
+
+	// DroppedBeyondBackfill counts turns excluded by an explicit
+	// --max-backfill window rather than by the account boundary.
+	DroppedBeyondBackfill int64 `json:"dropped_beyond_backfill"`
+
+	// BackfillLimit is the operator's chosen window, zero when unset.
+	BackfillLimit string `json:"backfill_limit,omitempty"`
+}
+
+// isZero reports whether anything was dropped. Exported behaviour lives on the
+// agent; this is just a nil-ish check.
+func (a Attribution) isZero() bool {
+	return a.DroppedPreAccount == 0 && a.DroppedBeyondBackfill == 0
+}
+
+// IsZero reports whether anything was dropped.
+func (a Attribution) IsZero() bool { return a.isZero() }
+
 // Batch is the agent's push payload.
 type Batch struct {
 	AgentVersion string          `json:"agent_version"`
 	Identity     Identity        `json:"identity"`
 	Events       []UsageEvent    `json:"events"`
 	Limits       *LimitsSnapshot `json:"limits,omitempty"`
+
+	// Attribution travels on the first chunk of a scan, like Limits.
+	Attribution *Attribution `json:"attribution,omitempty"`
 
 	// LimitsUnavailable explains why Limits is nil, so the hub can render an
 	// honest banner instead of a stale gauge. Empty when Limits is present.

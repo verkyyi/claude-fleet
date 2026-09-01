@@ -293,3 +293,91 @@ const (
 // alwaysRecent parks the limits poll in the near past so tests never reach out
 // to Anthropic.
 func alwaysRecent() time.Time { return time.Now() }
+
+// A first scan stamps a machine's whole history with today's login. Turns older
+// than the account itself provably belong to someone else and must never be
+// ingested — that is the one part of the attribution problem the data can
+// actually settle.
+func TestFilterAttributable_DropsTurnsOlderThanTheAccount(t *testing.T) {
+	created := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	id := &model.Identity{AccountUUID: "acct", Email: "me@example.com", AccountCreatedAt: created}
+	a := &Agent{cfg: Config{}}
+
+	evs := []model.UsageEvent{
+		{MessageUUID: "ancient", TS: created.AddDate(0, -3, 0)},
+		{MessageUUID: "just-before", TS: created.Add(-time.Second)},
+		{MessageUUID: "at-creation", TS: created},
+		{MessageUUID: "after", TS: created.AddDate(0, 1, 0)},
+	}
+	kept, att := a.filterAttributable(evs, id)
+
+	if len(kept) != 2 {
+		t.Fatalf("kept %v, want the two turns at or after account creation", uuidsOf(kept))
+	}
+	if att.DroppedPreAccount != 2 {
+		t.Errorf("DroppedPreAccount = %d, want 2", att.DroppedPreAccount)
+	}
+	if att.EarliestDropped == nil || !att.EarliestDropped.Equal(created.AddDate(0, -3, 0)) {
+		t.Errorf("EarliestDropped = %v, want the oldest dropped turn", att.EarliestDropped)
+	}
+}
+
+// Control: with no boundary known, nothing may be dropped — otherwise the test
+// above would pass on an agent that discards everything.
+func TestFilterAttributable_NoBoundaryKeepsEverything(t *testing.T) {
+	a := &Agent{cfg: Config{}}
+	evs := []model.UsageEvent{
+		{MessageUUID: "a", TS: time.Now().AddDate(-2, 0, 0)},
+		{MessageUUID: "b", TS: time.Now()},
+	}
+	kept, att := a.filterAttributable(evs, &model.Identity{AccountUUID: "acct"})
+	if len(kept) != 2 || !att.IsZero() {
+		t.Fatalf("kept %v att %+v; with no account boundary nothing is provably wrong", uuidsOf(kept), att)
+	}
+}
+
+func TestFilterAttributable_MaxBackfillTightensFurther(t *testing.T) {
+	a := &Agent{cfg: Config{MaxBackfill: 24 * time.Hour}}
+	id := &model.Identity{AccountUUID: "acct"} // no account boundary
+	evs := []model.UsageEvent{
+		{MessageUUID: "old", TS: time.Now().Add(-72 * time.Hour)},
+		{MessageUUID: "recent", TS: time.Now().Add(-time.Hour)},
+	}
+	kept, att := a.filterAttributable(evs, id)
+
+	if len(kept) != 1 || kept[0].MessageUUID != "recent" {
+		t.Fatalf("kept %v, want only the recent turn", uuidsOf(kept))
+	}
+	if att.DroppedBeyondBackfill != 1 {
+		t.Errorf("DroppedBeyondBackfill = %d, want 1", att.DroppedBeyondBackfill)
+	}
+	// The two reasons must stay separate: one is provable, the other a choice.
+	if att.DroppedPreAccount != 0 {
+		t.Errorf("DroppedPreAccount = %d; a backfill cut is not an account violation", att.DroppedPreAccount)
+	}
+	if att.BackfillLimit == "" {
+		t.Error("the chosen window should be reported so the UI can explain the gap")
+	}
+}
+
+// A turn with no usable timestamp cannot be judged; dropping it silently would
+// lose real spend for the sake of a check that could not run.
+func TestFilterAttributable_KeepsUndatedTurns(t *testing.T) {
+	a := &Agent{cfg: Config{MaxBackfill: time.Hour}}
+	id := &model.Identity{AccountCreatedAt: time.Now()}
+	kept, att := a.filterAttributable([]model.UsageEvent{{MessageUUID: "undated"}}, id)
+	if len(kept) != 1 {
+		t.Fatalf("an undated turn was dropped by a check that could not evaluate it")
+	}
+	if !att.IsZero() {
+		t.Errorf("att = %+v, want nothing reported as dropped", att)
+	}
+}
+
+func uuidsOf(evs []model.UsageEvent) []string {
+	out := make([]string, len(evs))
+	for i, e := range evs {
+		out[i] = e.MessageUUID
+	}
+	return out
+}

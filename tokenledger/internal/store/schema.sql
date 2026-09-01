@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   subscription_type TEXT NOT NULL DEFAULT '',
   rate_limit_tier   TEXT NOT NULL DEFAULT '',
   display_name      TEXT NOT NULL DEFAULT '',
+  -- Turns older than this cannot belong to this subscription. The agent uses
+  -- it as a hard attribution floor; the UI uses it to explain a gap.
+  account_created_at TEXT,
   first_seen        TEXT NOT NULL,
   last_seen         TEXT NOT NULL
 );
@@ -38,7 +41,14 @@ CREATE TABLE IF NOT EXISTS endpoints (
   -- Without this the UI can only say "nobody managed to read them", which
   -- tells an operator nothing about which machine to go fix.
   limits_unavailable TEXT NOT NULL DEFAULT '',
-  limits_checked_at  TEXT
+  limits_checked_at  TEXT,
+
+  -- What this endpoint refused to attribute, and why. Excluded history is
+  -- reported rather than silently missing from the totals.
+  dropped_pre_account     INTEGER NOT NULL DEFAULT 0,
+  earliest_dropped        TEXT,
+  dropped_beyond_backfill INTEGER NOT NULL DEFAULT 0,
+  backfill_limit          TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_endpoints_account ON endpoints(account_uuid);
