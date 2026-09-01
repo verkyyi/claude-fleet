@@ -391,3 +391,60 @@ func TestCounter_FallsBackToStoredGrowthWithoutHeartbeats(t *testing.T) {
 		t.Errorf("rate = %v once a heartbeat arrived, want the live one", got)
 	}
 }
+
+// The regression that made the counter vanish from the page at 4 of 30 samples.
+//
+// Invalidate used to signal staleness by zeroing measuredAt — which is also the
+// flag the error path tests to decide whether a previous reading exists. So a
+// failed read immediately after an ingest served NOTHING rather than the last
+// good total, attachCounter dropped the counter, and the page simply stopped
+// counting until the next successful read.
+func TestCounter_InvalidateDoesNotDestroyTheFallback(t *testing.T) {
+	var c Counter
+	if _, _, _, err := c.Total(func() (int64, int64, error) { return 7, 7000, nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	c.Invalidate() // as every ingest does
+
+	_, tokens, measuredAt, err := c.Total(func() (int64, int64, error) {
+		return 0, 0, errors.New("database is locked")
+	})
+	if err != nil {
+		t.Fatalf("a failed read after an ingest returned an error: %v — the counter "+
+			"disappears from the page entirely", err)
+	}
+	if tokens != 7000 {
+		t.Errorf("tokens = %d, want the last good reading (7000)", tokens)
+	}
+	if measuredAt.IsZero() {
+		t.Error("no measurement time; the page cannot project")
+	}
+}
+
+// Control: Invalidate must still force a recompute, or it does nothing at all.
+func TestCounter_InvalidateStillForcesARecompute(t *testing.T) {
+	var c Counter
+	calls := 0
+	load := func() (int64, int64, error) {
+		calls++
+		return int64(calls), int64(calls * 1000), nil
+	}
+	if _, _, _, err := c.Total(load); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := c.Total(load); err != nil { // cached
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("cache not working: %d calls", calls)
+	}
+
+	c.Invalidate()
+	if _, _, _, err := c.Total(load); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Errorf("Invalidate did not force a recompute: %d calls", calls)
+	}
+}

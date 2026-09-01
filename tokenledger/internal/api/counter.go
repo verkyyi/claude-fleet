@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -63,6 +64,15 @@ type Counter struct {
 	rateBaseAt time.Time
 	perMin     float64
 
+	// stale forces the next read to recompute.
+	//
+	// Separate from measuredAt on purpose. Invalidate used to signal staleness
+	// by zeroing measuredAt, which is also the flag the error path tests to
+	// decide whether a previous reading exists — so a failed read right after
+	// an ingest served NOTHING instead of the last good total, and the counter
+	// vanished from the page entirely. Measured at 4 of 30 samples.
+	stale bool
+
 	// The smoothed live rate, and whether one has ever been seen. Preferred
 	// over perMin because it is fresh within seconds rather than minutes.
 	liveEMA  float64
@@ -101,18 +111,21 @@ func (c *Counter) Total(load func() (int64, int64, error)) (turns, tokens int64,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.measuredAt.IsZero() && time.Since(c.measuredAt) < counterTTL {
+	if !c.stale && !c.measuredAt.IsZero() && time.Since(c.measuredAt) < counterTTL {
 		return c.turns, c.tokens, c.measuredAt, nil
 	}
 	t, tok, err := load()
 	if err != nil {
 		// Serve the previous reading rather than nothing: a momentarily
-		// unreadable database should not blank the headline figure.
+		// unreadable database should not blank the headline figure. This holds
+		// whether or not the cache was invalidated — a pending recompute is not
+		// a reason to forget what was already measured.
 		if !c.measuredAt.IsZero() {
 			return c.turns, c.tokens, c.measuredAt, nil
 		}
 		return 0, 0, time.Time{}, err
 	}
+	c.stale = false
 	// The store total can only grow. If a read comes back smaller — a merge
 	// mid-flight, a partial scan — keep the larger one. The counter's whole
 	// promise is that it never goes backwards.
@@ -145,7 +158,7 @@ func (c *Counter) Total(load func() (int64, int64, error)) (turns, tokens int64,
 // of pushes from a fleet costs one query between snapshots, not one per push.
 func (c *Counter) Invalidate() {
 	c.mu.Lock()
-	c.measuredAt = time.Time{}
+	c.stale = true
 	c.mu.Unlock()
 }
 
@@ -239,6 +252,11 @@ func (s *Server) attachCounter(snap *Snapshot) {
 	}
 	turns, tokens, measuredAt, err := s.counter.Total(s.Store.LifetimeTotals)
 	if err != nil {
+		// Only reachable before the first successful read; afterwards the last
+		// good total is served instead. Log it rather than dropping the counter
+		// silently — that is how a page that had simply stopped updating went
+		// unnoticed.
+		log.Printf("counter unavailable: %v", err)
 		return
 	}
 	// Fold this snapshot's live rate in before reading the smoothed value, so
