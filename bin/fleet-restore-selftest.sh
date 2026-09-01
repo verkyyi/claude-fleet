@@ -351,5 +351,46 @@ dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF i
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
 
-printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
+# --- #504: shrink-guard staleness escape hatches + refusal counter ------------
+# (a) the earlier hub-only refusal must have COUNTED itself (the frozen-map bug
+#     was every cycle refusing with only a log line to show for it).
+SKIPF="$FLEET_CONF_DIR/fleets/hubonly/.restore.skips"
+[ -f "$SKIPF" ] || fail "504: a shrink refusal should write the skip counter ($SKIPF missing)"
+[ "$(cat "$SKIPF")" = 1 ] || fail "504: one refusal → counter 1 (got: $(cat "$SKIPF"))"
+
+# (b) CONTENT escape: a stored map whose surplus WIN rows point at DEAD worktrees
+#     holds nothing restorable — the shrink must be ACCEPTED (map overwritten from
+#     live) and the successful write must reset the refusal counter.
+NMAP="$FLEET_CONF_DIR/fleets/hubonly/restore.map"
+mkdir -p "$(dirname "$NMAP")"
+{
+  printf 'FLEET\thubonly\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
+  printf 'WIN\tissue-dead1\t%s\tgone-111\t91\n' "$WORK/nonexistent-91"
+  printf 'WIN\tissue-dead2\t%s\tgone-222\t92\n' "$WORK/nonexistent-92"
+  printf 'WIN\tissue-dead3\t%s\tgone-333\t93\n' "$WORK/nonexistent-93"
+} > "$NMAP"
+bash "$RESTORE" --snapshot 2>/dev/null || fail "504: snapshot (content escape) exited non-zero"
+grep -q "^WIN${TAB}issue-dead1${TAB}" "$NMAP" \
+  && fail "504: dead-worktree rows should be dropped — shrink must be accepted (map: $(cat "$NMAP"))"
+[ -f "$SKIPF" ] && fail "504: a successful map write must reset the refusal counter"
+
+# (c) AGE escape: a rich stored map (live worktrees, so the content hatch does
+#     NOT fire) is first REFUSED while fresh, then ACCEPTED once older than
+#     FLEET_RESTORE_MAP_MAX_AGE — a map that old is frozen, not richer.
+mk_rich() { {
+  printf 'FLEET\thubonly\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
+  for i in 1 2 3 4 5; do printf 'WIN\tissue-fake%s\t%s\tfake-%s\t8%s\n' "$i" "$WORK_PATH" "$i" "$i"; done
+} > "$NMAP"; }
+mk_rich
+bash "$RESTORE" --snapshot 2>/dev/null || fail "504: snapshot (fresh rich map) exited non-zero"
+grep -q "^WIN${TAB}issue-fake1${TAB}" "$NMAP" \
+  || fail "504: a FRESH rich map (live worktrees) must still be kept (map: $(cat "$NMAP"))"
+[ "$(cat "$SKIPF" 2>/dev/null)" = 1 ] || fail "504: the fresh-map refusal should count (got: $(cat "$SKIPF" 2>/dev/null))"
+touch -t 200001010000 "$NMAP"
+bash "$RESTORE" --snapshot 2>/dev/null || fail "504: snapshot (aged map) exited non-zero"
+grep -q "^WIN${TAB}issue-fake1${TAB}" "$NMAP" \
+  && fail "504: a map older than FLEET_RESTORE_MAP_MAX_AGE must be overwritten (map: $(cat "$NMAP"))"
+[ -f "$SKIPF" ] && fail "504: the age-accepted write must reset the refusal counter"
+
+printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) + shrink staleness hatches & refusal counter (#504) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map, restore reconciles missing windows idempotently\n'
 exit 0

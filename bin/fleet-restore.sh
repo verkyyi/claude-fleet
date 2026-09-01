@@ -177,20 +177,64 @@ snapshot() {
     # shrink guard compares against whichever map currently holds recovery data —
     # the new-layout map, or a not-yet-migrated legacy one (issue #181).
     local prior; prior=$(restore_map_file "$sess")
+    local skipf="$sdir/.restore.skips"
     if [ -f "$prior" ]; then
       local new_wins old_wins
       new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"   2>/dev/null | wc -l | tr -d ' ')
       old_wins=$(awk -F'\t' '$1=="WIN"' "$prior" 2>/dev/null | wc -l | tr -d ' ')
       if [ "${new_wins:-0}" -lt "${old_wins:-0}" ]; then
-        log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} — keeping richer map (mid-restore?)"
-        rm -f "$tmp"
-        continue
+        # Staleness escape hatches (issue #504): the row-count-only compare froze
+        # one fleet's map at a months-old layout — every cycle refused, only a log
+        # line to show for it, and a real crash would have restored a set of DEAD
+        # windows while losing every current one. Before refusing, check whether
+        # the stored map's extra rows still point at anything restorable:
+        #  (1) CONTENT — count the stored WIN rows whose worktree still exists on
+        #      disk. If the live snapshot has at least that many rows, the prior
+        #      map's surplus is dead paths (restore skips them anyway) — nothing
+        #      recoverable is lost, so accept the shrink.
+        #  (2) AGE — a map that hasn't been successfully rewritten in
+        #      FLEET_RESTORE_MAP_MAX_AGE seconds (default 24h) is frozen, not
+        #      richer; trust the live layout over month-old recovery data.
+        local old_live p
+        old_live=$(awk -F'\t' '$1=="WIN"{print $3}' "$prior" 2>/dev/null \
+          | while IFS= read -r p; do [ -n "$p" ] && [ -d "$p" ] && printf 'x\n'; done \
+          | wc -l | tr -d ' ')
+        local max_age="${FLEET_RESTORE_MAP_MAX_AGE:-86400}" age=0 mts now
+        case "$max_age" in ''|*[!0-9]*) max_age=86400;; esac
+        mts=$(stat -f %m "$prior" 2>/dev/null || stat -c %Y "$prior" 2>/dev/null)
+        now=$(date +%s)
+        case "$mts" in ''|*[!0-9]*) ;; *) age=$(( now - mts ));; esac
+        if [ "${new_wins:-0}" -ge "${old_live:-0}" ]; then
+          log "snapshot $sess: shrink accepted — stored map's surplus WIN rows have no worktree on disk (live=$new_wins stored=$old_wins stored-alive=$old_live, #504)"
+        elif [ "$age" -gt "$max_age" ]; then
+          log "snapshot $sess: shrink accepted — stored map is ${age}s old (> ${max_age}s without a successful write, #504)"
+        else
+          # Genuine refusal (mid-restore shape). Count consecutive refusals in a
+          # per-fleet file and ALARM visibly once they pile up (issue #504's other
+          # half: a frozen map used to be a silent log line nobody read). The
+          # display-message lands on the fleet's own status line; re-fired every
+          # FLEET_RESTORE_SKIP_ALARM-th refusal (default 10) so it nags without
+          # spamming every tick. Counter resets on any successful map write below.
+          local skips=0 alarm_n="${FLEET_RESTORE_SKIP_ALARM:-10}"
+          case "$alarm_n" in ''|*[!0-9]*|0) alarm_n=10;; esac
+          [ -f "$skipf" ] && read -r skips < "$skipf" 2>/dev/null
+          case "$skips" in ''|*[!0-9]*) skips=0;; esac
+          skips=$((skips + 1)); printf '%s\n' "$skips" > "$skipf" 2>/dev/null || :
+          log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} (${old_live:-0} alive) — keeping richer map (mid-restore?) [refusal #$skips]"
+          if [ $(( skips % alarm_n )) -eq 0 ]; then
+            tmux -L "$sock" display-message -d 6000 \
+              "#[fg=red,bold] restore.map frozen: $skips snapshot cycles refused — check $(fleet_state_dir "$sess")/restore.map (#504) " 2>/dev/null || :
+          fi
+          rm -f "$tmp"
+          continue
+        fi
       fi
     fi
     # Drop the stale legacy map ONLY when the new one actually landed — a failed mv
     # (ENOSPC/read-only/EXDEV) must NOT leave the fleet with no recovery map at all.
     if mv "$tmp" "$dest" 2>/dev/null; then
       [ "$dest" = "$RDIR/$sess.map" ] || rm -f "$RDIR/$sess.map" 2>/dev/null || true
+      rm -f "$skipf" 2>/dev/null || :   # a successful write ends any refusal streak (#504)
     else
       rm -f "$tmp"
     fi
