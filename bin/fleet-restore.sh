@@ -168,12 +168,30 @@ snapshot() {
     # than the durable map and would blow the recovery data (the claude --resume
     # ids) away before restore can use it. Only overwrite when the live snapshot
     # has at least as many WIN rows as the stored map; otherwise the live layout
-    # is suspect, so keep the richer prior map. A genuine net-shrink (a landed
-    # worker's window closed) self-heals the moment the fleet grows back to its
-    # prior size and a full snapshot overwrites — and a stale WIN row is harmless
-    # to restore (its worktree is gone → skipped), so erring on the side of
-    # keeping recovery data is safe.
+    # is suspect, so keep the richer prior map.
+    #
+    # But row COUNT alone froze maps for good (issue #504): a fleet that
+    # permanently shrank (workers landed, windows closed) never "grows back to
+    # its prior size", so every later snapshot was rejected — for a week, one
+    # silent log line per cycle — and a real crash would have restored a set of
+    # long-dead windows while losing every live one. Two staleness escapes:
+    #
+    #   1) DEAD-ROW: compare against only the stored WIN rows whose worktree
+    #      still EXISTS. Mid-restore rows have live worktrees, so #160's
+    #      protection is intact; a row whose worktree is gone is dead weight
+    #      (restore skips it anyway) and must not block the overwrite.
+    #   2) AGE: a mid-restore lasts minutes; a map not successfully rewritten
+    #      for FLEET_RESTORE_STALE_MAP_AGE seconds (default 1 day) is stale,
+    #      not mid-restore — accept the live layout as truth. This also covers
+    #      windows closed on purpose whose worktrees were kept.
+    #
+    # A rejection that survives both escapes is COUNTED (consecutive, reset on
+    # any successful write); at FLEET_RESTORE_REJECT_ALARM rejects (default 20
+    # ≈ 20min at the collector's 60s tick) it logs an ALARM line and fires the
+    # best-effort FLEET_NOTIFY_CMD — so a frozen map is seen in minutes, long
+    # before the age escape would overwrite anything.
     local dest="$sdir/restore.map"
+    local rejf="$sdir/.snapshot-rejects"
     # shrink guard compares against whichever map currently holds recovery data —
     # the new-layout map, or a not-yet-migrated legacy one (issue #181).
     local prior; prior=$(restore_map_file "$sess")
@@ -182,14 +200,38 @@ snapshot() {
       new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"   2>/dev/null | wc -l | tr -d ' ')
       old_wins=$(awk -F'\t' '$1=="WIN"' "$prior" 2>/dev/null | wc -l | tr -d ' ')
       if [ "${new_wins:-0}" -lt "${old_wins:-0}" ]; then
-        log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} — keeping richer map (mid-restore?)"
-        rm -f "$tmp"
-        continue
+        local live_old
+        live_old=$(awk -F'\t' '$1=="WIN"{print $3}' "$prior" 2>/dev/null \
+                   | { n=0; while IFS= read -r _wt; do [ -n "$_wt" ] && [ -d "$_wt" ] && n=$((n+1)); done; printf '%s' "$n"; })
+        local max_age="${FLEET_RESTORE_STALE_MAP_AGE:-86400}" age=-1 pmt
+        pmt=$(stat -f %m "$prior" 2>/dev/null || stat -c %Y "$prior" 2>/dev/null)
+        [ -n "$pmt" ] && age=$(( $(date +%s) - pmt ))
+        if [ "${new_wins:-0}" -ge "${live_old:-0}" ]; then
+          log "snapshot $sess: accepting shrink ${old_wins}→${new_wins} WIN rows — only ${live_old} stored rows still have a worktree (dead rows, issue #504)"
+        elif [ "$age" -ge "$max_age" ]; then
+          log "snapshot $sess: accepting shrink ${old_wins}→${new_wins} WIN rows — stored map ${age}s old > ${max_age}s, stale not mid-restore (issue #504)"
+        else
+          local rejects; rejects=$(cat "$rejf" 2>/dev/null)
+          case "$rejects" in (''|*[!0-9]*) rejects=0;; esac
+          rejects=$((rejects + 1))
+          printf '%s\n' "$rejects" > "$rejf" 2>/dev/null || true
+          log "snapshot $sess: live has ${new_wins:-0} WIN rows < stored ${old_wins:-0} — keeping richer map (mid-restore?; reject #$rejects)"
+          if [ "$rejects" = "${FLEET_RESTORE_REJECT_ALARM:-20}" ]; then
+            log "snapshot $sess: ALARM — $rejects consecutive snapshots rejected; restore.map may be frozen at a stale layout (issue #504)"
+            if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+              "$FLEET_NOTIFY_CMD" "# ⚠ fleet restore.map frozen: $sess
+$rejects consecutive snapshots rejected by the shrink guard — the durable recovery map may be stuck at a stale layout (issue #504). See $LOG." >/dev/null 2>&1 || true
+            fi
+          fi
+          rm -f "$tmp"
+          continue
+        fi
       fi
     fi
     # Drop the stale legacy map ONLY when the new one actually landed — a failed mv
     # (ENOSPC/read-only/EXDEV) must NOT leave the fleet with no recovery map at all.
     if mv "$tmp" "$dest" 2>/dev/null; then
+      rm -f "$rejf" 2>/dev/null || true      # successful write breaks the reject streak
       [ "$dest" = "$RDIR/$sess.map" ] || rm -f "$RDIR/$sess.map" 2>/dev/null || true
     else
       rm -f "$tmp"
