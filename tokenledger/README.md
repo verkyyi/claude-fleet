@@ -74,6 +74,12 @@ ccquota agent
 scheduled-task command for the platform it runs on. Review it before using it —
 it carries a token.
 
+> **Minimal Linux images need CA certificates.** The agent talks to
+> `api.anthropic.com` over HTTPS, and a slim container or a stripped base image
+> often ships without root certificates. Token usage still flows, but the limits
+> lookup fails and the dashboard reports a TLS error against that endpoint.
+> `apt-get install -y ca-certificates` (or your distro's equivalent) fixes it.
+
 **Just want a local report?** No hub, no network:
 
 ```bash
