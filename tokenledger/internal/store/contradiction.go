@@ -16,6 +16,21 @@ import (
 // catches — the observed case fell 41 points.
 const utilizationDropTolerance = 10.0
 
+// maxComparisonAge is how old the previous reading may be and still be used as
+// evidence against a new one.
+//
+// Without this the guard wedges. A refused reading is not stored, so the
+// baseline it was compared against never moves: if the condition persists —
+// whatever caused it — every subsequent reading is refused against the same
+// increasingly ancient number, and the account's limits stay unavailable until
+// the window rolls over, which for the seven-day window is days.
+//
+// So the rule self-heals. A contradiction is refused loudly while the evidence
+// is fresh; if it is still being reported fifteen minutes later, the world has
+// changed and the new reading is believed. A one-off glitch does not survive
+// that long; a real change does.
+const maxComparisonAge = 15 * time.Minute
+
 // ContradictsPrevious reports whether snap cannot belong to the same account as
 // the reading before it.
 //
@@ -39,6 +54,11 @@ const utilizationDropTolerance = 10.0
 // a suspicion.
 func ContradictsPrevious(prev, snap *model.LimitsSnapshot) (bool, string) {
 	if prev == nil || snap == nil {
+		return false, ""
+	}
+	// Stale evidence convicts nobody — see maxComparisonAge.
+	if !prev.ObservedAt.IsZero() && !snap.ObservedAt.IsZero() &&
+		snap.ObservedAt.Sub(prev.ObservedAt) > maxComparisonAge {
 		return false, ""
 	}
 	if why, bad := windowContradicts("seven-day", prev.SevenDay, snap.SevenDay); bad {
