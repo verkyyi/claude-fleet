@@ -471,3 +471,57 @@ func TestGroupBySubscription_SameAccountIsNotSplit(t *testing.T) {
 		t.Fatalf("unstamped = %v, want both", uuidsOf(unstamped))
 	}
 }
+
+// Regression: the agent learns its own reset-phase fingerprint from the limits
+// poll, and grouping must happen AFTER that. Grouping first meant that on every
+// restart, before the first poll, the machine's own sessions failed to match
+// anything and were split into a phantom "unidentified subscription" — which
+// then appeared in the hub alongside the real one.
+func TestGroupBySubscription_MachineOwnFingerprintIsNotASeparateAccount(t *testing.T) {
+	r5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	r7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	own := sessions.FingerprintFor(&r5, &r7)
+
+	a := &Agent{cfg: Config{}, machineFingerprint: own}
+	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
+		"/p/mine.jsonl": {FiveHourAt: &r5, SevenDayAt: &r7, StampedAt: time.Now()},
+	}}
+
+	groups, unstamped := a.groupBySubscription(
+		[]model.UsageEvent{{MessageUUID: "a", TranscriptPath: "/p/mine.jsonl"}},
+		&model.Identity{AccountUUID: "acct-uuid"})
+
+	if len(groups) != 0 {
+		t.Fatalf("groups = %v; a session on this machine's OWN subscription is not a separate one", groups)
+	}
+	if len(unstamped) != 1 {
+		t.Fatalf("unstamped = %v, want the turn attributed to the machine login", uuidsOf(unstamped))
+	}
+}
+
+// Control: a genuinely different schedule still splits, so the check above is
+// not simply disabling attribution.
+func TestGroupBySubscription_DifferentScheduleStillSplits(t *testing.T) {
+	own5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	own7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	other5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
+	other7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
+
+	a := &Agent{cfg: Config{}, machineFingerprint: sessions.FingerprintFor(&own5, &own7)}
+	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
+		"/p/theirs.jsonl": {FiveHourAt: &other5, SevenDayAt: &other7, StampedAt: time.Now()},
+	}}
+
+	groups, _ := a.groupBySubscription(
+		[]model.UsageEvent{{MessageUUID: "b", TranscriptPath: "/p/theirs.jsonl"}},
+		&model.Identity{AccountUUID: "acct-uuid"})
+
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d, want the genuinely different subscription split off", len(groups))
+	}
+	for _, g := range groups {
+		if !g.inferred {
+			t.Error("a reset-phase identification must be marked inferred")
+		}
+	}
+}

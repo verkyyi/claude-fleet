@@ -359,6 +359,29 @@ func (a *Agent) cycle(ctx context.Context) error {
 		log.Printf("transcript warning: %v", e)
 	}
 
+	// Credentials give the account tier as well as the token, so read them even
+	// when it is not yet time to poll.
+	creds, credErr := identity.LoadCredentials(a.cfg.Home)
+	if creds != nil {
+		id.SubscriptionType = creds.SubscriptionType
+		id.RateLimitTier = creds.RateLimitTier
+	}
+
+	var snap *model.LimitsSnapshot
+	var unavailable string
+	if a.shouldPollLimits() {
+		snap, unavailable = a.pollLimits(ctx, creds, credErr)
+		a.lastLimitsPoll = time.Now()
+	}
+	// Learn the machine login's own reset phase, so sessions on that same
+	// subscription are not mistaken for a different one.
+	if snap != nil {
+		a.machineFingerprint = sessions.FingerprintFor(snap.FiveHour.ResetsAt, snap.SevenDay.ResetsAt)
+	}
+
+	// Grouping must come AFTER the fingerprint is known. Deciding what belongs
+	// to "another subscription" while ignorant of this machine's own schedule
+	// split the machine's own sessions into a phantom account on every restart.
 	// Split by the subscription each SESSION actually ran on, not by the
 	// machine's login. Claude Code takes CLAUDE_CODE_OAUTH_TOKEN from the
 	// environment, so sessions on one machine can be on different
@@ -378,26 +401,6 @@ func (a *Agent) cycle(ctx context.Context) error {
 	if attribution.DroppedBeyondBackfill > 0 {
 		log.Printf("dropped %d turn(s) beyond the %s backfill window",
 			attribution.DroppedBeyondBackfill, attribution.BackfillLimit)
-	}
-
-	// Credentials give the account tier as well as the token, so read them even
-	// when it is not yet time to poll.
-	creds, credErr := identity.LoadCredentials(a.cfg.Home)
-	if creds != nil {
-		id.SubscriptionType = creds.SubscriptionType
-		id.RateLimitTier = creds.RateLimitTier
-	}
-
-	var snap *model.LimitsSnapshot
-	var unavailable string
-	if a.shouldPollLimits() {
-		snap, unavailable = a.pollLimits(ctx, creds, credErr)
-		a.lastLimitsPoll = time.Now()
-	}
-	// Learn the machine login's own reset phase, so sessions on that same
-	// subscription are not mistaken for a different one.
-	if snap != nil {
-		a.machineFingerprint = sessions.FingerprintFor(snap.FiveHour.ResetsAt, snap.SevenDay.ResetsAt)
 	}
 
 	// Nothing new and nothing to report: skip the round trip entirely.
