@@ -155,7 +155,20 @@ func FingerprintFor(fiveHourResets, sevenDayResets *time.Time) string {
 		if t == nil {
 			return -1
 		}
-		p := t.Unix() % int64(window/time.Second)
+		// Quantise to the nearest minute before taking the phase.
+		//
+		// The same reset arrives with different precision depending on the
+		// source: /api/oauth/usage reports 13:39:59.278, the statusLine
+		// reports 13:40:00. That is 0.722s apart and straddles a second
+		// boundary, so the raw phases were 5999 and 6000 — and one
+		// subscription looked like two. Resets land on clean minute
+		// boundaries, so rounding there is lossless for real data and
+		// absorbs the discrepancy.
+		const quantum = int64(60)
+		secs := t.Unix()
+		rounded := (secs + quantum/2) / quantum * quantum
+
+		p := rounded % int64(window/time.Second)
 		if p < 0 {
 			p += int64(window / time.Second)
 		}

@@ -250,3 +250,30 @@ func TestInferBilling(t *testing.T) {
 		t.Errorf("without rate limits = %q, want api", got)
 	}
 }
+
+// The same reset reaches ccquota at two precisions: /api/oauth/usage says
+// 13:39:59.278, the statusLine says 13:40:00. Measured on a live machine, that
+// 0.722s straddled a second boundary and made one subscription look like two.
+func TestFingerprintFor_ToleratesSourcePrecisionSkew(t *testing.T) {
+	api5 := time.Date(2026, 9, 1, 13, 39, 59, 278002000, time.UTC)
+	api7 := time.Date(2026, 9, 4, 13, 59, 59, 278026000, time.UTC)
+	sl5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	sl7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+
+	if a, b := FingerprintFor(&api5, &api7), FingerprintFor(&sl5, &sl7); a != b {
+		t.Fatalf("the same subscription fingerprinted differently by source: %s vs %s", a, b)
+	}
+}
+
+// Control: quantising must not merge subscriptions that genuinely differ. The
+// real second account's resets were ten minutes and three days away.
+func TestFingerprintFor_QuantisingDoesNotMergeRealAccounts(t *testing.T) {
+	a5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
+	a7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	b5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
+	b7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
+
+	if FingerprintFor(&a5, &a7) == FingerprintFor(&b5, &b7) {
+		t.Fatal("two genuinely different subscriptions collapsed into one")
+	}
+}
