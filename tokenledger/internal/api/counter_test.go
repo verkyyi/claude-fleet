@@ -275,3 +275,119 @@ func TestCounter_NoGrowthMeansNoRate(t *testing.T) {
 		t.Errorf("rate = %v after a window with no growth, want 0", c.Rate())
 	}
 }
+
+// A TTL alone made the counter up to 30s staler than the data it reports, for
+// no reason: the total changes only when something is ingested, and the hub
+// knows exactly when that happens.
+func TestCounter_IngestInvalidatesTheCache(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+	h.push(t, tok, batchFor("acct-a", "laptop", []string{"a1"}, "/a"))
+
+	_, body := h.get(t, "/v1/live")
+	var first Snapshot
+	if err := json.Unmarshal(body, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Counter == nil {
+		t.Fatal("no counter")
+	}
+
+	// A second push, well inside the TTL.
+	h.push(t, tok, batchFor("acct-a", "laptop", []string{"a2", "a3"}, "/a"))
+
+	_, body = h.get(t, "/v1/live")
+	var second Snapshot
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.Counter.Turns <= first.Counter.Turns {
+		t.Fatalf("turns stayed at %d after ingesting more; the counter is serving "+
+			"a cached total the hub already knows is out of date", second.Counter.Turns)
+	}
+	if second.Counter.Turns != 3 {
+		t.Errorf("turns = %d, want 3", second.Counter.Turns)
+	}
+}
+
+// Control: a read that ingests nothing must NOT invalidate, or the cache is
+// pointless and every SSE push costs a full table scan.
+func TestCounter_ReadsDoNotInvalidateTheCache(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+	h.push(t, tok, batchFor("acct-a", "laptop", []string{"a1"}, "/a"))
+
+	scans := 0
+	h.srv.counter.Invalidate()
+	if _, _, _, err := h.srv.counter.Total(func() (int64, int64, error) {
+		scans++
+		return 1, 100, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		h.get(t, "/v1/live")
+	}
+	if _, _, _, err := h.srv.counter.Total(func() (int64, int64, error) {
+		scans++
+		return 1, 100, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 1 {
+		t.Errorf("the total was recomputed %d times across 5 reads with no ingest", scans)
+	}
+}
+
+// The raw live rate is unusable: it is the delta between two consecutive
+// statusLine reports, so it reads zero between turns and spikes on the report
+// that lands one. Smoothing is what makes it drivable.
+func TestCounter_SmoothsTheSpikyLiveRate(t *testing.T) {
+	var c Counter
+	// The measured shape on this hub: mostly nothing, occasionally a burst.
+	for _, sample := range []float64{0, 0, 0, 60000, 0, 0, 0, 60000, 0, 0, 0, 60000} {
+		c.ObserveLiveRate(sample)
+	}
+	got := c.Rate()
+	if got <= 0 {
+		t.Fatalf("rate = %v; the counter would freeze between turns", got)
+	}
+	if got > 40000 {
+		t.Errorf("rate = %v; a spike is being followed rather than smoothed", got)
+	}
+}
+
+// Idleness is information. Ignoring zero samples would make the average decay
+// only while work was happening, and hold its last busy value forever once a
+// fleet went quiet.
+func TestCounter_LiveRateDecaysWhenWorkStops(t *testing.T) {
+	var c Counter
+	for i := 0; i < 20; i++ {
+		c.ObserveLiveRate(60000)
+	}
+	busy := c.Rate()
+	if busy < 50000 {
+		t.Fatalf("rate never reached the sustained value: %v", busy)
+	}
+	for i := 0; i < 40; i++ {
+		c.ObserveLiveRate(0)
+	}
+	if idle := c.Rate(); idle > busy/20 {
+		t.Errorf("rate is %v after 40 idle samples (was %v); it is not decaying", idle, busy)
+	}
+}
+
+// The live rate is preferred because it is fresh in seconds rather than
+// minutes — but the stored-growth rate must remain for a hub whose endpoints
+// report usage without statusLine heartbeats.
+func TestCounter_FallsBackToStoredGrowthWithoutHeartbeats(t *testing.T) {
+	var c Counter
+	c.perMin = 1234
+	if got := c.Rate(); got != 1234 {
+		t.Fatalf("rate = %v with no live samples, want the stored-growth rate", got)
+	}
+	c.ObserveLiveRate(500)
+	if got := c.Rate(); got != 500 {
+		t.Errorf("rate = %v once a heartbeat arrived, want the live one", got)
+	}
+}

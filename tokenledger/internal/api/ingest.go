@@ -135,6 +135,12 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	s.Pricing.Apply(batch.Events)
 
 	inserted, deduped, err := s.Store.InsertEvents(batch.Events)
+	if inserted > 0 {
+		// The headline total just changed. Recomputing here would put a table
+		// scan on the ingest path; marking it stale lets the next snapshot pay
+		// for it, once, however many endpoints just pushed.
+		s.counter.Invalidate()
+	}
 	if err != nil {
 		return nil, err
 	}

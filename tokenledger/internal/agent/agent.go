@@ -77,8 +77,18 @@ type Config struct {
 }
 
 // Defaults for the intervals.
+//
+// The scan interval used to be 60s, chosen when every cycle re-opened and
+// re-fingerprinted every transcript to verify its cursor. That cost 755ms on a
+// machine with 25,164 of them whether or not anything had changed, and it put a
+// hard floor under how live the stored totals could be.
+//
+// The scanner now skips a transcript whose size and mtime both match the
+// cursor, using data the directory walk already has: the same no-change cycle
+// costs 134ms. Fifteen seconds is affordable at that price — under 1% of a core
+// — and it is the single largest term in how stale the dashboard's numbers are.
 const (
-	DefaultScanInterval   = 60 * time.Second
+	DefaultScanInterval   = 15 * time.Second
 	DefaultLimitsInterval = 120 * time.Second
 	DefaultLiveInterval   = 5 * time.Second
 )
@@ -190,6 +200,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	// machine's whole history.
 	go a.runLive(ctx)
 
+	// A transcript being written is the actual signal; the interval is the
+	// fallback for when the watch misses one. wake is buffered so a burst of
+	// writes collapses into a single pending cycle instead of blocking the
+	// watcher or queueing cycles behind each other.
+	wake := make(chan struct{}, 1)
+	go a.watchTranscripts(ctx, identity.ProjectsDir(a.cfg.Home), func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
+
 	// Jitter the first tick so a fleet restarted together by a config
 	// management run does not stampede the hub.
 	initial := time.Duration(rand.Int63n(int64(a.cfg.ScanInterval)))
@@ -200,6 +222,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-wake:
+			if err := a.cycle(ctx); err != nil {
+				log.Printf("collection cycle: %v", err)
+			}
+			// Reset the fallback: a watch-driven cycle has just done the
+			// timer's job, so the next tick should be a full interval away.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(jitter(a.backoffInterval()))
 		case <-timer.C:
 			if err := a.cycle(ctx); err != nil {
 				// A failed cycle is normal on a flaky link; the transcripts

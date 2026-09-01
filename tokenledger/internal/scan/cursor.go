@@ -29,6 +29,20 @@ type fileState struct {
 	// look like a replacement and force a full rescan.
 	HeadHash uint64 `json:"head_hash"`
 	HeadLen  int64  `json:"head_len"`
+
+	// ModTimeNano is the file's modification time when Offset was recorded.
+	//
+	// Purely an optimisation, and only ever used to skip work: together with
+	// Size it answers "has anything been appended?" from the directory walk
+	// alone, without opening the file or hashing its prefix. On a machine with
+	// 25,164 transcripts, a cycle in which nothing had changed cost 755ms of
+	// pure I/O to re-verify cursors that were all still valid — affordable
+	// once a minute, not once every few seconds.
+	//
+	// It is never trusted to decide WHERE to resume; that is still Offset,
+	// verified against HeadHash. A file whose size and mtime both match cannot
+	// have been appended to, because an append changes both.
+	ModTimeNano int64 `json:"mod_time_nano,omitempty"`
 }
 
 // cursor is the persisted map of transcript path -> position.

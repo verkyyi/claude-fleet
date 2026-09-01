@@ -303,6 +303,13 @@ minute (~1 in 10,000 per pair); such accounts are marked inferred, never
 overriding a reported uuid, and `ccquota name --dedupe` folds any duplicates
 that a past version created.
 
+**Collection reacts to writes, and falls back to a timer.** The agent watches
+the transcript directory and scans within a second of a write; the scan interval
+(15s) is the fallback for events a watch can miss — an overflowed queue, a
+network filesystem, a directory created before the watch covered it. A missed
+event under a watch-only design would not degrade collection, it would end it
+silently for that file.
+
 **The hero counter is projected between measurements.** Nothing emits usage per
 token: a transcript records a turn when it ENDS, and a statusLine reports a
 session's running totals when it redraws, so the finest real granularity is a

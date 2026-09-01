@@ -281,3 +281,143 @@ func TestScanner_UncommittedScanIsRepeated(t *testing.T) {
 		t.Fatalf("after Commit a fresh scanner returned %d events, want 0", len(evs))
 	}
 }
+
+// The pre-filter that makes a fast scan interval affordable.
+//
+// Verifying an unchanged cursor means opening the file and hashing its prefix.
+// On a machine with 25,164 transcripts a cycle in which nothing had changed
+// cost 755ms of pure I/O to conclude that nothing had changed; skipping on
+// size+mtime from the directory walk took it to 134ms.
+func TestScan_SkipsUnchangedTranscripts(t *testing.T) {
+	root := t.TempDir()
+	cursorPath := filepath.Join(t.TempDir(), "cursor.json")
+	path := filepath.Join(root, "a.jsonl")
+	writeFile(t, path, line("a", 10), line("b", 20))
+
+	s := NewScanner(root, cursorPath)
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := NewScanner(root, cursorPath)
+	evs, err := s2.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 0 {
+		t.Errorf("re-scanned an unchanged file and produced %d events", len(evs))
+	}
+	if s2.Skipped() != 1 {
+		t.Errorf("skipped %d files, want 1 — the pre-filter did not engage", s2.Skipped())
+	}
+}
+
+// The control, and the only one that really matters: a file that HAS grown must
+// never be skipped. A pre-filter that skipped everything would satisfy the test
+// above while silently ending data collection.
+func TestScan_NeverSkipsAnAppendedTranscript(t *testing.T) {
+	root := t.TempDir()
+	cursorPath := filepath.Join(t.TempDir(), "cursor.json")
+	path := filepath.Join(root, "a.jsonl")
+	writeFile(t, path, line("a", 10))
+
+	s := NewScanner(root, cursorPath)
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	appendLines(t, path, line("c", 30), line("d", 40), line("e", 50))
+
+	s2 := NewScanner(root, cursorPath)
+	evs, err := s2.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 3 {
+		t.Fatalf("got %d events after appending 3; the pre-filter swallowed new work", len(evs))
+	}
+	if s2.Skipped() != 0 {
+		t.Errorf("skipped %d files, want 0", s2.Skipped())
+	}
+}
+
+// Either half changing is enough to force a real look. Size is the reliable
+// signal for an append; mtime catches a rewrite that happens to land on the
+// same length.
+func TestScan_EitherSizeOrMtimeChangeForcesARescan(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		touch func(t *testing.T, path string, st fileState) fileState
+	}{
+		{"size differs", func(t *testing.T, _ string, st fileState) fileState {
+			st.Size--
+			return st
+		}},
+		{"mtime differs", func(t *testing.T, _ string, st fileState) fileState {
+			st.ModTimeNano--
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			cursorPath := filepath.Join(t.TempDir(), "cursor.json")
+			path := filepath.Join(root, "a.jsonl")
+			writeFile(t, path, line("a", 10), line("b", 20))
+
+			s := NewScanner(root, cursorPath)
+			if _, err := s.Scan(); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Commit(); err != nil {
+				t.Fatal(err)
+			}
+
+			s2 := NewScanner(root, cursorPath)
+			st := s2.cursor.Files[path]
+			s2.cursor.Files[path] = tc.touch(t, path, st)
+
+			if _, err := s2.Scan(); err != nil {
+				t.Fatal(err)
+			}
+			if s2.Skipped() != 0 {
+				t.Errorf("skipped a file whose %s; the cursor must be re-verified", tc.name)
+			}
+		})
+	}
+}
+
+// A cursor written before mtimes were recorded must not be treated as "matches
+// nothing changed" — ModTimeNano is zero there, which would collide with a real
+// file only if its mtime were the unix epoch.
+func TestScan_CursorWithoutAnMtimeIsNotSkipped(t *testing.T) {
+	root := t.TempDir()
+	cursorPath := filepath.Join(t.TempDir(), "cursor.json")
+	path := filepath.Join(root, "a.jsonl")
+	writeFile(t, path, line("a", 10), line("b", 20))
+
+	s := NewScanner(root, cursorPath)
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := NewScanner(root, cursorPath)
+	st := s2.cursor.Files[path]
+	st.ModTimeNano = 0 // as an older ccquota would have left it
+	s2.cursor.Files[path] = st
+
+	if _, err := s2.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Skipped() != 0 {
+		t.Error("an mtime-less cursor entry was treated as unchanged")
+	}
+}

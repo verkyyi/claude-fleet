@@ -34,7 +34,17 @@ type Scanner struct {
 	// than failing the whole pass, because one bad file must not stop an
 	// agent from shipping the other nine hundred.
 	Errs []error
+
+	// skipped counts transcripts the last pass did not open because neither
+	// their size nor their mtime had changed. Exposed so the agent can log it:
+	// a pre-filter that silently stops matching would look exactly like a quiet
+	// machine, and the cost it removes is the reason a fast scan interval is
+	// affordable at all.
+	skipped int
 }
+
+// Skipped reports how many transcripts the last Scan skipped untouched.
+func (s *Scanner) Skipped() int { return s.skipped }
 
 // NewScanner returns a Scanner over root (typically ~/.claude/projects),
 // persisting its position to cursorPath.
@@ -52,6 +62,7 @@ func NewScanner(root, cursorPath string) *Scanner {
 // why that seam exists.
 func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 	s.Errs = nil
+	s.skipped = 0
 
 	files, err := s.transcripts()
 	if err != nil {
@@ -102,6 +113,16 @@ func (s *Scanner) transcripts() ([]string, error) {
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
+		// Skip a file that provably cannot have new content. The walk already
+		// stats each entry, so size and mtime are free here; opening and
+		// hashing 25,164 files to re-verify unchanged cursors is not.
+		if st, known := s.cursor.Files[path]; known && st.ModTimeNano != 0 {
+			if fi, err := d.Info(); err == nil &&
+				fi.Size() == st.Size && fi.ModTime().UnixNano() == st.ModTimeNano {
+				s.skipped++
+				return nil
+			}
+		}
 		out = append(out, path)
 		return nil
 	})
@@ -124,6 +145,8 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 	size := fi.Size()
+	// Captured with the size, before any read — see reanchor.
+	modNano := fi.ModTime().UnixNano()
 
 	st, known := s.cursor.Files[path]
 	start := st.Offset
@@ -147,7 +170,7 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 			// Nothing appended. Re-anchor anyway: the fingerprint window grows
 			// with the file until it reaches headSample, which is safe now
 			// that the existing prefix has been verified.
-			if err := s.reanchor(path, f, size, st.Offset); err != nil {
+			if err := s.reanchor(path, f, size, st.Offset, modNano); err != nil {
 				return nil, err
 			}
 			return nil, nil
@@ -161,7 +184,7 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 	evs, consumed, errs := s.readLines(f, path)
 	s.Errs = append(s.Errs, errs...)
 
-	if err := s.reanchor(path, f, size, start+consumed); err != nil {
+	if err := s.reanchor(path, f, size, start+consumed, modNano); err != nil {
 		return nil, err
 	}
 
@@ -216,16 +239,25 @@ func (s *Scanner) readLines(r io.Reader, path string) (evs []model.UsageEvent, c
 }
 
 // reanchor records the position and refreshes the fingerprint window.
-func (s *Scanner) reanchor(path string, f *os.File, size, offset int64) error {
+// reanchor records the position. modNano MUST be the modification time
+// observed BEFORE the file was read, not after.
+//
+// Stat'ing at the end would record the mtime of an append that happened DURING
+// the read, pinning a new mtime to an old offset — and the pre-filter would
+// then skip that file forever, losing everything appended after it. Recording
+// the older mtime can only cause a redundant re-read, which the offset and
+// fingerprint absorb.
+func (s *Scanner) reanchor(path string, f *os.File, size, offset, modNano int64) error {
 	hash, length, err := anchor(f, size)
 	if err != nil {
 		return fmt.Errorf("fingerprint %s: %w", path, err)
 	}
 	s.cursor.Files[path] = fileState{
-		Offset:   offset,
-		Size:     size,
-		HeadHash: hash,
-		HeadLen:  length,
+		Offset:      offset,
+		Size:        size,
+		HeadHash:    hash,
+		HeadLen:     length,
+		ModTimeNano: modNano,
 	}
 	return nil
 }

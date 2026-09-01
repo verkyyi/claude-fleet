@@ -16,11 +16,15 @@ import (
 // The policy lives in Go rather than in the page because it is the part with
 // rules worth testing. The browser only animates.
 
-// counterTTL is how long a lifetime total is reused before being recomputed.
+// counterTTL bounds how long a lifetime total is reused.
 //
-// The query is a full scan of usage_events, and the SSE stream pushes on every
-// live report — several times a second across a fleet. Recomputing per push
-// would spend a table scan to move a number by a few hundred tokens.
+// The query is a full scan of usage_events and the SSE stream pushes several
+// times a second, so it cannot be recomputed per push. But a TTL alone made the
+// counter up to 30s staler than the data it reports, for no reason: the total
+// only changes when something is ingested, and the hub knows exactly when that
+// happens. Ingest now invalidates the cache, so the number is as fresh as the
+// ledger, and this remains only as a backstop for a hub that has somehow
+// ingested nothing.
 const counterTTL = 30 * time.Second
 
 // projectionWindow is how far past the last measurement the page may keep
@@ -58,6 +62,11 @@ type Counter struct {
 	rateBase   int64
 	rateBaseAt time.Time
 	perMin     float64
+
+	// The smoothed live rate, and whether one has ever been seen. Preferred
+	// over perMin because it is fresh within seconds rather than minutes.
+	liveEMA  float64
+	liveSeen bool
 }
 
 // CounterView is what the page needs to animate honestly.
@@ -129,10 +138,64 @@ func (c *Counter) Total(load func() (int64, int64, error)) (turns, tokens int64,
 	return c.turns, c.tokens, c.measuredAt, nil
 }
 
-// Rate is the measured growth of the stored total, in tokens per minute.
+// Invalidate marks the cached total stale, so the next read recomputes it.
+//
+// Called when events are stored. Cheap and idempotent: it clears a timestamp,
+// and the recompute happens on the next snapshot rather than here, so a burst
+// of pushes from a fleet costs one query between snapshots, not one per push.
+func (c *Counter) Invalidate() {
+	c.mu.Lock()
+	c.measuredAt = time.Time{}
+	c.mu.Unlock()
+}
+
+// emaAlpha weights each new live sample against the running average.
+//
+// The live rate is 12x fresher than the stored one — a 5s heartbeat against a
+// 60s scan — but it is also spiky to the point of uselessness raw: it is the
+// delta between two consecutive statusLine reports, so it reads zero between
+// turns and enormous on the report that lands one. Measured on this hub, five
+// active sessions reported 0 tokens/min because no turn had completed in the
+// last few seconds.
+//
+// Smoothing turns that into something a counter can be driven by. 0.2 gives a
+// time constant of roughly five samples — about 25 seconds at a 5s heartbeat —
+// so it responds within half a minute while ignoring the gaps between turns.
+const emaAlpha = 0.2
+
+// ObserveLiveRate folds a live sample into the smoothed rate.
+//
+// A zero sample is NOT ignored. Idleness is information: dropping zeros would
+// make the average decay only when work was happening and hold its last busy
+// value forever once a fleet went quiet, which is precisely the case the
+// projection deadline exists to catch.
+func (c *Counter) ObserveLiveRate(tokensPerMin float64) {
+	if tokensPerMin < 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.liveSeen {
+		c.liveEMA, c.liveSeen = tokensPerMin, true
+		return
+	}
+	c.liveEMA = emaAlpha*tokensPerMin + (1-emaAlpha)*c.liveEMA
+}
+
+// Rate is the rate to project at, in tokens per minute.
+//
+// The smoothed live rate wins when there is one: it reflects the last half
+// minute rather than the last ninety seconds, which is the difference between a
+// counter that responds to work starting and one that notices afterwards.
+//
+// The stored-growth rate remains the fallback, and it is the only one available
+// on a hub whose endpoints report usage but not statusLine heartbeats.
 func (c *Counter) Rate() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.liveSeen {
+		return c.liveEMA
+	}
 	return c.perMin
 }
 
@@ -178,6 +241,10 @@ func (s *Server) attachCounter(snap *Snapshot) {
 	if err != nil {
 		return
 	}
+	// Fold this snapshot's live rate in before reading the smoothed value, so
+	// the counter reflects the heartbeat that just arrived.
+	s.counter.ObserveLiveRate(snap.TokensPerMin)
+
 	v := counterView(turns, tokens, measuredAt, s.counter.Rate())
 	snap.Counter = &v
 }
