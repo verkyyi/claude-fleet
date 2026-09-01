@@ -166,6 +166,45 @@ the switch and shows it in the UI. Rows already ingested keep their old
 attribution and cannot be corrected — see the known limits below. Two plans
 running side by side is **not** a switch, and is not recorded as one.
 
+## Showing it to someone else
+
+The dashboard is not shareable. It carries account emails, project paths (which
+are client names), machine names, OS logins, session ids and branches, and its
+viewer token also opens the MCP server. There is no safe way to hand that to a
+third party "just for the charts", and no way to take it back afterwards without
+rotating it for everyone.
+
+So a share link is a **separate, revocable credential onto a separate page**:
+
+```bash
+ccquota share --name "conference talk"      # prints the link once
+ccquota share --list                        # what has been handed out, and its use count
+ccquota share --revoke <id>                 # dead immediately
+```
+
+The public page shows tokens and turns over time, the model mix, live plan
+utilization under pseudonyms ("Subscription A"), and **counts** of machines,
+logins and projects — never their names. What it omits is the point:
+
+| Shown | Never shown |
+|---|---|
+| tokens, turns, trend | account emails and uuids |
+| model mix | project paths |
+| plan utilization % | machine names, OS logins |
+| how many machines/logins/projects | session ids, git branches |
+
+This is enforced structurally rather than by filtering. The share token is
+accepted **only** on the share routes, and those routes build their own object
+from scratch — a field cannot leak in by being forgotten, only by being written
+there on purpose. A test asserts the share token is rejected on every other
+route, and another seeds a client name, a colleague's login and an unreleased
+branch and asserts none of them appear.
+
+**Notional costs are off by default** (`--with-costs` to include them). A dollar
+figure shown to someone who does not know it is API-equivalent reads as a bill.
+
+Add `--expires 720h` for a link that dies on its own.
+
 ## Scheduling against your own quota
 
 A dispatcher that spawns Claude sessions on a timer needs a verdict it can

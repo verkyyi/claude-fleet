@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Claude Code usage</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd; --grid:#eeede9;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+  --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c; --grid:#262624;
+    --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--plane); color:var(--ink);
+  font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2 { margin:0; font-weight:600; letter-spacing:-.01em; }
+.wrap { max-width:940px; margin:0 auto; padding:32px 20px 72px; }
+
+header { margin-bottom:28px; }
+header h1 { font-size:26px; }
+header .sub { color:var(--ink-3); margin-top:6px; }
+
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:18px 20px; box-shadow:var(--shadow); margin-bottom:18px;
+}
+.card h2 { font-size:15px; margin-bottom:2px; }
+.hint { color:var(--ink-3); font-size:13px; margin:0 0 14px; }
+
+/* Headline figures. Tabular numerals so digits do not jitter between sizes. */
+.figures { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+.fig { padding:14px 16px; border:1px solid var(--border); border-radius:10px; background:var(--plane); }
+.fig .n { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.fig .k { color:var(--ink-3); font-size:12px; margin-top:2px; text-transform:uppercase; letter-spacing:.04em; }
+
+.scale { display:flex; flex-wrap:wrap; gap:10px 26px; }
+.scale div { font-variant-numeric:tabular-nums; }
+.scale b { font-size:17px; font-weight:650; }
+.scale span { color:var(--ink-3); }
+
+/* Utilization bars. A percentage is meaningless without its scale, so each
+   row carries the number as text too — colour never carries meaning alone. */
+.sub-row { margin-bottom:12px; }
+.sub-row .top { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+.sub-row .name { font-weight:550; }
+.sub-row .pct { font-variant-numeric:tabular-nums; color:var(--ink-2); }
+.track { height:8px; border-radius:99px; background:var(--grid); overflow:hidden; margin-top:6px; }
+.fill { height:100%; border-radius:99px; background:var(--s1); }
+.win { color:var(--ink-3); font-size:12px; margin-top:3px; }
+
+svg { display:block; width:100%; height:auto; overflow:visible; }
+.axis { stroke:var(--border); }
+.gridline { stroke:var(--grid); }
+.tick { fill:var(--ink-3); font-size:11px; }
+
+.legend { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px; font-size:12px; color:var(--ink-2); }
+.legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:baseline; }
+
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid var(--grid); }
+th { color:var(--ink-3); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+td.n { text-align:right; font-variant-numeric:tabular-nums; }
+
+footer { color:var(--ink-3); font-size:12px; margin-top:26px; line-height:1.6; }
+.err { border-left:3px solid var(--s8); padding-left:12px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root"><p class="hint">Loading…</p></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const fmt = (n) => n >= 1e9 ? (n/1e9).toFixed(1)+"B"
+  : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
+  : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
+const full = (n) => n.toLocaleString();
+const SERIES = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+const color = (i) => `var(${SERIES[i % SERIES.length]})`;
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined) continue;
+    if (k === "class") n.className = v; else n.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) {
+    if (k === null || k === undefined) continue;
+    n.append(k.nodeType ? k : document.createTextNode(String(k)));
+  }
+  return n;
+}
+function svgEl(tag, attrs) {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  return n;
+}
+
+// An area chart of turns over time. Deliberately unlabelled on the y-axis in
+// absolute terms only where it would mislead: the figures above carry the totals.
+function historyChart(buckets) {
+  const W = 860, H = 200, PAD = { l: 46, r: 8, t: 10, b: 24 };
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": "Tokens over time" });
+  if (!buckets.length) return svg;
+
+  const max = Math.max(...buckets.map((b) => b.tokens), 1);
+  const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
+  const x = (i) => PAD.l + (buckets.length === 1 ? iw / 2 : (i / (buckets.length - 1)) * iw);
+  const y = (v) => PAD.t + ih - (v / max) * ih;
+
+  for (let g = 0; g <= 4; g++) {
+    const yy = PAD.t + (g / 4) * ih;
+    svg.append(svgEl("line", { class: "gridline", x1: PAD.l, x2: W - PAD.r, y1: yy, y2: yy }));
+    const t = svgEl("text", { class: "tick", x: PAD.l - 8, y: yy + 4, "text-anchor": "end" });
+    t.textContent = fmt(Math.round(max * (1 - g / 4)));
+    svg.append(t);
+  }
+
+  const pts = buckets.map((b, i) => `${x(i)},${y(b.tokens)}`).join(" ");
+  svg.append(svgEl("polygon", {
+    points: `${PAD.l},${PAD.t + ih} ${pts} ${x(buckets.length - 1)},${PAD.t + ih}`,
+    fill: "var(--s1)", "fill-opacity": ".14",
+  }));
+  svg.append(svgEl("polyline", { points: pts, fill: "none", stroke: "var(--s1)", "stroke-width": "2" }));
+
+  for (const i of [0, buckets.length - 1]) {
+    if (i < 0) continue;
+    const t = svgEl("text", { class: "tick", x: x(i), y: H - 6,
+      "text-anchor": i === 0 ? "start" : "end" });
+    t.textContent = new Date(buckets[i].key).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    svg.append(t);
+  }
+  return svg;
+}
+
+function modelBars(buckets) {
+  const total = buckets.reduce((a, b) => a + b.tokens, 0) || 1;
+  const bar = el("div", { style: "display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--grid)" });
+  buckets.forEach((b, i) => bar.append(el("div", {
+    style: `width:${(b.tokens / total) * 100}%;background:${color(i)}`,
+    title: `${b.key}: ${full(b.tokens)} tokens`,
+  })));
+  const legend = el("div", { class: "legend" }, buckets.map((b, i) =>
+    el("span", {}, el("i", { style: `background:${color(i)}` }),
+      `${b.key} · ${((b.tokens / total) * 100).toFixed(0)}%`)));
+  return el("div", {}, bar, legend);
+}
+
+function render(d) {
+  const root = $("#root");
+  const figures = [
+    el("div", { class: "fig" }, el("div", { class: "n" }, fmt(d.tokens)), el("div", { class: "k" }, "tokens")),
+    el("div", { class: "fig" }, el("div", { class: "n" }, fmt(d.turns)), el("div", { class: "k" }, "assistant turns")),
+  ];
+  if (d.show_costs && d.cost_usd != null) {
+    figures.push(el("div", { class: "fig" },
+      el("div", { class: "n" }, "$" + Math.round(d.cost_usd).toLocaleString()),
+      el("div", { class: "k" }, "notional API cost")));
+  }
+
+  const scale = el("div", { class: "scale" },
+    [["subscriptions", d.scale.subscriptions], ["machines", d.scale.machines],
+     ["logins", d.scale.logins], ["projects", d.scale.projects],
+     ["sessions", d.scale.sessions]]
+      .map(([k, v]) => el("div", {}, el("b", {}, full(v)), " ", el("span", {}, k))));
+
+  const subs = d.subscriptions.map((s) => {
+    const pct = Math.max(s.five_hour_pct, s.seven_day_pct);
+    return el("div", { class: "sub-row" },
+      el("div", { class: "top" },
+        el("span", { class: "name" }, s.name + (s.plan ? ` · ${s.plan}` : "")),
+        el("span", { class: "pct" }, s.available ? pct.toFixed(0) + "% used" : "no reading")),
+      el("div", { class: "track" }, el("div", { class: "fill", style: `width:${s.available ? pct : 0}%` })),
+      el("div", { class: "win" }, s.available
+        ? `5-hour ${s.five_hour_pct.toFixed(0)}% · 7-day ${s.seven_day_pct.toFixed(0)}%`
+        : "utilization unavailable"));
+  });
+
+  root.replaceChildren(
+    el("header", {},
+      el("h1", {}, d.title),
+      el("div", { class: "sub" },
+        `Claude Code usage · last ${d.since_days} days · generated ${new Date(d.generated_at).toLocaleString()}`)),
+
+    el("div", { class: "card" },
+      el("h2", {}, "Volume"),
+      el("p", { class: "hint" }, `Measured from transcripts over the last ${d.since_days} days.`),
+      el("div", { class: "figures" }, figures)),
+
+    el("div", { class: "card" },
+      el("h2", {}, "Scale"),
+      el("p", { class: "hint" }, "How many of each thing — not which."),
+      scale),
+
+    el("div", { class: "card" },
+      el("h2", {}, "Tokens over time"),
+      el("p", { class: "hint" }, "Total across every subscription."),
+      historyChart(d.history || [])),
+
+    d.model_split && d.model_split.length ? el("div", { class: "card" },
+      el("h2", {}, "Model mix"),
+      el("p", { class: "hint" }, "Share of tokens by model."),
+      modelBars(d.model_split)) : null,
+
+    subs.length ? el("div", { class: "card" },
+      el("h2", {}, "Plan utilization right now"),
+      el("p", { class: "hint" },
+        "Reported by Anthropic, covering every device on each plan. " +
+        "Percentages of an allowance, not of each other — they are never summed."),
+      subs) : null,
+
+    el("footer", {}, d.disclaimer),
+  );
+}
+
+fetch("/v1/share" + location.search, { headers: { Accept: "application/json" } })
+  .then((r) => r.ok ? r.json() : r.text().then((t) => { throw new Error(t || r.status); }))
+  .then(render)
+  .catch((e) => $("#root").replaceChildren(
+    el("div", { class: "card err" },
+      el("h2", {}, "This link is not available"),
+      el("p", { class: "hint" }, String(e.message || e)))));
+</script>
+</body>
+</html>

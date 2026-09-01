@@ -68,6 +68,12 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))
 	}
 
+	// The public view. Mounted BEFORE "/" so the share token never reaches a
+	// viewerOnly route, and viewerOnly never has to know share tokens exist.
+	mux.Handle("/v1/share", s.shareOnly(s.handleShareData))
+	mux.Handle("/share", s.shareOnly(s.serveSharePage))
+	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
+
 	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
 
 	return logRequests(mux)

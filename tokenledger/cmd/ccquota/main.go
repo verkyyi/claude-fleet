@@ -40,6 +40,8 @@ func main() {
 		err = runName(os.Args[2:])
 	case "budget":
 		err = runBudget(os.Args[2:])
+	case "share":
+		err = runShare(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -69,6 +71,7 @@ Usage:
   ccquota name   [flags]    List subscriptions, or name one permanently
   ccquota budget [flags]    Is there headroom to start more work? (--gate for
                             a scheduler: exit 0 proceed, 3 hold)
+  ccquota share  [flags]    Mint/list/revoke a redacted public link
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

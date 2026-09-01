@@ -154,3 +154,25 @@ CREATE TABLE IF NOT EXISTS account_switches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_switches_endpoint ON account_switches(endpoint_id, observed_at DESC);
+
+-- Revocable links for showing usage to someone who must NOT see the fleet.
+--
+-- A separate credential from the viewer token on purpose. The viewer token
+-- opens the dashboard AND the MCP server — every project path, machine name,
+-- OS login and account email. There is no way to hand that to a third party
+-- "just for the charts", and no way to take it back afterwards without
+-- rotating it for everyone.
+CREATE TABLE IF NOT EXISTS share_links (
+  id           TEXT PRIMARY KEY,       -- short, printable; what you revoke by
+  token_hash   TEXT NOT NULL UNIQUE,   -- never the token itself
+  label        TEXT NOT NULL DEFAULT '',
+  -- Notional costs are OFF unless deliberately enabled: an API-equivalent
+  -- dollar figure shown to someone who does not know it is notional reads as
+  -- a bill.
+  show_costs   INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  expires_at   TEXT,                   -- NULL = no expiry
+  revoked_at   TEXT,
+  last_used_at TEXT,
+  uses         INTEGER NOT NULL DEFAULT 0
+);
