@@ -148,7 +148,7 @@ contains "record-closed: reports the closed-unlanded record" "$outc" "closed-unl
 rowc=$(cat "$FLEET_HISTORY_LEDGER")
 tabsc=$(printf '%s' "$rowc" | tr -cd '\t' | wc -c | tr -d ' ')
 eq "record-closed: row has 11 columns (10 tabs)" "10" "$tabsc"
-IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state cc_origin <<<"$rowc"
+IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state _ <<<"$rowc"
 eq "record-closed: issue col"       "42"                "$cc_iss"
 eq "record-closed: no pr (dash)"    "-"                 "$cc_pr"
 eq "record-closed: no sha (dash)"   "-"                 "$cc_sha"
@@ -350,7 +350,7 @@ mkdir -p "$STDIR"; : > "$STDIR/sess-scr.jsonl"
 out=$(run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" \
         --summary "trying a thing" --sha deadbee1234)
 contains "scratch: record-closed labels the row ~<N>, not #<N>" "$out" "~7"
-IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state g_origin \
+IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state _ \
   <<<"$(cat "$FLEET_HISTORY_LEDGER")"
 eq "scratch: col 2 carries the scratch key"          "scratch-7"       "$g_key"
 eq "scratch: pr degrades to dash (no PR)"            "-"               "$g_pr"
