@@ -21,6 +21,8 @@
 #     load its conf; skip unless FLEET_AUTOFILL=1
 #     acquire a per-fleet LEASE (mkdir, steal-if-stale)   → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate) → never fill a full disk
+#     honor the quotaguard GATE (fleet-quotaguard.sh --gate) → never spend the
+#         last of a subscription's window on autofill (opt-in, fails open)
 #     slots = min(global headroom, per-fleet headroom, MAX_PER_TICK)  → rate-limit
 #     eligible = open, UNASSIGNED, carries `autofill`, not `blocked`,
 #                no live @issue window already bound                 → anti-collision
@@ -261,6 +263,22 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
    && ! "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
   log "disk gate closed — skipping all fleets this tick"
   exit 0
+fi
+
+# Quota gate: also machine-wide (the subscription is an account, not a fleet),
+# so it is answered ONCE per tick alongside the disk gate. Autofill spends the
+# subscription its spawned sessions run on; without this the dispatcher happily
+# burns the last of a weekly window on whatever happened to be labelled
+# `autofill`, and the operator discovers it when their own session is refused.
+#
+# OFF unless the fleet sets FLEET_QUOTA_GATE=1 and ccquota is installed with a
+# hub configured — the guard is a no-op otherwise, so a fleet that has never
+# heard of ccquota is unaffected. It fails OPEN, like the disk gate.
+if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-quotaguard.sh" ]; then
+  quota_why=$("$BIN/fleet-quotaguard.sh" --gate 2>&1 >/dev/null) || {
+    log "quota gate closed — skipping all fleets this tick: ${quota_why}"
+    exit 0
+  }
 fi
 
 for s in "${SESSIONS[@]}"; do
