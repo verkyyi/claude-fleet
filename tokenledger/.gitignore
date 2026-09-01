@@ -1,8 +1,13 @@
-bin/
-dist/
+# Anchored to the repo root ON PURPOSE. An unanchored `dist/` also matches
+# web/dist/ — which is the embedded dashboard, not build output — and quietly
+# kept it out of every commit. A fresh clone then failed to build at all
+# (`pattern all:dist: no matching files found`), because go:embed needs it.
+/dist/
+/bin/
+/ccquota
+
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
 .playwright-mcp/
-/ccquota
