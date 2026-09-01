@@ -303,6 +303,15 @@ minute (~1 in 10,000 per pair); such accounts are marked inferred, never
 overriding a reported uuid, and `ccquota name --dedupe` folds any duplicates
 that a past version created.
 
+**The hero counter is projected between measurements.** Nothing emits usage per
+token: a transcript records a turn when it ENDS, and a statusLine reports a
+session's running totals when it redraws, so the finest real granularity is a
+turn arriving up to a minute late. The big number counts forward at the measured
+growth rate and re-anchors on each measurement — hence the `~`. It never
+decreases, and it stops entirely (and dims) once nothing has been recorded for
+90 seconds, because a counter still climbing over a dead fleet is the one way
+this could genuinely mislead.
+
 **Per-endpoint shares are proportional estimates.** They assume Anthropic's
 utilization tracks weighted spend. Good enough to find the machine eating your
 week; not a settlement.

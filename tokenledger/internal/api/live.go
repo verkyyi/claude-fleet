@@ -66,6 +66,21 @@ type Live struct {
 	mu       sync.RWMutex
 	sessions map[string]*LiveSession
 	subs     map[chan []byte]struct{}
+
+	// enrich attaches data Live cannot reach on its own — the durable token
+	// total behind the hero counter, which lives in the store. Snapshots go out
+	// from three places, including a broadcast inside this type, so the hook
+	// belongs here rather than at each call site: one of the three would
+	// otherwise quietly ship a snapshot with no counter and the number would
+	// freeze for exactly the viewers watching it live.
+	enrich func(*Snapshot)
+}
+
+// Enrich registers a hook run on every snapshot before it is sent.
+func (l *Live) Enrich(fn func(*Snapshot)) {
+	l.mu.Lock()
+	l.enrich = fn
+	l.mu.Unlock()
 }
 
 // NewLive returns an empty live store.
@@ -137,6 +152,11 @@ type Snapshot struct {
 	SessionTokens int64   `json:"session_tokens"`
 	SessionCost   float64 `json:"session_cost_usd"`
 
+	// Counter is the all-time stored total plus the terms the page needs to
+	// project between measurements. Separate from everything above because it
+	// is the DURABLE ledger, not the live view — the two are never added.
+	Counter *CounterView `json:"counter,omitempty"`
+
 	Note string `json:"note"`
 }
 
@@ -169,6 +189,13 @@ func (l *Live) Snapshot() Snapshot {
 
 	out.ActiveSessions = len(out.Sessions)
 	out.Endpoints = len(eps)
+
+	l.mu.RLock()
+	fn := l.enrich
+	l.mu.RUnlock()
+	if fn != nil {
+		fn(&out)
+	}
 	sort.Slice(out.Sessions, func(i, j int) bool {
 		if out.Sessions[i].TokensPerMin != out.Sessions[j].TokensPerMin {
 			return out.Sessions[i].TokensPerMin > out.Sessions[j].TokensPerMin
@@ -246,9 +273,21 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(body.Sessions)})
 }
 
+// liveStore returns the live store, or an empty one.
+//
+// A hub built without a live store still answers /v1/live — with nothing in it,
+// which is the truth. Dereferencing nil here took the whole connection down
+// with a panic, and did it in the handler a dashboard polls continuously.
+func (s *Server) liveStore() *Live {
+	if s.LiveStore == nil {
+		return NewLive()
+	}
+	return s.LiveStore
+}
+
 // handleLiveSnapshot returns the current picture as plain JSON.
 func (s *Server) handleLiveSnapshot(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.LiveStore.Snapshot())
+	writeJSON(w, http.StatusOK, s.liveStore().Snapshot())
 }
 
 // handleLiveStream pushes snapshots over Server-Sent Events.
@@ -272,7 +311,7 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 
 	// Send the current state immediately: a viewer should not wait for the
 	// next agent report to see anything.
-	if b, err := json.Marshal(s.LiveStore.Snapshot()); err == nil {
+	if b, err := json.Marshal(s.liveStore().Snapshot()); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
 	}

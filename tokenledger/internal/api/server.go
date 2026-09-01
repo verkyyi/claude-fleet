@@ -33,6 +33,11 @@ type Server struct {
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
 
+	// counter caches the all-time token total behind the hero counter. Its
+	// query is a full scan and the SSE stream pushes several times a second,
+	// so it is recomputed on a timer rather than per push.
+	counter Counter
+
 	// LiveStore holds the seconds-scale view of running sessions. In memory
 	// only: it describes this minute, and a restart legitimately knows nothing
 	// until the agents report again.
@@ -42,6 +47,12 @@ type Server struct {
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// Every snapshot that leaves the hub carries the counter, including the
+	// ones broadcast from inside Live.
+	if s.LiveStore != nil {
+		s.LiveStore.Enrich(s.attachCounter)
+	}
 
 	// Ingest authenticates per endpoint, so it is deliberately outside the
 	// viewer-token gate.

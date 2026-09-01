@@ -543,3 +543,24 @@ func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
 	}
 	return out, rows.Err()
 }
+
+// LifetimeTotals is every turn and token this hub has ever stored, across every
+// subscription.
+//
+// Deliberately unscoped: no account, no time range. It is the one number that
+// only ever grows, which is what makes it worth putting at the top of a page —
+// any windowed total falls as old turns age out of the window.
+//
+// The token expression matches UsageBy's exactly. Two "total tokens" on one
+// page that disagree by a cache-creation column would be worse than either.
+func (s *Store) LifetimeTotals() (turns, tokens int64, err error) {
+	err = s.db.QueryRow(`
+		SELECT COUNT(*),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_create_5m_tokens
+		                    + cache_create_1h_tokens + cache_read_tokens), 0)
+		FROM usage_events`).Scan(&turns, &tokens)
+	if err != nil {
+		return 0, 0, fmt.Errorf("lifetime totals: %w", err)
+	}
+	return turns, tokens, nil
+}

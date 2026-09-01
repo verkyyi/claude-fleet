@@ -32,7 +32,8 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	srv := &Server{Store: st, Pricing: pricing.Default(), ViewerToken: viewerToken}
+	srv := &Server{Store: st, Pricing: pricing.Default(), ViewerToken: viewerToken,
+		LiveStore: NewLive()}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

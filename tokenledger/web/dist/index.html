@@ -57,6 +57,26 @@ a { color: var(--s1); }
 
 .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 64px; }
 
+/* Hero counter. The one number on this page that only ever grows. */
+.hero { padding: 18px 4px 22px; }
+.hero .n {
+  font-size: clamp(38px, 7vw, 76px); font-weight: 680; letter-spacing: -.03em;
+  line-height: 1; font-variant-numeric: tabular-nums;
+  /* Tabular numerals alone are not enough: the digits must also not reflow as
+     the value grows, or the whole line jitters several times a second. */
+  font-feature-settings: "tnum" 1; white-space: nowrap;
+  transition: opacity .6s ease;
+}
+.hero .k {
+  color: var(--ink-3); font-size: 12px; margin-top: 8px;
+  text-transform: uppercase; letter-spacing: .08em;
+}
+/* Stale: the fleet has stopped reporting, so the number has stopped moving.
+   Fading is the whole signal — a frozen counter that looks identical to a
+   running one reads as "nothing is happening", not "we have lost contact". */
+.hero.stale .n { opacity: .4; }
+@media (prefers-reduced-motion: reduce) { .hero .n { transition: none; } }
+
 header {
   display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
   padding-bottom: 14px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
@@ -208,6 +228,7 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
     <button id="theme" title="Toggle light / dark">◐</button>
   </header>
 
+  <div id="hero"></div>
   <div id="live"></div>
   <div id="banners"></div>
   <main id="main"></main>
@@ -353,8 +374,72 @@ function tile(id, label) {
     el("div", { class: "l" }, label));
 }
 
+/* ------------------------------------------------- hero counter (Q0) */
+
+// The all-time token total, counting between measurements.
+//
+// Neither source of usage is per-token: a transcript records a turn when it
+// ENDS, and a statusLine reports a session's running totals when it redraws.
+// The finest real granularity is a turn, arriving up to a minute late. So this
+// projects forward at the measured rate and re-anchors whenever a measurement
+// lands. Every rule it obeys was decided by the server — this only animates.
+const hero = {
+  anchor: 0,        // last measured total
+  anchorAt: 0,      // when it was measured (ms)
+  perMs: 0,         // measured rate, tokens per millisecond
+  until: 0,         // stop projecting after this (ms); 0 = do not project
+  shown: 0,         // what is on screen; never decreases
+  raf: 0,
+};
+
+function applyCounter(c) {
+  if (!c) return;
+  const measuredAt = new Date(c.measured_at).getTime();
+  hero.anchor = c.tokens;
+  hero.anchorAt = Number.isFinite(measuredAt) ? measuredAt : Date.now();
+  hero.perMs = (c.tokens_per_min || 0) / 60000;
+  hero.until = c.project_until ? new Date(c.project_until).getTime() : 0;
+
+  if (!$("#hero").firstChild) {
+    $("#hero").replaceChildren(el("div", { class: "hero" },
+      el("div", { class: "n", id: "hero-n" }, "—"),
+      // The tilde is the whole honesty marker: this figure is projected
+      // between measurements and is not exact. One character, always present.
+      el("div", { class: "k" }, "tokens consumed")));
+  }
+  if (!hero.raf) tickHero();
+}
+
+function tickHero() {
+  hero.raf = requestAnimationFrame(tickHero);
+  const now = Date.now();
+
+  // Projection has a deadline, set by the server from the last live report.
+  // Past it the fleet is not known to be working, and a counter that keeps
+  // climbing would be asserting work that is not happening.
+  const live = hero.until > 0 && now < hero.until;
+  const elapsed = live ? Math.max(0, now - hero.anchorAt) : 0;
+  const target = hero.anchor + hero.perMs * elapsed;
+
+  if (target > hero.shown) {
+    // Ease toward the target rather than jumping, so a fresh measurement that
+    // arrives well ahead of the projection lands smoothly.
+    const gap = target - hero.shown;
+    hero.shown += Math.max(gap * 0.12, Math.min(gap, 1));
+  }
+  // Never decreases. If the projection over-ran the truth, the number simply
+  // waits for the truth to catch up rather than snapping backwards.
+
+  const node = $("#hero-n");
+  if (node) {
+    node.textContent = "~" + Math.floor(hero.shown).toLocaleString();
+    node.parentElement.classList.toggle("stale", !live);
+  }
+}
+
 function renderLive(snap) {
   liveState.snap = snap;
+  applyCounter(snap && snap.counter);
   const root = $("#live");
   const active = snap && snap.active_sessions > 0;
 
