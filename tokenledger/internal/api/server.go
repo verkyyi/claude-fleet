@@ -32,6 +32,11 @@ type Server struct {
 
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
+
+	// LiveStore holds the seconds-scale view of running sessions. In memory
+	// only: it describes this minute, and a restart legitimately knows nothing
+	// until the agents report again.
+	LiveStore *Live
 }
 
 // Handler builds the router.
@@ -41,6 +46,8 @@ func (s *Server) Handler() http.Handler {
 	// Ingest authenticates per endpoint, so it is deliberately outside the
 	// viewer-token gate.
 	mux.HandleFunc("/v1/ingest", s.handleIngest)
+	// Live reports authenticate per endpoint, like ingest.
+	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -52,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))
 	mux.Handle("/v1/history", s.viewerOnly(http.HandlerFunc(s.handleHistory)))
 	mux.Handle("/v1/account-switches", s.viewerOnly(http.HandlerFunc(s.handleSwitches)))
+	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
+	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))

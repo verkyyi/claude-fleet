@@ -60,6 +60,51 @@ type Stamp struct {
 	CWD         string     `json:"cwd,omitempty"`
 	Model       string     `json:"model,omitempty"`
 	CCVersion   string     `json:"cc_version,omitempty"`
+
+	// Billing distinguishes a subscription session from an API-key one.
+	//
+	// Claude Code reports rate_limits ONLY for plan-based auth: an API-key
+	// session has no 5-hour or 7-day window to report, it is billed per token.
+	// Both kinds appear in the same transcripts and cost the same to run, but
+	// only one of them consumes a subscription — counting API spend against a
+	// plan's quota would misattribute it entirely.
+	Billing string `json:"billing,omitempty"` // "subscription" | "api" | ""
+
+	// Live is what this session looks like RIGHT NOW.
+	//
+	// Claude Code recomputes the statusLine on every turn, so these are a
+	// few-seconds-old view of a running session — far fresher than the
+	// transcript scan, which is a minute behind by design. It is also Claude
+	// Code's own arithmetic rather than ours.
+	Live *LiveSnapshot `json:"live,omitempty"`
+}
+
+// LiveSnapshot is one session's current state, straight from the statusLine
+// payload.
+//
+// These are per-session running totals, NOT deltas: two consecutive stamps
+// give a rate. They are also NOT the same quantity as the transcript scan's
+// events — this is Claude Code's own accounting of the session it is in, which
+// is why the dashboard shows it as a live indicator and never adds it to the
+// stored totals.
+type LiveSnapshot struct {
+	CostUSD       float64 `json:"cost_usd"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	DurationMS    int64   `json:"duration_ms"`
+	APIDurationMS int64   `json:"api_duration_ms"`
+	LinesAdded    int64   `json:"lines_added"`
+	LinesRemoved  int64   `json:"lines_removed"`
+
+	ContextUsedPct  float64 `json:"context_used_pct"`
+	ContextWindow   int64   `json:"context_window"`
+	CacheHitRatio   float64 `json:"cache_hit_ratio"`
+	CacheWarm       bool    `json:"cache_warm"`
+	ModelDisplay    string  `json:"model_display,omitempty"`
+	Effort          string  `json:"effort,omitempty"`
+	Worktree        string  `json:"worktree,omitempty"`
+	ThinkingEnabled bool    `json:"thinking_enabled"`
+	FastMode        bool    `json:"fast_mode"`
 }
 
 // AccountKeyFor derives a stable, non-secret identifier from a token.
@@ -119,6 +164,25 @@ func FingerprintFor(fiveHourResets, sevenDayResets *time.Time) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d",
 		phase(fiveHourResets, fiveHourWindow), phase(sevenDayResets, sevenDayWindow))))
 	return "win_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// Billing values.
+const (
+	BillingSubscription = "subscription"
+	BillingAPI          = "api"
+)
+
+// InferBilling decides how a session is paid for.
+//
+// The presence of a rate-limit window is the tell: plans have windows, API keys
+// have invoices. It is an inference from an absence, so it is only made when
+// the payload was otherwise complete — a truncated payload must not be read as
+// "this is an API session".
+func InferBilling(payloadHadRateLimits bool) string {
+	if payloadHadRateLimits {
+		return BillingSubscription
+	}
+	return BillingAPI
 }
 
 // Account returns the best available identifier for this session's

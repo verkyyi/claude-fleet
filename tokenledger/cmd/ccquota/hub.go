@@ -60,6 +60,7 @@ func runHub(args []string) error {
 		ViewerToken:         *token,
 		LimitsPollIntervalS: *pollInterval,
 		UI:                  web.Assets(),
+		LiveStore:           api.NewLive(),
 	}
 	srv.MCP = mcp.Handler(srv)
 
@@ -190,8 +191,13 @@ func runAgent(args []string) error {
 	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "enrollment token")
 	home := fs.String("home", "", "Claude Code home directory (default: your home)")
 	state := fs.String("state", "", "state directory (default: <home>/.ccquota)")
+	sessionsDir := fs.String("sessions-dir", "",
+		"where `ccquota stamp` writes session stamps (default: <home>/.ccquota).\n"+
+			"Must match the hook's --state; it is separate from this agent's own\n"+
+			"state directory because the hook does not know which agent reads it")
 	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
 	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
+	liveEvery := fs.Duration("live-interval", agent.DefaultLiveInterval, "how often to report running sessions")
 	spoolMB := fs.Int64("spool-mb", 64, "cap on the on-disk queue, in MB")
 	maxBackfill := fs.Duration("max-backfill", 0,
 		"ignore turns older than this (e.g. 720h). Turns older than the account\n"+
@@ -221,8 +227,10 @@ func runAgent(args []string) error {
 		Token:          *token,
 		Home:           h,
 		StateDir:       stateDir,
+		SessionsDir:    *sessionsDir,
 		ScanInterval:   *scanEvery,
 		LimitsInterval: *limitsEvery,
+		LiveInterval:   *liveEvery,
 		SpoolMaxBytes:  *spoolMB << 20,
 		MaxBackfill:    *maxBackfill,
 		Version:        Version,

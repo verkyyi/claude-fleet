@@ -238,3 +238,15 @@ func TestStamp_AccountPrefersTheTokenOverTheHeuristic(t *testing.T) {
 		t.Error("a reset-phase key MUST be reported as inferred; it is a heuristic")
 	}
 }
+
+// Plans have rate-limit windows; API keys have invoices. That absence is the
+// only signal distinguishing them, and the difference matters: API spend
+// counted against a plan's quota is misattributed entirely.
+func TestInferBilling(t *testing.T) {
+	if got := InferBilling(true); got != BillingSubscription {
+		t.Errorf("with rate limits = %q, want subscription", got)
+	}
+	if got := InferBilling(false); got != BillingAPI {
+		t.Errorf("without rate limits = %q, want api", got)
+	}
+}

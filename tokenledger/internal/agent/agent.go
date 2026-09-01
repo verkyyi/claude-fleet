@@ -21,6 +21,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"time"
@@ -40,10 +41,27 @@ type Config struct {
 	Home     string // Claude Code home; defaults to the user's home
 	StateDir string // cursor + spool live here
 
+	// SessionsDir is where the statusLine hook writes its stamps.
+	//
+	// Deliberately NOT derived from StateDir. Stamps are written by a hook
+	// that knows nothing about which agent instance will read them, so tying
+	// them to an agent's private state directory made the two silently
+	// disagree — the hook wrote to ~/.ccquota/sessions while an agent started
+	// with --state ~/.ccquota/agent looked in ~/.ccquota/agent/sessions and
+	// found nothing, with no error anywhere.
+	SessionsDir string
+
 	ScanInterval   time.Duration
 	LimitsInterval time.Duration
 	SpoolMaxBytes  int64
 	Version        string
+
+	// LiveInterval is how often the running-session heartbeat is sent.
+	//
+	// Separate from ScanInterval on purpose: the heartbeat only reads a few
+	// small stamp files written by the statusLine hook, so it can be seconds
+	// where a transcript scan must be a minute.
+	LiveInterval time.Duration
 
 	// MaxBackfill optionally narrows how far back a scan reaches. Zero means
 	// "as far as the account boundary allows".
@@ -62,6 +80,7 @@ type Config struct {
 const (
 	DefaultScanInterval   = 60 * time.Second
 	DefaultLimitsInterval = 120 * time.Second
+	DefaultLiveInterval   = 5 * time.Second
 )
 
 // maxEventsPerBatch bounds one push by count.
@@ -135,6 +154,16 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.LimitsInterval <= 0 {
 		cfg.LimitsInterval = DefaultLimitsInterval
 	}
+	if cfg.LiveInterval <= 0 {
+		cfg.LiveInterval = DefaultLiveInterval
+	}
+	if cfg.SessionsDir == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve home for the sessions directory: %w", err)
+		}
+		cfg.SessionsDir = filepath.Join(h, ".ccquota")
+	}
 
 	sp, err := spool.New(filepath.Join(cfg.StateDir, "spool"), cfg.SpoolMaxBytes)
 	if err != nil {
@@ -155,6 +184,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.cfg.Once {
 		return a.cycle(ctx)
 	}
+
+	// The heartbeat runs on its own cadence: it reads a handful of small files
+	// and must stay responsive even while a first scan is grinding through a
+	// machine's whole history.
+	go a.runLive(ctx)
 
 	// Jitter the first tick so a fleet restarted together by a config
 	// management run does not stampede the hub.
@@ -191,6 +225,111 @@ func (a *Agent) backoffInterval() time.Duration {
 	return a.cfg.ScanInterval * time.Duration(factor)
 }
 
+// runLive reports the sessions currently running on this machine.
+//
+// It sends what each session's own statusLine last said about itself, which is
+// seconds old — far fresher than the transcript scan, and Claude Code's own
+// arithmetic rather than a re-derivation of it. Nothing here is durable: a
+// missed heartbeat costs a few seconds of liveness and no recorded usage.
+func (a *Agent) runLive(ctx context.Context) {
+	t := time.NewTicker(a.cfg.LiveInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := a.pushLive(ctx); err != nil {
+				// Deliberately quiet: the hub being briefly unreachable is
+				// normal and this path has nothing to preserve.
+				continue
+			}
+		}
+	}
+}
+
+// liveStaleAfter bounds how old a stamp may be and still count as running.
+//
+// The statusLine redraws on every turn, so a working session stamps far more
+// often. Anything older has stopped, and showing it as live would be a lie the
+// viewer cannot check.
+const liveStaleAfter = 2 * time.Minute
+
+func (a *Agent) pushLive(ctx context.Context) error {
+	idx, err := sessions.Load(a.cfg.SessionsDir, liveStaleAfter)
+	if err != nil || len(idx.BySession) == 0 {
+		return err
+	}
+
+	out := make([]liveSession, 0, len(idx.BySession))
+	for _, st := range idx.BySession {
+		if st.Live == nil {
+			continue
+		}
+		out = append(out, liveSession{
+			SessionID:      st.SessionID,
+			Account:        st.Account(),
+			CostUSD:        st.Live.CostUSD,
+			InputTokens:    st.Live.InputTokens,
+			OutputTokens:   st.Live.OutputTokens,
+			LinesAdded:     st.Live.LinesAdded,
+			LinesRemoved:   st.Live.LinesRemoved,
+			ContextUsedPct: st.Live.ContextUsedPct,
+			CacheHitRatio:  st.Live.CacheHitRatio,
+			Model:          st.Live.ModelDisplay,
+			Effort:         st.Live.Effort,
+			Worktree:       st.Live.Worktree,
+			CWD:            st.CWD,
+			Billing:        st.Billing,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	body, err := json.Marshal(map[string]any{"sessions": out})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		a.cfg.HubURL+"/v1/live/report", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	return nil
+}
+
+// liveSession mirrors the hub's shape without importing the api package, which
+// would be a dependency cycle.
+type liveSession struct {
+	SessionID      string  `json:"session_id"`
+	Account        string  `json:"account,omitempty"`
+	CostUSD        float64 `json:"cost_usd"`
+	InputTokens    int64   `json:"input_tokens"`
+	OutputTokens   int64   `json:"output_tokens"`
+	LinesAdded     int64   `json:"lines_added"`
+	LinesRemoved   int64   `json:"lines_removed"`
+	ContextUsedPct float64 `json:"context_used_pct"`
+	CacheHitRatio  float64 `json:"cache_hit_ratio"`
+	Model          string  `json:"model,omitempty"`
+	Effort         string  `json:"effort,omitempty"`
+	Worktree       string  `json:"worktree,omitempty"`
+	CWD            string  `json:"cwd,omitempty"`
+	Billing        string  `json:"billing,omitempty"`
+}
+
 // jitter spreads a fleet's requests by ±20%.
 func jitter(d time.Duration) time.Duration {
 	spread := float64(d) * 0.2
@@ -206,7 +345,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 
 	// Reloaded every cycle: sessions start, stop and change subscription while
 	// the agent runs.
-	if idx, err := sessions.Load(a.cfg.StateDir, stampMaxAge); err != nil {
+	if idx, err := sessions.Load(a.cfg.SessionsDir, stampMaxAge); err != nil {
 		log.Printf("read session stamps: %v", err)
 	} else {
 		a.stamps = idx
@@ -312,8 +451,15 @@ func (a *Agent) cycle(ctx context.Context) error {
 		}
 		gid := *id
 		gid.AccountUUID = key
+		// An inferred subscription must NOT inherit the machine login's email.
+		// Borrowing it made a third account show up in the hub wearing the
+		// name of the second — worse than showing an opaque key, because it
+		// looks correct.
+		gid.Email, gid.DisplayName, gid.OrgUUID, gid.OrgName = "", "", "", ""
 		if g.label != "" {
 			gid.Email = g.label
+		} else if g.inferred {
+			gid.DisplayName = "unidentified subscription"
 		}
 		// The account-creation boundary belongs to the machine login, not to
 		// this subscription; applying it here would drop the wrong turns.

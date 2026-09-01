@@ -141,6 +141,45 @@ th { color: var(--ink-3); font-weight: 600; font-size: 11.5px; text-transform: u
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .scroll { overflow-x: auto; }
 
+/* ---- live strip ---- */
+.live {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+}
+.live-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.live-head h2 { font-size: 13px; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-2); }
+.live-head .note { color: var(--ink-3); font-size: 11.5px; }
+.pulse {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--good);
+  box-shadow: 0 0 0 0 var(--good); animation: pulse 2s infinite;
+}
+.pulse.off { background: var(--ink-3); animation: none; box-shadow: none; }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(12,163,12,.5); }
+  70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+}
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; }
+.tile .n {
+  font-size: 26px; font-weight: 620; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; line-height: 1.15;
+}
+.tile .l { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+
+.live-rows { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; }
+.live-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+  padding: 7px 10px; border-radius: 8px; background: var(--grid);
+}
+.live-row .who { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-row .who b { font-weight: 600; }
+.live-row .who span { color: var(--ink-3); }
+.live-row .rate { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctxbar { width: 54px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.ctxbar i { display: block; height: 100%; background: var(--s1); }
+
 .muted { color: var(--ink-3); font-size: 12.5px; }
 .empty { color: var(--ink-3); font-size: 13px; padding: 22px 0; text-align: center; }
 footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.7; }
@@ -169,6 +208,7 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
     <button id="theme" title="Toggle light / dark">◐</button>
   </header>
 
+  <div id="live"></div>
   <div id="banners"></div>
   <main id="main"></main>
 
@@ -281,6 +321,107 @@ async function api(path) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+/* ------------------------------------------------------------------- live */
+
+/** tween animates a number toward its target so a jump reads as movement
+ *  rather than a flicker. Honours reduced-motion by snapping instead. */
+function tween(node, to, fmt) {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const from = Number(node.dataset.v || 0);
+  node.dataset.v = String(to);
+  if (reduce || !isFinite(from) || from === to) { node.textContent = fmt(to); return; }
+
+  const t0 = performance.now(), dur = 600;
+  cancelAnimationFrame(Number(node.dataset.raf || 0));
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / dur);
+    // ease-out: fast to start, settles gently on the final value
+    const v = from + (to - from) * (1 - Math.pow(1 - p, 3));
+    node.textContent = fmt(v);
+    if (p < 1) node.dataset.raf = String(requestAnimationFrame(step));
+  };
+  node.dataset.raf = String(requestAnimationFrame(step));
+}
+
+const liveState = { snap: null, es: null };
+
+function tile(id, label) {
+  return el("div", { class: "tile" },
+    el("div", { class: "n", id }, "—"),
+    el("div", { class: "l" }, label));
+}
+
+function renderLive(snap) {
+  liveState.snap = snap;
+  const root = $("#live");
+  const active = snap && snap.active_sessions > 0;
+
+  if (!root.firstChild) {
+    root.replaceChildren(el("div", { class: "live" },
+      el("div", { class: "live-head" },
+        el("span", { class: "pulse", id: "live-pulse" }),
+        el("h2", {}, "Right now"),
+        el("span", { class: "note", id: "live-note" }, "")),
+      el("div", { class: "tiles" },
+        tile("lv-sessions", "active sessions"),
+        tile("lv-tpm", "tokens / min"),
+        tile("lv-uph", "$ / hour (notional)"),
+        tile("lv-ctx", "busiest context"),
+        tile("lv-lines", "lines changed")),
+      el("div", { class: "live-rows", id: "live-rows" })));
+  }
+
+  $("#live-pulse").className = "pulse" + (active ? "" : " off");
+  $("#live-note").textContent = active
+    ? `${snap.endpoints} endpoint${snap.endpoints === 1 ? "" : "s"} reporting · updates as sessions work`
+    : "no sessions reporting — install `ccquota stamp` as your statusLine to see live activity";
+
+  if (!snap) return;
+  const busiestCtx = snap.sessions.reduce((m, s) => Math.max(m, s.context_used_pct || 0), 0);
+
+  tween($("#lv-sessions"), snap.active_sessions, (v) => String(Math.round(v)));
+  tween($("#lv-tpm"), snap.tokens_per_min, (v) => fmtInt(Math.round(v)));
+  tween($("#lv-uph"), snap.usd_per_hour, (v) => "$" + v.toFixed(2));
+  tween($("#lv-ctx"), busiestCtx, (v) => Math.round(v) + "%");
+  tween($("#lv-lines"), (snap.lines_added || 0) + (snap.lines_removed || 0),
+    (v) => fmtInt(Math.round(v)));
+
+  const rows = snap.sessions.slice(0, 8).map((s) => {
+    const where = s.worktree || shortProject(s.cwd) || s.session_id.slice(0, 8);
+    const ctx = Math.round(s.context_used_pct || 0);
+    return el("div", { class: "live-row" },
+      el("div", { class: "who", title: s.cwd || "" },
+        el("b", {}, where), " ",
+        el("span", {}, `${s.model || "?"}${s.effort ? " · " + s.effort : ""} · ${s.endpoint}`)),
+      el("div", { class: "rate" },
+        s.tokens_per_min > 0 ? `${fmtInt(Math.round(s.tokens_per_min))}/min` : "idle"),
+      el("div", { class: "ctxbar", title: `context ${ctx}%` },
+        el("i", { style: `width:${Math.min(100, ctx)}%` })));
+  });
+  $("#live-rows").replaceChildren(...rows);
+}
+
+/** connectLive subscribes to the hub's event stream, falling back to polling
+ *  when the stream cannot be held open. */
+function connectLive() {
+  if (liveState.es) liveState.es.close();
+  try {
+    const es = new EventSource("/v1/live/stream");
+    liveState.es = es;
+    es.onmessage = (e) => { try { renderLive(JSON.parse(e.data)); } catch {} };
+    es.onerror = () => {
+      // EventSource reconnects on its own; a poll keeps the numbers moving
+      // meanwhile rather than freezing on the last frame.
+      es.close(); liveState.es = null;
+      setTimeout(connectLive, 5000);
+    };
+  } catch {
+    setInterval(async () => {
+      try { renderLive(await api("/v1/live")); } catch {}
+    }, 5000);
+  }
 }
 
 /* ------------------------------------------------------------------ state */
@@ -810,6 +951,7 @@ const escapeHTML = (s) => String(s).replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 boot();
+connectLive();
 /* The 5-hour window moves fast enough that a dashboard left open goes stale
    within minutes; refresh it rather than let someone read an old number. */
 setInterval(() => { if (state.account) load(); }, 60_000);
