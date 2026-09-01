@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -84,6 +85,16 @@ func TestDetect_IgnoresNonSemverReleaseNotes(t *testing.T) {
 	}
 }
 
+// noKeychain isolates a test from the machine's real login keychain. Without
+// it, credential tests on a Mac silently read the developer's own live token
+// and assert against that instead of their fixture.
+func noKeychain(t *testing.T) {
+	t.Helper()
+	prev := readKeychain
+	readKeychain = func() (*Credentials, error) { return nil, ErrNoCredentials }
+	t.Cleanup(func() { readKeychain = prev })
+}
+
 func writeCreds(t *testing.T, home, body string) {
 	t.Helper()
 	dir := filepath.Join(home, ".claude")
@@ -96,6 +107,7 @@ func writeCreds(t *testing.T, home, body string) {
 }
 
 func TestLoadCredentials_FromFile(t *testing.T) {
+	noKeychain(t)
 	home := t.TempDir()
 	future := time.Now().Add(time.Hour).UnixMilli()
 	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x","expiresAt":`+
@@ -116,6 +128,7 @@ func TestLoadCredentials_FromFile(t *testing.T) {
 // Expiry is reported, never repaired. Refreshing would race Claude Code's own
 // refresh and could invalidate the user's live session.
 func TestLoadCredentials_ExpiredIsReportedNotRefreshed(t *testing.T) {
+	noKeychain(t)
 	home := t.TempDir()
 	past := time.Now().Add(-time.Hour).UnixMilli()
 	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"stale","expiresAt":`+itoa(past)+`}}`)
@@ -142,6 +155,7 @@ func TestLoadCredentials_EnvOverride(t *testing.T) {
 }
 
 func TestLoadCredentials_MalformedFile(t *testing.T) {
+	noKeychain(t)
 	home := t.TempDir()
 	writeCreds(t, home, `{"claudeAiOauth":{}}`)
 	if _, err := LoadCredentials(home); err == nil {
@@ -166,4 +180,85 @@ func itoa(n int64) string {
 		return "-" + string(b)
 	}
 	return string(b)
+}
+
+// Regression: on macOS the file is often a stale leftover while the keychain
+// holds the live token. Preferring the file made the limits lookup fail
+// permanently and blame an expiry that had not happened.
+// Measured on a real Mac: file expired 17:07, keychain valid until 07:54 next day.
+func TestFreshest_PrefersTheLaterExpiry(t *testing.T) {
+	stale := &Credentials{AccessToken: "stale", ExpiresAt: time.Now().Add(-2 * time.Hour)}
+	live := &Credentials{AccessToken: "live", ExpiresAt: time.Now().Add(2 * time.Hour)}
+
+	// Order must not matter — the file is read first in practice.
+	if got := freshest([]*Credentials{stale, live}); got.AccessToken != "live" {
+		t.Errorf("file-then-keychain picked %q, want the live one", got.AccessToken)
+	}
+	if got := freshest([]*Credentials{live, stale}); got.AccessToken != "live" {
+		t.Errorf("keychain-then-file picked %q, want the live one", got.AccessToken)
+	}
+}
+
+// An unknown expiry is not evidence of freshness and must not beat a known-good
+// token.
+func TestFreshest_UnknownExpiryLosesToKnownGood(t *testing.T) {
+	unknown := &Credentials{AccessToken: "unknown"}
+	live := &Credentials{AccessToken: "live", ExpiresAt: time.Now().Add(time.Hour)}
+
+	if got := freshest([]*Credentials{unknown, live}); got.AccessToken != "live" {
+		t.Errorf("picked %q over a token with a known-good expiry", got.AccessToken)
+	}
+	// ...but it is better than nothing.
+	if got := freshest([]*Credentials{unknown}); got.AccessToken != "unknown" {
+		t.Error("an unknown-expiry token should still be used when it is all there is")
+	}
+}
+
+func TestFreshest_SkipsEmptyAndNil(t *testing.T) {
+	if got := freshest([]*Credentials{nil, {AccessToken: ""}}); got != nil {
+		t.Errorf("got %+v, want nil when nothing usable was found", got)
+	}
+}
+
+// The single-source platforms (Linux, Windows) must be unaffected.
+func TestLoadCredentials_SingleSourceStillWorks(t *testing.T) {
+	noKeychain(t)
+	home := t.TempDir()
+	future := time.Now().Add(time.Hour).UnixMilli()
+	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"only-one","expiresAt":`+itoa(future)+
+		`,"subscriptionType":"pro"}}`)
+
+	c, err := LoadCredentials(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessToken != "only-one" || c.SubscriptionType != "pro" {
+		t.Errorf("got %+v", c)
+	}
+}
+
+// The macOS two-source case, with the keychain stubbed so the assertion is
+// about ccquota's logic rather than the developer's own login keychain.
+func TestLoadCredentials_StaleFileLosesToLiveKeychain(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the two-source case only arises on macOS")
+	}
+	home := t.TempDir()
+	past := time.Now().Add(-2 * time.Hour).UnixMilli()
+	writeCreds(t, home, `{"claudeAiOauth":{"accessToken":"stale-file","expiresAt":`+itoa(past)+`}}`)
+
+	prev := readKeychain
+	readKeychain = func() (*Credentials, error) {
+		return &Credentials{AccessToken: "live-keychain",
+			ExpiresAt: time.Now().Add(2 * time.Hour), SubscriptionType: "max"}, nil
+	}
+	t.Cleanup(func() { readKeychain = prev })
+
+	c, err := LoadCredentials(home)
+	if err != nil {
+		t.Fatalf("a live keychain token must not report an expiry: %v", err)
+	}
+	if c.AccessToken != "live-keychain" {
+		t.Fatalf("picked %q; the stale file beat the live keychain", c.AccessToken)
+	}
 }

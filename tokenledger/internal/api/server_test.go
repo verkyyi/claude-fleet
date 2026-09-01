@@ -428,3 +428,52 @@ func TestUsage_UnknownDimensionIsRejected(t *testing.T) {
 		t.Fatalf("HTTP %d, want 400 for an unknown dimension", resp.StatusCode)
 	}
 }
+
+// Real-machine finding: an endpoint knows exactly why it could not read the
+// limits ("the local OAuth token has expired"), and that was thrown away, so
+// the UI could only say "nobody managed to read them" — useless for working out
+// WHICH machine to go fix.
+func TestLimits_UnavailableCarriesTheEndpointsOwnReason(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "macmini")
+
+	batch := batchFor("acct-a", "macmini", []string{"r1"}, "/a")
+	batch.LimitsUnavailable = "the local OAuth token has expired; it refreshes when Claude Code next runs"
+	if resp := h.push(t, tok, batch); resp.StatusCode != 200 {
+		t.Fatalf("HTTP %d", resp.StatusCode)
+	}
+
+	_, body := h.get(t, "/v1/limits?account=acct-a")
+	var view LimitsView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Available {
+		t.Fatal("available = true with no snapshot")
+	}
+	if !strings.Contains(view.Reason, "macmini") {
+		t.Errorf("reason %q does not name the endpoint to go fix", view.Reason)
+	}
+	if !strings.Contains(view.Reason, "expired") {
+		t.Errorf("reason %q dropped the endpoint's own explanation", view.Reason)
+	}
+}
+
+// Control: with nothing reported, the generic message stands — otherwise the
+// assertion above could pass on a build that always echoes a canned string.
+func TestLimits_NoReasonReportedFallsBackToTheGenericMessage(t *testing.T) {
+	h := newHarness(t)
+	h.push(t, h.enroll(t, "quiet"), batchFor("acct-a", "quiet", []string{"q1"}, "/a"))
+
+	_, body := h.get(t, "/v1/limits?account=acct-a")
+	var view LimitsView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(view.Reason, "reports:") {
+		t.Errorf("reason %q claims an endpoint said something when none did", view.Reason)
+	}
+	if view.Reason == "" {
+		t.Error("an unavailable reading must still carry some reason")
+	}
+}

@@ -49,11 +49,22 @@ const keychainService = "Claude Code-credentials"
 
 // LoadCredentials finds the local OAuth token, read-only.
 //
-// Sources, in order:
+// Sources:
 //  1. $CCQUOTA_OAUTH_TOKEN — an escape hatch for environments where neither
-//     of the below is reachable (containers, locked-down CI).
-//  2. <home>/.claude/.credentials.json — Linux and Windows.
+//     of the below is reachable (containers, locked-down CI). Wins outright.
+//  2. <home>/.claude/.credentials.json — the only source on Linux and Windows.
 //  3. the macOS keychain, via /usr/bin/security.
+//
+// On macOS BOTH may exist, and the file is often a stale leftover: Claude Code
+// writes refreshed tokens to the keychain, so a machine that once used the file
+// keeps an expired copy of it forever. Preferring the file — as this used to —
+// makes the limits lookup fail permanently on such a machine, and report
+// "token expired" while a perfectly valid token sits in the keychain.
+// Measured on a real Mac: file expired 17:07, keychain valid until 07:54 the
+// next day.
+//
+// So every source is read and the FRESHEST wins. That is correct on Linux and
+// Windows too, where there is only one.
 //
 // A returned ErrNoCredentials or ErrTokenExpired is expected operational
 // state, not a failure to report loudly.
@@ -64,21 +75,55 @@ func LoadCredentials(home string) (*Credentials, error) {
 		return &Credentials{AccessToken: tok}, nil
 	}
 
+	var found []*Credentials
+	var firstErr error
+
 	if c, err := fromFile(filepath.Join(home, ".claude", ".credentials.json")); err == nil {
-		return c, checkExpiry(c)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		found = append(found, c)
+	} else if !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+		firstErr = err
 	}
 
 	if runtime.GOOS == "darwin" {
-		c, err := fromKeychain()
-		if err != nil {
-			return nil, err
+		// A locked or unreachable keychain is ordinary on a headless SSH
+		// session; fall back to whatever the file had.
+		if c, err := readKeychain(); err == nil {
+			found = append(found, c)
+		} else if firstErr == nil {
+			firstErr = err
 		}
-		return c, checkExpiry(c)
 	}
 
-	return nil, ErrNoCredentials
+	best := freshest(found)
+	if best == nil {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return nil, ErrNoCredentials
+	}
+	return best, checkExpiry(best)
+}
+
+// freshest picks the credential with the latest expiry.
+//
+// A zero ExpiresAt means "unknown", which must never beat a known-good expiry;
+// it is only chosen when nothing else is available.
+func freshest(cs []*Credentials) *Credentials {
+	var best *Credentials
+	for _, c := range cs {
+		if c == nil || c.AccessToken == "" {
+			continue
+		}
+		switch {
+		case best == nil:
+			best = c
+		case best.ExpiresAt.IsZero() && !c.ExpiresAt.IsZero():
+			best = c
+		case c.ExpiresAt.After(best.ExpiresAt):
+			best = c
+		}
+	}
+	return best
 }
 
 func checkExpiry(c *Credentials) error {
@@ -95,6 +140,11 @@ func fromFile(path string) (*Credentials, error) {
 	}
 	return parseCreds(b, path)
 }
+
+// readKeychain is a package variable so tests can isolate themselves from the
+// developer's own login keychain, which otherwise leaks a real token into
+// every credential test on a Mac.
+var readKeychain = fromKeychain
 
 // fromKeychain shells out to /usr/bin/security. The Go standard library has no
 // keychain binding, and cgo is off by design so the binary stays trivially

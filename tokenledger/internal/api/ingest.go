@@ -95,6 +95,13 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		return nil, err
 	}
 
+	// Remember the endpoint's own explanation even when it could not read the
+	// limits — it is the only thing that can tell an operator WHICH machine to
+	// go fix.
+	if err := s.Store.RecordLimitsUnavailable(ep.ID, batch.LimitsUnavailable); err != nil {
+		return nil, err
+	}
+
 	if batch.Limits != nil {
 		batch.Limits.AccountUUID = id.AccountUUID
 		batch.Limits.EndpointID = ep.ID

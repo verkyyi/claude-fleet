@@ -31,7 +31,14 @@ CREATE TABLE IF NOT EXISTS endpoints (
   token_hash    TEXT NOT NULL,          -- enrollment token, hashed; never the plaintext
   label         TEXT NOT NULL DEFAULT '',
   enrolled_at   TEXT NOT NULL,
-  last_seen     TEXT
+  last_seen     TEXT,
+
+  -- Why this endpoint could not read its account's limits, in its own words
+  -- ("the local OAuth token has expired", "no readable credentials", ...).
+  -- Without this the UI can only say "nobody managed to read them", which
+  -- tells an operator nothing about which machine to go fix.
+  limits_unavailable TEXT NOT NULL DEFAULT '',
+  limits_checked_at  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_endpoints_account ON endpoints(account_uuid);

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -65,7 +66,15 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 		return nil, err
 	}
 	if snap == nil {
-		view.Reason = "no endpoint on this subscription has been able to read its account-wide limits"
+		ep, reason, err := s.Store.LimitsReason(account)
+		if err != nil {
+			return nil, err
+		}
+		if reason != "" {
+			view.Reason = fmt.Sprintf("%s reports: %s", ep, reason)
+		} else {
+			view.Reason = "no endpoint on this subscription has been able to read its account-wide limits"
+		}
 		return view, nil
 	}
 

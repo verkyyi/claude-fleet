@@ -44,7 +44,86 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate adds columns to databases created by an earlier version.
+//
+// The schema uses CREATE TABLE IF NOT EXISTS, which silently does nothing on an
+// existing database — so a new column has to be added explicitly or an upgraded
+// hub fails every query that mentions it.
+func migrate(db *sql.DB) error {
+	adds := []struct{ table, column, spec string }{
+		{"endpoints", "limits_unavailable", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "limits_checked_at", "TEXT"},
+	}
+	for _, a := range adds {
+		has, err := hasColumn(db, a.table, a.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.spec)); err != nil {
+			return fmt.Errorf("add %s.%s: %w", a.table, a.column, err)
+		}
+	}
+	return nil
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// RecordLimitsUnavailable stores an endpoint's own explanation of why it could
+// not read its account's limits.
+func (s *Store) RecordLimitsUnavailable(endpointID, reason string) error {
+	_, err := s.db.Exec(
+		`UPDATE endpoints SET limits_unavailable = ?, limits_checked_at = ? WHERE endpoint_id = ?`,
+		reason, fmtTime(time.Now()), endpointID)
+	if err != nil {
+		return fmt.Errorf("record limits reason: %w", err)
+	}
+	return nil
+}
+
+// LimitsReason returns the most recent explanation from any endpoint on an
+// account, so the UI can say which machine to go fix.
+func (s *Store) LimitsReason(account string) (endpoint, reason string, err error) {
+	row := s.db.QueryRow(`
+		SELECT COALESCE(NULLIF(label,''), hostname, endpoint_id), limits_unavailable
+		FROM endpoints
+		WHERE account_uuid = ? AND limits_unavailable <> ''
+		ORDER BY limits_checked_at DESC LIMIT 1`, account)
+	switch err := row.Scan(&endpoint, &reason); {
+	case err == sql.ErrNoRows:
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("limits reason: %w", err)
+	}
+	return endpoint, reason, nil
 }
 
 // DB exposes the handle for packages that need custom queries.
