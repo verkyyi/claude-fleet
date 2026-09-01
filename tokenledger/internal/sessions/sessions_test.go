@@ -185,10 +185,9 @@ func fileExists(p string) bool                { _, err := os.Stat(p); return err
 // identifies a subscription. Verified on a live machine: 17 sessions collapsed
 // into exactly two groups matching the account supervisor's own view.
 func TestFingerprintFor_SameScheduleSameAccount(t *testing.T) {
-	base5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
 	base7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
 
-	a := FingerprintFor(&base5, &base7)
+	a := FingerprintFor(&base7)
 	if a == "" {
 		t.Fatal("no fingerprint from a full reading")
 	}
@@ -196,23 +195,21 @@ func TestFingerprintFor_SameScheduleSameAccount(t *testing.T) {
 	// The SAME account one window later: both resets have advanced, but the
 	// phase has not. A raw-timestamp fingerprint would change identity every
 	// five hours.
-	next5 := base5.Add(5 * time.Hour)
 	next7 := base7.Add(7 * 24 * time.Hour)
-	if b := FingerprintFor(&next5, &next7); b != a {
+	if b := FingerprintFor(&next7); b != a {
 		t.Fatalf("fingerprint changed when the window rolled over: %s -> %s", a, b)
 	}
 
 	// A different account: the real second one from that machine, whose 7-day
 	// reset sat three days away.
-	other5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
 	other7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
-	if c := FingerprintFor(&other5, &other7); c == a {
+	if c := FingerprintFor(&other7); c == a {
 		t.Fatal("two subscriptions with different reset schedules produced one fingerprint")
 	}
 }
 
 func TestFingerprintFor_NoReadingNoFingerprint(t *testing.T) {
-	if got := FingerprintFor(nil, nil); got != "" {
+	if got := FingerprintFor(nil); got != "" {
 		t.Errorf("got %q; a session with no rate-limit reading cannot be identified", got)
 	}
 }
@@ -255,12 +252,10 @@ func TestInferBilling(t *testing.T) {
 // 13:39:59.278, the statusLine says 13:40:00. Measured on a live machine, that
 // 0.722s straddled a second boundary and made one subscription look like two.
 func TestFingerprintFor_ToleratesSourcePrecisionSkew(t *testing.T) {
-	api5 := time.Date(2026, 9, 1, 13, 39, 59, 278002000, time.UTC)
 	api7 := time.Date(2026, 9, 4, 13, 59, 59, 278026000, time.UTC)
-	sl5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
 	sl7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
 
-	if a, b := FingerprintFor(&api5, &api7), FingerprintFor(&sl5, &sl7); a != b {
+	if a, b := FingerprintFor(&api7), FingerprintFor(&sl7); a != b {
 		t.Fatalf("the same subscription fingerprinted differently by source: %s vs %s", a, b)
 	}
 }
@@ -268,12 +263,64 @@ func TestFingerprintFor_ToleratesSourcePrecisionSkew(t *testing.T) {
 // Control: quantising must not merge subscriptions that genuinely differ. The
 // real second account's resets were ten minutes and three days away.
 func TestFingerprintFor_QuantisingDoesNotMergeRealAccounts(t *testing.T) {
-	a5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
 	a7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
-	b5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
 	b7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
 
-	if FingerprintFor(&a5, &a7) == FingerprintFor(&b5, &b7) {
+	if FingerprintFor(&a7) == FingerprintFor(&b7) {
 		t.Fatal("two genuinely different subscriptions collapsed into one")
+	}
+}
+
+// The bug that split one subscription into three within a day.
+//
+// The five-hour window is ROLLING: its reset moves as old usage ages out, by
+// whatever amount ages out. Measured on this hub, one subscription's five-hour
+// reset went 18:40 -> 22:49:59 — four hours ten minutes — while its seven-day
+// reset never moved. Any fingerprint including the five-hour phase therefore
+// changes identity whenever it slides.
+func TestFingerprintFor_SurvivesTheRollingFiveHourWindow(t *testing.T) {
+	seven := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	want := FingerprintFor(&seven)
+
+	// Every five-hour reset this one subscription actually reported today.
+	for _, moved := range []time.Time{
+		time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC),
+		time.Date(2026, 9, 1, 18, 40, 0, 0, time.UTC),
+		time.Date(2026, 9, 1, 22, 49, 59, 916213000, time.UTC),
+		time.Date(2026, 9, 1, 23, 0, 0, 0, time.UTC),
+	} {
+		_ = moved // the five-hour reading must not participate at all
+		if got := FingerprintFor(&seven); got != want {
+			t.Fatalf("identity moved with the five-hour window: %s != %s", got, want)
+		}
+	}
+}
+
+// A statusLine that omits the seven-day window must yield NO fingerprint, not a
+// fingerprint of "absent". The old code mapped a missing window to phase -1 — a
+// perfectly good distinct value — so a session with an incomplete reading
+// became its own subscription.
+func TestFingerprintFor_MissingWindowIsNotAnIdentity(t *testing.T) {
+	seven := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	real := FingerprintFor(&seven)
+
+	got := FingerprintFor(nil)
+	if got != "" {
+		t.Fatalf("a missing seven-day reset produced the identity %q", got)
+	}
+	if got == real {
+		t.Fatal("an absent reading fingerprinted as a real subscription")
+	}
+}
+
+func TestIsFingerprint(t *testing.T) {
+	seven := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	if !IsFingerprint(FingerprintFor(&seven)) {
+		t.Error("a guessed identity must report itself as guessed")
+	}
+	for _, real := range []string{"e58c27f3-22fe-4939-b6ff-f7d9ad65275b", "tok_abc", ""} {
+		if IsFingerprint(real) {
+			t.Errorf("%q reported as a fingerprint", real)
+		}
 	}
 }

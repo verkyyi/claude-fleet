@@ -292,6 +292,17 @@ machine logs out and into a different account, rows already ingested keep the ol
 attribution. ccquota records the switch so the seam is visible in the UI rather
 than silently wrong — but it cannot retroactively fix history.
 
+**A subscription with no login is identified by a guess.** A session's own
+statusLine reports its rate-limit windows, so a subscription that has never been
+logged in on a monitored machine is identified by the phase of its **seven-day**
+reset. Only that window: the five-hour one is *rolling* — its reset moves as old
+usage ages out, measured here going 18:40 → 22:49 in one step — so its phase is
+not a property of the account and using it split one subscription into three
+within a day. Two subscriptions collide if their weekly resets land in the same
+minute (~1 in 10,000 per pair); such accounts are marked inferred, never
+overriding a reported uuid, and `ccquota name --dedupe` folds any duplicates
+that a past version created.
+
 **Per-endpoint shares are proportional estimates.** They assume Anthropic's
 utilization tracks weighted spend. Good enough to find the machine eating your
 week; not a settlement.

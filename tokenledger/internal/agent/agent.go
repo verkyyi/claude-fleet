@@ -376,7 +376,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 	// Learn the machine login's own reset phase, so sessions on that same
 	// subscription are not mistaken for a different one.
 	if snap != nil {
-		a.machineFingerprint = sessions.FingerprintFor(snap.FiveHour.ResetsAt, snap.SevenDay.ResetsAt)
+		a.machineFingerprint = sessions.FingerprintFor(snap.SevenDay.ResetsAt)
 	}
 
 	// Grouping must come AFTER the fingerprint is known. Deciding what belongs

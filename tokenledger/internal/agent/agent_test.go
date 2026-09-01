@@ -480,7 +480,7 @@ func TestGroupBySubscription_SameAccountIsNotSplit(t *testing.T) {
 func TestGroupBySubscription_MachineOwnFingerprintIsNotASeparateAccount(t *testing.T) {
 	r5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
 	r7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
-	own := sessions.FingerprintFor(&r5, &r7)
+	own := sessions.FingerprintFor(&r7)
 
 	a := &Agent{cfg: Config{}, machineFingerprint: own}
 	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
@@ -502,12 +502,11 @@ func TestGroupBySubscription_MachineOwnFingerprintIsNotASeparateAccount(t *testi
 // Control: a genuinely different schedule still splits, so the check above is
 // not simply disabling attribution.
 func TestGroupBySubscription_DifferentScheduleStillSplits(t *testing.T) {
-	own5 := time.Date(2026, 9, 1, 13, 40, 0, 0, time.UTC)
 	own7 := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
 	other5 := time.Date(2026, 9, 1, 13, 30, 0, 0, time.UTC)
 	other7 := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
 
-	a := &Agent{cfg: Config{}, machineFingerprint: sessions.FingerprintFor(&own5, &own7)}
+	a := &Agent{cfg: Config{}, machineFingerprint: sessions.FingerprintFor(&own7)}
 	a.stamps = &sessions.Index{ByTranscript: map[string]sessions.Stamp{
 		"/p/theirs.jsonl": {FiveHourAt: &other5, SevenDayAt: &other7, StampedAt: time.Now()},
 	}}

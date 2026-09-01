@@ -62,6 +62,20 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestResponse, error) {
 	id := batch.Identity
 
+	// A fingerprint is a guess at identity made from a reset schedule. When a
+	// known account's schedule matches it, they are the same subscription — and
+	// leaving them apart puts a phantom next to the real account, each holding
+	// a slice of the usage. Resolve BEFORE anything is written under the key.
+	if resolved, err := s.Store.ResolveFingerprint(id.AccountUUID); err != nil {
+		return nil, err
+	} else if resolved != id.AccountUUID {
+		log.Printf("fingerprint %s is %s (same seven-day reset schedule)", id.AccountUUID, resolved)
+		id.AccountUUID = resolved
+		// The guessed identity's placeholder fields must not overwrite the real
+		// account's; only the uuid was ever worth anything here.
+		id.Email, id.DisplayName = "", ""
+	}
+
 	if err := s.Store.UpsertAccount(id, id.SubscriptionType, id.RateLimitTier); err != nil {
 		return nil, err
 	}

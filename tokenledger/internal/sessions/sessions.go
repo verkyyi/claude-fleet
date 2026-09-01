@@ -125,58 +125,74 @@ func AccountKeyFor(token string) string {
 	return "tok_" + hex.EncodeToString(sum[:])[:16]
 }
 
-// Rate-limit window lengths, used to reduce a reset timestamp to its phase.
-const (
-	fiveHourWindow = 5 * time.Hour
-	sevenDayWindow = 7 * 24 * time.Hour
-)
+// sevenDayWindow is the only rate-limit window whose reset phase identifies an
+// account.
+const sevenDayWindow = 7 * 24 * time.Hour
 
-// FingerprintFor identifies a subscription from its rate-limit reset times.
+// FingerprintFor identifies a subscription from its SEVEN-DAY reset schedule.
 //
 // The token is unreachable from a hook, but the statusLine payload reports the
 // session's own rate_limits — and every session on one subscription shares that
-// subscription's reset schedule, while different subscriptions almost never
-// do. Measured on a live machine: 17 sessions collapsed into exactly two
-// groups, matching what the account supervisor independently reported, with
-// 7-day resets three days apart.
+// subscription's reset schedule, while different subscriptions almost never do.
 //
-// The PHASE is used, not the timestamp: a reset advances every window, so the
-// raw value would change identity every five hours. The offset within the
-// window is a property of the account.
+// The PHASE is used, not the timestamp: a reset advances a whole window at a
+// time, so the raw value would change identity every rollover. The offset
+// within the window is the property of the account.
 //
-// This is a heuristic and is labelled as one wherever it surfaces. Two accounts
-// collide only if BOTH windows align — 18,000 × 604,800 possible phase pairs —
-// but "unlikely" is not "impossible", so it never overrides a token-derived key.
-func FingerprintFor(fiveHourResets, sevenDayResets *time.Time) string {
-	if fiveHourResets == nil && sevenDayResets == nil {
+// The five-hour window is deliberately NOT used, and that is the correction
+// this function exists in its current form for. It is a ROLLING window: its
+// reset moves as old usage ages out, by whatever amount happens to age out.
+// Measured on one subscription, its reset went 18:40 -> 22:49:59 — four hours
+// ten minutes, not five — while its seven-day reset never moved. Feeding a
+// sliding value into the phase does not merely add noise: it guarantees a NEW
+// identity every time it slides. One subscription had split into three within a
+// day, and both halves of that split were then treated as separate accounts.
+//
+// A missing seven-day reset returns "" rather than a fingerprint built from a
+// sentinel. The old code mapped "absent" to phase -1, which is a perfectly good
+// distinct value, so a session whose statusLine happened to omit the window
+// became its own subscription. Refusing to answer is right here — the caller
+// falls back to the machine's own login, which is at worst the wrong known
+// account rather than an invented one.
+//
+// This is a heuristic and is labelled as one wherever it surfaces. Dropping the
+// five-hour component costs collision resistance — two subscriptions now
+// collide if their weekly resets land in the same minute, about 1 in 10,080 per
+// pair, against the old pair-of-phases space. That trade is worth taking: the
+// old space was larger but its coordinate moved, so it did not identify
+// anything. A heuristic that is stable and occasionally collides beats one that
+// is precise and never holds still.
+func FingerprintFor(sevenDayResets *time.Time) string {
+	if sevenDayResets == nil {
 		return ""
 	}
-	phase := func(t *time.Time, window time.Duration) int64 {
-		if t == nil {
-			return -1
-		}
-		// Quantise to the nearest minute before taking the phase.
-		//
-		// The same reset arrives with different precision depending on the
-		// source: /api/oauth/usage reports 13:39:59.278, the statusLine
-		// reports 13:40:00. That is 0.722s apart and straddles a second
-		// boundary, so the raw phases were 5999 and 6000 — and one
-		// subscription looked like two. Resets land on clean minute
-		// boundaries, so rounding there is lossless for real data and
-		// absorbs the discrepancy.
-		const quantum = int64(60)
-		secs := t.Unix()
-		rounded := (secs + quantum/2) / quantum * quantum
+	// Quantise to the nearest minute before taking the phase.
+	//
+	// The same reset arrives with different precision depending on the source:
+	// /api/oauth/usage reports 13:59:59.916, the statusLine reports 14:00:00.
+	// That is 0.084s apart but straddles a minute boundary, so the raw phases
+	// differed and one subscription looked like two. Resets land on clean
+	// minute boundaries, so rounding is lossless for real data and absorbs the
+	// discrepancy.
+	const quantum = int64(60)
+	secs := sevenDayResets.Unix()
+	rounded := (secs + quantum/2) / quantum * quantum
 
-		p := rounded % int64(window/time.Second)
-		if p < 0 {
-			p += int64(window / time.Second)
-		}
-		return p
+	p := rounded % int64(sevenDayWindow/time.Second)
+	if p < 0 {
+		p += int64(sevenDayWindow / time.Second)
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d",
-		phase(fiveHourResets, fiveHourWindow), phase(sevenDayResets, sevenDayWindow))))
-	return "win_" + hex.EncodeToString(sum[:])[:16]
+	sum := sha256.Sum256([]byte(fmt.Sprintf("7d|%d", p)))
+	return fingerprintPrefix + hex.EncodeToString(sum[:])[:16]
+}
+
+// fingerprintPrefix marks an account identifier that was GUESSED from a reset
+// schedule rather than reported. Callers must say so wherever it surfaces.
+const fingerprintPrefix = "win_"
+
+// IsFingerprint reports whether an account identifier is inferred.
+func IsFingerprint(accountKey string) bool {
+	return strings.HasPrefix(accountKey, fingerprintPrefix)
 }
 
 // Billing values.
@@ -204,7 +220,7 @@ func (s Stamp) Account() string {
 	if s.AccountKey != "" {
 		return s.AccountKey
 	}
-	return FingerprintFor(s.FiveHourAt, s.SevenDayAt)
+	return FingerprintFor(s.SevenDayAt)
 }
 
 // AccountIsInferred reports whether the identifier came from the reset-phase

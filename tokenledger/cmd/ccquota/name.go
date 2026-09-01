@@ -28,6 +28,11 @@ func runName(args []string) error {
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub URL (used instead of --db when set)")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token, with --hub")
 	clear := fs.Bool("clear", false, "remove the name and let automatic naming resume")
+	dedupe := fs.Bool("dedupe", false,
+		"merge subscriptions that share a seven-day reset schedule.\n"+
+			"Repairs a database that accumulated phantom accounts before the\n"+
+			"fingerprint stopped including the rolling five-hour window")
+	dryRun := fs.Bool("dry-run", false, "with --dedupe, show what would merge and change nothing")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota name [flags]                   list subscriptions and their names
@@ -42,6 +47,19 @@ Flags:
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *dedupe {
+		dbFile, err := resolveExistingDB(*dbPath)
+		if err != nil {
+			return err
+		}
+		st, err := store.Open(dbFile)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return dedupeAccounts(st, *dryRun)
 	}
 
 	rest := fs.Args()
@@ -166,5 +184,37 @@ func nameViaHub(hub, token, account, label string) error {
 		return fmt.Errorf("hub returned HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 	fmt.Printf("%s is now %q, and will stay that way\n", account, label)
+	return nil
+}
+
+// dedupeAccounts folds phantom subscriptions into the real ones.
+//
+// A fingerprint that shares a seven-day reset schedule with another account IS
+// that account — the schedule is the very thing the fingerprint is computed
+// from. Going forward the hub resolves this at ingest, but usage already split
+// across the phantoms stays split until something reunites it.
+func dedupeAccounts(st *store.Store, dryRun bool) error {
+	dupes, err := st.DuplicateAccountsBySchedule()
+	if err != nil {
+		return err
+	}
+	if len(dupes) == 0 {
+		fmt.Println("no duplicate subscriptions: every account has a distinct seven-day reset schedule")
+		return nil
+	}
+	for src, dst := range dupes {
+		if dryRun {
+			fmt.Printf("would merge %s -> %s\n", src, dst)
+			continue
+		}
+		moved, err := st.MergeAccount(src, dst)
+		if err != nil {
+			return fmt.Errorf("merge %s into %s: %w", src, dst, err)
+		}
+		fmt.Printf("merged %s into %s (%d turns moved)\n", src, dst, moved)
+	}
+	if dryRun {
+		fmt.Printf("\n%d merge(s) pending; re-run without --dry-run to apply\n", len(dupes))
+	}
 	return nil
 }
