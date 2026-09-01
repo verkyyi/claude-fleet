@@ -106,6 +106,13 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 			return nil, err
 		}
 	}
+	// Exactly one login at a time. Any other account still seen here is a
+	// guest from now on — including the one that just stopped being the login.
+	if login {
+		if err := s.Store.DemoteEndpointLogin(ep.ID, id.AccountUUID); err != nil {
+			return nil, err
+		}
+	}
 
 	// Stamp identity server-side. The agent reports which account it belongs
 	// to, but the endpoint id is whatever the token resolved to.

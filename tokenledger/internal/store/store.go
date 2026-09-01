@@ -412,6 +412,27 @@ func (s *Store) RecordEndpointAccount(endpointID, account string, origin model.A
 	return nil
 }
 
+// DemoteEndpointLogin marks any OTHER account on this endpoint as a guest.
+//
+// An endpoint has exactly one login at a time and any number of concurrent
+// guests — the whole point of endpoint_accounts. But 'login' is sticky, so that
+// a session sighting cannot demote a real login, and nothing ever un-stuck it:
+// after a genuine logout/login the previous account kept claiming to be this
+// machine's own login, and the dashboard showed one machine with two.
+//
+// The row is not deleted. Sessions started under the old account keep running
+// and keep reporting, which is exactly what 'session' means.
+func (s *Store) DemoteEndpointLogin(endpointID, keepLogin string) error {
+	_, err := s.db.Exec(`
+		UPDATE endpoint_accounts SET origin = 'session'
+		WHERE endpoint_id = ? AND account_uuid <> ? AND origin = 'login'`,
+		endpointID, keepLogin)
+	if err != nil {
+		return fmt.Errorf("demote endpoint login: %w", err)
+	}
+	return nil
+}
+
 // RecordAccountSwitch notes that an endpoint changed the account it is logged
 // into. Call it only for a login-origin batch — see TouchEndpoint.
 func (s *Store) RecordAccountSwitch(endpointID, from, to string) error {

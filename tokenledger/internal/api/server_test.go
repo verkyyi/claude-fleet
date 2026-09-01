@@ -905,3 +905,58 @@ func TestIngest_AcceptsAWindowRollover(t *testing.T) {
 			"reject an ordinary reset", view.FiveHour)
 	}
 }
+
+// An endpoint has one login at a time and any number of concurrent guests. The
+// 'login' marking is sticky so a session sighting cannot demote a real login —
+// but nothing un-stuck it after a genuine logout/login, so the dashboard showed
+// one machine claiming two "own logins" at once, contradicting the very model
+// the junction table exists to express.
+func TestIngest_ASwitchDemotesThePreviousLogin(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	h.push(t, tok, batchFor("acct-old", "laptop", []string{"o1"}, "/a"))
+	h.push(t, tok, batchFor("acct-new", "laptop", []string{"n1"}, "/a"))
+
+	eas, err := h.srv.Store.EndpointAccounts(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := map[string]string{}
+	for _, ea := range eas {
+		origin[ea.AccountUUID] = ea.Origin
+	}
+	if origin["acct-new"] != "login" {
+		t.Errorf("the account just logged into is %q, want login", origin["acct-new"])
+	}
+	if origin["acct-old"] != "session" {
+		t.Errorf("the previous login is still %q; one machine cannot have two own logins",
+			origin["acct-old"])
+	}
+	// It must not vanish — sessions started under it keep running and reporting.
+	if _, present := origin["acct-old"]; !present {
+		t.Error("the previous account was dropped rather than demoted")
+	}
+}
+
+// Control: a guest sighting must NOT demote the real login.
+func TestIngest_AGuestDoesNotDemoteTheLogin(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	h.push(t, tok, batchFor("acct-login", "laptop", []string{"l1"}, "/a"))
+	h.push(t, tok, sessionBatchFor("acct-guest", "laptop", []string{"g1"}, "/b"))
+
+	eas, err := h.srv.Store.EndpointAccounts(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ea := range eas {
+		if ea.AccountUUID == "acct-login" && ea.Origin != "login" {
+			t.Errorf("a guest sighting demoted the real login to %q", ea.Origin)
+		}
+		if ea.AccountUUID == "acct-guest" && ea.Origin != "session" {
+			t.Errorf("a guest was promoted to %q", ea.Origin)
+		}
+	}
+}
