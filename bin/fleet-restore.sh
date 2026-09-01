@@ -159,7 +159,7 @@ snapshot() {
     # worktree/PR) and its transcript can't be reliably resolved from the shared
     # base checkout — the resolver drops @raw=1 rows so they are never snapshotted
     # or restored. Older maps (pre-#214, no @raw field) default it to '' → kept.
-    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}' 2>/dev/null
       [ -n "$spath" ] && printf '__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -302,7 +302,7 @@ restore() {
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
     local wname wpath wid wissue wstate reopened=0
-    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _; do
+    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # reconcile path: a window with this name is already live — don't duplicate.
@@ -363,6 +363,11 @@ restore() {
         [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
+        # Re-stamp the spawn provenance too (issue #503) so a crash-restored
+        # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)
+        # leave $worigin empty → nothing stamped, exactly as before.
+        [ -n "${worigin:-}" ] && [ "$worigin" != "-" ] \
+          && tmux -L "$sock" set-window-option -t "$nw" @origin "$worigin" 2>/dev/null
         # Re-stamp @claude_state so the dash reflects reality instead of a blank row
         # (issue #153) — the bug this fixes is a restored worker coming back with an
         # empty state that the attention layer reads as "stuck idle". Stamp a fresh

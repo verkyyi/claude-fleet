@@ -131,7 +131,10 @@ if [ "${1:-}" = "--exec" ]; then
       # it this instant record deduped away ledger-watch's later titled row, leaving
       # every hand-exited scratch "(untitled)" in /fleet-history.
       wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
-      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname"
+      # @origin rides along as the row's provenance (issue #503) — read while the
+      # window is still alive, exactly like the name.
+      worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
+      fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
     fi
     [ -n "$sess" ] && [ -n "$win" ] && \
       rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$win")" 2>/dev/null
@@ -179,7 +182,9 @@ if [ "${1:-}" = "--exec" ]; then
   # title (the window is still alive — killed just below), so a closed-unlanded row
   # recorded here is never "(untitled)"; on the landed path gh's PR title still wins.
   wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
-  fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch" "$wname"
+  # @origin rides along as the row's provenance (issue #503) — read pre-kill.
+  worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
+  fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch" "$wname" "$worigin"
 
   # CLOSE THE WINDOW FIRST (mirrors dash-reap reap_full, #313): it frees the pane's
   # shell if it was cwd'd inside the worktree, so the remove below isn't blocked, and

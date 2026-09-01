@@ -459,7 +459,7 @@ bridge_relay() {
     if [ "$state" = OPEN ]; then
       target=$(bridge_fleet_for_repo "$repo")
       if [ -n "$target" ]; then
-        if "$BIN/dash-issue-session.sh" "$issue" "$target" >/dev/null 2>&1; then
+        if "$BIN/dash-issue-session.sh" "$issue" "$target" --origin bridge >/dev/null 2>&1; then
           echo "revived(#${issue}->${target})"; return 0
         fi
         echo "revive-failed(#$issue)"; return 0

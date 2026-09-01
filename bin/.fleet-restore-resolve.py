@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # fleet-restore-resolve.py — stdin: PIPE-delimited rows
-# "window_name|path|issue|claude_state|prci|pfg|raw".  (trailing `raw` = issue #214)
+# "window_name|path|issue|claude_state|prci|pfg|raw|origin".  (trailing `raw` =
+# issue #214; trailing `origin` = spawn provenance, issue #503)
 # stdout: TAB rows
-# "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue<TAB>state<TAB>prci<TAB>pfg"
+# "WIN<TAB>name<TAB>path<TAB>claude-session-id<TAB>issue<TAB>state<TAB>prci<TAB>pfg<TAB>origin"
 # for each work window. The session id is the stem of the NEWEST transcript in that
 # worktree's project dir (same slug convention the collector uses), or '-' if none.
 #
@@ -65,6 +66,7 @@ for line in sys.stdin:
     prci = parts[4] if len(parts) > 4 and parts[4] else "-"
     pfg = parts[5] if len(parts) > 5 and parts[5] else "-"
     raw = parts[6] if len(parts) > 6 and parts[6] else ""
+    origin = parts[7] if len(parts) > 7 and parts[7] else "-"
     if not name or not path:
         continue
     if name == HUB:
@@ -80,4 +82,4 @@ for line in sys.stdin:
     # and never restored; a crash simply drops it.
     if raw == "1":
         continue
-    print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}\t{state}\t{prci}\t{pfg}")
+    print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}")

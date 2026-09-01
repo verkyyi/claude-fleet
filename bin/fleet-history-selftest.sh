@@ -79,11 +79,12 @@ out=$(run record --issue 9 --worktree "$WT" \
 contains "record: reports the session it captured" "$out" "new-session-2222"
 
 row=$(cat "$FLEET_HISTORY_LEDGER")
-# exactly 10 tab-separated columns (count tabs = 9) — the 10th is `state` (#320)
+# exactly 11 tab-separated columns (count tabs = 10) — the 10th is `state` (#320),
+# the 11th the spawn provenance `origin` (#503).
 tabs=$(printf '%s' "$row" | tr -cd '\t' | wc -c | tr -d ' ')
-eq "record: row has 10 columns (9 tabs)" "9" "$tabs"
+eq "record: row has 11 columns (10 tabs)" "10" "$tabs"
 
-IFS=$'\t' read -r c_when c_iss _ c_pr c_sha c_wt c_td c_sid c_smry c_state <<<"$row"
+IFS=$'\t' read -r c_when c_iss _ c_pr c_sha c_wt c_td c_sid c_smry c_state c_origin <<<"$row"
 eq "record: issue col"            "9"      "$c_iss"
 eq "record: pr degrades to dash"  "-"      "$c_pr"
 eq "record: sha degrades to dash" "-"      "$c_sha"
@@ -92,6 +93,7 @@ eq "record: transcript-dir col"   "$TDIR"  "$c_td"
 eq "record: newest session id"    "new-session-2222" "$c_sid"
 eq "record: summary tab/nl flattened to spaces" "fixed the thing" "$c_smry"
 eq "record: state column is 'landed'" "landed" "$c_state"
+eq "record: origin degrades to dash (#503)" "-" "$c_origin"
 # mergedAt auto-stamped (non-empty, dash-free ISO-ish) when not provided
 case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
 CHECKS=$((CHECKS + 1))
@@ -145,8 +147,8 @@ outc=$(run record-closed --repo o/r --issue 42 --worktree "$WTC" --title "fix-wi
 contains "record-closed: reports the closed-unlanded record" "$outc" "closed-unlanded #42"
 rowc=$(cat "$FLEET_HISTORY_LEDGER")
 tabsc=$(printf '%s' "$rowc" | tr -cd '\t' | wc -c | tr -d ' ')
-eq "record-closed: row has 10 columns (9 tabs)" "9" "$tabsc"
-IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state <<<"$rowc"
+eq "record-closed: row has 11 columns (10 tabs)" "10" "$tabsc"
+IFS=$'\t' read -r cc_when cc_iss _ cc_pr cc_sha cc_wt _ cc_sid cc_smry cc_state _ <<<"$rowc"
 eq "record-closed: issue col"       "42"                "$cc_iss"
 eq "record-closed: no pr (dash)"    "-"                 "$cc_pr"
 eq "record-closed: no sha (dash)"   "-"                 "$cc_sha"
@@ -348,7 +350,7 @@ mkdir -p "$STDIR"; : > "$STDIR/sess-scr.jsonl"
 out=$(run record-closed --key scratch-7 --worktree "$SWT" --title "scratch-7" \
         --summary "trying a thing" --sha deadbee1234)
 contains "scratch: record-closed labels the row ~<N>, not #<N>" "$out" "~7"
-IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state \
+IFS=$'\t' read -r _ g_key _ g_pr g_sha g_wt g_td g_sid _ g_state _ \
   <<<"$(cat "$FLEET_HISTORY_LEDGER")"
 eq "scratch: col 2 carries the scratch key"          "scratch-7"       "$g_key"
 eq "scratch: pr degrades to dash (no PR)"            "-"               "$g_pr"

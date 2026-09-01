@@ -110,9 +110,10 @@ seed_transcript() {
 STEW_PATH="$WORK/main"; mkdir -p "$STEW_PATH"; seed_transcript "$STEW_PATH" "stew-abc123"
 WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PATH" "wrk-def456"
 
-# issue-9  : a bare 3-field row → the state trio defaults to '-' (nothing to restore).
-# issue-9b : carries the @claude_state|@prci|@pfg trio (issue #153) → passed through.
-out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a\n%s|%s|-\n' \
+# issue-9  : a bare 3-field row → the state trio (and origin, #503) defaults to '-'.
+# issue-9b : carries the @claude_state|@prci|@pfg trio (issue #153) → passed
+#            through — plus a trailing @origin (#503), passed through as col 9.
+out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a||issue-7\n%s|%s|-\n' \
         "__HUB__" "$STEW_PATH" \
         "issue-9" "$WORK_PATH" \
         "issue-9b" "$WORK_PATH" \
@@ -121,10 +122,10 @@ out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a\n%s|%s|-\n' \
 
 printf '%s\n' "$out" | grep -qxF "HUB	$STEW_PATH	stew-abc123" \
   || fail "resolver: __HUB__ should emit a HUB row with the newest id (got: $out)"
-printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9	-	-	-" \
-  || fail "resolver: a bare work window WIN row should default the state trio to '-' (got: $out)"
-printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH	wrk-def456	9	working	✓	#9ece6a" \
-  || fail "resolver: the @claude_state|@prci|@pfg trio should pass through onto the WIN row (got: $out)"
+printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9	-	-	-	-" \
+  || fail "resolver: a bare work window WIN row should default the state trio + origin to '-' (got: $out)"
+printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH	wrk-def456	9	working	✓	#9ece6a	issue-7" \
+  || fail "resolver: the @claude_state|@prci|@pfg trio + @origin should pass through onto the WIN row (got: $out)"
 printf '%s\n' "$out" | grep -q '^WIN	dash' \
   && fail "resolver: a panel (dash) must NOT emit a WIN row (got: $out)"
 # a hub pane with no transcript yet → id '-'
@@ -169,10 +170,11 @@ grep -q '^WIN	issue-9	' "$MAP" \
   || fail "snapshot: the work window should still be a WIN row (map: $(cat "$MAP"))"
 grep -q '^WIN	plan	' "$MAP" \
   && fail "snapshot: the 'plan' panel must not be a WIN row (map: $(cat "$MAP"))"
-# issue #153: the per-window runtime state trio rides on the WIN row.
-grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a$' "$MAP" \
+# issue #153: the per-window runtime state trio rides on the WIN row (trailing
+# field = @origin, '-' when unset — issue #503).
+grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a	-$' "$MAP" \
   || fail "snapshot: issue-9's @claude_state|@prci|@pfg trio should be captured (map: $(cat "$MAP"))"
-grep -qE '^WIN	issue-10	.*	done	-	-$' "$MAP" \
+grep -qE '^WIN	issue-10	.*	done	-	-	-$' "$MAP" \
   || fail "snapshot: issue-10's 'done' state should be captured, unset prci/pfg as '-' (map: $(cat "$MAP"))"
 
 # restore() must IGNORE the HUB row: the hub is dash-only, so there is no Claude

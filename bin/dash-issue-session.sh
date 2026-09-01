@@ -33,12 +33,12 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
-    case "$_want" in title) WIN_TITLE="$_a" ;; esac
+    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; esac
     _want=""; continue
   fi
   case "$_a" in
@@ -46,6 +46,12 @@ for _a in "$@"; do
     --async|--detach-spawn) ASYNC_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
+    # --origin (issue #503): spawn provenance — who asked for this worker. A
+    # headless caller states it (the dispatcher passes `autofill`, the bridge
+    # `bridge`); left empty it is AUTO-DETECTED from the calling pane below
+    # (a worker/scratch spawning a sibling), and empty-after-detect ≡ hub.
+    --origin) _want=origin ;;
+    --origin=*) ORIGIN="${_a#--origin=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -76,6 +82,14 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 # Naming -L is correct in-session too (it resolves to the same current socket).
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
+# Spawn provenance (issue #503): an explicit --origin wins (headless callers state
+# theirs); else detect the calling pane's own key — issue-<N> / scratch-<N> when a
+# worker or scratch is spawning this, empty (≡ hub) for the dash/backlog/operator.
+# FOREGROUND pass only: the --async tail runs under run-shell -b with no caller
+# pane, so the foreground bakes the detected value into the tail's --origin.
+# Sanitized to the key charset — it becomes a window option and a run-shell embed.
+[ -z "$ORIGIN" ] && [ "$TAIL_ONLY" != 1 ] && ORIGIN=$(fleet_origin_key)
+ORIGIN=$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
 # POSIX single-quote a value for safe embedding in the run-shell command string
 # (the --async tail is a `sh -c` string, and an issue title can carry quotes / $ /
 # backticks). Wrap in single quotes, escaping any embedded single quote as '\''.
@@ -240,7 +254,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # would surface as a popup. Redirect the whole tail so nothing can. The tail's own
   # error reporting is unaffected — refuse() surfaces via `tmux display-message`, a
   # separate client call independent of this process's fds.
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN") >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || refuse "spawn failed for #$num: dispatch"
   exit 0
@@ -303,6 +317,11 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# Spawn provenance (issue #503): stamp WHO spawned this worker beside the binding.
+# Unset ≡ hub-spawned (the default, untagged in the dash); the dash groups a
+# tagged child under its live parent, and the reapers copy it into the history
+# ledger's origin column before the window dies.
+[ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
 
 # (The sub-second cross-machine tie-break that re-read the ▶ claiming comment ids
 # was retired with the claiming marker in issue #283 — the assignee is now the

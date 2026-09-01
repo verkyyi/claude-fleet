@@ -109,7 +109,7 @@ kind=${verdict%%$'\t'*}
 # both the key (col 2) and the title (col 3), so pull them once here (a #PR key
 # resolves to its key too). Best-effort: a missing title falls back to a
 # resume-<key> name below; a missing key simply skips the bind.
-IFS=$'\t' read -r led_key led_title <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+IFS=$'\t' read -r led_key led_title led_origin <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
 rname=""; { [ -n "$led_title" ] && [ "$led_title" != "-" ]; } && rname=$(fleet_win_name "$led_title" 2>/dev/null)
 # Which marker set? A `scratch-<n>` key (from the target OR the ledger) is a SCRATCH
 # row (#466): it has no issue, and binding one would hand the restored window to
@@ -133,6 +133,10 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
   else
     [ -n "$bissue" ] && TM set-window-option -t "$1" @issue "$bissue" 2>/dev/null
   fi
+  # Spawn provenance from the ledger's origin column (issue #503): re-stamped so
+  # a resumed session keeps its dash grouping; '-'/empty (pre-#503 row) → skip.
+  { [ -n "${led_origin:-}" ] && [ "$led_origin" != "-" ]; } \
+    && TM set-window-option -t "$1" @origin "$led_origin" 2>/dev/null
 }
 
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the

@@ -32,7 +32,7 @@ CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
 AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -57,6 +57,20 @@ state_v() { case "$1" in
   looping) gc=$IN; gl='↻';      rk=3;;
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
+
+# window → its OWN ledger key (issue #503): `issue-<N>` from @issue, else the
+# `scratch-<N>` slug from the worktree basename (a scratch cwd IS its worktree;
+# a wandered cwd yields no key, same strict rule as fleet_scratch_key — inlined
+# here because $(fleet_scratch_key) would fork a subshell on the 4Hz hot path).
+# Empty = not addressable as a spawn parent. Sets $okey; no subshells.
+okey_v() { okey=''
+  if [ -n "$1" ]; then okey="issue-$1"; return; fi
+  local bn=${2##*/} sn
+  case "$bn" in
+    *-scratch-*) sn=${bn##*-scratch-}
+      case "$sn" in ''|*[!0-9]*) :;; *) okey="scratch-$sn";; esac;;
+  esac
+}
 
 # model → context window (FLEET_CTX_WINDOW; haiku 200k). The model short name was
 # dropped from the row in #36, so only cwin is computed now.
@@ -89,8 +103,26 @@ case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
 LEFTW=31; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
+# One tmux read, iterated twice (issue #503): pass A below builds the parent
+# lookup table the grouping needs (a child can appear BEFORE its parent in window
+# order); pass B renders. Herestring iteration, no extra forks.
+WLIST=$(tmux list-windows -a -F "$WFMT")
+
+# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<origin>` line per addressable window,
+# the parent-resolution table for the spawn-provenance grouping (issue #503).
+KEYTAB=''
+while IFS=$US read -r sess idx name path state _ _ iss origin; do
+  [ -z "$name" ] && continue
+  [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
+  case "$name" in dash|plan|backlog) continue;; esac
+  okey_v "$iss" "$path"
+  [ -z "$okey" ] && continue
+  state_v "$state"
+  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$origin"$'\n'
+done <<< "$WLIST"
+
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -182,15 +214,53 @@ while IFS=$US read -r sess idx name path state state_ts wid iss; do
   acol=$GY; [ -z "$act" ] && act='·'
 
   issd=''; [ -n "$iss" ] && issd="#$iss"
+  # --- spawn provenance (issue #503) -----------------------------------------
+  # ↳ tag: rendered before the summary for every non-hub origin (`↳#483` for a
+  # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
+  # word for autofill/bridge). └ indent: only when the parent is a WINDOW kind
+  # (issue-*/scratch-*), i.e. the row is a child in the grouped list.
+  tagd=''; dname=$name
+  case "$origin" in
+    '') : ;;
+    issue-*)   tagd="↳#${origin#issue-}";   dname="└ $name" ;;
+    scratch-*) tagd="↳~${origin#scratch-}"; dname="└ $name" ;;
+    *)         tagd="↳$origin" ;;
+  esac
+  # group sort key: a root keeps its own (rank, idx); a child resolves its parent
+  # CHAIN (≤4 hops, grandchildren group under the ultimate live root) and inherits
+  # that root's (rank, idx) with depth=1 so it sorts right below it; a chain that
+  # breaks (parent window closed) is an ORPHAN → the 9/99999 sentinel sinks the
+  # row below every live group, sub-sorted by its own rank/idx.
+  grk=$rk; gidx=$idx; depth=0
+  case "$origin" in
+    issue-*|scratch-*)
+      grk=9; gidx=99999; depth=1
+      cur=$origin; hops=0
+      while [ "$hops" -lt 4 ]; do
+        t=$'\n'"$KEYTAB"
+        m=${t#*$'\n'"$cur"$'\t'}
+        [ "$m" = "$t" ] && break
+        prow=${m%%$'\n'*}
+        prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
+        pidx=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+        case "$porig" in
+          issue-*|scratch-*) cur=$porig; hops=$((hops+1)) ;;
+          *) grk=$prk; gidx=$pidx; break ;;
+        esac
+      done ;;
+  esac
   # full row: glyph1·issue5·window22·summary(flex)·⟨pad⟩·act8·PR7·ctx4
   # window+summary sit right after the issue; act/PR/ctx right-align to the edge,
   # the gap between summary and act flexing so the metadata block stays pinned right.
   fld 5  "$issd"; f_iss=$fld_out
-  fld 22 "$name"; f_name=$fld_out
+  fld 22 "$dname"; f_name=$fld_out
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
   avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
+  # the ↳ tag borrows its width (+1 space) from the summary's flex span so the
+  # right-pinned act/PR/ctx block stays aligned; ↳/#/~ are all single-cell.
+  [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
   # Clip + measure the summary by DISPLAY width, not code-point count (#63): a CJK
   # or emoji glyph is one ${#} char but two terminal columns, so a char-count clip
   # can be ~2x wide and overrun the flex span into the right-pinned PR/ctx block.
@@ -201,12 +271,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss; do
   # (fld() at :24 shares the same ${#}=chars assumption; its inputs — issue/PR/
   #  ctx — are ASCII, and window names are rarely wide, so it's left as-is here.)
   fleet_clip_display "$avail" "$smry"; smry="${clip_out:-}"; dwidth="${clip_w:-0}"
+  tagpfx=''
+  [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dwidth=$(( dwidth + ${#tagd} + 1 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
-  buf+="$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
-done < <(tmux list-windows -a -F "$WFMT")
+  buf+="$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
+done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
@@ -220,8 +292,12 @@ h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = 
 printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
-# emit sorted by status rank (color/order conveys grouping)
-printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n | while IFS='	' read -r rk _ line; do
+# emit grouped by spawn provenance (issue #503): roots (hub/autofill/bridge
+# spawns) keep the status-rank order they always had; each root's children sort
+# directly below it (depth breaks the tie, then the child's own rank/idx);
+# orphans — children whose parent window closed — sink below every live group.
+printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n \
+| while IFS='	' read -r _ _ _ _ _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done

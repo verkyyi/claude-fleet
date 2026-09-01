@@ -80,7 +80,7 @@ reap_record() {
   # ⌃x-recorded closed-unlanded row isn't "(untitled)". On the landed path gh's
   # PR title still wins inside fleet-history.
   fleet_reap_record "${reason:-}" "$REPO" "$MAIN" "$iss" "$wtdir" "${wid:-}" \
-    "${FLEET_SESSION:-}" "" "$branch" "${wname:-}"
+    "${FLEET_SESSION:-}" "" "$branch" "${wname:-}" "${worigin:-}"
 }
 
 # full reap: remove worktree + delete branch, close issue, kill window
@@ -152,6 +152,7 @@ if [ "${1:-}" = "--exec" ]; then
   # afterwards). Empty is tolerated: the row just records no summary / no title.
   wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
   wname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
+  worigin="$(tmux display-message -t "$target" -p '#{@origin}' 2>/dev/null)"   # provenance (#503), read pre-kill
   case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
   exit 0
 fi
@@ -229,9 +230,10 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # SessionEnd/ledger-watch paths already record the name. Read it NOW: the window
   # is still alive at every scratch_record call site (killed after).
   swname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
+  sworigin="$(tmux display-message -t "$target" -p '#{@origin}' 2>/dev/null)"   # provenance (#503), read pre-kill
   scratch_record() {
     fleet_reap_record "$sreason" "${FLEET_REPO:-}" "$MAIN" "" \
-      "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch" "$swname"
+      "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch" "$swname" "$sworigin"
   }
 
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a

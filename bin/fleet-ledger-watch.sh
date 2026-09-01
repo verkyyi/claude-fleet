@@ -155,9 +155,9 @@ watch_fleet() { (
 
   # Raw window list (PIPE-delimited: tmux < 3.5 mangles a TAB in -F output; a
   # printable '|' survives — same reasoning as fleet-restore.sh's snapshot).
-  #   window-id | @issue | @raw | @worktree | pane_current_path | window_name
+  #   window-id | @issue | @raw | @worktree | pane_current_path | window_name | @origin
   raw=$(ftmux list-windows -t "$sess" \
-        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}' 2>/dev/null)
+        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}' 2>/dev/null)
   # A LIVE fleet always has ≥1 hub window (dash/plan/backlog). An empty read here
   # means the session is gone or tmux glitched — either way do NOT diff (that would
   # false-record still-live workers as closed) and do NOT overwrite the snapshot.
@@ -183,7 +183,7 @@ watch_fleet() { (
   cur=$(fleet_state_dir "$sess")/.ledgerwatch.$$.snap
   cur_keys=$'\n'
   : > "$cur"
-  while IFS='|' read -r wid iss rawf wt cwd wname; do
+  while IFS='|' read -r wid iss rawf wt cwd wname worigin; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
     if [ "$rawf" = 1 ]; then
       # @raw SCRATCH: no issue to key on — use the scratch-<N> slug of its worktree
@@ -201,7 +201,9 @@ watch_fleet() { (
     smry=""
     smk=$(fleet_summary_key "$sess" "$wid")
     [ -f "$DASHC/summary_$smk" ] && read -r smry < "$DASHC/summary_$smk"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" >> "$cur"
+    # col 6 = @origin (issue #503): captured while live like the title/summary, so
+    # a vanished window's history row still carries its spawn provenance.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" >> "$cur"
     cur_keys="${cur_keys}${key}"$'\n'
   done <<EOF
 $raw
@@ -214,7 +216,7 @@ EOF
   # or a prior closed-unlanded row — record-closed dedups), record it.
   recorded=0; vanished=0
   if [ -f "$snap" ]; then
-    while IFS=$'\t' read -r p_key p_wid p_wt p_title p_smry; do
+    while IFS=$'\t' read -r p_key p_wid p_wt p_title p_smry p_origin; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
       vanished=$((vanished + 1))
@@ -231,7 +233,8 @@ EOF
       tok=$(bash "$BIN/fleet-history.sh" record-closed \
               --repo "$repo" --session "$sess" --key "$p_key" \
               --worktree "$p_wt" --win "$p_wid" \
-              --title "$p_title" --summary "$p_smry" 2>/dev/null)
+              --title "$p_title" --summary "$p_smry" \
+              --origin "${p_origin:-}" 2>/dev/null)
       case "$tok" in
         closed-unlanded*) log "$sess: $tok"; recorded=$((recorded + 1)) ;;
         *)                log "$sess: $lbl — ${tok:-record-closed: no output}" ;;
