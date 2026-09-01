@@ -203,8 +203,13 @@ snapshot() {
         local live_old
         live_old=$(awk -F'\t' '$1=="WIN"{print $3}' "$prior" 2>/dev/null \
                    | { n=0; while IFS= read -r _wt; do [ -n "$_wt" ] && [ -d "$_wt" ] && n=$((n+1)); done; printf '%s' "$n"; })
+        # mtime probe: GNU first (-c %Y), BSD/macOS fallback (-f %m). NEVER the
+        # other way round — GNU `stat -f %m` SUCCEEDS and prints the MOUNT POINT,
+        # and a non-numeric operand aborts the non-interactive shell at $((…)).
+        # The numeric case guard is the belt to that braces.
         local max_age="${FLEET_RESTORE_STALE_MAP_AGE:-86400}" age=-1 pmt
-        pmt=$(stat -f %m "$prior" 2>/dev/null || stat -c %Y "$prior" 2>/dev/null)
+        pmt=$(stat -c %Y "$prior" 2>/dev/null || stat -f %m "$prior" 2>/dev/null)
+        case "$pmt" in (''|*[!0-9]*) pmt='';; esac
         [ -n "$pmt" ] && age=$(( $(date +%s) - pmt ))
         if [ "${new_wins:-0}" -ge "${live_old:-0}" ]; then
           log "snapshot $sess: accepting shrink ${old_wins}→${new_wins} WIN rows — only ${live_old} stored rows still have a worktree (dead rows, issue #504)"
