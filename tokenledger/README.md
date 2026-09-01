@@ -166,6 +166,37 @@ the switch and shows it in the UI. Rows already ingested keep their old
 attribution and cannot be corrected — see the known limits below. Two plans
 running side by side is **not** a switch, and is not recorded as one.
 
+## Scheduling against your own quota
+
+A dispatcher that spawns Claude sessions on a timer needs a verdict it can
+branch on, not a page to read. `ccquota budget` is that verdict:
+
+```bash
+ccquota budget                 # headroom on the subscription this machine uses
+ccquota budget --account all   # every subscription the hub knows about
+ccquota budget --json          # the whole report, for a program
+ccquota budget --gate          # exit 0 to proceed, 3 to hold; reason on stderr
+```
+
+The default scope is **the account this machine is logged into**, because that
+is what work started here will spend — headroom on a subscription this machine
+cannot reach is not headroom. The tighter of the two windows governs: a calm
+five-hour window means nothing if the weekly one is nearly spent, and the weekly
+one is the expensive mistake.
+
+**Unknown is never a hold.** If the hub is unreachable, or no endpoint could read
+the limits, the gate OPENS and says why on stderr. A monitor that silently halts
+the work it exists to observe is worse than one that admits it cannot see.
+
+ccquota stays **read-only** here too: it reports whether there is room, and the
+caller decides what to do. Giving a monitor a control channel back to every
+machine it watches is a much larger security surface than "tell me what my fleet
+spent", and the scheduler knows its own priorities better anyway.
+
+[claude-fleet](https://github.com/verkyyi/claude-fleet) consumes exactly this,
+through its own `fleet-quotaguard.sh --gate`; it runs fine without ccquota
+installed.
+
 ## MCP
 
 Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer.
