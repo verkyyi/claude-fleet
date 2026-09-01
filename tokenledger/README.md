@@ -44,6 +44,11 @@ go install github.com/verkyyi/ccquota/cmd/ccquota@latest   # needs Go 1.25+
 No runtime, no database to provision, no Node. `CGO_ENABLED=0` cross-compiles to
 linux/amd64, linux/arm64, darwin, and windows.
 
+> **Windows is best-effort and unverified.** It cross-compiles and the tests are
+> platform-independent, but the agent has never been run on a real Windows
+> machine — path handling around Claude Code's transcript directory and the
+> scheduled-task installer are the likely rough edges. Reports welcome.
+
 ## Run it
 
 **On the hub** (a VPS, a NAS, a spare Mac):
