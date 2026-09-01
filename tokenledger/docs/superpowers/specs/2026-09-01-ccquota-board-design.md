@@ -2,10 +2,9 @@
 
 **Date:** 2026-09-01
 **Status:** proposed design, pre-implementation — **no code written**
-**Approach:** a local `ccquota badge` command as the foundation (no service
-required), plus two optional roles with **separate payload types**:
-`ccquota board` (self-hosted, internal, rich) and `ccquota badges` (public,
-GitHub OAuth, minimal)
+**Approach:** a local `ccquota badge` command, three small additions to the hub
+that already exists, and exactly one genuinely new service (`ccquota badges`,
+public, GitHub OAuth)
 
 ---
 
@@ -21,21 +20,42 @@ ccquota tells one operator what their fleet spent. Three things it cannot do:
 3. **Let an individual show what they have spent**, on a profile that is not
    ccquota's.
 
-## 2. Three surfaces, deliberately separate
+## 2. What already exists
 
-| | `ccquota badge` | `ccquota board` | `ccquota badges` |
+An earlier draft of this design proposed `ccquota board` as a new self-hosted
+service for internal cost allocation. **That service is already built**: it is
+the hub. A company self-hosts one hub, every engineer's agent enrols against it,
+and the dashboard already aggregates the four dimensions an internal board is
+for. Measured on a live two-machine, five-login deployment:
+
+| the internal-board question | already answered by |
+|---|---|
+| which person costs what | `by=user` |
+| which repo costs what | `by=project` |
+| which machine costs what | `by=endpoint` |
+| which subscription | `by=account` |
+| in notional dollars | every dimension carries `cost_usd` |
+
+So the internal case needs **three additions to the hub**, not a new service:
+
+1. a **team** dimension (the one grouping that does not exist),
+2. a **`/u/<person>`** page,
+3. **badge** routes, from the shared renderer.
+
+That leaves three surfaces:
+
+| | `ccquota badge` | the hub (existing) | `ccquota badges` |
 |---|---|---|---|
-| what | a local command | self-hosted service | one public instance |
+| what | a local command | what a company already runs | one public instance |
 | network | **none** | inside a company | public |
-| auth | n/a | operator-minted tokens | GitHub OAuth |
-| payload | local totals | **rich** (§5.2) | **minimal** (§5.1) |
-| view | an SVG file | teams → projects → people | `/u/<handle>` + badge |
-| required | **yes** | optional | optional |
+| auth | n/a | viewer token (existing) | GitHub OAuth |
+| data | local totals | **rich** — projects, people, machines, cost | **minimal** (§5.1) |
+| new code | small | small (three additions) | the only new service |
 
-An earlier draft made one service do every job. The tell was a
-`--auth=github|token` flag: a service needing two authentication models is a
-service doing two things. A second tell was applying one exclusion list to both
-destinations, when their threat models are **inverted** — see §5.
+The remaining separation is still load-bearing, for a reason an earlier draft
+missed: the threat models are **inverted**. A public destination must never
+carry project paths — they are client names. The hub's dashboard shows them in
+full, correctly, because it is behind a viewer token inside a company.
 
 ## 3. Non-goals
 
@@ -81,34 +101,41 @@ useful before any service exists.
 | gist + shields.io | write the JSON to a gist; point shields at it | no repo churn; depends on shields.io |
 | own hub | serve it from a hub already publicly reachable | nothing new to run; most hubs are not public |
 
-### Layer 3 — the optional services
+### Layer 3 — the hub, extended (internal) and one new public service
 
 ```
-  a person's / team's hub
-  ──────────────────────
+  the hub a company already runs
+  ──────────────────────────────
+  by user / project / endpoint / account, with cost   ◄── exists today
+       + team dimension, /u/<person>, badge routes    ◄── the three additions
+       │
        ├── ccquota badge ──► SVG file ──► committed / gisted / served locally
        │
-       ├── POST /v1/submit/internal ──► board   (token auth, rich payload)
-       └── POST /v1/submit/public   ──► badges  (OAuth,      minimal payload)
+       └── POST /v1/submit ──► badges (public, OAuth, MINIMAL payload only)
 ```
 
 ### 4.1 Packages
 
 | package | used by | responsibility |
 |---|---|---|
-| `internal/badge` | all three | SVG + shields JSON rendering, self-contained |
-| `internal/submit` | board, badges | **two** payload types and their validation |
-| `internal/board` | board | token auth, grouping, wall |
+| `internal/badge` | hub, badges, `ccquota badge` | SVG + shields JSON rendering, self-contained |
+| `internal/submit` | badges | the public payload type and its validation |
 | `internal/badges` | badges | GitHub OAuth, per-person page |
 
-## 5. Payload: two types, not one with a flag
+No `internal/board` package: the hub's existing store and query layer already
+does that work.
 
-The threat models are inverted. A public destination must never carry project
-paths — they are client names. An internal destination behind a firewall wants
-exactly those, because "which repo costs what" is the question being asked.
+## 5. Payload
 
-Expressed as **two types**, so the public service cannot physically accept the
-internal shape. A flag would default wrong eventually; a type cannot.
+Only ONE payload type is needed now, because the internal case never submits
+anywhere — it reads the hub's own database directly. That removes a whole
+protocol, its validation, and the risk of an internal payload reaching a public
+service.
+
+What survives from the earlier draft is the reasoning: the public payload is
+defined **from scratch**, not derived from the hub's internal model. Redacting a
+rich struct loses over time — each field added later is exposed by default, and
+the destination is permanent and public.
 
 ### 5.1 `submit.PublicEntry` — for `badges`
 
@@ -128,44 +155,33 @@ branches, account emails or uuids, utilization. Utilization is excluded because
 it is a percentage of a plan-dependent allowance, so publishing it leaks plan
 tier by inference while telling a reader nothing about the person.
 
-### 5.2 `submit.InternalEntry` — for `board`
+### 5.2 The internal dimensions — no payload at all
 
-Everything above, plus the dimensions a company is paying to see:
+Projects, people, endpoints and notional cost are already in the hub's store and
+already on its dashboard. Nothing is submitted, so nothing needs a schema, a
+transport, or a filter. The only new dimension is **team**.
 
-```jsonc
-{
-  "team": "platform",                       // assigned by the board, not claimed
-  "projects":  [ {"name":"api","tokens":...,"turns":...} ],
-  "people":    [ {"name":"alice","tokens":...,"turns":...} ],
-  "endpoints": [ {"name":"buildbox","tokens":...,"turns":...} ],
-  "cost_usd_notional": 21625.93
-}
-```
+## 6. The internal view (three additions to the hub)
 
-Still absent: session ids, git branches, account emails, raw OAuth material.
-Those serve no cost question and are the fields most likely to embarrass.
+**1. A team dimension.** The one grouping the hub lacks. Teams map from enrolled
+endpoints, assigned by the operator in hub config — an endpoint cannot declare
+its own team, for the same reason a submission cannot declare its own handle.
+Implemented as another `store.Dimension`, so it inherits the existing query,
+API and dashboard machinery.
 
-`cost_usd_notional` is named for what it is. Nobody is billed this on a plan,
-and an unqualified dollar figure in a finance conversation becomes a number
-people argue about rather than a signal.
+**2. `/u/<person>`.** One page per OS login, linkable and badge-able.
 
-## 6. The internal board
+**3. Badge routes**, from the shared renderer, so an internal repo README can
+carry a badge served by the company's own hub.
 
-**Grouped team → project → person.** Teams are the landing view; a person view
-exists one click down. This is the framing that survives a manager opening it:
-the page answers "where does our spend go", not "who is best".
+**Framing.** When teams are configured, the landing view groups team → project →
+person, with no rank numbers or podium. This is aimed at how an internal board
+actually fails: not cheating, which a team socially checks, but Goodhart. Read
+as a performance ranking it makes people avoid the tool or pad their usage, and
+either destroys the cost data it exists to provide.
 
-**Team assignment is board-side**, mapped from the enrolled token by the
-operator. A hub cannot declare its own team, for the same reason a submission
-cannot declare its own handle.
-
-**No rank numbers, no podium, no medals.** Sorted by spend is legitimate for
-cost; a numbered ranking of people is not the same object and reads differently.
-
-**Air-gapped by construction** — no GitHub, no outbound calls.
-
-Also served: `/u/<person>` and badges from the shared renderer, so an internal
-repo README can carry a badge from the company's own board.
+**Air-gapped by construction** — the hub already makes no outbound calls beyond
+Anthropic's own endpoints.
 
 ## 7. The public badges service
 
@@ -233,8 +249,10 @@ Cache-Control: public, max-age=300
 
 ## 12. Sequencing
 
-1. `internal/badge` + `ccquota badge` — useful alone, no service, no open
-   questions blocking it.
-2. `internal/submit` — both payload types, with the separation tests.
-3. `ccquota board` — the internal case, which has a concrete asking user.
-4. `ccquota badges` — last, because §11.1 and §11.2 must be answered first.
+1. `internal/badge` + `ccquota badge` — useful alone, no service, nothing in §11
+   blocks it.
+2. The hub's three additions — team dimension, `/u/<person>`, badge routes. This
+   completes the internal case, which has a concrete asking user.
+3. `internal/submit` + `ccquota badges` — last, because §11.1 (who hosts and
+   pays) and §11.2 (Anthropic's terms) must be answered before promoting a
+   public instance.
