@@ -194,12 +194,26 @@ func nameViaHub(hub, token, account, label string) error {
 // from. Going forward the hub resolves this at ingest, but usage already split
 // across the phantoms stays split until something reunites it.
 func dedupeAccounts(st *store.Store, dryRun bool) error {
-	dupes, err := st.DuplicateAccountsBySchedule()
+	dupes, skipped, err := st.DuplicateAccountsBySchedule()
 	if err != nil {
 		return err
 	}
+	// Say what could NOT be judged before saying what was. An account with no
+	// limits snapshot yet — a login from the last couple of minutes, or one
+	// whose token cannot be read — is unexamined, not proven distinct.
+	if len(skipped) > 0 {
+		fmt.Printf("%d account(s) have no limits reading yet and were NOT checked:\n", len(skipped))
+		for _, a := range skipped {
+			fmt.Printf("  %s\n", a)
+		}
+		fmt.Println("  (re-run once an endpoint has polled their limits)")
+	}
 	if len(dupes) == 0 {
-		fmt.Println("no duplicate subscriptions: every account has a distinct seven-day reset schedule")
+		if len(skipped) > 0 {
+			fmt.Println("no duplicates among the accounts that COULD be checked")
+		} else {
+			fmt.Println("no duplicate subscriptions: every account has a distinct seven-day reset schedule")
+		}
 		return nil
 	}
 	for src, dst := range dupes {

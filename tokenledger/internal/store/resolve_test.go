@@ -84,7 +84,7 @@ func TestDuplicateAccountsBySchedule_RealAccountWins(t *testing.T) {
 	seedSchedule(t, s, "e58c27f3-real", seven)
 	seedSchedule(t, s, key, seven)
 
-	dupes, err := s.DuplicateAccountsBySchedule()
+	dupes, _, err := s.DuplicateAccountsBySchedule()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,5 +217,33 @@ func TestResolveFingerprint_DoesNotMatchItself(t *testing.T) {
 	}
 	if got != key {
 		t.Fatalf("resolved onto %q instead of staying itself", got)
+	}
+}
+
+// An account with no limits reading has not been shown to be distinct — nothing
+// about it was examined. Reporting "no duplicates" while silently skipping one
+// is how a duplicate hides, and it happened: a freshly logged-in account was
+// checked before its first limits poll landed, and dedupe declared every
+// account distinct.
+func TestDuplicateAccountsBySchedule_ReportsWhatItCouldNotCheck(t *testing.T) {
+	s := newStore(t)
+	seven := time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
+	seedSchedule(t, s, "has-snapshot", seven)
+
+	// Logged in, reported, but no limits poll has landed yet.
+	if err := s.UpsertAccount(ident("no-snapshot-yet"), "max", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	dupes, skipped, err := s.DuplicateAccountsBySchedule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dupes) != 0 {
+		t.Fatalf("dupes = %v, want none among the checkable accounts", dupes)
+	}
+	if len(skipped) != 1 || skipped[0] != "no-snapshot-yet" {
+		t.Fatalf("skipped = %v; an unexamined account must be reported, not "+
+			"counted as distinct", skipped)
 	}
 }

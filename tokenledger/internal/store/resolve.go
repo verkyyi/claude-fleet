@@ -132,7 +132,13 @@ func (s *Store) MergeAccount(src, dst string) (moved int64, err error) {
 // phase, returning src -> dst merges. A real uuid always wins over a
 // fingerprint, and between two fingerprints the older one wins, so repeated
 // runs converge instead of ping-ponging.
-func (s *Store) DuplicateAccountsBySchedule() (map[string]string, error) {
+//
+// skipped counts accounts with no limits snapshot to compare. They are NOT
+// evidence of distinctness — nothing was checked about them — and the caller
+// must say so. Reporting "every account has a distinct schedule" while silently
+// ignoring one is how a duplicate hides: it happened here the moment a freshly
+// logged-in account was queried before its first limits poll landed.
+func (s *Store) DuplicateAccountsBySchedule() (dupes map[string]string, skipped []string, err error) {
 	type acct struct {
 		uuid  string
 		first string
@@ -145,7 +151,7 @@ func (s *Store) DuplicateAccountsBySchedule() (map[string]string, error) {
 		   ORDER BY l.observed_at DESC LIMIT 1)
 		FROM accounts a`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
@@ -154,13 +160,15 @@ func (s *Store) DuplicateAccountsBySchedule() (map[string]string, error) {
 		var a acct
 		var reset sql.NullString
 		if err := rows.Scan(&a.uuid, &a.first, &reset); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !reset.Valid {
+			skipped = append(skipped, a.uuid)
 			continue
 		}
 		t, err := time.Parse(rfc, reset.String)
 		if err != nil {
+			skipped = append(skipped, a.uuid)
 			continue
 		}
 		a.reset = t
@@ -168,10 +176,10 @@ func (s *Store) DuplicateAccountsBySchedule() (map[string]string, error) {
 		byKey[k] = append(byKey[k], a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	out := map[string]string{}
+	dupes = map[string]string{}
 	for _, group := range byKey {
 		if len(group) < 2 {
 			continue
@@ -188,9 +196,9 @@ func (s *Store) DuplicateAccountsBySchedule() (map[string]string, error) {
 		}
 		for _, a := range group {
 			if a.uuid != winner.uuid {
-				out[a.uuid] = winner.uuid
+				dupes[a.uuid] = winner.uuid
 			}
 		}
 	}
-	return out, nil
+	return dupes, skipped, nil
 }
