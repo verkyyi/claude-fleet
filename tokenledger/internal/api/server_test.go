@@ -816,3 +816,92 @@ func TestUsageByUser(t *testing.T) {
 			"machine were not separated", got)
 	}
 }
+
+// End to end: a reading that contradicts the previous one must not be stored,
+// and the endpoint must say why. Measured on this hub — the seven-day window
+// reported 41% at 17:57 and 0% at 18:00 with an unchanged reset time, and
+// ccquota served the 0% as truth. `ccquota budget` reads exactly this, so the
+// stale-but-real 41% becoming a fresh-looking 0% is headroom that does not
+// exist.
+func TestIngest_RefusesALimitsReadingThatContradictsTheLast(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	sevenReset := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	fiveReset := time.Date(2026, 9, 1, 18, 40, 0, 0, time.UTC)
+
+	good := batchFor("acct-a", "laptop", []string{"g1"}, "/a")
+	good.Limits = &model.LimitsSnapshot{
+		AccountUUID: "acct-a",
+		ObservedAt:  time.Now().UTC().Add(-3 * time.Minute),
+		FiveHour:    model.Window{Utilization: 32, ResetsAt: &fiveReset},
+		SevenDay:    model.Window{Utilization: 41, ResetsAt: &sevenReset},
+	}
+	h.push(t, tok, good)
+
+	bad := batchFor("acct-a", "laptop", []string{"g2"}, "/a")
+	bad.Limits = &model.LimitsSnapshot{
+		AccountUUID: "acct-a",
+		ObservedAt:  time.Now().UTC(),
+		FiveHour:    model.Window{Utilization: 0, ResetsAt: &fiveReset},
+		SevenDay:    model.Window{Utilization: 0, ResetsAt: &sevenReset},
+	}
+	h.push(t, tok, bad)
+
+	_, body := h.get(t, "/v1/limits?account=acct-a")
+	var view LimitsView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.SevenDay != nil && view.SevenDay.Utilization == 0 {
+		t.Fatal("the contradicting reading was stored: the seven-day window now reads 0%, " +
+			"which a scheduler would see as a full week of headroom")
+	}
+	if view.SevenDay == nil || view.SevenDay.Utilization != 41 {
+		t.Fatalf("seven-day = %+v, want the last trustworthy reading (41%%)", view.SevenDay)
+	}
+
+	// The refusal must be visible, not silent — otherwise the number simply
+	// stops moving and nobody knows why.
+	eps, err := h.srv.Store.ListEndpoints("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(eps[0].LimitsUnavailable, "seven-day") {
+		t.Errorf("endpoint reason = %q; it should say which window contradicted",
+			eps[0].LimitsUnavailable)
+	}
+}
+
+// Control: an ordinary rollover must still be accepted, or the guard would
+// freeze every account's limits five hours after the hub started.
+func TestIngest_AcceptsAWindowRollover(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "laptop")
+
+	sevenReset := time.Date(2026, 9, 4, 14, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 9, 1, 18, 40, 0, 0, time.UTC)
+	after := time.Date(2026, 9, 1, 23, 40, 0, 0, time.UTC)
+
+	first := batchFor("acct-a", "laptop", []string{"r1"}, "/a")
+	first.Limits = &model.LimitsSnapshot{AccountUUID: "acct-a", ObservedAt: time.Now().UTC().Add(-time.Minute),
+		FiveHour: model.Window{Utilization: 96, ResetsAt: &before},
+		SevenDay: model.Window{Utilization: 41, ResetsAt: &sevenReset}}
+	h.push(t, tok, first)
+
+	rolled := batchFor("acct-a", "laptop", []string{"r2"}, "/a")
+	rolled.Limits = &model.LimitsSnapshot{AccountUUID: "acct-a", ObservedAt: time.Now().UTC(),
+		FiveHour: model.Window{Utilization: 2, ResetsAt: &after},
+		SevenDay: model.Window{Utilization: 41, ResetsAt: &sevenReset}}
+	h.push(t, tok, rolled)
+
+	_, body := h.get(t, "/v1/limits?account=acct-a")
+	var view LimitsView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.FiveHour == nil || view.FiveHour.Utilization != 2 {
+		t.Fatalf("five-hour = %+v, want the rolled-over 2%% — the guard must not "+
+			"reject an ordinary reset", view.FiveHour)
+	}
+}

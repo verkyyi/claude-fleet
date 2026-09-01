@@ -147,7 +147,22 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		if batch.Limits.ObservedAt.IsZero() {
 			batch.Limits.ObservedAt = time.Now().UTC()
 		}
-		if err := s.Store.InsertLimits(batch.Limits); err != nil {
+		// A reading that contradicts the one before it is not this
+		// subscription's, whatever the agent believed when it read it. Storing
+		// it would not merely be wrong on a dashboard: `ccquota budget` reads
+		// exactly this, and another account's fresh window looks like headroom
+		// that does not exist.
+		prev, err := s.Store.LatestLimits(id.AccountUUID)
+		if err != nil {
+			return nil, err
+		}
+		if bad, why := store.ContradictsPrevious(prev, batch.Limits); bad {
+			log.Printf("refusing a limits reading for %s from %s: %s",
+				id.AccountUUID, ep.ID, why)
+			if err := s.Store.RecordLimitsUnavailable(ep.ID, why); err != nil {
+				return nil, err
+			}
+		} else if err := s.Store.InsertLimits(batch.Limits); err != nil {
 			return nil, err
 		}
 	}

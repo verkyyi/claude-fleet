@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +92,9 @@ func runBudget(args []string) error {
 	ceiling := fs.Float64("ceiling", 90, "hold at or above this utilization, in percent")
 	gate := fs.Bool("gate", false, "exit 0 to proceed, 3 to hold; reason on stderr")
 	asJSON := fs.Bool("json", false, "print the full report as JSON")
+	asTSV := fs.Bool("tsv", false,
+		"print one tab-separated row per subscription: uuid, label, headroom%, available.\n"+
+			"For shell callers — parseable with `read`, so a scheduler needs no jq")
 	timeout := fs.Duration("timeout", 10*time.Second, "how long to wait for the hub")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage:
@@ -111,13 +115,16 @@ Flags:
 
 	rep := budget(*hub, *token, *account, *home, *ceiling, *timeout)
 
-	if *asJSON {
+	switch {
+	case *asJSON:
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(rep); err != nil {
 			return err
 		}
-	} else if !*gate {
+	case *asTSV:
+		printBudgetTSV(rep)
+	case !*gate:
 		printBudget(rep)
 	}
 
@@ -365,4 +372,27 @@ func printBudget(rep BudgetReport) {
 		fmt.Println()
 	}
 	fmt.Printf("\n%s\n", rep.Disclaimer)
+}
+
+// printBudgetTSV writes one row per subscription for a shell caller:
+//
+//	uuid\tlabel\theadroom_pct\tavailable
+//
+// Tab-separated and never quoted, so `while IFS=$'\t' read -r uuid label pct ok`
+// is the whole parser. A scheduler wanting to rank subscriptions should not have
+// to depend on jq being installed — the fleet's own selftests already have to
+// skip when it is absent.
+//
+// An unreadable subscription is still printed, with available=0 and an empty
+// headroom, rather than omitted: a caller ranking these must be able to tell
+// "no headroom" from "we could not see", and a missing row hides the second.
+func printBudgetTSV(rep BudgetReport) {
+	for _, a := range rep.Accounts {
+		avail, pct := "0", ""
+		if a.Available {
+			avail = "1"
+			pct = strconv.FormatFloat(a.HeadroomPct, 'f', 1, 64)
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\n", a.AccountUUID, a.Label, pct, avail)
+	}
 }
