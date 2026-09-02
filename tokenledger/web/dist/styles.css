@@ -286,12 +286,19 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 /* detail overlay */
 .detail { position: fixed; inset: 0 0 0 auto; width: min(760px, 100vw); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow); z-index: 30; overflow: auto; padding: 20px; }
 .detail .close { position: absolute; right: 16px; top: 12px; border: 0; background: transparent; font-size: 22px; cursor: pointer; color: var(--ink-2); }
+/* Task 13 (session.js): a narrower KPI grid than Review's 7-up strip (the
+   panel tops out at 760px) and room reserved so a long project path never
+   runs under the fixed × button. */
+.detail h2 { font-size: 18px; padding-right: 34px; }
+.detail .kpis { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
 /* fleet */
 details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
 /* mobile */
 @media (max-width: 720px) {
   .scope .row1 { padding: 8px 12px; gap: 6px; } .scope h1 { display: none; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
+  .detail .kpis { grid-template-columns: repeat(2, 1fr); }
+  .detail { padding: 16px; }
   .grid2 { grid-template-columns: 1fr; }
   .sessions table { display: none; } .sessions .cards { display: grid; gap: 8px; }
 }

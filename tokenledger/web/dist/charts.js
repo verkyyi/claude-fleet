@@ -522,7 +522,12 @@ export function composition(parts) {
 
 /** turnBars: one bar per turn, height = tokens, coloured by model (fixed
  *  palette order of first-seen models); a sidechain (subagent) turn gets a
- *  hatched overlay so it reads apart from a top-level turn even in grayscale. */
+ *  hatched overlay so it reads apart from a top-level turn even in grayscale.
+ *  `turns` items are `{tokens, model, sidechain}`; `ts`/`effort`/`cost_usd`
+ *  are optional and, when present, only enrich the hover tooltip. Follows
+ *  `bars()`'s own rule one series/no legend — a legend is only added once
+ *  there is more than one model to distinguish (or a sidechain turn, whose
+ *  hatch needs its own key since colour alone would not show it). */
 export function turnBars(turns) {
   const W = 900, H = 160, PAD = { t: 10, r: 8, b: 8, l: 8 };
   const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
@@ -531,6 +536,7 @@ export function turnBars(turns) {
   const bw = Math.max(1, iw / n - 2);
   const models = [];
   for (const t of turns) if (t.model && !models.includes(t.model)) models.push(t.model);
+  const anySidechain = turns.some((t) => t.sidechain);
 
   const defs = el('defs', {}, el('pattern',
     { id: 'ccq-sidechain-hatch', width: '4', height: '4', patternTransform: 'rotate(45)', patternUnits: 'userSpaceOnUse' },
@@ -541,12 +547,24 @@ export function turnBars(turns) {
     const h = Math.max(1, ((t.tokens || 0) / max) * ih);
     const x = PAD.l + i * (iw / n);
     const yTop = PAD.t + ih - h;
-    const label = `<b>${escapeHTML(t.model || '?')}</b>${t.sidechain ? ' · subagent' : ''}<br>${fmtFull(t.tokens || 0)} tokens`;
+    const head = t.ts ? new Date(t.ts).toLocaleTimeString() : (t.model || '?');
+    const meta = t.model ? `${escapeHTML(t.model)}${t.effort ? ' · ' + escapeHTML(t.effort) : ''}${t.sidechain ? ' · subagent' : ''}` : '';
+    const label = `<b>${escapeHTML(head)}</b>` + (meta ? `<br>${meta}` : '') +
+      `<br>${fmtFull(t.tokens || 0)} tokens` + (t.cost_usd != null ? ` · ${fmtUSD(t.cost_usd)}` : '');
     g.appendChild(el('rect', {
       x, y: yTop, width: bw, height: h, fill: models.includes(t.model) ? seriesColor(models.indexOf(t.model)) : OTHER_COLOR,
       onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
     }));
     if (t.sidechain) g.appendChild(el('rect', { x, y: yTop, width: bw, height: h, fill: 'url(#ccq-sidechain-hatch)' }));
   });
-  return el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
+  if (models.length < 2 && !anySidechain) return svg;
+
+  const legend = el('div', { class: 'legend' },
+    models.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+    anySidechain ? el('span', {},
+      el('i', { style: 'background:repeating-linear-gradient(45deg, var(--ink-3), var(--ink-3) 1px, transparent 1px, transparent 3px)' }),
+      'subagent') : null);
+  return el('div', {}, svg, legend);
 }
