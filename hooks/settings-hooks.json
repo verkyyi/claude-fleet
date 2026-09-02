@@ -17,6 +17,12 @@
         "hooks": [
           { "type": "command", "command": "python3 ~/.claude/fleet/hooks/base-readonly-guard.py" }
         ]
+      },
+      {
+        "matcher": "Artifact",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/artifact-guard.py" }
+        ]
       }
     ],
     "PostToolUse": [

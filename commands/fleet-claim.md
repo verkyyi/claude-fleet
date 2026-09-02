@@ -211,6 +211,16 @@ override them):
      so after the merge — that's the reap, not a crash. Don't start new work in a
      landed worktree; a follow-up gets its own issue (and, if it's worth one now,
      its own worker via `--spawn` above).
+- **Host for the operator with doc-preview, never an Artifact.** A report, plan,
+  design doc, dashboard or mockup the operator should open in a browser goes
+  through the fleet's doc-preview skill —
+  `~/.claude/skills/doc-preview/share.sh <file.md|file.html>`, then relay the
+  `READY` tailnet URL (any device, no login, every session's shares in one list).
+  Artifact pages are scoped to the claude.ai account that published them, and the
+  fleet rotates accounts under sessions, so the operator cannot know which login
+  would show yours; the Artifact tool's publish is hook-blocked in fleet sessions
+  (issue #526). Reading or commenting on an artifact someone shared with you is
+  fine.
 - **Blocked = say why, never stall silently.** Blocked means *actually* stuck —
   a required review you can't grant, credentials you don't have, a decision only
   the operator can make — not "I'd like a second opinion". Post a

@@ -5,7 +5,8 @@
 # A new share never removes existing shared docs or changes the URL; the root page
 # lists everything currently being shared (across every session).
 #
-#   share.sh <file.md> [more.md ...]   # add doc(s) to the shared list; prints READY <url>
+#   share.sh <file.md|file.html> [more ...]   # add doc(s)/page(s) to the shared list; prints READY <url>
+#                                      # (.md → GitHub-styled viewer; .html → served as-is, #526)
 #   share.sh --list                    # show what is currently shared
 #   share.sh --remove <substr>         # drop entries whose id/title/path matches <substr>
 #   share.sh --refresh                 # re-render all shared docs with the current template
@@ -157,7 +158,7 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
-[ $# -ge 1 ] || { echo "usage: share.sh <file.md> [more.md ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "usage: share.sh <file.md|file.html> [more ...] | --list | --remove <substr> | --publish <id> | --unpublish <id> | --stop" >&2; exit 1; }
 command -v tailscale >/dev/null || { echo "tailscale not installed" >&2; exit 1; }
 tailscale status >/dev/null 2>&1 || { echo "tailscale is not running / logged out" >&2; exit 1; }
 
