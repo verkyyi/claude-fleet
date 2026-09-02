@@ -309,13 +309,26 @@ function connectLive(app) {
 
 /* ------------------------------------------------------------- wall (Q1) */
 
-function wallCard(limits) {
+// Spec §3.3: wall gauges are per subscription and ignore chips entirely (a
+// machine/project/model/etc. chip narrows the OTHER cards; utilization here
+// is always the whole subscription's, because that is what the account's
+// rate limit actually tracks). chipsIgnoredHint says so, on this card, only
+// when there is something to ignore — it would be noise on every load
+// otherwise.
+function chipsIgnoredHint(chips) {
+  if (!chips || !Object.keys(chips).length) return null;
+  return el('p', { class: 'hint' },
+    'Ignoring the current chips — these gauges are always the whole subscription\u2019s utilization, never a filtered slice of it.');
+}
+
+function wallCard(limits, chips) {
   // The cross-subscription shape is a LIST, never a total: two pools at 4% and
   // 19% are not 23% of anything.
   if (limits && Array.isArray(limits.per_account)) {
     const card = el('div', { class: 'card' },
       el('h2', {}, 'Am I about to hit the wall?'),
-      el('p', { class: 'hint' }, limits.note));
+      el('p', { class: 'hint' }, limits.note),
+      chipsIgnoredHint(chips));
     if (limits.worst) {
       card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
         `Closest to its limit: ${limits.worst.label} at ` +
@@ -336,7 +349,8 @@ function wallCard(limits) {
   const card = el('div', { class: 'card' },
     el('h2', {}, 'Am I about to hit the wall?'),
     el('p', { class: 'hint' },
-      'Exact, account-wide, and already covering every device on the subscription.'));
+      'Exact, account-wide, and already covering every device on the subscription.'),
+    chipsIgnoredHint(chips));
 
   if (!limits.available) {
     // No gauge at all. A 0% bar rendered the same as a live one is the failure
@@ -372,27 +386,34 @@ function wallCard(limits) {
   return card;
 }
 
-function wallCardFromResult(result) {
+function wallCardFromResult(result, chips) {
   if (result.status === 'rejected') return queryFailed('Am I about to hit the wall?', result);
-  return wallCard(result.value);
+  return wallCard(result.value, chips);
 }
 
 /* --------------------------------------------------------------- alerts */
 
+// /v1/findings's contract (a backend fix landing alongside Review's, task
+// 12): the response is an envelope shaped like handleSummary's —
+// `{account_uuid, all_accounts, since, until, view, findings: [...]}`, with
+// `since`/`until` omitted for `view=now` (which has no meaningful window)
+// and `findings` always an array, never null. Read tolerantly regardless:
+// if the body is still a bare array (whichever order this and the backend
+// fix land in), treat it as the findings list directly.
 function alertsCard(result) {
   if (result.status === 'rejected') {
-    // /v1/findings?view=now does not exist yet (a later backend task); this
-    // is the expected, required per-card degrade path, not a bug.
     return el('div', { class: 'card findings' }, el('h2', {}, 'Alerts'),
       el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
   }
   const data = result.value || {};
   const findings = Array.isArray(data) ? data : (data.findings || []);
+  // Spec §4 item 1: the Alerts card is hidden when empty, not shown with a
+  // reassuring "nothing unusual" message — a healthy fleet should not carry
+  // a permanent card at the top of Now. (A rejected query above still shows
+  // its own error card; "empty" here means the query succeeded and found
+  // nothing, not that it failed.)
+  if (!findings.length) return null;
   const card = el('div', { class: 'card findings' }, el('h2', {}, 'Alerts'));
-  if (!findings.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'Nothing unusual right now.'));
-    return card;
-  }
   for (const f of findings) {
     card.appendChild(el('div', { class: 'f' },
       el('span', { class: 'dot ' + (f.severity || 'info') }),
@@ -598,7 +619,7 @@ function applyNow(root, state, app, results) {
   root.replaceChildren(...[
     alertsCard(findingsR),
     heroWrapEl,
-    wallCardFromResult(limitsR),
+    wallCardFromResult(limitsR, state.chips),
     liveWrapEl,
     fleet,
   ].filter(Boolean));

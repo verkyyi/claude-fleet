@@ -61,29 +61,26 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	}
 }
 
-// The landing view groups by TEAM when teams are configured, and never
-// numbers a row.
+// Nothing in the dashboard numbers a row (no "1.", no podium).
 //
 // This is not cosmetic. Read as a per-person performance ranking, an internal
 // board makes people avoid the tool or pad their usage, and either destroys
 // the cost data it exists to provide.
 //
-// Before Task 11, "team leads user" was checkable as raw markup order:
-// teamCard(d.byTeam) had to appear before userCard(d.byUser) in the one
-// index.html that rendered both, unconditionally, on every load. The
-// module-shell redesign moves that breakdown into the Review view (state.js's
-// GROUPS = the dimensions a "breakdown" card can show; team is one of them),
-// where g1/g2 pick which dimension each of the two breakdown cards shows via
-// a segmented control the viewer operates — there is no longer a fixed
-// "teamCard" / "userCard" pair in a hardcoded order for a byte offset to
-// compare. web/dist/review.js is a placeholder until Task 12 (see
-// task-12-brief.md); once it renders the real breakdown cards, the ordering
-// half of this test's intent belongs back there, keyed to the DEFAULTS in
-// lib/state.js rather than to source order in one file. Until then, the
-// still-checkable, still-permanent half — nothing in the dashboard renders a
-// rank marker — is asserted against every embedded module, which is a
-// strictly wider net than the single file the old check swept.
-func TestDashboard_TeamCardLeadsAndNothingIsRanked(t *testing.T) {
+// Before Task 11, this test also asserted markup order: the one index.html
+// that rendered both a team and a user breakdown card, unconditionally, had
+// to put teamCard(d.byTeam) before userCard(d.byUser). The module-shell
+// redesign moved that breakdown into the Review view (lib/state.js's GROUPS
+// — the dimensions a "breakdown" card can show, team among them), where g1/g2
+// pick which dimension each of the two breakdown cards shows via a segmented
+// control the viewer operates: there is no longer a fixed "teamCard" /
+// "userCard" pair in a hardcoded order for a byte offset to compare, so that
+// half of the check was retired (task-11-report.md has the detail; an
+// equivalent for Review's breakdown cards, if wanted, is a new test keyed to
+// lib/state.js's DEFAULTS, not to source order in one file). What remains —
+// and is a strictly wider net than the single file the original check swept
+// — is this: no rank marker in any embedded module.
+func TestDashboard_NothingIsRanked(t *testing.T) {
 	assets := Assets()
 	forbidden := []string{"podium", "${i + 1}.", "${idx + 1}."}
 	err := fs.WalkDir(assets, ".", func(path string, d fs.DirEntry, err error) error {
