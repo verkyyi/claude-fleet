@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,6 +39,11 @@ func runHub(args []string) error {
 			"Tagged nodes, other logins, the LAN, loopback and the hub's own\n"+
 			"address still need the token. Empty = off")
 	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI (default: search PATH and the usual places)")
+	httpsAddr := fs.String("https-addr", "",
+		"also serve HTTPS here (e.g. 100.85.129.58:443) with a certificate from\n"+
+			"`tailscale cert` for this node's MagicDNS name, renewed by the hub.\n"+
+			"The URL becomes https://<node>.<tailnet>.ts.net")
+	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
 	publicBadges := fs.Bool("public-badges", false,
 		"serve /badge/... without a viewer token.\n"+
 			"Needed for a README image, which sends no credential and is\n"+
@@ -119,8 +125,8 @@ func runHub(args []string) error {
 	}
 
 	handler := srv.Handler()
-	servers := make([]*http.Server, 0, len(addrs))
-	errCh := make(chan error, len(addrs))
+	servers := make([]*http.Server, 0, len(addrs)+1)
+	errCh := make(chan error, len(addrs)+1) // +1: the optional TLS listener
 
 	for _, a := range addrs {
 		// Listen before serving, so a bad address fails here with a clear
@@ -134,9 +140,42 @@ func runHub(args []string) error {
 
 		log.Printf("ccquota hub listening on %s (db %s)", a, dbFile)
 		if *token != "" {
-			log.Printf("  dashboard: http://%s/?token=%s", a, *token)
+			// The token itself is deliberately NOT logged: hub.log is readable
+			// by anyone on the machine and gets pasted into bug reports.
+			log.Printf("  dashboard: http://%s/?token=<viewer token>", a)
 		}
 		go func() { errCh <- hs.Serve(ln) }()
+	}
+
+	if *httpsAddr != "" {
+		bin, err := api.FindTailscaleBin(*tailscaleBin)
+		if err != nil {
+			return fmt.Errorf("--https-addr: %w", err)
+		}
+		host := *tlsHost
+		if host == "" {
+			if host, err = detectMagicDNSName(bin); err != nil {
+				return fmt.Errorf("--https-addr: %w", err)
+			}
+		}
+		tc := newTailscaleCert(bin, host, filepath.Join(filepath.Dir(dbFile), "tls"))
+		if err := tc.refresh(); err != nil {
+			return fmt.Errorf("--https-addr: obtain certificate: %w", err)
+		}
+		go tc.renewLoop(ctx, 12*time.Hour)
+
+		ln, err := net.Listen("tcp", *httpsAddr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", *httpsAddr, err)
+		}
+		hs := &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			TLSConfig:         &tls.Config{GetCertificate: tc.get, MinVersion: tls.VersionTLS12},
+		}
+		servers = append(servers, hs)
+		log.Printf("ccquota hub listening on %s (https) -> https://%s/", *httpsAddr, host)
+		go func() { errCh <- hs.ServeTLS(ln, "", "") }()
 	}
 
 	go func() {

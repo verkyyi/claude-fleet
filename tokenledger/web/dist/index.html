@@ -26,6 +26,9 @@
 
   --good: #0ca30c;  --warning: #fab219;  --serious: #ec835a;  --critical: #d03b3b;
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+  /* tokenman -- the same palette the badge renders with */
+  --tm-pac: #f0b90b; --tm-eye: #1a1a1f; --tm-dot: #8a7a55;
+  --tm-cell: #e6e2d8; --tm-cell-top: #ffffff; --tm-digit: #1a1a1f; --tm-comma: #8a8577;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -35,6 +38,8 @@
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --tm-pac: #ffd43b; --tm-eye: #0d0f14; --tm-dot: #f2d9a6;
+    --tm-cell: #1a1d26; --tm-cell-top: #2b2f3b; --tm-digit: #f3efe6; --tm-comma: #6b7080;
   }
 }
 :root[data-theme="dark"] {
@@ -44,6 +49,8 @@
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
   --shadow: 0 1px 2px rgba(0,0,0,.4);
+  --tm-pac: #ffd43b; --tm-eye: #0d0f14; --tm-dot: #f2d9a6;
+  --tm-cell: #1a1d26; --tm-cell-top: #2b2f3b; --tm-digit: #f3efe6; --tm-comma: #6b7080;
 }
 
 * { box-sizing: border-box; }
@@ -57,25 +64,47 @@ a { color: var(--s1); }
 
 .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 64px; }
 
-/* Hero counter. The one number on this page that only ever grows. */
-.hero { padding: 18px 4px 22px; }
-.hero .n {
-  font-size: clamp(38px, 7vw, 76px); font-weight: 680; letter-spacing: -.03em;
-  line-height: 1; font-variant-numeric: tabular-nums;
-  /* Tabular numerals alone are not enough: the digits must also not reflow as
-     the value grows, or the whole line jitters several times a second. */
-  font-feature-settings: "tnum" 1; white-space: nowrap;
-  transition: opacity .6s ease;
+/* Hero counter. The one number on this page that only ever grows.
+   Rendered as the tokenman odometer: the character eats the dot stream while
+   the fleet is working, and the wheels roll to follow the projection. */
+.hero { padding: 18px 4px 22px; font-size: clamp(20px, 3.4vw, 40px); }
+.hero .tm { display: flex; align-items: center; gap: .55em; flex-wrap: wrap; }
+.hero svg.pac { width: 1.7em; height: 1.7em; flex: none; }
+.hero .ju, .hero .jl { transform-box: view-box; transform-origin: 24px 24px; }
+.hero .ju { transform: rotate(-22deg); animation: tm-ju .5s ease-in-out infinite; }
+.hero .jl { transform: rotate(22deg);  animation: tm-jl .5s ease-in-out infinite; }
+@keyframes tm-ju { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(-36deg); } }
+@keyframes tm-jl { 0%,100% { transform: rotate(6deg); }  50% { transform: rotate(36deg); } }
+.hero .dots { display: flex; gap: .34em; overflow: hidden; width: 3.6em; flex: none; }
+.hero .dots .run { display: flex; gap: .34em; animation: tm-eat .5s linear infinite; }
+.hero .dots i { width: .22em; height: .22em; border-radius: 50%; background: var(--tm-dot); flex: none; }
+@keyframes tm-eat { to { transform: translateX(-.56em); } }
+.hero .odo {
+  display: flex; align-items: center; gap: .1em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--tm-digit);
 }
-.hero .k {
-  color: var(--ink-3); font-size: 12px; margin-top: 8px;
-  text-transform: uppercase; letter-spacing: .08em;
+.hero .tilde { color: var(--ink-3); font-weight: 400; margin-right: .1em; }
+.hero .wheel {
+  position: relative; width: .74em; height: 1.28em; overflow: hidden; border-radius: .12em;
+  background: var(--tm-cell); box-shadow: inset 0 1px 0 var(--tm-cell-top);
 }
-/* Stale: the fleet has stopped reporting, so the number has stopped moving.
-   Fading is the whole signal — a frozen counter that looks identical to a
-   running one reads as "nothing is happening", not "we have lost contact". */
-.hero.stale .n { opacity: .4; }
-@media (prefers-reduced-motion: reduce) { .hero .n { transition: none; } }
+.hero .strip { position: absolute; left: 0; top: 0; width: 100%;
+  transition: transform .45s cubic-bezier(.22,.8,.2,1); }
+.hero .strip.snap { transition: none; }
+.hero .strip span { display: block; height: 1.28em; line-height: 1.28em; text-align: center; }
+.hero .sep { color: var(--tm-comma); width: .32em; text-align: center; }
+.hero .k { color: var(--ink-3); font-size: 12px; margin-top: 10px;
+  text-transform: uppercase; letter-spacing: .08em; }
+/* Stale: the fleet has stopped reporting. The character stops eating and the
+   whole thing fades -- a frozen counter that looks identical to a running one
+   reads as "nothing is happening", not "we have lost contact". */
+.hero.stale .tm { opacity: .4; transition: opacity .6s ease; }
+.hero.stale .ju, .hero.stale .jl, .hero.stale .dots .run { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .hero .ju, .hero .jl, .hero .dots .run { animation: none; }
+  .hero .strip { transition: none; }
+}
 
 header {
   display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
@@ -401,13 +430,98 @@ function applyCounter(c) {
   hero.until = c.project_until ? new Date(c.project_until).getTime() : 0;
 
   if (!$("#hero").firstChild) {
-    $("#hero").replaceChildren(el("div", { class: "hero" },
-      el("div", { class: "n", id: "hero-n" }, "—"),
-      // The tilde is the whole honesty marker: this figure is projected
-      // between measurements and is not exact. One character, always present.
+    $("#hero").replaceChildren(el("div", { class: "hero", id: "hero-root" },
+      el("div", { class: "tm" }, pacSVG(), dotStream(),
+        el("div", { class: "odo", id: "hero-odo" },
+          // The tilde is the whole honesty marker: this figure is projected
+          // between measurements and is not exact. One character, always present.
+          el("span", { class: "tilde" }, "~"))),
       el("div", { class: "k" }, "tokens consumed")));
   }
   if (!hero.raf) tickHero();
+}
+
+/* The character: two half-discs rotating about the centre, the eye riding on
+   the upper jaw. Same geometry as the badge renderer, in a 48x48 box. */
+function pacSVG() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 48 48"); svg.setAttribute("class", "pac"); svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML =
+    '<g class="ju"><path d="M24,24 L42,24 A18,18 0 0 0 6,24 Z" fill="var(--tm-pac)"/>' +
+    '<circle cx="28" cy="15.4" r="2.5" fill="var(--tm-eye)"/></g>' +
+    '<g class="jl"><path d="M24,24 L42,24 A18,18 0 0 1 6,24 Z" fill="var(--tm-pac)"/></g>';
+  return svg;
+}
+function dotStream() {
+  const run = el("div", { class: "run" });
+  for (let i = 0; i < 8; i++) run.appendChild(el("i"));
+  return el("div", { class: "dots" }, run);
+}
+
+/* Odometer wheels. Each wheel is a strip of 0-9 three times over. A wheel only
+   ever moves FORWARD, by (new - old) mod 10 cells, so 9->0 rolls on to the next
+   lap rather than spinning back. When a wheel nears the end of its strip it is
+   shifted back one lap from wherever it is RENDERED at that instant -- the
+   strip repeats every 10 cells, so a shift of exactly 10 is invisible, even
+   mid-transition. That is what keeps a counter that moves every frame from
+   ever running off the strip or reversing. */
+const LAP = 10, LAPS = 3;
+const wheels = []; // [{el, strip, idx}] left to right; idx counts cells from the top
+function wheelEl() {
+  const strip = el("div", { class: "strip" });
+  for (let k = 0; k < LAP * LAPS; k++) strip.appendChild(el("span", {}, String(k % LAP)));
+  return { el: el("div", { class: "wheel" }, strip), strip, idx: 0 };
+}
+function renderedY(strip) {
+  const m = getComputedStyle(strip).transform;
+  if (!m || m === "none") return 0;
+  const parts = m.match(/matrix\(([^)]+)\)/);
+  return parts ? parseFloat(parts[1].split(",")[5]) : 0;
+}
+function shiftBackOneLap(w) {
+  const cell = w.el.clientHeight;
+  const y = renderedY(w.strip) + LAP * cell; // one lap less negative: same pixels
+  w.strip.classList.add("snap");
+  w.strip.style.transform = "translateY(" + y + "px)";
+  void w.strip.offsetHeight;
+  w.strip.classList.remove("snap");
+  w.idx -= LAP;
+}
+function setOdometer(n) {
+  const odo = $("#hero-odo");
+  if (!odo) return;
+  const digits = String(Math.floor(Math.max(0, n)));
+  // Grow on the left as the count gains digits; separators are rebuilt then.
+  if (wheels.length !== digits.length) {
+    while (wheels.length < digits.length) wheels.unshift(wheelEl());
+    while (wheels.length > digits.length) wheels.shift();
+    const kids = [odo.firstChild]; // the tilde
+    wheels.forEach((w, i) => {
+      const fromRight = wheels.length - 1 - i;
+      kids.push(w.el);
+      if (fromRight > 0 && fromRight % 3 === 0) kids.push(el("span", { class: "sep" }, ","));
+    });
+    odo.replaceChildren(...kids);
+  }
+  const now = performance.now();
+  for (let i = 0; i < digits.length; i++) {
+    const w = wheels[i], d = +digits[i];
+    const step = (d - (w.idx % LAP) + LAP) % LAP;
+    if (step === 0) continue;
+    // A wheel that changes again before its last roll could finish is
+    // moving faster than a roll can show. Rolling it anyway makes the
+    // rendered strip fall ever further behind its target -- until it is
+    // translated clean out of the window. So a fast wheel snaps, frame by
+    // frame, which is what a spinning odometer wheel looks like anyway; only
+    // a wheel that has been still for a moment gets the roll.
+    const fast = now - (w.lastAt || 0) < 500;
+    w.lastAt = now;
+    if (w.idx + step >= LAP * (LAPS - 1)) shiftBackOneLap(w);
+    w.idx += step;
+    if (fast) w.strip.classList.add("snap");
+    w.strip.style.transform = "translateY(-" + (w.idx * 1.28) + "em)";
+    if (fast) { void w.strip.offsetHeight; w.strip.classList.remove("snap"); }
+  }
 }
 
 function tickHero() {
@@ -430,11 +544,9 @@ function tickHero() {
   // Never decreases. If the projection over-ran the truth, the number simply
   // waits for the truth to catch up rather than snapping backwards.
 
-  const node = $("#hero-n");
-  if (node) {
-    node.textContent = "~" + Math.floor(hero.shown).toLocaleString();
-    node.parentElement.classList.toggle("stale", !live);
-  }
+  setOdometer(hero.shown);
+  const root = $("#hero-root");
+  if (root) root.classList.toggle("stale", !live);
 }
 
 function renderLive(snap) {
