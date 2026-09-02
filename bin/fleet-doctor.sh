@@ -171,6 +171,26 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     esac
   done
   [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed (per-account windows honored)"
+  # ccquota-driven PRE-EMPTIVE rotation (issue #513): with a hub URL + ccquota on
+  # PATH the collector rotates at FLEET_ACCOUNT_CEILING before any banner. Report
+  # what the collector would see: rows per pool label (unmapped labels = ccquota
+  # names that don't match the fleet's — fix with `ccquota name <uuid> <label>` or
+  # CCQUOTA_ACCOUNT=<uuid> in <label>.conf), or why it is running banner-only.
+  if [ -n "${CCQUOTA_HUB_URL:-}" ]; then
+    if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
+      qrows=$(bash "$(dirname "$0")/fleet-account.sh" quota --refresh 2>/dev/null); qn=$(printf '%s' "$qrows" | grep -c .)
+      if [ "$qn" -gt 0 ]; then
+        if [ "$qn" -eq "$n" ]; then pass quota "ccquota hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
+        else warn quota "ccquota maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"; fi
+      else
+        warn quota "ccquota hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
+      fi
+    else
+      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off"
+    fi
+  else
+    printf '        note: set CCQUOTA_HUB_URL (fleet.conf) for pre-emptive rotation via ccquota — today it rotates only after a limit banner.\n'
+  fi
   if [ "$(uname)" = "Darwin" ]; then
     printf '        note: on macOS token files are the ONLY way to switch accounts (Keychain ignores CLAUDE_CONFIG_DIR).\n'
   fi
