@@ -82,14 +82,22 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 # Naming -L is correct in-session too (it resolves to the same current socket).
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
-# Spawn provenance (issue #503): an explicit --origin wins (headless callers state
-# theirs); else detect the calling pane's own key — issue-<N> / scratch-<N> when a
-# worker or scratch is spawning this, empty (≡ hub) for the dash/backlog/operator.
-# FOREGROUND pass only: the --async tail runs under run-shell -b with no caller
-# pane, so the foreground bakes the detected value into the tail's --origin.
-# Sanitized to the key charset — it becomes a window option and a run-shell embed.
-[ -z "$ORIGIN" ] && [ "$TAIL_ONLY" != 1 ] && ORIGIN=$(fleet_origin_key)
-ORIGIN=$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+# Spawn provenance (issue #503): detect the calling pane's own key — issue-<N> /
+# scratch-<N> when a worker or scratch is spawning this, empty (≡ hub) for the
+# dash/backlog/operator — then let fleet_origin_canon decide between it and an
+# explicit --origin: a canonical key or known literal (the headless dispatcher's
+# `autofill`, the bridge's `bridge`) is honoured, a worktree BASENAME is folded to
+# its key (a Claude that read this header passed `cd-conductor-scratch-52` and the
+# dash could not group it), garbage yields to the detected key, and a cross-fleet
+# spawn stamps the SOURCE fleet (#516 — the key would name another window on the
+# target's dash). FOREGROUND pass only: the --async tail runs under run-shell -b
+# with no caller pane, so the foreground bakes the resolved value into the tail's
+# --origin (canon is idempotent on it). Sanitized inside canon — it becomes a
+# window option and a run-shell embed.
+_det=''; [ "$TAIL_ONLY" != 1 ] && _det=$(fleet_origin_key)
+_src=''; [ -n "$_det" ] && [ -n "$TARGET_SESS" ] && _src=$(fleet_current_session)
+ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "$_src")
+unset _det _src
 # POSIX single-quote a value for safe embedding in the run-shell command string
 # (the --async tail is a `sh -c` string, and an issue title can carry quotes / $ /
 # backticks). Wrap in single quotes, escaping any embedded single quote as '\''.

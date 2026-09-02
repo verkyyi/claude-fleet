@@ -220,22 +220,34 @@ grep -q -- '-t othersess:' "$NEWWIN_LOG"  || fail "L a positional <target-sessio
 ok "L --name foo <target-session> spawns 'foo' into the target"
 
 # ==================== N: spawn provenance across fleets =======================
-# A raw scratch spawned FROM a scratch pane (@raw=1 + @worktree=…-scratch-5) is
+# A raw scratch spawned FROM a scratch pane (@worktree=…-scratch-5; the probe is
+# `@issue|@worktree|pane_current_path`) is
 # stamped @origin=scratch-5 — right when the target is the spawner's own fleet,
 # wrong across fleets (the handoff pattern: a claude-fleet scratch seeding a
 # monorepo scratch): `scratch-5` means a different window on the target's dash,
 # which then nests the new row under an unrelated parent. Cross-fleet → the
 # origin is the SOURCE FLEET name (rendered `↳<fleet>`, no nesting).
 reset_scratch
-TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|1|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name same srcfleet
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name same srcfleet
 grep -q 'SETOPT .*@origin scratch-5' "$OPTS_LOG" || fail "N same-fleet spawn from scratch-5 must stamp @origin scratch-5" "$(cat "$OPTS_LOG")"
 reset_scratch
-TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|1|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name cross dstfleet
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name cross dstfleet
 grep -q 'SETOPT .*@origin srcfleet' "$OPTS_LOG"  || fail "N cross-fleet spawn must stamp the SOURCE FLEET as @origin, not scratch-5" "$(cat "$OPTS_LOG")"
 reset_scratch
-TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|1|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name explicit --origin issue-77 dstfleet
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name explicit --origin issue-77 dstfleet
 grep -q 'SETOPT .*@origin issue-77' "$OPTS_LOG"  || fail "N an explicit --origin is honoured as given across fleets" "$(cat "$OPTS_LOG")"
-ok "N provenance: same-fleet → scratch-N; cross-fleet → the source fleet; --origin wins"
+reset_scratch
+# A caller that read the header and passed its worktree BASENAME (the live
+# `--origin cd-conductor-scratch-52` that left #4591 ungrouped on the monorepo
+# dash): canonicalized to the scratch KEY, never stamped verbatim.
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name typo --origin cd-conductor-scratch-5 srcfleet
+grep -qE 'SETOPT .*@origin scratch-5$' "$OPTS_LOG" || fail "N a worktree-basename --origin must canonicalize to scratch-5" "$(cat "$OPTS_LOG")"
+reset_scratch
+# An UNSTAMPED scratch caller (no @worktree — a fleet-restore-recreated window;
+# the live #4594 case): detected from the pane cwd alone.
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="||$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name bare srcfleet
+grep -qE 'SETOPT .*@origin scratch-5$' "$OPTS_LOG" || fail "N an unstamped scratch caller (cwd only) must still stamp @origin scratch-5" "$(cat "$OPTS_LOG")"
+ok "N provenance: same-fleet → scratch-N; cross-fleet → the source fleet; --origin wins; a basename --origin canonicalizes; an unstamped caller is detected by cwd"
 
 # ==================== M: dash ⌃s spawns instantly (--bg) =====================
 # ⌃s has NO name popup any more (issue #444): the keypress runs the cheap refusals

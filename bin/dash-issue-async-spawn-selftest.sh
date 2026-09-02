@@ -90,6 +90,7 @@ case "\${1:-}" in
       *-p*) case "\$*" in
               *window_id*)    echo "\${TMUX_WIN:-@9}" ;;
               *session_name*) echo 'testsess' ;;
+              *@issue*)       echo "\${ORIGIN_PROBE:-}" ;;   # fleet_origin_key's caller-pane probe (ORIGIN)
               *) echo '' ;;
             esac ;;
       *) shift; printf '%s\n' "\$*" >> "$DISPLAY_LOG" ;;
@@ -201,6 +202,27 @@ tmux_has 'new-window'                   || fail "SYNC must spawn the window inli
 tmux_has '@issue 303'                   || fail "SYNC must bind @issue inline"
 runshell_has 'run-shell'                && fail "SYNC must NOT dispatch run-shell (no --async)"
 ok "SYNC no --async → worktree add + new-window inline (unchanged), no run-shell"
+
+# ===== ORIGIN: spawn provenance (issue #503) lands canonicalized on the sync path ===
+# A worker/scratch Claude that read this script's header and passed its worktree
+# BASENAME (`--origin cd-conductor-scratch-52`, the live #4591 case) must land as
+# the scratch KEY — the dash nests/finds parents by key only. No ORIGIN_PROBE ⇒
+# detection is empty, so the value is canonicalized from the string alone.
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 run_spawn 303 --origin cd-conductor-scratch-52
+[ "$(rc)" = 0 ]                         || fail "ORIGIN the spawn itself should succeed" "$(cat "$WORK/spawn.err")"
+tmux_has '@origin scratch-52'           || fail "ORIGIN a worktree-basename --origin must be stamped as its key (scratch-52)" "$(cat "$TMUX_LOG")"
+# An UNSTAMPED scratch caller — probe: no @issue, no @worktree, cwd
+# …-scratch-5 (a fleet-restore-recreated window; the live #4594 case) — is
+# detected from its cwd, so the child groups under it instead of reading as hub.
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 ORIGIN_PROBE="||$WORK/main-scratch-5" run_spawn 303
+grep -qE '@origin scratch-5$' "$TMUX_LOG" || fail "ORIGIN an unstamped scratch caller must still be detected from its cwd (scratch-5)" "$(cat "$TMUX_LOG")"
+# Cross-fleet ISSUE spawn (#516 patched only the raw spawner): the detected key
+# names a window in the SOURCE fleet — stamp the source fleet instead.
+: > "$WORK/conf/othersess.conf"
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5" run_spawn 303 othersess
+tmux_has '@origin testsess'             || fail "ORIGIN a cross-fleet issue spawn must stamp the SOURCE fleet (testsess), not scratch-5" "$(cat "$TMUX_LOG")"
+grep -qE '@origin scratch-5$' "$TMUX_LOG" && fail "ORIGIN a cross-fleet issue spawn must NOT stamp the source fleet's scratch key"
+ok "ORIGIN --origin canonicalized to its key; unstamped scratch caller detected by cwd; cross-fleet issue spawn → source fleet"
 
 printf '\nselftest OK: %s assertions passed (non-blocking backlog spawn, issue #303)\n' "$pass"
 exit 0

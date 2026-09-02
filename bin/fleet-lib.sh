@@ -924,32 +924,83 @@ fleet_scratch_key() {
 
 # fleet_origin_key — spawn provenance (issue #503): which fleet session is running
 # THIS script? Prints the CALLER's own ledger key — `issue-<N>` when the calling
-# pane's window carries @issue, `scratch-<N>` when it is an @raw scratch (key
-# derived from @worktree, else the pane cwd, via the STRICT fleet_scratch_key) —
-# and prints NOTHING for everything else: the dash/backlog/plan panels, the hub,
-# a headless caller (no $TMUX). Empty ≡ "hub" everywhere downstream (@origin
-# unset, blank ledger column), so the operator's own spawns stay untagged.
+# pane's window carries @issue, `scratch-<N>` when it sits in a scratch worktree
+# (key derived from @worktree, else the pane cwd, via the STRICT fleet_scratch_key;
+# NO @raw precondition — see below) — and prints NOTHING for everything else: the
+# dash/backlog/plan panels, the hub, a headless caller (no $TMUX). Empty ≡ "hub"
+# everywhere downstream (@origin unset, blank ledger column), so the operator's own
+# spawns stay untagged.
 # Spawn scripts call this in their FOREGROUND pass — a run-shell -b / fleet_bg
 # tail has no caller pane, so the detected value must ride a --origin flag into
 # any backgrounded re-invocation. Bare tmux on purpose: inside a pane $TMUX
 # already names the right per-fleet socket (the CLAUDE.md socket rail).
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
-  local o iss raw owt path
+  local o iss owt path k
   o=$(tmux display-message -p -t "$TMUX_PANE" \
-        '#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
-  iss=${o%%|*}; o=${o#*|}; raw=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
+  iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; path=${o#*|}
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf 'issue-%s' "$iss"; return 0 ;;
   esac
-  if [ "$raw" = 1 ]; then
-    local k; k=$(fleet_scratch_key "$owt")
-    [ -z "$k" ] && k=$(fleet_scratch_key "$path")
-    [ -n "$k" ] && printf '%s' "$k"
-  fi
+  # Scratch: @worktree first (the stamped path), else the pane cwd — deliberately
+  # WITHOUT an @raw=1 gate. A crash-restored scratch carries neither @raw nor
+  # @worktree (fleet-restore.sh re-stamps only @issue/@origin/@claude_state), yet
+  # its cwd IS the scratch worktree — the very path-only rule the dash's okey_v keys
+  # the PARENT side by. Gated on @raw, every spawn from such a window read as
+  # hub-spawned (#4594 on the monorepo dash, filed from a restored scratch-28).
+  # fleet_scratch_key is STRICT (…-scratch-<digits> only), so a plain window whose
+  # cwd is the base checkout never keys as a scratch.
+  k=$(fleet_scratch_key "$owt")
+  [ -z "$k" ] && k=$(fleet_scratch_key "$path")
+  [ -n "$k" ] && printf '%s' "$k"
   return 0
+}
+
+# fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the ONE
+# provenance decision both spawners make (dash-issue-session.sh, dash-raw-session.sh);
+# prints the value to stamp into @origin (empty ≡ hub).
+#   <explicit>   the caller's --origin, if any. Headless callers state theirs (the
+#                dispatcher `autofill`, the bridge `bridge`, a backgrounded tail the
+#                key its foreground pass resolved). A Claude in a pane that read the
+#                spawner's header tends to pass one too — and gets it wrong: the
+#                live #4591 spawn passed its worktree BASENAME, `cd-conductor-
+#                scratch-52`, which the dash can neither nest under nor resolve (it
+#                groups by KEY: issue-<N> / scratch-<N>), so the row showed a bare
+#                `↳cd-conductor-scratch-52` tag and no parent. So an explicit value
+#                is CANONICALIZED: `…-scratch-<N>`/`scratch-<N>` → scratch-<N>,
+#                `…issue-<N>` → issue-<N>; a canonical key and the known literals
+#                pass through; anything else yields to <detected> when there is
+#                one (a stderr warning names the swap — a Claude caller sees it in
+#                its tool output) and is otherwise kept as a free-form label
+#                (`↳<label>`, no nesting — how a source-fleet name renders).
+#   <detected>   fleet_origin_key's pane-derived key, or empty.
+#   <target-sess> <src-sess>  the #516 cross-fleet rule: a detected key names a
+#                window in the SPAWNER's fleet, so when the target is a different
+#                fleet the SOURCE fleet name is stamped instead. Applies to whatever
+#                was detected — including the garbage-explicit fallback — never to
+#                an explicit key (honoured as given, per #516).
+# Always sanitized to the key charset (window option + run-shell embed), ≤32 chars.
+fleet_origin_canon() {
+  local ex="${1:-}" det="${2:-}" tgt="${3:-}" src="${4:-}" k n
+  ex=$(printf '%s' "$ex" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+  [ -n "$det" ] && [ -n "$tgt" ] && [ -n "$src" ] && [ "$src" != "$tgt" ] && det=$src
+  [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
+  case "$ex" in autofill|bridge) printf '%s' "$ex"; return 0 ;; esac
+  k=$(fleet_scratch_key "$ex")                    # scratch-<N> and *-scratch-<N>
+  if [ -z "$k" ]; then
+    case "$ex" in
+      *issue-*) n=${ex##*issue-}; case "$n" in ''|*[!0-9]*) : ;; *) k="issue-$n" ;; esac ;;
+    esac
+  fi
+  if [ -n "$k" ]; then printf '%s' "$k"; return 0; fi
+  if [ -n "$det" ]; then
+    printf 'fleet: --origin %s is not a provenance key (issue-<N> / scratch-<N>); stamping the detected %s instead\n' "$ex" "$det" >&2
+    printf '%s' "$det"; return 0
+  fi
+  printf '%s' "$ex"
 }
 
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
