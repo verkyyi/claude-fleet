@@ -33,6 +33,12 @@ type Data struct {
 	Period string
 	// Theme is "dark" or "light", chosen explicitly by the caller.
 	Theme string
+	// Style is StyleTokenman (the default: animated, exact odometer) or
+	// StyleFlat (static, shields-shaped).
+	Style string
+	// Size is "full" (48px, the presentation size) or "compact" (20px, sits
+	// in a row of shields badges). Tokenman only.
+	Size string
 }
 
 // LabelText is the left half of the badge.
@@ -78,7 +84,12 @@ const (
 func textWidth(s string) int { return len([]rune(s))*charW + 2*padX }
 
 // Render returns the badge as SVG bytes.
-func Render(d Data) []byte { return RenderMessage(d.LabelText(), d.MessageText(), d.Theme) }
+func Render(d Data) []byte {
+	if d.Style == StyleFlat {
+		return RenderMessage(d.LabelText(), d.MessageText(), d.Theme)
+	}
+	return renderTokenman(d)
+}
 
 // RenderMessage draws an arbitrary two-part badge.
 //

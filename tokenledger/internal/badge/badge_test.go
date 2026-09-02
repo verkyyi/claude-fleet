@@ -31,21 +31,14 @@ func TestHumanTokens(t *testing.T) {
 // The badge is loaded through <img>, which is a sandboxed context: no scripts,
 // no external fonts, no external CSS, no network. A single external reference
 // does not error -- it silently renders a badge with the wrong type in it.
+// Local fragment references (clip-path="url(#id)") are fine; they fetch nothing.
 func TestRender_HasNoExternalReference(t *testing.T) {
-	svg := string(Render(Data{Tokens: 69_845_943_231, Turns: 267_607, Period: "all", Theme: "dark"}))
-	// The SVG namespace declaration is the one URI that legitimately appears:
-	// it is an identifier, never fetched, and a standalone SVG does not render
-	// without it. Strip it so the scan below is about real references.
-	const xmlns = `xmlns="http://www.w3.org/2000/svg"`
-	if !strings.Contains(svg, xmlns) {
-		t.Error("no xmlns declaration; a standalone SVG will not render")
-	}
-	svg = strings.ReplaceAll(svg, xmlns, "")
-	for _, forbidden := range []string{
-		"http://", "https://", "@import", "<image", "xlink:href", "url(", "<script", "<foreignObject",
-	} {
-		if strings.Contains(svg, forbidden) {
-			t.Errorf("rendered badge contains %q; an <img>-loaded SVG cannot fetch anything", forbidden)
+	for _, style := range []string{StyleTokenman, StyleFlat} {
+		svg := string(Render(Data{Tokens: 69_845_943_231, Turns: 267_607, Period: "all", Theme: "dark", Style: style}))
+		assertSandboxSafe(t, svg)
+		// Every url() must be a local #fragment.
+		if strings.Count(svg, "url(") != strings.Count(svg, "url(#") {
+			t.Errorf("%s: a url() that is not a local #fragment", style)
 		}
 	}
 }

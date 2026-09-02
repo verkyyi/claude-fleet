@@ -44,11 +44,16 @@ func runBadge(args []string) error {
 	theme := fs.String("theme", "dark", "\"dark\" or \"light\"; chosen explicitly because a badge\n"+
 		"loaded through <img> cannot read the reader's color scheme")
 	period := fs.String("period", "all", "\"all\", or a window like \"30d\"")
+	style := fs.String("style", badge.StyleTokenman,
+		"\"tokenman\" (animated odometer, the exact count) or \"flat\" (static, shields-shaped)")
+	size := fs.String("size", "full", "\"full\" (48px) or \"compact\" (20px, sits in a row of shields badges)")
 	asJSON := fs.Bool("json", false, "emit shields.io endpoint JSON instead of an SVG")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota badge --out ccquota.svg --theme dark --period all
-  ccquota badge --json --out ccquota.json      # shields.io endpoint schema
+  ccquota badge --size compact --out ccquota-sm.svg   # 20px, beside shields badges
+  ccquota badge --style flat --out ccquota-flat.svg   # static, shields-shaped
+  ccquota badge --json --out ccquota.json             # shields.io endpoint schema
 
 Renders this hub's totals as a badge. Entirely local: no server, no account,
 no submission, and the rendered SVG contains no external reference of any kind
@@ -68,6 +73,12 @@ Flags:
 	if *theme != "dark" && *theme != "light" {
 		return fmt.Errorf("unknown theme %q: use \"dark\" or \"light\"", *theme)
 	}
+	if *style != badge.StyleTokenman && *style != badge.StyleFlat {
+		return fmt.Errorf("unknown style %q: use \"tokenman\" or \"flat\"", *style)
+	}
+	if *size != "full" && *size != "compact" {
+		return fmt.Errorf("unknown size %q: use \"full\" or \"compact\"", *size)
+	}
 
 	dbFile, err := resolveExistingDB(*dbPath)
 	if err != nil {
@@ -83,6 +94,7 @@ Flags:
 	if err != nil {
 		return err
 	}
+	d.Style, d.Size = *style, *size
 
 	var payload []byte
 	if *asJSON {

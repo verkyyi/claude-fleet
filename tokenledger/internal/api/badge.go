@@ -36,6 +36,20 @@ func badgeTheme(r *http.Request) string {
 	return "dark"
 }
 
+// badgeStyle reads ?style= and ?size=. Tokenman/full is the default; the
+// flat shields-shaped badge and the 20px compact size are opt-in.
+func badgeStyle(r *http.Request) (style, size string) {
+	style = badge.StyleTokenman
+	if r.URL.Query().Get("style") == badge.StyleFlat {
+		style = badge.StyleFlat
+	}
+	size = "full"
+	if r.URL.Query().Get("size") == "compact" {
+		size = "compact"
+	}
+	return style, size
+}
+
 // badgePeriod reads ?period=. Anything unrecognised becomes all-time, which is
 // the only window that cannot be mislabelled.
 func badgePeriod(r *http.Request) (period string, start time.Time) {
@@ -106,6 +120,7 @@ func (s *Server) handleUserBadge(w http.ResponseWriter, r *http.Request) {
 	}
 	theme := badgeTheme(r)
 	period, start := badgePeriod(r)
+	style, size := badgeStyle(r)
 
 	sum, err := s.Store.UserSummary(login, start, time.Now().UTC())
 	if err != nil {
@@ -117,7 +132,7 @@ func (s *Server) handleUserBadge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeBadge(w, http.StatusOK, badge.Data{
-		Tokens: sum.Tokens, Turns: sum.Turns, Period: period, Theme: theme,
+		Tokens: sum.Tokens, Turns: sum.Turns, Period: period, Theme: theme, Style: style, Size: size,
 	}, asJSON)
 }
 
@@ -129,6 +144,7 @@ func (s *Server) handleTeamBadge(w http.ResponseWriter, r *http.Request) {
 	}
 	theme := badgeTheme(r)
 	period, start := badgePeriod(r)
+	style, size := badgeStyle(r)
 
 	buckets, err := s.Store.UsageBy(store.AllAccounts, store.ByTeam, start, time.Now().UTC(), 1000)
 	if err != nil {
@@ -138,7 +154,7 @@ func (s *Server) handleTeamBadge(w http.ResponseWriter, r *http.Request) {
 	for _, b := range buckets {
 		if b.Key == team {
 			writeBadge(w, http.StatusOK, badge.Data{
-				Tokens: b.Tokens, Turns: b.Events, Period: period, Theme: theme,
+				Tokens: b.Tokens, Turns: b.Events, Period: period, Theme: theme, Style: style, Size: size,
 			}, asJSON)
 			return
 		}
