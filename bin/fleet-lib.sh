@@ -513,6 +513,43 @@ $(fleet_each_conf)
 EOF
 }
 
+# fleet_server_cwds — print the PROCESS working directory of every live fleet
+# tmux server, one per line (deduped upstream by the caller if needed).
+#
+# Why this exists (issue #509): a tmux server chdir's ITSELF into the panes it
+# spawns with `-c <dir>`, so over a fleet's life the server's own cwd drifts into
+# whatever worktree was last spawned — cross-fleet, since the drift follows pane
+# creation regardless of which repo the worktree belongs to. If a reaper then
+# removes the worktree the server is sitting in, the server is stranded on a
+# deleted inode and getcwd() fails for good: EVERY window it spawns afterwards —
+# even one launched with an explicit, valid `-c` — is born in that dead cwd,
+# because tmux resolves the new pane's directory against the server's own broken
+# cwd and falls back to `.`. Claude Code then aborts at launch with
+#   "The current working directory was deleted, so that command didn't work."
+# and the whole fleet can no longer open a usable scratch/worker window until its
+# server is restarted. The janitor consults this so a worktree a server is cwd'd
+# into is treated as LIVE and never reaped — closing the hole at the reaper.
+#
+# Cross-platform: readlink /proc/<pid>/cwd on Linux (strip a trailing
+# " (deleted)"), lsof -Fn on macOS/BSD. The server pid is the `#{pid}` format,
+# read via list-sessions so it resolves in a headless daemon (no attached client).
+fleet_server_cwds() {
+  local label pid cwd
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    pid=$(tmux -L "$label" list-sessions -F '#{pid}' 2>/dev/null | head -1)
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    if [ -r "/proc/$pid/cwd" ]; then
+      cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); cwd=${cwd% (deleted)}
+    else
+      cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    fi
+    [ -n "$cwd" ] && printf '%s\n' "$cwd"
+  done <<EOF
+$(fleet_sockets)
+EOF
+}
+
 # Emulate the old server-wide `tmux list-windows -a -F <fmt>` across EVERY live
 # fleet socket, so a read-side daemon that relied on one estate-wide scan keeps
 # its whole-fleet view. Each emitted line is the tmux -F expansion (no socket

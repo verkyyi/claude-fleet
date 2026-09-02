@@ -8,13 +8,16 @@
 #   * issue-<N> clean+ancestor, NO live pane binds @issue=N                  → PRUNE
 #   * scratch-<N> clean+ancestor, a live pane cwd is a SUBDIR of the worktree → KEEP
 #   * scratch-<N> clean+ancestor, no live pane anywhere in it                → PRUNE
+#   * scratch-<N> clean+ancestor, NO live pane but a fleet tmux SERVER is
+#     cwd'd inside it (issue #509)                                          → KEEP
 #
 # No network / no tmux server / no real GitHub: the real script + fleet-lib.sh are
 # symlinked into a temp bin (so $BIN/../fleet.conf can't leak the real fleet), a
-# per-fleet conf drives fleet_sockets, and a fake `tmux`/`gh` stand in. A REAL local
-# git repo provides the worktrees. The fake tmux answers `list-panes -F '#{@issue}'`
-# from ISSUES_FILE and `-F '#{pane_current_path}'` from PATHS_FILE — the two live
-# facts the guard now reads.
+# per-fleet conf drives fleet_sockets, and a fake `tmux`/`gh`/`lsof` stand in. A REAL
+# local git repo provides the worktrees. The fake tmux answers `list-panes -F
+# '#{@issue}'` from ISSUES_FILE and `-F '#{pane_current_path}'` from PATHS_FILE, and
+# `list-sessions -F '#{pid}'` with a fixed pid that the fake `lsof` maps to
+# SERVER_CWD_FILE — the live facts the guard reads (issues #353, #509).
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -39,7 +42,8 @@ mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ISSUES_FILE="$WORK/issues"; PATHS_FILE="$WORK/paths"; NOTIFY_LOG="$WORK/notify"
-: > "$ISSUES_FILE"; : > "$PATHS_FILE"; : > "$NOTIFY_LOG"
+SERVER_CWD_FILE="$WORK/server_cwd"
+: > "$ISSUES_FILE"; : > "$PATHS_FILE"; : > "$NOTIFY_LOG"; : > "$SERVER_CWD_FILE"
 
 # --- build a real base checkout + issue/scratch worktrees ---------------------
 BASE="$WORK/base"
@@ -54,7 +58,8 @@ git -C "$BASE" worktree add -q -b issue-100  "$WORK/base-issue-100"  >/dev/null 
 git -C "$BASE" worktree add -q -b issue-200  "$WORK/base-issue-200"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-9  "$WORK/base-scratch-9"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-8  "$WORK/base-scratch-8"  >/dev/null 2>&1
-mkdir -p "$WORK/base-issue-100/subdir" "$WORK/base-scratch-9/deep/sub"
+git -C "$BASE" worktree add -q -b scratch-7  "$WORK/base-scratch-7"  >/dev/null 2>&1
+mkdir -p "$WORK/base-issue-100/subdir" "$WORK/base-scratch-9/deep/sub" "$WORK/base-scratch-7/live-here"
 
 # LIVE facts the fake tmux serves:
 #  * issue-100 has a live worker pane bound @issue=100, but its cwd is a SUBDIR
@@ -64,6 +69,10 @@ mkdir -p "$WORK/base-issue-100/subdir" "$WORK/base-scratch-9/deep/sub"
 printf '%s\n' '100' '' > "$ISSUES_FILE"                       # @issue per live pane
 printf '%s\n' "$WORK/base-issue-100/subdir" \
               "$WORK/base-scratch-9/deep/sub" > "$PATHS_FILE"  # pane_current_path per live pane
+# scratch-7 has NO live pane at all, but the fleet's tmux SERVER is cwd'd in a
+# SUBDIR of it — the exact drift that stranded a real server on a deleted inode
+# (issue #509). The fake lsof (below) reports this as the server's cwd.
+printf '%s\n' "$WORK/base-scratch-7/live-here" > "$SERVER_CWD_FILE"
 
 # --- fake tmux: has-session ok; list-panes branches on the -F format ----------
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
@@ -79,12 +88,24 @@ case "\$cmd" in
       *@issue*)            cat "$ISSUES_FILE" 2>/dev/null ;;
       *pane_current_path*) cat "$PATHS_FILE" 2>/dev/null ;;
     esac ;;
+  list-sessions) printf '%s\n' 999999 ;;   # fleet_server_cwds reads #{pid}; fake lsof maps it
   display-message) printf 'NOTIFY %s\n' "\$*" >> "$NOTIFY_LOG" ;;
   *) : ;;
 esac
 exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/tmux"
+
+# --- fake lsof: report the fleet server's cwd (fleet_server_cwds, macOS path) --
+# On the CI/dev boxes this runs on there is no /proc for pid 999999, so
+# fleet_server_cwds takes its lsof branch; we answer in `lsof -Fn` form.
+cat > "$WORK/fakebin/lsof" <<LSOFFAKE
+#!/bin/bash
+printf 'p999999\n'
+[ -s "$SERVER_CWD_FILE" ] && printf 'n%s\n' "\$(cat "$SERVER_CWD_FILE" 2>/dev/null)"
+exit 0
+LSOFFAKE
+chmod +x "$WORK/fakebin/lsof"
 
 # --- fake gh: no merged PRs (every reap here is via ancestor), issues OPEN -----
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
@@ -130,19 +151,26 @@ printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-9 ' \
 # no pane anywhere in scratch-8 → reaped
 printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-8 ' \
   || fail "scratch-8: no live pane inside it → must PRUNE" "$out"
+# scratch-7 has NO pane, but a fleet tmux server is cwd'd in a subdir → KEEP (#509)
+printf '%s\n' "$out" | grep -Eq "KEEP +scratch-7 .*tmux server is cwd" \
+  || fail "scratch-7: a tmux server cwd'd inside must KEEP (issue #509)" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-7 ' \
+  && fail "scratch-7: a worktree a server sits in must never be reaped (#509)" "$out"
 # dry run mutates nothing
 [ -d "$WORK/base-issue-100" ] || fail "dry run must not remove issue-100"
-ok "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallback; gone workers reaped"
+ok "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallback; server-cwd kept (#509); gone workers reaped"
 
 # ============================ REAL RUN: reap only the dead ================
 run_wac >/dev/null
 [ -d "$WORK/base-issue-100" ] || fail "real run must KEEP live worker issue-100 (false-reap regression)"
 [ -d "$WORK/base-scratch-9" ] || fail "real run must KEEP live-in-subdir scratch-9"
+[ -d "$WORK/base-scratch-7" ] || fail "real run must KEEP scratch-7 (a server is cwd'd inside, #509)"
 [ -d "$WORK/base-issue-200" ] && fail "real run should reap gone worker issue-200"
 [ -d "$WORK/base-scratch-8" ] && fail "real run should reap gone scratch-8"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-100 || fail "issue-100 branch must survive"
+git -C "$BASE" show-ref --verify -q refs/heads/scratch-7 || fail "scratch-7 branch must survive (#509)"
 git -C "$BASE" show-ref --verify -q refs/heads/issue-200 && fail "issue-200 branch should be deleted"
-ok "REAL: only the workers with no live @issue / no live pane are reaped; the busy ones survive"
+ok "REAL: workers with no live @issue / no live pane / no server-cwd are reaped; busy + server-anchored survive"
 
 printf '\nselftest OK: %s assertions passed (janitor liveness guard, #353)\n' "$pass"
 exit 0
