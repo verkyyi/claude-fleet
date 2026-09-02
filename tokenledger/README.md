@@ -205,6 +205,82 @@ figure shown to someone who does not know it is API-equivalent reads as a bill.
 
 Add `--expires 720h` for a link that dies on its own.
 
+## Badges
+
+Render your totals as a badge. Entirely local — no server, no account, nothing
+submitted anywhere:
+
+```bash
+ccquota badge --out ccquota.svg --theme dark --period all
+ccquota badge --json --out ccquota.json      # shields.io endpoint schema
+```
+
+**Publishing is up to you, and every route is serverless.** Which one works is
+decided by the content-type the host serves, so these were measured rather than
+assumed:
+
+| URL | Content-Type | Usable as a README image |
+|---|---|---|
+| `raw.githubusercontent.com/<you>/<you>/main/ccquota.svg` | `image/svg+xml` | yes |
+| `gist.githubusercontent.com/.../raw` | `text/plain` | no — fine as shields *data*, not as the image |
+| `img.shields.io/endpoint?url=<your json>` | `image/svg+xml` | yes, from a URL you supply |
+
+So: commit the SVG to your profile repo and link it, or write the JSON to a gist
+and point shields at that.
+
+**Light and dark take two URLs**, not one adaptive badge. An SVG loaded through
+`<img>` is a sandboxed context — no scripts, no external fonts, no CSS, no
+network — `prefers-color-scheme` inside one is inconsistently supported, and
+GitHub's camo proxy caches a single copy for every reader. So the theme is an
+explicit flag and READMEs use the `<picture>` pattern:
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".../ccquota-dark.svg">
+  <img alt="ccquota" src=".../ccquota-light.svg">
+</picture>
+```
+
+**A badge is not live.** camo caches it, so it carries a period label (`all`,
+`30d`) and never a timestamp — a timestamp would sit on your profile being
+wrong for a week.
+
+### Serving badges from your own hub
+
+`ccquota hub --public-badges` serves `/badge/u/<login>.svg` and
+`/badge/team/<team>.svg` without a viewer token, which is what makes them usable
+in an internal README: a README image sends no credential, and camo strips
+cookies.
+
+It is **off by default**, and it exposes the badge routes only. `/v1/user`, the
+dashboard, the query API and MCP all stay behind the viewer token — turning this
+on does not publish per-person cost data, only the two figures a badge shows.
+
+An unknown handle returns 404 with a badge that says so, never a zeroed one:
+"0 tokens" reads as "this person spent nothing", which is a different claim
+from "there is no such person here", and a false one.
+
+## Teams
+
+Allocate a machine's spend to a team:
+
+```bash
+ccquota team --list
+ccquota team --endpoint <endpoint-id> --set platform
+ccquota team --endpoint <endpoint-id> --set ""     # un-assign
+```
+
+Teams are assigned **here, on the hub**, and are never reported by an endpoint:
+a machine that could name its own team could move its spend onto another team's
+budget. Team is resolved when a query runs rather than stamped on each turn, so
+re-assigning a machine moves its **whole history**, not just what it does next.
+
+Once any team is assigned, the dashboard leads with the team breakdown, and
+every OS login links to its own page at `/u/<login>`. Both are deliberately
+unnumbered. Read as a per-person performance ranking, an internal usage board
+fails by Goodhart — people avoid the tool or pad their usage — and either
+outcome destroys the cost data it exists to provide.
+
 ## Scheduling against your own quota
 
 A dispatcher that spawns Claude sessions on a timer needs a verdict it can
