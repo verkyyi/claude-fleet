@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ N claude │ hostname
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
@@ -131,20 +131,15 @@ if [ -n "$usage" ]; then
     usage_seg="${DIM}│ #[range=user|usage]${usage_col}${usage} #[norange]"
 fi
 
-# --- Active subscription account (multi-account only; display-only read, no
-# side effects — resolving via `fleet-account.sh active` could ROTATE, which a
-# status repaint must never do, so read the cached pointer directly). ---
-acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"
-acct_seg=""
-if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.*' ! -name '*~' ! -name '*.conf' 2>/dev/null)" ]; then
-    act=$(sed -n '1p' "${TMPDIR:-/tmp}/.claude-dash/global/account.active" 2>/dev/null)   # global/ (issue #181)
-    # Wrap the chip in a clickable range (acct) — a MouseDown1Status bind in
-    # conf/tmux-attention.conf opens the account picker (same as prefix A). Only
-    # emitted when a chip exists, so there's no dead click target when off.
-    [ -n "$act" ] && acct_seg="${DIM}│ #[range=user|acct]${GREEN}◉ ${act} #[norange]"
-fi
+# --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
+# fleet-wide global/account.active pointer, i.e. "the account new sessions use".
+# Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
+# there is no fixed or default account to show — the chip was a stale snapshot
+# of a moving target. The truth is per window (@cc_account, shown by the dash and
+# `fleet-account.sh whoami`); the usage + account modal it opened stays one tap
+# away on the usage stat below. ---
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
-    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$acct_seg" "$usage_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg"

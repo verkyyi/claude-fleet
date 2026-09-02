@@ -103,18 +103,22 @@ API credits, **not** your subscription — the opposite of what this is for.)
 
 That's it — the next session you spawn launches under the active account.
 
-**Switch by hand.** Click the footer `◉` account chip (or the usage stat) to open
-the usage + account modal — the account pool is the selectable body under the
-usage detail (issue #289 merged the old `prefix A` picker + `prefix u` popup into
-one). Enter makes a choice active
-for new sessions **and restarts this fleet's idle Claude windows in place** —
-each gets a double ctrl-c, then relaunches via `fleet-claude.sh --continue`, so
-it resumes its own transcript under the new account. Windows mid-turn
-(`working`) or between `/loop` iterations (`looping`) are left alone; they pick
-up the switch on their next restart. Esc cancels. The status-bar footer also
-shows the active account as a green `◉ <account>` chip — **click it** to open
-the same picker (it only appears, and is only clickable, when multi-account is
-on).
+**Switch by hand.** Click the footer usage stat to open the usage + account
+modal — the account pool is the selectable body under the usage detail (issue
+#289 merged the old `prefix A` picker + `prefix u` popup into one). Enter sets
+the account new sessions start from **and moves this fleet's idle Claude
+windows onto it** (`fleet-account.sh migrate --idle`, issue #512: close +
+`--resume` in a new window, so each resumes its own transcript under the new
+account). Windows mid-turn (`working`) or between `/loop` iterations
+(`looping`) are left alone; they pick up the switch on their next restart. Esc
+cancels.
+
+There is **no fixed or default account**, so the footer shows no account chip:
+the pick is a starting point, and every spawn re-picks on ccquota headroom
+(issue #513, below) and rotates past a limited account. The old green
+`◉ <account>` chip mirrored `global/account.active`, which is now re-written
+per spawn — a stale snapshot. Per-window truth lives in the window's
+`@cc_account` (the dash) and `fleet-account.sh whoami <window-id>`.
 
 ## How it runs
 
@@ -201,7 +205,7 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
   subscription OAuth token fed through it just 401-loops, while the *same* token
   works via `CLAUDE_CODE_OAUTH_TOKEN`; env vars are never re-read mid-session.
   So both switch paths go through `fleet-account.sh migrate` (issue #512, below):
-  the manual picker (the footer `◉` chip / usage stat → usage + account modal)
+  the manual picker (the footer usage stat → usage + account modal)
   moves idle windows (`--idle`), and the automatic limit-hit rotation moves every
   window still on the benched account (`--limited`) — mid-turn ones included,
   their turn is already dead — with a nudge so each re-orients and continues.
