@@ -98,6 +98,9 @@ session_id_for() {
   f=${f##*/}; printf '%s' "${f%.jsonl}"
 }
 
+# wopt <wid> <format> — one expanded format off a window (empty + exit 1 if gone).
+wopt() { TM display-message -p -t "$1" "$2" 2>/dev/null; }
+
 # window_closed <wid> — 0 iff the window is gone OR has no live pane. tmux keeps a
 # window object around for a moment after its last pane exits (and for good on a
 # remain-on-exit install): `display-message -t <wid>` still succeeds there, with
@@ -134,9 +137,14 @@ migrate_selected() {
 # --- the move -------------------------------------------------------------------
 
 migrate_one() {
-  local wid="$1" cpid="$2" label="$3" o name cwd state raw iss wt origin summary
-  o=$(TM display-message -p -t "$wid" "#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@raw}${US}#{@issue}${US}#{@worktree}${US}#{@origin}${US}#{@summary}" 2>/dev/null) || return 1
-  IFS="$US" read -r name cwd state raw iss wt origin summary <<<"$o"
+  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin summary
+  # One display-message per field — NOT a joined format split on a control byte:
+  # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
+  # escaping; 3.7 emits the byte), so a separator-based parse is not portable.
+  name=$(wopt "$wid" '#{window_name}') || return 1
+  cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
+  raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
+  origin=$(wopt "$wid" '#{@origin}'); summary=$(wopt "$wid" '#{@summary}')
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "${FLEET_MAIN:-}" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
@@ -250,7 +258,6 @@ migrate_main() {
   # + Enter, and only while a Claude process is verified alive under the pane (the
   # relaunch line, when no hook closes the window, is typed only after it is gone).
   SK() { FLEET_ALLOW_SENDKEYS=1 tmux -L "$SOCK" send-keys "$@"; }
-  US=$'\x1f'
   C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"
 
   say() { printf '%s\n' "$*"; }
@@ -286,16 +293,19 @@ migrate_main() {
   if [ "$MODE" = explicit ]; then
     targets=("${WIDS[@]}")
   else
-    while IFS="$US" read -r wid name state raw acct; do
+    # window ids only from list-windows (one per line, always printable); the
+    # rest per field via wopt — see the escaping note in migrate_one.
+    while IFS= read -r wid; do
       [ -n "$wid" ] || continue
+      name=$(wopt "$wid" '#{window_name}'); state=$(wopt "$wid" '#{@claude_state}'); acct=$(wopt "$wid" '#{@cc_account}')
       printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || continue
       [ -n "$cpid" ] || continue
       label=$(window_account "$wid" "$cpid" "$acct")
       benched=0; [ -n "$label" ] && acct_benched "$label" && benched=1
-      migrate_selected "$MODE" "$label" "$state" "$ACTIVE" "$benched" "$ACCOUNT" || continue
+      migrate_selected "$MODE" "$label" "${state:--}" "$ACTIVE" "$benched" "$ACCOUNT" || continue
       targets+=("$wid")
-    done < <(TM list-windows -t "$SESS" -F "#{window_id}${US}#{window_name}${US}#{?@claude_state,#{@claude_state},-}${US}#{?@raw,#{@raw},0}${US}#{@cc_account}" 2>/dev/null)
+    done < <(TM list-windows -t "$SESS" -F '#{window_id}' 2>/dev/null)
   fi
 
   if [ "${#targets[@]}" -eq 0 ]; then

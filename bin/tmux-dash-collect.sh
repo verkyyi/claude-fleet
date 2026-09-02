@@ -505,11 +505,13 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_H
       qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
       qn=0
       for qs in $SOCKETS; do
-        while IFS=$'\x1f' read -r qw qa; do
+        # space-separated: a window id has no spaces and a label is a file name
+        # (tmux ≤3.4 would print a control-byte separator as literal `\037`)
+        while read -r qw qa; do
           [ "$qa" = "$ql" ] || continue
           qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
           [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && qn=$((qn+1))
-        done < <(tmux -L "$qs" list-windows -a -F $'#{window_id}\x1f#{@cc_account}' 2>/dev/null)
+        done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
         tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
       done
       [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
