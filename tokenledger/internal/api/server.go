@@ -99,10 +99,15 @@ func (s *Server) Handler() http.Handler {
 	badges := http.NewServeMux()
 	badges.HandleFunc("/badge/u/", s.handleUserBadge)
 	badges.HandleFunc("/badge/team/", s.handleTeamBadge)
+	// The live embed exposes exactly what a badge does, so it shares the gate.
+	badges.HandleFunc("/embed/u/", s.serveEmbed)
+	badges.HandleFunc("/embed/team/", s.serveEmbed)
 	if s.PublicBadges {
 		mux.Handle("/badge/", badges)
+		mux.Handle("/embed/", badges)
 	} else {
 		mux.Handle("/badge/", s.viewerOnly(badges))
+		mux.Handle("/embed/", s.viewerOnly(badges))
 	}
 
 	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))

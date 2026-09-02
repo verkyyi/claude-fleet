@@ -145,3 +145,106 @@ func TestUserData_ReturnsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestBadgeRoute_ForwardsParams(t *testing.T) {
+	s := badgeServer(t, true)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET",
+		"/badge/u/alice.svg?theme=auto&bg=transparent&pac=ff0000&from=4000", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"prefers-color-scheme:dark", "#ff0000"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("param not applied: missing %q", want)
+		}
+	}
+	if strings.Contains(body, `fill="var(--g)"`) {
+		t.Error("bg=transparent still paints a ground")
+	}
+	// from=4000 -> 4242: ones wheel starts on 0 and travels 242 steps capped.
+	if !strings.Contains(body, `class="w"`) {
+		t.Error("no wheels")
+	}
+}
+
+// The raw figure is what a live embed polls. It is data, not a badge, so it
+// must never be cached -- and it is behind exactly the same gate as the SVG.
+func TestBadgeRoute_RawJSON(t *testing.T) {
+	s := badgeServer(t, true)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/badge/u/alice.json?format=raw&period=30d", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("raw figure is cacheable (%q); a live embed would poll a stale copy", cc)
+	}
+	for _, want := range []string{`"tokens":4242`, `"period":"30d"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("raw JSON missing %s: %s", want, rec.Body.String())
+		}
+	}
+
+	closed := badgeServer(t, false)
+	rec = httptest.NewRecorder()
+	closed.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/badge/u/alice.json?format=raw", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("raw JSON served without a token while --public-badges is off (status %d)", rec.Code)
+	}
+}
+
+func TestEmbedPage(t *testing.T) {
+	s := badgeServer(t, true)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/embed/u/alice?theme=auto&bg=transparent&every=15", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	body := rec.Body.String()
+	// It embeds the badge for this login and forwards the params to it.
+	if !strings.Contains(body, "/badge/u/alice.svg?") || !strings.Contains(body, "theme=auto") || !strings.Contains(body, "bg=transparent") {
+		t.Error("embed page does not point at this login's badge with the given params")
+	}
+	// It polls the raw figure, never the SVG, to decide whether to roll.
+	if !strings.Contains(body, "format=raw") {
+		t.Error("embed page does not poll the raw figure")
+	}
+	// It is self-contained: nothing loads from anywhere but this hub.
+	for _, forbidden := range []string{"http://", "https://", "<link", "@import"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("embed page references %q; it must be self-contained", forbidden)
+		}
+	}
+	// A hostile login in the path must not become markup.
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/embed/u/%3Cscript%3Ealert(1)%3C%2Fscript%3E", nil))
+	if strings.Contains(rec.Body.String(), "<script>alert") {
+		t.Error("embed page interpolates the login into HTML unescaped")
+	}
+}
+
+func TestEmbedPage_SameGateAsBadges(t *testing.T) {
+	s := badgeServer(t, false)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/embed/u/alice", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("embed page served without a token while --public-badges is off (status %d)", rec.Code)
+	}
+}
+
+func TestJSString(t *testing.T) {
+	got := jsString(`a"b\c</script>&`)
+	want := `"a\"b\\c\u003c/script\u003e\u0026"`
+	if got != want {
+		t.Errorf("jsString = %s, want %s", got, want)
+	}
+	// The one property that matters: a closing tag cannot survive.
+	if strings.Contains(got, "</script>") {
+		t.Error("jsString lets </script> through; a login could end the script block")
+	}
+}

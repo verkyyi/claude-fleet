@@ -41,8 +41,15 @@ func runBadge(args []string) error {
 	fs := flag.NewFlagSet("badge", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	out := fs.String("out", "", "write to this file (default: stdout)")
-	theme := fs.String("theme", "dark", "\"dark\" or \"light\"; chosen explicitly because a badge\n"+
-		"loaded through <img> cannot read the reader's color scheme")
+	theme := fs.String("theme", "dark", "\"dark\", \"light\", or \"auto\" (follows the reader's\n"+
+		"OS colour scheme; on GitHub use two files and <picture>, since its\n"+
+		"own theme toggle can disagree with the OS)")
+	from := fs.Int64("from", 0, "roll the odometer from this previous count rather than from zero")
+	transparent := fs.Bool("transparent", false, "no ground; the host's own background shows through")
+	pac := fs.String("pac", "", "hex colour override for the character, e.g. ff0000")
+	dot := fs.String("dot", "", "hex colour override for the dots")
+	fg := fs.String("fg", "", "hex colour override for digits and label")
+	bg := fs.String("bg", "", "hex colour override for the ground")
 	period := fs.String("period", "all", "\"all\", or a window like \"30d\"")
 	style := fs.String("style", badge.StyleTokenman,
 		"\"tokenman\" (animated odometer, the exact count) or \"flat\" (static, shields-shaped)")
@@ -70,8 +77,8 @@ Flags:
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *theme != "dark" && *theme != "light" {
-		return fmt.Errorf("unknown theme %q: use \"dark\" or \"light\"", *theme)
+	if *theme != "dark" && *theme != "light" && *theme != "auto" {
+		return fmt.Errorf("unknown theme %q: use \"dark\", \"light\" or \"auto\"", *theme)
 	}
 	if *style != badge.StyleTokenman && *style != badge.StyleFlat {
 		return fmt.Errorf("unknown style %q: use \"tokenman\" or \"flat\"", *style)
@@ -95,6 +102,8 @@ Flags:
 		return err
 	}
 	d.Style, d.Size = *style, *size
+	d.From, d.Transparent = *from, *transparent
+	d.Colors = badge.Colors{Pac: *pac, Dot: *dot, FG: *fg, BG: *bg}
 
 	var payload []byte
 	if *asJSON {

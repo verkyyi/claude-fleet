@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,34 @@ func badgeStyle(r *http.Request) (style, size string) {
 	return style, size
 }
 
+// badgeOptions reads everything that shapes a tokenman badge besides the
+// figure: theme, size, style, the value to roll from, transparency and colour
+// overrides. Bad values fall back; a typo in a URL still yields a badge.
+func badgeOptions(r *http.Request) badge.Data {
+	q := r.URL.Query()
+	d := badge.Data{Theme: badgeTheme(r)}
+	if q.Get("theme") == "auto" {
+		d.Theme = "auto"
+	}
+	d.Style, d.Size = badgeStyle(r)
+	if n, err := strconv.ParseInt(q.Get("from"), 10, 64); err == nil && n > 0 {
+		d.From = n
+	}
+	d.Transparent = q.Get("bg") == "transparent"
+	d.Colors = badge.Colors{Pac: q.Get("pac"), Dot: q.Get("dot"), FG: q.Get("fg")}
+	if !d.Transparent {
+		d.Colors.BG = q.Get("bg")
+	}
+	return d
+}
+
+// rawFigure is what a live embed polls: the number itself, uncached.
+type rawFigure struct {
+	Tokens int64  `json:"tokens"`
+	Turns  int64  `json:"turns"`
+	Period string `json:"period"`
+}
+
 // badgePeriod reads ?period=. Anything unrecognised becomes all-time, which is
 // the only window that cannot be mislabelled.
 func badgePeriod(r *http.Request) (period string, start time.Time) {
@@ -63,8 +92,18 @@ func badgePeriod(r *http.Request) (period string, start time.Time) {
 	}
 }
 
-// writeBadge emits an SVG or shields JSON, depending on the extension.
-func writeBadge(w http.ResponseWriter, status int, d badge.Data, asJSON bool) {
+// writeBadge emits an SVG, shields JSON, or (with ?format=raw) the bare
+// figure. The raw figure is data for a poller and is never cached: a live
+// embed reading a five-minute-old copy would sit still while the real number
+// moved.
+func writeBadge(w http.ResponseWriter, r *http.Request, status int, d badge.Data, asJSON bool) {
+	if asJSON && r.URL.Query().Get("format") == "raw" {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(rawFigure{Tokens: d.Tokens, Turns: d.Turns, Period: d.Period})
+		return
+	}
 	w.Header().Set("Cache-Control", badgeMaxAge)
 	if asJSON {
 		w.Header().Set("Content-Type", "application/json")
@@ -118,9 +157,8 @@ func (s *Server) handleUserBadge(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	theme := badgeTheme(r)
+	d := badgeOptions(r)
 	period, start := badgePeriod(r)
-	style, size := badgeStyle(r)
 
 	sum, err := s.Store.UserSummary(login, start, time.Now().UTC())
 	if err != nil {
@@ -128,12 +166,11 @@ func (s *Server) handleUserBadge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sum.Turns == 0 {
-		notFoundBadge(w, theme, asJSON)
+		notFoundBadge(w, badgeTheme(r), asJSON)
 		return
 	}
-	writeBadge(w, http.StatusOK, badge.Data{
-		Tokens: sum.Tokens, Turns: sum.Turns, Period: period, Theme: theme, Style: style, Size: size,
-	}, asJSON)
+	d.Tokens, d.Turns, d.Period = sum.Tokens, sum.Turns, period
+	writeBadge(w, r, http.StatusOK, d, asJSON)
 }
 
 func (s *Server) handleTeamBadge(w http.ResponseWriter, r *http.Request) {
@@ -142,9 +179,8 @@ func (s *Server) handleTeamBadge(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	theme := badgeTheme(r)
+	d := badgeOptions(r)
 	period, start := badgePeriod(r)
-	style, size := badgeStyle(r)
 
 	buckets, err := s.Store.UsageBy(store.AllAccounts, store.ByTeam, start, time.Now().UTC(), 1000)
 	if err != nil {
@@ -153,11 +189,10 @@ func (s *Server) handleTeamBadge(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range buckets {
 		if b.Key == team {
-			writeBadge(w, http.StatusOK, badge.Data{
-				Tokens: b.Tokens, Turns: b.Events, Period: period, Theme: theme, Style: style, Size: size,
-			}, asJSON)
+			d.Tokens, d.Turns, d.Period = b.Tokens, b.Events, period
+			writeBadge(w, r, http.StatusOK, d, asJSON)
 			return
 		}
 	}
-	notFoundBadge(w, theme, asJSON)
+	notFoundBadge(w, badgeTheme(r), asJSON)
 }
