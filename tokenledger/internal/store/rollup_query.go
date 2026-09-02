@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const hourlyTokens = `(input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens + cache_read_tokens)`
+// hourlyTokens is the same column list as tokenSumExpr (query.go), unwrapped:
+// usage_hourly's rows are already per-hour sums, so callers here wrap this in
+// SUM() to total across hours, or use it bare inside a CASE branch. Built
+// from tokenColumnsExpr rather than retyped, so the two can never drift.
+const hourlyTokens = tokenColumnsExpr
 
 // UsageByFiltered is UsageBy over the rollup, under a Filter, with the token
 // composition filled in. Team is a join, as in UsageBy.
@@ -323,6 +327,9 @@ type Turn struct {
 // SessionTurns lists a session's turns oldest first. Empty when the raw events
 // were pruned; the caller reports that rather than showing an empty chart.
 func (s *Store) SessionTurns(account, id string) ([]Turn, error) {
+	if account == "" {
+		return nil, fmt.Errorf("account is required")
+	}
 	where, args := "WHERE session_id = ?", []any{id}
 	if account != AllAccounts {
 		where, args = "WHERE account_uuid = ? AND session_id = ?", []any{account, id}

@@ -16,12 +16,19 @@ func TestRollupEquivalence(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct-a", "ep-a1")
 	seedAccount(t, s, "acct-b", "ep-b1")
+	// One endpoint carries a team so ByTeam's hand-rebound join (usage_hourly
+	// vs. usage_events) actually discriminates rather than comparing two
+	// all-unassigned rows.
+	if err := s.SetEndpointTeam("ep-a1", "red"); err != nil {
+		t.Fatal(err)
+	}
 	rng := rand.New(rand.NewSource(42))
 	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	accounts := []string{"acct-a", "acct-b"}
 	eps := map[string]string{"acct-a": "ep-a1", "acct-b": "ep-b1"}
 	models := []string{"claude-opus-5", "claude-haiku-4-5", "claude-fable-5-1"}
 	cwds := []string{"/p/one", "/p/two", "/p/three"}
+	entrypoints := []string{"cli", "ide", ""}
 	var evs []model.UsageEvent
 	for i := 0; i < 600; i++ {
 		acct := accounts[rng.Intn(2)]
@@ -32,6 +39,7 @@ func TestRollupEquivalence(t *testing.T) {
 		e.GitBranch = []string{"main", "feat"}[rng.Intn(2)]
 		e.OSUser = []string{"u1", "u2"}[rng.Intn(2)]
 		e.Effort = []string{"xhigh", "high", ""}[rng.Intn(3)]
+		e.Entrypoint = entrypoints[rng.Intn(3)]
 		e.InputTokens, e.CacheRead = int64(rng.Intn(50)), int64(rng.Intn(5000))
 		e.IsSidechain = rng.Intn(6) == 0
 		if e.Model == "claude-fable-5-1" {
@@ -42,7 +50,7 @@ func TestRollupEquivalence(t *testing.T) {
 	if _, _, err := s.InsertEvents(evs); err != nil {
 		t.Fatal(err)
 	}
-	dims := []Dimension{ByEndpoint, ByProject, BySession, ByModel, ByBranch, ByUser, ByAccount}
+	dims := []Dimension{ByEndpoint, ByProject, BySession, ByModel, ByBranch, ByUser, ByAccount, ByTeam, ByEffort, ByEntrypoint}
 	for trial := 0; trial < 40; trial++ {
 		f := Filter{Account: []string{"acct-a", "acct-b", AllAccounts}[rng.Intn(3)]}
 		h1, h2 := rng.Intn(240), rng.Intn(240)

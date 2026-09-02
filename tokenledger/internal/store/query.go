@@ -196,13 +196,22 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 	return out, rows.Err()
 }
 
+// tokenColumnsExpr is THE column list behind "tokens" on this hub, unwrapped.
+//
+// A caller that needs the per-row expression rather than a SUM over it (a
+// CASE branch gating on is_sidechain, or a rollup table whose rows are
+// already per-hour sums and only needs summing again across hours) reuses
+// this constant rather than retyping the column list — hourlyTokens
+// (rollup_query.go) is built from exactly this, which is what keeps it from
+// drifting out of sync with tokenSumExpr below.
+const tokenColumnsExpr = `(input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens + cache_read_tokens)`
+
 // tokenSumExpr is THE definition of "tokens" on this hub.
 //
 // It exists as one constant because two totals on one page that disagree by a
 // cache-creation column would be worse than either -- LifetimeTotals already
 // carries a comment saying so. Every query that sums tokens uses this.
-const tokenSumExpr = `SUM(input_tokens + output_tokens + cache_create_5m_tokens
-                          + cache_create_1h_tokens + cache_read_tokens)`
+const tokenSumExpr = `SUM` + tokenColumnsExpr
 
 // Bucket is one row of a breakdown.
 type Bucket struct {

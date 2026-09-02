@@ -145,3 +145,14 @@ func TestLimitsHistory(t *testing.T) {
 		t.Fatalf("pts=%+v err=%v", pts, err)
 	}
 }
+
+// The empty string is what an uninitialised variable looks like; masking a
+// caller bug as "no turns found" is the failure every account-scoped query on
+// this hub refuses, per Filter.where and LimitsHistory.
+func TestSessionTurnsRefusesEmptyAccount(t *testing.T) {
+	s := newStore(t)
+	seedReview(t, s)
+	if _, err := s.SessionTurns("", "s-big"); err == nil {
+		t.Fatal("empty account must be refused")
+	}
+}
