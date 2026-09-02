@@ -205,6 +205,35 @@ figure shown to someone who does not know it is API-equivalent reads as a bill.
 
 Add `--expires 720h` for a link that dies on its own.
 
+## Tokenless on your own tailnet
+
+```bash
+ccquota hub --tailnet-viewers you@example.com,colleague@example.com
+```
+
+Named tailnet logins open the dashboard with **no token**. The hub asks the
+local tailscaled (`tailscale whois`) who owns the peer a connection came from —
+nothing in the request is trusted, so there is nothing to forge. Three rules
+keep it honest:
+
+- **An allowlist, not "anyone on the tailnet."** A tailnet routinely has shared
+  users and tagged servers on it.
+- **Tagged nodes are never people.** A tag means a server.
+- **The hub's own tailnet address is never trusted.** It resolves to the
+  machine's *owner*, so on a shared box every other OS login could be them.
+  Connections from the hub's machine to itself, and over loopback, still need
+  the token.
+
+Everything else — the LAN, unknown peers, a whois error — is a 401, exactly as
+if the feature were off. Lookups are cached for five minutes. The viewer token
+keeps working everywhere (MCP clients, scripts), and identity-authenticated
+requests show `viewer=<login>` in the access log.
+
+macOS note: the application firewall silently blocks incoming connections to an
+ad-hoc-signed hub when nobody is at the screen to click *Allow*, and an ad-hoc
+signature changes with every build. After each upgrade:
+`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <path> && sudo … --unblockapp <path>`.
+
 ## Badges
 
 Render your totals as a badge. Entirely local — no server, no account, nothing
