@@ -197,6 +197,10 @@ rig_diag() {  # on failure: what the walk saw (CI-only failures are otherwise bl
     "$(bash "$BIN/fleet-account.sh" list 2>&1)" \
     "$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name} state=#{@claude_state} raw=#{@raw} acct=#{@cc_account} pid=#{pane_pid}' 2>&1)" \
     "$(ps -axo pid=,ppid=,comm= 2>&1 | grep -E "claude|runner|perl" | head -8)"
+  printf 'walk format raw (cat -v):\n%s\nwalk parse:\n%s\ntmux: %s\n' \
+    "$(TM list-windows -t "$SESS" -F $'#{window_id}\x1f#{window_name}\x1f#{?@claude_state,#{@claude_state},-}\x1f#{?@raw,#{@raw},0}\x1f#{@cc_account}' 2>&1 | cat -v)" \
+    "$(TM list-windows -t "$SESS" -F $'#{window_id}\x1f#{window_name}\x1f#{?@claude_state,#{@claude_state},-}\x1f#{?@raw,#{@raw},0}\x1f#{@cc_account}' 2>/dev/null | while IFS=$'\x1f' read -r a b c d e; do printf '[%s|%s|%s|%s|%s] pid=%s\n' "$a" "$b" "$c" "$d" "$e" "$(fleet_pane_claude_pid "$a" "$LBL" 2>&1)"; done)" \
+    "$(tmux -V 2>&1)"
 }
 ok; printf '%s' "$out" | grep -q 'would /exit' || fail "dry-run must print the plan: $out $(rig_diag)"
 ok; [ ! -f "$WORK/launched" ] || fail "dry-run must not launch anything"
