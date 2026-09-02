@@ -196,6 +196,14 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 	return out, rows.Err()
 }
 
+// tokenSumExpr is THE definition of "tokens" on this hub.
+//
+// It exists as one constant because two totals on one page that disagree by a
+// cache-creation column would be worse than either -- LifetimeTotals already
+// carries a comment saying so. Every query that sums tokens uses this.
+const tokenSumExpr = `SUM(input_tokens + output_tokens + cache_create_5m_tokens
+                          + cache_create_1h_tokens + cache_read_tokens)`
+
 // Bucket is one row of a breakdown.
 type Bucket struct {
 	Key       string  `json:"key"`
@@ -295,8 +303,7 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 	q := fmt.Sprintf(`
 		SELECT %s AS k,
 		       COUNT(*),
-		       SUM(input_tokens + output_tokens + cache_create_5m_tokens
-		           + cache_create_1h_tokens + cache_read_tokens),
+		       %s,
 		       COALESCE(SUM(cost_usd), 0),
 		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
 		       COALESCE(SUM(CASE WHEN is_sidechain = 1
@@ -307,7 +314,7 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		WHERE %s ts >= ? AND ts < ?
 		GROUP BY k
 		ORDER BY 3 DESC
-		LIMIT ?`, col, accountClause(account))
+		LIMIT ?`, col, tokenSumExpr, accountClause(account))
 
 	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end), limit)...)
 	if err != nil {
@@ -440,14 +447,13 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 	q := fmt.Sprintf(`
 		SELECT strftime(?, ts) AS k,
 		       COUNT(*),
-		       SUM(input_tokens + output_tokens + cache_create_5m_tokens
-		           + cache_create_1h_tokens + cache_read_tokens),
+		       %s,
 		       COALESCE(SUM(cost_usd), 0),
 		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
 		       0
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?
-		GROUP BY k ORDER BY k`, accountClause(account))
+		GROUP BY k ORDER BY k`, tokenSumExpr, accountClause(account))
 
 	// The strftime pattern is the first placeholder, so it leads the argument
 	// list ahead of the optional account scope.
@@ -582,13 +588,121 @@ func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
 // The token expression matches UsageBy's exactly. Two "total tokens" on one
 // page that disagree by a cache-creation column would be worse than either.
 func (s *Store) LifetimeTotals() (turns, tokens int64, err error) {
-	err = s.db.QueryRow(`
-		SELECT COUNT(*),
-		       COALESCE(SUM(input_tokens + output_tokens + cache_create_5m_tokens
-		                    + cache_create_1h_tokens + cache_read_tokens), 0)
-		FROM usage_events`).Scan(&turns, &tokens)
+	err = s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*), COALESCE(%s, 0)
+		FROM usage_events`, tokenSumExpr)).Scan(&turns, &tokens)
 	if err != nil {
 		return 0, 0, fmt.Errorf("lifetime totals: %w", err)
 	}
 	return turns, tokens, nil
+}
+
+// UserSummary is one OS login's spend across the whole hub.
+//
+// Scoped by os_user rather than by endpoint: the same person on two machines
+// is one person, and that is the question /u/<login> answers.
+type UserSummary struct {
+	OSUser string `json:"os_user"`
+	// Teams is a LIST because a login can work on machines allocated to
+	// different teams. Collapsing it to one would attribute the rest of their
+	// spend to a team that never received it.
+	Teams    []string `json:"teams"`
+	Turns    int64    `json:"turns"`
+	Tokens   int64    `json:"tokens"`
+	CostUSD  float64  `json:"cost_usd"`
+	Projects int      `json:"projects"`
+	Machines int      `json:"machines"`
+}
+
+// UserSummary totals one OS login over a period.
+//
+// An unknown login returns a zeroed summary and no error: "this person has no
+// usage in this range" is an ordinary answer, and a 500 would be a lie about
+// what went wrong.
+func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, error) {
+	if osUser == "" {
+		return nil, fmt.Errorf("os user is required")
+	}
+	out := &UserSummary{OSUser: osUser}
+
+	q := fmt.Sprintf(`
+		SELECT COUNT(*), COALESCE(%s, 0), COALESCE(SUM(cost_usd), 0),
+		       COUNT(DISTINCT cwd), COUNT(DISTINCT endpoint_id)
+		FROM usage_events
+		WHERE os_user = ? AND ts >= ? AND ts < ?`, tokenSumExpr)
+	if err := s.db.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).
+		Scan(&out.Turns, &out.Tokens, &out.CostUSD, &out.Projects, &out.Machines); err != nil {
+		return nil, fmt.Errorf("user summary: %w", err)
+	}
+
+	rows, err := s.db.Query(`
+		SELECT DISTINCT e.team
+		FROM usage_events u
+		JOIN endpoints e ON e.endpoint_id = u.endpoint_id
+		WHERE u.os_user = ? AND u.ts >= ? AND u.ts < ? AND e.team <> ''
+		ORDER BY e.team`, osUser, fmtTime(start), fmtTime(end))
+	if err != nil {
+		return nil, fmt.Errorf("user teams: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var team string
+		if err := rows.Scan(&team); err != nil {
+			return nil, err
+		}
+		out.Teams = append(out.Teams, team)
+	}
+	return out, rows.Err()
+}
+
+// UsageByUser aggregates one OS login's spend along a dimension.
+//
+// Spans every subscription on purpose: a person's own page is about them, not
+// about which plan paid. Tokens and notional cost are additive, so this is a
+// legitimate total -- unlike utilization, which is never summed.
+func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
+	if osUser == "" {
+		return nil, fmt.Errorf("os user is required")
+	}
+	col, err := d.column()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	q := fmt.Sprintf(`
+		SELECT %s AS k, COUNT(*), %s, COALESCE(SUM(cost_usd), 0),
+		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0
+		FROM usage_events
+		WHERE os_user = ? AND ts >= ? AND ts < ?
+		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr)
+
+	rows, err := s.db.Query(q, osUser, fmtTime(start), fmtTime(end), limit)
+	if err != nil {
+		return nil, fmt.Errorf("usage by user %s: %w", d, err)
+	}
+	defer rows.Close()
+
+	var out []Bucket
+	for rows.Next() {
+		var b Bucket
+		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch d {
+	case ByEndpoint:
+		s.labelEndpoints(out)
+	case ByAccount:
+		s.labelAccounts(out)
+	case ByTeam:
+		labelTeams(out)
+	}
+	return out, nil
 }
