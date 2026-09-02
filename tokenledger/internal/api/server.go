@@ -91,6 +91,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/accounts/label", s.viewerOnly(http.HandlerFunc(s.handleAccountLabel)))
 	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
 	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))
+	mux.Handle("/v1/summary", s.viewerOnly(http.HandlerFunc(s.handleSummary)))
+	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
+	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
+	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))

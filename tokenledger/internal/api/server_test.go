@@ -83,6 +83,35 @@ func (h *harness) get(t *testing.T, path string) (*http.Response, []byte) {
 	return resp, buf.Bytes()
 }
 
+func (h *harness) getCode(t *testing.T, path string) int {
+	t.Helper()
+	req, _ := http.NewRequest("GET", h.http.URL+path, nil)
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	return res.StatusCode
+}
+
+func (h *harness) getJSON(t *testing.T, path string, into any) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", h.http.URL+path, nil)
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: %d", path, res.StatusCode)
+	}
+	if err := json.NewDecoder(res.Body).Decode(into); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func batchFor(account, host string, uuids []string, cwd string) model.Batch {
 	evs := make([]model.UsageEvent, len(uuids))
 	for i, u := range uuids {
