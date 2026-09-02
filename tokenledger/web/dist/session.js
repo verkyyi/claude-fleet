@@ -165,32 +165,39 @@ function bodyNode(turns, pruned) {
 
 /* ------------------------------------------------------------------- main */
 
+function refocusClose(root) {
+  const t = root.querySelector('.close');
+  if (t) t.focus();
+}
+
 function renderSkeleton(root) {
   root.replaceChildren(closeButton(), el('div', { class: 'empty' }, 'Loading…'));
 }
 
-// The skeleton's close button holds focus while the fetch is in flight (see
-// the `justOpened` branch in renderDetail, below); replacing it here detaches
-// that focused node, which drops focus to <body> by browser default. If
-// nothing else claimed focus meanwhile (the user tabbed or clicked elsewhere
-// on purpose — activeElement would then be THAT element, not body),
-// recapture it onto the new close button so "focus moves into the panel on
-// open" still holds once loading finishes, not just for the instant before.
-function refocusIfLost(root) {
-  if (root.hidden || document.activeElement !== document.body) return;
-  const target = root.querySelector('.close');
-  if (target) target.focus();
-}
-
+// FIX (review, Finding 1): the previous version checked
+// `document.activeElement === document.body` AFTER replaceChildren() and
+// treated that as proof the panel's own DOM removal had stripped focus. It
+// isn't proof — `.detail` is a non-modal side drawer with no backdrop, so
+// the rest of Review stays clickable while a fetch is in flight, and a
+// click on any non-focusable patch of that page (e.g. a card's padding)
+// ALSO leaves activeElement on body. That made the panel steal focus back
+// to its close button exactly when data arrived, even though the user had
+// deliberately clicked away. Fixed by checking a fact instead of guessing
+// from the aftermath: capture whether focus was actually inside the panel
+// BEFORE the mutation that might rip it out, and only restore it in that
+// case. If focus was already elsewhere (or nowhere) at that moment, it is
+// left alone.
 function renderError(root, err) {
+  const hadFocus = root.contains(document.activeElement);
   root.replaceChildren(closeButton(), el('div', { class: 'empty' }, 'Query failed: ' + errMsg(err)));
-  refocusIfLost(root);
+  if (hadFocus) refocusClose(root);
 }
 
 function renderLoaded(root, data, app) {
+  const hadFocus = root.contains(document.activeElement);
   const s = data.session || {};
   root.replaceChildren(...headerNodes(s, app), bodyNode(data.turns || [], !!data.pruned));
-  refocusIfLost(root);
+  if (hadFocus) refocusClose(root);
 }
 
 export function renderDetail(root, state, app) {
@@ -225,10 +232,50 @@ export function renderDetail(root, state, app) {
   // different session while the panel is already open must not yank focus
   // away from wherever the user currently is (e.g. the row they just
   // clicked, which is `lastFocus`'s new value on the NEXT open anyway).
-  if (justOpened) {
-    const target = root.querySelector('.close');
-    if (target) target.focus();
-  }
+  if (justOpened) refocusClose(root);
+}
+
+// isRendered is "is this actually laid out right now", not just "does it
+// exist in the DOM": offsetParent is null for an element that is
+// display:none OR has a display:none/hidden ancestor, which is exactly the
+// state of review.js's non-active sessions-table row shape (see
+// fallbackFocusTarget below) — a plain querySelector match on the other one
+// says nothing about whether .focus() will actually do anything.
+function isRendered(el) {
+  return !!el && el.offsetParent !== null;
+}
+
+// FIX (review, Finding 2): the old fallback selector was
+// `#sessions tbody tr[role="button"]`, which querySelector happily finds
+// even when it is not the thing actually on screen: review.js renders the
+// sessions table as `<tr>` rows on desktop and `.srow` cards on mobile
+// (styles.css's `@media (max-width:720px)` swap hides one via display:none),
+// and the whole `#review` subtree carries `hidden` when the panel was
+// opened while `view=now` (app.js's route()). Either way the old code
+// handed `.focus()` a node it could not actually focus, so the `||`
+// fallback to `#sessions` never fired and focus silently stayed on
+// <body> — reachable only via a deep link straight to `#/<view>/session/
+// <id>`, where there is no prior click for `lastFocus` to hold. Checking
+// isRendered() at each step picks whichever candidate is genuinely on
+// screen, so `.focus()` on it actually works.
+function fallbackFocusTarget() {
+  const row = document.querySelector('#sessions tbody tr[role="button"]');
+  if (isRendered(row)) return row;
+  const card = document.querySelector('#sessions .srow');
+  if (isRendered(card)) return card;
+  const panelCard = document.getElementById('sessions');
+  if (isRendered(panelCard)) return panelCard;
+  return document.body;
+}
+
+// focusEl gives a non-interactive container (`#sessions`, or the
+// document.body last resort above) a temporary tabindex so it can actually
+// receive focus, the same trick already used for the sessions-card fallback
+// before this fix existed.
+function focusEl(el) {
+  if (!el) return;
+  if (!el.hasAttribute('tabindex') && el.tabIndex < 0) el.setAttribute('tabindex', '-1');
+  el.focus();
 }
 
 export function closeDetail(root) {
@@ -238,12 +285,9 @@ export function closeDetail(root) {
   root.hidden = true;
   root.replaceChildren();
 
-  const target = (lastFocus && lastFocus !== document.body && document.contains(lastFocus))
+  const target = (lastFocus && document.contains(lastFocus) && isRendered(lastFocus))
     ? lastFocus
-    : document.querySelector('#sessions tbody tr[role="button"]') || document.getElementById('sessions');
+    : fallbackFocusTarget();
   lastFocus = null;
-  if (target) {
-    if (!target.hasAttribute('tabindex') && target.tabIndex < 0) target.setAttribute('tabindex', '-1');
-    target.focus();
-  }
+  focusEl(target);
 }
