@@ -59,21 +59,10 @@
 }
 
 * { box-sizing: border-box; }
-/* FIX (execution review, Finding 1): belt-and-suspenders against any stray
-   horizontal overflow now that the timeline brush no longer causes one
-   (charts.js's timeline() used to paint it at viewBox-space pixel
-   coordinates instead of the rendered track's width). Every wide element
-   already gets its own `.scroll { overflow-x: auto }` wrapper, so nothing
-   here legitimately needs the PAGE itself to scroll sideways. Both `html`
-   and `body` get it — which element is the document's actual root
-   scroller is a standards-vs-quirks-mode distinction browsers don't all
-   agree on, so this covers either. */
-html { overflow-x: hidden; }
 body {
   margin: 0; background: var(--plane); color: var(--ink);
   font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
 }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
 a { color: var(--s1); }
@@ -140,6 +129,16 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+  /* FIX (execution review, Finding 1 follow-up): a grid item's automatic
+     minimum width is its CONTENT's min-content, not 0 — so a .card sitting
+     inside .grid2 (currently the only place, but this is a property a card
+     should hold anywhere) refused to shrink narrower than its widest
+     unbreakable content, forcing the whole card past its 1fr track and out
+     the viewport on narrow screens. Chosen HERE (not `.grid2 > *`) because
+     every current and plausible future .grid2 child is a .card, and this
+     way the invariant travels with the component rather than being scoped
+     to one container that happens to use it today. */
+  min-width: 0;
 }
 .card > h2 { font-size: 13px; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 4px; }
 .card > .hint { color: var(--ink-3); font-size: 12px; margin: 0 0 14px; }
@@ -183,7 +182,18 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .bars { display: flex; flex-direction: column; gap: 9px; }
 .bar-row { display: grid; grid-template-columns: minmax(90px, 250px) 1fr auto; gap: 12px; align-items: center; }
 .bar-row .k { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-row .v { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+/* FIX (execution review, Finding 1 follow-up): unlike `.k` just above,
+   this had no overflow/text-overflow, so its `auto` grid column's
+   automatic minimum stayed its content's full min-content width — a
+   pathological "tokens · $ · delta" string (measured: 218px on real
+   data, driven by an uncapped percentage — see lib/format.js's delta())
+   forced the whole row, and therefore the whole card, wider than its
+   track. `overflow: hidden` on a grid/flex item also resets its
+   automatic minimum size to 0 per spec (the same mechanism `.k` already
+   relies on for a long project path) — no explicit max-width needed,
+   the `auto` track still grows to fill available space when there IS
+   room, and only clips when the grid is actually too narrow to fit it. */
+.bar-row .v { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar-track { height: 16px; background: var(--grid); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; }
 

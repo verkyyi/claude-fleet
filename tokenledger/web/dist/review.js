@@ -13,8 +13,8 @@
 import { apiQuery, withChip, GROUPS } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
-import { fmtInt, fmtUSD, fmtFull, fmtPct, fmtDur, delta, shortProject } from './lib/format.js';
-import { el } from './lib/dom.js';
+import { fmtInt, fmtUSD, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
+import { el, escapeHTML } from './lib/dom.js';
 import * as C from './charts.js';
 
 // GRAN mirrors brush.js's SPANS bucket sizes (7d→1h, 30d→6h, 90d→1d) — the
@@ -261,10 +261,25 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     // already uses it for exactly this reason. The chip/filter identity
     // (`r.key`, still `b.key`) and the row's tooltip stay the full raw path.
     const displayLabel = (b) => (dim === 'project' ? shortProject(b.key) : (b.label || b.key || '(unknown)'));
-    const rows = shown.map((b) => ({
-      key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
-      right: `${fmtFull(b.tokens)} · ${fmtUSD(b.cost_usd)} · ${delta(b.tokens, b.prev_tokens || 0).text}`,
-    }));
+    // delta() itself caps its rendered `text` past DELTA_CAP_PCT (a huge
+    // percentage against a near-zero baseline carries no information beyond
+    // "there was almost nothing before", and forced this exact row's width
+    // past its card on real data — see lib/format.js). `d.pct` stays the
+    // real, uncapped number; when it WAS capped, a `tip` on the row keeps it
+    // reachable (rankedBars already renders `r.tip` via the floating
+    // tooltip — no new plumbing needed for this).
+    const rows = shown.map((b) => {
+      const d = delta(b.tokens, b.prev_tokens || 0);
+      const capped = d.pct != null && Math.abs(d.pct) >= DELTA_CAP_PCT;
+      return {
+        key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
+        right: `${fmtFull(b.tokens)} · ${fmtUSD(b.cost_usd)} · ${d.text}`,
+        tip: capped
+          ? `<b>${escapeHTML(displayLabel(b))}</b><br>${fmtFull(b.tokens)} tokens (was ${fmtFull(b.prev_tokens || 0)})` +
+            `<br>exact change: ${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%`
+          : null,
+      };
+    });
     const chart = C.rankedBars(rows, { selectedKey, onClick: (r) => app.setState(withChip(state, dim, r.key)) });
     // Same shortening for the table fallback — bucketTable draws the
     // identical `b.label || b.key` off the RAW bucket objects, so the fix

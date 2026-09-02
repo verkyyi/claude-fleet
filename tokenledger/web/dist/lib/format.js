@@ -51,10 +51,21 @@ export function fmtDur(ms) {
   if (h < 24) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+// A delta against a near-zero (but not exactly zero, which `delta` below
+// already renders as "no previous data") baseline is technically defined
+// but carries no information beyond "there was almost nothing before" — and
+// on real data has been wide enough (measured: "+295242%") to force its own
+// layout wider than the column it lives in. DELTA_CAP_PCT is the magnitude
+// past which the exact number stops being worth rendering; `pct` on the
+// returned object is always the real, uncapped value (its SIGN still drives
+// kpiTile's up/down colouring either way), only `text` is capped.
+export const DELTA_CAP_PCT = 999;
+
 // delta compares two additive values. null pct means "no previous data".
 export function delta(cur, prev) {
   if (!prev || !Number.isFinite(prev)) return { pct: null, text: '—' };
   const pct = ((cur - prev) / prev) * 100;
   const sign = pct > 0 ? '+' : '';
+  if (Math.abs(pct) >= DELTA_CAP_PCT) return { pct, text: `${sign}≫${DELTA_CAP_PCT}%` };
   return { pct, text: `${sign}${Math.abs(pct) >= 10 ? Math.round(pct) : pct.toFixed(1)}%` };
 }
