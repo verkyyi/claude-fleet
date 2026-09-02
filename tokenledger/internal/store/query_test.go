@@ -319,7 +319,7 @@ func TestEndpointAccounts_DistinguishesAccountsSharingADisplayName(t *testing.T)
 		}
 	}
 
-	rows, err := s.EndpointAccounts(10)
+	rows, err := s.EndpointAccounts("", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,5 +329,78 @@ func TestEndpointAccounts_DistinguishesAccountsSharingADisplayName(t *testing.T)
 	if rows[0].AccountName == rows[1].AccountName {
 		t.Fatalf("both subscriptions rendered as %q — the card cannot tell them apart",
 			rows[0].AccountName)
+	}
+}
+
+// EndpointAccounts scoped to one subscription must not leak another's rows —
+// the same isolation TestQueries_AccountIsolation checks for usage.
+func TestEndpointAccounts_ScopesToOneAccount(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+	if err := s.RecordEndpointAccount("ep-a1", "acct-a", model.OriginLogin); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordEndpointAccount("ep-b1", "acct-b", model.OriginLogin); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.EndpointAccounts("acct-a", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].AccountUUID != "acct-a" {
+		t.Fatalf("rows = %+v, want exactly acct-a's own row", rows)
+	}
+
+	all, err := s.EndpointAccounts("", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unscoped rows = %d, want 2", len(all))
+	}
+	allSentinel, err := s.EndpointAccounts(AllAccounts, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allSentinel) != 2 {
+		t.Fatalf("AllAccounts rows = %d, want 2", len(allSentinel))
+	}
+}
+
+// AccountSwitches scoped to one subscription must return switches touching it
+// on EITHER side, and must not return an unrelated machine's switch.
+func TestAccountSwitches_ScopesToOneAccount(t *testing.T) {
+	s := newStore(t)
+	seedTwoAccounts(t, s)
+	if err := s.RecordAccountSwitch("ep-a1", "acct-old", "acct-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAccountSwitch("ep-b1", "acct-b", "acct-unrelated"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.AccountSwitches("acct-a", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ToAccount != "acct-a" {
+		t.Fatalf("rows = %+v, want exactly the switch into acct-a", rows)
+	}
+
+	rows, err = s.AccountSwitches("acct-b", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].FromAccount != "acct-b" {
+		t.Fatalf("rows = %+v, want exactly the switch away from acct-b", rows)
+	}
+
+	all, err := s.AccountSwitches("", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unscoped rows = %d, want 2", len(all))
 	}
 }

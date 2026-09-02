@@ -14,14 +14,19 @@ func seedReviewHarness(t *testing.T, h *harness) {
 	t.Helper()
 	tok := h.enroll(t, "mac")
 	base := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
-	c := 1.5
 	mk := func(uuid, session, cwd string, min int, out int64, priced bool) model.UsageEvent {
-		e := model.UsageEvent{AccountUUID: "acct-a", EndpointID: "ep_mac", SessionID: session, MessageUUID: uuid,
-			TS: base.Add(time.Duration(min) * time.Minute), Model: "claude-opus-5", OutputTokens: out, CacheRead: 900,
-			CWD: cwd, OSUser: "verkyyi"}
-		if priced {
-			e.CostUSD = &c
+		// Pricing is stamped server-side on ingest (see handleIngest ->
+		// Pricing.Apply), which overwrites whatever CostUSD a fixture sets
+		// here for a model the table knows. "priced" therefore has to pick
+		// the MODEL, not just fill in a cost: an unpriced event needs a model
+		// absent from pricing.Default() or the hub prices it anyway.
+		m := "claude-opus-5"
+		if !priced {
+			m = "claude-unpriced-test-model"
 		}
+		e := model.UsageEvent{AccountUUID: "acct-a", EndpointID: "ep_mac", SessionID: session, MessageUUID: uuid,
+			TS: base.Add(time.Duration(min) * time.Minute), Model: m, OutputTokens: out, CacheRead: 900,
+			CWD: cwd, OSUser: "verkyyi"}
 		return e
 	}
 	batch := model.Batch{Identity: model.Identity{

@@ -59,16 +59,24 @@ type Server struct {
 	// only: it describes this minute, and a restart legitimately knows nothing
 	// until the agents report again.
 	LiveStore *Live
+
+	// osUsers caches the endpoint_id -> os_user map behind attachOSUsers.
+	osUsers osUserCache
 }
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Every snapshot that leaves the hub carries the counter, including the
-	// ones broadcast from inside Live.
+	// Every snapshot that leaves the hub carries the counter and each
+	// session's os_user, including the ones broadcast from inside Live.
+	// Enrich holds one hook, so the two are chained rather than one silently
+	// replacing the other.
 	if s.LiveStore != nil {
-		s.LiveStore.Enrich(s.attachCounter)
+		s.LiveStore.Enrich(func(snap *Snapshot) {
+			s.attachCounter(snap)
+			s.attachOSUsers(snap)
+		})
 	}
 
 	// Ingest authenticates per endpoint, so it is deliberately outside the
@@ -95,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
 	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
+	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))

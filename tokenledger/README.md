@@ -432,10 +432,11 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Eleven read-only tools: `list_accounts`, `get_limits`, `list_endpoints`,
+Fifteen read-only tools: `list_accounts`, `get_limits`, `list_endpoints`,
 `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
-`usage_history`.
+`usage_history`, `usage_summary`, `list_sessions`, `get_session`,
+`get_findings`.
 
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security

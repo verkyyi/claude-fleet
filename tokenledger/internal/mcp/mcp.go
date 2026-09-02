@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/api"
+	"github.com/verkyyi/ccquota/internal/findings"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -181,6 +182,30 @@ var limitProp = map[string]any{
 	"description": "Maximum rows to return (default 50).",
 }
 
+// chipProps are the drill-down dimensions store.Filter accepts, at most one
+// value per dimension, ANDed together.
+var chipProps = map[string]any{
+	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id."},
+	"user":     map[string]any{"type": "string", "description": "Limit to one OS login."},
+	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)."},
+	"model":    map[string]any{"type": "string", "description": "Limit to one model id."},
+	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch."},
+	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team."},
+	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id."},
+}
+
+// withChips merges the drill-down chips into a tool's own properties.
+func withChips(base map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(chipProps))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range chipProps {
+		out[k] = v
+	}
+	return out
+}
+
 func toolSpecs() []toolSpec {
 	return []toolSpec{
 		{
@@ -289,6 +314,63 @@ func toolSpecs() []toolSpec {
 				"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": `Bucket size; defaults to "day".`},
 			}),
 		},
+		{
+			Name:  "usage_summary",
+			Title: "Totals for a period",
+			Description: "Totals for a period under optional drill-down filters: tokens, notional cost, " +
+				"turns, sessions, token composition (cache read / create, input, output, thinking), " +
+				"subagent share, and the same figures for the previous period of equal length." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+			})),
+		},
+		{
+			Name:  "list_sessions",
+			Title: "List sessions",
+			Description: "Sessions in a period, heaviest first by default, each with its token composition, " +
+				"cache hit rate and subagent share. Narrow with the drill-down filters (project, model, " +
+				"user, ...) to list what ran under one of them, or use usage_by_session to rank by a " +
+				"different total." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+				"sort": map[string]any{
+					"type": "string", "enum": []string{"tokens", "cost", "started", "duration", "turns"},
+					"description": `Sort order; defaults to "tokens" (heaviest first).`,
+				},
+				"limit": limitProp,
+			})),
+		},
+		{
+			Name:  "get_session",
+			Title: "One session's detail",
+			Description: "One session's header (tokens, cost, models, cache hit) and every turn inside it. " +
+				"Turns are omitted (pruned: true) once the raw events behind them have aged out of " +
+				"retention; the header itself survives from the hourly rollup." + caveat,
+			InputSchema: obj(map[string]any{
+				"account": accountProp,
+				"session_id": map[string]any{
+					"type": "string", "description": "The session id, from list_sessions or usage_by_session.",
+				},
+			}, "session_id"),
+		},
+		{
+			Name:  "get_findings",
+			Title: "Machine-generated findings",
+			Description: "Machine-generated findings for a period: runaway sessions, unpriced models, time " +
+				"spent in the critical rate-limit band, cache-hit drops and spend spikes. Pass " +
+				`view: "now" for live, minute-scale alerts instead (high rate-limit windows, an ` +
+				"agent that has stopped reporting, a runaway session in flight) — that mode ignores " +
+				"since/until and the drill-down filters. Findings are ranked, capped at a handful, and " +
+				"each carries a scope map naming the chip an equivalent usage_by_* or list_sessions " +
+				"call can drill into.",
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp,
+				"view": map[string]any{
+					"type": "string", "enum": []string{"review", "now"},
+					"description": `"review" (default) evaluates the period rules; "now" evaluates live alerts.`,
+				},
+			})),
+		},
 	}
 }
 
@@ -363,7 +445,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return map[string]any{"endpoints": eps, "now": time.Now().UTC()}, nil
 
 	case "list_account_switches":
-		sw, err := s.api.Store.AccountSwitches(intArg(args, "limit"))
+		sw, err := s.api.Store.AccountSwitches("", intArg(args, "limit"))
 		if err != nil {
 			return nil, err
 		}
@@ -380,7 +462,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}, store.ByAccount)
 
 	case "list_endpoint_accounts":
-		eas, err := s.api.Store.EndpointAccounts(intArg(args, "limit"))
+		eas, err := s.api.Store.EndpointAccounts("", intArg(args, "limit"))
 		if err != nil {
 			return nil, err
 		}
@@ -429,9 +511,108 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}
 		return hist, nil
 
+	case "usage_summary":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		sum, err := s.api.Store.Summary(f)
+		if err != nil {
+			return nil, err
+		}
+		psum, err := s.api.Store.Summary(f.Prev())
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End,
+			"summary": sum, "prev": psum,
+			"disclaimer": strings.TrimSpace(caveat),
+		}
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
+
+	case "list_sessions":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := s.api.Store.Sessions(f, str(args, "sort"), intArg(args, "limit"), 0)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End, "sessions": rows,
+		}, nil
+
+	case "get_session":
+		account, err := s.account(args)
+		if err != nil {
+			return nil, err
+		}
+		id := str(args, "session_id")
+		if id == "" {
+			return nil, fmt.Errorf("session_id is required")
+		}
+		head, err := s.api.Store.Session(account, id)
+		if err != nil {
+			return nil, err
+		}
+		if head == nil {
+			return nil, fmt.Errorf("unknown session %q", id)
+		}
+		turns, err := s.api.Store.SessionTurns(account, id)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"session": head, "turns": turns, "pruned": len(turns) == 0 && head.Turns > 0,
+		}, nil
+
+	case "get_findings":
+		if str(args, "view") == "now" {
+			account, err := s.account(args)
+			if err != nil {
+				return nil, err
+			}
+			in, err := s.api.GatherNow(account)
+			if err != nil {
+				return nil, err
+			}
+			return findings.Now(in), nil
+		}
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		in, err := s.api.GatherReview(f)
+		if err != nil {
+			return nil, err
+		}
+		return findings.Review(in), nil
+
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
+}
+
+// filter builds a store.Filter from tool arguments, mirroring api.scope:
+// account, then the time range, then at most one value per drill-down chip.
+func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
+	account, err := s.account(args)
+	if err != nil {
+		return store.Filter{}, err
+	}
+	start, end := timeRange(args)
+	f := store.Filter{
+		Account: account, Start: start, End: end,
+		Endpoint: str(args, "endpoint"), OSUser: str(args, "user"), CWD: str(args, "project"),
+		Model: str(args, "model"), Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
+	}
+	return f.AlignHours(), nil
 }
 
 func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {

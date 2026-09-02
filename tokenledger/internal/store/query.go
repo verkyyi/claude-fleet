@@ -522,13 +522,24 @@ type AccountSwitch struct {
 // AccountSwitches lists login changes, newest first. The UI shows these
 // alongside historical data because rows ingested before a switch keep their
 // old attribution and cannot be corrected.
-func (s *Store) AccountSwitches(limit int) ([]AccountSwitch, error) {
+//
+// account == "" or AllAccounts lists every switch on the hub; a specific uuid
+// scopes to switches touching that subscription on either side, since a
+// switch AWAY from an account is exactly as relevant to it as a switch INTO
+// it.
+func (s *Store) AccountSwitches(account string, limit int) ([]AccountSwitch, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`
-		SELECT endpoint_id, from_account, to_account, observed_at
-		FROM account_switches ORDER BY observed_at DESC LIMIT ?`, limit)
+	q := `SELECT endpoint_id, from_account, to_account, observed_at FROM account_switches`
+	args := []any{}
+	if account != "" && account != AllAccounts {
+		q += ` WHERE from_account = ? OR to_account = ?`
+		args = append(args, account, account)
+	}
+	q += ` ORDER BY observed_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("account switches: %w", err)
 	}
@@ -568,11 +579,14 @@ type EndpointAccount struct {
 
 // EndpointAccounts lists which subscriptions each endpoint has been seen
 // running, most recently active first.
-func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
+//
+// account == "" or AllAccounts lists every row on the hub; a specific uuid
+// scopes to that subscription's own rows.
+func (s *Store) EndpointAccounts(account string, limit int) ([]EndpointAccount, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.db.Query(`
+	q := `
 		SELECT ea.endpoint_id,
 		       COALESCE(NULLIF(ep.label, ''), NULLIF(ep.hostname, ''), ea.endpoint_id),
 		       COALESCE(ep.os_user, ''),
@@ -586,9 +600,15 @@ func (s *Store) EndpointAccounts(limit int) ([]EndpointAccount, error) {
 		       ea.origin, ea.first_seen, ea.last_seen
 		FROM endpoint_accounts ea
 		LEFT JOIN endpoints ep ON ep.endpoint_id = ea.endpoint_id
-		LEFT JOIN accounts  a  ON a.account_uuid  = ea.account_uuid
-		ORDER BY ea.last_seen DESC
-		LIMIT ?`, limit)
+		LEFT JOIN accounts  a  ON a.account_uuid  = ea.account_uuid`
+	args := []any{}
+	if account != "" && account != AllAccounts {
+		q += ` WHERE ea.account_uuid = ?`
+		args = append(args, account)
+	}
+	q += ` ORDER BY ea.last_seen DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint accounts: %w", err)
 	}

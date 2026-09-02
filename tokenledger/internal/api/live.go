@@ -25,6 +25,11 @@ type LiveSession struct {
 	Account    string    `json:"account,omitempty"`
 	SeenAt     time.Time `json:"seen_at"`
 
+	// OSUser is filled in by the hub's enrich hook from the endpoint's own
+	// record, not reported by the agent on every heartbeat: Live has no store
+	// access of its own, and the login rarely changes mid-session.
+	OSUser string `json:"os_user,omitempty"`
+
 	CostUSD      float64 `json:"cost_usd"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
@@ -203,6 +208,71 @@ func (l *Live) Snapshot() Snapshot {
 		return out.Sessions[i].SessionID < out.Sessions[j].SessionID
 	})
 	return out
+}
+
+// osUserCacheTTL bounds how stale the endpoint_id -> os_user map behind the
+// live enrich hook may be.
+//
+// Refreshed at most this often rather than on every snapshot: Snapshot() runs
+// on every SSE push, several times a second, and a full ListEndpoints("") is
+// more query than that rate deserves for a value that only changes on the
+// timescale of an endpoint re-enrolling or switching login.
+const osUserCacheTTL = 60 * time.Second
+
+// osUserCache is the endpoint_id -> os_user map behind attachOSUsers.
+type osUserCache struct {
+	mu sync.Mutex
+	m  map[string]string
+	at time.Time
+}
+
+// get returns the cached map, reloading it when stale.
+func (c *osUserCache) get(load func() (map[string]string, error)) map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m != nil && time.Since(c.at) < osUserCacheTTL {
+		return c.m
+	}
+	m, err := load()
+	if err != nil {
+		// Serve the previous map rather than blanking every OSUser on a
+		// momentarily unreadable database.
+		if c.m != nil {
+			return c.m
+		}
+		return nil
+	}
+	c.m, c.at = m, time.Now()
+	return c.m
+}
+
+// loadOSUsers reads the current endpoint_id -> os_user map from the store.
+func (s *Server) loadOSUsers() (map[string]string, error) {
+	eps, err := s.Store.ListEndpoints("")
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(eps))
+	for _, e := range eps {
+		m[e.ID] = e.OSUser
+	}
+	return m, nil
+}
+
+// attachOSUsers fills in each live session's OSUser from the endpoint's own
+// record. Live itself has no store access -- an endpoint's live heartbeat
+// carries no os_user -- so this is a server-side enrich hook, the same shape
+// as attachCounter.
+func (s *Server) attachOSUsers(snap *Snapshot) {
+	if s.Store == nil {
+		return
+	}
+	m := s.osUsers.get(s.loadOSUsers)
+	for i := range snap.Sessions {
+		if u, ok := m[snap.Sessions[i].EndpointID]; ok && u != "" {
+			snap.Sessions[i].OSUser = u
+		}
+	}
 }
 
 // subscribe registers a listener for pushed snapshots.

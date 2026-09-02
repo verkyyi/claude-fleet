@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 11 {
-		t.Fatalf("tools = %d, want 11", len(tools))
+	if len(tools) != 15 {
+		t.Fatalf("tools = %d, want 15", len(tools))
 	}
 
 	want := map[string]bool{
@@ -123,6 +123,7 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"usage_by_account": false, "usage_by_endpoint": false,
 		"usage_by_user": false, "usage_by_project": false,
 		"usage_by_session": false, "usage_history": false,
+		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
@@ -386,5 +387,42 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	if beforeEv != afterEv || beforeEp != afterEp {
 		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d",
 			beforeEv, afterEv, beforeEp, afterEp)
+	}
+}
+
+// Task 8 adds findings, session listing/detail and a period summary shaped
+// for an agent to call directly rather than reassemble from usage_by_*.
+func TestToolsList_NewToolsPresent(t *testing.T) {
+	ts, _ := newMCP(t)
+	out := rpc(t, ts, "tools/list", nil)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+
+	names := map[string]bool{}
+	for _, raw := range tools {
+		names[raw.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"usage_summary", "list_sessions", "get_session", "get_findings"} {
+		if !names[want] {
+			t.Errorf("tools/list is missing %q", want)
+		}
+	}
+}
+
+func TestCall_UsageSummary(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
+
+	out := call(t, ts, "usage_summary", map[string]any{"account": "acct-a"})
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("unexpected error: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	sum, ok := sc["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("no summary: %v", sc)
+	}
+	if tok, _ := sum["tokens"].(float64); tok <= 0 {
+		t.Fatalf("tokens = %v, want > 0", sum["tokens"])
 	}
 }

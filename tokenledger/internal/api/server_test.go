@@ -400,7 +400,7 @@ func TestIngest_RecordsAccountSwitch(t *testing.T) {
 	h.push(t, tok, batchFor("acct-a", "shared-laptop", []string{"s1"}, "/a"))
 	h.push(t, tok, batchFor("acct-b", "shared-laptop", []string{"s2"}, "/b"))
 
-	switches, err := h.srv.Store.AccountSwitches(10)
+	switches, err := h.srv.Store.AccountSwitches("", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +731,7 @@ func TestIngest_ConcurrentSubscriptionsAreNotSwitches(t *testing.T) {
 		h.push(t, tok, sessionBatchFor("acct-b", "laptop", []string{fmt.Sprintf("b%d", i)}, "/b"))
 	}
 
-	switches, err := h.srv.Store.AccountSwitches(100)
+	switches, err := h.srv.Store.AccountSwitches("", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,7 +742,7 @@ func TestIngest_ConcurrentSubscriptionsAreNotSwitches(t *testing.T) {
 
 	// Both must still be visible — the fix is to record concurrency, not to
 	// drop the second subscription on the floor.
-	eas, err := h.srv.Store.EndpointAccounts(100)
+	eas, err := h.srv.Store.EndpointAccounts("", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -801,7 +801,7 @@ func TestIngest_FirstReportEstablishesTheLoginEvenWithoutAnOrigin(t *testing.T) 
 	}
 	// ...and correcting that provisional guess later is not a "switch".
 	h.push(t, tok, batchFor("acct-b", "old-agent", []string{"x2"}, "/a"))
-	switches, err := h.srv.Store.AccountSwitches(10)
+	switches, err := h.srv.Store.AccountSwitches("", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -953,7 +953,7 @@ func TestIngest_ASwitchDemotesThePreviousLogin(t *testing.T) {
 	h.push(t, tok, batchFor("acct-old", "laptop", []string{"o1"}, "/a"))
 	h.push(t, tok, batchFor("acct-new", "laptop", []string{"n1"}, "/a"))
 
-	eas, err := h.srv.Store.EndpointAccounts(100)
+	eas, err := h.srv.Store.EndpointAccounts("", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -982,7 +982,7 @@ func TestIngest_AGuestDoesNotDemoteTheLogin(t *testing.T) {
 	h.push(t, tok, batchFor("acct-login", "laptop", []string{"l1"}, "/a"))
 	h.push(t, tok, sessionBatchFor("acct-guest", "laptop", []string{"g1"}, "/b"))
 
-	eas, err := h.srv.Store.EndpointAccounts(100)
+	eas, err := h.srv.Store.EndpointAccounts("", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
