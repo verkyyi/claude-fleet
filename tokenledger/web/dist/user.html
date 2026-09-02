@@ -85,10 +85,23 @@ footer { color:var(--ink-3); font-size:12px; margin-top:26px; line-height:1.6; }
 <style>
 /* The only additions to the shared sheet: the page is otherwise built from
    share.html's classes so the two standalone pages stay identical. */
+.figures { display:grid; grid-template-columns:repeat(auto-fit, minmax(128px, 1fr)); gap:12px; }
+.tw { overflow-x:auto; }
+th.n { text-align:right; }
+td.path { word-break:break-all; }
+.badge-row .swatch { min-width:0; max-width:100%; }
+.fig { min-width:0; }
+.fig.wide { grid-column:span 2; }
+.fig .n { font-variant-numeric:tabular-nums; white-space:nowrap; font-size:clamp(20px, 2.4vw, 26px); }
+@media (max-width:520px) { .fig.wide { grid-column:1 / -1; } }
+.badge-row { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin:.6rem 0 1rem; }
+.badge-row .swatch { padding:10px 12px; border-radius:8px; display:flex; align-items:center; }
+.badge-row .swatch.dk { background:#0d1117; } .badge-row .swatch.lt { background:#ffffff; border:1px solid var(--border); }
+.badge-row img { display:block; max-width:100%; height:auto; }
 .teams span { display:inline-block; margin-right:.4rem; padding:.1rem .45rem;
               border:1px solid var(--border); border-radius:4px; font-size:.85em; }
-.badges code { display:block; margin:.3rem 0; padding:.4rem .55rem; background:var(--grid);
-               border-radius:4px; font-size:.82em; word-break:break-all; }
+.badges code { display:block; margin:.3rem 0; padding:.5rem .65rem; background:var(--grid);
+               border-radius:4px; font-size:.8em; white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
 <body>
@@ -120,25 +133,54 @@ function el(tag, attrs, ...kids) {
 }
 
 const fmtInt = (n) => new Intl.NumberFormat().format(n || 0);
-const fmtUSD = (n) => "$" + Number(n || 0).toFixed(2);
+const fmtUSD = (n) => "$" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function fig(k, n) {
-  return el("div", { class: "fig" }, el("div", { class: "n" }, n), el("div", { class: "k" }, k));
+function fig(k, n, wide) {
+  return el("div", { class: wide ? "fig wide" : "fig" }, el("div", { class: "n" }, n), el("div", { class: "k" }, k));
 }
 
 function bucketCard(title, hint, buckets, keyOf) {
   if (!buckets || !buckets.length) return null;
   const rows = buckets.map((b) => el("tr", {},
-    el("td", {}, keyOf(b)),
+    el("td", { class: "path" }, keyOf(b)),
     el("td", { class: "n" }, fmtInt(b.tokens)),
     el("td", { class: "n" }, fmtUSD(b.cost_usd))));
   return el("div", { class: "card" },
     el("h2", {}, title),
     el("p", { class: "hint" }, hint),
-    el("table", {},
+    el("div", { class: "tw" }, el("table", {},
       el("thead", {}, el("tr", {},
-        el("th", {}, "Name"), el("th", {}, "Tokens"), el("th", {}, "Notional"))),
-      el("tbody", {}, rows)));
+        el("th", {}, "Name"), el("th", { class: "n" }, "Tokens"), el("th", { class: "n" }, "Notional"))),
+      el("tbody", {}, rows))));
+}
+
+/* The badge card SHOWS the badge. Someone deciding whether to put it in a
+   README wants to see it on both grounds and copy one snippet, not read URLs. */
+function badgeCard(d) {
+  const u = encodeURIComponent(d.os_user);
+  const base = location.origin + "/badge/u/" + u + ".svg";
+  const dark = base + "?theme=dark", light = base + "?theme=light";
+  const snippet =
+    "<picture>\n" +
+    '  <source media="(prefers-color-scheme: dark)" srcset="' + dark + '">\n' +
+    '  <img alt="' + d.os_user + " \u00b7 Claude Code tokens" + '" src="' + light + '">\n' +
+    "</picture>";
+  return el("div", { class: "card badges" },
+    el("h2", {}, "Badge"),
+    el("p", { class: "hint" },
+      "The odometer rolls up to the exact count on every load. A README image sends no " +
+      "credential, so serving these outside the dashboard needs `ccquota hub --public-badges`."),
+    el("div", { class: "badge-row" },
+      el("div", { class: "swatch dk" }, el("img", { src: dark, alt: "dark badge" })),
+      el("div", { class: "swatch lt" }, el("img", { src: light, alt: "light badge" }))),
+    el("div", { class: "badge-row" },
+      el("div", { class: "swatch dk" }, el("img", { src: dark + "&size=compact", alt: "compact dark badge" })),
+      el("div", { class: "swatch lt" }, el("img", { src: light + "&size=compact", alt: "compact light badge" })),
+      el("span", { class: "hint" }, "compact \u2014 sits in a row of shields badges")),
+    el("p", { class: "hint" }, "Paste into a README (light and dark pick themselves):"),
+    el("code", {}, snippet),
+    el("p", { class: "hint" }, "Static, shields-shaped: add ", el("b", {}, "?style=flat"),
+      ". shields.io endpoint JSON: ", el("b", {}, ".json"), " instead of ", el("b", {}, ".svg"), "."));
 }
 
 function render(d) {
@@ -170,7 +212,7 @@ function render(d) {
           ? ["Team: ", ...d.teams.map((t) => el("span", {}, t))]
           : "No team assigned."),
       el("div", { class: "figures" },
-        fig("tokens", fmtInt(d.tokens)),
+        fig("tokens", fmtInt(d.tokens), true),
         fig("turns", fmtInt(d.turns)),
         fig("notional cost", fmtUSD(d.cost_usd)),
         fig("machines", fmtInt(d.machines)),
@@ -181,13 +223,7 @@ function render(d) {
     bucketCard("Machines", "Which endpoints this login ran on \u00b7 last " + RANGE + ".",
       d.machines_breakdown, (b) => b.label || b.key),
 
-    el("div", { class: "card badges" },
-      el("h2", {}, "Badge"),
-      el("p", { class: "hint" },
-        "Serve these from this hub in an internal README. They need " +
-        "`ccquota hub --public-badges`, because a README image sends no credential."),
-      el("code", {}, location.origin + "/badge/u/" + encodeURIComponent(d.os_user) + ".svg?theme=dark"),
-      el("code", {}, location.origin + "/badge/u/" + encodeURIComponent(d.os_user) + ".json?theme=dark")),
+    badgeCard(d),
 
     el("footer", {}, d.disclaimer || ""));
 }
