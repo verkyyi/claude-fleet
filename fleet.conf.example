@@ -98,6 +98,25 @@ FLEET_CTX_WINDOW=200000
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
+# When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
+# Sep 6 …" / "You've reached your Fable limit …") while its subscription still
+# has 5h/7d headroom, the fleet does NOT bench the account (that rotation is for
+# the subscription wall — benching on a model cap moved every session onto an
+# account with the same cap). It records the (account, model) cap until the
+# banner's reset, relaunches the walled sessions on THIS model (close + `--resume
+# --model`, same transcript), and every new session on that account launches on
+# it until the cap resets — autofill, hand spawns, restores alike; subagents
+# follow. Set empty to disable (a model cap then behaves like a subscription
+# wall: bench + rotate). Machine-wide policy: one value for every fleet.
+# @label=Model-cap fallback @group=spawn @tier=common @scope=global @edit=enum
+#FLEET_MODEL_FALLBACK="opus"
+
+# How long a per-model cap stays recorded when its banner carries no parseable
+# reset instant (the sticky "reached your Fable limit" line has none). Model caps
+# are weekly, so the default is 7 days (seconds); a banner WITH a reset wins.
+# @label=Model-cap TTL @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_MODEL_LIMIT_TTL=604800
+
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
 # ALL fleets on this machine. Every spawn path — the new-session box and the
 # backlog's Enter — refuses once this many are live (panels — the dash/plan/

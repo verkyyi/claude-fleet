@@ -236,6 +236,17 @@ ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the mov
 out=$(bash "$SCRIPT" --session "$SESS" --nudge 'custom nudge' "$nw1" 2>&1)
 ok; grep -q -- '--resume sid-1111 custom nudge' "$WORK/launched" 2>/dev/null || fail "--nudge must replace the default nudge (launched: $(cat "$WORK/launched"))"
 
+# --- --model <m> (issue #524): a model-capped session is relaunched on the fallback
+# model. The launcher gets --model BEFORE --resume (fleet-claude.sh then sees an
+# explicit model and skips its FLEET_MODEL default), the default nudge names the
+# MODEL cap rather than the subscription, and the report says which model.
+nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
+: > "$WORK/launched"
+out=$(bash "$SCRIPT" --session "$SESS" --model opus "$nw1" 2>&1)
+ok; grep -q -- '--model opus --resume sid-1111 ' "$WORK/launched" 2>/dev/null || fail "--model must reach the launcher ahead of --resume (launched: $(cat "$WORK/launched" 2>/dev/null); out: $out)"
+ok; grep -q -- 'model usage limit' "$WORK/launched" 2>/dev/null || fail "--model must select the model-cap nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
+ok; printf '%s' "$out" | grep -q -- 'on opus' || fail "the report must name the fallback model: $out"
+
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

@@ -307,4 +307,55 @@ eq "cmd_bench: a past instant falls back to now+LIMIT_TTL" "$(( $(now) + TTL ))"
 rc_is "cmd_bench: benching a non-active account does not rotate" 0 "$rc"
 rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
 
+# ============================================================================
+# model-specific caps (issue #524): banner_reset_epoch's DATED form + the
+# account.model-limited ledger — separate from the subscription bench, no rotation
+# ============================================================================
+# (STATE_ACTIVE / STATE_DIR / LOCK already point at the scratch tree — see the
+#  cmd_mark_limited section above; only the model ledger is new here)
+STATE_MODEL_LIMITED="$FLEET_C/account.model-limited"
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"; rm -f "$STATE_MODEL_LIMITED"
+# The weekly model cap's banner carries a DATE: "resets Sep 6 at 10pm (zone)".
+# 2026-09-06 22:00 America/Los_Angeles = 1788757200 (what ccquota reports too).
+FABLE_HIT="hit your Fable 5 limit · resets Sep 6 at 10pm $Z"
+NOW_0902=1788381000                                     # 2026-09-02 13:30 PDT
+eq "banner: dated reset (Sep 6 at 10pm)" 1788757200 "$(banner_reset_epoch "$FABLE_HIT" $NOW_0902)"
+eq "banner: dated reset, host TZ ≠ zone" 1788757200 "$(TZ=Asia/Shanghai banner_reset_epoch "$FABLE_HIT" $NOW_0902)"
+eq "banner: dated reset with minutes" 1788758100 \
+   "$(banner_reset_epoch "hit your Fable 5 limit · resets Sep 6 at 10:15pm $Z" $NOW_0902)"
+eq "banner: dated reset already past this year → next year" 1798794000 \
+   "$(banner_reset_epoch "hit your Fable 5 limit · resets Jan 1 at 1am $Z" 1798747200)"
+eq "banner: clock-only form still works beside the dated one" 1787462400 "$(banner_reset_epoch "$B_1020" 1787454480)"
+
+# cmd_model_limited <label> <model> [banner] → benches (label, model) to the banner's
+# reset (+RESET_BUFFER); the SUBSCRIPTION ledger and the active pointer are untouched
+# — a model cap must never rotate accounts, that rotation was the cascade.
+# (the ledger uses the REAL clock, so the expected instant is the parser's answer
+#  for now — the parse itself is pinned above with fixed clocks)
+exp=$(( $(banner_reset_epoch "$FABLE_HIT" "$(now)") + RESET_BUFFER ))
+u=$(cmd_model_limited a fable "$FABLE_HIT"); rc=$?
+rc_is "model-limited: rc 0" 0 "$rc"
+eq "model-limited: prints the until epoch" "$exp" "$u"
+eq "model-limited: (a, fable) benched to reset+buffer" "$exp" "$(acct_model_limited_until a fable)"
+eq "model-limited: model match is case-insensitive"   "$exp" "$(acct_model_limited_until a Fable)"
+eq "model-limited: a model id containing the alias matches" "$exp" "$(acct_model_limited_until a claude-fable-5-1)"
+eq "model-limited: other model → 0"   0 "$(acct_model_limited_until a opus)"
+eq "model-limited: other account → 0" 0 "$(acct_model_limited_until b fable)"
+eq "model-limited: subscription ledger untouched" "" "$(cat "$STATE_LIMITED")"
+eq "model-limited: active pointer untouched"      a  "$(cat "$STATE_ACTIVE")"
+# no parseable reset in the banner → now + MODEL_TTL (a weekly cap: 7 days by default)
+: > "$STATE_MODEL_LIMITED"
+t0=$(now); u=$(cmd_model_limited b fable "reached your Fable limit. Run /usage-credits to continue or switch models with /model.")
+CHECKS=$((CHECKS + 1)); [ "$u" -ge $((t0 + 604800)) ] && [ "$u" -le $((t0 + 604800 + 5)) ] \
+  || fail "model-limited: no reset in banner → now+7d TTL — got $u (now $t0)"
+eq "model-limited: unknown account refused" 1 "$(cmd_model_limited nobody fable x >/dev/null 2>&1; echo $?)"
+# an expired row reads as 0 and is dropped on the next write
+printf 'a\tfable\t%s\told\n' $(( $(now) - 10 )) > "$STATE_MODEL_LIMITED"
+eq "model-limited: expired row → 0" 0 "$(acct_model_limited_until a fable)"
+cmd_model_limited b opus "hit your Opus limit · resets 10:20pm $Z" >/dev/null
+eq "model-limited: expired row dropped on write" 1 "$(wc -l < "$STATE_MODEL_LIMITED" | tr -d ' ')"
+# model-clear
+cmd_model_clear b opus
+eq "model-clear: (b, opus) cleared" 0 "$(acct_model_limited_until b opus)"
+
 printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench)\n' "$CHECKS"

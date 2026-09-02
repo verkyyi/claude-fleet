@@ -35,13 +35,40 @@ fi
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to
 # defer to the user's own `claude` default. Skipped if the caller already passed
 # an explicit --model (so an intentional override still wins).
+#
+# Per-MODEL cap fallback (issue #524). "You've hit your Fable 5 limit · resets Sep 6"
+# walls ONE model on ONE account while the subscription keeps its 5h/7d headroom;
+# fleet-account.sh records that per (account, model) — `model-limited-until`,
+# stamped by the collector off the banner — and this launcher, the single door
+# every spawn / restore / migrate walks through, swaps FLEET_MODEL for
+# FLEET_MODEL_FALLBACK (default opus) while the cap holds. So autofill and hand
+# spawns stop dying at their first turn, and once the cap resets new sessions are
+# back on FLEET_MODEL with nobody flipping a switch. Same rules as --model: an
+# explicit caller --model wins, an empty knob disables it, and a fallback equal
+# to FLEET_MODEL is a no-op (the cap IS the fallback — nothing to swap to). The
+# active account is resolved here (the token export below reuses it).
+label=$("$BIN/fleet-account.sh" active 2>/dev/null)
 model_flag=()
+launch_model=""
 if [ -z "${FLEET_MODEL+x}" ]; then FLEET_MODEL="opus"; fi
+if [ -z "${FLEET_MODEL_FALLBACK+x}" ]; then FLEET_MODEL_FALLBACK="opus"; fi
 if [ -n "$FLEET_MODEL" ]; then
   case " $* " in
     *" --model "*|*" --model="*) : ;;               # caller already chose a model
-    *) model_flag=(--model "$FLEET_MODEL") ;;
+    *)
+      launch_model="$FLEET_MODEL"
+      if [ -n "$label" ] && [ -n "$FLEET_MODEL_FALLBACK" ] && [ "$FLEET_MODEL_FALLBACK" != "$FLEET_MODEL" ]; then
+        _fc_until=$("$BIN/fleet-account.sh" model-limited-until "$label" "$FLEET_MODEL" 2>/dev/null)
+        case "$_fc_until" in ''|*[!0-9]*) _fc_until=0 ;; esac
+        [ "$_fc_until" -gt "$(date +%s)" ] && launch_model="$FLEET_MODEL_FALLBACK"
+        unset _fc_until
+      fi
+      model_flag=(--model "$launch_model") ;;
   esac
+fi
+# The effective model, stamped so the dash / migrate can see what a pane runs.
+if [ -n "$launch_model" ] && [ -n "${TMUX_PANE:-}" ]; then
+  tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
 fi
 
 # Force the session's SUBAGENTS (Task/Agent spawns) onto the same tier — this is
@@ -49,7 +76,9 @@ fi
 # overrides even the pinned built-ins (claude-code-guide=haiku, statusline=sonnet).
 # Defaults to FLEET_MODEL; set FLEET_SUBAGENT_MODEL=inherit in fleet.conf to let
 # each subagent resolve normally, or empty to not touch it at all.
-if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="$FLEET_MODEL"; fi
+# Subagents follow the EFFECTIVE model (a Fable-capped launch on opus must not spawn
+# Fable subagents that die at their first turn); an explicit FLEET_SUBAGENT_MODEL wins.
+if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model:-$FLEET_MODEL}"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
 
 # MCP allowlist (issue #473). A fleet session boots the operator's ENTIRE MCP set —
@@ -87,8 +116,7 @@ if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
   esac
 fi
 
-label=$("$BIN/fleet-account.sh" active 2>/dev/null)
-if [ -n "$label" ]; then
+if [ -n "$label" ]; then                                 # (resolved above, with the model)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
     export CLAUDE_CODE_OAUTH_TOKEN="$tok"

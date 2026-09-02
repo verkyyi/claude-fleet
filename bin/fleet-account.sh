@@ -68,6 +68,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 TTL="${FLEET_ACCOUNT_LIMIT_TTL:-18000}"     # how long a limited acct stays out (5h)
+MODEL_TTL="${FLEET_MODEL_LIMIT_TTL:-604800}" # a per-MODEL cap with no reset in its banner (7d; #524)
 RESET_BUFFER=60                             # grace past a banner-parsed reset, so an
                                             # account is not un-benched seconds early
 # ANSI for the `list` table (rendered by fzf --ansi in usage-modal.sh, and by a
@@ -78,6 +79,7 @@ A_DIM=$'\033[2m'; A_RST=$'\033[0m'; A_GRN=$'\033[32m'; A_YEL=$'\033[33m'; A_RED=
 STATE_DIR="$FLEET_C/global"
 STATE_ACTIVE="$STATE_DIR/account.active"
 STATE_LIMITED="$STATE_DIR/account.limited"
+STATE_MODEL_LIMITED="$STATE_DIR/account.model-limited"   # label<TAB>model<TAB>until<TAB>banner (#524)
 LOCK="$STATE_DIR/account.lock"
 # ccquota-driven pre-emptive rotation (issue #513): quota cache + policy knobs.
 # CEILING: bench + move sessions at/above this utilization (5h OR 7d, whichever is
@@ -170,11 +172,21 @@ tz_epoch() { local z="$1" ymd="$2" hm="$3"
 # <banner> <now-epoch> → the epoch the account's window refreshes, or EMPTY when
 # the banner doesn't carry one (caller then falls back to acct_ttl).
 banner_reset_epoch() {
-  local b hm h m ap zone ymd e i
+  local b hm h m ap zone ymd e i mon="" day="" md yr
   b=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')   # lowercase once: BSD sed has no //I
   local now_s="$2"
   # A clock time is REQUIRED. "resets monday" (the weekly banner) carries no
   # instant, so it falls back by design rather than guessing a weekday boundary.
+  # DATED form (issue #524): the weekly per-model cap says "resets Sep 6 at 10pm
+  # (zone)". Lift the month/day out, fold the tail back onto the clock-only grammar
+  # below ("resets 10pm"), and resolve the date in the banner's zone — this year, or
+  # next when that instant is already behind now (a Dec 31 banner naming Jan 1).
+  md=$(printf '%s' "$b" | grep -aoE 'resets +(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* +[0-9]{1,2},? +(at +)?[0-9]{1,2}(:[0-9]{2})? *[ap]\.?m\.?' | tail -1)
+  if [ -n "$md" ]; then
+    mon=$(printf '%s' "$md" | sed -nE 's/^resets +([a-z]{3})[a-z]* +.*/\1/p')
+    day=$(printf '%s' "$md" | sed -nE 's/^resets +[a-z]+ +([0-9]{1,2}).*/\1/p')
+    b=$(printf '%s' "$b" | sed -E 's/resets +[a-z]+ +[0-9]{1,2},? +(at +)?/resets /')
+  fi
   hm=$(printf '%s' "$b" | grep -aoE 'resets +[0-9]{1,2}(:[0-9]{2})? *[ap]\.?m\.?' | tail -1)
   [ -n "$hm" ] || return 0
   h=$(printf '%s' "$hm" | sed -nE 's/^resets +([0-9]{1,2}).*/\1/p')
@@ -189,6 +201,19 @@ banner_reset_epoch() {
   # macOS, which is exactly the wrong-epoch failure this must not produce.
   zone=$(printf '%s' "$1" | sed -nE 's/.*\(([A-Za-z]+\/[A-Za-z_+-]+(\/[A-Za-z_+-]+)?)\).*/\1/p' | tail -1)
   [ -z "$zone" ] || [ -f "/usr/share/zoneinfo/$zone" ] || return 0
+  if [ -n "$mon" ] && [ -n "$day" ]; then
+    case "$mon" in jan) mon=01;; feb) mon=02;; mar) mon=03;; apr) mon=04;; may) mon=05;; jun) mon=06;;
+                   jul) mon=07;; aug) mon=08;; sep) mon=09;; oct) mon=10;; nov) mon=11;; dec) mon=12;; esac
+    day=$(printf '%02d' "$((10#$day))")
+    yr=$(tz_ymd "$zone" "$now_s"); yr=${yr%%-*}
+    [ -n "$yr" ] || return 0
+    for i in 0 1; do
+      e=$(tz_epoch "$zone" "$((yr + i))-$mon-$day" "$(printf '%02d:%02d' "$h" "$m")")
+      [ -n "$e" ] || return 0
+      [ "$e" -gt "$now_s" ] && { printf '%s' "$e"; return 0; }
+    done
+    return 0
+  fi
   # Today's or tomorrow's wall clock, whichever lands in the future: a banner
   # seen at 11pm saying "resets 12:30am" means tomorrow. Both candidates are
   # formatted FROM an epoch, so a DST day can't shift the answer by an hour.
@@ -465,6 +490,43 @@ cmd_clear() {
   acct_unlock
 }
 
+# --- per-MODEL caps (issue #524) --------------------------------------------------
+# "You've hit your Fable 5 limit · resets Sep 6 …" is a different wall from the
+# subscription's: the account keeps its 5h/7d headroom for every other model. So it
+# is recorded HERE, per (account, model), and never touches account.limited or the
+# active pointer — benching + rotating on it moved every session onto an account
+# with the same cap (the 2026-09-02 cascade). Readers: fleet-claude.sh (launch on
+# FLEET_MODEL_FALLBACK while the cap holds) and the collector (relaunch the walled
+# window). <model> is FLEET_MODEL's alias grammar (fable/opus/…), lowercased; the
+# lookup matches an alias against a full model id either way (fable ~ claude-fable-5-1).
+cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
+  local label="$1" model="${2:-}" banner="${3:-}" until
+  [ -n "$label" ] && [ -n "$model" ] || { echo "model-limited: usage: model-limited <label> <model> [banner]" >&2; return 1; }
+  acct_labels | grep -qx "$label" || { echo "model-limited: unknown account '$label'" >&2; return 1; }
+  model=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+  until=$(banner_reset_epoch "$banner" "$(now)")
+  if [ -n "$until" ]; then until=$(( until + RESET_BUFFER ))
+  else                    until=$(( $(now) + MODEL_TTL )); fi
+  mkdir -p "$STATE_DIR"; acct_lock
+  { [ -f "$STATE_MODEL_LIMITED" ] && awk -F'\t' -v l="$label" -v m="$model" -v now="$(now)" '!($1==l && $2==m) && ($3+0)>now' "$STATE_MODEL_LIMITED"
+    printf '%s\t%s\t%s\t%s\n' "$label" "$model" "$until" "$banner"; } | atomic_write "$STATE_MODEL_LIMITED"
+  acct_unlock
+  printf '%s' "$until"
+}
+acct_model_limited_until() {   # <label> <model|model-id> → epoch, 0 = not capped
+  local m; m=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+  [ -f "$STATE_MODEL_LIMITED" ] && [ -n "$m" ] || { echo 0; return; }
+  awk -F'\t' -v l="$1" -v m="$m" -v now="$(now)" 'BEGIN{u=0}
+    $1==l && ($3+0)>now && ($3+0)>u && (index(m,$2)>0 || index($2,m)>0) { u=$3+0 } END { print u+0 }' "$STATE_MODEL_LIMITED"
+}
+cmd_model_clear() {   # [label [model]] — no args clears everything
+  [ -f "$STATE_MODEL_LIMITED" ] || return 0
+  acct_lock
+  if [ -z "${1:-}" ]; then : | atomic_write "$STATE_MODEL_LIMITED"
+  else awk -F'\t' -v l="$1" -v m="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')" '!($1==l && (m=="" || $2==m))' "$STATE_MODEL_LIMITED" | atomic_write "$STATE_MODEL_LIMITED"; fi
+  acct_unlock
+}
+
 # Aligned, scannable table — first token of every data row is the bare label, so
 # usage-modal.sh can extract the pick with `awk '{print $1}'`. Colour lives only
 # in the marker glyph (fixed 1-col) and the trailing STATE field (no padding after
@@ -537,8 +599,11 @@ case "${1:-active}" in
   limited-until) acct_limited_until "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
+  model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
+  model-limited-until) acct_model_limited_until "${2:-}" "${3:-}" ;;
+  model-clear)   cmd_model_clear "${2:-}" "${3:-}" ;;
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi

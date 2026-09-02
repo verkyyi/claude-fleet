@@ -218,6 +218,54 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
   point (it keeps the fleet working), but it means per-account settings aren't
   possible via this mechanism.
 
+## Per-model caps are not the subscription wall (#524)
+
+`You've hit your Fable 5 limit · resets Sep 6 at 10pm` — and its sticky twin,
+`You've reached your Fable limit. Run /usage-credits to continue or switch models
+with /model.` — is a **per-model** cap: one model is walled on one account while
+the account's 5h/7d subscription headroom stays intact for every other model. Up
+to #524 the collector read it as the subscription banner, benched the account and
+`migrate`d every session off it — onto an account with the same Fable cap, where
+they hit the same wall (the 2026-09-02 cascade: 19 sessions parked, an account
+benched at 14% utilization by a source string that merely *contained* "Usage
+limit reached").
+
+Now the two walls are told apart (`fleet_limit_kind` in `usage-lib.sh`), and a
+model cap is handled without touching the account pool:
+
+```
+collector sees "hit your Fable 5 limit" on a window running on account work
+   ├─ fleet-account.sh model-limited work fable "<banner>"
+   │     records (work, fable) capped until the banner's "resets Sep 6 at 10pm"
+   │     instant — the dated form is parsed in the banner's zone — else now +
+   │     FLEET_MODEL_LIMIT_TTL (7d). Ledger: global/account.model-limited.
+   │     account.limited and the active pointer are NOT touched: no rotation.
+   ├─ fleet-migrate.sh --model opus <window>     (backgrounded, once per window)
+   │     the usual Escape + /exit → SessionEnd hook → new window running
+   │     fleet-claude.sh --model opus --resume <sid> "<model-cap nudge>"
+   └─ notify once per (account, model) episode
+```
+
+and every **new** session on that account — autofill, a hand spawn, a restore, a
+migrate — goes through `fleet-claude.sh`, which asks `model-limited-until` for
+its FLEET_MODEL and launches on **`FLEET_MODEL_FALLBACK`** (default `opus`)
+while the cap holds; subagents follow (`CLAUDE_CODE_SUBAGENT_MODEL`), and the
+pane is stamped `@cc_model`. When the cap resets, new sessions are back on
+`FLEET_MODEL` with nobody flipping a switch. Sessions already running on the
+fallback stay there until they end.
+
+Rules, same as `--model`'s: an explicit caller `--model` wins; an empty
+`FLEET_MODEL_FALLBACK` turns the whole path off (a model cap then behaves like
+the subscription wall: bench + rotate); a fallback equal to the capped model is a
+no-op (nothing to swap to — the pre-#524 bench path runs). The knob is
+`@scope=global`: one policy for every fleet on the machine.
+
+```sh
+bin/fleet-account.sh model-limited-until work fable   # epoch, 0 = not capped
+bin/fleet-account.sh model-clear work fable           # lift it by hand
+bin/fleet-account.sh migrate --model opus <window>    # relaunch one window on opus
+```
+
 ## Pre-emptive rotation with ccquota
 
 The banner path is reactive: an account has to be walled — and a session stuck

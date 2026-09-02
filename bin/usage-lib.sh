@@ -84,9 +84,36 @@ fleet_usage_summary_plain() {
 #     out of the capture window. No zone in it → the caller benches by TTL.
 # Either match stops at the pane border (│) so a split pane can't bleed in.
 fleet_limit_banner() {
-  local text classic
+  local text classic sticky
   text=$(cat)
-  classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
+  classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 .-]*limit[^│]*" | tail -1)
   if [ -n "$classic" ]; then printf '%s\n' "$classic"; return 0; fi
-  printf '%s\n' "$text" | grep -aoE "Usage limit reached[^│]*" | tail -1
+  # The per-MODEL wall's second shape (issue #524): "You've reached your Fable
+  # limit. Run /usage-credits to continue or switch models with /model." — sticky
+  # like the footer, but names the model and carries no reset instant.
+  sticky=$(printf '%s\n' "$text" | grep -aoE "reached your [A-Za-z0-9 .-]*limit[^│]*" | tail -1)
+  if [ -n "$sticky" ]; then printf '%s\n' "$sticky"; return 0; fi
+  # The ` · ` separator is REQUIRED: the bare words also occur as a source-code
+  # string in a worker's tool output (`"Usage limit reached"` lives in this very
+  # repo) — that false positive benched a healthy account on 2026-09-02.
+  printf '%s\n' "$text" | grep -aoE "Usage limit reached · [^│]*" | tail -1
+}
+
+# fleet_limit_kind — stdin: a fleet_limit_banner line. Prints `subscription` for the
+# account-wide wall (the session / weekly / N-hour banners and the sticky footer) or
+# `model:<alias>` for a PER-MODEL cap — "hit your Fable 5 limit", "reached your
+# Fable limit", "hit your Opus limit" — where <alias> is the first word after
+# "your", lowercased (Fable 5 → fable), i.e. the grammar FLEET_MODEL speaks. The
+# two are different walls (issue #524): a model cap leaves the account's 5h/7d
+# headroom intact for every other model, so it must never bench the account.
+# Empty input → nothing.
+fleet_limit_kind() {
+  local b w
+  b=$(cat); [ -n "$b" ] || return 0
+  case "$b" in *"Usage limit reached"*) printf 'subscription\n'; return 0 ;; esac
+  w=$(printf '%s\n' "$b" | sed -nE 's/.*(hit|reached) your +([A-Za-z0-9.-]+).*limit.*/\2/p' | head -1 | tr '[:upper:]' '[:lower:]')
+  case "$w" in
+    ''|session|weekly|daily|monthly|usage|*hour*|*day) printf 'subscription\n' ;;
+    *) printf 'model:%s\n' "$w" ;;
+  esac
 }

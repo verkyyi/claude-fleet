@@ -36,6 +36,12 @@
 #   fleet-migrate.sh whoami <window-id>         print the account a window really runs
 #                                               (token truth; re-stamps a stale @cc_account)
 #   opts: --session <fleet>   target fleet when run outside tmux (default: the caller's)
+#         --model <alias>     relaunch on THIS model (issue #524: a per-model cap —
+#                             "hit your Fable 5 limit" — walled the session while the
+#                             subscription is fine; the collector passes the
+#                             FLEET_MODEL_FALLBACK). Rides ahead of --resume so the
+#                             launcher takes it as the caller's explicit choice; the
+#                             default nudge then names the MODEL cap, not the account.
 #         --nudge <text>      first prompt of the resumed session (default: the
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
@@ -59,6 +65,8 @@ EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claud
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
 NUDGE_DEFAULT="Your previous turn was interrupted by a subscription usage limit. The fleet moved this session to another subscription account and resumed it in a new tmux window via claude --resume. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling."
+# --model variant (#524): the account is fine, only one model is capped.
+NUDGE_MODEL_DEFAULT="Your previous turn was interrupted by a per-model usage limit: the model this session ran on has hit its cap on this account (the subscription itself still has headroom). The fleet relaunched this session on __MODEL__ via claude --resume --model in a new tmux window, same transcript. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task on this model. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling."
 
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
@@ -151,11 +159,18 @@ migrate_one() {
   fi
   [ -n "$sid" ] || { say "  – $name ($wid): no session id (registry + transcript lookup failed) — skipped"; skipped=$((skipped+1)); return 0; }
   local nudge="$NUDGE"
-  [ "$NUDGE_SET" = 0 ] && { [ "$state" = working ] && nudge="$NUDGE_DEFAULT" || nudge=""; }
+  if [ "$NUDGE_SET" = 0 ]; then
+    if [ "$state" = working ]; then
+      if [ -n "$MODEL" ]; then nudge="${NUDGE_MODEL_DEFAULT//__MODEL__/$MODEL}"; else nudge="$NUDGE_DEFAULT"; fi
+    else nudge=""; fi
+  fi
   nudge=$(printf '%s' "$nudge" | tr -d "'\`")             # embedded single-quoted below
-  local cmd="'$LAUNCH' --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'; exec \$SHELL"
+  # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
+  # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
+  local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
+  local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
   if [ "$DRY" = 1 ]; then
-    say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
+    say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     return 0
   fi
   local smk_old; smk_old="$G/summary_$(fleet_summary_key "$SESS" "$wid")"
@@ -217,7 +232,7 @@ migrate_one() {
   elif [ -n "$ACTIVE" ] && [ "$nl" != "$ACTIVE" ]; then
     say "  ? $name ($wid → $nw): resumed as pid $ncp on '${nl:-ambient login}', expected '$ACTIVE' — check it"
   else
-    say "  ✓ $name ($wid → $nw): ${label:-?} → ${nl:-?} (pid $ncp, session ${sid%%-*}…)"
+    say "  ✓ $name ($wid → $nw): ${label:-?} → ${nl:-?}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
   fi
   moved=$((moved+1)); note "$name"
   return 0
@@ -228,7 +243,7 @@ migrate_one() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; WIDS=()
+  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --limited|--idle|--all) MODE="${1#--}"; shift ;;
@@ -238,6 +253,8 @@ migrate_main() {
       --session=*) SESS="${1#--session=}"; shift ;;
       --nudge) NUDGE="${2:-}"; NUDGE_SET=1; shift 2 ;;
       --nudge=*) NUDGE="${1#--nudge=}"; NUDGE_SET=1; shift ;;
+      --model) MODEL="${2:-}"; shift 2 ;;
+      --model=*) MODEL="${1#--model=}"; shift ;;
       --dry-run) DRY=1; shift ;;
       --toast) TOAST=1; shift ;;
       whoami) MODE=whoami; shift ;;
@@ -248,6 +265,7 @@ migrate_main() {
   done
   [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '25,40p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
+  MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
 
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
   [ -n "$SESS" ] || { echo "fleet-migrate: no tmux session (pass --session <fleet>)" >&2; return 2; }
