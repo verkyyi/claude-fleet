@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"math"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -132,5 +133,43 @@ func TestLive_SnapshotSerialises(t *testing.T) {
 	}
 	if len(back.Sessions) != 1 || back.Sessions[0].Model != "Opus 5" {
 		t.Fatalf("round trip lost data: %+v", back)
+	}
+}
+
+// os_user does not ride on an agent's live heartbeat -- Live has no store
+// access of its own -- so it is filled in server-side, from each endpoint's
+// own record, through the REAL enrich chain Handler() wires up (attachCounter
+// chained with attachOSUsers), not by calling the cache in isolation. This
+// goes through newHarness -> srv.Handler() -> GET /v1/live end to end.
+func TestLive_OSUserEnrichedFromEndpointRecord(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "workstation")
+
+	// Establishes endpoints.os_user = "alice" for ep_workstation, the same
+	// way a real ingest batch does: handleIngest stamps os_user server-side
+	// from the batch's identity (see ingest.go).
+	b := batchFor("acct-a", "workstation", []string{"e1"}, "/proj")
+	b.Identity.OSUser = "alice"
+	if resp := h.push(t, tok, b); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed push: %d", resp.StatusCode)
+	}
+
+	h.srv.LiveStore.Report("ep_workstation", "workstation", []LiveSession{{SessionID: "s1"}})
+	// Negative case: a session on an endpoint nothing has ever enrolled or
+	// reported identity for must not invent an os_user.
+	h.srv.LiveStore.Report("ep-ghost", "ghost", []LiveSession{{SessionID: "s-ghost"}})
+
+	var snap Snapshot
+	h.getJSON(t, "/v1/live", &snap)
+
+	byID := map[string]LiveSession{}
+	for _, s := range snap.Sessions {
+		byID[s.SessionID] = s
+	}
+	if got := byID["s1"].OSUser; got != "alice" {
+		t.Errorf("os_user = %q, want %q", got, "alice")
+	}
+	if got := byID["s-ghost"].OSUser; got != "" {
+		t.Errorf("a session on an unknown endpoint invented os_user %q, want none", got)
 	}
 }

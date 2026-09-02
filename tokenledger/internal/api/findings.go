@@ -9,6 +9,16 @@ import (
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
+// handleFindings answers GET /v1/findings?view=review|now. Both views share
+// one envelope shape with the rest of the rollup-backed endpoints
+// (handleSummary, handleLimitsHistory, MCP usage_history): account_uuid,
+// all_accounts and the ALIGNED window actually queried -- s.scope() widens
+// the requested range out to whole UTC hours because the rollup cannot
+// answer at finer resolution, and a caller comparing this window against
+// another endpoint's needs to see that alignment, not the raw query string.
+//
+// "now" has no period to align -- it is a snapshot of the current minute --
+// so since/until are omitted entirely rather than echoing a fake window.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("view") == "now" {
 		s.handleNowFindings(w, r)
@@ -23,9 +33,21 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, findings.Review(in))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account_uuid": f.Account, "all_accounts": f.Account == store.AllAccounts,
+		"since": f.Start, "until": f.End, "view": "review",
+		// findings.Review always returns a non-nil slice (finish() converts
+		// nil to []Finding{}), so this is never a JSON null.
+		"findings": findings.Review(in),
+	})
 }
 
+// GatherReview assembles findings.Inputs for one Filter -- the period-scale
+// rules (runaway sessions, unpriced models, time in the critical rate-limit
+// band, cache-hit drops, spend spikes). Exported so internal/mcp's
+// get_findings tool can call it across the package boundary; the HTTP
+// handler above and that tool are the only two callers, and both then pass
+// the result to findings.Review.
 func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	var in findings.Inputs
 	in.SelectionSeconds = int64(f.End.Sub(f.Start) / time.Second)
@@ -118,9 +140,18 @@ func (s *Server) handleNowFindings(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, findings.Now(in))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account_uuid": account, "all_accounts": account == store.AllAccounts,
+		"view":     "now",
+		"findings": findings.Now(in),
+	})
 }
 
+// GatherNow assembles findings.NowInputs for one account (or AllAccounts) --
+// the minute-scale rules (a rate-limit window running hot, an endpoint that
+// has stopped reporting, a live session burning through tokens right now).
+// Exported for the same cross-package reason as GatherReview; callers pass
+// the result to findings.Now.
 func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
 	in := findings.NowInputs{Now: time.Now().UTC()}
 	accts, err := s.Store.ListAccounts()

@@ -412,6 +412,68 @@ func TestIngest_RecordsAccountSwitch(t *testing.T) {
 	}
 }
 
+// The ?account= query param on the two fleet-list HTTP endpoints must
+// actually reach store.AccountSwitches/EndpointAccounts, not just exist as an
+// accepted-but-ignored parameter -- the store layer's own scoping is covered
+// by internal/store's tests, this is the HTTP wiring on top of it.
+func TestSwitchesAndEndpointAccounts_ScopedByAccountQueryParam(t *testing.T) {
+	h := newHarness(t)
+	shared := h.enroll(t, "shared-laptop")
+	other := h.enroll(t, "solo-box")
+
+	// A switch that touches acct-a and acct-b, on shared-laptop.
+	h.push(t, shared, batchFor("acct-a", "shared-laptop", []string{"s1"}, "/a"))
+	h.push(t, shared, batchFor("acct-b", "shared-laptop", []string{"s2"}, "/b"))
+	// An unrelated third account/endpoint, no switch involving it.
+	h.push(t, other, batchFor("acct-c", "solo-box", []string{"o1"}, "/o"))
+
+	type sw struct {
+		FromAccount string `json:"from_account"`
+		ToAccount   string `json:"to_account"`
+	}
+	var got []sw
+
+	h.getJSON(t, "/v1/account-switches?account=acct-a", &got)
+	if len(got) != 1 || got[0].FromAccount != "acct-a" || got[0].ToAccount != "acct-b" {
+		t.Fatalf("account=acct-a: %+v, want the acct-a -> acct-b switch", got)
+	}
+
+	h.getJSON(t, "/v1/account-switches?account=acct-c", &got)
+	if len(got) != 0 {
+		t.Fatalf("account=acct-c: %+v, want none: acct-c was never part of a switch", got)
+	}
+
+	h.getJSON(t, "/v1/account-switches?account=all", &got)
+	if len(got) != 1 {
+		t.Fatalf("account=all: %+v, want the one switch that exists on the hub", got)
+	}
+
+	type ea struct {
+		AccountUUID string `json:"account_uuid"`
+	}
+	var eas []ea
+
+	h.getJSON(t, "/v1/endpoint-accounts?account=acct-c", &eas)
+	if len(eas) != 1 || eas[0].AccountUUID != "acct-c" {
+		t.Fatalf("account=acct-c: %+v, want exactly acct-c's own row", eas)
+	}
+
+	h.getJSON(t, "/v1/endpoint-accounts?account=acct-a", &eas)
+	for _, e := range eas {
+		if e.AccountUUID != "acct-a" {
+			t.Fatalf("account=acct-a leaked another subscription's row: %+v", eas)
+		}
+	}
+	if len(eas) == 0 {
+		t.Fatal("account=acct-a: want at least acct-a's own demoted-to-session row")
+	}
+
+	h.getJSON(t, "/v1/endpoint-accounts?account=all", &eas)
+	if len(eas) != 3 {
+		t.Fatalf("account=all: %d rows, want 3 (acct-a, acct-b on shared-laptop; acct-c on solo-box)", len(eas))
+	}
+}
+
 // No snapshot must present as unavailable-with-a-reason, never as 0%.
 func TestLimits_UnavailableIsExplicitNotZero(t *testing.T) {
 	h := newHarness(t)

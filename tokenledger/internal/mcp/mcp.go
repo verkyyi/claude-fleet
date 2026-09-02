@@ -362,7 +362,7 @@ func toolSpecs() []toolSpec {
 				"agent that has stopped reporting, a runaway session in flight) — that mode ignores " +
 				"since/until and the drill-down filters. Findings are ranked, capped at a handful, and " +
 				"each carries a scope map naming the chip an equivalent usage_by_* or list_sessions " +
-				"call can drill into.",
+				"call can drill into." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp,
 				"view": map[string]any{
@@ -573,6 +573,11 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}, nil
 
 	case "get_findings":
+		// Same envelope shape as usage_summary -- account_uuid plus (for the
+		// review view) the ALIGNED window actually queried, since/until
+		// omitted entirely for "now" rather than echoing a fake window -- for
+		// consistency with the other three new tools and with GET
+		// /v1/findings, which reads the same two gatherers.
 		if str(args, "view") == "now" {
 			account, err := s.account(args)
 			if err != nil {
@@ -582,7 +587,15 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			return findings.Now(in), nil
+			out := map[string]any{
+				"account_uuid": account, "view": "now",
+				"findings": findings.Now(in),
+			}
+			if note := scopeNote(account); note != "" {
+				out["all_accounts"] = true
+				out["scope_note"] = note
+			}
+			return out, nil
 		}
 		f, err := s.filter(args)
 		if err != nil {
@@ -592,7 +605,15 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return findings.Review(in), nil
+		out := map[string]any{
+			"account_uuid": f.Account, "since": f.Start, "until": f.End, "view": "review",
+			"findings": findings.Review(in),
+		}
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
