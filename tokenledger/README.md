@@ -234,6 +234,25 @@ ad-hoc-signed hub when nobody is at the screen to click *Allow*, and an ad-hoc
 signature changes with every build. After each upgrade:
 `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <path> && sudo … --unblockapp <path>`.
 
+## HTTPS, with a name you can remember
+
+```bash
+ccquota hub --https-addr :443
+```
+
+The hub gets a real certificate for this node's MagicDNS name from
+`tailscale cert` (Let's Encrypt, via Tailscale's DNS challenge), serves it
+directly, and renews it every 12 hours. The dashboard becomes
+`https://<node>.<tailnet>.ts.net/` — no port, no proxy, and the tailnet-identity
+gate above still sees the real peer.
+
+`:443` is the wildcard on purpose: macOS lets an unprivileged process take a
+privileged port on `0.0.0.0` but not on a specific address (measured). The
+listener stays tailnet-only regardless — any peer that is not a tailnet address
+or loopback is closed at accept, before TLS begins. HTTPS must be enabled on the
+tailnet (admin console → DNS → HTTPS Certificates); the hub says so and refuses
+to start otherwise.
+
 ## Badges
 
 Render your totals as a badge. Entirely local — no server, no account, nothing
@@ -357,6 +376,12 @@ Teams are assigned **here, on the hub**, and are never reported by an endpoint:
 a machine that could name its own team could move its spend onto another team's
 budget. Team is resolved when a query runs rather than stamped on each turn, so
 re-assigning a machine moves its **whole history**, not just what it does next.
+
+The dashboard's hero — the all-time count that only ever grows — is the
+tokenman odometer, live: the character eats the dot stream while the fleet is
+reporting and stops when it goes quiet, and the wheels follow the projected
+count between measurements (a wheel that changes faster than it can roll
+simply spins).
 
 Once any team is assigned, the dashboard leads with the team breakdown, and
 every OS login links to its own page at `/u/<login>`. Both are deliberately
