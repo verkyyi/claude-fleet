@@ -11,3 +11,4 @@
 *.db-shm
 *.sqlite
 .playwright-mcp/
+.superpowers/
