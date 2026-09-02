@@ -377,9 +377,16 @@ CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, sess
   and duration. `ccquota hub --rebuild-rollup` forces it.
 - `PruneEvents` leaves the rollup alone (its comment already promises this), so
   Review keeps working past the retention window; only per-turn detail is lost.
-- On the mini's data the rollup is ≈ 9 k rows without `session_id`; with it,
-  measured at implementation time and recorded in the plan. The budget: every
-  Review query < 300 ms at `span=90d`.
+- **Measured** on a 292,753-event snapshot of the live hub: the rollup is
+  **31,164 rows** with `session_id` in the key — a 9.4× reduction. The budget
+  was every Review query < 300 ms at `span=90d`; warm, eight of the nine come
+  in at **35–172 ms**, and `/v1/findings` does **not**: ~454 ms. That endpoint
+  runs about nine store queries in series and the store holds a single SQLite
+  connection, so they cannot overlap. It is accepted over budget rather than
+  chased, because the cards load independently — the other eight paint while it
+  works — and because closing the gap means restructuring the gatherer, which
+  buys less than it costs. Narrower spans are cheaper (30 d ≈ 395 ms,
+  7 d ≈ 244 ms; `view=now` is 5 ms).
 - Equivalence is enforced by a property test: for random filters and ranges on
   a seeded store, every aggregate from the rollup equals the same aggregate
   computed directly from `usage_events`.
@@ -497,7 +504,8 @@ Manual, against a local hub on a copy of the mini DB, before deploy:
    through them.
 3. Drill down machine → project → session detail and back; the chips row and
    every card agree.
-4. 90-day span: every Review request < 300 ms in the network panel.
+4. 90-day span: every Review request < 300 ms in the network panel, except
+   `/v1/findings` at ~454 ms (see §8.1 — measured and accepted).
 5. Phone width (390 px): scope bar reachable while scrolled; brush works by
    touch; sessions render as cards.
 6. Both themes; no `null` text anywhere.
@@ -529,7 +537,17 @@ follows this order.
 
 ## 13. Open questions
 
-None blocking. Two things the implementation must measure and record in the
-plan: the rollup row count with `session_id` in the key on the mini's data, and
-the per-request latency at `span=90d` after the rollup, against the 300 ms
-budget.
+Both open measurements are now closed, in §8.1: the rollup is 31,164 rows on
+the live hub's data, and every Review request at `span=90d` is inside the
+300 ms budget except `/v1/findings` at ~454 ms, which is accepted over budget
+for the reasons given there.
+
+One thing the measurement changed rather than merely recorded: it exposed that
+`runaway_session` — the engine's only `critical` rule — could never fire,
+because the gatherer handed `runaway()` the top 500 sessions and the rule takes
+its median from whatever slice it is given. On real data that median was 1,025×
+the population's (93,951,176 vs 91,684), pushing the threshold to 1.88 B tokens
+against a largest-ever session of 1.24 B. §7's threshold now reads against a
+median computed in SQL over the whole population. The lesson is the one this
+project keeps re-learning: a rule that samples its own baseline is not a rule,
+and only real data shows it.
