@@ -44,6 +44,8 @@ func main() {
 		err = runShare(os.Args[2:])
 	case "badge":
 		err = runBadge(os.Args[2:])
+	case "team":
+		err = runTeam(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -76,6 +78,7 @@ Usage:
   ccquota share  [flags]    Mint/list/revoke a redacted public link
   ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
                             no network) or as shields.io endpoint JSON
+  ccquota team   [flags]    Allocate an endpoint's spend to a team
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.
