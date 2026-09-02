@@ -47,6 +47,26 @@ type Inputs struct {
 	SelectionSeconds       int64
 	Projects, PrevProjects []ProjectStat
 	Tokens, PrevTokens     int64
+
+	// SessionTokenMedian is the median token count across every session in
+	// the window with >= 2 turns -- the SAME population runaway() filters
+	// Sessions to below, computed by the caller (typically a store query)
+	// over the FULL population rather than derived from Sessions here.
+	//
+	// Sessions is deliberately allowed to be a bounded, tokens-descending
+	// sample: a caller only needs enough of it to find candidates above the
+	// threshold, and runaway() cannot tell a full population from a sample by
+	// looking at it. Deriving the median from Sessions was exactly that
+	// mistake -- correct only when Sessions happened to BE the full
+	// population, and silently wrong by orders of magnitude once it was a
+	// top-N sample, because the top N sessions by tokens are themselves
+	// biased high and their OWN median is nowhere near the population's.
+	//
+	// Zero means "not supplied": runaway() then falls back to deriving the
+	// median from Sessions, so a caller with the whole population already in
+	// Sessions (every test fixture in this package, and any small enough
+	// hub) needs no extra field and gets the identical number either way.
+	SessionTokenMedian int64
 }
 
 const (
@@ -104,7 +124,7 @@ func finish(fs []Finding) []Finding {
 // Review evaluates the period rules.
 func Review(in Inputs) []Finding {
 	var fs []Finding
-	fs = append(fs, runaway(in.Sessions)...)
+	fs = append(fs, runaway(in.Sessions, in.SessionTokenMedian)...)
 	fs = append(fs, unpriced(in.Models)...)
 	fs = append(fs, critical(in.Critical, in.SelectionSeconds)...)
 	fs = append(fs, cacheDrop(in.Projects, in.PrevProjects)...)
@@ -112,21 +132,35 @@ func Review(in Inputs) []Finding {
 	return finish(fs)
 }
 
-func runaway(ss []SessionStat) []Finding {
+// runaway flags sessions whose tokens are far past a median: runawayMultiple
+// times the population median, floored at runawayFloor so a quiet window
+// with a tiny median cannot flag an ordinary session.
+//
+// populationMedian is the caller's own measurement of the FULL population
+// (see Inputs.SessionTokenMedian) and is preferred whenever it is supplied
+// (non-zero). Zero falls back to deriving the median from ss itself, exactly
+// as this function used to unconditionally do -- correct as long as ss IS
+// the population, which every test in this package still hands it, and which
+// is also true of any hub small enough that its whole session list fits in
+// one gatherer pull.
+func runaway(ss []SessionStat, populationMedian int64) []Finding {
 	if len(ss) == 0 {
 		return nil
 	}
-	var toks []int64
-	for _, s := range ss {
-		if s.Turns >= 2 {
-			toks = append(toks, s.Tokens)
+	median := populationMedian
+	if median == 0 {
+		var toks []int64
+		for _, s := range ss {
+			if s.Turns >= 2 {
+				toks = append(toks, s.Tokens)
+			}
 		}
+		if len(toks) == 0 {
+			return nil
+		}
+		sort.Slice(toks, func(i, j int) bool { return toks[i] < toks[j] })
+		median = toks[len(toks)/2]
 	}
-	if len(toks) == 0 {
-		return nil
-	}
-	sort.Slice(toks, func(i, j int) bool { return toks[i] < toks[j] })
-	median := toks[len(toks)/2]
 	threshold := median * runawayMultiple
 	if threshold < runawayFloor {
 		threshold = runawayFloor

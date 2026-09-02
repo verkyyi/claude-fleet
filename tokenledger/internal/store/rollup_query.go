@@ -242,6 +242,58 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 	return out, nil
 }
 
+// SessionTokenMedian returns the median token count across sessions with at
+// least 2 turns in the filter's window -- the same population rule
+// findings.runaway() applies to its own candidate list (internal/findings).
+// 0 when no such session exists.
+//
+// This exists because runaway()'s threshold used to be derived from whatever
+// slice of sessions the caller happened to hand it -- correct only when that
+// slice IS the whole population, and silently wrong (by orders of magnitude,
+// measured against a real hub) once a caller passes a bounded top-N sample:
+// the median of "the biggest N sessions" is nowhere near the median of "every
+// session," and a threshold built from it stops firing on genuine outliers.
+// Computing it here, once, over the full population under the SAME Filter
+// the gatherer already has, is what makes GatherReview's own session pull
+// safe to bound.
+//
+// SQLite has no MEDIAN aggregate. per_session is referenced twice below --
+// once to count, once to pick the offset row -- rather than through window
+// functions (ROW_NUMBER+COUNT OVER, which this method used at first):
+// measured against a 292k-event production snapshot, the double reference is
+// consistently faster, because SQLite auto-materializes a CTE referenced more
+// than once (a query planner detail, not a language feature this relies on)
+// so the GROUP BY runs once regardless, and a plain LIMIT/OFFSET avoids the
+// extra sort-with-frame bookkeeping ROW_NUMBER needs. OFFSET N/2 (integer
+// division) after ordering ascending is the same index (the upper of the two
+// middle values on an even population) findings.runaway() used when it
+// derived the median from its own sorted slice, so any caller with the full
+// population already in hand computes byte-for-byte the same number either
+// way.
+func (s *Store) SessionTokenMedian(f Filter) (int64, error) {
+	where, args, err := f.where("hour")
+	if err != nil {
+		return 0, err
+	}
+	q := fmt.Sprintf(`
+		WITH per_session AS (
+			SELECT SUM%s AS tokens
+			FROM usage_hourly %s AND session_id != ''
+			GROUP BY session_id
+			HAVING SUM(events) >= 2
+		)
+		SELECT tokens FROM per_session ORDER BY tokens ASC
+		LIMIT 1 OFFSET (SELECT COUNT(*) / 2 FROM per_session)`, hourlyTokens, where)
+	var median int64
+	switch err := s.db.QueryRow(q, args...).Scan(&median); {
+	case err == sql.ErrNoRows:
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("session token median: %w", err)
+	}
+	return median, nil
+}
+
 // fillSessionModels sets Model/Models for a page of sessions in one query.
 func (s *Store) fillSessionModels(account string, rows []SessionRow, ids []string) error {
 	if len(ids) == 0 {

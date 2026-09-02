@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -22,7 +24,10 @@ type findingsEnvelope struct {
 	Findings    []findingSummary `json:"findings"`
 }
 
-type findingSummary struct{ Kind, Severity string }
+type findingSummary struct {
+	Kind, Severity string
+	Scope          map[string]string
+}
 
 func TestFindingsReviewAndNow(t *testing.T) {
 	h := newHarness(t)
@@ -89,4 +94,72 @@ func TestFindingsReviewAndNow(t *testing.T) {
 		t.Fatalf("%+v", now.Findings)
 	}
 	_ = model.Batch{}
+}
+
+// Regression for a real production bug (measured against a 292,753-event
+// snapshot of the prod hub): GatherReview used to feed runaway() a bounded
+// top-N sample of sessions and let it derive the median from THAT sample.
+// The top N by tokens is, by construction, biased toward the largest
+// sessions -- its own median is nowhere near the true population median --
+// so on a hub with more sessions than the pull limit, the resulting
+// threshold could exceed even the genuine outlier it exists to catch, and
+// the rule silently never fired.
+//
+// This seeds realistic proportions: many (600) tiny sessions that dominate
+// the TRUE population median, a long tail of 500 "medium" sessions big
+// enough to fill up an old top-500 pull on their own, and one genuine
+// outlier. It fails against the pre-fix gatherer (pull=500, slice-derived
+// median) and passes once the median comes from store.SessionTokenMedian
+// over the full population instead.
+func TestFindings_RunawayUsesPopulationMedianNotSample(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "bulk")
+	// Establish the account/endpoint records the same way a real batch does.
+	seed := batchFor("acct-a", "bulk", []string{"seed-0"}, "/seed")
+	if resp := h.push(t, tok, seed); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed push: %d", resp.StatusCode)
+	}
+
+	const (
+		smallCount  = 600
+		mediumCount = 500
+		smallOut    = int64(500)         // 2 turns -> 1,000 tokens/session
+		mediumOut   = int64(15_000_000)  // 2 turns -> 30,000,000 tokens/session
+		outlierOut  = int64(250_000_000) // 2 turns -> 500,000,000 tokens
+	)
+	ts := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	mk := func(session string, turn int, out int64) model.UsageEvent {
+		return model.UsageEvent{
+			AccountUUID: "acct-a", EndpointID: "ep_bulk", SessionID: session,
+			MessageUUID: fmt.Sprintf("%s-%d", session, turn), TS: ts,
+			Model: "claude-sonnet-5", OutputTokens: out,
+		}
+	}
+	var evs []model.UsageEvent
+	for i := 0; i < smallCount; i++ {
+		session := fmt.Sprintf("small-%d", i)
+		evs = append(evs, mk(session, 0, smallOut), mk(session, 1, smallOut))
+	}
+	for i := 0; i < mediumCount; i++ {
+		session := fmt.Sprintf("medium-%d", i)
+		evs = append(evs, mk(session, 0, mediumOut), mk(session, 1, mediumOut))
+	}
+	evs = append(evs, mk("outlier", 0, outlierOut), mk("outlier", 1, outlierOut))
+
+	if _, _, err := h.srv.Store.InsertEvents(evs); err != nil {
+		t.Fatal(err)
+	}
+
+	var got findingsEnvelope
+	h.getJSON(t, "/v1/findings?account=acct-a&since=2026-08-20T00:00:00Z&until=2026-08-21T00:00:00Z", &got)
+
+	var runaways []findingSummary
+	for _, f := range got.Findings {
+		if f.Kind == "runaway_session" {
+			runaways = append(runaways, f)
+		}
+	}
+	if len(runaways) != 1 || runaways[0].Scope["session"] != "outlier" {
+		t.Fatalf("runaway findings = %+v, want exactly one naming the outlier session; all findings: %+v", runaways, got.Findings)
+	}
 }

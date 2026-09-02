@@ -52,13 +52,24 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	var in findings.Inputs
 	in.SelectionSeconds = int64(f.End.Sub(f.Start) / time.Second)
 
-	sessions, err := s.Store.Sessions(f, "tokens", 500, 0)
+	// 50, not the population: runaway()'s threshold now comes from
+	// SessionTokenMedian below, computed by the store over every session in
+	// the window, so this pull only needs enough of the tokens-descending
+	// order to find candidates above that threshold -- the actual outlier
+	// this rule exists to catch is always near the top. Pulling more here
+	// used to be how the median got silently computed from a biased sample
+	// instead of the population; see SessionTokenMedian's doc comment.
+	sessions, err := s.Store.Sessions(f, "tokens", 50, 0)
 	if err != nil {
 		return in, err
 	}
 	for _, sr := range sessions {
 		in.Sessions = append(in.Sessions, findings.SessionStat{SessionID: sr.SessionID, CWD: sr.CWD, Model: sr.Model,
 			Tokens: sr.Tokens, Turns: sr.Turns, Duration: sr.Ended.Sub(sr.Started)})
+	}
+	in.SessionTokenMedian, err = s.Store.SessionTokenMedian(f)
+	if err != nil {
+		return in, err
 	}
 	models, err := s.Store.UsageByFiltered(f, store.ByModel, 50)
 	if err != nil {

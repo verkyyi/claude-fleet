@@ -156,3 +156,73 @@ func TestSessionTurnsRefusesEmptyAccount(t *testing.T) {
 		t.Fatal("empty account must be refused")
 	}
 }
+
+// SessionTokenMedian must match findings.runaway()'s own convention exactly:
+// sort ascending, take toks[len(toks)/2] -- the upper of the two middle
+// values on an even population, not an average. It must also apply the same
+// population rule runaway() does (>= 2 turns), so a single-turn session with
+// a huge token count cannot skew it.
+func TestSessionTokenMedian(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+
+	mk := func(session string, turns int, outEach int64) []model.UsageEvent {
+		var out []model.UsageEvent
+		for i := 0; i < turns; i++ {
+			e := ev("acct-a", "ep-a1", session+"-"+string(rune('a'+i)), outEach)
+			e.SessionID = session
+			out = append(out, e)
+		}
+		return out
+	}
+	var evs []model.UsageEvent
+	// Five 2-turn sessions totalling 100, 200, 300, 400, 500 -- sorted
+	// ascending, toks[5/2] = toks[2] = 300 is the expected median.
+	evs = append(evs, mk("s1", 2, 50)...)  // 100
+	evs = append(evs, mk("s2", 2, 100)...) // 200
+	evs = append(evs, mk("s3", 2, 150)...) // 300
+	evs = append(evs, mk("s4", 2, 200)...) // 400
+	evs = append(evs, mk("s5", 2, 250)...) // 500
+	// A single-turn session with a token count bigger than everything above.
+	// If the >= 2 turns rule were not applied, sorting six values would move
+	// the median to 400 (toks[6/2] = toks[3]); it must stay 300.
+	evs = append(evs, mk("s-single-huge", 1, 100_000)...)
+	if _, _, err := s.InsertEvents(evs); err != nil {
+		t.Fatal(err)
+	}
+
+	f := Filter{Account: "acct-a",
+		Start: base.Add(-time.Hour), End: base.Add(time.Hour)}
+	median, err := s.SessionTokenMedian(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if median != 300 {
+		t.Fatalf("median = %d, want 300 (the single-turn session must be excluded)", median)
+	}
+}
+
+// No sessions in the window (or none with >= 2 turns) is a legitimate answer
+// of 0, not an error -- the same convention LatestLimits and UserSummary use
+// for "nothing here yet."
+func TestSessionTokenMedian_EmptyPopulationIsZero(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+
+	// One single-turn session: present, but excluded by the population rule,
+	// so the window is not literally empty -- it just has no >= 2-turn session.
+	e := ev("acct-a", "ep-a1", "solo", 999)
+	e.SessionID = "solo"
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := Filter{Account: "acct-a", Start: base.Add(-time.Hour), End: base.Add(time.Hour)}
+	median, err := s.SessionTokenMedian(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if median != 0 {
+		t.Fatalf("median = %d, want 0", median)
+	}
+}

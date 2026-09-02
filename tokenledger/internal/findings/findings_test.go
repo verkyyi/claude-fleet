@@ -46,6 +46,41 @@ func TestRunawaySession(t *testing.T) {
 	}
 }
 
+// Sessions is allowed to be a bounded, tokens-descending SAMPLE rather than
+// the full population -- SessionTokenMedian is how a caller supplies the
+// population's real median instead. This is the production bug this field
+// exists to fix: a caller handing runaway() only its biggest N sessions used
+// to derive a threshold from THEIR median, which is nowhere near the true
+// population median and swallowed genuine outliers.
+func TestRunaway_PopulationMedianOverridesSampleMedian(t *testing.T) {
+	// Every session in this slice is already large -- as if a caller had
+	// pulled only the top-N by tokens and none of the (hypothetical) many
+	// small sessions that dominate the real population survived into it.
+	in := Inputs{
+		Sessions: []SessionStat{
+			{SessionID: "s1", Tokens: 50_000_000, Turns: 3},
+			{SessionID: "s2", Tokens: 50_000_000, Turns: 3},
+			{SessionID: "s3", Tokens: 50_000_000, Turns: 3},
+			{SessionID: "outlier", Tokens: 200_000_000, Turns: 10},
+		},
+		// The true population median, dominated by tiny sessions never
+		// included in Sessions above -> threshold = max(20M, 100M) = 100M.
+		SessionTokenMedian: 1_000,
+	}
+	fs := Review(in)
+	if kinds(fs) != "runaway_session" || fs[0].Scope["session"] != "outlier" {
+		t.Fatalf("%+v", fs)
+	}
+
+	// Control: zero the field. runaway() now falls back to the SAMPLE's own
+	// median (50,000,000) -> threshold = max(20*50M, 100M) = 1B, which
+	// swallows the 200M outlier entirely. This reproduces the bug exactly.
+	in.SessionTokenMedian = 0
+	if fs := Review(in); len(fs) != 0 {
+		t.Fatalf("control (sample-median fallback should have swallowed the outlier): %+v", fs)
+	}
+}
+
 func TestUnpricedModel(t *testing.T) {
 	in := Inputs{Models: []ModelStat{{Model: "claude-fable-5-1", Tokens: 3_300_000_000, Unpriced: 9104}, {Model: "claude-opus-5", Tokens: 1}}}
 	fs := Review(in)
