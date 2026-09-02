@@ -66,16 +66,31 @@ const (
 
 var rank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 
-// finish orders by severity only. Findings carry a weight, but the units are
-// not comparable across kinds (percent, seconds, tokens, a ratio) — treating
-// them as one magnitude scale sorted a stale agent that has "never reported"
-// above a live runaway session, which is backwards. Within one severity,
-// SliceStable's stability keeps each rule's own append order, which is
-// already the order that matters (e.g. a spike's global entry before its
-// drill-down project entry).
+// finish orders by severity, then groups same-kind findings together (kinds
+// ordered by first appearance) and ranks each kind's findings by weight,
+// descending. Kinds are never compared to each other by weight — the units
+// differ (percent, seconds, tokens, a ratio), and mixing them put a stale
+// agent's synthetic "never reported" figure ahead of a live runaway session,
+// which is backwards. Within one kind the units agree, so the cap below
+// keeps the largest findings of a kind rather than whichever were appended
+// first — with more than maxFindings same-kind, same-severity findings (a
+// real fleet can easily have more than 8 unpriced-model or runaway-session
+// hits), dropping the small ones instead of the big ones is the point.
 func finish(fs []Finding) []Finding {
+	kindOrder := map[string]int{}
+	for _, f := range fs {
+		if _, ok := kindOrder[f.Kind]; !ok {
+			kindOrder[f.Kind] = len(kindOrder)
+		}
+	}
 	sort.SliceStable(fs, func(i, j int) bool {
-		return rank[fs[i].Severity] < rank[fs[j].Severity]
+		if rank[fs[i].Severity] != rank[fs[j].Severity] {
+			return rank[fs[i].Severity] < rank[fs[j].Severity]
+		}
+		if kindOrder[fs[i].Kind] != kindOrder[fs[j].Kind] {
+			return kindOrder[fs[i].Kind] < kindOrder[fs[j].Kind]
+		}
+		return fs[i].weight > fs[j].weight
 	})
 	if len(fs) > maxFindings {
 		fs = fs[:maxFindings]
@@ -225,7 +240,13 @@ func spike(in Inputs) []Finding {
 				Title:  fmt.Sprintf("%s is %.1f× its previous period and the top contributor", shortPath(top.CWD), r),
 				Detail: fmt.Sprintf("%s vs %s", tokens(top.Tokens), tokens(top.PrevTokens)),
 				Scope:  map[string]string{"project": top.CWD},
-				weight: r - 0.001, // just below the global one so it lists second
+				// Same weight as the blended finding above, not its own ratio r: a
+				// spike concentrated in one project routinely makes r exceed the
+				// blended ratio, so magnitude cannot be trusted to keep this listed
+				// second. Tying the weight makes finish's sort a no-op between the
+				// two, and its stability then preserves append order — this entry
+				// was appended after the one it drills down from.
+				weight: ratio,
 			})
 		}
 	}

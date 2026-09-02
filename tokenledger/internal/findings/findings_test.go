@@ -123,8 +123,22 @@ func TestOrderingAndCap(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		many = append(many, ModelStat{Model: "m" + string(rune('a'+i)), Unpriced: 1, Tokens: int64(i)})
 	}
-	if fs := Review(Inputs{Models: many}); len(fs) != 8 {
-		t.Fatalf("cap at 8, got %d", len(fs))
+	capped := Review(Inputs{Models: many})
+	if len(capped) != 8 {
+		t.Fatalf("cap at 8, got %d", len(capped))
+	}
+	// The cap must keep the 8 LARGEST findings, not the first 8 appended: on a
+	// real fleet with more than 8 same-kind, same-severity findings (e.g. 12
+	// unpriced models), dropping the small ones and keeping the big ones is
+	// the whole point of a findings list.
+	for _, f := range capped {
+		switch f.Scope["model"] {
+		case "ma", "mb", "mc", "md":
+			t.Fatalf("cap kept a small finding instead of a large one: %+v", capped)
+		}
+	}
+	if capped[0].Scope["model"] != "ml" || capped[7].Scope["model"] != "me" {
+		t.Fatalf("cap survivors not sorted by descending magnitude: %+v", capped)
 	}
 }
 
