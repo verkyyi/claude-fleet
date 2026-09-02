@@ -631,7 +631,7 @@ async function load() {
   const gran = (r === "1d") ? "hour" : "day";
   try {
     const [limits, endpoints, byEndpoint, byUser, byProject, bySession, history,
-           byAccount, switches, endpointAccounts] =
+           byAccount, switches, endpointAccounts, byTeam] =
       await Promise.all([
         api(`/v1/limits?account=${a}`),
         api(`/v1/endpoints?account=${a}`),
@@ -643,9 +643,10 @@ async function load() {
         spanning() ? api(`/v1/usage?account=all&by=account&since=${r}&limit=20`) : null,
         api(`/v1/account-switches?limit=20`),
         api(`/v1/endpoint-accounts?limit=200`),
+        api(`/v1/usage?account=${a}&by=team&since=${r}&limit=20`),
       ]);
     state.data = { limits, endpoints, byEndpoint, byUser, byProject, bySession, history,
-                   byAccount, switches, endpointAccounts };
+                   byAccount, switches, endpointAccounts, byTeam };
     render();
   } catch (err) {
     $("#banners").replaceChildren(banner("err", "Query failed.", String(err.message)));
@@ -705,6 +706,7 @@ function render() {
     wallCard(d.limits),
     d.byAccount ? accountCard(d.byAccount) : null,
     el("div", { class: "grid2" }, endpointCard(d), historyCard(d.history)),
+    teamCard(d.byTeam),
     userCard(d.byUser),
     projectCard(d.byProject, d.bySession),
     endpointRosterCard(d.endpoints),
@@ -842,6 +844,42 @@ function accountCard(byAccount) {
 
 // One machine is not one person. Every OS account has its own Claude Code
 // install, its own transcripts and its own credentials, so on a shared box
+/* ----------------------------- where the spend is allocated */
+
+// The LANDING breakdown when teams are configured.
+//
+// Deliberately first, and deliberately unnumbered. Read as a per-person
+// performance ranking an internal board fails by Goodhart -- people avoid the
+// tool or pad their usage -- and either outcome destroys the cost data it
+// exists to provide. Cost allocation is the question; who "won" is not.
+function teamCard(byTeam) {
+  const all = (byTeam && byTeam.buckets) || [];
+  // Every endpoint unassigned means nobody has configured teams yet; a card
+  // showing one "unassigned" row would be noise on every hub that never will.
+  const configured = all.some((b) => b.key !== "");
+  if (!configured) return null;
+
+  const card = el("div", { class: "card" },
+    el("h2", {}, "Where the spend is allocated"),
+    el("p", { class: "hint" },
+      `By team · ${state.range}. Teams are assigned on the hub ` +
+      `(ccquota team --endpoint <id> --set <team>), never reported by a machine.`));
+
+  if (state.tables) { card.appendChild(bucketTable(all, "Team")); return card; }
+
+  card.appendChild(rankedBars(all.map((b, i) => ({
+    key: b.label || b.key || "unassigned",
+    value: b.tokens,
+    right: `${fmtInt(b.tokens)} · ${fmtUSD(b.cost_usd)}`,
+    color: seriesColor(i),
+    tip: `<b>${escapeHTML(b.label || b.key || "unassigned")}</b><br>` +
+         `${fmtFull(b.tokens)} tokens<br>${fmtFull(b.events)} turns · ${fmtUSD(b.cost_usd)} notional`,
+  }))));
+  return card;
+}
+
+/* ----------------------------- who is burning it */
+
 // "which machine" and "who" are different questions and only this card answers
 // the second.
 function userCard(byUser) {
@@ -867,6 +905,11 @@ function userCard(byUser) {
     tip: `<b>${escapeHTML(b.key)}</b><br>${fmtFull(b.tokens)} tokens<br>` +
          `${fmtFull(b.events)} turns · ${fmtUSD(b.cost_usd)} notional`,
   }))));
+  card.appendChild(el("p", { class: "hint" }, "Open a login: ",
+    ...named.map((b) => el("a", {
+      href: `/u/${encodeURIComponent(b.key)}`,
+      style: "margin-right:.75rem",
+    }, b.key))));
   return card;
 }
 

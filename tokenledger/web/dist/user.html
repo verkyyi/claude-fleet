@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ccquota — login</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --border:#e3e2dd; --grid:#eeede9;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#85847e;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+  --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --border:#2f2f2c; --grid:#262624;
+    --ink:#fff; --ink-2:#c3c2b7; --ink-3:#8b8a81;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--plane); color:var(--ink);
+  font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2 { margin:0; font-weight:600; letter-spacing:-.01em; }
+.wrap { max-width:940px; margin:0 auto; padding:32px 20px 72px; }
+
+header { margin-bottom:28px; }
+header h1 { font-size:26px; }
+header .sub { color:var(--ink-3); margin-top:6px; }
+
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:18px 20px; box-shadow:var(--shadow); margin-bottom:18px;
+}
+.card h2 { font-size:15px; margin-bottom:2px; }
+.hint { color:var(--ink-3); font-size:13px; margin:0 0 14px; }
+
+/* Headline figures. Tabular numerals so digits do not jitter between sizes. */
+.figures { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+.fig { padding:14px 16px; border:1px solid var(--border); border-radius:10px; background:var(--plane); }
+.fig .n { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.fig .k { color:var(--ink-3); font-size:12px; margin-top:2px; text-transform:uppercase; letter-spacing:.04em; }
+
+.scale { display:flex; flex-wrap:wrap; gap:10px 26px; }
+.scale div { font-variant-numeric:tabular-nums; }
+.scale b { font-size:17px; font-weight:650; }
+.scale span { color:var(--ink-3); }
+
+/* Utilization bars. A percentage is meaningless without its scale, so each
+   row carries the number as text too — colour never carries meaning alone. */
+.sub-row { margin-bottom:12px; }
+.sub-row .top { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+.sub-row .name { font-weight:550; }
+.sub-row .pct { font-variant-numeric:tabular-nums; color:var(--ink-2); }
+.track { height:8px; border-radius:99px; background:var(--grid); overflow:hidden; margin-top:6px; }
+.fill { height:100%; border-radius:99px; background:var(--s1); }
+.win { color:var(--ink-3); font-size:12px; margin-top:3px; }
+
+svg { display:block; width:100%; height:auto; overflow:visible; }
+.axis { stroke:var(--border); }
+.gridline { stroke:var(--grid); }
+.tick { fill:var(--ink-3); font-size:11px; }
+
+.legend { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px; font-size:12px; color:var(--ink-2); }
+.legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:baseline; }
+
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid var(--grid); }
+th { color:var(--ink-3); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+td.n { text-align:right; font-variant-numeric:tabular-nums; }
+
+footer { color:var(--ink-3); font-size:12px; margin-top:26px; line-height:1.6; }
+.err { border-left:3px solid var(--s8); padding-left:12px; }
+</style>
+<style>
+/* The only additions to the shared sheet: the page is otherwise built from
+   share.html's classes so the two standalone pages stay identical. */
+.teams span { display:inline-block; margin-right:.4rem; padding:.1rem .45rem;
+              border:1px solid var(--border); border-radius:4px; font-size:.85em; }
+.badges code { display:block; margin:.3rem 0; padding:.4rem .55rem; background:var(--grid);
+               border-radius:4px; font-size:.82em; word-break:break-all; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><p class="hint">Loading\u2026</p></div>
+<script>
+"use strict";
+
+/* The login comes from the path, never templated into the HTML: this page is a
+   static asset served to everyone, and only its fetch is per-person. */
+const LOGIN = decodeURIComponent(location.pathname.replace(/^\/u\//, "").replace(/\/$/, ""));
+const RANGE = new URLSearchParams(location.search).get("since") || "30d";
+
+async function api(path) {
+  const res = await fetch(path, { headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(res.status + " " + res.statusText);
+  return res.json();
+}
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v !== null && v !== undefined) n.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined) continue;
+    n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return n;
+}
+
+const fmtInt = (n) => new Intl.NumberFormat().format(n || 0);
+const fmtUSD = (n) => "$" + Number(n || 0).toFixed(2);
+
+function fig(k, n) {
+  return el("div", { class: "fig" }, el("div", { class: "n" }, n), el("div", { class: "k" }, k));
+}
+
+function bucketCard(title, hint, buckets, keyOf) {
+  if (!buckets || !buckets.length) return null;
+  const rows = buckets.map((b) => el("tr", {},
+    el("td", {}, keyOf(b)),
+    el("td", { class: "n" }, fmtInt(b.tokens)),
+    el("td", { class: "n" }, fmtUSD(b.cost_usd))));
+  return el("div", { class: "card" },
+    el("h2", {}, title),
+    el("p", { class: "hint" }, hint),
+    el("table", {},
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Name"), el("th", {}, "Tokens"), el("th", {}, "Notional"))),
+      el("tbody", {}, rows)));
+}
+
+function render(d) {
+  const app = document.getElementById("app");
+
+  const header = el("header", {},
+    el("h1", {}, d.os_user || LOGIN),
+    el("div", { class: "sub" }, "Claude Code usage \u00b7 last " + RANGE));
+
+  if (!d.turns) {
+    /* Never an empty board: "no rows" and "no usage" look identical and mean
+       different things. Say which one this is. */
+    app.replaceChildren(header, el("div", { class: "card" },
+      el("h2", {}, "No usage in this range"),
+      el("p", {}, "Nothing has been recorded for this login in the last " + RANGE + "."),
+      el("p", { class: "hint" },
+        "That is not the same as spending nothing \u2014 an agent may never have " +
+        "reported under this login. `ccquota team --list` shows the endpoints enrolled here.")));
+    return;
+  }
+
+  app.replaceChildren(
+    header,
+
+    el("div", { class: "card" },
+      el("h2", {}, "Totals"),
+      el("p", { class: "hint teams" },
+        d.teams && d.teams.length
+          ? ["Team: ", ...d.teams.map((t) => el("span", {}, t))]
+          : "No team assigned."),
+      el("div", { class: "figures" },
+        fig("tokens", fmtInt(d.tokens)),
+        fig("turns", fmtInt(d.turns)),
+        fig("notional cost", fmtUSD(d.cost_usd)),
+        fig("machines", fmtInt(d.machines)),
+        fig("projects", fmtInt(d.projects)))),
+
+    bucketCard("Projects", "Where the work happened \u00b7 last " + RANGE + ".",
+      d.top_projects, (b) => b.key || "(no working directory)"),
+    bucketCard("Machines", "Which endpoints this login ran on \u00b7 last " + RANGE + ".",
+      d.machines_breakdown, (b) => b.label || b.key),
+
+    el("div", { class: "card badges" },
+      el("h2", {}, "Badge"),
+      el("p", { class: "hint" },
+        "Serve these from this hub in an internal README. They need " +
+        "`ccquota hub --public-badges`, because a README image sends no credential."),
+      el("code", {}, location.origin + "/badge/u/" + encodeURIComponent(d.os_user) + ".svg?theme=dark"),
+      el("code", {}, location.origin + "/badge/u/" + encodeURIComponent(d.os_user) + ".json?theme=dark")),
+
+    el("footer", {}, d.disclaimer || ""));
+}
+
+(async () => {
+  try {
+    if (!LOGIN) throw new Error("no login in the path; open /u/<os login>");
+    const d = await api("/v1/user?user=" + encodeURIComponent(LOGIN) +
+                        "&since=" + encodeURIComponent(RANGE));
+    render(d);
+  } catch (err) {
+    document.getElementById("app").replaceChildren(
+      el("header", {}, el("h1", {}, "Could not load this page")),
+      el("p", { class: "err" }, String(err.message)));
+  }
+})();
+</script>
+</body>
+</html>
