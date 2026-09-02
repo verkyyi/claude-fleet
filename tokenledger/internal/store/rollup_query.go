@@ -33,7 +33,7 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 		       SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens),
 		       SUM(cache_create_5m_tokens + cache_create_1h_tokens), SUM(thinking_tokens)
 		FROM usage_hourly %s
-		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, hourlyTokens, hourlyTokens, where)
+		GROUP BY k ORDER BY 3 DESC, k LIMIT ?`, col, hourlyTokens, hourlyTokens, where)
 	rows, err := s.db.Query(q, append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by %s (rollup): %w", d, err)
