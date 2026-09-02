@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,4 +110,43 @@ func TestMagicDNSName(t *testing.T) {
 	if _, err := magicDNSName([]byte(`{"Self":{"DNSName":"x.ts.net."}}`)); err == nil {
 		t.Error("a tailnet without HTTPS enabled was accepted")
 	}
+}
+
+func TestTailnetOnlyListener(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"100.110.252.40:5":      true,  // a tailnet peer
+		"[fd7a:115c:a1e0::1]:5": true,  // tailnet v6
+		"127.0.0.1:5":           true,  // loopback: the machine itself
+		"192.168.1.50:5":        false, // the LAN
+		"8.8.8.8:5":             false, // the internet
+		"[2001:db8::1]:5":       false,
+		"garbage":               false,
+	} {
+		if got := peerAllowed(addr); got != want {
+			t.Errorf("peerAllowed(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+// End to end on loopback: the wrapped listener still hands out loopback
+// connections (it must -- that is how the machine reaches itself).
+func TestTailnetOnlyListener_AcceptsLoopback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	wrapped := tailnetOnly{ln}
+	go func() {
+		c, _ := net.Dial("tcp", ln.Addr().String())
+		if c != nil {
+			c.Close()
+		}
+	}()
+	ln.(*net.TCPListener).SetDeadline(time.Now().Add(2 * time.Second))
+	c, err := wrapped.Accept()
+	if err != nil {
+		t.Fatalf("loopback connection was not accepted: %v", err)
+	}
+	c.Close()
 }

@@ -8,11 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/verkyyi/ccquota/internal/api"
 )
 
 // HTTPS from the tailnet's own certificates.
@@ -129,4 +133,40 @@ func detectMagicDNSName(bin string) (string, error) {
 		return "", fmt.Errorf("tailscale status: %w", err)
 	}
 	return magicDNSName(out)
+}
+
+// tailnetOnly is a listener that refuses everyone but tailnet peers and the
+// machine itself, before TLS even begins.
+//
+// It exists because of a macOS rule: an unprivileged process may bind a
+// privileged port on the WILDCARD address but not on a specific one. So the
+// HTTPS listener has to sit on 0.0.0.0:443 to be reachable at all, and this is
+// what keeps "tailnet only" true anyway -- a LAN neighbour's connection is
+// closed at accept, never answered.
+type tailnetOnly struct{ net.Listener }
+
+func (l tailnetOnly) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if peerAllowed(c.RemoteAddr().String()) {
+			return c, nil
+		}
+		c.Close()
+	}
+}
+
+func peerAllowed(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	return ip.IsLoopback() || api.IsTailnetAddr(ip)
 }

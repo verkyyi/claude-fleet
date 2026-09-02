@@ -93,6 +93,11 @@ var (
 	tailnetV6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
 )
 
+// IsTailnetAddr reports whether ip is in Tailscale's address ranges.
+func IsTailnetAddr(ip netip.Addr) bool {
+	return tailnetV4.Contains(ip) || tailnetV6.Contains(ip)
+}
+
 // Lookup answers "who is this, and may they view?" for a request's RemoteAddr.
 // Anything that is not a remote, untagged, allowlisted tailnet peer is a miss.
 func (t *TailnetViewers) Lookup(remoteAddr string) (login string, ok bool) {
@@ -108,7 +113,7 @@ func (t *TailnetViewers) Lookup(remoteAddr string) (login string, ok bool) {
 		return "", false
 	}
 	ip = ip.Unmap()
-	if !(tailnetV4.Contains(ip) || tailnetV6.Contains(ip)) || t.self[ip] {
+	if !IsTailnetAddr(ip) || t.self[ip] {
 		// Not a tailnet peer, or ourselves. No lookup: tailscaled would
 		// answer "peer not found" for the first and "you" for the second.
 		return "", false

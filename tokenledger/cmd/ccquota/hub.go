@@ -40,8 +40,10 @@ func runHub(args []string) error {
 			"address still need the token. Empty = off")
 	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI (default: search PATH and the usual places)")
 	httpsAddr := fs.String("https-addr", "",
-		"also serve HTTPS here (e.g. 100.85.129.58:443) with a certificate from\n"+
-			"`tailscale cert` for this node's MagicDNS name, renewed by the hub.\n"+
+		"also serve HTTPS here (e.g. :443) with a certificate from tailscale cert\n"+
+			"for this node's MagicDNS name, renewed by the hub. Only tailnet peers\n"+
+			"and loopback are accepted, whatever the socket can hear -- macOS lets\n"+
+			"an unprivileged process take :443 only on the wildcard address.\n"+
 			"The URL becomes https://<node>.<tailnet>.ts.net")
 	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
 	publicBadges := fs.Bool("public-badges", false,
@@ -164,17 +166,19 @@ func runHub(args []string) error {
 		}
 		go tc.renewLoop(ctx, 12*time.Hour)
 
-		ln, err := net.Listen("tcp", *httpsAddr)
+		rawLn, err := net.Listen("tcp", *httpsAddr)
 		if err != nil {
 			return fmt.Errorf("listen on %s: %w", *httpsAddr, err)
 		}
+		// Tailnet peers and loopback only, whatever the socket can hear.
+		ln := net.Listener(tailnetOnly{rawLn})
 		hs := &http.Server{
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 			TLSConfig:         &tls.Config{GetCertificate: tc.get, MinVersion: tls.VersionTLS12},
 		}
 		servers = append(servers, hs)
-		log.Printf("ccquota hub listening on %s (https) -> https://%s/", *httpsAddr, host)
+		log.Printf("ccquota hub listening on %s (https, tailnet peers only) -> https://%s/", *httpsAddr, host)
 		go func() { errCh <- hs.ServeTLS(ln, "", "") }()
 	}
 
