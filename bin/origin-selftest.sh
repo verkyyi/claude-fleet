@@ -71,6 +71,32 @@ row=$(grep -m1 "	scratch-901	" "$FLEET_HISTORY_LEDGER")
 [ -n "$row" ] || fail "fleet_reap_record: no scratch-901 row written"
 eq "fleet_reap_record arg 11 → col 11" "issue-100" "$(printf '%s' "$row" | awk -F'\t' '{print $11}')"
 
+# fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the
+# spawners' single provenance decision. An explicit --origin is canonicalized to
+# the key grammar (a Claude that read the spawner's header passed its worktree
+# BASENAME, `cd-conductor-scratch-52` — that must land as scratch-52, or the dash
+# can neither nest the child nor find its parent); an unrecognizable explicit
+# value yields to the pane-detected key when there is one (headless, it stays a
+# free-form label); and the #516 cross-fleet override (source FLEET, not a key
+# that names some other window on the target's dash) applies to whatever was
+# detected. Canonical keys + the known literals pass through untouched.
+canon() { fleet_origin_canon "$@" 2>/dev/null; }
+eq "canon: worktree basename → scratch key"              "scratch-52" "$(canon cd-conductor-scratch-52 scratch-52)"
+eq "canon: basename alone (tail re-entry, no pane)"      "scratch-52" "$(canon cd-conductor-scratch-52 '')"
+eq "canon: issue worktree basename → issue key"          "issue-4591" "$(canon repo-issue-4591 '')"
+eq "canon: a canonical key passes through"               "issue-77"   "$(canon issue-77 scratch-5)"
+eq "canon: a known literal wins over detection"          "autofill"   "$(canon autofill scratch-5)"
+eq "canon: garbage explicit yields to detected"          "scratch-52" "$(canon foo scratch-52)"
+eq "canon: garbage explicit, headless → kept as label"   "foo"        "$(canon foo '')"
+eq "canon: sanitized to the key charset"                 "badvalue"   "$(canon 'bad value!' '')"
+eq "canon: no explicit → detected"                       "scratch-52" "$(canon '' scratch-52)"
+eq "canon: cross-fleet → source fleet"                   "srcfleet"   "$(canon '' scratch-5 dstfleet srcfleet)"
+eq "canon: same fleet keeps the key"                     "scratch-5"  "$(canon '' scratch-5 srcfleet srcfleet)"
+eq "canon: no target ≡ own fleet"                        "scratch-5"  "$(canon '' scratch-5 '' srcfleet)"
+eq "canon: garbage explicit + cross-fleet → source fleet" "srcfleet"  "$(canon foo scratch-5 dstfleet srcfleet)"
+eq "canon: explicit key honoured across fleets (#516)"   "issue-77"   "$(canon issue-77 scratch-5 dstfleet srcfleet)"
+eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon '' '')"
+
 # rows: the ↳ tag renders on tagged rows only (strip ANSI + the US field bytes).
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1f/ /g'; }
 rows_out=$(FZF_COLUMNS=140 bash "$HIST" rows 2>/dev/null | strip)
@@ -122,20 +148,30 @@ esac
 # ============================================================================
 # A. fleet_origin_key — caller-pane detection
 # ============================================================================
-mkdir -p "$WORK/wt/repo-scratch-7"
-tmux new-session -d -s ok -x 200 -y 50 'sleep 300' || fail "could not start 'ok' session"
-mk_pane() { # <name> → pane id of a fresh window running sleep
-  tmux new-window -d -P -F '#{pane_id}' -t ok: -n "$1" 'sleep 300'
+mkdir -p "$WORK/wt/repo-scratch-7" "$WORK/wt/repo-scratch-9"
+# -c "$WORK" on the session AND every pane: a pane must never inherit the INVOKING
+# cwd — run from a checkout named `…-scratch-<N>` the plain pane would otherwise
+# key as that scratch (detection is path-based below, like the dash's okey_v).
+tmux new-session -d -s ok -x 200 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'ok' session"
+mk_pane() { # <name> [cwd] → pane id of a fresh window running sleep
+  tmux new-window -d -P -F '#{pane_id}' -t ok: -n "$1" -c "${2:-$WORK}" 'sleep 300'
 }
 p_iss=$(mk_pane w-iss);  tmux set-window-option -t "$p_iss" @issue 42
 p_raw=$(mk_pane w-raw);  tmux set-window-option -t "$p_raw" @raw 1
 tmux set-window-option -t "$p_raw" @worktree "$WORK/wt/repo-scratch-7"
 p_plain=$(mk_pane w-plain)
+# A scratch window with NO @raw/@worktree stamps — what fleet-restore.sh recreates
+# after a crash (it re-stamps only @issue/@origin/@claude_state) — is still a
+# scratch: its cwd IS the scratch worktree, the very path-only rule the dash's
+# okey_v keys the PARENT side by. Detection must agree, or every spawn from a
+# crash-restored scratch reads as hub-spawned (#4594 on the monorepo dash).
+p_bare=$(mk_pane w-bare "$WORK/wt/repo-scratch-9")
 
 og() { TMUX="fake,1,1" TMUX_PANE="$1" bash -c ". '$LIB'; fleet_origin_key"; }
 eq "origin_key: @issue pane" "issue-42" "$(og "$p_iss")"
 eq "origin_key: @raw pane (from @worktree)" "scratch-7" "$(og "$p_raw")"
 eq "origin_key: plain pane ≡ hub (empty)" "" "$(og "$p_plain")"
+eq "origin_key: unstamped scratch pane (cwd only)" "scratch-9" "$(og "$p_bare")"
 noenv=$(env -u TMUX -u TMUX_PANE bash -c ". '$LIB'; fleet_origin_key")
 eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
 

@@ -122,22 +122,17 @@ TM() { tmux -L "$SOCK" "$@"; }
 # backgrounded pass runs under run-shell -b with no caller pane, so this
 # foreground detect is the only chance; the value rides --origin through.
 # issue-<N>/scratch-<N> when a worker or scratch spawned us; empty ≡ hub (⌃s,
-# the dash PROMPT line). Sanitized to the key charset (window option + re-exec embed).
-if [ -z "$ORIGIN" ]; then
-  ORIGIN=$(fleet_origin_key)
-  # CROSS-FLEET spawn (a claude-fleet scratch seeding a monorepo scratch, the
-  # handoff pattern): the derived key names a window in the SPAWNER's fleet, and
-  # the target's dash would nest the new row under whatever window happens to
-  # carry that key there (or, missing it, indent it as an orphan under the last
-  # group) — a bogus parent. Stamp the source FLEET instead: the renderer shows
-  # `↳<fleet>` with no nesting. An explicit --origin is honoured as given.
-  if [ -n "$ORIGIN" ] && [ -n "$TARGET_SESS" ]; then
-    _src=$(fleet_current_session)
-    [ -n "$_src" ] && [ "$_src" != "$TARGET_SESS" ] && ORIGIN="$_src"
-    unset _src
-  fi
-fi
-ORIGIN=$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+# the dash PROMPT line). fleet_origin_canon arbitrates it against an explicit
+# --origin (a canonical key is honoured as given; a worktree BASENAME folds to its
+# key; garbage yields to the detected key) and applies the CROSS-FLEET rule (#516):
+# a claude-fleet scratch seeding a monorepo scratch (the handoff pattern) would
+# otherwise stamp a key that names some OTHER window on the target's dash — a
+# bogus parent — so the SOURCE fleet name is stamped instead (`↳<fleet>`, no
+# nesting). Sanitized inside canon (window option + re-exec embed).
+_det=$(fleet_origin_key)
+_src=''; [ -n "$_det" ] && [ -n "$TARGET_SESS" ] && _src=$(fleet_current_session)
+ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "$_src")
+unset _det _src
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
