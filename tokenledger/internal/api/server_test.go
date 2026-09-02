@@ -796,7 +796,12 @@ func TestUsageByUser(t *testing.T) {
 	b.Identity.OSUser = "bob"
 	h.push(t, bob, b)
 
-	_, body := h.get(t, "/v1/usage?account=acct-a&by=user&since=-24h")
+	// "-24h" used to work here by accident: it parses as a negative duration,
+	// which put start after end, and the old timeRange silently discarded
+	// that back to the default 7-day window (which still covered the
+	// just-pushed events). scope() refuses an inverted range outright, so the
+	// fixture asks for what it actually means: the last day.
+	_, body := h.get(t, "/v1/usage?account=acct-a&by=user&since=24h")
 	var out struct {
 		By      string `json:"by"`
 		Buckets []struct {

@@ -250,77 +250,95 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
-	account, ok := s.requireAccount(w, r)
+	f, ok := s.scope(w, r)
 	if !ok {
 		return
 	}
 	q := r.URL.Query()
-
 	dim := store.Dimension(q.Get("by"))
 	if dim == "" {
 		dim = store.ByEndpoint
 	}
-	start, end := timeRange(q.Get("since"), q.Get("until"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
-
-	buckets, err := s.Store.UsageBy(account, dim, start, end, limit)
+	buckets, err := s.Store.UsageByFiltered(f, dim, limit)
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if wantsCompare(r) {
+		prev, err := s.Store.UsageByFiltered(f.Prev(), dim, 500)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		byKey := map[string]store.Bucket{}
+		for _, b := range prev {
+			byKey[b.Key] = b
+		}
+		for i := range buckets {
+			if p, ok := byKey[buckets[i].Key]; ok {
+				buckets[i].PrevEvents, buckets[i].PrevTokens, buckets[i].PrevCostUSD = p.Events, p.Tokens, p.CostUSD
+			}
+		}
 	}
 	if buckets == nil {
 		buckets = []store.Bucket{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account_uuid": account,
-		"all_accounts": account == store.AllAccounts,
+		"account_uuid": f.Account,
+		"all_accounts": f.Account == store.AllAccounts,
 		"by":           string(dim),
-		"since":        start,
-		"until":        end,
+		"since":        f.Start,
+		"until":        f.End,
 		"buckets":      buckets,
 		"disclaimer":   shareDisclaimer,
-		"scope_note":   scopeNote(account),
+		"scope_note":   scopeNote(f.Account),
 	})
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	account, ok := s.requireAccount(w, r)
+	f, ok := s.scope(w, r)
 	if !ok {
 		return
 	}
 	q := r.URL.Query()
-
-	g := store.Granularity(q.Get("granularity"))
+	g := q.Get("granularity")
 	if g == "" {
-		g = store.Daily
+		g = "day"
 	}
-	start, end := timeRange(q.Get("since"), q.Get("until"))
-
-	series, err := s.Store.History(account, g, start, end)
+	rows, err := s.Store.HourlyByModel(f)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	stack := q.Get("stack") == "model"
+	top := topModels(rows, 6)
+	series, err := foldHours(rows, g, stack, top)
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	models, err := s.Store.ModelSplit(account, start, end)
+	models, err := s.Store.UsageByFiltered(f, store.ByModel, 50)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if series == nil {
-		series = []store.Bucket{}
+		series = []Series{}
 	}
 	if models == nil {
 		models = []store.Bucket{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account_uuid": account,
-		"all_accounts": account == store.AllAccounts,
-		"granularity":  string(g),
-		"since":        start,
-		"until":        end,
+		"account_uuid": f.Account,
+		"all_accounts": f.Account == store.AllAccounts,
+		"granularity":  g,
+		"since":        f.Start,
+		"until":        f.End,
 		"series":       series,
 		"by_model":     models,
-		"scope_note":   scopeNote(account),
+		"stack_models": append(top, "other"),
+		"scope_note":   scopeNote(f.Account),
 	})
 }
 
