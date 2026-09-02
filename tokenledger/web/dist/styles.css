@@ -303,3 +303,29 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
    selected. */
 .bar-row.sel .k { color: var(--ink); font-weight: 600; }
 .bar-row.sel .bar-track { outline: 2px solid var(--s1); outline-offset: 1px; border-radius: 6px; }
+
+/* ------------------------------------------------------------------------ */
+/* Task 12 (review.js): the segmented group-by control every breakdown card
+   has, room for its three inline efficiency lists, a mobile card layout for
+   the sessions table's stacked-card fallback, and scroll-margin so a
+   finding's "apply →" scrollIntoView doesn't tuck the target card under the
+   sticky scope bar. */
+
+/* A bare (unscoped) twin of `.scope .seg` — that rule only fires inside the
+   sticky header; the breakdown cards' own group-by control needs the same
+   look outside it. */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.seg button { border: 0; border-right: 1px solid var(--border); background: var(--surface); padding: 5px 10px; font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--s1); color: #fff; }
+
+.card { scroll-margin-top: 96px; }
+
+.eff-lists { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 4px; }
+.eff-lists > div { flex: 1 1 180px; min-width: 160px; }
+
+.sessions .cards .srow {
+  background: var(--grid); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px; font-size: 12.5px;
+}
+.sessions .cards .srow > div:nth-child(3) { color: var(--ink-3); font-size: 11.5px; }

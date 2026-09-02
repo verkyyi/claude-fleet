@@ -7,9 +7,25 @@
 // extraCols, `timeSeries` is renamed `bars`). Everything else here
 // (withTable, kpiTile, timeline, stackedArea, heatmap, lines, composition,
 // turnBars) is new: the Review view (task 12) and session detail (task 13)
-// consume these, but neither is wired up yet, so their exact input shapes
-// come from those tasks' briefs rather than a running backend. See the
-// task-11-report.md "assumptions" section for the field names guessed here.
+// consume these, but neither was wired up when Task 11 landed, so their
+// input shapes came from those tasks' briefs rather than a running backend.
+// See the task-11-report.md "assumptions" section for the field names
+// guessed at that point.
+//
+// Task 12 (review.js) additionally gives `rankedBars` an optional `r.label`
+// (display text, falling back to `r.key`) so a breakdown row can show a
+// friendly name — an endpoint's label — while `r.key`, used for onClick and
+// selectedKey, stays the raw filter value the chip actually needs. Every
+// other helper here matched review.js's real backend responses as read from
+// internal/api/{review,query}.go and internal/store/rollup_query.go, with
+// two adapter-layer gaps worth knowing about (both handled in review.js, not
+// here): `timeline`/`stackedArea` want `series[i].stack` as a name→tokens
+// MAP, but the backend's `Series.Stack` is an ARRAY of Bucket in
+// `stack_models` order; and `timeline`'s internal bucket-key parsing has no
+// case for the `6h` granularity's 13-char keys (`YYYY-MM-DDTHH`, which
+// `Date.parse` cannot read) — review.js normalizes every bucket key to a
+// full RFC3339 string before handing series to either function, which
+// sidesteps both.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
@@ -35,11 +51,18 @@ const band = (pct) =>
 /** rankedBars renders one row per item, longest bar first is the caller's
  *  job (rows are drawn in the order given). `onClick`/`selectedKey` make a
  *  row a facet: clicking it drills in, and the current facet value (if any)
- *  is highlighted via the `sel` class. */
+ *  is highlighted via the `sel` class. `r.key` is the row's IDENTITY (what
+ *  `onClick`/`selectedKey` compare against — a raw filter value such as an
+ *  endpoint id); `r.label` (optional) is what is actually shown, falling
+ *  back to `r.key` when absent. Task 12's breakdown cards need this split:
+ *  a machine's chip value is its endpoint id, not its display name, and
+ *  bucketTable already draws the same `label || key` distinction for its
+ *  own key column — this brings rankedBars in line with it. */
 export function rankedBars(rows, { onClick, selectedKey } = {}) {
   const max = Math.max(...rows.map((r) => r.value), 1);
   return el('div', { class: 'bars' }, rows.map((r) => {
     const sel = selectedKey != null && r.key === selectedKey;
+    const display = r.label || r.key;
     return el('div', {
         class: 'bar-row' + (sel ? ' sel' : ''),
         role: onClick ? 'button' : null,
@@ -49,7 +72,7 @@ export function rankedBars(rows, { onClick, selectedKey } = {}) {
         onclick: onClick ? () => onClick(r) : null,
         onkeydown: onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(r); } } : null,
       },
-      el('div', { class: 'k', title: r.key }, r.key),
+      el('div', { class: 'k', title: display }, display),
       el('div', { class: 'bar-track' },
         el('div', { class: 'bar-fill',
           style: `width:${Math.max(1.5, (r.value / max) * 100)}%${r.color ? ';background:' + r.color : ''}` })),
