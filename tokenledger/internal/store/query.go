@@ -213,6 +213,18 @@ type Bucket struct {
 	CostUSD   float64 `json:"cost_usd"`
 	Unpriced  int64   `json:"unpriced_events"`
 	Sidechain int64   `json:"sidechain_tokens"`
+
+	// Composition, filled by rollup-backed queries only.
+	InputTokens       int64 `json:"input_tokens,omitempty"`
+	OutputTokens      int64 `json:"output_tokens,omitempty"`
+	CacheReadTokens   int64 `json:"cache_read_tokens,omitempty"`
+	CacheCreateTokens int64 `json:"cache_create_tokens,omitempty"`
+	ThinkingTokens    int64 `json:"thinking_tokens,omitempty"`
+
+	// The same key in the previous period, when the caller asked to compare.
+	PrevEvents  int64   `json:"prev_events,omitempty"`
+	PrevTokens  int64   `json:"prev_tokens,omitempty"`
+	PrevCostUSD float64 `json:"prev_cost_usd,omitempty"`
 }
 
 // Dimension names a breakdown axis.
@@ -244,6 +256,12 @@ const (
 	// machine moves its WHOLE history -- freezing a team at ingest would mean
 	// a re-assignment silently changed nothing that had already happened.
 	ByTeam Dimension = "team"
+
+	// ByEffort is the reasoning effort the turn was run at.
+	ByEffort Dimension = "effort"
+
+	// ByEntrypoint is how the turn was invoked (cli, ide, ...).
+	ByEntrypoint Dimension = "entrypoint"
 )
 
 // AllAccounts asks for every subscription at once.
@@ -275,6 +293,10 @@ func (d Dimension) column() (string, error) {
 	case ByTeam:
 		return `COALESCE((SELECT e.team FROM endpoints e
 		                  WHERE e.endpoint_id = usage_events.endpoint_id), '')`, nil
+	case ByEffort:
+		return "effort", nil
+	case ByEntrypoint:
+		return "entrypoint", nil
 	default:
 		return "", fmt.Errorf("unknown dimension %q", d)
 	}
