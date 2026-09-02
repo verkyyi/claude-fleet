@@ -57,12 +57,22 @@ const band = (pct) =>
  *  back to `r.key` when absent. Task 12's breakdown cards need this split:
  *  a machine's chip value is its endpoint id, not its display name, and
  *  bucketTable already draws the same `label || key` distinction for its
- *  own key column — this brings rankedBars in line with it. */
+ *  own key column — this brings rankedBars in line with it. `r.title`
+ *  (optional) overrides the row's tooltip text, defaulting to the same
+ *  display text otherwise — a shortened project path (breakdown-by-project
+ *  rows) wants its tooltip to still carry the full raw path, not the
+ *  shortened label. */
 export function rankedBars(rows, { onClick, selectedKey } = {}) {
   const max = Math.max(...rows.map((r) => r.value), 1);
   return el('div', { class: 'bars' }, rows.map((r) => {
     const sel = selectedKey != null && r.key === selectedKey;
     const display = r.label || r.key;
+    // FIX (execution review, Finding 4): a display label can differ from
+    // the raw identity enough that the identity is worth keeping visible
+    // somewhere (a shortened project path is not the full path) — `r.title`
+    // lets a caller say so explicitly; every existing caller leaves it unset
+    // and gets exactly the old title (the display text itself).
+    const tipTitle = r.title || display;
     return el('div', {
         class: 'bar-row' + (sel ? ' sel' : ''),
         role: onClick ? 'button' : null,
@@ -72,7 +82,7 @@ export function rankedBars(rows, { onClick, selectedKey } = {}) {
         onclick: onClick ? () => onClick(r) : null,
         onkeydown: onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(r); } } : null,
       },
-      el('div', { class: 'k', title: display }, display),
+      el('div', { class: 'k', title: tipTitle }, display),
       el('div', { class: 'bar-track' },
         el('div', { class: 'bar-fill',
           style: `width:${Math.max(1.5, (r.value / max) * 100)}%${r.color ? ';background:' + r.color : ''}` })),
@@ -354,16 +364,29 @@ export function timeline(series, opts) {
     container.appendChild(legend);
   }
 
+  // FIX (execution review, Finding 1): paint() used to convert xOf()'s
+  // viewBox-space (0..W=900) coordinates to pixels via
+  // `container.getBoundingClientRect().width / W`, falling back to a scale
+  // of 1 — i.e. drawing the brush AT viewBox coordinates, in raw pixels —
+  // whenever that rect wasn't available yet. On a narrow (phone-width)
+  // viewport the rendered track is far narrower than 900px, so a scale-1
+  // fallback (or any measurement race) put the brush hundreds of pixels
+  // past the track's right edge and widened the whole page's scrollWidth.
+  // Desktop tracks happened to render close enough to 900px wide that the
+  // same bug read as "correct" by eye. Percentages sidestep the whole
+  // problem: `.brush` is `position:absolute` inside `.timeline`
+  // (`position:relative`), so a percentage of ITS width is exactly the
+  // fraction of `W` the SVG's own `viewBox`/`width:100%` already scales
+  // by — computed natively by the layout engine on first paint AND on
+  // every subsequent resize, with no JS measurement, no race, and no
+  // separate resize listener required.
   const paint = (sel) => {
     const x1 = xOf(sel.from), x2 = xOf(sel.to == null ? ext.end : sel.to);
-    const r = container.getBoundingClientRect();
-    const scale = r.width ? r.width / W : 1;
-    brush.style.left = (x1 * scale) + 'px';
-    brush.style.width = (Math.max(1, x2 - x1) * scale) + 'px';
+    brush.style.left = ((x1 / W) * 100) + '%';
+    brush.style.width = (Math.max(0.4, ((x2 - x1) / W) * 100)) + '%';
   };
   let sel = selection || { from: ext.start, to: null };
-  // paint() needs layout; do it once the element is actually in the DOM.
-  requestAnimationFrame(() => paint(sel));
+  paint(sel);
 
   const msAt = (clientX) => {
     const r = container.getBoundingClientRect();
@@ -372,14 +395,25 @@ export function timeline(series, opts) {
     return ext.start + ((px - PAD.l) / iw) * span;
   };
 
+  // FIX (execution review, Finding 2): a "live" selection (touches "now")
+  // encodes its right edge as `to: null` so it keeps tracking "now" until
+  // something pins it. Sliding such a selection used to write only `from`
+  // (`to` stayed null, i.e. pinned at `ext.end`), so dragging the body left
+  // GREW the window instead of moving it. moveSel materialises a concrete
+  // `to` (defaulting to `ext.end`) before applying the same delta to both
+  // edges, so a move always keeps the width constant; it only re-collapses
+  // to `to: null` when the shifted window still ends exactly at `ext.end`
+  // — the same "live" case, not a new one.
+  const moveSel = (base, deltaMs) => {
+    const to0 = base.to == null ? ext.end : base.to;
+    const c = clamp({ from: base.from + deltaMs, to: to0 + deltaMs }, ext);
+    return { from: c.from, to: c.to === ext.end ? null : c.to };
+  };
+
   let mode = null, startMs = 0, startSel = null;
   const compute = (clientX) => {
     const ms = snap(msAt(clientX), bucket);
-    if (mode === 'move') {
-      const d = ms - startMs;
-      const to = startSel.to == null ? null : startSel.to + d;
-      return clamp({ from: startSel.from + d, to }, ext);
-    }
+    if (mode === 'move') return moveSel(startSel, ms - startMs);
     if (mode === 'resize-l') return clamp({ from: ms, to: startSel.to == null ? ext.end : startSel.to }, ext);
     if (mode === 'resize-r') return clamp({ from: startSel.from, to: ms }, ext);
     return sel;
@@ -391,7 +425,17 @@ export function timeline(series, opts) {
     onBrush && onBrush(sel, { final: true });
   };
   const down = (m) => (e) => {
-    mode = m; startMs = msAt(e.clientX); startSel = { ...sel };
+    mode = m;
+    // FIX (execution review, Finding 3): this used to be the RAW,
+    // sub-bucket pointer position. `compute()`'s move branch derived its
+    // delta as `snap(current) - startMs` — a snapped value minus an
+    // unsnapped one, which is not itself a multiple of `bucket` — so a
+    // move corrupted an otherwise bucket-aligned `from`/`to` with
+    // fractional-millisecond noise (visible as `from=1787292020087.2688`
+    // in the URL after a drag). Snapping the anchor here keeps every delta
+    // computed from it an exact multiple of `bucket`.
+    startMs = snap(msAt(e.clientX), bucket);
+    startSel = { ...sel };
     e.preventDefault();
     addEventListener('pointermove', onMove);
     addEventListener('pointerup', onUp, { once: true });
@@ -410,10 +454,15 @@ export function timeline(series, opts) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     const dir = e.key === 'ArrowLeft' ? -1 : 1;
     if (e.shiftKey) {
+      // Shift+arrow resizes the right edge only — unaffected by Finding 2,
+      // kept as-is.
       sel = clamp({ from: sel.from, to: (sel.to == null ? ext.end : sel.to) + dir * bucket }, ext);
     } else {
-      const to = sel.to == null ? null : sel.to + dir * bucket;
-      sel = clamp({ from: sel.from + dir * bucket, to }, ext);
+      // Plain arrow moves the whole window (Finding 2's keyboard
+      // reproduction: ArrowLeft on a live selection used to widen it by
+      // one bucket instead of sliding it — same root cause as the pointer
+      // path, same fix).
+      sel = moveSel(sel, dir * bucket);
     }
     e.preventDefault();
     paint(sel);

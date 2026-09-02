@@ -249,12 +249,28 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
       return;
     }
     const shown = expanded ? buckets.slice(0, 50) : buckets.slice(0, 12);
+    // FIX (execution review, Finding 4): the rollup never fills
+    // `Bucket.Label` for the project dimension (only machine/team get one —
+    // internal/store/query.go's labelEndpoints/labelTeams), so `b.label ||
+    // b.key` fell through to the raw cwd for every row. CSS truncates a
+    // long path from the right, and every sibling worktree here shares the
+    // same "/Users/.../24haowan-monorepo-scratch-NN" prefix, so all 12+ rows
+    // rendered visually identical. shortProject (lib/format.js) keeps the
+    // LAST segment — the one that actually distinguishes them — instead of
+    // clipping it; every other surface (sessions table, findings, chips)
+    // already uses it for exactly this reason. The chip/filter identity
+    // (`r.key`, still `b.key`) and the row's tooltip stay the full raw path.
+    const displayLabel = (b) => (dim === 'project' ? shortProject(b.key) : (b.label || b.key || '(unknown)'));
     const rows = shown.map((b) => ({
-      key: b.key, label: b.label || b.key || '(unknown)', value: b.tokens,
+      key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
       right: `${fmtFull(b.tokens)} · ${fmtUSD(b.cost_usd)} · ${delta(b.tokens, b.prev_tokens || 0).text}`,
     }));
     const chart = C.rankedBars(rows, { selectedKey, onClick: (r) => app.setState(withChip(state, dim, r.key)) });
-    const table = C.bucketTable(buckets, DIM_LABEL[dim], [
+    // Same shortening for the table fallback — bucketTable draws the
+    // identical `b.label || b.key` off the RAW bucket objects, so the fix
+    // has to travel with the data, not just the rankedBars view.
+    const tableBuckets = dim === 'project' ? buckets.map((b) => ({ ...b, label: shortProject(b.key) })) : buckets;
+    const table = C.bucketTable(tableBuckets, DIM_LABEL[dim], [
       { label: 'Prev tokens', value: (b) => fmtFull(b.prev_tokens || 0) },
       { label: 'Prev cost', value: (b) => fmtUSD(b.prev_cost_usd || 0) },
     ]);

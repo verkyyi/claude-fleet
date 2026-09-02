@@ -135,9 +135,53 @@ function turnRow(t) {
     el('td', {}, t.is_sidechain ? '✓' : ''));
 }
 
+// FIX (execution review, minor): a large session (one real example ran
+// 3,643 turns) rendered every one as its own <tr> with no cap at all —
+// C.turnBars() below stays uncapped on purpose (it's one SVG, cheap
+// regardless of turn count), but the table is real DOM nodes and a
+// multi-thousand-row table is exactly the kind of thing this app already
+// refuses to do everywhere else (the sessions table caps at 50 with "load
+// more", breakdown cards cap at 12 with "show all"). TURN_PAGE caps the
+// table the same way — except, unlike sessions' "load more", ALL of a
+// session's turns are already in memory from the one /v1/sessions/<id>
+// fetch (there is no turns-pagination endpoint), so "load more" here just
+// reveals more of what's already local rather than issuing a new request.
+const TURN_PAGE = 200;
+
+function turnsTable(turns) {
+  const tbody = el('tbody', {}, turns.slice(0, TURN_PAGE).map(turnRow));
+  const table = el('div', { class: 'scroll' }, el('table', {},
+    el('thead', {}, el('tr', {},
+      el('th', {}, 'Time'), el('th', {}, 'Model'), el('th', {}, 'Effort'),
+      el('th', { class: 'num' }, 'Input'), el('th', { class: 'num' }, 'Output'),
+      el('th', { class: 'num' }, 'Cache read'), el('th', { class: 'num' }, 'Cache create'),
+      el('th', { class: 'num' }, 'Thinking'), el('th', { class: 'num' }, '$'), el('th', {}, 'Sub'))),
+    tbody));
+
+  const moreWrap = el('div', {});
+  let shown = Math.min(TURN_PAGE, turns.length);
+  const drawMore = () => {
+    moreWrap.replaceChildren();
+    if (shown >= turns.length) return;
+    moreWrap.appendChild(el('a', {
+      href: '#', style: 'display:inline-block;margin-top:10px',
+      onclick: (e) => {
+        e.preventDefault();
+        const next = turns.slice(shown, shown + TURN_PAGE);
+        tbody.append(...next.map(turnRow));
+        shown += next.length;
+        drawMore();
+      },
+    }, `load more (${turns.length - shown} left)`));
+  };
+  drawMore();
+
+  return el('div', {}, table, moreWrap);
+}
+
 function bodyNode(turns, pruned) {
   const wrap = el('div', {});
-  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, 'Turns'));
+  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, `Turns (${fmtFull(turns.length)})`));
   if (pruned) {
     wrap.appendChild(el('div', { class: 'empty' }, 'Turns older than the retention window are gone.'));
     return wrap;
@@ -153,13 +197,7 @@ function bodyNode(turns, pruned) {
   }));
   wrap.appendChild(C.turnBars(chartTurns));
 
-  wrap.appendChild(el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {},
-      el('th', {}, 'Time'), el('th', {}, 'Model'), el('th', {}, 'Effort'),
-      el('th', { class: 'num' }, 'Input'), el('th', { class: 'num' }, 'Output'),
-      el('th', { class: 'num' }, 'Cache read'), el('th', { class: 'num' }, 'Cache create'),
-      el('th', { class: 'num' }, 'Thinking'), el('th', { class: 'num' }, '$'), el('th', {}, 'Sub'))),
-    el('tbody', {}, turns.map(turnRow)))));
+  wrap.appendChild(turnsTable(turns));
   return wrap;
 }
 

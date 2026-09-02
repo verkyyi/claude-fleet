@@ -59,10 +59,21 @@
 }
 
 * { box-sizing: border-box; }
+/* FIX (execution review, Finding 1): belt-and-suspenders against any stray
+   horizontal overflow now that the timeline brush no longer causes one
+   (charts.js's timeline() used to paint it at viewBox-space pixel
+   coordinates instead of the rendered track's width). Every wide element
+   already gets its own `.scroll { overflow-x: auto }` wrapper, so nothing
+   here legitimately needs the PAGE itself to scroll sideways. Both `html`
+   and `body` get it — which element is the document's actual root
+   scroller is a standards-vs-quirks-mode distinction browsers don't all
+   agree on, so this covers either. */
+html { overflow-x: hidden; }
 body {
   margin: 0; background: var(--plane); color: var(--ink);
   font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
 a { color: var(--s1); }
