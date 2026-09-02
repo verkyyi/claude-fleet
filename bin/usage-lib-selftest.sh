@@ -107,4 +107,25 @@ rm -f "$CACHE/usage"
 eq "summary: limit only (no proxy)" \
    "92% of your weekly limit · resets Fri" "$(fleet_usage_summary_plain)"
 
-printf 'selftest OK: usage-lib severity + freshness gate + summary (%s assertions)\n' "$CHECKS"
+# --- fleet_limit_banner: which line of a pane proves the account hit its limit --
+# (issue #511) Two shapes exist. The classic line carries the reset instant + zone
+# (what mark-limited benches to); the newer sticky footer ("Usage limit reached ·
+# continuing automatically at …") stays on screen after the classic line has
+# scrolled out of the capture window. Prefer the classic line whenever it is
+# there; fall back to the footer; stop at the pane border either way.
+CLASSIC="hit your session limit · resets 1:50am (America/Los_Angeles)"
+FOOTER="Usage limit reached · continuing automatically at 1:50am · esc to cancel"
+eq "banner: nothing limit-shaped → empty" "" \
+   "$(printf 'working…\n❯ \n' | fleet_limit_banner)"
+eq "banner: the classic line" "$CLASSIC" \
+   "$(printf "  ⎿  You've hit your session limit · resets 1:50am (America/Los_Angeles)\n" | fleet_limit_banner)"
+eq "banner: the sticky footer alone" "$FOOTER" \
+   "$(printf '  ⚠ %s\n' "$FOOTER" | fleet_limit_banner)"
+eq "banner: classic wins even when the footer comes later" "$CLASSIC" \
+   "$(printf "  ⎿  You've %s\n⏺ Usage limit reached · continuing automatically at 1:50am · esc or type to cancel\n  ⚠ %s\n" "$CLASSIC" "$FOOTER" | fleet_limit_banner)"
+eq "banner: the LAST classic line wins" "hit your weekly limit · resets Mon" \
+   "$(printf "You've hit your session limit · resets 1:50am (America/Los_Angeles)\nYou've hit your weekly limit · resets Mon\n" | fleet_limit_banner)"
+eq "banner: stops at the pane border" "hit your weekly limit · resets Mon " \
+   "$(printf 'hit your weekly limit · resets Mon │ other pane\n' | fleet_limit_banner)"
+
+printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner (%s assertions)\n' "$CHECKS"

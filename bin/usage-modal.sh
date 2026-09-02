@@ -77,6 +77,36 @@ _ap_restart_eligible() {
   case "$state" in done|needs) return 0;; *) return 1;; esac
 }
 
+# _ap_pane_claude_pid <wid> — pid of the Claude process running under the window's
+# pane (any descendant of pane_pid whose command is `claude`, or a node/bun that
+# runs the npm-installed cli), or nothing. THIS is the exit gate (issue #511):
+# `pane_current_command` reads the `zsh -c` runner (`zsh`) for the whole life of a
+# session on macOS, so it said "shell" while Claude was alive and the relaunch line
+# went into the prompt as an LLM turn. Portable: `ps -axo` on macOS + Linux.
+_ap_pane_claude_pid() {
+  local pp ps p c kids seen=" "
+  pp=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
+  [ -n "$pp" ] || return 1
+  ps=$(ps -axo pid=,ppid=,comm=) || return 1
+  set -- "$pp"
+  while [ $# -gt 0 ]; do
+    p=$1; shift
+    case "$seen" in *" $p "*) continue;; esac; seen="$seen$p "
+    c=$(printf '%s\n' "$ps" | awk -v p="$p" '$1==p{print $3}')
+    case "${c##*/}" in
+      claude) printf '%s\n' "$p"; return 0;;
+      node|node[0-9]*|bun)
+        case " $(ps -o command= -p "$p" 2>/dev/null) " in
+          *"claude-code/cli.js"*|*"/claude "*) printf '%s\n' "$p"; return 0;;
+        esac;;
+    esac
+    kids=$(printf '%s\n' "$ps" | awk -v p="$p" '$2==p{print $1}')
+    # shellcheck disable=SC2086  # deliberate word-split: one pid per word
+    set -- "$@" $kids
+  done
+  return 1
+}
+
 # _ap_restart_window <wid> [nudge] — exit the live Claude TUI in ONE window and
 # relaunch it under the now-active account. A running `claude` baked its OAuth
 # token in at launch and cannot rotate in place, so the only way to move it is a
@@ -87,7 +117,7 @@ _ap_restart_eligible() {
 # pattern) — keep it apostrophe-free, it is single-quoted into the typed command.
 # Returns 0 iff the relaunch was typed.
 _ap_restart_window() {
-  local wid="$1" nudge="${2:-}" cmd
+  local wid="$1" nudge="${2:-}" alive=1
   # Double ctrl-c exits the Claude TUI (it needs two); harmless if the pane is
   # already sitting at a shell.
   # FLEET_ALLOW_SENDKEYS=1: sanctioned auto-continue plumbing (issue #437),
@@ -95,17 +125,18 @@ _ap_restart_window() {
   FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null || return 1
   FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$wid" C-c 2>/dev/null
 
-  # Wait (up to ~3s) for the pane to drop to its shell (spawns end with
-  # `; exec $SHELL`) before typing. If it never reaches a shell — e.g. a modal
-  # dialog swallowed the ctrl-c — SKIP: typing here would land in the still-live
-  # Claude as an LLM turn.
-  cmd=""
+  # Wait (up to ~3s) for the pane's Claude to actually be GONE before typing
+  # (issue #511). If it is still there — the "Usage limit reached · continuing
+  # automatically" wait swallows both ctrl-c, a modal dialog does too — SKIP:
+  # typing here would land in the still-live Claude as an LLM turn. If the window
+  # itself is gone (session-end-hook.sh kill-windows on exit), there is nothing to
+  # type into either — also a skip.
   for _ in $(seq 1 10); do
-    cmd=$(tmux display-message -p -t "$wid" '#{pane_current_command}' 2>/dev/null)
-    case "$cmd" in *zsh|*bash|sh|dash|fish) break;; esac
-    sleep 0.3
+    tmux display-message -p -t "$wid" '#{pane_pid}' >/dev/null 2>&1 || return 1
+    if _ap_pane_claude_pid "$wid" >/dev/null; then sleep 0.3; else alive=0; break; fi
   done
-  case "$cmd" in *zsh|*bash|sh|dash|fish) ;; *) return 1;; esac
+  [ "$alive" = 0 ] || return 1
+  tmux display-message -p -t "$wid" '#{pane_pid}' >/dev/null 2>&1 || return 1
 
   # Drop the scrollback BEFORE relaunching (issue #495): the pane's history may
   # still hold the "hit your … limit" banner that benched the OLD account. The

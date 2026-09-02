@@ -165,10 +165,13 @@ collector (every ~60s) ── scrapes each window ┘
   active token and tags the window; **with no pool it is just `exec claude`** —
   which is why every spawn path can route through it safely.
 - The **collector** (`bin/tmux-dash-collect.sh`) does the detection. It already
-  scrapes each pane for the usage-% line; this adds the "hit your … limit"
-  banner match, attributes it to the window's `@cc_account`, and rotates. The
-  whole banner is passed through, because its `· resets …` tail is what sets the
-  bench end.
+  scrapes each pane for the usage-% line; this adds the limit-banner match
+  (`fleet_limit_banner` in `usage-lib.sh`: the classic "hit your … limit ·
+  resets …" line, else the newer sticky "Usage limit reached · continuing
+  automatically at …" footer that outlives it on screen, #511), attributes it to
+  the window's `@cc_account`, and rotates. The whole banner is passed through,
+  because its `· resets …` tail is what sets the bench end (the footer carries
+  no zone, so it benches by TTL).
 - **The bench ends when the account's window actually refreshes.** The zone in
   the banner is the *account's*, not the host's, so a fleet running in another
   timezone still lands on the right instant. Anything the parser can't read
@@ -222,6 +225,7 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
 | Symptom | Check |
 |---|---|
 | Sessions still use the old account | `fleet-account.sh list` — is the pool non-empty and a token present? Is `fleet-claude.sh` on the spawn path (re-copy `bin/` after upgrading)? |
-| No auto-switch on a limit | The window must carry `@cc_account` (only sessions launched via `fleet-claude.sh` do). Confirm with `tmux show-options -w @cc_account`. |
+| No auto-switch on a limit | The window must carry `@cc_account` (only sessions launched via `fleet-claude.sh` do). Confirm with `tmux show-options -w @cc_account`. Before #511 the stamp landed on the hub window instead of the worker's — re-sync the install if your workers are unstamped. |
+| Which account is a window REALLY on? | The stamp is set at launch and can go stale (a hand restart, an older install). The truth is the Claude process's own env: `ps -E -o command= -p <claude pid> \| tr ' ' '\n' \| grep ^CLAUDE_CODE_OAUTH_TOKEN=` (macOS; `/proc/<pid>/environ` on Linux) and compare with the token files. `claude auth status` *inside a worker's Bash tool* is wrong here — the token is stripped from tool subprocesses, so it reports the Keychain login. |
 | An account never comes back | It's within its TTL. `fleet-account.sh clear <label>` forces it eligible now. |
 | macOS: switching seems ignored | You must use token files — the Keychain ignores `CLAUDE_CONFIG_DIR`. `fleet-doctor.sh` reminds you of this. |
