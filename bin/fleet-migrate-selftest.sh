@@ -190,7 +190,15 @@ ok; [ "$(TM display-message -p -t "$w1" '#{@cc_account}')" = acctA ] || fail "wh
 
 # --- dry-run moves nothing
 out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited)
-ok; printf '%s' "$out" | grep -q 'would /exit' || fail "dry-run must print the plan: $out"
+rig_diag() {  # on failure: what the walk saw (CI-only failures are otherwise blind)
+  printf '\n--all: %s\nlimited-until acctA: %s (now %s)\nlist:\n%s\nwindows:\n%s\nps:\n%s\n' \
+    "$(bash "$SCRIPT" --session "$SESS" --dry-run --all 2>&1)" \
+    "$(bash "$BIN/fleet-account.sh" limited-until acctA 2>&1)" "$(date +%s)" \
+    "$(bash "$BIN/fleet-account.sh" list 2>&1)" \
+    "$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name} state=#{@claude_state} raw=#{@raw} acct=#{@cc_account} pid=#{pane_pid}' 2>&1)" \
+    "$(ps -axo pid=,ppid=,comm= 2>&1 | grep -E "claude|runner|perl" | head -8)"
+}
+ok; printf '%s' "$out" | grep -q 'would /exit' || fail "dry-run must print the plan: $out $(rig_diag)"
 ok; [ ! -f "$WORK/launched" ] || fail "dry-run must not launch anything"
 ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail "dry-run must not close windows"
 
