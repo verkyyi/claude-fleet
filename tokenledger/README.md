@@ -212,8 +212,25 @@ submitted anywhere:
 
 ```bash
 ccquota badge --out ccquota.svg --theme dark --period all
-ccquota badge --json --out ccquota.json      # shields.io endpoint schema
+ccquota badge --size compact --out ccquota-sm.svg   # 20px, sits beside shields badges
+ccquota badge --style flat --out ccquota-flat.svg   # static, shields-shaped
+ccquota badge --json --out ccquota.json             # shields.io endpoint schema
 ```
+
+The default badge is **tokenman**: a character eats a stream of dots, and an
+odometer rolls up to the **exact** count — every digit, not "69.8B". The dots
+*are* tokens, so the animation carries the meaning rather than decorating it.
+
+**It animates inside a README.** An `<img>`-loaded SVG cannot run scripts, but
+it does run CSS keyframes and SMIL — measured, not assumed. Everything here is
+CSS inside the SVG's own `<style>`: no script, no font, no fetch. Readers with
+`prefers-reduced-motion` get the finished figure statically — the resting state
+*is* the final value, and the roll animates *from* zero, so nothing is ever
+wrong with animation off.
+
+The compact size is 20px tall and sits in a row of shields badges without
+looking like a visitor. `--style flat` is the plain two-tone badge for anyone
+who wants no motion at all.
 
 **Publishing is up to you, and every route is serverless.** Which one works is
 decided by the content-type the host serves, so these were measured rather than
@@ -248,7 +265,9 @@ wrong for a week.
 ### Serving badges from your own hub
 
 `ccquota hub --public-badges` serves `/badge/u/<login>.svg` and
-`/badge/team/<team>.svg` without a viewer token, which is what makes them usable
+`/badge/team/<team>.svg` (`?theme=dark|light`, `?period=all|30d|7d`,
+`?size=full|compact`, `?style=tokenman|flat`; `.json` for shields data) without
+a viewer token, which is what makes them usable
 in an internal README: a README image sends no credential, and camo strips
 cookies.
 
