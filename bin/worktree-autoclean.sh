@@ -8,6 +8,9 @@
 #     issue-<N> worktree, AND no live pane's cwd is inside it (issue #353 — the
 #     @issue identity check is cwd-independent, so a busy worker whose cwd has
 #     wandered into a subdir is not false-reaped)
+#   * no live fleet tmux SERVER is cwd'd inside it (issue #509 — a server chdir's
+#     itself into panes it spawns, and reaping the dir it sits in strands it on a
+#     deleted inode, breaking every future spawn on that server)
 #   * it is clean (no uncommitted changes; untracked counts as dirty)
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is an ancestor of origin/<base>
@@ -83,6 +86,15 @@ LIVE="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{pane_current_pa
 # after spawn, and can then false-reap the live worker's worktree.
 LIVE_ISSUES="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{@issue}' 2>/dev/null; done)"
 
+# Also gather each live fleet SERVER's OWN process cwd (issue #509). A tmux server
+# chdir's itself into the panes it spawns, so its cwd drifts into a worktree over
+# time; reaping THAT worktree strands the server on a deleted inode and every
+# window it spawns afterwards is born in a dead cwd — Claude Code aborts at launch
+# with "The current working directory was deleted". The drift is cross-fleet (it
+# follows pane creation, not the repo), so this reads EVERY fleet server's cwd, and
+# a worktree any of them sits in is treated as live below. See fleet_server_cwds.
+LIVE_SERVER_CWDS="$(fleet_server_cwds)"
+
 # --- orphan procs of a KEPT worktree, issue #469 -------------------------------
 # #151 reaps a worktree's detached processes when it is PRUNED. A dirty/unmerged
 # worktree is KEPT forever (correctly — #290 must never silently delete an
@@ -129,6 +141,15 @@ process() {
   fi
   if printf '%s\n' "$LIVE" | grep -qxF "$dir" || printf '%s\n' "$LIVE" | grep -qF "$dir/"; then
     say "KEEP  $branch  (live tmux session)"; kept=$((kept+1)); return
+  fi
+  # A tmux SERVER whose own cwd is inside this worktree keeps it (issue #509):
+  # reaping it would strand the server on a deleted inode, and every window it
+  # spawns after that is born in a dead cwd (Claude Code aborts at launch). Same
+  # exact-or-prefix match as the live-pane gate above — a server cwd'd in a subdir
+  # still counts. This is a fleet-wide signal (fleet_server_cwds walks every live
+  # server), so a claude-fleet server drifted into a 24haowan worktree protects it.
+  if printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qxF "$dir" || printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qF "$dir/"; then
+    say "KEEP  $branch  (a tmux server is cwd'd here)"; kept=$((kept+1)); return
   fi
   # clean + merged? — the shared gate (identical logic in dash-reap.sh).
   local merged is_scratch=0
