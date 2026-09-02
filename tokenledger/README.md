@@ -232,6 +232,40 @@ The compact size is 20px tall and sits in a row of shields badges without
 looking like a visitor. `--style flat` is the plain two-tone badge for anyone
 who wants no motion at all.
 
+### Fitting the host
+
+- **`theme=auto`** — one SVG carrying both palettes, switched by
+  `prefers-color-scheme`. An `<img>`-loaded SVG *does* evaluate it (measured),
+  and follows the reader's OS/browser scheme. The one place that is not
+  enough is GitHub, whose own dark/light toggle can disagree with the OS —
+  there, keep the `<picture>` pattern above.
+- **`bg=transparent`** — no ground; the host's own background shows through.
+  With `theme=auto`, the badge sits on anything.
+- **Colours** — `pac=`, `dot=`, `fg=`, `bg=` take a hex value without `#`.
+  A bad value is ignored, never an error badge.
+
+### Is it live?
+
+Depends on the embed, and the reason is structural:
+
+| Embed | You get |
+|---|---|
+| `<img>` — README, Markdown, anywhere that only allows images | **Current at fetch time**, refreshed by the cache TTL (`max-age=300`, the same as shields.io; GitHub's camo re-pulls within minutes). It does **not** tick while you watch: an image is a snapshot and cannot re-fetch itself. |
+| `<iframe>` — your site, a docs page, a wiki, a wallboard | **Truly live.** `/embed/u/<login>` polls the raw figure (every 30s; `?every=`) and, only when it has actually *changed*, swaps in a badge rendered `?from=<the previous value>` — so the wheels roll the real difference, position by position, as many turns as each one carried. |
+
+```html
+<iframe src="https://hub.example/embed/u/verkyyi?theme=auto&bg=transparent"
+        width="400" height="60" frameborder="0" title="Claude Code tokens"></iframe>
+```
+
+Nothing is extrapolated. If the hub has not measured a new number, nothing
+moves except the character. `?from=` works on the plain SVG too — a wallboard
+that re-fetches the badge every minute can pass the last value it showed.
+
+`/badge/u/<login>.json?format=raw` is the figure the embed polls:
+`{"tokens":…,"turns":…,"period":"30d"}`, never cached, behind the same
+`--public-badges` gate as everything else here.
+
 **Publishing is up to you, and every route is serverless.** Which one works is
 decided by the content-type the host serves, so these were measured rather than
 assumed:
@@ -265,9 +299,10 @@ wrong for a week.
 ### Serving badges from your own hub
 
 `ccquota hub --public-badges` serves `/badge/u/<login>.svg` and
-`/badge/team/<team>.svg` (`?theme=dark|light`, `?period=all|30d|7d`,
-`?size=full|compact`, `?style=tokenman|flat`; `.json` for shields data) without
-a viewer token, which is what makes them usable
+`/badge/team/<team>.svg` (`?theme=dark|light|auto`, `?period=all|30d|7d`,
+`?size=full|compact`, `?style=tokenman|flat`, `?bg=transparent`, `?from=`,
+colour overrides; `.json` for shields data, `.json?format=raw` for the bare
+figure) and the live `/embed/u/<login>` page without a viewer token, which is what makes them usable
 in an internal README: a README image sends no credential, and camo strips
 cookies.
 
