@@ -434,20 +434,89 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
     # exit 10 = this call rotated the active account away → fires ONCE per bench.
     # A running session cannot hot-swap its token (apiKeyHelper only carries
     # API-key credentials, not subscription OAuth tokens — verified on #495), so
-    # following the rotation means restarting sessions: hand the banner window +
-    # this fleet's idle windows to usage-modal.sh's restart pass (issue #263
-    # machinery), backgrounded via run-shell -b so the collector never blocks on
-    # the per-window ctrl-c settle loops. run-shell sets $TMUX for the job, so
-    # the pass's bare tmux calls stay on THIS fleet's server.
+    # following the rotation means moving sessions: every window still running on
+    # a benched account — the banner window and any other on that account, mid-
+    # turn or idle (their next request fails anyway) — is closed and `--resume`d
+    # in a new window under the new active account (fleet-migrate.sh, issue
+    # #512), backgrounded via run-shell -b so the collector never blocks on the
+    # per-window exit/boot waits. run-shell sets $TMUX for the job, so migrate's
+    # bare tmux calls stay on THIS fleet's server; --toast reports the count.
     if [ "$rc" -eq 10 ]; then
-      tmux -L "$sock" run-shell -b "bash '$BIN/usage-modal.sh' --restart-after-rotate '$wid' '${newact:-}'" 2>/dev/null
+      tmux -L "$sock" run-shell -b "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast" 2>/dev/null
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription limit reached
-account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; the limited window and this fleet's idle sessions are being restarted onto it (\`--continue\`)
+account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)
 > ${banner}" >/dev/null 2>&1
       fi
     fi
   done
+  done
+fi
+
+# --- quota-aware PRE-EMPTIVE rotation via ccquota (issue #513, every run) ---
+# The banner path above is reactive: an account has to be walled — a session
+# stuck for hours — before the fleet reacts. ccquota knows every pool account's
+# exact 5-hour / 7-day utilization + reset instants, account-wide, so with a hub
+# configured (CCQUOTA_HUB_URL) the fleet acts BEFORE the wall, per account:
+#   ≥ FLEET_ACCOUNT_CEILING (85%)  bench it until ccquota's reset instant (which
+#                                  rotates the active pointer past it — new spawns
+#                                  go elsewhere at once), then move every session
+#                                  still running on it (fleet-account.sh migrate
+#                                  --account, per fleet, backgrounded) — the same
+#                                  close + --resume a banner would trigger, minus
+#                                  the wall; notify once.
+#   ≥ FLEET_ACCOUNT_WARN_PCT (70%) tell every session on it, over its own peer
+#                                  inbox (fleet_peer_send — the SendMessage channel,
+#                                  not send-keys), that a move is coming and to
+#                                  commit WIP; toast + FLEET_NOTIFY_CMD once.
+# Once per (account, reset-window): a marker file holds the reset epoch the
+# episode was handled for, so the next window (new epoch) re-arms it. Fail-open:
+# no ccquota / no hub / unknown → no rows → nothing here runs, the banner path
+# stays. `quota` itself refetches at most every FLEET_ACCOUNT_QUOTA_TTL s.
+if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
+  qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
+  qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
+  QDIR="$G"; mkdir -p "$QDIR"
+  # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
+  printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
+    [ -n "$ql" ] || continue
+    qutil=$q5; qwhich="5-hour"; qreset=$qr5
+    if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
+    qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
+    if [ "$qutil" -ge "$qceil" ]; then
+      mk="$QDIR/quota.ceiling.$ql"
+      [ "$(cat "$mk" 2>/dev/null)" = "$qreset" ] && continue          # this window already handled
+      printf '%s' "$qreset" | atomic_write "$mk"
+      "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
+      qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
+      for qs in $SOCKETS; do
+        tmux -L "$qs" run-shell -b "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast" 2>/dev/null
+        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null
+      done
+      if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+        $FLEET_NOTIFY_CMD "# subscription near its limit — rotated early
+**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett; new sessions now use **${qnew:-?}** and every session still on it is being moved (close + \`--resume\` in a new window), before it hits the wall" >/dev/null 2>&1
+      fi
+    elif [ "$qutil" -ge "$qwarn" ]; then
+      mk="$QDIR/quota.warn.$ql"
+      [ "$(cat "$mk" 2>/dev/null)" = "$qreset" ] && continue
+      printf '%s' "$qreset" | atomic_write "$mk"
+      qeta=""; [ "${qpph:-0}" -gt 0 ] && qeta=" (~$(( (100 - qutil) * 60 / qpph )) min to 100% at the current rate)"
+      qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
+      qn=0
+      for qs in $SOCKETS; do
+        # space-separated: a window id has no spaces and a label is a file name
+        # (tmux ≤3.4 would print a control-byte separator as literal `\037`)
+        while read -r qw qa; do
+          [ "$qa" = "$ql" ] || continue
+          qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
+          [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && qn=$((qn+1))
+        done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
+        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
+      done
+      [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
+**$ql** is at ${qutil}% of its $qwhich window${qeta} (ccquota, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
+    fi
   done
 fi
 

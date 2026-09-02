@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -1537,5 +1537,171 @@ fleet_clip_display() {
     clip_out="${s:0:$(( avail / 2 ))}"
     # shellcheck disable=SC2034  # output global, read by the row producers
     clip_w=$(( ${#clip_out} * 2 ))
+  fi
+}
+
+# ============================================================================
+# --- Claude Code process + session-registry probes (issues #511/#512/#513) ---
+# Every running `claude` registers itself under ~/.claude/sessions/<pid>.json
+# (sessionId, cwd, messagingSocketPath, …) with a sibling <pid>.<sha>.key holding
+# the peer token its local inbox (/tmp/cc-socks/<pid>.sock) authenticates with.
+# That registry is the SAME substrate the SendMessage/ListAgents tools ride, so
+# reading it gives the fleet exact per-window truth — which session id a pane
+# runs, which subscription token it was launched with — instead of the stamps
+# (@cc_account) that #511 showed can be missing or stale. FLEET_CC_SESSIONS_DIR
+# overrides the registry location so selftests can point it at a scratch tree.
+FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
+
+# fleet_pane_claude_pid <tmux-target> [socket] — pid of the Claude process running
+# under the target's pane (any descendant of pane_pid whose command is `claude`, or
+# a node/bun running the npm-installed cli), or nothing (exit 1). THIS is the "is
+# Claude alive here" gate (issue #511): `pane_current_command` reads the `zsh -c`
+# runner for the whole life of a session on macOS, so it says "shell" while Claude
+# is alive. Portable: `ps -axo` on macOS + Linux. [socket] = -L label for headless
+# callers; bare tmux (the $TMUX socket) otherwise. FLEET_CLAUDE_COMM widens the
+# command-name match (a selftest's fake `claude` is a bash script, whose comm is
+# `bash` on macOS).
+fleet_pane_claude_pid() {
+  local tgt="$1" sock="${2:-}" pp ps p c kids seen=" "
+  if [ -n "$sock" ]; then pp=$(tmux -L "$sock" display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null)
+  else                    pp=$(tmux display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null); fi
+  [ -n "$pp" ] || return 1
+  ps=$(ps -axo pid=,ppid=,comm=) || return 1
+  set -- "$pp"
+  while [ $# -gt 0 ]; do
+    p=$1; shift
+    case "$seen" in *" $p "*) continue;; esac; seen="$seen$p "
+    c=$(printf '%s\n' "$ps" | awk -v p="$p" '$1==p{print $3}')
+    case "${c##*/}" in
+      claude) printf '%s\n' "$p"; return 0;;
+      node|node[0-9]*|bun)
+        case " $(ps -o command= -p "$p" 2>/dev/null) " in
+          *"claude-code/cli.js"*|*"/claude "*) printf '%s\n' "$p"; return 0;;
+        esac;;
+      bash|sh|zsh|dash)
+        # a selftest's fake `claude` is a script: its comm is the interpreter, so
+        # match ONLY the explicit FLEET_CLAUDE_COMM substring (never a bare heuristic
+        # — a worker's `zsh -c '…fleet-claude.sh…'` runner must not count as Claude).
+        if [ -n "${FLEET_CLAUDE_COMM:-}" ]; then
+          case " $(ps -o command= -p "$p" 2>/dev/null) " in
+            *"$FLEET_CLAUDE_COMM"*) printf '%s\n' "$p"; return 0;;
+          esac
+        fi;;   # (no `continue` here — the shell's children still need walking)
+    esac
+    kids=$(printf '%s\n' "$ps" | awk -v p="$p" '$2==p{print $1}')
+    # shellcheck disable=SC2086  # deliberate word-split: one pid per word
+    set -- "$@" $kids
+  done
+  return 1
+}
+
+# fleet_cc_session_json <pid> — path of the registry record for a Claude pid.
+fleet_cc_session_json() { local f="$FLEET_CC_SESSIONS_DIR/$1.json"; [ -f "$f" ] && printf '%s' "$f"; }
+# fleet_cc_session_field <pid> <field> — one string field off the registry record.
+fleet_cc_session_field() {
+  local f; f=$(fleet_cc_session_json "$1") || return 1
+  sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$f" | head -n1
+}
+# fleet_cc_session_id <pid> — the session id (transcript uuid) the pid runs.
+fleet_cc_session_id() { fleet_cc_session_field "$1" sessionId; }
+# fleet_cc_peer_sock <pid> — the inbox socket path (registry value, else the default).
+fleet_cc_peer_sock() { local s; s=$(fleet_cc_session_field "$1" messagingSocketPath); printf '%s' "${s:-/tmp/cc-socks/$1.sock}"; }
+# fleet_cc_peer_token <pid> — the peer token off <pid>.<sha>.key (exit 1 = none).
+fleet_cc_peer_token() {
+  local f
+  for f in "$FLEET_CC_SESSIONS_DIR/$1".*.key; do
+    [ -f "$f" ] || continue
+    sed -n 's/.*"peerToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n1
+    return 0
+  done
+  return 1
+}
+# fleet_cc_pid_for_session <session-uuid> — the registry pid running that session.
+fleet_cc_pid_for_session() {
+  local f
+  for f in "$FLEET_CC_SESSIONS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    grep -q "\"sessionId\"[[:space:]]*:[[:space:]]*\"$1\"" "$f" 2>/dev/null || continue
+    f=${f##*/}; printf '%s' "${f%.json}"; return 0
+  done
+  return 1
+}
+
+# fleet_sha12 — stdin → first 12 hex of its sha256 (shasum on macOS, sha256sum on Linux).
+fleet_sha12() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -c1-12; else sha256sum | cut -c1-12; fi; }
+# fleet_claude_token_sha <pid> — sha12 of CLAUDE_CODE_OAUTH_TOKEN in the process's
+# environment; exit 1 when it carries none (ambient Keychain login). This is the
+# TRUTH about which pool account a running session spends (issue #511) — a
+# `claude` bakes the token in at launch and cannot change it. macOS: `ps -E`;
+# Linux: /proc/<pid>/environ (own-uid processes only, which is all the fleet has).
+# FLEET_TOKEN_PROBE=<cmd> is the selftest seam: `<cmd> <pid>` prints the token
+# (macOS strips the environment of Apple-signed binaries — a selftest's perl fake
+# — from `ps -E`, so a hermetic test cannot read it the production way).
+fleet_claude_token_sha() {
+  local pid="$1" tok=""
+  if [ -n "${FLEET_TOKEN_PROBE:-}" ]; then
+    tok=$("$FLEET_TOKEN_PROBE" "$pid" 2>/dev/null | head -n1)
+  elif [ -r "/proc/$pid/environ" ]; then
+    tok=$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -n1)
+  else
+    tok=$(ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -n1)
+  fi
+  [ -n "$tok" ] || return 1
+  printf '%s' "$tok" | fleet_sha12
+}
+
+# fleet_peer_send <pid> <text> [from-name] — deliver <text> to a running Claude
+# session as a cross-session message: the SendMessage tool's LOCAL channel. An
+# auth frame with the session's peer token, then a user frame, newline-delimited
+# JSON over its inbox socket. The session sees it as a message from another
+# session on its next turn (queued while it is busy). This is the sanctioned way
+# for fleet tooling to talk to a live session — NOT tmux send-keys into its
+# prompt (#437: bracketed paste eats the Enter, and a keystroke lands in whatever
+# the TUI is showing).
+#
+# The body rides the CLI's own canonical envelope, `<cross-session-message
+# from-name="…" from-mode="…">`, because of the recipient's inbound policy: a
+# session running bypassPermissions HOLDS a peer message whose sender did not
+# attest its permission mode (a blocking approve/deny dialog in the pane —
+# exactly the stall this tooling exists to prevent), and a "prompting" sender
+# into a bypass session is a mode mismatch (also held). Fleet sessions run
+# bypassPermissions (settings.json defaultMode), so the envelope attests
+# FLEET_PEER_MODE (default bypass); an operator whose sessions prompt sets it to
+# `prompting`. The envelope must be byte-canonical (attribute order fixed:
+# from, from-session, hop-chain, from-name, from-mode; the receiver re-serializes
+# and compares) — do not reorder or pad it. [from-name] must not contain " < > or
+# a newline. python3 writes the socket (pure bash has no unix-socket client);
+# `nc -U` is the fallback. Exit 0 iff the frame was written.
+fleet_peer_send() {
+  local pid="$1" text="$2" from="${3:-fleet}" tok sock
+  tok=$(fleet_cc_peer_token "$pid") || return 1
+  [ -n "$tok" ] || return 1
+  sock=$(fleet_cc_peer_sock "$pid")
+  [ -S "$sock" ] || return 1
+  from=$(printf '%s' "$from" | tr -d '"<>\n\r'); [ -n "$from" ] || from=fleet
+  text="<cross-session-message from-name=\"$from\" from-mode=\"${FLEET_PEER_MODE:-bypass}\">"$'\n'"$text"$'\n'"</cross-session-message>"
+  if command -v python3 >/dev/null 2>&1; then
+    FPS_TOK="$tok" FPS_TEXT="$text" FPS_SOCK="$sock" python3 - <<'PY'
+import json, os, socket, sys, time
+frame = (json.dumps({"type": "auth", "token": os.environ["FPS_TOK"]}) + "\n"
+         + json.dumps({"type": "user", "message": {"role": "user", "content": os.environ["FPS_TEXT"]}}) + "\n")
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5)
+try:
+    s.connect(os.environ["FPS_SOCK"]); s.sendall(frame.encode())
+    time.sleep(0.2)                      # let the server read before the FIN (as the CLI does)
+except OSError as e:
+    print("fleet_peer_send: %s" % e, file=sys.stderr); sys.exit(1)
+finally:
+    s.close()
+PY
+  elif command -v nc >/dev/null 2>&1; then
+    local esc
+    # minimal JSON string escaping: backslash, quote, tab, newline
+    esc=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | awk 'NR>1{printf "\\n"} {printf "%s", $0}')
+    { printf '{"type":"auth","token":"%s"}\n' "$tok"
+      printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$esc"
+      sleep 0.2; } | nc -U "$sock" 2>/dev/null
+  else
+    return 1
   fi
 }

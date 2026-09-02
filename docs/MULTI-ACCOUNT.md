@@ -149,18 +149,22 @@ collector (every ~60s) ── scrapes each window ┘
         └─ (if FLEET_NOTIFY_CMD set) pings you once: "work hit its limit → personal"
         │
         ▼
-   the NEXT spawned session launches under personal, AND (issue #495) the
-   collector dispatches usage-modal.sh --restart-after-rotate in the background:
-   the banner window restarts immediately (its turn is already dead on the
-   benched account) with a resume nudge, and the fleet's idle windows restart
-   via `fleet-claude.sh --continue` — so RUNNING sessions follow the rotation
-   too, without a manual /login
+   the NEXT spawned session launches under personal, AND the collector
+   dispatches `fleet-account.sh migrate --limited` in the background (issue
+   #512): every window still running on work — the banner window and any other,
+   mid-turn or idle — is asked to /exit, the SessionEnd hook closes it, and a NEW
+   window in the same worktree runs `fleet-claude.sh --resume <session-id>`
+   under personal, with a re-orient nudge — so RUNNING sessions follow the
+   rotation too, without a manual /login
 ```
 
 - **`bin/fleet-account.sh`** is the single owner of the rotation state
   (`account.active` + `account.limited` in the shared cache dir). Commands:
   `active`, `token [label]`, `env`, `list`, `use <label>`, `rotate`,
-  `mark-limited <label>`, `clear [label]`.
+  `mark-limited <label>`, `clear [label]`, `limited-until <label>`, and the two
+  that act on LIVE sessions (delegated to `bin/fleet-migrate.sh`): `migrate …`
+  and `whoami <window-id>` — see [Moving live sessions](#moving-live-sessions)
+  below.
 - **`bin/fleet-claude.sh`** is a transparent launcher: with a pool it exports the
   active token and tags the window; **with no pool it is just `exec claude`** —
   which is why every spawn path can route through it safely.
@@ -189,26 +193,108 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
 - ✅ Works on **macOS and Linux** (token env var, not config-dir juggling).
 - ✅ **Zero cost when off** — no token files ⇒ every code path is a no-op and the
   fleet is byte-for-byte its old single-account self.
-- ⚠️ **A live process cannot hot-swap its token — restarts are how sessions
-  follow a rotation.** Claude Code binds its credential at launch, and every
-  in-place alternative was falsified on issue #495: `settings.json`'s
+- ⚠️ **A live process cannot hot-swap its token — a close + `--resume` is how
+  sessions follow a rotation.** Claude Code binds its credential at launch, and
+  every in-place alternative was falsified on issue #495: `settings.json`'s
   `apiKeyHelper` (the only documented periodically-re-run credential hook) is an
   **API-key** path — its output is sent as both `X-Api-Key` and `Bearer`, but a
   subscription OAuth token fed through it just 401-loops, while the *same* token
   works via `CLAUDE_CODE_OAUTH_TOKEN`; env vars are never re-read mid-session.
-  So both switch paths restart sessions with `fleet-claude.sh --continue` (each
-  resumes its own transcript on the new account): the manual picker (the footer
-  `◉` chip / usage stat → usage + account modal) restarts idle windows, and the
-  automatic limit-hit rotation (issue #495) additionally restarts the banner
-  window itself — its turn is already dead on the benched account — with a nudge
-  so it re-orients and continues. Sessions mid-turn on *other* accounts, and
-  `/loop` windows, keep their account until their next natural restart.
+  So both switch paths go through `fleet-account.sh migrate` (issue #512, below):
+  the manual picker (the footer `◉` chip / usage stat → usage + account modal)
+  moves idle windows (`--idle`), and the automatic limit-hit rotation moves every
+  window still on the benched account (`--limited`) — mid-turn ones included,
+  their turn is already dead — with a nudge so each re-orients and continues.
+  Sessions mid-turn on *other* accounts, and `/loop` windows, keep their
+  account until their next natural restart.
 - ⚠️ **The usage proxy (`5h/7d` in the status bar) is aggregate**, summed across
   *all* accounts' transcripts — it can't attribute past tokens to an account
   after the fact. Treat it as total fleet consumption, not per-subscription.
 - ⚠️ **Hooks/settings are shared** across accounts (one `~/.claude`). That's the
   point (it keeps the fleet working), but it means per-account settings aren't
   possible via this mechanism.
+
+## Pre-emptive rotation with ccquota
+
+The banner path is reactive: an account has to be walled — and a session stuck
+for up to five hours — before the fleet reacts. If you run
+[ccquota](https://github.com/verkyyi/ccquota) with a hub, the fleet can act
+first (issue #513). ccquota knows every subscription's **exact, account-wide**
+5-hour and 7-day utilization and reset instants, across devices; set
+`export CCQUOTA_HUB_URL=…` in `fleet.conf` (ccquota reads the viewer token from
+`~/.ccquota/viewer-token`) and the collector does, per pool account, every tick:
+
+| utilization (higher of 5h / 7d) | action |
+|---|---|
+| ≥ `FLEET_ACCOUNT_WARN_PCT` (70%) | message every session running on it over its **peer inbox** (`fleet-peer-send.sh`, the `SendMessage` channel) that a move is coming, with the ETA at the current burn rate, so it can commit WIP; toast + `FLEET_NOTIFY_CMD` once |
+| ≥ `FLEET_ACCOUNT_CEILING` (85%) | **bench** it until ccquota's reset instant (`fleet-account.sh bench`), which rotates the active pointer at once, then **move** every session still on it (`migrate --account <label>`, per fleet, backgrounded) — the same close + `--resume` a banner triggers, minus the wall |
+
+Each step fires once per (account, reset window). New sessions, meanwhile, go
+to the eligible account with the **most headroom** (`fleet-account.sh active`
+reads the cached ccquota rows; the current account is kept while it is within
+10 points of the best, so spawns don't flip-flop). Everything fails open: no
+ccquota on `PATH`, no URL, an unreachable hub or an `unknown` verdict → no
+rows → the banner path above, unchanged.
+
+```
+fleet-account.sh quota            # what the collector sees: label · 5h% · 7d% · headroom · resets · %/h
+fleet-account.sh quota --refresh  # bypass the FLEET_ACCOUNT_QUOTA_TTL (60s) cache
+fleet-account.sh list             # …the same numbers, coloured, next to each account
+fleet-doctor.sh                   # "quota" row: hub reachable, N/M pool labels mapped
+```
+
+Label ↔ account: ccquota's name for the account (`ccquota name`) must equal the
+fleet label, or pin `CCQUOTA_ACCOUNT=<uuid>` in the label's `<label>.conf`.
+
+## Moving live sessions
+
+`fleet-account.sh migrate …` (`bin/fleet-migrate.sh`, issue #512) is the one
+mechanism that moves a RUNNING session onto the active account. It replaced the
+#263/#495 in-place `--continue` restart, which could not work on an install whose
+SessionEnd hook closes the window the instant Claude exits (issue #403) — there
+was never a shell left to type a relaunch into. Per window it:
+
+1. reads the window (name, cwd, `@issue`/`@raw`/`@worktree`/`@origin`/
+   `@summary`, state) and the **session id off Claude Code's own registry**
+   (`~/.claude/sessions/<pid>.json` — exact, not "the newest transcript");
+2. types `Esc` (which also cancels a "Usage limit reached · continuing
+   automatically" wait), `/exit`, `Enter`, and waits for the Claude **process**
+   to be gone — never typing anything else while it lives (issue #511);
+3. lets the SessionEnd hook close the window (it records the `/fleet-history`
+   row too); with no hook (`FLEET_CLOSE_ON_EXIT=0`) it relaunches in the
+   surviving shell instead;
+4. opens a NEW window, same name and cwd, running
+   `fleet-claude.sh --resume <session-id> [nudge]`, re-binds the options, and
+   **verifies** by reading the new process's token out of its environment.
+
+```
+fleet-account.sh migrate --limited          # every window on a benched account (the collector's call)
+fleet-account.sh migrate --idle             # done|needs windows not on the active account (the picker's call)
+fleet-account.sh migrate --all              # everything not on the active account
+fleet-account.sh migrate --account work     # everything running on `work`
+fleet-account.sh migrate @12 @15            # these windows, whatever they run on
+fleet-account.sh migrate --dry-run --all    # print the plan only
+fleet-account.sh whoami @12                 # the account a window REALLY runs (token truth;
+                                            # heals a stale @cc_account stamp)
+```
+
+Never touched: panels (`dash`/`plan`/`backlog`), the operator hub (`@hub`),
+windows with no Claude process, and a raw scratch parked at `FLEET_MAIN`
+without a registry session id. Windows move one at a time (each is a cold
+`claude` boot). From outside tmux pass `--session <fleet>`.
+
+### Messaging a live session
+
+`bin/fleet-peer-send.sh <target> <text>` delivers a message to a running session
+over Claude Code's local inbox socket — the same channel the `SendMessage` /
+`ListAgents` tools use between sessions on one machine — so fleet tooling can
+talk to a worker without `tmux send-keys` into its prompt (issue #437). The
+target is a window id, a pid, or a session uuid; the recipient sees it as a
+message from another session on its next turn. The body rides Claude Code's
+canonical `<cross-session-message from-name=… from-mode=…>` envelope, attesting
+`FLEET_PEER_MODE` (default `bypass`, the mode fleet sessions run in): without
+that attestation a bypass-mode recipient HOLDS the message behind an approve/
+deny dialog in the pane — the very stall this tooling exists to prevent.
 
 ## Security & terms
 

@@ -437,6 +437,29 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (seconds; default 18000 = the 5-hour session window).
 # @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_LIMIT_TTL=18000
+# Pre-emptive rotation via ccquota (issue #513). The banner path above is
+# reactive — a session has to be walled first. With a ccquota hub reachable
+# (`export` the URL HERE so every fleet script and daemon sees it; ccquota reads
+# the viewer token from ~/.ccquota/viewer-token, or CCQUOTA_VIEWER_TOKEN) the
+# collector reads each pool account's EXACT 5h/7d utilization and, per account:
+#   • prefers the eligible account with the most headroom for NEW sessions
+#     (kept while within 10 points of the best, so spawns don't flip-flop);
+#   • at FLEET_ACCOUNT_WARN_PCT messages every session running on it — over its
+#     own peer inbox, the SendMessage channel — that a move is coming, so it
+#     can commit WIP;
+#   • at FLEET_ACCOUNT_CEILING benches it until ccquota's reset instant and
+#     moves its sessions (`fleet-account.sh migrate --account`), BEFORE any
+#     limit banner. The ceiling is the higher of the 5h and 7d utilizations.
+# Fail-open: no ccquota on PATH, no URL, hub unreachable → the banner path,
+# unchanged. `fleet-account.sh quota` shows what the collector sees.
+# @label=ccquota hub URL @group=accounts @tier=advanced @scope=global @edit=str
+#export CCQUOTA_HUB_URL="http://100.x.y.z:8787"
+# @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_ACCOUNT_CEILING=85
+# @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_ACCOUNT_WARN_PCT=70
+# @label=ccquota cache TTL @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ACCOUNT_QUOTA_TTL=60
 
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector

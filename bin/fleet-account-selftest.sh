@@ -253,4 +253,58 @@ eq "mark-limited: fallback still honours per-account LIMIT_TTL" \
    "$((1787454480 + 604800))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
 rm -f "$ACCT_DIR/a.conf"; : > "$STATE_LIMITED"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant)\n' "$CHECKS"
+# ============================================================================
+# ccquota (issue #513): quota_parse fixture → rows; pick_active prefers headroom
+# under the ceiling (with hysteresis) and falls back to round-robin; cmd_bench
+# benches to an exact instant (+RESET_BUFFER) and rotates the active pointer.
+# ============================================================================
+STATE_QUOTA="$FLEET_C/account.quota"; STATE_QUOTA_TS="$FLEET_C/account.quota.ts"
+# shellcheck disable=SC2034  # read by the sourced pick_active at call time
+CEILING=85
+: > "$STATE_LIMITED"; rm -f "$STATE_QUOTA"; printf 'a\n' > "$STATE_ACTIVE"
+# labels a b c already exist as token files; pin c to a uuid via c.conf
+printf 'CCQUOTA_ACCOUNT=uuid-cccc\n' > "$ACCT_DIR/c.conf"
+fixture='{"verdict":"go","accounts":[
+ {"account_uuid":"uuid-aaaa","label":"a","headroom_pct":24,"five_hour":{"utilization":76,"resets_at":"2026-09-02T14:00:00Z","percent_per_hour":36.4},"seven_day":{"utilization":34,"resets_at":"2026-09-07T05:00:00Z"}},
+ {"account_uuid":"uuid-bbbb","label":"b","headroom_pct":75,"five_hour":{"utilization":0,"resets_at":"2026-09-02T13:50:00Z"},"seven_day":{"utilization":25,"resets_at":"2026-09-04T14:00:00Z"}},
+ {"account_uuid":"uuid-cccc","label":"c-renamed-in-ccquota","headroom_pct":0,"five_hour":{"utilization":100,"resets_at":"2026-09-02T11:50:00Z"},"seven_day":{"utilization":21,"resets_at":"2026-09-06T06:00:00Z"}},
+ {"account_uuid":"uuid-zzzz","label":"not-in-pool","headroom_pct":90,"five_hour":{"utilization":10},"seven_day":{"utilization":10}}]}'
+rows=$(printf '%s' "$fixture" | quota_parse)
+eq "quota_parse: one row per pool label, by name" "a	76	34	24	1788357600	1788757200	36" "$(printf '%s\n' "$rows" | grep '^a	')"
+eq "quota_parse: uuid pin via <label>.conf"        "c	100	21	0	1788349800	1788674400	0"  "$(printf '%s\n' "$rows" | grep '^c	')"
+eq "quota_parse: accounts outside the pool are dropped" "" "$(printf '%s\n' "$rows" | grep 'not-in-pool')"
+eq "quota_parse: row count" 3 "$(printf '%s\n' "$rows" | grep -c .)"
+eq "quota_parse: unknown verdict → no rows" "" "$(printf '{"verdict":"unknown","accounts":[]}' | quota_parse)"
+eq "quota_parse: garbage → no rows" "" "$(printf 'not json' | quota_parse)"
+eq "quota_field: 5h reset epoch of a" 1788357600 "$(quota_field "$rows" a 5)"
+eq "quota_field: missing label → empty" "" "$(quota_field "$rows" nope 4)"
+
+printf '%s' "$rows" > "$STATE_QUOTA"; NOW > "$STATE_QUOTA_TS" 2>/dev/null || date +%s > "$STATE_QUOTA_TS"
+eq "pick_active(quota): most headroom wins (a 24 → b 75)"          b "$(pick_active a)"
+eq "pick_active(quota): keep current within 10 points of best"      b "$(pick_active b)"
+eq "pick_active(quota): c is at the ceiling → never picked"         b "$(pick_active c)"
+rows2=$(printf '%s\n' "$rows" | sed 's/^a	76	34	24/a	5	34	70/')   # a now 70 headroom vs b 75 → within 10 → keep a
+printf '%s' "$rows2" > "$STATE_QUOTA"
+eq "pick_active(quota): hysteresis keeps current within 10 points" a "$(pick_active a)"
+limit b                                                            # b benched → a is the only candidate
+eq "pick_active(quota): benched accounts are skipped"               a "$(pick_active b)"
+clear_limits
+printf 'a	90	34	10	1	2	0\nb	95	1	5	1	2	0\nc	100	21	0	1	2	0\n' > "$STATE_QUOTA"
+eq "pick_active(quota): everyone at the ceiling → round-robin keeps current" b "$(pick_active b)"
+rm -f "$STATE_QUOTA"
+eq "pick_active(no quota): plain round-robin"                       b "$(pick_active b)"
+
+# cmd_bench: exact instant + buffer, rotates when the benched one was active (exit 10)
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+until=$(( $(now) + 3600 ))                                          # NB: now() is the selftest's fixed clock
+out=$(cmd_bench a "$until" "ccquota: 5-hour window at 86%"); rc=$?
+eq "cmd_bench: benched until the instant + buffer" "$(( until + RESET_BUFFER ))" "$(awk -F'\t' '$1=="a"{print $2}' "$STATE_LIMITED")"
+eq "cmd_bench: note recorded"                       "ccquota: 5-hour window at 86%" "$(awk -F'\t' '$1=="a"{print $3}' "$STATE_LIMITED")"
+rc_is "cmd_bench: rotated the active away → exit 10" 10 "$rc"
+eq "cmd_bench: new active printed"                  b "$out"
+out=$(cmd_bench c "$(( $(now) - 5 ))" past); rc=$?
+eq "cmd_bench: a past instant falls back to now+LIMIT_TTL" "$(( $(now) + TTL ))" "$(awk -F'\t' '$1=="c"{print $2}' "$STATE_LIMITED")"
+rc_is "cmd_bench: benching a non-active account does not rotate" 0 "$rc"
+rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
+
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench)\n' "$CHECKS"

@@ -43,6 +43,23 @@
 #                          Exit 10 iff this call rotated the active account away
 #                          (the collector uses that to notify exactly once).
 #   clear [label]        — drop the limit flag for <label> (or all)
+#   limited-until <label>
+#                        — epoch until which <label> is benched (0 = not benched)
+#   quota [--refresh|--cached] [--json]
+#                        — exact, account-wide utilization per POOL label from ccquota
+#                          (issue #513): label · 5h% · 7d% · headroom% · 5h-reset ·
+#                          7d-reset · %/h, one TSV row each. Cached FLEET_ACCOUNT_QUOTA_TTL s
+#                          (--refresh forces; --cached never fetches). Fail-open: no
+#                          ccquota / no CCQUOTA_HUB_URL / hub unreachable → no rows, exit 0.
+#   bench <label> <until-epoch> [reason]
+#                        — bench <label> until an EXACT instant (ccquota's reset) and
+#                          rotate if it was active; exit 10 iff rotated (like mark-limited)
+#   migrate …            — move LIVE sessions onto the active account by close +
+#                          `--resume` in a new window (issue #512): delegates to
+#                          bin/fleet-migrate.sh — see its header for the selectors
+#                          (<window-id>… | --limited | --idle | --all | --account L)
+#   whoami <window-id>   — the account a window really runs (token truth; heals a
+#                          stale @cc_account stamp) — fleet-migrate.sh whoami
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -62,6 +79,19 @@ STATE_DIR="$FLEET_C/global"
 STATE_ACTIVE="$STATE_DIR/account.active"
 STATE_LIMITED="$STATE_DIR/account.limited"
 LOCK="$STATE_DIR/account.lock"
+# ccquota-driven pre-emptive rotation (issue #513): quota cache + policy knobs.
+# CEILING: bench + move sessions at/above this utilization (5h OR 7d, whichever is
+# higher). WARN_PCT: message the sessions on the account first. QUOTA_TTL: how
+# stale the cached ccquota answer may be before `quota` refetches (the collector
+# refetches; the spawn-path `active` reads the cache only, so a slow hub never
+# delays a spawn). CCQUOTA_HUB_URL (+ optional CCQUOTA_VIEWER_TOKEN) come from the
+# environment / fleet.conf; ccquota itself reads them.
+CEILING="${FLEET_ACCOUNT_CEILING:-85}"
+WARN_PCT="${FLEET_ACCOUNT_WARN_PCT:-70}"
+QUOTA_TTL="${FLEET_ACCOUNT_QUOTA_TTL:-60}"
+CCQUOTA="${FLEET_QUOTA_BIN:-ccquota}"
+STATE_QUOTA="$STATE_DIR/account.quota"
+STATE_QUOTA_TS="$STATE_DIR/account.quota.ts"
 
 now() { date +%s; }
 
@@ -194,10 +224,126 @@ acct_limited_until() {
 }
 acct_eligible() { [ "$(acct_limited_until "$1")" -le "$(now)" ]; }
 
+# --- ccquota: exact, account-wide utilization (issue #513) ----------------------
+# ccquota (https://github.com/verkyyi/ccquota) knows every subscription's 5-hour
+# and 7-day utilization + reset instants, account-wide, across devices — the
+# number the limit banner is the LAST symptom of. Reading it lets the fleet
+# rotate BEFORE a session is walled, instead of after one prints a banner.
+#
+# quota_parse: ccquota's `budget --account all --json` on stdin → one TSV row per
+# POOL label:  label  5h%  7d%  headroom%  5h-reset-epoch  7d-reset-epoch  %/h
+# Label ↔ account: ccquota's name for the account (`ccquota name`) equals the
+# fleet label, or the label's companion <label>.conf pins CCQUOTA_ACCOUNT=<uuid>.
+# Accounts ccquota knows but the pool doesn't (and vice versa) are simply absent.
+# %/h is the 5h window's burn rate when ccquota reports one (else 0). Pure
+# (python3 + stdin), so the selftest pins it on a fixture.
+quota_parse() {
+  local map="" l conf u
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    conf="$ACCT_DIR/$l.conf"; u=""
+    [ -f "$conf" ] && u=$(sed -n 's/^[[:space:]]*CCQUOTA_ACCOUNT[[:space:]]*=[[:space:]]*//p' "$conf" | head -1 | tr -d '[:space:]"')
+    map="${map}${l}"$'\t'"${u}"$'\n'
+  done <<EOF
+$(acct_labels)
+EOF
+  # the JSON rides the environment: `python3 -` takes its PROGRAM from stdin
+  local js; js=$(cat)
+  QP_MAP="$map" QP_JSON="$js" python3 - <<'PY'
+import json, os, sys, datetime
+try:
+    d = json.loads(os.environ.get("QP_JSON", ""))
+except Exception:
+    sys.exit(0)
+accts = d.get("accounts") or []
+if not accts or d.get("verdict") == "unknown":
+    sys.exit(0)
+def ep(iso):
+    if not iso: return 0
+    try:
+        return int(datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return 0
+by_uuid = {a.get("account_uuid"): a for a in accts}
+by_label = {a.get("label"): a for a in accts}
+for line in os.environ.get("QP_MAP", "").splitlines():
+    if not line.strip(): continue
+    label, _, uuid = line.partition("\t")
+    a = by_uuid.get(uuid) if uuid else by_label.get(label)
+    if not a: continue
+    fh, sd = a.get("five_hour") or {}, a.get("seven_day") or {}
+    u5, u7 = fh.get("utilization"), sd.get("utilization")
+    u5 = 0 if u5 is None else u5; u7 = 0 if u7 is None else u7
+    room = a.get("headroom_pct"); room = 100 - max(u5, u7) if room is None else room
+    print("%s\t%d\t%d\t%d\t%d\t%d\t%d" % (label, round(u5), round(u7), round(room),
+          ep(fh.get("resets_at")), ep(sd.get("resets_at")), round(fh.get("percent_per_hour") or 0)))
+PY
+}
+# quota_fetch — ask ccquota (10s cap) and rewrite the cache; silent no-op without
+# ccquota / a hub URL. Empty rows (unknown verdict, unreachable) still refresh the
+# stamp so a dead hub is retried at TTL cadence, not on every call.
+quota_fetch() {
+  command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
+  [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
+  local rows; rows=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null | quota_parse)
+  mkdir -p "$STATE_DIR"
+  printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
+  now | atomic_write "$STATE_QUOTA_TS"
+}
+# quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
+quota_rows() {
+  local mode="${1:-}" ts
+  if [ "$mode" != cached ]; then
+    ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0)
+    if [ "$mode" = refresh ] || [ $(( $(now) - ts )) -ge "$QUOTA_TTL" ]; then quota_fetch; fi
+  fi
+  [ -f "$STATE_QUOTA" ] && cat "$STATE_QUOTA"
+  return 0
+}
+# quota_field <rows> <label> <col> — one cell (cols: 2=5h 3=7d 4=headroom 5=5h-reset 6=7d-reset 7=%/h)
+quota_field() { printf '%s\n' "$1" | awk -F'\t' -v l="$2" -v c="$3" '$1==l{print $c; exit}'; }
+cmd_quota() {
+  local mode="" json=0 a
+  for a in "$@"; do case "$a" in --refresh) mode=refresh;; --cached) mode=cached;; --json) json=1;; esac; done
+  if [ "$json" = 1 ]; then
+    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "${CCQUOTA_HUB_URL:-}" ] && "$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null
+    return 0
+  fi
+  quota_rows "$mode"
+}
+
 # Choose the account new sessions should use, starting from $1 (the current
-# active). Keep it if eligible; else the next eligible one round-robin; if ALL
-# are limited, keep the current (best effort) so sessions still launch.
+# active). With ccquota rows (issue #513): among ELIGIBLE (un-benched) accounts
+# under the ceiling, the one with the most headroom wins — but the current one
+# is kept while it is within 10 points of the best, so new spawns don't
+# flip-flop between near-equal accounts. Without rows (or with every account at
+# the ceiling): keep it if eligible; else the next eligible one round-robin; if
+# ALL are limited, keep the current (best effort) so sessions still launch.
+# Reads the quota CACHE only — this runs on the spawn path.
 pick_active() {
+  local cur="$1" rows best="" bestroom=-1 curroom=-1 l room u5 u7 util
+  rows=$(quota_rows cached)
+  if [ -n "$rows" ]; then
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      acct_eligible "$l" || continue
+      u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3); room=$(quota_field "$rows" "$l" 4)
+      [ -n "$room" ] || continue                       # not in ccquota → no opinion
+      util=$u5; [ "$u7" -gt "$util" ] && util=$u7
+      [ "$util" -ge "$CEILING" ] && continue          # at the ceiling → not a candidate
+      [ "$l" = "$cur" ] && curroom=$room
+      [ "$room" -gt "$bestroom" ] && { best=$l; bestroom=$room; }
+    done <<EOF
+$(acct_labels)
+EOF
+    if [ -n "$best" ]; then
+      if [ "$curroom" -ge 0 ] && [ $(( bestroom - curroom )) -le 10 ]; then printf '%s' "$cur"; else printf '%s' "$best"; fi
+      return 0
+    fi
+  fi
+  pick_active_rr "$cur"
+}
+pick_active_rr() {
   local cur="$1" i n start from idx
   local L=()
   while IFS= read -r l; do [ -n "$l" ] && L+=("$l"); done <<EOF
@@ -263,7 +409,7 @@ EOF
 }
 
 cmd_mark_limited() {
-  local label="$1" banner="${2:-}" until cur nxt rotated=0
+  local label="$1" banner="${2:-}" until
   [ -n "$label" ] || { echo "mark-limited: usage: mark-limited <label> [banner]" >&2; return 1; }
   acct_labels | grep -qx "$label" || { echo "mark-limited: unknown account '$label'" >&2; return 1; }
   # Bench until the account's REAL refresh instant when the banner carries one
@@ -271,6 +417,24 @@ cmd_mark_limited() {
   until=$(banner_reset_epoch "$banner" "$(now)")
   if [ -n "$until" ]; then until=$(( until + RESET_BUFFER ))
   else                    until=$(( $(now) + $(acct_ttl "$label") )); fi
+  bench_write "$label" "$until" "$banner"
+}
+# bench <label> <until-epoch> [reason] — the pre-emptive form (issue #513): the
+# collector benches an account at the ccquota ceiling until ccquota's own reset
+# instant, before any banner exists. A bogus/past epoch falls back to LIMIT_TTL.
+cmd_bench() {
+  local label="$1" until="${2:-}" reason="${3:-ccquota ceiling}"
+  [ -n "$label" ] || { echo "bench: usage: bench <label> <until-epoch> [reason]" >&2; return 1; }
+  acct_labels | grep -qx "$label" || { echo "bench: unknown account '$label'" >&2; return 1; }
+  case "$until" in ''|*[!0-9]*) until=0;; esac
+  if [ "$until" -gt "$(now)" ]; then until=$(( until + RESET_BUFFER ))
+  else                               until=$(( $(now) + $(acct_ttl "$label") )); fi
+  bench_write "$label" "$until" "$reason"
+}
+# bench_write <label> <until-epoch> <note> — record the bench row, rotate the
+# active pointer past it if needed. Exit 10 iff this call rotated the active away.
+bench_write() {
+  local label="$1" until="$2" banner="$3" cur nxt rotated=0
   mkdir -p "$STATE_DIR"; acct_lock
   # Rewrite: drop this label's old row + any expired rows, then add the fresh one.
   { [ -f "$STATE_LIMITED" ] && awk -F'\t' -v l="$label" -v now="$(now)" '$1!=l && ($2+0)>now' "$STATE_LIMITED"
@@ -320,6 +484,7 @@ cmd_list() {
   fi
   active=$(cmd_active)
   now_s=$(now)
+  local qrows u5 u7 util qc; qrows=$(quota_rows cached)
   # Dynamic ACCOUNT width: the widest label, floored at len("ACCOUNT").
   w=7
   while IFS= read -r l; do [ -n "$l" ] && [ "${#l}" -gt "$w" ] && w=${#l}; done <<EOF
@@ -337,6 +502,16 @@ EOF
     else
       tok=$(acct_token "$l")
       if [ -n "$tok" ]; then state="${A_GRN}ok${A_RST}"; else state="${A_RED}NO TOKEN${A_RST}"; fi
+    fi
+    # ccquota columns when known (issue #513): "5h 42% · 7d 21%", coloured by the
+    # higher of the two against the warn/ceiling knobs.
+    if [ -n "$qrows" ]; then
+      u5=$(quota_field "$qrows" "$l" 2); u7=$(quota_field "$qrows" "$l" 3)
+      if [ -n "$u5" ]; then
+        util=$u5; [ "$u7" -gt "$util" ] && util=$u7
+        qc="$A_GRN"; [ "$util" -ge "$WARN_PCT" ] && qc="$A_YEL"; [ "$util" -ge "$CEILING" ] && qc="$A_RED"
+        state="$state ${A_DIM}·${A_RST} ${qc}5h ${u5}% · 7d ${u7}%${A_RST}"
+      fi
     fi
     printf "$fmt" "$w" "$l" \
       "$([ "$l" = "$active" ] && printf '%s●%s' "$A_GRN" "$A_RST" || printf ' ')" \
@@ -359,6 +534,11 @@ case "${1:-active}" in
   rotate)        cmd_rotate ;;
   mark-limited)  cmd_mark_limited "${2:-}" "${3:-}" ;;
   clear)         cmd_clear "${2:-}" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear)" >&2; exit 2 ;;
+  limited-until) acct_limited_until "${2:-}" ;;
+  quota)         shift; cmd_quota "$@" ;;
+  bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
+  migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
+  whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi
