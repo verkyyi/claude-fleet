@@ -5,6 +5,8 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -22,6 +24,15 @@ type Server struct {
 	// ViewerToken guards the dashboard, the query API and MCP. Endpoint
 	// ingest uses per-endpoint enrollment tokens instead.
 	ViewerToken string
+
+	// Tailnet grants the viewer role to allowlisted tailnet logins with no
+	// token, on the word of the local tailscaled. Nil means off.
+	Tailnet *TailnetViewers
+
+	// LogWriter receives access-log lines; nil means the standard logger.
+	// Tests capture it to assert that a tailnet-authenticated request is
+	// logged with who made it.
+	LogWriter func(line string)
 
 	// PublicBadges serves /badge/... without a viewer token, so an internal
 	// README can actually render one (a README image sends no credential, and
@@ -112,7 +123,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
 
-	return logRequests(mux)
+	return s.logRequests(mux)
 }
 
 // viewerOnly gates a handler behind the viewer token.
@@ -147,6 +158,12 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 		}
 		if c, err := r.Cookie("ccquota_token"); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
 			next.ServeHTTP(w, r)
+			return
+		}
+		// No token. A named tailnet peer may still be let in -- on the word
+		// of the local tailscaled, never of anything in the request.
+		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
+			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), login)))
 			return
 		}
 
@@ -208,14 +225,27 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path, st.ModTime(), rs)
 }
 
-// logRequests logs method, path and duration. Query strings are omitted: they
-// can carry the viewer token.
-func logRequests(next http.Handler) http.Handler {
+// logRequests logs method, path, status and duration, plus who it was when a
+// tailnet identity let the request in. Query strings are omitted: they can
+// carry the viewer token.
+func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		// The gate fills this in if it grants by identity; the pointer is
+		// how a value set downstream reaches this outer layer.
+		var viewer string
+		r = r.WithContext(context.WithValue(r.Context(), viewerKey{}, &viewer))
 		next.ServeHTTP(sw, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+		line := fmt.Sprintf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+		if viewer != "" {
+			line += " viewer=" + viewer
+		}
+		if s.LogWriter != nil {
+			s.LogWriter(line)
+			return
+		}
+		log.Print(line)
 	})
 }
 

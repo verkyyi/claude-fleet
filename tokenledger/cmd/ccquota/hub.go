@@ -32,6 +32,12 @@ func runHub(args []string) error {
 	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
+	tailnetViewers := fs.String("tailnet-viewers", os.Getenv("CCQUOTA_TAILNET_VIEWERS"),
+		"comma-separated tailnet logins who may open the dashboard with no\n"+
+			"token, on the word of the local tailscaled (tailscale whois).\n"+
+			"Tagged nodes, other logins, the LAN, loopback and the hub's own\n"+
+			"address still need the token. Empty = off")
+	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI (default: search PATH and the usual places)")
 	publicBadges := fs.Bool("public-badges", false,
 		"serve /badge/... without a viewer token.\n"+
 			"Needed for a README image, which sends no credential and is\n"+
@@ -81,10 +87,23 @@ func runHub(args []string) error {
 		}
 	}
 
+	var tailnet *api.TailnetViewers
+	if *tailnetViewers != "" {
+		bin, err := api.FindTailscaleBin(*tailscaleBin)
+		if err != nil {
+			// Fail closed and loud: an operator who asked for tailnet
+			// identity must not get a hub that silently never grants it.
+			return fmt.Errorf("--tailnet-viewers: %w", err)
+		}
+		tailnet = api.NewTailnetViewers(strings.Split(*tailnetViewers, ","), bindHosts(*addr), api.TailscaleWhoIs(bin))
+		log.Printf("tailnet identity: %s may view without a token (via %s)", *tailnetViewers, bin)
+	}
+
 	srv := &api.Server{
 		Store:               st,
 		Pricing:             table,
 		ViewerToken:         *token,
+		Tailnet:             tailnet,
 		PublicBadges:        *publicBadges,
 		LimitsPollIntervalS: *pollInterval,
 		UI:                  web.Assets(),
@@ -317,4 +336,19 @@ func runAgent(args []string) error {
 		log.Printf("ccquota agent %s -> %s (scan every %s)", Version, *hub, scanEvery)
 	}
 	return a.Run(ctx)
+}
+
+// bindHosts is the list of hosts in a comma-separated --addr. The tailnet
+// identity gate treats these as "self" and never trusts them: the hub's own
+// tailnet address resolves to the machine's owner.
+func bindHosts(addr string) []string {
+	var hosts []string
+	for _, a := range strings.Split(addr, ",") {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(a))
+		if err != nil {
+			continue
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
