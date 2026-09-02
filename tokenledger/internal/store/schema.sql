@@ -183,3 +183,48 @@ CREATE TABLE IF NOT EXISTS share_links (
   last_used_at TEXT,
   uses         INTEGER NOT NULL DEFAULT 0
 );
+
+-- Hourly rollup of usage_events, keyed by every dimension the dashboard can
+-- drill down on plus the session. One row here stands for every turn in that
+-- hour with the same (account, endpoint, session, login, project, model,
+-- branch, effort, entrypoint, sidechain). The mini's 290k events collapse to a
+-- few thousand rows, which is what makes brushing a 90-day timeline cheap.
+--
+-- Maintained in the same transaction as the event insert, so it can never
+-- drift from usage_events; rebuilt from scratch when rollup_meta's version
+-- changes. Pruning raw events leaves it alone on purpose: totals and sessions
+-- keep working past the retention window, only per-turn detail is lost.
+CREATE TABLE IF NOT EXISTS usage_hourly (
+  hour          TEXT NOT NULL,   -- 'YYYY-MM-DDTHH:00:00Z', the bucket start
+  account_uuid  TEXT NOT NULL,
+  endpoint_id   TEXT NOT NULL,
+  session_id    TEXT NOT NULL DEFAULT '',
+  os_user       TEXT NOT NULL DEFAULT '',
+  cwd           TEXT NOT NULL DEFAULT '',
+  model         TEXT NOT NULL DEFAULT '',
+  git_branch    TEXT NOT NULL DEFAULT '',
+  effort        TEXT NOT NULL DEFAULT '',
+  entrypoint    TEXT NOT NULL DEFAULT '',
+  is_sidechain  INTEGER NOT NULL DEFAULT 0,
+
+  events                 INTEGER NOT NULL DEFAULT 0,
+  input_tokens           INTEGER NOT NULL DEFAULT 0,
+  output_tokens          INTEGER NOT NULL DEFAULT 0,
+  cache_create_5m_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens      INTEGER NOT NULL DEFAULT 0,
+  thinking_tokens        INTEGER NOT NULL DEFAULT 0,
+  cost_usd               REAL    NOT NULL DEFAULT 0,   -- priced turns only
+  unpriced_events        INTEGER NOT NULL DEFAULT 0,   -- turns with NULL cost
+  min_ts                 TEXT NOT NULL,
+  max_ts                 TEXT NOT NULL,
+  PRIMARY KEY (hour, account_uuid, endpoint_id, session_id, os_user, cwd,
+               model, git_branch, effort, entrypoint, is_sidechain)
+);
+CREATE INDEX IF NOT EXISTS idx_hourly_account_hour ON usage_hourly(account_uuid, hour);
+CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, session_id);
+
+CREATE TABLE IF NOT EXISTS rollup_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

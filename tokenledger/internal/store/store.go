@@ -25,6 +25,11 @@ var schemaSQL string
 // Store is a handle on the hub's database.
 type Store struct {
 	db *sql.DB
+
+	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
+	// usage_events on this open, 0 when the rollup was already current. The
+	// hub logs it so an operator can see a first-run backfill happen.
+	BackfilledRollup int64
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -49,7 +54,13 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+
+	st := &Store{db: db}
+	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 // migrate adds columns to databases created by an earlier version.
@@ -475,6 +486,12 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 	}
 	defer stmt.Close()
 
+	rstmt, err := tx.Prepare(rollupInsertSQL)
+	if err != nil {
+		return 0, 0, fmt.Errorf("prepare rollup upsert: %w", err)
+	}
+	defer rstmt.Close()
+
 	for i := range evs {
 		e := &evs[i]
 		var cost any
@@ -492,6 +509,9 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			inserted++
+			if err := rollupUpsert(rstmt, e); err != nil {
+				return 0, 0, fmt.Errorf("rollup event %s: %w", e.MessageUUID, err)
+			}
 		} else {
 			deduped++
 		}
