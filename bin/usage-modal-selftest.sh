@@ -60,5 +60,21 @@ grep -Eq '^  migrate\)' "$BIN/fleet-account.sh" || fail "fleet-account.sh must d
 CHECKS=$((CHECKS + 1))
 [ -x "$BIN/fleet-migrate.sh" ] || fail "bin/fleet-migrate.sh missing or not executable"
 
+# --- the collector's once-per-reset-window quota markers compare with tolerance
+# (fleet_same_window): ccquota's resets_at jitters by ~1s between polls, and an
+# exact compare re-armed the 70% warning every tick (seven copies to one session).
+CHECKS=$((CHECKS + 1))
+grep -q 'fleet_same_window "$mk" "$qreset" && continue' "$BIN/tmux-dash-collect.sh" \
+  || fail "the collector's quota markers must go through fleet_same_window"
+# shellcheck source=/dev/null
+. "$BIN/fleet-lib.sh"
+_t=$(mktemp); printf '1788375599' > "$_t"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 || fail "fleet_same_window: 1s jitter is the same window"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788393600 && fail "fleet_same_window: the next 5h window is a new episode"
+printf 'junk' > "$_t"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t" 1788375600 && fail "fleet_same_window: a non-numeric marker is not a match"
+CHECKS=$((CHECKS + 1)); fleet_same_window "$_t.missing" 1788375600 && fail "fleet_same_window: a missing marker is not a match"
+rm -f "$_t"
+
 printf 'usage-modal selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

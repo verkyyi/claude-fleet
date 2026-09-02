@@ -477,6 +477,8 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_H
   qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
   qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
   QDIR="$G"; mkdir -p "$QDIR"
+  # fleet_same_window (fleet-lib.sh): the once-per-reset-window markers compare
+  # with tolerance — ccquota's resets_at jitters by a second between polls.
   # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
   printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     [ -n "$ql" ] || continue
@@ -485,7 +487,7 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_H
     qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
     if [ "$qutil" -ge "$qceil" ]; then
       mk="$QDIR/quota.ceiling.$ql"
-      [ "$(cat "$mk" 2>/dev/null)" = "$qreset" ] && continue          # this window already handled
+      fleet_same_window "$mk" "$qreset" && continue                          # this window already handled
       printf '%s' "$qreset" | atomic_write "$mk"
       "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
       qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
@@ -499,7 +501,7 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_H
       fi
     elif [ "$qutil" -ge "$qwarn" ]; then
       mk="$QDIR/quota.warn.$ql"
-      [ "$(cat "$mk" 2>/dev/null)" = "$qreset" ] && continue
+      fleet_same_window "$mk" "$qreset" && continue
       printf '%s' "$qreset" | atomic_write "$mk"
       qeta=""; [ "${qpph:-0}" -gt 0 ] && qeta=" (~$(( (100 - qutil) * 60 / qpph )) min to 100% at the current rate)"
       qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
