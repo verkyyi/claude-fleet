@@ -346,24 +346,38 @@ function indexHtml(entries) {
 
 const [mode, ...rest] = process.argv.slice(2);
 
+// An .html/.htm source is served AS-IS (issue #526): the fleet forbids Artifact
+// publishing (account-scoped pages), so a dashboard or interactive page needs a
+// tailnet home too. Its title is the <title>, else the file name. Markdown keeps
+// the GitHub-styled viewer wrapper and its `# H1` title.
+const isHtml = (src) => /\.html?$/i.test(src);
+function titleOf(src, raw) {
+  const m = isHtml(src) ? raw.match(/<title[^>]*>([^<]*)<\/title>/i) : raw.match(/^#\s+(.+?)\s*$/m);
+  const t = m ? m[1].trim() : '';
+  return (t || path.basename(src)).slice(0, 120);
+}
+function writePage(src, raw, out, title, meta) {
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  if (isHtml(src)) fs.writeFileSync(out, raw);
+  else fs.writeFileSync(out, pageHtml(title, Buffer.from(raw, 'utf8').toString('base64'), meta));
+}
+
 if (mode === 'page') {
   const [src, out, meta] = rest;
   const raw = fs.readFileSync(src, 'utf8');
-  const m = raw.match(/^#\s+(.+?)\s*$/m);
-  const title = (m ? m[1] : path.basename(src)).slice(0, 120);
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, pageHtml(title, Buffer.from(raw, 'utf8').toString('base64'), {
+  const title = titleOf(src, raw);
+  writePage(src, raw, out, title, {
     id: process.env.ID,
     session: process.env.SESSION, added: process.env.ADDED,
     disp: process.env.DISP, full: process.env.SRC,
-  }));
+  });
 
   // Copy referenced LOCAL images next to the served page so relative paths resolve
   // (e.g. ![](assets/x.svg) or ![](../../doc/assets/x.svg)). Remote/data URLs are left alone.
   const srcDir = path.dirname(path.resolve(src));
   const outDir = path.dirname(out);
   const seen = new Set();
-  for (const mm of raw.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)) {
+  for (const mm of (isHtml(src) ? [] : raw.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g))) {
     const url = mm[1].replace(/^<|>$/g, '');
     if (/^(https?:|data:|\/\/|\/)/.test(url) || seen.has(url)) continue;
     seen.add(url);
@@ -393,13 +407,11 @@ if (mode === 'page') {
   const src = e.full || e.src;
   if (!fs.existsSync(src)) { process.stdout.write(`skip (source gone): ${src}`); process.exit(0); }
   const raw = fs.readFileSync(src, 'utf8');
-  const m = raw.match(/^#\s+(.+?)\s*$/m);
-  const title = (m ? m[1] : path.basename(src)).slice(0, 120);
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, pageHtml(title, Buffer.from(raw, 'utf8').toString('base64'), {
+  const title = titleOf(src, raw);
+  writePage(src, raw, out, title, {
     id: e.id,
     session: e.session, added: e.added, disp: e.src, full: e.full,
-  }));
+  });
   if (title !== e.title) { e.title = title; fs.writeFileSync(metaJson, JSON.stringify(e, null, 2)); }
   process.stdout.write(title);
 } else if (mode === 'index') {

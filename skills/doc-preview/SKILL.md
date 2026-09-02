@@ -10,6 +10,16 @@ description: Render a Markdown document to GitHub-styled HTML and host it on thi
 Use this whenever you have written or meaningfully edited a Markdown document and the user
 would benefit from reading the rendered result (not raw `.md`) in a browser before commit.
 
+**In a fleet session this is THE way to host anything for the operator — never the
+Artifact tool.** An Artifact page belongs to the claude.ai account that published it, and
+the fleet rotates subscription accounts under sessions, so the operator cannot know which
+login would show it (hook-enforced: `hooks/artifact-guard.py` refuses a publish and points
+here; issue #526). This URL is on the tailnet: any device, no login, every session's shares
+in one list. **`.html` files are accepted too** and served as-is — a dashboard, a report
+page, an interactive mockup — titled from their `<title>`; Markdown gets the GitHub-styled
+viewer. Anything you would have published as an Artifact: write the file, share it here,
+relay the `READY` URL.
+
 ## How it works
 
 `share.sh` renders the given Markdown file(s) into GitHub-styled HTML (client-side `marked`
