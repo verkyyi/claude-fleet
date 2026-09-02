@@ -25,6 +25,14 @@ const GRAN = { '7d': 'hour', '30d': '6h', '90d': 'day' };
 // value the Go API actually expects (internal/api/scope.go, store.Dimension).
 const DIM_TO_API = { project: 'project', login: 'user', machine: 'endpoint', model: 'model', branch: 'branch', team: 'team' };
 const DIM_LABEL = { project: 'Project', login: 'Login', machine: 'Machine', model: 'Model', branch: 'Branch', team: 'Team' };
+// kpiTile's `tone` only special-cases the literal string 'neutral' (its own
+// default) — anything else gets the up=red/down=green colouring. Named here
+// rather than passed as an arbitrary truthy string so every "more usage is
+// worse" tile says so the same way. Sessions counts as one of these too
+// (more concurrent/total sessions reads the same as more turns or more
+// tokens — it's usage volume, not a ratio); cache hit and subagent share
+// stay 'neutral' since a higher ratio there is not inherently bad.
+const TONE_MORE_IS_WORSE = 'volume';
 
 let brushTimer = 0;
 
@@ -157,6 +165,7 @@ function kpisCard(result) {
     id: 'kpi-spend', label: 'spend (notional)',
     value: (d.unpriced_events > 0 ? '⚠ ' : '') + fmtUSD(d.cost_usd),
     delta: delta(d.cost_usd, p.cost_usd),
+    tone: TONE_MORE_IS_WORSE,
   });
   if (d.unpriced_events > 0) {
     spendTile.title = `${fmtFull(d.unpriced_events)} event(s) in this period have no price data — spend is a lower bound.`;
@@ -165,15 +174,16 @@ function kpisCard(result) {
   const card = el('div', { class: 'card' }, el('h2', {}, 'KPIs'),
     el('p', { class: 'hint' }, 'Selection totals, each compared with the equal-length period right before it.'));
   card.appendChild(el('div', { class: 'kpis' },
-    C.kpiTile({ id: 'kpi-tokens', label: 'tokens', value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens) }),
+    C.kpiTile({ id: 'kpi-tokens', label: 'tokens', value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
     spendTile,
-    C.kpiTile({ id: 'kpi-turns', label: 'turns', value: fmtInt(d.events), delta: delta(d.events, p.events) }),
-    C.kpiTile({ id: 'kpi-sessions', label: 'sessions', value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions) }),
+    C.kpiTile({ id: 'kpi-turns', label: 'turns', value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
+    C.kpiTile({ id: 'kpi-sessions', label: 'sessions', value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-cachehit', label: 'cache hit', value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
     C.kpiTile({
       id: 'kpi-perm', label: '$ per 1M output',
       value: perM == null ? '—' : fmtUSD(perM),
       delta: perM == null || prevPerM == null ? null : delta(perM, prevPerM),
+      tone: TONE_MORE_IS_WORSE,
     }),
     C.kpiTile({ id: 'kpi-subagent', label: 'subagent share', value: fmtPct(subShare), delta: delta(subShare, prevSubShare), tone: 'neutral' })));
   return card;

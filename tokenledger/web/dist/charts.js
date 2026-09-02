@@ -270,7 +270,25 @@ export function timeline(series, opts) {
   const gap = n > 90 ? 1 : 2;
   const bw = Math.max(1, iw / n - gap);
 
-  const keyMs = (s) => (typeof s.key === 'number' ? s.key : Date.parse(s.key.length === 16 ? s.key + ':00Z' : s.key));
+  // keyMs accepts a bucket key in any of the three raw shapes the rollup
+  // emits (internal/api/history.go's bucketKey: day 'YYYY-MM-DD' — 10
+  // chars, 6h 'YYYY-MM-DDTHH' — 13 chars, hour 'YYYY-MM-DDTHH:00' — 16
+  // chars) or an already-normalized full timestamp. The three raw lengths
+  // are mutually exclusive, so branching on length alone is sufficient —
+  // the previous version of this only had a branch for 16, so every 6h
+  // (30d-span) bucket silently mis-dated. Kept granularity-free (no
+  // `gran`/`bucket`-derived signal) on purpose: a caller's series can mix
+  // in an already-full ISO key (review.js normalizes upstream for its own,
+  // unrelated reasons — see its `bucketISO`) and this still has to accept
+  // that too.
+  const keyMs = (s) => {
+    if (typeof s.key === 'number') return s.key;
+    const k = s.key;
+    if (k.length === 10) return Date.parse(k + 'T00:00:00Z');
+    if (k.length === 13) return Date.parse(k + ':00:00Z');
+    if (k.length === 16) return Date.parse(k + ':00Z');
+    return Date.parse(k);
+  };
   const xOf = (ms) => PAD.l + ((ms - ext.start) / span) * iw;
 
   // Stack heights per bucket, in the fixed palette order (+ "other" last).
@@ -322,6 +340,19 @@ export function timeline(series, opts) {
   const brush = el('div', { class: 'brush', tabindex: '0' },
     el('div', { class: 'h l' }), el('div', { class: 'h r' }));
   container.appendChild(brush);
+
+  // A stack of up to 7 series (6 top models + "other") with no legend is
+  // unreadable — every other multi-series chart here (stackedArea, lines,
+  // composition) builds one; this one didn't. Same palette order the stack
+  // itself is drawn in (built.forEach above: `i < names.length ?
+  // seriesColor(i) : OTHER_COLOR`), so the mapping is actually correct.
+  if (names.length) {
+    const hasOther = built.some((b) => b.other > 0);
+    const legend = el('div', { class: 'legend' },
+      names.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+      hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), 'Other') : null);
+    container.appendChild(legend);
+  }
 
   const paint = (sel) => {
     const x1 = xOf(sel.from), x2 = xOf(sel.to == null ? ext.end : sel.to);
