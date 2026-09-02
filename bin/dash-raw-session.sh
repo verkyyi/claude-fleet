@@ -123,7 +123,20 @@ TM() { tmux -L "$SOCK" "$@"; }
 # foreground detect is the only chance; the value rides --origin through.
 # issue-<N>/scratch-<N> when a worker or scratch spawned us; empty ≡ hub (⌃s,
 # the dash PROMPT line). Sanitized to the key charset (window option + re-exec embed).
-[ -z "$ORIGIN" ] && ORIGIN=$(fleet_origin_key)
+if [ -z "$ORIGIN" ]; then
+  ORIGIN=$(fleet_origin_key)
+  # CROSS-FLEET spawn (a claude-fleet scratch seeding a monorepo scratch, the
+  # handoff pattern): the derived key names a window in the SPAWNER's fleet, and
+  # the target's dash would nest the new row under whatever window happens to
+  # carry that key there (or, missing it, indent it as an orphan under the last
+  # group) — a bogus parent. Stamp the source FLEET instead: the renderer shows
+  # `↳<fleet>` with no nesting. An explicit --origin is honoured as given.
+  if [ -n "$ORIGIN" ] && [ -n "$TARGET_SESS" ]; then
+    _src=$(fleet_current_session)
+    [ -n "$_src" ] && [ "$_src" != "$TARGET_SESS" ] && ORIGIN="$_src"
+    unset _src
+  fi
+fi
 ORIGIN=$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._-' | cut -c1-32)
 
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is

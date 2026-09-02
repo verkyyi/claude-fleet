@@ -239,7 +239,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin; do
       while [ "$hops" -lt 4 ]; do
         t=$'\n'"$KEYTAB"
         m=${t#*$'\n'"$cur"$'\t'}
-        [ "$m" = "$t" ] && break
+        # parent not on this dash at all (closed, or a key from ANOTHER fleet):
+        # keep the ↳ tag but drop the └ indent — an orphan sinks below every live
+        # group, and indenting it there reads as a child of an unrelated row.
+        [ "$m" = "$t" ] && { [ "$hops" -eq 0 ] && dname=$name; break; }
         prow=${m%%$'\n'*}
         prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
         pidx=${prest%%$'\t'*}; porig=${prest#*$'\t'}
