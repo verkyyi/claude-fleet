@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS endpoints (
   -- every OS account has its own ~/.claude, its own transcripts and its own
   -- credentials, and on a shared box the other homes are unreadable.
   os_user       TEXT NOT NULL DEFAULT '',
+
+  -- The team this endpoint's spend is allocated to.
+  --
+  -- Assigned by the operator, never reported by the endpoint. An endpoint that
+  -- could name its own team could move its spend onto another team's budget,
+  -- for the same reason a public submission may not name its own handle.
+  team          TEXT NOT NULL DEFAULT '',
   enrolled_at   TEXT NOT NULL,
   last_seen     TEXT,
 

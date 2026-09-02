@@ -69,6 +69,7 @@ func migrate(db *sql.DB) error {
 		{"accounts", "label_locked", "INTEGER NOT NULL DEFAULT 0"},
 		{"endpoints", "os_user", "TEXT NOT NULL DEFAULT ''"},
 		{"usage_events", "os_user", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "team", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -254,7 +255,10 @@ type Endpoint struct {
 	AgentVersion string `json:"agent_version"`
 	// OSUser is the OS login the agent runs as. An endpoint is a (machine,
 	// user) pair, not a machine.
-	OSUser     string     `json:"os_user"`
+	OSUser string `json:"os_user"`
+	// Team is the operator's allocation of this endpoint's spend. Empty means
+	// unassigned, which the UI renders as "unassigned" rather than hiding.
+	Team       string     `json:"team"`
 	EnrolledAt time.Time  `json:"enrolled_at"`
 	LastSeen   *time.Time `json:"last_seen"`
 
@@ -290,7 +294,7 @@ func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 // drifted apart once already when a column was added.
 const endpointColumns = `
 	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
-	       cc_version, agent_version, os_user, enrolled_at, last_seen,
+	       cc_version, agent_version, os_user, team, enrolled_at, last_seen,
 	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
 	       backfill_limit, limits_unavailable`
 
@@ -301,7 +305,7 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	var enrolled string
 	var lastSeen, account, earliest sql.NullString
 	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
-		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &enrolled, &lastSeen,
+		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &e.Team, &enrolled, &lastSeen,
 		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
 		&e.BackfillLimit, &e.LimitsUnavailable)
 	if err != nil {
@@ -529,4 +533,23 @@ func (s *Store) PruneEvents(olderThan time.Time) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// SetEndpointTeam allocates an endpoint's spend to a team.
+//
+// Operator-side on purpose: this is the only writer of endpoints.team, and the
+// ingest path (TouchEndpoint) deliberately does not name the column. Passing an
+// empty team un-assigns it.
+func (s *Store) SetEndpointTeam(endpointID, team string) error {
+	if endpointID == "" {
+		return fmt.Errorf("endpoint id is required")
+	}
+	res, err := s.db.Exec(`UPDATE endpoints SET team = ? WHERE endpoint_id = ?`, team, endpointID)
+	if err != nil {
+		return fmt.Errorf("set endpoint team: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no endpoint %q on this hub (run `ccquota team --list` to see them)", endpointID)
+	}
+	return nil
 }

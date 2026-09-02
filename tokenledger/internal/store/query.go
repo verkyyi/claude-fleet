@@ -228,6 +228,14 @@ const (
 	// hostname is the machine, cwd is a project path, and one machine's users
 	// cannot read each other's transcripts.
 	ByUser Dimension = "user"
+
+	// ByTeam allocates spend to an operator-assigned team.
+	//
+	// It is the one dimension not stored on the event row. Team is a property
+	// of the endpoint, resolved by join at query time, so re-assigning a
+	// machine moves its WHOLE history -- freezing a team at ingest would mean
+	// a re-assignment silently changed nothing that had already happened.
+	ByTeam Dimension = "team"
 )
 
 // AllAccounts asks for every subscription at once.
@@ -256,6 +264,9 @@ func (d Dimension) column() (string, error) {
 		return "git_branch", nil
 	case ByUser:
 		return "os_user", nil
+	case ByTeam:
+		return `COALESCE((SELECT e.team FROM endpoints e
+		                  WHERE e.endpoint_id = usage_events.endpoint_id), '')`, nil
 	default:
 		return "", fmt.Errorf("unknown dimension %q", d)
 	}
@@ -320,8 +331,25 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		s.labelEndpoints(out)
 	case ByAccount:
 		s.labelAccounts(out)
+	case ByTeam:
+		labelTeams(out)
 	}
 	return out, nil
+}
+
+// labelTeams names the empty team.
+//
+// An unassigned endpoint keeps its bucket rather than being filtered out: a
+// team breakdown whose rows do not add up to the fleet total is worse than one
+// with an "unassigned" row in it.
+func labelTeams(bs []Bucket) {
+	for i := range bs {
+		if bs[i].Key == "" {
+			bs[i].Label = "unassigned"
+			continue
+		}
+		bs[i].Label = bs[i].Key
+	}
 }
 
 // accountClause returns the WHERE fragment that scopes to one subscription, or
