@@ -39,6 +39,25 @@ type Data struct {
 	// Size is "full" (48px, the presentation size) or "compact" (20px, sits
 	// in a row of shields badges). Tokenman only.
 	Size string
+
+	// From is the value the odometer rolls FROM. Zero rolls up from nothing;
+	// a previous reading rolls exactly the difference, wheel by wheel, with
+	// as many turns as each position actually carried. This is what lets a
+	// page that re-fetches the badge show real movement rather than a
+	// from-zero replay. Tokenman only.
+	From int64
+	// Transparent omits the ground so the host's own background shows
+	// through. Tokenman only.
+	Transparent bool
+	// Colors overrides individual palette entries. Tokenman only.
+	Colors Colors
+}
+
+// Colors are optional hex overrides (six or three hex digits, no #). An
+// invalid value is ignored rather than rendering an error: a badge with a typo
+// in its URL should still be a badge.
+type Colors struct {
+	Pac, Dot, FG, BG string
 }
 
 // LabelText is the left half of the badge.

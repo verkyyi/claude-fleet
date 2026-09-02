@@ -2,6 +2,7 @@ package badge
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -57,8 +58,62 @@ var sizes = map[string]metrics{
 }
 
 type tokenmanPalette struct {
-	ground, groundEdge, pac, pacEdge, eye, dot     string
+	ground, groundEdge, pac, eye, dot              string
 	cell, cellTop, digit, comma, label, labelMuted string
+}
+
+// vars renders the palette as CSS custom properties. Every fill in the
+// badge references a variable, which is what lets ONE document carry both
+// themes and switch on prefers-color-scheme.
+func (p tokenmanPalette) vars(o Colors) string {
+	pac, dot, digit, label, ground := p.pac, p.dot, p.digit, p.label, p.ground
+	if h, ok := hex(o.Pac); ok {
+		pac = h
+	}
+	if h, ok := hex(o.Dot); ok {
+		dot = h
+	}
+	if h, ok := hex(o.FG); ok {
+		digit, label = h, h
+	}
+	if h, ok := hex(o.BG); ok {
+		ground = h
+	}
+	return fmt.Sprintf("--g:%s;--ge:%s;--pac:%s;--eye:%s;--dot:%s;--cell:%s;--ct:%s;--d:%s;--cm:%s;--l:%s;--lm:%s",
+		ground, p.groundEdge, pac, p.eye, dot, p.cell, p.cellTop, digit, p.comma, label, p.labelMuted)
+}
+
+var hexRe = regexp.MustCompile(`^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
+
+func hex(s string) (string, bool) {
+	if !hexRe.MatchString(s) {
+		return "", false
+	}
+	return "#" + strings.ToLower(s), true
+}
+
+// wheelSteps is how many digit advances the wheel at pos (0 = ones) makes
+// rolling from one value to another: the number of times that position
+// changed, capped to a few full turns so the strip stays small, but always
+// ending on the right digit. A decrease -- a pruned history, say -- rolls up
+// from zero rather than backwards.
+func wheelSteps(from, to int64, pos int) int {
+	if to < from || from < 0 {
+		from = 0
+	}
+	p := int64(1)
+	for i := 0; i < pos; i++ {
+		p *= 10
+	}
+	raw := to/p - from/p
+	rot, rem := int(raw/10), int(raw%10)
+	if cap := 4 - pos; rot > cap {
+		rot = cap
+	}
+	if rot < 0 {
+		rot = 0
+	}
+	return rot*10 + rem
 }
 
 func tokenmanPaletteFor(theme string) tokenmanPalette {
@@ -110,31 +165,18 @@ func GroupDigits(n int64) string {
 	return b.String()
 }
 
-// spinsFor is how many extra full rotations a wheel makes before settling.
-// The ones wheel spins most; anything past the thousands just rolls up to its
-// digit. Distance is what makes the low wheels look fast under one shared
-// duration -- a real odometer's wheels all move together.
-func spinsFor(fromRight int) int {
-	switch fromRight {
-	case 0:
-		return 4
-	case 1:
-		return 3
-	case 2:
-		return 2
-	case 3:
-		return 1
-	}
-	return 0
-}
-
 func renderTokenman(d Data) []byte {
 	m, ok := sizes[d.Size]
 	if !ok {
 		m = sizes["full"]
 	}
 	p := tokenmanPaletteFor(d.Theme)
-	digits := strconv.FormatInt(max64(d.Tokens, 0), 10)
+	to := max64(d.Tokens, 0)
+	from := d.From
+	if from > to || from < 0 {
+		from = 0
+	}
+	digits := strconv.FormatInt(to, 10)
 	grouped := GroupDigits(d.Tokens)
 	period := periodLabel(d.Period)
 	title := fmt.Sprintf("%s tokens (%s)", grouped, period)
@@ -163,30 +205,30 @@ func renderTokenman(d Data) []byte {
 	for _, ch := range grouped {
 		if ch == ',' {
 			// A separator mark at the baseline, between wheels.
-			fmt.Fprintf(&cells, `<text class="cm" x="%d" y="%d" style="fill:%s">,</text>`,
-				x+m.commaW/2, baseline, p.comma)
+			fmt.Fprintf(&cells, `<text class="cm" x="%d" y="%d">,</text>`, x+m.commaW/2, baseline)
 			x += m.commaW
 			continue
 		}
-		final := int(ch - '0')
 		fromRight := nDigits - 1 - digitIdx
-		steps := spinsFor(fromRight)*10 + final
+		steps := wheelSteps(from, to, fromRight)
+		startDigit := int(digitAt(from, fromRight))
 		rest := steps * m.cellH
 		clipID := fmt.Sprintf("c%d", digitIdx)
 
 		fmt.Fprintf(&clips, `<clipPath id="%s"><rect x="%d" y="%d" width="%d" height="%d" rx="2"/></clipPath>`,
 			clipID, x, cellY, m.cellW, m.cellH)
 		// The cell: an inset wheel with a hairline highlight along its top.
-		fmt.Fprintf(&cells, `<rect x="%d" y="%d" width="%d" height="%d" rx="2" fill="%s"/>`,
-			x, cellY, m.cellW, m.cellH, p.cell)
-		fmt.Fprintf(&cells, `<rect x="%d" y="%d" width="%d" height="1" fill="%s"/>`,
-			x+1, cellY, m.cellW-2, p.cellTop)
-		// The strip of digits inside it. Index k shows k mod 10; the strip
-		// ends on the final digit, and the base transform parks it there.
+		fmt.Fprintf(&cells, `<rect x="%d" y="%d" width="%d" height="%d" rx="2" fill="var(--cell)"/>`,
+			x, cellY, m.cellW, m.cellH)
+		fmt.Fprintf(&cells, `<rect x="%d" y="%d" width="%d" height="1" fill="var(--ct)"/>`,
+			x+1, cellY, m.cellW-2)
+		// The strip of digits inside it, starting on the OLD digit. Index k
+		// shows (start+k) mod 10; the strip ends on the new digit and the
+		// base transform parks it there.
 		fmt.Fprintf(&cells, `<g clip-path="url(#%s)"><g class="w" style="transform:translateY(-%dpx)">`, clipID, rest)
 		cx := x + m.cellW/2
 		for k := 0; k <= steps; k++ {
-			fmt.Fprintf(&cells, `<text x="%d" y="%d">%d</text>`, cx, baseline+k*m.cellH, k%10)
+			fmt.Fprintf(&cells, `<text x="%d" y="%d">%d</text>`, cx, baseline+k*m.cellH, (startDigit+k)%10)
 		}
 		cells.WriteString(`</g></g>`)
 		x += m.pitch
@@ -199,14 +241,14 @@ func renderTokenman(d Data) []byte {
 	var label strings.Builder
 	labelW := 0
 	if m.twoLine {
-		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" font-weight="600" fill="%s">tokens</text>`,
-			labelX, pacCY-2, sansStack, m.labelFont, p.label)
-		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" fill="%s">%s</text>`,
-			labelX, pacCY+m.labelFont+1, sansStack, m.labelFont-1, p.labelMuted, esc(period))
+		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" font-weight="600" fill="var(--l)">tokens</text>`,
+			labelX, pacCY-2, sansStack, m.labelFont)
+		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" fill="var(--lm)">%s</text>`,
+			labelX, pacCY+m.labelFont+1, sansStack, m.labelFont-1, esc(period))
 		labelW = textAdvance(maxLen("tokens", period), m.labelFont)
 	} else {
-		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" font-weight="600" fill="%s">tokens</text>`,
-			labelX, pacCY+m.labelFont*36/100, sansStack, m.labelFont, p.label)
+		fmt.Fprintf(&label, `<text x="%d" y="%d" font-family="%s" font-size="%d" font-weight="600" fill="var(--l)">tokens</text>`,
+			labelX, pacCY+m.labelFont*36/100, sansStack, m.labelFont)
 		labelW = textAdvance(len("tokens"), m.labelFont)
 	}
 	width := labelX + labelW + m.pad
@@ -224,8 +266,8 @@ func renderTokenman(d Data) []byte {
 
 	var dots strings.Builder
 	for i := 0; i <= m.nDots; i++ { // one extra so the loop is seamless
-		fmt.Fprintf(&dots, `<circle cx="%.1f" cy="%d" r="%.1f" fill="%s"/>`,
-			dotsX0+m.dotP*float64(i), pacCY, m.dotR, p.dot)
+		fmt.Fprintf(&dots, `<circle cx="%.1f" cy="%d" r="%.1f" fill="var(--dot)"/>`,
+			dotsX0+m.dotP*float64(i), pacCY, m.dotR)
 	}
 
 	var b strings.Builder
@@ -233,7 +275,18 @@ func renderTokenman(d Data) []byte {
 		width, m.h, width, m.h, esc(title))
 	fmt.Fprintf(&b, `<title>%s</title>`, esc(title))
 	// Origins are absolute pixels in the badge's own coordinate space.
-	fmt.Fprintf(&b, `<style>`+
+	// Theme. An explicit theme sets one palette; "auto" sets light and lets
+	// the dark block override it when the reader's scheme is dark -- which an
+	// <img>-loaded SVG does evaluate.
+	var theme string
+	switch d.Theme {
+	case "auto":
+		theme = fmt.Sprintf(`:root{%s}@media (prefers-color-scheme:dark){:root{%s}}`,
+			tokenmanPaletteFor("light").vars(d.Colors), tokenmanPaletteFor("dark").vars(d.Colors))
+	default:
+		theme = fmt.Sprintf(`:root{%s}`, p.vars(d.Colors))
+	}
+	fmt.Fprintf(&b, `<style>%s`+
 		`.w{animation:roll %s cubic-bezier(.22,.8,.2,1) both}`+
 		`@keyframes roll{from{transform:translateY(0)}}`+
 		`.ju,.jl{transform-box:view-box;transform-origin:%dpx %dpx}`+
@@ -243,26 +296,37 @@ func renderTokenman(d Data) []byte {
 		`@keyframes jl{0%%,100%%{transform:rotate(6deg)}50%%{transform:rotate(36deg)}}`+
 		`.dots{animation:eat %s linear infinite}`+
 		`@keyframes eat{to{transform:translateX(-%.1fpx)}}`+
-		`.w text,.cm{font-family:%s;font-size:%dpx;font-weight:700;fill:%s;text-anchor:middle}`+
+		`.w text{font-family:%s;font-size:%dpx;font-weight:700;fill:var(--d);text-anchor:middle}`+
+		`.cm{font-family:%s;font-size:%dpx;font-weight:700;fill:var(--cm);text-anchor:middle}`+
 		`@media (prefers-reduced-motion:reduce){.w,.ju,.jl,.dots{animation:none}}`+
 		`</style>`,
-		rollS, pacCX, pacCY, chompS, chompS, chompS, m.dotP, monoStack, m.digitFont, p.digit)
+		theme, rollS, pacCX, pacCY, chompS, chompS, chompS, m.dotP, monoStack, m.digitFont, monoStack, m.digitFont)
 	fmt.Fprintf(&b, `<defs>%s<clipPath id="dc"><rect x="%.1f" y="0" width="%.1f" height="%d"/></clipPath></defs>`,
 		clips.String(), dotsClipL, dotsClipR-dotsClipL, m.h)
-	fmt.Fprintf(&b, `<rect width="%d" height="%d" rx="%d" fill="%s" stroke="%s"/>`,
-		width, m.h, m.rx, p.ground, p.groundEdge)
+	if !d.Transparent {
+		fmt.Fprintf(&b, `<rect width="%d" height="%d" rx="%d" fill="var(--g)" stroke="var(--ge)"/>`,
+			width, m.h, m.rx)
+	}
 	// dots
 	fmt.Fprintf(&b, `<g clip-path="url(#dc)"><g class="dots">%s</g></g>`, dots.String())
 	// character
-	fmt.Fprintf(&b, `<g class="ju"><path d="%s" fill="%s"/>`+
-		`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s"/></g>`,
-		jaw(0), p.pac, eyeCX, eyeCY, eyeR, p.eye)
-	fmt.Fprintf(&b, `<g class="jl"><path d="%s" fill="%s"/></g>`, jaw(1), p.pac)
+	fmt.Fprintf(&b, `<g class="ju"><path d="%s" fill="var(--pac)"/>`+
+		`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="var(--eye)"/></g>`,
+		jaw(0), eyeCX, eyeCY, eyeR)
+	fmt.Fprintf(&b, `<g class="jl"><path d="%s" fill="var(--pac)"/></g>`, jaw(1))
 	// odometer + label
 	b.WriteString(cells.String())
 	b.WriteString(label.String())
 	b.WriteString(`</svg>`)
 	return []byte(b.String())
+}
+
+// digitAt is the decimal digit of n at pos (0 = ones).
+func digitAt(n int64, pos int) int64 {
+	for i := 0; i < pos; i++ {
+		n /= 10
+	}
+	return n % 10
 }
 
 func periodLabel(period string) string {

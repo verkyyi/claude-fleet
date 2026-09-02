@@ -2,6 +2,7 @@ package badge
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -128,5 +129,99 @@ func TestGroupDigits(t *testing.T) {
 		if got := GroupDigits(c.n); got != c.want {
 			t.Errorf("GroupDigits(%d) = %q, want %q", c.n, got, c.want)
 		}
+	}
+}
+
+// A wheel rolls from its old digit to its new one, turning as many times as
+// that position actually carried -- capped so the strip stays small, but
+// always ending on the right digit.
+func TestWheelSteps(t *testing.T) {
+	cases := []struct {
+		from, to int64
+		pos      int
+		want     int
+	}{
+		{0, 7, 0, 7},
+		{0, 59_745_827_895, 0, 45}, // 4 capped rotations + 5
+		{0, 59_745_827_895, 1, 39}, // 3 + 9
+		{0, 59_745_827_895, 4, 2},  // no rotation past the thousands; just 0 -> 2
+		{999, 1_000, 0, 1},         // every wheel carries exactly once
+		{999, 1_000, 1, 1},
+		{999, 1_000, 2, 1},
+		{999, 1_000, 3, 1},
+		{1_000, 1_000, 0, 0}, // unchanged: nothing moves
+		{123, 125, 0, 2},
+		{123, 125, 1, 0},
+		{5_000, 4_000, 0, 40}, // a decrease rolls up from zero: 4 capped turns + 0
+		{5_000, 4_000, 3, 4},
+	}
+	for _, c := range cases {
+		if got := wheelSteps(c.from, c.to, c.pos); got != c.want {
+			t.Errorf("wheelSteps(%d, %d, pos %d) = %d, want %d", c.from, c.to, c.pos, got, c.want)
+		}
+	}
+}
+
+// The strip starts on the OLD digit and its resting transform is exactly the
+// steps travelled, so the wheel lands on the new digit and a reduced-motion
+// reader sees the new value.
+func TestTokenman_FromRollsTheDifference(t *testing.T) {
+	svg := string(Render(Data{Tokens: 1_000, From: 999, Style: StyleTokenman}))
+	m := sizes["full"]
+	wheels := regexp.MustCompile(`class="w" style="transform:translateY\(-(\d+)px\)"`).FindAllStringSubmatch(svg, -1)
+	if len(wheels) != 4 {
+		t.Fatalf("want 4 wheels, got %d", len(wheels))
+	}
+	for i, w := range wheels {
+		if w[1] != strconv.Itoa(m.cellH) {
+			t.Errorf("wheel %d rests at %spx, want one step (%dpx)", i, w[1], m.cellH)
+		}
+	}
+	// The ones wheel's strip: 9 then 0.
+	if !strings.Contains(svg, `>9</text><text`) {
+		t.Error("the ones wheel does not start on its old digit 9")
+	}
+}
+
+func TestTokenman_AutoThemeCarriesBothPalettes(t *testing.T) {
+	svg := string(Render(Data{Tokens: 5, Theme: "auto", Style: StyleTokenman}))
+	if !strings.Contains(svg, "prefers-color-scheme:dark") {
+		t.Fatal("auto theme has no dark media block")
+	}
+	dark, light := tokenmanPaletteFor("dark"), tokenmanPaletteFor("light")
+	if !strings.Contains(svg, dark.ground) || !strings.Contains(svg, light.ground) {
+		t.Error("auto theme does not carry both grounds")
+	}
+	// An explicit theme carries only its own.
+	d := string(Render(Data{Tokens: 5, Theme: "dark", Style: StyleTokenman}))
+	if strings.Contains(d, light.ground) {
+		t.Error("dark theme leaks the light ground")
+	}
+}
+
+func TestTokenman_TransparentHasNoGround(t *testing.T) {
+	svg := string(Render(Data{Tokens: 5, Theme: "dark", Transparent: true, Style: StyleTokenman}))
+	if strings.Contains(svg, `fill="var(--g)"`) {
+		t.Error("transparent badge still paints its ground")
+	}
+	opaque := string(Render(Data{Tokens: 5, Theme: "dark", Style: StyleTokenman}))
+	if !strings.Contains(opaque, `fill="var(--g)"`) {
+		t.Error("control: the opaque badge has no ground rect either, so the assertion above is empty")
+	}
+	assertSandboxSafe(t, svg)
+}
+
+func TestTokenman_ColorOverrides(t *testing.T) {
+	svg := string(Render(Data{Tokens: 5, Style: StyleTokenman, Colors: Colors{Pac: "ff0000", Dot: "00ff00", FG: "0000ff", BG: "123456"}}))
+	for _, want := range []string{"#ff0000", "#00ff00", "#0000ff", "#123456"} {
+		if !strings.Contains(svg, want) {
+			t.Errorf("override %s not applied", want)
+		}
+	}
+	// Bad hex is ignored, never an error badge.
+	bad := string(Render(Data{Tokens: 5, Style: StyleTokenman, Colors: Colors{Pac: "not-a-colour", BG: "<script>"}}))
+	assertSandboxSafe(t, bad)
+	if !strings.Contains(bad, tokenmanPaletteFor("dark").pac) {
+		t.Error("a bad override did not fall back to the default")
 	}
 }
