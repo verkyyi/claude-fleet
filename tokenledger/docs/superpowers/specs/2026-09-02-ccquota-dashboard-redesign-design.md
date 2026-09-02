@@ -62,18 +62,36 @@ Non-goals (unchanged by this work):
 
 ```
 ┌ sticky ──────────────────────────────────────────────────────────────┐
-│ ccquota   [Now] [Review]        [All 3 subscriptions ▾] [7d|30d|90d] │
-│ filters: [machine: macbook ×] [model: claude-opus-5 ×] [clear]       │
+│ ccquota   [Now] [Review]                                           ◐ │
 └──────────────────────────────────────────────────────────────────────┘
   Now                                  Review
   ─ alerts                             ─ 1 timeline + brush
-  ─ hero odometer                      ─ 2 KPI strip (with deltas)
-  ─ wall gauges per subscription       ─ 3 findings
-  ─ right now (live sessions)          ─ 4 two breakdowns (group-by each)
-  ─ ▸ fleet (collapsed)                ─ 5 efficiency      6 model mix over time
-                                       ─ 7 when (heatmap)  8 wall history
-                                       ─ 9 sessions table → session detail
+  ─ hero odometer                        · [subs ▾] [7d|30d|90d]
+  ─ wall gauges per subscription          · filters: [machine: macbook ×]
+    · [subs ▾]                          ─ 2 KPI strip (with deltas)
+    · filters: [machine: macbook ×]     ─ 3 findings
+  ─ right now (live sessions)           ─ 4 two breakdowns (group-by each)
+  ─ ▸ fleet (collapsed)                 ─ 5 efficiency  6 model mix over time
+                                        ─ 7 when (heatmap)  8 wall history
+                                        ─ 9 sessions table → session detail
 ```
+
+**The navigation bar carries navigation only** — wordmark, the two view tabs,
+and the theme toggle. It does not carry scope. That was the operator's call
+after using the built dashboard: *"不需要全局进行 Sub 或者日期，过滤，只有子项
+需要这样过滤"* — don't filter globally; the sub-items are what need filtering.
+
+The scope controls instead live on **the first substantive card of each view**,
+which is also the card whose own subject they are. In Review that is the
+timeline, which already owns the time range through its brush, so the span
+control sits beside the axis it scales. In Now it is "Am I about to hit the
+wall?", the card that is per-subscription by definition; Now carries no span
+control at all, because it is a live view with no range.
+
+This is a change of *where the controls are*, not of what they mean: one scope
+still drives every card in the view, and it is still the URL that holds it
+(§3.1). A card that "owns" the scope renders its widget; it does not own a
+private filter.
 
 Routing is hash-based so the Go server needs no route changes and the existing
 path routes (`/u/`, `/share`) are untouched:
@@ -108,13 +126,21 @@ pure functions, round-trip tested. Every control writes to the URL
 group-by) and the app re-renders from `hashchange`. There is no second copy of
 the state.
 
-### 3.2 Scope bar
+### 3.2 Navigation bar and scope controls
 
-- Sticky at the top on every viewport. Row 1: view tabs · subscription select ·
-  span segmented control. Row 2 (only when chips exist): chips + "clear".
-- On ≤ 720 px row 1 wraps, chips scroll horizontally, and the tabs stay in
-  view.
-- A 2 px progress bar under the scope bar is visible while any request for the
+- The **navigation bar** is sticky on every viewport and holds only the
+  wordmark, the `Now` / `Review` tabs, and the theme toggle. No scope, no
+  filters. On ≤ 720 px the wordmark drops and the tabs stay in view.
+- The **scope controls** — subscription select, span control, and the chips row
+  (chips + "clear", rendered only when chips exist) — live on the first
+  substantive card of the current view: the timeline in Review, the wall card
+  in Now. Now has no span control.
+- Wherever they are rendered, they write through `app.setState` → the URL → one
+  sequenced load (§3.4). A relocated control that talked to the network
+  directly would reintroduce the race this design exists to fix.
+- On ≤ 720 px the controls wrap within their card and chips scroll
+  horizontally.
+- A 2 px progress bar under the navigation bar is visible while any request for the
   current state is in flight; `main` gets `aria-busy="true"` and cards dim to
   60 % opacity. Old data stays visible under the dimming. There is no spinner
   that replaces content.
@@ -447,8 +473,8 @@ Files under `web/dist`, ES modules, no bundler:
 
 | file | responsibility |
 |---|---|
-| `index.html` | shell: scope bar, `#now`, `#review`, `#detail`, tooltip; loads `app.js` as a module |
-| `styles.css` | the existing palette and tokens, plus scope bar, chips, brush, heatmap, KPI, overlay |
+| `index.html` | shell: nav bar, `#now`, `#review`, `#detail`, tooltip; loads `app.js` as a module |
+| `styles.css` | the existing palette and tokens, plus nav bar, scope controls, chips, brush, heatmap, KPI, overlay |
 | `app.js` | boot, router (`hashchange`), `loader` (seq/abort), view switching |
 | `lib/state.js` | URL ⇄ state codec; chip and scope → query-string mapping (pure) |
 | `lib/brush.js` | bucket math, snapping, default selection, span change rules (pure) |
@@ -456,7 +482,7 @@ Files under `web/dist`, ES modules, no bundler:
 | `lib/format.js` | `fmtInt`, `fmtUSD`, `shortProject`, `relTime`, `ago`, deltas (pure) |
 | `lib/dom.js` | `el`, tooltip, `escapeHTML` |
 | `charts.js` | rankedBars, stackedBars (timeline), stackedArea, heatmap, lines, kpi tile, composition bar, table view |
-| `scope.js` | scope bar, chips, brush wiring |
+| `scope.js` | the nav bar, and the per-view scope controls (subscription / span / chips) each view mounts on its first card |
 | `now.js` | Now view (ported cards) |
 | `review.js` | Review view |
 | `session.js` | session detail overlay |
@@ -472,7 +498,7 @@ number on every bar, honest empty states, cost always labelled notional.
 
 Accessibility: every chart card has the table toggle; the brush is keyboard
 operable (arrow keys move the selection by one bucket, shift+arrow resizes);
-`aria-busy` during loads; the scope bar controls are real `<select>` /
+`aria-busy` during loads; the scope controls are real `<select>` /
 `<button>` elements.
 
 ## 10. Testing
@@ -506,7 +532,7 @@ Manual, against a local hub on a copy of the mini DB, before deploy:
    every card agree.
 4. 90-day span: every Review request < 300 ms in the network panel, except
    `/v1/findings` at ~454 ms (see §8.1 — measured and accepted).
-5. Phone width (390 px): scope bar reachable while scrolled; brush works by
+5. Phone width (390 px): nav bar reachable while scrolled; brush works by
    touch; sessions render as cards.
 6. Both themes; no `null` text anywhere.
 
@@ -525,7 +551,7 @@ additive and ignored by it.
    `sessions`, `sessions/{id}`, `limits/history` endpoints; chips on `usage` /
    `history`; tests. Deployable on its own (no UI change).
 2. **Shell** — module split, router and URL state, loader with sequencing,
-   scope bar with chips, Now view ported, Fleet collapsed, the `null` fix.
+   scope controls with chips, Now view ported, Fleet collapsed, the `null` fix.
    Deployable: same information as today, race fixed.
 3. **Review** — timeline + brush, KPI strip, breakdowns, efficiency, model mix,
    heatmap, wall history, sessions + detail.
