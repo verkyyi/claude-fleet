@@ -54,6 +54,10 @@ func runHub(args []string) error {
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
 	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
+	rebuild := fs.Bool("rebuild-rollup", false,
+		"rebuild the hourly rollup from raw events at startup, then continue.\n"+
+			"Open already does this automatically after a schema change; pass this\n"+
+			"to force it after fixing corrupted rows by hand, for instance")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -87,6 +91,16 @@ func runHub(args []string) error {
 		return err
 	}
 	defer st.Close()
+	if st.BackfilledRollup > 0 {
+		log.Printf("rollup: built %d hourly rows from usage_events", st.BackfilledRollup)
+	}
+	if *rebuild {
+		n, err := st.RebuildRollup()
+		if err != nil {
+			return fmt.Errorf("--rebuild-rollup: %w", err)
+		}
+		log.Printf("rollup: rebuilt %d hourly rows from usage_events", n)
+	}
 
 	table := pricing.Default()
 	if *pricingFile != "" {

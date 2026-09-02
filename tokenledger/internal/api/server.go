@@ -235,6 +235,11 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unreadable asset", http.StatusInternalServerError)
 		return
 	}
+	// The embedded dashboard is rebuilt into the SAME binary on every deploy,
+	// with no cache-busting filename. A browser that cached an old bundle
+	// under this path would keep serving it past a release until someone
+	// force-refreshed, silently running stale JS against a live API.
+	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, path, st.ModTime(), rs)
 }
 
