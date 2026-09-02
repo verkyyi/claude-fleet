@@ -401,8 +401,25 @@ function wallCard(limits, chips) {
   return card;
 }
 
+// wallCardFromResult does NOT delegate a rejected result to queryFailed()
+// the way every other card on this view does (Task 15 fix round). Those
+// other cards own no persistent state; this one hosts nowScope.el, the
+// scope-controls widget Now mounts here (see the module comment above and
+// scope.js's createScopeControls) precisely because Now has no span control
+// to fall back on -- it is the ONLY place Now can change subscription or
+// chips at all. queryFailed()'s error card has no room for it, and
+// applyNow()'s replaceChildren() would detach the widget from the live DOM
+// along with the rest of the failed card, stranding the viewer with the one
+// control that view has. So a rejection here builds its own card, with the
+// same h2 and nowScope.el every other branch of wallCard() carries, and
+// only the body below them is the error state.
 function wallCardFromResult(result, chips) {
-  if (result.status === 'rejected') return queryFailed('Am I about to hit the wall?', result);
+  if (result.status === 'rejected') {
+    return el('div', { class: 'card' },
+      el('h2', {}, 'Am I about to hit the wall?'),
+      nowScope.el,
+      el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+  }
   return wallCard(result.value, chips);
 }
 

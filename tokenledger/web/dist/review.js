@@ -117,20 +117,36 @@ function applyFindingScope(state, app, f) {
 
 /* -------------------------------------------------------- card 1: timeline */
 
+// timelineCard ALWAYS builds the card shell (title, hint, reviewScope.el)
+// before branching on the fetch's outcome, and both branches append to that
+// SAME card element. This is deliberate (Task 15 fix round): reviewScope.el
+// is the persistent scope-controls widget Review mounts on this card (see
+// the module comment above and scope.js's createScopeControls) -- if a
+// rejected `/v1/history` short-circuited to a wholly separate error card the
+// way errCard()'s other three callers do, replaceChildren() at this card's
+// call site would detach the subscription/span/chips widget from the live
+// DOM along with the rest of the card, stranding the viewer with no way to
+// change scope until the URL is hand-edited. Building the shell first and
+// branching only on what comes AFTER it means the widget survives a failed
+// fetch exactly like it survives a successful one.
 function timelineCard(result, ctx, state, app) {
-  if (result.status === 'rejected') return errCard('Timeline', result);
-  const { ext, sel, gran } = ctx;
-  const data = result.value;
-  const topModels = (data.stack_models || []).filter((m) => m !== 'other');
-  const norm = normalizeSeries(data.series, gran, data.stack_models || []);
-  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost_usd: n.cost_usd, stack: n.stack }));
-
   const card = el('div', { class: 'card' }, el('h2', {}, 'Timeline'),
     el('p', { class: 'hint' },
       'Tokens per bucket across the current span, stacked by model (top 6 + other). Drag the ' +
       'body to move the selection every other card reports on, an edge to resize it, or ' +
       'double-click to reset to the whole span.'),
     reviewScope.el);
+
+  if (result.status === 'rejected') {
+    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    return card;
+  }
+
+  const { ext, sel, gran } = ctx;
+  const data = result.value;
+  const topModels = (data.stack_models || []).filter((m) => m !== 'other');
+  const norm = normalizeSeries(data.series, gran, data.stack_models || []);
+  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost_usd: n.cost_usd, stack: n.stack }));
 
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;

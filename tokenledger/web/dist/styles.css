@@ -352,9 +352,13 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
    finding's "apply →" scrollIntoView doesn't tuck the target card under the
    sticky scope bar. */
 
-/* A bare (unscoped) twin of `.scope .seg` — that rule only fires inside the
-   sticky header; the breakdown cards' own group-by control needs the same
-   look outside it. */
+/* The one `.seg` rule (Task 15 removed the old `.scope .seg` twin along with
+   the span control it was styling inside the sticky header — see the scope
+   bar section above). Used by the breakdown cards' own group-by control
+   here, and by Review's relocated Timeline span control via
+   `.scope-controls .filters .seg` (which cancels this rule's
+   margin-bottom — see that selector above — so it sits flush next to the
+   subscription select). */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
 .seg button { border: 0; border-right: 1px solid var(--border); background: var(--surface); padding: 5px 10px; font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .seg button:last-child { border-right: 0; }
