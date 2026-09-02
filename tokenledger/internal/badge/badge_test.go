@@ -107,3 +107,14 @@ func TestToShields_MatchesEndpointSchema(t *testing.T) {
 		}
 	}
 }
+
+// An unknown handle must not render as a figure of zero.
+func TestRenderMessage_CarriesArbitraryText(t *testing.T) {
+	svg := string(RenderMessage("ccquota", "no such handle", "dark"))
+	if !strings.Contains(svg, "no such handle") {
+		t.Error("RenderMessage dropped its message")
+	}
+	if strings.Contains(svg, "0 tokens") {
+		t.Error("RenderMessage rendered a zeroed figure")
+	}
+}

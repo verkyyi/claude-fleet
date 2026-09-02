@@ -78,9 +78,16 @@ const (
 func textWidth(s string) int { return len([]rune(s))*charW + 2*padX }
 
 // Render returns the badge as SVG bytes.
-func Render(d Data) []byte {
-	p := paletteFor(d.Theme)
-	label, msg := d.LabelText(), d.MessageText()
+func Render(d Data) []byte { return RenderMessage(d.LabelText(), d.MessageText(), d.Theme) }
+
+// RenderMessage draws an arbitrary two-part badge.
+//
+// It exists for the cases that are not a figure at all -- an unknown handle,
+// above all. Rendering those through Data would give them a Tokens of 0 and
+// print "0 tokens", which reads as "this person spent nothing": a different
+// claim from "there is no such person here", and a false one.
+func RenderMessage(label, msg, theme string) []byte {
+	p := paletteFor(theme)
 	lw, mw := textWidth(label), textWidth(msg)
 	total := lw + mw
 

@@ -23,6 +23,12 @@ type Server struct {
 	// ingest uses per-endpoint enrollment tokens instead.
 	ViewerToken string
 
+	// PublicBadges serves /badge/... without a viewer token, so an internal
+	// README can actually render one (a README image sends no credential, and
+	// camo strips cookies). Off by default: an operator who upgrades must not
+	// silently start serving without auth.
+	PublicBadges bool
+
 	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
 	// off centrally without touching every machine.
 	LimitsPollIntervalS int
@@ -84,6 +90,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/share", s.shareOnly(s.handleShareData))
 	mux.Handle("/share", s.shareOnly(s.serveSharePage))
 	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
+
+	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
+	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
+
+	// Badges are the one surface that may be unauthenticated, and only on
+	// purpose. Everything else on this hub stays behind the viewer token.
+	badges := http.NewServeMux()
+	badges.HandleFunc("/badge/u/", s.handleUserBadge)
+	badges.HandleFunc("/badge/team/", s.handleTeamBadge)
+	if s.PublicBadges {
+		mux.Handle("/badge/", badges)
+	} else {
+		mux.Handle("/badge/", s.viewerOnly(badges))
+	}
 
 	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
 

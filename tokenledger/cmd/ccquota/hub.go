@@ -32,6 +32,10 @@ func runHub(args []string) error {
 	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
+	publicBadges := fs.Bool("public-badges", false,
+		"serve /badge/... without a viewer token.\n"+
+			"Needed for a README image, which sends no credential and is\n"+
+			"proxied through a cache that strips cookies. Off by default")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
@@ -81,6 +85,7 @@ func runHub(args []string) error {
 		Store:               st,
 		Pricing:             table,
 		ViewerToken:         *token,
+		PublicBadges:        *publicBadges,
 		LimitsPollIntervalS: *pollInterval,
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
