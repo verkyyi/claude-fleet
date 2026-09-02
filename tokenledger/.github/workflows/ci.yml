@@ -15,6 +15,18 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      # `node --test <dir>` (a bare directory positional) does not glob-search
+      # the directory on Node 22 as shipped here -- it tries to require() the
+      # directory itself and fails with ERR_MODULE_NOT_FOUND. The glob form
+      # (shell-expanded) is what actually runs the suite.
+      - run: node --test web/test/*.test.mjs
+
   cross-compile:
     # The whole adoption story is "download one binary", so a platform that
     # stops building is a release-blocking bug, not a nice-to-have.
