@@ -632,24 +632,50 @@ EOF
 
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
-#   worker  — the current tmux window has @issue set AND cwd is inside an
-#             issue-<N> git worktree (a session bound to one issue)
+#   worker  — the current tmux window has @issue set AND cwd is inside the
+#             worktree it is bound to (a session bound to one issue)
 #   ""      — not a worker (the operator's hub pane, a panel, or a stray shell)
 # Since issue #439 the fleet has ONE seat: `worker`. The hub pane is the
 # operator's own Claude session, not a fleet role — it is identified by the @hub
 # pane marker / FLEET_HUB env (see fleet_hub_pane), never by a seat.
+#
+# TWO worktree shapes count, because a worker can be born either way:
+#   * SPAWNED  — dash-issue-session.sh puts it in an `issue-<N>` directory, which
+#                the cwd glob below recognises on its own.
+#   * BOUND IN PLACE — fleet-bind.sh (issue #520) promotes a SCRATCH: it renames
+#                the branch to `issue-<N>` but deliberately leaves the DIRECTORY
+#                named `<repo>-scratch-<K>` (moving it would strand a running
+#                Claude's cwd), so the glob cannot see it. That window carries
+#                both @issue and @worktree, so "cwd is inside my own @worktree"
+#                is the identity — and it is strictly narrower than the glob: a
+#                plain scratch has @worktree but no @issue, and stays seatless.
 # Pure tmux + shell builtins, no git/gh forks.
 fleet_seat() {
-  local issue cwd
-  issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
+  local o issue wt cwd
+  o=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}|#{@worktree}' 2>/dev/null)
+  issue=${o%%|*}; wt=${o#*|}
+  [ "$wt" = "$o" ] && wt=""            # no separator came back ⇒ no @worktree
+  [ -n "$issue" ] || return 0          # the binding is required in BOTH shapes
   cwd=$(pwd -P 2>/dev/null)
   # Match both the bare `issue-<N>` worktree name and the `<repo>-issue-<N>`
   # form that cw.zsh actually creates (dir="$root/../${repo}-${branch}"), where
   # `issue-<N>` is preceded by `-`, not `/`. `*/*issue-[0-9]*` still requires a
   # path separator (a real nested path) but tolerates the `<repo>-` prefix.
   case "$cwd" in
-    */*issue-[0-9]*)
-      [ -n "$issue" ] && { printf 'worker'; return; } ;;
+    */*issue-[0-9]*) printf 'worker'; return ;;
+  esac
+  # Bound-in-place worker: cwd is the bound window's own @worktree, or under it.
+  case "$wt" in
+    /*)
+      case "$cwd" in
+        "$wt"|"$wt"/*) printf 'worker'; return ;;
+      esac
+      # The conf-derived @worktree may be unresolved where cwd is not (/tmp vs
+      # /private/tmp on macOS), so pay for one subshell resolve only on a miss.
+      local rwt; rwt=$(cd "$wt" 2>/dev/null && pwd -P 2>/dev/null)
+      case "$cwd" in
+        "$rwt"|"$rwt"/*) [ -n "$rwt" ] && { printf 'worker'; return; } ;;
+      esac ;;
   esac
   return 0
 }

@@ -146,6 +146,11 @@ override them):
   A sub-issue is an ordinary issue — its own number, `@issue`, and `issue-<num>`
   worktree/branch — plus GitHub's parent pointer, so the claim / worktree /
   ledger flow is unchanged.
+  **`--bind` is the SCRATCH escalation** (issue #520), and it is not for you: a
+  worker is already bound, so `--bind` refuses here. It belongs to a scratch
+  session (dash ⌃s) that has talked its way to a clear requirement — filing with
+  `--bind` makes *that* session the new issue's worker in place, rather than
+  spawning one that must re-ground from zero.
   **`--spawn` is yours to use** (issue #441): it hands the new number to the same
   spawn choke point the hub uses, so the session caps + cross-machine pre-spawn
   dedup still apply and a cap refusal just leaves the issue filed. Spawn when the

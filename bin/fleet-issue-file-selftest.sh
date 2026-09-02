@@ -44,7 +44,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin"
-GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BODY="$WORK/body"
+GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BIND_LOG="$WORK/binds"; BODY="$WORK/body"
 
 # real channel + lib run from $WORK/bin so BIN resolves the copies and ../fleet.conf
 # is absent (env FLEET_REPO wins) — fully hermetic.
@@ -58,6 +58,14 @@ printf '%s\n' "$*" >> "$SPAWN_LOG"
 exit "${SPAWN_RC:-0}"
 SPAWNSTUB
 chmod +x "$WORK/bin/dash-issue-session.sh"
+# Stub the in-place binder the channel hands to on --bind (issue #520): log its
+# args, honour BIND_RC so a refusal can be simulated.
+cat > "$WORK/bin/fleet-bind.sh" <<'BINDSTUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$BIND_LOG"
+exit "${BIND_RC:-0}"
+BINDSTUB
+chmod +x "$WORK/bin/fleet-bind.sh"
 
 # --- fake gh: issue create (log body + args, echo a URL) · api (issue id lookup +
 # sub_issues POST log). GH_CREATE_FAIL=1 fails create. The filer no longer reads
@@ -117,11 +125,11 @@ chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 # $@ = args to fleet-issue-file.sh ; env (GH_CREATE_FAIL / LABELS_EMPTY / SPAWN_RC
 # / NEW_NUM / CHILD_ID) passes through. Records exit code in $RC, stdout/stderr.
 run_fif() {
-  : > "$GH_LOG"; : > "$SPAWN_LOG"; : > "$BODY"
+  : > "$GH_LOG"; : > "$SPAWN_LOG"; : > "$BIND_LOG"; : > "$BODY"
   # FLEET_CONF_DIR points at an empty temp dir so the filer's per-fleet conf load
   # (issue #433, FLEET_DEFAULT_MILESTONE) finds nothing — the knob is driven only
   # by the env we pass, keeping every case hermetic.
-  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BODY="$BODY" \
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BIND_LOG="$BIND_LOG" BODY="$BODY" \
   FLEET_REPO="acme/widgets" FLEET_CONF_DIR="$WORK/conf" \
     bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out" 2>"$WORK/err"
   RC=$?
@@ -234,5 +242,27 @@ grep -q -- '--milestone' "$GH_LOG" && fail "M must NOT pass --milestone when ens
 grep -qi 'could not ensure milestone' "$WORK/err"     || fail "M should warn that the milestone was skipped" "$(cat "$WORK/err")"
 ok "M an ensure-failure files-without-milestone (fast path never wedged)"
 
-printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn)\n' "$pass"
+# ============================ N: --bind binds the CALLER (issue #520) =======
+# happy: the new number + descriptive title go to fleet-bind.sh, NOT the spawner.
+run_fif --title "Own it" --bind
+[ "$RC" -eq 0 ]                        || fail "N --bind should succeed" "$(cat "$WORK/err")"
+grep -q '^777' "$BIND_LOG"             || fail "N --bind must hand the new number to fleet-bind.sh" "$(cat "$BIND_LOG")"
+grep -q -- '--title Own it' "$BIND_LOG" || fail "N --bind must pass the descriptive --title" "$(cat "$BIND_LOG")"
+[ -s "$SPAWN_LOG" ]                    && fail "N --bind must NOT spawn a worker" "$(cat "$SPAWN_LOG")"
+ok "N --bind hands the new number + title to the in-place binder, no spawn"
+
+# files-without-binding: a bind refusal (non-zero) leaves the issue FILED and says so.
+BIND_RC=3 run_fif --title "Own it" --bind
+[ "$RC" -eq 0 ]                        || fail "N2 a bind refusal must still exit 0 (issue filed)" "$(cat "$WORK/err")"
+grep -q 'issues/777' "$WORK/out"       || fail "N2 the issue must still be FILED (URL echoed) on a bind refusal" "$(cat "$WORK/out")"
+grep -qi 'bind' "$WORK/err"            || fail "N2 a bind refusal must be reported on stderr" "$(cat "$WORK/err")"
+ok "N2 a bind refusal files-without-binding (issue not lost, reported)"
+
+# --bind and --spawn are mutually exclusive: usage error, nothing filed.
+run_fif --title "Both" --bind --spawn
+[ "$RC" -eq 2 ]                        || fail "N3 --bind + --spawn must be a usage error (2)" "$(cat "$WORK/err")"
+grep -q 'issue create' "$GH_LOG"       && fail "N3 a usage error must not file" "$(cat "$GH_LOG")"
+ok "N3 --bind + --spawn is rejected up front (2), nothing filed"
+
+printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind)\n' "$pass"
 exit 0
