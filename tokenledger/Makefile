@@ -15,6 +15,7 @@ build:
 
 test:
 	go test ./...
+	@command -v node >/dev/null && node --test web/test/*.test.mjs || echo "node not found: skipping web tests"
 
 vet:
 	go vet ./...
