@@ -90,7 +90,7 @@ print_sheet() {
   key "F9" "(no prefix) jump back to this session's hub"
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
-  key "click ◉ / usage" "footer account chip / usage stat — opens the usage + account modal"
+  key "click usage" "footer usage stat — opens the usage + account modal"
   fi
 
   if want dashboard; then

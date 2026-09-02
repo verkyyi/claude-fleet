@@ -1,19 +1,23 @@
 #!/bin/bash
 # usage-modal.sh — the consolidated Claude usage + subscription-account modal
 # (issue #289; merges the old usage-popup.sh + account-pick.sh into ONE surface).
-# Opened by clicking the footer usage stat OR the ◉ account chip
-# (MouseDown1Status in conf/tmux-attention.conf) — there is no keyboard path any
-# more (prefix A/u were dropped in the shortcut prune). It shows:
+# Opened by clicking the footer usage stat (MouseDown1Status in
+# conf/tmux-attention.conf) — there is no keyboard path any more (prefix A/u
+# were dropped in the shortcut prune) and no ◉ account chip either (dropped: see
+# the "no fixed account" note below). It shows:
 #   • usage DETAIL as the header — the local 5h/7d proxy + the official
 #     weekly/N-hour limit line (which limit + reset), read via usage-lib.sh — the
 #     SAME shared reader that colors the footer, so they can't drift;
-#   • the account POOL as the selectable body — Enter switches the account new
-#     sessions launch under (via bin/fleet-claude.sh) AND moves this fleet's
+#   • the account POOL as the selectable body — Enter sets the account new
+#     sessions START FROM (via bin/fleet-claude.sh) AND moves this fleet's
 #     IDLE Claude windows onto it (`fleet-account.sh migrate --idle`: close +
 #     `--resume` in a new window, issue #512); mid-turn (working) and looping
 #     sessions keep their old account until their next natural restart or a
 #     limit rotation; Esc cancels.
-#     Picking a currently-limited account still rotates past it at spawn time.
+#     There is NO fixed account: the pick is a starting point, not a pin — every
+#     spawn re-picks on ccquota headroom (issue #513) and a limited account is
+#     rotated past. So the header names no "current" account (the old
+#     `[now: X]` was a stale snapshot) and the footer shows no ◉ chip.
 # On a SINGLE-account install (no token files) there is no pool to pick: it shows
 # the usage detail only + a pointer to register accounts, and holds for a key.
 # Run inside `tmux display-popup -E`.
@@ -90,8 +94,12 @@ esac
 # neither cache has anything. ---
 usg=$(fleet_usage_summary_plain)
 
+# $active is only the before-value for the "did the pick change anything" test
+# below — it is NOT shown: the account new sessions get is re-picked per spawn
+# (ccquota headroom, #513), so a `[now: X]` in the header would be a stale
+# snapshot of a moving target. The ● in the pool table marks it for the curious.
 active=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-hdr="switch the account fleet sessions use  ·  enter=select · esc=cancel · [✕ close]   [now: ${active}]"
+hdr="pick the account new sessions start from (re-picked per spawn on quota headroom)  ·  enter=select · esc=cancel · [✕ close]"
 [ -n "$usg" ] && hdr="${usg}"$'\n'"${hdr}"
 
 # --header-lines=1 pins the table's column-title row (line 1 of `list`) so it
@@ -105,7 +113,7 @@ hdr="switch the account fleet sessions use  ·  enter=select · esc=cancel · [�
 # carries no ✕/close, so a tap there never fires the bind.
 pick=$(printf '%s\n' "$listing" \
   | fzf --ansi --no-sort --layout=reverse --height=100% --header-lines=1 \
-        --prompt='active account ▸ ' \
+        --prompt='account ▸ ' \
         --header="$hdr" \
         --bind 'click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac' \
   | awk '{print $1}')
@@ -115,9 +123,9 @@ prev="$active"
 if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
   now=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
   if [ "$now" = "$pick" ]; then
-    msg="fleet: new sessions now use  ${pick}"
+    msg="fleet: new sessions start from  ${pick}"
   else
-    msg="fleet: ${pick} is limited — new sessions use  ${now}"
+    msg="fleet: ${pick} is limited — new sessions start from  ${now}"
   fi
   # Move this fleet's IDLE running sessions onto the new account too (issue #263,
   # now fleet-migrate.sh per #512: close + --resume in a new window), but only when

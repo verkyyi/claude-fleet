@@ -84,7 +84,7 @@ assumes — this doc is only the install/uninstall procedure.
    needed — but call them out. The shortcut prune (#289) left `prefix+n` and
    `prefix+r` bound back to tmux's stock `next-window` / `refresh-client`, so they
    clobber nothing; the usage/account controls live on the footer clicks (the
-   `◉` chip / usage stat → `bin/usage-modal.sh`), not the keyboard. There are also **root-table** binds (`bind -n …`)
+   usage stat → `bin/usage-modal.sh`), not the keyboard. There are also **root-table** binds (`bind -n …`)
    that intercept the key/mouse in every pane *before* the app, so flag each: `F9`
    jumps back to this session's hub (`hub-zoom.sh`) — safe because the
    Claude TUI/shells don't use function keys; `MouseDown1Status` owns the clickable

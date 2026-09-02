@@ -159,7 +159,7 @@ line, which exits silently without it.)
 The shortcut surface was pruned in #289 (one keyboard home per action): raw
 scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
 `prefix u` / `prefix A`) merged into one modal reachable by clicking the footer
-usage stat or the `◉` account chip. `prefix n` / `prefix r` are back to tmux's
+usage stat. `prefix n` / `prefix r` are back to tmux's
 stock `next-window` / `refresh-client`.
 
 The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
@@ -170,9 +170,9 @@ clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap �
 always lands on this fleet's hub, unzoomed
 (never a pane zoom, unlike `F9`) — the **fleet name** (`#S`) opens a picker of running
 fleets and switches to the chosen one, the red **`● N` needs badge** cycles to the
-next window that needs you, and the **usage stat** or the **`◉ <account>` chip** both
-open the consolidated **usage + account modal** (usage/limit detail on top, the
-account pool as a selectable body below). (Comment out `set -g mouse on` in
+next window that needs you, and the **usage stat** opens the consolidated
+**usage + account modal** (usage/limit detail on top, the account pool as a
+selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
@@ -279,10 +279,12 @@ chmod 600 ~/.config/claude-fleet/accounts/*
 bin/fleet-account.sh list          # pool · ● active · limited state
 ```
 
-Switch by hand by **clicking the `◉ <account>` chip** (or the usage stat) in the
-status-bar footer — it opens the usage + account modal, with the account pool as
-a selectable body under the usage detail. Enter makes the choice active for new
-sessions; Esc cancels.
+Switch by hand by **clicking the usage stat** in the status-bar footer — it
+opens the usage + account modal, with the account pool as a selectable body
+under the usage detail. Enter sets the account new sessions start from; Esc
+cancels. There is no fixed account and so no footer account chip: each spawn
+re-picks on ccquota headroom (#513), and the per-window truth is
+`fleet-account.sh whoami <window-id>`.
 
 Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
 macOS Keychain ignores). One caveat: an **already-running** session can't
@@ -373,7 +375,7 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
   it to **color the footer usage stat** (indigo → yellow ≥`FLEET_USAGE_WARN_PCT`
   → red ≥`FLEET_USAGE_CRIT_PCT`) rather than adding another always-on footer
   segment; the full detail (which limit, reset time, account) is in the usage +
-  account modal — click the usage stat or the `◉` account chip.
+  account modal — click the usage stat.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
