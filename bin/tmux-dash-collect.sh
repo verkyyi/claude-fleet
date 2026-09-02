@@ -28,6 +28,8 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/usage-lib.sh"     # fleet_limit_banner (pure lib, no dispatch)
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 # Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
 # and machine-wide caches under global/. G is the global bucket.
@@ -421,11 +423,12 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_id}${US}#{@cc_account}" 2>/dev/null | \
   while IFS="$US" read -r win wid acct; do
     [ -n "$acct" ] || continue
-    # match the core signal ("hit your <session|weekly|Opus> limit"); the trailing
-    # "· resets …" is not required to match, but IS what mark-limited benches to
-    # when present (issue #490) — so capture the whole banner, not just the head.
-    banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null \
-      | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
+    # fleet_limit_banner (usage-lib.sh, issue #511) prefers the classic "hit your
+    # <session|weekly|Opus> limit · resets …" line — its tail is what mark-limited
+    # benches to (issue #490), so the whole banner is passed, not just the head —
+    # and falls back to the newer sticky "Usage limit reached · continuing
+    # automatically at …" footer, which outlives the classic line on screen.
+    banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
     [ -n "$banner" ] || continue
     newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
     # exit 10 = this call rotated the active account away → fires ONCE per bench.

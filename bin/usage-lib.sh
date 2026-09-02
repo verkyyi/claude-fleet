@@ -72,3 +72,21 @@ fleet_usage_summary_plain() {
   fi
   printf '%s' "$out"
 }
+
+# fleet_limit_banner — stdin: pane text. Print the ONE line that proves the account
+# hit its usage limit (the collector hands it to `fleet-account.sh mark-limited`),
+# or nothing. Two shapes exist (issue #511):
+#   • the classic "hit your <session|weekly|Opus> limit · resets <t> (<zone>)" — its
+#     tail is the reset instant mark-limited benches to (#490), so it WINS whenever
+#     present (last occurrence, like the collector always took);
+#   • the newer sticky footer "Usage limit reached · continuing automatically at
+#     <t> · esc to cancel", which stays on screen after the classic line scrolled
+#     out of the capture window. No zone in it → the caller benches by TTL.
+# Either match stops at the pane border (│) so a split pane can't bleed in.
+fleet_limit_banner() {
+  local text classic
+  text=$(cat)
+  classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 -]*limit[^│]*" | tail -1)
+  if [ -n "$classic" ]; then printf '%s\n' "$classic"; return 0; fi
+  printf '%s\n' "$text" | grep -aoE "Usage limit reached[^│]*" | tail -1
+}

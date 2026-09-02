@@ -92,7 +92,14 @@ if [ -n "$label" ]; then
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
     export CLAUDE_CODE_OAUTH_TOKEN="$tok"
-    tmux set-option -w @cc_account "$label" 2>/dev/null || true
+    # Stamp THIS pane's window (issue #511). An untargeted `set-option -w` resolves
+    # to the session's CURRENT window, and every spawn is `new-window -d` (the hub
+    # stays current on purpose) — so the label used to land on the hub while the
+    # worker stayed unstamped, invisible to the collector's banner attribution.
+    # No $TMUX_PANE (launched outside tmux) → nothing to stamp.
+    if [ -n "${TMUX_PANE:-}" ]; then
+      tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+    fi
   fi
 fi
 
