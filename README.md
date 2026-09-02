@@ -290,6 +290,14 @@ cancels. There is no fixed account and so no footer account chip: each spawn
 re-picks on ccquota headroom (#513), and the per-window truth is
 `fleet-account.sh whoami <window-id>`.
 
+A **per-model cap** is a different wall: `You've hit your Fable 5 limit · resets
+Sep 6` leaves the account's 5h/7d headroom intact for every other model, so the
+fleet does not bench the account for it (#524). It records the (account, model)
+cap until the banner's reset, relaunches the walled sessions on
+`FLEET_MODEL_FALLBACK` (default `opus`; `claude --resume --model`, same
+transcript), and every new session on that account launches on the fallback
+until the cap resets — then goes back to `FLEET_MODEL` on its own.
+
 Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
 macOS Keychain ignores). One caveat: an **already-running** session can't
 hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full

@@ -59,6 +59,7 @@ printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/fleet-account.sh"; chmod +x "$WORK/bin
 cat > "$WORK/fakebin/claude" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" > "$WORK/argv"
+printf '%s\n' "\${CLAUDE_CODE_SUBAGENT_MODEL:-}" > "$WORK/subm"
 exit 0
 EOF
 chmod +x "$WORK/fakebin/claude"
@@ -68,7 +69,7 @@ chmod +x "$WORK/fakebin/claude"
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
 cat > "$WORK/fakebin/tmux" <<EOF
 #!/bin/sh
-case "\$1" in display-message) cat "$SESS_FILE" ;; *) : ;; esac
+case "\$1" in display-message) cat "$SESS_FILE" ;; set-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;; esac
 exit 0
 EOF
 chmod +x "$WORK/fakebin/tmux"
@@ -81,7 +82,7 @@ printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
 
 run() {   # run the SUT with a fresh env; extra args are passed through to it
   rm -f "$WORK/argv"
-  ( unset FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_MCP_CONFIG CLAUDE_CODE_SUBAGENT_MODEL
+  ( unset FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_MCP_CONFIG CLAUDE_CODE_SUBAGENT_MODEL FLEET_MODEL_FALLBACK
     bash "$WORK/bin/fleet-claude.sh" "$@" ) >/dev/null 2>&1
   cat "$WORK/argv" 2>/dev/null
 }
@@ -174,5 +175,64 @@ printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/
 argv="$(run 'Work GitHub issue #2109 in this repo')"
 case "$argv" in *"Work GitHub issue #2109 in this repo"*) : ;; *) fail "a multi-word prompt was mangled" "$argv" ;; esac
 ok "a multi-word seed prompt passes through intact"
+
+# --- #524: a model-capped account launches on the FALLBACK model ----------------
+# The Fable weekly cap walls FLEET_MODEL=fable on one account while the subscription
+# is fine. fleet-account.sh keeps that per (account, model) — `model-limited-until`
+# — and the launcher, the one door every spawn/restore/migrate walks through, must
+# pick FLEET_MODEL_FALLBACK (default opus) while it is set, so autofill and hand
+# spawns stop dying at their first turn. Subagents follow the effective model, the
+# pane is stamped @cc_model, and — the rules --model already follows — an explicit
+# caller --model still wins and an empty knob turns it off.
+cat > "$WORK/bin/fleet-account.sh" <<EOF
+#!/bin/sh
+case "\$1" in
+  active) echo acctA ;;
+  token)  echo tok-A ;;
+  model-limited-until) if [ "\$2" = acctA ] && [ "\$3" = "\${LIMITED_MODEL:-}" ]; then echo "\${LIMITED_UNTIL:-0}"; else echo 0; fi ;;
+  *) : ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/bin/fleet-account.sh"
+printf 'f1' > "$SESS_FILE"
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
+far=$(( $(date +%s) + 3600 )); : > "$WORK/tmuxlog"
+argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
+has "$argv" "--model opus" || fail "a Fable-capped account must launch on the fallback (opus)" "$argv"
+case "$argv" in *"--model fable"*) fail "the capped model was still passed" "$argv" ;; esac
+[ "$(cat "$WORK/subm")" = opus ] || fail "subagents must follow the effective model (got '$(cat "$WORK/subm")')"
+grep -q '@cc_model opus' "$WORK/tmuxlog" 2>/dev/null || fail "the pane must be stamped @cc_model opus (tmux: $(cat "$WORK/tmuxlog" 2>/dev/null))"
+ok "a model-capped account launches on FLEET_MODEL_FALLBACK, subagents follow, @cc_model stamped"
+
+argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$(( $(date +%s) - 10 )) run)"
+has "$argv" "--model fable" || fail "an EXPIRED cap must launch the configured model again" "$argv"
+ok "an expired cap goes back to FLEET_MODEL"
+
+argv="$(LIMITED_MODEL=opus LIMITED_UNTIL=$far run)"
+has "$argv" "--model fable" || fail "a cap on ANOTHER model must not trigger the fallback" "$argv"
+ok "a cap on another model is ignored"
+
+argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run --model haiku)"
+has "$argv" "--model haiku" || fail "caller --model was dropped under a cap" "$argv"
+case "$argv" in *"--model opus"*) fail "the fallback was added ALONGSIDE the caller's --model" "$argv" ;; esac
+ok "an explicit caller --model still wins over the fallback"
+
+printf 'FLEET_MODEL="opus"\nFLEET_MODEL_FALLBACK=""\n' > "$WORK/fleet.conf"
+argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
+has "$argv" "--model fable" || fail "FLEET_MODEL_FALLBACK='' must disable the fallback" "$argv"
+ok "an empty FLEET_MODEL_FALLBACK turns the fallback off"
+
+printf 'FLEET_MODEL="opus"\nFLEET_MODEL_FALLBACK="sonnet"\n' > "$WORK/fleet.conf"
+argv="$(LIMITED_MODEL=fable LIMITED_UNTIL=$far run)"
+has "$argv" "--model sonnet" || fail "a configured fallback model must be used" "$argv"
+ok "FLEET_MODEL_FALLBACK picks the fallback model"
+
+printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
+printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$(LIMITED_MODEL=opus LIMITED_UNTIL=$far run)"
+has "$argv" "--model opus" || fail "fallback == FLEET_MODEL must be a no-op, not an empty model" "$argv"
+ok "a cap on the fallback model itself leaves the launch alone"
 
 printf 'selftest OK: %s checks — the launcher reads the per-fleet conf and honours FLEET_MCP_CONFIG (issues #472, #473, #476)\n' "$pass"

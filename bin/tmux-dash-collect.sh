@@ -430,6 +430,43 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
     # automatically at …" footer, which outlives the classic line on screen.
     banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
     [ -n "$banner" ] || continue
+    # A PER-MODEL cap (issue #524) — "hit your Fable 5 limit · resets Sep 6" /
+    # "reached your Fable limit" — is NOT the subscription wall: the account keeps
+    # its 5h/7d headroom for every other model. Benching it here moved every
+    # session onto an account with the same cap (the 2026-09-02 cascade). Instead:
+    # record the (account, model) cap (fleet-claude.sh launches new sessions on
+    # FLEET_MODEL_FALLBACK while it holds), relaunch THIS walled window on the
+    # fallback (fleet-migrate.sh --model, same close + --resume dance), and notify
+    # once per episode. @model_migrating guards the ~30s exit/boot window across
+    # ticks. No usable fallback (knob empty, or it IS the capped model) → the
+    # pre-#524 subscription path below, unchanged.
+    kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
+    case "$kind" in
+      model:*)
+        lm=${kind#model:}; fb="${FLEET_MODEL_FALLBACK-opus}"
+        if [ -n "$fb" ] && [ "$fb" != "$lm" ]; then
+          muntil=$("$BIN/fleet-account.sh" model-limited "$acct" "$lm" "$banner" 2>/dev/null)
+          case "$muntil" in ''|*[!0-9]*) muntil=0;; esac
+          mig=$(tmux -L "$sock" display-message -p -t "$wid" '#{@model_migrating}' 2>/dev/null)
+          case "$mig" in ''|*[!0-9]*) mig=0;; esac
+          if [ $(( $(now) - mig )) -gt 180 ]; then
+            tmux -L "$sock" set-window-option -t "$wid" @model_migrating "$(now)" 2>/dev/null
+            tmux -L "$sock" run-shell -b "bash '$BIN/fleet-migrate.sh' --model '$fb' --session '$sock' --toast '$wid'" 2>/dev/null
+          fi
+          mk="$G/model.limited.$acct.$lm"
+          if ! fleet_same_window "$mk" "$muntil"; then
+            printf '%s' "$muntil" | atomic_write "$mk"
+            muntilt=$(date -r "$muntil" '+%b %d %H:%M' 2>/dev/null || date -d "@$muntil" '+%b %d %H:%M' 2>/dev/null || echo "?")
+            tmux -L "$sock" display-message "fleet: $acct hit its $lm cap (until $muntilt) — relaunching walled sessions on $fb; new sessions on it launch on $fb" 2>/dev/null
+            if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+              $FLEET_NOTIFY_CMD "# model cap reached — falling back to $fb
+account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself is fine, so the account stays active — sessions showing the wall are relaunched on **$fb** (close + \`--resume --model\`, same transcript) and new sessions on this account launch on **$fb** until the cap resets
+> ${banner}" >/dev/null 2>&1
+            fi
+          fi
+          continue
+        fi ;;
+    esac
     newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
     # exit 10 = this call rotated the active account away → fires ONCE per bench.
     # A running session cannot hot-swap its token (apiKeyHelper only carries

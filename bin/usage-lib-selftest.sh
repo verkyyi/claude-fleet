@@ -128,4 +128,28 @@ eq "banner: the LAST classic line wins" "hit your weekly limit · resets Mon" \
 eq "banner: stops at the pane border" "hit your weekly limit · resets Mon " \
    "$(printf 'hit your weekly limit · resets Mon │ other pane\n' | fleet_limit_banner)"
 
-printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner (%s assertions)\n' "$CHECKS"
+# --- model-specific caps (Fable / Opus) vs the subscription (issue #524) ---------
+# A model cap is NOT a subscription limit: the account keeps its 5h/7d headroom for
+# every other model. Treating "hit your Fable 5 limit" as the subscription banner
+# benched the account and migrated everything off it — onto an account with the
+# same Fable cap (the 2026-09-02 cascade). Two Fable shapes exist on screen; both
+# must SURFACE from fleet_limit_banner and CLASSIFY as model:fable, while every
+# subscription shape stays `subscription`. The sticky footer must carry its ` · `
+# separator, so a source string like `"Usage limit reached"` scrolling by in a
+# worker's tool output (how gmail got benched that day) is never taken for it.
+FABLE_HIT="hit your Fable 5 limit · resets Sep 6 at 10pm (America/Los_Angeles)"
+FABLE_STICKY="reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+eq "banner: the sticky Fable line surfaces" "$FABLE_STICKY" \
+   "$(printf "  ⎿  You've %s\n" "$FABLE_STICKY" | fleet_limit_banner)"
+eq "banner: a quoted source string is not the footer" "" \
+   "$(printf '  ⎿    printf "Usage limit reached" ⎿ bench +\n' | fleet_limit_banner)"
+eq "kind: session limit → subscription"    subscription "$(printf '%s\n' "hit your session limit · resets 1:50am (America/Los_Angeles)" | fleet_limit_kind)"
+eq "kind: weekly limit → subscription"     subscription "$(printf '%s\n' "hit your weekly limit · resets Mon" | fleet_limit_kind)"
+eq "kind: 5-hour limit → subscription"     subscription "$(printf '%s\n' "hit your 5-hour limit · resets 3pm" | fleet_limit_kind)"
+eq "kind: sticky footer → subscription"    subscription "$(printf '%s\n' "$FOOTER" | fleet_limit_kind)"
+eq "kind: Fable 5 cap → model:fable"       model:fable  "$(printf '%s\n' "$FABLE_HIT" | fleet_limit_kind)"
+eq "kind: sticky Fable line → model:fable" model:fable  "$(printf '%s\n' "$FABLE_STICKY" | fleet_limit_kind)"
+eq "kind: Opus cap → model:opus"           model:opus   "$(printf '%s\n' "hit your Opus limit · resets 3pm (America/Los_Angeles)" | fleet_limit_kind)"
+eq "kind: nothing → nothing"               ""           "$(printf '' | fleet_limit_kind)"
+
+printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind (%s assertions)\n' "$CHECKS"
