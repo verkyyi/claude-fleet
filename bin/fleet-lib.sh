@@ -1627,6 +1627,18 @@ fleet_cc_pid_for_session() {
   return 1
 }
 
+# fleet_same_window <marker-file> <epoch> — 0 iff the marker file holds an epoch
+# within 15 minutes of <epoch>, i.e. the same reset window (issue #513's once-per-
+# window quota episodes). Tolerant, not exact: ccquota's resets_at jitters by a
+# second or so between polls (…599 vs …600), and an exact compare re-armed the
+# episode every tick — the 70% warning reached one session seven times. A missing
+# or non-numeric marker is "not the same window".
+fleet_same_window() {
+  local m d; m=$(cat "$1" 2>/dev/null); case "$m" in ''|*[!0-9]*) return 1;; esac
+  case "$2" in ''|*[!0-9]*) return 1;; esac
+  d=$(( m - $2 )); [ "$d" -lt 0 ] && d=$(( -d )); [ "$d" -le 900 ]
+}
+
 # fleet_sha12 — stdin → first 12 hex of its sha256 (shasum on macOS, sha256sum on Linux).
 fleet_sha12() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -c1-12; else sha256sum | cut -c1-12; fi; }
 # fleet_claude_token_sha <pid> — sha12 of CLAUDE_CODE_OAUTH_TOKEN in the process's
