@@ -198,3 +198,9 @@ rules), the closed row also stores the worktree's **HEAD sha** — captured whil
 still stands — so `resume` can rebuild the worktree at its original path and
 `claude --resume` still finds the transcript. That sha applies to worker
 closed-unlanded rows too: a reaped-clean session no longer degrades to REVIEW-ONLY.
+
+A scratch **bound in place** (`fleet-bind.sh`, issue #520) leaves this path
+entirely: from the bind onward its branch is `issue-<N>`, so every reaper takes
+the ordinary worker route — the merged-PR gate, the `issue-<N>` ledger key, the
+issue close — even though its directory is still named `<repo>-scratch-<K>`.
+Branch, not directory, is what the reapers read.

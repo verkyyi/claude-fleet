@@ -14,6 +14,14 @@
 #   2. ESCALATABLE FOR FREE — a scratch that turns real just pushes its branch and
 #      opens a PR (`fixes #N` optional). The prmap is repo-wide, so the janitor
 #      reaps a merged `scratch-<N>` like any worker on merge — zero new machinery.
+#      Or escalate it PROPERLY (issue #520): once the requirement is clear, file
+#      the issue and BIND this same session to it —
+#      `fleet-issue-file.sh --title "…" --bind`, or `fleet-bind.sh <N>` for an
+#      issue that already exists. That renames the branch `scratch-<K>` →
+#      `issue-<N>` in place (the DIRECTORY keeps its name, so the running Claude's
+#      cwd never moves), stamps @issue, drops @raw, and claims the issue — so the
+#      session that holds all the context becomes the worker, instead of spawning
+#      a second one to re-ground from zero.
 #   3. RESOLVABLE TRANSCRIPTS — the unique cwd fixes the "can't resolve the
 #      transcript from the shared base checkout" limit (#214): a scratch can be
 #      summarized correctly, and (issue #466) it is now CAPTURED in the

@@ -29,6 +29,12 @@
 #      spawn choke point; its session caps + cross-machine pre-spawn dedup are the
 #      "reuse pre-spawn dedup helpers" the channel leans on (a filer creates a
 #      brand-new number, so there is nothing to dedup until the spawn).
+#   5b. --bind → hand it to bin/fleet-bind.sh instead: the CALLING scratch session
+#      becomes the worker for the issue it just filed, in place (issue #520). This
+#      is the "refine in a scratch, then track it" path — the context is already in
+#      this session, so spawning a second worker to re-ground it is pure waste.
+#      Mutually exclusive with --spawn (bind THIS session or start another, never
+#      both), and like --spawn a refusal leaves the issue FILED.
 #
 # Prints the created issue URL on stdout (exactly like `gh issue create`) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
@@ -38,14 +44,14 @@
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] \
-#                       [--repo R] [--spawn]
+#                       [--repo R] [--spawn | --bind]
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
-title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0
+title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0
 labels=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -64,6 +70,7 @@ while [ "$#" -gt 0 ]; do
     --milestone) shift; milestone="${1:-}" ;;
     --repo)      shift; repo="${1:-}" ;;
     --spawn)     spawn=1 ;;
+    --bind)      bind=1 ;;
     -h|--help)   sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
@@ -72,6 +79,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -z "$title" ] && { printf 'fleet-issue-file: --title is required\n' >&2; exit 2; }
+# --spawn starts a NEW worker; --bind makes the CALLER one. Asking for both is a
+# caller bug with no sane resolution, so refuse before filing anything.
+[ "$spawn" = 1 ] && [ "$bind" = 1 ] \
+  && { printf 'fleet-issue-file: --spawn and --bind are mutually exclusive\n' >&2; exit 2; }
 
 # --priority pN is sugar for the priority:pN LABEL (the backlog sorts by it). Only
 # p0/p1/p2 exist; a bad value is a caller bug, so reject before touching the repo.
@@ -187,5 +198,14 @@ fi
 # spawning), so its non-zero exit must not fail the create.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
   bash "$BIN/dash-issue-session.sh" "$num" --title "$title" || true
+fi
+
+# --- 5b. --bind: promote the CALLING scratch into this issue's worker ----------
+# fleet-bind.sh owns the rails (scratch-only, dedup, claim, branch rename) and
+# reports its own refusal. Like --spawn, a refusal must NOT lose the just-filed
+# issue: say so on stderr and still exit 0 with the URL already on stdout.
+if [ "$bind" = 1 ] && [ -n "$num" ]; then
+  bash "$BIN/fleet-bind.sh" "$num" --title "$title" \
+    || printf 'fleet-issue-file: filed #%s but the bind was refused — it is on the backlog\n' "$num" >&2
 fi
 exit 0

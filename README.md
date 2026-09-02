@@ -38,7 +38,11 @@ demo repo data.</sub>
   GitHub issue and spawns a worker session bound to it.
   `Ctrl-S` opens an unseeded raw scratch session (plain `claude`, no issue — but
   in its own writable `scratch-N` worktree, so an experiment can push a branch and
-  open a PR like any worker). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
+  open a PR like any worker). Once a scratch has talked its way to a real
+  requirement it can **become** the worker for it, in place: filing with
+  `fleet-issue-file.sh --title "…" --bind` (or `fleet-bind.sh <N>` for an existing
+  issue) renames its branch `scratch-N` → `issue-N`, binds the window and claims
+  the issue — no second session re-grounding from zero (#520). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
   ready: `⌃s` then hands you a session you can type into immediately (0.46s to
   the window, 0.30s to the first keystroke) instead of one that spends ~7s
   booting — the last second of which paints a `❯` box that silently swallows

@@ -133,7 +133,7 @@ operator's hub pane, a panel, a stray shell) is *not* a worker:
 
 | `fleet_seat` | How it's detected | Who it is |
 |---|---|---|
-| `worker`  | the current tmux window has `@issue` set **and** cwd is inside an `issue-<N>` git worktree | a session bound to one issue, implementing it |
+| `worker`  | the current tmux window has `@issue` set **and** cwd is inside the worktree it is bound to — an `issue-<N>` directory, or the window's own `@worktree` for a scratch bound in place (#520) | a session bound to one issue, implementing it |
 | `""`      | anything else | the operator hub pane (`@hub=1` / `FLEET_HUB=1`), a panel, or a stray shell |
 
 Each skill declares which seat(s) it belongs to, on its marker line (see below):

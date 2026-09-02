@@ -124,6 +124,22 @@ eq "seat: @issue set while sitting in base checkout" "" \
 eq "seat: worker without FLEET_MAIN in env" worker \
   "$( cd "$WORK/issue-111" && unset FLEET_MAIN; FAKE_ISSUE=111 fleet_seat )"
 
+# 8–10. A scratch BOUND in place (issue #520, fleet-bind.sh): the branch became
+#    `issue-<N>` but the DIRECTORY is still `<repo>-scratch-<K>`, so the cwd glob
+#    can't see it. The window carries @issue + @worktree, and the seat is `worker`
+#    when cwd is inside that @worktree. The fake answers the whole
+#    '#{@issue}|#{@worktree}' probe from FAKE_ISSUE, so feed it both fields.
+mkdir -p "$WORK/claude-fleet-scratch-3/docs"
+SWT="$( cd "$WORK/claude-fleet-scratch-3" && pwd -P )"
+eq "seat: bound scratch (@issue + cwd == @worktree)" worker \
+  "$( cd "$WORK/claude-fleet-scratch-3" && FAKE_ISSUE="520|$SWT" fleet_seat )"
+eq "seat: bound scratch, cwd in a SUBDIR of @worktree" worker \
+  "$( cd "$WORK/claude-fleet-scratch-3/docs" && FAKE_ISSUE="520|$SWT" fleet_seat )"
+eq "seat: @issue + @worktree but cwd elsewhere" "" \
+  "$( cd "$WORK/random-elsewhere" && FAKE_ISSUE="520|$SWT" fleet_seat )"
+eq "seat: plain scratch (@worktree, NO @issue)" "" \
+  "$( cd "$WORK/claude-fleet-scratch-3" && FAKE_ISSUE="|$SWT" fleet_seat )"
+
 # ============================================================================
 # B. fleet_reap_ok — the clean+merged reap gate
 # ============================================================================
