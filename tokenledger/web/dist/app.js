@@ -1,7 +1,7 @@
 // web/dist/app.js — boot, router, loader wiring.
 import { parse, format } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
-import { renderScope, setBusy } from './scope.js';
+import { renderNav, renderScopeControls, setBusy } from './scope.js';
 import { renderNow } from './now.js';
 import { renderReview } from './review.js';
 import { renderDetail, closeDetail } from './session.js';
@@ -37,13 +37,21 @@ function route() {
   if (!s.sub || (s.sub !== 'all' && !app.accounts.some((a) => a.account_uuid === s.sub))) {
     s.sub = app.accounts.length > 1 ? 'all' : (app.accounts[0]?.account_uuid || 'all');
   }
-  renderScope($('#scope'), s, app.accounts, {
+  // Handlers are shared by both calls below: renderNav only ever invokes
+  // onView, renderScopeControls only ever invokes the other four — same
+  // split the two functions had when this was one renderScope() call.
+  const cb = {
     onView: (v) => app.setState({ ...s, view: v, session: null }),
     onSub: (sub) => app.setState({ ...s, sub }),
     onSpan: (span) => app.setState({ ...s, span, from: null, to: null }),
     onChipRemove: (dim) => { const chips = { ...s.chips }; delete chips[dim]; app.setState({ ...s, chips }); },
     onClear: () => app.setState({ ...s, chips: {} }),
-  });
+  };
+  renderNav($('#scope'), s, cb);
+  // Updates EVERY view's scope-controls widget synchronously (whichever is
+  // visible right now, and the hidden one so it stays correct for later) —
+  // see scope.js's renderScopeControls doc comment.
+  renderScopeControls(s, app.accounts, cb);
   $('#now').hidden = s.view !== 'now';
   $('#review').hidden = s.view !== 'review';
   if (s.session) renderDetail($('#detail'), s, app); else closeDetail($('#detail'));

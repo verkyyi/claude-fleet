@@ -1,17 +1,38 @@
-// web/dist/scope.js — renders the sticky scope bar (tabs, subscription
-// select, span buttons, chips, theme toggle) purely from state. No fetching;
-// app.js owns the load loop and calls back into it via the handler object.
+// web/dist/scope.js — the top nav bar, and the reusable "scope controls"
+// widget (subscription select · span segmented control · chips row).
+//
+// As of the Task 15 nav restructure, these are two SEPARATE things:
+//   - renderNav() draws the sticky bar itself — wordmark, Now/Review tabs,
+//     theme toggle. Nothing else. It is global navigation, not filtering, so
+//     it holds no scope state.
+//   - createScopeControls() builds ONE instance of the scope-controls widget
+//     (subscription + optional span + chips). Each view MOUNTS its own
+//     instance on its first substantive card — the card whose meaning the
+//     scope actually belongs to (Review's Timeline card owns the brush that
+//     the span scales; Now's "Am I about to hit the wall?" card is
+//     per-subscription by definition) — rather than the widget living in one
+//     global location. Now and Review need overlapping-but-different
+//     subsets (Now has no time range, so it renders no span control at all),
+//     which is exactly what `createScopeControls({ span })` parametrises;
+//     everything else (subscription list, chip rendering/removal) is shared,
+//     unchanged behaviour, just relocated. Every instance self-registers
+//     here so app.js's route() can update all of them from one call
+//     (renderScopeControls) without knowing how many views exist or where
+//     each one mounted its widget.
+//
+// No fetching in this file either way — app.js owns the load loop and calls
+// back into whichever handlers were passed at update() time.
 import { DIMS } from './lib/state.js';
 import { shortProject } from './lib/format.js';
 import { el, $ } from './lib/dom.js';
 // `app` is read only inside functions below (never at module-eval time), so
-// this is a safe circular import: app.js imports renderScope/setBusy from
-// here, and by the time either is actually CALLED (from route(), which only
-// runs after app.js has fully evaluated and boot()'s account fetch has
-// resolved), `app`'s exported binding is fully populated. This is how a chip
-// for the "machine" dimension resolves its label — scope.js's own signature
-// (state, accounts, callbacks) has no room for the endpoint roster that
-// now.js caches on `app.endpoints` after every /v1/endpoints fetch.
+// this is a safe circular import: app.js imports renderNav/renderScopeControls/
+// setBusy from here, and by the time any of them is actually CALLED (from
+// route(), which only runs after app.js has fully evaluated and boot()'s
+// account fetch has resolved), `app`'s exported binding is fully populated.
+// This is how a chip for the "machine" dimension resolves its label — this
+// module's own state has no room for the endpoint roster that now.js caches
+// on `app.endpoints` after every /v1/endpoints fetch.
 import { app } from './app.js';
 
 // Restored as early as possible (module-eval time, right after the document
@@ -21,8 +42,6 @@ try {
   const saved = localStorage.getItem('ccquota-theme');
   if (saved) document.documentElement.setAttribute('data-theme', saved);
 } catch {}
-
-let handlers = {};
 
 /** chipLabel resolves the DISPLAY text for one chip. Everything but
  *  machine/project/session shows its raw filter value. */
@@ -37,62 +56,123 @@ function chipLabel(dim, value) {
   return value;
 }
 
-export function renderScope(root, state, accounts, cb) {
-  handlers = cb || {};
+/* ---------------------------------------------------------------- nav bar */
+
+let navHandlers = {};
+
+/** renderNav renders/updates the sticky top bar: wordmark, view tabs, theme
+ *  toggle — nothing else. `root` is the static `<header id="scope">` from
+ *  index.html (always present, never recreated), so listeners are bound
+ *  exactly once behind a `data-bound` guard the same way the whole bar used
+ *  to be before Task 15 split it. */
+export function renderNav(root, state, cb) {
+  navHandlers = cb || {};
   if (!root.dataset.bound) {
-    bind(root);
+    $('#tab-now', root).addEventListener('click', () => navHandlers.onView && navHandlers.onView('now'));
+    $('#tab-review', root).addEventListener('click', () => navHandlers.onView && navHandlers.onView('review'));
+    // Theme toggle: copied verbatim from the old page's click handler.
+    $('#theme', root).addEventListener('click', () => {
+      const cur = document.documentElement.getAttribute('data-theme');
+      const next = cur === 'dark' ? 'light' : cur === 'light' ? 'auto' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('ccquota-theme', next); } catch {}
+    });
     root.dataset.bound = '1';
   }
-
   $('#tab-now', root).setAttribute('aria-selected', String(state.view === 'now'));
   $('#tab-review', root).setAttribute('aria-selected', String(state.view === 'review'));
-
-  const sel = $('#sub', root);
-  const opts = accounts.map((a) => el('option', { value: a.account_uuid },
-    a.email || a.display_name || a.account_uuid));
-  if (accounts.length > 1) opts.unshift(el('option', { value: 'all' }, `All ${accounts.length} subscriptions`));
-  sel.replaceChildren(...opts);
-  sel.style.display = accounts.length > 1 ? '' : 'none';
-  sel.value = state.sub;
-
-  for (const btn of root.querySelectorAll('.seg button')) {
-    btn.setAttribute('aria-pressed', String(btn.dataset.span === state.span));
-  }
-
-  const chipsRow = $('#chips', root);
-  const dims = DIMS.filter((d) => state.chips[d]);
-  if (!dims.length) {
-    chipsRow.hidden = true;
-    chipsRow.replaceChildren();
-    return;
-  }
-  chipsRow.hidden = false;
-  const chips = dims.map((d) => el('span', { class: 'chip' },
-    d + ': ',
-    el('b', {}, chipLabel(d, state.chips[d])),
-    el('button', { type: 'button', 'aria-label': 'remove ' + d, onclick: () => handlers.onChipRemove && handlers.onChipRemove(d) }, '×')));
-  chips.push(el('span', { class: 'chip clear' },
-    el('button', { type: 'button', onclick: () => handlers.onClear && handlers.onClear() }, 'Clear all')));
-  chipsRow.replaceChildren(...chips);
-}
-
-function bind(root) {
-  $('#tab-now', root).addEventListener('click', () => handlers.onView && handlers.onView('now'));
-  $('#tab-review', root).addEventListener('click', () => handlers.onView && handlers.onView('review'));
-  $('#sub', root).addEventListener('change', (e) => handlers.onSub && handlers.onSub(e.target.value));
-  for (const btn of root.querySelectorAll('.seg button')) {
-    btn.addEventListener('click', () => handlers.onSpan && handlers.onSpan(btn.dataset.span));
-  }
-  // Theme toggle: copied verbatim from the old page's click handler.
-  $('#theme', root).addEventListener('click', () => {
-    const cur = document.documentElement.getAttribute('data-theme');
-    const next = cur === 'dark' ? 'light' : cur === 'light' ? 'auto' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('ccquota-theme', next); } catch {}
-  });
 }
 
 export function setBusy(b) {
   const p = $('#progress');
   if (p) p.hidden = !b;
+}
+
+/* --------------------------------------------------------- scope controls */
+
+// Every instance created by createScopeControls, so renderScopeControls can
+// update all of them without the caller (app.js) needing to know which views
+// exist or import each view's own mount point.
+const instances = [];
+
+/** createScopeControls builds one instance of the scope widget: a
+ *  subscription <select>, an OPTIONAL span segmented control, and a chips
+ *  row with per-chip remove + "Clear all". Unlike the old single sticky-bar
+ *  render, this element is built ONCE (by whichever view calls this at its
+ *  own module-eval time, e.g. now.js's `const nowScope =
+ *  createScopeControls({ span: false })`) and is a plain, freestanding DOM
+ *  node from then on — the caller embeds `instance.el` into its card same as
+ *  now.js already does for its persistent heroWrapEl/liveWrapEl, and just
+ *  re-appends the same reference on every rebuild. Because construction and
+ *  event binding happen exactly once, in this closure, there is no
+ *  `data-bound` guard to forget here (unlike renderNav's root, which is
+ *  handed a pre-existing static element it does not own). */
+export function createScopeControls({ span = true } = {}) {
+  let handlers = {};
+
+  const sel = el('select', { 'aria-label': 'Subscription' });
+  sel.addEventListener('change', (e) => handlers.onSub && handlers.onSub(e.target.value));
+
+  const spanSeg = span
+    ? el('div', { class: 'seg', role: 'group', 'aria-label': 'Timeline span' },
+        ['7d', '30d', '90d'].map((v) => el('button', { type: 'button', 'data-span': v }, v)))
+    : null;
+  if (spanSeg) {
+    for (const btn of spanSeg.querySelectorAll('button')) {
+      btn.addEventListener('click', () => handlers.onSpan && handlers.onSpan(btn.dataset.span));
+    }
+  }
+
+  const chipsRow = el('div', { class: 'chips-row', hidden: true });
+
+  const filters = el('div', { class: 'filters' }, sel, spanSeg);
+  const root = el('div', { class: 'scope-controls' }, filters, chipsRow);
+
+  function update(state, accounts, cb) {
+    handlers = cb || {};
+
+    const opts = accounts.map((a) => el('option', { value: a.account_uuid },
+      a.email || a.display_name || a.account_uuid));
+    if (accounts.length > 1) opts.unshift(el('option', { value: 'all' }, `All ${accounts.length} subscriptions`));
+    sel.replaceChildren(...opts);
+    sel.style.display = accounts.length > 1 ? '' : 'none';
+    sel.value = state.sub;
+
+    if (spanSeg) {
+      for (const btn of spanSeg.querySelectorAll('button')) {
+        btn.setAttribute('aria-pressed', String(btn.dataset.span === state.span));
+      }
+    }
+
+    const dims = DIMS.filter((d) => state.chips[d]);
+    if (!dims.length) {
+      chipsRow.hidden = true;
+      chipsRow.replaceChildren();
+      return;
+    }
+    chipsRow.hidden = false;
+    const chips = dims.map((d) => el('span', { class: 'chip' },
+      d + ': ',
+      el('b', {}, chipLabel(d, state.chips[d])),
+      el('button', { type: 'button', 'aria-label': 'remove ' + d, onclick: () => handlers.onChipRemove && handlers.onChipRemove(d) }, '×')));
+    chips.push(el('span', { class: 'chip clear' },
+      el('button', { type: 'button', onclick: () => handlers.onClear && handlers.onClear() }, 'Clear all')));
+    chipsRow.replaceChildren(...chips);
+  }
+
+  const instance = { el: root, update };
+  instances.push(instance);
+  return instance;
+}
+
+/** renderScopeControls updates EVERY scope-controls instance that has been
+ *  created (Now's and Review's, however many that ends up being) from the
+ *  current state. Called synchronously from app.js's route() on every
+ *  hashchange — same timing the old single renderScope() had — so a
+ *  subscription/span/chip change is reflected immediately, without waiting
+ *  for that view's async load() cycle to finish. The instance whose view is
+ *  hidden right now still gets updated; that just keeps it correct for when
+ *  the user switches tabs, and is cheap (a handful of DOM writes). */
+export function renderScopeControls(state, accounts, cb) {
+  for (const inst of instances) inst.update(state, accounts, cb);
 }

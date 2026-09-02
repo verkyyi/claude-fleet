@@ -20,7 +20,20 @@
 import { el, $, escapeHTML } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago } from './lib/format.js';
 import { withChip } from './lib/state.js';
+import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
+
+// Now's scope-controls widget: subscription select + chips row, no span
+// control — Now has no time range, it is *right now* (see the module
+// comment above). Mounted on the "Am I about to hit the wall?" card, below
+// (Task 15 nav restructure): that card is per-subscription by definition,
+// the natural first-substantive-card home for Now's scope, the same way
+// Review's Timeline card owns Review's. Built once, module-eval time, same
+// persistent-node reasoning as heroWrapEl/liveWrapEl just below — its
+// content is kept current by app.js's route() calling scope.js's
+// renderScopeControls on every hashchange, independent of this view's own
+// async load() cycle.
+const nowScope = createScopeControls({ span: false });
 
 /* ------------------------------------------------------- persistent nodes */
 
@@ -328,6 +341,7 @@ function wallCard(limits, chips) {
     const card = el('div', { class: 'card' },
       el('h2', {}, 'Am I about to hit the wall?'),
       el('p', { class: 'hint' }, limits.note),
+      nowScope.el,
       chipsIgnoredHint(chips));
     if (limits.worst) {
       card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
@@ -350,6 +364,7 @@ function wallCard(limits, chips) {
     el('h2', {}, 'Am I about to hit the wall?'),
     el('p', { class: 'hint' },
       'Exact, account-wide, and already covering every device on the subscription.'),
+    nowScope.el,
     chipsIgnoredHint(chips));
 
   if (!limits.available) {

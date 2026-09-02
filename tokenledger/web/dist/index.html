@@ -9,6 +9,11 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<!-- The scope bar is deliberately minimal: wordmark, view tabs, theme toggle.
+     Subscription / span / chips are per-view scope, not global navigation —
+     each view mounts its own "scope controls" widget (web/dist/scope.js's
+     createScopeControls) on its first substantive card instead. See
+     scope.js for why. -->
 <header class="scope" id="scope">
   <div class="row1">
     <h1>ccquota</h1>
@@ -17,13 +22,8 @@
       <button role="tab" id="tab-review" aria-selected="false">Review</button>
     </nav>
     <span class="spacer"></span>
-    <select id="sub" aria-label="Subscription"></select>
-    <div class="seg" id="span" role="group" aria-label="Timeline span">
-      <button data-span="7d">7d</button><button data-span="30d">30d</button><button data-span="90d">90d</button>
-    </div>
     <button id="theme" title="Toggle light / dark">◐</button>
   </div>
-  <div class="row2" id="chips" hidden></div>
   <div class="progress" id="progress" hidden></div>
 </header>
 <div class="wrap">

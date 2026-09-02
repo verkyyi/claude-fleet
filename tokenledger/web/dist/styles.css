@@ -6,11 +6,13 @@
    NOTE: the old bare `header { display:flex; ... }` rule is intentionally
    dropped here — the new index.html's <header class="scope" id="scope">
    is itself a <header> element, so that unqualified selector would still
-   match it and force .row1/.row2(chips)/.progress into a flex ROW instead
-   of the intended vertical stack. The three *qualified* old header rules
-   (header h1 / header .sub / header .spacer) are harmless or still load-
-   bearing (header .spacer keeps the new .row1's <span class="spacer">
-   pushing the controls right) and are kept verbatim below. */
+   match it and force .row1/.progress into a flex ROW instead of the
+   intended vertical stack (as of Task 15 the header holds only .row1 and
+   .progress — chips/select/span moved out to .scope-controls, mounted
+   per-view; see that section below). The three *qualified* old header
+   rules (header h1 / header .sub / header .spacer) are harmless or still
+   load-bearing (header .spacer keeps the new .row1's <span class="spacer">
+   pushing the theme toggle right) and are kept verbatim below. */
 
 /* Palette: the dataviz reference instance, validated with
    scripts/validate_palette.js for both surfaces. Light mode reports aqua and
@@ -264,22 +266,33 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
 /* ------------------------------------------------------------------------ */
 /* Everything below is new for the module-shell redesign (Task 11 brief).   */
 
-/* scope bar */
+/* scope bar (Task 15: nav only — wordmark, view tabs, theme toggle. No
+   subscription/span/chips here any more; see .scope-controls below for
+   where those moved. Fewer elements, so the tabs read as a calm segmented
+   switch rather than the old "row of controls" look.) */
 .scope { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
-.scope .row1 { display: flex; align-items: center; gap: 10px; padding: 10px 20px; flex-wrap: wrap; }
+.scope .row1 { display: flex; align-items: center; gap: 14px; padding: 11px 20px; flex-wrap: wrap; }
 .scope h1 { font-size: 17px; }
-.scope .views button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; color: var(--ink-2); font: inherit; cursor: pointer; }
-.scope .views button[aria-selected="true"] { background: var(--s1); color: #fff; }
-.scope .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.scope .seg button { border: 0; border-right: 1px solid var(--border); background: var(--surface); padding: 5px 10px; font: inherit; color: var(--ink-2); cursor: pointer; }
-.scope .seg button:last-child { border-right: 0; }
-.scope .seg button[aria-pressed="true"] { background: var(--s1); color: #fff; }
-.scope .row2 { display: flex; gap: 6px; align-items: center; padding: 0 20px 8px; overflow-x: auto; white-space: nowrap; }
+.scope .views { display: inline-flex; gap: 2px; background: var(--grid); border-radius: 10px; padding: 3px; }
+.scope .views button { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; }
+.scope .views button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border-radius: 999px; background: var(--s1); color: #fff; font-size: 12.5px; }
 .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .chip.clear { background: var(--ink-3); }
 .progress { height: 2px; background: linear-gradient(90deg, var(--s1), var(--s3)); animation: prog 1s linear infinite; background-size: 200% 100%; }
 @keyframes prog { from { background-position: 0 0 } to { background-position: 200% 0 } }
+
+/* scope controls (Task 15): the subscription select + span segmented
+   control + chips row, now mounted on a view's own first substantive card
+   (web/dist/scope.js's createScopeControls) instead of the sticky bar. A
+   near-twin of the old `.scope .row1`/`.row2` it replaces, just not scoped
+   under `.scope` any more — `.filters` holds the select/span side by side,
+   `.chips-row` is the second line and only takes space when chips exist
+   (scope.js toggles its `hidden` attribute). */
+.scope-controls { margin-bottom: 14px; }
+.scope-controls .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scope-controls .filters .seg { margin-bottom: 0; } /* cancel the breakdown-card .seg's margin-bottom so this row stays centered */
+.scope-controls .chips-row { display: flex; gap: 6px; align-items: center; padding-top: 8px; overflow-x: auto; white-space: nowrap; }
 main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 /* kpi */
 .kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }

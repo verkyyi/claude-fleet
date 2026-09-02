@@ -15,7 +15,18 @@ import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
 import { fmtInt, fmtUSD, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
 import { el, escapeHTML } from './lib/dom.js';
+import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
+
+// Review's scope-controls widget: subscription select + span segmented
+// control + chips row (Task 15 nav restructure). Mounted on the Timeline
+// card (card 1, below) rather than the sticky bar — the Timeline already
+// owns the time range via its brush, so the span control that scales it
+// belongs right next to it. Built once, module-eval time; kept current by
+// app.js's route() calling scope.js's renderScopeControls on every
+// hashchange, independent of this view's own async load() cycle — see
+// now.js's identical `nowScope` for the fuller version of this comment.
+const reviewScope = createScopeControls({ span: true });
 
 // GRAN mirrors brush.js's SPANS bucket sizes (7d→1h, 30d→6h, 90d→1d) — the
 // two must agree, since card 1's `bucket`/`extent.n` come from brush.js while
@@ -118,7 +129,8 @@ function timelineCard(result, ctx, state, app) {
     el('p', { class: 'hint' },
       'Tokens per bucket across the current span, stacked by model (top 6 + other). Drag the ' +
       'body to move the selection every other card reports on, an edge to resize it, or ' +
-      'double-click to reset to the whole span.'));
+      'double-click to reset to the whole span.'),
+    reviewScope.el);
 
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;
