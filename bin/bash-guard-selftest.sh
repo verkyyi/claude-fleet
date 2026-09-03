@@ -49,6 +49,40 @@ assert_exit() {
   fi
 }
 
+# assert_rewrite <label> <hook> <json> <substring>  — the messaging rails REPAIR
+# rather than deny (#528): exit 0 PLUS a PreToolUse updatedInput payload on
+# stdout. Asserts the payload is well-formed, carries the substring, and that the
+# ORIGINAL command is gone (a rewrite that leaves the raw call in place is a
+# silent no-op).
+assert_rewrite() {
+  local label="$1" hook="$2" json="$3" want="$4" out got
+  out=$(printf '%s' "$json" | "$PY" "$hook" 2>/dev/null); got=$?
+  if [ "$got" != 0 ]; then
+    printf 'FAIL: %s — expected exit 0 with a rewrite, got %s\n' "$label" "$got" >&2
+    fails=$((fails + 1)); return
+  fi
+  printf '%s' "$out" | "$PY" -c '
+import json,sys
+d=json.load(sys.stdin)["hookSpecificOutput"]
+assert d["hookEventName"]=="PreToolUse", "wrong hookEventName"
+assert d["permissionDecision"]=="allow", "rewrite must decide allow"
+cmd=d["updatedInput"]["command"]
+assert sys.argv[1] in cmd, "rewrite missing %r" % sys.argv[1]
+' "$want" 2>/dev/null || {
+    printf 'FAIL: %s — malformed/incomplete rewrite payload\n' "$label" >&2
+    fails=$((fails + 1)); }
+}
+
+# assert_no_rewrite <label> <hook> <json> — allowed AND left verbatim (no payload).
+assert_no_rewrite() {
+  local label="$1" hook="$2" json="$3" out
+  out=$(printf '%s' "$json" | "$PY" "$hook" 2>/dev/null)
+  if [ -n "$out" ]; then
+    printf 'FAIL: %s — expected a verbatim allow, got a rewrite\n' "$label" >&2
+    fails=$((fails + 1))
+  fi
+}
+
 bash_json() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$1"; }
 # jq-free JSON string encode of "$1" (handles the quoting/escaping we need here).
 jstr() { "$PY" -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"; }
@@ -89,13 +123,60 @@ assert_exit 0 "cross-segment split" "$GUARD" "$(bash_json "$(jstr 'git commit -m
 # but a REAL dangerous statement AFTER a harmless one still fires
 assert_exit 2 "block in 2nd segment" "$GUARD" "$(bash_json "$(jstr 'echo hi && rm -rf /')")"
 
-# BLOCK: a raw `tmux send-keys` into a live Claude TUI — inter-agent messaging
-# must go through the issue-bridge (issue #437), on ANY server flavour.
-assert_exit 2 "send-keys (bare)"    "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
-assert_exit 2 "send-keys -L sock"   "$GUARD" "$(bash_json "$(jstr 'tmux -L fleet-x send-keys -t win C-c')")"
-assert_exit 2 "send-keys -S path"   "$GUARD" "$(bash_json "$(jstr 'tmux -S /tmp/s send-keys -t win -l hi')")"
-# ALLOW: the FLEET_ALLOW_SENDKEYS=1 hatch (sanctioned fleet plumbing)
-assert_exit 0 "send-keys + hatch"   "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t win Enter')")"
+# MASKING (#528): quoted and heredoc text is DATA. A runbook, a report or a
+# test fixture whose line merely BEGINS with a guarded command used to segment
+# like code and get denied though nothing would ever run — the guard blocked its
+# own documentation. The rails still fire on the real thing in the same command.
+assert_exit 0 "rm -rf in a heredoc doc" "$GUARD" "$(bash_json "$(jstr 'cat > /tmp/d.md <<EOF
+Never run this:
+rm -rf /
+EOF
+echo wrote')")"
+assert_exit 0 "rm -rf in a quoted arg"  "$GUARD" "$(bash_json "$(jstr 'printf "%s" "rm -rf /"')")"
+assert_exit 0 "push -f doc line"        "$GUARD" "$(bash_json "$(jstr 'cat <<EOF > /tmp/r.md
+git push --force origin master
+EOF')")"
+# ...but a REAL statement after a masked lookalike still fires
+assert_exit 2 "real rm after doc text"  "$GUARD" "$(bash_json "$(jstr 'cat > /tmp/d.md <<EOF
+rm -rf /
+EOF
+rm -rf /')")"
+# A live $(...) inside a quoted body is code again, not data — masking blanks the
+# surrounding string but leaves the substitution scannable, so it cannot become a
+# bypass for the irreversible rails.
+assert_exit 2 "rm -rf in a subst"       "$GUARD" "$(bash_json "$(jstr 'echo "$(cd /tmp && rm -rf / )"')")"
+
+# BLOCK: a raw tmux send-keys into a live FLEET pane — inter-agent messaging must
+# go through the issue-bridge (issue #437). Scoped to fleet SERVERS since #528:
+# the rail protects a worker's Claude TUI, and a server hosting no fleet has no
+# TUI to corrupt. FLEET_CONF_DIR is pinned so "which labels are fleets" stays
+# hermetic — `fleet-x` owns a conf here, `scratch` deliberately does not.
+export FLEET_CONF_DIR="$TMP/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/fleet-x" && : > "$FLEET_CONF_DIR/fleets/fleet-x/conf"
+( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
+  assert_exit 2 "send-keys ambient fleet"   "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
+  assert_exit 2 "send-keys -L a fleet"      "$GUARD" "$(bash_json "$(jstr 'tmux -L fleet-x send-keys -t win C-c')")"
+  # ALLOW: the isolated-socket test idiom CLAUDE.md prescribes ("test tmux
+  # tooling on an isolated socket") — 12 of the 13 blocks this rail produced were
+  # exactly this, never a live pane.
+  assert_exit 0 "send-keys -S custom sock"  "$GUARD" "$(bash_json "$(jstr 'tmux -S /tmp/probe.sock send-keys -t t -l hi')")"
+  assert_exit 0 "send-keys -L non-fleet"    "$GUARD" "$(bash_json "$(jstr 'tmux -L scratch send-keys -t t C-u')")"
+  # ALLOW: the FLEET_ALLOW_SENDKEYS=1 hatch — COMMAND-WIDE since #528, not
+  # segment-local: an inline assignment anywhere in the command counts, and so
+  # does the process env. Read off one segment the hatch was useless on exactly
+  # the compound commands that needed it.
+  assert_exit 0 "send-keys + inline hatch"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t win Enter')")"
+  assert_exit 0 "hatch on an earlier stmt"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_SENDKEYS=1 ; tmux send-keys -t win Enter')")"
+  # FALSE-POSITIVE: a script FIXTURE that merely contains the call is data, not a
+  # call. Before #528 the heredoc body segmented and its line posed as a command.
+  assert_exit 0 "send-keys in a heredoc"    "$GUARD" "$(bash_json "$(jstr 'cat > /tmp/s.sh <<EOF
+tmux send-keys -t x Enter
+EOF
+chmod +x /tmp/s.sh')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
+( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_ALLOW_SENDKEYS=1; unset TMUX
+  assert_exit 0 "send-keys + env hatch"     "$GUARD" "$(bash_json "$(jstr 'tmux send-keys -t win Enter')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
 # ALLOW: a script wrapping send-keys — the hook never sees the subprocess
 assert_exit 0 "bash cycle script"   "$GUARD" "$(bash_json "$(jstr 'bash ~/.claude/fleet/bin/fleet-handoff-cycle.sh')")"
 # ALLOW: unrelated tmux (a read/list is not send-keys)
@@ -103,16 +184,36 @@ assert_exit 0 "tmux list-windows"   "$GUARD" "$(bash_json "$(jstr 'tmux list-win
 # ALLOW: send-keys as a quoted literal to another subcommand isn't the subcommand
 assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buffer -- "send-keys demo"')")"
 
-# BLOCK: a raw `gh issue comment` from a FLEET pane — fleet writes must go through
-# fleet-comment.sh so the issue-bridge's markers are stamped at the source
-# (issue #483). Fleet context is pinned hermetically via FLEET_MAIN (env is
-# authoritative, no tmux consulted); outside a fleet raw gh stays allowed.
-( fails=0; export FLEET_MAIN="$TMP/repo"; unset TMUX
-  assert_exit 2 "gh issue comment (fleet)"  "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"
-  assert_exit 2 "gh --repo= issue comment"  "$GUARD" "$(bash_json "$(jstr 'gh --repo=o/r issue comment 483 -F body.md')")"
-  assert_exit 2 "gh comment in 2nd segment" "$GUARD" "$(bash_json "$(jstr 'echo hi && gh issue comment 12 --body x')")"
-  # ALLOW: the FLEET_ALLOW_RAW_COMMENT=1 hatch (a repo no fleet serves)
-  assert_exit 0 "gh comment + hatch"        "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 gh issue comment 483 --body x')")"
+# REWRITE (not deny, since #528): a raw gh issue-comment from a FLEET pane is
+# repaired onto fleet-comment.sh so the issue-bridge's markers are stamped at the
+# source (issue #483) WITHOUT throwing the rest of the command away. Every block
+# this rail ever produced hit a compound command (median 1.2 KB, up to 34
+# statements), so a deny cost the whole batch to fix one statement.
+#
+# Fleet context is pinned hermetically via FLEET_MAIN (env is authoritative, no
+# tmux consulted). FLEET_LIB points at nothing, so the "does this issue have a
+# live bound worker" probe cannot resolve and takes its conservative branch
+# (assume yes → rewrite); the rewrite is lossless, so guessing wrong costs
+# nothing. The narrow case — a resolvable fleet that reports NO bound worker —
+# is covered by the stub-lib block further down.
+( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_LIB="$TMP/nope/fleet-lib.sh"; unset TMUX
+  assert_rewrite "gh comment -> wrapper"    "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")" \
+    'fleet-comment.sh --note 483 --body "done"'
+  assert_rewrite "gh --repo= comment"       "$GUARD" "$(bash_json "$(jstr 'gh --repo=o/r issue comment 483 -F body.md')")" \
+    'fleet-comment.sh --note 483 -F body.md'
+  assert_rewrite "gh comment in 2nd stmt"   "$GUARD" "$(bash_json "$(jstr 'echo hi && gh issue comment 12 --body x')")" \
+    'echo hi && ~/.claude/fleet/bin/fleet-comment.sh --note 12 --body x'
+  # The whole point: the OTHER statements survive untouched, including a body
+  # that must not be re-typed and must not be case-folded.
+  assert_rewrite "batch keeps its work"     "$GUARD" "$(bash_json "$(jstr 'git commit -m WIP ; gh issue comment 7 --body "Done: See PR" ; echo TAIL')")" \
+    'git commit -m WIP ; ~/.claude/fleet/bin/fleet-comment.sh --note 7 --body "Done: See PR" ; echo TAIL'
+  # ALLOW verbatim: the FLEET_ALLOW_RAW_COMMENT=1 hatch, inline or in the env,
+  # anywhere in the command (command-wide since #528).
+  assert_no_rewrite "gh comment + hatch"    "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 gh issue comment 483 --body x')")"
+  assert_no_rewrite "hatch on stmt 1 of 2"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_RAW_COMMENT=1 echo go ; gh issue comment 483 --body x')")"
+  # BLOCK: an issue the wrapper cannot address (its digit-strip would mangle a
+  # URL into a different issue number) — refuse rather than post to the wrong one.
+  assert_exit 2 "gh comment by URL"         "$GUARD" "$(bash_json "$(jstr 'gh issue comment https://github.com/o/r/issues/483 --body x')")"
   # ALLOW: the sanctioned wrapper (its internal gh runs in a subprocess this
   # layer never sees), and non-comment gh issue verbs
   # shellcheck disable=SC2088  # the tilde is a literal test payload, as typed in a pane
@@ -124,6 +225,32 @@ assert_exit 0 "send-keys quoted lit" "$GUARD" "$(bash_json "$(jstr 'tmux set-buf
   assert_exit 0 "issue comment in body"     "$GUARD" "$(bash_json "$(jstr 'gh issue create --title x --body "never run gh issue comment raw"')")"
   assert_exit 0 "issue comment in echo"     "$GUARD" "$(bash_json "$(jstr 'echo gh issue comment')")"
   exit $fails ); rc=$?; fails=$((fails + rc))
+
+# ALLOW verbatim: a fleet whose bridge reports NO live worker bound to that issue.
+# This is the scope fix (#528) — the rail exists so an unmarked comment cannot be
+# relayed back into a bound worker as a spurious self-turn, and with nothing bound
+# the comment is inert. It was denying overwhelmingly inert commands: of the 43
+# blocks it produced, 36 came from scratch panes with no binding at all, and
+# exactly ONE was the pane's own issue. Stub lib + bridge so the probe resolves
+# without a live fleet.
+mkdir -p "$TMP/stub"
+cat > "$TMP/stub/fleet-lib.sh" <<'STUB'
+fleet_current_session() { printf 'fleet-x'; }
+fleet_repo_cached()     { printf 'o/r'; }
+STUB
+cat > "$TMP/stub/fleet-issue-bridge.sh" <<'STUB'
+#!/bin/bash
+# --find-window <issue> <repo>: issue 999 is bound to a live worker, nothing else is.
+[ "${1:-}" = "--find-window" ] || exit 2
+[ "${2:-}" = "999" ] && printf 'fleet-x\t@9\tdone'
+exit 0
+STUB
+( fails=0; export FLEET_MAIN="$TMP/repo" FLEET_LIB="$TMP/stub/fleet-lib.sh"; unset TMUX
+  assert_no_rewrite "unbound issue verbatim" "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body x')")"
+  assert_rewrite "bound issue rewritten"     "$GUARD" "$(bash_json "$(jstr 'gh issue comment 999 --body x')")" \
+    'fleet-comment.sh --note 999 --body x'
+  exit $fails ); rc=$?; fails=$((fails + rc))
+
 # ALLOW: the same raw comment OUTSIDE a fleet (no FLEET_MAIN, no TMUX)
 ( fails=0; unset FLEET_MAIN; unset TMUX
   assert_exit 0 "gh comment (no fleet)"     "$GUARD" "$(bash_json "$(jstr 'gh issue comment 483 --body "done"')")"

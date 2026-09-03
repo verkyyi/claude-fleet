@@ -131,7 +131,11 @@ override them):
   another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
   the Enter) and is hook-blocked (#437). The bridge relays your comment as the
   target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
-  for fleet plumbing only. Closing the issue with a final comment (a
+  for fleet plumbing only. An **isolated** test socket (`tmux -S /tmp/x.sock`, or
+  `-L <label>` owning no fleet conf) is not a pane and is not guarded — drive it
+  freely when testing tmux tooling. Reaching for `gh issue comment` needs no
+  ceremony either: the guard rewrites it onto the wrapper for you and lets the
+  rest of your command run (#528). Closing the issue with a final comment (a
   research/no-PR task) goes through the same wrapper —
   `fleet-comment.sh "<issue>" --repo "$FLEET_REPO" --close --body '…'` — never a
   bare `gh issue close --comment`: that posts an UNMARKED comment the bridge
