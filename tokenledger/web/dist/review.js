@@ -159,7 +159,13 @@ function timelineCard(result, ctx, state, app) {
     caption.textContent = captionText(brushSel);
     if (!final) return;
     clearTimeout(brushTimer);
-    brushTimer = setTimeout(() => app.setState({ ...state, from: brushSel.from, to: brushSel.to }), 250);
+    // Read app.state at fire time, not the `state` this card was built from:
+    // up to 250ms can pass before this fires, and another change (a chip
+    // removed, the subscription switched) may have landed a fresh state in
+    // that window. Spreading the stale captured `state` here would silently
+    // revert it -- the race this whole redesign exists to kill, reintroduced
+    // in a narrower window.
+    brushTimer = setTimeout(() => app.setState({ ...app.state, from: brushSel.from, to: brushSel.to }), 250);
   };
 
   const chart = C.timeline(tSeries, {
@@ -479,7 +485,11 @@ function wallHistoryCard(result, ctx) {
   const accounts = data.accounts || [];
   const totalPoints = accounts.reduce((a, x) => a + ((x.points || []).length), 0);
   if (!totalPoints) {
-    card.appendChild(el('div', { class: 'empty' }, 'Limit snapshots exist from 2026-09-01.'));
+    // Not "snapshots exist from <date>": that hardcoded a date true only of
+    // the author's hub, and every other hub would show it verbatim and
+    // wrongly. No response field gives an actual earliest-snapshot date to
+    // derive it from, so say plainly that this period has none.
+    card.appendChild(el('div', { class: 'empty' }, 'No limit snapshots in this period.'));
     return card;
   }
 
@@ -642,6 +652,12 @@ function applyAll(root, state, app, ctx, results) {
 }
 
 export function renderReview(root, state, app) {
+  // A re-render (any state change -- a chip removed, the subscription
+  // switched, ...) invalidates whatever brush-commit timer a PREVIOUS render
+  // may have armed: that timer closes over the state as it stood when it was
+  // set, so left running it would fire ~250ms later and write that stale
+  // state back over whatever just changed. See onBrush below.
+  clearTimeout(brushTimer);
   const now = app.now();
   const ext = extent(state.span, now);
   const sel = resolve({ from: state.from, to: state.to }, state.span, now);
