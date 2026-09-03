@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -1410,20 +1410,79 @@ fleet_scratch_free() {
 # to the dash rows (scoped by FLEET_SESSION) — no per-consumer opt-out to forget.
 fleet_pool_session() { printf '%s-pool\n' "$1"; }
 
+# Milliseconds since the epoch, portable. BSD `date` has no %N/%3N, so use perl
+# (already a fleet dependency — the sub-second spinner needs Time::HiRes), then
+# python3, then whole seconds ×1000 as a last-resort coarse fallback. Digits only.
+fleet_now_ms() {
+  perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000' 2>/dev/null && return
+  python3 -c 'import time;print(int(time.time()*1000))' 2>/dev/null && return
+  echo $(( $(date +%s 2>/dev/null || echo 0) * 1000 ))
+}
+
+# fleet_spawn_is_burst <now_ms> <last_ms> <guard_ms> — 0 (true) iff this dash
+# prompt-line Enter TRAILS the previous one by < guard_ms, i.e. it is one line of a
+# multi-line PASTE (issue #531). A terminal delivers a paste as one Enter per line,
+# fired milliseconds apart, and fzf has no bracketed-paste awareness on the input
+# line — so 250 pasted lines fired 250 seeded spawns. dash-enter.sh drops a burst
+# Enter and only spawns an ISOLATED one (quiet before AND after, within the guard).
+# A "no prior Enter" (last_ms=0) is never a burst — the gap is huge.
+fleet_spawn_is_burst() {
+  local now="${1:-0}" last="${2:-0}" guard="${3:-1000}"
+  case "$now$last$guard" in *[!0-9]*) return 1;; esac   # non-numeric → treat as not-a-burst
+  [ "$last" -gt 0 ] && [ $((now - last)) -lt "$guard" ]
+}
+
+# In-flight scratch-spawn markers (issue #531). A spawn's SLOW half — git fetch +
+# `git worktree add` + window launch — holds NO session slot until its window
+# exists, so a flood of spawns (the paste storm; a wedged Enter/⌃s key) could all
+# pass fleet_session_cap_ok and launch hundreds of concurrent `worktree add`s
+# before the first one counted (the 2026-09-03 incident: 244 adds, cap=4 bypassed,
+# disk 30→6 GB). Each spawn drops a marker for the duration of its slow half; the
+# cap check counts fresh markers so concurrent spawns SEE one another. Markers are
+# machine-wide like the session cache, keyed <fleet-slug>.<pid>; a crashed spawn's
+# marker ages out (FLEET_INFLIGHT_TTL, default 180s) rather than wedging the cap.
+FLEET_INFLIGHT_DIR="$FLEET_C/global/spawn-inflight"
+fleet_inflight_mark() {   # <sess> → create a marker for THIS process; echo its path
+  local sess="${1:-_}" f
+  mkdir -p "$FLEET_INFLIGHT_DIR" 2>/dev/null || { printf ''; return; }
+  f="$FLEET_INFLIGHT_DIR/$(fleet_slug "$sess").$$"
+  : > "$f" 2>/dev/null
+  printf '%s' "$f"
+}
+fleet_inflight_count() {  # [sess] → count FRESH markers (all fleets, or one), reaping stale
+  local sess="${1:-}" ttl="${FLEET_INFLIGHT_TTL:-180}" now cut n=0 f m pat
+  [ -d "$FLEET_INFLIGHT_DIR" ] || { printf 0; return; }
+  now=$(date +%s 2>/dev/null || echo 0); cut=$((now - ttl))
+  pat='*'; [ -n "$sess" ] && pat="$(fleet_slug "$sess").*"
+  while IFS= read -r f; do
+    [ -e "$f" ] || continue
+    # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0 with
+    # non-mtime output, so it must not win — `stat -c %Y` (GNU) errors cleanly on BSD.
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+    case "$m" in ''|*[!0-9]*) m=0;; esac
+    if [ "$m" -ge "$cut" ]; then n=$((n + 1)); else rm -f "$f" 2>/dev/null; fi
+  done <<EOF
+$(find "$FLEET_INFLIGHT_DIR" -maxdepth 1 -type f -name "$pat" 2>/dev/null)
+EOF
+  printf '%s' "$n"
+}
+
 fleet_session_cap_ok() {
   local sess="${1:-}"
   local gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}" fmax="${FLEET_MAX_SESSIONS:-0}" n
   case "$gmax" in ''|*[!0-9]*) gmax=8;; esac   # tolerate a garbled conf value
   case "$fmax" in ''|*[!0-9]*) fmax=0;; esac
   if [ "$gmax" -ne 0 ]; then                   # 0 ⇒ unlimited
-    n=$(fleet_session_count)
+    # count LIVE session windows PLUS spawns still building their window (#531), so
+    # a burst of concurrent spawns cannot all slip past before any lands a window.
+    n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
     if [ "$n" -ge "$gmax" ]; then
       printf 'fleet at capacity: %s/%s Claude sessions running (global) — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' "$n" "$gmax"
       return 1
     fi
   fi
   if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
-    n=$(fleet_session_count_for "$sess")
+    n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
     if [ "$n" -ge "$fmax" ]; then
       printf 'fleet at capacity: %s/%s Claude sessions in this fleet — raise FLEET_MAX_SESSIONS or close one first' "$n" "$fmax"
       return 1

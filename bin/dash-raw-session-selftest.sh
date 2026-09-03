@@ -117,7 +117,7 @@ run_raw() {
   : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR" \
-  FLEET_GLOBAL_MAX_SESSIONS=0 \
+  FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-0}" \
   DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" RS_LOG="$RS_LOG" \
     bash "$WORK/bin/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"
 }
@@ -336,5 +336,29 @@ out=$(printf 'issue-9|%s|9|done|-|-\n' "$WORK/main-issue-9" | python3 "$RESOLVE"
 printf '%s\n' "$out" | grep -q $'^WIN\tissue-9\t'  || fail "E a 6-field (pre-#214) WIN row must still parse+survive" "$out"
 ok "E an old 6-field map row (no @raw) is unaffected"
 
-printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290)\n' "$pass"
+# ==================== O: in-flight spawns count toward the cap (#531) ========
+# A spawn's slow half (worktree add + window launch) holds no session slot until
+# its window exists, so a FLOOD (the multi-line paste storm, a wedged key) could
+# all pass the global cap before any landed a window — the 2026-09-03 incident:
+# 244 concurrent `git worktree add`s, cap=4 bypassed, disk 30→6 GB. Each in-flight
+# spawn now drops a marker that the cap counts. A fresh marker + a global cap of 1
+# ⇒ the next spawn is refused BEFORE it creates a worktree.
+reset_scratch
+INFLIGHT="$WORK/tmp/.claude-dash/global/spawn-inflight"
+mkdir -p "$INFLIGHT"; : > "$INFLIGHT/otherfleet.99999"     # one FRESH in-flight spawn elsewhere
+GMAX=1 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
+[ -s "$NEWWIN_LOG" ] && fail "O an in-flight spawn must count toward the cap (no window)" "$(cat "$NEWWIN_LOG")"
+[ -e "$WORK/main-scratch-1" ] && fail "O a cap refusal from an in-flight marker must create no worktree" "$(git -C "$MAIN" worktree list)"
+grep -qi 'capacity' "$DISPLAY_LOG" || fail "O the refusal should surface a capacity message" "$(cat "$DISPLAY_LOG")"
+# …and a STALE marker (mtime older than the TTL) must NOT hold the slot — it ages
+# out. Age the marker by mtime (a fixed past date, portable) rather than TTL=0,
+# which second-granular mtimes defeat for a marker written this same second.
+reset_scratch; : > "$DISPLAY_LOG"
+touch -t 202001010000 "$INFLIGHT/otherfleet.99999"
+GMAX=1 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
+grep -q 'NEWWIN' "$NEWWIN_LOG" || fail "O a stale in-flight marker (past its TTL) must not wedge the cap" "$(cat "$WORK/err")"
+rm -rf "$INFLIGHT"
+ok "O in-flight spawn markers count toward the cap (fresh blocks, stale ages out)"
+
+printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

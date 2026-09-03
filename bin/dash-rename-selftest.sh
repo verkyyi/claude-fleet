@@ -65,6 +65,9 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/dr-selftest.XXXXXX")" || exit 2
 # typed task spawns through) is a FAKE that logs its argv — no worktree, no claude.
 mkdir -p "$WORK/sbin"
 for f in dash-rename.sh dash-enter.sh dash-esc.sh; do ln -s "$BIN/$f" "$WORK/sbin/$f"; done
+# dash-enter.sh sources fleet-lib.sh (fleet_bg / fleet_now_ms / fleet_spawn_is_burst,
+# the paste-storm guard, #531) — provide it in the stub dir so the source resolves.
+ln -s "$BIN/fleet-lib.sh" "$WORK/sbin/fleet-lib.sh"
 RAW_LOG="$WORK/raw.log"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$RAW_LOG" > "$WORK/sbin/dash-raw-session.sh"
 chmod +x "$WORK/sbin/dash-raw-session.sh"
@@ -225,17 +228,24 @@ bash "$ENT" "$T" '-dashy' >/dev/null
 [ -f "$FLAG" ] && fail "M: the rename_target flag must be dropped"
 ok "M a window name starting with '-' renames instead of tripping tmux flag parsing"
 
-# --- P. TYPED TASK → seeded scratch -------------------------------------------
-rm -f "$FLAG" "$RAW_LOG"
-out="$(bash "$ENT" "$T" 'fix the flaky dash selftest')"
-[ -s "$RAW_LOG" ] || fail "P: a typed task must spawn through dash-raw-session.sh" "$out"
-argv="$(cat "$RAW_LOG")"
-case "$argv" in *--bg*) ;; *) fail "P: the typed-task spawn must be backgrounded (--bg)" "$argv" ;; esac
-case "$argv" in *"--prompt fix the flaky dash selftest"*) ;; *) fail "P: the typed task must be handed over as --prompt <q>" "$argv" ;; esac
-case "$out" in *clear-query*) ;; *) fail "P: a typed task must clear the query after spawning" "$out" ;; esac
+# --- P. TYPED TASK → seeded scratch (DEFERRED past the paste guard, #531) ------
+# The typed-task spawn is now DEBOUNCED (issue #531): a lone Enter defers, then
+# spawns via `dash-raw-session.sh --prompt-file <f>` (the query in a file, never on
+# the argv). Drive it with a tiny guard so the deferred spawn lands fast, and give
+# the backgrounded decider a moment before reading the log.
+rm -f "$FLAG" "$RAW_LOG" "$C"/global/spawn_last_ms_*
+out="$(FLEET_SPAWN_GUARD_MS=50 FLEET_SPAWN_GUARD_SLEEP=0.1 bash "$ENT" "$T" 'fix the flaky dash selftest')"
+case "$out" in *clear-query*) ;; *) fail "P: a typed task must clear the query" "$out" ;; esac
 case "$out" in *reload*) ;; *) fail "P: a typed task must reload the rows" "$out" ;; esac
+# wait for the deferred spawn (guard 0.1s + slack)
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$RAW_LOG" ] && break; sleep 0.1; done
+[ -s "$RAW_LOG" ] || fail "P: a typed task must (after the defer) spawn through dash-raw-session.sh" "$out"
+argv="$(cat "$RAW_LOG")"
+case "$argv" in *--prompt-file=*) ;; *) fail "P: the deferred spawn must hand the query over via --prompt-file" "$argv" ;; esac
+pf="${argv#*--prompt-file=}"; pf="${pf%% *}"
+[ "$(cat "$pf" 2>/dev/null)" = 'fix the flaky dash selftest' ] || fail "P: the prompt-file must hold the typed task verbatim" "$argv"
 [ "$(wname "$T")" = '-dashy' ] || fail "P: a typed task must not rename the highlighted window"
-ok "P Enter with a typed task spawns a seeded scratch (--bg --prompt), clears the line"
+ok "P Enter with a typed task defers, then spawns a seeded scratch (--prompt-file), clears the line"
 
 # --- P2. BLANK TASK is a plain jump -------------------------------------------
 rm -f "$RAW_LOG"

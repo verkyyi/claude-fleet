@@ -187,6 +187,18 @@ if [ "$BG" = 1 ]; then
   exit 0
 fi
 
+# In-flight marker (issue #531). Only the FOREGROUND pass reaches here — the --bg
+# dispatcher above re-execs + exits, so its instant return holds no slot. From now
+# until this spawn's WINDOW exists (and counts via fleet_session_count) the marker
+# makes THIS spawn visible to every other spawn's cap check, so a flood — the
+# multi-line paste storm, a wedged Enter/⌃s key — can't all pass the cap before any
+# of them lands a window (the 2026-09-03 incident: 244 concurrent `worktree add`s,
+# global cap 4 bypassed, disk 30→6 GB). Removed on ANY exit (success, a
+# worktree-add failure, a lost-cap race). The cap check already ran above, so this
+# spawn is never counted against itself.
+_inflight="$(fleet_inflight_mark "$SESS")"
+trap 'rm -f "$_inflight" 2>/dev/null' EXIT
+
 # Window name (issue #225): an optional --name wins; otherwise the auto
 # `scratch-<N>` (N == the worktree suffix, allocated below). A custom name is
 # sanitized (trim; strip control chars + `#`, the tmux format char; cap ~24 chars)
