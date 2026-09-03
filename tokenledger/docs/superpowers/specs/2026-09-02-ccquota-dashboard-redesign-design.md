@@ -420,6 +420,15 @@ CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, sess
   works — and because closing the gap means restructuring the gatherer, which
   buys less than it costs. Narrower spans are cheaper (30 d ≈ 395 ms,
   7 d ≈ 244 ms; `view=now` is 5 ms).
+
+  **Those are laptop figures. Measured again on the mini itself after the
+  2026-09-03 deploy — slower hardware, and serving live ingest on the same
+  single connection — the same requests at `span=90d` cost roughly 3–4× more:
+  history 0.43 s, sessions 0.54 s, summary 0.57 s, and `/v1/findings` **2.1 s**.
+  The page is still usable because the eight other cards paint first and
+  findings fills in last, but anyone quoting the 454 ms above should know it is
+  the best case, not the deployed one. If findings is ever made faster, the
+  serial gatherer on a one-connection store is the thing to attack.**
 - Equivalence is enforced by a property test: for random filters and ranges on
   a seeded store, every aggregate from the rollup equals the same aggregate
   computed directly from `usage_events`.
