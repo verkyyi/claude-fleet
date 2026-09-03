@@ -105,7 +105,7 @@ path routes (`/u/`, `/share`) are untouched:
 |---|---|---|
 | `sub` | `all` or an account uuid | subscription scope. Default `all` when >1 account, else the one account |
 | `span` | `7d` `30d` `90d` | the timeline's extent, ending now. Default `30d` |
-| `from`, `to` | RFC3339 UTC | the brush selection inside the span. Both absent ⇒ the default selection: the last 7 days of the span (the whole span when `span=7d`). `from` present and `to` absent ⇒ the right edge is "now" and moves with time (this is how a selection that touches the right edge is encoded, including the whole span, which is `from` = span start). Both present ⇒ a fixed window |
+| `from`, `to` | epoch milliseconds | the brush selection inside the span. Both absent ⇒ the default selection: the last 7 days of the span (the whole span when `span=7d`). `from` present and `to` absent ⇒ the right edge is "now" and moves with time (this is how a selection that touches the right edge is encoded, including the whole span, which is `from` = span start). Both present ⇒ a fixed window |
 | `machine` | endpoint id | drill-down chip |
 | `login` | os_user | drill-down chip |
 | `project` | cwd (full path, URL-encoded) | drill-down chip |
@@ -439,6 +439,9 @@ Common query parameters on every endpoint below: `account` (uuid | `all`),
 `since`, `until` (RFC3339 or `7d`-style, as today), and the chips
 `endpoint`, `user`, `project`, `model`, `branch`, `team`, `session`. Unknown
 parameters are ignored; a malformed time is a 400 with `{"error": …}`.
+One exception: `GET /v1/sessions/{id}` ignores `since`/`until` by design —
+`Store.Session` queries a fixed wide range so the response is the whole
+session regardless of the caller's time window.
 
 | endpoint | change |
 |---|---|
@@ -543,7 +546,14 @@ to both binary paths, `codesign`, re-allow in the application firewall,
 `bootout` + `bootstrap`). First start backfills the rollup and logs it; the
 dashboard is available throughout (the old UI is replaced atomically with the
 binary). Rollback is the previous binary; `usage_hourly` and `rollup_meta` are
-additive and ignored by it.
+additive and ignored by it. One consequence: the old binary has no
+`rollupUpsert`, so events ingested during a rollback window never reach the
+rollup, and rolling forward again does not backfill them either — `ensureRollup`
+sees a current version with rows already present and does nothing. An
+operator who rolls forward after a rollback should run the rebuild
+(`ccquota hub --rebuild-rollup`) to pick those hours back up — safe to do
+only once `RebuildRollup` no longer deletes hours it cannot reconstruct from
+`usage_events` (§8.1 / the force-gated rebuild).
 
 ## 12. Sequencing
 

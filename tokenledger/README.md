@@ -383,9 +383,14 @@ reporting and stops when it goes quiet, and the wheels follow the projected
 count between measurements (a wheel that changes faster than it can roll
 simply spins).
 
-Once any team is assigned, the dashboard leads with the team breakdown, and
-every OS login links to its own page at `/u/<login>`. Both are deliberately
-unnumbered. Read as a per-person performance ranking, an internal usage board
+Once any team is assigned, team becomes a choice for the two breakdown
+cards' group-by (`g1`/`g2` in the URL), alongside project, login, machine,
+model and branch — not something the dashboard leads with. An OS login in
+the sessions table is a chip link that filters the current view to that
+person, not a link to a page; `/u/<login>` still exists and still renders a
+per-person view, but is now a direct-URL surface only — reachable by typing
+it or an old bookmark, not by clicking anything in the dashboard. Both are
+deliberately unnumbered. Read as a per-person performance ranking, an internal usage board
 fails by Goodhart — people avoid the tool or pad their usage — and either
 outcome destroys the cost data it exists to provide.
 
