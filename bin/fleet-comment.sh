@@ -28,6 +28,7 @@
 #
 # Usage:
 #   fleet-comment.sh <issue> --body "<text>"            # DEFAULT: record/no-relay
+#   fleet-comment.sh <issue> --body-file <path|->       # body from a file / stdin
 #   fleet-comment.sh <issue> --note --body "<text>"     # explicit no-relay
 #   fleet-comment.sh <issue> --to-worker --body "<text>" # RELAYED into the worker
 #   fleet-comment.sh <issue> --from <role> --body "..." # force the footer's role
@@ -83,17 +84,29 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # explicit --from wins, else FLEET_HUB / fleet_seat(), else the generic 'fleet'.
 resolve_role() { fleet_from_role "${from:-}"; }
 
-num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0 do_close=0
+num='' body='' repo='' relay=0 have_body=0 from='' no_footer=0 do_close=0 f=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --note)      relay=0 ;;
     --to-worker) relay=1 ;;
     --close)     do_close=1 ;;
-    --body)      shift; body="${1:-}"; have_body=1 ;;
-    --repo)      shift; repo="${1:-}" ;;
+    # gh-compatible spellings (issue #528). hooks/bash-guard.py rewrites a raw
+    # gh issue-comment onto this wrapper verbatim, and a human reaching for the
+    # wrapper types what gh taught them; the old `-*) unknown flag` catch-all
+    # turned both into a SECOND failure right after the first one (--body-file
+    # alone accounted for 13 of them). Accept gh's short forms and --body-file.
+    --body|-b)   shift; body="${1:-}"; have_body=1 ;;
+    --body-file|-F)
+                 shift; f="${1:-}"
+                 if [ "$f" = "-" ]; then body="$(cat)"; else
+                   [ -r "$f" ] || { printf 'fleet-comment: cannot read body file %s\n' "$f" >&2; exit 2; }
+                   body="$(cat -- "$f")"
+                 fi
+                 have_body=1 ;;
+    --repo|-R)   shift; repo="${1:-}" ;;
     --from)      shift; from="${1:-}" ;;
     --no-footer) no_footer=1 ;;
-    -h|--help)   sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-comment: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           num="${1//[^0-9]/}" ;;
   esac

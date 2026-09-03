@@ -237,5 +237,41 @@ lines=$(grep -c '^- ' "$BODYFILE")
 [ "$lines" = 2 ] || fail "verbatim: expected exactly 2 '- ' body lines (footer must not add/remove any), got $lines"
 printf 'selftest: verbatim-body leg PASS (footer appends, never rewrites)\n' >&2
 
-printf 'selftest PASS: footer role-resolution (worker/operator/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + body-verbatim verified\n'
+# ============================== gh-compatible flags =========================
+# The guard REWRITES a raw gh issue-comment onto this wrapper verbatim (#528), and
+# a human reaching for the wrapper types what gh taught them. Before the flag gap
+# closed, the `-*) unknown flag` catch-all turned the guard's own remedy into a
+# SECOND failure right after the first — `--body-file` alone did that 13 times in
+# the fleet's transcripts. Every gh spelling the rewrite can hand over must work.
+reset; FLEET_HUB=''
+fc 21 --note -b 'short flag body' || fail "-b (gh's short --body) rejected"
+grep -qF 'short flag body' "$BODYFILE" || fail "-b: body did not reach the comment"
+
+reset
+printf 'body from a file\n' > "$WORK/b.md"
+fc 22 --note --body-file "$WORK/b.md" || fail '--body-file rejected'
+grep -qF 'body from a file' "$BODYFILE" || fail '--body-file: file content did not reach the comment'
+
+reset
+printf 'body via -F\n' > "$WORK/b2.md"
+fc 23 --note -F "$WORK/b2.md" || fail "-F (gh's short --body-file) rejected"
+grep -qF 'body via -F' "$BODYFILE" || fail '-F: file content did not reach the comment'
+
+reset
+printf 'body on stdin\n' | fc 24 --note --body-file - || fail '--body-file - (stdin) rejected'
+grep -qF 'body on stdin' "$BODYFILE" || fail '--body-file -: stdin did not reach the comment'
+
+# an unreadable body file must fail LOUDLY, not post an empty comment
+reset
+if fc 25 --note --body-file "$WORK/does-not-exist.md" 2>/dev/null; then
+  fail '--body-file: a missing file must be a hard error, not a silent empty post'
+fi
+# a genuinely unknown flag still is one — the catch-all was narrowed, not removed
+reset
+if fc 26 --note --no-such-flag x 2>/dev/null; then
+  fail 'an unknown flag must still be rejected'
+fi
+printf 'selftest: gh-flag leg PASS (-b / --body-file / -F / stdin accepted, bad file + unknown flag still rejected)\n' >&2
+
+printf 'selftest PASS: footer role-resolution (worker/operator/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + body-verbatim + gh-compatible flags verified\n'
 exit 0

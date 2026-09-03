@@ -17,6 +17,12 @@
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
 #     latency. See docs/ISSUE-BRIDGE.md.
 #
+# One read-only side door, no ingress of its own:
+#   • --find-window <issue> <repo> — print the live bound worker window for that
+#     issue (empty if none). hooks/bash-guard.py asks this before rewriting a raw
+#     gh issue-comment: with no worker bound there is nothing to relay into, so
+#     the comment is inert and the rail stays out of the way (issue #528).
+#
 # RELAY CORE (identical for both ingresses), for each new comment:
 #   1. dedup      — skip if this comment id was already handled (redeliveries,
 #                   poll/webhook overlap). GitHub redelivers on any non-2xx.
@@ -666,6 +672,13 @@ EOF
 # =============================== dispatch ======================================
 case "${1:-}" in
   --deliver)          deliver ;;
+  # Read-only lookup used by hooks/bash-guard.py: does <issue> have a live bound
+  # worker on <repo> — i.e. is there anything an unmarked comment would be
+  # relayed INTO? Exposed as a subcommand rather than letting the guard source
+  # this file, because sourcing runs the dispatch below and a bare source would
+  # fire a full poll tick. Prints the bridge's own window line (or nothing).
+  --find-window)      shift; [ "$#" -ge 2 ] || { printf 'fleet-issue-bridge: --find-window needs <issue> <repo>\n' >&2; exit 2; }
+                      bridge_find_window "$1" "$2"; exit 0 ;;
   --poll|'')          poll ;;
   -h|--help)          sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf 'fleet-issue-bridge: unknown arg %s (use --poll or --deliver)\n' "$1" >&2; exit 2 ;;
