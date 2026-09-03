@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -177,26 +178,42 @@ var sessionSorts = map[string]string{
 	"turns":    "turns DESC",
 }
 
+// ErrUnknownSort is returned by Sessions when sortBy is non-empty and not one
+// of sessionSorts -- a bad client-supplied value, distinct from a database
+// failure, so callers (handleSessions) can tell the two apart and answer 400
+// only for this one.
+var ErrUnknownSort = errors.New("unknown sort")
+
 // Sessions lists sessions under a Filter, from the rollup. The Filter's
 // Session field narrows to one session (used by Session).
+//
+// Grouped by (account_uuid, session_id), not session_id alone: the rollup's
+// dedup key is (account_uuid, message_uuid), so one session_id can
+// legitimately carry rows under two accounts (a session resumed under a
+// different login -- account_switches records exactly this seam). Grouping
+// by session_id alone would blend those into one row labelled with whichever
+// account_uuid happened to sort higher.
 func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionRow, error) {
 	order, ok := sessionSorts[sortBy]
 	if sortBy == "" {
 		order, ok = sessionSorts["tokens"], true
 	}
 	if !ok {
-		return nil, fmt.Errorf("unknown sort %q", sortBy)
+		return nil, fmt.Errorf("%w %q", ErrUnknownSort, sortBy)
 	}
 	where, args, err := f.where("hour")
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 500 {
+	switch {
+	case limit <= 0:
 		limit = 50
+	case limit > 500:
+		limit = 500
 	}
 	q := fmt.Sprintf(`
 		SELECT * FROM (
-		  SELECT session_id, MAX(account_uuid) AS account_uuid, MAX(endpoint_id) AS endpoint_id,
+		  SELECT session_id, account_uuid, MAX(endpoint_id) AS endpoint_id,
 		         MAX(os_user) AS os_user, MAX(cwd) AS cwd,
 		         MIN(min_ts) AS started, MAX(max_ts) AS ended,
 		         SUM(events) AS turns, SUM%s AS tokens, SUM(cost_usd) AS cost_usd, SUM(unpriced_events) AS unpriced,
@@ -204,7 +221,7 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 		         SUM(cache_read_tokens) AS cache_read, SUM(cache_create_5m_tokens + cache_create_1h_tokens) AS cache_create,
 		         SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END) AS sidechain
 		  FROM usage_hourly %s AND session_id != ''
-		  GROUP BY session_id
+		  GROUP BY account_uuid, session_id
 		) ORDER BY %s LIMIT ? OFFSET ?`, hourlyTokens, hourlyTokens, where, order)
 	rows, err := s.db.Query(q, append(args, limit, offset)...)
 	if err != nil {
@@ -235,7 +252,7 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.fillSessionModels(f.Account, out, ids); err != nil {
+	if err := s.fillSessionModels(f, out, ids); err != nil {
 		return nil, err
 	}
 	s.labelSessionEndpoints(out)
@@ -275,11 +292,15 @@ func (s *Store) SessionTokenMedian(f Filter) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Grouped by (account_uuid, session_id), same reason as Sessions above: a
+	// session_id can legitimately carry rows under two accounts, and grouping
+	// by session_id alone would compute the median over that blended
+	// population instead of over the real one session per (account, id).
 	q := fmt.Sprintf(`
 		WITH per_session AS (
 			SELECT SUM%s AS tokens
 			FROM usage_hourly %s AND session_id != ''
-			GROUP BY session_id
+			GROUP BY account_uuid, session_id
 			HAVING SUM(events) >= 2
 		)
 		SELECT tokens FROM per_session ORDER BY tokens ASC
@@ -294,38 +315,52 @@ func (s *Store) SessionTokenMedian(f Filter) (int64, error) {
 	return median, nil
 }
 
-// fillSessionModels sets Model/Models for a page of sessions in one query.
-func (s *Store) fillSessionModels(account string, rows []SessionRow, ids []string) error {
+// fillSessionModels sets Model/Models for a page of sessions in one query,
+// scoped by the SAME Filter (time range plus every drill-down chip) the
+// outer Sessions query used, narrowed further to this page's ids.
+//
+// It used to scope by account_uuid and session_id IN (…) only -- no hour
+// bound, no drill-down predicates -- so a session's Model/Models were
+// computed over all of history and every model while its Tokens were the
+// filtered subset: with a model chip active, the sessions table could show
+// model: X on a row whose displayed tokens were entirely model Y's.
+//
+// Keyed by (account_uuid, session_id), matching Sessions' grouping: a
+// session_id alone is not a unique row once one can legitimately carry rows
+// under two accounts (see Sessions' doc comment).
+func (s *Store) fillSessionModels(f Filter, rows []SessionRow, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	ph := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, 0, len(ids)+1)
-	where := "WHERE session_id IN (" + ph + ")"
-	if account != AllAccounts {
-		where = "WHERE account_uuid = ? AND session_id IN (" + ph + ")"
-		args = append(args, account)
+	where, args, err := f.where("hour")
+	if err != nil {
+		return err
 	}
+	ph := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	where += " AND session_id IN (" + ph + ")"
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	res, err := s.db.Query(fmt.Sprintf(`SELECT session_id, model, SUM%s AS t FROM usage_hourly %s
-		GROUP BY session_id, model ORDER BY session_id, t DESC`, hourlyTokens, where), args...)
+	res, err := s.db.Query(fmt.Sprintf(`SELECT account_uuid, session_id, model, SUM%s AS t FROM usage_hourly %s
+		GROUP BY account_uuid, session_id, model ORDER BY account_uuid, session_id, t DESC`, hourlyTokens, where), args...)
 	if err != nil {
 		return fmt.Errorf("session models: %w", err)
 	}
 	defer res.Close()
 	models := map[string][]string{}
+	key := func(account, session string) string { return account + "\x00" + session }
 	for res.Next() {
-		var id, m string
+		var acct, id, m string
 		var t int64
-		if err := res.Scan(&id, &m, &t); err != nil {
+		if err := res.Scan(&acct, &id, &m, &t); err != nil {
 			return err
 		}
-		models[id] = append(models[id], m)
+		k := key(acct, id)
+		models[k] = append(models[k], m)
 	}
 	for i := range rows {
-		rows[i].Models = models[rows[i].SessionID]
+		k := key(rows[i].AccountUUID, rows[i].SessionID)
+		rows[i].Models = models[k]
 		if len(rows[i].Models) > 0 {
 			rows[i].Model = rows[i].Models[0]
 		}

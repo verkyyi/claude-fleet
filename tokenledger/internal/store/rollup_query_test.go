@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -125,6 +126,113 @@ func TestSessionsAndTurns(t *testing.T) {
 	}
 	if _, err := s.Sessions(reviewFilter(), "drop table", 10, 0); err == nil {
 		t.Fatal("unknown sort must be refused")
+	} else if !errors.Is(err, ErrUnknownSort) {
+		t.Fatalf("want ErrUnknownSort, got %v", err)
+	}
+}
+
+// TestSessionsDoesNotBlendSameSessionIDAcrossAccounts is the regression for
+// the "one session_id, two accounts" seam: the rollup's dedup key is
+// (account_uuid, message_uuid), so a session resumed under a different login
+// legitimately produces rows under two account_uuids sharing one session_id
+// (account_switches records exactly this). Grouping by session_id alone
+// blended those into one row labelled with whichever account_uuid sorted
+// higher; acct-b is given far more tokens than acct-a specifically so a
+// MAX(account_uuid)/blended-sum bug would be obvious rather than
+// coincidentally correct.
+func TestSessionsDoesNotBlendSameSessionIDAcrossAccounts(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+	seedAccount(t, s, "acct-b", "ep-b1")
+	base := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	mkFor := func(account, endpoint, uuid string, out int64, min int) model.UsageEvent {
+		e := ev(account, endpoint, uuid, out)
+		e.SessionID = "shared-session" // same id reused across accounts, deliberately
+		e.TS = base.Add(time.Duration(min) * time.Minute)
+		return e
+	}
+	evs := []model.UsageEvent{
+		mkFor("acct-a", "ep-a1", "a1", 100, 0),
+		mkFor("acct-a", "ep-a1", "a2", 100, 5),
+		mkFor("acct-b", "ep-b1", "b1", 5000, 10),
+	}
+	if _, _, err := s.InsertEvents(evs); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{Account: AllAccounts, Start: base, End: base.Add(time.Hour)}
+	rows, err := s.Sessions(f, "tokens", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 separate session rows (one per account), got %d: %+v", len(rows), rows)
+	}
+	byAccount := map[string]SessionRow{}
+	for _, r := range rows {
+		if r.SessionID != "shared-session" {
+			t.Fatalf("unexpected session id %q", r.SessionID)
+		}
+		byAccount[r.AccountUUID] = r
+	}
+	if a := byAccount["acct-a"]; a.Turns != 2 || a.Tokens != 200 {
+		t.Fatalf("acct-a row wrong: %+v", a)
+	}
+	if b := byAccount["acct-b"]; b.Turns != 1 || b.Tokens != 5000 {
+		t.Fatalf("acct-b row wrong: %+v", b)
+	}
+
+	// The median must not blend the two accounts' populations either: only
+	// acct-a's session has >= 2 turns (acct-b's single-turn session is
+	// excluded by the HAVING clause both use), so it is the whole population.
+	median, err := s.SessionTokenMedian(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if median != 200 {
+		t.Fatalf("median = %d, want 200 (only acct-a's session qualifies with >= 2 turns)", median)
+	}
+}
+
+// TestSessionsFillModelsRespectsFilter is the regression for
+// fillSessionModels ignoring the time range and every drill-down chip: a
+// session's model/models used to be computed over ALL of history and every
+// model while its tokens were the filtered subset, so a model chip could
+// show model: X on a row whose displayed tokens were entirely model Y's.
+func TestSessionsFillModelsRespectsFilter(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+	base := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	mk := func(uuid, model string, out int64, min int) model.UsageEvent {
+		e := ev("acct-a", "ep-a1", uuid, out)
+		e.SessionID = "s1"
+		e.Model = model
+		e.TS = base.Add(time.Duration(min) * time.Minute)
+		return e
+	}
+	evs := []model.UsageEvent{
+		mk("1", "claude-haiku-4-5", 10, 0),  // minority model overall
+		mk("2", "claude-opus-5", 10000, 65), // dominant model overall
+	}
+	if _, _, err := s.InsertEvents(evs); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{Account: "acct-a", Start: base, End: base.Add(2 * time.Hour), Model: "claude-haiku-4-5"}
+	rows, err := s.Sessions(f, "tokens", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 session, got %d: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Tokens != 10 {
+		t.Fatalf("tokens should be the model-chip-filtered subset (10), got %d", r.Tokens)
+	}
+	if r.Model != "claude-haiku-4-5" {
+		t.Fatalf("reported primary model must agree with the counted tokens, got %q", r.Model)
+	}
+	if len(r.Models) != 1 || r.Models[0] != "claude-haiku-4-5" {
+		t.Fatalf("models must not leak a model the filter excluded, got %+v", r.Models)
 	}
 }
 

@@ -2,6 +2,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,7 +69,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	rows, err := s.Store.Sessions(f, q.Get("sort"), limit, offset)
 	if err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
+		// Only an unknown sort is the client's fault; anything else (a
+		// database error) is ours.
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrUnknownSort) {
+			status = http.StatusBadRequest
+		}
+		httpError(w, status, err.Error())
 		return
 	}
 	if rows == nil {
