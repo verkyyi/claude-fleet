@@ -74,15 +74,67 @@ FROM usage_events
 GROUP BY 1,2,3,4,5,6,7,8,9,10,11`
 
 // RebuildRollup recomputes usage_hourly from usage_events in one transaction
-// and stamps the current version. Returns the number of rollup rows.
-func (s *Store) RebuildRollup() (int64, error) {
+// and stamps the current version. Returns the number of rollup rows (re)built.
+//
+// Only hours at or after the earliest surviving raw event are touched: rows
+// for older hours, if any, are the ONLY remaining record of history that
+// retention pruning has already deleted from usage_events, and rebuilding
+// from usage_events would silently and irreversibly truncate them. When such
+// rows exist, RebuildRollup refuses outright unless force is true — even a
+// rebuild that only touches the reconstructable hours would leave those older
+// rows sitting untouched under a schema/key that the rest of the table has
+// just moved on from, which is a state worth an operator's explicit say-so,
+// not a default. Pass force to proceed anyway, accepting that those older
+// hours will keep whatever shape they already have.
+func (s *Store) RebuildRollup(force bool) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM usage_hourly`); err != nil {
-		return 0, fmt.Errorf("clear rollup: %w", err)
+
+	// The earliest hour usage_events can still attest to. NULL when
+	// usage_events is empty (nothing survives to rebuild from at all).
+	var earliestHour sql.NullString
+	if err := tx.QueryRow(
+		`SELECT strftime('%Y-%m-%dT%H:00:00Z', MIN(ts)) FROM usage_events`,
+	).Scan(&earliestHour); err != nil {
+		return 0, fmt.Errorf("find earliest surviving event: %w", err)
+	}
+
+	if !force {
+		var unreconstructable int64
+		var err error
+		if earliestHour.Valid {
+			err = tx.QueryRow(`SELECT COUNT(*) FROM usage_hourly WHERE hour < ?`, earliestHour.String).Scan(&unreconstructable)
+		} else {
+			// No raw events survive at all: every existing rollup row is
+			// unreconstructable.
+			err = tx.QueryRow(`SELECT COUNT(*) FROM usage_hourly`).Scan(&unreconstructable)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("check for unreconstructable rollup rows: %w", err)
+		}
+		if unreconstructable > 0 {
+			return 0, fmt.Errorf(
+				"refusing to rebuild: usage_hourly holds %d hour-row(s) older than the earliest "+
+					"raw event still in usage_events (retention pruning has already deleted their "+
+					"source) — rebuilding would erase the only surviving record of that history for "+
+					"good; pass force to rebuild anyway and leave those older rows untouched",
+				unreconstructable)
+		}
+	}
+
+	// Never delete hours usage_events can no longer reconstruct, force or not
+	// — force only overrides the refusal above, not this scoping.
+	if earliestHour.Valid {
+		if _, err := tx.Exec(`DELETE FROM usage_hourly WHERE hour >= ?`, earliestHour.String); err != nil {
+			return 0, fmt.Errorf("clear reconstructable rollup rows: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(`DELETE FROM usage_hourly`); err != nil {
+			return 0, fmt.Errorf("clear rollup: %w", err)
+		}
 	}
 	res, err := tx.Exec(rollupBackfillSQL)
 	if err != nil {
@@ -108,6 +160,14 @@ func (s *Store) RollupRows() (int64, error) {
 
 // ensureRollup rebuilds the rollup when it is missing or from another version.
 // Called from Open; returns how many rows were built (0 = nothing to do).
+//
+// Never passes force: an automatic rebuild at startup has no operator present
+// to weigh "leave stale rows in place" against "erase pre-retention history",
+// so if RebuildRollup would have to destroy history to proceed it returns an
+// error here instead, which fails Open. That is a deliberate refusal to start
+// up on a rollup it cannot safely bring current — the fix is for an operator
+// to run `ccquota hub --rebuild-rollup --force` by hand, after reading what
+// the error says would be lost.
 func ensureRollup(s *Store) (int64, error) {
 	var version string
 	err := s.db.QueryRow(`SELECT value FROM rollup_meta WHERE key = 'usage_hourly_version'`).Scan(&version)
@@ -125,5 +185,5 @@ func ensureRollup(s *Store) (int64, error) {
 	if version == rollupVersion && (rows > 0 || events == 0) {
 		return 0, nil
 	}
-	return s.RebuildRollup()
+	return s.RebuildRollup(false)
 }

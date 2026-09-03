@@ -70,12 +70,82 @@ func TestRollupBackfillMatchesIncremental(t *testing.T) {
 		t.Fatal(err)
 	}
 	incremental := dumpRollup(t, s)
-	if n, err := s.RebuildRollup(); err != nil || n == 0 {
+	if n, err := s.RebuildRollup(false); err != nil || n == 0 {
 		t.Fatalf("rebuild: n=%d err=%v", n, err)
 	}
 	rebuilt := dumpRollup(t, s)
 	if incremental != rebuilt {
 		t.Fatalf("rebuild differs from incremental upserts:\n%s\n---\n%s", incremental, rebuilt)
+	}
+}
+
+// TestRebuildRollupRefusesToDestroyPrunedHistory is the prune-then-rebuild
+// regression: PruneEvents and RebuildRollup used to be exercised only in
+// separate, unrelated tests, which is exactly how a rebuild that silently
+// truncates pruned history survived unnoticed.
+func TestRebuildRollupRefusesToDestroyPrunedHistory(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+
+	oldTS := time.Date(2026, 6, 1, 3, 0, 0, 0, time.UTC)   // pruned away below
+	newTS := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC) // survives
+
+	oldEvent := ev("acct-a", "ep-a1", "u-old", 10)
+	oldEvent.TS = oldTS
+	newEvent := ev("acct-a", "ep-a1", "u-new", 20)
+	newEvent.TS = newTS
+
+	if _, _, err := s.InsertEvents([]model.UsageEvent{oldEvent, newEvent}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.RollupRows(); err != nil || n != 2 {
+		t.Fatalf("want 2 rollup rows before prune, got %d err=%v", n, err)
+	}
+
+	// PruneEvents deletes the old raw event but must leave its rollup row
+	// alone -- that is the entire point of the rollup surviving retention.
+	if _, err := s.PruneEvents(oldTS.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var events int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("want 1 surviving raw event after prune, got %d", events)
+	}
+	if n, err := s.RollupRows(); err != nil || n != 2 {
+		t.Fatalf("prune must not touch the rollup: rows=%d err=%v", n, err)
+	}
+
+	// A rebuild (as a rollupVersion bump, or --rebuild-rollup, would trigger)
+	// must refuse: it can no longer reconstruct the pruned hour from
+	// usage_events, and deleting-then-rebuilding would erase it for good.
+	if _, err := s.RebuildRollup(false); err == nil {
+		t.Fatal("RebuildRollup(false) must refuse when usage_hourly holds hours usage_events can no longer reconstruct")
+	}
+	if n, err := s.RollupRows(); err != nil || n != 2 {
+		t.Fatalf("a refused rebuild must not touch the rollup: rows=%d err=%v", n, err)
+	}
+
+	// With force, only the reconstructable hour is rebuilt; the
+	// unreconstructable one is left exactly as it was -- never deleted.
+	n, err := s.RebuildRollup(true)
+	if err != nil {
+		t.Fatalf("RebuildRollup(true): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 rebuilt row (only the reconstructable hour), got %d", n)
+	}
+	if rows, err := s.RollupRows(); err != nil || rows != 2 {
+		t.Fatalf("the pruned hour's rollup row must survive a forced rebuild: rows=%d err=%v", rows, err)
+	}
+	var oldEvents int64
+	if err := s.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
+		t.Fatalf("the pruned hour's rollup row must still exist: %v", err)
+	}
+	if oldEvents != 1 {
+		t.Fatalf("the pruned hour's rollup row must be untouched (still 1 event), got %d", oldEvents)
 	}
 }
 

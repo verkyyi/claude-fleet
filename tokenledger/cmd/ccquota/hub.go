@@ -57,7 +57,17 @@ func runHub(args []string) error {
 	rebuild := fs.Bool("rebuild-rollup", false,
 		"rebuild the hourly rollup from raw events at startup, then continue.\n"+
 			"Open already does this automatically after a schema change; pass this\n"+
-			"to force it after fixing corrupted rows by hand, for instance")
+			"to force it after fixing corrupted rows by hand, for instance.\n"+
+			"Refuses (see the error) rather than rebuild over hours usage_events\n"+
+			"can no longer reconstruct -- retention pruning has already deleted\n"+
+			"their only other record. Pass --rebuild-rollup-force too to proceed\n"+
+			"anyway and accept losing them")
+	rebuildForce := fs.Bool("rebuild-rollup-force", false,
+		"with --rebuild-rollup, proceed even when the rollup holds hours\n"+
+			"usage_events can no longer reconstruct, accepting that those older\n"+
+			"rows are left exactly as they are (not deleted, not rebuilt).\n"+
+			"Read the refusal error before reaching for this: it says how many\n"+
+			"hours are at stake")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -95,7 +105,7 @@ func runHub(args []string) error {
 		log.Printf("rollup: built %d hourly rows from usage_events", st.BackfilledRollup)
 	}
 	if *rebuild {
-		n, err := st.RebuildRollup()
+		n, err := st.RebuildRollup(*rebuildForce)
 		if err != nil {
 			return fmt.Errorf("--rebuild-rollup: %w", err)
 		}

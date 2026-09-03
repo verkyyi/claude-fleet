@@ -191,9 +191,15 @@ CREATE TABLE IF NOT EXISTS share_links (
 -- few thousand rows, which is what makes brushing a 90-day timeline cheap.
 --
 -- Maintained in the same transaction as the event insert, so it can never
--- drift from usage_events; rebuilt from scratch when rollup_meta's version
--- changes. Pruning raw events leaves it alone on purpose: totals and sessions
--- keep working past the retention window, only per-turn detail is lost.
+-- drift from usage_events. Pruning raw events leaves it alone on purpose:
+-- totals and sessions keep working past the retention window, only per-turn
+-- detail is lost -- which is exactly why a version bump does NOT rebuild it
+-- from scratch: RebuildRollup only ever touches hours at or after the
+-- earliest surviving raw event, since those are the only ones usage_events
+-- can still attest to. Once anything has been pruned, the rows below that
+-- line are the sole surviving record of that history, and RebuildRollup
+-- refuses to run over them unless told --rebuild-rollup-force, rather than
+-- silently truncating the rollup to the retention window with no way back.
 CREATE TABLE IF NOT EXISTS usage_hourly (
   hour          TEXT NOT NULL,   -- 'YYYY-MM-DDTHH:00:00Z', the bucket start
   account_uuid  TEXT NOT NULL,
