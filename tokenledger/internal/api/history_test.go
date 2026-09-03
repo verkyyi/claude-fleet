@@ -22,7 +22,7 @@ func TestFoldHoursIntoSixHourBucketsWithStack(t *testing.T) {
 	if len(top) != 2 || top[0] != "opus" || top[1] != "haiku" {
 		t.Fatalf("top=%v", top)
 	}
-	out, err := foldHours(rows, "6h", true, top)
+	out, err := FoldHours(rows, "6h", true, top)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,14 +40,14 @@ func TestFoldHoursIntoSixHourBucketsWithStack(t *testing.T) {
 	if len(out[0].Stack) != 3 || out[0].Stack[1].Tokens != 0 {
 		t.Fatalf("zero-filled stack expected: %+v", out[0].Stack)
 	}
-	if _, err := foldHours(rows, "week", false, nil); err == nil {
+	if _, err := FoldHours(rows, "week", false, nil); err == nil {
 		t.Fatal("unknown granularity must be refused")
 	}
-	day, _ := foldHours(rows, "day", false, nil)
+	day, _ := FoldHours(rows, "day", false, nil)
 	if len(day) != 1 || day[0].Key != "2026-09-02" || day[0].Tokens != 36 {
 		t.Fatalf("day=%+v", day)
 	}
-	hour, _ := foldHours(rows, "hour", false, nil)
+	hour, _ := FoldHours(rows, "hour", false, nil)
 	if len(hour) != 3 || hour[0].Key != "2026-09-02T05:00" {
 		t.Fatalf("hour=%+v", hour)
 	}

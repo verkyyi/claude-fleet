@@ -178,6 +178,135 @@ func TestOpenBackfillsEmptyRollupAndHonoursVersion(t *testing.T) {
 	}
 }
 
+// TestForceRebuildWithEmptyEventsPreservesRollup is the pre-deploy review's
+// first landmine: RebuildRollup(true) with usage_events completely empty
+// used to fall into a stray `else` branch running an unconditional DELETE
+// FROM usage_hourly -- destroying exactly what force is documented to
+// preserve (rollup.go's own comments, and hub.go's --rebuild-rollup-force
+// flag help, both promise pre-retention rows are "left exactly as they are,
+// not deleted, not rebuilt"). With no surviving raw events there is no hour
+// left to reconstruct from, so the correct delete set is empty, not "all of
+// usage_hourly".
+func TestForceRebuildWithEmptyEventsPreservesRollup(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct-a", "ep-a1")
+
+	e := ev("acct-a", "ep-a1", "u-1", 10)
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.RollupRows(); err != nil || n != 1 {
+		t.Fatalf("want 1 rollup row before prune, got %d err=%v", n, err)
+	}
+
+	// Prune away every raw event: usage_events is now empty, but its rollup
+	// row is the only surviving record of that history.
+	if _, err := s.PruneEvents(e.TS.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var events int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("want 0 surviving raw events after pruning, got %d", events)
+	}
+
+	// The interactive refusal must still fire: nothing here is asking for
+	// force yet.
+	if _, err := s.RebuildRollup(false); err == nil {
+		t.Fatal("RebuildRollup(false) must refuse when usage_events is empty but usage_hourly is not")
+	}
+	if n, err := s.RollupRows(); err != nil || n != 1 {
+		t.Fatalf("a refused rebuild must not touch the rollup: rows=%d err=%v", n, err)
+	}
+
+	// With force, there is nothing to backfill (usage_events is empty), so
+	// the rollup must come out of this untouched, not wiped.
+	n, err := s.RebuildRollup(true)
+	if err != nil {
+		t.Fatalf("RebuildRollup(true) with empty usage_events must not error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("nothing to backfill from an empty usage_events, want 0 rebuilt rows, got %d", n)
+	}
+	if rows, err := s.RollupRows(); err != nil || rows != 1 {
+		t.Fatalf("FORCE rebuild must preserve the rollup when usage_events is empty: rows=%d (want 1) err=%v", rows, err)
+	}
+}
+
+// TestOpenDegradesRollupOnPrunedDBInsteadOfFailing is the pre-deploy review's
+// second landmine: a rollupVersion bump on a hub that has ever pruned used to
+// fail store.Open outright (ensureRollup always called RebuildRollup(false),
+// whose refusal to destroy pre-retention rows then failed Open) -- with no
+// way to reach the documented --rebuild-rollup-force escape hatch, because
+// every command that opens the store, including hub itself, dies before it
+// gets a chance to honour that flag. Open must instead degrade to the same
+// scoped, non-destructive rebuild force already performs: rebuild every
+// reconstructable hour, leave the pre-retention rows exactly as they are,
+// and succeed.
+func TestOpenDegradesRollupOnPrunedDBInsteadOfFailing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAccount(t, s, "acct-a", "ep-a1")
+
+	oldTS := time.Date(2026, 6, 1, 3, 0, 0, 0, time.UTC)   // pruned away below
+	newTS := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC) // survives, reconstructable
+
+	oldEvent := ev("acct-a", "ep-a1", "u-old", 10)
+	oldEvent.TS = oldTS
+	newEvent := ev("acct-a", "ep-a1", "u-new", 20)
+	newEvent.TS = newTS
+	if _, _, err := s.InsertEvents([]model.UsageEvent{oldEvent, newEvent}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PruneEvents(oldTS.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the design's own rollup-schema upgrade mechanism: a
+	// rollupVersion bump, recorded here by hand since the real constant is
+	// fixed at "1" in this build.
+	if _, err := s.db.Exec(
+		`UPDATE rollup_meta SET value = 'simulated-next-version' WHERE key = 'usage_hourly_version'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open must degrade to a scoped rebuild rather than fail on a pruned DB whose rollup version differs: %v", err)
+	}
+	defer s2.Close()
+
+	var v string
+	if err := s2.db.QueryRow(`SELECT value FROM rollup_meta WHERE key='usage_hourly_version'`).Scan(&v); err != nil || v != rollupVersion {
+		t.Fatalf("version stamp after the degraded rebuild = %q err=%v, want %q", v, err, rollupVersion)
+	}
+
+	// The pre-retention hour must survive, untouched.
+	var oldEvents int64
+	if err := s2.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
+		t.Fatalf("the pruned hour's rollup row must survive Open's degraded rebuild: %v", err)
+	}
+	if oldEvents != 1 {
+		t.Fatalf("pre-retention row must be untouched (still 1 event), got %d", oldEvents)
+	}
+
+	// The reconstructable hour must have been rebuilt under the new version.
+	var newEvents int64
+	if err := s2.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(newTS)).Scan(&newEvents); err != nil {
+		t.Fatalf("the reconstructable hour must be rebuilt: %v", err)
+	}
+	if newEvents != 1 {
+		t.Fatalf("reconstructable hour rebuild has the wrong shape: events=%d", newEvents)
+	}
+}
+
 func dumpRollup(t *testing.T, s *Store) string {
 	t.Helper()
 	rows, err := s.db.Query(`SELECT hour, model, is_sidechain, events, output_tokens, cost_usd, unpriced_events, min_ts, max_ts

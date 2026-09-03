@@ -2,7 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
@@ -73,6 +75,23 @@ SELECT strftime('%Y-%m-%dT%H:00:00Z', ts), account_uuid, endpoint_id, session_id
 FROM usage_events
 GROUP BY 1,2,3,4,5,6,7,8,9,10,11`
 
+// unreconstructableRowsError is RebuildRollup(false)'s refusal to rebuild
+// over usage_hourly rows older than the earliest surviving usage_events row
+// — retention pruning has already deleted their only other record. It is a
+// distinct type (not a bare fmt.Errorf) so ensureRollup can tell this
+// specific, expected refusal apart from a genuine failure via errors.As: the
+// refusal is not a reason to fail Open, only a real error is.
+type unreconstructableRowsError struct{ n int64 }
+
+func (e *unreconstructableRowsError) Error() string {
+	return fmt.Sprintf(
+		"refusing to rebuild: usage_hourly holds %d hour-row(s) older than the earliest "+
+			"raw event still in usage_events (retention pruning has already deleted their "+
+			"source) — rebuilding would erase the only surviving record of that history for "+
+			"good; pass force to rebuild anyway and leave those older rows untouched",
+		e.n)
+}
+
 // RebuildRollup recomputes usage_hourly from usage_events in one transaction
 // and stamps the current version. Returns the number of rollup rows (re)built.
 //
@@ -116,24 +135,21 @@ func (s *Store) RebuildRollup(force bool) (int64, error) {
 			return 0, fmt.Errorf("check for unreconstructable rollup rows: %w", err)
 		}
 		if unreconstructable > 0 {
-			return 0, fmt.Errorf(
-				"refusing to rebuild: usage_hourly holds %d hour-row(s) older than the earliest "+
-					"raw event still in usage_events (retention pruning has already deleted their "+
-					"source) — rebuilding would erase the only surviving record of that history for "+
-					"good; pass force to rebuild anyway and leave those older rows untouched",
-				unreconstructable)
+			return 0, &unreconstructableRowsError{n: unreconstructable}
 		}
 	}
 
 	// Never delete hours usage_events can no longer reconstruct, force or not
-	// — force only overrides the refusal above, not this scoping.
+	// — force only overrides the refusal above, not this scoping. When
+	// earliestHour is NULL, usage_events is empty: there is no hour left to
+	// reconstruct from, so the correct delete set is EMPTY, not "all of
+	// usage_hourly". Deleting nothing here means the backfill below (which
+	// inserts 0 rows from an empty usage_events) leaves the rollup exactly as
+	// it was — which is what force promises: those rows "keep whatever shape
+	// they already have."
 	if earliestHour.Valid {
 		if _, err := tx.Exec(`DELETE FROM usage_hourly WHERE hour >= ?`, earliestHour.String); err != nil {
 			return 0, fmt.Errorf("clear reconstructable rollup rows: %w", err)
-		}
-	} else {
-		if _, err := tx.Exec(`DELETE FROM usage_hourly`); err != nil {
-			return 0, fmt.Errorf("clear rollup: %w", err)
 		}
 	}
 	res, err := tx.Exec(rollupBackfillSQL)
@@ -161,13 +177,21 @@ func (s *Store) RollupRows() (int64, error) {
 // ensureRollup rebuilds the rollup when it is missing or from another version.
 // Called from Open; returns how many rows were built (0 = nothing to do).
 //
-// Never passes force: an automatic rebuild at startup has no operator present
-// to weigh "leave stale rows in place" against "erase pre-retention history",
-// so if RebuildRollup would have to destroy history to proceed it returns an
-// error here instead, which fails Open. That is a deliberate refusal to start
-// up on a rollup it cannot safely bring current — the fix is for an operator
-// to run `ccquota hub --rebuild-rollup --force` by hand, after reading what
-// the error says would be lost.
+// Tries RebuildRollup(false) first, exactly like an operator's interactive
+// --rebuild-rollup would. If that refuses only because usage_hourly holds
+// pre-retention rows (unreconstructableRowsError — retention pruning has
+// already deleted their source), that is not a reason to fail Open: an
+// automatic rebuild at startup has no operator present to read the refusal
+// and answer it, and refusing to boot a database that has ever pruned would
+// make the design's own version-bump upgrade path — and every other command
+// that opens the store — permanently unstartable on it. So instead it falls
+// back to RebuildRollup(true), which rebuilds every reconstructable hour and
+// leaves the pre-retention rows exactly as they are (never deleted, never
+// rebuilt) — the same non-destructive contract force always promises — and
+// logs loudly what it preserved and why, so an operator can still see and
+// act on it. Any other error from RebuildRollup still fails Open: refusing
+// an explicit operator command is right, refusing to boot silently through a
+// real problem is not.
 func ensureRollup(s *Store) (int64, error) {
 	var version string
 	err := s.db.QueryRow(`SELECT value FROM rollup_meta WHERE key = 'usage_hourly_version'`).Scan(&version)
@@ -185,5 +209,23 @@ func ensureRollup(s *Store) (int64, error) {
 	if version == rollupVersion && (rows > 0 || events == 0) {
 		return 0, nil
 	}
-	return s.RebuildRollup(false)
+
+	n, err := s.RebuildRollup(false)
+	if err == nil {
+		return n, nil
+	}
+	var unrec *unreconstructableRowsError
+	if !errors.As(err, &unrec) {
+		return 0, err
+	}
+	n, ferr := s.RebuildRollup(true)
+	if ferr != nil {
+		return 0, ferr
+	}
+	log.Printf("rollup: usage_hourly holds %d pre-retention hour-row(s) usage_events can no "+
+		"longer reconstruct (retention pruning already deleted their source); startup rebuilt "+
+		"the %d reconstructable hour-row(s) instead and left those older rows exactly as they "+
+		"are — the same outcome `ccquota hub --rebuild-rollup --rebuild-rollup-force` gives by "+
+		"hand", unrec.n, n)
+	return n, nil
 }

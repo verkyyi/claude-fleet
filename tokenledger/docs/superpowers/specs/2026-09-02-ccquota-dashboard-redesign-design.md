@@ -399,8 +399,15 @@ CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, sess
   max(max_ts, excluded.max_ts)`.
 - `rollup_meta(version INTEGER)` holds the rollup schema version. On `Open`, if
   the table is empty while `usage_events` is not, or the version differs, the
-  hub rebuilds it with one `INSERT … SELECT … GROUP BY` and logs the row count
-  and duration. `ccquota hub --rebuild-rollup` forces it.
+  hub rebuilds it with one `INSERT … SELECT … GROUP BY`, scoped to hours
+  `usage_events` can still reconstruct. If earlier retention pruning has left
+  `usage_hourly` rows `Open` can no longer reconstruct from raw events, it
+  does not fail over that — it rebuilds the reconstructable hours anyway,
+  leaves those older rows exactly as they are, and logs what it preserved and
+  why. `ccquota hub --rebuild-rollup --rebuild-rollup-force` performs that
+  same scoped, non-destructive rebuild by hand; `--rebuild-rollup` alone still
+  refuses when pre-retention rows exist, the same explicit-consent refusal an
+  operator gets from `RebuildRollup(force=false)` interactively.
 - `PruneEvents` leaves the rollup alone (its comment already promises this), so
   Review keeps working past the retention window; only per-turn detail is lost.
 - **Measured** on a 292,753-event snapshot of the live hub: the rollup is
@@ -551,9 +558,11 @@ additive and ignored by it. One consequence: the old binary has no
 rollup, and rolling forward again does not backfill them either — `ensureRollup`
 sees a current version with rows already present and does nothing. An
 operator who rolls forward after a rollback should run the rebuild
-(`ccquota hub --rebuild-rollup`) to pick those hours back up — safe to do
-only once `RebuildRollup` no longer deletes hours it cannot reconstruct from
-`usage_events` (§8.1 / the force-gated rebuild).
+(`ccquota hub --rebuild-rollup --rebuild-rollup-force` — a hub that has ever
+pruned holds pre-retention rows plain `--rebuild-rollup` would refuse to
+touch) to pick those hours back up — safe to do only once `RebuildRollup`
+no longer deletes hours it cannot reconstruct from `usage_events` (§8.1 / the
+force-gated rebuild).
 
 ## 12. Sequencing
 

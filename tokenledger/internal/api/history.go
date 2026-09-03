@@ -62,10 +62,17 @@ func topModels(rows []store.HourRow, n int) []string {
 	return names
 }
 
-// foldHours sums hourly rows into buckets of granularity g, oldest first. With
-// stack, every bucket carries one entry per model in top plus "other", in that
-// order and zero-filled, so a client can draw the stack without joining.
-func foldHours(rows []store.HourRow, g string, stack bool, top []string) ([]Series, error) {
+// FoldHours sums hourly rows into buckets of granularity g ("hour", "6h" or
+// "day"), oldest first. With stack, every bucket carries one entry per model
+// in top plus "other", in that order and zero-filled, so a client can draw
+// the stack without joining.
+//
+// Exported so internal/mcp's usage_history can fold the SAME way
+// /v1/history's handleHistory does, rather than maintaining a second
+// hand-written fold of this bucketing arithmetic that could silently drift
+// from it -- see the 2026-09-02 pre-deploy review of commit 1ff1bfc, which
+// introduced (and this replaced) exactly that second implementation.
+func FoldHours(rows []store.HourRow, g string, stack bool, top []string) ([]Series, error) {
 	if _, err := bucketKey("2000-01-01T00:00:00Z", g); err != nil {
 		return nil, err
 	}

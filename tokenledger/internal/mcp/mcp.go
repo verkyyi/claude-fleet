@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -491,14 +490,18 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if g == "" {
 			g = store.Daily
 		}
+		if g != store.Hourly && g != store.Daily {
+			return nil, fmt.Errorf("unknown granularity %q (want hour or day)", g)
+		}
 		rows, err := s.api.Store.HourlyByModel(f)
 		if err != nil {
 			return nil, err
 		}
-		series, err := foldHourly(rows, g)
+		folded, err := api.FoldHours(rows, string(g), false, nil)
 		if err != nil {
 			return nil, err
 		}
+		series := seriesToBuckets(folded)
 		models, err := s.api.Store.UsageByFiltered(f, store.ByModel, 50)
 		if err != nil {
 			return nil, err
@@ -665,46 +668,28 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 	return out, nil
 }
 
-// foldHourly sums store.HourlyByModel's per-(hour,model) rows into a plain
-// time series at hour or day granularity -- the shape usage_history returned
-// before it moved onto the rollup. Deliberately not internal/api's
-// foldHours: that one also builds a per-model stack for the dashboard's
-// stacked-area chart, which usage_history has never exposed (by_model, a
-// separate field, already covers the per-model breakdown); this is the
-// unstacked subset of that logic, kept here because api.foldHours is
-// unexported and api.Series is not the shape usage_history has always
-// returned. Key format matches the old store.History exactly: "YYYY-MM-DD"
-// for day, "YYYY-MM-DDTHH:00" for hour (see internal/api/history.go's
-// bucketKey, which this mirrors for those two cases only -- MCP's
-// granularity enum never offers "6h").
-func foldHourly(rows []store.HourRow, g store.Granularity) ([]store.Bucket, error) {
-	if g != store.Hourly && g != store.Daily {
-		return nil, fmt.Errorf("unknown granularity %q", g)
+// seriesToBuckets adapts api.FoldHours's []api.Series to the []store.Bucket
+// shape usage_history has always returned over MCP. The two are identical
+// field for field except Series carries no Label -- store.Bucket's Label is
+// simply left at its zero value "", which is exactly what usage_history
+// returned before this used api.FoldHours too (by_model, a separate field,
+// already covers the per-model breakdown; usage_history has never populated
+// a per-bucket label). Series' Stack is dropped: usage_history calls
+// api.FoldHours with stack=false, so it is always empty anyway.
+//
+// This -- not a second hand-written fold of bucketKey's day/hour arithmetic
+// -- is what usage_history now does; see the 2026-09-02 pre-deploy review of
+// commit 1ff1bfc, which introduced (and this replaced) exactly that second
+// implementation.
+func seriesToBuckets(series []api.Series) []store.Bucket {
+	out := make([]store.Bucket, len(series))
+	for i, s := range series {
+		out[i] = store.Bucket{
+			Key: s.Key, Events: s.Events, Tokens: s.Tokens, CostUSD: s.CostUSD,
+			Unpriced: s.Unpriced, Sidechain: s.Sidechain,
+		}
 	}
-	idx := map[string]int{}
-	var out []store.Bucket
-	for _, r := range rows {
-		if len(r.Hour) < 13 {
-			return nil, fmt.Errorf("bad hour key %q", r.Hour)
-		}
-		k := r.Hour[:10]
-		if g == store.Hourly {
-			k = r.Hour[:13] + ":00"
-		}
-		i, ok := idx[k]
-		if !ok {
-			i = len(out)
-			idx[k] = i
-			out = append(out, store.Bucket{Key: k})
-		}
-		out[i].Events += r.Events
-		out[i].Tokens += r.Tokens
-		out[i].CostUSD += r.CostUSD
-		out[i].Unpriced += r.Unpriced
-		out[i].Sidechain += r.Sidechain
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out, nil
+	return out
 }
 
 // scopeNote states what a figure spans, so a cross-subscription total is never

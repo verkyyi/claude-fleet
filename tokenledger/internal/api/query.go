@@ -313,7 +313,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	stack := q.Get("stack") == "model"
 	top := topModels(rows, 6)
-	series, err := foldHours(rows, g, stack, top)
+	series, err := FoldHours(rows, g, stack, top)
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
