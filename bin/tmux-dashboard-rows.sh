@@ -32,7 +32,7 @@ CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
 AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -59,17 +59,28 @@ state_v() { case "$1" in
 esac; }
 
 # window → its OWN ledger key (issue #503): `issue-<N>` from @issue, else the
-# `scratch-<N>` slug from the worktree basename (a scratch cwd IS its worktree;
-# a wandered cwd yields no key, same strict rule as fleet_scratch_key — inlined
-# here because $(fleet_scratch_key) would fork a subshell on the 4Hz hot path).
+# `scratch-<N>` slug — read from @worktree FIRST and the pane cwd only as a
+# fallback (issue #529). @worktree is stamped once at spawn and never moves; the
+# cwd does, and a scratch whose Claude `cd`s into a subdir yields basename `docs`,
+# no key, and so used to render as an un-addressable row with a blank id cell.
+# That is the same @worktree-first rule fleet_origin_key already follows, so the
+# two provenance readers no longer disagree about the same window.
+# Same strict digits-only shape as fleet_scratch_key (both the bare `scratch-<N>`
+# and the `<repo>-scratch-<N>` dir form) — inlined because $(fleet_scratch_key)
+# would fork a subshell on the 4Hz hot path.
 # Empty = not addressable as a spawn parent. Sets $okey; no subshells.
 okey_v() { okey=''
   if [ -n "$1" ]; then okey="issue-$1"; return; fi
-  local bn=${2##*/} sn
-  case "$bn" in
-    *-scratch-*) sn=${bn##*-scratch-}
-      case "$sn" in ''|*[!0-9]*) :;; *) okey="scratch-$sn";; esac;;
-  esac
+  local cand bn sn
+  for cand in "$2" "$3"; do
+    bn=${cand##*/}
+    case "$bn" in
+      scratch-*)   sn=${bn#scratch-} ;;
+      *-scratch-*) sn=${bn##*-scratch-} ;;
+      *)           continue ;;
+    esac
+    case "$sn" in ''|*[!0-9]*) continue;; *) okey="scratch-$sn"; return;; esac
+  done
 }
 
 # model → context window (FLEET_CTX_WINDOW; haiku 200k). The model short name was
@@ -111,18 +122,18 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<origin>` line per addressable window,
 # the parent-resolution table for the spawn-provenance grouping (issue #503).
 KEYTAB=''
-while IFS=$US read -r sess idx name path state _ _ iss origin; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
-  okey_v "$iss" "$path"
+  okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
   state_v "$state"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -213,7 +224,22 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin; do
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
 
-  issd=''; [ -n "$iss" ] && issd="#$iss"
+  # --- the id cell (issue #529) ----------------------------------------------
+  # `#<N>` in GREEN for an issue-bound worker; `~<N>` in INDIGO for a scratch —
+  # the same `~` grammar key_label/`↳~12`//fleet-history list already speak, and
+  # the same indigo the ↳ scratch-provenance tag is drawn in, so the column reads
+  # green=issue / indigo=scratch. Colour is the half #502 was missing: it put a
+  # GREEN `~<N>` here, found it "indistinguishable from `#<N>` at a glance", and
+  # blanked the cell — which cost the scratch its only stable on-dash id, since
+  # the window column holds a merely cosmetic name (`--name`, #225, or ⌃n rename
+  # both erase the `scratch-<N>` default). Widths are unchanged: `~<N>` and
+  # `#<N>` are the same width, still inside the 5-col cell.
+  okey_v "$iss" "$wt" "$path"
+  issd=''; icol=$GN
+  case "$okey" in
+    issue-*)   issd="#${okey#issue-}" ;;
+    scratch-*) issd="~${okey#scratch-}"; icol=$IN ;;
+  esac
   # --- spawn provenance (issue #503) -----------------------------------------
   # ↳ tag: rendered before the summary for every non-hub origin (`↳#483` for a
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
@@ -278,7 +304,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin; do
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dwidth=$(( dwidth + ${#tagd} + 1 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${GN}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"

@@ -27,9 +27,11 @@
 #      the transcript key for the real session that follows; newest-first is by
 #      TIMESTAMP rather than append order.
 #   G. SCRATCH rows (#466) — a session with no issue: col 2 carries its
-#      `scratch-<N>` key, list/rows render `~<N>` and target landed:scratch:<key>,
-#      record-closed stores the HEAD sha, and resume rebuilds off that sha (or
-#      degrades to REVIEW-ONLY without one). Plus: --issue is still an alias of --key.
+#      `scratch-<N>` key, list/rows render `~<N>` (the dash id cell in INDIGO, so it
+#      cannot be misread as a green `#<N>` — issue #529) and target
+#      landed:scratch:<key>, record-closed stores the HEAD sha, and resume rebuilds
+#      off that sha (or degrades to REVIEW-ONLY without one). Plus: --issue is still
+#      an alias of --key.
 #
 # Fully hermetic: no gh, no git, no tmux, no network. FLEET_HISTORY_LEDGER points
 # the ledger at a scratch file; CLAUDE_PROJECTS_DIR points the transcript lookup
@@ -365,11 +367,15 @@ lst=$(run list)
 contains "scratch: list marks the key ~7"            "$lst" "✗ ~7"
 rws=$(run rows)
 contains "scratch: dash row targets landed:scratch:" "$rws" "landed:scratch:scratch-7"
-# The dash issue cell is EMPTY for a scratch — same rule as the live view (a @raw
-# window has no @issue), so a scratch never reads as issue-bound. `~<N>` stays the
-# label in `list`/log lines only; the row is addressed via the field1 target.
+# The dash id cell carries `~<N>` in INDIGO for a scratch and `#<N>` in green for a
+# worker (issue #529) — the same grammar the live view paints, so ⌃t keeps one
+# reading. #502 blanked this cell because the `~<N>` of the day was GREEN and so
+# "indistinguishable from `#<N>` at a glance"; the colour is what fixes that, and
+# what this assertion pins. The full cross-view grammar lives in
+# bin/dash-rows-scratch-id-selftest.sh; this is the local guard on the landed half.
+contains "scratch: dash row prints the id cell as INDIGO ~7" "$rws" $'\033[38;2;187;154;247m~7'
 CHECKS=$((CHECKS + 1))
-case "$rws" in *"~7"*) fail "dash row must NOT print ~7 in the issue cell (blank for a scratch)";; esac
+case "$rws" in *"#7"*) fail "dash row must NOT print #7 for a scratch (it is not an issue)";; esac
 contains "scratch: dash row names the scratch window" "$rws" "scratch-7"
 
 # RESUME: the worktree is gone (never existed here), but the recorded sha means it

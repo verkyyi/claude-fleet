@@ -516,14 +516,17 @@ cmd_rows() {
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
     local prcell; case "$pr" in ''|-) prcell="—";; *) prcell="#${pr#\#}";; esac
 
-    # issue cell: `#<issue>` for a worker; EMPTY for a scratch — the SAME rule the
-    # live dash uses (a @raw window has no @issue → blank cell), so toggling ⌃t
-    # keeps one visual grammar and a scratch never reads as issue-bound. The green
-    # `~<N>` used to sit here and was indistinguishable from `#<N>` at a glance;
-    # the scratch identity stays visible in the window column (scratch-<N>
-    # fallback) and the row is still addressed by its key via the field1 target.
-    # `~<N>` remains the label in `list` output and log lines, where it is the key.
-    local issd=""; is_scratch_key "$iss" || issd=$(key_label "$iss")
+    # id cell: `#<issue>` in GREEN for a worker, `~<N>` in INDIGO for a scratch —
+    # the SAME rule the live dash now uses (issue #529), so toggling ⌃t keeps one
+    # visual grammar. #502 blanked this cell precisely to match the live view of
+    # the day, whose scratch rows had no id either; now that the live view paints
+    # one, staying blank here is what would split the grammar. #502's actual
+    # finding stands and is honoured: a GREEN `~<N>` was "indistinguishable from
+    # `#<N>` at a glance", so the tell is the COLOUR — green=issue, indigo=scratch
+    # — not the glyph alone. Width is unchanged (`~<N>` == `#<N>` == the 5-col cell).
+    local issd icol=$GN
+    issd=$(key_label "$iss")
+    is_scratch_key "$iss" && icol=$IN
     local f_iss f_name f_act f_pr f_ctx
     fld 5  "$issd";   f_iss=$fld_out
     fld 22 "$wname";  f_name=$fld_out
@@ -554,7 +557,7 @@ cmd_rows() {
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$fzfkey" "$US" \
-      "${glyph_c}${glyph}${R} ${GN}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
+      "${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
   done
 }
 

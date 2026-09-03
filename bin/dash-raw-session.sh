@@ -42,7 +42,11 @@
 #     out after sanitizing) falls back to the auto `scratch-<N>` name.
 #
 # How the rest of the fleet treats it (all handled gracefully, most for free):
-#   * dash        — LISTED (only plan/dash/backlog are excluded from the list).
+#   * dash        — LISTED (only plan/dash/backlog are excluded from the list),
+#                   with `~<N>` in the id column, in indigo against a worker's
+#                   green `#<N>` (issue #529). The id is read from @worktree, so
+#                   it survives a --name/⌃n rename and a wandered cwd — the two
+#                   states where the window name stops carrying `scratch-<N>`.
 #   * session cap — COUNTS toward FLEET_MAX_SESSIONS / the global cap (it is a
 #                   real Claude session holding a slot), so it is cap-checked here.
 #   * classifier / summarizer — run normally (its state + summary show in the dash).
