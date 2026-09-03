@@ -20,15 +20,52 @@ PROMPT='▸ '
 # visible now — there is no show/hide to undo, only the prompt label.)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"    # fleet_bg / fleet_now_ms / fleet_spawn_is_burst (#531)
 
 # Typed task → seeded scratch. Checked FIRST, before any view logic: the prompt line
 # means the same thing in the live and the landed view, and it is mode-free — a
-# rename/bind in progress owns the query line instead (those branches below). The
-# spawn is the ⌃s path with a prompt (--bg: cheap checks sync, slow half
-# backgrounded, so the keystroke returns instantly); the query is handed over as an
-# ARGUMENT ({q} is fzf-quoted), never interpolated into an action string.
+# rename/bind in progress owns the query line instead (those branches below).
+#
+# Paste-storm guard (issue #531): a terminal delivers a MULTI-LINE PASTE into this
+# fzf input as one Enter PER LINE, and fzf has no bracketed-paste awareness on the
+# input line — so pasting a ~250-line stack trace once fired 250 seeded spawns (244
+# concurrent `git worktree add`s, the global cap bypassed, disk 30→6 GB). So the
+# spawn is DEBOUNCED, timestamp-based: an Enter that trails the previous one by
+# < FLEET_SPAWN_GUARD_MS is a burst line and is DROPPED; an Enter with quiet before
+# it DEFERS FLEET_SPAWN_GUARD_SLEEP and then spawns IFF nothing followed within the
+# guard (it was isolated). Net: a lone task spawns after a ~1s wait, a paste spawns
+# nothing (one explanatory message), and two tasks typed > guard apart both spawn.
+# Timestamp-based, not a counter — a counter drops the EARLIER of two spaced tasks
+# (a later Enter exists ⇒ "not newest" ⇒ wrongly dropped). The query is only ever
+# handed over via a FILE (--prompt-file), never interpolated into a command string.
 if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
-  bash "$BIN/dash-raw-session.sh" --bg --prompt "$q" >/dev/null 2>&1
+  GUARD_MS="${FLEET_SPAWN_GUARD_MS:-1000}"
+  case "$GUARD_MS" in ''|*[!0-9]*) GUARD_MS=1000;; esac
+  # The defer is the guard, expressed in seconds — derived, so operators tune ONE
+  # knob. FLEET_SPAWN_GUARD_SLEEP is an undocumented override the selftest uses to
+  # keep a wide gap-window while sleeping only a fraction of a second.
+  GUARD_SLEEP="${FLEET_SPAWN_GUARD_SLEEP:-$(printf '%d.%03d' $((GUARD_MS/1000)) $((GUARD_MS%1000)))}"
+  gdir="$C/global"; mkdir -p "$gdir" 2>/dev/null
+  key=$(fleet_slug "${FLEET_SESSION:-default}")
+  lastf="$gdir/spawn_last_ms_$key"
+  now=$(fleet_now_ms)
+  last=$(cat "$lastf" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0;; esac
+  printf '%s' "$now" > "$lastf" 2>/dev/null
+  if fleet_spawn_is_burst "$now" "$last" "$GUARD_MS"; then
+    :   # trailing line of a paste — drop; the candidate's deferred decider reports it
+  else
+    # A candidate: quiet before it. Stage the query in a file (never interpolated),
+    # then defer the decision. On wake, spawn IFF `lastf` is still ≤ our timestamp
+    # (nothing followed us within the guard — we were isolated, a real lone task);
+    # else a burst formed around us → drop it and surface ONE message. Backgrounded
+    # via fleet_bg so the keystroke returns now; $now is digits-only (safe to embed).
+    qf=$(mktemp "$gdir/spawn_q.XXXXXX" 2>/dev/null)
+    if [ -n "$qf" ]; then
+      printf '%s' "$q" > "$qf" 2>/dev/null
+      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --prompt-file='$qf' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a task — the prompt line takes ONE task. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
+    fi
+  fi
   echo "clear-query+reload(bash $ROWS)"; exit 0
 fi
 

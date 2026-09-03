@@ -592,6 +592,25 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Warm pool refill delay (s) @group=spawn @tier=advanced @scope=fleet @edit=int
 #FLEET_POOL_REFILL_DELAY=45
 
+# --- Dash prompt-line paste guard (bin/dash-enter.sh, issue #531) -----------------
+# The dash's always-visible prompt line ("type a task, ↵ → scratch session") is an
+# fzf input, and a terminal delivers a MULTI-LINE PASTE as one Enter PER LINE (fzf
+# has no bracketed-paste awareness on the input line). Pasting a ~250-line stack
+# trace once fired 250 seeded spawns — 244 concurrent `git worktree add`s, the
+# global session cap bypassed, disk 30→6 GB. So a typed Enter is DEBOUNCED: an
+# Enter that trails the previous one by less than this many ms is treated as a
+# paste line and dropped; an isolated Enter defers this long, then spawns. Raising
+# it drops more of a fast-typed second task; lowering it lets a slow paste through.
+# @label=Prompt-line debounce (ms) @group=spawn @tier=advanced @scope=global @edit=int @unit=ms
+#FLEET_SPAWN_GUARD_MS=1000
+
+# How long an in-progress scratch spawn (issue #531) counts against the session cap
+# before its window exists — so a flood of spawns can't all pass the cap check
+# before any of them lands a window. A crashed spawn's marker ages out after this
+# many seconds rather than wedging the cap.
+# @label=In-flight spawn TTL (s) @group=spawn @tier=advanced @scope=global @edit=int @unit=seconds
+#FLEET_INFLIGHT_TTL=180
+
 # --- Cross-machine pre-spawn dedup (bin/dash-issue-session.sh, issue #258) --------
 # ON by default (set to 0 to opt out). The local spawn dedup only sees THIS machine's
 # tmux server. When two fleets run on DIFFERENT machines against the SAME repo, a
