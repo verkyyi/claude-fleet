@@ -24,7 +24,7 @@ Contract (Claude Code hooks):
   - exit 2  -> BLOCK; stderr is shown to the model so it can course-correct
   - ANY error here -> exit 0 (fail OPEN) so a guard bug never bricks a session.
 
-WHY REWRITE BEATS DENY (issue #528). A PreToolUse deny kills the WHOLE Bash
+WHY REWRITE BEATS DENY (#528). A PreToolUse deny kills the WHOLE Bash
 call. Every messaging-rail block observed in the fleet's transcripts (56 of
 them) hit a COMPOUND command — median 1.2 KB, up to 34 statements — so a batch
 that commits, probes, writes files and only THEN posts a report lost all of it,
@@ -248,7 +248,7 @@ def _base_branches():
 
 
 # --- ESCAPE HATCHES ----------------------------------------------------------
-# A hatch is COMMAND-WIDE, not segment-local (issue #528). The old rails read the
+# A hatch is COMMAND-WIDE, not segment-local (#528). The old rails read the
 # inline `VAR=1` prefix off the one segment it sat on, so on a compound command
 # the operator had to repeat it on every offending statement and an `export` did
 # nothing at all — the block message said "prefix it" and the retry was denied
@@ -374,7 +374,7 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
 
     # 3) Inter-agent messaging must go through the issue-bridge, not a raw
     #    send-keys into a live Claude TUI — send-keys is racy (bracketed-paste
-    #    swallows the Enter). SELF-SCOPED TO FLEET SERVERS (issue #528): the rail
+    #    swallows the Enter). SELF-SCOPED TO FLEET SERVERS (#528): the rail
     #    exists to protect a live worker's TUI, and a tmux server that hosts no
     #    fleet has no TUI to corrupt. `-S <path>` is by definition a custom socket
     #    (fleet tooling always uses `-L <session>`) and `-L <label>` is a fleet

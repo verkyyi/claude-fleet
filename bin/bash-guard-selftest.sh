@@ -50,7 +50,7 @@ assert_exit() {
 }
 
 # assert_rewrite <label> <hook> <json> <substring>  — the messaging rails REPAIR
-# rather than deny (issue #528): exit 0 PLUS a PreToolUse updatedInput payload on
+# rather than deny (#528): exit 0 PLUS a PreToolUse updatedInput payload on
 # stdout. Asserts the payload is well-formed, carries the substring, and that the
 # ORIGINAL command is gone (a rewrite that leaves the raw call in place is a
 # silent no-op).
@@ -123,7 +123,7 @@ assert_exit 0 "cross-segment split" "$GUARD" "$(bash_json "$(jstr 'git commit -m
 # but a REAL dangerous statement AFTER a harmless one still fires
 assert_exit 2 "block in 2nd segment" "$GUARD" "$(bash_json "$(jstr 'echo hi && rm -rf /')")"
 
-# MASKING (issue #528): quoted and heredoc text is DATA. A runbook, a report or a
+# MASKING (#528): quoted and heredoc text is DATA. A runbook, a report or a
 # test fixture whose line merely BEGINS with a guarded command used to segment
 # like code and get denied though nothing would ever run — the guard blocked its
 # own documentation. The rails still fire on the real thing in the same command.

@@ -21,7 +21,7 @@
 #   • --find-window <issue> <repo> — print the live bound worker window for that
 #     issue (empty if none). hooks/bash-guard.py asks this before rewriting a raw
 #     gh issue-comment: with no worker bound there is nothing to relay into, so
-#     the comment is inert and the rail stays out of the way (issue #528).
+#     the comment is inert and the rail stays out of the way (#528).
 #
 # RELAY CORE (identical for both ingresses), for each new comment:
 #   1. dedup      — skip if this comment id was already handled (redeliveries,

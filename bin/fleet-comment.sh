@@ -90,7 +90,7 @@ while [ "$#" -gt 0 ]; do
     --note)      relay=0 ;;
     --to-worker) relay=1 ;;
     --close)     do_close=1 ;;
-    # gh-compatible spellings (issue #528). hooks/bash-guard.py rewrites a raw
+    # gh-compatible spellings (#528). hooks/bash-guard.py rewrites a raw
     # gh issue-comment onto this wrapper verbatim, and a human reaching for the
     # wrapper types what gh taught them; the old `-*) unknown flag` catch-all
     # turned both into a SECOND failure right after the first one (--body-file
