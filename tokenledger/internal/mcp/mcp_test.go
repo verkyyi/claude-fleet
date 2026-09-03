@@ -427,6 +427,54 @@ func TestCall_UsageSummary(t *testing.T) {
 	}
 }
 
+// TestCall_UsageHistoryAndUsageBySurviveAPrune is the regression for MCP's
+// usage_history and usage_by_* reading usage_events directly while their HTTP
+// twins (/v1/history, /v1/usage) read the rollup: before any retention
+// pruning the two agree by coincidence, because the raw events are still
+// there. After the first prune they would silently start answering the same
+// question with permanently different numbers -- MCP's would drop to zero
+// while the rollup-backed HTTP endpoints keep the totals.
+func TestCall_UsageHistoryAndUsageBySurviveAPrune(t *testing.T) {
+	ts, st := newMCP(t)
+	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
+
+	// Prune every raw event; InsertEvents maintains the rollup in the same
+	// transaction, so it must be all that survives.
+	if _, err := st.PruneEvents(time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var events int64
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("setup: want 0 surviving raw events after pruning, got %d", events)
+	}
+
+	out := call(t, ts, "usage_history", map[string]any{"account": "acct-a"})
+	res := out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("usage_history errored post-prune: %v", res)
+	}
+	sc := res["structuredContent"].(map[string]any)
+	if series, _ := sc["series"].([]any); len(series) == 0 {
+		t.Fatal("usage_history.series went to zero after a prune: it must read the rollup, like /v1/history, not usage_events")
+	}
+	if byModel, _ := sc["by_model"].([]any); len(byModel) == 0 {
+		t.Fatal("usage_history.by_model went to zero after a prune")
+	}
+
+	out = call(t, ts, "usage_by_endpoint", map[string]any{"account": "acct-a"})
+	res = out["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("usage_by_endpoint errored post-prune: %v", res)
+	}
+	sc = res["structuredContent"].(map[string]any)
+	if buckets, _ := sc["buckets"].([]any); len(buckets) == 0 {
+		t.Fatal("usage_by_endpoint.buckets went to zero after a prune: it must read the rollup, like /v1/usage, not usage_events")
+	}
+}
+
 // get_findings uses the same envelope shape as usage_summary and GET
 // /v1/findings: account_uuid plus the ALIGNED since/until for the review
 // view, and since/until omitted entirely (not null) for the now view.

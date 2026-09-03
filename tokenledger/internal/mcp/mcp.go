@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -482,7 +483,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return s.usage(args, store.BySession)
 
 	case "usage_history":
-		account, err := s.account(args)
+		f, err := s.filter(args)
 		if err != nil {
 			return nil, err
 		}
@@ -490,22 +491,25 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if g == "" {
 			g = store.Daily
 		}
-		start, end := timeRange(args)
-		series, err := s.api.Store.History(account, g, start, end)
+		rows, err := s.api.Store.HourlyByModel(f)
 		if err != nil {
 			return nil, err
 		}
-		models, err := s.api.Store.ModelSplit(account, start, end)
+		series, err := foldHourly(rows, g)
+		if err != nil {
+			return nil, err
+		}
+		models, err := s.api.Store.UsageByFiltered(f, store.ByModel, 50)
 		if err != nil {
 			return nil, err
 		}
 		hist := map[string]any{
-			"account_uuid": account, "granularity": string(g),
-			"since": start, "until": end,
+			"account_uuid": f.Account, "granularity": string(g),
+			"since": f.Start, "until": f.End,
 			"series": series, "by_model": models,
 			"disclaimer": strings.TrimSpace(caveat),
 		}
-		if note := scopeNote(account); note != "" {
+		if note := scopeNote(f.Account); note != "" {
 			hist["all_accounts"] = true
 			hist["scope_note"] = note
 		}
@@ -642,13 +646,14 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 		return nil, err
 	}
 	start, end := timeRange(args)
-	buckets, err := s.api.Store.UsageBy(account, d, start, end, intArg(args, "limit"))
+	f := store.Filter{Account: account, Start: start, End: end}.AlignHours()
+	buckets, err := s.api.Store.UsageByFiltered(f, d, intArg(args, "limit"))
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{
 		"account_uuid": account, "by": string(d),
-		"since": start, "until": end, "buckets": buckets,
+		"since": f.Start, "until": f.End, "buckets": buckets,
 		"disclaimer": strings.TrimSpace(caveat),
 	}
 	// An agent relaying a blended total without saying it is blended is the
@@ -657,6 +662,48 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 		out["all_accounts"] = true
 		out["scope_note"] = note
 	}
+	return out, nil
+}
+
+// foldHourly sums store.HourlyByModel's per-(hour,model) rows into a plain
+// time series at hour or day granularity -- the shape usage_history returned
+// before it moved onto the rollup. Deliberately not internal/api's
+// foldHours: that one also builds a per-model stack for the dashboard's
+// stacked-area chart, which usage_history has never exposed (by_model, a
+// separate field, already covers the per-model breakdown); this is the
+// unstacked subset of that logic, kept here because api.foldHours is
+// unexported and api.Series is not the shape usage_history has always
+// returned. Key format matches the old store.History exactly: "YYYY-MM-DD"
+// for day, "YYYY-MM-DDTHH:00" for hour (see internal/api/history.go's
+// bucketKey, which this mirrors for those two cases only -- MCP's
+// granularity enum never offers "6h").
+func foldHourly(rows []store.HourRow, g store.Granularity) ([]store.Bucket, error) {
+	if g != store.Hourly && g != store.Daily {
+		return nil, fmt.Errorf("unknown granularity %q", g)
+	}
+	idx := map[string]int{}
+	var out []store.Bucket
+	for _, r := range rows {
+		if len(r.Hour) < 13 {
+			return nil, fmt.Errorf("bad hour key %q", r.Hour)
+		}
+		k := r.Hour[:10]
+		if g == store.Hourly {
+			k = r.Hour[:13] + ":00"
+		}
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, store.Bucket{Key: k})
+		}
+		out[i].Events += r.Events
+		out[i].Tokens += r.Tokens
+		out[i].CostUSD += r.CostUSD
+		out[i].Unpriced += r.Unpriced
+		out[i].Sidechain += r.Sidechain
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
 }
 
