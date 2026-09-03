@@ -107,16 +107,20 @@ hasnt "live: renamed scratch's window column no longer carries the id" "$r3" "sc
 # 4. a window that is neither → blank cell (5 spaces), not a stray `~`/`#`.
 hasnt "live: a non-scratch, non-worker window prints no id" "$r4" "~"
 
-# 5. alignment: the id cell stays 5 wide in every shape, so the columns after it
-#    line up. Strip ANSI, take field 3, and read chars 2..6 (glyph + space first).
-cell() {
-  printf '%s' "$1" | awk -F"$US" '{print $3}' \
-    | sed $'s/\033\\[[0-9;]*m//g' | cut -c3-7
+# 5. alignment: the id cell stays 5 wide in every shape, so every column after it
+#    lines up. Asserted as ONE exact substring — <colour><cell><reset> — rather than
+#    by character offset: the row's leading state glyph (·/⠋/✓) is multi-byte UTF-8,
+#    so any positional read (cut -c, substr) counts BYTES under the C locale CI runs
+#    in and lands one column short, while the escape-anchored form is locale-proof
+#    and pins the colour and the padding in the same check.
+cellis() {   # <label> <row> <5-char cell> <colour>
+  CHECKS=$((CHECKS+1))
+  case "$2" in *"$4$3"$'\033[0m'*) : ;; *) fail "$1" "$2";; esac
 }
-eq "live: worker id cell is 5 wide"            "#123 " "$(cell "$r1")"
-eq "live: scratch id cell is 5 wide"           "~9   " "$(cell "$r2")"
-eq "live: wandered scratch id cell is 5 wide"  "~5   " "$(cell "$r3")"
-eq "live: unkeyed window id cell is 5 blanks"  "     " "$(cell "$r4")"
+cellis "live: worker id cell is GREEN and 5 wide"           "$r1" "#123 " "$GN"
+cellis "live: scratch id cell is INDIGO and 5 wide"         "$r2" "~9   " "$IN"
+cellis "live: wandered scratch id cell is INDIGO, 5 wide"   "$r3" "~5   " "$IN"
+cellis "live: unkeyed window id cell is 5 blanks"           "$r4" "     " "$GN"
 
 # --- the landed view (⌃t) must speak the SAME grammar -------------------------
 # #502 blanked the landed scratch cell to match the live view of the day; now that
