@@ -1456,7 +1456,9 @@ fleet_inflight_count() {  # [sess] → count FRESH markers (all fleets, or one),
   pat='*'; [ -n "$sess" ] && pat="$(fleet_slug "$sess").*"
   while IFS= read -r f; do
     [ -e "$f" ] || continue
-    m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+    # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0 with
+    # non-mtime output, so it must not win — `stat -c %Y` (GNU) errors cleanly on BSD.
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
     case "$m" in ''|*[!0-9]*) m=0;; esac
     if [ "$m" -ge "$cut" ]; then n=$((n + 1)); else rm -f "$f" 2>/dev/null; fi
   done <<EOF
