@@ -36,6 +36,15 @@ function route() {
   const s = app.state;
   if (!s.sub || (s.sub !== 'all' && !app.accounts.some((a) => a.account_uuid === s.sub))) {
     s.sub = app.accounts.length > 1 ? 'all' : (app.accounts[0]?.account_uuid || 'all');
+    // Fix the URL to match, not just the in-memory state: state.js's whole
+    // premise is "there is no second copy of the state", and leaving the
+    // hash on the unknown/invalid sub would silently re-run this same
+    // correction on every reload or shared link. replaceState (not push):
+    // this is a correction of the current entry, not a new navigation, and
+    // it must not itself trigger another route() (replaceState fires no
+    // hashchange), which would recurse into this same branch.
+    const corrected = format(s);
+    if (corrected !== location.hash) history.replaceState(null, '', corrected);
   }
   // Handlers are shared by both calls below: renderNav only ever invokes
   // onView, renderScopeControls only ever invokes the other four — same
