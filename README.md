@@ -34,7 +34,7 @@ demo repo data.</sub>
  `F9`. `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
   **type a task and press Enter** — it spawns a scratch session (own writable
   `scratch-N` worktree, no issue) **seeded with that text**, so it starts working
-  at once. `Ctrl-N` (or the `[＋ new]` chip) is the issue-bound path: it files a
+  at once. `Ctrl-N` is the issue-bound path: it files a
   GitHub issue and spawns a worker session bound to it.
   `Ctrl-S` opens an unseeded raw scratch session (plain `claude`, no issue — but
   in its own writable `scratch-N` worktree, so an experiment can push a branch and
