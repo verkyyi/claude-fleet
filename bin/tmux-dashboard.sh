@@ -3,9 +3,9 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · Enter jump to that window · type a task + Enter → a SEEDED scratch
-#   session (the prompt line at the bottom is always visible; dash-enter.sh hands
-#   the text to dash-raw-session.sh --prompt) ·
+#   ↑/↓ move · Enter jump to that window · type a name + Enter → an EMPTY scratch
+#   session named after it, no prompt sent (#534; the prompt line at the bottom is
+#   always visible; dash-enter.sh hands the text to dash-raw-session.sh --name-file) ·
 #   ⌃n file an issue + spawn its worker ·
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
@@ -94,13 +94,14 @@ HDR='↵ jump · [＋ new] · ? keys'
 # less obvious than esc-back on the always-on dash) — that token is the only diff.
 [ -n "$POPUP" ] && HDR='↵ jump · [＋ new] · ? keys · esc close'
 # The prompt line at the bottom is ALWAYS visible (no --no-input): it is the
-# quick-scratch box — type a task, ↵ → a scratch session seeded with it
-# (dash-enter.sh → dash-raw-session.sh --prompt). The hint lives in the input's
+# quick-scratch box — type a name, ↵ → an EMPTY scratch session named after it
+# (dash-enter.sh → dash-raw-session.sh --name-file; it seeded a prompt until #534 —
+# an operator typing here wants a session to drive, not one already working). The hint lives in the input's
 # ghost text, not the header, so it vanishes the moment you start typing and the
 # header stays one line wide. Typing never filters (--disabled); ↵ on an EMPTY
 # line is still plain jump. --no-separator: the header line already divides the
 # list from the prompt, so the input costs ONE row, not two (iPad-height panes).
-GHOST='type a task, ↵ → scratch session'
+GHOST='type a name, ↵ → empty scratch'
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across

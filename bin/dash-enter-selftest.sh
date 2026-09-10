@@ -2,7 +2,8 @@
 # dash-enter-selftest.sh — the dash prompt-line Enter handler, focused on the
 # paste-storm guard (issue #531).
 #
-# The bug: the dash's always-visible prompt line ("type a task, ↵ → scratch")
+# The bug: the dash's always-visible prompt line ("type a task, ↵ → scratch" then;
+# "type a name, ↵ → empty scratch" since #534 — the guard is the same either way)
 # is an fzf input. A terminal delivers a MULTI-LINE PASTE as one Enter PER LINE
 # (fzf has no bracketed-paste awareness on the input line — measured on 0.74.3),
 # so pasting a ~250-line stack trace fired `dash-enter.sh → dash-raw-session.sh
@@ -20,7 +21,7 @@
 # Two surfaces:
 #   1. bin/fleet-lib.sh fleet_spawn_is_burst — the pure gap predicate (unit).
 #   2. bin/dash-enter.sh — end-to-end: a lone Enter → exactly one spawn; a rapid
-#      burst → ZERO spawns + one "pasted text is not a task" message. The spawn is
+#      burst → ZERO spawns + one "pasted text is not a name" message. The spawn is
 #      faked (a logging stub), the defer is driven for real via a backgrounded
 #      run-shell (mirroring the live `fleet_bg`), with tiny guard knobs.
 #
@@ -53,9 +54,12 @@ SPAWN_LOG="$WORK/spawns"; DISPLAY_LOG="$WORK/display"
 # dispatched — record each call (with the prompt it carried) and do nothing else.
 cat > "$WORK/bin/dash-raw-session.sh" <<RAWFAKE
 #!/bin/bash
-p=""
-for a in "\$@"; do case "\$a" in --prompt-file=*) p="\$(cat "\${a#--prompt-file=}" 2>/dev/null)";; esac; done
-printf 'SPAWN %s\n' "\$p" >> "$SPAWN_LOG"
+# Record the NAME the spawn carried (--name-file, #534) plus the raw argv: the
+# typed text must arrive as a WINDOW NAME, never as a seed prompt (--prompt*).
+n=""
+for a in "\$@"; do case "\$a" in --name-file=*) n="\$(cat "\${a#--name-file=}" 2>/dev/null)";; esac; done
+printf 'SPAWN %s\n' "\$n" >> "$SPAWN_LOG"
+printf 'ARGV %s\n' "\$*" >> "$SPAWN_LOG"
 RAWFAKE
 chmod +x "$WORK/bin/dash-raw-session.sh"
 
@@ -110,8 +114,9 @@ grep -q 'clear-query' "$WORK/out" || fail "A the Enter must clear the query line
 [ -s "$SPAWN_LOG" ] && fail "A the spawn must be DEFERRED, not synchronous (nothing yet)" "$(cat "$SPAWN_LOG")"
 wait_bg 0.6
 [ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "A a lone task must spawn exactly once after the defer" "$(cat "$SPAWN_LOG")"
-grep -qF 'refactor the login flow' "$SPAWN_LOG" || fail "A the spawn must carry the typed task verbatim" "$(cat "$SPAWN_LOG")"
-ok "A a lone typed task defers, then spawns exactly one seeded scratch"
+grep -qF 'SPAWN refactor the login flow' "$SPAWN_LOG" || fail "A the spawn must carry the typed text verbatim as the window NAME (--name-file)" "$(cat "$SPAWN_LOG")"
+grep -q -- '--prompt' "$SPAWN_LOG" && fail "A the typed text must NOT be handed over as a seed prompt (--prompt*, #534)" "$(cat "$SPAWN_LOG")"
+ok "A a lone typed name defers, then spawns exactly one EMPTY scratch named after it (#534)"
 
 # ===================== B: a multi-line paste spawns nothing ==================
 # 6 Enters fired back-to-back (a paste's per-line Enters) — guard window wide
@@ -124,8 +129,8 @@ for line in 'xO @ D531DotG.js:2' 'Promise.then' 'CO @ D531DotG.js:2' 'by @ D531D
 done
 wait_bg 0.8
 [ ! -s "$SPAWN_LOG" ] || fail "B a multi-line paste must spawn NOTHING" "$(cat "$SPAWN_LOG")"
-grep -qi 'not a task\|pasted' "$DISPLAY_LOG" || fail "B a dropped paste must surface one explanatory message" "$(cat "$DISPLAY_LOG")"
-[ "$(grep -ci 'not a task\|pasted' "$DISPLAY_LOG")" = 1 ] || fail "B the paste message must appear exactly once, not per line" "$(cat "$DISPLAY_LOG")"
+grep -qi 'not a name\|pasted' "$DISPLAY_LOG" || fail "B a dropped paste must surface one explanatory message" "$(cat "$DISPLAY_LOG")"
+[ "$(grep -ci 'not a name\|pasted' "$DISPLAY_LOG")" = 1 ] || fail "B the paste message must appear exactly once, not per line" "$(cat "$DISPLAY_LOG")"
 ok "B a 6-line paste spawns nothing and reports once"
 
 # ===================== C: a real rename still works (no regression) ==========

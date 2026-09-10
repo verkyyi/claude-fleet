@@ -4,9 +4,11 @@
 # the tmux side-effect. Modes:
 #   bind mode    (bind flag, set by ctrl-g): bind/unbind <target> to issue query
 #   rename mode  (rename flag, set by ctrl-e): rename <stored target> to query
-#   typed task   (no flag, query non-empty): spawn a scratch session SEEDED with
-#                the query (dash-raw-session.sh --prompt) — the dash's always-
-#                visible prompt line is the quick-scratch box
+#   typed name   (no flag, query non-empty): spawn an EMPTY scratch session NAMED
+#                with the query (dash-raw-session.sh --name-file, #534) — the dash's
+#                always-visible prompt line is the quick-scratch box. No seed prompt:
+#                the session opens at `❯` for the operator to drive (it seeded the
+#                text as claude's first prompt from #493 until #534)
 #   jump         (default, empty query): select the target window
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
@@ -23,7 +25,7 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"    # fleet_bg / fleet_now_ms / fleet_spawn_is_burst (#531)
 
-# Typed task → seeded scratch. Checked FIRST, before any view logic: the prompt line
+# Typed name → an empty scratch named after it (#534). Checked FIRST, before any view logic: the prompt line
 # means the same thing in the live and the landed view, and it is mode-free — a
 # rename/bind in progress owns the query line instead (those branches below).
 #
@@ -38,7 +40,7 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 # nothing (one explanatory message), and two tasks typed > guard apart both spawn.
 # Timestamp-based, not a counter — a counter drops the EARLIER of two spaced tasks
 # (a later Enter exists ⇒ "not newest" ⇒ wrongly dropped). The query is only ever
-# handed over via a FILE (--prompt-file), never interpolated into a command string.
+# handed over via a FILE (--name-file), never interpolated into a command string.
 if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
   GUARD_MS="${FLEET_SPAWN_GUARD_MS:-1000}"
   case "$GUARD_MS" in ''|*[!0-9]*) GUARD_MS=1000;; esac
@@ -63,7 +65,7 @@ if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
     qf=$(mktemp "$gdir/spawn_q.XXXXXX" 2>/dev/null)
     if [ -n "$qf" ]; then
       printf '%s' "$q" > "$qf" 2>/dev/null
-      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --prompt-file='$qf' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a task — the prompt line takes ONE task. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
+      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
     fi
   fi
   echo "clear-query+reload(bash $ROWS)"; exit 0

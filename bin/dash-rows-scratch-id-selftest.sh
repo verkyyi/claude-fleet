@@ -82,6 +82,11 @@ w 1 fix-the-thing         /w/repo-issue-123       idle   @1  123 ''  /w/repo-iss
 w 2 scratch-9             /w/repo-scratch-9       idle   @2  ''  ''  /w/repo-scratch-9
 w 3 tencent-workbuddy     /w/repo-scratch-5/docs  idle   @3  ''  ''  /w/repo-scratch-5
 w 4 hub                   /w/repo                 idle   @4  ''  ''  ''
+#   #534: CJK window names — the window cell must be 22 display COLUMNS, not 22
+#   code points (a CJK glyph is 2 cols): a short one pads to 22 cols, a long one
+#   clips at 22 cols (11 glyphs), so the right-pinned act/PR/ctx block stays put.
+w 5 修复仪表盘             /w/repo-scratch-7       idle   @5  ''  ''  /w/repo-scratch-7
+w 6 修复仪表盘粘贴问题的名字很长 /w/repo-scratch-8     idle   @6  ''  ''  /w/repo-scratch-8
 
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS" 2>&1) \
   || fail "live rows producer exited non-zero" "$out"
@@ -121,6 +126,18 @@ cellis "live: worker id cell is GREEN and 5 wide"           "$r1" "#123 " "$GN"
 cellis "live: scratch id cell is INDIGO and 5 wide"         "$r2" "~9   " "$IN"
 cellis "live: wandered scratch id cell is INDIGO, 5 wide"   "$r3" "~5   " "$IN"
 cellis "live: unkeyed window id cell is 5 blanks"           "$r4" "     " "$GN"
+
+# 6. #534 — the window cell is 22 display COLUMNS for a CJK name too. fld() padded
+#    by ${#} (code points), so `修复仪表盘` (5 glyphs, 10 cols) got 17 pad spaces
+#    = 27 cols and shoved every column after it 5 to the right; a 14-glyph name
+#    (28 cols) was not clipped at all. Anchored on the reset escape that closes the
+#    cell, like the id cell above (locale-proof).
+r5=$(row_of 5); r6=$(row_of 6)
+[ -n "$r5" ] && [ -n "$r6" ] || fail "live rows: expected the CJK-named fixtures" "$out"
+has   "live: a 10-col CJK name pads to 22 cols (12 spaces), not 17" "$r5" "修复仪表盘            "$'\033[0m'
+hasnt "live: a 10-col CJK name must not get a 17-space (code-point) pad" "$r5" "修复仪表盘                 "
+has   "live: a 28-col CJK name clips at 22 cols = 11 glyphs" "$r6" "修复仪表盘粘贴问题的名"$'\033[0m'
+hasnt "live: a 28-col CJK name must not leak past 22 cols" "$r6" "的名字"
 
 # --- the landed view (⌃t) must speak the SAME grammar -------------------------
 # #502 blanked the landed scratch cell to match the live view of the day; now that

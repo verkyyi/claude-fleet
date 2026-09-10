@@ -2,7 +2,7 @@
 # fleet-bind.sh <issue-number> [--force] [--title <t>] — promote THIS scratch
 # session into the worker for a GitHub issue, IN PLACE (issue #520).
 #
-# The flow it serves: press ⌃s (or type a task on the dash prompt line), refine the
+# The flow it serves: press ⌃s (or type a name on the dash prompt line), refine the
 # requirement in conversation until it is clear enough to track, file an issue —
 # and have THIS session, which already holds all the context, become its worker.
 # Before this, the only escalations were `fleet-issue-file.sh --spawn` (which files
