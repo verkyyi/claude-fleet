@@ -50,10 +50,11 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 # slow `git worktree add` + window spawn via `run-shell -b`, so fzf's execute-silent
 # returns at once and the popup closes without freezing on a big-monorepo checkout.
 # The header is deliberately terse — the essential action (enter=work), the
-# common one (⌃n new), and a pointer to the full keymap (? keys), matching the
-# dashboard's `↵ jump · ⌃n new · … · ? keys` grammar (one `?` convention
-# everywhere, issue #289). Every other bind lives in the `?` cheatsheet
-# (bin/fleet-keys.sh) rather than crowding this line.
+# common one (⌃n new), and a pointer to the full keymap (? keys) — the `key verb`
+# grammar of #249/#289 (one `?` convention everywhere). Every other bind lives in
+# the `?` cheatsheet (bin/fleet-keys.sh) rather than crowding this line. The dash
+# dropped its own hint line in #536 (its always-visible prompt line made `↵ jump`
+# and `? keys` misleading there); the backlog has no prompt line, so this stays.
 # Lead the header with a live "slots N/8" chip (issue #331) so the GLOBAL session
 # cap's fullness is visible BEFORE an Enter that the cap would silently refuse.
 # Reuses the cross-fleet count in fleet-lib.sh (pure tmux+awk, no network on
