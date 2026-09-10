@@ -177,7 +177,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
                     behind)   ptxt='✓↑'; pcol=$AM;;   # behind base → update-branch
                     conflict) ptxt='✓!'; pcol=$RD;;   # conflicting → rebase
                     blocked)  ptxt='✓·'; pcol=$AM;;   # mergeable+green but blocked
-                    *)        ptxt='✓';;              # land-ready (or neutral)
+                    draft)    ptxt='✓d'; pcol=$GY;;   # a DRAFT — can't land; gh pr ready (#533)
+                    unknown)  ptxt='✓?'; pcol=$TX;;   # mergeability not computed yet (#533)
+                    *)        ptxt='✓';;              # land-ready (ready, or a 4-field cache)
                   esac;;
                ✗) pcol=$RD; ptxt="$ci";;
                …) pcol=$TX; ptxt="$ci";;
