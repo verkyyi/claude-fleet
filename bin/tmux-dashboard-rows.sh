@@ -16,7 +16,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-G="$C/global"                       # machine-wide caches (git_/ctx_/summary_) — issue #181
+G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
 # LANDED mode this producer hands off to the history ledger's row emitter, so
@@ -97,8 +97,8 @@ model_v() {
 PRMAP=""; _pf=$(fleet_cache prmap "${FLEET_SESSION:-}"); [ -s "$_pf" ] && PRMAP=$(<"$_pf")
 PRMAPN=$'\n'"$PRMAP"
 
-# List width, to right-align the PR/ctx block to the edge and give the summary
-# the full remaining span. Prefer fzf's own viewport width — FZF_COLUMNS is
+# List width, to right-align the PR/ctx block to the edge and give the flex
+# span the full remaining width. Prefer fzf's own viewport width — FZF_COLUMNS is
 # exported to reload/transform child procs (fzf ≥0.53) and is the TRUE list
 # width. `tput cols </dev/tty` is unreliable here (it reads the client tty, not
 # the pane), so it's only a fallback for the very first pre-fzf render before
@@ -210,15 +210,6 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
        pct="${pct}%";;
   esac
 
-  # one-line summary (first line of the cache file). Keyed by <session>_<id>:
-  # per-fleet tmux servers renumber windows from @1, so the bare id would read
-  # another fleet's row (issue #208) — the session prefix pins it to THIS fleet.
-  # Inlined (not fleet_summary_key) to keep this hot loop fork-free; MUST stay
-  # byte-identical to that helper in fleet-lib.sh.
-  smk=${sess//[^A-Za-z0-9._-]/_}_${wid//[^0-9]/}; smry=''
-  [ -f "$G/summary_$smk" ] && { read -r smry < "$G/summary_$smk" || :; }
-  smry=${smry:0:120}
-
   # last-activity (issue #228): friendly "time since" from @claude_state_ts (epoch
   # re-stamped by the hooks/spinner/classifier on every state change). fleet_reltime
   # is pure-bash (no fork) so it stays on the hot path; NOW was computed once above.
@@ -243,7 +234,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
     scratch-*) issd="~${okey#scratch-}"; icol=$IN ;;
   esac
   # --- spawn provenance (issue #503) -----------------------------------------
-  # ↳ tag: rendered before the summary for every non-hub origin (`↳#483` for a
+  # ↳ tag: rendered in the flex span for every non-hub origin (`↳#483` for a
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
   # word for autofill/bridge). └ indent: only when the parent is a WINDOW kind
   # (issue-*/scratch-*), i.e. the row is a child in the grouped list.
@@ -280,48 +271,41 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
         esac
       done ;;
   esac
-  # full row: glyph1·issue5·window22·summary(flex)·⟨pad⟩·act8·PR7·ctx4
-  # window+summary sit right after the issue; act/PR/ctx right-align to the edge,
-  # the gap between summary and act flexing so the metadata block stays pinned right.
+  # full row: glyph1·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
+  # window sits right after the issue; act/PR/ctx right-align to the edge, the
+  # flex gap between them absorbing the width so the metadata block stays pinned
+  # right. The flex span used to carry the LLM one-liner (summary column, retired
+  # in issue #535 — it was the dash's only token-spending column); only the ↳
+  # provenance tag lives there now.
   fld 5  "$issd"; f_iss=$fld_out
   fld 22 "$dname"; f_name=$fld_out
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
-  # the ↳ tag borrows its width (+1 space) from the summary's flex span so the
-  # right-pinned act/PR/ctx block stays aligned; ↳/#/~ are all single-cell.
-  [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
-  # Clip + measure the summary by DISPLAY width, not code-point count (#63): a CJK
-  # or emoji glyph is one ${#} char but two terminal columns, so a char-count clip
-  # can be ~2x wide and overrun the flex span into the right-pinned PR/ctx block.
-  # The implementation is shared with the /fleet-history rows producer
-  # (fleet_clip_display in fleet-lib.sh) — it used to live here only, and the other
-  # producer's char-count copy was still overrunning (issue #492). ASCII stays
-  # fork-free; only a non-ASCII summary pays one perl/wcwidth fork.
+  # the ↳ tag is the only thing drawn in the flex span; ↳/#/~ are all single-cell,
+  # so ${#tagd} is its display width and the pad keeps act/PR/ctx pinned right.
   # (fld() at :24 shares the same ${#}=chars assumption; its inputs — issue/PR/
   #  ctx — are ASCII, and window names are rarely wide, so it's left as-is here.)
-  fleet_clip_display "$avail" "$smry"; smry="${clip_out:-}"; dwidth="${clip_w:-0}"
-  tagpfx=''
-  [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dwidth=$(( dwidth + ${#tagd} + 1 )); }
+  tagpfx=''; dwidth=0
+  [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${TX}${smry}${R}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
-# "summary" flexes, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
+# the flex span is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
 fld 5  "issue";  h_i=$fld_out
 fld 22 "window"; h_n=$fld_out
 fld "$ACTW" "act"; h_a=$fld_out
 fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
-h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = len("summary")
+h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
 # emit grouped by spawn provenance (issue #503): roots (hub/autofill/bridge
 # spawns) keep the status-rank order they always had; each root's children sort

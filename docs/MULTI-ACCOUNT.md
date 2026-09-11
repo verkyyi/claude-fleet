@@ -123,9 +123,9 @@ per spawn — a stale snapshot. Per-window truth lives in the window's
 ## How it runs
 
 Two things authenticate against the pool, not one. The obvious one is a **worker
-session**. The other is the fleet's own **helper `claude -p` calls** — the dash
-summary column (`bin/tmux-summarize.sh`) and the looping-detector
-(`bin/classify-sessions.sh`) — which route through `fleet_helper_claude_auth`
+session**. The other is the fleet's own **helper `claude -p` call** — the
+looping-detector (`bin/classify-sessions.sh`; the dash summarizer that shared the
+wire retired in issue #535) — which routes through `fleet_helper_claude_auth`
 (`bin/fleet-lib.sh`) and pick up the same ACTIVE-account token, *unless* one is
 already in the environment: the Stop-hook path runs as a child of a worker's
 claude and must keep THAT worker's account rather than re-resolving `active`
@@ -306,8 +306,8 @@ mechanism that moves a RUNNING session onto the active account. It replaced the
 SessionEnd hook closes the window the instant Claude exits (issue #403) — there
 was never a shell left to type a relaunch into. Per window it:
 
-1. reads the window (name, cwd, `@issue`/`@raw`/`@worktree`/`@origin`/
-   `@summary`, state) and the **session id off Claude Code's own registry**
+1. reads the window (name, cwd, `@issue`/`@raw`/`@worktree`/`@origin`,
+   state) and the **session id off Claude Code's own registry**
    (`~/.claude/sessions/<pid>.json` — exact, not "the newest transcript");
 2. types `Esc` (which also cancels a "Usage limit reached · continuing
    automatically" wait), `/exit`, `Enter`, and waits for the Claude **process**

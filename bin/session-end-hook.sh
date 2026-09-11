@@ -4,7 +4,7 @@
 # Runs under BASH (wired `bash …` in settings-hooks.json, NOT `sh`): it sources
 # fleet-lib.sh, which uses process substitution `< <(…)` that bash-as-/bin/sh
 # (macOS posix mode) rejects at parse time — every fleet-lib-sourcing script in the
-# tree is likewise `#!/bin/bash`. The `sh`-wired hooks (set-claude-state, summarize)
+# tree is likewise `#!/bin/bash`. The `sh`-wired hooks (set-claude-state)
 # deliberately do NOT source fleet-lib.
 #
 # When an operator MANUALLY exits a worker (Ctrl-D / `/exit`, or logout), react AT
@@ -136,8 +136,6 @@ if [ "${1:-}" = "--exec" ]; then
       worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
       fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
     fi
-    [ -n "$sess" ] && [ -n "$win" ] && \
-      rm -f "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$win")" 2>/dev/null
     [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
     exit 0
   fi

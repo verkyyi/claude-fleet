@@ -107,7 +107,6 @@ $TMPDIR/.claude-dash/
     sessmap            #   session<TAB>slug<TAB>repo (collector)
     git_<key>          #   per worktree (globally-unique path key)
     ctx_<key>          #   per Claude session
-    summary_<winid>    #   per window (globally-unique tmux window id)
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state
 ```
@@ -117,8 +116,8 @@ The collector resolves each live tmux session → its repo and records it in
 (fork-free) and read the slug'd cache through `fleet_cache` / `fleet_cache_dir` —
 the SINGLE slug-resolution truth. **All fleets are equal (issue #180): no fleet is
 "primary."** A cold-start / unresolved session returns a non-existent path so the
-reader shows "loading" until the fetch lands. The `git_`/`ctx_`/`summary_` caches
-are keyed by a globally-unique worktree path / tmux window id (so they cannot
+reader shows "loading" until the fetch lands. The `git_`/`ctx_` caches
+are keyed by a globally-unique worktree path (so they cannot
 collide across fleets) and live under `global/`, keeping the fork-free dashboard
 hot path a single slug lookup per repaint.
 

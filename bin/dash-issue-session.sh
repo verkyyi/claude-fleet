@@ -268,8 +268,6 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   exit 0
 fi
 
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
-G="$C/global"; mkdir -p "$G"
 # The seed-prompt handoff is per-fleet (keyed by issue-N, which repeats across
 # repos) → fleets/<repo-slug>/ so two fleets spawning the same issue# never collide
 # (issue #181).
@@ -335,19 +333,6 @@ TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ iss
 # was retired with the claiming marker in issue #283 — the assignee is now the
 # claim, and workers share one gh account so a per-attempt tie token no longer
 # exists. Claim-at-spawn still shrinks the race window; it was never a mutex.)
-# Seed the dash summary column synchronously so the row isn't blank until the
-# session renders content. summarize-hook.sh's SessionStart run skips a still-
-# blank pane (no screen text yet), so without this the column stays empty until
-# the first Stop or the ~180s daemon sweep. The LLM summarizer overwrites this
-# placeholder once real content exists (it change-gates on a screen hash, not on
-# prior file contents). Same key/format the readers expect: summary_<sess>_<winIdDigits>
-# = one plaintext line (see tmux-summarize.sh, tmux-dashboard-rows.sh). The session
-# prefix keeps per-fleet servers from colliding on the bare window id (issue #208).
-seed="starting #$num"; [ -n "$title" ] && seed="$seed: $title"
-printf '%s' "$seed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
-# Same seed as a window option so the PANE HEADER isn't blank either until the first
-# summarize tick (issue #455); tmux-summarize.sh overwrites both from one LLM call.
-TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$seed")" 2>/dev/null || :
 # Non-invasive by default: leave the active window put and just confirm the spawn
 # on the status line. Only jump to the new worker when the user opted in
 # (FLEET_SPAWN_FOCUS=1) on an interactive spawn; a headless spawn stays silent.

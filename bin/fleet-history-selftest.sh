@@ -100,31 +100,28 @@ eq "record: origin degrades to dash (#503)" "-" "$c_origin"
 case "$c_when" in ''|-) fail "record: mergedAt should auto-stamp, got [$c_when]";; esac
 CHECKS=$((CHECKS + 1))
 
-# --win path: pull the summary from the dash cache when --summary is absent.
-# Keyed by <session>_<id> (issue #208), so --session is required to resolve it.
-# Each record below uses its OWN worktree — as issue-<N> worktrees really are
+# --win path: with no --summary, col 9 is '-' — the dash-cache fallback it used to
+# pull retired with the summary column (issue #535); a stale summary_* file must
+# never leak back into the ledger. Each record below uses its OWN worktree — as issue-<N> worktrees really are
 # distinct — because landed `record` is now idempotent on the session/transcript
 # key (#384): reusing issue-9's worktree here would dedup these rows away (the same
 # session already recorded) instead of appending the fresh rows these checks need.
-DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # summary_<sess>_<id> lives in global/ (#181/#208)
+DC="$TMPDIR/.claude-dash/global"; mkdir -p "$DC"   # a leftover pre-#535 cache file
 WT10="/w/repo_v1.2/.claude-worktrees/issue-10"
 ENC10=$(printf '%s' "$WT10" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC10"; : > "$CLAUDE_PROJECTS_DIR/$ENC10/sess-10.jsonl"
 printf 'summary from the dash cache\n' > "$DC/summary_fleetA_77"
 run record --issue 10 --worktree "$WT10" --win '@77' --session fleetA >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
-eq "record: --win pulls summary from dash cache" "summary from the dash cache" "$smry_col"
+eq "record: --win without --summary leaves col 9 '-' (no dash-cache fallback, #535)" "-" "$smry_col"
 
-# Cross-fleet isolation (issue #208): a DIFFERENT fleet's window @77 must NOT
-# render this fleet's row. fleetB's @77 has its own key; recording fleetB/@77
-# pulls fleetB's summary, never fleetA's.
+# …and the same for a second fleet (the row count downstream relies on both records).
 WT11="/w/repo_v1.2/.claude-worktrees/issue-11"
 ENC11=$(printf '%s' "$WT11" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC11"; : > "$CLAUDE_PROJECTS_DIR/$ENC11/sess-11.jsonl"
-printf 'summary belonging to fleetB\n' > "$DC/summary_fleetB_77"
 run record --issue 11 --worktree "$WT11" --win '@77' --session fleetB >/dev/null
 last=$(tail -n1 "$FLEET_HISTORY_LEDGER"); smry_col=$(printf '%s' "$last" | awk -F'\t' '{print $9}')
-eq "record: cross-fleet @77 pulls its OWN summary, not fleetA's" "summary belonging to fleetB" "$smry_col"
+eq "record: second fleet's --win record also leaves col 9 '-'" "-" "$smry_col"
 
 # landed record is IDEMPOTENT (#384): record-before-remove now runs from TWO
 # reapers (fleet-cleanup.sh AND worktree-autoclean.sh, both via fleet_reap_record),
@@ -293,9 +290,10 @@ contains "resume(#319): absent worktree reconstructs via git worktree add" \
 printf '2026-01-01T00:00:00Z\t5\ttitle5\t70\tSHA5\t/w/issue-5\t/nope\tsid-abc\t-\n' >> "$FLEET_HISTORY_LEDGER"
 rows=$(run rows)
 # The landed view now shares the live list's column header (issue · window ·
-# summary · act · PR · ctx) so the two read as one table (issue #228).
+# title · act · PR · ctx) so the two read as one table (issue #228; the flex span
+# is labelled "title" here since the summary column retired, #535).
 contains "rows: emits the unified column header (window)"  "$rows" "window"
-contains "rows: emits the unified column header (summary)" "$rows" "summary"
+contains "rows: emits the unified column header (title)"   "$rows" "title"
 contains "rows: emits the last-activity column header"     "$rows" "act"
 contains "rows: PR-bearing row targets landed:<pr>" "$rows" "landed:70"
 # field2 still carries the session id (used by the resume/restore path).
@@ -484,9 +482,10 @@ contains "the later REAL session at that worktree is still recorded" "$out" "rea
 eq "  …as its own row" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 
 # H2c. The fleet's OWN helper transcripts must not be indexed as "the session".
-# The status classifier and the dashboard summarizer run `claude -p` from inside a
-# window's worktree, so their transcripts land in the same project dir and — running
-# every ~60s — are usually the NEWEST file there. Indexing one makes resume drop you
+# The status classifier (and, until #535, the dashboard summarizer) runs `claude -p`
+# from inside a window's worktree, so its transcripts land in the same project dir
+# and — running on every Stop — are usually the NEWEST file there. The summarizer's
+# transcripts are still on disk in older project dirs, so its rubric stays filtered. Indexing one makes resume drop you
 # into the classifier's context. (A warm scratch-pool worktree is ALL of these: one
 # real dir held 21 transcripts, every one a helper call.)
 WTH="/w/repo-scratch-helper"
@@ -518,12 +517,19 @@ out=$(run record-closed --key scratch-77 --worktree "$WTHO")
 contains "an all-helper dir is skipped, not indexed" "$out" "no transcript to index"
 eq "  …and writes no row" 0 "$(grep -c . "$FLEET_HISTORY_LEDGER" || true)"
 
-# Two-way lock: the markers above must still be the text those daemons actually send.
-for _pair in "classify-sessions.sh|$CLS" "tmux-summarize.sh|$SUM"; do
-  _f="$BIN/${_pair%%|*}"; _needle="${_pair#*|}"
+# Two-way lock: the classifier marker must still be the text that daemon actually
+# sends, and BOTH rubrics must still be in the filter (fleet_newest_human_session)
+# — the summarizer's because its old transcripts outlive the script (#535).
+CHECKS=$((CHECKS + 1))
+grep -qF -- "$CLS" "$BIN/classify-sessions.sh" || \
+  fail "the transcript filter's marker is no longer in classify-sessions.sh — reword it in both places"
+# (the filter matches on a PREFIX of each rubric — assert the prefix is still a
+# prefix of the string the test seeds, then that the lib still carries it.)
+for _pfx in 'You are a status classifier for a Claude Code' 'You are labeling a Claude Code session for a dashboard'; do
   CHECKS=$((CHECKS + 1))
-  grep -qF -- "$_needle" "$_f" || \
-    fail "the transcript filter's marker is no longer in $(basename "$_f") — reword it in both places"
+  case "$CLS$SUM" in *"$_pfx"*) ;; *) fail "rubric prefix [$_pfx] no longer matches the seeded transcript text" ;; esac
+  grep -qF -- "$_pfx" "$BIN/fleet-lib.sh" || \
+    fail "fleet_newest_human_session no longer filters the rubric prefix [$_pfx]"
 done
 
 # H3. Newest-first is by TIMESTAMP, not append order. A row appended LAST but

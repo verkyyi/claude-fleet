@@ -62,8 +62,8 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_REAP_KEPT_MINAGE=600
 
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
-# ON by default, GLOBALLY. bin/tmux-summarize.sh and bin/classify-sessions.sh read a
-# pane and answer in one line/one word. Left unflagged, EVERY such call boots the
+# ON by default, GLOBALLY. bin/classify-sessions.sh reads a pane and answers in one
+# word (the dash summarizer that shared this flag retired in issue #535). Left unflagged, EVERY such call boots the
 # operator's whole MCP set — 4+ node children, the remote connectors, and a cold `rg`
 # scan: measured at 5.2s and up to 517MB RSS, on every Stop hook in every window. They
 # now pass --strict-mcp-config with an empty config (auth and settings stay intact,

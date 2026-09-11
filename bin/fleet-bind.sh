@@ -173,14 +173,6 @@ tmux set-window-option -t "$WIN" @issue "$num" 2>/dev/null
 tmux set-window-option -t "$WIN" -u @raw 2>/dev/null
 tmux rename-window -t "$WIN" -- "$wname" 2>/dev/null
 
-# Reseed the dash summary so the row stops reading "scratch-K (raw session)"
-# before the next summarizer tick — same key/format the readers expect, and the
-# same split the spawner uses: the FILE keeps the raw text, the window option
-# takes the sanitized copy (pane-border-format re-parses it, #455).
-seed="bound #$num"; [ -n "$title" ] && seed="$seed: $title"
-printf '%s' "$seed" > "$(fleet_cache_global)/summary_$(fleet_summary_key "$SESS" "$WIN")" 2>/dev/null || :
-tmux set-window-option -t "$WIN" @summary "$(fleet_summary_sanitize "$seed")" 2>/dev/null || :
-
 printf 'bound: this session is now the worker for #%s (branch %s, worktree %s)\n' "$num" "$branch" "$WT"
 printf 'ship it the usual way: git push -u origin %s · PR body "Closes #%s" · merge on a READY verdict\n' "$branch" "$num"
 exit 0

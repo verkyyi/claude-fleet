@@ -52,8 +52,8 @@ TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else 
 # Authenticate the helper `claude -p` off the account POOL (issue #497). Bare, it
 # rides the machine's AMBIENT login, which is the ONE credential no worker depends
 # on — bin/fleet-claude.sh puts every worker on a pool token. When that ambient login
-# lapsed on 2026-08-25 the fleet kept working and only this classifier and the dash's
-# summary column went dark. No-op when multi-account is off, or when a token is
+# lapsed on 2026-08-25 the fleet kept working and only this classifier (and the
+# dash's since-retired summary column, #535) went dark. No-op when multi-account is off, or when a token is
 # already inherited (the Stop-hook path runs inside a worker's claude).
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
