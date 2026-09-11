@@ -341,6 +341,29 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=PR status refresh @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_PR_REFRESH_INTERVAL=15
 
+# --- "merged" ≠ "live": deploy state for merged PRs (issue #541) ------------------
+# Once a PR is MERGED the dash PR cell reads `merged`. With one of the two knobs
+# below set for THIS fleet, bin/tmux-pr-refresh.sh also probes where the merge
+# commit actually is and the cell becomes `live` (green) / `deploy…` (still
+# rolling out) / `deploy✗` (a post-merge run went red); the ⌃t landed list shows
+# the same in its `dep` column. Per-fleet: each repo deploys its own way.
+#
+# A) A local git checkout that IS the deployment — the merge sha is live once it is
+# an ancestor of that checkout's HEAD. Zero network. For claude-fleet itself this
+# is the live install `$HOME/.claude/fleet`, which /fleet-sync-install
+# fast-forwards. Wins over the Actions check below when both are set.
+# @label=Deploy ref (local checkout) @group=cache @tier=advanced @scope=fleet @edit=str
+#FLEET_DEPLOY_REF=""
+
+# B) GitHub Actions: the merge sha's post-merge workflow runs (the push-to-master
+# runs plus any workflow_dispatch deploys a conductor fans out with the same
+# head_sha). All green → live; any still running → deploying; any red → failed;
+# none → unknown. Costs one `gh api` per un-live merge sha at most every
+# FLEET_DEPLOY_TTL seconds (default 60); a sha that reached `live` is never
+# re-read. Only `actions` is understood.
+# @label=Deploy check (Actions runs) @group=cache @tier=advanced @scope=fleet @edit=str
+#FLEET_DEPLOY_CHECK=""
+
 # Stuck-working demotion (bin/tmux-spinner.sh). A window whose Stop hook was
 # missed (crash/race/a turn that didn't emit Stop) stays pinned at
 # @claude_state=working forever — the classifier backstop skips working windows.

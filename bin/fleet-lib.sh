@@ -1570,8 +1570,8 @@ fleet_backlog_col_header() {
 # IS the verdict's `fail|pending|pass`, spelled as glyphs.
 #
 # Input: the JSON array from
-#   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup
-# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready
+#   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit
+# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha
 #   ci    ·  no checks at all
 #         ✗  any red: a CheckRun whose conclusion is FAILURE / TIMED_OUT / CANCELLED /
 #            ACTION_REQUIRED, or a StatusContext (the OTHER rollup shape — it has
@@ -1588,8 +1588,11 @@ fleet_backlog_col_header() {
 #         blocked  BLOCKED — branch protection (review required / other)         (✓·)
 #         unknown  UNKNOWN / "" — GitHub hasn't computed mergeability yet (every
 #                  fresh push for a few seconds) — NOT the same as ready          (✓?)
+#   sha   the MERGE commit (mergeCommit.oid) of a MERGED PR, "" otherwise (issue #541).
+#         The deploy probe below keys its fleets/<slug>/deploy_<sha> cache on it; the
+#         ledger's own sha is the pre-squash worktree HEAD, which is NOT on master.
 # The first 4 fields are a stable contract (fleet-cleanup-daemon.sh keys off
-# branch/#num/state); readers tab-guard a missing 5th field to "" (pre-#81 caches).
+# branch/#num/state); readers tab-guard a missing 5th/6th field to "" (older caches).
 # shellcheck disable=SC2016,SC2034  # jq vars ($r/$ci/$ready) not shell — keep single-quoted; read cross-file by pr-refresh + its selftest
 FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
   (.statusCheckRollup // []) as $r |
@@ -1608,7 +1611,58 @@ FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
       elif .mergeStateStatus=="BLOCKED"                                      then "blocked"
       else "unknown" end)
    else "" end) as $ready |
-  .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready'
+  .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready
+  + "\t" + (.mergeCommit.oid // "")'
+
+# ── deploy state of a MERGED PR (issue #541) ────────────────────────────────────
+# "Merged" is not "live": claude-fleet's own tooling only runs once /fleet-sync-install
+# fast-forwards ~/.claude/fleet, and an app repo deploys off a post-merge workflow.
+# Two per-fleet knobs (fleet.conf; neither set ⇒ the feature is off and the dash keeps
+# rendering `merged`):
+#   FLEET_DEPLOY_REF=<path>     a local git checkout that IS the deployment — live ⇔
+#                               the merge sha is an ancestor of its HEAD. Zero network.
+#                               Wins over FLEET_DEPLOY_CHECK when both are set.
+#   FLEET_DEPLOY_CHECK=actions  GitHub Actions runs for the merge sha (push runs +
+#                               the workflow_dispatch deploys a conductor fans out with
+#                               the same head_sha): folded by FLEET_DEPLOY_RUNS_JQ.
+# States: live (terminal) · deploying · failed · unknown. bin/tmux-pr-refresh.sh (the
+# single prmap writer) caches them at fleets/<slug>/deploy_<sha> as `<state>\t<epoch>`;
+# the dash (`live` / `deploy…` / `deploy✗`) and the ⌃t landed list (`dep` column) read
+# that file fork-free. bin/deploy-state-selftest.sh pins both programs offline.
+#
+# One run → one token: its status while not completed (queued / in_progress / waiting
+# / requested / pending), else its conclusion. Any red token → failed (a broken
+# post-merge run is attention, whichever workflow it is); any still-running → deploying;
+# all green (success / skipped / neutral) → live; no runs at all → unknown.
+# shellcheck disable=SC2016,SC2034  # jq vars ($s) not shell — keep single-quoted; read cross-file
+FLEET_DEPLOY_RUNS_JQ='[.workflow_runs[]? | (if .status=="completed" then (.conclusion // "unknown") else .status end)] as $s |
+  if   ($s|length)==0                                                                    then "unknown"
+  elif ($s|any(.=="failure" or .=="cancelled" or .=="timed_out" or .=="action_required"
+               or .=="startup_failure" or .=="stale"))                                  then "failed"
+  elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                          then "deploying"
+  else "live" end'
+
+# fleet_deploy_probe <repo> <sha> <ref> <check> — print live|deploying|failed|unknown
+# for one merge sha under the given knobs; "" (rc 0) when the feature is off for this
+# repo or the sha is empty; rc 1 with "" when the actions read itself failed (the
+# caller keeps whatever it cached rather than downgrading on a transient gh error).
+fleet_deploy_probe() {
+  local repo="${1:-}" sha="${2:-}" ref="${3:-}" check="${4:-}" out
+  [ -n "$sha" ] || return 0
+  if [ -n "$ref" ]; then
+    # rc 1 = not an ancestor, rc 128 = sha not in that checkout's object db (it has
+    # not fetched master yet) — both read as "not live here", never as an error.
+    if git -C "$ref" merge-base --is-ancestor "$sha" HEAD >/dev/null 2>&1; then printf 'live'; else printf 'unknown'; fi
+    return 0
+  fi
+  case "$check" in
+    actions)
+      out=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --jq "$FLEET_DEPLOY_RUNS_JQ" 2>/dev/null) || return 1
+      case "$out" in live|deploying|failed|unknown) printf '%s' "$out" ;; *) return 1 ;; esac ;;
+    *) : ;;
+  esac
+  return 0
+}
 
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
