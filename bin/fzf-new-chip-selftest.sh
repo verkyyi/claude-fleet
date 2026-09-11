@@ -56,8 +56,8 @@ grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
   || fail "dash: ⌃n bind lost — it is the dash's only new-issue+worker path since #536"
 ok
 # the ghost text must carry BOTH ↵ meanings (the hint line used to say `↵ jump`).
-grep -qF -- "GHOST='type a task ↵ scratch · empty ↵ jumps'" "$DASH" \
-  || fail "dash: the prompt-line ghost text must read 'type a task ↵ scratch · empty ↵ jumps' (#536)"
+grep -qF -- "GHOST='type a name ↵ scratch · empty ↵ jumps'" "$DASH" \
+  || fail "dash: the prompt-line ghost text must read 'type a name ↵ scratch · empty ↵ jumps' (#536; `name` since #534 — the typed text is the window name, no seed)"
 ok
 
 # --- BACKLOG: chip in the POPUP header + click-header drops the 'new' sentinel ---
