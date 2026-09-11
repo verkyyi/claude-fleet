@@ -212,6 +212,25 @@ WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 grep -q -- '-n ABCDEFGHIJKLMNOPQRSTUVWX\b' "$NEWWIN_LOG" || fail "K a long name should be capped at ~24 chars" "$(cat "$NEWWIN_LOG")"
 ok "K sanitize strips control chars + '#', preserves case/spacing, caps at ~24"
 
+# ==================== K2: the cap is DISPLAY width, locale-proof (#534) ======
+# The dash prompt line now hands its text over as the window NAME, so a Chinese
+# name is the common case. The cap must count TERMINAL COLUMNS (a CJK glyph is 2),
+# not code points or bytes: 24 cols = 24 ASCII or 12 CJK. And it must not depend on
+# the locale of the process that runs the spawn: under C, a byte-wise `cut -c` split
+# the last glyph in half (a lone lead byte = mojibake in the tmux status line).
+# "修复 仪表盘 粘贴问题 这是一个很长的名字" → cells: 修复(4)+sp 仪表盘(6)+sp 粘贴问题(8)+sp 这(2)
+# = 23; 是 would be 25 > 24, so the clip is `修复 仪表盘 粘贴问题 这`.
+reset_scratch
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name '修复 仪表盘 粘贴问题 这是一个很长的名字'
+grep -qF -- '-n 修复 仪表盘 粘贴问题 这 -c' "$NEWWIN_LOG" || fail "K2 a CJK name must be capped at 24 display COLUMNS (12 glyphs), spaces kept" "$(cat "$NEWWIN_LOG")"
+reset_scratch
+LC_ALL=C LANG=C WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name '修复 仪表盘 粘贴问题 这是一个很长的名字'
+grep -qF -- '-n 修复 仪表盘 粘贴问题 这 -c' "$NEWWIN_LOG" || fail "K2 the same clip under LC_ALL=C — never a half glyph" "$(cat "$NEWWIN_LOG")"
+reset_scratch
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name '  a b  c  '
+grep -qF -- '-n a b  c -c' "$NEWWIN_LOG" || fail "K2 internal spaces (even doubled) are kept; only the ends are trimmed" "$(cat "$NEWWIN_LOG")"
+ok "K2 the name cap is 24 display columns (CJK=2), locale-proof, spaces kept (#534)"
+
 # ==================== L: positional target alongside --name ==================
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name foo othersess
@@ -275,8 +294,9 @@ WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw --bg
 grep -qi 'capacity' "$DISPLAY_LOG" || fail "M a --bg cap refusal should still surface a message" "$(cat "$DISPLAY_LOG")"
 ok "M dash ⌃s (--bg) spawns instantly — backgrounded, no prompt, refusals stay sync"
 
-# ==================== N: --prompt seeds the scratch (dash prompt line) ========
-# The dash's always-visible prompt line hands its text over as --prompt (via
+# ==================== N: --prompt seeds the scratch (CLI / handoff) ============
+# A CLI or cross-fleet-handoff caller hands its text over as --prompt (the dash
+# prompt line did too until #534; it now sends --name-file — K2 above) (via
 # dash-enter.sh). The seed rides in a task file read at launch — `fleet-claude.sh
 # "$(cat <tf>)"`, the worker-seed handoff — never inline in the command string; a
 # --bg --prompt stages it through --prompt-file (never into the run-shell string);

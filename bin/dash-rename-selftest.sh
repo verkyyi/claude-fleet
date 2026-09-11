@@ -37,10 +37,10 @@
 #   L. SHELLCHECK   dash-rename.sh is shellcheck-clean (skipped if absent)
 #
 # The query line is ALWAYS visible — it doubles as the quick-scratch box (type a
-# task, ↵ → a scratch session seeded with it). Rename borrows it; the two must
+# name, ↵ → an empty scratch session named after it, #534). Rename borrows it; the two must
 # not bleed into each other:
-#   P. TYPED TASK   Enter with a non-empty query and NO mode armed spawns a seeded
-#                   scratch (dash-raw-session.sh --bg --prompt <q>), clears the
+#   P. TYPED NAME   Enter with a non-empty query and NO mode armed spawns an EMPTY
+#                   scratch named <q> (dash-raw-session.sh --name-file <f>, #534), clears the
 #                   query, never jumps/renames
 #   P2. BLANK TASK  a whitespace-only query is a plain jump (no spawn)
 #   Q. ESC CLEARS   Esc with a half-typed task clears it (no abort); an empty line
@@ -228,9 +228,9 @@ bash "$ENT" "$T" '-dashy' >/dev/null
 [ -f "$FLAG" ] && fail "M: the rename_target flag must be dropped"
 ok "M a window name starting with '-' renames instead of tripping tmux flag parsing"
 
-# --- P. TYPED TASK → seeded scratch (DEFERRED past the paste guard, #531) ------
-# The typed-task spawn is now DEBOUNCED (issue #531): a lone Enter defers, then
-# spawns via `dash-raw-session.sh --prompt-file <f>` (the query in a file, never on
+# --- P. TYPED NAME → empty scratch (DEFERRED past the paste guard, #531) --------
+# The typed-text spawn is DEBOUNCED (issue #531): a lone Enter defers, then spawns
+# via `dash-raw-session.sh --name-file <f>` (#534; the query in a file, never on
 # the argv). Drive it with a tiny guard so the deferred spawn lands fast, and give
 # the backgrounded decider a moment before reading the log.
 rm -f "$FLAG" "$RAW_LOG" "$C"/global/spawn_last_ms_*
@@ -241,11 +241,12 @@ case "$out" in *reload*) ;; *) fail "P: a typed task must reload the rows" "$out
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$RAW_LOG" ] && break; sleep 0.1; done
 [ -s "$RAW_LOG" ] || fail "P: a typed task must (after the defer) spawn through dash-raw-session.sh" "$out"
 argv="$(cat "$RAW_LOG")"
-case "$argv" in *--prompt-file=*) ;; *) fail "P: the deferred spawn must hand the query over via --prompt-file" "$argv" ;; esac
-pf="${argv#*--prompt-file=}"; pf="${pf%% *}"
-[ "$(cat "$pf" 2>/dev/null)" = 'fix the flaky dash selftest' ] || fail "P: the prompt-file must hold the typed task verbatim" "$argv"
+case "$argv" in *--name-file=*) ;; *) fail "P: the deferred spawn must hand the query over via --name-file (a window NAME, #534)" "$argv" ;; esac
+case "$argv" in *--prompt*) fail "P: the typed text must NOT ride as a seed prompt (#534)" "$argv" ;; esac
+pf="${argv#*--name-file=}"; pf="${pf%% *}"
+[ "$(cat "$pf" 2>/dev/null)" = 'fix the flaky dash selftest' ] || fail "P: the name-file must hold the typed text verbatim" "$argv"
 [ "$(wname "$T")" = '-dashy' ] || fail "P: a typed task must not rename the highlighted window"
-ok "P Enter with a typed task defers, then spawns a seeded scratch (--prompt-file), clears the line"
+ok "P Enter with typed text defers, then spawns an EMPTY scratch named after it (--name-file), clears the line"
 
 # --- P2. BLANK TASK is a plain jump -------------------------------------------
 rm -f "$RAW_LOG"

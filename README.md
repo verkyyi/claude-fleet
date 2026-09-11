@@ -32,11 +32,13 @@ demo repo data.</sub>
   embedded pane in the `plan` hub, which holds the dash and nothing else;
   `prefix+g` focuses it and, pressed again, zooms it fullscreen — as does
  `F9`. `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
-  **type a task and press Enter** — it spawns a scratch session (own writable
-  `scratch-N` worktree, no issue) **seeded with that text**, so it starts working
-  at once. `Ctrl-N` is the issue-bound path: it files a
+  **type a name and press Enter** — it spawns an empty scratch session (own
+  writable `scratch-N` worktree, no issue) **named after that text**, sitting at
+  `❯` for you to drive; no prompt is sent. Chinese and spaces are fine (the name
+  is capped at 24 columns — 12 CJK glyphs). `Ctrl-N` is the issue-bound path: it files a
   GitHub issue and spawns a worker session bound to it.
-  `Ctrl-S` opens an unseeded raw scratch session (plain `claude`, no issue — but
+  `Ctrl-S` opens the same raw scratch under its auto `scratch-N` name (plain
+  `claude`, no issue — but
   in its own writable `scratch-N` worktree, so an experiment can push a branch and
   open a PR like any worker). Once a scratch has talked its way to a real
   requirement it can **become** the worker for it, in place: filing with

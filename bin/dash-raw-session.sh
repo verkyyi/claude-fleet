@@ -74,8 +74,12 @@
 # is still available non-interactively via --name, and any window can be renamed
 # after the fact.
 #
-# --prompt <text>: a SEEDED scratch — the dash's always-visible prompt line (type a
-# task, ↵ — dash-enter.sh). The text is handed to `claude` as its initial prompt,
+# --prompt <text>: a SEEDED scratch — a CLI / headless caller's path (the cross-fleet
+# handoff pattern: `--prompt '/fleet-handoff pickup <file>' <target-fleet>`). The
+# dash prompt line routed here from #493 until #534; it now hands its text over as
+# --name-file — an operator typing into the dash wants an EMPTY session named after
+# the text, sitting at `❯`, not one already working (and a Chinese name at that,
+# hence the display-width cap below). The text is handed to `claude` as its initial prompt,
 # exactly how dash-issue-session.sh seeds a worker, so the session starts WORKING on
 # it instead of sitting at an empty `❯`. Everything else — worktree, @raw, cap,
 # naming, reaping — is the plain scratch. A seeded scratch always takes the COLD
@@ -201,7 +205,8 @@ trap 'rm -f "$_inflight" 2>/dev/null' EXIT
 
 # Window name (issue #225): an optional --name wins; otherwise the auto
 # `scratch-<N>` (N == the worktree suffix, allocated below). A custom name is
-# sanitized (trim; strip control chars + `#`, the tmux format char; cap ~24 chars)
+# sanitized (trim; strip control chars + `#`, the tmux format char; cap 24 display
+# columns — 12 CJK glyphs)
 # but its casing/spacing is PRESERVED — it's the user's scratch label, not a kebab
 # slug. If it sanitizes to a panel name the dash hides (plan/dash/backlog), or
 # empties out, fall back to the auto name with a one-line note (non-blocking: the
@@ -211,9 +216,16 @@ custom=""
 if [ -n "$NAME" ]; then
   san=$(printf '%s' "$NAME" \
     | LC_ALL=C tr -d '[:cntrl:]#' \
-    | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-    | cut -c1-24 \
-    | LC_ALL=C sed -e 's/[[:space:]]*$//')
+    | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  # Cap at 24 DISPLAY columns — not 24 code points, not 24 bytes (issue #534). The
+  # dash prompt line hands its text over as this name, so CJK is the everyday case:
+  # a CJK glyph is 2 columns (12 glyphs fit), and the old byte-wise `cut -c` under
+  # the C locale (the spawn runs under run-shell, whose locale is not ours to
+  # assume) split the last glyph in half — a lone lead byte in the status line.
+  # fleet_clip_display is wcwidth-aware and locale-independent (the same clip the
+  # dash rows use); re-trim, since the clip can land right after a space.
+  fleet_clip_display 24 "$san"; san="${clip_out:-}"
+  san=$(printf '%s' "$san" | LC_ALL=C sed -e 's/[[:space:]]*$//')
   case "$san" in
     plan|dash|backlog) note="'$san' is reserved — named it scratch instead" ;;
     "")                note="name empty after sanitize — named it scratch instead" ;;

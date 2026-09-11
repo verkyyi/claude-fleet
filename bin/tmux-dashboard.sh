@@ -3,9 +3,9 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · Enter jump to that window · type a task + Enter → a SEEDED scratch
-#   session (the prompt line at the bottom is always visible; dash-enter.sh hands
-#   the text to dash-raw-session.sh --prompt) ·
+#   ↑/↓ move · Enter jump to that window · type a name + Enter → an EMPTY scratch
+#   session named after it, no prompt sent (#534; the prompt line at the bottom is
+#   always visible; dash-enter.sh hands the text to dash-raw-session.sh --name-file) ·
 #   ⌃n file an issue + spawn its worker ·
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
@@ -89,18 +89,19 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # only fires on an EMPTY line (with text typed `?` is a character — see the `?`
 # bind), and the `? keys` token was never tappable. The operator chose to drop the
 # row outright rather than relocate its content, so:
-#   • the ghost text carries BOTH ↵ meanings (typed → seeded scratch, empty → jump);
+#   • the ghost text carries BOTH ↵ meanings (typed → named scratch, empty → jump);
 #   • the ＋new chip is gone with the row — ⌃n is the dash's only new-issue+worker
 #     path (the backlog popup, prefix b, keeps its own chip);
 #   • `?` stays bound (empty line → the cheatsheet, fleet-keys.sh --context dash).
 # The prompt line at the bottom is ALWAYS visible (no --no-input): it is the
-# quick-scratch box — type a task, ↵ → a scratch session seeded with it
-# (dash-enter.sh → dash-raw-session.sh --prompt). The hint lives in the input's
-# ghost text, so it vanishes the moment you start typing. Typing never filters
-# (--disabled); ↵ on an EMPTY line is still plain jump. --no-separator +
-# --info=hidden: the input costs ONE row, not two (iPad-height panes), and the
-# list runs straight into it.
-GHOST='type a task ↵ scratch · empty ↵ jumps'
+# quick-scratch box — type a name, ↵ → an EMPTY scratch session named after it
+# (dash-enter.sh → dash-raw-session.sh --name-file; it seeded a prompt until #534 —
+# an operator typing here wants a session to drive, not one already working). The
+# hint lives in the input's ghost text, so it vanishes the moment you start typing.
+# Typing never filters (--disabled); ↵ on an EMPTY line is still plain jump.
+# --no-separator + --info=hidden: the input costs ONE row, not two (iPad-height
+# panes), and the list runs straight into it.
+GHOST='type a name ↵ scratch · empty ↵ jumps'
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across

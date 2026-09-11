@@ -292,14 +292,24 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
   # in issue #535 — it was the dash's only token-spending column); only the ↳
   # provenance tag lives there now.
   fld 5  "$issd"; f_iss=$fld_out
-  fld 22 "$dname"; f_name=$fld_out
+  # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
+  # name is the everyday case now that the prompt line NAMES a scratch, and a CJK
+  # glyph is 2 cols — fld()'s ${#} pad gave `修复仪表盘` (10 cols) 17 spaces and
+  # shoved the right-pinned act/PR/ctx block over. ASCII stays on fld()'s
+  # fork-free path; only a non-ASCII name pays the one perl/wcwidth fork.
+  case "$dname" in
+    *[![:ascii:]]*) fleet_clip_display 22 "$dname"
+                    printf -v f_name '%s%*s' "${clip_out:-}" $(( 22 - ${clip_w:-0} )) '' ;;
+    *)              fld 22 "$dname"; f_name=$fld_out ;;
+  esac
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
   # the ↳ tag is the only thing drawn in the flex span; ↳/#/~ are all single-cell,
   # so ${#tagd} is its display width and the pad keeps act/PR/ctx pinned right.
-  # (fld() at :24 shares the same ${#}=chars assumption; its inputs — issue/PR/
-  #  ctx — are ASCII, and window names are rarely wide, so it's left as-is here.)
+  # (fld() shares the same ${#}=chars assumption; its remaining inputs — issue/PR/
+  #  ctx — are ASCII. The window column, where CJK names are ordinary since #534,
+  #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
