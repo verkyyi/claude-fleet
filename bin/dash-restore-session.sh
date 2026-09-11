@@ -142,7 +142,6 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the
 # jump with FLEET_SPAWN_FOCUS=1 on an interactive (no TARGET_SESS) restore.
 detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
-G="${TMPDIR:-/tmp}/.claude-dash/global"; mkdir -p "$G" 2>/dev/null || true
 
 announce() {  # $1 = window-id, $2 = message
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then TM select-window -t "$1"
@@ -173,8 +172,6 @@ case "$kind" in
     # marked @raw + @worktree instead, #466).
     bind_marks "$win" "$wt"
     TM set-window-option -t "$win" @restored 1 2>/dev/null   # mark: a resumed landed session
-    printf 'resumed %s' "$key" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
-    TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed $key")" 2>/dev/null || :   # pane header too (#455)
     announce "$win" "restored $key → $name"
     ;;
   FROM-PR)
@@ -190,8 +187,6 @@ case "$kind" in
       || { TM display-message "restore: new-window failed for PR $pr" 2>/dev/null; exit 1; }
     bind_marks "$win" ""
     TM set-window-option -t "$win" @restored 1 2>/dev/null
-    printf 'resumed PR %s (from-pr)' "$pr" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
-    TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "resumed PR $pr (from-pr)")" 2>/dev/null || :   # pane header too (#455)
     announce "$win" "restored PR $pr (from-pr) → $name"
     ;;
   *)

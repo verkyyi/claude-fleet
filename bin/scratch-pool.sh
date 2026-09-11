@@ -30,10 +30,10 @@
 #   * the dash rows            — scoped by FLEET_SESSION
 #   * fleet-restore            — @raw rows are never snapshotted
 # so there is no per-consumer opt-out list to forget to register in (the failure
-# mode that bites every "add it in N places" design). The summarizer is the one
-# thing that walks `list-windows -a` across the whole socket — and it already drops
-# these for free: it returns early on an empty @claude_state ("non-Claude window"),
-# and a warm entry has never run a turn, so nothing has ever set that option.
+# mode that bites every "add it in N places" design). Nothing walks `list-windows
+# -a` across the whole socket any more (the dash summarizer, which did, retired in
+# issue #535); a helper that ever does should key off @claude_state — a warm entry
+# has never run a turn, so nothing has ever set that option.
 #
 # Commands:
 #   ensure <sess>   top the pool up to FLEET_SCRATCH_POOL ready entries (slow —

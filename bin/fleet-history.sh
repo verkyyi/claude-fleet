@@ -77,7 +77,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" 2>/dev/null || true
 
-C="${TMPDIR:-/tmp}/.claude-dash/global"   # dash summary cache lives here (summary_<winid>, issue #181)
 
 # --- ledger location: per-fleet (a fleet ≡ a repo), durable across reboots -----
 # ~/.claude/fleet/logs survives a TMPDIR wipe; keyed by repo slug so two fleets
@@ -115,24 +114,13 @@ transcript_dir_for() {
 }
 
 # newest HUMAN *.jsonl session id in a transcript dir, skipping the fleet's own
-# helper (classifier/summarizer) transcripts. The logic — including the
+# helper (classifier — and the retired summarizer's leftovers) transcripts. The logic — including the
 # SIGPIPE-under-pipefail trap and the helper-rubric filter — moved to
 # fleet_newest_human_session in fleet-lib.sh so worktree-autoclean.sh (the
 # conversation-scratch keep gate) shares ONE copy of it; this local name stays for
 # the call sites below (record / record-closed).
 newest_session_in() {
   fleet_newest_human_session "${1:-}"
-}
-
-# one-line summary from the dash summary cache for <session>/<window-id>, or empty.
-# The cache is keyed by <session>_<window-id> (issue #208), so a cross-fleet @NN
-# never renders another fleet's row. Shared by record + record-closed.
-resolve_summary() {   # $1=session  $2=window-id (@NN)
-  local sess="${1:-}" win="${2:-}" smk s=""
-  [ -z "$win" ] || [ -z "${win//[^0-9]/}" ] && return 0
-  smk=$(fleet_summary_key "$sess" "$win")
-  [ -f "$C/summary_$smk" ] && read -r s < "$C/summary_$smk"
-  printf '%s' "$s"
 }
 
 # Does the ledger already carry a row for this session? Dedup key: session-id
@@ -167,7 +155,7 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
 cmd_record() {
-  local repo="" main="" pr="" key="" wt="" win="" summary="" mergedat="" sess="" title_fb="" origin=""
+  local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -178,7 +166,7 @@ cmd_record() {
       # (older caller + newer script, or the reverse) never silently drops a row.
       --key|--issue) key="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
-      --win) win="${2:-}"; shift 2;;
+      --win) shift 2;;   # accepted for callers; unused since the dash summary cache retired (#535)
       --session) sess="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
       # FALLBACK title only (e.g. the window name the SessionEnd hook passes): the
@@ -228,8 +216,8 @@ cmd_record() {
     [ -z "$sid" ] && tdir=""
   fi
 
-  # summary: explicit --summary wins, else the dash summary cache for --win.
-  [ -z "$summary" ] && summary=$(resolve_summary "$sess" "$win")
+  # summary (col 9): only an explicit --summary lands here — the dash summary
+  # cache it used to fall back to retired with the summary column (issue #535).
 
   local ledger; ledger=$(ledger_path "$repo")
   # Idempotent like record-closed (#384): record-before-remove now runs from TWO
@@ -280,14 +268,14 @@ cmd_record() {
 # session (landed OR a prior tick), and a skip when there is no resolvable
 # transcript (nothing to index).
 cmd_record_closed() {
-  local repo="" key="" wt="" win="" sess="" title="" summary="" closedat="" sha="" origin=""
+  local repo="" key="" wt="" sess="" title="" summary="" closedat="" sha="" origin=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
       --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466)
       --sha) sha="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
-      --win) win="${2:-}"; shift 2;;
+      --win) shift 2;;   # accepted for callers; unused since the dash summary cache retired (#535)
       --session) sess="${2:-}"; shift 2;;
       --title) title="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
@@ -319,8 +307,7 @@ cmd_record_closed() {
   fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
 
-  # summary: explicit --summary wins, else the dash summary cache for --win.
-  [ -z "$summary" ] && summary=$(resolve_summary "$sess" "$win")
+  # summary (col 9): only an explicit --summary lands here (no dash-cache fallback, #535).
   # close time in col 1 so the reader's "act" (time-since) column is meaningful.
   [ -z "$closedat" ] && closedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
 
@@ -428,7 +415,7 @@ cmd_list() {
 # rows — dash US-delimited closed rows (field1=landed:<pr|issue|scratch>, field3=display)
 # ============================================================================
 # The landed view shares the SAME aligned column skeleton as the live dash list
-# (glyph·issue·window·summary·act·PR·ctx) so toggling ⌃t reads as ONE list, not a
+# (glyph·issue·window·title·act·PR·ctx) so toggling ⌃t reads as ONE list, not a
 # separate ad-hoc format (issue #228). Finished-session specifics: the glyph is an
 # indigo ✓ (merged/archived, vs live green ✓ = done); "window" mirrors the tmux
 # window name the worker had (kebab of the title); "act" is time-since-merge; PR
@@ -477,9 +464,11 @@ cmd_rows() {
   fld "$ACTW" "act"; h_a=$fld_out
   fld 7  "PR";     h_p=$fld_out
   fld 4  "ctx";    h_c=$fld_out
-  h_pad=$(( USABLE - LEFTW - 7 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 7 = len("summary")
+  # the flex span is labelled "title" here (a landed row shows its issue title);
+  # the live list's flex span is blank since the summary column retired (#535).
+  h_pad=$(( USABLE - LEFTW - 5 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 5 = len("title")
   printf -v h_gap '%*s' "$h_pad" ''
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} summary${h_gap}${h_a} ${h_p} ${h_c}${R}"
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
@@ -508,9 +497,11 @@ cmd_rows() {
     if [ -z "${wname:-}" ]; then
       if is_scratch_key "$iss"; then wname="$iss"; else wname="issue-$iss"; fi
     fi
-    # summary column: the recorded one-line summary, else the title so it's not blank.
-    local dsmry="$smry"; { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="$title"
-    [ "${dsmry:--}" = "-" ] && dsmry="(untitled)"
+    # flex span: the issue title. The recorded one-liner (col 9) used to take
+    # precedence; it retired with the dash's summary column (issue #535) and the
+    # column stays in the ledger format unrendered.
+    local dsmry="$title"
+    { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="(untitled)"
     # activity = time since the merge (mergedAt → epoch → friendly span).
     local ep act; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; act="${reltime_out:--}"
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
@@ -533,14 +524,14 @@ cmd_rows() {
     fld "$ACTW" "$act"; f_act=$fld_out
     fld 7  "$prcell"; f_pr=$fld_out
     fld 4  "·";       f_ctx=$fld_out
-    # summary flexes into the gap; clip to the same avail the live list uses — by
+    # the title flexes into the gap; clip to the same avail the live list uses — by
     # DISPLAY width, via the shared helper the live producer uses (fleet-lib.sh).
     # The old char-clip's comment claimed it "may run a hair short — never
     # overruns"; the opposite was true (a CJK glyph is 1 char / 2 columns, so the
     # clip passed ~2x the width and the pad was computed from the short count).
     # spawn provenance (issue #503): same ↳ tag grammar as the live dash, before
-    # the summary. col 11 absent (pre-#503 row) / '-' ≡ hub → no tag. The tag
-    # borrows its width from the summary flex span so act/PR/ctx stay pinned.
+    # the title. col 11 absent (pre-#503 row) / '-' ≡ hub → no tag. The tag
+    # borrows its width from the flex span so act/PR/ctx stay pinned.
     local tagd='' tagpfx=''
     case "${origin:-}" in
       ''|-) : ;;

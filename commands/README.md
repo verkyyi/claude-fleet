@@ -33,7 +33,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 | | **A. Interactive / role skill** | **B. Background-job prompt** |
 |---|---|---|
-| Examples | `/fleet-claim`, `/fleet-history`, `/fleet-sync-install` | `classify-session`, `summarize-session` |
+| Examples | `/fleet-claim`, `/fleet-history`, `/fleet-sync-install` | `classify-session` |
 | Invoked by | the operator or a worker, on demand | a `claude -p` daemon (on a timer/hook) |
 | Template | [`_template.md`](_template.md) | [`_template-background.md`](_template-background.md) |
 | Step-0 preamble | **yes** — resolve fleet + guard seat | **no** — a daemon has no seat |
@@ -43,7 +43,7 @@ kinds**, distinguished by how they are invoked and what they may do:
 
 Everything under *The contract every fleet skill follows* below describes **kind
 A**. Kind B is a versioned prompt, not a playbook: today the daemons carry their
-prompt as a hardcoded heredoc (`bin/classify-sessions.sh`, `bin/tmux-summarize.sh`);
+prompt as a hardcoded heredoc (`bin/classify-sessions.sh`);
 kind B is where those prompts move so they can be reviewed, diffed, and reused.
 
 ### The two contracts a kind-B skill declares

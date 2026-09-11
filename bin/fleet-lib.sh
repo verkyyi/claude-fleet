@@ -65,7 +65,7 @@ fi
 # name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,
 # bridge/{seen,since}, watch/{keys,needs}, sweep.due). Its RUNTIME cache is keyed
 # by repo SLUG and lives under $FLEET_C/fleets/<slug>/ (issues, prmap, labels, …).
-# Machine-wide state (sessmap, account.*, git_*/ctx_*/summary_* window caches,
+# Machine-wide state (sessmap, account.*, git_*/ctx_* window caches,
 # usage, collapsed) lives under $FLEET_C/global/. Truly global durable state
 # (accounts/, diskguard/, restore/{autorestore.on,restore.log}) is unchanged.
 #
@@ -151,66 +151,24 @@ fleet_cache_dir() {
   printf '%s' "$d"
 }
 
-# Machine-wide (non-fleet) runtime cache dir — sessmap, account.*, git_*/ctx_*/
-# summary_* window caches, usage, ratelimit, collapsed, config scratch. Created on
-# demand.
+# Machine-wide (non-fleet) runtime cache dir — sessmap, account.*, git_*/ctx_*
+# window caches, usage, ratelimit, collapsed, config scratch. Created on demand.
 fleet_cache_global() {
   local d="$FLEET_C/global"
   mkdir -p "$d" 2>/dev/null
   printf '%s' "$d"
 }
 
-# Filename key for a window's dash-summary cache, machine-wide under global/
-# (callers do "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$wid")").
-# Post-#159 each fleet runs its OWN tmux server numbering windows from @1, so the
-# bare numeric window id — globally unique under the old shared `default` socket —
-# now COLLIDES across fleets: fleet A's @2 and fleet B's @2 both mapped to
-# summary_2, so one fleet's row bled into another fleet's dash (issue #208).
-# Prefixing the (globally-unique, fleet-up-sanitized) session name disambiguates.
-# Both parts are sanitized to [A-Za-z0-9._-] so an unexpected char can't escape
-# the cache dir; a real session name (fleet-up already strips '.'/':'/space) is
-# unchanged, and the numeric id is digits-only, so the key stays stable across
-# window reorders. The one hot-path reader (tmux-dashboard-rows.sh) inlines this
-# same expansion to stay fork-free, so keep the two byte-identical.
-fleet_summary_key() {
-  local sess="${1:-}" wid="${2:-}"
-  printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"
-}
-
-# fleet_summary_sanitize <text> — make a session one-liner safe to hand tmux as the
-# @summary WINDOW OPTION the pane border renders (issue #455). The dash column keeps
-# reading the raw summary FILE; only this option-bound copy is scrubbed, because the
-# border takes a second parsing pass the file never does:
-#   • ONE LINE      pane-border-format draws a single row, so CR/LF/TAB → space (a
-#                   raw newline would truncate or smear the border).
-#   • NO '#'        tmux re-parses the EXPANDED border string in format_draw, so a
-#                   '#[' or '#{' arriving from an LLM one-liner would leak a style
-#                   or a format token into the header. Substituted values are not
-#                   re-expanded, so ',', '{', '%' are inert and stay readable —
-#                   '#' is the one byte that must go.
-#   • CLIPPED       ~60 chars, an upper bound on what any window option can carry;
-#                   the format clips again to the width it can actually draw.
-# Squeeze/trim keeps the double spaces a collapsed newline leaves behind out of the
-# header. Pure builtins — no forks, and safe under a `set -u` caller.
-fleet_summary_sanitize() {
-  local s="${1:-}"
-  s="${s//$'\n'/ }"; s="${s//$'\r'/ }"; s="${s//$'\t'/ }"
-  s="${s//'#'/}"
-  while [ "$s" != "${s//  / }" ]; do s="${s//  / }"; done
-  s="${s# }"; s="${s% }"
-  printf '%s' "${s:0:60}"
-}
-
 # --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
-# The two screen-classifier helpers (bin/tmux-summarize.sh, bin/classify-sessions.sh)
-# shell out to `claude -p`. Left bare, that call authenticates from the machine's
+# The screen-classifier helper (bin/classify-sessions.sh — the dash summarizer that
+# shared this wire retired in issue #535) shells out to `claude -p`. Left bare, that call authenticates from the machine's
 # AMBIENT login — the macOS Keychain entry / ~/.claude credentials — which is a
 # DIFFERENT credential from the one every worker runs on: bin/fleet-claude.sh exports
 # CLAUDE_CODE_OAUTH_TOKEN for the active pool account before exec'ing claude, exactly
 # as fleet-account.sh's header describes. So when the ambient login lapsed on
-# 2026-08-25, all eleven workers kept running and only the dash's summary column and
-# the looping-detector died — the one credential nothing else in the fleet depends on
-# was the one credential these two helpers depended on.
+# 2026-08-25, all eleven workers kept running and only the dash's (then) summary
+# column and the looping-detector died — the one credential nothing else in the fleet
+# depends on was the one credential these helpers depended on.
 #
 # This is that missing wire, and only that: the pool token when there IS one, silence
 # when multi-account is off (then a bare `claude -p` and its ambient login is still
@@ -583,12 +541,13 @@ fleet_transcript_dir() {
 }
 
 # Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
-# a human ran? The status classifier and the dashboard summarizer run from INSIDE a
-# window's worktree, so their transcripts land in the SAME project dir as the
-# session they describe — and they run every ~60s, so they are usually the NEWEST
-# file there. Recognise them by their own rubric text (RUBRIC= in
-# bin/classify-sessions.sh / bin/tmux-summarize.sh; fleet-history-selftest.sh pins
-# both strings against those files so they cannot drift apart silently).
+# a human ran? The status classifier (and, until issue #535, the dashboard
+# summarizer) runs from INSIDE a window's worktree, so its transcripts land in the
+# SAME project dir as the session they describe — and it runs on every Stop, so
+# they are usually the NEWEST file there. Recognise them by their own rubric text
+# (RUBRIC= in bin/classify-sessions.sh; fleet-history-selftest.sh pins that string
+# against the file so the two cannot drift apart silently). The summarizer's rubric
+# stays in the list below: its transcripts outlive the retired script on disk.
 # Canonical copy — bin/fleet-history.sh (indexing) and bin/worktree-autoclean.sh
 # (the conversation-scratch keep gate) both key off it.
 #
@@ -606,7 +565,7 @@ fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a re
 # newest HUMAN *.jsonl session id in a transcript dir (basename sans .jsonl), or
 # empty when the dir holds nothing but the fleet's own helper transcripts (a warm
 # scratch-pool worktree is exactly that — all 21 transcripts in one such dir were
-# classifier/summarizer runs).
+# classifier/summarizer runs — the latter before #535).
 #
 # NO `| head` here, deliberately. With `set -o pipefail` an early-closing consumer
 # makes `ls` die of SIGPIPE and the substitution reports 141 — which silently

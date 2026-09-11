@@ -12,7 +12,7 @@
 # a shell left to type a relaunch into. This script embraces the hook instead:
 #
 #   1. read everything about the window FIRST (name, cwd, @issue/@raw/@worktree/
-#      @origin/@summary, state) and the session id off the Claude Code registry
+#      @origin, state) and the session id off the Claude Code registry
 #      (~/.claude/sessions/<pid>.json — exact, not "newest transcript");
 #   2. ask Claude to exit — `/exit` typed at the prompt after an Escape (which also
 #      cancels the "Usage limit reached · continuing automatically" wait, the very
@@ -145,14 +145,14 @@ migrate_selected() {
 # --- the move -------------------------------------------------------------------
 
 migrate_one() {
-  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin summary
+  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin
   # One display-message per field — NOT a joined format split on a control byte:
   # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
   # escaping; 3.7 emits the byte), so a separator-based parse is not portable.
   name=$(wopt "$wid" '#{window_name}') || return 1
   cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
   raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
-  origin=$(wopt "$wid" '#{@origin}'); summary=$(wopt "$wid" '#{@summary}')
+  origin=$(wopt "$wid" '#{@origin}')
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "${FLEET_MAIN:-}" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
@@ -173,9 +173,6 @@ migrate_one() {
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     return 0
   fi
-  local smk_old; smk_old="$G/summary_$(fleet_summary_key "$SESS" "$wid")"
-  local smry=""; [ -f "$smk_old" ] && { read -r smry < "$smk_old" || :; }
-
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
@@ -214,8 +211,6 @@ migrate_one() {
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
-    [ -n "$summary" ] && TM set-window-option -t "$nw" @summary "$summary" 2>/dev/null
-    [ -n "$smry" ] && printf '%s' "$smry" > "$G/summary_$(fleet_summary_key "$SESS" "$nw")" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
   fi
@@ -276,7 +271,6 @@ migrate_main() {
   # + Enter, and only while a Claude process is verified alive under the pane (the
   # relaunch line, when no hook closes the window, is typed only after it is gone).
   SK() { FLEET_ALLOW_SENDKEYS=1 tmux -L "$SOCK" send-keys "$@"; }
-  C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"
 
   say() { printf '%s\n' "$*"; }
   now() { date +%s; }

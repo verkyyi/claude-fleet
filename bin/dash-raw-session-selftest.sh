@@ -280,8 +280,7 @@ ok "M dash ⌃s (--bg) spawns instantly — backgrounded, no prompt, refusals st
 # dash-enter.sh). The seed rides in a task file read at launch — `fleet-claude.sh
 # "$(cat <tf>)"`, the worker-seed handoff — never inline in the command string; a
 # --bg --prompt stages it through --prompt-file (never into the run-shell string);
-# the summary column is seeded with the task; a seeded scratch never claims a
-# warm-pool window; a whitespace-only prompt is a plain scratch.
+# a seeded scratch never claims a warm-pool window; a whitespace-only prompt is a plain scratch.
 POOL_LOG="$WORK/pool"
 cat > "$WORK/bin/scratch-pool.sh" <<POOLFAKE
 #!/bin/bash
@@ -300,7 +299,6 @@ tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^
 [ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"
 [ "$(cat "$tf")" = $'audit the dash binds for "$(injection)" risks' ] || fail "N the task file must hold the prompt verbatim" "$(cat "$tf")"
 grep -qs 'claim' "$POOL_LOG"               && fail "N a seeded scratch must never claim a warm-pool window (the seed is a launch arg)" "$(cat "$POOL_LOG")"
-grep -qs 'scratch-1: audit the dash binds' "$WORK/tmp/.claude-dash/global"/summary_* || fail "N the summary column must be seeded with the task" "$(ls "$WORK/tmp/.claude-dash/global" 2>/dev/null)"
 grep -q 'seeded' "$DISPLAY_LOG"            || fail "N the status line should say the scratch was seeded" "$(cat "$DISPLAY_LOG")"
 # …while an UNSEEDED spawn does consult the pool first
 reset_scratch; : > "$POOL_LOG"
