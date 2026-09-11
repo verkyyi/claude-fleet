@@ -96,6 +96,8 @@ model_v() {
 # per-row) so the hot loop stays fork-free.
 PRMAP=""; _pf=$(fleet_cache prmap "${FLEET_SESSION:-}"); [ -s "$_pf" ] && PRMAP=$(<"$_pf")
 PRMAPN=$'\n'"$PRMAP"
+# deploy_<sha> files (issue #541) live beside the prmap they were derived from.
+PRDIR=${_pf%/*}
 
 # List width, to right-align the PR/ctx block to the edge and give the flex
 # span the full remaining width. Prefer fzf's own viewport width — FZF_COLUMNS is
@@ -160,14 +162,26 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
       tail=${PRMAPN#*$'\n'"$bare"$'\t'}
       if [ "$tail" != "$PRMAPN" ]; then
         line=${tail%%$'\n'*}
-        # line = #num\tstate\tci\tready. Parse each; ready may be absent on a
-        # stale 4-field cache (mid-upgrade) — tab-guard so it degrades to ''.
+        # line = #num\tstate\tci\tready\tsha. Parse each; ready / sha may be absent
+        # on a stale 4-/5-field cache (mid-upgrade) — tab-guard so each degrades to ''.
         pnum=${line%%$'\t'*}   # "#num" — field 1, surfaced into the OPEN-PR cell
         rest=${line#*$'\t'}; st=${rest%%$'\t'*}; after=${rest#*$'\t'}
-        ci=${after%%$'\t'*}
-        case "$after" in *$'\t'*) ready=${after#*$'\t'};; *) ready='';; esac
+        ci=${after%%$'\t'*}; ready=''; msha=''
+        case "$after" in *$'\t'*)
+          ready=${after#*$'\t'}
+          case "$ready" in *$'\t'*) msha=${ready#*$'\t'}; msha=${msha%%$'\t'*}; ready=${ready%%$'\t'*};; esac;;
+        esac
         case "$st" in
-          MERGED) pcol=$IN; ptxt="merged";;
+          MERGED) pcol=$IN; ptxt="merged"
+                  # merged ≠ live (issue #541): the deploy probe's verdict for this
+                  # merge sha, when the fleet has one. 7 cells, single-cell glyphs.
+                  dst=''
+                  [ -n "$msha" ] && [ -f "$PRDIR/deploy_$msha" ] && { read -r dst _ < "$PRDIR/deploy_$msha" || :; }
+                  case "$dst" in
+                    live)      ptxt='live';    pcol=$GN;;   # merge sha is in the deployment
+                    deploying) ptxt='deploy…'; pcol=$TX;;   # post-merge runs still going
+                    failed)    ptxt='deploy✗'; pcol=$RD;;   # a post-merge run went red
+                  esac;;
           CLOSED) pcol=$GY; ptxt="closed";;
           *) case "$ci" in
                ✓) pcol=$GN

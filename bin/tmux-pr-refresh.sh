@@ -12,12 +12,17 @@
 # issues on 60s, PR status refreshes here on 15s.
 #
 # Writes under $C = $TMPDIR/.claude-dash:
-#   prmap_<slug>  — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready  per repo. The fold
-#                   from `gh pr list --json` to that line is FLEET_PRMAP_JQ in
+#   prmap_<slug>  — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha  per repo. The
+#                   fold from `gh pr list --json` to that line is FLEET_PRMAP_JQ in
 #                   fleet-lib.sh (the taxonomy is documented there; issue #533):
 #                   ci ∈ ·|✗|…|✓, ready ∈ draft|conflict|ready|behind|blocked|
 #                   unknown|"" — mirrors fleet-pr-verdict.sh so the dash and the
-#                   worker's merge gate never disagree about a PR.
+#                   worker's merge gate never disagree about a PR. sha = the merge
+#                   commit of a MERGED PR (issue #541), "" otherwise.
+#   deploy_<sha>  — `<live|deploying|failed|unknown><TAB><epoch>` per MERGED sha
+#                   (fleets/<slug>/), for fleets that set FLEET_DEPLOY_REF or
+#                   FLEET_DEPLOY_CHECK (issue #541) — the dash's `live`/`deploy…`/
+#                   `deploy✗` and the landed list's `dep` column. `live` is terminal.
 #   prmap         — flat mirror of the PRIMARY (FLEET_REPO) slug'd file
 #   @prci / @pfg  — per-window tmux options (glyph + color)
 # Reads (owned by the collector, read-only here): sessmap (session→slug→repo)
@@ -132,7 +137,7 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     # share (issue #533) — it lived inline here and drifted from fleet-pr-verdict.sh
     # (no isDraft, only FAILURE was red, StatusContext never looked at).
     gh pr list --repo "$rp" --state all --limit 100 \
-      --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup \
+      --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit \
       --jq "$FLEET_PRMAP_JQ" \
       > "$FD/prmap.$$" 2>/dev/null && mv "$FD/prmap.$$" "$FD/prmap"
     now > "$FD/prmap.ts"
@@ -161,6 +166,13 @@ while IFS="$US" read -r sess win path cur; do
   glyph=""; pfg=""
   if [ -n "$bare" ] && [ "$bare" != "-" ]; then
     hit=$(awk -F'\t' -v x="$bare" '$1==x{print;exit}' "$prmf" 2>/dev/null)
+    # a live window sitting on a MERGED branch is a deploy-state candidate (#541):
+    # hand its merge sha to the deploy pass below (this loop is a pipeline subshell,
+    # so the hand-off is a PID-unique temp file, swept by the EXIT trap).
+    if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "MERGED" ]; then
+      msha=$(echo "$hit"|cut -f6)
+      [ -n "$msha" ] && printf '%s\t%s\n' "${prmf%/*}" "$msha" >> "$C/deploy-live.$$"
+    fi
     if [ -n "$hit" ] && [ "$(echo "$hit"|cut -f3)" = "OPEN" ]; then
       ready=$(echo "$hit"|cut -f5)
       case "$(echo "$hit"|cut -f4)" in
@@ -181,5 +193,66 @@ while IFS="$US" read -r sess win path cur; do
     tmux -L "$sock" set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
   fi
 done
+done
+
+# --- deploy state for MERGED PRs (issue #541) ---
+# "merged" ≠ "live". For every queued repo whose fleet sets FLEET_DEPLOY_REF (a local
+# checkout that IS the deployment — claude-fleet's ~/.claude/fleet) or
+# FLEET_DEPLOY_CHECK=actions (post-merge workflow runs for the merge sha), probe the
+# MERGED candidates and cache `<state>\t<epoch>` at fleets/<slug>/deploy_<sha>.
+# Candidates = the newest 20 MERGED PRs (so the ⌃t landed list has data) ∪ every
+# MERGED branch a live window sits on (collected by the loop above). `live` is
+# terminal and never re-probed; ref mode re-probes the rest every tick (one local
+# git each — cheap); actions mode re-probes only entries older than FLEET_DEPLOY_TTL
+# (60s) — so a merged PR that went live minutes ago costs ZERO gh calls from then on.
+# Neither knob set ⇒ nothing written, and the readers keep rendering `merged`.
+deploy_conf_for() {   # $1=repo → DEP_REF / DEP_CHECK from the fleet conf bound to it
+  local want r _s cf
+  want=$(fleet_slug "$(fleet_norm_repo "$1")")
+  DEP_REF=''; DEP_CHECK=''
+  while IFS=$'\t' read -r _s cf; do
+    [ -f "$cf" ] || continue
+    # unset first: the global fleet.conf sourced at the top may carry these keys for
+    # ITS repo, and a per-fleet conf that doesn't set them must not inherit them.
+    r=$( unset FLEET_REPO FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK; . "$cf" >/dev/null 2>&1
+         printf '%s\t%s\t%s' "$(fleet_slug "$(fleet_norm_repo "${FLEET_REPO:-}")")" "${FLEET_DEPLOY_REF:-}" "${FLEET_DEPLOY_CHECK:-}" )
+    case "$r" in
+      "$want"$'\t'*) r=${r#*$'\t'}; DEP_REF=${r%%$'\t'*}; DEP_CHECK=${r#*$'\t'}
+                      [ -n "$DEP_REF$DEP_CHECK" ] && return 0 ;;
+    esac
+  done < <(fleet_each_conf)
+  # the global fleet.conf's knobs apply to the global FLEET_REPO only
+  if [ -n "$REPO" ] && [ "$(fleet_slug "$(fleet_norm_repo "$REPO")")" = "$want" ]; then
+    DEP_REF="${FLEET_DEPLOY_REF:-}"; DEP_CHECK="${FLEET_DEPLOY_CHECK:-}"
+  fi
+  return 0
+}
+DEP_TTL="${FLEET_DEPLOY_TTL:-60}"; case "$DEP_TTL" in ''|*[!0-9]*) DEP_TTL=60;; esac
+i=0
+while [ "$i" -lt "${#Q_REPO[@]}" ]; do
+  rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
+  FD=$(fleet_cache_dir "$sg")
+  [ -s "$FD/prmap" ] || continue
+  deploy_conf_for "$rp"
+  [ -n "$DEP_REF$DEP_CHECK" ] || continue
+  cands=$(awk -F'\t' '$3=="MERGED" && $6!="" {n=$2; sub(/^#/,"",n); print n "\t" $6}' "$FD/prmap" 2>/dev/null \
+          | sort -t"$(printf '\t')" -k1,1nr | head -20 | cut -f2)
+  [ -f "$C/deploy-live.$$" ] && cands="$cands"$'\n'"$(awk -F'\t' -v d="$FD" '$1==d{print $2}' "$C/deploy-live.$$" 2>/dev/null)"
+  nowts=$(now)
+  printf '%s\n' "$cands" | sort -u | while read -r sha; do
+    [ -n "$sha" ] || continue
+    f="$FD/deploy_$sha"; st=''; ts=0
+    [ -f "$f" ] && { IFS=$'\t' read -r st ts < "$f" || :; }
+    [ "$st" = live ] && continue                               # terminal — never re-probed
+    if [ -z "$DEP_REF" ]; then                                 # actions mode: TTL-gated gh read
+      case "$ts" in ''|*[!0-9]*) ts=0;; esac
+      [ $(( nowts - ts )) -ge "$DEP_TTL" ] || continue
+    fi
+    new=$(fleet_deploy_probe "$rp" "$sha" "$DEP_REF" "$DEP_CHECK") || continue   # gh failed → keep the cached state
+    [ -n "$new" ] || continue
+    printf '%s\t%s\n' "$new" "$nowts" > "$f.$$" && mv "$f.$$" "$f"
+  done
+  # a sha's file outlives its PR's 100-row prmap window by a fortnight, then goes.
+  find "$FD" -maxdepth 1 -name 'deploy_*' -mtime +14 -delete 2>/dev/null || true
 done
 exit 0

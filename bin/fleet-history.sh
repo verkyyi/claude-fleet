@@ -439,7 +439,7 @@ cmd_rows() {
   export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} counts chars
   local E=$'\033[' US=$'\x1f'
   local GN="${E}38;2;158;206;106m" IN="${E}38;2;187;154;247m" TX="${E}38;2;169;177;214m"
-  local GY="${E}38;2;86;95;137m" R="${E}0m"
+  local GY="${E}38;2;86;95;137m" RD="${E}38;2;247;118;142m" R="${E}0m"
 
   # Column widths — kept in step with tmux-dashboard-rows.sh so live & landed align.
   local COLS=${FZF_COLUMNS:-}
@@ -456,6 +456,15 @@ cmd_rows() {
 
   local out; out=$(read_ledger "$repo")
 
+  # deploy state per landed row (issue #541): the ledger's own sha is the pre-squash
+  # worktree HEAD (never on master), so the merge sha comes from this fleet's prmap
+  # (field 6, by PR number) and the verdict from the deploy_<sha> file beside it —
+  # both read once/fork-free, the same way the live producer does. Rows whose PR
+  # fell out of the 100-row prmap window, or fleets without the feature, stay `·`.
+  local _pf prdir prmapn=''
+  _pf=$(fleet_cache prmap "${FLEET_SESSION:-}" 2>/dev/null); prdir=${_pf%/*}
+  [ -s "$_pf" ] && prmapn=$'\n'$(<"$_pf")
+
   # header row (fzf --header-lines=1 pins it) — identical column layout to the live
   # list's header so the two read as one table.
   local h_i h_n h_a h_p h_c h_pad h_gap
@@ -463,7 +472,7 @@ cmd_rows() {
   fld 22 "window"; h_n=$fld_out
   fld "$ACTW" "act"; h_a=$fld_out
   fld 7  "PR";     h_p=$fld_out
-  fld 4  "ctx";    h_c=$fld_out
+  fld 4  "dep";    h_c=$fld_out   # a landed row has no ctx; the cell carries its deploy state (#541)
   # the flex span is labelled "title" here (a landed row shows its issue title);
   # the live list's flex span is blank since the summary column retired (#535).
   h_pad=$(( USABLE - LEFTW - 5 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 5 = len("title")
@@ -506,6 +515,22 @@ cmd_rows() {
     local ep act; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; act="${reltime_out:--}"
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
     local prcell; case "$pr" in ''|-) prcell="—";; *) prcell="#${pr#\#}";; esac
+    # dep cell (#541): prmap line for this PR → merge sha → deploy_<sha> verdict.
+    local depc='·' depcol=$GY msha='' _t _l _r dst=''
+    case "$pr" in ''|-) : ;; *)
+      _t=${prmapn#*$'\t'"#${pr#\#}"$'\t'}
+      if [ "$_t" != "$prmapn" ]; then
+        _l=${_t%%$'\n'*}                       # state\tci\tready\tsha
+        _r=${_l#*$'\t'}; _r=${_r#*$'\t'}       # ready\tsha (ready may be empty)
+        case "$_r" in *$'\t'*) msha=${_r#*$'\t'}; msha=${msha%%$'\t'*};; esac
+      fi;;
+    esac
+    [ -n "$msha" ] && [ -f "$prdir/deploy_$msha" ] && { read -r dst _ < "$prdir/deploy_$msha" || :; }
+    case "$dst" in
+      live)      depc='live'; depcol=$GN;;
+      deploying) depc='…';    depcol=$TX;;
+      failed)    depc='✗';    depcol=$RD;;
+    esac
 
     # id cell: `#<issue>` in GREEN for a worker, `~<N>` in INDIGO for a scratch —
     # the SAME rule the live dash now uses (issue #529), so toggling ⌃t keeps one
@@ -523,7 +548,7 @@ cmd_rows() {
     fld 22 "$wname";  f_name=$fld_out
     fld "$ACTW" "$act"; f_act=$fld_out
     fld 7  "$prcell"; f_pr=$fld_out
-    fld 4  "·";       f_ctx=$fld_out
+    fld 4  "$depc";   f_ctx=$fld_out
     # the title flexes into the gap; clip to the same avail the live list uses — by
     # DISPLAY width, via the shared helper the live producer uses (fleet-lib.sh).
     # The old char-clip's comment claimed it "may run a hair short — never
@@ -548,7 +573,7 @@ cmd_rows() {
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$fzfkey" "$US" \
-      "${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${GY}${f_ctx}${R}"
+      "${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"
   done
 }
 

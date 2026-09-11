@@ -100,6 +100,7 @@ $TMPDIR/.claude-dash/
   fleets/<slug>/       # per repo (slug = owner-name)
     issues  issues.ts  #   backlog cache (+ fetch-complete marker)
     prmap   prmap.ts   #   PR/CI map
+    deploy_<sha>       #   deploy verdict per merge sha (live/deploying/failed/unknown, #541)
     labels             #   #num → labels (fleet watcher)
     issue_<n>.json     #   per-issue preview cache
     task_issue-<n>.txt #   spawn seed handoff
