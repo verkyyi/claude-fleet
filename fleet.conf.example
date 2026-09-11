@@ -152,6 +152,41 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=MCP servers for this fleet @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_MCP_CONFIG=""
 
+# Which agent CLI a spawned session runs (issue #547). Every spawn path — the
+# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch, autofill, the
+# issue-bridge revive — funnels through bin/fleet-claude.sh, which branches here:
+#   claude   (default) Claude Code, exactly as before — the default fleet's spawn
+#            argv is byte-for-byte unchanged.
+#   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Codex has
+#            no slash commands, so the bare `/fleet-claim` seed is EXPANDED into a
+#            prose prompt (conf/codex-preamble.md + commands/fleet-claim.md); the
+#            fleet's Stop / PostToolUse / PreToolUse hooks ride inline as `-c hooks.*`
+#            (dash state + the bash-guard and base-checkout guard — Codex's hook
+#            schema is Claude Code's); CLAUDE.md is read as the project doc; and
+#            the Claude-only knobs — FLEET_MODEL, FLEET_MCP_CONFIG, subagent model,
+#            account rotation — are skipped. Codex auth is `codex login`, not the
+#            fleet's account files. Runs full-access (`--dangerously-bypass-
+#            approvals-and-sandbox`), the same posture as a bypassPermissions Claude
+#            worker: the hooks are the rails.
+# Per-spawn override: `--agent codex|claude` on dash-issue-session.sh /
+# dash-raw-session.sh, or a `codex:` / `claude:` prefix on the dash prompt line
+# (`codex: fix parser` → a Codex scratch named "fix parser"). A `--resume` /
+# `--continue` / `--from-pr` launch (restore, migrate, /fleet-history) is ALWAYS
+# Claude — those resume Claude transcripts. Not available to a Codex worker:
+# /fleet-handoff + auto-handoff, /fleet-context + the dash ctx %, account rotation.
+# ONE-TIME SETUP: Codex asks "Do you trust the contents of this directory?" once per
+# project, and a worktree inherits its main repo's trust — so trust the BASE
+# CHECKOUT once (`codex` in $FLEET_MAIN → 1/Yes). An untrusted base turns the first
+# Codex pane red (`needs`) with the instruction in the pane, rather than stalling.
+# @label=Worker agent CLI @group=spawn @tier=common @scope=fleet @edit=enum
+#FLEET_AGENT="claude"
+
+# Model a Codex worker launches with (`codex -m`). Codex model names are not
+# Claude's, hence a separate key. Empty (default) defers to your own
+# ~/.codex/config.toml `model`. Stamped on the window as @cc_model when set.
+# @label=Codex worker model @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_MODEL=""
+
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
 # OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
 # fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps

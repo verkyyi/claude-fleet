@@ -8,6 +8,9 @@
 # It exports CLAUDE_CODE_OAUTH_TOKEN for the active account and stamps the
 # window's @cc_account option with that account's label, so the collector can
 # attribute a "hit your … limit" banner back to the right account and rotate.
+#
+# Since issue #547 it is also the AGENT switch: FLEET_AGENT=codex (or a caller's
+# `--agent codex`) execs bin/fleet-codex.sh instead — see the dispatch block below.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -30,6 +33,45 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
   [ -n "$_fc_sess" ] && fleet_load_conf "$_fc_sess"
   unset _fc_sess
 fi
+
+# Agent CLI dispatch (issue #547). FLEET_AGENT — per-fleet overlay ▸ global ▸
+# `claude` — picks which agent a spawned session runs; a caller's `--agent <a>`
+# (dash-issue-session.sh / dash-raw-session.sh `--agent`, the dash prompt line's
+# `codex:` prefix) wins over the conf, the rule --model already follows. The flag
+# is OURS: consumed here, never passed on. `codex` hands the whole launch to the
+# sibling bin/fleet-codex.sh — nothing below (model alias + cap fallback, MCP
+# allowlist, subagent model, OAuth token) applies to Codex. Anything else — unset,
+# empty, `claude` — falls through to the unchanged Claude path, so a default
+# fleet's argv is byte-for-byte what it was.
+#
+# A resume-shaped launch is ALWAYS Claude unless the caller said `--agent`
+# explicitly: --resume / --continue / --from-pr / --fork-session (fleet-restore,
+# fleet-migrate, dash-restore-session) resume a CLAUDE transcript, and --model is
+# only ever passed by those same Claude-side callers (migrate's fresh-launch
+# fallback) — a fleet that flipped to codex must still bring its earlier Claude
+# sessions back, and a Claude model alias must never reach `codex -m`.
+_fc_agent="${FLEET_AGENT:-}"; _fc_explicit=0
+_fc_args=(); _fc_want=0
+for _fc_a in "$@"; do
+  if [ "$_fc_want" = 1 ]; then _fc_agent="$_fc_a"; _fc_explicit=1; _fc_want=0; continue; fi
+  case "$_fc_a" in
+    --agent)   _fc_want=1 ;;
+    --agent=*) _fc_agent="${_fc_a#--agent=}"; _fc_explicit=1 ;;
+    *)         _fc_args+=("$_fc_a") ;;
+  esac
+done
+set -- ${_fc_args[@]+"${_fc_args[@]}"}
+if [ "$_fc_explicit" != 1 ]; then
+  case " $* " in
+    *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" --model "*|*" --model="*) _fc_agent=claude ;;
+  esac
+fi
+case "$_fc_agent" in
+  codex)     exec "$BIN/fleet-codex.sh" "$@" ;;
+  ''|claude) : ;;
+  *) printf 'fleet-claude: unknown agent %s (FLEET_AGENT / --agent must be claude|codex) — launching claude\n' "$_fc_agent" >&2 ;;
+esac
+unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to

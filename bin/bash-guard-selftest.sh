@@ -302,6 +302,41 @@ edit_json() { printf '{"tool_name":"%s","tool_input":{"%s":%s}}' "$1" "$2" "$(js
   assert_exit 0 "read tool no-op"   "$BASEGUARD" '{"tool_name":"Read","tool_input":{"file_path":"'"$BASE/x"'"}}'
   # fail OPEN on malformed input
   assert_exit 0 "baseguard bad json" "$BASEGUARD" 'nope'
+  # Codex apply_patch (issue #547): the payload is the PATCH TEXT in
+  # tool_input.command; targets are the `*** <Op> File:` lines, relative to cwd.
+  patch_json() {   # $1 = cwd (or "") $2 = patch body
+    printf '{"tool_name":"apply_patch","cwd":%s,"tool_input":{"command":%s}}' "$(jstr "$1")" "$(jstr "$2")"; }
+  assert_exit 2 "patch: Add File in base (abs)"   "$BASEGUARD" "$(patch_json "$TMP/repo-issue-5" "*** Begin Patch
+*** Add File: $BASE/bin/new.sh
++x
+*** End Patch")"
+  assert_exit 2 "patch: Update relative, cwd=base" "$BASEGUARD" "$(patch_json "$BASE" "*** Begin Patch
+*** Update File: README.md
+@@
+-a
++b
+*** End Patch")"
+  assert_exit 2 "patch: Move to base"             "$BASEGUARD" "$(patch_json "$TMP/repo-issue-5" "*** Begin Patch
+*** Update File: bin/x.sh
+*** Move to: $BASE/bin/x.sh
+*** End Patch")"
+  assert_exit 2 "patch: one bad target of two"    "$BASEGUARD" "$(patch_json "$TMP/repo-issue-5" "*** Begin Patch
+*** Update File: bin/ok.sh
+@@
+-a
++b
+*** Delete File: $BASE/README.md
+*** End Patch")"
+  assert_exit 0 "patch: worktree relative"        "$BASEGUARD" "$(patch_json "$TMP/repo-issue-5" "*** Begin Patch
+*** Add File: bin/new.sh
++x
+*** End Patch")"
+  assert_exit 0 "patch: elsewhere (abs)"          "$BASEGUARD" "$(patch_json "$BASE" "*** Begin Patch
+*** Add File: $TMP/elsewhere/z.txt
++x
+*** End Patch")"
+  assert_exit 0 "patch: no targets"               "$BASEGUARD" "$(patch_json "$BASE" "*** Begin Patch
+*** End Patch")"
   exit $fails ); rc=$?; fails=$((fails + rc))
 
 # Not in a fleet (no FLEET_MAIN, no $TMUX) → nothing to protect → allow

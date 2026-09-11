@@ -32,7 +32,7 @@ CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
 AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -135,7 +135,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt; do
 done <<< "$WLIST"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -259,6 +259,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
     scratch-*) tagd="↳~${origin#scratch-}"; dname="└ $name" ;;
     *)         tagd="↳$origin" ;;
   esac
+  # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
+  # by bin/fleet-codex.sh) shows its agent name in the same flex span, after the
+  # provenance tag — a Claude window carries no @cc_agent and draws nothing. ASCII
+  # only, so the ${#tagd} width math below stays exact.
+  case "$agent" in ''|claude) : ;; *) tagd="${tagd:+$tagd }${agent//[^A-Za-z0-9_-]/}" ;; esac
   # group sort key: a root keeps its own (rank, idx); a child resolves its parent
   # CHAIN (≤4 hops, grandchildren group under the ultimate live root) and inherits
   # that root's (rank, idx) with depth=1 so it sorts right below it; a chain that
@@ -305,8 +310,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt; do
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  # the ↳ tag is the only thing drawn in the flex span; ↳/#/~ are all single-cell,
-  # so ${#tagd} is its display width and the pad keeps act/PR/ctx pinned right.
+  # the ↳ tag (+ an agent tag, #547) is all that is drawn in the flex span; ↳/#/~
+  # are single-cell and the agent name ASCII, so ${#tagd} is its display width and
+  # the pad keeps act/PR/ctx pinned right.
   # (fld() shares the same ${#}=chars assumption; its remaining inputs — issue/PR/
   #  ctx — are ASCII. The window column, where CJK names are ordinary since #534,
   #  takes the width-aware path above.)

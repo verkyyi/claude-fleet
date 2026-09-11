@@ -20,7 +20,15 @@ denied.
 Register it (matcher "Edit|Write|MultiEdit|NotebookEdit") — see
 hooks/settings-hooks.json.
 
-Contract (Claude Code hooks):
+Codex (issue #547): a Codex worker edits through its `apply_patch` tool, whose
+PreToolUse payload is {tool_name:"apply_patch", tool_input:{command:"<patch>"}}
+(the same hook schema — bin/fleet-codex.sh wires this file with matcher
+"apply_patch"). The patch names its targets on `*** Add File:` / `*** Update
+File:` / `*** Delete File:` / `*** Move to:` lines, relative to the session cwd
+unless absolute — every one is checked, and a single hit inside the base
+checkout blocks the whole patch.
+
+Contract (Claude Code hooks; Codex's is the same):
   - stdin: JSON with {tool_name, tool_input:{file_path|notebook_path,...}}
   - exit 0  -> allow
   - exit 2  -> BLOCK; stderr is shown to the model
@@ -31,7 +39,22 @@ Resolving the base checkout: prefer FLEET_MAIN from the environment; otherwise
 ask fleet-lib for the current session's base. Outside a fleet (no $TMUX, or no
 FLEET_MAIN resolvable) there is nothing to protect, so we allow.
 """
-import sys, os, json, subprocess
+import sys, os, json, re, subprocess
+
+# apply_patch target lines (Codex): the path is everything after the marker.
+_PATCH_TARGET = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
+
+
+def _patch_targets(text):
+    """Every file path an apply_patch body names (Add/Update/Delete/Move to)."""
+    if not isinstance(text, str):
+        return []
+    out = []
+    for m in _PATCH_TARGET.finditer(text):
+        p = m.group(1) or m.group(2)
+        if p:
+            out.append(p)
+    return out
 
 
 def allow():
@@ -103,21 +126,30 @@ def main():
         allow()  # fail open
 
     tool = data.get("tool_name")
-    if tool not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-        allow()
     ti = data.get("tool_input") or {}
     if not isinstance(ti, dict):
         allow()
-    path = ti.get("file_path") or ti.get("notebook_path") or ""
-    if not path:
+    if tool == "apply_patch":
+        # Codex: one patch, many targets; relative paths resolve against the
+        # session cwd the payload carries (the hook itself also runs there).
+        paths = _patch_targets(ti.get("command") or ti.get("patch") or ti.get("input") or "")
+        cwd = data.get("cwd") or os.getcwd()
+        paths = [p if os.path.isabs(p) else os.path.join(cwd, p) for p in paths]
+    elif tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        path = ti.get("file_path") or ti.get("notebook_path") or ""
+        paths = [path] if path else []
+    else:
+        allow()
+    if not paths:
         allow()
 
     base = _resolve_base()
     if not base:
         allow()  # not in a fleet → nothing to protect
 
-    if _under(path, base):
-        block(os.path.realpath(path), base)
+    for path in paths:
+        if _under(path, base):
+            block(os.path.realpath(path), base)
     allow()
 
 

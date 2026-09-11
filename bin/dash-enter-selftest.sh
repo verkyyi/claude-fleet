@@ -144,5 +144,29 @@ wait_bg 0.3
 rm -f "$WORK/tmp/.claude-dash/rename_target"
 ok "C the guard sits only on the typed-task branch (rename Enter still renames, no spawn)"
 
+# ===================== D: a `codex:` / `claude:` prefix picks the agent (#547) ==
+# The prefix is stripped, the rest is the NAME, and the spawn carries --agent=<a>;
+# a bare `codex:` spawns an unnamed codex scratch; an unknown `word:` is a name.
+reset_debounce; : > "$SPAWN_LOG"; : > "$DISPLAY_LOG"
+GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'codex: port the parser'
+wait_bg 0.6
+[ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "D codex: must spawn exactly once" "$(cat "$SPAWN_LOG")"
+grep -q '^SPAWN *port the parser$' "$SPAWN_LOG" || fail "D the prefix must be stripped from the name" "$(cat "$SPAWN_LOG")"
+grep -q '^ARGV .*--agent=codex' "$SPAWN_LOG" || fail "D the spawn must carry --agent=codex" "$(cat "$SPAWN_LOG")"
+reset_debounce; : > "$SPAWN_LOG"
+GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'codex:'
+wait_bg 0.6
+grep -q '^ARGV .*--agent=codex' "$SPAWN_LOG" || fail "D a bare codex: must still spawn a codex scratch (auto name)" "$(cat "$SPAWN_LOG")"
+reset_debounce; : > "$SPAWN_LOG"
+GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'claude: on a codex fleet'
+wait_bg 0.6
+grep -q '^ARGV .*--agent=claude' "$SPAWN_LOG" || fail "D claude: must carry --agent=claude" "$(cat "$SPAWN_LOG")"
+reset_debounce; : > "$SPAWN_LOG"
+GUARD_MS=1000 GUARD_SLEEP=0.3 run_enter 'todo: rename things'
+wait_bg 0.6
+grep -q -- '--agent' "$SPAWN_LOG" && fail "D an unknown word: prefix is just a name, not an agent" "$(cat "$SPAWN_LOG")"
+grep -qF 'SPAWN todo: rename things' "$SPAWN_LOG" || fail "D the unknown-prefix name must be kept whole" "$(cat "$SPAWN_LOG")"
+ok "D codex:/claude: prefixes pick the agent and strip; other word: prefixes are names (#547)"
+
 printf '\nselftest OK: %s assertions passed (dash prompt-line paste-storm guard, #531)\n' "$pass"
 exit 0
