@@ -97,7 +97,11 @@ chmod +x "$WORK/fakebin/tmux"
 # `codex` (typically ~/.local/bin, /opt/homebrew/bin) can ever be reached.
 export PATH="$WORK/fakebin:/usr/bin:/bin"
 export FLEET_CONF_DIR="$WORK/conf"
+# A pane's env: $TMUX_PANE names the window to stamp, and set-claude-state.sh is
+# a no-op without $TMUX (a non-tmux shell is never a fleet) — CI has neither, so
+# both are faked here; the fake `tmux` on PATH is what answers.
 export TMUX_PANE="%0"
+export TMUX="$WORK/fake-tmux-sock,1,0"
 export FLEET_SKIP_GLOBAL_CONF=1
 printf 'FLEET_MODEL="opus"\n' > "$WORK/install/fleet.conf"     # the global conf the lib sources
 # a fake CODEX_HOME: the trust pre-check reads $CODEX_HOME/config.toml — ours, never

@@ -160,7 +160,9 @@ if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
   printf '\nfleet-codex: the base checkout %s is not trusted in %s — Codex will ask\n' "$_trust_root" "$_codex_conf" >&2
   printf 'fleet-codex: "Do you trust the contents of this directory?" below. Answer 1 (Yes) ONCE: Codex\n' >&2
   printf 'fleet-codex: persists it for the repo, and every issue-<N>/scratch-<N> worktree inherits it.\n\n' >&2
-  [ -n "${TMUX_PANE:-}" ] && sh "$STATE" needs >/dev/null 2>&1
+  # </dev/null: the stamper's `needs` path reads a hook payload off a non-tty
+  # stdin; give it EOF so it can never sit on an inherited descriptor.
+  [ -n "${TMUX_PANE:-}" ] && sh "$STATE" needs </dev/null >/dev/null 2>&1
 fi
 unset _trust_root _codex_conf
 
