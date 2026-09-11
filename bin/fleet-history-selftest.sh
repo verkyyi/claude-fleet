@@ -9,7 +9,7 @@
 #      break layout.
 #   A2. record-closed (#320) — a landed-less closed-unlanded row: idempotent (no
 #      duplicate), never shadows a landed row for the same session, skips a window
-#      with no transcript.
+#      with no transcript (recorded transcript-less since #547, deduped).
 #   B. list / find_row — newest-first ordering and lookup by issue# and by #PR.
 #   C. resume — verdict routing: RESUME when a transcript exists, FROM-PR when
 #      only a PR is recorded, REVIEW-ONLY when neither (and for an unknown key);
@@ -170,12 +170,18 @@ outs=$(run record-closed --repo o/r --issue 42 --worktree "$WTC")
 contains "record-closed: skips when a landed row exists" "$outs" "already in ledger"
 eq "record-closed: landed row not shadowed (still 1 row)" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
-# no transcript → nothing to index/resume → skip (no row written), not an error.
+# no transcript → recorded TRANSCRIPT-LESS (issue #547: a Codex worker never writes
+# a ~/.claude/projects transcript; a Claude one that died before its first turn is
+# still a closed session). cols 7/8 = '-', and a repeat dedups on key + worktree.
 : > "$FLEET_HISTORY_LEDGER"
 WTN="$WORK/wtn/issue-77"; mkdir -p "$WTN"
 outn=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
-contains "record-closed: no transcript → skipped" "$outn" "no transcript"
-eq "record-closed: no-transcript writes no row" "0" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+contains "record-closed: no transcript → still recorded" "$outn" "closed-unlanded"
+eq "record-closed: no-transcript writes ONE row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+eq "record-closed: transcript-less row has '-' for dir + session" "-	-" "$(cut -f7,8 "$FLEET_HISTORY_LEDGER")"
+outn2=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
+contains "record-closed: transcript-less repeat is deduped" "$outn2" "already in ledger"
+eq "record-closed: transcript-less repeat writes no 2nd row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
 
 # ============================================================================
 # B. list / find_row — newest-first + lookup by issue and by #PR
@@ -507,15 +513,17 @@ contains "helper transcripts are skipped for the real session" "$out" "real-sess
 eq "  …and the real session id is what lands in the row" "real-session" \
    "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
 
-# A dir with ONLY helper transcripts has nothing to index → record-closed skips it.
+# A dir with ONLY helper transcripts resolves NO session — since #547 that is a
+# transcript-less row (session '-'), never a helper id promoted to the session.
 WTHO="/w/repo-scratch-pool-slot"
 ENCHO=$(printf '%s' "$WTHO" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 mkdir -p "$CLAUDE_PROJECTS_DIR/$ENCHO"
 printf '{"type":"user","message":{"content":"%s"}}\n' "$CLS" > "$CLAUDE_PROJECTS_DIR/$ENCHO/only-helper.jsonl"
 : > "$FLEET_HISTORY_LEDGER"
 out=$(run record-closed --key scratch-77 --worktree "$WTHO")
-contains "an all-helper dir is skipped, not indexed" "$out" "no transcript to index"
-eq "  …and writes no row" 0 "$(grep -c . "$FLEET_HISTORY_LEDGER" || true)"
+contains "an all-helper dir is recorded transcript-less (#547)" "$out" "closed-unlanded"
+eq "  …one row, with NO session id (helper never promoted)" "-" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+eq "  …and no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
 
 # Two-way lock: the classifier marker must still be the text that daemon actually
 # sends, and BOTH rubrics must still be in the filter (fleet_newest_human_session)

@@ -79,7 +79,8 @@ SWT900="$WORK/base-scratch-900"
 git -C "$BASE" worktree add -q -b scratch-900 "$SWT900" >/dev/null 2>&1
 
 # Surviving transcripts (outside the worktree, under CLAUDE_PROJECTS_DIR) so every
-# record path resolves a session id (record-closed SKIPS a branch with no transcript).
+# record path resolves a session id (a branch with no transcript would be recorded
+# transcript-less since #547 — these cases assert the resolved ids).
 mkdir -p "$PROJECTS/$(enc "$WT500")"; : > "$PROJECTS/$(enc "$WT500")/sess-500.jsonl"
 mkdir -p "$PROJECTS/$(enc "$WT600")"; : > "$PROJECTS/$(enc "$WT600")/sess-600.jsonl"
 mkdir -p "$PROJECTS/$(enc "$SWT900")"; : > "$PROJECTS/$(enc "$SWT900")/sess-900.jsonl"

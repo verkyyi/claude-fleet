@@ -78,7 +78,7 @@ case "${1:-}" in
     esac ;;
   list-windows)      : ;;
   show-options)      echo '' ;;
-  new-window)        echo "${TMUX_WIN:-@9}" ;;
+  new-window)        [ -n "${NEWWIN_LOG:-}" ] && printf '%s\n' "$*" >> "$NEWWIN_LOG"; echo "${TMUX_WIN:-@9}" ;;
   *) : ;;
 esac
 exit 0
@@ -95,7 +95,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   # covers the dedup.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-  FLEET_PRESPAWN_DEDUP=0 \
+  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 # The seed is written to $TMPDIR/.claude-dash/fleets/<slug>/task_issue-<N>.txt.
@@ -130,6 +130,23 @@ for gone in 'Work GitHub issue' 'To finish:' 'arm GitHub auto-merge' \
   ! has "$gone" || fail "C retired seed text '$gone' leaked back into the collapsed seed" "$(seed)"
 done
 ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
+
+# ===== SEED D: --agent rides the launch command, never the seed (issue #547) ====
+# A per-spawn `--agent codex` reaches bin/fleet-claude.sh as its own flag INSIDE
+# the new-window command (the launcher consumes it and execs fleet-codex.sh); the
+# seed file stays the bare `/fleet-claim` (fleet-codex.sh expands it). A default
+# spawn carries no --agent — byte-for-byte the historic command. An unknown token
+# is dropped, not embedded.
+: > "$WORK/newwin"; run_spawn 234 --agent codex
+[ "$(seed)" = "/fleet-claim" ] || fail "D --agent must not change the seed" "$(seed)"
+grep -qF -- "fleet-claude.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
+  || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"; run_spawn 234
+grep -q -- '--agent' "$WORK/newwin" && fail "D a default spawn must carry NO --agent" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"; run_spawn 234 --agent=gemini
+grep -q -- '--agent' "$WORK/newwin" && fail "D an unknown --agent must be dropped, never embedded" "$(cat "$WORK/newwin")"
+grep -q 'unknown --agent' "$WORK/spawn.err" || fail "D an unknown --agent should be reported on stderr" "$(cat "$WORK/spawn.err")"
+ok "D --agent codex rides the launch command; default/unknown carry none (#547)"
 
 # ===== BODY: fleet_worker_prompt_body (the per-fleet directive the skill weaves in)
 # The skill (/fleet-claim step 4) now calls this at runtime instead of the spawn

@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-issue-session.sh <issue-number> [<target-session>] [--title <t>] — spawn a
+# dash-issue-session.sh <issue-number> [<target-session>] [--title <t>] [--agent <a>] — spawn a
 # Claude session to work a GitHub issue: a git worktree issue-<N> off the base
 # branch + a tmux window running `claude` seeded to read, claim, and implement the
 # issue. The window is NAMED after the issue CONTENT (a short kebab of its title,
@@ -33,12 +33,12 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
-    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; esac
+    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; esac
     _want=""; continue
   fi
   case "$_a" in
@@ -52,6 +52,12 @@ for _a in "$@"; do
     # (a worker/scratch spawning a sibling), and empty-after-detect ≡ hub.
     --origin) _want=origin ;;
     --origin=*) ORIGIN="${_a#--origin=}" ;;
+    # --agent (issue #547): which agent CLI THIS worker runs — `claude` or `codex`
+    # — overriding the fleet's FLEET_AGENT for one spawn. Handed to the launcher
+    # (bin/fleet-claude.sh --agent) inside the window command; validated below so
+    # only a known token is ever embedded in that command string.
+    --agent) _want=agent ;;
+    --agent=*) AGENT="${_a#--agent=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -61,6 +67,11 @@ for _a in "$@"; do
   esac
 done
 num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
+case "$AGENT" in
+  ''|claude|codex) : ;;
+  *) printf 'dash-issue-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
+     tmux display-message "issues: unknown --agent $AGENT — using the fleet default" 2>/dev/null; AGENT="" ;;
+esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -262,7 +273,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # would surface as a popup. Redirect the whole tail so nothing can. The tail's own
   # error reporting is unaffected — refuse() surfaces via `tmux display-message`, a
   # separate client call independent of this process's fds.
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN") >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || refuse "spawn failed for #$num: dispatch"
   exit 0
@@ -307,7 +318,8 @@ fi
 # fleet-up.sh. Create in the fleet's session explicitly (the trailing ':' picks
 # the next free window index) so it works headless with no client attached.
 # Route through fleet-claude.sh so the session launches under the active
-# subscription account (transparent `exec claude` when no accounts registered).
+# subscription account (transparent `exec claude` when no accounts registered) —
+# and, since issue #547, under the fleet's agent (FLEET_AGENT / --agent codex).
 #
 # Spawn is non-invasive by default: ALWAYS pass -d so new-window creates the
 # window WITHOUT making it current — new-window makes the new window CURRENT by
@@ -320,7 +332,10 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # ${detach[@]+"${detach[@]}"}: expand to the flag(s) when set, to NOTHING when the
 # array is empty — bash 3.2 (macOS) errors on a bare "${detach[@]}" under `set -u`
 # when empty, which aborted every INTERACTIVE spawn (no target session → empty array).
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh' \"\$(cat '$tf')\"; exec \$SHELL") \
+# `--agent <a>` (issue #547) rides inside the command when a caller chose one; the
+# launcher consumes it and picks the agent. Validated to claude|codex above, so it
+# is safe to embed bare. Absent (the default) the command string is unchanged.
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Spawn provenance (issue #503): stamp WHO spawned this worker beside the binding.

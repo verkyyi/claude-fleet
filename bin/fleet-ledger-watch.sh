@@ -227,7 +227,8 @@ EOF
       fi
       # Drive the ledger owner. It resolves transcript-dir + session-id (and the
       # worktree's HEAD sha, so the row survives a later reap) from the worktree,
-      # dedups (idempotent), and skips a window with no transcript.
+      # dedups (idempotent); a window with no transcript (a Codex worker, #547) is
+      # recorded transcript-less rather than skipped.
       tok=$(bash "$BIN/fleet-history.sh" record-closed \
               --repo "$repo" --session "$sess" --key "$p_key" \
               --worktree "$p_wt" --win "$p_wid" \

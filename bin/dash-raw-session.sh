@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-raw-session.sh [--name <name>] [--prompt <text>] [<target-session>] — open a
+# dash-raw-session.sh [--name <name>] [--prompt <text>] [--agent <a>] [<target-session>] — open a
 # RAW (non-issue-bound) scratch Claude window in a fleet: plain `claude` on the
 # fleet's socket, with NO GitHub issue and (unless --prompt) NO seed prompt, but in
 # its OWN git worktree off the base branch (issue #290). It is the counterpart to the issue-bound spawners
@@ -94,7 +94,7 @@ set -uo pipefail
 # window name (issue #225); --prompt <t> / --prompt=<t> is the optional seed prompt;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <target-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -113,12 +113,24 @@ while [ "$#" -gt 0 ]; do
     # --prompt-file=<f>: same staging as --name-file — the seed is arbitrary user
     # text and is NEVER interpolated into the run-shell string.
     --prompt-file=*) f="${1#--prompt-file=}"; PROMPT="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
+    # --agent (issue #547): `claude` | `codex` for THIS scratch, overriding the
+    # fleet's FLEET_AGENT. Rides the --bg re-exec and lands in the launcher's argv;
+    # validated below so only a known token is embedded in a command string. An
+    # explicit agent always takes the COLD path — the warm pool holds windows
+    # launched under the fleet default, which may be the other agent.
+    --agent)       AGENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --agent=*)     AGENT="${1#--agent=}"; shift ;;
     --bg)          BG=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
+case "$AGENT" in
+  ''|claude|codex) : ;;
+  *) printf 'dash-raw-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
+     tmux display-message "raw: unknown --agent $AGENT — using the fleet default" 2>/dev/null; AGENT="" ;;
+esac
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -187,7 +199,7 @@ if [ "$BG" = 1 ]; then
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
   exit 0
 fi
 
@@ -247,7 +259,7 @@ fi
 # argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
 claimed=""
-[ -z "$PROMPT" ] && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+[ -z "$PROMPT" ] && [ -z "$AGENT" ] && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
@@ -292,11 +304,13 @@ else
   # arbitrary user text (quotes, `$`, backticks) can't break or inject into it.
   # Keyed by the scratch slug under this fleet's cache dir; left in place like the
   # worker seed (tiny, and the path is the debug trail for "what did I seed?").
-  launch="'$BIN/fleet-claude.sh'"
+  # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
+  # launcher consumes it. Validated to claude|codex above, so bare is safe.
+  launch="'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT}"
   if [ -n "$PROMPT" ]; then
     tf="$(fleet_cache_dir "$(fleet_slug "${FLEET_REPO:-$SESS}")")/task_$slug.txt"
     printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
-      && launch="'$BIN/fleet-claude.sh' \"\$(cat '$tf')\""
+      && launch="$launch \"\$(cat '$tf')\""
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$launch; exec \$SHELL") \
     || { fleet_scratch_free "$MAIN" "$slug" "$wt"
@@ -327,6 +341,7 @@ if [ -z "$TARGET_SESS" ]; then
     [ -n "$note" ] && TM display-message "$note" 2>/dev/null
   else
     msg="spawned raw session → $name"; [ -n "$PROMPT" ] && msg="spawned scratch → $name (seeded)"
+    [ -n "$AGENT" ] && msg="$msg [$AGENT]"
     [ -n "$note" ] && msg="$msg ($note)"
     TM display-message "$msg" 2>/dev/null
   fi

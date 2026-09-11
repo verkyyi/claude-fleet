@@ -74,6 +74,12 @@ TM() { tmux -L "$SOCK" "$@"; }
 POOL=$(fleet_pool_session "$SESS")
 
 WANT="${FLEET_SCRATCH_POOL:-0}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
+# The pool is Claude-only (issue #547): its readiness probe waits for a `claude`
+# process under the pane and its warm-up keystroke is tuned to Claude Code's TUI
+# mount, so a fleet whose FLEET_AGENT is codex would warm windows the probe never
+# calls ready — a cold codex boot per ensure tick, for nothing. Off for that fleet;
+# a `--agent codex` scratch always took the cold path anyway (dash-raw-session.sh).
+case "${FLEET_AGENT:-}" in codex) WANT=0 ;; esac
 MAXAGE="${FLEET_POOL_MAX_AGE:-1800}"; case "$MAXAGE" in ''|*[!0-9]*) MAXAGE=1800;; esac
 PTIMEOUT="${FLEET_POOL_PROBE_TIMEOUT:-120}"; case "$PTIMEOUT" in ''|*[!0-9]*) PTIMEOUT=120;; esac
 MAIN="${FLEET_MAIN:-}"

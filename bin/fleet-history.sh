@@ -46,8 +46,10 @@
 #           reap removes that worktree (issue #466) — resume rebuilds it off the sha.
 #           Idempotent: a no-op if a row already exists for this session-id /
 #           transcript-dir (so the daemon can call it every tick, and it never
-#           shadows a landed row). Skips a window with no resolvable transcript
-#           (nothing to index). Resolves transcript-dir + session-id + summary the
+#           shadows a landed row). A window with no resolvable transcript (a Codex
+#           worker, #547; a Claude one that never took a turn) is recorded with
+#           '-' for transcript/session — review-only, deduped on key + worktree/sha.
+#           Resolves transcript-dir + session-id + summary the
 #           same way `record` does.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
 #   rows                             Dash US-delimited rows (closed view of the dashboard).
@@ -289,20 +291,24 @@ cmd_record_closed() {
   [ -z "$key" ] && { echo "fleet-history record-closed: --key is required" >&2; return 2; }
 
   # transcript dir + session id from the (still-present) worktree path. A window
-  # with no transcript is nothing to index/resume → skip quietly (not an error).
+  # with no transcript used to be SKIPPED ("nothing to index/resume"); since issue
+  # #547 it is recorded TRANSCRIPT-LESS (cols 7/8 = '-'), because a Codex worker
+  # (FLEET_AGENT=codex) never writes a ~/.claude/projects transcript, and a Claude
+  # worker that died before its first turn is a closed session the operator should
+  # see too. Such a row is review-only (resume has no session to reopen), and it
+  # dedups on key + worktree/sha (ledger_has_session's transcript-less fallback),
+  # so the reapers that all reach here stay idempotent. No session ⇒ no transcript
+  # dir (the dir key is a dedup key — never store a speculative path, #492).
   local tdir="" sid=""
   if [ -n "$wt" ]; then
     tdir=$(transcript_dir_for "$wt")
     sid=$(newest_session_in "$tdir")
-  fi
-  if [ -z "$sid" ]; then
-    printf 'closed %s → no transcript to index (skipped)\n' "$(key_label "$key")"
-    return 0
+    [ -z "$sid" ] && tdir=""
   fi
 
   local ledger; ledger=$(ledger_path "$repo")
   if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
-    printf 'closed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "$sid"
+    printf 'closed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "${sid:-none}"
     return 0
   fi
   mkdir -p "$(dirname "$ledger")" 2>/dev/null || true

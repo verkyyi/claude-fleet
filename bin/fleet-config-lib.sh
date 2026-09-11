@@ -342,6 +342,10 @@ fcfg_enum_options() {
         squash "$FCFG_US" 'squash-merge (default)' \
         merge  "$FCFG_US" 'merge commit' \
         rebase "$FCFG_US" 'rebase-merge' ;;
+    FLEET_AGENT)
+      printf '%s%s%s\n' \
+        claude "$FCFG_US" 'Claude Code (default)' \
+        codex  "$FCFG_US" 'OpenAI Codex CLI (bin/fleet-codex.sh, issue #547)' ;;
     *) fcfg_model_aliases "$1" ;;
   esac
 }
@@ -394,6 +398,15 @@ fcfg_validate() {
         case "$val" in
           ''|squash|merge|rebase) : ;;
           *) printf '%s must be squash|merge|rebase or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
+      # FLEET_AGENT is an enum over the agent CLIs the launcher can exec (issue
+      # #547) — its own set, not a model alias. Empty defers to claude.
+      if [ "$key" = FLEET_AGENT ]; then
+        case "$val" in
+          ''|claude|codex) : ;;
+          *) printf '%s must be claude|codex or empty (got: %s)' "$key" "$val"; return 1 ;;
         esac
         return 0
       fi

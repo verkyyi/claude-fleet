@@ -127,6 +127,8 @@ eq 'type FLEET_SPAWN_FOCUS'    "$(fcfg_type FLEET_SPAWN_FOCUS)"    bool
 eq 'type FLEET_MODEL'          "$(fcfg_type FLEET_MODEL)"          enum
 eq 'type FLEET_SUBAGENT_MODEL' "$(fcfg_type FLEET_SUBAGENT_MODEL)" enum
 eq 'type FLEET_MERGE_METHOD'   "$(fcfg_type FLEET_MERGE_METHOD)"   enum
+eq 'type FLEET_AGENT'          "$(fcfg_type FLEET_AGENT)"          enum
+eq 'type FLEET_CODEX_MODEL'    "$(fcfg_type FLEET_CODEX_MODEL)"    str
 eq 'type FLEET_CTX_WINDOW'     "$(fcfg_type FLEET_CTX_WINDOW)"     num
 eq 'type FLEET_MAX_SESSIONS'   "$(fcfg_type FLEET_MAX_SESSIONS)"   num
 eq 'type FLEET_ISSUE_TTL'      "$(fcfg_type FLEET_ISSUE_TTL)"      num
@@ -192,6 +194,12 @@ fcfg_validate enum ''        FLEET_MERGE_METHOD >/dev/null || fail 'empty valid 
 fcfg_validate enum opus      FLEET_MERGE_METHOD >/dev/null && fail 'model alias invalid for FLEET_MERGE_METHOD'; ok
 fcfg_validate enum fast      FLEET_MERGE_METHOD >/dev/null && fail 'garbage invalid for FLEET_MERGE_METHOD'; ok
 fcfg_validate enum comment   FLEET_MODEL >/dev/null && fail 'comment invalid for FLEET_MODEL'; ok
+# FLEET_AGENT is an enum over its OWN set (claude|codex|empty), issue #547.
+fcfg_validate enum claude    FLEET_AGENT >/dev/null || fail 'claude valid for FLEET_AGENT'; ok
+fcfg_validate enum codex     FLEET_AGENT >/dev/null || fail 'codex valid for FLEET_AGENT'; ok
+fcfg_validate enum ''        FLEET_AGENT >/dev/null || fail 'empty valid for FLEET_AGENT'; ok
+fcfg_validate enum opus      FLEET_AGENT >/dev/null && fail 'model alias invalid for FLEET_AGENT'; ok
+fcfg_validate enum gemini    FLEET_AGENT >/dev/null && fail 'unknown agent invalid for FLEET_AGENT'; ok
 fcfg_validate regex '^(a|b)$' FLEET_PROTECTED_RE >/dev/null || fail 'valid regex should pass'; ok
 fcfg_validate regex '^(a'    FLEET_PROTECTED_RE >/dev/null && fail 'invalid regex should fail'; ok
 fcfg_validate regex 'a`b'    FLEET_PROTECTED_RE >/dev/null && fail 'regex with backtick should fail'; ok
@@ -224,7 +232,7 @@ case " $ma_sub "   in *' inherit '*) ok ;; *) fail "FLEET_SUBAGENT_MODEL must of
 # PICKER ⇔ VALIDATOR: every token the picker can offer for an enum key (from
 # fcfg_enum_options, what dash-config-edit reads) must also validate for that key.
 # Ties the offered set to the accepted set for EVERY enum key so they can't drift.
-for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD; do
+for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT; do
   while IFS="$FCFG_US" read -r tok _ann; do
     [ -n "$tok" ] || continue
     fcfg_validate enum "$tok" "$k" >/dev/null || fail "picker offers '$tok' for $k but the validator rejects it"

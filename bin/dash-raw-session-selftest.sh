@@ -378,5 +378,27 @@ grep -q 'NEWWIN' "$NEWWIN_LOG" || fail "O a stale in-flight marker (past its TTL
 rm -rf "$INFLIGHT"
 ok "O in-flight spawn markers count toward the cap (fresh blocks, stale ages out)"
 
+# ==================== O: --agent picks the agent CLI for THIS scratch (#547) ====
+# `--agent codex` rides into the launcher's argv inside the new-window command
+# (`fleet-claude.sh --agent codex`), survives the --bg re-exec, never claims a
+# warm-pool window (the pool holds fleet-default windows), and an unknown token is
+# dropped (fleet default) rather than embedded. Default spawns carry no --agent.
+reset_scratch; : > "$POOL_LOG"; : > "$NEWWIN_LOG"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent codex
+grep -qF -- "fleet-claude.sh' --agent codex" "$NEWWIN_LOG" || fail "O --agent codex must reach the launcher inside the new-window command" "$(cat "$NEWWIN_LOG")"
+grep -qs 'claim' "$POOL_LOG"               && fail "O an explicit --agent scratch must never claim a warm-pool window" "$(cat "$POOL_LOG")"
+grep -q '\[codex\]' "$DISPLAY_LOG"         || fail "O the status line should name the agent" "$(cat "$DISPLAY_LOG")"
+reset_scratch; : > "$NEWWIN_LOG"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --agent=codex --prompt 'seeded on codex'
+grep -qF -- "fleet-claude.sh' --agent codex \"\$(cat '" "$NEWWIN_LOG" || fail "O --bg --agent must survive the re-exec and precede the seed" "$(cat "$NEWWIN_LOG")"
+reset_scratch; : > "$NEWWIN_LOG"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent gemini
+grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O an unknown --agent must be dropped, never embedded" "$(cat "$NEWWIN_LOG")"
+grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "O an unknown --agent still spawns (fleet default)" "$(cat "$NEWWIN_LOG")"
+reset_scratch; : > "$NEWWIN_LOG"
+WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
+grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O a default spawn must carry NO --agent (byte-for-byte unchanged)" "$(cat "$NEWWIN_LOG")"
+ok "O --agent codex reaches the launcher (cold path, survives --bg); unknown/default carry none (#547)"
+
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0
