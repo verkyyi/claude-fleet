@@ -38,7 +38,7 @@
 #            - dirty/unmerged  → confirm POPUP first; confirm y keeps a dirty wt but
 #                                removes a clean+unmerged one; the window closes
 #            - no @worktree    → degrade: just close the window (pre-#290 behavior)
-#          Nothing issue-bound is touched; the summary-cache seed is removed.
+#          Nothing issue-bound is touched.
 #
 #   C. the dash ⌃x bind wiring (issue #313) — a static check on tmux-dashboard.sh:
 #      the reap bind must be `ctrl-x:execute-silent(...)`, never a bare
@@ -297,18 +297,14 @@ grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
 [ "$(srows 4)" = 0 ] || fail "a CANCELLED reap must not record a row (the session is still live)" "$(cat "$LEDGER")"
 
 # B8: ⌃x on a raw scratch row (@raw=1, no @issue, no @worktree) → DEGRADE to the
-# pre-#290 behavior: just close the window. No refuse, the dash summary-cache seed
-# is removed, and nothing issue-bound is touched (no gh). The summary key mirrors
-# dash-raw-session.sh: fleet_summary_key <session s1> <window @9> = s1_9.
-CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
-SEED="$CACHE/summary_s1_9"; printf 'scratch (raw session)' > "$SEED"
+# pre-#290 behavior: just close the window. No refuse, and nothing issue-bound is
+# touched (no gh).
 : > "$TMLOG"; : > "$GHLOG"
 rows_before="$(wc -l < "$LEDGER" | tr -d ' ')"   # the worker cases above populated it (#471)
 RAW=1 WID='@9' WT='' run_reap "" "s1:9"
 grep -q 'KILL' "$TMLOG" || fail "raw ⌃x (no worktree) should kill the scratch window"
 grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothing to reap')"
 grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
-[ -e "$SEED" ] && fail "raw ⌃x should remove the summary-cache seed"
 [ -s "$GHLOG" ] && fail "raw ⌃x (no worktree) must not touch gh (no issue/PR lifecycle)"
 [ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$rows_before" ] \
   || fail "raw ⌃x with no worktree has nothing to index — no NEW ledger row" "$(cat "$LEDGER")"

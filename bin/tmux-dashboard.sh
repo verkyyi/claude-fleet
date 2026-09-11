@@ -82,26 +82,26 @@ PREVIEW=( --preview-window=hidden )
 # backlog panel (tmux-issues.sh) uses.
 POPUP="${POPUP:-}"
 ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
-# Minimal header (issue #249): core actions inline, the rest deferred to the `?`
-# cheatsheet (fleet-keys.sh lists every demoted bind: ⌃s ⌃x ⌃t ⌃o). Terse
-# `key verb` form, not `key=phrase`, so it fits one line at normal widths.
-# `new` is a TAPPABLE button chip `[＋ new]` (issue #381): ⌃n is swallowed by
-# Termius/iPad (its own new-tab shortcut) with no keyboard fallback, so the chip
-# — wired in run_dash via click-header → the same file+spawn ⌃n runs — is the
-# tap-first new-SESSION path there. ⌃n stays bound (additive), listed under `?`.
-HDR='↵ jump · [＋ new] · ? keys'
-# POPUP variant: same minimal set + a trailing `esc close` (closing a modal is
-# less obvious than esc-back on the always-on dash) — that token is the only diff.
-[ -n "$POPUP" ] && HDR='↵ jump · [＋ new] · ? keys · esc close'
+# No hint line above the prompt (issue #536). The dash used to carry a one-row
+# fzf header — `↵ jump · ＋new · ? keys` (#249 minimal set, #381 tap chip) — but
+# once the prompt line became always-visible (#493) it went stale against it:
+# `↵ jump` contradicted the ghost text's `↵ → scratch` one row below, `? keys`
+# only fires on an EMPTY line (with text typed `?` is a character — see the `?`
+# bind), and the `? keys` token was never tappable. The operator chose to drop the
+# row outright rather than relocate its content, so:
+#   • the ghost text carries BOTH ↵ meanings (typed → named scratch, empty → jump);
+#   • the ＋new chip is gone with the row — ⌃n is the dash's only new-issue+worker
+#     path (the backlog popup, prefix b, keeps its own chip);
+#   • `?` stays bound (empty line → the cheatsheet, fleet-keys.sh --context dash).
 # The prompt line at the bottom is ALWAYS visible (no --no-input): it is the
 # quick-scratch box — type a name, ↵ → an EMPTY scratch session named after it
 # (dash-enter.sh → dash-raw-session.sh --name-file; it seeded a prompt until #534 —
-# an operator typing here wants a session to drive, not one already working). The hint lives in the input's
-# ghost text, not the header, so it vanishes the moment you start typing and the
-# header stays one line wide. Typing never filters (--disabled); ↵ on an EMPTY
-# line is still plain jump. --no-separator: the header line already divides the
-# list from the prompt, so the input costs ONE row, not two (iPad-height panes).
-GHOST='type a name, ↵ → empty scratch'
+# an operator typing here wants a session to drive, not one already working). The
+# hint lives in the input's ghost text, so it vanishes the moment you start typing.
+# Typing never filters (--disabled); ↵ on an EMPTY line is still plain jump.
+# --no-separator + --info=hidden: the input costs ONE row, not two (iPad-height
+# panes), and the list runs straight into it.
+GHOST='type a name ↵ scratch · empty ↵ jumps'
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across
@@ -117,10 +117,7 @@ run_dash() {
   # popup (⌃n/?) keep `execute` on purpose. ⌃s is no longer one of them (issue #444):
   # a scratch now spawns ON THE KEYSTROKE — no name popup, no confirm (that prompt was
   # an empty line to dismiss; `--name` still exists off the dash) — so it takes the same
-  # silent + backgrounded (`--bg`) form as the other instant actions. The click-header
-  # bind mirrors ⌃n for the tappable `[＋ new]` chip (issue #381): tapping ＋/new
-  # transforms into the very file+spawn action string ⌃n runs — a single source of
-  # truth, additive to ⌃n.
+  # silent + backgrounded (`--bg`) form as the other instant actions.
   # The two popup binds (⌃n/?) do NOT call `tmux display-popup` directly — they go
   # through bin/dash-popup.sh (issue #448). A popup needs a CLIENT to draw on, and a
   # command run from a pane process (which is what an fzf `execute()` bind is) reaches
@@ -143,13 +140,11 @@ run_dash() {
     --disabled --no-sort \
     --layout=reverse-list --info=hidden --no-separator --border=none \
     --prompt='▸ ' --ghost="$GHOST" \
-    --header="$HDR" \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)" \
     --bind "ctrl-r:reload(bash $ROWS)" \
     --bind "?:transform:[ -n \"\$FZF_QUERY\" ] && echo 'put(?)' || echo 'execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)'" \
     --bind "ctrl-n:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
-    --bind "click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)' ;; esac" \
     --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
     --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \

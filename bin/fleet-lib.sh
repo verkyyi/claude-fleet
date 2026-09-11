@@ -65,7 +65,7 @@ fi
 # name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,
 # bridge/{seen,since}, watch/{keys,needs}, sweep.due). Its RUNTIME cache is keyed
 # by repo SLUG and lives under $FLEET_C/fleets/<slug>/ (issues, prmap, labels, …).
-# Machine-wide state (sessmap, account.*, git_*/ctx_*/summary_* window caches,
+# Machine-wide state (sessmap, account.*, git_*/ctx_* window caches,
 # usage, collapsed) lives under $FLEET_C/global/. Truly global durable state
 # (accounts/, diskguard/, restore/{autorestore.on,restore.log}) is unchanged.
 #
@@ -151,66 +151,24 @@ fleet_cache_dir() {
   printf '%s' "$d"
 }
 
-# Machine-wide (non-fleet) runtime cache dir — sessmap, account.*, git_*/ctx_*/
-# summary_* window caches, usage, ratelimit, collapsed, config scratch. Created on
-# demand.
+# Machine-wide (non-fleet) runtime cache dir — sessmap, account.*, git_*/ctx_*
+# window caches, usage, ratelimit, collapsed, config scratch. Created on demand.
 fleet_cache_global() {
   local d="$FLEET_C/global"
   mkdir -p "$d" 2>/dev/null
   printf '%s' "$d"
 }
 
-# Filename key for a window's dash-summary cache, machine-wide under global/
-# (callers do "$(fleet_cache_global)/summary_$(fleet_summary_key "$sess" "$wid")").
-# Post-#159 each fleet runs its OWN tmux server numbering windows from @1, so the
-# bare numeric window id — globally unique under the old shared `default` socket —
-# now COLLIDES across fleets: fleet A's @2 and fleet B's @2 both mapped to
-# summary_2, so one fleet's row bled into another fleet's dash (issue #208).
-# Prefixing the (globally-unique, fleet-up-sanitized) session name disambiguates.
-# Both parts are sanitized to [A-Za-z0-9._-] so an unexpected char can't escape
-# the cache dir; a real session name (fleet-up already strips '.'/':'/space) is
-# unchanged, and the numeric id is digits-only, so the key stays stable across
-# window reorders. The one hot-path reader (tmux-dashboard-rows.sh) inlines this
-# same expansion to stay fork-free, so keep the two byte-identical.
-fleet_summary_key() {
-  local sess="${1:-}" wid="${2:-}"
-  printf '%s_%s' "${sess//[^A-Za-z0-9._-]/_}" "${wid//[^0-9]/}"
-}
-
-# fleet_summary_sanitize <text> — make a session one-liner safe to hand tmux as the
-# @summary WINDOW OPTION the pane border renders (issue #455). The dash column keeps
-# reading the raw summary FILE; only this option-bound copy is scrubbed, because the
-# border takes a second parsing pass the file never does:
-#   • ONE LINE      pane-border-format draws a single row, so CR/LF/TAB → space (a
-#                   raw newline would truncate or smear the border).
-#   • NO '#'        tmux re-parses the EXPANDED border string in format_draw, so a
-#                   '#[' or '#{' arriving from an LLM one-liner would leak a style
-#                   or a format token into the header. Substituted values are not
-#                   re-expanded, so ',', '{', '%' are inert and stay readable —
-#                   '#' is the one byte that must go.
-#   • CLIPPED       ~60 chars, an upper bound on what any window option can carry;
-#                   the format clips again to the width it can actually draw.
-# Squeeze/trim keeps the double spaces a collapsed newline leaves behind out of the
-# header. Pure builtins — no forks, and safe under a `set -u` caller.
-fleet_summary_sanitize() {
-  local s="${1:-}"
-  s="${s//$'\n'/ }"; s="${s//$'\r'/ }"; s="${s//$'\t'/ }"
-  s="${s//'#'/}"
-  while [ "$s" != "${s//  / }" ]; do s="${s//  / }"; done
-  s="${s# }"; s="${s% }"
-  printf '%s' "${s:0:60}"
-}
-
 # --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
-# The two screen-classifier helpers (bin/tmux-summarize.sh, bin/classify-sessions.sh)
-# shell out to `claude -p`. Left bare, that call authenticates from the machine's
+# The screen-classifier helper (bin/classify-sessions.sh — the dash summarizer that
+# shared this wire retired in issue #535) shells out to `claude -p`. Left bare, that call authenticates from the machine's
 # AMBIENT login — the macOS Keychain entry / ~/.claude credentials — which is a
 # DIFFERENT credential from the one every worker runs on: bin/fleet-claude.sh exports
 # CLAUDE_CODE_OAUTH_TOKEN for the active pool account before exec'ing claude, exactly
 # as fleet-account.sh's header describes. So when the ambient login lapsed on
-# 2026-08-25, all eleven workers kept running and only the dash's summary column and
-# the looping-detector died — the one credential nothing else in the fleet depends on
-# was the one credential these two helpers depended on.
+# 2026-08-25, all eleven workers kept running and only the dash's (then) summary
+# column and the looping-detector died — the one credential nothing else in the fleet
+# depends on was the one credential these helpers depended on.
 #
 # This is that missing wire, and only that: the pool token when there IS one, silence
 # when multi-account is off (then a bare `claude -p` and its ambient login is still
@@ -583,12 +541,13 @@ fleet_transcript_dir() {
 }
 
 # Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
-# a human ran? The status classifier and the dashboard summarizer run from INSIDE a
-# window's worktree, so their transcripts land in the SAME project dir as the
-# session they describe — and they run every ~60s, so they are usually the NEWEST
-# file there. Recognise them by their own rubric text (RUBRIC= in
-# bin/classify-sessions.sh / bin/tmux-summarize.sh; fleet-history-selftest.sh pins
-# both strings against those files so they cannot drift apart silently).
+# a human ran? The status classifier (and, until issue #535, the dashboard
+# summarizer) runs from INSIDE a window's worktree, so its transcripts land in the
+# SAME project dir as the session they describe — and it runs on every Stop, so
+# they are usually the NEWEST file there. Recognise them by their own rubric text
+# (RUBRIC= in bin/classify-sessions.sh; fleet-history-selftest.sh pins that string
+# against the file so the two cannot drift apart silently). The summarizer's rubric
+# stays in the list below: its transcripts outlive the retired script on disk.
 # Canonical copy — bin/fleet-history.sh (indexing) and bin/worktree-autoclean.sh
 # (the conversation-scratch keep gate) both key off it.
 #
@@ -606,7 +565,7 @@ fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a re
 # newest HUMAN *.jsonl session id in a transcript dir (basename sans .jsonl), or
 # empty when the dir holds nothing but the fleet's own helper transcripts (a warm
 # scratch-pool worktree is exactly that — all 21 transcripts in one such dir were
-# classifier/summarizer runs).
+# classifier/summarizer runs — the latter before #535).
 #
 # NO `| head` here, deliberately. With `set -o pipefail` an early-closing consumer
 # makes `ls` die of SIGPIPE and the substitution reports 141 — which silently
@@ -1599,6 +1558,110 @@ fleet_backlog_col_header() {
   while [ "${#s}" -lt "$off_ms" ];    do s="$s "; done; s="${s}milestone"
   while [ "${#s}" -lt "$off_title" ]; do s="$s "; done; s="${s}title"
   printf '\033[38;2;%sm%s%s' "$dim" "$s" "$reset"
+}
+
+# ── prmap jq program — the ONE fold from `gh pr list --json` to the prmap TSV ─────
+# (issue #533). bin/tmux-pr-refresh.sh (the single prmap writer) feeds this to
+# `gh --jq`; bin/pr-refresh-jq-selftest.sh feeds the byte-identical program to the
+# system `jq` against fixture JSON, so the taxonomy below is tested offline. It used
+# to be inlined in the refresher, where it silently drifted from the merge gate
+# (fleet-pr-verdict.sh → land_verdict): the dash showed `#N✓` on a PR the worker's
+# verdict called DRAFT / FAILING / PENDING. Keep the two in step — the ci fold here
+# IS the verdict's `fail|pending|pass`, spelled as glyphs.
+#
+# Input: the JSON array from
+#   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit
+# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha
+#   ci    ·  no checks at all
+#         ✗  any red: a CheckRun whose conclusion is FAILURE / TIMED_OUT / CANCELLED /
+#            ACTION_REQUIRED, or a StatusContext (the OTHER rollup shape — it has
+#            `.state`, not `.status`/`.conclusion`) in FAILURE / ERROR
+#         …  anything not final yet (a CheckRun not COMPLETED, a StatusContext not SUCCESS)
+#         ✓  every check final and none red (NEUTRAL / SKIPPED count as green — same as
+#            the verdict's `pass`)
+#   ready only for an OPEN + ✓ PR, else "" — the dash decorates the ✓ with it:
+#         draft    isDraft — wins over everything; a draft can't land whatever CI says (✓d)
+#         conflict mergeable CONFLICTING or mergeStateStatus DIRTY               (✓!)
+#         ready    CLEAN | HAS_HOOKS | UNSTABLE (UNSTABLE = a NON-required check is
+#                  red; with ci=✓ nothing is, so it's mergeable — as land_classify)  (✓)
+#         behind   BEHIND — update-branch                                        (✓↑)
+#         blocked  BLOCKED — branch protection (review required / other)         (✓·)
+#         unknown  UNKNOWN / "" — GitHub hasn't computed mergeability yet (every
+#                  fresh push for a few seconds) — NOT the same as ready          (✓?)
+#   sha   the MERGE commit (mergeCommit.oid) of a MERGED PR, "" otherwise (issue #541).
+#         The deploy probe below keys its fleets/<slug>/deploy_<sha> cache on it; the
+#         ledger's own sha is the pre-squash worktree HEAD, which is NOT on master.
+# The first 4 fields are a stable contract (fleet-cleanup-daemon.sh keys off
+# branch/#num/state); readers tab-guard a missing 5th/6th field to "" (older caches).
+# shellcheck disable=SC2016,SC2034  # jq vars ($r/$ci/$ready) not shell — keep single-quoted; read cross-file by pr-refresh + its selftest
+FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
+  (.statusCheckRollup // []) as $r |
+  (if   ($r|length)==0                                                       then "·"
+   elif ($r|any(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
+                or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
+                or .state=="FAILURE" or .state=="ERROR"))                    then "✗"
+   elif ($r|any(.status!="COMPLETED" and .state!="SUCCESS"))                 then "…"
+   else "✓" end) as $ci |
+  (if .state=="OPEN" and $ci=="✓" then
+     (if   .isDraft==true                                                    then "draft"
+      elif (.mergeable=="CONFLICTING" or .mergeStateStatus=="DIRTY")         then "conflict"
+      elif (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS"
+            or .mergeStateStatus=="UNSTABLE")                                then "ready"
+      elif .mergeStateStatus=="BEHIND"                                       then "behind"
+      elif .mergeStateStatus=="BLOCKED"                                      then "blocked"
+      else "unknown" end)
+   else "" end) as $ready |
+  .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready
+  + "\t" + (.mergeCommit.oid // "")'
+
+# ── deploy state of a MERGED PR (issue #541) ────────────────────────────────────
+# "Merged" is not "live": claude-fleet's own tooling only runs once /fleet-sync-install
+# fast-forwards ~/.claude/fleet, and an app repo deploys off a post-merge workflow.
+# Two per-fleet knobs (fleet.conf; neither set ⇒ the feature is off and the dash keeps
+# rendering `merged`):
+#   FLEET_DEPLOY_REF=<path>     a local git checkout that IS the deployment — live ⇔
+#                               the merge sha is an ancestor of its HEAD. Zero network.
+#                               Wins over FLEET_DEPLOY_CHECK when both are set.
+#   FLEET_DEPLOY_CHECK=actions  GitHub Actions runs for the merge sha (push runs +
+#                               the workflow_dispatch deploys a conductor fans out with
+#                               the same head_sha): folded by FLEET_DEPLOY_RUNS_JQ.
+# States: live (terminal) · deploying · failed · unknown. bin/tmux-pr-refresh.sh (the
+# single prmap writer) caches them at fleets/<slug>/deploy_<sha> as `<state>\t<epoch>`;
+# the dash (`live` / `deploy…` / `deploy✗`) and the ⌃t landed list (`dep` column) read
+# that file fork-free. bin/deploy-state-selftest.sh pins both programs offline.
+#
+# One run → one token: its status while not completed (queued / in_progress / waiting
+# / requested / pending), else its conclusion. Any red token → failed (a broken
+# post-merge run is attention, whichever workflow it is); any still-running → deploying;
+# all green (success / skipped / neutral) → live; no runs at all → unknown.
+# shellcheck disable=SC2016,SC2034  # jq vars ($s) not shell — keep single-quoted; read cross-file
+FLEET_DEPLOY_RUNS_JQ='[.workflow_runs[]? | (if .status=="completed" then (.conclusion // "unknown") else .status end)] as $s |
+  if   ($s|length)==0                                                                    then "unknown"
+  elif ($s|any(.=="failure" or .=="cancelled" or .=="timed_out" or .=="action_required"
+               or .=="startup_failure" or .=="stale"))                                  then "failed"
+  elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                          then "deploying"
+  else "live" end'
+
+# fleet_deploy_probe <repo> <sha> <ref> <check> — print live|deploying|failed|unknown
+# for one merge sha under the given knobs; "" (rc 0) when the feature is off for this
+# repo or the sha is empty; rc 1 with "" when the actions read itself failed (the
+# caller keeps whatever it cached rather than downgrading on a transient gh error).
+fleet_deploy_probe() {
+  local repo="${1:-}" sha="${2:-}" ref="${3:-}" check="${4:-}" out
+  [ -n "$sha" ] || return 0
+  if [ -n "$ref" ]; then
+    # rc 1 = not an ancestor, rc 128 = sha not in that checkout's object db (it has
+    # not fetched master yet) — both read as "not live here", never as an error.
+    if git -C "$ref" merge-base --is-ancestor "$sha" HEAD >/dev/null 2>&1; then printf 'live'; else printf 'unknown'; fi
+    return 0
+  fi
+  case "$check" in
+    actions)
+      out=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --jq "$FLEET_DEPLOY_RUNS_JQ" 2>/dev/null) || return 1
+      case "$out" in live|deploying|failed|unknown) printf '%s' "$out" ;; *) return 1 ;; esac ;;
+    *) : ;;
+  esac
+  return 0
 }
 
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if

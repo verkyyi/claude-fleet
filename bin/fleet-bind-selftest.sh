@@ -15,7 +15,7 @@
 #
 #   A. happy bind     → branch scratch-1 → issue-42 (same dir), @issue=42 set, @raw
 #                       unset, @worktree KEPT, window renamed to the title kebab,
-#                       @summary + summary cache reseeded, issue assigned (@me),
+#                       issue assigned (@me),
 #                       one `bound` line on stdout naming #42 + issue-42
 #   B. not a scratch  → no @raw on the caller window → REFUSE (3), nothing touched
 #   C. already bound  → caller window carries @issue → REFUSE (3), nothing touched
@@ -135,14 +135,8 @@ has_branch scratch-1                         && fail "A branch scratch-1 must be
 grep -q 'SETOPT .*@issue 42' "$OPTS_LOG"     || fail "A @issue=42 not set" "$(cat "$OPTS_LOG")"
 grep -q 'SETOPT .*-u @raw' "$OPTS_LOG"       || fail "A @raw must be UNSET" "$(cat "$OPTS_LOG")"
 grep -q 'SETOPT .*-u @worktree' "$OPTS_LOG"  && fail "A @worktree must be KEPT (dash ⌃x resolves it)" "$(cat "$OPTS_LOG")"
-# The window option is fleet_summary_sanitize'd, which strips '#' by design (it is
-# re-parsed by pane-border-format, #455) — so the OPTION reads "bound 42" while the
-# dash summary FILE below keeps the raw "bound #42", exactly as a worker spawn does.
-grep -q 'SETOPT .*@summary .*bound 42' "$OPTS_LOG" || fail "A @summary must be reseeded with bound 42" "$(cat "$OPTS_LOG")"
 grep -q 'RENAME .*ship-the-widget' "$RENAME_LOG" || fail "A window must be renamed to the title kebab" "$(cat "$RENAME_LOG")"
 grep -q 'issue edit 42 .*--add-assignee @me' "$GH_LOG" || fail "A #42 must be claimed (assignee @me)" "$(cat "$GH_LOG")"
-sf=$(ls "$WORK"/tmp/.claude-dash/global/summary_* 2>/dev/null | head -1)
-[ -n "$sf" ] && grep -q 'bound #42' "$sf"    || fail "A the dash summary cache must carry bound #42" "$(ls -R "$WORK/tmp")"
 grep -q 'bound' "$WORK/out" && grep -q '#42' "$WORK/out" && grep -q 'issue-42' "$WORK/out" \
   || fail "A stdout must report the bind (#42, issue-42)" "$(cat "$WORK/out")"
 ok "A bind renames scratch-1→issue-42 in place, @issue set, @raw dropped, window renamed, claimed"
@@ -212,7 +206,6 @@ PANE_INFO="$SCRATCH_PANE" GH_TITLE="Wrong One" run_bind 42 --title "My Custom Ti
 [ "$RC" -eq 0 ]                              || fail "G2 bind should succeed with --title (rc=$RC)" "$(cat "$WORK/err")"
 grep -q 'RENAME .*my-custom-title' "$RENAME_LOG" || fail "G2 --title must name the window" "$(cat "$RENAME_LOG")"
 grep -q 'issue view 42 .*title' "$GH_LOG"    && fail "G2 --title must skip the gh title read" "$(cat "$GH_LOG")"
-grep -q 'SETOPT .*@summary .*My Custom Title' "$OPTS_LOG" || fail "G2 the summary seed should carry the title" "$(cat "$OPTS_LOG")"
 ok "G no title → issue-42; --title names the window without a gh read"
 
 # ============================ H: no pane ====================================

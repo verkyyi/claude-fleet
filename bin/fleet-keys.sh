@@ -106,7 +106,7 @@ print_sheet() {
   key "enter (landed)" "resume the highlighted landed session — same as ⌃o"
   key "⌃p (landed)" "open the highlighted landed row's PR in the browser"
   key "⌃r" "refresh now"
-  key "?" "this cheatsheet"
+  key "?" "this cheatsheet — on an EMPTY prompt line (with text typed, ? is just a character)"
   key "esc" "relaunch the dash (it's the always-on hub pane)"
   fi
 

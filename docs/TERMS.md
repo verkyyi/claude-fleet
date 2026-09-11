@@ -62,11 +62,25 @@ they repaint instantly:
 ## The data (files the collector writes, the views read)
 
 - **Cache dir** — `$TMPDIR/.claude-dash/`. Holds the cache files:
-  - **`prmap`** — `branch <TAB> #num <TAB> state <TAB> ci-symbol <TAB> ready`
-    per open PR. `ready` (land-readiness of an OPEN + green PR, from
-    `mergeStateStatus`/`mergeable`) ∈ `ready|behind|conflict|blocked|""`; the
-    dash decorates a green PR's `✓` with it (`✓↑` behind · `✓!` conflict ·
-    `✓·` blocked). First 4 fields are a stable contract.
+  - **`prmap`** — `branch <TAB> #num <TAB> state <TAB> ci-symbol <TAB> ready <TAB> sha`
+    per PR (`--state all`, newest PR per branch). Folded from the `gh` JSON by
+    `FLEET_PRMAP_JQ` (`bin/fleet-lib.sh`), the one program the dash and the
+    worker's merge gate (`bin/fleet-pr-verdict.sh`) share (issue #533).
+    `ci-symbol` ∈ `·` no checks · `✗` any red (FAILURE / TIMED_OUT / CANCELLED /
+    ACTION_REQUIRED, or a StatusContext FAILURE / ERROR) · `…` not final ·
+    `✓` green. `ready` (land-readiness of an OPEN + green PR, from `isDraft` /
+    `mergeStateStatus` / `mergeable`) ∈ `draft|conflict|ready|behind|blocked|unknown|""`;
+    the dash decorates a green PR's `✓` with it (`✓d` draft · `✓!` conflict ·
+    `✓↑` behind · `✓·` blocked · `✓?` mergeability not computed yet · bare `✓`
+    = ready). `sha` is the merge commit of a MERGED PR, else empty (issue #541).
+    First 4 fields are a stable contract.
+  - **`deploy_<sha>`** — `<live|deploying|failed|unknown> <TAB> <epoch>` per merge
+    sha, beside its `prmap` (`fleets/<slug>/`), written by the PR refresher for a
+    fleet that sets `FLEET_DEPLOY_REF` (a local checkout that IS the deployment —
+    live ⇔ the sha is an ancestor of its HEAD) or `FLEET_DEPLOY_CHECK=actions`
+    (the sha's post-merge workflow runs; folded by `FLEET_DEPLOY_RUNS_JQ`). The
+    dash renders a MERGED PR as `merged` (no verdict) · `live` · `deploy…` ·
+    `deploy✗`; the landed list's `dep` column as `·` · `live` · `…` · `✗` (#541).
   - **`issues`** — `milestone <TAB> #num <TAB> assignee <TAB> title` per open issue.
   - **`git_<key>`** — per-worktree branch + dirty flag.
   - **`ctx_<key>`** — per-Claude-session model + context-token count (feeds ctx%).

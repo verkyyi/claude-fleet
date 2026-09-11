@@ -35,7 +35,7 @@ demo repo data.</sub>
   **type a name and press Enter** — it spawns an empty scratch session (own
   writable `scratch-N` worktree, no issue) **named after that text**, sitting at
   `❯` for you to drive; no prompt is sent. Chinese and spaces are fine (the name
-  is capped at 24 columns — 12 CJK glyphs). `Ctrl-N` (or the `[＋ new]` chip) is the issue-bound path: it files a
+  is capped at 24 columns — 12 CJK glyphs). `Ctrl-N` is the issue-bound path: it files a
   GitHub issue and spawns a worker session bound to it.
   `Ctrl-S` opens the same raw scratch under its auto `scratch-N` name (plain
   `claude`, no issue — but

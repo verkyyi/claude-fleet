@@ -1,13 +1,23 @@
 #!/bin/bash
-# fzf-new-chip-selftest.sh — asserts the tappable `[＋ new]` button chip (issue
-# #381) is wired on the two surfaces that file/spawn a session: the dash
-# (tmux-dashboard.sh) and the backlog POPUP (tmux-issues.sh).
+# fzf-new-chip-selftest.sh — the tappable `[＋ new]` button chip (issue #381) on
+# the two surfaces that file/spawn a session — with OPPOSITE contracts since #536:
+#   * the backlog POPUP (tmux-issues.sh) STILL carries it in its hint line;
+#   * the dash (tmux-dashboard.sh) carries NO hint line at all any more, so no
+#     chip and no header-tap bind — ⌃n is the dash's only new-issue+worker path.
 #
-# Why: on Termius/iPad ⌃n (new issue/session) is swallowed by Termius's own
-# new-tab shortcut and has no keyboard fallback, so a TAP path is the only way to
-# create a session there. The chip rides the SAME click-header:transform mechanism
-# as the `[✕ close]` chip (issue #346, fzf-modal-close-selftest.sh): tapping ＋/new
-# transforms into the action that ⌃n runs. The chip is ADDITIVE — ⌃n stays bound.
+# Why the chip (backlog): on Termius/iPad ⌃n (new issue/session) is swallowed by
+# Termius's own new-tab shortcut and has no keyboard fallback, so a TAP path is the
+# only way to create a session there. The chip rides the SAME click-header:transform
+# mechanism as the `[✕ close]` chip (issue #346, fzf-modal-close-selftest.sh):
+# tapping ＋/new transforms into the action that ⌃n runs. ADDITIVE — ⌃n stays bound.
+#
+# Why NOT on the dash (#536): the dash's bottom row is an always-visible prompt
+# line (#493), and the hint line above it — `↵ jump · [＋ new] · ? keys` — had gone
+# stale against it: `↵ jump` contradicted the ghost text's `↵ → scratch`, `? keys`
+# only fires on an EMPTY line, and the `? keys` token was never tappable. The
+# operator chose to drop the row outright rather than relocate its content, so this
+# half of the test is a NEGATIVE contract: the row, the chip and the tap bind must
+# not quietly come back.
 #
 # A bracketed multi-word chip `[＋ new]` is split by fzf into the header words `[＋`
 # and `new]`, so $FZF_CLICK_HEADER_WORD is one or the other; the case globs
@@ -30,21 +40,24 @@ BACKLOG="$BIN/tmux-issues.sh"
 for f in "$DASH" "$BACKLOG"; do [ -f "$f" ] || fail "missing $f"; done
 ok
 
-# --- DASH: chip in the header + click-header emits the file+spawn action --------
+# --- DASH: NO hint line, NO chip, NO header-tap bind (issue #536) ----------------
+# `--header=` is the hint-line flag; `--header-lines=1` (the pinned column-title
+# row from the rows producer) is a different flag and is expected to stay.
+grep -q -- '--header=' "$DASH" \
+  && fail "dash: the --header hint line is back (dropped in #536 — the prompt line's ghost text carries the ↵ hint)"
 grep -qF -- '[＋ new]' "$DASH" \
-  || fail "dash: --header missing the '[＋ new]' button chip"
+  && fail "dash: the '[＋ new]' chip is back (dropped with the hint line in #536)"
+grep -q -- 'click-header' "$DASH" \
+  && fail "dash: a click-header bind is back — there is no hint row to tap since #536"
 ok
-# a click-header:transform bind whose ＋/new case runs the very file+spawn action
-# (dash-issue-new.sh confirm --spawn) — the same one ⌃n runs.
-grep -- 'click-header:transform' "$DASH" | grep -qF -- '*＋*|*new*)' \
-  || fail "dash: click-header has no *＋*|*new* case"
-grep -- 'click-header:transform' "$DASH" | grep -qF -- 'dash-issue-new.sh confirm --spawn' \
-  || fail "dash: the ＋/new case must emit the file+spawn action (dash-issue-new.sh --spawn)"
-ok
-# ⌃n stays bound (additive, not a replacement) — same assertion as
+# ⌃n is the dash's ONLY new-issue+worker path now — same assertion as
 # dash-issue-new-spawn-selftest.sh test E.
 grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
-  || fail "dash: ⌃n bind lost — the chip must be additive to ⌃n"
+  || fail "dash: ⌃n bind lost — it is the dash's only new-issue+worker path since #536"
+ok
+# the ghost text must carry BOTH ↵ meanings (the hint line used to say `↵ jump`).
+grep -qF -- "GHOST='type a task ↵ scratch · empty ↵ jumps'" "$DASH" \
+  || fail "dash: the prompt-line ghost text must read 'type a task ↵ scratch · empty ↵ jumps' (#536)"
 ok
 
 # --- BACKLOG: chip in the POPUP header + click-header drops the 'new' sentinel ---
@@ -73,13 +86,10 @@ for w in '↵' 'jump' 'work' 'keys' '?'; do
 done
 ok
 
-# --- both shipped binds must PARSE (filter mode validates --bind). The forms below
-# mirror what the scripts build after shell expansion (abs paths standin). --------
-DASH_BIND="click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) echo 'execute(tmux display-popup -w 90% -h 12 -E \"bash /b/dash-issue-new.sh confirm --spawn\")+reload(bash /b/rows)' ;; esac"
+# --- the shipped backlog bind must PARSE (filter mode validates --bind). The form
+# below mirrors what the script builds after shell expansion (abs paths standin). --
 BACKLOG_BIND="click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) printf 'new' > '/tmp/act'; echo abort ;; *✕*|*close*) echo abort ;; esac"
 if command -v fzf >/dev/null 2>&1; then
-  printf 'x\n' | fzf -f x --bind "$DASH_BIND" >/dev/null 2>&1 \
-    || fail 'fzf rejected the dash ＋ new bind — the syntax is no longer valid'
   printf 'x\n' | fzf -f x --bind "$BACKLOG_BIND" >/dev/null 2>&1 \
     || fail 'fzf rejected the backlog ＋ new bind — the syntax is no longer valid'
   ok
@@ -87,5 +97,5 @@ else
   printf 'fzf-new-chip-selftest: fzf absent — skipped the live bind-parse check\n'
 fi
 
-printf 'selftest PASS: %d assertions (dash + backlog [＋ new] chip: wiring, additive ⌃n, glob match, bind parse)\n' "$pass"
+printf 'selftest PASS: %d assertions (backlog [＋ new] chip wired + parses; dash has no hint line/chip/tap bind, ⌃n kept, ghost carries ↵)\n' "$pass"
 exit 0

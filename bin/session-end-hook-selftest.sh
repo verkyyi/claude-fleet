@@ -280,16 +280,12 @@ clr; REASON=prompt_input_exit ISS=2 WID='@2' run_hook
 ok "idempotent — a second fire records ONE row (dedup vs cleanup/ledger-watch)"
 
 # T11: @raw scratch with NO resolvable scratch worktree (a pre-#290 window, or one
-# whose cwd wandered) → close the window ONLY, nothing to record. A summary-cache
-# seed under the dash cache is dropped. fleet_summary_key s1/@9 = s1_9.
-CACHE="$WORK/rt/.claude-dash/global"; mkdir -p "$CACHE"
-SEED="$CACHE/summary_s1_9"; printf 'scratch' > "$SEED"
+# whose cwd wandered) → close the window ONLY, nothing to record.
 before="$(wc -l < "$LEDGER" | tr -d ' ')"
 clr; REASON=prompt_input_exit ISS='' RAW=1 WID='@9' run_hook
 grep -q 'RUNSHELL' "$TMLOG" || fail "raw scratch exit must dispatch (window close)" "$(cat "$TMLOG")"
 grep -q 'KILL' "$TMLOG" || fail "raw scratch exit must close the window"
 [ -s "$GHLOG" ] && fail "a worktree-less raw exit must not touch gh"
-[ -e "$SEED" ] && fail "raw scratch exit should drop the dash summary-cache seed"
 [ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$before" ] || fail "a worktree-less raw exit must write NO ledger row" "$(cat "$LEDGER")"
 ok "@raw with no scratch worktree → window closed only (nothing to record)"
 

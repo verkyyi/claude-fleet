@@ -173,7 +173,7 @@ spawn() {  # <name> <runner> <sid> <cwd> → window id (a claude-bearing window 
   local w
   w=$(TM new-window -d -t "$SESS": -n "$1" -c "$4" -P -F '#{window_id}' "$FB/$2 $3") || fail "spawn $1"
   TM set-window-option -t "$w" @raw 1; TM set-window-option -t "$w" @worktree "$4"
-  TM set-window-option -t "$w" @claude_state working; TM set-window-option -t "$w" @summary "sum-$1"
+  TM set-window-option -t "$w" @claude_state working
   TM set-window-option -t "$w" @origin scratch-9; TM set-window-option -t "$w" @cc_account acctA
   printf '%s' "$w"
 }
@@ -209,7 +209,7 @@ nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1
 ok; [ -n "$nw1" ] && [ "$nw1" != "$w1" ] || fail "w1 must be re-opened as a NEW window — $out $(diag)"
 # (physical path: macOS reports /private/var/… for a /var/… mktemp dir)
 ok; [ "$(cd "$(TM display-message -p -t "$nw1" '#{pane_current_path}')" && pwd -P)" = "$(cd "$WORK/wt1" && pwd -P)" ] || fail "new w1 must run in the same cwd (got $(TM display-message -p -t "$nw1" '#{pane_current_path}'))"
-for opt in @raw=1 @worktree="$WORK/wt1" @summary=sum-w1 @origin=scratch-9 @claude_state=working; do
+for opt in @raw=1 @worktree="$WORK/wt1" @origin=scratch-9 @claude_state=working; do
   ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "new w1 must carry ${opt%%=*}=${opt#*=} (got $(TM display-message -p -t "$nw1" "#{${opt%%=*}}"))"
 done
 ok; [ -n "$(TM display-message -p -t "$nw1" '#{@migrated}')" ] || fail "new w1 must be stamped @migrated"

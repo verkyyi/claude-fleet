@@ -250,6 +250,11 @@ fi
 for _stale in issues prmap labels parents; do
   rm -f "$C/$_stale" "$C/$_stale.ts" 2>/dev/null || true
 done
+# The dash summary cache retired with the summary column (issue #535): sweep the
+# per-window summary_* files and the summarizer's sumhash/ change-gate dir. Cheap
+# (a glob over global/), idempotent, and gone-for-good once nothing writes them.
+rm -f "$G"/summary_* 2>/dev/null || true
+rm -rf "$G/sumhash" 2>/dev/null || true
 
 # pin repos with NO live session so their caches stay fresh (a repo you're
 # watching but haven't opened; a fleet-up'd-but-closed fleet): FLEET_REPOS list +
@@ -582,10 +587,8 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
     case "$ts" in ''|*[!0-9]*) continue;; esac
     [ $(( nowts - ts )) -ge "$ESC_AFTER" ] || continue
     [ "$esc" = "$ts" ] && continue
-    sum=$(head -1 "$G/summary_$(fleet_summary_key "$sock" "$wid")" 2>/dev/null | cut -c1-80)
     msg="# session blocked
-**${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)${sum:+
-> doing: ${sum}}"
+**${name}** has been waiting for your input for $(( (nowts-ts)/60 ))m (no client attached)"
     $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1 \
       && tmux -L "$sock" set-window-option -t "$win" @escalated "$ts" 2>/dev/null
   done

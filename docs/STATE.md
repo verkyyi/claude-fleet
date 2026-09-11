@@ -46,7 +46,7 @@ Claude Code fires shell **hooks** on turn edges. Each one runs
 | `PostToolUse` | `working` | `working` |
 | `UserPromptSubmit` | `working` | `working` |
 | `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*) |
-| `Stop` | `done` | `done` (then hands off to `summarize-hook.sh` + `classify-hook.sh`) |
+| `Stop` | `done` | `done` (then hands off to `classify-hook.sh`) |
 
 Because Claude Code **re-reads `settings.json` hooks every turn**, a running
 session picks up hook changes with no restart.

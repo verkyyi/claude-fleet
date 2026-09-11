@@ -15,7 +15,7 @@
 #   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
 #   python3      collector context% + usage caches
-#   claude       the sessions you run + the optional classify/summarize hooks
+#   claude       the sessions you run + the optional classify hook
 #   perl HiRes   soft — dash spinner sub-second frames (degrades to 1s ticks)
 #   jq is NOT required standalone: the collector only uses `gh --jq` (built in).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
@@ -83,7 +83,7 @@ fi
 if command -v claude >/dev/null 2>&1; then
   pass claude "on PATH"
 else
-  warn claude "not found — the CLI you run per window and the optional classify/summarize hooks"
+  warn claude "not found — the CLI you run per window and the optional classify hook"
 fi
 
 # --- fleet quality-of-life commands (optional: repo-shipped /skills) ---

@@ -124,7 +124,7 @@ bash ~/.claude/fleet/bin/fleet-migrate-layout.sh          # or --dry-run first t
 ## 3. Reload only the daemons that changed
 
 Most script-body changes need **no reload**: an *interval* daemon
-(collector / summarize / diskguard) re-reads its script
+(collector / pr-refresh / diskguard) re-reads its script
 from disk on its next tick. Reload only when the diff (step 2) touched:
 
 - a **plist/timer** under `launchd/` or `systemd/` (an interval or arguments
@@ -134,6 +134,15 @@ from disk on its next tick. Reload only when the diff (step 2) touched:
   `com.claude-fleet.spinner`) — it's long-lived, so
   `launchctl kickstart -k gui/$(id -u)/com.claude-fleet.spinner`
   (Linux: `systemctl --user restart claude-fleet-spinner.service`).
+
+A **retired** daemon is the third case: a `D launchd/com.claude-fleet.<x>.plist.tmpl`
+(and its `systemd/claude-fleet-<x>.{service,timer}`) in the step-2 diff means the
+script it ran is gone too, so the loaded unit must be torn down, not reloaded —
+macOS: `launchctl bootout gui/$(id -u)/com.claude-fleet.<x>` then
+`rm -f ~/Library/LaunchAgents/com.claude-fleet.<x>.plist`; Linux:
+`systemctl --user disable --now claude-fleet-<x>.timer` then remove the unit files
+and `daemon-reload`. (Worked example: the #535 retirement of
+`com.claude-fleet.summarize` — the dash summarizer.) Report which unit you removed.
 
 If the diff touched none of these, say "no daemon reload needed" and move on.
 
@@ -148,8 +157,15 @@ cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%s)
 ```
 
 Merge each hook array with jq using `+=` (creating keys that don't exist), then
-de-dup so a re-run doesn't stack duplicate entries. If `settings-hooks.json`
-didn't change, skip this step.
+de-dup so a re-run doesn't stack duplicate entries.
+
+The merge only ever ADDS. If the diff **removed** an entry from
+`settings-hooks.json` (a `-` line with a `"command"`), delete that exact entry
+from every hook array in `~/.claude/settings.json` too — e.g.
+`jq '(.hooks[][]?.hooks) |= map(select(.command != "sh ~/.claude/fleet/bin/<retired>.sh"))'`
+— otherwise the live config keeps firing a script that no longer exists on every
+turn. (Worked example: the two `summarize-hook.sh` entries on `Stop`/`SessionStart`,
+retired in #535.) If `settings-hooks.json` didn't change, skip this step.
 
 ## 5. Install new/changed fleet commands — and remove retired ones
 

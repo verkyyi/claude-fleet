@@ -23,8 +23,8 @@
 #      session that holds all the context becomes the worker, instead of spawning
 #      a second one to re-ground from zero.
 #   3. RESOLVABLE TRANSCRIPTS — the unique cwd fixes the "can't resolve the
-#      transcript from the shared base checkout" limit (#214): a scratch can be
-#      summarized correctly, and (issue #466) it is now CAPTURED in the
+#      transcript from the shared base checkout" limit (#214): a scratch's own
+#      transcript is findable, and (issue #466) it is now CAPTURED in the
 #      /fleet-history ledger when its window closes — keyed by the `scratch-<N>`
 #      slug this script allocates below — so it browses and RESUMES like a worker.
 #
@@ -49,7 +49,7 @@
 #                   states where the window name stops carrying `scratch-<N>`.
 #   * session cap — COUNTS toward FLEET_MAX_SESSIONS / the global cap (it is a
 #                   real Claude session holding a slot), so it is cap-checked here.
-#   * classifier / summarizer — run normally (its state + summary show in the dash).
+#   * classifier — runs normally (its state shows in the dash).
 #   * worktree janitor — REAPS it by the scratch rules (issue #290): once the window
 #                        is gone, a clean+no-unpushed `scratch-<N>` worktree is
 #                        removed silently; a dirty/unpushed one is KEPT and surfaced
@@ -307,22 +307,6 @@ fi
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
-
-# Seed the dash summary column so the row isn't blank until the session renders
-# content (same key/format the readers expect; the LLM summarizer overwrites this
-# placeholder once real content exists). The session prefix keeps per-fleet servers
-# from colliding on the bare window id (issue #208).
-C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"; mkdir -p "$G"
-# A seeded scratch shows its task (first line, clipped) — the same "what is this
-# row doing" the worker seed gives ("starting #N: title") — not the bare label.
-if [ -n "$PROMPT" ]; then
-  rawseed="$name: $(printf '%s' "${PROMPT%%$'\n'*}" | cut -c1-80)"
-else
-  rawseed="$name (raw session)"
-fi
-printf '%s' "$rawseed" > "$G/summary_$(fleet_summary_key "$SESS" "$win")" 2>/dev/null || :
-# …and as a window option, so the pane header carries it too (issue #455).
-TM set-window-option -t "$win" @summary "$(fleet_summary_sanitize "$rawseed")" 2>/dev/null || :
 
 # Refill the pool in the background, so the NEXT ⌃s is instant too — but NOT right
 # now. Warming costs a whole cold claude boot (node + the fleet's MCP set), and

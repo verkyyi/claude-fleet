@@ -101,8 +101,6 @@ done
 
 LEASE_TTL="${FLEET_LEDGER_WATCH_LEASE_TTL:-300}"
 LEASE_DIR="${FLEET_DISPATCH_LEASE_DIR:-$HOME/.claude/leases}"
-# dash summary cache (issue #181/#208): summary_<sess>_<winid> lives under global/.
-DASHC="${TMPDIR:-/tmp}/.claude-dash/global"
 
 # All progress goes to stderr — a daemon's stdout is /dev/null; stderr is the log.
 now() { date +%s 2>/dev/null || echo 0; }
@@ -177,9 +175,11 @@ watch_fleet() { (
   # Build the CURRENT snapshot of session windows, keyed by the window's DURABLE
   # key: the NUMERIC @issue for a worker, the `scratch-<N>` slug for an @raw scratch
   # (issue #466). Hub panels carry neither → skipped. Snapshot row (TAB-delimited on
-  # disk): key · window-id · worktree · title · summary. The summary is captured
-  # WHILE LIVE (from the dash cache) — the whole point of a snapshot-diff daemon is
-  # that the window can't be inspected once it's gone.
+  # disk): key · window-id · worktree · title · summary · origin. The whole point
+  # of a snapshot-diff daemon is that the window can't be inspected once it's gone.
+  # col 5 (summary) is kept EMPTY: the dash summary cache it was captured from
+  # retired in issue #535; the slot stays so a snapshot written before the upgrade
+  # still parses (6 columns) across the land→sync window.
   cur=$(fleet_state_dir "$sess")/.ledgerwatch.$$.snap
   cur_keys=$'\n'
   : > "$cur"
@@ -199,9 +199,7 @@ watch_fleet() { (
     # dedup within a tick: one window ≡ one key — first seen wins.
     case "$cur_keys" in *$'\n'"$key"$'\n'*) continue ;; esac
     smry=""
-    smk=$(fleet_summary_key "$sess" "$wid")
-    [ -f "$DASHC/summary_$smk" ] && read -r smry < "$DASHC/summary_$smk"
-    # col 6 = @origin (issue #503): captured while live like the title/summary, so
+    # col 6 = @origin (issue #503): captured while live like the title, so
     # a vanished window's history row still carries its spawn provenance.
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" >> "$cur"
     cur_keys="${cur_keys}${key}"$'\n'
