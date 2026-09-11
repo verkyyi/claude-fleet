@@ -184,7 +184,9 @@ SHA_Y=$(git -C "$OTHER" rev-parse HEAD)
 printf 'issue-9\t#19\tMERGED\t✓\t\t%s\n' "$SHA_Y" > "$WORK/prmap.tsv"
 reset_dep; run_refresh
 eq "producer-ref: not yet fetched into the ref → unknown" unknown "$(dep "$SHA_Y")"
-git -C "$REPO" fetch -q "$OTHER" && git -C "$REPO" merge -q --allow-unrelated-histories -m M FETCH_HEAD 2>/dev/null \
+# -c user.*: this merge CREATES a commit, and a CI runner with an empty gecos has
+# no identity to auto-derive (macOS does, which is why it only failed on Linux).
+git -C "$REPO" fetch -q "$OTHER" && git -C "$REPO" -c user.name=t -c user.email=t merge -q --allow-unrelated-histories -m M FETCH_HEAD 2>/dev/null \
   || fail "could not merge the other repo's history into the ref repo"
 run_refresh
 eq "producer-ref: after the ref caught up → live" live "$(dep "$SHA_Y")"
