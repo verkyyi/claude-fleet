@@ -12,8 +12,12 @@
 # issues on 60s, PR status refreshes here on 15s.
 #
 # Writes under $C = $TMPDIR/.claude-dash:
-#   prmap_<slug>  — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready  per repo (same
-#                   contract as before; see tmux-dash-collect.sh header)
+#   prmap_<slug>  — branch<TAB>#num<TAB>state<TAB>ci<TAB>ready  per repo. The fold
+#                   from `gh pr list --json` to that line is FLEET_PRMAP_JQ in
+#                   fleet-lib.sh (the taxonomy is documented there; issue #533):
+#                   ci ∈ ·|✗|…|✓, ready ∈ draft|conflict|ready|behind|blocked|
+#                   unknown|"" — mirrors fleet-pr-verdict.sh so the dash and the
+#                   worker's merge gate never disagree about a PR.
 #   prmap         — flat mirror of the PRIMARY (FLEET_REPO) slug'd file
 #   @prci / @pfg  — per-window tmux options (glyph + color)
 # Reads (owned by the collector, read-only here): sessmap (session→slug→repo)
@@ -123,24 +127,13 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=$(cat "$FD/prmap.ts" 2>/dev/null || echo 0)
   if [ "$FORCE" = 1 ] || [ $(( $(now) - pts )) -ge "$PR_TTL" ]; then
-    # shellcheck disable=SC2016  # $r/$ci/$ready are jq vars, not shell — keep single-quoted
+    # The fold from PR JSON → prmap TSV is FLEET_PRMAP_JQ (fleet-lib.sh), the one
+    # program the dash, the merge gate's taxonomy and pr-refresh-jq-selftest.sh
+    # share (issue #533) — it lived inline here and drifted from fleet-pr-verdict.sh
+    # (no isDraft, only FAILURE was red, StatusContext never looked at).
     gh pr list --repo "$rp" --state all --limit 100 \
-      --json number,headRefName,state,mergeable,mergeStateStatus,statusCheckRollup \
-      --jq 'group_by(.headRefName)[] | max_by(.number) |
-            (.statusCheckRollup // []) as $r |
-            (if   ($r|length)==0                     then "·"
-             elif ($r|any(.conclusion=="FAILURE"))   then "✗"
-             elif ($r|any(.status!="COMPLETED"))     then "…"
-             elif ($r|any(.conclusion=="SUCCESS"))   then "✓"
-             else "…" end) as $ci |
-            (if .state=="OPEN" and $ci=="✓" then
-               (if   (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS") then "ready"
-                elif .mergeStateStatus=="BEHIND"                                    then "behind"
-                elif (.mergeStateStatus=="DIRTY" or .mergeable=="CONFLICTING")      then "conflict"
-                elif .mergeStateStatus=="BLOCKED"                                   then "blocked"
-                else "" end)
-             else "" end) as $ready |
-            .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready' \
+      --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup \
+      --jq "$FLEET_PRMAP_JQ" \
       > "$FD/prmap.$$" 2>/dev/null && mv "$FD/prmap.$$" "$FD/prmap"
     now > "$FD/prmap.ts"
   fi
@@ -172,11 +165,13 @@ while IFS="$US" read -r sess win path cur; do
       ready=$(echo "$hit"|cut -f5)
       case "$(echo "$hit"|cut -f4)" in
         ✗) glyph="✗"; pfg="#f7768e";;   # real CI failure → attention
-        ✓) case "$ready" in             # green: decorate by land-readiness
+        ✓) case "$ready" in             # green: decorate by land-readiness (#533)
              behind)   glyph="✓↑"; pfg="#e0af68";;   # green but behind base → update-branch
              conflict) glyph="✓!"; pfg="#f7768e";;   # green but conflicting → rebase
              blocked)  glyph="✓·"; pfg="#e0af68";;   # green+mergeable but blocked (protection)
-             *)        glyph="✓";  pfg="#9ece6a";;   # green, awaiting merge
+             draft)    glyph="✓d"; pfg="#565f89";;   # green but a DRAFT → gh pr ready (muted)
+             unknown)  glyph="✓?"; pfg="#a9b1d6";;   # green, mergeability not computed yet
+             *)        glyph="✓";  pfg="#9ece6a";;   # green + mergeable, awaiting merge
            esac;;
       esac
     fi

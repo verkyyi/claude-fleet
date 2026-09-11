@@ -1601,6 +1601,56 @@ fleet_backlog_col_header() {
   printf '\033[38;2;%sm%s%s' "$dim" "$s" "$reset"
 }
 
+# ── prmap jq program — the ONE fold from `gh pr list --json` to the prmap TSV ─────
+# (issue #533). bin/tmux-pr-refresh.sh (the single prmap writer) feeds this to
+# `gh --jq`; bin/pr-refresh-jq-selftest.sh feeds the byte-identical program to the
+# system `jq` against fixture JSON, so the taxonomy below is tested offline. It used
+# to be inlined in the refresher, where it silently drifted from the merge gate
+# (fleet-pr-verdict.sh → land_verdict): the dash showed `#N✓` on a PR the worker's
+# verdict called DRAFT / FAILING / PENDING. Keep the two in step — the ci fold here
+# IS the verdict's `fail|pending|pass`, spelled as glyphs.
+#
+# Input: the JSON array from
+#   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup
+# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready
+#   ci    ·  no checks at all
+#         ✗  any red: a CheckRun whose conclusion is FAILURE / TIMED_OUT / CANCELLED /
+#            ACTION_REQUIRED, or a StatusContext (the OTHER rollup shape — it has
+#            `.state`, not `.status`/`.conclusion`) in FAILURE / ERROR
+#         …  anything not final yet (a CheckRun not COMPLETED, a StatusContext not SUCCESS)
+#         ✓  every check final and none red (NEUTRAL / SKIPPED count as green — same as
+#            the verdict's `pass`)
+#   ready only for an OPEN + ✓ PR, else "" — the dash decorates the ✓ with it:
+#         draft    isDraft — wins over everything; a draft can't land whatever CI says (✓d)
+#         conflict mergeable CONFLICTING or mergeStateStatus DIRTY               (✓!)
+#         ready    CLEAN | HAS_HOOKS | UNSTABLE (UNSTABLE = a NON-required check is
+#                  red; with ci=✓ nothing is, so it's mergeable — as land_classify)  (✓)
+#         behind   BEHIND — update-branch                                        (✓↑)
+#         blocked  BLOCKED — branch protection (review required / other)         (✓·)
+#         unknown  UNKNOWN / "" — GitHub hasn't computed mergeability yet (every
+#                  fresh push for a few seconds) — NOT the same as ready          (✓?)
+# The first 4 fields are a stable contract (fleet-cleanup-daemon.sh keys off
+# branch/#num/state); readers tab-guard a missing 5th field to "" (pre-#81 caches).
+# shellcheck disable=SC2016,SC2034  # jq vars ($r/$ci/$ready) not shell — keep single-quoted; read cross-file by pr-refresh + its selftest
+FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
+  (.statusCheckRollup // []) as $r |
+  (if   ($r|length)==0                                                       then "·"
+   elif ($r|any(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
+                or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
+                or .state=="FAILURE" or .state=="ERROR"))                    then "✗"
+   elif ($r|any(.status!="COMPLETED" and .state!="SUCCESS"))                 then "…"
+   else "✓" end) as $ci |
+  (if .state=="OPEN" and $ci=="✓" then
+     (if   .isDraft==true                                                    then "draft"
+      elif (.mergeable=="CONFLICTING" or .mergeStateStatus=="DIRTY")         then "conflict"
+      elif (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS"
+            or .mergeStateStatus=="UNSTABLE")                                then "ready"
+      elif .mergeStateStatus=="BEHIND"                                       then "behind"
+      elif .mergeStateStatus=="BLOCKED"                                      then "blocked"
+      else "unknown" end)
+   else "" end) as $ready |
+  .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready'
+
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
 # the repo has 0 rows). Keying off .ts — not file size — so a fleet whose repo
