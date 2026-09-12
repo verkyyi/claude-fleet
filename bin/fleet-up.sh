@@ -110,6 +110,21 @@ fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
 
+# --- project trust (issue #563) ---
+# Claude Code asks "trust this folder?" once per project root and a worktree
+# resolves to its MAIN checkout — so an untrusted $DIR means every worker this
+# fleet spawns parks on that dialog with nobody to answer it. The launcher
+# pre-trusts at spawn, but a live install predating #563 (or FLEET_PRETRUST=0) does
+# not: say it loudly here, at the one moment the operator is watching, with the fix.
+if [ -f "$BIN/fleet-trust.sh" ]; then
+  case "$(sh "$BIN/fleet-trust.sh" check "$DIR" 2>/dev/null)" in
+    untrusted)
+      echo "fleet-up: WARNING — $DIR is not trusted in $(sh "$BIN/fleet-trust.sh" file):" >&2
+      echo "          workers spawned by a pre-#563 launcher hang at Claude Code's \"trust this folder?\" dialog." >&2
+      echo "          fix now:  sh $BIN/fleet-trust.sh grant --main '$DIR'" >&2 ;;
+  esac
+fi
+
 # --- create the session + the HUB ---
 # 'work' is the plain work shell; the 'plan' hub (the dash, and ONLY the dash —
 # a fresh fleet no longer comes up with a hub Claude session) is built by

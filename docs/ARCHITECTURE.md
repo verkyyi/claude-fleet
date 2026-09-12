@@ -89,6 +89,32 @@ estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*
 …) into this layout **idempotently**, and every reader **dual-reads** both layouts
 so a fleet keeps working across the land→migrate window.
 
+### The launcher pre-trusts the fleet's checkout (issue #563)
+
+Claude Code asks "Quick safety check: Is this a project you created or one you
+trust?" once per project root and keys the answer in `~/.claude.json` as
+`projects[<root>].hasTrustDialogAccepted` — an **exact** lookup on the resolved
+root, where a linked git worktree resolves to its **main checkout** (that is why a
+machine with only `FLEET_MAIN` trusted spawns workers straight into `/fleet-claim`
+with no `…-issue-<N>` entries at all). A fleet pane has nobody to press Enter, so
+an untrusted `FLEET_MAIN` parks every dispatched worker on that dialog — slot
+counted, nothing running, nothing logged (macmini, 2026-09-12). `bin/fleet-claude.sh`,
+the one door every spawn/restore/migrate walks through, therefore calls
+`bin/fleet-trust.sh grant --main $FLEET_MAIN $PWD` before `exec claude`. The helper
+is the rail: it writes **only** the base checkout and directories whose git common
+dir is that checkout's (`.git`), refusing anything else; it edits atomically
+(temp + rename, compare-and-swap on the file's identity between read and rename,
+so a claude process saving its own state at the same instant loses nothing); it
+leaves an unparseable file alone and creates a missing one `0600`. It is
+per-directory trust kept per-directory — never a `--dangerously-*` blanket.
+`fleet-doctor.sh` (`trust` line) and `fleet-up.sh` warn on an untrusted base for
+installs that predate this; the autofill dispatcher sweeps its fleets for a pane
+still showing the dialog (issue-bound, `@claude_state` empty — no hook ever fired)
+and stamps it `needs` once, with the fix in its log. `FLEET_PRETRUST=0` opts a
+fleet out. Selftests: `bin/fleet-trust-selftest.sh` (scope, losslessness under a
+concurrent writer, atomicity), plus the call contract in `fleet-claude-selftest.sh`
+and the sweep in `fleet-dispatch-selftest.sh`.
+
 ### Hooks read the conf; the launcher does not export (issue #561)
 
 A Claude Code hook runs with the **pane's environment**, and the fleet never

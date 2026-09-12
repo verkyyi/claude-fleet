@@ -523,6 +523,50 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 
+# --- project trust: will a spawned worker stop at "trust this folder?" (issue #563) ---
+# Claude Code keys its per-directory trust on the resolved project root — a linked
+# worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
+# (`projects[<root>].hasTrustDialogAccepted === true`). So the ONE entry a fleet
+# needs is FLEET_MAIN's; with it missing/false every dispatched worker parks on the
+# dialog with nobody to answer (macmini, 2026-09-12: 7+ minutes, slot "filled",
+# nothing logged). The launcher pre-trusts at spawn since #563, but a live install
+# that predates it, or an opted-out fleet (FLEET_PRETRUST=0), still stalls — say so
+# here, with the one-line fix. Read the conf the way sourcing does (a subshell), so
+# a `$HOME/…` FLEET_MAIN expands; the verdict comes from bin/fleet-trust.sh itself.
+tr_sh="$(dirname "$0")/fleet-trust.sh"
+if [ ! -f "$tr_sh" ]; then
+  warn trust "bin/fleet-trust.sh missing — spawns cannot pre-trust the checkout; a worker may park on Claude Code's \"trust this folder?\" dialog (#563); run /fleet-sync-install"
+elif [ -d "$conf_dir" ]; then
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
+    [ -n "$main" ] || { warn trust "$sess: conf has no FLEET_MAIN — cannot check checkout trust"; continue; }
+    pretrust=$(_conf_val "$cf" FLEET_PRETRUST); [ -n "$pretrust" ] || pretrust=$(_conf_val "$gconf" FLEET_PRETRUST)
+    verdict=$(sh "$tr_sh" check "$main" 2>/dev/null)
+    case "$verdict" in
+      trusted)
+        pass trust "$sess: $main is trusted in $(sh "$tr_sh" file) — workers skip the trust dialog" ;;
+      untrusted)
+        if [ "$pretrust" = 0 ]; then
+          warn trust "$sess: $main is NOT trusted and FLEET_PRETRUST=0 — every spawned worker will hang at Claude Code's \"trust this folder?\" dialog; fix: sh $(dirname "$0")/fleet-trust.sh grant --main '$main'"
+        else
+          warn trust "$sess: $main is NOT trusted in $(sh "$tr_sh" file) — a worker spawned by a pre-#563 launcher hangs at the \"trust this folder?\" dialog; the current launcher pre-trusts at spawn; fix now: sh $(dirname "$0")/fleet-trust.sh grant --main '$main'"
+        fi ;;
+      *)
+        if [ ! -d "$main" ]; then
+          warn trust "$sess: FLEET_MAIN $main does not exist — nothing to trust (and nothing to spawn into)"
+        elif ! command -v python3 >/dev/null 2>&1; then
+          warn trust "$sess: cannot read $(sh "$tr_sh" file) without python3 — trust unknown; pre-trust at spawn is also inert"
+        else
+          printf '        note: %s: no %s yet (claude has never run here?) — the first spawn creates it with %s trusted.\n' "$sess" "$(sh "$tr_sh" file)" "$main"
+        fi ;;
+    esac
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"
