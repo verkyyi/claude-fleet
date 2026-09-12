@@ -451,7 +451,7 @@ cmd_rows() {
   local COLS=${FZF_COLUMNS:-}
   case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
   case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-  local LEFTW=31 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
+  local LEFTW=35 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
   [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
   # pad/truncate to N DISPLAY chars → $fld_out (mirror of the live producer's fld).
   local fld_out
@@ -473,7 +473,8 @@ cmd_rows() {
 
   # header row (fzf --header-lines=1 pins it) — identical column layout to the live
   # list's header so the two read as one table.
-  local h_i h_n h_a h_p h_c h_pad h_gap
+  local h_w h_i h_n h_a h_p h_c h_pad h_gap
+  fld 3  "id";     h_w=$fld_out    # the live list's @wid column (#566) — see below
   fld 5  "issue";  h_i=$fld_out
   fld 22 "window"; h_n=$fld_out
   fld "$ACTW" "act"; h_a=$fld_out
@@ -483,7 +484,7 @@ cmd_rows() {
   # the live list's flex span is blank since the summary column retired (#535).
   h_pad=$(( USABLE - LEFTW - 5 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 5 = len("title")
   printf -v h_gap '%*s' "$h_pad" ''
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
@@ -538,18 +539,23 @@ cmd_rows() {
       failed)    depc='✗';    depcol=$RD;;
     esac
 
-    # id cell: `#<issue>` in GREEN for a worker, `~<N>` in INDIGO for a scratch —
-    # the SAME rule the live dash now uses (issue #529), so toggling ⌃t keeps one
-    # visual grammar. #502 blanked this cell precisely to match the live view of
-    # the day, whose scratch rows had no id either; now that the live view paints
-    # one, staying blank here is what would split the grammar. #502's actual
-    # finding stands and is honoured: a GREEN `~<N>` was "indistinguishable from
-    # `#<N>` at a glance", so the tell is the COLOUR — green=issue, indigo=scratch
-    # — not the glyph alone. Width is unchanged (`~<N>` == `#<N>` == the 5-col cell).
+    # issue cell: `#<issue>` in GREEN for a worker, `~<N>` in INDIGO for a scratch
+    # (issue #529). #502 blanked this cell and left a scratch with no id at all;
+    # the tell is the COLOUR — green=issue, indigo=scratch — since a GREEN `~<N>`
+    # was "indistinguishable from `#<N>` at a glance".
+    # #566 dropped the `~<N>` branch from the LIVE list, where a scratch now has a
+    # window HANDLE in the `id` column to be addressed by. A landed row has no
+    # live window and therefore no handle, so `~<N>` is the only id it will ever
+    # have — it stays here, and dropping it would re-create #502 exactly.
     local issd icol=$GN
     issd=$(key_label "$iss")
     is_scratch_key "$iss" && icol=$IN
-    local f_iss f_name f_act f_pr f_ctx
+    # id cell (#566): @wid is a LIVE-window handle and a landed row has no window,
+    # so the cell carries the muted dot this skeleton already uses for "no live
+    # meaning" (the ctx column's own convention). It is not dead space: it holds
+    # the live list's `id` column open so ⌃t keeps both lists on one grid.
+    local f_hnd f_iss f_name f_act f_pr f_ctx
+    fld 3  "·";       f_hnd=$fld_out
     fld 5  "$issd";   f_iss=$fld_out
     fld 22 "$wname";  f_name=$fld_out
     fld "$ACTW" "$act"; f_act=$fld_out
@@ -579,7 +585,7 @@ cmd_rows() {
     local gap; printf -v gap '%*s' "$pad" ''
     printf '%s%s%s%s%s\n' \
       "$target" "$US" "$fzfkey" "$US" \
-      "${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"
+      "${glyph_c}${glyph}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"
   done
 }
 

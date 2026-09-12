@@ -23,6 +23,48 @@ Each fleet has an identity **`FLEET_ID` = its tmux session name** (e.g.
 `webapp`, `infra`, `docs-site`). Every fleet script derives `FLEET_ID` from
 `#{session_name}` and scopes itself to that fleet.
 
+### Window identity — the tmux options a fleet stamps, and `@wid` (issue #566)
+
+Everything a fleet knows about a window lives in tmux **window options**, read
+back through `#{@…}` formats. They are the substrate the dash, the reapers, the
+bridge and the migrator all agree on:
+
+| option | meaning |
+|---|---|
+| `@wid` | **the window's handle** — `a1`…`z9`, unique among this fleet's live windows |
+| `@issue` | the GitHub issue this worker is bound to (absent ⇒ not a worker) |
+| `@raw` | `1` ⇒ a scratch session: no issue, its own `scratch-<N>` worktree |
+| `@worktree` | the git worktree the window owns (survives the pane `cd`-ing away) |
+| `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … |
+| `@claude_state`, `@claude_state_ts` | the state glyph + when it last changed |
+| `@cc_account`, `@cc_agent` | which subscription account / which agent it runs |
+
+**`@wid` is the one an operator says out loud.** A window's tmux `window_id`
+(`@382`) is re-minted every time the window is re-created, and that happens
+constantly — `fleet-migrate.sh` re-created 21 windows in one night, and every
+`dash-restore-session.sh` mints another — so it can never be the name for "reap
+that one". `@wid` is a **letter + digit** (234 of them, lowercase, digits 1-up so
+nothing reads as `0`/`O` or `1`/`l` on a soft keyboard), rendered in the dash's
+leftmost `id` column and accepted **wherever a window target is** —
+`fleet-migrate.sh b3`, `dash-reap.sh a1` — via `fleet_wid_target`, which passes
+any non-handle (`@382`, an index, a name) straight through.
+
+- **Scope: this fleet's live windows.** A handle is **reused** once its window is
+  gone, which is what keeps it two characters forever. Durable identity for
+  history/the ledger stays the session/transcript id; `@wid` never appears there,
+  and the landed (`⌃t`) view shows `·` in that column.
+- **Allocation is stateless** — no counter file. `fleet_wid_stamp` reads `@wid`
+  off every window on the fleet's socket and takes the lowest unused one, under a
+  short mkdir-lock in `fleets/<session>/wid.lock`. Nothing to corrupt, self-healing
+  after a crash, correct across `fleet-up`/`fleet-down`. On lock timeout it fails
+  **open** (no handle) and the dash's render-time **backfill** assigns one on the
+  next repaint — which is also how every window that predates #566 gets one.
+- **It survives re-creation.** `fleet-migrate.sh` re-stamps the same handle onto
+  the replacement window (taking the next free one if something claimed it in the
+  gap); a `/fleet-handoff` cycle reuses the same pane, so there is nothing to do
+  there. A *restored* landed session is a genuinely new window and gets a fresh
+  handle — the old one was released when the original closed.
+
 ### What is shared vs. per-fleet
 
 The key insight: the collector's work is **~80% machine-global** and only the

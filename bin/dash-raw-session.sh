@@ -321,6 +321,10 @@ fi
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
+# Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
+# in the holding session with no handle, and only becomes a fleet window here at
+# claim time. Best-effort — the dash backfills a window that ends up without one.
+fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 
 # Refill the pool in the background, so the NEXT ⌃s is instant too — but NOT right
 # now. Warming costs a whole cold claude boot (node + the fleet's MCP set), and

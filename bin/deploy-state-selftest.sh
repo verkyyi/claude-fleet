@@ -121,13 +121,19 @@ exit 0
 SHIM
 chmod +x "$WORK/bin/gh"
 # fake tmux: no live fleet server (has-session fails) — the producer's targeted --repo
-# path needs none; the dash producer's ONE call (list-windows) replays $WLIST_FILE.
+# path needs none; the dash producer's ROW read (list-windows with a 0x1f-separated
+# -F) replays $WLIST_FILE. Any OTHER list-windows — #566's `-F '#{@wid}'` handle
+# scan — gets nothing back, which is the truth here: no window is stamped.
 cat > "$WORK/bin/tmux" <<'SHIM'
 #!/bin/sh
+US=$(printf '\037')
+lw=0; fmt=0
 for a in "$@"; do
-  [ "$a" = list-windows ] && { cat "${WLIST_FILE:-/dev/null}"; exit 0; }
   [ "$a" = has-session ] && exit 1
+  [ "$a" = list-windows ] && lw=1
+  case "$a" in *"$US"*) fmt=1 ;; esac
 done
+[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "${WLIST_FILE:-/dev/null}"
 exit 0
 SHIM
 chmod +x "$WORK/bin/tmux"

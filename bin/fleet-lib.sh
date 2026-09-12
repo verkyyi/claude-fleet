@@ -1916,3 +1916,184 @@ PY
     return 1
   fi
 }
+
+# ============================================================================
+# --- per-fleet window handles: `@wid` (issue #566) --------------------------
+# ============================================================================
+# A window's tmux `window_id` (`@382`) is NOT a name the operator can use: it is
+# re-minted every time the window is re-created, and that happens constantly —
+# `fleet-migrate.sh` re-created 21 windows in one night, and every
+# `dash-restore-session.sh` / warm-pool claim mints another. So the fleet stamps
+# its own SHORT handle on each window: `@wid` = letter + digit, `a1`…`z9` (234),
+# lowercase and digit-1-up so nothing reads as `0`/`O` or `1`/`l` on a soft
+# keyboard. It is rendered in the dash's leftmost `id` column and accepted
+# wherever a window target is (`fleet_wid_target`), so "reap a1" / "migrate b3"
+# are things the operator can actually type.
+#
+# SCOPE: unique among the LIVE windows on this fleet's socket — that is all the
+# operator asked for. A handle is REUSED once its window is gone, which is what
+# keeps it two characters forever instead of growing. Durable identity for the
+# history ledger stays the session/transcript id; `@wid` never appears there.
+#
+# ALLOCATION IS STATELESS — derived from tmux, never from a counter file. To
+# allocate: read `@wid` off every window on the socket and take the lowest unused.
+# Nothing to corrupt, self-healing after any crash, and correct across
+# fleet-up/fleet-down. A short mkdir-lock in the fleet's state dir serialises
+# concurrent spawns; on lock timeout the caller FAILS OPEN (no handle) and the
+# dash's render-time backfill assigns one on the next tick.
+FLEET_WID_ALPHA=abcdefghijklmnopqrstuvwxyz
+FLEET_WID_DIGITS=123456789
+
+# fleet_wid_valid <handle> — 0 iff it is a well-formed handle. The sets are spelled
+# out rather than written `[a-z][1-9]`: a RANGE in a glob follows the locale's
+# collation, and under en_US.UTF-8 `[a-z]` happily matches `A` — which would let
+# `A1` through as a handle and, worse, let fleet_wid_target shadow a window
+# legitimately named `A1`.
+fleet_wid_valid() {
+  case "${1:-}" in
+    [abcdefghijklmnopqrstuvwxyz][123456789]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# fleet_wid_next <taken> — the lowest handle NOT in <taken> (whitespace/newline
+# separated). Pure bash, no forks, no tmux: this is the allocator's whole policy,
+# so bin/dash-wid-selftest.sh can pin it without a server. Exit 1 = all 234 taken.
+# (POSIX `while` loops, not `for (( … ))`: fleet-lib.sh must PARSE under a strict
+# /bin/sh — the conf sources it under `sh` for the ⌂ hub tap, and a C-style for is
+# a syntax error in dash, which would leave every later function undefined. That
+# is the #414 class, and bin/posix-lib-parse-selftest.sh is its net.)
+fleet_wid_next() {
+  local taken=" ${1//$'\n'/ } " i=0 j h la ld
+  la=${#FLEET_WID_ALPHA}; ld=${#FLEET_WID_DIGITS}
+  while [ "$i" -lt "$la" ]; do
+    j=0
+    while [ "$j" -lt "$ld" ]; do
+      h="${FLEET_WID_ALPHA:$i:1}${FLEET_WID_DIGITS:$j:1}"
+      case "$taken" in
+        *" $h "*) : ;;
+        *) printf '%s' "$h"; return 0 ;;
+      esac
+      j=$((j + 1))
+    done
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# fleet_wid_taken <handle> <taken> — 0 iff <handle> appears in the list. Pure.
+fleet_wid_taken() {
+  case " ${2//$'\n'/ } " in *" $1 "*) return 0;; *) return 1;; esac
+}
+
+# fleet_wid_used [socket] — every handle stamped on the socket, one per line
+# (blank lines for unstamped windows are harmless — fleet_wid_next ignores them).
+# `-a`: the scope is the SERVER, so the warm pool session's windows count too and
+# a claimed pool window never collides with a live one.
+fleet_wid_used() {
+  if [ -n "${1:-}" ]; then tmux -L "$1" list-windows -a -F '#{@wid}' 2>/dev/null
+  else                     tmux list-windows -a -F '#{@wid}' 2>/dev/null; fi
+}
+
+# fleet_wid_get <window-target> [socket] — the handle stamped on that window ('').
+fleet_wid_get() {
+  if [ -n "${2:-}" ]; then tmux -L "$2" display-message -p -t "$1" '#{@wid}' 2>/dev/null
+  else                     tmux display-message -p -t "$1" '#{@wid}' 2>/dev/null; fi
+}
+
+# fleet_wid_sess [socket] — the fleet whose state dir holds the allocation lock.
+# The socket LABEL is the session name (fleet_socket is identity), so a socket is
+# already the answer; with none, ask the caller's own server. The `-pool` holding
+# session shares its fleet's socket, hence its lock.
+fleet_wid_sess() {
+  local s="${1:-}"
+  [ -n "$s" ] || s=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+  printf '%s' "${s%-pool}"
+}
+
+# fleet_wid_lock <dir> / fleet_wid_unlock <dir> — mkdir-lock (portable; macOS has
+# no flock). A lock whose holder pid is gone is STOLEN, so a crash mid-allocation
+# cannot wedge handle assignment forever. ~2s ceiling, then exit 1 = fail open.
+fleet_wid_lock() {
+  local d="$1" i=0 p alive
+  mkdir -p "${d%/*}" 2>/dev/null
+  while [ "$i" -lt 40 ]; do
+    if mkdir "$d" 2>/dev/null; then printf '%s' "$$" > "$d/pid" 2>/dev/null; return 0; fi
+    i=$((i + 1))
+    # No pid file yet = a holder mid-mkdir; give it a few ticks before stealing.
+    p=$(cat "$d/pid" 2>/dev/null); alive=1
+    case "$p" in
+      ''|*[!0-9]*) [ "$i" -ge 5 ] && alive=0 ;;
+      *)           kill -0 "$p" 2>/dev/null || alive=0 ;;
+    esac
+    if [ "$alive" = 0 ]; then rm -rf "$d" 2>/dev/null; else sleep 0.05; fi
+  done
+  return 1
+}
+fleet_wid_unlock() { rm -rf "$1" 2>/dev/null; return 0; }
+
+# fleet_wid_stamp <window-target> [socket] [wanted] — THE allocator. Prints the
+# window's handle, assigning the lowest free one when it has none. Idempotent: a
+# window that already carries a handle keeps it (so the dash's backfill is a
+# no-op after the first tick, and a double-stamped spawn is harmless).
+#
+# <wanted> is the RE-STAMP path (fleet-migrate.sh closes a window and opens a new
+# one for the same session): keep that handle if it is still free, else take the
+# next one rather than letting two windows answer to `b3`.
+#
+# Exit 1 + no output = no handle this time (lock timeout, or all 234 in use) —
+# deliberately non-fatal for every caller: a spawn proceeds without one and the
+# dash backfills it on the next repaint.
+fleet_wid_stamp() {
+  local win="$1" sock="${2:-}" want="${3:-}" cur used lk
+  cur=$(fleet_wid_get "$win" "$sock")
+  [ -n "$cur" ] && { printf '%s' "$cur"; return 0; }
+  lk="$(fleet_state_dir "$(fleet_wid_sess "$sock")")/wid.lock"
+  fleet_wid_lock "$lk" || return 1
+  cur=$(fleet_wid_get "$win" "$sock")        # re-read UNDER the lock
+  if [ -z "$cur" ]; then
+    used=$(fleet_wid_used "$sock")
+    cur=''
+    if [ -n "$want" ] && fleet_wid_valid "$want" && ! fleet_wid_taken "$want" "$used"; then
+      cur=$want
+    else
+      cur=$(fleet_wid_next "$used") || cur=''
+    fi
+    if [ -n "$cur" ]; then
+      if [ -n "$sock" ]; then tmux -L "$sock" set-window-option -t "$win" @wid "$cur" 2>/dev/null
+      else                    tmux set-window-option -t "$win" @wid "$cur" 2>/dev/null; fi
+    fi
+  fi
+  fleet_wid_unlock "$lk"
+  [ -n "$cur" ] || return 1
+  printf '%s' "$cur"
+}
+
+# fleet_wid_resolve <handle> [socket] — handle → `window_id` (`@382`). Empty +
+# exit 1 when no live window carries it. Space-separated -F, never a control byte:
+# tmux ≤3.4 vis-escapes 0x1f/0x09 in format output (the `\037` trap from #208).
+fleet_wid_resolve() {
+  local h="${1:-}" sock="${2:-}" w v
+  fleet_wid_valid "$h" || return 1
+  while read -r w v; do
+    [ -n "$w" ] || continue
+    if [ "$v" = "$h" ]; then printf '%s' "$w"; return 0; fi
+  done <<EOF
+$(if [ -n "$sock" ]; then tmux -L "$sock" list-windows -a -F '#{window_id} #{@wid}' 2>/dev/null
+  else                    tmux list-windows -a -F '#{window_id} #{@wid}' 2>/dev/null; fi)
+EOF
+  return 1
+}
+
+# fleet_wid_target <target> [socket] — the window-target normaliser every
+# target-taking script runs its argument through. A handle resolves to its
+# `window_id`; ANYTHING else (an `@id`, an index, `sess:idx`, a window name) is
+# passed back untouched, so every form that works today keeps working. Handles
+# win the tie by design — a window merely NAMED `a1` is addressable by index.
+fleet_wid_target() {
+  local t="${1:-}" sock="${2:-}" w
+  if fleet_wid_valid "$t"; then
+    w=$(fleet_wid_resolve "$t" "$sock") && [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+  fi
+  printf '%s' "$t"
+}
