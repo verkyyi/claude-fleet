@@ -46,6 +46,8 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/tmp/.claude-dash/global"
 ln -s "$ENTER" "$WORK/bin/dash-enter.sh"
 ln -s "$LIB"   "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/dash-agent-prompt.sh" "$WORK/bin/dash-agent-prompt.sh"   # the restore-prompt helper (#554)
+export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1          # never read a machine conf
 # a no-op rows script (dash-enter only names it inside an emitted `reload(...)`).
 printf '#!/bin/sh\n:\n' > "$WORK/bin/tmux-dashboard-rows.sh"; chmod +x "$WORK/bin/tmux-dashboard-rows.sh"
 

@@ -15,7 +15,6 @@
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
 target="${1:-}"; q="${2:-}"
-PROMPT='▸ '
 # `rebind(?)` pairs with the `unbind(?)` dash-rename.sh emits when it arms: `?` is
 # the dash's cheatsheet bind, and a bound printable key keeps firing its action
 # instead of typing (fzf 0.74.3), so it is unbound for the length of the edit and
@@ -26,6 +25,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"    # fleet_bg / fleet_now_ms / fleet_spawn_is_burst (#531)
+# The prompt label a mode-exit restores is the agent-labelled one (`claude ▸ ` /
+# `codex ▸ `, issue #554) from the ONE helper the dash launches + reloads with —
+# never a literal here, or a rename's Enter would drop the agent off the line.
+PROMPT=$(bash "$BIN/dash-agent-prompt.sh" prompt 2>/dev/null); [ -n "$PROMPT" ] || PROMPT='▸ '
 
 # Typed name → an empty scratch named after it (#534). Checked FIRST, before any view logic: the prompt line
 # means the same thing in the live and the landed view, and it is mode-free — a

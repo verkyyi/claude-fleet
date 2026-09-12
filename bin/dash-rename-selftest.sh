@@ -68,6 +68,12 @@ for f in dash-rename.sh dash-enter.sh dash-esc.sh; do ln -s "$BIN/$f" "$WORK/sbi
 # dash-enter.sh sources fleet-lib.sh (fleet_bg / fleet_now_ms / fleet_spawn_is_burst,
 # the paste-storm guard, #531) — provide it in the stub dir so the source resolves.
 ln -s "$BIN/fleet-lib.sh" "$WORK/sbin/fleet-lib.sh"
+# The prompt a mode-exit restores is the agent-labelled one from dash-agent-prompt.sh
+# (`claude ▸ ` for an unset conf, issue #554) — link the helper so the REAL restore
+# path runs, and point FLEET_CONF_DIR at the sandbox so it can never read a machine
+# conf for a fleet that happens to be named `t`.
+ln -s "$BIN/dash-agent-prompt.sh" "$WORK/sbin/dash-agent-prompt.sh"
+export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 RAW_LOG="$WORK/raw.log"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$RAW_LOG" > "$WORK/sbin/dash-raw-session.sh"
 chmod +x "$WORK/sbin/dash-raw-session.sh"
@@ -162,7 +168,7 @@ out="$(bash "$ENT" "$T" 'issue-449')"
 [ "$(wname "$T")" = 'issue-449' ] || fail "H: Enter must rename the stashed target"
 [ -f "$FLAG" ] && fail "H: Enter must drop the rename_target flag"
 case "$out" in *"rebind(?)"*) ;; *) fail "H: Enter must rebind '?' when it restores the prompt" "$out" ;; esac
-case "$out" in *"change-prompt(▸ )"*) ;; *) fail "H: Enter must restore the '▸ ' prompt" "$out" ;; esac
+case "$out" in *"change-prompt(claude ▸ )"*) ;; *) fail "H: Enter must restore the 'claude ▸ ' prompt" "$out" ;; esac
 ok "H Enter commits the rename and restores the dash prompt"
 
 # --- K. @issue survives (dash-issue-session.sh matches @issue first) ----------
@@ -175,7 +181,7 @@ bash "$REN" "$T" >/dev/null
 out="$(bash "$ENT" "$T" '')"
 [ "$(wname "$T")" = 'issue-449' ] || fail "I: an empty query must NOT rename the window"
 [ -f "$FLAG" ] && fail "I: an empty query must still drop the rename_target flag"
-case "$out" in *"change-prompt(▸ )"*) ;; *) fail "I: an empty query must restore the '▸ ' prompt" "$out" ;; esac
+case "$out" in *"change-prompt(claude ▸ )"*) ;; *) fail "I: an empty query must restore the 'claude ▸ ' prompt" "$out" ;; esac
 case "$out" in *"rebind(?)"*) ;; *) fail "I: an empty query must rebind '?' when it restores the prompt" "$out" ;; esac
 ok "I an empty name cancels the rename"
 
@@ -184,7 +190,7 @@ bash "$REN" "$T" >/dev/null
 out="$(bash "$ESC")"
 [ "$(wname "$T")" = 'issue-449' ] || fail "J: Esc must not rename the window"
 [ -f "$FLAG" ] && fail "J: Esc must drop the rename_target flag"
-case "$out" in *"change-prompt(▸ )"*) ;; *) fail "J: Esc must restore the '▸ ' prompt" "$out" ;; esac
+case "$out" in *"change-prompt(claude ▸ )"*) ;; *) fail "J: Esc must restore the 'claude ▸ ' prompt" "$out" ;; esac
 case "$out" in *"rebind(?)"*) ;; *) fail "J: Esc must rebind '?' when it restores the prompt" "$out" ;; esac
 case "$out" in *abort*) fail "J: Esc in rename mode must back out, not abort the dash" "$out" ;; esac
 ok "J Esc cancels rename mode without aborting the dash"
@@ -206,8 +212,8 @@ for lrow in "landed:99" "$T"; do
   case "$out" in *"rebind(?)"*) ;; *)
     fail "N: landed-view Enter dropped the arm without rebinding '?' — the cheatsheet key stays dead (issue #454, row $lrow)" "$out" ;;
   esac
-  case "$out" in *"change-prompt(▸ )"*) ;; *)
-    fail "N: landed-view Enter must restore the '▸ ' prompt it left relabelled ($lrow)" "$out" ;;
+  case "$out" in *"change-prompt(claude ▸ )"*) ;; *)
+    fail "N: landed-view Enter must restore the 'claude ▸ ' prompt it left relabelled ($lrow)" "$out" ;;
   esac
 done
 # …and a landed Enter with NO mode armed must stay exactly as it was — no stray
