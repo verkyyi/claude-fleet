@@ -467,6 +467,62 @@ if [ -f "$settings" ] && grep -q 'statusline\.sh' "$settings" 2>/dev/null; then
   fi
 fi
 
+# --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
+# FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
+# hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing
+# exports — so the nudge never fired once (#561; the #472 class: a conf key only a
+# launcher could see). The hook now resolves it through bin/fleet-hook-conf.sh
+# (global conf → per-fleet overlay). Evaluate it HERE the same way, per fleet, and
+# compare with what the conf files literally say — so "configured 60, hook sees 0"
+# is a WARN on this screen instead of a silent no-op. Probed through a LIVE worker
+# pane when the fleet is up ($TMUX + $TMUX_PANE — exactly the hook's inputs, so the
+# pane→session→conf hop is exercised too), else resolved by session name.
+hc="$(dirname "$0")/fleet-hook-conf.sh"
+gconf="$(dirname "$0")/../fleet.conf"
+# _conf_val <file> <KEY> → the LAST uncommented assignment's value, quotes/blanks
+# stripped ('' if none) — what sourcing the file would leave in KEY.
+_conf_val() {
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
+}
+if [ ! -f "$hc" ]; then
+  warn handoff "bin/fleet-hook-conf.sh missing — the Stop hook cannot read FLEET_AUTO_HANDOFF_PCT from the conf, so the auto-handoff nudge is inert (#561); run /fleet-sync-install"
+elif [ -d "$conf_dir" ]; then
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    # what the operator SET: the per-fleet line, else the global one, else off.
+    want=$(_conf_val "$cf" FLEET_AUTO_HANDOFF_PCT)
+    [ -n "$want" ] || want=$(_conf_val "$gconf" FLEET_AUTO_HANDOFF_PCT)
+    case "$want" in ''|*[!0-9]*) want=0 ;; esac
+    # what the HOOK SEES: the same resolver the hook runs.
+    via="session name (fleet not running)"
+    sees=$(bash "$hc" --session "$sess" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+    sock=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null)
+    if [ -n "$sock" ]; then
+      # any pane the nudge applies to: an issue-bound worker (@issue) or a scratch (@raw)
+      pane=$(tmux -L "$sess" list-panes -s -t "$sess" -F '#{pane_id} i=#{@issue} r=#{@raw}' 2>/dev/null \
+             | awk '$2!="i=" || $3=="r=1" {print $1; exit}')
+      if [ -n "$pane" ]; then
+        sees=$(TMUX="$sock,0,0" TMUX_PANE="$pane" bash "$hc" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+        via="live pane $pane"
+      else
+        via="session name (fleet up, no worker/scratch pane to probe)"
+      fi
+    fi
+    case "$sees" in ''|*[!0-9]*) sees=0 ;; esac
+    if [ "$want" -gt 0 ] && [ "$sees" -eq "$want" ]; then
+      pass handoff "$sess: auto-handoff at ${want}% (hook sees $sees via $via)"
+    elif [ "$want" -gt 0 ]; then
+      warn handoff "$sess: conf says FLEET_AUTO_HANDOFF_PCT=$want but the Stop hook sees $sees via $via — nudge inert (#561); check bin/fleet-lib.sh + the fleet.conf beside bin/"
+    else
+      pass handoff "$sess: auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT unset/0; hook sees $sees)"
+    fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

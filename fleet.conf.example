@@ -493,7 +493,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (never a needs-attention turn), and only on panes that HAVE /fleet-handoff
 # (issue-bound workers + raw scratch; panels and the hub pane are excluded).
 # Spends tokens (the handoff doc + the resume). 0 = OFF (mirrors
-# FLEET_RUNAWAY_CPU_PCT); 60 auto-hands off at 60%.
+# FLEET_RUNAWAY_CPU_PCT); 60 auto-hands off at 60%. The Stop hook reads it from
+# THIS file (and the per-fleet overlay) via bin/fleet-hook-conf.sh — nothing to
+# export; `fleet-doctor.sh` shows what the hook sees (issue #561).
 # @label=Auto-handoff percent @group=handoff @tier=advanced @scope=fleet @edit=int @unit=%
 #FLEET_AUTO_HANDOFF_PCT=0        # context % that triggers an auto-handoff; 0 = OFF
 

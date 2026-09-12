@@ -266,6 +266,25 @@ assert_exit 0 "non-Bash tool"       "$GUARD" '{"tool_name":"Read","tool_input":{
   assert_exit 2 "push -f develop"   "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
   exit $fails ); rc=$?; fails=$((fails + rc))
 
+# …and the CONF is where a real fleet's base lives (issue #561): nothing exports
+# FLEET_BASE_BRANCH into a pane, so with an EMPTY env the rail must resolve it via
+# fleet-lib for the pane's session (stubbed: fleet_load_conf sets develop). A branch
+# that is neither a default nor the fleet's base stays force-pushable.
+mkdir -p "$TMP/stub-base"
+cat > "$TMP/stub-base/fleet-lib.sh" <<'STUB'
+fleet_current_session() { printf 'fleet-x'; }
+fleet_load_conf()       { FLEET_BASE_BRANCH=develop; }
+STUB
+( fails=0; unset FLEET_BASE_BRANCH; export TMUX='fake,1,0' FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
+  assert_exit 2 "push -f develop (base from the CONF, env empty)" "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
+  assert_exit 2 "push -f master still blocked alongside"         "$GUARD" "$(bash_json "$(jstr 'git push -f origin master')")"
+  assert_exit 0 "push -f a feature branch stays allowed"          "$GUARD" "$(bash_json "$(jstr 'git push -f origin feature-x')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
+# Outside tmux (no fleet) the conf is never consulted: develop is just a branch.
+( fails=0; unset FLEET_BASE_BRANCH; unset TMUX; export FLEET_LIB="$TMP/stub-base/fleet-lib.sh"
+  assert_exit 0 "push -f develop outside tmux (no fleet → no conf)" "$GUARD" "$(bash_json "$(jstr 'git push -f origin develop')")"
+  exit $fails ); rc=$?; fails=$((fails + rc))
+
 # Local overlay: a present overlay's block() denies; a broken overlay fails OPEN.
 mkdir -p "$TMP/home/.claude/hooks"
 cat > "$TMP/home/.claude/hooks/bash-guard-local.py" <<'PYEOF'

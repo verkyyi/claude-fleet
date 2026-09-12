@@ -190,9 +190,11 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
   the Stop-hook `block` decision that steers a near-full session into
   `/fleet-handoff` when context crosses `FLEET_AUTO_HANDOFF_PCT`. It reads the
   context % from `@ctx_pct`, which [`conf/statusline.sh`](../conf/statusline.sh)
-  stamps on the same window-option bus each render. That is a separate feature
-  that happens to ride the `done` state edge — see the inline comments in
-  `set-claude-state.sh`.
+  stamps on the same window-option bus each render, and the threshold from the
+  **conf** — `bin/fleet-hook-conf.sh` (global `fleet.conf` → this fleet's overlay),
+  never the hook's environment, which nothing exports into (#561). That is a
+  separate feature that happens to ride the `done` state edge — see the inline
+  comments in `set-claude-state.sh`.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

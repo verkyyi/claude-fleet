@@ -61,6 +61,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+# …then THIS fleet's overlay on top of it (issue #561): the global conf above is
+# only the default layer, and a per-fleet FLEET_AUTO_HANDOFF_PCT / FLEET_CONTEXT_LIMIT
+# was invisible here before. Same hop the Stop hook makes (bin/fleet-hook-conf.sh):
+# pane → session → fleet_load_conf. Only inside tmux — outside there is no fleet to
+# overlay, and a bare `tmux display-message` would touch the default socket.
+if [ -n "${TMUX:-}" ] && type fleet_load_conf >/dev/null 2>&1; then
+  _sess=$(fleet_current_session 2>/dev/null)
+  [ -n "$_sess" ] && fleet_load_conf "$_sess"
+  unset _sess
+fi
 
 PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
