@@ -7,6 +7,11 @@ where it went on **one** machine, and has to guess at the quota.
 ccquota joins the two. One Go binary, an agent on every endpoint, a hub with a
 dashboard, and a read-only MCP server so any Claude session can ask.
 
+Token usage also covers **Codex**. The agent and local report collect Claude
+Code and Codex by default, with a source dimension for comparing or filtering
+them. Both sources support subscription-limit monitoring when a usable local
+login is available.
+
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
 │ linux server │  │ windows box  │  │ your laptop  │
@@ -99,6 +104,152 @@ it carries a token.
 ```bash
 ccquota report --days 7 --no-limits
 ```
+
+### Claude Code and Codex sources
+
+```bash
+ccquota report --sources codex --days 7 --no-limits
+ccquota report --sources all --json --no-limits
+ccquota agent --sources codex
+ccquota agent --sources claude                # collect Claude Code only
+ccquota agent --codex-home /data/codex        # a custom Codex data directory
+```
+
+`--sources` accepts `all` (the default), `claude`, `codex`, or a comma-separated
+list. `CCQUOTA_SOURCES` sets its default. `--home` selects the user's home;
+`--codex-home` overrides `CODEX_HOME`, which otherwise defaults to
+`<home>/.codex`. Both commands read Codex `sessions/**/*.jsonl` and
+`archived_sessions/**/*.jsonl`. No Claude login is needed to collect Codex.
+
+Codex collection supports per-request `token_usage_record` entries and older
+`event_msg` / `token_count` entries. Notification echoes are ignored when
+per-request records exist; older cumulative counters are differenced instead
+of summed. Cached input is separated from total input, and reasoning remains
+a subset of output, so neither is counted twice. Cache writes remain in
+non-read input because these logs do not provide Claude's cache TTL split.
+See [OpenAI's token accounting example](https://developers.openai.com/api/docs/guides/prompt-caching).
+The dashboard's "turns" count represents model requests, including tool-use
+iterations, rather than user messages.
+
+The local report includes **By source**. **Now** and **Review** share a source
+selector; accounts follow that selection. Usage, quota history, findings,
+Live/SSE, machine lists and MCP accept `source=codex`. The all-time headline
+follows the selected account/source; project and machine chips narrow details.
+
+The agent reads file-backed Codex account metadata and invokes the official
+[App Server read APIs](https://learn.chatgpt.com/docs/app-server) for quota and
+account activity. A disposable, restricted credential snapshot contains an
+empty refresh token for quota reads. A separate maintenance step asks official
+Codex to renew the original file login before access expires; no model turn is
+started. The hub receives measurements, never credentials. Queries have a
+25-second timeout; a short hub lease and jitter avoid duplicate polling of the
+same account on multiple machines. Each credential profile renews independently
+of that quota lease. Keychain-only and unsupported login modes report an
+explicit reason while log collection continues. CLI 0.149.0 and 0.153.4 have
+been checked with real account reads.
+
+### Codex login renewal and multiple accounts
+
+```bash
+ccquota codex add personal --codex-home "$HOME/.codex"  # name the existing login
+ccquota codex add work                                 # new independent home
+ccquota codex login work                               # official browser login
+ccquota codex login work --device-auth                 # alternative for a headless host
+ccquota codex list                                     # email, plan, login state
+ccquota codex use personal                             # default for new managed launches
+ccquota codex run                                      # use that default
+ccquota codex run work -- exec "review this change"     # choose one explicitly
+ccquota codex refresh personal                         # explicit renewal, no model turn
+```
+
+Login starts in the selected account directory, including when invoked through
+`sudo -H -u USER`; `ccquota codex run` keeps the current project directory.
+
+The registry is `~/.ccquota/codex-profiles.json`; it contains names and paths,
+never tokens. New directories live in `~/.codex-accounts/NAME`. Agents reload
+registrations on each scan, deduplicate canonical paths, and preserve existing
+cursors when a directory gets a name. Explicit add/login commands record a
+credential-matched observation time, so a session launched immediately after
+login is attributed even before the next agent scan; older sessions stay under
+their existing attribution. `use` affects `ccquota codex run`; the
+plain `codex` command and already-running sessions keep their existing login.
+Managed launches explicitly use file credentials and remove ambient API/access
+token overrides so they cannot silently select another identity. They lock the
+profile for their lifetime; Codex itself renews while the launch is active.
+
+Automatic renewal is enabled by default for ChatGPT file logins. Disable it
+with `ccquota agent --codex-auto-refresh=false`. Within 24 hours of access-token
+expiry, maintenance asks official App Server `account/read` to refresh and
+persist the original credentials. ccquota does not implement an OAuth exchange,
+copy refresh tokens into other homes, send credentials to the hub, or promise a
+permanent login. ccquota-managed login/run/refresh commands share an OS file
+lock. Direct Codex clients do not participate in that lock; official Codex still
+owns credential persistence. Independent logins per home/machine avoid relying
+on copied refresh credentials. Transient failures back off; a recognized
+revoked/expired/reused refresh credential stops retries until a new login is
+observed. Expired access alone is reported as pending renewal.
+
+**Now → Collection by source** shows the account email, plan, profile/default,
+login state, access expiry, last credential refresh, retry time, and per-machine
+management commands. Quota delegation is separate from login health. **Review →
+KPIs** explains request pricing coverage as priced requests / collected requests
+and lists unpriced reasons. Pruned details get an explicit historical-detail
+label; their tokens and requests remain in totals.
+
+Renewal requires a writable Codex home and the official CLI. Keyring-only,
+API-key, and workspace PAT logins are not automatically renewed by this adapter.
+On a hardened systemd service, separately registered homes must also be included
+in `ReadWritePaths`; the generated service includes the standard account root
+and explicitly configured homes. See [official authentication](https://learn.chatgpt.com/docs/auth)
+and [App Server authentication](https://learn.chatgpt.com/docs/app-server#authentication-modes).
+
+Accounts use a hash of the stable account and member IDs, rather than email or
+reset time. A profile's first observed login is a conservative boundary: only
+new OpenAI sessions started after that observation are associated with it.
+Existing/running and historical sessions remain **Codex (local usage)**
+(`codex:local`). Current login changes do not rewrite old history. Codex does
+not change the endpoint's Claude login. Request IDs survive account changes,
+parser upgrades and raw retention; metadata/price enrichment changes no token
+or request total.
+
+```bash
+ccquota agent --codex-homes /data/codex-work,/data/codex-personal
+ccquota agent --codex-bin /opt/homebrew/bin/codex
+ccquota budget --source codex --json
+ccquota budget --source codex --account all --gate
+```
+
+Additional directories are separate profiles (`CCQUOTA_CODEX_HOMES`); the CLI
+path can also be set with `CCQUOTA_CODEX_BINARY`. File credentials are required
+only for account queries. No quota is inferred from an API key or third-party
+model provider. A missing quota/expired window is unknown; the budget gate
+retains its existing fail-open behavior. Credits alone do not prove headroom.
+
+**Now** displays the actual provider windows (a primary window can be 7 days),
+credits, observation time, recent Codex activity and per-source collector health.
+Completed/interrupted sessions leave the live list; old replays cannot appear
+as live. Missing context, live cost or edited-line counters remain unknown.
+**Review** adds quota series, cache-write coverage and request provenance.
+Service account totals appear alongside locally attributed details, never
+added to them. Their dates, scope and update delay are not yet proven comparable,
+so no difference is labelled as missing data or cloud usage.
+
+Codex costs are **API equivalents at the 2026-09-07 public rate schedule**,
+including historical revaluation, not subscription invoices. Built-in coverage
+includes GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4, GPT-5.3 Codex and
+GPT-5.2 Codex. New models use explicit cache writes and request context tiers;
+known Fast/Flex/Batch rates are applied when recorded, otherwise Standard is
+an explicit assumption. GPT-5.4/5.5 use per-request equivalents; session-wide
+adjustments are unavailable. Legacy Fast rates, Spark, unknown providers/models
+and missing required cache breakdowns remain unpriced. Review shows the
+coverage and per-request basis. Rates: [OpenAI pricing](https://developers.openai.com/api/docs/pricing),
+[GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5),
+[GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4),
+[GPT-5.2 Codex](https://developers.openai.com/api/docs/models/gpt-5.2-codex).
+
+Upgrade the hub before upgrading agents. Existing events and historical hourly
+totals migrate to source `claude`, including history whose raw events have
+already been pruned. Each collector has its own durable scan position.
 
 ## Several subscriptions, several people
 
@@ -437,11 +588,11 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Fifteen read-only tools: `list_accounts`, `get_limits`, `list_endpoints`,
+Twenty read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
 `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
 `usage_history`, `usage_summary`, `list_sessions`, `get_session`,
-`get_findings`.
+`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
 
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security
@@ -465,7 +616,7 @@ The total is exact. **The split is an estimate** and every surface says so.
 only the resulting numbers, so a compromised hub leaks usage statistics — never
 account access.
 
-**The agent never refreshes your token.** If it has expired the agent says so and
+**The agent never refreshes your Claude token.** If it has expired the agent says so and
 keeps reporting token counts. Refreshing would race Claude Code's own refresh and
 could log you out of the thing being monitored.
 
