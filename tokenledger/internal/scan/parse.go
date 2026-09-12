@@ -90,6 +90,7 @@ func ParseLine(line []byte) (*model.UsageEvent, bool, error) {
 	u := e.Message.Usage
 
 	ev := &model.UsageEvent{
+		Source:      model.SourceClaude,
 		SessionID:   e.SessionID,
 		MessageUUID: e.UUID,
 		RequestID:   e.RequestID,

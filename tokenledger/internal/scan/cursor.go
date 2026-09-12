@@ -12,6 +12,7 @@ import (
 
 // fileState is what the scanner remembers about one transcript between runs.
 type fileState struct {
+	Codex *codexState `json:"codex,omitempty"`
 	// Offset is the byte position just past the last COMPLETE line consumed.
 	// A partial trailing line leaves Offset before it, so the next scan picks
 	// it up once the writer finishes.

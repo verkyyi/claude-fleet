@@ -19,21 +19,25 @@ import (
 // than read into memory.
 const maxLineBytes = 32 << 20
 
-// Scanner walks a Claude Code projects directory and yields the usage events
+// Scanner walks transcript directories and yields the usage events
 // it has not yielded before.
 //
 // It is incremental by design: an agent polls it on a timer, and each call
 // costs a stat per transcript plus a read of whatever was appended since. The
 // first call on a busy machine is the expensive one.
 type Scanner struct {
-	root   string
-	cursor *cursor
+	root    string
+	cursor  *cursor
+	roots   []string
+	codex   bool
+	pending map[string]fileState
 
 	// Errs collects non-fatal problems from the last Scan — an unreadable
 	// transcript, a corrupt line. Scan keeps going and reports these rather
 	// than failing the whole pass, because one bad file must not stop an
 	// agent from shipping the other nine hundred.
-	Errs []error
+	Errs        []error
+	CodexQuotas []CodexQuotaObservation
 
 	// skipped counts transcripts the last pass did not open because neither
 	// their size nor their mtime had changed. Exposed so the agent can log it:
@@ -62,7 +66,12 @@ func NewScanner(root, cursorPath string) *Scanner {
 // why that seam exists.
 func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 	s.Errs = nil
+	s.CodexQuotas = nil
 	s.skipped = 0
+	s.pending = make(map[string]fileState, len(s.cursor.Files))
+	for path, st := range s.cursor.Files {
+		s.pending[path] = st
+	}
 
 	files, err := s.transcripts()
 	if err != nil {
@@ -95,39 +104,61 @@ func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 // are safely somewhere else now"; re-reading and re-sending is free because
 // the hub dedups.
 func (s *Scanner) Commit() error {
-	return s.cursor.save()
+	if s.pending == nil {
+		return nil
+	}
+	next := &cursor{path: s.cursor.path, Files: s.pending}
+	if err := next.save(); err != nil {
+		return err
+	}
+	s.cursor = next
+	s.pending = nil
+	return nil
 }
 
 // transcripts lists *.jsonl under root, sorted for deterministic ordering.
 func (s *Scanner) transcripts() ([]string, error) {
 	var out []string
-	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// An unreadable subdirectory should not abort the walk.
-			s.Errs = append(s.Errs, err)
-			if d != nil && d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-		// Skip a file that provably cannot have new content. The walk already
-		// stats each entry, so size and mtime are free here; opening and
-		// hashing 25,164 files to re-verify unchanged cursors is not.
-		if st, known := s.cursor.Files[path]; known && st.ModTimeNano != 0 {
-			if fi, err := d.Info(); err == nil &&
-				fi.Size() == st.Size && fi.ModTime().UnixNano() == st.ModTimeNano {
-				s.skipped++
+	roots := s.roots
+	if len(roots) == 0 {
+		roots = []string{s.root}
+	}
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if path == root && errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				// An unreadable subdirectory should not abort the walk.
+				s.Errs = append(s.Errs, err)
+				if d != nil && d.IsDir() {
+					return fs.SkipDir
+				}
 				return nil
 			}
+			if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+				return nil
+			}
+			// Skip a file that provably cannot have new content. The walk already
+			// stats each entry, so size and mtime are free here; opening and
+			// hashing 25,164 files to re-verify unchanged cursors is not.
+			if st, known := s.cursor.Files[path]; known && st.ModTimeNano != 0 {
+				if s.codex && (st.Codex == nil || st.Codex.Version < codexParserVersion) {
+					out = append(out, path)
+					return nil
+				}
+				if fi, err := d.Info(); err == nil &&
+					fi.Size() == st.Size && fi.ModTime().UnixNano() == st.ModTimeNano {
+					s.skipped++
+					return nil
+				}
+			}
+			out = append(out, path)
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("walk %s: %w", root, err)
 		}
-		out = append(out, path)
-		return nil
-	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("walk %s: %w", s.root, err)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -152,6 +183,8 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 	start := st.Offset
 
 	switch {
+	case s.codex && (st.Codex == nil || st.Codex.Version < codexParserVersion):
+		start = 0
 	case !known:
 		start = 0
 	case size < st.Offset, size < st.HeadLen:
@@ -177,16 +210,40 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 		}
 	}
 
+	var enrichUntil int64
+	if s.codex && start == 0 && known && st.Offset > 0 && size >= st.Offset && (st.Codex == nil || st.Codex.Version < codexParserVersion) {
+		h, err := hashPrefix(f, st.HeadLen)
+		if err != nil {
+			return nil, err
+		}
+		if h == st.HeadHash {
+			enrichUntil = st.Offset
+		}
+	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek %s: %w", path, err)
 	}
 
-	evs, consumed, errs := s.readLines(f, path)
+	var state *codexState
+	if s.codex {
+		state = &codexState{}
+		if start > 0 && st.Codex != nil {
+			*state = *st.Codex
+			if st.Codex.Telemetry != nil {
+				copy := *st.Codex.Telemetry
+				state.Telemetry = &copy
+			}
+		}
+	}
+	evs, consumed, errs := s.readLines(f, path, state, enrichUntil)
 	s.Errs = append(s.Errs, errs...)
 
 	if err := s.reanchor(path, f, size, start+consumed, modNano); err != nil {
 		return nil, err
 	}
+	updated := s.pending[path]
+	updated.Codex = state
+	s.pending[path] = updated
 
 	// Dedup after the offset is recorded: a uuid already seen this pass is
 	// still consumed, it just is not emitted twice.
@@ -204,7 +261,7 @@ func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.Usage
 // readLines consumes whole lines only, returning how many bytes were consumed
 // so a partial trailing line is re-read next pass rather than lost or
 // half-parsed.
-func (s *Scanner) readLines(r io.Reader, path string) (evs []model.UsageEvent, consumed int64, errs []error) {
+func (s *Scanner) readLines(r io.Reader, path string, state *codexState, enrichUntil ...int64) (evs []model.UsageEvent, consumed int64, errs []error) {
 	br := bufio.NewReaderSize(r, 256<<10)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -224,7 +281,19 @@ func (s *Scanner) readLines(r io.Reader, path string) (evs []model.UsageEvent, c
 		}
 		consumed += int64(len(line))
 
-		ev, ok, perr := ParseLine(line)
+		parse := ParseLine
+		if state != nil {
+			parse = state.parseLine
+		}
+		var prevQuota *model.QuotaSnapshot
+		if state != nil && state.Telemetry != nil {
+			prevQuota = state.Telemetry.Quota
+		}
+		ev, ok, perr := parse(line)
+		if state != nil && state.Telemetry != nil && state.Telemetry.Quota != nil && state.Telemetry.Quota != prevQuota {
+			t := state.Telemetry
+			s.CodexQuotas = append(s.CodexQuotas, CodexQuotaObservation{SessionID: t.SessionID, StartedAt: t.StartedAt, Provider: t.Provider, Snapshot: *t.Quota})
+		}
 		if perr != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", path, perr))
 			continue
@@ -233,6 +302,9 @@ func (s *Scanner) readLines(r io.Reader, path string) (evs []model.UsageEvent, c
 			// Which file a turn came from is how a per-session account stamp
 			// is matched back to it; the transcript itself names no account.
 			ev.TranscriptPath = path
+			if len(enrichUntil) > 0 && enrichUntil[0] > 0 && consumed <= enrichUntil[0] {
+				ev.EnrichOnly = true
+			}
 			evs = append(evs, *ev)
 		}
 	}
@@ -252,7 +324,8 @@ func (s *Scanner) reanchor(path string, f *os.File, size, offset, modNano int64)
 	if err != nil {
 		return fmt.Errorf("fingerprint %s: %w", path, err)
 	}
-	s.cursor.Files[path] = fileState{
+	s.pending[path] = fileState{
+		Codex:       s.cursor.Files[path].Codex,
 		Offset:      offset,
 		Size:        size,
 		HeadHash:    hash,
