@@ -8,9 +8,11 @@
 #                with the query (dash-raw-session.sh --name-file, #534) — the dash's
 #                always-visible prompt line is the quick-scratch box. No seed prompt:
 #                the session opens at `❯` for the operator to drive (it seeded the
-#                text as claude's first prompt from #493 until #534)
-#                A `codex:` / `claude:` prefix picks the agent for that one
-#                scratch (issue #547); the rest of the line is the name.
+#                text as claude's first prompt from #493 until #534). The text is
+#                the name VERBATIM — no prefix syntax: the `codex:` / `claude:`
+#                one-off override from #547 was removed in #559 (two ways to pick
+#                the agent was one too many; the toggle key / prefix+c / conf is
+#                the agent choice, and the prompt label shows it).
 #   jump         (default, empty query): select the target window
 set -uo pipefail
 C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
@@ -47,16 +49,11 @@ PROMPT=$(bash "$BIN/dash-agent-prompt.sh" prompt 2>/dev/null); [ -n "$PROMPT" ] 
 # (a later Enter exists ⇒ "not newest" ⇒ wrongly dropped). The query is only ever
 # handed over via a FILE (--name-file), never interpolated into a command string.
 #
-# Agent prefix (issue #547): `codex: <name>` / `claude: <name>` spawns the scratch
-# on THAT agent instead of the fleet's FLEET_AGENT — the prefix is stripped and the
-# rest is the name (a bare `codex:` gives the auto `scratch-<N>` name). Only the
-# two known tokens are prefixes; any other `word:` is just a name.
-agent=''
-case "$q" in
-  codex:*)  agent=codex;  q="${q#codex:}"  ;;
-  claude:*) agent=claude; q="${q#claude:}" ;;
-esac
-if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && { [ -n "${q//[[:space:]]/}" ] || [ -n "$agent" ]; }; then
+# No agent-prefix parsing (issue #559): `codex: foo` is a window NAMED `codex: foo`
+# on the fleet's default agent, like any other `word:` text. The agent for a new
+# session is the dash's toggle key (dash-agent-toggle.sh), prefix+c, or
+# FLEET_AGENT in the conf — the prompt label (`claude ▸` / `codex ▸`) is the truth.
+if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && [ -n "${q//[[:space:]]/}" ]; then
   GUARD_MS="${FLEET_SPAWN_GUARD_MS:-1000}"
   case "$GUARD_MS" in ''|*[!0-9]*) GUARD_MS=1000;; esac
   # The defer is the guard, expressed in seconds — derived, so operators tune ONE
@@ -80,7 +77,7 @@ if [ ! -f "$flag" ] && [ ! -f "$bindflag" ] && { [ -n "${q//[[:space:]]/}" ] || 
     qf=$(mktemp "$gdir/spawn_q.XXXXXX" 2>/dev/null)
     if [ -n "$qf" ]; then
       printf '%s' "$q" > "$qf" 2>/dev/null
-      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf'${agent:+ --agent=$agent} >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
+      fleet_bg "sleep $GUARD_SLEEP; _l=\$(cat '$lastf' 2>/dev/null); case \"\$_l\" in ''|*[!0-9]*) _l=0;; esac; if [ \"\$_l\" -le $now ]; then bash '$BIN/dash-raw-session.sh' --name-file='$qf' >/dev/null 2>&1; else rm -f '$qf'; tmux display-message 'dash: pasted text is not a name — the prompt line takes ONE scratch name. Paste long text into a Claude window or the file inbox (see ONBOARDING).' 2>/dev/null; fi"
     fi
   fi
   echo "clear-query+reload(bash $ROWS)"; exit 0

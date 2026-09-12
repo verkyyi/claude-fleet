@@ -36,8 +36,9 @@ fi
 
 # Agent CLI dispatch (issue #547). FLEET_AGENT — per-fleet overlay ▸ global ▸
 # `claude` — picks which agent a spawned session runs; a caller's `--agent <a>`
-# (dash-issue-session.sh / dash-raw-session.sh `--agent`, the dash prompt line's
-# `codex:` prefix) wins over the conf, the rule --model already follows. The flag
+# (dash-issue-session.sh / dash-raw-session.sh `--agent` — scripts and selftests;
+# the dash prompt line has no agent prefix since #559) wins over the conf, the
+# rule --model already follows. The flag
 # is OURS: consumed here, never passed on. `codex` hands the whole launch to the
 # sibling bin/fleet-codex.sh — nothing below (model alias + cap fallback, MCP
 # allowlist, subagent model, OAuth token) applies to Codex. Anything else — unset,

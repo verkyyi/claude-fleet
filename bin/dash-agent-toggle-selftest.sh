@@ -6,8 +6,10 @@
 #   bin/dash-agent-prompt.sh  — ONE derivation of the label: effective FLEET_AGENT
 #                               (global fleet.conf → per-fleet overlay → claude) →
 #                               `claude ▸ ` / `codex ▸ ` (codex in the #547 row-tag
-#                               colour) + the ghost naming the OTHER agent's one-off
-#                               prefix; `actions` = the change-prompt/change-ghost
+#                               colour) + the ghost `↵ 新开空 scratch · 切换 agent:
+#                               <key>` naming the RESOLVED toggle key (#559 — the
+#                               `<agent>:` one-off prefix hint is gone with the
+#                               prefix); `actions` = the change-prompt/change-ghost
 #                               pair the dash's load/⌃r ticks apply.
 #   bin/dash-agent-toggle.sh  — ⌃v: flip FLEET_AGENT in the fleet's conf through
 #                               the config-modal write path (fcfg_validate +
@@ -76,17 +78,27 @@ E=$'\033['; IN="${E}38;2;187;154;247m"; RD="${E}38;2;247;118;142m"; RS="${E}0m"
 CODEX_PROMPT="${IN}codex${RS} ▸ "
 agent_line() { grep -E '^[[:space:]]*FLEET_AGENT=' "$CONF" 2>/dev/null; }
 
-# --- A. unset conf → claude, plain, ghost names codex: ----------------------------
+# --- A. unset conf → claude, plain; ghost = ↵ hint + the RESOLVED toggle key -------
 out=$(bash "$P" agent)  || fail "A: prompt helper (agent) exited non-zero" "$out"
 [ "$out" = claude ] || fail "A: unset conf must resolve to claude (got: $out)"
 out=$(bash "$P" prompt) || fail "A: prompt helper (prompt) exited non-zero" "$out"
 [ "$out" = 'claude ▸ ' ] || fail "A: prompt for claude must be the plain 'claude ▸ ' (got: $(printf '%q' "$out"))"
 out=$(bash "$P" ghost)
-case "$out" in *'codex: prefix'*) ;; *) fail "A: ghost under a claude default must name the codex: one-off prefix" "$out" ;; esac
+[ "$out" = '↵ 新开空 scratch · 切换 agent: ⌃v' ] || fail "A: ghost must be ONE line — ↵ meaning + the resolved toggle key (⌃v under a C-b prefix), #559" "$(printf '%q' "$out")"
+case "$out" in *'codex:'*|*'claude:'*) fail "A: the ghost must NOT advertise a codex:/claude: prefix (removed in #559)" "$out" ;; esac
+# the key is the resolver's, never a literal: under a C-v prefix it must say ⌥v …
+out=$(FLEET_TMUX_PREFIX=C-v bash "$P" ghost)
+[ "$out" = '↵ 新开空 scratch · 切换 agent: ⌥v' ] || fail "A: with ⌃v as the tmux prefix the ghost must name ⌥v (#556 remap)" "$(printf '%q' "$out")"
+# … and the dash's exported launch-time glyph wins over a fresh resolve, so the
+# ghost names the key fzf actually BOUND even if the prefix changed mid-dash.
+out=$(DASH_GLYPH_AGENT='⌥v' bash "$P" ghost)
+[ "$out" = '↵ 新开空 scratch · 切换 agent: ⌥v' ] || fail "A: DASH_GLYPH_AGENT from the launcher must win over the resolver" "$(printf '%q' "$out")"
+out=$(DASH_GLYPH_AGENT='⌃v (x)' bash "$P" ghost)
+case "$out" in *'('*|*')'*) fail "A: parens in the glyph must be stripped (fzf stops change-ghost at the first ')')" "$out" ;; esac
 out=$(bash "$P" actions)
-[ "$out" = 'change-prompt(claude ▸ )+change-ghost(↵ empty scratch · codex: prefix for a one-off)' ] \
+[ "$out" = 'change-prompt(claude ▸ )+change-ghost(↵ 新开空 scratch · 切换 agent: ⌃v)' ] \
   || fail "A: actions for an unset conf" "$(printf '%q' "$out")"
-ok "A unset conf → 'claude ▸ ', ghost offers codex:, actions pair"
+ok "A unset conf → 'claude ▸ ', ghost = ↵ hint + resolved key (⌃v / ⌥v / launcher env), no prefix hint"
 
 # --- B. ⌃a → codex written to the fleet conf, other keys kept, relabel emitted --
 # seed the overlay with a neighbour key + a comment so a clobbering write shows.
@@ -98,12 +110,11 @@ out=$(bash "$T") || fail "B: toggle exited non-zero" "$out"
 grep -qx 'FLEET_MODEL="fable"' "$CONF" || fail "B: the neighbour key FLEET_MODEL must survive the write" "$(cat "$CONF")"
 grep -qx '# seeded by the selftest' "$CONF" || fail "B: the comment line must survive the write" "$(cat "$CONF")"
 [ -f "$CONF.bak" ] || fail "B: fcfg_write backs the conf up first (.bak missing)"
-case "$out" in
-  "change-prompt(${CODEX_PROMPT})+change-ghost("*'claude: prefix'*) ;;
-  *) fail "B: toggle must emit change-prompt(<IN>codex<reset> ▸ )+change-ghost(… claude: prefix …)" "$(printf '%q' "$out")" ;;
-esac
+[ "$out" = "change-prompt(${CODEX_PROMPT})+change-ghost(↵ 新开空 scratch · 切换 agent: ⌃v)" ] \
+  || fail "B: toggle must emit change-prompt(<IN>codex<reset> ▸ )+change-ghost(↵ 新开空 scratch · 切换 agent: ⌃v) — same ghost either way (#559)" "$(printf '%q' "$out")"
 grep -q 'new sessions → codex' "$DISPLAY_LOG" || fail "B: toast 'fleet: new sessions → codex' missing" "$(cat "$DISPLAY_LOG")"
 grep -q '⌃v flips back' "$DISPLAY_LOG" || fail "B: the toast must name the resolved key (⌃v under a C-b prefix)" "$(cat "$DISPLAY_LOG")"
+grep -Eq 'codex:|claude:' "$DISPLAY_LOG" && fail "B: the toast must not advertise a codex:/claude: prefix (removed in #559)" "$(cat "$DISPLAY_LOG")"
 [ "$(bash "$P" agent)" = codex ] || fail "B: the helper must now read codex from the conf"
 [ "$(bash "$P" prompt)" = "$CODEX_PROMPT" ] || fail "B: prompt for codex must be coloured IN (#547 tag colour)" "$(bash "$P" prompt | od -c | head -3)"
 ok "B ⌃v → FLEET_AGENT=\"codex\" (neighbours + comment kept, .bak), coloured relabel + toast"
@@ -116,9 +127,11 @@ out=$(FLEET_TMUX_PREFIX=C-v bash "$T") || fail "B2: toggle under a C-v prefix ex
 [ "$(agent_line)" = 'FLEET_AGENT="claude"' ] || fail "B2: the flip itself is unaffected by the prefix" "$(cat "$CONF")"
 grep -q '⌥v flips back' "$DISPLAY_LOG" || fail "B2: with prefix C-v the toast must say ⌥v flips back" "$(cat "$DISPLAY_LOG")"
 grep -q '⌃v flips back' "$DISPLAY_LOG" && fail "B2: … and must NOT still advertise ⌃v" "$(cat "$DISPLAY_LOG")"
+[ "$out" = "change-prompt(claude ▸ )+change-ghost(↵ 新开空 scratch · 切换 agent: ⌥v)" ] \
+  || fail "B2: the change-ghost the toggle emits must name ⌥v too (same resolver as the toast)" "$(printf '%q' "$out")"
 out=$(FLEET_TMUX_PREFIX=C-v bash "$T") || fail "B2: second toggle exited non-zero" "$out"
 [ "$(agent_line)" = 'FLEET_AGENT="codex"' ] || fail "B2: back on codex" "$(cat "$CONF")"
-ok "B2 toast names the RESOLVED key: ⌥v when ⌃v is the tmux prefix"
+ok "B2 toast + ghost name the RESOLVED key: ⌥v when ⌃v is the tmux prefix"
 
 # --- C. ⌃a again → back to claude ---------------------------------------------------
 : > "$DISPLAY_LOG"
@@ -126,7 +139,7 @@ out=$(bash "$T") || fail "C: second toggle exited non-zero" "$out"
 [ "$(agent_line)" = 'FLEET_AGENT="claude"' ] || fail "C: conf must flip back to FLEET_AGENT=\"claude\"" "$(cat "$CONF")"
 [ "$(agent_line | wc -l | tr -d ' ')" = 1 ] || fail "C: still exactly one FLEET_AGENT line (in-place replace)" "$(cat "$CONF")"
 grep -qx 'FLEET_MODEL="fable"' "$CONF" || fail "C: FLEET_MODEL must survive the second write" "$(cat "$CONF")"
-[ "$out" = 'change-prompt(claude ▸ )+change-ghost(↵ empty scratch · codex: prefix for a one-off)' ] \
+[ "$out" = 'change-prompt(claude ▸ )+change-ghost(↵ 新开空 scratch · 切换 agent: ⌃v)' ] \
   || fail "C: second toggle must relabel back to the plain claude prompt" "$(printf '%q' "$out")"
 grep -q 'new sessions → claude' "$DISPLAY_LOG" || fail "C: toast 'fleet: new sessions → claude' missing" "$(cat "$DISPLAY_LOG")"
 ok "C ⌃v again → FLEET_AGENT=\"claude\", plain relabel + toast"
@@ -139,7 +152,7 @@ out=$(bash "$P" agent); rc=$?
 out=$(bash "$P" prompt)
 [ "$out" = "${RD}gemini beta${RS} ▸ " ] || fail "D: unknown value is drawn red, as-is" "$(printf '%q' "$out")"
 out=$(bash "$P" actions)
-case "$out" in 'change-prompt('*'gemini beta'*' ▸ )+change-ghost('*'codex: prefix'*) ;; *) fail "D: actions for an unknown value" "$(printf '%q' "$out")" ;; esac
+case "$out" in 'change-prompt('*'gemini beta'*" ▸ )+change-ghost(↵ 新开空 scratch · 切换 agent: ⌃v)") ;; *) fail "D: actions for an unknown value" "$(printf '%q' "$out")" ;; esac
 out=$(bash "$T") || fail "D: toggle on an unknown value exited non-zero" "$out"
 [ "$(agent_line)" = 'FLEET_AGENT="claude"' ] || fail "D: an unknown value must toggle to claude" "$(cat "$CONF")"
 ok "D unknown conf value renders as-is (red, parens stripped), toggles to claude"
@@ -188,6 +201,10 @@ grep -q -- '--bind "ctrl-a:' "$DASH" && fail "H: ctrl-a is the operator's tmux p
 grep -Eq '^AGENT_PROMPT="\$BIN/dash-agent-prompt\.sh"' "$DASH" || fail "H: tmux-dashboard.sh must name the helper as AGENT_PROMPT"
 grep -Eq -- '--prompt="\$PROMPT_NOW" --ghost="\$GHOST_NOW"' "$DASH" || fail "H: --prompt/--ghost must come from the helper, not literals"
 grep -Eq 'PROMPT_NOW=\$\(bash "\$AGENT_PROMPT" prompt' "$DASH" || fail "H: PROMPT_NOW must be derived from the helper"
+grep -Eq 'GHOST_NOW=\$\(bash "\$AGENT_PROMPT" ghost' "$DASH" || fail "H: GHOST_NOW must be derived from the helper"
+grep -Eq '^\s*export DASH_GLYPH_AGENT\b' "$DASH" || fail "H: tmux-dashboard.sh must export DASH_GLYPH_AGENT so the ghost names the key it actually bound (#559)"
+grep -Eq 'codex: prefix|claude: prefix|prefix for a one-off' "$DASH" "$PROMPT" "$TOGGLE" "$BIN/dash-enter.sh" "$BIN/fleet-keys.sh" \
+  && fail "H: a codex:/claude: prefix hint survives somewhere (#559 removed the prefix)" "$(grep -nE 'codex: prefix|claude: prefix|prefix for a one-off' "$DASH" "$PROMPT" "$TOGGLE" "$BIN/dash-enter.sh" "$BIN/fleet-keys.sh")"
 grep -Eq -- '--bind "load:reload-sync\(sleep \$REFRESH; sh \$WAIT; bash \$ROWS\)\+transform\(bash \$AGENT_PROMPT actions\)"' "$DASH" || fail "H: the load tick must re-derive the label (after the popup-waited reload, #308)"
 grep -Eq -- '--bind "\$DASH_KEY_RELOAD:reload\(bash \$ROWS\)\+transform\(bash \$AGENT_PROMPT actions\)"' "$DASH" || fail "H: ⌃r (via \$DASH_KEY_RELOAD) must re-derive the label"
 for f in dash-enter.sh dash-esc.sh; do
@@ -197,7 +214,7 @@ done
 grep -q 'key "$(dg agent)"' "$BIN/fleet-keys.sh" || fail "H: fleet-keys.sh dashboard sheet must document the flip via dg agent"
 sheet=$(NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain --context dash)   # capture first: grep -q + pipefail would SIGPIPE the sheet
 printf '%s\n' "$sheet" | grep -q '^  ⌃v  *flip this fleet' || fail "H: the rendered sheet must show ⌃v for the flip" "$sheet"
-ok "H dash wiring: \$DASH_KEY_AGENT (ctrl-v) bind, helper-derived --prompt/--ghost, load/⌃r re-derive, enter/esc restore, ? sheet"
+ok "H dash wiring: \$DASH_KEY_AGENT (ctrl-v) bind, helper-derived --prompt/--ghost, DASH_GLYPH_AGENT exported, load/⌃r re-derive, enter/esc restore, ? sheet, no prefix hint"
 
 # --- I. shellcheck (when present) -------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
@@ -219,17 +236,19 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
     sleep 0.1
   done
   pane=$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess)
-  case "$pane" in *'codex: prefix for a one-off'*) ;; *) fail "J: the ghost must name the codex: one-off under a claude default" "$pane" ;; esac
+  case "$pane" in *'切换 agent: ⌃v'*) ;; *) fail "J: the ghost must name the resolved toggle key (⌃v under the pinned C-b prefix)" "$pane" ;; esac
+  case "$pane" in *'codex:'*|*'claude:'*) fail "J: the ghost must not advertise a codex:/claude: prefix (#559)" "$pane" ;; esac
   "$REAL_TMUX" -S "$LIVE_SOCK" send-keys -t testsess C-v
   n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "${IN}codex"; do
     n=$((n+1)); [ "$n" -gt 50 ] && fail "J: after ⌃v the pane must show codex in the IN colour" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
     sleep 0.1
   done
   pane=$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess)
-  case "$pane" in *'claude: prefix for a one-off'*) ;; *) fail "J: after ⌃v the ghost must name the claude: one-off" "$(printf '%s' "$pane" | cat -v)" ;; esac
+  case "$pane" in *'切换 agent: ⌃v'*) ;; *) fail "J: after ⌃v the ghost must still name the toggle key (one ghost, both agents)" "$(printf '%s' "$pane" | cat -v)" ;; esac
+  case "$pane" in *'codex:'*|*'claude:'*) fail "J: after ⌃v the ghost must still carry no prefix hint (#559)" "$(printf '%s' "$pane" | cat -v)" ;; esac
   [ "$(agent_line)" = 'FLEET_AGENT="codex"' ] || fail "J: the live ⌃v must have written FLEET_AGENT=\"codex\"" "$(cat "$CONF" 2>/dev/null)"
   "$REAL_TMUX" -S "$LIVE_SOCK" kill-server 2>/dev/null
-  ok "J live fzf: ⌃v recolours the prompt, swaps the ghost, persists the conf"
+  ok "J live fzf: ⌃v recolours the prompt, ghost names the key, persists the conf"
 
   # --- K. LIVE: the server's prefix IS ⌃v → the bind resolved in the pane is ⌥v -------
   # The #556 failure end to end: the pane's own `tmux show -gv prefix` (via $TMUX on
@@ -250,6 +269,8 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
     sleep 0.1
   done
   [ "$(cat "$WORK/k.resolved" 2>/dev/null)" = alt-v ] || fail "K: inside a pane whose server prefix is C-v the flip must resolve to alt-v" "$(cat "$WORK/k.resolved" 2>/dev/null)"
+  pane=$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess)
+  case "$pane" in *'切换 agent: ⌥v'*) ;; *) fail "K: the ghost drawn in a C-v-prefix pane must name ⌥v — the key the bind holds (#559)" "$(printf '%s' "$pane" | cat -v)" ;; esac
   "$REAL_TMUX" -S "$LIVE_SOCK" send-keys -t testsess M-v
   n=0; until "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess 2>/dev/null | grep -Fq "${IN}codex"; do
     n=$((n+1)); [ "$n" -gt 50 ] && fail "K: ⌥v must flip the prompt to codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
@@ -261,7 +282,7 @@ if [ -n "$REAL_TMUX" ] && command -v fzf >/dev/null 2>&1; then
   [ "$(agent_line)" = 'FLEET_AGENT="codex"' ] || fail "K: a bare ⌃v (the prefix) must NOT reach fzf — conf flipped" "$(cat "$CONF" 2>/dev/null)"
   "$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | grep -Fq "${IN}codex" || fail "K: after a bare ⌃v the prompt must still read codex" "$("$REAL_TMUX" -S "$LIVE_SOCK" capture-pane -p -e -t testsess | cat -v)"
   "$REAL_TMUX" -S "$LIVE_SOCK" kill-server 2>/dev/null
-  ok "K live fzf under prefix C-v: bind resolves to ⌥v, ⌥v flips, a bare ⌃v is eaten by tmux"
+  ok "K live fzf under prefix C-v: bind + ghost resolve to ⌥v, ⌥v flips, a bare ⌃v is eaten by tmux"
 else
   printf 'skip J/K live fzf tails (tmux or fzf not installed)\n'
 fi

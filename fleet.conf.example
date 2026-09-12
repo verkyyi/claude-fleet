@@ -171,9 +171,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # The dash prompt line shows the EFFECTIVE value — `claude ▸ ` / `codex ▸ ` — and
 # ⌃v in the dash flips it here, in this fleet's conf (issue #554), so every spawn
 # path follows and the dash shows the truth.
-# Per-spawn override: `--agent codex|claude` on dash-issue-session.sh /
-# dash-raw-session.sh, or a `codex:` / `claude:` prefix on the dash prompt line
-# (`codex: fix parser` → a Codex scratch named "fix parser"). A `--resume` /
+# Pick it with the dash toggle key (⌃v, or its ⌥ twin when ⌃v is your tmux
+# prefix — the `?` sheet shows the real one), prefix+c, or this key. There is NO
+# prompt-line prefix (issue #559): `codex: fix parser` typed on the dash is a
+# scratch NAMED "codex: fix parser" on the fleet's default agent. Per-spawn
+# override for scripts: `--agent codex|claude` on dash-issue-session.sh /
+# dash-raw-session.sh. A `--resume` /
 # `--continue` / `--from-pr` launch (restore, migrate, /fleet-history) is ALWAYS
 # Claude — those resume Claude transcripts. Not available to a Codex worker:
 # /fleet-handoff + auto-handoff, /fleet-context + the dash ctx %, account rotation.
