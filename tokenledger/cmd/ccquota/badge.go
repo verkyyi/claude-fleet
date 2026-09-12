@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/badge"
@@ -40,6 +43,15 @@ func periodRange(period string, now time.Time) (start time.Time, all bool, err e
 func runBadge(args []string) error {
 	fs := flag.NewFlagSet("badge", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
+	// ★ 远端模式：hub 搬进集群之后，**发布这张图的机器上已经没有那个库了**。
+	//   给它一条只读的取数路：问 hub 要同一个 LifetimeTotals，渲染不变。
+	//   不给 --hub 就还是本地库，行为逐字节不变。
+	// ★ **不从环境变量取默认值**（token 可以，hub 不行）。本命令的契约是「完全本地、
+	//   不碰网络」——`TestRunBadge_WritesSVGWithoutNetwork` 就是钉这条的。让 --hub 默认
+	//   读 CCQUOTA_HUB_URL 会**静默**把一条离线命令变成联网命令：环境里恰好有那个变量的
+	//   机器上，`ccquota badge` 会突然开始打网络，而调用方什么都没改。要远端就显式写出来。
+	hub := fs.String("hub", "", "read totals from a hub over HTTP instead of a local database (explicit only)")
+	hubToken := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token, with --hub")
 	out := fs.String("out", "", "write to this file (default: stdout)")
 	theme := fs.String("theme", "dark", "\"dark\", \"light\", or \"auto\" (follows the reader's\n"+
 		"OS colour scheme; on GitHub use two files and <picture>, since its\n"+
@@ -87,17 +99,32 @@ Flags:
 		return fmt.Errorf("unknown size %q: use \"full\" or \"compact\"", *size)
 	}
 
-	dbFile, err := resolveExistingDB(*dbPath)
-	if err != nil {
-		return err
+	var (
+		d   badge.Data
+		err error
+	)
+	if *hub != "" {
+		// 远端只认 all-time：hub 的 /v1/live 给的就是 LifetimeTotals 那一个数。
+		// 窗口口径要另一个端点，而这条路的唯一用途是发那张全时长的图 —— 与其
+		// 悄悄换个口径渲染出一张“看起来对”的图，不如当场说不支持。
+		if *period != "" && *period != "all" {
+			return fmt.Errorf("--period %s needs a local database; --hub only serves all-time totals", *period)
+		}
+		d, err = hubBadgeData(*hub, *hubToken, *theme)
+	} else {
+		var dbFile string
+		dbFile, err = resolveExistingDB(*dbPath)
+		if err != nil {
+			return err
+		}
+		var st *store.Store
+		st, err = store.Open(dbFile)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		d, err = badgeData(st, *period, *theme)
 	}
-	st, err := store.Open(dbFile)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	d, err := badgeData(st, *period, *theme)
 	if err != nil {
 		return err
 	}
@@ -159,5 +186,48 @@ func badgeData(st *store.Store, period, theme string) (badge.Data, error) {
 		d.Turns += b.Events
 		d.Tokens += b.Tokens
 	}
+	return d, nil
+}
+
+// hubBadgeData asks a hub for the same all-time figure `badgeData` computes
+// locally.
+//
+// Why this exists: the hub moved into the cluster, and the machine that
+// publishes this SVG no longer has the database. Reading it over HTTP keeps one
+// number behind both artefacts — the alternative (publish a frozen SVG next to
+// a live JSON) is exactly the drift that made the website and the dashboard
+// disagree by 1.5B tokens once already.
+func hubBadgeData(hubURL, token, theme string) (badge.Data, error) {
+	d := badge.Data{Period: "all", Theme: theme}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(hubURL, "/")+"/v1/live", nil)
+	if err != nil {
+		return d, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return d, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return d, fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		Counter *struct {
+			Turns  int64 `json:"turns"`
+			Tokens int64 `json:"tokens"`
+		} `json:"counter"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return d, err
+	}
+	// ★ 拿不到计数器就报错，不要渲染一张 0 的图 —— 一张写着 0 的里程表比没有图更糟：
+	//   它看起来是个事实。
+	if body.Counter == nil || body.Counter.Tokens <= 0 {
+		return d, fmt.Errorf("hub returned no counter")
+	}
+	d.Turns, d.Tokens = body.Counter.Turns, body.Counter.Tokens
 	return d, nil
 }
