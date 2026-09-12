@@ -121,7 +121,7 @@ print_sheet() {
   key "type a name, enter" "EMPTY scratch session named after the typed text — no prompt sent; CJK + spaces fine, 24 cols (the prompt line at the bottom; esc clears it)"
   key "$(dg new)" "new issue — file one AND spawn its worker (quick-dispatch)$(dn new)"
   key "$(dg scratch)" "raw scratch session — spawns instantly (the fleet's default agent in its own scratch-N worktree, no issue, no prompt)$(dn scratch)"
-  key "$(dg agent)" "flip this fleet's default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet's conf, so every spawn path follows; a codex:/claude: prefix stays the one-off$(dn agent)"
+  key "$(dg agent)" "flip this fleet's default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet's conf, so every spawn path follows — this key, prefix+c or FLEET_AGENT in the conf are the ways to pick it (no prompt-line prefix)$(dn agent)"
   key "$(dg rename)" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)$(dn rename)"
   key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean$(dn reap)"
   key "$(dg view)" "toggle live ⇄ closed (finished sessions + scratch)$(dn view)"

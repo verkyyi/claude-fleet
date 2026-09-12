@@ -98,8 +98,9 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # bind), and the `? keys` token was never tappable. The operator chose to drop the
 # row outright rather than relocate its content, so:
 #   • the ghost text carried BOTH ↵ meanings (typed → named scratch, empty → jump)
-#     until #554 gave its second half to the `<agent>:` one-off hint — `↵ empty
-#     scratch · codex: prefix for a one-off`; empty-↵ = jump is the cheatsheet's;
+#     until #554 gave its second half to the agent hint — since #559 `↵ 新开空
+#     scratch · 切换 agent: ⌃v` (the resolved toggle key, never a literal);
+#     empty-↵ = jump is the cheatsheet's;
 #   • the ＋new chip is gone with the row — ⌃n is the dash's only new-issue+worker
 #     path (the backlog popup, prefix b, keeps its own chip);
 #   • `?` stays bound (empty line → the cheatsheet, fleet-keys.sh --context dash).
@@ -113,12 +114,14 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # panes), and the list runs straight into it.
 # The prompt label + ghost are NOT literals here (issue #554): the prompt carries
 # the fleet's default agent for a NEW session — `claude ▸ ` / `codex ▸ ` (codex in
-# the #547 row-tag colour) — and the ghost names the OTHER agent's `<agent>:`
-# one-off prefix. Both come from ONE helper, bin/dash-agent-prompt.sh (effective
-# FLEET_AGENT via fleet_load_conf), read at every launch here AND re-derived on
-# every reload tick (`load` / ⌃r → transform(… actions)), so a change from ANY
-# writer — ⌃v (dash-agent-toggle.sh), the prefix+c modal, a hand edit — shows on
-# the next tick without a relaunch. Same helper restores the label after a rename.
+# the #547 row-tag colour) — and the ghost says what ↵ does + names the toggle
+# key the dash actually bound (issue #559; the `<agent>:` one-off prefix is gone).
+# Both come from ONE helper, bin/dash-agent-prompt.sh (effective FLEET_AGENT via
+# fleet_load_conf; the key via the exported DASH_GLYPH_AGENT below), read at
+# every launch here AND re-derived on every reload tick (`load` / ⌃r →
+# transform(… actions)), so a change from ANY writer — ⌃v (dash-agent-toggle.sh),
+# the prefix+c modal, a hand edit — shows on the next tick without a relaunch.
+# Same helper restores the label after a rename.
 AGENT_PROMPT="$BIN/dash-agent-prompt.sh"
 KEYMAP="$BIN/dash-keymap.sh"   # the dash's ⌃-keys, resolved against the tmux prefix (issue #556)
 
@@ -167,9 +170,14 @@ run_dash() {
   # unbound floor for an install missing the helper.
   DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
   DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e
+  DASH_GLYPH_AGENT='⌃v'
   eval "$(bash "$KEYMAP" env 2>/dev/null)"
+  # The ghost names the agent-flip key (issue #559): export the LAUNCH-TIME glyph
+  # so the helper — at launch here, on every tick, and inside the toggle's
+  # change-ghost, all children of this fzf — says the key the bind above holds.
+  export DASH_GLYPH_AGENT
   PROMPT_NOW=$(bash "$AGENT_PROMPT" prompt 2>/dev/null); [ -n "$PROMPT_NOW" ] || PROMPT_NOW='▸ '
-  GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ empty scratch'
+  GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ 新开空 scratch'
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-sort \

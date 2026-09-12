@@ -10,8 +10,10 @@
 # the prompt line at once (bin/dash-agent-prompt.sh actions) and toasts one line
 # (`fleet: new sessions → codex`). Because it is the REAL conf that changed, every
 # spawn path follows — the dash prompt line, ⌃s, dash-issue-session.sh, autofill /
-# dispatch, other sessions' scripts — and the dash shows the truth; the `codex:` /
-# `claude:` prompt-line prefix stays the one-off override.
+# dispatch, other sessions' scripts — and the dash shows the truth. This key,
+# prefix+c and the conf are the ONLY ways to pick the agent (issue #559 retired the
+# `codex:` / `claude:` prompt-line prefix); `--agent` on the CLI spawners stays for
+# scripts.
 #
 # Flip table (the effective value, same ladder as the prompt): claude / unset →
 # codex; codex → claude; an UNKNOWN value → claude (the only state the launcher
@@ -61,5 +63,5 @@ if ! fcfg_write "$target" FLEET_AGENT "$new" enum >/dev/null; then
   exit 0
 fi
 glyph=$(bash "$BIN/dash-keymap.sh" glyph agent 2>/dev/null); [ -n "$glyph" ] || glyph='⌃v'
-tmux display-message "fleet: new sessions → $new · $glyph flips back · ${cur:-claude}: prefix for a one-off" 2>/dev/null || true
+tmux display-message "fleet: new sessions → $new · $glyph flips back" 2>/dev/null || true
 bash "$BIN/dash-agent-prompt.sh" actions
