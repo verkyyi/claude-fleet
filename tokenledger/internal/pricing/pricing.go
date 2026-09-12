@@ -82,7 +82,7 @@ func Default() *Table {
 
 // dateSuffix matches the trailing snapshot date on ids like
 // claude-haiku-4-5-20251001.
-var dateSuffix = regexp.MustCompile(`-\d{8}$`)
+var dateSuffix = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
 
 // Normalize reduces a transcript's model id to the table's key.
 func Normalize(id string) string {
@@ -96,6 +96,9 @@ func Normalize(id string) string {
 // the figure is unknown. Zero is a claim that the work was free, and a busy
 // endpoint running an unrecognised model would silently rank as idle.
 func (t *Table) Cost(ev *model.UsageEvent) *float64 {
+	if ev.Source == model.SourceCodex {
+		return codexCost(ev)
+	}
 	r, ok := t.rates[Normalize(ev.Model)]
 	if !ok {
 		return nil
@@ -111,6 +114,9 @@ func (t *Table) Cost(ev *model.UsageEvent) *float64 {
 
 // Known reports whether a model has rates.
 func (t *Table) Known(modelID string) bool {
+	if _, ok := openAIRates[Normalize(modelID)]; ok {
+		return true
+	}
 	_, ok := t.rates[Normalize(modelID)]
 	return ok
 }
