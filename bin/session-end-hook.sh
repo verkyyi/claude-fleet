@@ -5,7 +5,9 @@
 # fleet-lib.sh, which uses process substitution `< <(…)` that bash-as-/bin/sh
 # (macOS posix mode) rejects at parse time — every fleet-lib-sourcing script in the
 # tree is likewise `#!/bin/bash`. The `sh`-wired hooks (set-claude-state)
-# deliberately do NOT source fleet-lib.
+# deliberately do NOT source fleet-lib — when one needs a conf knob it goes through
+# bin/fleet-hook-conf.sh, a bash hop that does the same source + fleet_load_conf
+# (issue #561: a hook never reads FLEET_* from its env; nothing exports it).
 #
 # When an operator MANUALLY exits a worker (Ctrl-D / `/exit`, or logout), react AT
 # EXIT instead of waiting for the polling daemons:

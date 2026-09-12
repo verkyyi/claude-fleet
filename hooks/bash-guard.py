@@ -237,11 +237,41 @@ def cmd_is(seg, name):
 
 
 # Base branches a force-push must never touch. master/main are the near-universal
-# defaults; a fleet that runs off another base exports FLEET_BASE_BRANCH and the
-# hook subprocess inherits it, so its base is protected too.
+# defaults; a fleet that runs off another base has FLEET_BASE_BRANCH in its CONF,
+# and that is where it must be read from (issue #561): nothing exports the conf
+# into a pane's environment, so the env is only honoured as an explicit override
+# (a selftest seam, or an operator who exports it by hand). Resolved via fleet-lib
+# for the pane's session, the way base-readonly-guard.py resolves FLEET_MAIN — and
+# only on the force-push path (this is called after the `git push` regex matched),
+# so the bash subprocess stays off the per-command hot path. Any failure → the
+# defaults alone (fail open, as everywhere in this rail).
+def _fleet_base_branch():
+    bb = os.environ.get("FLEET_BASE_BRANCH", "").strip()
+    if bb or not os.environ.get("TMUX"):
+        return bb
+    lib = os.path.expanduser(
+        os.environ.get("FLEET_LIB", "~/.claude/fleet/bin/fleet-lib.sh")
+    )
+    if not os.path.exists(lib):
+        return ""
+    try:
+        out = subprocess.run(
+            ["bash", "-c",
+             'source "$1" >/dev/null 2>&1 || exit 9; '
+             'S=$(fleet_current_session 2>/dev/null); '
+             '[ -n "$S" ] && fleet_load_conf "$S" >/dev/null 2>&1; '
+             'printf "%s" "${FLEET_BASE_BRANCH:-}"',
+             "_", lib],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def _base_branches():
     names = {"master", "main"}
-    bb = os.environ.get("FLEET_BASE_BRANCH", "").strip()
+    bb = _fleet_base_branch()
     if bb:
         names.add(bb)
     return names

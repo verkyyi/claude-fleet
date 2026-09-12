@@ -77,9 +77,25 @@ fi
 # is reused unchanged. Single knob FLEET_AUTO_HANDOFF_PCT (0 = OFF; mirrors
 # FLEET_RUNAWAY_CPU_PCT). Only 'done' (the Stop hook) reaches here, so the JSON is
 # only ever emitted in the Stop-hook context that parses it as a decision.
+#
+# THE KNOB IS READ FROM THE CONF, NOT THIS PROCESS'S ENVIRONMENT (issue #561). A
+# hook inherits the pane's env, and nothing exports fleet.conf into it (the conf is
+# assignments-only; the launcher never `set -a`s it) — so the original
+# `${FLEET_AUTO_HANDOFF_PCT:-0}` read here was 0 in every real session while the
+# operator's global conf said 60, and all 134 logged handoff cycles were the worker
+# nudging itself. Resolution goes through bin/fleet-hook-conf.sh — the ONE
+# hook-side path (global fleet.conf → this fleet's overlay via fleet_load_conf,
+# global-only keys stripped per #237) that fleet-doctor.sh evaluates too. This
+# script is `sh`-wired and cannot source the bash-only fleet-lib itself; the helper
+# is the bash hop (≈20 ms, once per Stop — never on the per-tool hot path). Any
+# failure (helper/lib missing, no server, no conf) yields '' ⇒ 0 ⇒ OFF: fail-open,
+# exactly as before.
 if [ "$sem" = "done" ]; then
-  _hp="${FLEET_AUTO_HANDOFF_PCT:-0}"
-  case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # non-numeric → treat as off
+  _bin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+  _hp=''
+  [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
+    && _hp=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+  case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
   # Loop-guard: the Stop-hook stdin carries stop_hook_active=true when the model is
   # ALREADY continuing because of a prior Stop-hook block — never re-block that
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with

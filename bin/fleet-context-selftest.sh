@@ -52,6 +52,7 @@ case "$*" in
   *@ctx_pct*)       printf '%s\n' "${FAKE_CTX_PCT:-}" ;;
   *@ctx_limit*)     printf '%s\n' "${FAKE_CTX_LIMIT:-}" ;;
   *@handoff_armed*) printf '%s\n' "${FAKE_ARMED:-}" ;;
+  *session_name*)   printf '%s\n' "${FAKE_SESSION:-}" ;;
 esac
 exit 0
 FAKE
@@ -111,6 +112,22 @@ out=$(FLEET_AUTO_HANDOFF_PCT=60 FLEET_CONTEXT_LIMIT=100000 run --transcript "$T"
 is "43% is still OK — just under the 45% watch floor" "$out" "OK"
 out=$(FLEET_AUTO_HANDOFF_PCT=60 FLEET_CONTEXT_LIMIT=200000 run --transcript "$T" -q)
 is "threshold 60 leaves 21% OK" "$out" "OK"
+
+printf '\n-- CONF OVERLAY (#561) --\n'
+# The threshold lives in the CONF, and this read must see THIS fleet's overlay — not
+# just the global file, and never only the env (nothing exports the conf into a
+# pane). FLEET_CONF_DIR is fleet-lib's test seam for the per-fleet estate; the fake
+# tmux names the pane's session.
+mkdir -p "$WORK/conf/fleets/s1"
+printf 'FLEET_AUTO_HANDOFF_PCT=60\n' > "$WORK/conf/fleets/s1/conf"
+out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s1 FLEET_CONTEXT_LIMIT=70000 run --transcript "$T" -q)
+is "per-fleet conf FLEET_AUTO_HANDOFF_PCT=60 (env empty) makes 61% HANDOFF" "$out" "HANDOFF"
+out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s1 run --transcript "$T")
+has "…and the handoff line reports the conf threshold" "$out" "auto-handoff at 60%"
+out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s2 FLEET_CONTEXT_LIMIT=70000 run --transcript "$T" -q)
+is "another fleet's pane does not see s1's overlay (61% is WATCH on default bands)" "$out" "WATCH"
+out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s1 FLEET_CONTEXT_LIMIT=70000 run_notmux --transcript "$T" -q)
+is "outside tmux no overlay is loaded (61% is WATCH on default bands)" "$out" "WATCH"
 
 printf '\n-- STAMP --\n'
 out=$(FAKE_CTX_PCT=91 run --transcript "$T" --json)

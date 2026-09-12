@@ -114,7 +114,10 @@ assumes — this doc is only the install/uninstall procedure.
    decision steering the model to run `/fleet-handoff` (store → `/clear` → resume)
    — reusing the whole existing handoff cycle, only the trigger is new. The `%` is
    measured by `conf/statusline.sh`, which stamps it onto `@ctx_pct` each render
-   (so this needs the status line wired, step 8b). The nudge fires once per session
+   (so this needs the status line wired, step 8b); the threshold is read from the
+   **conf** (global `fleet.conf`, then the fleet's overlay) through
+   `bin/fleet-hook-conf.sh` — nothing to export, and `fleet-doctor.sh`'s `handoff`
+   line shows what the hook actually sees (issue #561). The nudge fires once per session
    (latch), only from a clean `done` (never a needs-attention turn), and never on
    panels or the hub pane.
 

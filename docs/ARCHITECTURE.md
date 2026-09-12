@@ -89,6 +89,37 @@ estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*
 …) into this layout **idempotently**, and every reader **dual-reads** both layouts
 so a fleet keeps working across the land→migrate window.
 
+### Hooks read the conf; the launcher does not export (issue #561)
+
+A Claude Code hook runs with the **pane's environment**, and the fleet never
+exports `FLEET_*` into it: `fleet.conf` is assignments-only, `fleet-claude.sh`
+does not `set -a` it, and the only keys fleet-lib exports on load are the
+global-only caps (issue #399) — for its *own* children. So a hook that reads
+`${FLEET_X:-default}` from its environment sees the default, always. That is how
+`FLEET_AUTO_HANDOFF_PCT=60` sat inert in the global conf for weeks while every
+logged handoff cycle was worker-initiated (#561), the same class as #472
+(`FLEET_MODEL` visible only to the launcher). A selftest that injects the knob via
+the env stays green through exactly that failure — it must drive the conf.
+
+**The rule: a hook (or anything it spawns) that needs a `FLEET_*` knob loads the
+conf — global `fleet.conf`, then this fleet's overlay — and never assumes the
+launcher exported it.** Three shapes, one resolution:
+
+| Hook shell | How it resolves | Example |
+|---|---|---|
+| bash | source `fleet-lib.sh` (auto-sources the global conf) then `fleet_load_conf "$(fleet_current_session)"` | `session-end-hook.sh`, `fleet-context.sh`, `classify-sessions.sh` |
+| `sh` (cannot source the bash-only lib) | `bash bin/fleet-hook-conf.sh KEY…` — the same two steps in a ≈20 ms bash hop | `set-claude-state.sh` (the auto-handoff threshold) |
+| python | `bash -c 'source lib; fleet_load_conf "$(fleet_current_session)"; printf "$KEY"'` | `base-readonly-guard.py` (`FLEET_MAIN`), `bash-guard.py` (`FLEET_BASE_BRANCH`) |
+
+The environment is still honoured as an **explicit override** (a selftest seam,
+or an operator who exports by hand): a conf assignment overrides an inherited
+value, and a key no conf sets is left as the env had it. Operator escape hatches
+(`FLEET_ALLOW_SENDKEYS`, `FLEET_ALLOW_ARTIFACT`, …) are env-only *by design* —
+they are per-command switches, not fleet configuration. `fleet-doctor.sh`
+evaluates the auto-handoff threshold through the hook's own resolver
+(`handoff  … (hook sees N)`) and WARNs `hook sees 0 — nudge inert` when the conf
+says otherwise, so this cannot silently regress again.
+
 ### Runtime cache layout
 
 The **runtime** cache is ephemeral (regenerated each collector/pr-refresh tick),
