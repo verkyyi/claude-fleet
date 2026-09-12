@@ -29,6 +29,15 @@
 #     undefined interleaving, so gate every keystroke on @claude_state != working
 #     (the Stop hook fired = the arming turn ended), exactly like the issue-bridge
 #     idle-gate. On the never-idle timeout we ABORT *without clearing*.
+#   • Never clear under the operator's fingers (issue #571) — Esc+`/clear` typed
+#     into an input line holding a draft keeps the draft (a single Esc does not
+#     clear it) and submits it with "/clear" glued on; a queued message dies with
+#     the old session. So a keypress at THIS window (#{client_activity} of a client
+#     whose current window is ours) fresher than FLEET_HANDOFF_DEFER_SECS (default
+#     30; 0 = off) HOLDS the clear inside the same idle deadline; still active at
+#     the deadline ⇒ abort without clearing, latch left alone (re-nudging into a
+#     live conversation is the storm this avoids). A never-idle or
+#     unconfirmed-clear abort UNSETS @handoff_armed so a later Stop can try again.
 #   • Fail-safe ordering — every failure degrades to "handoff stored, context not
 #     cleared": the handoff is stored+verified (doc on disk, or marked comment on
 #     the issue) BEFORE this is armed, and re-validated here BEFORE the first key;
@@ -53,6 +62,16 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -r "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh" 2>/dev/null || true
+# This fleet's conf overlay (issue #571): the cycle is launched from inside the pane,
+# whose environment carries no conf, so load it the way every hook does — the global
+# fleet.conf came with fleet-lib above, the per-fleet overlay comes here. Inside
+# tmux only (outside there is no fleet to overlay). The environment stays the floor
+# (the selftest's seam); a conf assignment overrides it.
+if [ -n "${TMUX:-}" ] && type fleet_load_conf >/dev/null 2>&1; then
+  _sess=$(fleet_current_session 2>/dev/null)
+  [ -n "$_sess" ] && fleet_load_conf "$_sess" >/dev/null 2>&1
+  unset _sess
+fi
 
 # --- tunables (env-overridable; the selftest drives them tiny for speed) --------
 IDLE_TIMEOUT="${FLEET_HANDOFF_IDLE_TIMEOUT:-180}"   # wait-idle ceiling (s) — a big
@@ -70,6 +89,9 @@ HARD_TIMEOUT="${FLEET_HANDOFF_HARD_TIMEOUT:-300}"    # overall self-kill (s) —
 POLL="${FLEET_HANDOFF_POLL:-2}"                      # poll interval (s)
 PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-/fleet-handoff pickup}"
 LOG_DIR="${FLEET_HANDOFF_LOG_DIR:-$HOME/.claude/fleet/logs}"
+DEFER_SECS="${FLEET_HANDOFF_DEFER_SECS:-30}"          # operator hold (issue #571): a keypress
+case "$DEFER_SECS" in ''|*[!0-9]*) DEFER_SECS=30 ;; esac   # at THIS window within this many s
+                                                    # holds the clear; 0 = off
 
 HANDOFF_MARKER='<!-- fleet:handoff -->'   # pickup-lookup marker on a stored comment
 
@@ -100,6 +122,26 @@ notify() { log "$*"; TM display-message -t "$PANE" "fleet-handoff: $*" 2>/dev/nu
 refuse() { log "REFUSE: $*"; TM display-message -t "$PANE" "fleet-handoff: $*" 2>/dev/null || true; exit 1; }
 
 nap() { sleep "$POLL" 2>/dev/null || sleep 1; }
+
+# unlatch — re-arm auto-handoff for the session still living in this pane: the nudge
+# that led here set @handoff_armed; an abort that leaves the OLD session running must
+# clear it, or auto-handoff is dead there until the next SessionStart (issue #571).
+unlatch() { TM set-window-option -u -t "$PANE" @handoff_armed 2>/dev/null || true; }
+
+# operator_present — 0 when some attached client's CURRENT window is this pane's and
+# its last keypress (#{client_activity}) is within DEFER_SECS; OP_AGE = that age (s).
+# Claude Code gives no "draft in the input box" signal, so this is the proxy (#571).
+OP_AGE=''
+operator_present() {
+  [ "$DEFER_SECS" -gt 0 ] && [ -n "${WID:-}" ] || return 1
+  local now
+  now=$(date +%s 2>/dev/null || echo 0)
+  OP_AGE=$(TM list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
+    | awk -v w="$WID" -v now="$now" -v ds="$DEFER_SECS" '
+        $2 == w && $1 ~ /^[0-9]+$/ { a = now - $1; if (a <= ds && (best == "" || a < best)) best = a }
+        END { if (best != "") print best }')
+  [ -n "$OP_AGE" ]
+}
 
 # ============================ 1. VALIDATE ======================================
 [ -n "$PANE" ] || { log "REFUSE: no --pane"; exit 1; }
@@ -137,6 +179,9 @@ fi
 # The pane must be alive (a dead pane = nothing to clear/resume).
 TM display-message -p -t "$PANE" '#{pane_id}' >/dev/null 2>&1 \
   || refuse "target pane $PANE is gone"
+# This pane's window — the operator hold (issue #571) matches it against the window
+# each attached client is currently looking at.
+WID="$(TM display-message -p -t "$PANE" '#{window_id}' 2>/dev/null)"
 
 # Per-pane lock — a second arm while one cycle is pending must REFUSE (never race
 # two clears at one pane). A stale lock (dead pid) is reclaimed.
@@ -166,17 +211,33 @@ log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIME
 # Stop hook flips @claude_state off `working` (turn ended). `done` is the normal
 # terminal state; `needs`/`looping` also mean the turn ended, so any non-working,
 # non-empty state satisfies the gate. Timeout ⇒ ABORT WITHOUT CLEARING.
-idle=0 idl_deadline=$(( $(date +%s 2>/dev/null || echo 0) + IDLE_TIMEOUT ))
+idle=0 held=0 idl_deadline=$(( $(date +%s 2>/dev/null || echo 0) + IDLE_TIMEOUT ))
 while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$idl_deadline" ]; do
   st="$(TM display-message -p -t "$PANE" '#{@claude_state}' 2>/dev/null)"
   case "$st" in
-    working|'') : ;;                 # still in-turn (or not yet stamped) — keep waiting
-    *) idle=1; log "arming turn ended (@claude_state=$st)"; break ;;
+    working|'') nap; continue ;;     # still in-turn (or not yet stamped) — keep waiting
   esac
-  nap
+  # The turn ended — but is the operator TYPING here (issue #571)? Hold while a
+  # keypress at THIS window is fresher than DEFER_SECS; the idle deadline bounds it.
+  if operator_present; then
+    [ "$held" = 0 ] && log "arming turn ended (@claude_state=$st) but the operator is active at this window (keypress ${OP_AGE}s ago) — holding the clear (FLEET_HANDOFF_DEFER_SECS=${DEFER_SECS})"
+    held=1; nap; continue
+  fi
+  idle=1
+  if [ "$held" = 1 ]; then log "operator left the window — proceeding (@claude_state=$st)"
+  else log "arming turn ended (@claude_state=$st)"; fi
+  break
 done
 if [ "$idle" != 1 ]; then
-  notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE)"
+  if [ "$held" = 1 ]; then
+    # The operator is mid-conversation in this very pane: don't clear it under their
+    # fingers, and DON'T re-arm the nudge — it would only fire again into the same
+    # conversation. They are told; a manual pickup resumes from the stored handoff.
+    notify "operator still active at this pane after ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE); run /fleet-handoff pickup when ready"
+  else
+    unlatch
+    notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE)"
+  fi
   exit 0   # fail-safe: doc intact, context untouched
 fi
 
@@ -243,8 +304,12 @@ while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$vf_deadline" ]; do
   sleep 0.5 2>/dev/null || true
 done
 if [ "$fresh" != 1 ]; then
+  # Most often the /clear never landed (typed into a draft, #571) and the OLD session
+  # is still live — re-arm its nudge. If the clear DID land, SessionStart already
+  # cleared the latch and this is a no-op.
+  unlatch
   notify "could not confirm a fresh session after /clear — resume manually: $PICKUP"
-  exit 0   # fail-safe: cleared but pickup withheld; manual pickup still works
+  exit 0   # fail-safe: cleared (or not) but pickup withheld; manual pickup still works
 fi
 
 # ============================ 5. PICKUP ========================================

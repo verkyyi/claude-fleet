@@ -41,6 +41,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/fh-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/fakepath" "$WORK/logs"
 INJECT="$WORK/inject.log"; : > "$INJECT"
+SETOPT="$WORK/setopt.log"; : > "$SETOPT"     # every set-window-option the cycle makes
 PANE='%7'
 
 # --- fake tmux: records send-keys; answers display-message/capture-pane from env.
@@ -59,10 +60,17 @@ case "\$verb" in
       *pane_id*)             [ -n "\${FAKE_PANE_DEAD:-}" ] && exit 1; printf '%s\n' "$PANE" ;;
       *@claude_state*)       printf '%s\n' "\${FAKE_STATE:-done}" ;;
       *@handoff_cleared_at*) printf '%s\n' "\${FAKE_CLEARED_AT:-}" ;;
+      *window_id*)           printf '%s\n' '@7' ;;
       *) : ;;   # a plain notify display-message (no -p) — no-op
     esac ;;
   capture-pane)
     printf '%b' "\${FAKE_CAP:-❯ \n  ? for shortcuts\n}" ;;
+  list-clients)
+    # "<client_activity> <window_id>" per line; a FILE lets a leg change it mid-run
+    if [ -n "\${FAKE_CLIENTS_FILE:-}" ]; then cat "\$FAKE_CLIENTS_FILE" 2>/dev/null
+    else printf '%b' "\${FAKE_CLIENTS:-}"; fi ;;
+  set-window-option)
+    printf '%s\n' "\$args" >> "$SETOPT" ;;
 esac
 exit 0
 FAKE
@@ -83,19 +91,23 @@ EMPTY="$WORK/empty.md"; : > "$EMPTY"
 MARKED='handoff body\n<!-- fleet:handoff -->\n'   # a comment body carrying the pickup marker
 
 # run the cycle helper with the fake tmux on PATH and fast, deterministic tunables.
-run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] -- <helper args...>
-  : > "$INJECT"
-  PATH="$WORK/fakepath:$PATH" \
+run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] [DEFER=..] -- <helper args...>
+  : > "$INJECT"; : > "$SETOPT"
+  # DEFER unset ⇒ the knob is NOT passed (the cycle's own default applies).
+  env PATH="$WORK/fakepath:$PATH" \
   FLEET_HANDOFF_LOG_DIR="$WORK/logs" \
   FLEET_HANDOFF_IDLE_TIMEOUT="${IDLE:-2}" \
   FLEET_HANDOFF_VERIFY_TIMEOUT="${VF:-2}" \
   FLEET_HANDOFF_HARD_TIMEOUT="${HARD:-30}" \
   FLEET_HANDOFF_POLL="${POLL:-1}" \
+  ${DEFER+FLEET_HANDOFF_DEFER_SECS="$DEFER"} \
   FAKE_STATE="${FAKE_STATE:-done}" \
   FAKE_CAP="${FAKE_CAP:-}" \
   FAKE_PANE_DEAD="${FAKE_PANE_DEAD:-}" \
   FAKE_COMMENTS="${FAKE_COMMENTS:-}" \
   FAKE_CLEARED_AT="${FAKE_CLEARED_AT:-}" \
+  FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
+  FAKE_CLIENTS_FILE="${FAKE_CLIENTS_FILE:-}" \
   TMUX="${TMUX_OVERRIDE-fake,1,0}" \
     bash "$SRC" "$@"
 }
@@ -105,6 +117,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- log ---\n' >&2; cat "$WORK/logs/handoff-cycle.log" >&2 2>/dev/null; exit 1; }
 
 cleared() { grep -q '/clear' "$INJECT" 2>/dev/null; }
+unlatched() { grep -q -- '-u .*@handoff_armed' "$SETOPT" 2>/dev/null; }
 
 # ---- REFUSE-NO-STORE (neither --doc nor --issue) ------------------------------
 if run --pane "$PANE"; then fail "must refuse when armed with no --doc/--issue"; fi
@@ -146,6 +159,9 @@ IDLE=1 POLL=1 FAKE_STATE=working run --pane "$PANE" --doc "$DOC" \
   || fail "never-idle must exit 0 (fail-safe), not error"
 cleared && fail "never-idle must NOT clear (abort before the destructive /clear)"
 grep -q 'Escape' "$INJECT" 2>/dev/null && fail "never-idle must send NO keys at all"
+# …and the abort must UNSET @handoff_armed (issue #571): the latch was set by the nudge
+# that led here; left armed, auto-handoff is dead for the rest of this session.
+unlatched || fail "a never-idle abort must unset @handoff_armed so a later Stop can re-nudge, setopt: $(cat "$SETOPT")"
 
 printf 'selftest: never-idle leg PASS (aborts without clearing)\n' >&2
 
@@ -197,6 +213,10 @@ VF=1 FAKE_STATE='done' FAKE_CAP='still churning...\n' run --pane "$PANE" --doc "
 cleared || fail "verify-gate: the /clear must still have been sent (idle reached)"
 grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null \
   && fail "verify-gate: pickup must be WITHHELD when the fresh session can't be confirmed"
+# An unconfirmed clear most often means the /clear never landed (a draft in the input
+# line swallowed it) — the OLD session is still live, so re-arm it (issue #571). If the
+# clear did land, SessionStart already cleared the latch and this unset is a no-op.
+unlatched || fail "an unconfirmed clear must unset @handoff_armed (the old session may still be live), setopt: $(cat "$SETOPT")"
 
 printf 'selftest: verify-gate leg PASS (clears, withholds pickup on unconfirmed fresh session)\n' >&2
 
@@ -213,5 +233,49 @@ grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null \
 
 printf 'selftest: deterministic-verify leg PASS (@handoff_cleared_at marker confirms fresh → pickup)\n' >&2
 
-printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate + deterministic marker verified\n'
+# ---- OPERATOR-PRESENT (issue #571): a live keypress at THIS window holds the clear -
+# Esc + "/clear" + Enter typed into a pane whose input line holds a half-typed draft
+# does not clear anything: a single Esc leaves the draft (only a double Esc clears
+# it), so "/clear" is appended to the draft and SUBMITTED as a plain message. The
+# cycle therefore waits while a client whose current window is this pane's has a
+# keypress (#{client_activity}) within FLEET_HANDOFF_DEFER_SECS, and on the idle
+# timeout ABORTS without clearing — and without touching the latch (the operator is
+# told on the status line; re-nudging into their conversation is the storm we avoid).
+now=$(date +%s)
+IDLE=2 POLL=1 FAKE_STATE='done' FAKE_CLIENTS="$now @7\n" run --pane "$PANE" --doc "$DOC" \
+  || fail "operator-present must exit 0 (fail-safe), not error"
+cleared && fail "operator typing at the pane: the cycle must NOT clear"
+grep -q 'Escape' "$INJECT" 2>/dev/null && fail "operator-present must send NO keys at all"
+grep -qi 'operator' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
+  || fail "the abort must SAY the operator was active at the pane, log: $(cat "$WORK/logs/handoff-cycle.log")"
+unlatched && fail "an operator-present abort must leave @handoff_armed alone (no re-nudge into the conversation), setopt: $(cat "$SETOPT")"
+
+# ---- OPERATOR ELSEWHERE / STALE: another window, or a 120s-old keypress → clears ---
+FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_CLIENTS="$now @9\n" run --pane "$PANE" --doc "$DOC" \
+  || fail "operator on another window: cycle must exit 0"
+cleared || fail "operator active on a DIFFERENT window must not hold this pane's clear"
+FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_CLIENTS="$((now-120)) @7\n" run --pane "$PANE" --doc "$DOC" \
+  || fail "stale keypress: cycle must exit 0"
+cleared || fail "a 120s-old keypress (> 30s default) must not hold the clear"
+
+# ---- DEFER OFF (FLEET_HANDOFF_DEFER_SECS=0) → clears despite a live keypress --------
+DEFER=0 FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_CLIENTS="$now @7\n" run --pane "$PANE" --doc "$DOC" \
+  || fail "defer-off cycle must exit 0"
+cleared || fail "FLEET_HANDOFF_DEFER_SECS=0 must disable the operator hold"
+
+# ---- OPERATOR-LEAVES: the hold is a WAIT, not an abort — once the keypress ages out,
+# ---- the cycle proceeds and clears + picks up within the same run.
+CF="$WORK/clients.txt"; printf '%s @7\n' "$(date +%s)" > "$CF"
+( sleep 3; : > "$CF" ) &
+IDLE=12 POLL=1 FAKE_STATE='done' FAKE_CLEARED_AT=9999999999 FAKE_CLIENTS_FILE="$CF" \
+  run --pane "$PANE" --doc "$DOC" || fail "operator-leaves cycle must exit 0"
+wait
+cleared || fail "once the operator leaves the window the cycle must clear"
+grep -q '/fleet-handoff pickup' "$INJECT" 2>/dev/null || fail "operator-leaves: pickup must follow the clear"
+grep -qi 'operator' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
+  || fail "the wait must be logged (operator active → holding), log: $(cat "$WORK/logs/handoff-cycle.log")"
+
+printf 'selftest: operator-hold legs PASS (present→abort w/o clear or unlatch · elsewhere/stale/off→clear · leaves→clear+pickup)\n' >&2
+
+printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate + deterministic marker + operator hold (#571) verified\n'
 exit 0

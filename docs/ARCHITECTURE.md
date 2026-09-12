@@ -188,6 +188,25 @@ evaluates the auto-handoff threshold through the hook's own resolver
 (`handoff  … (hook sees N)`) and WARNs `hook sees 0 — nudge inert` when the conf
 says otherwise, so this cannot silently regress again.
 
+**A hook must also know whose session it is.** A `claude -p` helper launched from
+inside a pane — the Stop-hook classifier, any headless claude a worker's Bash tool
+spawns — inherits `$TMUX`/`$TMUX_PANE` *and* the global hooks, so its own
+SessionStart/Stop fire against the pane: the classifier's SessionStart cleared the
+pane's auto-handoff latch on every classification, and its Stop read the pane's
+`@ctx_pct`, received the block decision meant for the TUI, ran `/fleet-handoff` on
+itself and `/clear`-ed the operator's pane — 16 cycles in a day, one every ~70 s on
+a pane the operator was typing into (#571). Claude Code marks the entrypoint in the
+environment its hooks inherit (`CLAUDE_CODE_ENTRYPOINT`: `cli` for the TUI,
+`sdk-cli` for `-p`), so `set-claude-state.sh` and `handoff-latch-reset-hook.sh`
+exit before touching a window option unless it is `cli`; and the fleet's own helper
+is launched `env -u TMUX -u TMUX_PANE`, so every hook no-ops inside it whatever the
+marker says. **The rule: a headless helper spawned from a pane runs without
+`$TMUX`, and a pane-writing hook checks the session is the TUI's.** The same
+incident is why `SessionStart(source=clear)` unsets `@ctx_pct` (the stale
+percentage of the session that just ended re-triggered the nudge before the fresh
+TUI re-stamped it) and why the nudge is *held* while an attached client is typing
+at that window (`FLEET_HANDOFF_DEFER_SECS`).
+
 ### Runtime cache layout
 
 The **runtime** cache is ephemeral (regenerated each collector/pr-refresh tick),

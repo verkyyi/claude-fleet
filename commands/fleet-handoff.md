@@ -172,7 +172,11 @@ manual `/fleet-handoff pickup` always still works. It confirms the `/clear` land
 (`handoff-latch-reset-hook.sh`) stamps a `@handoff_cleared_at` marker the cycle
 polls — instead of screen-scraping the live TUI (issue #345), and retries the
 `/clear` once if a dropped keystroke leaves no fresh signal. It self-terminates on
-a hard ≤5-minute timeout (never an immortal orphan).
+a hard ≤5-minute timeout (never an immortal orphan). While an attached client is
+**typing at this window** (a keypress within `FLEET_HANDOFF_DEFER_SECS`, default
+30 s) it **holds** the `/clear` — Esc+`/clear` into a half-typed draft would submit
+the draft with `/clear` glued on — and if the operator is still there at the idle
+deadline it aborts without clearing and says so on the status line (issue #571).
 
 ### C4. End the turn — tell the operator, then stop
 
