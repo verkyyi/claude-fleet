@@ -31,6 +31,15 @@
 #    a stale value from an earlier clear never false-confirms; no cleanup needed.
 #    We stamp on `clear` ONLY (not startup/resume/compact) — those are not the
 #    cycle's /clear and must never be mistaken for a confirmed clear.
+#    On `clear` we ALSO unset @ctx_pct (issue #571): it is the percentage of the
+#    session that just ended, and until the fresh TUI's statusline re-stamps it any
+#    Stop in the gap read "73%" against a 9% session and re-nudged — a loop.
+#
+# A HEADLESS claude (`claude -p`: the Stop-hook classifier, a worker's own helper)
+# is not this pane's session (issue #571) — its SessionStart used to clear the
+# pane's latch on EVERY classification, which is what let one pane be re-nudged at
+# every Stop. Same discriminator as bin/set-claude-state.sh: only the TUI (`cli`)
+# owns the pane; anything else exits before touching it.
 #
 # Testable seam: FLEET_LATCH_RESET_SOURCE overrides the stdin source (the selftest
 # has no real hook payload). No-op outside tmux / with no owning pane. Always exits 0
@@ -38,6 +47,7 @@
 set -u
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0
+case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac   # headless child → not ours (#571)
 
 # 1. Reset the debounce latch (unconditional — every session boundary is clean).
 tmux set-window-option -u -t "$TMUX_PANE" @handoff_armed 2>/dev/null || true
@@ -58,6 +68,10 @@ fi
 if [ "$src" = "clear" ]; then
   now=$(date +%s 2>/dev/null || echo 0)
   tmux set-window-option -t "$TMUX_PANE" @handoff_cleared_at "$now" 2>/dev/null || true
+  # …and drop the STALE context stamp (issue #571): @ctx_pct is still the OLD
+  # session's percentage until the fresh TUI re-stamps it. Unset ⇒ the Stop hook
+  # reads -1 ⇒ no nudge until this session has actually been measured.
+  tmux set-window-option -u -t "$TMUX_PANE" @ctx_pct 2>/dev/null || true
 fi
 
 exit 0

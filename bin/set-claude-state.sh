@@ -9,6 +9,17 @@
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0
+# A HEADLESS claude is NOT this pane's session (issue #571). A `claude -p` helper —
+# the Stop-hook classifier (bin/classify-sessions.sh), or any headless claude a
+# worker spawns from its Bash tool — inherits the pane's TMUX/TMUX_PANE *and* the
+# global hooks, so its own Stop landed here: it flipped the pane's @claude_state,
+# and (worse) read the PANE's @ctx_pct, got the auto-handoff block decision meant
+# for the TUI, ran /fleet-handoff on ITSELF and /clear-ed the operator's pane —
+# 16 cycles in one day, several under the operator's fingers. Claude Code marks
+# the entrypoint in the environment its hooks inherit: `cli` for the interactive
+# TUI, `sdk-cli` for `-p` (verified on 2.1.269). Only the TUI owns the pane;
+# anything else touches nothing. Unset (an older CLI, the selftests' `env -i`) ⇒ TUI.
+case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 
@@ -74,9 +85,10 @@ fi
 # /fleet-handoff (cycle) — a structured handoff preserves task state far better
 # than Claude's near-limit auto-compaction. This ONLY adds the trigger; the whole
 # handoff/clear/resume machinery (commands/fleet-handoff.md + fleet-handoff-cycle.sh)
-# is reused unchanged. Single knob FLEET_AUTO_HANDOFF_PCT (0 = OFF; mirrors
-# FLEET_RUNAWAY_CPU_PCT). Only 'done' (the Stop hook) reaches here, so the JSON is
-# only ever emitted in the Stop-hook context that parses it as a decision.
+# is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (0 = OFF; mirrors
+# FLEET_RUNAWAY_CPU_PCT) and FLEET_HANDOFF_DEFER_SECS (the typing hold, issue #571).
+# Only 'done' (the Stop hook) reaches here, so the JSON is only ever emitted in the
+# Stop-hook context that parses it as a decision.
 #
 # THE KNOB IS READ FROM THE CONF, NOT THIS PROCESS'S ENVIRONMENT (issue #561). A
 # hook inherits the pane's env, and nothing exports fleet.conf into it (the conf is
@@ -92,10 +104,13 @@ fi
 # exactly as before.
 if [ "$sem" = "done" ]; then
   _bin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-  _hp=''
+  _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
-    && _hp=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+    && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
+  _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
+  _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
+  case "$_ds" in ''|*[!0-9]*) _ds=30 ;; esac         # unset / non-numeric → the 30s default
   # Loop-guard: the Stop-hook stdin carries stop_hook_active=true when the model is
   # ALREADY continuing because of a prior Stop-hook block — never re-block that
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with
@@ -123,9 +138,31 @@ if [ "$sem" = "done" ]; then
     if [ "$_armed" != "1" ] && [ "$handoff_prev" != "needs" ] \
        && { [ -n "$_issue" ] || [ "$_raw" = "1" ]; } \
        && [ "$_ctx" -ge "$_hp" ]; then
-      # Latch FIRST (idempotent) so the next Stop skips, THEN emit the directive.
-      tmux set-window-option -t "$TMUX_PANE" @handoff_armed 1 2>/dev/null
-      printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction."}\n' "$_ctx" "$_hp"
+      # Operator-typing deferral (issue #571). A handoff cycle Esc+`/clear`s this
+      # pane a minute from now; typed into an input line holding a half-written
+      # draft, that keeps the draft (a single Esc does not clear it) and submits
+      # it with "/clear" glued on, and a queued message dies with the old session.
+      # Claude Code hands a hook no draft/queue signal, so the proxy is tmux: a
+      # client whose CURRENT window is this one with a keypress (#{client_activity})
+      # within FLEET_HANDOFF_DEFER_SECS ⇒ skip THIS Stop — no nudge, no latch (the
+      # next Stop re-judges) — and stamp @handoff_deferred_ts so the hold is visible.
+      # Ceiling: at threshold+10 the nudge fires anyway, or a long conversation
+      # would defer itself straight into autocompact.
+      _hold=''
+      if [ "$_ds" -gt 0 ] && [ "$_ctx" -lt $(( _hp + 10 )) ]; then
+        _wid=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
+        _now=$(date +%s 2>/dev/null || echo 0)
+        [ -n "$_wid" ] && _hold=$(tmux list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
+          | awk -v w="$_wid" -v now="$_now" -v ds="$_ds" \
+              '$2 == w && $1 ~ /^[0-9]+$/ && (now - $1) <= ds { print 1; exit }')
+      fi
+      if [ "$_hold" = "1" ]; then
+        tmux set-window-option -t "$TMUX_PANE" @handoff_deferred_ts "$_now" 2>/dev/null
+      else
+        # Latch FIRST (idempotent) so the next Stop skips, THEN emit the directive.
+        tmux set-window-option -t "$TMUX_PANE" @handoff_armed 1 2>/dev/null
+        printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction."}\n' "$_ctx" "$_hp"
+      fi
     fi
   fi
 fi

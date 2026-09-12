@@ -497,22 +497,27 @@ elif [ -d "$conf_dir" ]; then
     case "$want" in ''|*[!0-9]*) want=0 ;; esac
     # what the HOOK SEES: the same resolver the hook runs.
     via="session name (fleet not running)"
-    sees=$(bash "$hc" --session "$sess" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+    kv=$(bash "$hc" --session "$sess" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
     sock=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null)
     if [ -n "$sock" ]; then
       # any pane the nudge applies to: an issue-bound worker (@issue) or a scratch (@raw)
       pane=$(tmux -L "$sess" list-panes -s -t "$sess" -F '#{pane_id} i=#{@issue} r=#{@raw}' 2>/dev/null \
              | awk '$2!="i=" || $3=="r=1" {print $1; exit}')
       if [ -n "$pane" ]; then
-        sees=$(TMUX="$sock,0,0" TMUX_PANE="$pane" bash "$hc" FLEET_AUTO_HANDOFF_PCT 2>/dev/null)
+        kv=$(TMUX="$sock,0,0" TMUX_PANE="$pane" bash "$hc" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
         via="live pane $pane"
       else
         via="session name (fleet up, no worker/scratch pane to probe)"
       fi
     fi
+    sees=$(printf '%s\n' "$kv" | sed -n 1p)
+    # the operator-typing hold (issue #571) rides the same resolver: unset ⇒ 30s, 0 ⇒ off
+    dsees=$(printf '%s\n' "$kv" | sed -n 2p)
     case "$sees" in ''|*[!0-9]*) sees=0 ;; esac
+    case "$dsees" in ''|*[!0-9]*) dsees=30 ;; esac
+    if [ "$dsees" -gt 0 ]; then defer="defer ${dsees}s"; else defer="defer off"; fi
     if [ "$want" -gt 0 ] && [ "$sees" -eq "$want" ]; then
-      pass handoff "$sess: auto-handoff at ${want}% (hook sees $sees via $via)"
+      pass handoff "$sess: auto-handoff at ${want}% (hook sees $sees via $via) · $defer while the operator types at the pane"
     elif [ "$want" -gt 0 ]; then
       warn handoff "$sess: conf says FLEET_AUTO_HANDOFF_PCT=$want but the Stop hook sees $sees via $via — nudge inert (#561); check bin/fleet-lib.sh + the fleet.conf beside bin/"
     else

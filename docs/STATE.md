@@ -194,7 +194,17 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
   **conf** — `bin/fleet-hook-conf.sh` (global `fleet.conf` → this fleet's overlay),
   never the hook's environment, which nothing exports into (#561). That is a
   separate feature that happens to ride the `done` state edge — see the inline
-  comments in `set-claude-state.sh`.
+  comments in `set-claude-state.sh`. Two rails around it (#571): a **headless**
+  `claude -p` child (`CLAUDE_CODE_ENTRYPOINT≠cli` — the Stop-hook classifier, a
+  worker's own helper) is not the pane's session, so `set-claude-state.sh` and
+  `handoff-latch-reset-hook.sh` exit before touching any window option (its Stop
+  used to read the pane's `@ctx_pct`, nudge *itself* into `/fleet-handoff` and
+  `/clear` the operator's pane); and the nudge is **held** — no latch, re-judged
+  at the next Stop, `@handoff_deferred_ts` stamped — while an attached client
+  whose current window is this one has a keypress within
+  `FLEET_HANDOFF_DEFER_SECS` (default 30 s; ceiling: threshold+10 fires anyway).
+  `SessionStart(source=clear)` also unsets `@ctx_pct`, the stale percentage of
+  the session that just ended.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the shared-vs-per-fleet split and the
   many-fleets-on-one-machine model.
 - [TERMS.md](TERMS.md) — definitions of collector / hub / dash.

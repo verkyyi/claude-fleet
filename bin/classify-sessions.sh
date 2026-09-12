@@ -94,7 +94,15 @@ classify_one() {
   hf="$CACHE/$key.hash"
   [ "$h" = "$(cat "$hf" 2>/dev/null)" ] && return 0    # unchanged screen -> no LLM call
 
-  raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" | claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
+  # OUTSIDE tmux (issue #571): the helper inherits this pane's TMUX/TMUX_PANE and
+  # the global hooks, so ITS SessionStart/Stop drove the PANE — cleared the
+  # auto-handoff latch, read the pane's @ctx_pct, got nudged into /fleet-handoff
+  # and /clear-ed the operator's session (16 cycles in a day). Every fleet hook
+  # opens with `[ -n "$TMUX" ] || exit 0`, so stripping the two vars makes them
+  # all no-ops in the helper; the hooks' own CLAUDE_CODE_ENTRYPOINT guard is the
+  # second rail. The capture above already happened, in tmux.
+  raw=$(printf '%s\n%s\n' "$RUBRIC" "$cap" \
+        | env -u TMUX -u TMUX_PANE claude -p ${NOMCP[@]+"${NOMCP[@]}"} --model "$MODEL" 2>/dev/null)
   crc=$?
   # rc != 0 is NOT an unparseable answer, it is NO answer (issue #497) — `claude`
   # prints its auth failure on stdout, so the two are indistinguishable by text. Bail

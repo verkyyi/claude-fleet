@@ -44,7 +44,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE="$BIN/../conf/statusline.sh"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 [ -f "$STATUSLINE" ] || { printf 'selftest: %s not found\n' "$STATUSLINE" >&2; exit 2; }
@@ -59,7 +59,7 @@ SESS='s1'
 # global conf) relative to its OWN path, so copying the pieces here makes the global
 # conf $WORK/inst/fleet.conf — hermetic wherever this runs (a live install's bin
 # has a real sibling fleet.conf with the operator's real threshold).
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 STATE="$WORK/inst/bin/set-claude-state.sh"
@@ -88,9 +88,12 @@ case "$verb" in
       *@raw*)           printf '%s\n' "${FAKE_RAW:-}" ;;
       *@claude_state*)  printf '%s\n' "${FAKE_PREV:-done}" ;;
       *session_name*)   printf '%s\n' "${FAKE_SESSION:-}" ;;
+      *window_id*)      printf '%s\n' "${FAKE_WID:-@1}" ;;
       *) : ;;
     esac ;;
   set-window-option) printf '%s\n' "$args" >> "$SETOPT_LOG" ;;
+  list-clients)      printf '%b' "${FAKE_CLIENTS:-}" ;;   # "<client_activity> <window_id>" per line
+  capture-pane)      printf '%b' "${FAKE_CAP:-}" ;;
   *) exit 1 ;;   # no server for anything else (list-panes etc.)
 esac
 exit 0
@@ -112,10 +115,12 @@ write_confs() {
     printf '# global fleet.conf (selftest)\nFLEET_GLOBAL_MAX_SESSIONS=3\n'
     if [ -n "${GPCT:-}" ]; then printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$GPCT"
     else                        printf '#FLEET_AUTO_HANDOFF_PCT=0        # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
+    [ -n "${GDEFER:-}" ] && printf 'FLEET_HANDOFF_DEFER_SECS=%s\n' "$GDEFER"
   } > "$GCONF"
   {
     printf 'FLEET_REPO="fake/repo"\nFLEET_MAIN="%s/repo"\n' "$WORK"
     [ -n "${FPCT:-}" ] && printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$FPCT"
+    [ -n "${FDEFER:-}" ] && printf 'FLEET_HANDOFF_DEFER_SECS=%s\n' "$FDEFER"
   } > "$FCONF"
 }
 
@@ -129,6 +134,8 @@ run_state() {
       SETOPT_LOG="$SETOPT_LOG" FAKE_SESSION="$SESS" \
       FAKE_PREV="${FAKE_PREV:-done}" FAKE_ARMED="${FAKE_ARMED:-}" \
       FAKE_ISSUE="${FAKE_ISSUE:-}" FAKE_RAW="${FAKE_RAW:-}" FAKE_CTX="${FAKE_CTX:-}" \
+      FAKE_WID="${FAKE_WID:-}" FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
+      ${HOOK_ENTRY:+CLAUDE_CODE_ENTRYPOINT=$HOOK_ENTRY} \
     sh "$STATE" "$@" < /dev/null   # empty stdin → deterministic (no stop_hook_active)
 }
 
@@ -199,6 +206,56 @@ latched && fail "the 2nd fire must not re-write the latch"
 # ---- UNSTAMPED @ctx_pct (statusline hasn't rendered yet) → no nudge -----------
 out="$(GPCT=60 FAKE_CTX='' FAKE_ISSUE=561 run_state 'done')"
 nudged "$out" && fail "an unstamped @ctx_pct must NOT nudge (no measurement yet)"
+
+# ---- HEADLESS CHILD (issue #571): a `claude -p` helper's hooks must touch NOTHING --
+# A headless claude (the Stop-hook classifier; any `claude -p` a worker spawns from
+# its Bash tool) inherits the pane's TMUX/TMUX_PANE AND the global hooks — so ITS
+# Stop landed here, read the PANE's @ctx_pct and nudged ITSELF into /fleet-handoff,
+# which then /clear-ed the operator's pane (16 cycles in 24h, one every ~70s on the
+# pane the operator was typing into). Claude Code marks the entrypoint in the env
+# its hooks inherit: `cli` for the TUI, `sdk-cli` for -p. Not the TUI ⇒ this hook is
+# not the pane's session ⇒ no state write, no latch, no nudge.
+out="$(HOOK_ENTRY=sdk-cli GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 run_state 'done')"
+nudged "$out" && fail "a headless child (CLAUDE_CODE_ENTRYPOINT=sdk-cli) must NEVER be nudged, got: '$out'"
+latched && fail "a headless child must not set the latch"
+[ -s "$SETOPT_LOG" ] && fail "a headless child must not write the pane's @claude_state, log: $(cat "$SETOPT_LOG")"
+out="$(HOOK_ENTRY=cli GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 run_state 'done')"
+nudged "$out" || fail "the TUI (CLAUDE_CODE_ENTRYPOINT=cli) must still nudge, got: '$out'"
+printf 'selftest: HEADLESS leg PASS (sdk-cli child: no state/latch/nudge; cli still nudges)\n' >&2
+
+# ---- DEFER while the operator is typing at THIS window (issue #571) --------------
+# Claude Code hands a hook no "draft in the input box" signal (checked: the Stop
+# payload has none), so the proxy is tmux: a client whose CURRENT window is this one
+# and whose last keypress (#{client_activity}) is within FLEET_HANDOFF_DEFER_SECS.
+# Then: no nudge, NO latch (the next Stop re-judges), and a visible
+# @handoff_deferred_ts stamp. A ceiling at threshold+10 keeps a long conversation
+# from deferring forever into autocompact.
+now=$(date +%s)
+deferred() { grep -q '@handoff_deferred_ts' "$SETOPT_LOG" 2>/dev/null; }
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-5)) @1\n" run_state 'done')"
+nudged "$out" && fail "operator active at this window 5s ago must DEFER the nudge, got: '$out'"
+latched && fail "a deferred nudge must not set the latch (the next Stop re-judges)"
+deferred || fail "a deferral must stamp @handoff_deferred_ts, log: $(cat "$SETOPT_LOG")"
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-120)) @1\n" run_state 'done')"
+nudged "$out" || fail "operator idle for 120s (> 30s default) must nudge, got: '$out'"
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-1)) @2\n" run_state 'done')"
+nudged "$out" || fail "operator active on a DIFFERENT window must not defer this one, got: '$out'"
+out="$(GPCT=60 FAKE_CTX=70 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-1)) @1\n" run_state 'done')"
+nudged "$out" || fail "at threshold+10 (70>=60+10) the deferral must yield — nudge anyway, got: '$out'"
+out="$(GPCT=60 FAKE_CTX=69 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-1)) @1\n" run_state 'done')"
+nudged "$out" && fail "just under the ceiling (69<70) an active operator must still defer, got: '$out'"
+out="$(GPCT=60 GDEFER=0 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-1)) @1\n" run_state 'done')"
+nudged "$out" || fail "FLEET_HANDOFF_DEFER_SECS=0 must disable the deferral, got: '$out'"
+deferred && fail "with the deferral off nothing must stamp @handoff_deferred_ts"
+out="$(GPCT=60 GDEFER=0 FDEFER=5 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-3)) @1\n" run_state 'done')"
+nudged "$out" && fail "per-fleet FLEET_HANDOFF_DEFER_SECS=5 with a 3s-old keypress must defer, got: '$out'"
+out="$(GPCT=60 GDEFER=0 FDEFER=5 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-8)) @1\n" run_state 'done')"
+nudged "$out" || fail "per-fleet FLEET_HANDOFF_DEFER_SECS=5 with an 8s-old keypress must nudge, got: '$out'"
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-3000)) @1\n$((now-2)) @1\n" run_state 'done')"
+nudged "$out" && fail "a live client beside a stale ghost (dropped Termius) must still defer, got: '$out'"
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="garbage\n" run_state 'done')"
+nudged "$out" || fail "garbage in list-clients must fail open (nudge), got: '$out'"
+printf 'selftest: DEFER legs PASS (active/stale/other-window/ceiling/off/per-fleet/ghost/garbage)\n' >&2
 
 # ---- WRONG EVENT: the nudge lives ONLY in the done branch ---------------------
 for ev in working busy needs; do
@@ -272,6 +329,11 @@ grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
   || fail "source=clear reset must still unset @handoff_armed, log: $(cat "$SETOPT_LOG")"
 grep -Eq '@handoff_cleared_at [0-9]+' "$SETOPT_LOG" 2>/dev/null \
   || fail "source=clear must stamp @handoff_cleared_at <epoch>, log: $(cat "$SETOPT_LOG")"
+# …and UNSET the stale @ctx_pct (issue #571): after a /clear the window still carries
+# the OLD session's percentage until the fresh TUI re-stamps it, and any Stop in that
+# gap (a classifier child, a fast first turn) read "73%" against a 9% session.
+grep -q -- '-u .*@ctx_pct' "$SETOPT_LOG" 2>/dev/null \
+  || fail "source=clear must UNSET the stale @ctx_pct stamp (#571), log: $(cat "$SETOPT_LOG")"
 
 # ---- RESET(non-clear): startup/resume/compact must NOT stamp the marker --------
 # Only a /clear is the cycle's fresh-session signal; other boundaries must reset the
@@ -283,8 +345,43 @@ grep -q -- '-u .*@handoff_armed' "$SETOPT_LOG" 2>/dev/null \
   || fail "startup reset must still unset @handoff_armed, log: $(cat "$SETOPT_LOG")"
 grep -q '@handoff_cleared_at' "$SETOPT_LOG" 2>/dev/null \
   && fail "source!=clear must NOT stamp @handoff_cleared_at, log: $(cat "$SETOPT_LOG")"
+grep -q '@ctx_pct' "$SETOPT_LOG" 2>/dev/null \
+  && fail "source!=clear must leave @ctx_pct alone (a compact's stamp is still the live session's), log: $(cat "$SETOPT_LOG")"
 
 printf 'selftest: RESET-marker legs PASS (source=clear stamps @handoff_cleared_at; others do not)\n' >&2
+
+# ---- RESET(headless): a `claude -p` child's SessionStart must not touch the pane ---
+# The classifier's own SessionStart cleared the pane's latch every classification —
+# that is what let the same pane be re-nudged every Stop (issue #571).
+: > "$SETOPT_LOG"
+PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOPT_LOG" \
+  CLAUDE_CODE_ENTRYPOINT=sdk-cli FLEET_LATCH_RESET_SOURCE=clear sh "$RESET" < /dev/null
+[ -s "$SETOPT_LOG" ] && fail "a headless child's SessionStart must not reset the latch or stamp the marker, log: $(cat "$SETOPT_LOG")"
+printf 'selftest: RESET-headless leg PASS (sdk-cli SessionStart touches nothing)\n' >&2
+
+# ---- CLASSIFIER HELPER runs `claude -p` OUTSIDE tmux (issue #571) ----------------
+# Belt to the headless guard's suspenders: bin/classify-sessions.sh strips TMUX and
+# TMUX_PANE from the helper's environment, so every fleet hook (`[ -n "$TMUX" ] ||
+# exit 0`) no-ops inside it whatever Claude Code's env markers say. A fake `claude`
+# records the environment it was handed.
+CLASSIFY="$WORK/inst/bin/classify-sessions.sh"
+CLENV="$WORK/classify-claude.env"; rm -f "$CLENV"
+cat > "$WORK/fakepath/claude" <<FAKECL
+#!/bin/sh
+env > "$CLENV"
+cat >/dev/null
+printf 'STOPPED\n'
+FAKECL
+chmod +x "$WORK/fakepath/claude"
+mkdir -p "$WORK/inst/logs"
+PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK/home" TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" \
+  SETOPT_LOG="$SETOPT_LOG" FAKE_PREV='done' FAKE_WID='@1' FAKE_CAP='some screen text\n' CLASSIFY_SETTLE=0 \
+  bash "$CLASSIFY" --window '@1' </dev/null
+[ -f "$CLENV" ] || fail "classifier must have called the helper claude (fake never invoked)"
+grep -q '^TMUX=' "$CLENV" && fail "the helper claude -p must NOT inherit TMUX (its hooks would drive the pane), got: $(grep '^TMUX' "$CLENV")"
+grep -q '^TMUX_PANE=' "$CLENV" && fail "the helper claude -p must NOT inherit TMUX_PANE, got: $(grep '^TMUX' "$CLENV")"
+rm -f "$WORK/fakepath/claude"
+printf 'selftest: CLASSIFIER-ENV leg PASS (helper claude -p sees no TMUX/TMUX_PANE)\n' >&2
 
 # ---- DOCTOR: evaluates the threshold the way the hook does (issue #561) ---------
 # The doctor line is the regression tripwire: it compares what the conf files SAY
@@ -310,6 +407,16 @@ case "$out" in *PASS*'auto-handoff at 45%'*'hook sees 45'*) : ;;
 out="$(run_doctor)"
 case "$out" in *PASS*'auto-handoff OFF'*) : ;;
   *) fail "doctor: nothing set must read PASS 'auto-handoff OFF', got: '$out'";; esac
+# The typing-deferral window rides the same line (issue #571): default 30s, conf value.
+out="$(GPCT=60 run_doctor)"
+case "$out" in *'defer 30s'*) : ;;
+  *) fail "doctor: with the knob unset the handoff line must show 'defer 30s' (default), got: '$out'";; esac
+out="$(GPCT=60 GDEFER=45 run_doctor)"
+case "$out" in *'defer 45s'*) : ;;
+  *) fail "doctor: FLEET_HANDOFF_DEFER_SECS=45 must show 'defer 45s', got: '$out'";; esac
+out="$(GPCT=60 GDEFER=0 run_doctor)"
+case "$out" in *'defer off'*) : ;;
+  *) fail "doctor: FLEET_HANDOFF_DEFER_SECS=0 must show 'defer off', got: '$out'";; esac
 # The inert case the doctor exists for: the conf says 60 but the hook's path can't
 # resolve it (its lib is gone) → WARN, naming the hole.
 mv "$WORK/inst/bin/fleet-lib.sh" "$WORK/inst/bin/fleet-lib.sh.off"

@@ -116,7 +116,11 @@ assumes — this doc is only the install/uninstall procedure.
    no-op if you skip the classifier. The `SessionStart` array also fires
    `handoff-latch-reset-hook.sh` (issue #330):
    it clears the `@handoff_armed` auto-handoff debounce latch at every session
-   boundary. That latch is set by the `Stop` hook's **auto-handoff nudge**: when
+   boundary and, on a `/clear`, drops the stale `@ctx_pct` of the session that just
+   ended (issue #571). Both hooks exit untouched for a **headless** `claude -p`
+   child (`CLAUDE_CODE_ENTRYPOINT≠cli`) — not the pane's session — and the nudge
+   is **held** while a client is typing at that window (`FLEET_HANDOFF_DEFER_SECS`,
+   default 30 s; 0 = off). That latch is set by the `Stop` hook's **auto-handoff nudge**: when
    `FLEET_AUTO_HANDOFF_PCT>0` (OFF by default) and a worker/scratch session's
    context crosses that %, `set-claude-state.sh done` emits a Stop-hook `block`
    decision steering the model to run `/fleet-handoff` (store → `/clear` → resume)
