@@ -42,6 +42,12 @@ Do not install from memory: read the doc and work from it.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).
+- **A dash key is never a literal ctrl chord.** tmux swallows its prefix before
+  any pane sees it, so every dash `--bind` goes through `bin/dash-keymap.sh`
+  (issue #556): add the action to its table, bind `$DASH_KEY_<ACTION>` in
+  `tmux-dashboard.sh`, list it in `fleet-keys.sh` via `dg`. Pick a default that
+  is unbound in fzf and no one's prefix; `fleet-keys-selftest.sh` holds the three
+  in lockstep.
 - **Never run destructive tmux on the live server**, and test tmux tooling on an
   **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim pattern
   the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in

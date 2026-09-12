@@ -137,6 +137,37 @@ else
   warn config "fleet.conf.example missing — prefix+c config modal has no key list/help source"
 fi
 
+# --- dash keys vs the tmux prefix (issue #556) ---
+# tmux never delivers its prefix (or prefix2) to a pane, so a dash ⌃-key equal
+# to it is dead on the keyboard (⌃a was: the operator's prefix is C-a).
+# bin/dash-keymap.sh resolves the dash's bind table against the prefix (the live
+# server, else the tmux conf) and remaps a colliding default to its ⌥ twin — the
+# `?` sheet shows the real key. Say so here anyway (the docs name the defaults),
+# and shout when even the fallback is a prefix: that key is unreachable.
+km="$(dirname "$0")/dash-keymap.sh"
+if [ -f "$km" ]; then
+  pfx=$(bash "$km" prefixes 2>/dev/null); pfx="${pfx:-C-b -}"
+  p1="${pfx%% *}"; p2="${pfx#* }"
+  if [ "$p2" = "-" ]; then p2=""; else p2=" + prefix2 $p2"; fi
+  coll=$(bash "$km" collisions 2>/dev/null)
+  if [ -z "$coll" ]; then
+    pass keys "no dash key collides with the tmux prefix ($p1$p2)"
+  else
+    while read -r act def pname fb; do
+      [ -n "$act" ] || continue
+      if [ "$fb" = UNREACHABLE ]; then
+        warn keys "dash $def ($act) is your tmux prefix $pname and its ⌥ twin is one too — unreachable from the dash; change prefix2 or the key"
+      else
+        warn keys "dash $def ($act) is your tmux prefix $pname — the dash binds $fb instead (\`?\` in the dash shows it)"
+      fi
+    done <<EOF
+$coll
+EOF
+  fi
+else
+  warn keys "bin/dash-keymap.sh missing — dash keys are not checked against the tmux prefix"
+fi
+
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.

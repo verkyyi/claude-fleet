@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-agent-toggle.sh — the ⌃a handler for the dash (issue #554): flip THIS
+# dash-agent-toggle.sh — the ⌃v handler for the dash (issue #554): flip THIS
 # fleet's default agent for NEW sessions between claude and codex, persisted.
 #
 # Called from an fzf `transform` bind. It flips FLEET_AGENT in the fleet's own
@@ -17,8 +17,12 @@
 # codex; codex → claude; an UNKNOWN value → claude (the only state the launcher
 # would not already be falling back to). Outside a fleet (no session ⇒ no per-fleet
 # conf) it toasts and changes nothing. While a rename/bind is armed on the query
-# line it is a no-op — ⌃a there is far more likely fzf's beginning-of-line reflex
-# than a deliberate fleet-wide flip.
+# line it is a no-op — a fleet-wide flip mid-edit is never what was meant.
+#
+# The key is ⌃v BY DEFAULT (issue #556 — it was ⌃a, which is the operator's tmux
+# prefix, so tmux ate it): the dash resolves it through bin/dash-keymap.sh at
+# launch (the ⌥ fallback when ⌃v IS the prefix), and the toast below asks the
+# same resolver for the glyph so it never tells the operator to press a dead key.
 #
 # Prints nothing (⇒ no fzf action) on every refusal; the toast carries the why.
 set -uo pipefail
@@ -56,5 +60,6 @@ if ! fcfg_write "$target" FLEET_AGENT "$new" enum >/dev/null; then
   tmux display-message "fleet: write to ${target##*/} FAILED (full/read-only volume?) — FLEET_AGENT unchanged" 2>/dev/null || true
   exit 0
 fi
-tmux display-message "fleet: new sessions → $new · ⌃a flips back · ${cur:-claude}: prefix for a one-off" 2>/dev/null || true
+glyph=$(bash "$BIN/dash-keymap.sh" glyph agent 2>/dev/null); [ -n "$glyph" ] || glyph='⌃v'
+tmux display-message "fleet: new sessions → $new · $glyph flips back · ${cur:-claude}: prefix for a one-off" 2>/dev/null || true
 bash "$BIN/dash-agent-prompt.sh" actions

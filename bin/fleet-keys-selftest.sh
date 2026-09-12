@@ -14,10 +14,15 @@
 #   4. The sheet renders non-empty in --plain mode and lists all four groups.
 #   5. Context scoping (issue #265): `--context dash`/`--context backlog` show
 #      that panel + the global `tmux prefix` group, and drop the OTHER panels.
-#   6. Every `⌃<k>` row in the DASHBOARD group is bound as `--bind "ctrl-<k>:"`
-#      in tmux-dashboard.sh, and every such dash bind has a sheet row — both
-#      directions, so neither a new key nor a pruned one can drift (issue #449,
-#      which re-wired ⌃e rename and is asserted by name below).
+#   6. The dash's keys are a THREE-way lockstep (issue #556): every action in
+#      bin/dash-keymap.sh's table is bound as `--bind "$DASH_KEY_<ACTION>:"` in
+#      tmux-dashboard.sh (and nothing is bound by a literal ctrl chord — tmux
+#      eats its prefix, so the resolver owns the key), every such bind is a table
+#      action, and every table glyph has a `$(dg <action>)` sheet row / every
+#      `⌃<k>` row is a table glyph — so neither a new key nor a pruned one can
+#      drift (issue #449, which re-wired ⌃e rename and is asserted by name
+#      below). Pinned to the stock C-b prefix so it is deterministic anywhere;
+#      one extra render under a C-s prefix checks the sheet shows the remap.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
 set -uo pipefail
@@ -28,12 +33,19 @@ KEYS="$BIN/fleet-keys.sh"
 CONF="$ROOT/conf/tmux-attention.conf"
 DASH="$BIN/tmux-dashboard.sh"
 ISSUES="$BIN/tmux-issues.sh"
+KEYMAP="$BIN/dash-keymap.sh"
 
-for f in "$KEYS" "$CONF" "$DASH" "$ISSUES"; do
+for f in "$KEYS" "$CONF" "$DASH" "$ISSUES" "$KEYMAP"; do
   [ -f "$f" ] || { printf 'selftest: missing %s\n' "$f" >&2; exit 2; }
 done
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
+
+# The dash keys are resolved against the tmux prefix (issue #556); pin the stock
+# C-b so the sheet renders its defaults on every machine (an operator whose prefix
+# collides with a dash key would otherwise see the ⌥ remap here and this guard
+# would compare against the wrong glyph).
+export FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2=''
 
 SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh --plain exited non-zero"
 [ -n "$SHEET" ] || fail "sheet rendered empty"
@@ -122,10 +134,13 @@ printf '%s\n' "$BSHEET" | grep -qi '^backlog '      || fail "--context backlog m
 printf '%s\n' "$BSHEET" | grep -qi '^dashboard '    && fail "--context backlog should NOT list the 'dashboard' group"
 printf '%s\n' "$BSHEET" | grep -qi '^config modal ' && fail "--context backlog should NOT list the 'config modal' group"
 
-# --- 6. dashboard ⌃-keys ⇄ the dash's own fzf --binds --------------------------
+# --- 6. dashboard ⌃-keys ⇄ the dash's fzf --binds ⇄ the keymap table ----------
 # Section 1/2 guard the `prefix` binds; the DASHBOARD group had no such guard, so
 # a ⌃-key could be bound with no sheet row (undiscoverable) or listed with no bind
-# (a lie — exactly what ⌃e was between #289 and #449). Cross-check both ways.
+# (a lie — exactly what ⌃e was between #289 and #449). Since #556 the dash binds
+# no literal chord: each key is `$DASH_KEY_<ACTION>` from dash-keymap.sh's table
+# and the sheet renders the same resolution via `$(dg <action>)`. Cross-check all
+# three ways.
 # The sheet's dashboard block: rows are two-space indented, the next group header
 # is flush-left, and blank lines inside the block are kept.
 dash_block="$(printf '%s\n' "$SHEET" | awk '/^dashboard /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
@@ -134,23 +149,61 @@ dash_block="$(printf '%s\n' "$SHEET" | awk '/^dashboard /{f=1;next} f && NF && /
 # so the capture is the plain ASCII letter after it (byte- and UTF-8-locale safe).
 sheet_dash_keys="$(printf '%s\n' "$dash_block" | sed -n 's/^  ⌃\(.\).*/\1/p' | sort -u)"
 [ -n "$sheet_dash_keys" ] || fail "no '⌃X' rows parsed from the sheet's dashboard group"
-dash_binds="$(grep -oE -- '--bind "ctrl-[a-z]:' "$DASH" | sed 's/.*ctrl-\(.\):.*/\1/' | sort -u)"
-[ -n "$dash_binds" ] || fail "no 'ctrl-X' --binds parsed from tmux-dashboard.sh"
+# the table, resolved under the pinned C-b: `action key glyph default remap state`
+table="$(bash "$KEYMAP" list)" || fail "dash-keymap.sh list exited non-zero"
+table_actions="$(printf '%s\n' "$table" | awk '{print $1}' | sort -u)"
+[ -n "$table_actions" ] || fail "no actions parsed from dash-keymap.sh list"
+table_keys="$(printf '%s\n' "$table" | awk '{print $3}' | sed -n 's/^⌃\(.\)$/\1/p' | sort -u)"
+[ "$(printf '%s\n' "$table_keys" | grep -c .)" = "$(printf '%s\n' "$table_actions" | grep -c .)" ] \
+  || fail "under C-b every table glyph must be a plain ⌃<letter> (got: $(printf '%s' "$table" | awk '{print $3}' | tr '\n' ' '))"
+# the dash's binds: `--bind "$DASH_KEY_<ACTION>:` → action, lowercased
+dash_actions="$(grep -oE -- '--bind "\$DASH_KEY_[A-Z]+:' "$DASH" | sed 's/.*DASH_KEY_\([A-Z]*\):.*/\1/' | tr '[:upper:]' '[:lower:]' | sort -u)"
+[ -n "$dash_actions" ] || fail "no '\$DASH_KEY_<ACTION>' --binds parsed from tmux-dashboard.sh"
+grep -Eq -- '--bind "(ctrl|alt)-' "$DASH" \
+  && fail "tmux-dashboard.sh binds a literal ctrl/alt chord — add the action to dash-keymap.sh and bind \$DASH_KEY_<ACTION> (#556)"
 
+# 6a. dash ⇄ table
 while IFS= read -r k; do
   [ -n "$k" ] || continue
-  printf '%s\n' "$dash_binds" | grep -Fxq "$k" \
-    || fail "sheet lists dashboard '⌃$k' but tmux-dashboard.sh has no --bind ctrl-$k"
+  printf '%s\n' "$table_actions" | grep -Fxq "$k" \
+    || fail "tmux-dashboard.sh binds \$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]') but dash-keymap.sh's table has no '$k' action"
+done <<EOF
+$dash_actions
+EOF
+while IFS= read -r k; do
+  [ -n "$k" ] || continue
+  printf '%s\n' "$dash_actions" | grep -Fxq "$k" \
+    || fail "dash-keymap.sh lists '$k' but tmux-dashboard.sh has no --bind \"\$DASH_KEY_$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]'):…\""
+  grep -q "key \"\$(dg $k)" "$KEYS" \
+    || fail "dash-keymap.sh lists '$k' but fleet-keys.sh has no \$(dg $k) row for it"
+done <<EOF
+$table_actions
+EOF
+
+# 6b. sheet ⇄ table (the rendered ⌃-letters)
+while IFS= read -r k; do
+  [ -n "$k" ] || continue
+  printf '%s\n' "$table_keys" | grep -Fxq "$k" \
+    || fail "sheet lists dashboard '⌃$k' but dash-keymap.sh resolves no action to ctrl-$k"
 done <<EOF
 $sheet_dash_keys
 EOF
 while IFS= read -r k; do
   [ -n "$k" ] || continue
   printf '%s\n' "$sheet_dash_keys" | grep -Fxq "$k" \
-    || fail "tmux-dashboard.sh binds ctrl-$k but the dashboard sheet does not document it"
+    || fail "dash-keymap.sh resolves an action to ctrl-$k but the dashboard sheet does not show ⌃$k"
 done <<EOF
-$dash_binds
+$table_keys
 EOF
+
+# 6c. the sheet honours the resolution: under a C-s prefix the scratch row is ⌥s
+# with the why, and ⌃s is gone — the help never names a key tmux will eat.
+RSHEET="$(FLEET_TMUX_PREFIX=C-s NO_COLOR=1 bash "$KEYS" --plain --context dash)" \
+  || fail "fleet-keys.sh under a C-s prefix exited non-zero"
+printf '%s\n' "$RSHEET" | grep -q '^  ⌥s .*⌃s is your tmux prefix C-s' \
+  || fail "under a C-s tmux prefix the sheet must list ⌥s for scratch and say why"
+printf '%s\n' "$RSHEET" | grep -q '^  ⌃s ' \
+  && fail "under a C-s tmux prefix the sheet must NOT still list ⌃s"
 
 # ⌃e rename by name (issue #449): the bijection above passes if BOTH sides drop a
 # key, so pin the one this guard was extended for — sheet row, bind, and the
@@ -158,9 +211,14 @@ EOF
 # window name, which is why dash-rename.sh is a script).
 printf '%s\n' "$dash_block" | grep -q '⌃e' \
   || fail "dashboard sheet is missing the ⌃e (rename window) row"
-grep -Eq -- '--bind "ctrl-e:transform\(bash [^)]*dash-rename\.sh' "$DASH" \
-  || fail "dashboard ⌃e is not bound to a transform(dash-rename.sh ...) action"
+grep -Eq -- '--bind "\$DASH_KEY_RENAME:transform\(bash [^)]*dash-rename\.sh' "$DASH" \
+  || fail "dashboard ⌃e is not bound (via \$DASH_KEY_RENAME) to a transform(dash-rename.sh ...) action"
 [ -x "$BIN/dash-rename.sh" ] || fail "bin/dash-rename.sh missing or not executable"
+# and the #556 key by name: the agent flip is ⌃v, never ⌃a (the operator's prefix)
+printf '%s\n' "$dash_block" | grep -q '^  ⌃v .*flip this fleet' \
+  || fail "dashboard sheet must list the agent flip on ⌃v"
+printf '%s\n' "$dash_block" | grep -q '^  ⌃a ' \
+  && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \

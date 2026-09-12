@@ -23,6 +23,7 @@
 # against the binds actually shipped in conf/tmux-attention.conf + the dash/
 # backlog fzf --binds, so this sheet can't silently go stale.
 set -u
+BIN="$(cd "$(dirname "$0")" && pwd)"
 
 PLAIN=""
 CONTEXT="all"
@@ -46,6 +47,27 @@ if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
 else
   B=""; DIM=""; CYAN=""; YEL=""; R=""
 fi
+
+# --- dash keys: the RESOLVED table, never the defaults (issue #556) -----------
+# tmux never delivers its prefix (or prefix2) to a pane, so the dash resolves
+# every ⌃-key through bin/dash-keymap.sh at launch — the default, else its ⌥
+# fallback. This sheet reads the SAME resolution: `dg <action>` is the glyph
+# actually bound, `dn <action>` a trailing note when the default was dodged —
+# so the sheet can never name a key the terminal will not deliver.
+eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
+dg() {
+  local v; v="DASH_GLYPH_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  printf '%s' "${!v:-⌃?}"
+}
+dn() {
+  local a s r g gl
+  a=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+  s="DASH_KEYSTATE_$a"; r="DASH_REMAP_$a"; g="DASH_GLYPH_$a"; gl="${!g:-}"
+  case "${!s:-ok}" in
+    remapped)    printf ' — (⌥ fallback: ⌃%s is your tmux prefix %s)' "${gl#⌥}" "${!r:-}" ;;
+    unreachable) printf ' — (UNREACHABLE: %s is your tmux prefix %s and its ⌥ twin is one too)' "$gl" "${!r:-}" ;;
+  esac
+}
 
 # group <title>; then key <keys> <desc> rows. Two columns; the key column is
 # padded to a fixed DISPLAY width — computed from ${#k} (character count, not
@@ -76,7 +98,7 @@ print_sheet() {
   case "$CONTEXT" in
     dash)    sub="(dashboard panel · prefix binds work here too · q/esc to close)" ;;
     backlog) sub="(backlog panel · prefix binds work here too · q/esc to close)" ;;
-    *)       sub="(prefix = your tmux prefix, default C-b · q/esc to close)" ;;
+    *)       sub="(prefix = your tmux prefix, ${DASH_KEYMAP_PREFIX:-C-b} here · q/esc to close)" ;;
   esac
   printf '%s%s fleet keymap %s  %s%s%s\n' "$B" "$CYAN" "$R" "$DIM" "$sub" "$R"
 
@@ -97,16 +119,16 @@ print_sheet() {
   group "dashboard" "— inside the hub dash pane (prefix g)"
   key "enter" "jump to the highlighted window"
   key "type a name, enter" "EMPTY scratch session named after the typed text — no prompt sent; CJK + spaces fine, 24 cols (the prompt line at the bottom; esc clears it)"
-  key "⌃n" "new issue — file one AND spawn its worker (quick-dispatch)"
-  key "⌃s" "raw scratch session — spawns instantly (the fleet's default agent in its own scratch-N worktree, no issue, no prompt)"
-  key "⌃a" "flip this fleet's default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet's conf, so every spawn path follows; a codex:/claude: prefix stays the one-off"
-  key "⌃e" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)"
-  key "⌃x" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean"
-  key "⌃t" "toggle live ⇄ closed (finished sessions + scratch)"
-  key "⌃o" "restore the highlighted landed session into a new window (claude --resume)"
-  key "enter (landed)" "resume the highlighted landed session — same as ⌃o"
-  key "⌃p (landed)" "open the highlighted landed row's PR in the browser"
-  key "⌃r" "refresh now"
+  key "$(dg new)" "new issue — file one AND spawn its worker (quick-dispatch)$(dn new)"
+  key "$(dg scratch)" "raw scratch session — spawns instantly (the fleet's default agent in its own scratch-N worktree, no issue, no prompt)$(dn scratch)"
+  key "$(dg agent)" "flip this fleet's default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet's conf, so every spawn path follows; a codex:/claude: prefix stays the one-off$(dn agent)"
+  key "$(dg rename)" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)$(dn rename)"
+  key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean$(dn reap)"
+  key "$(dg view)" "toggle live ⇄ closed (finished sessions + scratch)$(dn view)"
+  key "$(dg restore)" "restore the highlighted landed session into a new window (claude --resume)$(dn restore)"
+  key "enter (landed)" "resume the highlighted landed session — same as $(dg restore)"
+  key "$(dg pr) (landed)" "open the highlighted landed row's PR in the browser$(dn pr)"
+  key "$(dg reload)" "refresh now$(dn reload)"
   key "?" "this cheatsheet — on an EMPTY prompt line (with text typed, ? is just a character)"
   key "esc" "relaunch the dash (it's the always-on hub pane)"
   fi

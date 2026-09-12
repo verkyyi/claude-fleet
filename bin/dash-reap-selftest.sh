@@ -374,11 +374,13 @@ grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 # `run-shell -b` (backgrounded) rather than run inline on the bind.
 DASH="$BIN/tmux-dashboard.sh"
 [ -f "$DASH" ] || fail "tmux-dashboard.sh missing next to dash-reap.sh (#313)"
-cx="$(grep -n 'ctrl-x:' "$DASH" | head -1)"
-[ -n "$cx" ] || fail "no ctrl-x bind found in tmux-dashboard.sh (#313)"
+# The key is `$DASH_KEY_REAP` (ctrl-x by default) — resolved against the tmux
+# prefix by dash-keymap.sh (#556), never a literal chord in the dash source.
+cx="$(grep -n '\$DASH_KEY_REAP:' "$DASH" | head -1)"
+[ -n "$cx" ] || fail "no ⌃x (\$DASH_KEY_REAP) bind found in tmux-dashboard.sh (#313)"
 case "$cx" in
-  *'ctrl-x:execute-silent('*) : ;;                                  # non-blocking — correct
-  *'ctrl-x:execute('*)  fail "ctrl-x uses blocking execute() — blanks the dash; must be execute-silent (#313): $cx" ;;
+  *'$DASH_KEY_REAP:execute-silent('*) : ;;                                  # non-blocking — correct
+  *'$DASH_KEY_REAP:execute('*)  fail "ctrl-x uses blocking execute() — blanks the dash; must be execute-silent (#313): $cx" ;;
   *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
 esac
 
