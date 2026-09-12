@@ -72,3 +72,55 @@ func TestLiveSourceScopeAndLifecycle(t *testing.T) {
 		t.Fatal("historical replay resurrected a session")
 	}
 }
+
+// Codex usage whose session no logged-in profile can claim arrives under the
+// pool key. Once the operator has bound the pool, it must land on the real
+// account at ingest — otherwise the pool account is re-created on the next
+// scan and the history has to be merged by hand again.
+func TestIngest_BoundCodexPoolLandsOnTheRealAccount(t *testing.T) {
+	h := newHarness(t)
+	seedReviewHarness(t, h)
+	now := time.Now().UTC()
+	real := "codex:account:real"
+	if err := h.srv.Store.UpsertAccount(model.Identity{AccountUUID: real, Source: "codex"}, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.BindSourcePool("codex", real); err != nil {
+		t.Fatal(err)
+	}
+
+	b := model.Batch{
+		Identity: model.Identity{Source: "codex", AccountUUID: "codex:local", DisplayName: "Codex (local usage)"},
+		Events:   []model.UsageEvent{{MessageUUID: "codex:pooled", SessionID: "codex:s", TS: now, OutputTokens: 77}},
+	}
+	r := h.push(t, h.tokens["mac"], b)
+	r.Body.Close()
+	if r.StatusCode != 200 {
+		t.Fatalf("ingest returned %d", r.StatusCode)
+	}
+
+	var pooled, landed int
+	if err := h.srv.Store.DB().QueryRow(
+		`SELECT COUNT(*) FROM usage_events WHERE account_uuid='codex:local'`).Scan(&pooled); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.DB().QueryRow(
+		`SELECT COUNT(*) FROM usage_events WHERE account_uuid=?`, real).Scan(&landed); err != nil {
+		t.Fatal(err)
+	}
+	if pooled != 0 || landed != 1 {
+		t.Fatalf("pooled=%d landed=%d, want the turn under the bound account", pooled, landed)
+	}
+	accts, err := h.srv.Store.ListAccounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accts {
+		if a.AccountUUID == "codex:local" {
+			t.Fatal("the pool account was re-created at ingest")
+		}
+		if a.AccountUUID == real && a.DisplayName == "Codex (local usage)" {
+			t.Fatal("the pool's placeholder name overwrote the real account's")
+		}
+	}
+}

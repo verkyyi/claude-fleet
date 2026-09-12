@@ -63,6 +63,19 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	id := batch.Identity
 	id.Source = model.UsageSource(id.Source)
 
+	// A source whose transcripts cannot name an account parks its usage in a
+	// pool ("codex:local"). When the operator has said which subscription that
+	// pool is, it is that subscription — resolve before anything is written
+	// under the pool key, or the pool reappears on every scan.
+	if resolved, err := s.Store.ResolvePool(string(id.Source), id.AccountUUID); err != nil {
+		return nil, err
+	} else if resolved != id.AccountUUID {
+		id.AccountUUID = resolved
+		// The pool's placeholder name ("Codex (local usage)") must not
+		// overwrite the real account's; only the uuid was worth anything.
+		id.Email, id.DisplayName = "", ""
+	}
+
 	// A fingerprint is a guess at identity made from a reset schedule. When a
 	// known account's schedule matches it, they are the same subscription — and
 	// leaving them apart puts a phantom next to the real account, each holding

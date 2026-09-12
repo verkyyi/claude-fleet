@@ -32,11 +32,16 @@ func runName(args []string) error {
 		"merge subscriptions that share a seven-day reset schedule.\n"+
 			"Repairs a database that accumulated phantom accounts before the\n"+
 			"fingerprint stopped including the rolling five-hour window")
-	dryRun := fs.Bool("dry-run", false, "with --dedupe, show what would merge and change nothing")
+	merge := fs.Bool("merge", false,
+		"fold one account's usage into another: `ccquota name --merge <src> <dst>`.\n"+
+			"For adopting a pool of unassigned usage (codex:local) into the\n"+
+			"subscription it belongs to. src is deleted; dst must already exist")
+	dryRun := fs.Bool("dry-run", false, "with --dedupe or --merge, show what would move and change nothing")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota name [flags]                   list subscriptions and their names
   ccquota name [flags] <account> <name>  name one, permanently
+  ccquota name --merge <src> <dst>       fold src's usage into dst, delete src
 
 The name is locked: later automatic reports (a tmux window option, an env var,
 a login) will not overwrite it. Use --clear to unlock.
@@ -60,6 +65,23 @@ Flags:
 		}
 		defer st.Close()
 		return dedupeAccounts(st, *dryRun)
+	}
+
+	if *merge {
+		rest := fs.Args()
+		if len(rest) != 2 {
+			return errors.New("--merge takes two accounts: <src> <dst>")
+		}
+		dbFile, err := resolveExistingDB(*dbPath)
+		if err != nil {
+			return err
+		}
+		st, err := store.Open(dbFile)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return mergeAccount(st, rest[0], rest[1], *dryRun)
 	}
 
 	rest := fs.Args()
@@ -187,6 +209,62 @@ func nameViaHub(hub, token, account, label string) error {
 	return nil
 }
 
+// mergeAccount folds one named account into another.
+//
+// Named accounts, not a schedule match: the case this exists for is a pool
+// that CANNOT be matched automatically — Codex transcripts do not attest to an
+// account, so their usage is parked under codex:local and only the operator
+// knows which subscription paid for it.
+func mergeAccount(st *store.Store, src, dst string, dryRun bool) error {
+	raw, rollup, tokens, err := st.AccountFootprint(src)
+	if err != nil {
+		return err
+	}
+	if raw == 0 && rollup == 0 {
+		fmt.Printf("%s holds no usage; nothing to merge\n", src)
+		return nil
+	}
+	fmt.Printf("%s holds %s (%s tokens)\n", src, mergeCounts(raw, rollup), humanInt(tokens))
+	if dryRun {
+		fmt.Printf("would merge %s -> %s; re-run without --dry-run to apply\n", src, dst)
+		return nil
+	}
+	moved, folded, err := st.MergeAccount(src, dst)
+	if err != nil {
+		return fmt.Errorf("merge %s into %s: %w", src, dst, err)
+	}
+	fmt.Printf("merged %s into %s (%s)\n", src, dst, mergeCounts(moved, folded))
+
+	// Merging a source's unassigned pool is a statement about where that
+	// source's usage belongs, not just a repair: without recording it, the
+	// pool is re-created by the next scan of any session no profile can claim,
+	// and the operator has to do this again.
+	if source, ok := poolSource(src); ok {
+		if err := st.BindSourcePool(source, dst); err != nil {
+			return fmt.Errorf("record that %s usage belongs to %s: %w", source, dst, err)
+		}
+		fmt.Printf("%s usage that cannot name its own account will now land under %s\n", source, dst)
+	}
+	return nil
+}
+
+// poolSource reports the source whose unassigned pool this account key is.
+func poolSource(account string) (string, bool) {
+	source, ok := strings.CutSuffix(account, ":local")
+	return source, ok && source != ""
+}
+
+// mergeCounts says both numbers whenever they differ. They differ for every
+// account with history older than the retention window: the raw turns are
+// gone and the rollup is the only record left, so printing the raw count
+// alone would report "0 turns moved" for a merge that moved everything.
+func mergeCounts(raw, rollup int64) string {
+	if raw == rollup {
+		return fmt.Sprintf("%d turns", raw)
+	}
+	return fmt.Sprintf("%d raw turns + %d rollup turns (the rest is past the retention window)", raw, rollup)
+}
+
 // dedupeAccounts folds phantom subscriptions into the real ones.
 //
 // A fingerprint that shares a seven-day reset schedule with another account IS
@@ -221,11 +299,11 @@ func dedupeAccounts(st *store.Store, dryRun bool) error {
 			fmt.Printf("would merge %s -> %s\n", src, dst)
 			continue
 		}
-		moved, err := st.MergeAccount(src, dst)
+		moved, folded, err := st.MergeAccount(src, dst)
 		if err != nil {
 			return fmt.Errorf("merge %s into %s: %w", src, dst, err)
 		}
-		fmt.Printf("merged %s into %s (%d turns moved)\n", src, dst, moved)
+		fmt.Printf("merged %s into %s (%s)\n", src, dst, mergeCounts(moved, folded))
 	}
 	if dryRun {
 		fmt.Printf("\n%d merge(s) pending; re-run without --dry-run to apply\n", len(dupes))

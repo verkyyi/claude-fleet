@@ -34,6 +34,20 @@ CREATE TABLE IF NOT EXISTS source_account_switches (
   PRIMARY KEY(endpoint_id, source, profile_id, observed_at)
 );
 
+-- Which subscription a source's UNASSIGNED pool belongs to.
+--
+-- Codex transcripts do not attest to an OpenAI account, so usage whose session
+-- no logged-in profile can claim is parked under "<source>:local" rather than
+-- guessed at. On a hub that holds exactly one subscription for that source,
+-- the guess is not a guess and the pool is just that account under another
+-- name -- but only the operator can say so, which is what this records.
+-- Keyed by source: one pool per source, and re-binding replaces it.
+CREATE TABLE IF NOT EXISTS source_pool_bindings (
+  source       TEXT PRIMARY KEY,
+  account_uuid TEXT NOT NULL,
+  bound_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account_usage_observations (
   account_uuid TEXT NOT NULL,
   source TEXT NOT NULL,
