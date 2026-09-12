@@ -11,10 +11,15 @@
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
 #   ⌃o restore a landed session ·
-#   ⌃a flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
+#   ⌃v flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
 #   written to the fleet's conf, so every spawn path follows; the prompt line
 #   reads `claude ▸ ` / `codex ▸ ` from the same conf, dash-agent-prompt.sh) ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
+#   Every ⌃-key above is the DEFAULT: tmux never delivers its prefix to a pane,
+#   so each launch resolves the bind table in bin/dash-keymap.sh against the
+#   live prefix/prefix2 and remaps a colliding key to its ⌥ twin (issue #556 —
+#   the flip was ⌃a, the operator's prefix, so tmux ate it); `?` shows the key
+#   that is actually bound.
 #   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning) and ⌃l
 #   (arm auto-merge — the worker lands its own PR now, #441; gh pr merge covers
 #   strays), plus ⌥x (force-reap — folded into the one confirming ⌃x). ⌃e was
@@ -112,9 +117,10 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # one-off prefix. Both come from ONE helper, bin/dash-agent-prompt.sh (effective
 # FLEET_AGENT via fleet_load_conf), read at every launch here AND re-derived on
 # every reload tick (`load` / ⌃r → transform(… actions)), so a change from ANY
-# writer — ⌃a (dash-agent-toggle.sh), the prefix+c modal, a hand edit — shows on
+# writer — ⌃v (dash-agent-toggle.sh), the prefix+c modal, a hand edit — shows on
 # the next tick without a relaunch. Same helper restores the label after a rename.
 AGENT_PROMPT="$BIN/dash-agent-prompt.sh"
+KEYMAP="$BIN/dash-keymap.sh"   # the dash's ⌃-keys, resolved against the tmux prefix (issue #556)
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across
@@ -148,11 +154,20 @@ run_dash() {
   # non-empty one → `put(?)`, i.e. the character goes into the task you're typing.
   # (dash-rename.sh still unbinds it outright for the length of a rename, where the
   # query is pre-filled and may be emptied mid-edit.)
-  # ⌃a is a transform (issue #554): dash-agent-toggle.sh flips FLEET_AGENT in the
+  # ⌃v is a transform (issue #554): dash-agent-toggle.sh flips FLEET_AGENT in the
   # fleet's conf via the config-modal write path, toasts, and emits the
   # change-prompt/change-ghost that relabels the line at once. `load`/⌃r re-derive
   # the label from the conf each tick (a no-op emit when nothing changed; nothing at
   # all while a rename owns the prompt line).
+  # The ⌃-keys are NOT literals (issue #556): tmux swallows its prefix (and
+  # prefix2) before any pane sees it, so each launch resolves the bind table
+  # through bin/dash-keymap.sh — the default key unless it IS the live prefix,
+  # else the ⌥ fallback — and the `?` sheet (fleet-keys.sh) + the toggle toast
+  # read the same resolution. The literals below are only the never-launch-
+  # unbound floor for an install missing the helper.
+  DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
+  DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e
+  eval "$(bash "$KEYMAP" env 2>/dev/null)"
   PROMPT_NOW=$(bash "$AGENT_PROMPT" prompt 2>/dev/null); [ -n "$PROMPT_NOW" ] || PROMPT_NOW='▸ '
   GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ empty scratch'
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
@@ -162,16 +177,16 @@ run_dash() {
     --prompt="$PROMPT_NOW" --ghost="$GHOST_NOW" \
     "${PREVIEW[@]}" \
     --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
-    --bind "ctrl-r:reload(bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
-    --bind "ctrl-a:transform(bash $BIN/dash-agent-toggle.sh)" \
+    --bind "$DASH_KEY_RELOAD:reload(bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
+    --bind "$DASH_KEY_AGENT:transform(bash $BIN/dash-agent-toggle.sh)" \
     --bind "?:transform:[ -n \"\$FZF_QUERY\" ] && echo 'put(?)' || echo 'execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)'" \
-    --bind "ctrl-n:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
-    --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
-    --bind "ctrl-t:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
-    --bind "ctrl-o:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
-    --bind "ctrl-p:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
-    --bind "ctrl-x:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
-    --bind "ctrl-e:transform(bash $BIN/dash-rename.sh {1})" \
+    --bind "$DASH_KEY_NEW:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_SCRATCH:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_VIEW:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_RESTORE:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_PR:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
+    --bind "$DASH_KEY_REAP:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1

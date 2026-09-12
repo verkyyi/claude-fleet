@@ -25,7 +25,7 @@
 #
 # One script, three callers, so the initial launch (`--prompt=$(… prompt)`), the
 # reload ticks (`load` / ⌃r → transform(… actions)) and the mode restores can never
-# disagree: any writer changing FLEET_AGENT — ⌃a (dash-agent-toggle.sh), the
+# disagree: any writer changing FLEET_AGENT — ⌃v (dash-agent-toggle.sh), the
 # prefix+c config modal, a hand edit of the conf — shows on the next tick.
 #
 # NB: the values go INSIDE fzf `change-prompt(…)` — fzf stops at the FIRST ')' — so

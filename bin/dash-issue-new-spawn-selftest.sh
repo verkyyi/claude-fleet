@@ -215,8 +215,10 @@ ok "H an empty accepted query cancels the create (empty-title contract intact)"
 # prefix+n path already exercised by A–D above.
 DASH="$BIN/tmux-dashboard.sh"
 [ -f "$DASH" ] || fail "E $DASH missing"
-grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
-  || fail "E dashboard has no ⌃n bind invoking dash-issue-new.sh --spawn" "$(grep -n 'ctrl-n' "$DASH" || true)"
+# The key is `$DASH_KEY_NEW` (ctrl-n by default) — resolved against the tmux
+# prefix by dash-keymap.sh (#556), never a literal chord in the dash source.
+grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh.*--spawn' "$DASH" \
+  || fail "E dashboard has no ⌃n (\$DASH_KEY_NEW) bind invoking dash-issue-new.sh --spawn" "$(grep -n 'DASH_KEY_NEW' "$DASH" || true)"
 ok "E dash ⌃n bind wires into the quick-dispatch (dash-issue-new.sh --spawn)"
 
 printf '\nselftest OK: %s assertions passed (quick-dispatch: title-only, bg spawn, fzf exit-130 cancel + dash ⌃n)\n' "$pass"

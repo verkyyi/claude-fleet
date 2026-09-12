@@ -52,8 +52,10 @@ grep -q -- 'click-header' "$DASH" \
 ok
 # ⌃n is the dash's ONLY new-issue+worker path now — same assertion as
 # dash-issue-new-spawn-selftest.sh test E.
-grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
-  || fail "dash: ⌃n bind lost — it is the dash's only new-issue+worker path since #536"
+# the key is `$DASH_KEY_NEW` (ctrl-n by default), resolved against the tmux
+# prefix by dash-keymap.sh (#556) — never a literal chord in the dash source.
+grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh.*--spawn' "$DASH" \
+  || fail "dash: ⌃n (\$DASH_KEY_NEW) bind lost — it is the dash's only new-issue+worker path since #536"
 ok
 # the ghost text carries the ↵ hint (the hint line used to say `↵ jump`). Since
 # #554 it is DERIVED — bin/dash-agent-prompt.sh names the OTHER agent's one-off
