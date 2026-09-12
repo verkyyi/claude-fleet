@@ -1959,14 +1959,24 @@ fleet_wid_valid() {
 # fleet_wid_next <taken> — the lowest handle NOT in <taken> (whitespace/newline
 # separated). Pure bash, no forks, no tmux: this is the allocator's whole policy,
 # so bin/dash-wid-selftest.sh can pin it without a server. Exit 1 = all 234 taken.
+# (POSIX `while` loops, not `for (( … ))`: fleet-lib.sh must PARSE under a strict
+# /bin/sh — the conf sources it under `sh` for the ⌂ hub tap, and a C-style for is
+# a syntax error in dash, which would leave every later function undefined. That
+# is the #414 class, and bin/posix-lib-parse-selftest.sh is its net.)
 fleet_wid_next() {
-  local taken=" ${1//$'\n'/ } " i j h
-  for (( i=0; i<${#FLEET_WID_ALPHA}; i++ )); do
-    for (( j=0; j<${#FLEET_WID_DIGITS}; j++ )); do
+  local taken=" ${1//$'\n'/ } " i=0 j h la ld
+  la=${#FLEET_WID_ALPHA}; ld=${#FLEET_WID_DIGITS}
+  while [ "$i" -lt "$la" ]; do
+    j=0
+    while [ "$j" -lt "$ld" ]; do
       h="${FLEET_WID_ALPHA:$i:1}${FLEET_WID_DIGITS:$j:1}"
-      case "$taken" in *" $h "*) continue;; esac
-      printf '%s' "$h"; return 0
+      case "$taken" in
+        *" $h "*) : ;;
+        *) printf '%s' "$h"; return 0 ;;
+      esac
+      j=$((j + 1))
     done
+    i=$((i + 1))
   done
   return 1
 }
