@@ -46,6 +46,8 @@ func main() {
 		err = runBadge(os.Args[2:])
 	case "team":
 		err = runTeam(os.Args[2:])
+	case "codex":
+		err = runCodex(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -63,7 +65,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `ccquota — cross-endpoint Claude Code usage monitor
+	fmt.Fprint(os.Stderr, `ccquota — cross-endpoint Claude Code and Codex usage monitor
 
 Usage:
   ccquota report [flags]    Local one-shot usage report (no hub, no network)
@@ -79,6 +81,7 @@ Usage:
   ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
                             no network) or as shields.io endpoint JSON
   ccquota team   [flags]    Allocate an endpoint's spend to a team
+  ccquota codex  [command]  Manage Codex accounts, launch profiles and renew login
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

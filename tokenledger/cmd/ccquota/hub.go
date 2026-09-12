@@ -20,6 +20,7 @@ import (
 	"github.com/verkyyi/ccquota/internal/api"
 	"github.com/verkyyi/ccquota/internal/mcp"
 	"github.com/verkyyi/ccquota/internal/pricing"
+	"github.com/verkyyi/ccquota/internal/scan"
 	"github.com/verkyyi/ccquota/internal/store"
 	"github.com/verkyyi/ccquota/web"
 )
@@ -338,7 +339,12 @@ func runAgent(args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
 	token := fs.String("token", os.Getenv("CCQUOTA_TOKEN"), "enrollment token")
-	home := fs.String("home", "", "Claude Code home directory (default: your home)")
+	home := fs.String("home", "", "user home directory (default: your home)")
+	sources := fs.String("sources", os.Getenv("CCQUOTA_SOURCES"), "usage sources: all (default), claude, codex, or claude,codex")
+	codexHome := fs.String("codex-home", "", "Codex data directory (default: CODEX_HOME or <home>/.codex)")
+	codexHomes := fs.String("codex-homes", os.Getenv("CCQUOTA_CODEX_HOMES"), "additional Codex data directories, comma-separated")
+	codexBinary := fs.String("codex-bin", os.Getenv("CCQUOTA_CODEX_BINARY"), "Codex CLI executable for account queries and renewal")
+	codexAutoRefresh := fs.Bool("codex-auto-refresh", true, "renew Codex ChatGPT file logins through the official CLI before expiry")
 	state := fs.String("state", "", "state directory (default: <home>/.ccquota)")
 	sessionsDir := fs.String("sessions-dir", "",
 		"where `ccquota stamp` writes session stamps (default: <home>/.ccquota).\n"+
@@ -374,23 +380,32 @@ func runAgent(args []string) error {
 	}
 
 	if *install {
-		return printServiceUnit(*hub, stateDir)
+		selected, err := scan.ParseSources(*sources)
+		if err != nil {
+			return err
+		}
+		return printServiceUnit(*hub, stateDir, strings.Join(selected, ","), scan.CodexHome(h, *codexHome), *codexHomes, *codexBinary, h, *codexAutoRefresh)
 	}
 
 	a, err := agent.New(agent.Config{
-		HubURL:         strings.TrimRight(*hub, "/"),
-		Token:          *token,
-		Home:           h,
-		StateDir:       stateDir,
-		SessionsDir:    *sessionsDir,
-		ScanInterval:   *scanEvery,
-		LimitsInterval: *limitsEvery,
-		LiveInterval:   *liveEvery,
-		SpoolMaxBytes:  *spoolMB << 20,
-		MaxBackfill:    *maxBackfill,
-		Version:        Version,
-		Once:           *once,
-		AccountsDir:    *accountsDir,
+		HubURL:              strings.TrimRight(*hub, "/"),
+		Token:               *token,
+		Home:                h,
+		Sources:             *sources,
+		CodexHome:           *codexHome,
+		CodexHomes:          *codexHomes,
+		CodexBinary:         *codexBinary,
+		CodexDisableRefresh: !*codexAutoRefresh,
+		StateDir:            stateDir,
+		SessionsDir:         *sessionsDir,
+		ScanInterval:        *scanEvery,
+		LimitsInterval:      *limitsEvery,
+		LiveInterval:        *liveEvery,
+		SpoolMaxBytes:       *spoolMB << 20,
+		MaxBackfill:         *maxBackfill,
+		Version:             Version,
+		Once:                *once,
+		AccountsDir:         *accountsDir,
 	})
 	if err != nil {
 		return err

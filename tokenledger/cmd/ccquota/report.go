@@ -27,7 +27,9 @@ import (
 // the command you point at a real machine to check that.
 func runReport(args []string) error {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
-	home := fs.String("home", "", "Claude Code home directory (default: your home)")
+	home := fs.String("home", "", "user home directory (default: your home)")
+	sourcesFlag := fs.String("sources", os.Getenv("CCQUOTA_SOURCES"), "usage sources: all (default), claude, codex, or claude,codex")
+	codexHome := fs.String("codex-home", "", "Codex data directory (default: CODEX_HOME or <home>/.codex)")
 	days := fs.Int("days", 7, "how many days back to report")
 	asJSON := fs.Bool("json", false, "emit JSON instead of a table")
 	noLimits := fs.Bool("no-limits", false, "skip the account-wide limits lookup (no network at all)")
@@ -42,24 +44,43 @@ func runReport(args []string) error {
 		return err
 	}
 
-	id, err := identity.Detect(h)
+	sources, err := scan.ParseSources(*sourcesFlag)
 	if err != nil {
 		return err
 	}
+	id := identity.Local()
+	var warnings []string
+	var claudeLogin bool
 
 	// A one-shot report must not disturb a running agent's position, so the
 	// cursor lives in a scratch file that is discarded afterwards.
-	cursor, err := os.CreateTemp("", "ccquota-report-cursor-*.json")
+	cursorDir, err := os.MkdirTemp("", "ccquota-report-*")
 	if err != nil {
 		return fmt.Errorf("create scratch cursor: %w", err)
 	}
-	cursor.Close()
-	defer os.Remove(cursor.Name())
-
-	sc := scan.NewScanner(identity.ProjectsDir(h), cursor.Name())
-	evs, err := sc.Scan()
-	if err != nil {
-		return err
+	defer os.RemoveAll(cursorDir)
+	var evs []model.UsageEvent
+	for _, source := range sources {
+		var sc *scan.Scanner
+		switch source {
+		case model.SourceClaude:
+			if detected, err := identity.Detect(h); err == nil {
+				id, claudeLogin = detected, true
+			} else if !errors.Is(err, os.ErrNotExist) {
+				warnings = append(warnings, err.Error())
+			}
+			sc = scan.NewScanner(identity.ProjectsDir(h), filepath.Join(cursorDir, "claude.json"))
+		case model.SourceCodex:
+			sc = scan.NewCodexScanner(scan.CodexHome(h, *codexHome), filepath.Join(cursorDir, "codex.json"))
+		}
+		events, err := sc.Scan()
+		if err != nil {
+			return err
+		}
+		evs = append(evs, events...)
+		for _, warning := range sc.Errs {
+			warnings = append(warnings, warning.Error())
+		}
 	}
 
 	table := pricing.Default()
@@ -75,14 +96,14 @@ func runReport(args []string) error {
 
 	rep := buildReport(id, evs, table, since, *top)
 
-	if !*noLimits {
+	rep.Sources = sources
+	rep.ScanWarnings = warnings
+	if !*noLimits && claudeLogin {
 		rep.Limits, rep.LimitsUnavailable = fetchLimits(h)
-	} else {
+	} else if *noLimits {
 		rep.LimitsUnavailable = "skipped (--no-limits)"
-	}
-
-	for _, e := range sc.Errs {
-		rep.ScanWarnings = append(rep.ScanWarnings, e.Error())
+	} else {
+		rep.LimitsUnavailable = "Claude limits require a Claude login; Codex collection reports tokens only"
 	}
 
 	if *asJSON {
@@ -134,6 +155,8 @@ type bucket struct {
 }
 
 type report struct {
+	Sources      []string        `json:"sources"`
+	BySource     []bucket        `json:"by_source"`
 	Identity     *model.Identity `json:"identity"`
 	Since        time.Time       `json:"since"`
 	Events       int             `json:"events"`
@@ -157,6 +180,7 @@ func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Tabl
 	rep := &report{Identity: id, Since: since, RatesAsOf: pricing.RatesAsOf}
 
 	byModel := map[string]*bucket{}
+	bySource := map[string]*bucket{}
 	byProject := map[string]*bucket{}
 	byDay := map[string]*bucket{}
 
@@ -188,11 +212,13 @@ func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Tabl
 			rep.SidechainTokens += e.TotalTokens()
 		}
 		add(byModel, orUnknown(e.Model), e)
+		add(bySource, model.UsageSource(e.Source), e)
 		add(byProject, projectLabel(e.CWD), e)
 		add(byDay, e.TS.Format("2006-01-02"), e)
 	}
 
 	rep.ByModel = rank(byModel, top)
+	rep.BySource = rank(bySource, 0)
 	rep.ByProject = rank(byProject, top)
 	rep.ByDay = chronological(byDay)
 	return rep
@@ -247,17 +273,14 @@ func chronological(m map[string]*bucket) []bucket {
 }
 
 func (r *report) writeText(f *os.File) error {
-	acct := r.Identity.Email
-	if acct == "" {
-		acct = r.Identity.AccountUUID
-	}
-	fmt.Fprintf(f, "ccquota report — %s on %s (%s/%s)\n",
-		acct, r.Identity.Hostname, r.Identity.OS, r.Identity.Arch)
+	fmt.Fprintf(f, "ccquota report — local usage on %s (%s/%s) · sources: %s\n",
+		r.Identity.Hostname, r.Identity.OS, r.Identity.Arch, strings.Join(r.Sources, ", "))
 	fmt.Fprintf(f, "since %s · %d turns · %s tokens · ~$%.2f notional\n\n",
 		r.Since.Format("2006-01-02"), r.Events, humanInt(r.Tokens), r.CostUSD)
 
 	r.writeLimits(f)
 
+	writeBuckets(f, "By source", r.BySource)
 	writeBuckets(f, "By model", r.ByModel)
 	writeBuckets(f, "By project", r.ByProject)
 	writeBuckets(f, "By day", r.ByDay)
@@ -289,10 +312,10 @@ func (r *report) writeLimits(f *os.File) {
 	if r.Limits == nil {
 		// Never print a percentage we do not have. An absent gauge with a
 		// reason is honest; a 0%% would not be.
-		fmt.Fprintf(f, "Account-wide limits: unavailable — %s\n\n", r.LimitsUnavailable)
+		fmt.Fprintf(f, "Claude account-wide limits: unavailable — %s\n\n", r.LimitsUnavailable)
 		return
 	}
-	fmt.Fprintf(f, "Account-wide limits (exact, all devices):\n")
+	fmt.Fprintf(f, "Claude account-wide limits (exact, all devices):\n")
 	fmt.Fprintf(f, "  5-hour  %s  %s\n", gauge(r.Limits.FiveHour.Utilization), resetIn(r.Limits.FiveHour.ResetsAt))
 	fmt.Fprintf(f, "  7-day   %s  %s\n", gauge(r.Limits.SevenDay.Utilization), resetIn(r.Limits.SevenDay.ResetsAt))
 	for _, s := range r.Limits.Scoped {

@@ -21,13 +21,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/api"
+	"github.com/verkyyi/ccquota/internal/codex"
 	"github.com/verkyyi/ccquota/internal/identity"
+	"github.com/verkyyi/ccquota/internal/scan"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -46,6 +49,8 @@ const (
 
 // BudgetWindow is one rate-limit window, flattened for a scheduler.
 type BudgetWindow struct {
+	ID             string     `json:"id,omitempty"`
+	Minutes        int64      `json:"minutes,omitempty"`
 	Utilization    float64    `json:"utilization"`
 	ResetsAt       *time.Time `json:"resets_at,omitempty"`
 	PercentPerHour float64    `json:"percent_per_hour,omitempty"`
@@ -54,10 +59,13 @@ type BudgetWindow struct {
 
 // BudgetAccount is one subscription's headroom.
 type BudgetAccount struct {
-	AccountUUID string `json:"account_uuid"`
-	Label       string `json:"label,omitempty"`
-	Available   bool   `json:"available"`
-	Reason      string `json:"reason,omitempty"`
+	Source      string         `json:"source,omitempty"`
+	Windows     []BudgetWindow `json:"windows,omitempty"`
+	Blocked     bool           `json:"blocked,omitempty"`
+	AccountUUID string         `json:"account_uuid"`
+	Label       string         `json:"label,omitempty"`
+	Available   bool           `json:"available"`
+	Reason      string         `json:"reason,omitempty"`
 	// HeadroomPct is 100 minus the FULLER of the two windows. A subscription is
 	// as constrained as its tightest limit, so the five-hour window being calm
 	// says nothing if the weekly one is nearly spent.
@@ -68,6 +76,7 @@ type BudgetAccount struct {
 
 // BudgetReport is the whole answer.
 type BudgetReport struct {
+	Source     string          `json:"source,omitempty"`
 	Verdict    string          `json:"verdict"` // go | hold | unknown
 	Reason     string          `json:"reason"`
 	CeilingPct float64         `json:"ceiling_pct"`
@@ -89,6 +98,8 @@ func runBudget(args []string) error {
 			"one work started here will spend. Headroom on a subscription this\n"+
 			"machine cannot reach is not headroom")
 	home := fs.String("home", "", "Claude Code home directory (default: your home)")
+	source := fs.String("source", "claude", "usage source: claude or codex")
+	codexHome := fs.String("codex-home", "", "Codex profile directory (default: CODEX_HOME or <home>/.codex)")
 	ceiling := fs.Float64("ceiling", 90, "hold at or above this utilization, in percent")
 	gate := fs.Bool("gate", false, "exit 0 to proceed, 3 to hold; reason on stderr")
 	asJSON := fs.Bool("json", false, "print the full report as JSON")
@@ -113,7 +124,10 @@ Flags:
 		return err
 	}
 
-	rep := budget(*hub, *token, *account, *home, *ceiling, *timeout)
+	if *source != "claude" && *source != "codex" {
+		return fmt.Errorf("source must be claude or codex")
+	}
+	rep := budgetSource(*hub, *token, *account, *home, *source, *codexHome, *ceiling, *timeout)
 
 	switch {
 	case *asJSON:
@@ -145,7 +159,11 @@ Flags:
 // verdict of "unknown" carrying its own reason, because a scheduler calling
 // this on a timer needs an answer, not an exception.
 func budget(hub, token, account, home string, ceiling float64, timeout time.Duration) BudgetReport {
-	rep := BudgetReport{CeilingPct: ceiling, Disclaimer: budgetDisclaimer, Scope: account}
+	return budgetSource(hub, token, account, home, "", "", ceiling, timeout)
+}
+
+func budgetSource(hub, token, account, home, source, codexHome string, ceiling float64, timeout time.Duration) BudgetReport {
+	rep := BudgetReport{CeilingPct: ceiling, Disclaimer: budgetDisclaimer, Scope: account, Source: source}
 
 	if hub == "" {
 		rep.Verdict, rep.Reason = verdictUnknown,
@@ -162,18 +180,28 @@ func budget(hub, token, account, home string, ceiling float64, timeout time.Dura
 			rep.Verdict, rep.Reason = verdictUnknown, "cannot locate a home directory: "+err.Error()
 			return rep
 		}
-		id, err := identity.Detect(h)
-		if err != nil {
-			rep.Verdict, rep.Reason = verdictUnknown,
-				"this machine has no readable Claude Code login, so there is no default "+
-					"subscription to judge; pass --account: "+err.Error()
-			return rep
+		if source == "codex" {
+			auth, err := codex.ReadAuth(scan.CodexHome(h, codexHome))
+			if err != nil || auth == nil || auth.Identity.AccountUUID == "" {
+				rep.Verdict = verdictUnknown
+				rep.Reason = "no readable Codex subscription login; pass --account for an enrolled account"
+				return rep
+			}
+			account = auth.Identity.AccountUUID
+		} else {
+			id, err := identity.Detect(h)
+			if err != nil {
+				rep.Verdict, rep.Reason = verdictUnknown,
+					"this machine has no readable Claude Code login, so there is no default "+
+						"subscription to judge; pass --account: "+err.Error()
+				return rep
+			}
+			account = id.AccountUUID
 		}
-		account = id.AccountUUID
 		rep.Scope = account
 	}
 
-	across, err := fetchHubLimits(hub, token, account, timeout)
+	across, err := fetchHubLimits(hub, token, account, timeout, source)
 	if err != nil {
 		rep.Verdict, rep.Reason = verdictUnknown, "hub unreachable: "+err.Error()
 		return rep
@@ -240,9 +268,13 @@ func (a BudgetAccount) name() string {
 }
 
 // fetchHubLimits reads /v1/limits and flattens it. account may be a uuid or "all".
-func fetchHubLimits(hub, token, account string, timeout time.Duration) ([]BudgetAccount, error) {
-	url := strings.TrimRight(hub, "/") + "/v1/limits?account=" + account
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func fetchHubLimits(hub, token, account string, timeout time.Duration, sources ...string) ([]BudgetAccount, error) {
+	q := url.Values{"account": {account}}
+	if len(sources) > 0 && sources[0] != "" {
+		q.Set("source", sources[0])
+	}
+	address := strings.TrimRight(hub, "/") + "/v1/limits?" + q.Encode()
+	req, err := http.NewRequest(http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -327,10 +359,33 @@ func flatten(uuid, label string, v *api.LimitsView) BudgetAccount {
 		return a
 	}
 	a.Available, a.Reason = v.Available, v.Reason
+	a.Source = v.Source
 	if !v.Available {
 		return a
 	}
 	used := 0.0
+	if v.Source == "codex" {
+		if v.StaleSeconds > 600 {
+			a.Available = false
+			a.Reason = "quota observation is stale"
+			return a
+		}
+		for _, w := range v.Windows {
+			if w.ResetsAt != nil && !w.ResetsAt.After(time.Now()) {
+				continue
+			}
+			a.Windows = append(a.Windows, BudgetWindow{ID: w.ID, Minutes: w.Minutes, Utilization: w.Utilization, ResetsAt: w.ResetsAt, PercentPerHour: w.Burn.PercentPerHour, ExhaustedAt: w.Burn.ExhaustedAt})
+			used = max(used, w.Utilization)
+		}
+		a.Blocked = v.Blocked
+		if v.Blocked {
+			used = 100
+		} else if len(a.Windows) == 0 {
+			a.Available = false
+			a.Reason = "no valid quota window; credits alone do not establish headroom"
+			return a
+		}
+	}
 	if v.FiveHour != nil {
 		a.FiveHour = &BudgetWindow{
 			Utilization: v.FiveHour.Utilization, ResetsAt: v.FiveHour.ResetsAt,
@@ -368,6 +423,9 @@ func printBudget(rep BudgetReport) {
 		}
 		if a.SevenDay != nil {
 			fmt.Printf("   7d %.1f%%", a.SevenDay.Utilization)
+		}
+		for _, w := range a.Windows {
+			fmt.Printf("   %s (%dm) %.1f%%", w.ID, w.Minutes, w.Utilization)
 		}
 		fmt.Println()
 	}

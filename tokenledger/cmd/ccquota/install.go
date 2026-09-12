@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"os/user"
+	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // printServiceUnit emits a service definition for the running platform.
@@ -12,7 +15,7 @@ import (
 // It prints rather than installs. Writing to /etc or ~/Library on a machine
 // the operator is only trying out is presumptuous, and printing makes the unit
 // reviewable before it runs — including the fact that it carries a token.
-func printServiceUnit(hub, stateDir string) error {
+func printServiceUnit(hub, stateDir, sources, codexHome, codexHomes, codexBinary, userHome string, autoRefresh bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "ccquota"
@@ -25,6 +28,14 @@ func printServiceUnit(hub, stateDir string) error {
 		uname = u.Username
 	}
 
+	writableProfiles := ""
+	if autoRefresh {
+		for _, path := range append([]string{codexHome, filepath.Join(userHome, ".codex-accounts")}, strings.Split(codexHomes, ",")...) {
+			if path = strings.TrimSpace(path); path != "" {
+				writableProfiles += " \"-" + systemdEnv(path) + "\""
+			}
+		}
+	}
 	switch runtime.GOOS {
 	case "linux":
 		fmt.Printf(`# Save as /etc/systemd/system/ccquota-agent.service, then:
@@ -36,7 +47,7 @@ func printServiceUnit(hub, stateDir string) error {
 #   echo 'CCQUOTA_TOKEN=<token from ccquota enroll>' | sudo tee /etc/ccquota.env
 
 [Unit]
-Description=ccquota agent (Claude Code usage collector)
+Description=ccquota agent (Claude Code and Codex usage collector)
 After=network-online.target
 Wants=network-online.target
 
@@ -44,21 +55,26 @@ Wants=network-online.target
 Type=simple
 User=%s
 Environment=CCQUOTA_HUB_URL=%s
+Environment="CCQUOTA_SOURCES=%s"
+Environment="CODEX_HOME=%s"
+Environment="CCQUOTA_CODEX_HOMES=%s"
+Environment="CCQUOTA_CODEX_BINARY=%s"
 EnvironmentFile=/etc/ccquota.env
-ExecStart=%s agent --state %s
+ExecStart=%s agent --state %s --codex-auto-refresh=%t
 Restart=always
 RestartSec=30
 
-# The agent only ever reads: transcripts, ~/.claude.json, the credential file.
+# Claude credentials are read-only. Codex maintenance writes its profile homes.
+# Add any separately registered Codex homes to ReadWritePaths.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%s
+ReadWritePaths=%s%s
 
 [Install]
 WantedBy=multi-user.target
-`, uname, hub, exe, stateDir, stateDir)
+`, uname, hub, sources, strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`).Replace(codexHome), systemdEnv(codexHomes), systemdEnv(codexBinary), exe, stateDir, autoRefresh, stateDir, writableProfiles)
 
 	case "darwin":
 		fmt.Printf(`<!-- Save as ~/Library/LaunchAgents/com.ccquota.agent.plist, then:
@@ -79,10 +95,15 @@ WantedBy=multi-user.target
     <string>agent</string>
     <string>--state</string>
     <string>%s</string>
+    <string>--codex-auto-refresh=%t</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>CCQUOTA_HUB_URL</key><string>%s</string>
+    <key>CCQUOTA_SOURCES</key><string>%s</string>
+    <key>CODEX_HOME</key><string>%s</string>
+    <key>CCQUOTA_CODEX_HOMES</key><string>%s</string>
+    <key>CCQUOTA_CODEX_BINARY</key><string>%s</string>
     <key>CCQUOTA_TOKEN</key><string>REPLACE_WITH_TOKEN</string>
   </dict>
   <key>RunAtLoad</key><true/>
@@ -90,26 +111,34 @@ WantedBy=multi-user.target
   <key>StandardErrorPath</key><string>%s/agent.log</string>
 </dict>
 </plist>
-`, exe, stateDir, hub, stateDir)
+`, html.EscapeString(exe), html.EscapeString(stateDir), autoRefresh, html.EscapeString(hub), sources, html.EscapeString(codexHome), html.EscapeString(codexHomes), html.EscapeString(codexBinary), html.EscapeString(stateDir))
 
 	case "windows":
 		fmt.Printf(`# Run in an elevated PowerShell. A Scheduled Task rather than a Windows
 # Service: the agent must run as the interactive user to read that user's
 # %%USERPROFILE%%\.claude\.credentials.json.
 
-$action  = New-ScheduledTaskAction -Execute "%s" -Argument "agent --state %s"
+$action  = New-ScheduledTaskAction -Execute "%s" -Argument "agent --state %s --codex-auto-refresh=%t"
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $set     = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 
 [Environment]::SetEnvironmentVariable("CCQUOTA_HUB_URL", "%s", "User")
+[Environment]::SetEnvironmentVariable("CCQUOTA_SOURCES", "%s", "User")
+[Environment]::SetEnvironmentVariable("CODEX_HOME", '%s', "User")
+[Environment]::SetEnvironmentVariable("CCQUOTA_CODEX_HOMES", '%s', "User")
+[Environment]::SetEnvironmentVariable("CCQUOTA_CODEX_BINARY", '%s', "User")
 [Environment]::SetEnvironmentVariable("CCQUOTA_TOKEN", "REPLACE_WITH_TOKEN", "User")
 
 Register-ScheduledTask -TaskName "ccquota-agent" -Action $action -Trigger $trigger -Settings $set
-`, exe, stateDir, hub)
+`, exe, stateDir, autoRefresh, hub, sources, strings.ReplaceAll(codexHome, "'", "''"), strings.ReplaceAll(codexHomes, "'", "''"), strings.ReplaceAll(codexBinary, "'", "''"))
 
 	default:
 		return fmt.Errorf("no service template for %s; run `ccquota agent` under your own supervisor, "+
 			"or `ccquota agent --once` from cron", runtime.GOOS)
 	}
 	return nil
+}
+
+func systemdEnv(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`).Replace(s)
 }
