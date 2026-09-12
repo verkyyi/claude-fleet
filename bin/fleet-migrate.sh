@@ -49,7 +49,15 @@
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with no
 # Claude process, raw scratch windows whose cwd is FLEET_MAIN without a registry
-# session id. Windows are moved ONE AT A TIME (each is a cold `claude` boot).
+# session id — and a window with NO MOVE AVAILABLE (issue #567): one already on
+# the active account, or any window while the active account is itself benched.
+# When every pool account is benched `fleet-account.sh active` keeps the current
+# one (the right answer for a fresh spawn — there is no better), so an
+# `--account X` / `--limited` fan-out would close N sessions and cold-boot each
+# one (~25 s) straight back onto X — or onto another wall — still walled. Such a
+# window is reported as a skip; only a `--model` move is exempt (it is a
+# same-account relaunch on purpose, #524).
+# Windows are moved ONE AT A TIME (each is a cold `claude` boot).
 # Exit 0 (per-window outcomes are printed); 2 = usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -129,6 +137,15 @@ migrate_eligible() {
   if [ "$raw" = 1 ] && [ -n "$main" ] && [ "${cwd%/}" = "${main%/}" ] && [ -z "$sid" ]; then return 1; fi
   return 0
 }
+# migrate_noop <label> <active> <model> <active-benched> → 0 iff there is no move
+# to make (issue #567): the target is the account the window already runs on
+# (target == source is "no move available", never a move), or the target is
+# benched itself — `active` names a benched account only when NONE is eligible,
+# and a cold boot onto another wall is no better than staying on this one. A
+# --model relaunch is exempt (same account, other model — the #524 per-model cap
+# fallback); no pool at all (empty active) is left alone so a pool-less install
+# keeps its explicit-restart behaviour.
+migrate_noop() { [ -z "$3" ] && [ -n "$2" ] && { [ "$1" = "$2" ] || [ "${4:-0}" = 1 ]; }; }
 # migrate_selected <mode> <label> <state> <active> <benched> <wanted> → 0 iff selected
 migrate_selected() {
   local mode="$1" label="$2" state="$3" active="$4" benched="$5" wanted="$6"
@@ -157,6 +174,11 @@ migrate_one() {
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "${FLEET_MAIN:-}" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
+  fi
+  if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
+    if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
+    else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi
+    skipped=$((skipped+1)); return 0
   fi
   [ -n "$sid" ] || { say "  – $name ($wid): no session id (registry + transcript lookup failed) — skipped"; skipped=$((skipped+1)); return 0; }
   local nudge="$NUDGE"
@@ -303,6 +325,7 @@ migrate_main() {
     [ -n "$s" ] && SHA2LABEL="${SHA2LABEL}${s}"$'\t'"${l}"$'\n'
   done
   ACTIVE=$("$BIN/fleet-account.sh" active 2>/dev/null)
+  ACTIVE_BENCHED=0; [ -n "$ACTIVE" ] && acct_benched "$ACTIVE" && ACTIVE_BENCHED=1   # ⇒ no account is eligible (#567)
 
   moved=0; skipped=0; REPORT=""
   # --- whoami -----------------------------------------------------------------------
