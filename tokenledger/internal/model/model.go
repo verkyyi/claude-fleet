@@ -7,13 +7,26 @@ package model
 
 import "time"
 
-// UsageEvent is one billable assistant turn, parsed from a single line of a
-// Claude Code transcript.
+const (
+	SourceClaude = "claude"
+	SourceCodex  = "codex"
+)
+
+// UsageSource preserves compatibility with agents and rows predating sources.
+func UsageSource(source string) string {
+	if source == "" {
+		return SourceClaude
+	}
+	return source
+}
+
+// UsageEvent is one model request, normalized from a source's transcript.
 //
-// The token counters come from the transcript's top-level `message.usage`
-// object. They are ALREADY the total for the turn — `usage.iterations[]` is a
-// per-iteration breakdown of the same spend and must never be added on top.
+// Input and cache counters are disjoint after normalization. Thinking is a
+// subset of output and must never be added to TotalTokens. Source adapters
+// discard repeated notifications and overlapping breakdowns.
 type UsageEvent struct {
+	Source      string    `json:"source"`
 	AccountUUID string    `json:"account_uuid"`
 	EndpointID  string    `json:"endpoint_id"`
 	SessionID   string    `json:"session_id"`
@@ -35,7 +48,11 @@ type UsageEvent struct {
 	// CostUSD is notional: what this turn would have cost at API rates. It is
 	// nil for models absent from the pricing table — never 0, because 0 is a
 	// claim and nil is an admission.
-	CostUSD *float64 `json:"cost_usd"`
+	CostUSD *float64      `json:"cost_usd"`
+	Details *UsageDetails `json:"details,omitempty"`
+	// Replayed prefix after a parser upgrade: enrich only, never resurrect a
+	// request the hub may already have pruned from the raw ledger.
+	EnrichOnly bool `json:"enrich_only,omitempty"`
 
 	CWD         string `json:"cwd"`
 	GitBranch   string `json:"git_branch"`
@@ -63,6 +80,7 @@ func (e UsageEvent) TotalTokens() int64 {
 
 // Identity is who and where a batch of events came from.
 type Identity struct {
+	Source           string `json:"source"`
 	AccountUUID      string `json:"account_uuid"`
 	Email            string `json:"email"`
 	OrgUUID          string `json:"org_uuid"`
@@ -165,10 +183,13 @@ func (a Attribution) IsZero() bool { return a.isZero() }
 
 // Batch is the agent's push payload.
 type Batch struct {
-	AgentVersion string          `json:"agent_version"`
-	Identity     Identity        `json:"identity"`
-	Events       []UsageEvent    `json:"events"`
-	Limits       *LimitsSnapshot `json:"limits,omitempty"`
+	Quotas       []QuotaSnapshot  `json:"quotas,omitempty"`
+	Collector    *CollectorStatus `json:"collector,omitempty"`
+	AccountUsage *AccountUsage    `json:"account_usage,omitempty"`
+	AgentVersion string           `json:"agent_version"`
+	Identity     Identity         `json:"identity"`
+	Events       []UsageEvent     `json:"events"`
+	Limits       *LimitsSnapshot  `json:"limits,omitempty"`
 
 	// Attribution travels on the first chunk of a scan, like Limits.
 	Attribution *Attribution `json:"attribution,omitempty"`

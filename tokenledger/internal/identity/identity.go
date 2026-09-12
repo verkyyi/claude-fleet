@@ -10,6 +10,7 @@ package identity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -38,6 +39,8 @@ type claudeConfig struct {
 
 var semverish = regexp.MustCompile(`^\d+\.\d+\.\d+`)
 
+var ErrNoAccount = errors.New("no Claude account is logged in")
+
 // Detect builds an Identity from a Claude Code home directory (the parent of
 // .claude, normally $HOME).
 //
@@ -56,7 +59,7 @@ func Detect(home string) (*model.Identity, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if cfg.OAuthAccount == nil || cfg.OAuthAccount.AccountUUID == "" {
-		return nil, fmt.Errorf("%s has no oauthAccount.accountUuid: is Claude Code logged in?", path)
+		return nil, fmt.Errorf("%s has no oauthAccount.accountUuid: %w", path, ErrNoAccount)
 	}
 
 	hostname, err := os.Hostname()
@@ -65,6 +68,7 @@ func Detect(home string) (*model.Identity, error) {
 	}
 
 	id := &model.Identity{
+		Source:      model.SourceClaude,
 		AccountUUID: cfg.OAuthAccount.AccountUUID,
 		Email:       cfg.OAuthAccount.EmailAddress,
 		OrgUUID:     cfg.OAuthAccount.OrganizationUUID,
@@ -91,6 +95,23 @@ func Detect(home string) (*model.Identity, error) {
 		id.CCVersion = cfg.LastReleaseNotesSeen
 	}
 	return id, nil
+}
+
+// Local identifies the collector without requiring a Claude login.
+func Local() *model.Identity {
+	hostname, _ := os.Hostname()
+	return &model.Identity{Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH, OSUser: osUser()}
+}
+
+// Codex transcripts do not attest to an OpenAI account. Keep their usage in
+// an explicitly unassigned pool rather than attributing it to a Claude login
+// or today's Codex credentials (which may differ from historical sessions).
+func Codex() *model.Identity {
+	id := Local()
+	id.Source = model.SourceCodex
+	id.AccountUUID = "codex:local"
+	id.DisplayName = "Codex (local usage)"
+	return id
 }
 
 // ProjectsDir is where Claude Code writes transcripts.
