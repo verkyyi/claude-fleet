@@ -193,6 +193,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex worker model @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_CODEX_MODEL=""
 
+# Pre-answer Claude Code's "trust this folder?" dialog for THIS fleet's checkout at
+# every spawn (issue #563). Claude Code keys trust on the resolved project root — a
+# worktree resolves to its MAIN checkout — so when FLEET_MAIN is not trusted in
+# ~/.claude.json every dispatched worker parks on the dialog with nobody to answer
+# (macmini, 2026-09-12: 7+ min, slot "filled", nothing running). The launcher
+# (bin/fleet-claude.sh → bin/fleet-trust.sh) writes
+# projects[FLEET_MAIN].hasTrustDialogAccepted=true (and the worktree's) — SCOPED to
+# the fleet's own checkout, atomic (temp + rename, race-checked against a claude
+# process saving at the same instant), never a --dangerously-* flag. 0 turns it
+# off; then trust the base once by hand (`claude` in $FLEET_MAIN → 1/Yes) or run
+# `sh bin/fleet-trust.sh grant --main $FLEET_MAIN`. fleet-doctor.sh's `trust` line
+# and fleet-up warn on an untrusted base; the dispatcher marks a parked pane `needs`.
+# @label=Pre-trust checkout at spawn @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_PRETRUST=1
+
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
 # OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
 # fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps

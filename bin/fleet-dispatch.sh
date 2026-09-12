@@ -156,6 +156,38 @@ lease_release() { # $1 = lease path, $2 = my holder id
   return 0
 }
 
+# --- liveness: a spawned pane parked on Claude Code's trust dialog (issue #563) ---
+# A worker whose checkout is not trusted in ~/.claude.json stops at "Quick safety
+# check: Is this a project you created or one you trust? ❯ 1. Yes, I trust this
+# folder / 2. No, exit" — and with nobody in the pane it stays there while this
+# dispatcher counts the slot as filled (macmini, 2026-09-12: 7+ minutes, no
+# /fleet-claim, no comment, no branch, nothing in this log). The launcher now
+# pre-trusts at spawn, so this is the backstop that makes a recurrence VISIBLE:
+# once per window, log it + stamp `needs` (red on the dash, with the fix in the
+# log). Discriminator against a WORKING session whose screen merely contains the
+# words (a worker editing this very file): a parked pane has never run a hook, so
+# its @claude_state is EMPTY — a live session always carries working/done/needs.
+# The slot is deliberately NOT freed: freeing it would spawn another parked worker.
+trust_sweep() { # $1 = session
+  local sess="$1" sock wid iss wname
+  sock=$(fleet_socket "$sess")
+  # Filter in awk, not `read`: tab is IFS whitespace, so `read` COLLAPSES the empty
+  # fields this filter is about (`@3<tab><tab><tab><tab>plan` would read as issue
+  # "plan"). awk -F'\t' keeps them. Survivors have a non-empty @issue and the name
+  # last, so the shell read below is safe.
+  tmux -L "$sock" list-windows -t "$sess" -F '#{window_id}	#{@issue}	#{@claude_state}	#{@trust_stuck}	#{window_name}' 2>/dev/null \
+  | awk -F'\t' '$2 != "" && $3 == "" && $4 == "" { print $1 "\t" $2 "\t" $5 }' \
+  | while IFS=$(printf '\t') read -r wid iss wname; do
+      # issue-bound (col 2), no hook ever fired (col 3 empty), not yet reported (col 4)
+      tmux -L "$sock" capture-pane -p -t "$wid" 2>/dev/null | grep -q 'trust this folder' || continue
+      log "$sess: #$iss ($wname, $wid) is PARKED at Claude Code's \"trust this folder?\" dialog — the slot is filled but nothing runs; fix: sh $BIN/fleet-trust.sh grant --main '${FLEET_MAIN:-<FLEET_MAIN>}' then answer 1 in the pane (or kill + respawn); marking needs"
+      tmux -L "$sock" set-window-option -t "$wid" @claude_state needs 2>/dev/null
+      tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$(date +%s)" 2>/dev/null
+      tmux -L "$sock" set-window-option -t "$wid" @trust_stuck 1 2>/dev/null
+    done
+  return 0
+}
+
 # --- dispatch ONE fleet. Runs in a subshell so its per-fleet conf never leaks. --
 dispatch_fleet() { (
   sess="$1"
@@ -164,6 +196,10 @@ dispatch_fleet() { (
     log "$sess: autofill off (FLEET_AUTOFILL≠1) — skip"
     exit 0
   fi
+
+  # An autofill fleet is by definition unattended — report a parked spawn before
+  # counting slots (it stays counted; see trust_sweep).
+  [ "$DRY" = 1 ] || trust_sweep "$sess"
 
   repo="${FLEET_REPO:-}"
   _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && repo="$_r"

@@ -50,7 +50,15 @@ assumes — this doc is only the install/uninstall procedure.
    (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
    a soft dep (without it the dash spinner ticks at whole-second granularity).
    If `gh` is not authed, the backlog/PR features silently show nothing — tell
-   the user.
+   the user. Its `trust` line checks, per configured fleet, that `FLEET_MAIN` is
+   trusted in `~/.claude.json` (issue #563): Claude Code keys its "trust this
+   folder?" dialog on the resolved project root — a worktree resolves to its main
+   checkout — so an untrusted base parks every unattended worker on that dialog.
+   The spawn launcher pre-trusts the fleet's own checkout automatically
+   (`bin/fleet-claude.sh` → `bin/fleet-trust.sh`, scoped to `FLEET_MAIN` + its
+   worktrees, atomic; `FLEET_PRETRUST=0` opts out); the doctor/`fleet-up` warning
+   is for an install that predates it, with the one-line fix
+   (`sh bin/fleet-trust.sh grant --main <FLEET_MAIN>`).
 
 2. **Copy to the install dir.** Canonical: `~/.claude/fleet/`. Copy `bin/`,
    `conf/`, `shell/`, `fleet.conf.example` there; `mkdir -p ~/.claude/fleet/logs`;

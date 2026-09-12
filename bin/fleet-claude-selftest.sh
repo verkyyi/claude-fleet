@@ -235,4 +235,67 @@ argv="$(LIMITED_MODEL=opus LIMITED_UNTIL=$far run)"
 has "$argv" "--model opus" || fail "fallback == FLEET_MODEL must be a no-op, not an empty model" "$argv"
 ok "a cap on the fallback model itself leaves the launch alone"
 
-printf 'selftest OK: %s checks — the launcher reads the per-fleet conf and honours FLEET_MCP_CONFIG (issues #472, #473, #476)\n' "$pass"
+# --- #563: the launcher pre-trusts THIS fleet's checkout before exec ------------
+# Claude Code parks an untrusted project on "trust this folder?" — with nobody in
+# the pane, for good. The launcher (the one door every spawn walks through) hands
+# FLEET_MAIN + its cwd to bin/fleet-trust.sh, which scopes + writes atomically (its
+# own selftest covers that); here we pin the CALL: made by default with the fleet's
+# FLEET_MAIN and the launch cwd, skipped under FLEET_PRETRUST=0 or with no
+# FLEET_MAIN, and its stderr note names what it trusted. A fake fleet-trust.sh
+# records its argv; the real one never runs (no ~/.claude.json is touched).
+TRUST_LOG="$WORK/trustlog"
+cat > "$WORK/bin/fleet-trust.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TRUST_LOG"
+case "\$1" in grant) printf '%s\n' "\$3" ;; file) echo /fake/home/.claude.json ;; esac
+exit 0
+EOF
+chmod +x "$WORK/bin/fleet-trust.sh"
+runt() {   # like run() with no args, but also scrubs the trust knobs from the env and keeps stderr
+  rm -f "$WORK/argv" "$TRUST_LOG"
+  ( unset FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_MCP_CONFIG CLAUDE_CODE_SUBAGENT_MODEL FLEET_MODEL_FALLBACK FLEET_MAIN FLEET_PRETRUST
+    bash "$WORK/bin/fleet-claude.sh" ) >/dev/null 2>"$WORK/err"
+}
+printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
+mkdir -p "$WORK/main"
+printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+runt
+[ -f "$TRUST_LOG" ] || fail "#563 the launcher did not call fleet-trust.sh at all" "$(cat "$WORK/err")"
+grep -qxF "grant --main $WORK/main $PWD" "$TRUST_LOG" || fail "#563 pre-trust must be 'grant --main <FLEET_MAIN> <cwd>'" "$(cat "$TRUST_LOG")"
+grep -q "pre-trusted $WORK/main in /fake/home/.claude.json" "$WORK/err" || fail "#563 a granted path must be announced on stderr" "$(cat "$WORK/err")"
+[ -s "$WORK/argv" ] || fail "#563 claude must still be exec'd after pre-trust" "$(cat "$WORK/err")"
+ok "pre-trust: grant --main <FLEET_MAIN> <cwd> before exec, announced in the pane (#563)"
+
+printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\nFLEET_PRETRUST=0\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+runt
+[ ! -f "$TRUST_LOG" ] || fail "#563 FLEET_PRETRUST=0 must skip the pre-trust call" "$(cat "$TRUST_LOG")"
+[ -s "$WORK/argv" ] || fail "#563 claude must still launch with pre-trust off"
+ok "FLEET_PRETRUST=0 opts the fleet out (claude still launches)"
+
+printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"          # no FLEET_MAIN anywhere
+runt
+[ ! -f "$TRUST_LOG" ] || fail "#563 no FLEET_MAIN → nothing to trust, no call" "$(cat "$TRUST_LOG")"
+ok "no FLEET_MAIN resolvable → pre-trust is skipped quietly"
+
+# a refused cwd (exit 3, e.g. a plain launch from ~) is silent; a real write failure is shown
+cat > "$WORK/bin/fleet-trust.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TRUST_LOG"
+case "\$1" in grant) echo "fleet-trust: refusing \$4: not a worktree" >&2; exit 3 ;; file) echo /fake/home/.claude.json ;; esac
+exit 0
+EOF
+printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+runt
+grep -q "refusing" "$WORK/err" && fail "#563 a refused cwd (exit 3) must be silent in the pane" "$(cat "$WORK/err")"
+[ -s "$WORK/argv" ] || fail "#563 a refused cwd must not block the launch"
+cat > "$WORK/bin/fleet-trust.sh" <<EOF
+#!/bin/sh
+case "\$1" in grant) echo "fleet-trust: /fake/home/.claude.json is not valid JSON — leaving it alone" >&2; exit 5 ;; file) echo /fake/home/.claude.json ;; esac
+exit 0
+EOF
+runt
+grep -q "not valid JSON" "$WORK/err" || fail "#563 a real pre-trust failure must be shown in the pane" "$(cat "$WORK/err")"
+[ -s "$WORK/argv" ] || fail "#563 a pre-trust failure must not block the launch (claude is the authority)"
+ok "a refused cwd is silent, a real write failure is shown — and neither blocks the launch"
+
+printf 'selftest OK: %s checks — the launcher reads the per-fleet conf, honours FLEET_MCP_CONFIG, and pre-trusts the checkout (issues #472, #473, #476, #563)\n' "$pass"

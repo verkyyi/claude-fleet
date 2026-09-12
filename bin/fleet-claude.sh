@@ -74,6 +74,35 @@ case "$_fc_agent" in
 esac
 unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
+# --- project trust: pre-answer "trust this folder?" for THIS fleet's checkout ---
+# (issue #563). Claude Code keys trust on the resolved project root — a linked
+# worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
+# (`projects[<root>].hasTrustDialogAccepted`). When that entry is missing or
+# false for $FLEET_MAIN, EVERY spawned worker stops at "Quick safety check: Is this
+# a project you created or one you trust?" and, with nobody in the pane, sits
+# there for good — on 2026-09-12 two autofill-dispatched workers on the macmini did
+# exactly that for 7+ minutes while the dispatcher counted their slots as filled.
+# So the single door every spawn walks through writes the trust itself, scoped:
+# bin/fleet-trust.sh grants ONLY the base checkout and worktrees OF it (this cwd,
+# when it is one), atomically (temp + rename, compare-and-swap against a claude
+# process saving its own state at the same instant). Not a --dangerously-* flag:
+# the dialog stays per-directory; we answer it for our own directories only.
+# Best-effort: no python3 / no FLEET_MAIN / a cwd that is not ours → skip quietly;
+# claude is still the authority. FLEET_PRETRUST=0 opts a fleet out.
+if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -n "${FLEET_MAIN:-}" ] && [ -f "$BIN/fleet-trust.sh" ]; then
+  _fc_granted=$(sh "$BIN/fleet-trust.sh" grant --main "$FLEET_MAIN" "$PWD" 2>"${TMPDIR:-/tmp}/.fleet-trust.$$")
+  _fc_rc=$?
+  if [ -n "$_fc_granted" ]; then
+    printf 'fleet-claude: pre-trusted %s in %s (issue #563)\n' "$(printf '%s' "$_fc_granted" | tr '\n' ' ')" "$(sh "$BIN/fleet-trust.sh" file)" >&2
+  fi
+  # 3 = a refused path (a cwd outside this fleet's checkout — expected for a plain
+  # launch from elsewhere), 2 = no python3: both silent. Anything else is a real
+  # write failure the pane should show before claude clears the screen.
+  case "$_fc_rc" in 0|2|3) : ;; *) cat "${TMPDIR:-/tmp}/.fleet-trust.$$" >&2 ;; esac
+  rm -f "${TMPDIR:-/tmp}/.fleet-trust.$$"
+  unset _fc_granted _fc_rc
+fi
+
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to
 # defer to the user's own `claude` default. Skipped if the caller already passed

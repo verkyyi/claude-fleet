@@ -151,5 +151,49 @@ grep -qxF 25 "$SPAWN_LOG" && fail "#25 lacks the autofill label (not opted in, #
 grep -qxF 30 "$SPAWN_LOG" && fail "#30 is assigned (== claimed elsewhere, #258) — must NOT spawn"
 grep -qxF 35 "$SPAWN_LOG" && fail "#35 is blocked (autofill-excluded even with the label) — must NOT spawn"
 
-printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision\n' "$got"
+# --- #563: a worker PARKED on Claude Code's trust dialog is reported, once, as `needs` ---
+# The fake tmux now also answers the sweep's list-windows form (matched FIRST — its
+# -F string contains `@issue` too) and capture-pane per window. Four windows show
+# the dialog text on screen; only @1 qualifies: issue-bound, @claude_state EMPTY
+# (no hook ever fired — the parked signature), not yet reported. @2 is a live
+# worker whose screen merely contains the words (a worker editing the fix itself),
+# @3 is a panel, @4 was already reported last tick.
+TMUX_LOG="$WORK/tmuxlog"; : > "$TMUX_LOG"
+cat > "$WORK/fakepath/tmux" <<FAKE
+#!/bin/bash
+args="\$*"
+case "\$args" in
+  *set-window-option*) printf '%s\n' "\$args" >> "$TMUX_LOG" ;;   # first: its argv names @trust_stuck too
+  *trust_stuck*)  printf '%b' "@1\t10\t\t\tissue-10\n@2\t15\tworking\t\tissue-15\n@3\t\t\t\tplan\n@4\t20\t\t1\tissue-20\n" ;;
+  *capture-pane*) printf ' Accessing workspace:\n /Users/x/proj-issue-N\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n' ;;
+  *'@issue'*)     printf '%b' "\tplan\n\tdash\n\tbacklog\n10\tissue-10\n\tissue-15\n" ;;
+  *session_name*) printf 's1 plan\ns1 dash\ns1 backlog\ns1 issue-10\ns1 issue-15\n' ;;
+  *window_name*)  printf 'plan\ndash\nbacklog\nissue-10\nissue-15\n' ;;
+  *)              : ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/fakepath/tmux"
+: > "$SPAWN_LOG"; LOG2="$WORK/log2"
+PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+  bash "$WORK/bin/fleet-dispatch.sh" s1 >/dev/null 2>"$LOG2" || { printf 'selftest: dispatcher (sweep run) exited non-zero\n' >&2; cat "$LOG2" >&2; exit 1; }
+fail2() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- log ---\n' >&2; cat "$LOG2" >&2; printf -- '--- tmux ---\n' >&2; cat "$TMUX_LOG" >&2; exit 1; }
+[ "$(grep -c 'PARKED at Claude Code' "$LOG2")" = 1 ] || fail2 "#563 exactly ONE parked worker must be logged"
+grep -q '#10 (issue-10, @1) is PARKED' "$LOG2" || fail2 "#563 the log line must name the issue, window and id"
+grep -q 'fleet-trust.sh grant --main' "$LOG2" || fail2 "#563 the log line must carry the fix"
+grep -q 'set-window-option -t @1 @claude_state needs' "$TMUX_LOG" || fail2 "#563 the parked window must be stamped needs (red on the dash)"
+grep -q 'set-window-option -t @1 @trust_stuck 1' "$TMUX_LOG" || fail2 "#563 the parked window must be marked reported (once-only)"
+grep -q -- '-L s1 set-window-option -t @1' "$TMUX_LOG" || fail2 "#563 stamps must go to THIS fleet's socket (-L <session>)"
+grep -q -- '-t @2 ' "$TMUX_LOG" && fail2 "#563 a LIVE worker (@claude_state set) must never be flagged for words on its screen"
+grep -q -- '-t @3 ' "$TMUX_LOG" && fail2 "#563 a panel (no @issue) must never be flagged"
+grep -q -- '-t @4 ' "$TMUX_LOG" && fail2 "#563 an already-reported window must not be re-stamped"
+grep -qxF 20 "$SPAWN_LOG" || fail2 "#563 the sweep must not change what gets spawned (slot stays counted, dispatch proceeds)"
+# --dry-run never stamps anything
+: > "$TMUX_LOG"
+PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+  bash "$WORK/bin/fleet-dispatch.sh" --dry-run s1 >/dev/null 2>"$WORK/log3"
+grep -q 'PARKED' "$WORK/log3" && fail2 "#563 --dry-run must not sweep"
+[ -s "$TMUX_LOG" ] && fail2 "#563 --dry-run must not stamp windows"
+
+printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563)\n' "$got"
 exit 0
