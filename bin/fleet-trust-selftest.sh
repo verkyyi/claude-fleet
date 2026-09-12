@@ -69,7 +69,9 @@ for k in sys.argv[2:]:
     if d is None: break
 print(json.dumps(d))' "$CFG" "$@"; }
 valid_json() { python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null; }
-mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# portable: BSD `stat -f` is a FORMAT flag, GNU `stat -f` means "file system" and
+# succeeds with the wrong answer — so neither shape can be the other's fallback.
+mode_of() { python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
 
 # --- A. check verdicts + exit codes --------------------------------------------
 write_cfg
