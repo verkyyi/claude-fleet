@@ -11,6 +11,9 @@
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
 #   ⌃o restore a landed session ·
+#   ⌃a flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
+#   written to the fleet's conf, so every spawn path follows; the prompt line
+#   reads `claude ▸ ` / `codex ▸ ` from the same conf, dash-agent-prompt.sh) ·
 #   Ctrl-R refresh now · Esc/q relaunch (it's always-on).
 #   Pruned in #289: ⌃g (bind window↔issue — backlog Enter owns spawning) and ⌃l
 #   (arm auto-merge — the worker lands its own PR now, #441; gh pr merge covers
@@ -89,7 +92,9 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # only fires on an EMPTY line (with text typed `?` is a character — see the `?`
 # bind), and the `? keys` token was never tappable. The operator chose to drop the
 # row outright rather than relocate its content, so:
-#   • the ghost text carries BOTH ↵ meanings (typed → named scratch, empty → jump);
+#   • the ghost text carried BOTH ↵ meanings (typed → named scratch, empty → jump)
+#     until #554 gave its second half to the `<agent>:` one-off hint — `↵ empty
+#     scratch · codex: prefix for a one-off`; empty-↵ = jump is the cheatsheet's;
 #   • the ＋new chip is gone with the row — ⌃n is the dash's only new-issue+worker
 #     path (the backlog popup, prefix b, keeps its own chip);
 #   • `?` stays bound (empty line → the cheatsheet, fleet-keys.sh --context dash).
@@ -101,7 +106,15 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # Typing never filters (--disabled); ↵ on an EMPTY line is still plain jump.
 # --no-separator + --info=hidden: the input costs ONE row, not two (iPad-height
 # panes), and the list runs straight into it.
-GHOST='type a name ↵ scratch · empty ↵ jumps'
+# The prompt label + ghost are NOT literals here (issue #554): the prompt carries
+# the fleet's default agent for a NEW session — `claude ▸ ` / `codex ▸ ` (codex in
+# the #547 row-tag colour) — and the ghost names the OTHER agent's `<agent>:`
+# one-off prefix. Both come from ONE helper, bin/dash-agent-prompt.sh (effective
+# FLEET_AGENT via fleet_load_conf), read at every launch here AND re-derived on
+# every reload tick (`load` / ⌃r → transform(… actions)), so a change from ANY
+# writer — ⌃a (dash-agent-toggle.sh), the prefix+c modal, a hand edit — shows on
+# the next tick without a relaunch. Same helper restores the label after a rename.
+AGENT_PROMPT="$BIN/dash-agent-prompt.sh"
 
 run_dash() {
   # reset the live⇄landed view so the landed peek doesn't stick across
@@ -135,14 +148,22 @@ run_dash() {
   # non-empty one → `put(?)`, i.e. the character goes into the task you're typing.
   # (dash-rename.sh still unbinds it outright for the length of a rename, where the
   # query is pre-filled and may be emptied mid-edit.)
+  # ⌃a is a transform (issue #554): dash-agent-toggle.sh flips FLEET_AGENT in the
+  # fleet's conf via the config-modal write path, toasts, and emits the
+  # change-prompt/change-ghost that relabels the line at once. `load`/⌃r re-derive
+  # the label from the conf each tick (a no-op emit when nothing changed; nothing at
+  # all while a rename owns the prompt line).
+  PROMPT_NOW=$(bash "$AGENT_PROMPT" prompt 2>/dev/null); [ -n "$PROMPT_NOW" ] || PROMPT_NOW='▸ '
+  GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ empty scratch'
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-sort \
     --layout=reverse-list --info=hidden --no-separator --border=none \
-    --prompt='▸ ' --ghost="$GHOST" \
+    --prompt="$PROMPT_NOW" --ghost="$GHOST_NOW" \
     "${PREVIEW[@]}" \
-    --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)" \
-    --bind "ctrl-r:reload(bash $ROWS)" \
+    --bind "load:reload-sync(sleep $REFRESH; sh $WAIT; bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
+    --bind "ctrl-r:reload(bash $ROWS)+transform(bash $AGENT_PROMPT actions)" \
+    --bind "ctrl-a:transform(bash $BIN/dash-agent-toggle.sh)" \
     --bind "?:transform:[ -n \"\$FZF_QUERY\" ] && echo 'put(?)' || echo 'execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context dash)'" \
     --bind "ctrl-n:execute(bash $BIN/dash-popup.sh -w 90% -h 12 -- bash $BIN/dash-issue-new.sh confirm --spawn)+reload(bash $ROWS)" \
     --bind "ctrl-s:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \

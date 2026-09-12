@@ -55,9 +55,19 @@ ok
 grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh.*--spawn' "$DASH" \
   || fail "dash: ⌃n bind lost — it is the dash's only new-issue+worker path since #536"
 ok
-# the ghost text must carry BOTH ↵ meanings (the hint line used to say `↵ jump`).
-grep -qF -- "GHOST='type a name ↵ scratch · empty ↵ jumps'" "$DASH" \
-  || fail "dash: the prompt-line ghost text must read 'type a name ↵ scratch · empty ↵ jumps' (#536; `name` since #534 — the typed text is the window name, no seed)"
+# the ghost text carries the ↵ hint (the hint line used to say `↵ jump`). Since
+# #554 it is DERIVED — bin/dash-agent-prompt.sh names the OTHER agent's one-off
+# prefix after the ↵ hint — so pin (a) that the dash takes it from the helper, not
+# a literal, and (b) the helper's claude-default wording, run from a sandboxed bin
+# (no ../fleet.conf, no conf estate) so a live install's FLEET_AGENT can't skew it.
+grep -qF -- '--ghost="$GHOST_NOW"' "$DASH" \
+  || fail "dash: the prompt-line ghost must come from dash-agent-prompt.sh (#554), not a literal"
+GW="$(mktemp -d "${TMPDIR:-/tmp}/chip-ghost.XXXXXX")" || fail "mktemp failed"
+mkdir -p "$GW/bin"; ln -s "$BIN/dash-agent-prompt.sh" "$GW/bin/"; ln -s "$BIN/fleet-lib.sh" "$GW/bin/"
+ghost="$(FLEET_SESSION=chipsess FLEET_CONF_DIR="$GW/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$GW" bash "$GW/bin/dash-agent-prompt.sh" ghost)"
+rm -rf "$GW"
+[ "$ghost" = '↵ empty scratch · codex: prefix for a one-off' ] \
+  || fail "dash: the prompt-line ghost text must read '↵ empty scratch · codex: prefix for a one-off' under a claude default (#536 ↵ hint; #554 one-off prefix) — got: $ghost"
 ok
 
 # --- BACKLOG: chip in the POPUP header + click-header drops the 'new' sentinel ---

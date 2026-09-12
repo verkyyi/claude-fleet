@@ -168,6 +168,9 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #            fleet's account files. Runs full-access (`--dangerously-bypass-
 #            approvals-and-sandbox`), the same posture as a bypassPermissions Claude
 #            worker: the hooks are the rails.
+# The dash prompt line shows the EFFECTIVE value — `claude ▸ ` / `codex ▸ ` — and
+# ⌃a in the dash flips it here, in this fleet's conf (issue #554), so every spawn
+# path follows and the dash shows the truth.
 # Per-spawn override: `--agent codex|claude` on dash-issue-session.sh /
 # dash-raw-session.sh, or a `codex:` / `claude:` prefix on the dash prompt line
 # (`codex: fix parser` → a Codex scratch named "fix parser"). A `--resume` /
