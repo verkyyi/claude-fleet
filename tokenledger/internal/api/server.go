@@ -47,6 +47,10 @@ type Server struct {
 	// UI is the built dashboard, or nil when the binary was built without one.
 	UI fs.FS
 
+	// SSO connects the human-facing surfaces to the company's WeCom single
+	// sign-on. Nil means not wired up — /enter 404s and nothing else changes.
+	SSO *SSO
+
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
 
@@ -87,6 +91,11 @@ func (s *Server) Handler() http.Handler {
 	// Live reports authenticate per endpoint, like ingest.
 	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
 	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
+
+	// The way in. Outside the viewer-token gate on purpose, and mounted
+	// unconditionally: when SSO is not configured the handler answers 404, so
+	// whether the route exists never leaks whether the feature is on.
+	mux.HandleFunc("/enter", s.handleEnter)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -178,10 +187,23 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// A WeCom session this hub minted itself, from a ticket the company's
+		// authorization service signed. Checked after the token so the token
+		// stays the fallback that works when WeCom does not.
+		if sub, ok := s.ssoViewer(r); ok {
+			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), sub)))
+			return
+		}
 		// No token. A named tailnet peer may still be let in -- on the word
 		// of the local tailscaled, never of anything in the request.
 		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
 			next.ServeHTTP(w, r.WithContext(withViewer(r.Context(), login)))
+			return
+		}
+		// A browser with no credential is someone who has not signed in yet;
+		// send them to do that. Everything else gets the honest 401.
+		if to, ok := s.ssoSignInURL(r); ok {
+			http.Redirect(w, r, to, http.StatusFound)
 			return
 		}
 

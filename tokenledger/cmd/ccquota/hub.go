@@ -34,6 +34,17 @@ func runHub(args []string) error {
 	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	token := fs.String("token", os.Getenv("CCQUOTA_VIEWER_TOKEN"), "viewer token for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
+	// 企微 SSO（把「人看面板」这一档接到公司已有的授权服务上）。
+	// ★ 两把密钥只从环境来、不给命令行开关：命令行参数在 `ps` 里人人可见，而这两把
+	//   一把能验票、一把能签会话 —— 泄露任何一把都等于可以凭空造一个已登录的人。
+	//   一把也没配 = 整条 SSO 关闭，/enter 回 404，行为与从前逐字节相同。
+	ssoApp := fs.String("sso-app", os.Getenv("CCQUOTA_SSO_APP"),
+		"this hub's app id at the authorization service (its `aud`); empty disables WeCom SSO")
+	ssoSlug := fs.String("sso-slug", os.Getenv("CCQUOTA_SSO_SLUG"), "tenant slug to enter as")
+	ssoEnterURL := fs.String("sso-enter-url", os.Getenv("CCQUOTA_SSO_ENTER_URL"),
+		"authorization endpoint a signed-out browser is sent to")
+	ssoHours := fs.Int("sso-session-hours", 8, "how long a WeCom session lasts")
+
 	tailnetViewers := fs.String("tailnet-viewers", os.Getenv("CCQUOTA_TAILNET_VIEWERS"),
 		"comma-separated tailnet logins who may open the dashboard with no\n"+
 			"token, on the word of the local tailscaled (tailscale whois).\n"+
@@ -132,8 +143,27 @@ func runHub(args []string) error {
 		log.Printf("tailnet identity: %s may view without a token (via %s)", *tailnetViewers, bin)
 	}
 
+	var sso *api.SSO
+	if *ssoApp != "" {
+		sso = &api.SSO{
+			AppID:         *ssoApp,
+			Slug:          *ssoSlug,
+			TicketSecret:  os.Getenv("CCQUOTA_SSO_TICKET_SECRET"),
+			SessionSecret: os.Getenv("CCQUOTA_SSO_SESSION_SECRET"),
+			EnterURL:      *ssoEnterURL,
+			TTL:           time.Duration(*ssoHours) * time.Hour,
+		}
+		// 配了一半比没配更危险：运维以为登录口在跑，实际上每个人都被挡在门外
+		// （或者更糟，以为挡住了其实没挡）。当场说清缺哪一件。
+		if sso.TicketSecret == "" || sso.SessionSecret == "" || sso.EnterURL == "" {
+			return errors.New("--sso-app is set but the rest is not: " +
+				"CCQUOTA_SSO_TICKET_SECRET, CCQUOTA_SSO_SESSION_SECRET and --sso-enter-url are all required")
+		}
+	}
+
 	srv := &api.Server{
 		Store:               st,
+		SSO:                 sso,
 		Pricing:             table,
 		ViewerToken:         *token,
 		Tailnet:             tailnet,
