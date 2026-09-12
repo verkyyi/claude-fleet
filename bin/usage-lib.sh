@@ -117,3 +117,42 @@ fleet_limit_kind() {
     *) printf 'model:%s\n' "$w" ;;
   esac
 }
+
+# --- ccquota pre-emptive watch liveness (issue #551) ---------------------------
+# The quota watch (bin/fleet-quotawatch.sh) restamps $C/account.quota.ts on every
+# tick — even when the hub is unreachable (empty rows still refresh the stamp) —
+# so the stamp's age is the watch's LIVENESS, not the hub's. Once the pool + hub
+# are configured and the stamp is older than FLEET_ACCOUNT_QUOTA_STALE (default
+# 600 s = 10× the fetch TTL), no tick has run for that long and the 70%/85%
+# pre-emptive rotation is blind. Surfaced by the status bar (⚠ quota stale 47m),
+# fleet-doctor, and the watch's own --status. POSIX sh (fleet-doctor sources
+# nothing bash-only; keep it that way).
+
+# fleet_quota_watch_configured — 0 iff the watch is armed: an accounts pool dir
+# AND a ccquota hub URL. Mirrors the watch's own fail-open gate exactly.
+fleet_quota_watch_configured() {
+  [ -d "${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}" ] \
+    && [ -n "${CCQUOTA_HUB_URL:-}" ]
+}
+
+# fleet_quota_stale_age — print the stamp's age in seconds IFF the watch is
+# configured AND the stamp is stale (or absent: a configured pool with no stamp
+# has never been watched — that is stale too). Prints nothing when fresh or off.
+fleet_quota_stale_age() {
+  fleet_quota_watch_configured || return 0
+  _qts=$(cat "$(fleet_usage_cache_dir)/account.quota.ts" 2>/dev/null)
+  case "$_qts" in ''|*[!0-9]*) _qts=0 ;; esac
+  _qage=$(( $(date +%s) - _qts ))
+  [ "$_qage" -ge "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ] && printf '%s' "$_qage"
+  return 0
+}
+
+# fleet_usage_human_secs <secs> — 47s | 47m | 3h | 2d (coarsest unit, floor).
+fleet_usage_human_secs() {
+  _s="${1:-0}"
+  case "$_s" in ''|*[!0-9]*) _s=0 ;; esac
+  if   [ "$_s" -ge 86400 ]; then printf '%sd' $(( _s / 86400 ))
+  elif [ "$_s" -ge 3600 ];  then printf '%sh' $(( _s / 3600 ))
+  elif [ "$_s" -ge 60 ];    then printf '%sm' $(( _s / 60 ))
+  else                           printf '%ss' "$_s"; fi
+}

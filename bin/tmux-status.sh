@@ -1,6 +1,6 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat> [│ ⚠ quota stale 47m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
@@ -131,6 +131,19 @@ if [ -n "$usage" ]; then
     usage_seg="${DIM}│ #[range=user|usage]${usage_col}${usage} #[norange]"
 fi
 
+# --- quota-watch staleness (issue #551): the ONE always-on alarm on the bar.
+# The pre-emptive rotation's cache (account.quota.ts) is restamped by every
+# fleet-quotawatch tick; with a pool + hub configured, a stamp older than
+# FLEET_ACCOUNT_QUOTA_STALE means no tick has run for that long and the 70%/85%
+# rotation is BLIND (2026-09-11: 2.5h blind ⇒ 21 sessions rode a window to 100%).
+# Silent fail-open is exactly what cost that window, so this is red and never
+# gated by freshness. Empty when fresh, or when the watch isn't configured.
+quota_seg=""
+qstale=$(fleet_quota_stale_age)
+if [ -n "$qstale" ]; then
+    quota_seg="${DIM}│ ${RED}⚠ quota stale $(fleet_usage_human_secs "$qstale") "
+fi
+
 # --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
 # fleet-wide global/account.active pointer, i.e. "the account new sessions use".
 # Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
@@ -141,5 +154,5 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s" \
-    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg" "$quota_seg"

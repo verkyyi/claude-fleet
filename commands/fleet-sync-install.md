@@ -144,6 +144,21 @@ macOS: `launchctl bootout gui/$(id -u)/com.claude-fleet.<x>` then
 and `daemon-reload`. (Worked example: the #535 retirement of
 `com.claude-fleet.summarize` — the dash summarizer.) Report which unit you removed.
 
+An **added** daemon is the fourth case: an `A launchd/com.claude-fleet.<x>.plist.tmpl`
+(and its `systemd/claude-fleet-<x>.{service,timer}`) in the step-2 diff means a
+unit exists upstream that this machine has never loaded — it is NOT installed
+retroactively by the fast-forward, and `fleet-doctor.sh` will WARN on it until it
+is. Template + bootstrap it exactly like the install step (docs/INSTALL.md §6):
+macOS: substitute `__HOME__` + `__BREW_PREFIX__` (`$(brew --prefix)`, else
+`/opt/homebrew`) into `~/Library/LaunchAgents/com.claude-fleet.<x>.plist`, then
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.<x>.plist`;
+Linux: `sed s|__HOME__|$HOME|g` the unit files into `~/.config/systemd/user/`,
+`systemctl --user daemon-reload`, `systemctl --user enable --now claude-fleet-<x>.timer`.
+(Worked example: the #551 addition of `com.claude-fleet.quotawatch` — the
+pre-emptive account rotation's own 60s tick; it is a no-op on a machine without
+`CCQUOTA_HUB_URL` + an accounts pool, so loading it everywhere is safe.) Report
+which unit you added, then confirm with `bin/fleet-doctor.sh`.
+
 If the diff touched none of these, say "no daemon reload needed" and move on.
 
 ## 4. Re-merge the settings-hooks delta (only if it changed)

@@ -110,6 +110,9 @@ $TMPDIR/.claude-dash/
     ctx_<key>          #   per Claude session
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state
+    collect.pid · collect.heartbeat           # collector overlap guard + per-phase heartbeat (#551)
+    quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
+    quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
 ```
 
 The collector resolves each live tmux session → its repo and records it in

@@ -1,0 +1,205 @@
+#!/bin/bash
+# fleet-quotawatch.sh — the ccquota-driven PRE-EMPTIVE account rotation, as its
+# OWN ~60s tick (issue #551). Reads every pool account's exact 5h/7d utilization
+# off the ccquota hub and, per account, warns its sessions at
+# FLEET_ACCOUNT_WARN_PCT and benches + moves them at FLEET_ACCOUNT_CEILING —
+# BEFORE the subscription wall (issue #513's policy, unchanged).
+#
+# Why its own tick (#551): this policy used to be the LAST block of the dash
+# collector's tick, after the per-repo gh fetches, the git/ctx/usage scans and
+# the pane scrapes. On a 21-window fleet a tick ran 2–3 minutes, and a tick that
+# stalled (an un-timeboxed `gh` on a bad network) or died before its end simply
+# never reached the quota block — the cache went 2.5h stale, the 70%/85% branches
+# never ran, and every session on the account rode the 5-hour window to 100%.
+# The watch is now (a) this script on its own launchd/systemd 60s unit
+# (com.claude-fleet.quotawatch) and (b) ALSO the first thing every collector tick
+# runs — so an install whose daemon set predates #551 keeps the watch at the
+# collector's cadence, and a healthy install gets a real 60s cadence that no gh
+# latency can push around. Both callers are safe together: the once-per-reset-
+# window markers dedup the actions, `fleet-account.sh quota` refetches at most
+# every FLEET_ACCOUNT_QUOTA_TTL s, and the lock below serializes overlapping ticks.
+#
+# What it writes (all under $TMPDIR/.claude-dash/global/):
+#   account.quota(.ts)      — via `fleet-account.sh quota` (the TTL-gated fetch)
+#   quota.warn.<label>      — reset epoch the 70% warning was sent for
+#   quota.ceiling.<label>   — reset epoch the 85% bench+move was done for
+#   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/fetched
+#   quotawatch.lock/        — mkdir lock (pid + ts inside) — overlap guard
+#
+# Staleness alarm (#551): `account.quota.ts` is the watch's liveness — every tick
+# restamps it even when the hub is unreachable (empty rows still refresh the
+# stamp). Once it is older than FLEET_ACCOUNT_QUOTA_STALE (default 600s = 10×
+# the TTL) while the pool + hub are configured, the watch is BLIND: the status
+# bar shows `⚠ quota stale 47m` (bin/tmux-status.sh via usage-lib.sh),
+# fleet-doctor FAILs, and the next tick that does run notifies once that it was
+# blind for that long. `--status` prints the same verdict for scripts.
+#
+# Fail-open, exactly as before: no accounts dir / no CCQUOTA_HUB_URL → exit 0
+# and nothing here runs (the banner-driven path in the collector stays).
+#
+# Usage:
+#   fleet-quotawatch.sh [--caller <name>] [--dry-run]
+#   fleet-quotawatch.sh --status        # off | never | fresh | stale  <TAB> age-s
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+. "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/usage-lib.sh"         # fleet_quota_stale_age / fleet_quota_watch_configured
+
+C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"; mkdir -p "$G"
+now() { date +%s; }
+atomic_write() { local dest="$1" tmp="$1.$$"; cat > "$tmp" && mv "$tmp" "$dest"; }
+
+CALLER=daemon; DRY=0; STATUS=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --caller)  CALLER="${2:-daemon}"; shift ;;
+    --dry-run) DRY=1 ;;
+    --status)  STATUS=1 ;;
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    *) printf 'fleet-quotawatch: unknown argument %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+QTS="$G/account.quota.ts"
+HB="$G/quotawatch.heartbeat"
+LOCK="$G/quotawatch.lock"
+STALE="${FLEET_ACCOUNT_QUOTA_STALE:-600}"
+DEADLINE="${FLEET_QUOTAWATCH_DEADLINE:-120}"   # a tick past this is stuck → superseded
+
+# --status: off (pool/hub not configured) | never (configured, no stamp yet) |
+# fresh | stale, then TAB + the stamp's age in seconds (0 for off/never).
+if [ "$STATUS" = 1 ]; then
+  if ! fleet_quota_watch_configured; then printf 'off\t0\n'; exit 0; fi
+  ts=$(cat "$QTS" 2>/dev/null); case "$ts" in ''|*[!0-9]*) ts=0;; esac
+  if [ "$ts" -eq 0 ]; then printf 'never\t0\n'; exit 0; fi
+  age=$(( $(now) - ts ))
+  if [ -n "$(fleet_quota_stale_age)" ]; then printf 'stale\t%s\n' "$age"; else printf 'fresh\t%s\n' "$age"; fi
+  exit 0
+fi
+
+# Fail-open gate — identical to the collector's pre-#551 gate.
+fleet_quota_watch_configured || exit 0
+
+# --- overlap guard: one tick at a time; a stuck one is superseded past DEADLINE.
+# mkdir is the atomic primitive (no flock on macOS). The holder's pid + start
+# epoch sit inside; a dead holder (crash without cleanup) or one past the
+# deadline is taken over — and killed, so a wedged `ccquota` can't pin the lock.
+if ! mkdir "$LOCK" 2>/dev/null; then
+  opid=$(cat "$LOCK/pid" 2>/dev/null); ots=$(cat "$LOCK/ts" 2>/dev/null)
+  case "$opid" in ''|*[!0-9]*) opid='';; esac
+  case "$ots" in ''|*[!0-9]*) ots=0;; esac
+  if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null \
+     && ps -o command= -p "$opid" 2>/dev/null | grep -q 'fleet-quotawatch'; then
+    age=$(( $(now) - ots ))
+    if [ "$age" -lt "$DEADLINE" ]; then
+      printf 'fleet-quotawatch: skip — tick %s still running (%ss)\n' "$opid" "$age" >&2
+      exit 0
+    fi
+    printf 'fleet-quotawatch: tick %s past the %ss deadline (%ss) — superseding it\n' "$opid" "$DEADLINE" "$age" >&2
+    kill -TERM "$opid" 2>/dev/null
+  fi
+  rm -rf "$LOCK"
+  mkdir "$LOCK" 2>/dev/null || exit 0        # lost the takeover race → the other tick has it
+fi
+printf '%s' "$$" > "$LOCK/pid"; now > "$LOCK/ts"
+trap 'rm -rf "$LOCK"' EXIT
+trap 'exit 143' INT TERM                       # so the EXIT trap (lock release) runs on a supersede
+
+START=$(now)
+hb() {  # $1 = phase, $2 = extra key=value lines (optional)
+  printf 'pid=%s\ncaller=%s\nstart=%s\nphase=%s\nphase_ts=%s\n%s' "$$" "$CALLER" "$START" "$1" "$(now)" "${2:-}" | atomic_write "$HB"
+}
+
+# --- blind-spell alarm: how old was the stamp BEFORE this tick? A stamp older
+# than STALE (and not "never": a fresh install has no stamp) means no tick ran
+# for that long — say so once, now that one is running, so the gap is visible in
+# the notifier's history and not only on the status bar while it lasted.
+pre_ts=$(cat "$QTS" 2>/dev/null); case "$pre_ts" in ''|*[!0-9]*) pre_ts=0;; esac
+blind=0
+if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$(( START - pre_ts )); fi
+
+hb "fetch"
+qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
+post_ts=$(cat "$QTS" 2>/dev/null); case "$post_ts" in ''|*[!0-9]*) post_ts=0;; esac
+fetched=0; [ "$post_ts" -gt "$pre_ts" ] && fetched=1
+nrows=$(printf '%s' "$qrows" | grep -c .)
+hb "policy" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'
+
+if [ "$blind" -gt 0 ]; then
+  bm=$(( blind / 60 ))
+  printf 'fleet-quotawatch: the quota cache was %sm stale before this tick — the watch was blind for that long (caller now: %s)\n' "$bm" "$CALLER" >&2
+  if [ "$DRY" = 0 ] && [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+    $FLEET_NOTIFY_CMD "# quota watch was blind for ${bm}m
+the ccquota cache (\`account.quota.ts\`) had not been refreshed for ${bm}m — no pre-emptive rotation could fire in that window. It is ticking again now (caller: ${CALLER}). Check \`fleet-doctor.sh\` → quotawatch / collect, and that com.claude-fleet.quotawatch is loaded." >/dev/null 2>&1
+  fi
+fi
+
+# --- the policy (issue #513, verbatim from the collector's former tail block):
+#   ≥ FLEET_ACCOUNT_CEILING (85%)  bench until ccquota's reset instant (rotates
+#                                  the active pointer past it — new spawns go
+#                                  elsewhere at once), then move every session
+#                                  still on it (fleet-account.sh migrate
+#                                  --account, per fleet, backgrounded); notify once.
+#   ≥ FLEET_ACCOUNT_WARN_PCT (70%) tell every session on it, over its own peer
+#                                  inbox (fleet_peer_send — the SendMessage
+#                                  channel, not send-keys), that a move is coming
+#                                  and to commit WIP; toast + FLEET_NOTIFY_CMD once.
+# Once per (account, reset-window): a marker file holds the reset epoch the
+# episode was handled for (fleet_same_window compares with tolerance — ccquota's
+# resets_at jitters by a second between polls), so the next window re-arms it.
+# Empty rows (no ccquota / hub unreachable / unknown verdict) → nothing runs.
+SOCKETS=$(fleet_sockets)
+qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
+# shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
+printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
+  [ -n "$ql" ] || continue
+  qutil=$q5; qwhich="5-hour"; qreset=$qr5
+  if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
+  qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
+  if [ "$qutil" -ge "$qceil" ]; then
+    mk="$G/quota.ceiling.$ql"
+    fleet_same_window "$mk" "$qreset" && continue                          # this window already handled
+    if [ "$DRY" = 1 ]; then printf 'would: bench %s (%s%% of %s, resets %s) + migrate --account %s on: %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$(printf '%s' "$SOCKETS" | tr '\n' ' ')"; continue; fi
+    printf '%s' "$qreset" | atomic_write "$mk"
+    "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
+    qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
+    for qs in $SOCKETS; do
+      tmux -L "$qs" run-shell -b "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast" 2>/dev/null
+      tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null
+    done
+    if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+      $FLEET_NOTIFY_CMD "# subscription near its limit — rotated early
+**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett; new sessions now use **${qnew:-?}** and every session still on it is being moved (close + \`--resume\` in a new window), before it hits the wall" >/dev/null 2>&1
+    fi
+  elif [ "$qutil" -ge "$qwarn" ]; then
+    mk="$G/quota.warn.$ql"
+    fleet_same_window "$mk" "$qreset" && continue
+    if [ "$DRY" = 1 ]; then printf 'would: warn the sessions on %s (%s%% of %s, resets %s)\n' "$ql" "$qutil" "$qwhich" "$qresett"; continue; fi
+    printf '%s' "$qreset" | atomic_write "$mk"
+    qeta=""; [ "${qpph:-0}" -gt 0 ] && qeta=" (~$(( (100 - qutil) * 60 / qpph )) min to 100% at the current rate)"
+    qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
+    qn=0
+    for qs in $SOCKETS; do
+      # space-separated: a window id has no spaces and a label is a file name
+      # (tmux ≤3.4 would print a control-byte separator as literal `\037`)
+      while read -r qw qa; do
+        [ "$qa" = "$ql" ] || continue
+        qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
+        [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && qn=$((qn+1))
+      done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
+      tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
+    done
+    [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
+**$ql** is at ${qutil}% of its $qwhich window${qeta} (ccquota, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
+  else
+    [ "$DRY" = 1 ] && printf 'ok: %s at %s%% of its %s window (warn %s%%, ceiling %s%%)\n' "$ql" "$qutil" "$qwhich" "$qwarn" "$qceil"
+  fi
+done
+
+END=$(now)
+hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'
+exit 0

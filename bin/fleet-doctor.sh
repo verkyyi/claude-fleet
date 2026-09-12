@@ -177,6 +177,18 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
   # names that don't match the fleet's — fix with `ccquota name <uuid> <label>` or
   # CCQUOTA_ACCOUNT=<uuid> in <label>.conf), or why it is running banner-only.
   if [ -n "${CCQUOTA_HUB_URL:-}" ]; then
+    # Watch LIVENESS first (issue #551), BEFORE the --refresh below restamps the
+    # cache: account.quota.ts is restamped by every fleet-quotawatch tick (even an
+    # unreachable hub restamps), so its age says whether the watch is ticking at
+    # all. Stale = the 70%/85% pre-emptive rotation is BLIND — that silent
+    # fail-open cost a whole 5-hour window on 2026-09-11, so it is a FAIL.
+    qst=$(bash "$(dirname "$0")/fleet-quotawatch.sh" --status 2>/dev/null)
+    qstate=${qst%%	*}; qage=${qst#*	}
+    case "$qstate" in
+      stale) fail qwatch "quota cache last refreshed $((qage/60))m ago (> FLEET_ACCOUNT_QUOTA_STALE ${FLEET_ACCOUNT_QUOTA_STALE:-600}s) — pre-emptive rotation is BLIND; is com.claude-fleet.quotawatch loaded? (\`launchctl list | grep quotawatch\`; the collector also runs the watch first thing each tick — check its heartbeat below)" ;;
+      never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
+      fresh) pass qwatch "quota cache ${qage}s old — the pre-emptive watch is ticking (\`fleet-quotawatch.sh --status\`)" ;;
+    esac
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
       qrows=$(bash "$(dirname "$0")/fleet-account.sh" quota --refresh 2>/dev/null); qn=$(printf '%s' "$qrows" | grep -c .)
       if [ "$qn" -gt 0 ]; then
@@ -360,6 +372,51 @@ EOF
       "the local base is NOT being fast-forwarded (new worktrees fork off a stale base)"
     printf '        note: needs com.claude-fleet.base-sync installed; fetches + pulls --ff-only the base under the shared land lease (no merge, no gh).\n'
   fi
+fi
+
+# --- quota-watch daemon (issue #551) ---------------------------------------------
+# The ccquota pre-emptive rotation has its OWN 60s unit since #551 — the collector
+# still runs the watch first thing each tick, so a missing unit degrades the
+# cadence to the collector's (and to nothing if the collector is wedged) rather
+# than switching the watch off: WARN, not FAIL. Only meaningful with a pool + hub.
+if [ -d "$acct_dir" ] && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
+  daemon_verdict qwatch com.claude-fleet.quotawatch \
+    "com.claude-fleet.quotawatch loaded — 60s pre-emptive rotation tick, independent of the collector" \
+    "the quota watch only runs at the top of each collector tick (and not at all while the collector is wedged)"
+  printf '        note: bin/fleet-quotawatch.sh — its own 60s unit; heartbeat in global/quotawatch.heartbeat, staleness on the status bar (⚠ quota stale) + above.\n'
+fi
+
+# --- collector heartbeat (issue #551) -------------------------------------------
+# global/collect.heartbeat: key=value written at every phase boundary of a tick —
+# last complete tick's end/dur/phases, or the phase a dying tick was in. A stale
+# heartbeat means the dash caches (git/ctx/usage, and pre-#551 the quota watch)
+# are not moving: wedged tick (past FLEET_COLLECT_DEADLINE it is killed + superseded
+# by the next one) or an unloaded com.claude-fleet.collect.
+hb="${TMPDIR:-/tmp}/.claude-dash/global/collect.heartbeat"
+if [ -f "$hb" ]; then
+  hb_now=$(date +%s)
+  hb_get() { sed -n "s/^$1=//p" "$hb" | head -1; }
+  hb_end=$(hb_get end); hb_start=$(hb_get start); hb_phase=$(hb_get phase); hb_dur=$(hb_get dur); hb_phases=$(hb_get phases)
+  case "$hb_start" in ''|*[!0-9]*) hb_start=0;; esac
+  case "$hb_end"   in ''|*[!0-9]*) hb_end=0;;   esac
+  hb_slow=$(printf '%s\n' "$hb_phases" | tr ' ' '\n' | sort -t= -k2 -nr | head -1)
+  if [ "$hb_end" -gt 0 ]; then
+    hb_age=$((hb_now - hb_end))
+    if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
+      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`?"
+    else
+      pass collect "last tick ${hb_age}s ago, took ${hb_dur:-?}s (slowest phase ${hb_slow:-?}; deadline ${FLEET_COLLECT_DEADLINE:-600}s)"
+    fi
+  else
+    hb_age=$((hb_now - hb_start))
+    if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
+      warn collect "a tick started $((hb_age/60))m ago is still in phase \`$hb_phase\` and never finished — wedged (the next tick kills + supersedes it past the deadline); see logs/collect.launchd.log"
+    else
+      pass collect "a tick is running (phase \`$hb_phase\`, ${hb_age}s in)"
+    fi
+  fi
+else
+  printf '        note: no collector heartbeat yet (global/collect.heartbeat) — the collector has not completed a tick since #551; run bin/tmux-dash-collect.sh once or check com.claude-fleet.collect.\n'
 fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
