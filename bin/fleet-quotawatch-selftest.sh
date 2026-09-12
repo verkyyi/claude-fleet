@@ -22,6 +22,10 @@
 #                 stale, the status-bar helper prints the age, and the next tick
 #                 notifies once that the watch was blind.
 #   7. human    — fleet_usage_human_secs coarsest-unit rendering.
+#   8. nowhere  — (#567) EVERY account ≥ ceiling in one tick: both benched, both
+#                 ceiling markers, NO `migrate` fan-out (a move would cold-boot
+#                 each session back onto the account just benched), the toast +
+#                 notify say "nowhere to move"; --dry-run says the same.
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -42,12 +46,13 @@ printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"
 G="$WORK/.claude-dash/global"
 
 # --- fake ccquota: `budget --account all --json …` → two pool accounts; a's 5h %
-# comes from $FAKE_PCT_FILE, its 5h reset from $FAKE_RESET_FILE (ISO). Logs calls.
+# comes from $FAKE_PCT_FILE (b's from $FAKE_PCT_B_FILE, default 20), the 5h reset
+# from $FAKE_RESET_FILE (ISO). Logs calls.
 cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
-p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); r5=$(cat "$FAKE_RESET_FILE")
-printf '{"verdict":"ok","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},{"account_uuid":"u-b","label":"b","headroom_pct":80,"five_hour":{"utilization":20,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}]}' "$((100-p))" "$p" "$r5" "$r5"
+p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>/dev/null || echo 20); r5=$(cat "$FAKE_RESET_FILE")
+printf '{"verdict":"ok","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}]}' "$((100-p))" "$p" "$r5" "$((100-pb))" "$pb" "$r5"
 FAKE
 # --- fake tmux: strips -L; one live fleet `sessA`; two windows (@1 on a, @2 on b);
 # display-message -p answers a pane pid (ours — no claude under it, so the peer
@@ -75,6 +80,7 @@ chmod +x "$WORK/fakepath/"*
 iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 NOW=$(date +%s)
 RESET1=$(( NOW + 10800 )); RESET2=$(( NOW + 10800 + 14400 ))   # two windows, 4h apart (> the 15-min tolerance)
+RESET3=$(( RESET2 + 14400 ))                                    # a third, for the every-account-capped case (#567)
 iso "$RESET1" > "$WORK/reset"
 HUB="http://hub.test:8787"
 ACCTS=""            # per-case override of the accounts pool (see case 1)
@@ -83,7 +89,7 @@ run_watch() {
   FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="${ACCTS:-$WORK/accounts}" CCQUOTA_HUB_URL="$HUB" \
   FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
-  FAKE_PCT_FILE="$WORK/pct" FAKE_RESET_FILE="$WORK/reset" \
+  FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -210,5 +216,34 @@ h() { bash -c '. "$0"; fleet_usage_human_secs "$1"' "$WORK/bin/usage-lib.sh" "$1
   || fail "7: fleet_usage_human_secs: $(h 47) $(h 2820) $(h 7200) $(h 90000) $(h x)"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs) (#551)\n' "$CHECKS"
+# 8. nowhere to move (#567) ------------------------------------------------------
+# A NEW reset window with a at 90% AND b at 95%. Row a fires first: a is benched
+# (already was, from the earlier 90% tick) and b — though not benched yet — is at
+# the ceiling in this tick's rows, so it is no target; row b fires next with a
+# benched. Neither may fan out a migrate: `fleet-account.sh active` would name a
+# benched account and every session would be cold-booted back onto its own wall.
+iso "$RESET3" > "$WORK/reset"; echo 90 > "$WORK/pct"; echo 95 > "$WORK/pct-b"
+m=$(migrates); n=$(notifies)
+run_watch --dry-run || fail "8: --dry-run must exit 0"
+grep -q "^would: bench a (90% of 5-hour.*nowhere to move" "$WORK/stdout" || fail "8: --dry-run must say a has nowhere to move (stdout: $(cat "$WORK/stdout"))"
+grep -q "^would: bench b (95% of 5-hour.*nowhere to move" "$WORK/stdout" || fail "8: --dry-run must say b has nowhere to move (stdout: $(cat "$WORK/stdout"))"
+! grep -q "migrate --account" "$WORK/stdout" || fail "8: --dry-run must plan no migrate when every account is capped (stdout: $(cat "$WORK/stdout"))"
+run_watch || fail "8b: the every-account-capped tick must exit 0"
+[ "$(cat "$G/quota.ceiling.a" 2>/dev/null)" = "$RESET3" ] || fail "8b: a's ceiling marker = the new reset epoch (got: $(cat "$G/quota.ceiling.a" 2>/dev/null))"
+[ "$(cat "$G/quota.ceiling.b" 2>/dev/null)" = "$RESET3" ] || fail "8b: b's ceiling marker = the new reset epoch (got: $(cat "$G/quota.ceiling.b" 2>/dev/null))"
+[ "$(awk -F'\t' '$1=="a"{print $3}' "$G/account.limited" 2>/dev/null)" = "ccquota: 5-hour window at 90%" ] || fail "8b: a must still be benched (account.limited: $(cat "$G/account.limited" 2>/dev/null))"
+[ "$(awk -F'\t' '$1=="b"{print $3}' "$G/account.limited" 2>/dev/null)" = "ccquota: 5-hour window at 95%" ] || fail "8b: b must be benched too (account.limited: $(cat "$G/account.limited" 2>/dev/null))"
+[ "$(migrates)" = "$m" ] || fail "8b: NO migrate --account a when every account is capped (got $(( $(migrates) - m )) new)"
+! grep -q "migrate --account 'b'" "$WORK/tmux.calls" || fail "8b: NO migrate --account b either"
+grep -q 'display-message fleet: a at 90%.*nowhere to move: every account is at its ceiling' "$WORK/tmux.calls" || fail "8b: the toast must say nowhere to move (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
+grep -q '# subscription at its limit — nowhere to move' "$WORK/notify.log" || fail "8b: the notify must say nowhere to move"
+grep -q 'sessions were NOT moved: they stay on \*\*b\*\*' "$WORK/notify.log" || fail "8b: the notify names the account the sessions stay on (notify: $(tail -4 "$WORK/notify.log"))"
+[ "$(notifies)" = $((n+2)) ] || fail "8b: one notify per capped account (got $(( $(notifies) - n )))"
+grep -q 'nowhere to move' "$WORK/stderr" || fail "8b: the tick logs the no-move on stderr (stderr: $(cat "$WORK/stderr"))"
+run_watch || fail "8c: next tick must exit 0"
+[ "$(notifies)" = $((n+2)) ] || fail "8c: same window ⇒ no repeat notify"
+[ "$(migrates)" = "$m" ] || fail "8c: still no migrate"
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567) (#551)\n' "$CHECKS"
 exit 0

@@ -315,7 +315,7 @@ first thing by every collector tick — does, per pool account, every tick:
 | utilization (higher of 5h / 7d) | action |
 |---|---|
 | ≥ `FLEET_ACCOUNT_WARN_PCT` (70%) | message every session running on it over its **peer inbox** (`fleet-peer-send.sh`, the `SendMessage` channel) that a move is coming, with the ETA at the current burn rate, so it can commit WIP; toast + `FLEET_NOTIFY_CMD` once |
-| ≥ `FLEET_ACCOUNT_CEILING` (85%) | **bench** it until ccquota's reset instant (`fleet-account.sh bench`), which rotates the active pointer at once, then **move** every session still on it (`migrate --account <label>`, per fleet, backgrounded) — the same close + `--resume` a banner triggers, minus the wall |
+| ≥ `FLEET_ACCOUNT_CEILING` (85%) | **bench** it until ccquota's reset instant (`fleet-account.sh bench`), which rotates the active pointer at once, then **move** every session still on it (`migrate --account <label>`, per fleet, backgrounded) — the same close + `--resume` a banner triggers, minus the wall. **Nowhere to move** (issue #567: every other account is benched or at its ceiling too) ⇒ bench only, no fan-out — the toast/notify say so, and the sessions stay put until the reset; a walled session waiting for its own reset beats one cold-booted back into the same wall |
 
 Each step fires once per (account, reset window). New sessions, meanwhile, go
 to the eligible account with the **most headroom** (`fleet-account.sh active`

@@ -3,8 +3,9 @@
 # move a live session onto the active account by close + `--resume` in a new window).
 #
 # Two layers:
-#   1. PURE matrices, sourced: migrate_eligible (panels / hub / raw@FLEET_MAIN) and
-#      migrate_selected (--limited / --idle / --all / --account / explicit).
+#   1. PURE matrices, sourced: migrate_eligible (panels / hub / raw@FLEET_MAIN),
+#      migrate_selected (--limited / --idle / --all / --account / explicit) and
+#      migrate_noop (target == source is no move, #567; --model exempt).
 #   2. END-TO-END on a DEDICATED tmux server on its own -L label (never the live
 #      server), the way the fleet itself isolates (issue #159) — it must be -L,
 #      not a -S shim, because fleet-migrate.sh targets servers as `tmux -L
@@ -22,7 +23,8 @@
 #      + the interrupted-turn nudge, account A → B verified), the stuck path (a
 #      claude that ignores /exit is left alone, nothing typed), the no-hook path
 #      (relaunch typed in place), --dry-run (nothing moves), whoami (truth heals a
-#      stale stamp).
+#      stale stamp), and the every-account-benched case (#567: `--account <the
+#      active one>` reports each window as already there and launches nothing).
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -82,6 +84,19 @@ sel   "account: match"                account  acctA "done"     acctB  0  acctA
 unsel "account: other"                account  acctB "done"     acctB  0  acctA
 sel   "explicit: always"              explicit ""    ""       ""     0  ""
 
+# migrate_noop <label> <active> <model> <active-benched> — the #567 guard, every
+# caller goes through it
+noop() { ok; migrate_noop "$2" "$3" "$4" "$5" || fail "$1 — expected a no-op (no move available)"; }
+move() { ok; migrate_noop "$2" "$3" "$4" "$5" && fail "$1 — expected a real move"; }
+#      desc                                    label active model benched
+noop "same account, no model"                 acctB acctB ""   0
+move "different account"                      acctA acctB ""   0
+move "same account but --model (#524)"        acctB acctB opus 0
+move "ambient login → the pool"               ""    acctB ""   0
+move "no pool at all (empty active)"          ""    ""    ""   0
+noop "other account, but the target is benched" acctA acctB "" 1
+move "target benched, --model still relaunches" acctB acctB opus 1
+
 # ============================================================================
 # 2. end-to-end on an isolated tmux server
 # ============================================================================
@@ -129,6 +144,8 @@ WIN=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
 "$FB/claude" "$WORK/claude.pl" </dev/tty
 tmux run-shell -b "tmux kill-window -t '\$WIN'"
 EOS
+# runner-hook-b: the hook runner, but under account B's token (the #567 case below)
+sed 's/tokA-secret/tokB-secret/' "$FB/runner-hook" > "$FB/runner-hook-b"
 # runner-nohook: same, but drops to the recording shell (FLEET_CLOSE_ON_EXIT=0)
 cat > "$FB/runner-nohook" <<EOS
 #!/bin/sh
@@ -231,21 +248,64 @@ ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be '
 out=$(bash "$SCRIPT" --session "$SESS" --idle 2>&1)
 ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the move must find nothing (all working or on B): $out"
 
-# --- explicit window ids need no account filter: move the (now B) w1 again
+# --- explicit window ids need no account filter: move w1 (now on B) again, onto
+# A — un-benched and pinned active for it (a move onto the account a window
+# already runs on is a no-op since #567, see below).
+bash "$BIN/fleet-account.sh" clear acctA >/dev/null; bash "$BIN/fleet-account.sh" use acctA >/dev/null
+ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctA ] || fail "rig: active should be acctA now"
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --nudge 'custom nudge' "$nw1" 2>&1)
-ok; grep -q -- '--resume sid-1111 custom nudge' "$WORK/launched" 2>/dev/null || fail "--nudge must replace the default nudge (launched: $(cat "$WORK/launched"))"
+ok; grep -q -- '--resume sid-1111 custom nudge' "$WORK/launched" 2>/dev/null || fail "--nudge must replace the default nudge (launched: $(cat "$WORK/launched"); out: $out)"
+ok; printf '%s' "$out" | grep -q 'w1 .*acctB → acctA' || fail "the explicit move must verify B → A: $out"
 
 # --- --model <m> (issue #524): a model-capped session is relaunched on the fallback
 # model. The launcher gets --model BEFORE --resume (fleet-claude.sh then sees an
 # explicit model and skips its FLEET_MODEL default), the default nudge names the
-# MODEL cap rather than the subscription, and the report says which model.
+# MODEL cap rather than the subscription, and the report says which model. w1 is
+# on A and A is active: a same-account relaunch, which is exactly what --model
+# is for — the #567 no-op guard must not catch it.
 nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --model opus "$nw1" 2>&1)
 ok; grep -q -- '--model opus --resume sid-1111 ' "$WORK/launched" 2>/dev/null || fail "--model must reach the launcher ahead of --resume (launched: $(cat "$WORK/launched" 2>/dev/null); out: $out)"
 ok; grep -q -- 'model usage limit' "$WORK/launched" 2>/dev/null || fail "--model must select the model-cap nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; printf '%s' "$out" | grep -q -- 'on opus' || fail "the report must name the fallback model: $out"
+
+# --- every account benched (issue #567). State: w1 on A (moved above), w2 on A
+# (stuck), w3 has no Claude any more (its fake shell only records), plus a fresh
+# w4 on B; active = A. Bench B first (pointer stays on A), then A: nothing is
+# eligible, so the pointer stays on A — there is nowhere better. `--account
+# acctA` — what the quota watch's ceiling branch fans out after benching A — must
+# NOT close + resume w1/w2 onto A again: each is reported as already there (w2
+# before any /exit is typed), nothing is launched, the windows survive, exit 0.
+# And a benched window on ANOTHER benched account (w4 on B) is not bounced onto A
+# either: nowhere to move.
+nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1"{print $1}' | head -1)
+w4=$(spawn w4 runner-hook-b sid-4444 "$WORK/wt4"); TM set-window-option -t "$w4" @cc_account acctB; sleep 1.5
+bash "$BIN/fleet-account.sh" mark-limited acctB >/dev/null
+bash "$BIN/fleet-account.sh" mark-limited acctA >/dev/null
+ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctA ] || fail "rig: with A and B both benched, active must fall back to acctA (got $(bash "$BIN/fleet-account.sh" active))"
+: > "$WORK/launched"
+out=$(bash "$SCRIPT" --session "$SESS" --account acctA 2>&1); rc=$?
+ok; [ "$rc" = 0 ] || fail "--account onto itself must still exit 0 (got $rc): $out"
+ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "w1 (on A, active A) must be reported as already there: $out $(diag)"
+ok; printf '%s' "$out" | grep -q 'w2 .*already on acctA — skipped' || fail "w2 (stuck, on A) must be skipped BEFORE any /exit is typed: $out $(diag)"
+ok; printf '%s' "$out" | grep -q 'moved 0, skipped 2' || fail "summary must be 'moved 0, skipped 2': $out"
+ok; [ ! -s "$WORK/launched" ] || fail "a same-account move must launch nothing (launched: $(cat "$WORK/launched"))"
+ok; TM display-message -p -t "$nw1" '#{pane_pid}' >/dev/null 2>&1 || fail "a same-account move must not close the window — $out $(diag)"
+# --dry-run explains the same skip, for --account and for --limited (w4: B → A, both benched)
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
+ok; printf '%s' "$out" | grep -q 'already on acctA — skipped' || fail "--dry-run must print the same-account skip: $out"
+ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--dry-run must plan no /exit for a same-account move: $out"
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited 2>&1)
+ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "--limited must skip a benched window whose account is still the active one: $out"
+ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move (acctB → acctA, benched too) — skipped' || fail "--limited must not bounce w4 from benched B onto benched A: $out $(diag)"
+ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--limited with every account benched must plan nothing: $out"
+# …but the SAME windows move once another account is eligible again
+bash "$BIN/fleet-account.sh" clear acctB >/dev/null
+ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: B un-benched ⇒ active rotates to acctB (got $(bash "$BIN/fleet-account.sh" active))"
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --account acctA 2>&1)
+ok; printf '%s' "$out" | grep -q 'w1 .*\[acctA → acctB\] would /exit' || fail "with B eligible again, --account acctA must plan the move A → B: $out"
 
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"
