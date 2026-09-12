@@ -20,7 +20,7 @@ func TestLive_RatesComeFromConsecutiveReports(t *testing.T) {
 
 	// Backdate the stored report so the second one is a measurable interval later.
 	l.mu.Lock()
-	l.sessions["s1"].SeenAt = time.Now().UTC().Add(-time.Minute)
+	l.sessions[liveKey(LiveSession{EndpointID: "ep1", Source: "claude", SessionID: "s1"})].ObservedAt = time.Now().UTC().Add(-time.Minute)
 	l.mu.Unlock()
 
 	l.Report("ep1", "web-01", []LiveSession{{SessionID: "s1", InputTokens: 4000, CostUSD: 2.0}})
@@ -39,7 +39,7 @@ func TestLive_CountersGoingBackwardsDoNotProduceNegativeRates(t *testing.T) {
 	l := NewLive()
 	l.Report("ep1", "web-01", []LiveSession{{SessionID: "s1", InputTokens: 9000, CostUSD: 9}})
 	l.mu.Lock()
-	l.sessions["s1"].SeenAt = time.Now().UTC().Add(-time.Minute)
+	l.sessions[liveKey(LiveSession{EndpointID: "ep1", Source: "claude", SessionID: "s1"})].ObservedAt = time.Now().UTC().Add(-time.Minute)
 	l.mu.Unlock()
 	l.Report("ep1", "web-01", []LiveSession{{SessionID: "s1", InputTokens: 10, CostUSD: 0.01}})
 
@@ -55,7 +55,7 @@ func TestLive_StaleSessionsExpire(t *testing.T) {
 	l := NewLive()
 	l.Report("ep1", "web-01", []LiveSession{{SessionID: "gone", InputTokens: 5}})
 	l.mu.Lock()
-	l.sessions["gone"].SeenAt = time.Now().UTC().Add(-2 * activeWindow)
+	l.sessions[liveKey(LiveSession{EndpointID: "ep1", Source: "claude", SessionID: "gone"})].SeenAt = time.Now().UTC().Add(-2 * activeWindow)
 	l.mu.Unlock()
 
 	if snap := l.Snapshot(); snap.ActiveSessions != 0 {
@@ -86,7 +86,7 @@ func TestLive_SortedByBurnRate(t *testing.T) {
 	l.Report("ep1", "e", []LiveSession{{SessionID: "slow"}, {SessionID: "fast"}})
 	l.mu.Lock()
 	for _, s := range l.sessions {
-		s.SeenAt = time.Now().UTC().Add(-time.Minute)
+		s.ObservedAt = time.Now().UTC().Add(-time.Minute)
 	}
 	l.mu.Unlock()
 	l.Report("ep1", "e", []LiveSession{

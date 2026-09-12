@@ -61,6 +61,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestResponse, error) {
 	id := batch.Identity
+	id.Source = model.UsageSource(id.Source)
 
 	// A fingerprint is a guess at identity made from a reset schedule. When a
 	// known account's schedule matches it, they are the same subscription — and
@@ -87,7 +88,7 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	// An agent too old to say which is which sends no origin at all. Treat
 	// that as a guest: under-recording a real logout is a gap, while trusting
 	// it turns every scan cycle into a fabricated switch.
-	login := batch.AccountOrigin == model.OriginLogin
+	login := batch.AccountOrigin == model.OriginLogin && id.Source == model.SourceClaude
 
 	prev, prevWasLogin, err := s.Store.TouchEndpoint(ep.ID, id, batch.AgentVersion, login)
 	if err != nil {
@@ -125,6 +126,7 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		osUser = ep.OSUser
 	}
 	for i := range batch.Events {
+		batch.Events[i].Source = id.Source
 		batch.Events[i].AccountUUID = id.AccountUUID
 		batch.Events[i].EndpointID = ep.ID
 		batch.Events[i].OSUser = osUser
@@ -139,7 +141,7 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		// The headline total just changed. Recomputing here would put a table
 		// scan on the ingest path; marking it stale lets the next snapshot pay
 		// for it, once, however many endpoints just pushed.
-		s.counter.Invalidate()
+		s.invalidateCounters()
 	}
 	if err != nil {
 		return nil, err
@@ -154,7 +156,7 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	// unconditionally let the silent remainder overwrite the real reason with
 	// an empty string, which is exactly what happened on a live two-machine
 	// hub.
-	if batch.Limits != nil || batch.LimitsUnavailable != "" {
+	if id.Source == model.SourceClaude && (batch.Limits != nil || batch.LimitsUnavailable != "") {
 		if err := s.Store.RecordLimitsUnavailable(ep.ID, batch.LimitsUnavailable); err != nil {
 			return nil, err
 		}
@@ -194,6 +196,10 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		}
 	}
 
+	batch.Identity = id
+	if err := s.ingestObservations(ep.ID, batch); err != nil {
+		return nil, err
+	}
 	return &model.IngestResponse{
 		Accepted:            inserted,
 		Deduped:             deduped,

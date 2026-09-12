@@ -14,6 +14,9 @@ import (
 //
 // The range is widened to whole hours because the rollup cannot split one.
 func (s *Server) scope(w http.ResponseWriter, r *http.Request) (store.Filter, bool) {
+	if _, ok := querySource(w, r); !ok {
+		return store.Filter{}, false
+	}
 	account, ok := s.requireAccount(w, r)
 	if !ok {
 		return store.Filter{}, false
@@ -46,6 +49,7 @@ func (s *Server) scope(w http.ResponseWriter, r *http.Request) (store.Filter, bo
 		Account: account, Start: start, End: end,
 		Endpoint: q.Get("endpoint"), OSUser: q.Get("user"), CWD: q.Get("project"),
 		Model: q.Get("model"), Branch: q.Get("branch"), Team: q.Get("team"), Session: q.Get("session"),
+		Source: q.Get("source"),
 	}
 	return f.AlignHours(), true
 }

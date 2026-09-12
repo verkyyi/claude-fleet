@@ -53,7 +53,9 @@ type Server struct {
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
 	// so it is recomputed on a timer rather than per push.
-	counter Counter
+	counter        Counter
+	sourceCounters scopedCounters
+	quotaLeases    quotaLeases
 
 	// LiveStore holds the seconds-scale view of running sessions. In memory
 	// only: it describes this minute, and a restart legitimately knows nothing
@@ -84,12 +86,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/ingest", s.handleIngest)
 	// Live reports authenticate per endpoint, like ingest.
 	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
+	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
 	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
+	mux.Handle("/v1/collectors", s.viewerOnly(http.HandlerFunc(s.handleCollectors)))
+	mux.Handle("/v1/account-usage", s.viewerOnly(http.HandlerFunc(s.handleAccountUsage)))
 	mux.Handle("/v1/limits", s.viewerOnly(http.HandlerFunc(s.handleLimits)))
 	mux.Handle("/v1/endpoints", s.viewerOnly(http.HandlerFunc(s.handleEndpoints)))
 	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/findings"
+	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -78,12 +79,12 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	for _, m := range models {
 		in.Models = append(in.Models, findings.ModelStat{Model: m.Key, Tokens: m.Tokens, Unpriced: m.Unpriced})
 	}
-	pts, err := s.Store.LimitsHistory(f.Account, f.Start, f.End)
+	pts, err := s.Store.LimitsHistory(f.Account, f.Start, f.End, f.Source)
 	if err != nil {
 		return in, err
 	}
 	prev := f.Prev()
-	prevPts, err := s.Store.LimitsHistory(f.Account, prev.Start, prev.End)
+	prevPts, err := s.Store.LimitsHistory(f.Account, prev.Start, prev.End, f.Source)
 	if err != nil {
 		return in, err
 	}
@@ -106,6 +107,13 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 		in.Critical = append(in.Critical, findings.AccountCritical{Label: labels[a], Seconds: secs, PrevSeconds: prevSecs, Episodes: eps})
 	}
 	cur, err := s.Store.UsageByFiltered(f, store.ByProject, 50)
+	qs, qerr := s.QuotaHistorySeries(f, 400)
+	if qerr != nil {
+		return in, qerr
+	}
+	for _, q := range qs {
+		in.Critical = append(in.Critical, findings.AccountCritical{Label: q.Label, Seconds: q.CriticalSeconds, PrevSeconds: q.PrevCriticalSeconds, Episodes: q.CriticalEpisodes})
+	}
 	if err != nil {
 		return in, err
 	}
@@ -142,11 +150,15 @@ func projectStat(b store.Bucket, prevTokens int64) findings.ProjectStat {
 }
 
 func (s *Server) handleNowFindings(w http.ResponseWriter, r *http.Request) {
+	source, valid := querySource(w, r)
+	if !valid {
+		return
+	}
 	account, ok := s.requireAccount(w, r)
 	if !ok {
 		return
 	}
-	in, err := s.GatherNow(account)
+	in, err := s.GatherNowSource(account, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -164,13 +176,33 @@ func (s *Server) handleNowFindings(w http.ResponseWriter, r *http.Request) {
 // Exported for the same cross-package reason as GatherReview; callers pass
 // the result to findings.Now.
 func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
+	return s.GatherNowSource(account, "")
+}
+
+func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, error) {
 	in := findings.NowInputs{Now: time.Now().UTC()}
 	accts, err := s.Store.ListAccounts()
 	if err != nil {
 		return in, err
 	}
 	for _, a := range accts {
+		if source != "" && model.UsageSource(a.Source) != source {
+			continue
+		}
 		if account != store.AllAccounts && a.AccountUUID != account {
+			continue
+		}
+		if a.Source == model.SourceCodex {
+			v, err := s.codexLimitsFor(a.AccountUUID)
+			if err != nil {
+				return in, err
+			}
+			if !v.Available {
+				continue
+			}
+			for _, w := range v.Windows {
+				in.Windows = append(in.Windows, findings.WindowStat{Label: a.Label(), Window: w.Label, FiveHourPct: w.Utilization})
+			}
 			continue
 		}
 		snap, err := s.Store.LatestLimits(a.AccountUUID)
@@ -183,7 +215,7 @@ func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
 	if scopeAcct == store.AllAccounts {
 		scopeAcct = ""
 	}
-	eps, err := s.Store.ListEndpoints(scopeAcct)
+	eps, err := s.Store.ListEndpoints(scopeAcct, source)
 	if err != nil {
 		return in, err
 	}
@@ -194,10 +226,7 @@ func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
 		}
 		in.Endpoints = append(in.Endpoints, findings.EndpointSeen{Label: label, LastSeen: e.LastSeen})
 	}
-	for _, l := range s.liveStore().Snapshot().Sessions {
-		if account != store.AllAccounts && l.Account != "" && l.Account != account {
-			continue
-		}
+	for _, l := range s.FilterLive(s.liveStore().Snapshot(), account, source).Sessions {
 		in.Live = append(in.Live, findings.LiveStat{SessionID: l.SessionID, CWD: l.CWD, Tokens: l.InputTokens + l.OutputTokens})
 	}
 	return in, nil

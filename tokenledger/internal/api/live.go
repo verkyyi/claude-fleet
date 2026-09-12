@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/verkyyi/ccquota/internal/model"
 )
 
 // LiveSession is one running Claude Code session as its own statusLine
@@ -19,11 +21,18 @@ import (
 // adds it to the totals — two different measurements of overlapping things,
 // summed, would be wrong in a way nobody could see.
 type LiveSession struct {
-	SessionID  string    `json:"session_id"`
-	EndpointID string    `json:"endpoint_id"`
-	Endpoint   string    `json:"endpoint"`
-	Account    string    `json:"account,omitempty"`
-	SeenAt     time.Time `json:"seen_at"`
+	Source         string    `json:"source"`
+	ProfileID      string    `json:"profile_id,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
+	State          string    `json:"state"`
+	ContextUnknown bool      `json:"context_unknown,omitempty"`
+	CostUnknown    bool      `json:"cost_unknown,omitempty"`
+	LinesUnknown   bool      `json:"lines_unknown,omitempty"`
+	SessionID      string    `json:"session_id"`
+	EndpointID     string    `json:"endpoint_id"`
+	Endpoint       string    `json:"endpoint"`
+	Account        string    `json:"account,omitempty"`
+	SeenAt         time.Time `json:"seen_at"`
 
 	// OSUser is filled in by the hub's enrich hook from the endpoint's own
 	// record, not reported by the agent on every heartbeat: Live has no store
@@ -95,30 +104,59 @@ func NewLive() *Live {
 
 // Report merges an endpoint's snapshot of its running sessions.
 func (l *Live) Report(endpointID, endpointLabel string, in []LiveSession) {
+	l.report(endpointID, endpointLabel, in, false)
+}
+
+func liveKey(s LiveSession) string {
+	return s.EndpointID + "\x00" + s.Source + "\x00" + s.ProfileID + "\x00" + s.SessionID
+}
+
+func (l *Live) report(endpointID, endpointLabel string, in []LiveSession, complete bool) {
 	now := time.Now().UTC()
 
 	l.mu.Lock()
+	present := map[string]bool{}
 	for i := range in {
 		s := in[i]
+		s.Source = model.UsageSource(s.Source)
 		s.EndpointID = endpointID
 		s.Endpoint = endpointLabel
 		s.SeenAt = now
+		if s.ObservedAt.IsZero() && s.Source == model.SourceClaude {
+			s.ObservedAt = now
+		}
+		key := liveKey(s)
+		if s.SessionID == "" || s.ObservedAt.IsZero() || s.ObservedAt.After(now.Add(time.Minute)) || now.Sub(s.ObservedAt) > activeWindow || s.State == "completed" || s.State == "interrupted" {
+			delete(l.sessions, key)
+			continue
+		}
+		present[key] = true
 
 		// Rates come from the change between two reports of the same session.
 		// A single report carries running totals and cannot express a rate.
-		if prev, ok := l.sessions[s.SessionID]; ok {
-			if dt := now.Sub(prev.SeenAt).Minutes(); dt > 0.01 {
+		if prev, ok := l.sessions[key]; ok {
+			if s.ObservedAt.Before(prev.ObservedAt) {
+				continue
+			}
+			if dt := s.ObservedAt.Sub(prev.ObservedAt).Minutes(); dt > 0.01 {
 				dTok := float64((s.InputTokens + s.OutputTokens) - (prev.InputTokens + prev.OutputTokens))
 				if dTok >= 0 {
 					s.TokensPerMin = dTok / dt
 				}
 				dUSD := s.CostUSD - prev.CostUSD
-				if dUSD >= 0 {
+				if dUSD >= 0 && !s.CostUnknown && !prev.CostUnknown {
 					s.USDPerHour = dUSD / (dt / 60)
 				}
 			}
 		}
-		l.sessions[s.SessionID] = &s
+		l.sessions[key] = &s
+	}
+	if complete {
+		for key, s := range l.sessions {
+			if s.EndpointID == endpointID && !present[key] {
+				delete(l.sessions, key)
+			}
+		}
 	}
 	l.pruneLocked(now)
 	l.mu.Unlock()
@@ -128,7 +166,7 @@ func (l *Live) Report(endpointID, endpointLabel string, in []LiveSession) {
 
 func (l *Live) pruneLocked(now time.Time) {
 	for id, s := range l.sessions {
-		if now.Sub(s.SeenAt) > activeWindow {
+		if now.Sub(s.SeenAt) > activeWindow || (!s.ObservedAt.IsZero() && now.Sub(s.ObservedAt) > activeWindow) {
 			delete(l.sessions, id)
 		}
 	}
@@ -154,8 +192,9 @@ type Snapshot struct {
 	// They fall when a session ends and leaves the window. That is honest:
 	// this is "in flight right now", not a cumulative ledger. The durable
 	// totals live in the store.
-	SessionTokens int64   `json:"session_tokens"`
-	SessionCost   float64 `json:"session_cost_usd"`
+	SessionTokens    int64   `json:"session_tokens"`
+	SessionCost      float64 `json:"session_cost_usd"`
+	UnpricedSessions int     `json:"unpriced_sessions"`
 
 	// Counter is the all-time stored total plus the terms the page needs to
 	// project between measurements. Separate from everything above because it
@@ -165,9 +204,7 @@ type Snapshot struct {
 	Note string `json:"note"`
 }
 
-const liveNote = "Live figures come from each session's own statusLine, seconds old. " +
-	"They are Claude Code's per-session accounting and are shown alongside the " +
-	"stored totals, never added to them."
+const liveNote = "Claude statusLine heartbeats and Codex log observations. Codex is recent activity, not a continuous liveness guarantee. Session totals overlap the durable ledger and are never added to it."
 
 // Snapshot returns the current picture, newest-busiest first.
 func (l *Live) Snapshot() Snapshot {
@@ -186,6 +223,9 @@ func (l *Live) Snapshot() Snapshot {
 		out.LinesRemoved += s.LinesRemoved
 		out.SessionTokens += s.InputTokens + s.OutputTokens
 		out.SessionCost += s.CostUSD
+		if s.CostUnknown {
+			out.UnpricedSessions++
+		}
 		if s.Billing == "api" {
 			out.APISessions++
 		}
@@ -329,6 +369,7 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		Sessions []LiveSession `json:"sessions"`
+		Complete bool          `json:"complete"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed live report: "+err.Error())
@@ -339,7 +380,7 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = ep.Hostname
 	}
-	s.LiveStore.Report(ep.ID, label, body.Sessions)
+	s.liveStore().report(ep.ID, label, body.Sessions, body.Complete)
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(body.Sessions)})
 }
 
@@ -357,7 +398,11 @@ func (s *Server) liveStore() *Live {
 
 // handleLiveSnapshot returns the current picture as plain JSON.
 func (s *Server) handleLiveSnapshot(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.liveStore().Snapshot())
+	account, source, ok := liveScope(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.FilterLive(s.liveStore().Snapshot(), account, source))
 }
 
 // handleLiveStream pushes snapshots over Server-Sent Events.
@@ -365,6 +410,11 @@ func (s *Server) handleLiveSnapshot(w http.ResponseWriter, r *http.Request) {
 // SSE rather than websockets: this is one-way, it is a handful of KB every few
 // seconds, and it survives proxies that would need explicit upgrade handling.
 func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
+	account, source, valid := liveScope(w, r)
+	if !valid {
+		return
+	}
+	l := s.liveStore()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httpError(w, http.StatusInternalServerError, "streaming unsupported")
@@ -381,13 +431,13 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 
 	// Send the current state immediately: a viewer should not wait for the
 	// next agent report to see anything.
-	if b, err := json.Marshal(s.liveStore().Snapshot()); err == nil {
+	if b, err := json.Marshal(s.FilterLive(l.Snapshot(), account, source)); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
 	}
 
-	ch := s.LiveStore.subscribe()
-	defer s.LiveStore.unsubscribe(ch)
+	ch := l.subscribe()
+	defer l.unsubscribe(ch)
 
 	// A heartbeat keeps intermediaries from timing out an idle stream, and
 	// lets the browser notice a dead connection.
@@ -399,10 +449,20 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case b := <-ch:
+			var snap Snapshot
+			if json.Unmarshal(b, &snap) != nil {
+				continue
+			}
+			b, err := json.Marshal(s.FilterLive(snap, account, source))
+			if err != nil {
+				continue
+			}
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
 		case <-beat.C:
-			fmt.Fprint(w, ": keepalive\n\n")
+			if b, err := json.Marshal(s.FilterLive(l.Snapshot(), account, source)); err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", b)
+			}
 			flusher.Flush()
 		}
 	}

@@ -185,6 +185,7 @@ var limitProp = map[string]any{
 // chipProps are the drill-down dimensions store.Filter accepts, at most one
 // value per dimension, ANDed together.
 var chipProps = map[string]any{
+	"source":   map[string]any{"type": "string", "description": "Limit token usage to a source, such as claude or codex."},
 	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id."},
 	"user":     map[string]any{"type": "string", "description": "Limit to one OS login."},
 	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)."},
@@ -208,29 +209,33 @@ func withChips(base map[string]any) map[string]any {
 
 func toolSpecs() []toolSpec {
 	return []toolSpec{
+		{Name: "get_collectors", Title: "Collection status by source", Description: "Source profile health, latest scan/event, client version, quota query failures and queue backlog." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "get_account_usage", Title: "Service account activity", Description: "Independent service totals and locally attributed details. Overlap exists; they must never be added or treated as directly comparable." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "get_live", Title: "Live and recent sessions", Description: "Claude heartbeats and Codex recent log activity, filtered by source/account, with scoped aggregates. Never add these overlapping counters to stored totals." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
+		{Name: "quota_history", Title: "Provider quota window history", Description: "Codex provider-defined quota windows and critical time within the selected interval. Windows and accounts are separate series; percentages are not added." + caveat, InputSchema: obj(withChips(map[string]any{"account": accountProp, "since": sinceProp, "until": untilProp}))},
 		{
 			Name:  "list_accounts",
 			Title: "List subscriptions",
-			Description: "List the Claude subscriptions this hub tracks, with plan tier and how " +
+			Description: "List the subscriptions and local usage pools this hub tracks, with source, plan tier and how " +
 				"many endpoints report on each. Call this first when you do not know the account uuid.",
-			InputSchema: obj(map[string]any{}),
+			InputSchema: obj(map[string]any{"source": chipProps["source"]}),
 		},
 		{
 			Name:  "get_limits",
 			Title: "Current rate-limit state",
-			Description: "How much of the 5-hour and 7-day windows a subscription has used right now, " +
+			Description: "How much of each provider-defined quota window a subscription has used right now, " +
 				"when each resets, the current burn rate, and a projection of when the window would be " +
 				"exhausted. Also breaks the 5-hour window down by endpoint. If the reading is " +
 				"unavailable the response says so with a reason — treat that as unknown and do NOT " +
 				"report zero." + caveat,
-			InputSchema: obj(map[string]any{"account": accountProp}),
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]}),
 		},
 		{
 			Name:  "list_endpoints",
 			Title: "List collecting machines",
 			Description: "The machines reporting into this hub: hostname, OS, agent version and when " +
 				"each was last heard from. Useful for spotting an agent that has stopped reporting.",
-			InputSchema: obj(map[string]any{"account": accountProp}),
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]}),
 		},
 		{
 			Name:  "usage_by_account",
@@ -238,9 +243,9 @@ func toolSpecs() []toolSpec {
 			Description: "Token and cost totals grouped by subscription — which of several " +
 				"Claude plans a period's spend landed on. Subscription is an ordinary axis here, " +
 				"the same shape of question as by-machine or by-project." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"since": sinceProp, "until": untilProp, "limit": limitProp,
-			}),
+			})),
 		},
 		{
 			Name:  "list_account_switches",
@@ -251,7 +256,7 @@ func toolSpecs() []toolSpec {
 				"unreliable. Use it to explain a total that looks wrong for a period. " +
 				"This is rare: running several subscriptions side by side is NOT a switch — " +
 				"for that, call list_endpoint_accounts.",
-			InputSchema: obj(map[string]any{"limit": limitProp}),
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"], "limit": limitProp}),
 		},
 		{
 			Name:  "list_endpoint_accounts",
@@ -261,7 +266,15 @@ func toolSpecs() []toolSpec {
 				"subscription observed in a session on it. A machine can run several AT THE " +
 				"SAME TIME — Claude Code takes its account from the process environment — so " +
 				"this is a list per machine, not one value.",
-			InputSchema: obj(map[string]any{"limit": limitProp}),
+			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"], "limit": limitProp}),
+		},
+		{
+			Name:        "usage_by_source",
+			Title:       "Token usage by source",
+			Description: "Token and notional cost totals grouped by collector source, such as Claude Code or Codex." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
 		},
 		{
 			Name:  "usage_by_user",
@@ -271,48 +284,48 @@ func toolSpecs() []toolSpec {
 				"own Claude Code install, transcripts and credentials, so this is a different " +
 				"axis from by-machine, and on a multi-user box it is usually the one you " +
 				"want." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
-			}),
+			})),
 		},
 		{
 			Name:  "usage_by_endpoint",
 			Title: "Spend by machine",
 			Description: "Token and cost totals grouped by machine over a time range — which server or " +
 				"laptop is consuming the subscription." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
-			}),
+			})),
 		},
 		{
 			Name:  "usage_by_project",
 			Title: "Spend by project",
 			Description: "Token and cost totals grouped by working directory over a time range — which " +
 				"codebase the spend went to." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
-			}),
+			})),
 		},
 		{
 			Name:  "usage_by_session",
 			Title: "Spend by session",
 			Description: "Token and cost totals grouped by Claude Code session, including how much went " +
 				"to subagents. Use this to find a single runaway session." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
-			}),
+			})),
 		},
 		{
 			Name:  "usage_history",
 			Title: "Usage over time",
 			Description: "A time series of a subscription's usage plus a per-model split, for trend and " +
 				"capacity questions." + caveat,
-			InputSchema: obj(map[string]any{
+			InputSchema: obj(withChips(map[string]any{
 				"account":     accountProp,
 				"since":       sinceProp,
 				"until":       untilProp,
 				"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": `Bucket size; defaults to "day".`},
-			}),
+			})),
 		},
 		{
 			Name:  "usage_summary",
@@ -404,11 +417,41 @@ func (s *mcpServer) callTool(raw json.RawMessage) (any, *rpcError) {
 }
 
 func (s *mcpServer) run(name string, args map[string]any) (any, error) {
+	if source := str(args, "source"); source != "" && source != "claude" && source != "codex" {
+		return nil, fmt.Errorf("source must be claude or codex")
+	}
 	switch name {
+	case "get_collectors":
+		rows, err := s.api.Store.Collectors(str(args, "account"), str(args, "source"))
+		return map[string]any{"collectors": rows}, err
+	case "get_account_usage":
+		return s.api.AccountUsageView(str(args, "account"), str(args, "source"))
+	case "get_live":
+		l := s.api.LiveStore
+		if l == nil {
+			l = api.NewLive()
+		}
+		return s.api.FilterLive(l.Snapshot(), str(args, "account"), str(args, "source")), nil
+	case "quota_history":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := s.api.QuotaHistorySeries(f, 400)
+		return map[string]any{"account_uuid": f.Account, "since": f.Start, "until": f.End, "series": rows}, err
 	case "list_accounts":
 		accts, err := s.api.Store.ListAccounts()
 		if err != nil {
 			return nil, err
+		}
+		if source := str(args, "source"); source != "" {
+			filtered := accts[:0]
+			for _, account := range accts {
+				if account.Source == source {
+					filtered = append(filtered, account)
+				}
+			}
+			accts = filtered
 		}
 		if len(accts) == 0 {
 			return map[string]any{
@@ -422,30 +465,30 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		// Spanning subscriptions returns a LIST, never a total: separate quota
 		// pools with separate resets cannot be added.
 		if a := str(args, "account"); a == "all" || a == store.AllAccounts {
-			return s.api.LimitsForAll()
+			return s.api.LimitsForAllSource(str(args, "source"))
 		}
 		account, err := s.account(args)
 		if err != nil {
 			return nil, err
 		}
 		if account == store.AllAccounts {
-			return s.api.LimitsForAll()
+			return s.api.LimitsForAllSource(str(args, "source"))
 		}
-		return s.api.LimitsFor(account)
+		return s.api.LimitsForSource(account, str(args, "source"))
 
 	case "list_endpoints":
 		account := str(args, "account")
 		if account == "all" || account == store.AllAccounts {
 			account = ""
 		}
-		eps, err := s.api.Store.ListEndpoints(account)
+		eps, err := s.api.Store.ListEndpoints(account, str(args, "source"))
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"endpoints": eps, "now": time.Now().UTC()}, nil
 
 	case "list_account_switches":
-		sw, err := s.api.Store.AccountSwitches("", intArg(args, "limit"))
+		sw, err := s.api.Store.SourceSwitches(str(args, "account"), str(args, "source"), intArg(args, "limit"))
 		if err != nil {
 			return nil, err
 		}
@@ -456,13 +499,15 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}, nil
 
 	case "usage_by_account":
-		return s.usage(map[string]any{
-			"account": store.AllAccounts,
-			"since":   args["since"], "until": args["until"], "limit": args["limit"],
-		}, store.ByAccount)
+		all := make(map[string]any, len(args)+1)
+		for k, v := range args {
+			all[k] = v
+		}
+		all["account"] = store.AllAccounts
+		return s.usage(all, store.ByAccount)
 
 	case "list_endpoint_accounts":
-		eas, err := s.api.Store.EndpointAccounts("", intArg(args, "limit"))
+		eas, err := s.api.Store.EndpointAccounts(str(args, "account"), intArg(args, "limit"), str(args, "source"))
 		if err != nil {
 			return nil, err
 		}
@@ -474,6 +519,8 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 
 	case "usage_by_endpoint":
 		return s.usage(args, store.ByEndpoint)
+	case "usage_by_source":
+		return s.usage(args, store.BySource)
 	case "usage_by_user":
 		return s.usage(args, store.ByUser)
 	case "usage_by_project":
@@ -564,14 +611,14 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if id == "" {
 			return nil, fmt.Errorf("session_id is required")
 		}
-		head, err := s.api.Store.Session(account, id)
+		head, err := s.api.Store.Session(account, id, str(args, "source"))
 		if err != nil {
 			return nil, err
 		}
 		if head == nil {
 			return nil, fmt.Errorf("unknown session %q", id)
 		}
-		turns, err := s.api.Store.SessionTurns(account, id)
+		turns, err := s.api.Store.SessionTurns(account, id, str(args, "source"))
 		if err != nil {
 			return nil, err
 		}
@@ -590,7 +637,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			in, err := s.api.GatherNow(account)
+			in, err := s.api.GatherNowSource(account, str(args, "source"))
 			if err != nil {
 				return nil, err
 			}
@@ -639,17 +686,17 @@ func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
 		Account: account, Start: start, End: end,
 		Endpoint: str(args, "endpoint"), OSUser: str(args, "user"), CWD: str(args, "project"),
 		Model: str(args, "model"), Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
+		Source: str(args, "source"),
 	}
 	return f.AlignHours(), nil
 }
 
 func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
-	account, err := s.account(args)
+	f, err := s.filter(args)
 	if err != nil {
 		return nil, err
 	}
-	start, end := timeRange(args)
-	f := store.Filter{Account: account, Start: start, End: end}.AlignHours()
+	account := f.Account
 	buckets, err := s.api.Store.UsageByFiltered(f, d, intArg(args, "limit"))
 	if err != nil {
 		return nil, err

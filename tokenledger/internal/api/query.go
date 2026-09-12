@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/recon"
 	"github.com/verkyyi/ccquota/internal/store"
 )
@@ -19,9 +20,14 @@ import (
 // percentage shown with the same weight as a live one is the failure this
 // whole project exists to avoid.
 type LimitsView struct {
-	AccountUUID string `json:"account_uuid"`
-	Available   bool   `json:"available"`
-	Reason      string `json:"reason,omitempty"`
+	Source      string               `json:"source,omitempty"`
+	Plan        string               `json:"plan,omitempty"`
+	Windows     []ProviderWindow     `json:"windows,omitempty"`
+	Credits     []model.QuotaCredits `json:"credits,omitempty"`
+	Blocked     bool                 `json:"blocked,omitempty"`
+	AccountUUID string               `json:"account_uuid"`
+	Available   bool                 `json:"available"`
+	Reason      string               `json:"reason,omitempty"`
 
 	ObservedAt *time.Time `json:"observed_at,omitempty"`
 	// StaleSeconds is how old the reading is. The UI greys out a reading older
@@ -38,6 +44,31 @@ type LimitsView struct {
 	EndpointShares []recon.Share `json:"endpoint_shares,omitempty"`
 
 	Disclaimer string `json:"disclaimer"`
+}
+
+type ProviderWindow struct {
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	WindowView
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	LimitID string `json:"limit_id"`
+	Minutes int64  `json:"minutes,omitempty"`
+}
+
+func (v *LimitsView) HighestUtilization() float64 {
+	if v.Blocked {
+		return 100
+	}
+	var n float64
+	if v.FiveHour != nil {
+		n = v.FiveHour.Utilization
+	}
+	for _, w := range v.Windows {
+		if w.Utilization > n {
+			n = w.Utilization
+		}
+	}
+	return n
 }
 
 // WindowView is one rate-limit bucket plus its projection.
@@ -91,6 +122,13 @@ const acrossNote = "Utilization is per subscription and is never summed: separat
 
 // LimitsFor builds the view for one account.
 func (s *Server) LimitsFor(account string) (*LimitsView, error) {
+	source, err := s.Store.SourceForAccount(account)
+	if err != nil {
+		return nil, err
+	}
+	if source == model.SourceCodex {
+		return s.codexLimitsFor(account)
+	}
 	view := &LimitsView{AccountUUID: account, Disclaimer: shareDisclaimer}
 
 	snap, err := s.Store.LatestLimits(account)
@@ -98,6 +136,14 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 		return nil, err
 	}
 	if snap == nil {
+		source, err := s.Store.SourceForAccount(account)
+		if err != nil {
+			return nil, err
+		}
+		if source == model.SourceCodex {
+			view.Reason = "Codex local usage reports token consumption only; subscription limits are not collected"
+			return view, nil
+		}
 		ep, reason, err := s.Store.LimitsReason(account)
 		if err != nil {
 			return nil, err
@@ -149,12 +195,19 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 
 // LimitsForAll builds one reading per subscription.
 func (s *Server) LimitsForAll() (*LimitsAcross, error) {
+	return s.LimitsForAllSource("")
+}
+
+func (s *Server) LimitsForAllSource(source string) (*LimitsAcross, error) {
 	accts, err := s.Store.ListAccounts()
 	if err != nil {
 		return nil, err
 	}
-	out := &LimitsAcross{Note: acrossNote}
+	out := &LimitsAcross{Note: acrossNote, PerAccount: []AccountLimits{}}
 	for _, a := range accts {
+		if source != "" && model.UsageSource(a.Source) != source {
+			continue
+		}
 		v, err := s.LimitsFor(a.AccountUUID)
 		if err != nil {
 			return nil, err
@@ -164,8 +217,8 @@ func (s *Server) LimitsForAll() (*LimitsAcross, error) {
 
 		// "Worst" compares readings we actually have; an unavailable one is
 		// unknown, not zero, and must not win by default.
-		if v.Available && v.FiveHour != nil {
-			if out.Worst == nil || v.FiveHour.Utilization > out.Worst.Limits.FiveHour.Utilization {
+		if v.Available && (v.FiveHour != nil || len(v.Windows) > 0 || v.Blocked) {
+			if out.Worst == nil || v.HighestUtilization() > out.Worst.Limits.HighestUtilization() {
 				w := entry
 				out.Worst = &w
 			}
@@ -205,10 +258,14 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
+	source, valid := querySource(w, r)
+	if !valid {
+		return
+	}
 	// Spanning subscriptions returns a different SHAPE — a list, not a total —
 	// because utilization cannot be added up. Callers must handle both.
 	if isAllAccounts(r.URL.Query().Get("account")) {
-		across, err := s.LimitsForAll()
+		across, err := s.LimitsForAllSource(source)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -220,7 +277,7 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view, err := s.LimitsFor(account)
+	view, err := s.LimitsForSource(account, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -234,11 +291,15 @@ func isAllAccounts(v string) bool {
 }
 
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	source, ok := querySource(w, r)
+	if !ok {
+		return
+	}
 	account := r.URL.Query().Get("account")
 	if isAllAccounts(account) {
 		account = ""
 	}
-	eps, err := s.Store.ListEndpoints(account)
+	eps, err := s.Store.ListEndpoints(account, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -278,6 +339,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		for i := range buckets {
 			if p, ok := byKey[buckets[i].Key]; ok {
 				buckets[i].PrevEvents, buckets[i].PrevTokens, buckets[i].PrevCostUSD = p.Events, p.Tokens, p.CostUSD
+				buckets[i].PrevUnpriced = p.Unpriced
 			}
 		}
 	}
@@ -372,12 +434,16 @@ func (s *Server) handleAccountLabel(w http.ResponseWriter, r *http.Request) {
 // handleEndpointAccounts answers "which subscriptions is each machine running",
 // which on a machine running several at once is a list, not a single value.
 func (s *Server) handleEndpointAccounts(w http.ResponseWriter, r *http.Request) {
+	source, ok := querySource(w, r)
+	if !ok {
+		return
+	}
 	account := r.URL.Query().Get("account")
 	if isAllAccounts(account) {
 		account = ""
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	eas, err := s.Store.EndpointAccounts(account, limit)
+	eas, err := s.Store.EndpointAccounts(account, limit, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -389,12 +455,16 @@ func (s *Server) handleEndpointAccounts(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleSwitches(w http.ResponseWriter, r *http.Request) {
+	source, ok := querySource(w, r)
+	if !ok {
+		return
+	}
 	account := r.URL.Query().Get("account")
 	if isAllAccounts(account) {
 		account = ""
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	sw, err := s.Store.AccountSwitches(account, limit)
+	sw, err := s.Store.SourceSwitches(account, source, limit)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

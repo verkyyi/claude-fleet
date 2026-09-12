@@ -194,8 +194,8 @@ func unpriced(ms []ModelStat) []Finding {
 		}
 		out = append(out, Finding{
 			Severity: "warning", Kind: "unpriced_model",
-			Title:  fmt.Sprintf("%s has no price: %s tokens over %d turns show as $0", m.Model, tokens(m.Tokens), m.Unpriced),
-			Detail: "Spend totals under-count until the model is added to the pricing table.",
+			Title:  fmt.Sprintf("%s: %d requests have incomplete pricing", m.Model, m.Unpriced),
+			Detail: "A price or required usage metadata is missing. These requests are excluded from cost totals; their cost is unknown.",
 			Scope:  map[string]string{"model": m.Model},
 			weight: float64(m.Tokens),
 		})
@@ -290,6 +290,7 @@ func spike(in Inputs) []Finding {
 // ---- Now ----
 
 type WindowStat struct {
+	Window      string
 	Label       string
 	FiveHourPct float64
 }
@@ -319,8 +320,12 @@ func Now(in NowInputs) []Finding {
 		if w.FiveHourPct >= windowCriticalPct {
 			sev = "critical"
 		}
+		window := w.Window
+		if window == "" {
+			window = "5-hour window"
+		}
 		fs = append(fs, Finding{Severity: sev, Kind: "window_high",
-			Title: fmt.Sprintf("%s is at %.0f%% of its 5-hour window", w.Label, w.FiveHourPct),
+			Title: fmt.Sprintf("%s is at %.0f%% of its %s", w.Label, w.FiveHourPct, window),
 			Link:  "#wall", weight: w.FiveHourPct})
 	}
 	for _, e := range in.Endpoints {
