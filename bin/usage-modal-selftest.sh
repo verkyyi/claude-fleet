@@ -64,8 +64,10 @@ CHECKS=$((CHECKS + 1))
 # (fleet_same_window): ccquota's resets_at jitters by ~1s between polls, and an
 # exact compare re-armed the 70% warning every tick (seven copies to one session).
 CHECKS=$((CHECKS + 1))
-grep -q 'fleet_same_window "$mk" "$qreset" && continue' "$BIN/tmux-dash-collect.sh" \
-  || fail "the collector's quota markers must go through fleet_same_window"
+# (The block moved out of the collector into bin/fleet-quotawatch.sh — its own
+# 60s tick — in issue #551; the marker contract is unchanged.)
+grep -q 'fleet_same_window "$mk" "$qreset" && continue' "$BIN/fleet-quotawatch.sh" \
+  || fail "the quota watch's markers must go through fleet_same_window"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 _t=$(mktemp); printf '1788375599' > "$_t"

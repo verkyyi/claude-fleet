@@ -24,6 +24,21 @@
 #   global/usage.filecache— per-file raw token sums keyed by (mtime,size) — memoizes
 #                           the usage scan so unchanged transcripts aren't re-read
 #   global/ratelimit      — last-seen official weekly-% line + epoch (scrape, every run)
+#   global/collect.pid    — "pid<TAB>start-epoch" of the running tick (overlap guard, #551)
+#   global/collect.heartbeat — key=value: pid/start/phase/phase_ts/phases/end/dur — the
+#                           tick's progress + per-phase seconds (last complete tick), so a
+#                           slow or wedged phase is visible in one look (#551)
+# The ccquota PRE-EMPTIVE rotation (issue #513) is NOT a block of this tick any more
+# (issue #551): it lives in bin/fleet-quotawatch.sh, its own 60s daemon
+# (com.claude-fleet.quotawatch), and is ALSO run first thing below — before any gh
+# work — so its cadence never rides this tick's gh latency.
+#
+# Overlap guard (#551): ONE tick at a time. launchd/systemd never overlap a
+# StartInterval job themselves, but a tick can be started by hand / by fleet-up
+# while one runs; and a tick wedged on an un-timeboxed `gh` blocked every later
+# phase (git/ctx/usage — and, pre-#551, the quota watch) for hours. So: a live
+# previous tick younger than FLEET_COLLECT_DEADLINE (600s) ⇒ this one skips; older
+# ⇒ it is killed (whole process tree) and superseded.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -37,7 +52,8 @@ G="$C/global"; mkdir -p "$G"
 # Sweep this run's PID-unique temps on exit (across the global/ + fleets/<slug>/
 # subdirs now): the per-repo gh fetches only `mv` their temp on success, so a failed
 # fetch would otherwise orphan a 0-byte issues.<pid> (and sessmap.<pid>) forever.
-trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true' EXIT
+trap 'find "$C" -maxdepth 3 -name "*.'"$$"'" -delete 2>/dev/null || true; [ "$(cut -f1 "$G/collect.pid" 2>/dev/null)" = "$$" ] && rm -f "$G/collect.pid"' EXIT
+trap 'exit 143' INT TERM   # a supersede's SIGTERM still runs the EXIT trap (temp sweep)
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
@@ -159,6 +175,67 @@ if [ -n "$TARGET_ISSUES_REPO" ]; then
   exit 0
 fi
 
+# --- overlap guard (issue #551): one full tick at a time -------------------------
+# global/collect.pid holds "pid<TAB>start-epoch" of the running tick. A live
+# holder that really IS a collector (pid recycling: verify the command line, never
+# trust a bare `kill -0`) younger than FLEET_COLLECT_DEADLINE ⇒ skip this tick, say
+# so on stderr (→ logs/collect.launchd.log). Older ⇒ it is wedged: TERM its whole
+# process tree (pipeline subshells, a hung gh/python) and take over. The targeted
+# `--issues` kick above bypasses this on purpose (short, single writer of its own
+# file, and the webhook wants it NOW).
+kill_tree() {  # TERM <pid> and every descendant (children first is not needed: TERM, not KILL)
+  local ps p kids; ps=$(ps -axo pid=,ppid=) || { kill -TERM "$1" 2>/dev/null; return 0; }
+  set -- "$1"
+  while [ $# -gt 0 ]; do
+    p=$1; shift
+    kids=$(printf '%s\n' "$ps" | awk -v p="$p" '$2==p{print $1}')
+    kill -TERM "$p" 2>/dev/null
+    # shellcheck disable=SC2086  # deliberate word-split: one pid per word
+    set -- "$@" $kids
+  done
+  return 0
+}
+PIDF="$G/collect.pid"; DEADLINE="${FLEET_COLLECT_DEADLINE:-600}"
+opid=''; ots=''
+[ -f "$PIDF" ] && IFS=$'\t' read -r opid ots < "$PIDF"
+case "$opid" in ''|*[!0-9]*) opid='';; esac
+case "$ots"  in ''|*[!0-9]*) ots=0;;   esac
+if [ -n "$opid" ] && [ "$opid" != "$$" ] && kill -0 "$opid" 2>/dev/null \
+   && ps -o command= -p "$opid" 2>/dev/null | grep -q 'tmux-dash-collect'; then
+  _age=$(( $(now) - ots ))
+  if [ "$_age" -lt "$DEADLINE" ]; then
+    printf 'fleet-collect: skip — tick %s still running (%ss, deadline %ss)\n' "$opid" "$_age" "$DEADLINE" >&2
+    exit 0
+  fi
+  printf 'fleet-collect: tick %s exceeded the %ss deadline (%ss) — killing it and taking over\n' "$opid" "$DEADLINE" "$_age" >&2
+  kill_tree "$opid"
+fi
+printf '%s\t%s\n' "$$" "$(now)" > "$PIDF"
+
+# --- heartbeat (issue #551): where the tick is + how long each phase took ---------
+# global/collect.heartbeat, key=value lines, rewritten atomically at every phase
+# boundary: pid, start, phase (the one RUNNING; `done` after the tick), phase_ts,
+# phases ("sessmap=1 issues=12 …" — seconds, accumulated as they complete), and
+# end + dur once complete. `fleet-doctor.sh` reads it (last tick age, duration,
+# slowest phase); a tick that died mid-way leaves phase=<where> with no end=.
+HB="$G/collect.heartbeat"; HB_START=$(now); HB_PHASE=''; HB_PHASE_TS=$HB_START; HB_PHASES=''
+hb_phase() {  # $1 = the phase now starting ('' = the tick is done)
+  local t; t=$(now)
+  [ -n "$HB_PHASE" ] && HB_PHASES="${HB_PHASES}${HB_PHASES:+ }${HB_PHASE}=$(( t - HB_PHASE_TS ))"
+  HB_PHASE="$1"; HB_PHASE_TS=$t
+  { printf 'pid=%s\nstart=%s\nphase=%s\nphase_ts=%s\nphases=%s\n' "$$" "$HB_START" "${HB_PHASE:-done}" "$t" "$HB_PHASES"
+    [ -z "$HB_PHASE" ] && printf 'end=%s\ndur=%s\n' "$t" "$(( t - HB_START ))"; } | atomic_write "$HB"
+}
+
+# --- quota watch FIRST (issue #551): before any gh/git/python work ---------------
+# The ccquota pre-emptive rotation (bin/fleet-quotawatch.sh) has its own 60s
+# daemon; running it here too, at the very top, keeps an install whose daemon set
+# predates #551 watching at THIS tick's cadence — and costs nothing on a healthy
+# one (its fetch is TTL-gated, its lock skips an in-flight tick, its markers dedup
+# every action). stderr passes through to the collector log.
+hb_phase quotawatch
+bash "$BIN/fleet-quotawatch.sh" --caller collect >/dev/null || true
+
 # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
 # single shared server to probe — enumerate the live fleet sockets ONCE and fan
 # every tmux query out across them. NB: we do NOT early-exit when the set is empty
@@ -189,6 +266,7 @@ have_py3() {
 # vs API chatter; GH_TTL=0 on a one-off run forces a fetch.
 GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
 
+hb_phase sessmap
 # --- resolve the repo set from live tmux sessions (multi-fleet) ---
 # Each tmux session ≡ one fleet ≡ one repo. Seed the fetch queue with the global
 # FLEET_REPO (so its slug'd cache stays fresh even with no live session), then add
@@ -266,6 +344,7 @@ while IFS=$'\t' read -r _s cf; do
   [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
 done < <(fleet_each_conf)
 
+hb_phase issues
 # --- per-repo issues (TTL-gated per repo) ---
 # NB: PR status (prmap_<slug> + the flat prmap mirror + @prci/@pfg) is NOT built
 # here anymore — it moved to bin/tmux-pr-refresh.sh so it can refresh on a ~15s
@@ -282,6 +361,7 @@ done
 # every reader routes through fleet_cache, which returns issues_<slug> for a
 # resolved fleet and only falls back to the un-slug'd name during cold start.
 
+hb_phase git
 # --- git per live worktree (every run) ---
 lw_all '#{pane_current_path}' | sort -u | while read -r path; do
   [ -z "$path" ] && continue
@@ -295,6 +375,7 @@ lw_all '#{pane_current_path}' | sort -u | while read -r path; do
   printf '%s\t%s' "$branch" "$dirty" | atomic_write "$G/git_$key"
 done
 
+hb_phase ctx
 # --- per-window context tokens (every run): newest transcript's last-turn input+cache ---
 # Claude Code writes transcripts to ~/.claude/projects/<cwd-slug>/*.jsonl; the last
 # assistant turn's input+cache tokens = the conversation's current context weight.
@@ -335,6 +416,7 @@ for path in sys.argv[3:]:
 PY
 fi
 
+hb_phase usage
 # --- token-usage proxy (≥300s): sum across ALL session transcripts, 5h + 7d ---
 # The official rate-limit % is not exposed by any API, so this is a local proxy
 # over Claude's official limit windows (rolling 5h + 7d), weighted like limits
@@ -404,6 +486,7 @@ PY
   now > "$G/usage.ts"
 fi
 
+hb_phase scrape
 # --- opportunistic scrape of the official weekly-% line (every run) ---
 # If any session happens to print "N% of your weekly limit", capture it.
 # tolerant by design: grep exits 1 when no session shows the line (the common
@@ -416,6 +499,7 @@ line=$(for sock in $SOCKETS; do
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/ratelimit"; fi
 
+hb_phase banner
 # --- multi-account auto-switch (every run) ---
 # When a window running under a registered account shows the "You've hit your …
 # limit · resets …" banner, mark THAT account limited and rotate the active
@@ -495,79 +579,17 @@ account **$acct** hit its usage limit — new sessions now use **${newact:-?}**;
   done
 fi
 
-# --- quota-aware PRE-EMPTIVE rotation via ccquota (issue #513, every run) ---
-# The banner path above is reactive: an account has to be walled — a session
-# stuck for hours — before the fleet reacts. ccquota knows every pool account's
-# exact 5-hour / 7-day utilization + reset instants, account-wide, so with a hub
-# configured (CCQUOTA_HUB_URL) the fleet acts BEFORE the wall, per account:
-#   ≥ FLEET_ACCOUNT_CEILING (85%)  bench it until ccquota's reset instant (which
-#                                  rotates the active pointer past it — new spawns
-#                                  go elsewhere at once), then move every session
-#                                  still running on it (fleet-account.sh migrate
-#                                  --account, per fleet, backgrounded) — the same
-#                                  close + --resume a banner would trigger, minus
-#                                  the wall; notify once.
-#   ≥ FLEET_ACCOUNT_WARN_PCT (70%) tell every session on it, over its own peer
-#                                  inbox (fleet_peer_send — the SendMessage channel,
-#                                  not send-keys), that a move is coming and to
-#                                  commit WIP; toast + FLEET_NOTIFY_CMD once.
-# Once per (account, reset-window): a marker file holds the reset epoch the
-# episode was handled for, so the next window (new epoch) re-arms it. Fail-open:
-# no ccquota / no hub / unknown → no rows → nothing here runs, the banner path
-# stays. `quota` itself refetches at most every FLEET_ACCOUNT_QUOTA_TTL s.
-if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ] && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
-  qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
-  qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
-  QDIR="$G"; mkdir -p "$QDIR"
-  # fleet_same_window (fleet-lib.sh): the once-per-reset-window markers compare
-  # with tolerance — ccquota's resets_at jitters by a second between polls.
-  # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
-  printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
-    [ -n "$ql" ] || continue
-    qutil=$q5; qwhich="5-hour"; qreset=$qr5
-    if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
-    qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
-    if [ "$qutil" -ge "$qceil" ]; then
-      mk="$QDIR/quota.ceiling.$ql"
-      fleet_same_window "$mk" "$qreset" && continue                          # this window already handled
-      printf '%s' "$qreset" | atomic_write "$mk"
-      "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
-      qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
-      for qs in $SOCKETS; do
-        tmux -L "$qs" run-shell -b "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast" 2>/dev/null
-        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null
-      done
-      if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
-        $FLEET_NOTIFY_CMD "# subscription near its limit — rotated early
-**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett; new sessions now use **${qnew:-?}** and every session still on it is being moved (close + \`--resume\` in a new window), before it hits the wall" >/dev/null 2>&1
-      fi
-    elif [ "$qutil" -ge "$qwarn" ]; then
-      mk="$QDIR/quota.warn.$ql"
-      fleet_same_window "$mk" "$qreset" && continue
-      printf '%s' "$qreset" | atomic_write "$mk"
-      qeta=""; [ "${qpph:-0}" -gt 0 ] && qeta=" (~$(( (100 - qutil) * 60 / qpph )) min to 100% at the current rate)"
-      qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
-      qn=0
-      for qs in $SOCKETS; do
-        # space-separated: a window id has no spaces and a label is a file name
-        # (tmux ≤3.4 would print a control-byte separator as literal `\037`)
-        while read -r qw qa; do
-          [ "$qa" = "$ql" ] || continue
-          qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
-          [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && qn=$((qn+1))
-        done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
-        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
-      done
-      [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
-**$ql** is at ${qutil}% of its $qwhich window${qeta} (ccquota, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
-    fi
-  done
-fi
+# NB: the ccquota-driven PRE-EMPTIVE rotation (issue #513) — warn at
+# FLEET_ACCOUNT_WARN_PCT, bench + migrate at FLEET_ACCOUNT_CEILING — used to sit
+# HERE, at the tail of the tick. It moved to bin/fleet-quotawatch.sh (issue #551):
+# its own 60s daemon, and run at the TOP of this tick (see above), so it no longer
+# waits on the gh/git/python phases and a tick that dies early can't skip it.
 
 # NB: the PR/CI attention signal (@prci/@pfg per window) moved to
 # bin/tmux-pr-refresh.sh (single writer, ~15s cadence) — see #81. The collector
 # no longer touches it.
 
+hb_phase escalate
 # --- detached-attention escalation (every run) ---
 # A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is
 # attached → run FLEET_NOTIFY_CMD (fleet.conf) with the message as $1 — plug in
@@ -595,10 +617,12 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   done
 fi
 
+hb_phase snapshot
 # --- crash-recovery snapshot (every run) ---
 # Durably record the live fleet layout (which fleets, work windows, worktrees,
 # Claude session ids) so fleet-restore.sh can rebuild every fleet and
 # `claude --resume` every session after a tmux-server-wide crash. Cheap; never
 # fatal to the collector.
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
+hb_phase ''
 exit 0

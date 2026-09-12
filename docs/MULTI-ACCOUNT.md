@@ -274,7 +274,9 @@ for up to five hours — before the fleet reacts. If you run
 first (issue #513). ccquota knows every subscription's **exact, account-wide**
 5-hour and 7-day utilization and reset instants, across devices; set
 `export CCQUOTA_HUB_URL=…` in `fleet.conf` (ccquota reads the viewer token from
-`~/.ccquota/viewer-token`) and the collector does, per pool account, every tick:
+`~/.ccquota/viewer-token`) and the **quota watch** — `bin/fleet-quotawatch.sh`,
+its own 60s daemon `com.claude-fleet.quotawatch` since issue #551, and also run
+first thing by every collector tick — does, per pool account, every tick:
 
 | utilization (higher of 5h / 7d) | action |
 |---|---|
@@ -288,8 +290,44 @@ reads the cached ccquota rows; the current account is kept while it is within
 ccquota on `PATH`, no URL, an unreachable hub or an `unknown` verdict → no
 rows → the banner path above, unchanged.
 
+### The watch is its own tick, and it tells you when it is blind (issue #551)
+
+Until #551 this policy was the **last** block of the dash collector's tick —
+after the per-repo `gh` fetches and the git/ctx/usage scans. On a 21-window
+fleet a tick took 2–3 minutes, and a tick that wedged (an un-timeboxed `gh`) or
+died early never reached it: on 2026-09-11 the cache sat 2.5h stale, neither
+branch fired, and every session on the account rode the 5-hour window to 100%.
+Now:
+
+- **Own unit.** `com.claude-fleet.quotawatch` (`systemd/claude-fleet-quotawatch.timer`)
+  runs `bin/fleet-quotawatch.sh` every 60s, independent of the collector. The
+  collector still runs the same script **first** in its tick (before any `gh`),
+  so an install whose daemon set predates #551 keeps watching at the collector's
+  cadence. Both together are safe: the fetch is TTL-gated
+  (`FLEET_ACCOUNT_QUOTA_TTL`), a `mkdir` lock (`global/quotawatch.lock`) skips
+  an in-flight tick (a tick older than 120s is superseded), and the
+  once-per-reset-window markers dedup every action.
+- **Heartbeat.** `global/quotawatch.heartbeat` (key=value: `pid caller start
+  phase phase_ts fetched rows end dur`) — and the collector's own
+  `global/collect.heartbeat` with per-phase seconds, so "which phase was slow"
+  is one `cat` away.
+- **Staleness alarm.** `account.quota.ts` is restamped by every watch tick (an
+  unreachable hub restamps too — empty rows still refresh the stamp), so its age
+  is the watch's *liveness*. With a pool + hub configured and the stamp older
+  than `FLEET_ACCOUNT_QUOTA_STALE` (600s = 10× the TTL) the rotation is blind,
+  and that is never silent: the tmux status bar shows **`⚠ quota stale 47m`**
+  (red, never freshness-gated), `fleet-doctor.sh` **FAILs** its `quotawatch`
+  line (plus a `collect` line with the last tick's age/duration/slowest phase),
+  and the next tick that does run sends one `FLEET_NOTIFY_CMD` saying how long
+  the watch was blind.
+- **Rehearsal.** `fleet-quotawatch.sh --dry-run` prints what each account
+  would trigger without writing a marker, benching or moving anything;
+  `--status` prints `off|never|fresh|stale<TAB>age-seconds`.
+
 ```
-fleet-account.sh quota            # what the collector sees: label · 5h% · 7d% · headroom · resets · %/h
+fleet-quotawatch.sh --status      # off | never | fresh | stale  + the cache age (s)
+fleet-quotawatch.sh --dry-run     # what this tick WOULD do per account, no side effects
+fleet-account.sh quota            # what the watch sees: label · 5h% · 7d% · headroom · resets · %/h
 fleet-account.sh quota --refresh  # bypass the FLEET_ACCOUNT_QUOTA_TTL (60s) cache
 fleet-account.sh list             # …the same numbers, coloured, next to each account
 fleet-doctor.sh                   # "quota" row: hub reachable, N/M pool labels mapped
@@ -320,7 +358,7 @@ was never a shell left to type a relaunch into. Per window it:
    **verifies** by reading the new process's token out of its environment.
 
 ```
-fleet-account.sh migrate --limited          # every window on a benched account (the collector's call)
+fleet-account.sh migrate --limited          # every window on a benched account (the banner path's call)
 fleet-account.sh migrate --idle             # done|needs windows not on the active account (the picker's call)
 fleet-account.sh migrate --all              # everything not on the active account
 fleet-account.sh migrate --account work     # everything running on `work`

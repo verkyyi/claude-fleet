@@ -10,6 +10,7 @@ webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-webhook.service` | always-on (`Restart=always`) | `com.claude-fleet.webhook` (KeepAlive) | optional (fresh ~1s PR/issue/CI status via `gh webhook forward`, no public endpoint; needs FLEET_WEBHOOK=1 per fleet + the `cli/gh-webhook` extension) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
+| `claude-fleet-quotawatch.timer` | every 60s, +15s after start | `com.claude-fleet.quotawatch` | recommended with a ccquota hub (the pre-emptive account rotation's own tick, issue #551; no-op without `CCQUOTA_HUB_URL` + an accounts pool) |
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
 | `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill `autofill`-labelled backlog; needs FLEET_AUTOFILL=1 per fleet; LLM tokens) |
 | `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
@@ -36,6 +37,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now claude-fleet-spinner.service
 systemctl --user enable --now claude-fleet-collect.timer
 systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: crash-guard
+systemctl --user enable --now claude-fleet-quotawatch.timer  # with a ccquota hub: pre-emptive account rotation on its own 60s tick (#551)
 systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast ~15s PR/CI status
 systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap worktrees after merges (it merges nothing itself); ON per fleet unless FLEET_CLEANUP=0
 systemctl --user enable --now claude-fleet-ledger-watch.timer # recommended: index every closed worker session for resume; ON per fleet unless FLEET_LEDGER_WATCH=0
