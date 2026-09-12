@@ -1,4 +1,47 @@
 -- ccquota schema.
+-- Provider-specific observations are additive: old raw and rollup history is
+-- retained, and account-wide observations never enter usage_events.
+
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+  account_uuid TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  endpoint_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  observation TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(account_uuid, source, profile_id, endpoint_id, observed_at, observation)
+);
+CREATE INDEX IF NOT EXISTS idx_quotas_time ON quota_snapshots(account_uuid, observed_at);
+
+CREATE TABLE IF NOT EXISTS source_collectors (
+  endpoint_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  account_uuid TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(endpoint_id, source, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_account_switches (
+  endpoint_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  from_account TEXT NOT NULL,
+  to_account TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY(endpoint_id, source, profile_id, observed_at)
+);
+
+CREATE TABLE IF NOT EXISTS account_usage_observations (
+  account_uuid TEXT NOT NULL,
+  source TEXT NOT NULL,
+  endpoint_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(account_uuid, source, endpoint_id, observed_at)
+);
 --
 -- One hub may hold several subscriptions. account_uuid is therefore on every
 -- fact table and on every index, and every query path filters by it: an
@@ -6,6 +49,7 @@
 
 CREATE TABLE IF NOT EXISTS accounts (
   account_uuid      TEXT PRIMARY KEY,
+  source            TEXT NOT NULL DEFAULT 'claude',
   email             TEXT NOT NULL DEFAULT '',
   org_uuid          TEXT NOT NULL DEFAULT '',
   org_name          TEXT NOT NULL DEFAULT '',
@@ -68,6 +112,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_token ON endpoints(token_hash);
 
 CREATE TABLE IF NOT EXISTS usage_events (
   id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  source                 TEXT NOT NULL DEFAULT 'claude',
   account_uuid           TEXT NOT NULL,
   endpoint_id            TEXT NOT NULL,
   session_id             TEXT NOT NULL DEFAULT '',
@@ -100,8 +145,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
 -- The dedup key. A resumed session re-reads lines it already shipped and a
 -- forked conversation copies entries into a new file; both replay the same
 -- uuid for the same API call, so collapsing them is correct.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup
-  ON usage_events(account_uuid, message_uuid);
+-- The source-aware dedup index is created by migrateSources, after older
+-- databases have acquired their source column.
 
 CREATE INDEX IF NOT EXISTS idx_events_account_ts ON usage_events(account_uuid, ts);
 CREATE INDEX IF NOT EXISTS idx_events_endpoint_ts ON usage_events(account_uuid, endpoint_id, ts);
@@ -224,8 +269,9 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   unpriced_events        INTEGER NOT NULL DEFAULT 0,   -- turns with NULL cost
   min_ts                 TEXT NOT NULL,
   max_ts                 TEXT NOT NULL,
+  source                 TEXT NOT NULL DEFAULT 'claude',
   PRIMARY KEY (hour, account_uuid, endpoint_id, session_id, os_user, cwd,
-               model, git_branch, effort, entrypoint, is_sidechain)
+               model, git_branch, effort, entrypoint, is_sidechain, source)
 );
 CREATE INDEX IF NOT EXISTS idx_hourly_account_hour ON usage_hourly(account_uuid, hour);
 CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, session_id);

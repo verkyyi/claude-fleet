@@ -13,7 +13,7 @@ type Filter struct {
 	Account    string
 	Start, End time.Time
 
-	Endpoint, OSUser, CWD, Model, Branch, Team, Session string
+	Endpoint, OSUser, CWD, Model, Branch, Team, Session, Source string
 }
 
 // Prev is the period of the same length that ends where this one starts.
@@ -63,6 +63,7 @@ func (f Filter) where(tsCol string) (string, []any, error) {
 	eq("os_user", f.OSUser)
 	eq("cwd", f.CWD)
 	eq("model", f.Model)
+	eq("source", f.Source)
 	eq("git_branch", f.Branch)
 	eq("session_id", f.Session)
 	if f.Team != "" {

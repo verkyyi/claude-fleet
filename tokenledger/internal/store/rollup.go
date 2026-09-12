@@ -12,6 +12,8 @@ import (
 
 // rollupVersion is stamped into rollup_meta. Bump it when the rollup's key or
 // columns change: Open then rebuilds the table from usage_events.
+// Source was added by migrateSources without a rebuild: existing rows are
+// known to be Claude usage, including those whose raw events were pruned.
 const rollupVersion = "1"
 
 func hourKey(t time.Time) string {
@@ -21,12 +23,12 @@ func hourKey(t time.Time) string {
 const rollupInsertSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, git_branch,
-  effort, entrypoint, is_sidechain,
+  effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-  cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts
-) VALUES (?,?,?,?,?,?,?,?,?,?,?, 1,?,?,?,?,?,?,?,?,?,?)
+  cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,cache_write_tokens,cache_write_known_events
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 1,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model,
-            git_branch, effort, entrypoint, is_sidechain) DO UPDATE SET
+            git_branch, effort, entrypoint, is_sidechain, source) DO UPDATE SET
   events                 = events + 1,
   input_tokens           = input_tokens + excluded.input_tokens,
   output_tokens          = output_tokens + excluded.output_tokens,
@@ -36,6 +38,8 @@ ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model,
   thinking_tokens        = thinking_tokens + excluded.thinking_tokens,
   cost_usd               = cost_usd + excluded.cost_usd,
   unpriced_events        = unpriced_events + excluded.unpriced_events,
+  cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+  cache_write_known_events = cache_write_known_events + excluded.cache_write_known_events,
   min_ts                 = min(min_ts, excluded.min_ts),
   max_ts                 = max(max_ts, excluded.max_ts)`
 
@@ -53,27 +57,28 @@ func rollupUpsert(stmt *sql.Stmt, e *model.UsageEvent) error {
 		side = 1
 	}
 	ts := fmtTime(e.TS)
+	write, known := cacheWrite(e)
 	_, err := stmt.Exec(
 		hourKey(e.TS), e.AccountUUID, e.EndpointID, e.SessionID, e.OSUser, e.CWD, e.Model, e.GitBranch,
-		e.Effort, e.Entrypoint, side,
+		e.Effort, e.Entrypoint, side, model.UsageSource(e.Source),
 		e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
-		e.CacheRead, e.Thinking, cost, unpriced, ts, ts)
+		e.CacheRead, e.Thinking, cost, unpriced, ts, ts, write, known)
 	return err
 }
 
 const rollupBackfillSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, git_branch,
-  effort, entrypoint, is_sidechain,
+  effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-  cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts)
+  cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,cache_write_tokens,cache_write_known_events)
 SELECT strftime('%Y-%m-%dT%H:00:00Z', ts), account_uuid, endpoint_id, session_id, os_user, cwd, model, git_branch,
-       effort, entrypoint, is_sidechain,
+       effort, entrypoint, is_sidechain, source,
        COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_create_5m_tokens), SUM(cache_create_1h_tokens),
        SUM(cache_read_tokens), SUM(thinking_tokens), COALESCE(SUM(cost_usd), 0),
-       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), MIN(ts), MAX(ts)
+       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), MIN(ts), MAX(ts),SUM(cache_write_tokens),SUM(cache_write_known_events)
 FROM usage_events
-GROUP BY 1,2,3,4,5,6,7,8,9,10,11`
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12`
 
 // unreconstructableRowsError is RebuildRollup(false)'s refusal to rebuild
 // over usage_hourly rows older than the earliest surviving usage_events row

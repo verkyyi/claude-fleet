@@ -81,6 +81,8 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "os_user", "TEXT NOT NULL DEFAULT ''"},
 		{"usage_events", "os_user", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "team", "TEXT NOT NULL DEFAULT ''"},
+		{"accounts", "source", "TEXT NOT NULL DEFAULT 'claude'"},
+		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -94,7 +96,10 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("add %s.%s: %w", a.table, a.column, err)
 		}
 	}
-	return nil
+	if err := migrateSources(db); err != nil {
+		return err
+	}
+	return migrateDetails(db)
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
@@ -198,8 +203,8 @@ func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO accounts (account_uuid, email, org_uuid, org_name,
 		                      subscription_type, rate_limit_tier, display_name,
-		                      account_created_at, first_seen, last_seen)
-		VALUES (?,?,?,?,?,?,?,?,?,?)
+		                      account_created_at, first_seen, last_seen, source)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(account_uuid) DO UPDATE SET
 		  -- A name set by hand is never overwritten by an automatic one. The
 		  -- automatic sources (a tmux window option, an env var) are hints that
@@ -218,7 +223,7 @@ func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 		  account_created_at = COALESCE(excluded.account_created_at, accounts.account_created_at),
 		  last_seen         = excluded.last_seen`,
 		id.AccountUUID, id.Email, id.OrgUUID, id.OrgName,
-		subType, tier, id.DisplayName, created, now, now)
+		subType, tier, id.DisplayName, created, now, now, model.UsageSource(id.Source))
 	if err != nil {
 		return fmt.Errorf("upsert account: %w", err)
 	}
@@ -376,7 +381,8 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 	if login || prevAccount == "" {
 		_, err = s.db.Exec(`
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
-			       machine_id = ?, cc_version = ?, agent_version = ?, os_user = ?,
+			       machine_id = COALESCE(NULLIF(?,''), machine_id),
+			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?
 			WHERE endpoint_id = ?`,
 			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
@@ -386,7 +392,8 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 		// its hardware facts are just as true on a secondary batch.
 		_, err = s.db.Exec(`
 			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
-			       machine_id = ?, cc_version = ?, agent_version = ?, os_user = ?,
+			       machine_id = COALESCE(NULLIF(?,''), machine_id),
+			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?
 			WHERE endpoint_id = ?`,
 			id.Hostname, id.OS, id.Arch, id.MachineID,
@@ -479,8 +486,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
-		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
@@ -494,6 +501,26 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 
 	for i := range evs {
 		e := &evs[i]
+		e.Source = model.UsageSource(e.Source)
+		if e.Source == model.SourceCodex {
+			res, err := tx.Exec(`INSERT OR IGNORE INTO codex_request_keys(message_uuid) VALUES(?)`, e.MessageUUID)
+			if err != nil {
+				return 0, 0, err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return 0, 0, err
+			}
+			if n == 0 || e.EnrichOnly {
+				deduped++
+				if err := enrichCodex(tx, e); err != nil {
+					return 0, 0, err
+				}
+				continue
+			}
+		}
+		details, _ := json.Marshal(e.Details)
+		write, known := cacheWrite(e)
 		var cost any
 		if e.CostUSD != nil {
 			cost = *e.CostUSD
@@ -503,7 +530,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			fmtTime(e.TS), e.Model,
 			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
-			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain)
+			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known)
 		if err != nil {
 			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
 		}
@@ -514,6 +541,9 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			}
 		} else {
 			deduped++
+			if err := enrichCodex(tx, e); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {

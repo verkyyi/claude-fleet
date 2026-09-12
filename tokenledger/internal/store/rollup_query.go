@@ -3,8 +3,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/verkyyi/ccquota/internal/model"
 	"strings"
 	"time"
 )
@@ -106,37 +108,41 @@ func (s *Store) HourlyByModel(f Filter) ([]HourRow, error) {
 
 // Summary is the KPI strip's data: everything additive over a Filter.
 type Summary struct {
-	Events            int64   `json:"events"`
-	Tokens            int64   `json:"tokens"`
-	Sessions          int64   `json:"sessions"`
-	CostUSD           float64 `json:"cost_usd"`
-	Unpriced          int64   `json:"unpriced_events"`
-	InputTokens       int64   `json:"input_tokens"`
-	OutputTokens      int64   `json:"output_tokens"`
-	CacheReadTokens   int64   `json:"cache_read_tokens"`
-	CacheCreateTokens int64   `json:"cache_create_tokens"`
-	ThinkingTokens    int64   `json:"thinking_tokens"`
-	SidechainTokens   int64   `json:"sidechain_tokens"`
-	SidechainEvents   int64   `json:"sidechain_events"`
+	CacheWriteTokens      int64   `json:"cache_write_tokens"`
+	CacheWriteKnownEvents int64   `json:"cache_write_known_events"`
+	Events                int64   `json:"events"`
+	Tokens                int64   `json:"tokens"`
+	Sessions              int64   `json:"sessions"`
+	CostUSD               float64 `json:"cost_usd"`
+	Unpriced              int64   `json:"unpriced_events"`
+	InputTokens           int64   `json:"input_tokens"`
+	OutputTokens          int64   `json:"output_tokens"`
+	CacheReadTokens       int64   `json:"cache_read_tokens"`
+	CacheCreateTokens     int64   `json:"cache_create_tokens"`
+	ThinkingTokens        int64   `json:"thinking_tokens"`
+	SidechainTokens       int64   `json:"sidechain_tokens"`
+	SidechainEvents       int64   `json:"sidechain_events"`
 }
 
-func (s *Store) Summary(f Filter) (*Summary, error) {
+func (s *Store) Summary(f Filter) (*Summary, error) { return readSummary(s.db, f) }
+
+func readSummary(db interface{ QueryRow(string, ...any) *sql.Row }, f Filter) (*Summary, error) {
 	where, args, err := f.where("hour")
 	if err != nil {
 		return nil, err
 	}
 	var sum Summary
-	err = s.db.QueryRow(fmt.Sprintf(`
+	err = db.QueryRow(fmt.Sprintf(`
 		SELECT COALESCE(SUM(events),0), COALESCE(SUM%s,0), COUNT(DISTINCT session_id),
 		       COALESCE(SUM(cost_usd),0), COALESCE(SUM(unpriced_events),0),
 		       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
 		       COALESCE(SUM(cache_create_5m_tokens + cache_create_1h_tokens),0), COALESCE(SUM(thinking_tokens),0),
 		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END),0),
-		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN events ELSE 0 END),0)
+		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN events ELSE 0 END),0),COALESCE(SUM(cache_write_tokens),0),COALESCE(SUM(cache_write_known_events),0)
 		FROM usage_hourly %s`, hourlyTokens, hourlyTokens, where), args...).Scan(
 		&sum.Events, &sum.Tokens, &sum.Sessions, &sum.CostUSD, &sum.Unpriced,
 		&sum.InputTokens, &sum.OutputTokens, &sum.CacheReadTokens, &sum.CacheCreateTokens, &sum.ThinkingTokens,
-		&sum.SidechainTokens, &sum.SidechainEvents)
+		&sum.SidechainTokens, &sum.SidechainEvents, &sum.CacheWriteTokens, &sum.CacheWriteKnownEvents)
 	if err != nil {
 		return nil, fmt.Errorf("summary: %w", err)
 	}
@@ -387,9 +393,12 @@ func (s *Store) labelSessionEndpoints(rows []SessionRow) {
 }
 
 // Session returns one session's header row, or nil when unknown.
-func (s *Store) Session(account, id string) (*SessionRow, error) {
+func (s *Store) Session(account, id string, sources ...string) (*SessionRow, error) {
 	f := Filter{Account: account, Session: id,
 		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)}
+	if len(sources) > 0 {
+		f.Source = sources[0]
+	}
 	rows, err := s.Sessions(f, "tokens", 1, 0)
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -399,21 +408,24 @@ func (s *Store) Session(account, id string) (*SessionRow, error) {
 
 // Turn is one API call inside a session, from the raw events.
 type Turn struct {
-	TS                time.Time `json:"ts"`
-	Model             string    `json:"model"`
-	Effort            string    `json:"effort"`
-	InputTokens       int64     `json:"input_tokens"`
-	OutputTokens      int64     `json:"output_tokens"`
-	CacheReadTokens   int64     `json:"cache_read_tokens"`
-	CacheCreateTokens int64     `json:"cache_create_tokens"`
-	ThinkingTokens    int64     `json:"thinking_tokens"`
-	CostUSD           *float64  `json:"cost_usd"`
-	IsSidechain       bool      `json:"is_sidechain"`
+	RequestID         string              `json:"request_id"`
+	Source            string              `json:"source"`
+	Details           *model.UsageDetails `json:"details,omitempty"`
+	TS                time.Time           `json:"ts"`
+	Model             string              `json:"model"`
+	Effort            string              `json:"effort"`
+	InputTokens       int64               `json:"input_tokens"`
+	OutputTokens      int64               `json:"output_tokens"`
+	CacheReadTokens   int64               `json:"cache_read_tokens"`
+	CacheCreateTokens int64               `json:"cache_create_tokens"`
+	ThinkingTokens    int64               `json:"thinking_tokens"`
+	CostUSD           *float64            `json:"cost_usd"`
+	IsSidechain       bool                `json:"is_sidechain"`
 }
 
 // SessionTurns lists a session's turns oldest first. Empty when the raw events
 // were pruned; the caller reports that rather than showing an empty chart.
-func (s *Store) SessionTurns(account, id string) ([]Turn, error) {
+func (s *Store) SessionTurns(account, id string, sources ...string) ([]Turn, error) {
 	if account == "" {
 		return nil, fmt.Errorf("account is required")
 	}
@@ -421,8 +433,12 @@ func (s *Store) SessionTurns(account, id string) ([]Turn, error) {
 	if account != AllAccounts {
 		where, args = "WHERE account_uuid = ? AND session_id = ?", []any{account, id}
 	}
+	if len(sources) > 0 && sources[0] != "" {
+		where += ` AND source=?`
+		args = append(args, sources[0])
+	}
 	rows, err := s.db.Query(`SELECT ts, model, effort, input_tokens, output_tokens, cache_read_tokens,
-		cache_create_5m_tokens + cache_create_1h_tokens, thinking_tokens, cost_usd, is_sidechain
+		cache_create_5m_tokens + cache_create_1h_tokens, thinking_tokens, cost_usd, is_sidechain,request_id,source,details_json
 		FROM usage_events `+where+` ORDER BY ts`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("session turns: %w", err)
@@ -432,10 +448,11 @@ func (s *Store) SessionTurns(account, id string) ([]Turn, error) {
 	for rows.Next() {
 		var t Turn
 		var ts string
+		var details string
 		var cost sql.NullFloat64
 		var side int
 		if err := rows.Scan(&ts, &t.Model, &t.Effort, &t.InputTokens, &t.OutputTokens, &t.CacheReadTokens,
-			&t.CacheCreateTokens, &t.ThinkingTokens, &cost, &side); err != nil {
+			&t.CacheCreateTokens, &t.ThinkingTokens, &cost, &side, &t.RequestID, &t.Source, &details); err != nil {
 			return nil, err
 		}
 		t.TS, _ = time.Parse(rfc, ts)
@@ -444,6 +461,7 @@ func (s *Store) SessionTurns(account, id string) ([]Turn, error) {
 			t.CostUSD = &c
 		}
 		t.IsSidechain = side == 1
+		_ = json.Unmarshal([]byte(details), &t.Details)
 		out = append(out, t)
 	}
 	return out, rows.Err()

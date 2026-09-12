@@ -17,14 +17,20 @@ type LimitPoint struct {
 // LimitsHistory returns every snapshot in [start, end) for one account or all,
 // ordered by account then time. Several endpoints may observe the same account;
 // their readings agree (the figure is account-wide) and are all returned.
-func (s *Store) LimitsHistory(account string, start, end time.Time) ([]LimitPoint, error) {
+func (s *Store) LimitsHistory(account string, start, end time.Time, sources ...string) ([]LimitPoint, error) {
 	if account == "" {
 		return nil, fmt.Errorf("account is required")
 	}
+	filter := ""
+	args := accountArgs(account, fmtTime(start), fmtTime(end))
+	if len(sources) > 0 && sources[0] != "" {
+		filter = ` AND account_uuid IN (SELECT account_uuid FROM accounts WHERE source=?)`
+		args = append(args, sources[0])
+	}
 	q := `SELECT account_uuid, observed_at, five_hour_pct, seven_day_pct FROM limit_snapshots
 	      WHERE ` + accountClause(account) + ` observed_at >= ? AND observed_at < ?
-	      ORDER BY account_uuid, observed_at`
-	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end))...)
+	      ` + filter + ` ORDER BY account_uuid, observed_at`
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("limits history: %w", err)
 	}

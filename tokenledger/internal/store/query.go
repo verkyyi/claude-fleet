@@ -12,6 +12,7 @@ import (
 
 // Account is a subscription tracked by this hub.
 type Account struct {
+	Source           string     `json:"source"`
 	AccountUUID      string     `json:"account_uuid"`
 	Email            string     `json:"email"`
 	OrgUUID          string     `json:"org_uuid"`
@@ -54,7 +55,9 @@ func (s *Store) ListAccounts() ([]Account, error) {
 		SELECT a.account_uuid, a.email, a.org_uuid, a.org_name,
 		       a.subscription_type, a.rate_limit_tier, a.display_name,
 		       a.account_created_at, a.label_locked, a.first_seen, a.last_seen,
-		       (SELECT COUNT(*) FROM endpoints e WHERE e.account_uuid = a.account_uuid)
+		       (SELECT COUNT(*) FROM endpoints e WHERE e.account_uuid = a.account_uuid
+		        OR EXISTS (SELECT 1 FROM endpoint_accounts ea WHERE ea.endpoint_id = e.endpoint_id AND ea.account_uuid = a.account_uuid)),
+		       a.source
 		FROM accounts a
 		ORDER BY a.last_seen DESC`)
 	if err != nil {
@@ -69,7 +72,7 @@ func (s *Store) ListAccounts() ([]Account, error) {
 		var created sql.NullString
 		if err := rows.Scan(&a.AccountUUID, &a.Email, &a.OrgUUID, &a.OrgName,
 			&a.SubscriptionType, &a.RateLimitTier, &a.DisplayName,
-			&created, &a.LabelLocked, &first, &last, &a.EndpointCount); err != nil {
+			&created, &a.LabelLocked, &first, &last, &a.EndpointCount, &a.Source); err != nil {
 			return nil, err
 		}
 		a.AccountCreatedAt = parseNullTime(created)
@@ -82,12 +85,16 @@ func (s *Store) ListAccounts() ([]Account, error) {
 
 // ListEndpoints returns the endpoints for one account, or all when account is
 // empty.
-func (s *Store) ListEndpoints(account string) ([]Endpoint, error) {
-	q := endpointColumns + ` FROM endpoints`
+func (s *Store) ListEndpoints(account string, sources ...string) ([]Endpoint, error) {
+	q := endpointColumns + ` FROM endpoints WHERE 1=1`
 	var args []any
 	if account != "" && account != AllAccounts {
-		q += ` WHERE account_uuid = ?`
-		args = append(args, account)
+		q += ` AND (account_uuid = ? OR endpoint_id IN (SELECT endpoint_id FROM endpoint_accounts WHERE account_uuid = ?))`
+		args = append(args, account, account)
+	}
+	if len(sources) > 0 && sources[0] != "" {
+		q += ` AND endpoint_id IN (SELECT ea.endpoint_id FROM endpoint_accounts ea JOIN accounts a ON a.account_uuid=ea.account_uuid WHERE a.source=?)`
+		args = append(args, sources[0])
 	}
 	q += ` ORDER BY last_seen DESC NULLS LAST, label`
 
@@ -165,7 +172,7 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 		SELECT endpoint_id, session_id, message_uuid, ts, model,
 		       input_tokens, output_tokens, cache_create_5m_tokens,
 		       cache_create_1h_tokens, cache_read_tokens, thinking_tokens,
-		       cost_usd, cwd, git_branch, is_sidechain, account_uuid
+		       cost_usd, cwd, git_branch, is_sidechain, account_uuid, source
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?`, accountClause(account))
 
@@ -183,7 +190,7 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 		if err := rows.Scan(&e.EndpointID, &e.SessionID, &e.MessageUUID, &ts, &e.Model,
 			&e.InputTokens, &e.OutputTokens, &e.CacheCreate5m, &e.CacheCreate1h,
 			&e.CacheRead, &e.Thinking, &cost, &e.CWD, &e.GitBranch, &e.IsSidechain,
-			&e.AccountUUID); err != nil {
+			&e.AccountUUID, &e.Source); err != nil {
 			return nil, err
 		}
 		e.TS, _ = time.Parse(rfc, ts)
@@ -231,15 +238,17 @@ type Bucket struct {
 	ThinkingTokens    int64 `json:"thinking_tokens,omitempty"`
 
 	// The same key in the previous period, when the caller asked to compare.
-	PrevEvents  int64   `json:"prev_events,omitempty"`
-	PrevTokens  int64   `json:"prev_tokens,omitempty"`
-	PrevCostUSD float64 `json:"prev_cost_usd,omitempty"`
+	PrevEvents   int64   `json:"prev_events,omitempty"`
+	PrevUnpriced int64   `json:"prev_unpriced_events,omitempty"`
+	PrevTokens   int64   `json:"prev_tokens,omitempty"`
+	PrevCostUSD  float64 `json:"prev_cost_usd,omitempty"`
 }
 
 // Dimension names a breakdown axis.
 type Dimension string
 
 const (
+	BySource   Dimension = "source"
 	ByEndpoint Dimension = "endpoint"
 	ByProject  Dimension = "project"
 	BySession  Dimension = "session"
@@ -285,6 +294,8 @@ const AllAccounts = "*"
 // interpolating the caller's string is what keeps this injection-proof.
 func (d Dimension) column() (string, error) {
 	switch d {
+	case BySource:
+		return "source", nil
 	case ByAccount:
 		return "account_uuid", nil
 	case ByEndpoint:
@@ -513,6 +524,8 @@ func (s *Store) ModelSplit(account string, start, end time.Time) ([]Bucket, erro
 
 // AccountSwitch is a recorded change of subscription on one endpoint.
 type AccountSwitch struct {
+	Source      string    `json:"source,omitempty"`
+	ProfileID   string    `json:"profile_id,omitempty"`
 	EndpointID  string    `json:"endpoint_id"`
 	FromAccount string    `json:"from_account"`
 	ToAccount   string    `json:"to_account"`
@@ -582,7 +595,10 @@ type EndpointAccount struct {
 //
 // account == "" or AllAccounts lists every row on the hub; a specific uuid
 // scopes to that subscription's own rows.
-func (s *Store) EndpointAccounts(account string, limit int) ([]EndpointAccount, error) {
+func (s *Store) EndpointAccounts(account string, limit int, sources ...string) ([]EndpointAccount, error) {
+	if account == "all" {
+		account = AllAccounts
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -600,11 +616,15 @@ func (s *Store) EndpointAccounts(account string, limit int) ([]EndpointAccount, 
 		       ea.origin, ea.first_seen, ea.last_seen
 		FROM endpoint_accounts ea
 		LEFT JOIN endpoints ep ON ep.endpoint_id = ea.endpoint_id
-		LEFT JOIN accounts  a  ON a.account_uuid  = ea.account_uuid`
+		LEFT JOIN accounts  a  ON a.account_uuid  = ea.account_uuid WHERE 1=1`
 	args := []any{}
 	if account != "" && account != AllAccounts {
-		q += ` WHERE ea.account_uuid = ?`
+		q += ` AND ea.account_uuid = ?`
 		args = append(args, account)
+	}
+	if len(sources) > 0 && sources[0] != "" {
+		q += ` AND a.source=?`
+		args = append(args, sources[0])
 	}
 	q += ` ORDER BY ea.last_seen DESC LIMIT ?`
 	args = append(args, limit)
@@ -640,8 +660,8 @@ func (s *Store) EndpointAccounts(account string, limit int) ([]EndpointAccount, 
 // page that disagree by a cache-creation column would be worse than either.
 func (s *Store) LifetimeTotals() (turns, tokens int64, err error) {
 	err = s.db.QueryRow(fmt.Sprintf(`
-		SELECT COUNT(*), COALESCE(%s, 0)
-		FROM usage_events`, tokenSumExpr)).Scan(&turns, &tokens)
+		SELECT COALESCE(SUM(events),0), COALESCE(%s, 0)
+		FROM usage_hourly`, tokenSumExpr)).Scan(&turns, &tokens)
 	if err != nil {
 		return 0, 0, fmt.Errorf("lifetime totals: %w", err)
 	}
