@@ -7,8 +7,8 @@
 // and ships only the resulting numbers, so a compromised hub leaks usage
 // statistics and never account access.
 //
-// The agent NEVER refreshes an OAuth token. Refreshing races Claude Code's own
-// refresh and could log the user out of the very thing being monitored.
+// Claude credentials remain read-only. Codex renewal is delegated to the
+// official CLI and coordinated with ccquota-managed launches per profile.
 package agent
 
 import (
@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/identity"
@@ -36,10 +37,15 @@ import (
 
 // Config configures one endpoint's collector.
 type Config struct {
-	HubURL   string // e.g. https://ccquota.example.com
-	Token    string // enrollment token
-	Home     string // Claude Code home; defaults to the user's home
-	StateDir string // cursor + spool live here
+	HubURL              string // e.g. https://ccquota.example.com
+	Token               string // enrollment token
+	Home                string // Claude Code home; defaults to the user's home
+	StateDir            string // cursor + spool live here
+	Sources             string // all (default), claude, codex, or a comma-separated list
+	CodexHome           string // defaults to CODEX_HOME or <home>/.codex
+	CodexHomes          string // optional additional comma-separated Codex homes
+	CodexBinary         string // optional Codex CLI executable
+	CodexDisableRefresh bool   // disable official Codex credential renewal
 
 	// SessionsDir is where the statusLine hook writes its stamps.
 	//
@@ -120,15 +126,20 @@ const spoolFraction = 4
 
 // Agent is a running collector.
 type Agent struct {
-	cfg     Config
-	scanner *scan.Scanner
-	spool   *spool.Spool
-	limits  *limits.Client
-	http    *http.Client
+	cfg             Config
+	scanner         *scan.Scanner
+	codex           *scan.Scanner
+	codexProfiles   []*codexCollector
+	codexProfilesMu sync.RWMutex
+	claudeEnabled   bool
+	spool           *spool.Spool
+	limits          *limits.Client
+	http            *http.Client
 
 	// lastLimitsPoll throttles the Anthropic call independently of the scan
 	// loop, so a fast scan cadence does not hammer the usage endpoint.
-	lastLimitsPoll time.Time
+	lastLimitsPoll   time.Time
+	lastClaudeReport time.Time
 
 	// serverInterval is the poll interval the hub asked for, if any. It lets a
 	// noisy fleet be backed off centrally without editing every machine.
@@ -169,6 +180,17 @@ const stampMaxAge = 7 * 24 * time.Hour
 
 // New builds an Agent.
 func New(cfg Config) (*Agent, error) {
+	sources, err := scan.ParseSources(cfg.Sources)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Home == "" {
+		cfg.Home, err = os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	cfg.CodexHome = scan.CodexHome(cfg.Home, cfg.CodexHome)
 	if cfg.HubURL == "" {
 		return nil, errors.New("hub URL is required")
 	}
@@ -197,13 +219,24 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 
-	return &Agent{
+	a := &Agent{
 		cfg:     cfg,
 		scanner: scan.NewScanner(identity.ProjectsDir(cfg.Home), filepath.Join(cfg.StateDir, "cursor.json")),
 		spool:   sp,
 		limits:  limits.New(),
 		http:    &http.Client{Timeout: 60 * time.Second},
-	}, nil
+	}
+	for _, source := range sources {
+		switch source {
+		case model.SourceClaude:
+			a.claudeEnabled = true
+		case model.SourceCodex:
+			if err := a.initCodex(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return a, nil
 }
 
 // Run collects until the context is cancelled, or once when cfg.Once is set.
@@ -222,12 +255,19 @@ func (a *Agent) Run(ctx context.Context) error {
 	// writes collapses into a single pending cycle instead of blocking the
 	// watcher or queueing cycles behind each other.
 	wake := make(chan struct{}, 1)
-	go a.watchTranscripts(ctx, identity.ProjectsDir(a.cfg.Home), func() {
+	wakeScan := func() {
 		select {
 		case wake <- struct{}{}:
 		default:
 		}
-	})
+	}
+	if a.claudeEnabled {
+		go a.watchTranscripts(ctx, identity.ProjectsDir(a.cfg.Home), wakeScan)
+	}
+	for _, p := range a.codexProfileSnapshot() {
+		go a.watchTranscripts(ctx, filepath.Join(p.home, "sessions"), wakeScan)
+		go a.watchTranscripts(ctx, filepath.Join(p.home, "archived_sessions"), wakeScan)
+	}
 
 	// Jitter the first tick so a fleet restarted together by a config
 	// management run does not stampede the hub.
@@ -308,38 +348,46 @@ func (a *Agent) runLive(ctx context.Context) {
 const liveStaleAfter = 2 * time.Minute
 
 func (a *Agent) pushLive(ctx context.Context) error {
-	idx, err := sessions.Load(a.cfg.SessionsDir, liveStaleAfter)
-	if err != nil || len(idx.BySession) == 0 {
-		return err
-	}
-
-	out := make([]liveSession, 0, len(idx.BySession))
-	for _, st := range idx.BySession {
-		if st.Live == nil {
-			continue
+	out := make([]liveSession, 0)
+	if a.claudeEnabled {
+		idx, err := sessions.Load(a.cfg.SessionsDir, liveStaleAfter)
+		if err != nil {
+			return err
 		}
-		out = append(out, liveSession{
-			SessionID:      st.SessionID,
-			Account:        st.Account(),
-			CostUSD:        st.Live.CostUSD,
-			InputTokens:    st.Live.InputTokens,
-			OutputTokens:   st.Live.OutputTokens,
-			LinesAdded:     st.Live.LinesAdded,
-			LinesRemoved:   st.Live.LinesRemoved,
-			ContextUsedPct: st.Live.ContextUsedPct,
-			CacheHitRatio:  st.Live.CacheHitRatio,
-			Model:          st.Live.ModelDisplay,
-			Effort:         st.Live.Effort,
-			Worktree:       st.Live.Worktree,
-			CWD:            st.CWD,
-			Billing:        st.Billing,
-		})
+		for _, st := range idx.BySession {
+			if st.Live == nil {
+				continue
+			}
+			out = append(out, liveSession{
+				Source: model.SourceClaude, ObservedAt: st.StampedAt, State: "active",
+				SessionID:      st.SessionID,
+				Account:        st.Account(),
+				CostUSD:        st.Live.CostUSD,
+				InputTokens:    st.Live.InputTokens,
+				OutputTokens:   st.Live.OutputTokens,
+				LinesAdded:     st.Live.LinesAdded,
+				LinesRemoved:   st.Live.LinesRemoved,
+				ContextUsedPct: st.Live.ContextUsedPct,
+				CacheHitRatio:  st.Live.CacheHitRatio,
+				Model:          st.Live.ModelDisplay,
+				Effort:         st.Live.Effort,
+				Worktree:       st.Live.Worktree,
+				CWD:            st.CWD,
+				Billing:        st.Billing,
+			})
+		}
 	}
-	if len(out) == 0 {
-		return nil
+	for _, p := range a.codexProfileSnapshot() {
+		p.mu.Lock()
+		for _, l := range p.live {
+			if time.Since(l.ObservedAt) <= liveStaleAfter {
+				out = append(out, l)
+			}
+		}
+		p.mu.Unlock()
 	}
 
-	body, err := json.Marshal(map[string]any{"sessions": out})
+	body, err := json.Marshal(map[string]any{"sessions": out, "complete": true})
 	if err != nil {
 		return err
 	}
@@ -360,26 +408,36 @@ func (a *Agent) pushLive(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("live report: HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 
 // liveSession mirrors the hub's shape without importing the api package, which
 // would be a dependency cycle.
 type liveSession struct {
-	SessionID      string  `json:"session_id"`
-	Account        string  `json:"account,omitempty"`
-	CostUSD        float64 `json:"cost_usd"`
-	InputTokens    int64   `json:"input_tokens"`
-	OutputTokens   int64   `json:"output_tokens"`
-	LinesAdded     int64   `json:"lines_added"`
-	LinesRemoved   int64   `json:"lines_removed"`
-	ContextUsedPct float64 `json:"context_used_pct"`
-	CacheHitRatio  float64 `json:"cache_hit_ratio"`
-	Model          string  `json:"model,omitempty"`
-	Effort         string  `json:"effort,omitempty"`
-	Worktree       string  `json:"worktree,omitempty"`
-	CWD            string  `json:"cwd,omitempty"`
-	Billing        string  `json:"billing,omitempty"`
+	Source         string    `json:"source"`
+	ProfileID      string    `json:"profile_id,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
+	State          string    `json:"state"`
+	ContextUnknown bool      `json:"context_unknown,omitempty"`
+	CostUnknown    bool      `json:"cost_unknown,omitempty"`
+	LinesUnknown   bool      `json:"lines_unknown,omitempty"`
+	SessionID      string    `json:"session_id"`
+	Account        string    `json:"account,omitempty"`
+	CostUSD        float64   `json:"cost_usd"`
+	InputTokens    int64     `json:"input_tokens"`
+	OutputTokens   int64     `json:"output_tokens"`
+	LinesAdded     int64     `json:"lines_added"`
+	LinesRemoved   int64     `json:"lines_removed"`
+	ContextUsedPct float64   `json:"context_used_pct"`
+	CacheHitRatio  float64   `json:"cache_hit_ratio"`
+	Model          string    `json:"model,omitempty"`
+	Effort         string    `json:"effort,omitempty"`
+	Worktree       string    `json:"worktree,omitempty"`
+	CWD            string    `json:"cwd,omitempty"`
+	Billing        string    `json:"billing,omitempty"`
 }
 
 // jitter spreads a fleet's requests by ±20%.
@@ -390,11 +448,24 @@ func jitter(d time.Duration) time.Duration {
 
 // cycle does one scan, one conditional limits poll, and drains the spool.
 func (a *Agent) cycle(ctx context.Context) error {
-	id, err := identity.Detect(a.cfg.Home)
-	if err != nil {
-		return fmt.Errorf("identify this machine: %w", err)
+	var claudeErr, codexErr error
+	if a.claudeEnabled {
+		// A Codex-only installation has no Claude login. It must still work
+		// with the default source selection.
+		id, err := identity.Detect(a.cfg.Home)
+		if err == nil {
+			claudeErr = a.cycleClaude(ctx, id)
+		} else if a.codex == nil || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, identity.ErrNoAccount)) {
+			claudeErr = fmt.Errorf("identify this machine: %w", err)
+		}
 	}
+	if a.codex != nil {
+		codexErr = a.cycleCodex(ctx)
+	}
+	return errors.Join(claudeErr, codexErr)
+}
 
+func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 	// Reloaded every cycle: sessions start, stop and change subscription while
 	// the agent runs.
 	if idx, err := sessions.Load(a.cfg.SessionsDir, stampMaxAge); err != nil {
@@ -469,10 +540,29 @@ func (a *Agent) cycle(ctx context.Context) error {
 		observed[l.AccountUUID] = true
 	}
 	stampLimits = append(stampLimits, a.probeAccounts(ctx, observed)...)
+	status := model.CollectorStatus{Source: model.SourceClaude, ProfileID: "default", ObservedAt: time.Now().UTC(), State: "idle", Files: a.scanner.FileCount(), Capabilities: []string{"usage", "quota_query", "live"}, LimitsReason: unavailable}
+	if !a.lastLimitsPoll.IsZero() {
+		checked := a.lastLimitsPoll
+		status.LimitsCheckedAt = &checked
+	}
+	for _, ev := range evs {
+		if status.LastEventAt == nil || ev.TS.After(*status.LastEventAt) {
+			at := ev.TS
+			status.LastEventAt = &at
+		}
+	}
+	if len(evs) > 0 {
+		status.State = "ok"
+	}
+	if len(a.scanner.Errs) > 0 {
+		status.State = "degraded"
+		status.Reason = fmt.Sprintf("%d transcript warning(s); see agent log", len(a.scanner.Errs))
+	}
+	status.QueueBytes, _ = a.spool.Bytes()
 
 	// Nothing new and nothing to report: skip the round trip entirely.
-	if len(evs) == 0 && snap == nil && unavailable == "" && attribution.IsZero() &&
-		len(stampLimits) == 0 {
+	if len(evs) == 0 && len(groups) == 0 && snap == nil && unavailable == "" && attribution.IsZero() &&
+		len(stampLimits) == 0 && time.Since(a.lastClaudeReport) < time.Minute {
 		return a.drain(ctx)
 	}
 
@@ -494,6 +584,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 			AccountOrigin: model.OriginLogin,
 		}
 		if i == 0 {
+			batch.Collector = &status
 			// The limits reading and the attribution report ride along with the
 			// first chunk so they are not duplicated across every one of them.
 			batch.Limits, batch.LimitsUnavailable = snap, unavailable
@@ -519,6 +610,9 @@ func (a *Agent) cycle(ctx context.Context) error {
 			log.Printf("could not queue batch %d/%d: %v; holding the scan position", i+1, len(chunks), err)
 			queuedAll = false
 			break
+		}
+		if i == 0 {
+			a.lastClaudeReport = status.ObservedAt
 		}
 	}
 
