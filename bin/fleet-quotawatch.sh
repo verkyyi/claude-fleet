@@ -193,6 +193,8 @@ fi
 #                                  elsewhere at once), then move every session
 #                                  still on it (fleet-account.sh migrate
 #                                  --account, per fleet, backgrounded); notify once.
+#                                  No OTHER account to move to (#567): bench
+#                                  only, say so once — the sessions stay put.
 #   ≥ FLEET_ACCOUNT_WARN_PCT (70%) tell every session on it, over its own peer
 #                                  inbox (fleet_peer_send — the SendMessage
 #                                  channel, not send-keys), that a move is coming
@@ -202,6 +204,33 @@ fi
 # resets_at jitters by a second between polls), so the next window re-arms it.
 # Empty rows (no ccquota / hub unreachable / unknown verdict) → nothing runs.
 qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
+# quota_move_target <label> — an account the ceiling branch could move <label>'s
+# sessions onto: some OTHER pool account that is neither benched nor itself at
+# the ceiling in THIS tick's rows. Prints it; empty + exit 1 ⇒ nowhere to move
+# (issue #567). Why not just `fleet-account.sh active` after the bench: with every
+# other account benched it keeps the CURRENT one — the right answer for "which
+# account should a new spawn use" (there is no better), but the migrate fan-out
+# then closes N sessions and cold-boots each one (~25 s) straight back onto the
+# account that was just benched for being over the ceiling, still walled. Seen
+# live on 2026-09-12 05:32: 12 sessions bounced onto the same wall with the reset
+# 24 min away. A session that is walled and waiting for its own reset is strictly
+# better off than one cold-booted into the same wall — so: bench (spawns must
+# know), skip the move, say so. Rows matter too: an account that crosses the
+# ceiling in the SAME tick (a later row, not benched yet) is no target either —
+# its own row benches it seconds later and would bounce those sessions again.
+quota_move_target() {
+  local skip="$1" f l u
+  for f in "$ACCT_DIR"/*; do
+    [ -f "$f" ] || continue
+    l=${f##*/}; case "$l" in .*|*~|*.conf) continue;; esac
+    [ "$l" != "$skip" ] || continue
+    [ "$("$BIN/fleet-account.sh" limited-until "$l" 2>/dev/null || echo 0)" -le "$(now)" ] || continue
+    u=$(printf '%s\n' "$qrows" | awk -F'\t' -v l="$l" '$1==l{print (($2+0)>($3+0))?$2+0:$3+0; exit}')
+    [ -n "$u" ] && [ "$u" -ge "$qceil" ] && continue
+    printf '%s' "$l"; return 0
+  done
+  return 1
+}
 # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
 printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
   [ -n "$ql" ] || continue
@@ -211,10 +240,27 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
   if [ "$qutil" -ge "$qceil" ]; then
     mk="$G/quota.ceiling.$ql"
     fleet_same_window "$mk" "$qreset" && continue                          # this window already handled
-    if [ "$DRY" = 1 ]; then printf 'would: bench %s (%s%% of %s, resets %s) + migrate --account %s on: %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$(printf '%s' "$SOCKETS" | tr '\n' ' ')"; continue; fi
+    qto=$(quota_move_target "$ql") || qto=""
+    if [ "$DRY" = 1 ]; then
+      if [ -n "$qto" ]; then printf 'would: bench %s (%s%% of %s, resets %s) + migrate --account %s on: %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$(printf '%s' "$SOCKETS" | tr '\n' ' ')"
+      else printf 'would: bench %s (%s%% of %s, resets %s) — nowhere to move: every other account is benched or at its ceiling; its sessions would stay on %s until %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$qresett"; fi
+      continue
+    fi
     printf '%s' "$qreset" | atomic_write "$mk"
     "$BIN/fleet-account.sh" bench "$ql" "$qreset" "ccquota: $qwhich window at ${qutil}%" >/dev/null 2>&1
     qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
+    if [ -z "$qto" ]; then
+      # #567: the bench is recorded (a new spawn must know), the move is not made.
+      printf 'fleet-quotawatch: %s at %s%% of its %s window — benched until %s; nowhere to move: every account is at its ceiling, its sessions stay on %s until then\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" >&2
+      for qs in $SOCKETS; do
+        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: every account is at its ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+      done
+      if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+        $FLEET_NOTIFY_CMD "# subscription at its limit — nowhere to move
+**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett, but every other account is benched or at its ceiling too, so its sessions were NOT moved: they stay on **$ql** until $qresett (a walled session waiting for its own reset beats one cold-booted back into the same wall)" >/dev/null 2>&1
+      fi
+      continue
+    fi
     for qs in $SOCKETS; do
       tmux -L "$qs" run-shell -b "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast" 2>/dev/null
       tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null

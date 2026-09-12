@@ -27,7 +27,11 @@
 #
 # Commands:
 #   active               — print the label new sessions should use (rotating past
-#                          any account still inside its limit window); empty = off
+#                          any account still inside its limit window); empty = off.
+#                          With EVERY account benched it keeps the current one (best
+#                          effort — a spawn has no better answer), so a caller that
+#                          MOVES sessions must treat target == source, or a benched
+#                          target, as "no move available" (fleet-migrate.sh, #567)
 #   token [label]        — print the OAuth token for <label> (default: active)
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
 #   list                 — aligned table: label · active(●) · rotation window · state
@@ -57,7 +61,10 @@
 #   migrate …            — move LIVE sessions onto the active account by close +
 #                          `--resume` in a new window (issue #512): delegates to
 #                          bin/fleet-migrate.sh — see its header for the selectors
-#                          (<window-id>… | --limited | --idle | --all | --account L)
+#                          (<window-id>… | --limited | --idle | --all | --account L);
+#                          a window already on the active account, or any window
+#                          while the active account is benched itself, is skipped
+#                          (#567) — only a --model relaunch is exempt
 #   whoami <window-id>   — the account a window really runs (token truth; heals a
 #                          stale @cc_account stamp) — fleet-migrate.sh whoami
 set -uo pipefail
