@@ -234,17 +234,37 @@ Now the two walls are told apart (`fleet_limit_kind` in `usage-lib.sh`), and a
 model cap is handled without touching the account pool:
 
 ```
-collector sees "hit your Fable 5 limit" on a window running on account work
+fleet-quotawatch.sh (≤60s tick) — or the collector, as the backstop — sees
+"hit your Fable 5 limit" on a window running on account work
    ├─ fleet-account.sh model-limited work fable "<banner>"
    │     records (work, fable) capped until the banner's "resets Sep 6 at 10pm"
    │     instant — the dated form is parsed in the banner's zone — else now +
    │     FLEET_MODEL_LIMIT_TTL (7d). Ledger: global/account.model-limited.
    │     account.limited and the active pointer are NOT touched: no rotation.
-   ├─ fleet-migrate.sh --model opus <window>     (backgrounded, once per window)
-   │     the usual Escape + /exit → SessionEnd hook → new window running
-   │     fleet-claude.sh --model opus --resume <sid> "<model-cap nudge>"
+   ├─ fleet-model-switch.sh --capped --model opus   (backgrounded, per fleet)
+   │     types Escape + `/model opus` + Enter at the walled session's OWN
+   │     prompt, confirms Claude Code's "Switch model?" dialog, then VERIFIES
+   │     the flip off the pane's `◆ <model>` status line. ~5s, and the process
+   │     never dies: background agents, context and cost all survive. The nudge
+   │     that follows rides fleet_peer_send (the SendMessage channel), never
+   │     send-keys.
+   │     └─ flip unverifiable → fleet-migrate.sh --model opus <window>
+   │           the pre-#569 fallback: Escape + /exit → SessionEnd hook → new
+   │           window running fleet-claude.sh --model opus --resume <sid>
    └─ notify once per (account, model) episode
 ```
+
+**Why in place (#569).** A model cap needs no new token — same account, same
+OAuth — so the close + `--resume` dance #524 borrowed from account rotation was
+pure cost. Measured on the 2026-09-12 episode (9 walled workers over two
+fleets): ~30–60s of cold boot per window and strictly one at a time, every
+background agent killed with the process (one worker was 13 min into a
+general-purpose agent), the whole transcript re-read as fresh *input* tokens on
+the one account not already benched, plus the #543/#544 reap hazards of closing
+a worker's window. And it was gated behind the collector's tick, which on that
+fleet ran 17 minutes (the git scan alone took 551s) — so the recovery trickled
+out for the better part of an hour. Detection now rides the 60s quotawatch tick
+and the recovery is a keystroke.
 
 and every **new** session on that account — autofill, a hand spawn, a restore, a
 migrate — goes through `fleet-claude.sh`, which asks `model-limited-until` for
@@ -259,6 +279,20 @@ Rules, same as `--model`'s: an explicit caller `--model` wins; an empty
 the subscription wall: bench + rotate); a fallback equal to the capped model is a
 no-op (nothing to swap to — the pre-#524 bench path runs). The knob is
 `@scope=global`: one policy for every fleet on the machine.
+
+The in-place switch refuses three more cases (#569), and says which in its
+report: a window **mid-turn** (`@claude_state working` — an Escape there would
+cancel a live turn; the next tick takes it), a window whose status line already
+reads something other than the capped model (nothing to do — this, not a marker
+file, is what makes a second pass idempotent even with the banner still in the
+scrollback), and a fallback that is **itself** capped on that account, which is
+handed to the subscription path instead of flipped onto a second wall.
+
+```sh
+bin/fleet-model-switch.sh --capped --dry-run       # what a sweep would do, here
+bin/fleet-model-switch.sh --capped --model opus    # do it
+bin/fleet-model-switch.sh --model opus @37         # one window, on the operator's word
+```
 
 ```sh
 bin/fleet-account.sh model-limited-until work fable   # epoch, 0 = not capped
