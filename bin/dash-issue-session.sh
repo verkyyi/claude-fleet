@@ -338,6 +338,11 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { refuse "spawn failed for #$num: new-window"; exit 1; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
+# Window handle (issue #566): the fleet's own short, typeable name for this window
+# (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
+# target is. Best-effort by design — a lock timeout or an exhausted alphabet just
+# leaves it unstamped and the dash's render-time backfill assigns one.
+fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # Spawn provenance (issue #503): stamp WHO spawned this worker beside the binding.
 # Unset ≡ hub-spawned (the default, untagged in the dash); the dash groups a
 # tagged child under its live parent, and the reapers copy it into the history

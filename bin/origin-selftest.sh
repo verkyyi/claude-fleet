@@ -26,6 +26,9 @@ HIST="$BIN/fleet-history.sh"
 [ -f "$HIST" ] || { printf 'selftest: %s not found\n' "$HIST" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/origin-selftest.XXXXXX")" || exit 2
+export FLEET_SKIP_GLOBAL_CONF=1
+export FLEET_CONF_DIR="$WORK/conf"     # keep #566's @wid allocation lock in the sandbox
+mkdir -p "$WORK/conf"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }

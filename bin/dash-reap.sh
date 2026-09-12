@@ -118,6 +118,12 @@ reap_keep() {
 
 # --- parse args ---------------------------------------------------------------
 target="${1:-}"; [ -z "$target" ] && exit 0
+# A target may be the fleet's short window HANDLE (`a1`, issue #566) as well as the
+# `sess:idx` the dash row hands over. Normalise ONCE here, before the --exec
+# re-dispatch carries $target into the background pass, so both passes address the
+# same window; a non-handle passes through untouched. Bare tmux: ⌃x runs in the
+# dash pane and the --exec tail under run-shell, both on THIS fleet's socket.
+target="$(fleet_wid_target "$target")"
 confirm=0
 shift || true
 for a in "$@"; do case "$a" in confirm) confirm=1;; esac; done

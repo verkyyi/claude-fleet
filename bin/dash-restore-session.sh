@@ -137,6 +137,11 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
   # a resumed session keeps its dash grouping; '-'/empty (pre-#503 row) → skip.
   { [ -n "${led_origin:-}" ] && [ "$led_origin" != "-" ]; } \
     && TM set-window-option -t "$1" @origin "$led_origin" 2>/dev/null
+  # Window handle (issue #566): a restored session is a NEW window, so it gets a
+  # FRESH handle rather than the one its original window held — that handle was
+  # freed for reuse the moment the original closed, and may well be someone
+  # else's by now. Best-effort; the dash backfills if this comes up empty.
+  fleet_wid_stamp "$1" "$SOCK" >/dev/null 2>&1 || :
 }
 
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the

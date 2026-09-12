@@ -1,26 +1,34 @@
 #!/bin/bash
-# dash-rows-scratch-id-selftest.sh — the dash id column tells a SCRATCH apart from
-# an ISSUE WORKER at a glance, in BOTH dash views (issue #529).
+# dash-rows-scratch-id-selftest.sh — the dash `issue` column, and where a SCRATCH
+# is identified in each of the two dash views (issues #529 / #566).
 #
-# The rule under test, one grammar across the ⌃t toggle:
-#   * an issue-bound worker → `#<N>` in GREEN  (38;2;158;206;106)
-#   * a scratch session     → `~<N>` in INDIGO (38;2;187;154;247)
-#   * anything else         → a blank cell
+# The rule under test, per view:
+#   LANDED (⌃t) — a closed row has no live window, so this cell is the only id it
+#   will ever have, and it keeps the #529 two-colour grammar:
+#     * an issue-bound worker → `#<N>` in GREEN  (38;2;158;206;106)
+#     * a scratch session     → `~<N>` in INDIGO (38;2;187;154;247)
+#   LIVE — #566 gave every window a HANDLE of its own in a new leftmost `id`
+#   column, so the `issue` column stopped carrying two meanings behind a sigil:
+#     * an issue-bound worker → `#<N>` in GREEN
+#     * a scratch session     → BLANK (its identity is the handle; its slot number
+#       still names the worktree and still shows in the `↳~76` provenance tag)
+#     * anything else         → a blank cell
+# (The handle column itself is pinned by bin/dash-wid-selftest.sh.)
 # `~<N>` is the fleet's existing scratch grammar (fleet-history.sh key_label, the
 # `↳~12` provenance tag, `/fleet-history list`); indigo is the colour that tag is
 # already drawn in. The COLOUR is the load-bearing half: #499/#502 put a GREEN
 # `~<N>` in this cell, found it "indistinguishable from `#<N>` at a glance", and
 # blanked the cell instead — which left a scratch with NO id on the dash at all.
-# So every id assertion here pins the colour ESCAPE + the text together; a future
-# change that paints `~<N>` green again fails this test, it does not quietly
-# re-create the #502 confusion.
+# So every landed id assertion here pins the colour ESCAPE + the text together; a
+# future change that paints `~<N>` green again fails this test, it does not
+# quietly re-create the #502 confusion. Blanking the LIVE cell is not a repeat of
+# #502 for the one reason that matters: a live scratch now carries a handle.
 #
 # The other half is WHERE the id comes from. It must be read from `@worktree`
 # first and the pane cwd only as a fallback, because both of the cwd-only reader's
 # blind spots are ordinary states for a live scratch:
 #   * the window was renamed (`dash-raw-session.sh --name`, #225, or ⌃n), so the
-#     window column no longer carries `scratch-<N>` either — the id cell is then
-#     the ONLY place the id survives; and
+#     window column no longer carries `scratch-<N>` either; and
 #   * its Claude `cd`'d into a subdirectory, so the cwd basename is `docs`, not
 #     `<repo>-scratch-<N>`, and the strict key rule yields nothing.
 # Fixture 3 below is exactly that window (renamed AND wandered) and is the reason
@@ -44,7 +52,9 @@ HIST="$BIN/fleet-history.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashid-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 export TMPDIR="$WORK"                    # fleet_cache's $C lands in the sandbox
-mkdir -p "$WORK/.claude-dash/global"
+export FLEET_SKIP_GLOBAL_CONF=1
+export FLEET_CONF_DIR="$WORK/conf"       # …and so does the #566 @wid allocation lock
+mkdir -p "$WORK/.claude-dash/global" "$WORK/conf"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
@@ -58,14 +68,20 @@ IN='38;2;187;154;247m'      # indigo — a scratch
 SESS=fleet-testrepo
 
 # --- tmux shim: replay a fixed window list, no-op everything else --------------
-# The producer makes exactly ONE tmux call (`list-windows -a -F <fmt>`); the shim
-# replays $WLIST_FILE for it and exits 0 silently for anything fleet-lib might ask.
+# The producer's ROW read is `list-windows -a -F <fmt>` where <fmt> is separated by
+# 0x1f; the shim replays $WLIST_FILE for exactly that and exits 0 silently for
+# anything else fleet-lib might ask — including #566's own `-F '#{@wid}'` handle
+# scan, which must NOT get a window list back (it would read as 6 taken handles).
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/tmux" <<'SHIM'
 #!/bin/sh
+US=$(printf '\037')
+lw=0; fmt=0
 for a in "$@"; do
-  [ "$a" = list-windows ] && { cat "$WLIST_FILE"; exit 0; }
+  [ "$a" = list-windows ] && lw=1
+  case "$a" in *"$US"*) fmt=1 ;; esac
 done
+[ "$lw" = 1 ] && [ "$fmt" = 1 ] && cat "$WLIST_FILE"
 exit 0
 SHIM
 chmod +x "$WORK/bin/tmux"
@@ -98,19 +114,23 @@ r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4)
 # 1. an issue worker keeps the green `#<N>` it always had.
 has "live: worker id cell is GREEN #123" "$r1" "$GN#123"
 
-# 2. a scratch gets an INDIGO `~<N>` — never green, and never `#<N>` (which would
-#    read as an issue that does not exist).
-has   "live: scratch id cell is INDIGO ~9" "$r2" "$IN~9"
-hasnt "live: scratch id must not be green" "$r2" "$GN~9"
-hasnt "live: scratch must not render as #9" "$r2" "#9"
+# 2. a scratch leaves the issue column BLANK (#566) — it is not an issue, and its
+#    own identity is the handle in the `id` column to the left. Never `#9` either
+#    (which would read as an issue that does not exist).
+hasnt "live: scratch draws no ~N sigil in the issue column" "$r2" "~9"
+hasnt "live: scratch must not render as #9"                 "$r2" "#9"
 
-# 3. THE #529 CASE — renamed window + cwd wandered into a subdir: the id survives
-#    because it is read from @worktree, and it is the only id left on the row.
-has   "live: renamed+wandered scratch still shows INDIGO ~5" "$r3" "$IN~5"
+# 3. THE #529 CASE — renamed window + cwd wandered into a subdir. The KEY is still
+#    read from @worktree (the #529 fix): it drives the provenance grouping and the
+#    ledger, it just no longer paints a sigil in the issue column.
+hasnt "live: renamed+wandered scratch draws no ~5 sigil" "$r3" "~5"
 hasnt "live: renamed scratch's window column no longer carries the id" "$r3" "scratch-5"
 
 # 4. a window that is neither → blank cell (5 spaces), not a stray `~`/`#`.
 hasnt "live: a non-scratch, non-worker window prints no id" "$r4" "~"
+# 5a. the leftmost column is now the #566 handle, and it precedes `issue`.
+has "live: the header names an 'id' column before 'issue'" \
+    "$(printf '%s\n' "$out" | grep -F "hdr${US}hdr")" "id  issue"
 
 # 5. alignment: the id cell stays 5 wide in every shape, so every column after it
 #    lines up. Asserted as ONE exact substring — <colour><cell><reset> — rather than
@@ -122,10 +142,10 @@ cellis() {   # <label> <row> <5-char cell> <colour>
   CHECKS=$((CHECKS+1))
   case "$2" in *"$4$3"$'\033[0m'*) : ;; *) fail "$1" "$2";; esac
 }
-cellis "live: worker id cell is GREEN and 5 wide"           "$r1" "#123 " "$GN"
-cellis "live: scratch id cell is INDIGO and 5 wide"         "$r2" "~9   " "$IN"
-cellis "live: wandered scratch id cell is INDIGO, 5 wide"   "$r3" "~5   " "$IN"
-cellis "live: unkeyed window id cell is 5 blanks"           "$r4" "     " "$GN"
+cellis "live: worker issue cell is GREEN and 5 wide"         "$r1" "#123 " "$GN"
+cellis "live: scratch issue cell is 5 blanks"               "$r2" "     " "$GN"
+cellis "live: wandered scratch issue cell is 5 blanks"      "$r3" "     " "$GN"
+cellis "live: unkeyed window issue cell is 5 blanks"        "$r4" "     " "$GN"
 
 # 6. #534 — the window cell is 22 display COLUMNS for a CJK name too. fld() padded
 #    by ${#} (code points), so `修复仪表盘` (5 glyphs, 10 cols) got 17 pad spaces
@@ -139,9 +159,10 @@ hasnt "live: a 10-col CJK name must not get a 17-space (code-point) pad" "$r5" "
 has   "live: a 28-col CJK name clips at 22 cols = 11 glyphs" "$r6" "修复仪表盘粘贴问题的名"$'\033[0m'
 hasnt "live: a 28-col CJK name must not leak past 22 cols" "$r6" "的名字"
 
-# --- the landed view (⌃t) must speak the SAME grammar -------------------------
-# #502 blanked the landed scratch cell to match the live view of the day; now that
-# the live view paints an id, a blank here is what would split the two.
+# --- the landed view (⌃t) keeps the #529 two-colour grammar -------------------
+# A landed row has no live window and therefore no #566 handle, so `~<N>` is the
+# ONLY id it will ever have. Blanking it here — which is what "match the live
+# view" would now argue for — is exactly the #502 regression.
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
 printf '2026-01-01T00:00:00Z\t123\tfix the thing\t61\tsha1\t/w/repo-issue-123\t/nope\tsid-a\t-\t\n' \
   > "$FLEET_HISTORY_LEDGER"

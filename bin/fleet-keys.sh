@@ -118,6 +118,7 @@ print_sheet() {
   if want dashboard; then
   group "dashboard" "— inside the hub dash pane (prefix g)"
   key "enter" "jump to the highlighted window"
+  key "id a1 b7" "the leftmost id column is that WINDOW's handle (a1…z9) — unique in this fleet, it survives a migrate/handoff, and it is accepted wherever a window target is: \`fleet-migrate.sh b3\`, \`dash-reap.sh a1\`. Freed for reuse once the window is gone; the landed view has none (⌃t shows \`·\`)"
   key "type a name, enter" "EMPTY scratch session named after the typed text — no prompt sent; CJK + spaces fine, 24 cols (the prompt line at the bottom; esc clears it)"
   key "$(dg new)" "new issue — file one AND spawn its worker (quick-dispatch)$(dn new)"
   key "$(dg scratch)" "raw scratch session — spawns instantly (the fleet's default agent in its own scratch-N worktree, no issue, no prompt)$(dn scratch)"

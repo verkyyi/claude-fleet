@@ -12,7 +12,7 @@
 # a shell left to type a relaunch into. This script embraces the hook instead:
 #
 #   1. read everything about the window FIRST (name, cwd, @issue/@raw/@worktree/
-#      @origin, state) and the session id off the Claude Code registry
+#      @origin/@wid, state) and the session id off the Claude Code registry
 #      (~/.claude/sessions/<pid>.json — exact, not "newest transcript");
 #   2. ask Claude to exit — `/exit` typed at the prompt after an Escape (which also
 #      cancels the "Usage limit reached · continuing automatically" wait, the very
@@ -27,13 +27,13 @@
 #      @cc_account — re-bind the window options, then VERIFY by reading the new
 #      process's token out of its environment (truth, not a stamp).
 #
-#   fleet-migrate.sh [opts] <window-id>…        explicit windows (still require a live Claude)
+#   fleet-migrate.sh [opts] <window>…           a @wid handle (b3), tmux id or index
 #   fleet-migrate.sh [opts] --limited           every window whose account is benched
 #                                               (working ones included: their turn is dead)
 #   fleet-migrate.sh [opts] --idle              done|needs windows NOT on the active account
 #   fleet-migrate.sh [opts] --all               every window NOT on the active account
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
-#   fleet-migrate.sh whoami <window-id>         print the account a window really runs
+#   fleet-migrate.sh whoami <window>            print the account a window really runs
 #                                               (token truth; re-stamps a stale @cc_account)
 #   opts: --session <fleet>   target fleet when run outside tmux (default: the caller's)
 #         --model <alias>     relaunch on THIS model (issue #524: a per-model cap —
@@ -145,7 +145,7 @@ migrate_selected() {
 # --- the move -------------------------------------------------------------------
 
 migrate_one() {
-  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin
+  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd
   # One display-message per field — NOT a joined format split on a control byte:
   # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
   # escaping; 3.7 emits the byte), so a separator-based parse is not portable.
@@ -153,6 +153,7 @@ migrate_one() {
   cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
   raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
   origin=$(wopt "$wid" '#{@origin}')
+  hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
   local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "${FLEET_MAIN:-}" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
@@ -211,6 +212,13 @@ migrate_one() {
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
+    # @wid (issue #566): the WHOLE point of the handle is that it survives this —
+    # a migrate closes the window and opens a new one, minting a new window_id,
+    # and 21 windows went through here in a single night. Re-stamp the SAME handle
+    # so "migrate b3" still means the same session afterwards. fleet_wid_stamp
+    # takes it as a WANT: if something claimed it in the gap it allocates the next
+    # free one instead of letting two windows answer to b3.
+    [ -n "$hnd" ] && fleet_wid_stamp "$nw" "$SOCK" "$hnd" >/dev/null 2>&1
     TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
   fi
@@ -266,6 +274,14 @@ migrate_main() {
   [ -n "$SESS" ] || { echo "fleet-migrate: no tmux session (pass --session <fleet>)" >&2; return 2; }
   fleet_load_conf "$SESS" 2>/dev/null || :
   SOCK=$(fleet_socket "$SESS")
+  # A positional may be the fleet's short window HANDLE (`b3`, issue #566) instead
+  # of a tmux window-id/index. Normalise once, here, so every path below (whoami
+  # and the explicit walk alike) works on a real target; anything that is not a
+  # handle passes through untouched, so `@382` / `3` / a name keep working.
+  if [ "${#WIDS[@]}" -gt 0 ]; then
+    _norm=(); for _w in "${WIDS[@]}"; do _norm+=("$(fleet_wid_target "$_w" "$SOCK")"); done
+    WIDS=("${_norm[@]}")
+  fi
   TM() { tmux -L "$SOCK" "$@"; }
   # Sanctioned keystrokes (issue #437): the ONLY keys ever typed are Escape + `/exit`
   # + Enter, and only while a Claude process is verified alive under the pane (the

@@ -9,7 +9,8 @@
 # HOT PATH (2026-07-07): this runs on every dash repaint (4×/s) — the loop is
 # exec-fork-free (bash builtins only: read/expansion instead of cat/cut/sed/awk).
 # Execs per render: tmux + sort + perl(sub-second clock) + one fleet_cache slug
-# lookup ≈ 4. ~30ms total.
+# lookup ≈ 4. ~30ms total. (The #566 @wid backfill adds a handful of forks for a
+# window that carries no handle yet — once in that window's life, not per tick.)
 set -uo pipefail
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} must count chars, not bytes
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -32,7 +33,7 @@ CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
 AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -106,14 +107,14 @@ PRDIR=${_pf%/*}
 # the pane), so it's only a fallback for the very first pre-fzf render before
 # FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
 # margin so fzf never clips the ctx% digits. Layout column widths:
-#   LEFTW  = glyph1+sp + issue5+sp + window22+sp = 31
+#   LEFTW  = glyph1+sp + id3+sp + issue5+sp + window22+sp = 35   (id = @wid, issue #566)
 #   RIGHTW = act8+sp + PR7+sp + ctx4 = 21   (act = last-activity, issue #228)
 # NB: LEFTW/ACTW/RIGHTW MUST stay in step with fleet-history.sh cmd_rows so the
 # live list and the landed history list render the SAME aligned columns (#228).
 COLS=${FZF_COLUMNS:-}
 case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
 case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-LEFTW=31; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
+LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
 # One tmux read, iterated twice (issue #503): pass A below builds the parent
@@ -123,8 +124,13 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<origin>` line per addressable window,
 # the parent-resolution table for the spawn-provenance grouping (issue #503).
+# The trailing `_` absorbs every field AFTER @worktree (@cc_agent since #547,
+# @wid since #566): `read` gives the LAST name all remaining fields, so without
+# it $wt arrived as `<path><US><agent><US><handle>` and okey_v's strict
+# `scratch-<digits>` test could never match a @worktree-stamped scratch — the
+# #529 blind spot, reopened in pass A only (pass B reads every field by name).
 KEYTAB=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
@@ -135,7 +141,7 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt; do
 done <<< "$WLIST"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -231,22 +237,29 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent;
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
 
-  # --- the id cell (issue #529) ----------------------------------------------
-  # `#<N>` in GREEN for an issue-bound worker; `~<N>` in INDIGO for a scratch —
-  # the same `~` grammar key_label/`↳~12`//fleet-history list already speak, and
-  # the same indigo the ↳ scratch-provenance tag is drawn in, so the column reads
-  # green=issue / indigo=scratch. Colour is the half #502 was missing: it put a
-  # GREEN `~<N>` here, found it "indistinguishable from `#<N>` at a glance", and
-  # blanked the cell — which cost the scratch its only stable on-dash id, since
-  # the window column holds a merely cosmetic name (`--name`, #225, or ⌃n rename
-  # both erase the `scratch-<N>` default). Widths are unchanged: `~<N>` and
-  # `#<N>` are the same width, still inside the 5-col cell.
+  # --- the `id` cell: this window's handle (issue #566) -----------------------
+  # @wid is the fleet's own short, TYPEABLE name for a window (`a1`…`z9`) — the
+  # thing the operator says when they mean "reap a1" / "migrate b3". Muted grey:
+  # it is a handle, not status, and must not compete with the state glyph beside
+  # it. Backfilled here (the render is the one place that sees every window on
+  # every tick) for anything that has none — a window that predates #566, or a
+  # spawn whose allocator failed open. fleet_wid_stamp is idempotent + lock-held,
+  # so this costs its handful of forks ONCE per window's life, never per tick,
+  # and can never hand the same handle to two windows.
+  if [ -z "$hnd" ]; then hnd=$(fleet_wid_stamp "$wid" "${FLEET_SESSION:-}") || hnd=''; fi
+
+  # --- the issue cell (issues #529/#566) --------------------------------------
+  # ISSUE-ONLY since #566: `#<N>` in GREEN for an issue-bound worker, BLANK for a
+  # scratch. The cell used to carry both meanings behind a sigil (`#5613` vs
+  # `~76`), which is what #566 unpicked — a scratch's per-window identity is now
+  # the `id` handle to its left, so the `~<N>` branch has nothing left to say
+  # here. (#502's finding still holds and is still honoured in the LANDED view,
+  # where a closed row has no live window and `~<N>` IS its only id — see
+  # fleet-history.sh cmd_rows.) The scratch slot number stays findable: it names
+  # the worktree dir and still renders in the `↳~76` provenance tag.
   okey_v "$iss" "$wt" "$path"
   issd=''; icol=$GN
-  case "$okey" in
-    issue-*)   issd="#${okey#issue-}" ;;
-    scratch-*) issd="~${okey#scratch-}"; icol=$IN ;;
-  esac
+  case "$okey" in issue-*) issd="#${okey#issue-}" ;; esac
   # --- spawn provenance (issue #503) -----------------------------------------
   # ↳ tag: rendered in the flex span for every non-hub origin (`↳#483` for a
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
@@ -290,12 +303,13 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent;
         esac
       done ;;
   esac
-  # full row: glyph1·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
+  # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
   # window sits right after the issue; act/PR/ctx right-align to the edge, the
   # flex gap between them absorbing the width so the metadata block stays pinned
   # right. The flex span used to carry the LLM one-liner (summary column, retired
   # in issue #535 — it was the dash's only token-spending column); only the ↳
   # provenance tag lives there now.
+  fld 3  "$hnd";  f_hnd=$fld_out
   fld 5  "$issd"; f_iss=$fld_out
   # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
   # name is the everyday case now that the prompt line NAMES a scratch, and a CJK
@@ -320,7 +334,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent;
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
@@ -328,6 +342,7 @@ done <<< "$WLIST"
 # column header — pinned at top of the list by fzf --header-lines=1. Same
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
 # the flex span is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
+fld 3  "id";     h_w=$fld_out
 fld 5  "issue";  h_i=$fld_out
 fld 22 "window"; h_n=$fld_out
 fld "$ACTW" "act"; h_a=$fld_out
@@ -335,7 +350,7 @@ fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
 # emit grouped by spawn provenance (issue #503): roots (hub/autofill/bridge
 # spawns) keep the status-rank order they always had; each root's children sort
