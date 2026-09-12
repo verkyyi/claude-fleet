@@ -24,7 +24,7 @@
 // field: Turn.CacheCreateTokens is already cache_create_5m + cache_create_1h
 // collapsed server-side (rollup_query.go's SessionTurns query).
 import { el } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtFull, fmtPct, fmtDur, shortProject } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, shortProject } from './lib/format.js';
 import * as C from './charts.js';
 
 /* ------------------------------------------------------------------ state */
@@ -90,7 +90,7 @@ function errMsg(err) {
 function headerNodes(s, app) {
   const spendTile = C.kpiTile({
     label: 'spend (notional)',
-    value: (s.unpriced_events > 0 ? '⚠ ' : '') + fmtUSD(s.cost_usd),
+    value: fmtCost(s),
   });
   if (s.unpriced_events > 0) {
     spendTile.title = `${fmtFull(s.unpriced_events)} event(s) in this session have no price data — spend is a lower bound.`;
@@ -181,7 +181,13 @@ function turnsTable(turns) {
 
 function bodyNode(turns, pruned) {
   const wrap = el('div', {});
-  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, `Turns (${fmtFull(turns.length)})`));
+  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, `Model requests (${fmtFull(turns.length)})`));
+  const details = turns.find(t => t.details)?.details;
+  if (details) {
+    wrap.appendChild(el('p', {class:'hint'}, `${details.model_provider || 'provider unknown'} · client ${details.client_version || 'unknown'} · ${details.billing_mode || 'billing unknown'} · account: ${(details.account_basis || 'unassigned').replaceAll('_',' ')}`));
+    const bases = [...new Set(turns.map(t => t.details?.price_basis).filter(Boolean))];
+    wrap.appendChild(el('p', {class:'hint'}, bases.join(' · ')));
+  }
   if (pruned) {
     wrap.appendChild(el('div', { class: 'empty' }, 'Turns older than the retention window are gone.'));
     return wrap;
@@ -198,6 +204,8 @@ function bodyNode(turns, pruned) {
   wrap.appendChild(C.turnBars(chartTurns));
 
   wrap.appendChild(turnsTable(turns));
+  if (details) wrap.appendChild(el('details', {}, el('summary', {}, 'Request provenance and cache writes'),
+    el('div', {}, turns.slice(-100).map(t => el('p', {class:'hint'}, `${t.request_id || 'legacy request'} · turn ${t.details?.turn_id || 'unknown'} · root ${t.details?.root_turn_id || 'unknown'} · cache writes ${t.details?.cache_write_input_tokens == null ? 'unknown' : fmtInt(t.details.cache_write_input_tokens)} · tier ${t.details?.service_tier || 'not recorded'}`)))));
   return wrap;
 }
 
@@ -250,7 +258,7 @@ export function renderDetail(root, state, app) {
     root.hidden = false;
   }
 
-  const key = state.session + '|' + (state.sub || 'all');
+  const key = state.session + '|' + (state.sub || 'all') + '|' + (state.chips.source || '');
   if (key !== loadKey) {
     loadKey = key;
     if (controller) controller.abort();
@@ -258,7 +266,7 @@ export function renderDetail(root, state, app) {
     controller = ctrl;
     renderSkeleton(root);
     const acct = encodeURIComponent(state.sub || 'all');
-    app.api(`/v1/sessions/${encodeURIComponent(state.session)}?account=${acct}`, ctrl.signal)
+    app.api(`/v1/sessions/${encodeURIComponent(state.session)}?account=${acct}&source=${encodeURIComponent(state.chips.source || '')}`, ctrl.signal)
       .then((data) => { if (ctrl === controller) renderLoaded(root, data, app); })
       .catch((err) => {
         if (ctrl !== controller || (err && err.name === 'AbortError')) return;

@@ -1,3 +1,4 @@
+import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive } from './providers.js';
 // web/dist/now.js — the Now view: hero odometer, live strip, "am I about to
 // hit the wall" gauges, and the collapsible Fleet tables.
 //
@@ -45,7 +46,6 @@ const nowScope = createScopeControls({ span: false });
 const heroWrapEl = el('div', { class: 'hero-wrap' });
 const liveWrapEl = el('div', { class: 'live-wrap' });
 
-let liveStarted = false;
 
 /* ------------------------------------------------------------------ utils */
 
@@ -103,7 +103,7 @@ function applyCounter(c) {
           // The tilde is the whole honesty marker: this figure is projected
           // between measurements and is not exact. One character, always present.
           el('span', { class: 'tilde' }, '~'))),
-      el('div', { class: 'k' }, 'tokens consumed')));
+      el('div', { class: 'k' }, 'tokens consumed · selected account and source · all time')));
   }
   if (!hero.raf) tickHero();
 }
@@ -218,7 +218,8 @@ function tickHero() {
 
 /* ------------------------------------------------------------------- live */
 
-const liveState = { snap: null, es: null };
+const liveState = { snap: null, es: null, key: null, retry: null };
+const liveScopeKey = (app) => new URLSearchParams({account:app.state.sub || 'all', source:app.state.chips.source || ''}).toString();
 
 /** matchesChips filters a live session against the current chips. Only the
  *  five dimensions a LiveSession actually carries (endpoint/os_user/cwd/
@@ -229,13 +230,14 @@ function matchesChips(s, chips) {
   if (chips.login && s.os_user !== chips.login) return false;
   if (chips.project && s.cwd !== chips.project) return false;
   if (chips.model && s.model !== chips.model) return false;
+  if (chips.source && (s.source || 'claude') !== chips.source) return false;
   if (chips.session && s.session_id !== chips.session) return false;
   return true;
 }
 
 function liveRow(s, app) {
   const where = s.worktree || shortProject(s.cwd) || s.session_id.slice(0, 8);
-  const ctx = Math.round(s.context_used_pct || 0);
+  const ctx = s.context_unknown ? null : Math.round(s.context_used_pct || 0);
   return el('div', {
       class: 'live-row', role: 'button', tabindex: '0',
       title: 'click to filter by this session',
@@ -246,17 +248,18 @@ function liveRow(s, app) {
       el('b', {
         onclick: (e) => { e.stopPropagation(); app.setState(withChip(app.state, 'project', s.cwd)); },
       }, where), ' ',
-      el('span', {}, `${s.model || '?'}${s.effort ? ' · ' + s.effort : ''} · ${s.endpoint}`)),
+      el('span', {}, `${s.source === 'codex' ? 'Codex · recent activity · ' : 'Claude · '}${s.model || '?'}${s.effort ? ' · ' + s.effort : ''} · ${s.endpoint}${s.observed_at ? ' · ' + new Date(s.observed_at).toLocaleTimeString() : ''}`)),
     el('div', { class: 'rate' },
       `${fmtInt((s.input_tokens || 0) + (s.output_tokens || 0))}` +
-      (s.tokens_per_min > 0 ? ` · ${fmtInt(Math.round(s.tokens_per_min))}/min` : ' · idle')),
-    el('div', { class: 'ctxbar', title: `context ${ctx}%` },
+      (s.tokens_per_min > 0 ? ` · ${fmtInt(Math.round(s.tokens_per_min))}/min` : s.source === 'codex' ? ' · no new tokens' : ' · idle')),
+    ctx == null ? el('span', {class:'hint'}, 'context unknown') : el('div', { class: 'ctxbar', title: `context ${ctx}%` },
       el('i', { style: `width:${Math.min(100, ctx)}%` })));
 }
 
 function renderLive(snap, app) {
   liveState.snap = snap;
   applyCounter(snap && snap.counter);
+  if (snap) snap = selectLive(snap, app.state.chips || {}, app.state.sub);
   const active = snap && snap.active_sessions > 0;
 
   if (!liveWrapEl.firstChild) {
@@ -266,7 +269,7 @@ function renderLive(snap, app) {
         el('h2', {}, 'Right now'),
         el('span', { class: 'note', id: 'live-note' }, '')),
       el('div', { class: 'tiles' },
-        C.tile('lv-sessions', 'active sessions'),
+        C.tile('lv-sessions', 'active / recent sessions'),
         C.tile('lv-tpm', 'tokens / min'),
         C.tile('lv-uph', '$ / hour (notional)'),
         C.tile('lv-stok', 'tokens in flight')),
@@ -277,12 +280,13 @@ function renderLive(snap, app) {
   pulse.className = 'pulse' + (active ? '' : ' off');
   note.textContent = active
     ? `${snap.endpoints} endpoint${snap.endpoints === 1 ? '' : 's'} reporting · updates as sessions work`
-    : 'no sessions reporting — install `ccquota stamp` as your statusLine to see live activity';
+    : 'No recent activity. Codex uses log observations; Claude uses statusLine heartbeats.';
 
   if (!snap) return;
   C.tween($('#lv-sessions', liveWrapEl), snap.active_sessions, (v) => String(Math.round(v)));
   C.tween($('#lv-tpm', liveWrapEl), snap.tokens_per_min, (v) => fmtInt(Math.round(v)));
-  C.tween($('#lv-uph', liveWrapEl), snap.usd_per_hour, (v) => '$' + v.toFixed(2));
+  if (snap.active_sessions > 0 && snap.unpriced_sessions === snap.active_sessions) $('#lv-uph',liveWrapEl).textContent = '—';
+  else C.tween($('#lv-uph', liveWrapEl), snap.usd_per_hour, (v) => (snap.unpriced_sessions ? '≥ $' : '$') + v.toFixed(2));
   C.tween($('#lv-stok', liveWrapEl), snap.session_tokens || 0, (v) => fmtInt(Math.round(v)));
 
   const chips = app.state.chips || {};
@@ -304,18 +308,22 @@ function renderLive(snap, app) {
 function connectLive(app) {
   if (liveState.es) liveState.es.close();
   try {
-    const es = new EventSource('/v1/live/stream');
+    const key = liveScopeKey(app);
+    const es = new EventSource('/v1/live/stream?' + key);
     liveState.es = es;
-    es.onmessage = (e) => { try { renderLive(JSON.parse(e.data), app); } catch {} };
+    es.onmessage = (e) => { if (liveState.es !== es || liveScopeKey(app) !== key) return; try { renderLive(JSON.parse(e.data), app); } catch {} };
     es.onerror = () => {
       // EventSource reconnects on its own; a poll keeps the numbers moving
       // meanwhile rather than freezing on the last frame.
+      if (liveState.es !== es) return;
       es.close(); liveState.es = null;
-      setTimeout(() => connectLive(app), 5000);
+      clearTimeout(liveState.retry); liveState.retry = setTimeout(() => connectLive(app), 5000);
     };
   } catch {
-    setInterval(async () => {
-      try { renderLive(await app.api('/v1/live'), app); } catch {}
+    clearTimeout(liveState.retry); liveState.retry = setTimeout(async () => {
+      const key = liveScopeKey(app);
+      try { const snap = await app.api('/v1/live?' + key); if (key === liveScopeKey(app)) renderLive(snap, app); } catch {}
+      connectLive(app);
     }, 5000);
   }
 }
@@ -329,9 +337,9 @@ function connectLive(app) {
 // when there is something to ignore — it would be noise on every load
 // otherwise.
 function chipsIgnoredHint(chips) {
-  if (!chips || !Object.keys(chips).length) return null;
+  if (!chips || !Object.keys(chips).some((k) => k !== 'source')) return null;
   return el('p', { class: 'hint' },
-    'Ignoring the current chips — these gauges are always the whole subscription\u2019s utilization, never a filtered slice of it.');
+    'Quota follows the selected source and account. Project and machine filters apply to usage details; gauges cover the whole subscription.');
 }
 
 function wallCard(limits, chips) {
@@ -346,7 +354,7 @@ function wallCard(limits, chips) {
     if (limits.worst) {
       card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
         `Closest to its limit: ${limits.worst.label} at ` +
-        `${limits.worst.limits.five_hour.utilization.toFixed(1)}%.`));
+        `${highestQuota(limits.worst.limits).toFixed(1)}%.`));
     }
     for (const entry of limits.per_account) {
       card.appendChild(el('h2', { style: 'margin-top:20px' }, entry.label));
@@ -354,8 +362,7 @@ function wallCard(limits, chips) {
         card.appendChild(el('div', { class: 'empty' }, entry.limits.reason || 'No reading available.'));
         continue;
       }
-      card.appendChild(C.gauge('5-hour window', entry.limits.five_hour));
-      card.appendChild(C.gauge('7-day window', entry.limits.seven_day));
+      card.append(...quotaGauges(entry.limits));
     }
     return card;
   }
@@ -375,8 +382,7 @@ function wallCard(limits, chips) {
     return card;
   }
 
-  card.appendChild(C.gauge('5-hour window', limits.five_hour));
-  card.appendChild(C.gauge('7-day window', limits.seven_day));
+  card.append(...quotaGauges(limits));
 
   for (const s of limits.scoped || []) {
     if (!s.model && !s.surface) continue;
@@ -631,7 +637,7 @@ function buildBanners(state, endpointsR, limitsR) {
 /* ------------------------------------------------------------------- main */
 
 function applyNow(root, state, app, results) {
-  const [findingsR, limitsR, endpointsR, epAcctR, switchesR] = results;
+  const [findingsR, limitsR, endpointsR, epAcctR, switchesR, collectorsR, accountUsageR] = results;
 
   // scope.js resolves a "machine" chip's label from this on its next render.
   if (endpointsR.status === 'fulfilled') app.endpoints = endpointsR.value;
@@ -653,21 +659,32 @@ function applyNow(root, state, app, results) {
     heroWrapEl,
     wallCardFromResult(limitsR, state.chips),
     liveWrapEl,
+    collectorsCard(collectorsR, endpoints, app.accounts),
+    accountUsageCard(accountUsageR, app.accounts),
     fleet,
   ].filter(Boolean));
 }
 
 export function renderNow(root, state, app) {
-  if (!liveStarted) { liveStarted = true; connectLive(app); }
+  const liveKey = liveScopeKey(app);
+  if (liveState.key !== liveKey) {
+    liveState.key = liveKey; liveState.snap = null;
+    hero.anchor = hero.shown = hero.until = hero.perMs = 0;
+    wheels.length = 0; heroWrapEl.replaceChildren(); liveWrapEl.replaceChildren();
+    clearTimeout(liveState.retry); connectLive(app);
+  } else if (liveState.snap) renderLive(liveState.snap, app);
 
   const acct = encodeURIComponent(state.sub || 'all');
+  const source = encodeURIComponent(state.chips.source || '');
   const get = (path) => (signal) => app.api(path, signal);
   const fetchers = [
-    get(`/v1/findings?view=now&account=${acct}`),
-    get(`/v1/limits?account=${acct}`),
-    get(`/v1/endpoints?account=${acct}`),
-    get(`/v1/endpoint-accounts?account=${acct}&limit=200`),
-    get(`/v1/account-switches?account=${acct}&limit=20`),
+    get(`/v1/findings?view=now&account=${acct}&source=${source}`),
+    get(`/v1/limits?account=${acct}&source=${source}`),
+    get(`/v1/endpoints?account=${acct}&source=${source}`),
+    get(`/v1/endpoint-accounts?account=${acct}&source=${source}&limit=200`),
+    get(`/v1/account-switches?account=${acct}&source=${source}&limit=20`),
+    get(`/v1/collectors?account=${acct}&source=${source}`),
+    get(`/v1/account-usage?account=${acct}&source=${source}`),
   ];
   return { fetchers, apply: (results) => applyNow(root, state, app, results) };
 }

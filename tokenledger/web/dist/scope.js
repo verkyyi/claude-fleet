@@ -113,6 +113,9 @@ export function createScopeControls({ span = true } = {}) {
   const sel = el('select', { 'aria-label': 'Subscription' });
   sel.addEventListener('change', (e) => handlers.onSub && handlers.onSub(e.target.value));
 
+  const sourceSel = el('select', { 'aria-label': 'Usage source' });
+  if (sourceSel) sourceSel.addEventListener('change', (e) => handlers.onSource && handlers.onSource(e.target.value));
+
   const spanSeg = span
     ? el('div', { class: 'seg', role: 'group', 'aria-label': 'Timeline span' },
         ['7d', '30d', '90d'].map((v) => el('button', { type: 'button', 'data-span': v }, v)))
@@ -125,18 +128,28 @@ export function createScopeControls({ span = true } = {}) {
 
   const chipsRow = el('div', { class: 'chips-row', hidden: true });
 
-  const filters = el('div', { class: 'filters' }, sel, spanSeg);
+  const filters = el('div', { class: 'filters' }, sel, sourceSel, spanSeg);
   const root = el('div', { class: 'scope-controls' }, filters, chipsRow);
 
   function update(state, accounts, cb) {
     handlers = cb || {};
 
-    const opts = accounts.map((a) => el('option', { value: a.account_uuid },
-      a.email || a.display_name || a.account_uuid));
-    if (accounts.length > 1) opts.unshift(el('option', { value: 'all' }, `All ${accounts.length} subscriptions`));
+    const relevant = accounts.filter((a) => !state.chips.source || (a.source || 'claude') === state.chips.source);
+    const opts = relevant.map((a) => el('option', { value: a.account_uuid },
+      `${a.source === 'codex' ? 'Codex · ' : 'Claude · '}${a.email || a.display_name || a.account_uuid}`));
+    opts.unshift(el('option', { value: 'all' }, `All ${relevant.length} accounts / usage pools`));
     sel.replaceChildren(...opts);
-    sel.style.display = accounts.length > 1 ? '' : 'none';
+    sel.style.display = relevant.length ? '' : 'none';
     sel.value = state.sub;
+
+    if (sourceSel) {
+      const sources = [...new Set(accounts.map((a) => a.source || 'claude'))];
+      if (state.chips.source && !sources.includes(state.chips.source)) sources.push(state.chips.source);
+      sourceSel.replaceChildren(el('option', { value: '' }, 'All sources'),
+        ...sources.map((source) => el('option', { value: source },
+          ({ claude: 'Claude Code', codex: 'Codex' })[source] || source)));
+      sourceSel.value = state.chips.source || '';
+    }
 
     if (spanSeg) {
       for (const btn of spanSeg.querySelectorAll('button')) {

@@ -13,10 +13,11 @@
 import { apiQuery, withChip, GROUPS } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
-import { fmtInt, fmtUSD, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
 import { el, escapeHTML } from './lib/dom.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
+import { pricingCoverage } from './lib/providers.js';
 
 // Review's scope-controls widget: subscription select + span segmented
 // control + chips row (Task 15 nav restructure). Mounted on the Timeline
@@ -34,8 +35,8 @@ const reviewScope = createScopeControls({ span: true });
 const GRAN = { '7d': 'hour', '30d': '6h', '90d': 'day' };
 // DIM_TO_API translates a URL/chip dimension name to the `by=`/filter query
 // value the Go API actually expects (internal/api/scope.go, store.Dimension).
-const DIM_TO_API = { project: 'project', login: 'user', machine: 'endpoint', model: 'model', branch: 'branch', team: 'team' };
-const DIM_LABEL = { project: 'Project', login: 'Login', machine: 'Machine', model: 'Model', branch: 'Branch', team: 'Team' };
+const DIM_TO_API = { project: 'project', login: 'user', machine: 'endpoint', model: 'model', branch: 'branch', team: 'team', source: 'source' };
+const DIM_LABEL = { project: 'Project', login: 'Login', machine: 'Machine', model: 'Model', branch: 'Branch', team: 'Team', source: 'Source' };
 // kpiTile's `tone` only special-cases the literal string 'neutral' (its own
 // default) — anything else gets the up=red/down=green colouring. Named here
 // rather than passed as an arbitrary truthy string so every "more usage is
@@ -146,7 +147,7 @@ function timelineCard(result, ctx, state, app) {
   const data = result.value;
   const topModels = (data.stack_models || []).filter((m) => m !== 'other');
   const norm = normalizeSeries(data.series, gran, data.stack_models || []);
-  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost_usd: n.cost_usd, stack: n.stack }));
+  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost_usd: n.cost_usd, unpriced_events: n.unpriced_events, stack: n.stack }));
 
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;
@@ -190,15 +191,15 @@ function kpisCard(result) {
 
   const cacheHit = ratio(d.cache_read_tokens, d.cache_read_tokens + d.input_tokens + d.cache_create_tokens);
   const prevCacheHit = ratio(p.cache_read_tokens || 0, (p.cache_read_tokens || 0) + (p.input_tokens || 0) + (p.cache_create_tokens || 0));
-  const perM = d.output_tokens > 0 ? (d.cost_usd / d.output_tokens) * 1e6 : null;
-  const prevPerM = p.output_tokens > 0 ? (p.cost_usd / p.output_tokens) * 1e6 : null;
+  const perM = d.output_tokens > 0 && !d.unpriced_events ? (d.cost_usd / d.output_tokens) * 1e6 : null;
+  const prevPerM = p.output_tokens > 0 && !p.unpriced_events ? (p.cost_usd / p.output_tokens) * 1e6 : null;
   const subShare = ratio(d.sidechain_tokens, d.tokens);
   const prevSubShare = ratio(p.sidechain_tokens || 0, p.tokens || 0);
 
   const spendTile = C.kpiTile({
     id: 'kpi-spend', label: 'spend (notional)',
-    value: (d.unpriced_events > 0 ? '⚠ ' : '') + fmtUSD(d.cost_usd),
-    delta: delta(d.cost_usd, p.cost_usd),
+    value: fmtCost(d),
+    delta: d.unpriced_events || p.unpriced_events ? null : delta(d.cost_usd, p.cost_usd),
     tone: TONE_MORE_IS_WORSE,
   });
   if (d.unpriced_events > 0) {
@@ -207,10 +208,20 @@ function kpisCard(result) {
 
   const card = el('div', { class: 'card' }, el('h2', {}, 'KPIs'),
     el('p', { class: 'hint' }, 'Selection totals, each compared with the equal-length period right before it.'));
+  if (d.pricing_note) card.appendChild(el('p', {class:'hint'}, d.pricing_note));
+  const coverage = pricingCoverage(d);
+  card.appendChild(el('div', {class:'pricing-coverage'},
+    el('p', {}, el('b', {}, `Request pricing coverage · 计价覆盖率: ${coverage.percent}`)),
+    el('p', {class:'hint'}, `${fmtFull(coverage.priced)} priced / ${fmtFull(coverage.total)} collected model requests. ${fmtFull(coverage.unpriced)} unpriced requests still count toward token totals. This measures pricing coverage by request count, not collection completeness or remaining quota. API-equivalent cost is not your subscription bill.`)));
+  if (d.unpriced_reasons?.length) card.appendChild(el('details', {class:'unpriced-reasons'},
+    el('summary', {}, `Why ${fmtFull(coverage.unpriced)} requests have no price · 未计价原因`),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source / model'), el('th', {}, 'Reason'), el('th', {}, 'Requests'))),
+      el('tbody', {}, d.unpriced_reasons.map((r) => el('tr', {}, el('td', {}, `${r.source} / ${r.model || 'unknown'}`), el('td', {}, r.reason), el('td', {}, fmtFull(r.events))))))));
+  if (d.cache_write_known_events > 0) card.appendChild(el('p', {class:'hint'}, `Codex cache writes: ${fmtInt(d.cache_write_tokens)} tokens · breakdown available for ${fmtInt(d.cache_write_known_events)} requests. Included in input totals.`));
   card.appendChild(el('div', { class: 'kpis' },
     C.kpiTile({ id: 'kpi-tokens', label: 'tokens', value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
     spendTile,
-    C.kpiTile({ id: 'kpi-turns', label: 'turns', value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
+    C.kpiTile({ id: 'kpi-turns', label: 'model requests', value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-sessions', label: 'sessions', value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-cachehit', label: 'cache hit', value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
     C.kpiTile({
@@ -307,7 +318,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
       const capped = d.pct != null && Math.abs(d.pct) >= DELTA_CAP_PCT;
       return {
         key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
-        right: `${fmtFull(b.tokens)} · ${fmtUSD(b.cost_usd)} · ${d.text}`,
+        right: `${fmtFull(b.tokens)} · ${fmtCost(b)} · ${d.text}`,
         tip: capped
           ? `<b>${escapeHTML(displayLabel(b))}</b><br>${fmtFull(b.tokens)} tokens (was ${fmtFull(b.prev_tokens || 0)})` +
             `<br>exact change: ${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%`
@@ -321,7 +332,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     const tableBuckets = dim === 'project' ? buckets.map((b) => ({ ...b, label: shortProject(b.key) })) : buckets;
     const table = C.bucketTable(tableBuckets, DIM_LABEL[dim], [
       { label: 'Prev tokens', value: (b) => fmtFull(b.prev_tokens || 0) },
-      { label: 'Prev cost', value: (b) => fmtUSD(b.prev_cost_usd || 0) },
+      { label: 'Prev cost', value: (b) => fmtCost({cost_usd:b.prev_cost_usd || 0, events:b.prev_events, unpriced_events:b.prev_unpriced_events}) },
     ]);
     C.withTable(body, chart, table, `review-breakdown-${n}`);
     if (!expanded && buckets.length > 12) {
@@ -350,7 +361,7 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   const parts = [
     { key: 'cache read', tokens: d.cache_read_tokens, color: C.seriesColor(0) },
     { key: 'cache create', tokens: d.cache_create_tokens, color: C.seriesColor(1) },
-    { key: 'output', tokens: d.output_tokens, color: C.seriesColor(2) },
+    { key: 'output (non-thinking)', tokens: Math.max(0, (d.output_tokens || 0) - (d.thinking_tokens || 0)), color: C.seriesColor(2) },
     { key: 'input', tokens: d.input_tokens, color: C.seriesColor(3) },
     { key: 'thinking', tokens: d.thinking_tokens, color: C.seriesColor(4) },
   ];
@@ -433,6 +444,7 @@ function modelMixCard(result, ctx) {
       if (!name) return;
       const t = totals[name] || (totals[name] = { key: name, events: 0, tokens: 0, cost_usd: 0, unpriced_events: 0 });
       t.events += b.events || 0; t.tokens += b.tokens || 0; t.cost_usd += b.cost_usd || 0;
+      t.unpriced_events += b.unpriced_events || 0;
     });
   }
   const table = C.bucketTable(Object.values(totals), 'Model');
@@ -475,14 +487,15 @@ function whenCard(result, ctx) {
 
 function wallHistoryCard(result, ctx) {
   const card = el('div', { class: 'card', id: 'wall-history' }, el('h2', {}, 'Wall history'),
-    el('p', { class: 'hint' }, '5-hour utilization over the selection, red where ≥ 90%; the 7-day line is fainter.'));
+    el('p', { class: 'hint' }, 'Quota observations for the selected source and accounts. Each Codex window is separate; red marks ≥ 90%.'));
   if (result.status === 'rejected') {
     card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
     return card;
   }
   const { sel } = ctx;
   const data = result.value;
-  const accounts = data.accounts || [];
+  const accounts = [...(data.accounts || []), ...(data.quota_series || []).map((s) => ({ ...s,
+    points: s.points.map((p) => ({ t: p.t, five_hour_pct: p.utilization })) }))];
   const totalPoints = accounts.reduce((a, x) => a + ((x.points || []).length), 0);
   if (!totalPoints) {
     // Not "snapshots exist from <date>": that hardcoded a date true only of
@@ -542,7 +555,7 @@ function sessionRow(r, state, app) {
     el('td', {}, sessionDuration(r)),
     el('td', { class: 'num' }, fmtFull(r.turns)),
     el('td', { class: 'num' }, fmtInt(r.tokens)),
-    el('td', { class: 'num' }, fmtUSD(r.cost_usd)),
+    el('td', { class: 'num' }, fmtCost(r)),
     el('td', { class: 'num' }, fmtPct(r.cache_hit || 0)),
     el('td', { class: 'num' }, fmtPct(r.sidechain_share || 0)));
 }
@@ -553,7 +566,7 @@ function sessionMobileCard(r, state, app) {
     el('div', {}, chipLink(state, app, 'project', r.cwd, shortProject(r.cwd)), ' — ', chipLink(state, app, 'login', r.os_user, r.os_user)),
     el('div', {}, `${r.model || '—'} · ${r.endpoint || r.endpoint_id}`),
     el('div', {}, `${new Date(r.started).toLocaleString()} · ${sessionDuration(r)}`),
-    el('div', {}, `${fmtInt(r.tokens)} tokens · ${fmtUSD(r.cost_usd)} · ${fmtFull(r.turns)} turns`),
+    el('div', {}, `${fmtInt(r.tokens)} tokens · ${fmtCost(r)} · ${fmtFull(r.turns)} turns`),
     el('div', {}, `cache hit ${fmtPct(r.cache_hit || 0)} · subagent ${fmtPct(r.sidechain_share || 0)}`));
 }
 

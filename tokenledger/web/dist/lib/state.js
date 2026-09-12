@@ -1,8 +1,8 @@
 // web/dist/lib/state.js — URL ⇄ state. No DOM. The hash is the only copy of the state.
-export const DIMS = ['machine', 'login', 'project', 'model', 'branch', 'team', 'session'];
-export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project', model: 'model', branch: 'branch', team: 'team', session: 'session' };
+export const DIMS = ['machine', 'login', 'project', 'model', 'branch', 'team', 'session', 'source'];
+export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project', model: 'model', branch: 'branch', team: 'team', session: 'session', source: 'source' };
 export const SPAN_VALUES = ['7d', '30d', '90d'];
-export const GROUPS = ['project', 'login', 'machine', 'model', 'branch', 'team'];
+export const GROUPS = ['project', 'login', 'machine', 'model', 'branch', 'team', 'source'];
 export const SORTS = ['tokens', 'cost', 'started', 'duration', 'turns'];
 export const DEFAULTS = Object.freeze({ view: 'now', session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens' });
 

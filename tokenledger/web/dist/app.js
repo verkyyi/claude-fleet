@@ -34,8 +34,8 @@ let lastRendered = '';
 function route() {
   app.state = parse(location.hash);
   const s = app.state;
-  if (!s.sub || (s.sub !== 'all' && !app.accounts.some((a) => a.account_uuid === s.sub))) {
-    s.sub = app.accounts.length > 1 ? 'all' : (app.accounts[0]?.account_uuid || 'all');
+  if (!s.sub || (s.sub !== 'all' && !app.accounts.some((a) => a.account_uuid === s.sub && (!s.chips.source || (a.source || 'claude') === s.chips.source)))) {
+    s.sub = 'all';
     // Fix the URL to match, not just the in-memory state: state.js's whole
     // premise is "there is no second copy of the state", and leaving the
     // hash on the unknown/invalid sub would silently re-run this same
@@ -52,6 +52,7 @@ function route() {
   const cb = {
     onView: (v) => app.setState({ ...s, view: v, session: null }),
     onSub: (sub) => app.setState({ ...s, sub }),
+    onSource: (source) => { const chips = { ...s.chips }; if (source) chips.source = source; else delete chips.source; app.setState({ ...s, chips }); },
     onSpan: (span) => app.setState({ ...s, span, from: null, to: null }),
     onChipRemove: (dim) => { const chips = { ...s.chips }; delete chips[dim]; app.setState({ ...s, chips }); },
     onClear: () => app.setState({ ...s, chips: {} }),
@@ -85,7 +86,10 @@ async function boot() {
   route();
   // Now refreshes its stored cards every minute; Review only when the brush
   // touches the right edge, every five minutes.
-  setInterval(() => { if (app.state.view === 'now') load(); }, 60_000);
+  setInterval(async () => {
+    try { app.accounts = await app.api('/v1/accounts'); route(); } catch {}
+    if (app.state.view === 'now') load();
+  }, 60_000);
   setInterval(() => { if (app.state.view === 'review' && app.state.to == null) load(); }, 300_000);
 }
 boot();

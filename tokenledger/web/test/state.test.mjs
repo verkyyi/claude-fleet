@@ -40,3 +40,12 @@ test('apiQuery maps chips and honours omitDim', () => {
   assert.ok(!apiQuery(s, { from: 0, to: 1, omitDim: 'machine' }).includes('endpoint='));
   assert.ok(apiQuery(s, { from: 0, to: 1, extra: { by: 'project', compare: 1 } }).endsWith('&by=project&compare=1'));
 });
+
+test('source selection survives navigation and scopes API requests', () => {
+  const state = parse('#/review?source=codex&g1=source');
+  assert.equal(state.chips.source, 'codex');
+  assert.equal(state.g1, 'source');
+  assert.deepEqual(parse(format(state)), state);
+  assert.match(apiQuery(state, { from: 0, to: 3600000 }), /&source=codex/);
+  assert.ok(!apiQuery(state, { from: 0, to: 3600000, omitDim: 'source' }).includes('&source='));
+});

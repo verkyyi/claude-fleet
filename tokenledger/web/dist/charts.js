@@ -28,7 +28,7 @@
 // sidesteps both.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtCost, fmtFull, relTime } from './lib/format.js';
 import { snap, clamp } from './lib/brush.js';
 
 const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
@@ -107,7 +107,7 @@ export function bucketTable(buckets, keyLabel, extraCols = []) {
       el('td', { title: b.key }, b.label || b.key || '(unknown)'),
       el('td', { class: 'num' }, fmtFull(b.events)),
       el('td', { class: 'num' }, fmtFull(b.tokens)),
-      el('td', { class: 'num' }, fmtUSD(b.cost_usd)),
+      el('td', { class: 'num' }, fmtCost(b)),
       el('td', { class: 'num' }, b.unpriced_events ? fmtFull(b.unpriced_events) : '—'),
       ...extraCols.map((c) => el('td', { class: 'num' }, c.value(b))))))));
 }
@@ -231,7 +231,7 @@ export function bars(series, granularity) {
     const h = Math.max(s.tokens > 0 ? 1.5 : 0, (s.tokens / max) * ih);
     const x = PAD.l + i * (iw / n);
     const label = `<b>${escapeHTML(s.key)}</b><br>${fmtFull(s.tokens)} tokens<br>` +
-      `${fmtFull(s.events)} turns · ${fmtUSD(s.cost_usd)} notional`;
+      `${fmtFull(s.events)} turns · ${fmtCost(s)} notional`;
     g.appendChild(el('rect', {
       x, y: y(s.tokens), width: bw, height: h, rx: 2, fill: 'var(--s1)',
       onmousemove: (e) => showTip(e, label),
@@ -551,7 +551,7 @@ export function lines(accounts, { start, end }) {
   (accounts || []).forEach((a, i) => {
     const color = seriesColor(i);
     const pts = (a.points || []).slice().sort((p, q) => p.ts - q.ts);
-    if (pts.length) {
+    if (pts.length && pts.some((p) => Number.isFinite(p.seven_day_pct))) {
       const d7 = pts.map((p, idx) => `${idx ? 'L' : 'M'}${x(p.ts)},${y(p.seven_day_pct)}`).join(' ');
       g.appendChild(el('path', { d: d7, fill: 'none', stroke: color, 'stroke-width': '1', 'stroke-dasharray': '3,3', opacity: '.55' }));
     }

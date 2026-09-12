@@ -10,6 +10,17 @@ export const fmtInt = (n) => {
   return String(Math.round(n));
 };
 export const fmtUSD = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Aggregates retain the known subtotal and a separate missing-price count.
+// A wholly unpriced bucket is unknown; a partial subtotal is a lower bound.
+export const fmtCost = (b) => {
+  if (b.cost_usd == null) return '—';
+  if (b.unpriced_events > 0) {
+    const count = b.events ?? b.turns;
+    if (count > 0 && b.unpriced_events >= count) return '—';
+    return '≥ ' + fmtUSD(b.cost_usd);
+  }
+  return fmtUSD(b.cost_usd);
+};
 export const fmtFull = (n) => (Number(n) || 0).toLocaleString();
 
 /** shortProject trims a working directory to its last two segments. Full paths
