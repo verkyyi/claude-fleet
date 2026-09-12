@@ -300,10 +300,13 @@ re-picks on ccquota headroom (#513), and the per-window truth is
 A **per-model cap** is a different wall: `You've hit your Fable 5 limit · resets
 Sep 6` leaves the account's 5h/7d headroom intact for every other model, so the
 fleet does not bench the account for it (#524). It records the (account, model)
-cap until the banner's reset, relaunches the walled sessions on
-`FLEET_MODEL_FALLBACK` (default `opus`; `claude --resume --model`, same
-transcript), and every new session on that account launches on the fallback
-until the cap resets — then goes back to `FLEET_MODEL` on its own.
+cap until the banner's reset, switches the walled sessions to
+`FLEET_MODEL_FALLBACK` (default `opus`) **in place** — `/model` typed at their
+own prompt, so the process, its background agents and its context all survive,
+~5s per window, detected on the 60s quotawatch tick (#569; a flip it cannot
+verify falls back to `claude --resume --model`) — and every new session on that
+account launches on the fallback until the cap resets, then goes back to
+`FLEET_MODEL` on its own.
 
 Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
 macOS Keychain ignores). One caveat: an **already-running** session can't

@@ -34,8 +34,23 @@
 # fleet-doctor FAILs, and the next tick that does run notifies once that it was
 # blind for that long. `--status` prints the same verdict for scripts.
 #
-# Fail-open, exactly as before: no accounts dir / no CCQUOTA_HUB_URL → exit 0
-# and nothing here runs (the banner-driven path in the collector stays).
+# SECOND job — the PER-MODEL cap sweep (issue #569). A model cap ("You've reached
+# your Fable limit …", #524) is detected by the dash collector's banner phase, and
+# that phase sits behind the whole tick: on a monorepo fleet the git scan alone ran
+# 551 s, so nine walled workers idled for the better part of an hour on
+# 2026-09-12 while the recovery trickled through one cold `--resume` at a time. The
+# detection belongs on a fast tick, and the recovery does not need a restart at all
+# — so every tick now also runs `fleet-model-switch.sh --capped` per fleet, which
+# types `/model <fallback>` at each walled session's own prompt (~5 s, process and
+# background agents and context all kept) and only falls back to
+# `fleet-migrate.sh --model` when it cannot verify the flip. Reaction time goes
+# from a tick of unbounded length to ≤60 s. The collector's #524 branch stays as
+# the backstop for installs whose daemon set predates this; `@model_migrating`
+# (180 s) and the pane's own status line keep the two callers from double-typing.
+#
+# Fail-open, per job: the model sweep needs only an accounts pool (the cap ledger
+# is per-account), the ccquota policy needs a hub URL too. Neither configured →
+# exit 0 and nothing here runs.
 #
 # Usage:
 #   fleet-quotawatch.sh [--caller <name>] [--dry-run]
@@ -81,8 +96,15 @@ if [ "$STATUS" = 1 ]; then
   exit 0
 fi
 
-# Fail-open gate — identical to the collector's pre-#551 gate.
-fleet_quota_watch_configured || exit 0
+# Fail-open gates — one per job (#569). The MODEL sweep needs only an accounts
+# pool: a per-model cap is recorded per account and recovered in place, neither of
+# which touches ccquota. The ccquota POLICY additionally needs a hub URL — that is
+# fleet_quota_watch_configured, identical to the collector's pre-#551 gate, and it
+# alone still governs `--status`, the liveness stamp and the blind-spell alarm.
+ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
+MODEL_SWEEP=0; [ -d "$ACCT_DIR" ] && MODEL_SWEEP=1
+QUOTA_POLICY=0; fleet_quota_watch_configured && QUOTA_POLICY=1
+[ "$MODEL_SWEEP" = 1 ] || [ "$QUOTA_POLICY" = 1 ] || exit 0
 
 # --- overlap guard: one tick at a time; a stuck one is superseded past DEADLINE.
 # mkdir is the atomic primitive (no flock on macOS). The holder's pid + start
@@ -113,6 +135,33 @@ START=$(now)
 hb() {  # $1 = phase, $2 = extra key=value lines (optional)
   printf 'pid=%s\ncaller=%s\nstart=%s\nphase=%s\nphase_ts=%s\n%s' "$$" "$CALLER" "$START" "$1" "$(now)" "${2:-}" | atomic_write "$HB"
 }
+
+SOCKETS=$(fleet_sockets)
+
+# --- the PER-MODEL cap sweep (issue #569) -------------------------------------
+# Runs FIRST and on every tick: it is capture-pane only until it finds something,
+# it needs no network, and a walled worker is the most urgent thing this daemon
+# can fix. The dry run is the cheap probe (no keystrokes, no sleeps); only a fleet
+# with at least one candidate gets the real pass, and that one is backgrounded via
+# `run-shell -b` so the ~5 s-per-window typing can never eat into DEADLINE.
+# run-shell sets $TMUX for the job, so the switch's bare tmux calls stay on THIS
+# fleet's server.
+if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
+  hb "modelcap"
+  for ms in $SOCKETS; do
+    mplan=$("$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null | grep -c '^  would:')
+    case "$mplan" in ''|*[!0-9]*) mplan=0 ;; esac
+    [ "$mplan" -gt 0 ] || continue
+    if [ "$DRY" = 1 ]; then
+      printf 'would: switch %s walled window(s) on %s in place (/model <fallback>)\n' "$mplan" "$ms"
+      continue
+    fi
+    printf 'fleet-quotawatch: %s walled window(s) on %s — switching in place\n' "$mplan" "$ms" >&2
+    tmux -L "$ms" run-shell -b "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast" 2>/dev/null
+  done
+fi
+
+[ "$QUOTA_POLICY" = 1 ] || { END=$(now); hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'; exit 0; }
 
 # --- blind-spell alarm: how old was the stamp BEFORE this tick? A stamp older
 # than STALE (and not "never": a fresh install has no stamp) means no tick ran
@@ -152,7 +201,6 @@ fi
 # episode was handled for (fleet_same_window compares with tolerance — ccquota's
 # resets_at jitters by a second between polls), so the next window re-arms it.
 # Empty rows (no ccquota / hub unreachable / unknown verdict) → nothing runs.
-SOCKETS=$(fleet_sockets)
 qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
 # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
 printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do

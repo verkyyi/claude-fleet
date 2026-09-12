@@ -4,7 +4,10 @@
 # staleness alarm. Drives the REAL bin/fleet-quotawatch.sh + fleet-account.sh
 # against a FAKE ccquota / tmux / notifier on PATH (no network, no tmux server).
 #
-#   1. off      — no hub URL ⇒ exit 0, ccquota never called, no heartbeat.
+#   1. off      — the two fail-open gates (#569): NEITHER an accounts pool nor a
+#                 hub ⇒ exit 0, ccquota never called, no heartbeat; an accounts
+#                 pool but NO hub ⇒ the per-model sweep still ticks (heartbeat,
+#                 modelsweep=1) while ccquota stays uncalled and `--status` off.
 #   2. status   — `never` before a tick; `fresh` after one.
 #   3. policy   — 50%: nothing; 72%: warn marker = reset epoch + notify + toast, no
 #                 bench; 72% again: no second notify (same window); 90%: ceiling
@@ -74,9 +77,10 @@ NOW=$(date +%s)
 RESET1=$(( NOW + 10800 )); RESET2=$(( NOW + 10800 + 14400 ))   # two windows, 4h apart (> the 15-min tolerance)
 iso "$RESET1" > "$WORK/reset"
 HUB="http://hub.test:8787"
+ACCTS=""            # per-case override of the accounts pool (see case 1)
 run_watch() {
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
-  FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="$HUB" \
+  FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="${ACCTS:-$WORK/accounts}" CCQUOTA_HUB_URL="$HUB" \
   FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_RESET_FILE="$WORK/reset" \
@@ -92,11 +96,21 @@ notifies()  { grep -c '^---$' "$WORK/notify.log" 2>/dev/null || echo 0; }
 migrates()  { grep -c "migrate --account 'a'" "$WORK/tmux.calls" 2>/dev/null || echo 0; }
 hbget()     { sed -n "s/^$2=//p" "$1" | head -1; }
 
-# 1. off ---------------------------------------------------------------------
+# 1. off — one gate per job (#569) --------------------------------------------
 echo 50 > "$WORK/pct"
-HUB="" run_watch || fail "1: unconfigured tick must exit 0"
-[ "$(ccq_calls)" = 0 ]          || fail "1: no hub URL ⇒ ccquota must not be called"
-[ ! -f "$G/quotawatch.heartbeat" ] || fail "1: no hub URL ⇒ no heartbeat"
+# 1a. neither an accounts pool nor a hub: nothing runs at all.
+HUB="" ACCTS="$WORK/nope" run_watch || fail "1a: fully unconfigured tick must exit 0"
+[ "$(ccq_calls)" = 0 ]             || fail "1a: no hub URL ⇒ ccquota must not be called"
+[ ! -f "$G/quotawatch.heartbeat" ] || fail "1a: nothing configured ⇒ no heartbeat"
+ok
+# 1b. an accounts pool but no hub: the per-model cap sweep needs no ccquota, so it
+# ticks (and stamps a heartbeat) while the quota policy stays switched off.
+HUB="" run_watch || fail "1b: pool-only tick must exit 0"
+[ "$(ccq_calls)" = 0 ] || fail "1b: no hub URL ⇒ ccquota must STILL not be called"
+[ -f "$G/quotawatch.heartbeat" ] || fail "1b: a pool-only tick must still stamp a heartbeat"
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "1b: a pool-only tick must reach phase=done (got: $(hbget "$G/quotawatch.heartbeat" phase))"
+[ "$(hbget "$G/quotawatch.heartbeat" modelsweep)" = 1 ] || fail "1b: the heartbeat must mark the tick as model-sweep-only"
+rm -f "$G/quotawatch.heartbeat"
 HUB="" run_watch --status; [ "$(cat "$WORK/stdout")" = "$(printf 'off\t0')" ] || fail "1: --status must say off (got: $(cat "$WORK/stdout"))"
 ok
 
