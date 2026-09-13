@@ -342,3 +342,85 @@ MIT，6,716★，日更，作者自陈"几乎全部代码由 AI agent 通过 Bac
 它把"任务该切多大"从直觉变成了可检查的规则。
 
 ---
+
+## claude-fleet 的坐标
+
+### 我们做了、这张图上其他人没做的
+
+1. **GitHub issue 是唯一入口、且是持久的 backlog。**
+   Agent Teams 的任务表是 `~/.claude/tasks/<session-派生名>/`、**本地、不上传、一 session 一 team、
+   lead 不可转让、in-process teammate 不能 `/resume`**（[官方限制清单](https://code.claude.com/docs/en/agent-teams#limitations)）。
+   Backlog.md 放仓库里，但没有 assignee 这种天然的并发 claim 原语。
+   我们用 **issue assignee 即 claim**（`bin/fleet-claim-brief.sh` 一次 `gh` 往返读全），
+   这在多会话抢任务时是正确的锁。
+2. **多订阅账号池的调度。** 全网唯一接近的是 [clauth](https://github.com/uwuclxdy/clauth)（149★）。
+   `fleet-account.sh migrate/whoami/quota`、85% bench+move、per-model cap 的**就地 `/model` 切换**
+   （进程/后台 agent/context 全保留，~5s），这些没有第二家。
+   原生只到 `autoContinueAtUsageLimit`（撞墙后等 reset），不换账号。
+3. **注意力路由。** urgency-sorted windows（needs > done > working > looping > idle）、
+   红 `● N` / 跨 fleet 橙 `● N`、`prefix a` 跳最急的窗口。
+   **整张图里所有人都在解决"怎么并行跑"，没人解决"N 个跑着的 session 谁该先看"。**
+   Backlog.md 的 README 把注意力认成了瓶颈，但它的答案是 review checkpoint，不是实时信号。
+4. **每 fleet 一个 tmux socket 的爆炸半径护栏**（`tmux -L <session>`，#159）。
+   claude-squad、gastown、Agent Teams 的 tmux 模式都共用一个 server ——
+   官方文档甚至专门写了 "Orphaned tmux sessions" 的排障段。
+5. **跨 context window 的续命**（`/fleet-handoff` + 自动 nudge）。
+   原生只有 `/compact`、"resume from a summary"，没有"写一份自足的交接文档然后 `/clear` 接上"。
+6. **没有常驻 orchestrator。** operator 从 hub 派活、worker 自己开 PR 自己落。
+   Agent Teams 的 lead 是一个必须一直在的进程，且终身不可转让 —— 它是"会话内的团队"，
+   我们是"机器上的车间"。
+
+### 他们做了、我们没有的
+
+1. **文件系统 / 网络级隔离。** 我们只有 git worktree + hook 守卫；
+   [container-use](https://github.com/dagger/container-use) 每 agent 一个容器，
+   [coder](https://coder.com/docs/ai-coder) 有进程级 Agent Firewall 且 workspace 可完全断网。
+2. **Diff review UI + inline 评论回传 agent。** vibe-kanban / Sculptor / Nimbalyst 都有；
+   我们的 review 全在 GitHub PR 上，没有"在同一个界面里指着某一行说这里改"。
+3. **真正的多人。** 我们全部状态在一台 mini 的 tmux window options + 本地文件里；
+   第二个人看不到 fleet。coder / OpenHands 有 server、SSO、审计。
+4. **CI 侧 agent。** [gh-aw](https://github.com/github/gh-aw) 的 `safe-outputs`
+   二段式（agent 只读 + 写操作走收窄权限的独立 job）比我们的 worker 直接 `gh pr merge` 安全。
+5. **配置分发的打包。** 别人用 plugin marketplace 一条命令装；
+   我们 `/fleet-sync-install` 是 git pull + 重载 daemon + 重新 merge hooks 到一台机器。
+6. **跨 harness。** claude-squad / cafleet / [wshobson/agents](https://github.com/wshobson/agents)
+   一份源产出 5 种 harness；我们有 `@cc_agent` 和 `Ctrl-V` 切 `claude ▸ / codex ▸`，但深度只到启动命令。
+
+### 诚实清单：我们在重复造、而上游现在已经原生提供的
+
+| claude-fleet 里的东西 | 原生等价物 | 差距 |
+|---|---|---|
+| `cw` / `dash-issue-session.sh` 建 `issue-<N>` worktree | `claude --worktree <name>`、`--worktree "#1234"`、`worktree.baseRef` | 原生不能按 issue 号命名分支、不能绑 issue；**我们的绑定语义仍有价值** |
+| `hooks/base-readonly-guard.py`（base checkout 只读） | worktree 隔离的四道强制检查 | ⚠️ **原生更严**：还拦 `git -C` / `--git-dir` / `GIT_DIR` 重定向，以及"命令形状无法静态证明"就拒（不可关闭）。我们没有这几路 |
+| worktree janitor（每小时，merged+clean+无 pane） | 原生 sweep：worktree 上写 marker、按 `cleanupPeriodDays` 扫、运行期 `git worktree lock` | ⚠️ **原生更安全**，marker + lock 比条件推断可靠 |
+| 各 worker 自己把 `.env` 复制进 worktree | `.worktreeinclude`（gitignore 语法，只复制被 ignore 的文件） | 直接可以换掉 |
+| tmux 一窗口一 session + 分屏 | Agent Teams `teammateMode: "tmux" / "iterm2" / "auto"` | 原生是 session 内、不可持久；我们的是机器级、跨天。**不重叠，但形态撞了** |
+| ainbox / `fleet-comment.sh --to-worker` / issue bridge | [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging) + Agent Teams mailbox（`~/.claude/teams/{team}/inboxes/{agent}.json`） | 原生只在同一台机器 + 同一 team；我们跨 fleet。**部分重叠** |
+| 本地 token 用量代理（output×1 + input×0.25 + cache-write×0.25 + cache-read×0.02） | `/usage` 的 plan 用量条 + OTEL `claude_code.token.usage` / `cost.usage` | ⚠️ **这个代理现在基本没必要了**：`/usage` 给的是官方限额百分比，不是估算。我们的 scrape-banner 路子应该换成读 `/usage` |
+| `conf/statusline.sh` 的 context mini-bar | [statusline 原生 context window usage + `prompt_cache` 字段](https://code.claude.com/docs/en/statusline) | 原生已给结构化字段，我们不必自己算 |
+| haiku 分类器纠正 hook 状态 | `TeammateIdle` / `TaskCreated` / `TaskCompleted` hook（exit 2 可打回） | 只在 Agent Teams 下有；我们的 `/loop` 场景原生仍不覆盖 |
+| `commands/*.md` + 五条 hook 的手工同步 | plugin marketplace（`.claude-plugin/marketplace.json`，一个 plugin 可含 commands/agents/skills/hooks/mcpServers） | 直接可以换掉，收益最大 |
+
+### 如果只改三件事
+
+1. **把 base-readonly-guard + janitor 换成原生 worktree 隔离与 sweep**，
+   只保留 issue↔branch 的绑定语义。少维护两个自建安全件，且拿到更严的检查。
+2. **把 fleet 打包成一个 plugin，走 marketplace 分发**，`/fleet-sync-install` 退化成 `/plugin update`。
+   这同时解决了"第二个人怎么装"。
+3. **把用量代理换成 `/usage` + OTEL**，让 ccquota 只做原生做不到的那一件事 ——
+   **多订阅账号池的跨机器合并视角与主动调度**。顺带偷 clauth 的
+   "各账号 5h 窗口相位错开 `5h / 账号数`"这个启动排队。
+
+### 一句话定位
+
+> 市面上的开源方案在解决"**怎么让多个 agent 同时跑**"，上游 Claude Code 在 2026 年把这件事做进了产品；
+> claude-fleet 真正在解决的是"**一个人 / 一个小团队，在一台共享机器上，用有限的订阅配额，
+> 让十几个跑了几天的 session 不失控**" —— 配额调度、注意力路由、跨 context 续命，
+> 这三件事在这张图上仍然是空的。
+
+---
+
+<sub>调研方法：`gh api repos/*`（star / license / pushed_at / 默认分支 commit 日期）、
+`gh search repos`（按 star 排序的赛道扫描）、各仓库 README 原文（`gh api .../readme` base64 解码）、
+[code.claude.com/docs](https://code.claude.com/docs) 与 [platform.claude.com/docs](https://platform.claude.com/docs) 官方文档。
+标 **[二手]** 的是博客/聚合文章。数据快照日期 2026-09-12/13，star 与 commit 会漂移。</sub>
