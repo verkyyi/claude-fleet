@@ -23,8 +23,11 @@
 #      nudge is asserted to arrive over fleet_peer_send — the SendMessage channel,
 #      NOT send-keys (#437/#513) — wrapped in the canonical cross-session envelope.
 #      Cases: the happy flip (+ ledger row, @cc_model restamped, nudge delivered),
-#      a mid-turn window left untouched, an already-flipped window left untouched,
-#      a fallback that is itself capped on the account, and --dry-run.
+#      a window pinned at @claude_state=working by the Stop hook the cap never fired
+#      (switched — the #569 blocker), a GENUINELY live turn left untouched, a cap the
+#      ledger knows but the scrollback has lost (switched, silently), an
+#      already-flipped window left untouched, a fallback that is itself capped on the
+#      account, and --dry-run.
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -70,17 +73,41 @@ ok; model_matches fable "Opus 5"    && fail "model_matches: fable must NOT match
 ok; model_matches opus  ""          && fail "model_matches: empty pane model never matches"
 ok; model_matches ""    "Opus 5"    && fail "model_matches: empty alias never matches"
 
-sel() { ok; switch_selected "$2" "$3" "$4" "$5" || fail "$1 — expected a candidate"; }
-nsel(){ ok; switch_selected "$2" "$3" "$4" "$5" && fail "$1 — expected NOT a candidate"; }
-#     desc                              state     pane-model    capped  target
+command -v cap_settled >/dev/null 2>&1 || fail "cap_settled not defined after sourcing"
+
+# cap_settled — the gate that tells a LIVE turn apart from a turn the cap already
+# ended. Regression cover for the #569 blocker: a per-model cap aborts the turn
+# without a Stop hook, so @claude_state stays `working` and the mid-turn guard
+# deferred the sweep's own candidates on every tick, forever.
+#                                              vis  state_ts  now   stale
+ok; cap_settled 1 1000 2000 120 || fail "cap_settled: cap on screen + 1000s stale is settled"
+ok; cap_settled 1 1900 2000 120 && fail "cap_settled: a 100s-old stamp is still inside the guard"
+ok; cap_settled 1 2000 2000 120 && fail "cap_settled: a stamp from right now is never settled"
+ok; cap_settled 0 1000 2000 120 && fail "cap_settled: no cap on the VISIBLE screen → never settled"
+ok; cap_settled 1 ''   2000 120 && fail "cap_settled: a missing stamp is refused, not assumed stale"
+ok; cap_settled 1 abc  2000 120 && fail "cap_settled: a garbage stamp is refused"
+ok; cap_settled 1 1000 2000 0   && fail "cap_settled: stale-secs 0 disables the lift (the #101 idiom)"
+ok; cap_settled 1 1000 2000 ''  || fail "cap_settled: empty stale-secs falls back to the 120s default"
+ok; cap_settled 1 1000 1000 120 && fail "cap_settled: a stamp in the future is never settled"
+
+sel() { ok; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" || fail "$1 — expected a candidate"; }
+nsel(){ ok; switch_selected "$2" "$3" "$4" "$5" "${6:-0}" && fail "$1 — expected NOT a candidate"; }
+#     desc                              state     pane-model    capped  target   settled
 sel  "walled + idle"                    -         "Fable 5.1"   fable   opus
 sel  "walled + done"                    "done"    "Fable 5.1"   fable   opus
 sel  "walled + needs"                   needs     "Fable 5.1"   fable   opus
-nsel "mid-turn is never typed into"     working   "Fable 5.1"   fable   opus
+nsel "a LIVE turn is never typed into"  working   "Fable 5.1"   fable   opus     0
+sel  "working pinned by the missed Stop hook IS taken" \
+                                        working   "Fable 5.1"   fable   opus     1
 nsel "already flipped off the cap"      "done"    "Opus 5"      fable   opus
+nsel "already flipped, even when settled" \
+                                        working   "Opus 5"      fable   opus     1
 nsel "target IS the capped model"       "done"    "Fable 5.1"   fable   fable
+nsel "target IS the capped model, even when settled" \
+                                        working   "Fable 5.1"   fable   fable    1
 nsel "target is a version of the cap"   "done"    "Fable 5.1"   fable   "fable 5"
 nsel "no target (fallback switched off)" "done"   "Fable 5.1"   fable   ""
+nsel "no target, even when settled"     working   "Fable 5.1"   fable   ""       1
 nsel "no status line to verify against" "done"    ""            fable   opus
 
 printf 'fleet-model-switch selftest: %s pure checks passed\n' "$CHECKS"
@@ -190,9 +217,23 @@ spawn_worker() {
 tmux -L "$LBL" new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
 spawn_worker walled    Fable "Fable 5.1"; W_OK="$WID"
 spawn_worker busy      Fable "Fable 5.1"; W_BUSY="$WID"
+spawn_worker stuck     Fable "Fable 5.1"; W_STUCK="$WID"
 spawn_worker recovered Fable "Opus 5";    W_DONE="$WID"
 : "$W_DONE"
+NOWS=$(date +%s)
+# `busy` is a GENUINELY live turn: @claude_state working with a stamp from just
+# now, which is what a session mid-tool-call looks like. It must never be typed
+# into — an Escape there cancels real work.
 tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state working 2>/dev/null
+tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$NOWS" 2>/dev/null
+# `stuck` is what a REAL per-model cap leaves behind, and the case this selftest
+# used to get wrong: the cap aborted the turn without a Stop hook, so the window is
+# pinned at `working` with the stamp frozen at the moment of the abort. The old
+# fixture set `working` with no stamp at all and asserted the window was skipped —
+# i.e. it asserted the production bug as correct, which is exactly why #570 shipped
+# green while nine walled workers idled. It must be SWITCHED.
+tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state working 2>/dev/null
+tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state_ts "$((NOWS - 600))" 2>/dev/null
 sleep 1
 
 RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1; }
@@ -205,15 +246,17 @@ eq "--dry-run writes no ledger row" "" "$(cat "$CAPLEDGER" 2>/dev/null)"
 
 # --- the real pass ------------------------------------------------------------
 out=$(RUN --capped --model opus)
-ok; has '1 switched' "$out" || fail "expected exactly the walled window to switch" "$out"
+ok; has '2 switched' "$out" || fail "expected the walled AND the stop-hook-pinned window to switch" "$out"
 ok; has "$W_OK" "$out" || fail "the walled window should be named in the report" "$out"
+ok; has "$W_STUCK" "$out" || fail "the stop-hook-pinned window should be named in the report" "$out"
 
 typed=$(cat "$WORK/typed.walled")
 ok; has '/model opus' "$typed" || fail "the walled pane should have been handed /model opus" "$typed"
-eq "the busy pane was never typed into"      "" "$(cat "$WORK/typed.busy")"
+ok; has '/model opus' "$(cat "$WORK/typed.stuck")" || fail "a window pinned at working by the missed Stop hook must still be flipped" "$(cat "$WORK/typed.stuck")"
+eq "the genuinely-busy pane was never typed into" "" "$(cat "$WORK/typed.busy")"
 eq "the recovered pane was never typed into" "" "$(cat "$WORK/typed.recovered")"
 
-ok; has 'mid-turn' "$out" || fail "the working window should be reported as mid-turn" "$out"
+ok; has 'mid-turn' "$out" || fail "the genuinely-working window should be reported as mid-turn" "$out"
 ok; has 'already off fable' "$out" || fail "the flipped window should be reported as already off the cap" "$out"
 
 eq "@cc_model restamped to the new model" "opus" "$(tmux -L "$LBL" display-message -p -t "$W_OK" '#{@cc_model}')"
@@ -232,8 +275,36 @@ ok; has 'tok-walled' "$inbox" || fail "the auth frame should carry the session's
 ok; has '/model' "$(cat "$WORK/typed.walled")" || fail "sanity: keystrokes are recorded"
 ok; grep -q 'cross-session-message' "$WORK/typed.walled" && fail "the NUDGE must never be typed into the pane"
 
+# --- a cap the LEDGER knows but the scrollback has lost ----------------------
+# The banner is ephemeral: it scrolls past $SCROLL, and a session that was merely
+# IDLE when the cap landed never printed one at all. The (account, model) ledger
+# row is the durable fact, so --capped consults it when no banner is on screen.
+# On 2026-09-12 six monorepo windows sat on fable for hours, with the cap recorded
+# and 7 days left to run, for exactly this reason.
+spawn_worker ledgeronly '' "Fable 5.1"; W_LED="$WID"
+# keep `busy` a LIVE turn for this pass too, so the count cannot drift with how
+# long the selftest has been running
+tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
+sleep 1
+ok; has $'acctA\tfable' "$(cat "$CAPLEDGER" 2>/dev/null)" || fail "precondition: the fable cap row should already be on the ledger"
+eq "the ledger-only pane shows no banner" "" "$(tmux -L "$LBL" capture-pane -p -t "$W_LED" | grep -c 'reached your' | tr -d ' ' | sed 's/^0$//')"
+
+out=$(RUN --capped --model opus --dry-run)
+ok; has 'via ledger' "$out" || fail "a ledger detection should say so in the plan" "$out"
+ok; has "$W_LED" "$out" || fail "the banner-less window on a ledger-capped model should be planned" "$out"
+
+out=$(RUN --capped --model opus)
+ok; has '1 switched' "$out" || fail "expected exactly the ledger-only window to switch" "$out"
+ok; has '/model opus' "$(cat "$WORK/typed.ledgeronly")" || fail "the ledger-only pane should have been handed /model opus" "$(cat "$WORK/typed.ledgeronly")"
+eq "the genuinely-busy pane is still never typed into" "" "$(cat "$WORK/typed.busy")"
+# A ledger detection means the session was sitting at its prompt, not interrupted
+# mid-turn — waking it to "continue the task" would spend tokens on a worker that
+# may well be finished. The model flips silently instead.
+ok; grep -q 'tok-ledgeronly' "$INBOX_LOG" && fail "a ledger-only flip must NOT nudge the session" "$(cat "$INBOX_LOG")"
+
 # --- a fallback that is itself capped on the account is refused ---------------
 spawn_worker walled2 Fable "Fable 5.1"
+tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
 "$BIN/fleet-account.sh" model-limited acctA opus "reached your Opus limit" >/dev/null 2>&1
 out=$(RUN --capped --model opus)
 ok; has 'ALSO capped' "$out" || fail "a capped fallback must be refused, not flipped onto" "$out"
