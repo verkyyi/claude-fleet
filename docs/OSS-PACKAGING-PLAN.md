@@ -329,7 +329,7 @@ session start 自动读」—— 与 skills 同一个适配问题，不是新问
 
 | fleet 里的东西 | 原生等价物 | 处置 |
 |---|---|---|
-| `hooks/base-readonly-guard.py` | worktree 隔离的四道强制检查 | **删**。原生更严：还拦 `git -C` / `--git-dir` / `GIT_DIR` 重定向，且不可关闭 |
+| `hooks/base-readonly-guard.py` | worktree 隔离的四道强制检查 | ❌ **不可删（M0 已证伪，2026-09-13）**。防的不是同一件事 —— 见下方说明 |
 | worktree janitor（每小时） | marker + `git worktree lock` 的定期 sweep | **删**。原生更安全，marker+lock 比条件推断可靠 |
 | 各 worker 手工复制 `.env` 进 worktree | `.worktreeinclude` | **换** |
 | 本地 token 用量代理 | `/usage` 官方百分比 + OTEL | **换**。OTEL 中立可留，`/usage` 仅作 Claude 适配器 |
@@ -337,6 +337,23 @@ session start 自动读」—— 与 skills 同一个适配问题，不是新问
 | `commands/*.md` + 五条 hook 手工同步 | plugin（作为物化目标） | **换**，收益最大 |
 
 保留：**issue↔branch 绑定语义**（原生没有，是真价值）。
+
+> **为什么 `base-readonly-guard.py` 删不得**（M0 查证结论，推翻了原 issue #4）
+>
+> 两者的威胁模型不同：
+> - **原生 worktree 检查**：「session X 必须待在 worktree X 里」—— 每 session 一条边界
+> - **我们的 guard**：「**任何人**都不许编辑 base checkout」—— 一个共享只读资产
+>
+> 决定性差别：**hub 和 scratch 本来就跑在 base checkout 里**（操作员从 hub 派活、
+> triage），那里根本没有 worktree 边界可言，原生管不着。
+>
+> 而且同一份文件用 `apply_patch` matcher 挡着 **Codex** 的补丁（解析
+> `*** Add/Update/Delete File:` / `*** Move to:` 行，一条命中就整个补丁拒掉）。
+> 在跨 agent 是核心的前提下删掉它 = Codex worker 完全裸奔。
+>
+> 📌 **#5（删 janitor）需要同样的检查再决定** —— 原生 sweep 只认它自己
+> （`claude --worktree`）建的 worktree，而我们的是 `cw` / `dash-issue-session.sh`
+> 建的。大概率也不是 drop-in。
 
 ## 八、该偷的(按性价比)
 
@@ -387,22 +404,47 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 | 仓库 | 涉及 issue | 起法 |
 |---|---|---|
 | `verkyyi/claude-fleet` | 大多数 | 已有 fleet |
-| `verkyyi/ccquota` | 18（归因）、M1 全部 | **需要 `bin/fleet-up.sh verkyyi/ccquota` 起第三个 fleet** |
+| `verkyyi/ccquota` | 18（归因）、M1 全部 | ✅ **`fleet-ccquota` 已存在**（M0 查证时发现），直接用 |
 | 团队 config repo | M4 | 还不存在，M4 时新建 |
 
 ---
 
-### M0 — 先证伪(约半天,零代码)
+### M0 — 先证伪(约半天,零代码) ✅ 已完成 2026-09-13
 
-三条全是查证。**任何一条被否定都会改变后面的路线**，所以必须在写代码前做完。
-
-| # | 要验什么 | 否定了会怎样 |
+| # | 验什么 | 结论 |
 |---|---|---|
-| 22 | 用**当期定价**重算「N 份 Max 池化 vs N 个席位」的每美元可用额度 | 成本卖点的措辞要重写；若席位制更划算，整个 ccquota 定位塌一半 |
-| — | 复验「一机多 token 并发」：ccquota 当年实测同跑三份，**现在还成立吗** | 这是池化省钱的**物理前提**。不成立则 M2 整个作废 |
-| — | 原生 worktree 的四道检查**是否真覆盖**我们 `base-readonly-guard.py` 的威胁模型 | 决定 #4 能不能删。**不成立就别删**——那是在用文档承诺换掉一个在跑的安全件 |
+| 22 | 当期定价下「N 份 Max 池化 vs N 个席位」的每美元额度 | ✅ **强力证实**，见下表 |
+| — | 「一机多 token 并发」现在是否仍成立 | ✅ **实测成立**：19 个 window 跨 3 个 fleet 同时跑在 **3 个不同账号**上 |
+| — | 原生 worktree 检查是否覆盖 `base-readonly-guard.py` | ❌ **证伪 —— #4 作废**，见[瘦身清单](#七瘦身清单原生已覆盖该删) |
 
-### M1 — 用已经做完的那块试水(1–2 天)
+#### 成本对照（claude.com/pricing，月付，2026-09-13）
+
+| 方案 | 月成本 | 总额度（相对 Pro） | 每美元额度 | 可池化 |
+|---|---:|---:|---:|:--:|
+| 5 × Team Standard 席位 | $125 | ~5x | 0.040 | ❌ 各自封顶 |
+| 5 × Team Premium 席位 | $625 | ~25x | 0.040 | ❌ 各自封顶 |
+| **2 × Max 20x 池化** | **$400** | **40x** | **0.100** | ✅ 全池共享 |
+
+**$400 池化拿到 40x；$625 买席位只拿到 25x,且不能互相调剂。**
+每美元额度差 2.5 倍 —— 还没算池化消除闲置的收益（席位制下一个人休假，
+他那份额度就是纯浪费）。
+
+> ⚠️ 一个数待人工确认：官网页面上 Max 5x 与 Max 20x **都显示 "From $100"**，
+> 与已知的 Max 20x = $200 冲突（抓取可能混行）。上表按 $200 保守计算；
+> 若真是 $100，池化优势翻倍。**写进 README 前去账单页确认。**
+
+#### 并发实测（2026-09-13，本机）
+
+```
+fleet-claude-fleet       ×6   verky@24helpful.com
+fleet-24haowan-monorepo  ×11  verky@24helpful.com ×9 · verky.yi@gmail.com ×1 · ly297@georgetown.edu ×1
+fleet-ccquota            ×1   verky@24helpful.com
+```
+
+三个账号同时在跑，证实 `CLAUDE_CODE_OAUTH_TOKEN` 仍是 per-process 生效。
+**池化省钱的物理前提成立,M2 不作废。**
+
+### M1 — 用已经做完的那块试水(1–2 天) ← **操作员已选定为起步路线**
 
 ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队归属模型、
 已经是 hub/agent 架构。要做的只是**把 README 主线从「用量监控」换成
