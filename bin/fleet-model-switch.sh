@@ -178,6 +178,30 @@ pane_model_of() {
     | tail -1
 }
 
+# ledger_until <account> <model> — `fleet-account.sh model-limited-until`, memoized
+# for the life of this run. NOT pure (it forks), so it lives out here rather than
+# with the helpers above. The memo is the whole point: every window on a fleet
+# normally shares one account and one model, so the banner-less ledger probe and the
+# is-my-fallback-also-capped check would otherwise fork fleet-account.sh (which
+# sources fleet-lib + usage-lib each time) once per window — measured at roughly
+# doubling the sweep's dry-run probe on a 14-window fleet, and that probe runs
+# SYNCHRONOUSLY inside the 60 s quotawatch tick. One fork per distinct pair instead.
+# A cap cannot meaningfully expire inside a single sweep, so a run-scoped cache is
+# exact. bash 3.2 (macOS) has no associative arrays — hence the delimited string.
+_LEDGER_MEMO="|"
+ledger_until() {
+  local a="${1:-}" m="${2:-}" key hit v
+  [ -n "$a" ] && [ -n "$m" ] || { printf '0'; return 0; }
+  key="$a/$m"
+  case "$_LEDGER_MEMO" in
+    *"|$key="*) hit=${_LEDGER_MEMO#*"|$key="}; printf '%s' "${hit%%|*}"; return 0 ;;
+  esac
+  v=$("$BIN/fleet-account.sh" model-limited-until "$a" "$m" 2>/dev/null)
+  case "$v" in ''|*[!0-9]*) v=0 ;; esac
+  _LEDGER_MEMO="${_LEDGER_MEMO}$key=$v|"
+  printf '%s' "$v"
+}
+
 # ------------------------------------------------------------------ main ----
 main() {
   local MODE="" TARGET="" SESS="" NUDGE="__default__" FALLBACK=1 LEDGER=1 DRY=0 TOAST=0
@@ -226,27 +250,33 @@ main() {
   fi
 
   for wid in "${targets[@]}"; do
-    local name state sts acct cpid text vis pmodel banner kind capped tuntil
-    local settled=0 via=banner lcap lu reason
+    local name state acct cpid text pmodel banner kind capped tuntil
+    local settled=0 vis=0 sts="" via=banner lcap lu reason
     name=$(wopt "$wid" '#{window_name}')
     printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
     [ -n "$(wopt "$wid" '#{@hub}')" ] && continue
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
     [ -n "$cpid" ] || continue
     state=$(wopt "$wid" '#{@claude_state}')
-    sts=$(wopt "$wid" '#{@claude_state_ts}')
     acct=$(wopt "$wid" '#{@cc_account}')
     text=$(TM capture-pane -p -S "$SCROLL" -t "$wid" 2>/dev/null)
     pmodel=$(pane_model_of "$text")
     banner=$(printf '%s\n' "$text" | fleet_limit_banner)
     kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
-    # Is the cap the pane's CURRENT tail (the VISIBLE screen, no -S) rather than a
-    # line somewhere back in the scrollback? That is cap_settled's recency half.
-    vis=0
-    case "$(TM capture-pane -p -t "$wid" 2>/dev/null | fleet_limit_banner | fleet_limit_kind)" in
-      model:*) vis=1 ;;
-    esac
-    cap_settled "$vis" "$sts" "$(date +%s)" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
+    # cap_settled is consulted ONLY for a `working` window, so nothing below it is
+    # worth paying for on any other window — and most windows are not working. This
+    # probe runs synchronously inside the 60 s quotawatch tick, so it stays cheap:
+    # one extra capture-pane and two window options for the working few, nothing for
+    # everyone else.
+    if [ "$state" = working ]; then
+      sts=$(wopt "$wid" '#{@claude_state_ts}')
+      # Is the cap the pane's CURRENT tail (the VISIBLE screen, no -S) rather than a
+      # line somewhere back in the scrollback? That is cap_settled's recency half.
+      case "$(TM capture-pane -p -t "$wid" 2>/dev/null | fleet_limit_banner | fleet_limit_kind)" in
+        model:*) vis=1 ;;
+      esac
+      cap_settled "$vis" "$sts" "$(date +%s)" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
+    fi
     case "$kind" in
       model:*) capped=${kind#model:} ;;
       *)
@@ -268,8 +298,7 @@ main() {
           lcap=""
           if [ -n "$acct" ] && [ -n "$pmodel" ]; then
             lcap=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1)
-            lu=$("$BIN/fleet-account.sh" model-limited-until "$acct" "$lcap" 2>/dev/null)
-            case "$lu" in ''|*[!0-9]*) lu=0 ;; esac
+            lu=$(ledger_until "$acct" "$lcap")
             [ "$lu" -gt "$(date +%s)" ] || lcap=""
           fi
           [ -n "$lcap" ] || continue
@@ -296,8 +325,7 @@ main() {
     # A fallback that is itself capped on this account is no fallback: hand the
     # window to the subscription path rather than flip it onto a second wall.
     if [ -n "$acct" ]; then
-      tuntil=$("$BIN/fleet-account.sh" model-limited-until "$acct" "$TARGET" 2>/dev/null)
-      case "$tuntil" in ''|*[!0-9]*) tuntil=0 ;; esac
+      tuntil=$(ledger_until "$acct" "$TARGET")
       if [ "$tuntil" -gt "$(date +%s)" ]; then
         printf '  – %s (%s): %s is ALSO capped on %s — skipped (subscription path)\n' "$wid" "$name" "$TARGET" "$acct"
         skipped=$((skipped+1)); continue
