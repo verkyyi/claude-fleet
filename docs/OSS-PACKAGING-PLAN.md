@@ -569,8 +569,15 @@ sync-install + 冒烟，确认 fleet 没炸再下一条。
 
 ### M4 — 团队层
 
-9 `scope:` 轴 + 10 `memory promote` + 11 config repo 双 target 物化。
-新建第三个仓库时再起对应 fleet。
+**backlog 已全部建好（2026-09-13）**：
+
+| issue | 内容 | 依赖 |
+|---|---|---|
+| [#612](https://github.com/verkyyi/claude-fleet/issues/612) | memory frontmatter 加正交 `scope:` 轴 + 29 条全量回填 | 无 |
+| [#613](https://github.com/verkyyi/claude-fleet/issues/613) | `memory promote` + 密钥扫描 gate | #612 |
+| [#614](https://github.com/verkyyi/claude-fleet/issues/614) | config source-of-truth 仓库 + 双 target 物化 | #611（plugin） |
+
+⚠️ #612 的安全默认很重要：**缺 `scope:` 时默认 `personal`** —— 漏标不该导致泄露。
 
 ---
 
@@ -587,15 +594,17 @@ worker+PR），全局 cap 10。
 
 ### 完整 issue 索引
 
-**M0** 22（定价重算）+ 两条复验（待建 issue）
-**M1** ccquota README 主线重写（待建 issue）
-**M2** 17 跨 provider 溢出 · 18 token 标签+team 归因 · 19 相位错开 · 20 争用策略 · 21 Codex 池化
-**M3** 1 `@agent_state` 正名 · 2 能力矩阵进 README · 3 mini 改 N 个 OS login ·
-4 删 base-readonly-guard · 5 删 janitor · 6 `.worktreeinclude` · 7 用量代理→OTEL ·
-8 commands+hooks→plugin
-**M4** 9 `scope:` 轴 · 10 `memory promote`+密钥扫描 · 11 config repo 双 target 物化
-**其他** 12 Codex context%/handoff · 13 配额裁决接口中立化 · 14 clauth 相位错开 ·
-15 friction Stop hook · 16 双 anchor worktree 检测
-**已关闭** 4（M0 证伪）· 22（M0 完成）· 23（措辞已定：中性「团队账号池」）
+全部 backlog 已于 2026-09-13 建成 GitHub issue。
 
-> 14 与 19 是同一件事（clauth 的相位错开），建 issue 时合并。
+| 里程碑 | issue | 状态 |
+|---|---|---|
+| **M0** | 定价重算 · 并发复验 · 原生 worktree 覆盖面 | ✅ 全部完成（无需 issue，直接查证） |
+| **M1** | ccquota#16 README 主线改写 | ✅ 已落 main（PR #18 → #19） |
+| **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
+| **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL · [#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 | ⬜ #608 已派 autofill |
+| **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
+| **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch | ✅ 已上线（PR #604） |
+| **已证伪作废** | 删 base-readonly-guard · 删 janitor · `.worktreeinclude` | ❌ 见第七章 |
+| **其他（低优先）** | Codex context%/handoff · 配额裁决接口中立化 · friction Stop hook · 双 anchor worktree 检测 | ⬜ 未建 issue |
+
+> 「相位错开」原本在两处重复（旧编号 14 与 19），已合并为 #598。
