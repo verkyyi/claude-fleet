@@ -41,9 +41,23 @@
 #   cleaned:closed   CLOSED-unmerged → orphan worktree/window reaped (no base pull)
 #   skip:not-final   PR still OPEN — not merged/closed, nothing to clean (rc 0)
 #   skip:nothing     final PR but no worktree AND no window to reap (already clean)
+#   skip:protected   scratch-head reap refused: the base checkout / a protected branch
+#   skip:unmerged    scratch-head reap refused: local commits past the merged head
+#   skip:dirty       scratch-head reap refused: the worktree has uncommitted work
+#   skip:busy        scratch-head reap refused: its window is not `done`
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
+# NON-issue-<N> HEADS (issue #589). Everything above is addressed by `issue-<N>`,
+# so a session that started as a scratch (`scratch-<N>`) and grew into a PR is
+# never reaped: its window hangs around forever and its worktree keeps the disk.
+# That is deliberate (#543/#544) — a scratch window is routinely the operator's own
+# workbench. FLEET_CLEANUP_SCRATCH_HEADS=1 opts a fleet INTO reaping those too, but
+# only behind the strict gate in `scratch_head_gate` below; the default (0) is the
+# historic behavior, byte for byte.
+#
 # Env knobs (all optional):
+#   FLEET_CLEANUP_SCRATCH_HEADS  1 = also reap a MERGED PR whose head is not
+#                        issue-<N>, behind the strict gate      (default 0/off)
 #   LAND_LEASE_TTL       lease lifetime, seconds           (default 3600)
 #   LAND_QUEUE_TIMEOUT   max seconds to WAIT for the lease (default 300)
 #   LAND_POLL            seconds between lease-queue polls  (default 15)
@@ -72,7 +86,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --pr) shift; PR="${1:-}"; PR="${PR//[^0-9]/}" ;;
     --dry-run|-n) DRY=1 ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) printf 'fleet-cleanup: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)  PR="${1//[^0-9]/}" ;;
   esac
@@ -114,12 +128,22 @@ pr_fields() {
 fields=$(pr_fields "$PR")
 [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
 IFS=$'\t' read -r st oid href <<<"$fields"
+# BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the
+# @issue window binding, the ledger key, the branch name). They coincide for a
+# worker; for an opted-in non-issue head BRANCH is the PR's head and ISSUE empty.
+SCRATCH_HEAD=0
 case "$href" in
-  issue-[0-9]*) ISSUE="${href#issue-}"; ISSUE="${ISSUE%%[!0-9]*}" ;;
-  *) ISSUE="" ;;   # a non-issue-<N> head PR has no worktree/window to reap
+  issue-[0-9]*) ISSUE="${href#issue-}"; ISSUE="${ISSUE%%[!0-9]*}"; BRANCH="issue-$ISSUE" ;;
+  *)
+    ISSUE=""; BRANCH=""
+    # Opt-in only, MERGED only (issue #589). A CLOSED-unmerged non-issue PR
+    # abandoned work that is still sitting in its worktree — never reap that.
+    if [ "${FLEET_CLEANUP_SCRATCH_HEADS:-0}" = 1 ] && [ "$st" = MERGED ] && [ -n "$href" ]; then
+      SCRATCH_HEAD=1; BRANCH="$href"
+    fi ;;
 esac
 
-note "fleet-cleanup: repo=$REPO  pr=#$PR  head=$href  issue=${ISSUE:-none}  state=$st$([ "$DRY" = 1 ] && echo '  (dry-run)')"
+note "fleet-cleanup: repo=$REPO  pr=#$PR  head=$href  issue=${ISSUE:-none}  branch=${BRANCH:-none}  state=$st$([ "$DRY" = 1 ] && echo '  (dry-run)')"
 
 # --- only FINAL PRs are cleanable ---------------------------------------------
 case "$st" in
@@ -128,8 +152,83 @@ case "$st" in
   *)      note "  #$PR is $st — not final (not merged/closed); nothing to clean."; done_token "skip:not-final"; exit 0 ;;
 esac
 
+# --- resolve the worktree + window for BRANCH (idempotency hinges on this) -----
+# Both empty on a final PR ⇒ already cleaned (or a head we may not reap) ⇒ no-op.
+WT=""; WT_HEAD=""; WIN=""; WIN_STATE=""
+if [ -n "$BRANCH" ]; then
+  IFS=$'\t' read -r WT WT_HEAD <<<"$(fleet_worktree_head "$MAIN" "$BRANCH")"
+  if [ "$SCRATCH_HEAD" = 1 ]; then
+    # No @issue binding on a non-issue head → the window is addressed by pane cwd.
+    [ -n "$WT" ] && IFS=$'\t' read -r WIN WIN_STATE <<<"$(fleet_wt_window "$FLEET_SESSION" "$WT")"
+  else
+    WIN=$(ftmux list-windows -t "$FLEET_SESSION" -F '#{window_id} #{@issue}' 2>/dev/null | \
+          awk -v i="$ISSUE" '$2==i{print $1}')
+  fi
+fi
+
+# --- the scratch-head gate (issue #589) ---------------------------------------
+# Reaping on head branch alone would kill live work — a `scratch-<N>` window is
+# routinely the operator's own workbench, which is exactly why #543/#544 protects
+# it. So the opt-in buys only this: the worktree janitor's full liveness gate,
+# PLUS "the window itself says it is finished". Every check below is a READ, so it
+# runs in --dry-run too and makes that classification honest.
+scratch_head_gate() {
+  local re="${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}"
+  # Protection is a property of the BRANCH, so it is answered before we go looking
+  # for a worktree: a protected head is refused whether or not one is checked out.
+  if printf '%s\n' "$BRANCH" | grep -Eq "$re"; then
+    note "  refusing $BRANCH: it is a protected branch (FLEET_PROTECTED_RE)."
+    done_token "skip:protected"; return 1
+  fi
+  if [ -z "$WT" ]; then
+    note "  no worktree is checked out on $BRANCH — nothing of ours to reap."
+    done_token "skip:nothing"; return 1
+  fi
+  if [ "$WT" = "$MAIN" ]; then
+    note "  refusing $BRANCH: it is checked out in the BASE checkout $MAIN."
+    done_token "skip:protected"; return 1
+  fi
+  # The local branch must be EXACTLY the commit GitHub merged. `--is-ancestor`
+  # cannot answer this: a squash merge (the fleet default) leaves the head tip off
+  # the base's history entirely, so every squash-merged branch would read as
+  # unmerged. Compare against the PR's own headRefOid instead — anything past it
+  # was pushed after the merge and was never merged. WT_HEAD is that tip already
+  # (the porcelain HEAD of the worktree this branch is attached to), so this costs
+  # no extra git call.
+  if [ -n "$oid" ] && [ -n "$WT_HEAD" ] && [ "$WT_HEAD" != "$oid" ]; then
+    note "  refusing $BRANCH: local tip $WT_HEAD != merged head $oid (commits past the merge)."
+    done_token "skip:unmerged"; return 1
+  fi
+  if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+    note "  refusing $BRANCH: worktree $WT is dirty (uncommitted or untracked files)."
+    done_token "skip:dirty"; return 1
+  fi
+  # The window's own verdict, and it must EXIST. Fail CLOSED on purpose: the window
+  # is located by comparing the porcelain worktree path to a pane cwd, and any
+  # reason that comparison comes up empty (a symlinked checkout, a pane whose cwd
+  # has not settled) would otherwise read as "nobody home" and kill a live session.
+  # Requiring it costs nothing — a clean, merged worktree with NO live pane is
+  # already worktree-autoclean.sh's job, and that is the one reaper that handles it.
+  if [ -z "$WIN" ]; then
+    note "  refusing $BRANCH: no live window sits in $WT — worktree-autoclean.sh owns that case."
+    done_token "skip:nothing"; return 1
+  fi
+  # Anything but `done` — working, needs, or a window that never stamped a state
+  # at all — means a session is still using this worktree; leave it alone.
+  if [ "$WIN_STATE" != "done" ]; then
+    note "  refusing $BRANCH: window $WIN is '${WIN_STATE:--}' (not done) — a session is still using $WT."
+    done_token "skip:busy"; return 1
+  fi
+  note "  scratch-head reap armed: $BRANCH → wt=$WT win=${WIN:-none}/${WIN_STATE:--}"
+  return 0
+}
+if [ "$SCRATCH_HEAD" = 1 ]; then
+  scratch_head_gate || exit 0
+fi
+
 # --- dry-run: report what we WOULD do, take no lease, mutate nothing ----------
 if [ "$DRY" = 1 ]; then
+  if [ -z "$WT" ] && [ -z "$WIN" ]; then done_token "dry:would-reap-nothing"; exit 0; fi
   case "$st" in
     MERGED) done_token "dry:would-clean-merged" ;;
     CLOSED) done_token "dry:would-reap-closed" ;;
@@ -137,21 +236,11 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-# --- resolve the worktree + window for issue-<N> (idempotency hinges on this) --
-# Both empty on a final PR ⇒ already cleaned (or a non-issue head) ⇒ no-op.
-WT=""; WIN=""
-if [ -n "$ISSUE" ]; then
-  WT=$(git -C "$MAIN" worktree list --porcelain 2>/dev/null | \
-       awk -v b="issue-$ISSUE" '/^worktree /{p=$2} $0 ~ "branch refs/heads/"b"$"{print p}')
-  WIN=$(ftmux list-windows -t "$FLEET_SESSION" -F '#{window_id} #{@issue}' 2>/dev/null | \
-        awk -v i="$ISSUE" '$2==i{print $1}')
-fi
-
 # --- teardown: kill window → drop worktree → delete branch --------------------
 # If the CALLER is inside the worktree (a worker cleaning up its own PR), detach
 # the teardown into the tmux server — you can't remove the ground you stand on.
 teardown() {
-  [ -z "$ISSUE" ] && { note "  no issue-<N> head — nothing to reap."; return 0; }
+  [ -z "$BRANCH" ] && { note "  head $href is not a branch we may reap — nothing to do."; return 0; }
   local self_win cwd
   self_win=$(ftmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)
   cwd=$(pwd -P 2>/dev/null)
@@ -169,7 +258,7 @@ teardown() {
     # string under /bin/sh, which cannot source fleet-lib.sh; hence the shim.
     local dropcmd=""
     [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' --force; "
-    local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D 'issue-$ISSUE'; } >/dev/null 2>&1"
+    local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D '$BRANCH'; } >/dev/null 2>&1"
     note "  teardown (detached): $cmd"
     [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] && return 0
     ftmux run-shell -b "$cmd" 2>/dev/null || \
@@ -177,7 +266,7 @@ teardown() {
     return 0
   fi
 
-  note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D issue-$ISSUE"
+  note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
   # releases the busy cwd, THEN drop the worktree, THEN delete the branch.
@@ -191,7 +280,7 @@ teardown() {
       *) note "  worktree drop failed for $WT ($drop) — worktree-autoclean.sh will reap it." ;;
     esac
   fi
-  git -C "$MAIN" branch -D "issue-$ISSUE" >/dev/null 2>&1 || true
+  git -C "$MAIN" branch -D "$BRANCH" >/dev/null 2>&1 || true
 }
 
 # --- closed-unmerged: reap the orphan worktree/window, no base pull, no ledger -
@@ -222,8 +311,10 @@ fi
 # through the shared reap-and-record helper (issue #384) so this reaper and
 # worktree-autoclean.sh write the row the SAME way and can't drift; the PR is known
 # here, so the helper skips its branch→PR resolution and records a landed row.
-if [ -n "$ISSUE" ] && [ -n "$WT" ]; then
-  fleet_reap_record "merged-pr" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "issue-$ISSUE" || true
+# A non-issue head has no issue number, so the helper keys the row by the branch's
+# `scratch-<N>` slug instead (issue #466) — the session stays in /fleet-history.
+if [ -n "$BRANCH" ] && [ -n "$WT" ]; then
+  fleet_reap_record "merged-pr" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "$BRANCH" || true
 fi
 
 # Base fast-forward under the SHARED land lease — serialize base movers. We take

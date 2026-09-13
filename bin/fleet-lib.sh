@@ -769,6 +769,42 @@ EOF
   return 0
 }
 
+# tmux for a NAMED fleet from either side of the #159 dividing line: inside a pane
+# $TMUX already carries this fleet's socket (bare `tmux` is correct); outside one a
+# daemon must name the fleet's OWN socket by label. Private to fleet_wt_window —
+# every other caller in the tree spells its own two-line `ftmux()` inline.
+_fleet_tmux() {
+  local sess="${1:-}"; shift
+  if [ -n "${TMUX:-}" ]; then tmux "$@"
+  else tmux -L "$(fleet_socket "$sess")" "$@"; fi
+}
+
+# fleet_wt_window <session> <worktree-dir> — the live window sitting in a worktree,
+# addressed by PANE CWD (issue #589). An `issue-<N>` worker is addressed by its
+# @issue binding instead, which is cwd-INdependent and therefore the better key
+# (issue #353); a scratch / ad-hoc worktree carries no such binding, so cwd is the
+# only link back to its window. Match the worktree root or any subdir of it —
+# the same exact-or-prefix rule the worktree janitor's liveness gate uses, so a
+# session whose cwd wandered into a subdir still reads as live.
+# Prints "<window_id><TAB><@claude_state>" for the FIRST pane that matches ('-'
+# when the state option is unset) and NOTHING when no live pane sits in the
+# worktree. Two reads rather than one combined format on purpose: an unset
+# @claude_state would collapse to nothing mid-line and shift the path field.
+fleet_wt_window() {
+  local sess="${1:-}" dir="${2:-}" wid st
+  [ -n "$sess" ] && [ -n "$dir" ] || return 0
+  dir="${dir%/}"
+  wid=$(_fleet_tmux "$sess" list-panes -s -t "$sess" \
+          -F '#{window_id} #{pane_current_path}' 2>/dev/null \
+        | awk -v d="$dir" '{ w=$1; p=$0; sub(/^[^ ]* /, "", p)
+                             if (p == d || index(p, d "/") == 1) { print w; exit } }')
+  [ -n "$wid" ] || return 0
+  st=$(_fleet_tmux "$sess" list-windows -t "$sess" \
+          -F '#{window_id} #{@claude_state}' 2>/dev/null \
+       | awk -v w="$wid" '$1 == w { print $2; exit }')
+  printf '%s\t%s' "$wid" "${st:--}"
+}
+
 # Age of a process in SECONDS, portably (issue #469). macOS `ps` has no `etimes`
 # (Linux does), so parse the POSIX `etime` field — [[dd-]hh:]mm:ss. Prints 0 for a
 # pid that is gone or unparseable, which makes an age gate fail CLOSED (the process

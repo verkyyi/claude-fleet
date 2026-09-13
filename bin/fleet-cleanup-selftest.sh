@@ -19,6 +19,17 @@
 #                      bytes intact and pruned from the registry, never deleted
 #                      inline (issue #586 — a 308k-file delete held the daemon 67min)
 #   --dry-run        → dry:*  (no teardown, no mutation)
+#   NON-issue head (a scratch that grew into a PR, issue #589):
+#     knob OFF (default) → skip:nothing, NOTHING torn down — the historic behavior
+#     knob ON  + clean + tip==merged head + window `done` → cleaned:* + teardown
+#                                            (dropped into .fleet-trash, not deleted)
+#     knob ON  + window working → skip:busy      (the operator's own workbench)
+#     knob ON  + dirty worktree → skip:dirty
+#     knob ON  + commits past the merge → skip:unmerged
+#     knob ON  + protected head branch  → skip:protected
+#     knob ON  + no window in the worktree → skip:nothing (fails CLOSED; that case
+#                                            belongs to worktree-autoclean.sh)
+#     knob ON  + CLOSED-unmerged        → skip:nothing (never in scope)
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -47,14 +58,17 @@ if [ "\${1:-}" = "-C" ]; then shift 2; fi
 case "\${1:-}" in
   worktree)
     case "\${2:-}" in
-      list)   [ "\${WT_GONE:-0}" = 1 ] || printf 'worktree %s/wt-issue-42\nHEAD deadbeef\nbranch refs/heads/issue-42\n\n' "$WORK" ;;
-      remove) printf 'worktree-remove\n' >> "$ORDER_LOG" ;;
+      list)   [ "\${WT_GONE:-0}" = 1 ] || printf 'worktree %s/wt-issue-42\nHEAD deadbeef\nbranch refs/heads/issue-42\n\n' "$WORK"
+              [ "\${SCRATCH_WT:-0}" = 1 ] && printf 'worktree %s/wt-scratch-99\nHEAD %s\nbranch refs/heads/scratch-99\n\n' "$WORK" "\${FAKE_TIP:-cafe1234}"
+              : ;;
+      remove) printf 'worktree-remove %s\n' "\${!#}" >> "$ORDER_LOG" ;;
       prune)  printf 'worktree-prune\n'  >> "$ORDER_LOG" ;;
       *)      : ;;
     esac ;;
-  branch)  printf 'branch-D\n' >> "$ORDER_LOG" ;;    # git branch -D issue-42
+  branch)  printf 'branch-D %s\n' "\${3:-}" >> "$ORDER_LOG" ;;   # git branch -D <b>
   pull)    printf 'pull\n' >> "$PULL_LOG" ;;          # git pull --ff-only
-  rev-parse) printf 'deadbeef\n' ;;
+  status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
+  rev-parse) printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
   *) : ;;                                             # fetch → succeed silently
 esac
 exit 0
@@ -70,9 +84,12 @@ case "\$action" in
     case "\$*" in
       *"--json state,headRefOid"*)
         case "\${GH_SCENARIO:-merged}" in
-          merged) printf 'MERGED\tsha-%s\tissue-42\n' "\$num" ;;
-          closed) printf 'CLOSED\tsha-%s\tissue-42\n' "\$num" ;;
-          open)   printf 'OPEN\tsha-%s\tissue-42\n' "\$num" ;;
+          merged)        printf 'MERGED\tsha-%s\tissue-42\n' "\$num" ;;
+          closed)        printf 'CLOSED\tsha-%s\tissue-42\n' "\$num" ;;
+          open)          printf 'OPEN\tsha-%s\tissue-42\n' "\$num" ;;
+          scratch)       printf 'MERGED\tcafe1234\tscratch-99\n' ;;
+          scratchclosed) printf 'CLOSED\tcafe1234\tscratch-99\n' ;;
+          protected)     printf 'MERGED\tcafe1234\tmaster\n' ;;
         esac ;;
       *"--json title"*) printf 'Fake PR %s\t2026-01-01T00:00:00Z\tsha-%s\n' "\$num" "\$num" ;;
     esac ;;
@@ -88,7 +105,14 @@ cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash
 if [ "\${1:-}" = "-L" ]; then shift 2; fi
 case "\${1:-}" in
-  list-windows)  [ "\${WIN_GONE:-0}" = 1 ] || echo '@7 42' ;;   # window @7 → issue 42
+  list-panes)
+    # fleet_wt_window's cwd probe: window @9 sits in the scratch-99 worktree.
+    [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s/wt-scratch-99\n' "$WORK"; : ;;
+  list-windows)
+    case "\$*" in
+      *claude_state*) [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s\n' "\${SCRATCH_STATE:-done}"; : ;;
+      *)              [ "\${WIN_GONE:-0}" = 1 ] || echo '@7 42' ;;   # window @7 → issue 42
+    esac ;;
   display-message)
     case "\$*" in *window_id*) echo "\${FAKE_SELF_WIN:-@1}" ;; *session_name*) echo 'testsess' ;; *) echo '' ;; esac ;;
   kill-window)   printf 'kill-window %s\n' "\${!#}" >> "$ORDER_LOG" ;;
@@ -112,6 +136,10 @@ run_clean() {
   fi
   GH_SCENARIO="$scenario" FAKE_SELF_WIN="${FAKE_SELF_WIN:-@1}" \
   WT_GONE="${WT_GONE:-0}" WIN_GONE="${WIN_GONE:-0}" \
+  SCRATCH_WT="${SCRATCH_WT:-0}" SCRATCH_WIN="${SCRATCH_WIN:-0}" \
+  SCRATCH_STATE="${SCRATCH_STATE:-done}" FAKE_DIRTY="${FAKE_DIRTY:-0}" \
+  FAKE_TIP="${FAKE_TIP:-deadbeef}" \
+  FLEET_CLEANUP_SCRATCH_HEADS="${FLEET_CLEANUP_SCRATCH_HEADS:-0}" \
   TMUX='' PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" \
   FLEET_CONF_DIR="$WORK/conf" FLEET_SESSION="testsess" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
@@ -191,6 +219,85 @@ tok="$(run_clean merged --dry-run)"; err="$(cat "$WORK/err")"
 [ -s "$ORDER_LOG" ] && fail "6 --dry-run must not tear anything down" "$err"
 [ -s "$LEDGER" ]    && fail "6 --dry-run must not record a ledger row" "$err"
 ok "6 --dry-run classifies without mutating"
+
+# ======= non-issue (scratch) heads, issue #589 ==================================
+# A `scratch-<N>` worktree + a window sitting in it; the PR merged at cafe1234.
+scratch() { # $1 = gh scenario; remaining args pass through to run_clean
+  # Real bytes on disk so the drop (issue #586) can be asserted as a RENAME.
+  mkdir -p "$WORK/wt-scratch-99" && printf 'payload\n' > "$WORK/wt-scratch-99/keep.txt"
+  rm -rf "$WORK/.fleet-trash"
+  SCRATCH_WT=1 SCRATCH_WIN="${SCRATCH_WIN:-1}" \
+  SCRATCH_STATE="${SCRATCH_STATE:-done}" FAKE_DIRTY="${FAKE_DIRTY:-0}" \
+  FAKE_TIP="${FAKE_TIP:-cafe1234}" \
+  FLEET_CLEANUP_SCRATCH_HEADS="${FLEET_CLEANUP_SCRATCH_HEADS:-1}" \
+    run_clean "$@"
+}
+
+# --- 7. knob OFF (the default) → the historic behavior, byte for byte ----------
+: > "$LEDGER"
+tok="$(FLEET_CLEANUP_SCRATCH_HEADS=0 scratch scratch)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:nothing" ] || fail "7 knob off must leave a non-issue head alone, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "7 knob off must tear NOTHING down for a non-issue head" "$err"
+[ -s "$LEDGER" ]    && fail "7 knob off must not record a ledger row" "$err"
+ok "7 non-issue head, knob OFF → skip:nothing (default behavior unchanged)"
+
+# --- 8. knob ON + clean + tip==merged head + window done → reaped --------------
+: > "$LEDGER"
+tok="$(scratch scratch)"; err="$(cat "$WORK/err")"
+case "$tok" in cleaned:*) ;; *) fail "8 expected cleaned:* for an armed scratch head, got '$tok'" "$err" ;; esac
+order="$(tr '\n' ' ' < "$ORDER_LOG")"
+case "$order" in
+  "kill-window @9 "*"worktree-prune "*"branch-D scratch-99"*) ;;
+  *) fail "8 teardown must kill @9 then drop the worktree then branch -D scratch-99: [$order]" "$err" ;;
+esac
+# Dropped, not deleted (issue #586) — the same rename-into-.fleet-trash the
+# issue-<N> path takes, so a huge scratch worktree cannot hold the daemon either.
+[ -e "$WORK/wt-scratch-99" ] && fail "8 the scratch worktree dir is still in place — no drop happened" "$err"
+trashed="$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-scratch-99.*' 2>/dev/null | head -1)"
+[ -n "$trashed" ] || fail "8 the scratch worktree was not renamed into .fleet-trash" "$err"
+[ "$(cat "$trashed/keep.txt" 2>/dev/null)" = payload ] \
+  || fail "8 trashed content missing — teardown deleted instead of renaming" "$err"
+grep -q 'wt-scratch-99' "$LEDGER" || fail "8 the reaped scratch session must land in the ledger" "$err"
+[ -s "$PULL_LOG" ] || fail "8 a merged scratch-head cleanup must fast-forward the base" "$err"
+ok "8 non-issue head, knob ON + gate green → cleaned + teardown + ledger + base pull"
+
+# --- 9. window is working → the operator's own workbench, hands off ------------
+: > "$LEDGER"
+tok="$(SCRATCH_STATE=working scratch scratch)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:busy" ] || fail "9 a working window must refuse with skip:busy, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "9 a working window must not be torn down" "$err"
+ok "9 non-issue head, window working → skip:busy (no teardown)"
+
+# --- 10. dirty worktree → never silently delete work --------------------------
+tok="$(FAKE_DIRTY=1 scratch scratch)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:dirty" ] || fail "10 a dirty worktree must refuse with skip:dirty, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "10 a dirty worktree must not be torn down" "$err"
+ok "10 non-issue head, dirty worktree → skip:dirty (no teardown)"
+
+# --- 11. local commits past the merged head → never merged, keep them ---------
+tok="$(FAKE_TIP=beef9999 scratch scratch)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:unmerged" ] || fail "11 a tip past the merge must refuse with skip:unmerged, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "11 unmerged commits must not be torn down" "$err"
+ok "11 non-issue head, commits past the merge → skip:unmerged (no teardown)"
+
+# --- 12. CLOSED-unmerged non-issue head → never in scope, even armed ----------
+tok="$(scratch scratchclosed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:nothing" ] || fail "12 a CLOSED non-issue head must stay out of scope, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "12 a CLOSED non-issue head must not be torn down" "$err"
+ok "12 non-issue head, CLOSED-unmerged → skip:nothing (opt-in is MERGED-only)"
+
+# --- 12b. no live window in the worktree → fail CLOSED, not "nobody home" -----
+tok="$(SCRATCH_WIN=0 scratch scratch)"
+err="$(cat "$WORK/err")"
+[ "$tok" = "skip:nothing" ] || fail "12b a worktree with no live window must fail closed, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "12b a worktree with no live window must not be torn down" "$err"
+ok "12b non-issue head, no window in the worktree → skip:nothing (fails closed)"
+
+# --- 13. a protected head branch is never reapable ---------------------------
+tok="$(scratch protected)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:protected" ] || fail "13 a protected head must refuse with skip:protected, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "13 a protected branch must not be torn down" "$err"
+ok "13 non-issue head on a protected branch → skip:protected (no teardown)"
 
 printf '\nselftest OK: %s assertions passed (no-merge janitor bin/fleet-cleanup.sh)\n' "$pass"
 exit 0
