@@ -286,7 +286,7 @@ grep -q 'hit its 2s budget' "$WORK/stderr" || fail "9a: the timed-out probe must
 [ "$(ccq_calls)" = $((before+1)) ] || fail "9a: the ccquota fetch must NOT be starved by a wedged sweep"
 [ "$elapsed" -lt 6 ] || fail "9a: the tick must not wait out the wedged probe (took ${elapsed}s, probe sleeps 6s)"
 pgrep -f "$WORK/bin/fleet-model-switch.sh" >/dev/null 2>&1 && fail "9a: the timed-out probe must be gone, not detached"
-[ "$(hbget "$G/quotawatch.heartbeat" phase)" = done ] || fail "9a: the tick must reach phase=done"
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "9a: the tick must reach phase=done"
 ok
 
 # 9b. the whole TREE dies, not just the script: the fake's post-sleep marker is
