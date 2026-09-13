@@ -443,7 +443,28 @@ fleet-ccquota            ×1   verky@24helpful.com
 三个账号同时在跑，证实 `CLAUDE_CODE_OAUTH_TOKEN` 仍是 per-process 生效。
 **池化省钱的物理前提成立,M2 不作废。**
 
-### M1 — 用已经做完的那块试水(1–2 天) ← **操作员已选定为起步路线**
+### M1 — 用已经做完的那块试水 ✅ 已完成 2026-09-13
+
+README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条验收全过：
+中性开篇 "Books for a team account pool"、成本对照表、受众边界单独成段
+（还主动写了**不适用**人群）、跨机器差异化引文、反 Goodhart 设计保留、措辞红线未碰。
+
+> ⚠️ **踩到的坑（值得记住）**：worker 干完活却落在 `dashboard-redesign` 上，
+> 因为 `~/.config/claude-fleet/fleets/fleet-ccquota/conf` 的
+> `FLEET_BASE_BRANCH="dashboard-redesign"` —— fleet-up.sh 建 fleet 时抓了当时
+> checkout 所在的分支，而默认分支是 `main`。那是条落后 main 5 个提交的废分支，
+> 成果等于石沉大海，靠 PR #19 才捞回来。
+>
+> **这与 ccquota 自己 PR #11 修过的是同一类 bug**（「push 触发器指向真正的主干
+> —— 57 个提交没被 push-CI 验过，因为它指着一条两周没动的分支」）。第二次犯。
+> 📌 未决：`FLEET_BASE_BRANCH` 是否改回 `main`。不改则该 fleet 之后每个 worker
+> 继续落废分支。
+>
+> 💡 产品启示：**`fleet-up.sh` 不该默认拿当前 checkout 的分支当 base**，
+> 应取仓库的 default branch（或至少在两者不一致时警告）。这是打包给团队用之前
+> 必须修的 —— 陌生人装上之后踩这个坑，会以为整个工具不工作。
+
+发布动作（HN / X / subreddit）**尚未做**，等操作员决定。
 
 ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队归属模型、
 已经是 hub/agent 架构。要做的只是**把 README 主线从「用量监控」换成
@@ -464,14 +485,24 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 这组是方案的卖点，**hands-on,不要 autofill** —— 每条都含调度判断。
 
 ```
-18 池内 token 打标签 + 接 ccquota team --set   ← 先做,其余都要读这个标签
+19 相位错开 5h/N  → claude-fleet#598 已建 2026-09-13   ← 最独立,先做
      ↓
-19 相位错开 5h/N          20 争用策略(p0/p1/p2 + 人均熔断)
+18 池内 token 打标签 + 接 ccquota team --set
+     ↓
+20 争用策略(p0/p1/p2 + 人均熔断)
      ↓
 17 跨 provider 溢出 → Codex   ← 头条功能,可先上「换 agent」版
      ↓
 21 Codex 侧多 ~/.codex home 池化   ← 17 的完整版前置,可延后
 ```
+
+> 顺序调整：原定 18 先做（「其余都要读这个标签」），但查证发现 `@cc_account`
+> 窗口 option 与 `fleet-account.sh list` 的 per-account 5h/7d% **已经存在**，
+> 标签基础大体已有。真正空白的是**用它来调度**，所以改由最独立的 19 领头。
+>
+> 📌 实测发现的真问题（2026-09-13）：三份账号里几乎所有 window 都压在
+> `verky@24helpful.com` 一份上 —— **不是相位问题,是根本没在轮着用**。
+> 这让 19 的价值比原先估计的更高。
 
 ### M3 — 让第二个人装得上
 
