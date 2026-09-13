@@ -229,6 +229,7 @@ FLEET_BASE_BRANCH="main"
 FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 FLEET_CTX_WINDOW=200000               # 1000000 if you run 1M-context models
 FLEET_GLOBAL_MAX_SESSIONS=8          # system-wide cap on live Claude sessions; 0 = off
+FLEET_AGENT="claude"                  # or "codex" — see the capability matrix below
 ```
 
 ## Multiple fleets on one machine
@@ -378,6 +379,71 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
 2. **Fallback (zero setup)** — without the tunnel, you get a tmux popup with
    the URL (cmd-clickable in iTerm) already OSC52-copied to your local
    clipboard (`set-clipboard on` is in the shipped tmux conf).
+
+## Agents: Claude Code and Codex
+
+A fleet spawns **Claude Code** by default and can spawn **OpenAI Codex CLI**
+instead (`FLEET_AGENT=codex`, or `⌃v` on the dash to flip it for that fleet).
+Two agents, not thirty — which is what makes it honest to print the grading in
+full, gaps included.
+
+**Why the gaps are published.** A feature table that lists only ticks tells you
+nothing about whether the second agent is usable for *your* work. Every ❌ below
+says which kind of gap it is — **Codex has no such mechanism**, or **the
+mechanism exists and the fleet has not adapted it** — because those are different
+promises about the roadmap.
+
+**Why these two agents.** The hardest part of an agent-neutral layer is the live
+state signal, and Codex's hook system *is* Claude Code's schema: same event
+names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on
+codex-cli 0.154). So the dash colours a Codex worker off real hooks instead of
+degrading to a pane-content heuristic.
+
+<!-- codex-matrix:begin -->
+| Capability | Claude Code | Codex | Why |
+|---|:--:|:--:|---|
+| worktree per task · `@issue` binding · claim-at-spawn · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic. |
+| hook state signals → dash colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli 0.154). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`. |
+| bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | `--dangerously-bypass-approvals-and-sandbox` + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit. |
+| project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`. |
+| worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane. |
+| slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`. |
+| per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently. |
+| red `needs` + bell when a session is blocked on you | ✅ | ❌ | **Codex has no `Notification` event.** 0.154's hook set is PreToolUse · PermissionRequest · PostToolUse · Pre/PostCompact · SessionStart · SessionEnd · UserPromptSubmit · SubagentStart/Stop · Stop · Interrupt — and its nearest analogue, `PermissionRequest`, cannot fire under the fleet's bypass posture. A Codex worker that stops to ask you something reads green `done`, like any finished turn. |
+| `AskUserQuestion` + the dash's ⌃k answer key | ✅ | ❌ | A Claude-only tool; `bin/fleet-answer.sh` answers it by driving that dialog's keystrokes. Codex has no equivalent dialog to drive. |
+| close the window when the operator exits the agent | ✅ | ❌ | Codex does fire `SessionEnd`, but reports `reason=other` for every end — it never emits Claude's `prompt_input_exit` / `logout` — so the matcher that tells a manual `/exit` from a `/clear` cannot fire. The cleanup daemon's poll reaps a Codex window instead: a minute later, not instantly. |
+| `/fleet-handoff` + the auto-handoff nudge | ✅ | ❌ | Reads Claude Code's `~/.claude/projects/**.jsonl` transcript and re-seeds the pane. Codex keeps its own rollout files — the mechanism is not missing on Codex, the adapter is. |
+| `/fleet-context` + the dash's ctx % | ✅ | ❌ | Same transcript, plus `conf/statusline.sh` stamping `@ctx_pct` on every render. Codex's status line is a built-in TUI toggle, not a user command that could stamp that bus. |
+| Stop classifier (haiku) | ✅ | ❌ | Reads the Claude transcript to correct a state the semantic-blind hooks got wrong. Same adapter gap. |
+| `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ❌ | `bin/fleet-claude.sh` routes every `--resume` / `--continue` / `--from-pr` / `--fork-session` launch to Claude — those resume Claude transcripts. Codex has `codex resume`; the fleet does not wire it. |
+| multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over. |
+| per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch. |
+| MCP servers + subagent model | ✅ | ❌ | Deliberately skipped, **not** a Codex limit: Codex has both (`codex mcp`, its own subagents). `FLEET_MCP_CONFIG` / `FLEET_SUBAGENT_MODEL` are Claude-shaped and are not materialised into Codex config. |
+<!-- codex-matrix:end -->
+
+That table is **generated** from the `MATRIX` block in
+[`bin/fleet-codex.sh`](bin/fleet-codex.sh)'s header — one source of truth, sitting
+next to the code it grades. `bin/codex-matrix.sh --check` fails on any drift and
+runs in CI, so a row cannot be edited in one file and forgotten in the other.
+
+**The two gaps that matter**, said plainly rather than left to be inferred from
+the rows:
+
+1. **Cross-context continuity does not exist on Codex.** `/fleet-handoff`,
+   `/fleet-context` and every `--resume` path are shaped around Claude Code's
+   transcript. A Codex worker that fills its window has no bridge to a fresh one.
+2. **Quota governance does not exist on Codex.** Account rotation and the usage
+   collector read Claude subscription state; Codex's limits are a different
+   model with no per-launch token seam. Across providers only the *verdict*
+   interface is neutral ("is there headroom?" → yes/no); the data layer stays
+   per-agent.
+
+Codex needs one manual setup step: it asks "Do you trust the contents of this
+directory?" once per project and no flag or `-c` override satisfies it, so answer
+Yes once in your base checkout (run `codex` in `$FLEET_MAIN`). Worktrees inherit
+it. The launcher pre-reads that trust and turns the first Codex pane red with the
+instruction in it, rather than letting a spawn stall on a prompt nobody is
+watching.
 
 ## Assumptions & limitations
 
