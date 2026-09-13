@@ -46,6 +46,8 @@ func main() {
 		err = runBadge(os.Args[2:])
 	case "team":
 		err = runTeam(os.Args[2:])
+	case "plan":
+		err = runPlan(os.Args[2:])
 	case "codex":
 		err = runCodex(os.Args[2:])
 	case "version", "--version", "-v":
@@ -81,6 +83,8 @@ Usage:
   ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
                             no network) or as shields.io endpoint JSON
   ccquota team   [flags]    Allocate an endpoint's spend to a team
+  ccquota plan   [flags]    Record what a subscription actually costs, and
+                            report real (billed, not notional) spend
   ccquota codex  [command]  Manage Codex accounts, launch profiles and renew login
   ccquota version           Print the version
 

@@ -294,3 +294,37 @@ CREATE TABLE IF NOT EXISTS rollup_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- What the subscriptions ACTUALLY cost.
+--
+-- A table rather than a column on accounts, because prices change. One column
+-- would rewrite history on every price change: last month's figures would
+-- silently be recomputed at this month's price. Effective-dated rows keep each
+-- period priced at what it actually cost then.
+--
+-- Seats are deliberately NOT stored. How many accounts were on a plan in a
+-- period is derivable from accounts; a stored count drifts out of date the
+-- moment somebody is added or removed, and a drifted count is worse than no
+-- count because it still looks authoritative.
+--
+-- THIS IS REAL MONEY, and it is a different kind of money from
+-- usage_events.cost_usd. A subscription is billed whether or not a single
+-- token is spent; cost_usd is notional -- "what this would have cost at API
+-- rates" -- and is not an invoice. Subscription spend may be added to a
+-- metered gateway bill. It must NEVER be added to the notional figure.
+--
+-- An unpriced plan is ABSENT here rather than present at 0, for the same
+-- reason usage_events.cost_usd is NULL rather than 0: zero is a claim that the
+-- plan was free, absent is an admission that nobody has said what it costs.
+CREATE TABLE IF NOT EXISTS subscription_plans (
+  plan           TEXT NOT NULL,           -- matches accounts.subscription_type
+  source         TEXT NOT NULL,           -- 'claude' | 'codex' | ... — same plan name, different vendors
+  monthly_cost   REAL NOT NULL,
+  currency       TEXT NOT NULL DEFAULT 'USD',
+  effective_from TEXT NOT NULL,           -- RFC3339 UTC, inclusive
+  effective_to   TEXT,                    -- RFC3339 UTC, exclusive; NULL = still current
+  PRIMARY KEY (plan, source, effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_period
+  ON subscription_plans(source, plan, effective_from DESC);

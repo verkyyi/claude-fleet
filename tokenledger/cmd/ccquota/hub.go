@@ -129,6 +129,24 @@ func runHub(args []string) error {
 		if err := table.LoadOverrides(*pricingFile); err != nil {
 			return err
 		}
+		// Subscription prices ride in the same file but land in the database,
+		// not in the rate table: they are real money and the rate table is
+		// notional, and the two must never meet. Recording them on every start
+		// keeps the file the source of truth for a hub that manages prices
+		// that way, while `ccquota plan --set` stays available for a hub that
+		// does not.
+		plans, err := pricing.LoadPlanPrices(*pricingFile)
+		if err != nil {
+			return err
+		}
+		for _, pl := range plans {
+			if err := st.SetPlanPrice(pl); err != nil {
+				return fmt.Errorf("--pricing: record %s/%s: %w", pl.Source, pl.Plan, err)
+			}
+		}
+		if len(plans) > 0 {
+			log.Printf("pricing: recorded %d subscription plan price(s) from %s", len(plans), *pricingFile)
+		}
 	}
 
 	var tailnet *api.TailnetViewers

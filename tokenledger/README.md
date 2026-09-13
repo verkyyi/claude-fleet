@@ -545,6 +545,58 @@ deliberately unnumbered. Read as a per-person performance ranking, an internal u
 fails by Goodhart — people avoid the tool or pad their usage — and either
 outcome destroys the cost data it exists to provide.
 
+## What the subscriptions actually cost
+
+The hub can observe everything except the one number on the invoice. No
+transcript attests to what a plan costs, so an operator has to say:
+
+```bash
+ccquota plan --set max --monthly 200                    # from now on
+ccquota plan --set max --monthly 250 --from 2026-10-01  # a price change
+ccquota plan --list                                     # every price, current and superseded
+ccquota plan --spend --days 30                          # real, billed spend
+```
+
+Prices can also be declared in the `--pricing` overrides file that `ccquota
+hub` already takes, under a `plans` key — the same place the per-token rate
+overrides live, recorded into the database on every start:
+
+```json
+{"plans": [{"plan": "max", "source": "claude", "monthly_cost": 200,
+            "currency": "USD", "effective_from": "2026-01-01T00:00:00Z"}]}
+```
+
+**No amounts ship in this repo.** A subscription price varies by region, seat
+count and negotiation, so a built-in table would be wrong for most hubs while
+looking authoritative on all of them. The per-token rates have defaults because
+they are published; these cannot.
+
+Three things this is careful about:
+
+**It is real money, and it is the only real money the hub holds.** The
+`cost_usd` figure everywhere else is *notional* — what the tokens would have
+cost at API rates — and is explicitly not an invoice. Subscription spend may be
+added to a metered gateway bill. It must **never** be added to the notional
+figure, and there is a test that fails if recording a price moves any notional
+aggregate by a cent.
+
+**Prices are effective-dated and appended, never overwritten.** A single column
+on the account would rewrite history on every price change: last month's
+figures would silently be recomputed at this month's price. Recording a change
+closes the old period and opens a new one, so each period stays priced at what
+it actually cost. Re-recording an existing start date corrects that period's
+figure; a date *behind* an existing one is refused rather than producing
+overlapping periods that double-count.
+
+**Seats are counted, not stored.** How many accounts were on a plan comes from
+the accounts themselves at query time. A stored count drifts the moment
+somebody is added and still looks authoritative.
+
+A plan nobody has priced is reported as **unpriced**, never as free — same rule
+as an unpriced model's `cost_usd`. `--spend` lists it with its seat count and
+says the total is low by however much it costs, rather than quietly handing
+back a number that is wrong in the one direction nobody checks.
+
 ## Scheduling against your own quota
 
 A dispatcher that spawns Claude sessions on a timer needs a verdict it can

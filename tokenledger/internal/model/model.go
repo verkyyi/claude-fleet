@@ -237,3 +237,24 @@ type IngestResponse struct {
 	EndpointID          string `json:"endpoint_id"`
 	LimitsPollIntervalS int    `json:"limits_poll_interval_s,omitempty"`
 }
+
+// SubscriptionPlan is what one plan cost over one period.
+//
+// This is REAL money and it is a different kind of money from
+// UsageEvent.CostUSD. A subscription is billed whether or not a single token
+// is spent; CostUSD is notional — what the tokens would have cost at API
+// rates — and is not an invoice. The two must never be summed. They are
+// separate types here for that reason: the mistake that matters is adding
+// them, and separate types are the cheapest thing that makes it visible.
+//
+// EffectiveTo is nil while the price is current. Prices change, so a plan
+// accumulates rows rather than having one overwritten: last month's spend
+// must stay priced at last month's price.
+type SubscriptionPlan struct {
+	Plan          string     `json:"plan"`   // matches Identity/account subscription_type
+	Source        string     `json:"source"` // same plan name, different vendors
+	MonthlyCost   float64    `json:"monthly_cost"`
+	Currency      string     `json:"currency"`
+	EffectiveFrom time.Time  `json:"effective_from"`
+	EffectiveTo   *time.Time `json:"effective_to,omitempty"`
+}
