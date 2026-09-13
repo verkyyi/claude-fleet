@@ -19,6 +19,8 @@
 #                        script AND its children), logged, and the tick carries
 #                        on to the remaining candidates (issue #587).
 #   • DISK GATE          diskguard --gate closed → no-op for the whole tick.
+#   • TRASH SWEEP        the budgeted delete of worktrees teardown renamed aside
+#                        (issue #586) runs once per tick and BEFORE the disk gate.
 #   • DRY-RUN            --dry-run mutates NOTHING (no reap, no lease taken).
 #
 # Detection is cache + local: a canned prmap the daemon reads through fleet_cache,
@@ -214,5 +216,22 @@ rm -f "$WORK/hang"
 [ -s "$CLEAN_LOG" ] && fail "cap 1 spent on a timeout must reap nothing, got [$(reaped_list)]"
 grep -q 'slot 1/1' "$WORK/log" || fail "a timed-out candidate should consume slot 1/1"
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout\n'
+# 9) TRASH SWEEP: the budgeted delete of DROPPED worktrees runs once per tick and
+#    BEFORE the disk gate — teardown no longer deletes a worktree inline, it renames
+#    it into a sibling .fleet-trash/ (issue #586), and a closed gate means the volume
+#    is full, which is exactly when those bytes most need releasing. Gating the sweep
+#    on free disk is the one ordering that can deadlock.
+reset
+conf
+mkdir -p "$WORK/.fleet-trash/main-issue-99.1700000000.4242"
+echo bytes > "$WORK/.fleet-trash/main-issue-99.1700000000.4242/big"
+touch "$WORK/disk_closed"
+run s1
+rm -f "$WORK/disk_closed"
+[ -e "$WORK/.fleet-trash/main-issue-99.1700000000.4242" ] \
+  && fail "the trash sweep must run even with the disk gate closed (it is what frees the disk)"
+grep -q 'worktree trash swept:1 left:0' "$WORK/log" || fail "the sweep should log what it freed"
+[ -s "$CLEAN_LOG" ] && fail "a closed disk gate must still reap nothing"
+
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep\n'
 exit 0

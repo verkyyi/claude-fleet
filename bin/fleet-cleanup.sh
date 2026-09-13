@@ -18,10 +18,14 @@
 #      land lease (the SAME lock every base-mover took — serialize base movers;
 #      the lease survives even though the merge moved to GitHub). MERGED only.
 #   3. ordered teardown — kill the worker window FIRST (frees the busy cwd), THEN
-#      git worktree remove + branch -D issue-<N>. If the CALLER stands on the
-#      worktree being removed (a worker cleaning up its own merged PR), teardown
-#      detaches into the tmux server so it can't saw off the branch it sits on.
-#      worktree-autoclean.sh stays the backstop.
+#      DROP the worktree + branch -D issue-<N>. Dropping is a rename into a sibling
+#      .fleet-trash/ plus a `worktree prune` (fleet_worktree_drop, issue #586), never
+#      a synchronous delete: a 308k-file node_modules worktree once took this step 67
+#      minutes and stalled the whole cleanup daemon behind it. The bytes go to the
+#      daemon's budgeted fleet_trash_sweep. If the CALLER stands on the worktree being
+#      removed (a worker cleaning up its own merged PR), teardown detaches into the
+#      tmux server so it can't saw off the branch it sits on. worktree-autoclean.sh
+#      stays the backstop.
 #
 # Merge-source-agnostic: it reaps the same whether the worker itself, a web merge,
 # or a collaborator did the merge — it reads the PR's final state, it does not
@@ -159,7 +163,13 @@ teardown() {
   if [ "$detach" = 1 ]; then
     # Silence the git steps (issue #192): run-shell surfaces non-empty output as a
     # view-mode overlay on the attached client.
-    local cmd="tmux kill-window -t ${WIN:-@self}; { git -C '$MAIN' worktree remove --force '$WT'; git -C '$MAIN' branch -D 'issue-$ISSUE'; } >/dev/null 2>&1"
+    # The worktree is DROPPED, not deleted (issue #586): fleet-worktree-drop.sh
+    # renames it into a sibling .fleet-trash/ in milliseconds, so a 300k-file tree
+    # cannot hold this teardown — nor the daemon tick driving it. run-shell runs the
+    # string under /bin/sh, which cannot source fleet-lib.sh; hence the shim.
+    local dropcmd=""
+    [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' --force; "
+    local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D 'issue-$ISSUE'; } >/dev/null 2>&1"
     note "  teardown (detached): $cmd"
     [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] && return 0
     ftmux run-shell -b "$cmd" 2>/dev/null || \
@@ -167,14 +177,19 @@ teardown() {
     return 0
   fi
 
-  note "  teardown: kill-window ${WIN:-none} → worktree remove ${WT:-none} → branch -D issue-$ISSUE"
+  note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D issue-$ISSUE"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
-  # releases the busy cwd, THEN remove the worktree, THEN delete the branch.
+  # releases the busy cwd, THEN drop the worktree, THEN delete the branch.
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
   if [ -n "$WT" ]; then
-    git -C "$MAIN" worktree remove --force "$WT" 2>/dev/null || \
-      note "  worktree remove failed for $WT — worktree-autoclean.sh will reap it."
+    # Drop, don't delete (issue #586) — a rename into .fleet-trash/ plus a prune,
+    # so the bytes are swept later under a budget instead of holding this tick.
+    local drop; drop=$(fleet_worktree_drop "$MAIN" "$WT" --force)
+    case "$drop" in
+      trashed:*|removed:*|gone) note "  worktree $drop" ;;
+      *) note "  worktree drop failed for $WT ($drop) — worktree-autoclean.sh will reap it." ;;
+    esac
   fi
   git -C "$MAIN" branch -D "issue-$ISSUE" >/dev/null 2>&1 || true
 }

@@ -26,6 +26,8 @@
 #     clean up to FLEET_CLEANUP_MAX_PER_TICK of them via bin/fleet-cleanup.sh <pr>,
 #       each under a FLEET_CLEANUP_CANDIDATE_TIMEOUT wall-clock budget
 #     release the lease
+#   then, once per tick and BEFORE the disk gate: fleet_trash_sweep, the budgeted
+#   delete of the worktrees teardown renamed aside (issue #586)
 #
 #   Serialization with base-movers is the SHARED per-repo land-lease INSIDE
 #   fleet-cleanup.sh (base fast-forward) — this daemon's own lease only stops two
@@ -54,6 +56,9 @@
 #   FLEET_CLEANUP_CANDIDATE_TIMEOUT  per-candidate budget, seconds   (default 120)
 #   FLEET_CLEANUP_LEASE_TTL    lease lifetime, seconds              (default 300)
 #   FLEET_DISPATCH_LEASE_DIR   lease dir (shared)    (default ~/.claude/leases)
+#   FLEET_TRASH_SWEEP_BUDGET   seconds/tick spent deleting trashed worktrees
+#                              (default 20; 0 disables the sweep). Read ONCE, before
+#                              any per-fleet conf — global fleet.conf / env only.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -246,6 +251,38 @@ fi
 if [ "${#SESSIONS[@]}" -eq 0 ]; then
   log "no fleet sessions found (nothing to clean up)"
   exit 0
+fi
+
+# --- pay for the trashed worktrees FIRST, before the disk gate (issue #586) -----
+# A teardown no longer deletes a worktree inline: fleet_worktree_drop RENAMES it into
+# a sibling .fleet-trash/ (O(1)) so a 308k-file node_modules tree cannot hold a tick
+# for 67 minutes and stall the reaping of every fleet behind it. THIS is where those
+# bytes are actually paid for — in one budgeted instalment per tick, shared across
+# every fleet (distinct base checkouts only; two sessions on one repo share a trash).
+# Whatever the budget does not finish stays half-deleted in the trash for the next
+# tick, which is harmless: it is already out of `git worktree list` and nothing waits
+# on it.
+#
+# It runs BEFORE the disk gate on purpose. A closed gate means the volume is full,
+# and emptying the trash is exactly what unsticks it — gating the sweep on free disk
+# would be the one ordering that can deadlock.
+SWEEP_BUDGET="${FLEET_TRASH_SWEEP_BUDGET:-20}"
+case "$SWEEP_BUDGET" in ''|*[!0-9]*) SWEEP_BUDGET=20 ;; esac
+if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
+  sweep_deadline=$(( $(now) + SWEEP_BUDGET ))
+  swept_mains=""
+  for s in "${SESSIONS[@]}"; do
+    # A subshell read: fleet_load_conf in THIS shell would leak one fleet's conf
+    # into the next one's cleanup.
+    m=$(fleet_load_conf "$s" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}")
+    [ -n "$m" ] || continue
+    case " $swept_mains " in *" $m "*) continue ;; esac
+    swept_mains="$swept_mains $m"
+    budget_left=$(( sweep_deadline - $(now) ))
+    [ "$budget_left" -gt 0 ] || break
+    sweep=$(fleet_trash_sweep "$m" "$budget_left")
+    case "$sweep" in "swept:0 left:0") ;; *) log "$s: worktree trash $sweep ($m)" ;; esac
+  done
 fi
 
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per

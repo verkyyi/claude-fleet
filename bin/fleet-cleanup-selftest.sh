@@ -13,7 +13,11 @@
 #   OPEN             → skip:not-final (nothing torn down, nothing recorded)
 #   already-torn-down (MERGED, no worktree/window) → skip:nothing (idempotent,
 #                                       no duplicate ledger row, no teardown)
-#   self-cwd cleanup → teardown DETACHES into the tmux server (worker-safe)
+#   self-cwd cleanup → teardown DETACHES into the tmux server (worker-safe), and the
+#                      detached command drives bin/fleet-worktree-drop.sh
+#   the drop itself  → the worktree is RENAMED into a sibling .fleet-trash/ with its
+#                      bytes intact and pruned from the registry, never deleted
+#                      inline (issue #586 — a 308k-file delete held the daemon 67min)
 #   --dry-run        → dry:*  (no teardown, no mutation)
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
@@ -45,6 +49,7 @@ case "\${1:-}" in
     case "\${2:-}" in
       list)   [ "\${WT_GONE:-0}" = 1 ] || printf 'worktree %s/wt-issue-42\nHEAD deadbeef\nbranch refs/heads/issue-42\n\n' "$WORK" ;;
       remove) printf 'worktree-remove\n' >> "$ORDER_LOG" ;;
+      prune)  printf 'worktree-prune\n'  >> "$ORDER_LOG" ;;
       *)      : ;;
     esac ;;
   branch)  printf 'branch-D\n' >> "$ORDER_LOG" ;;    # git branch -D issue-42
@@ -98,6 +103,13 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 run_clean() {
   local scenario="$1"; shift
   : > "$ORDER_LOG"; : > "$PULL_LOG"
+  # A REAL worktree dir (issue #586): teardown no longer shells out to
+  # `git worktree remove` — it RENAMES the tree into a sibling .fleet-trash/, so the
+  # test needs actual bytes on disk to watch move, and a clean trash each run.
+  rm -rf "$WORK/.fleet-trash" "$WORK/wt-issue-42"
+  if [ "${WT_GONE:-0}" != 1 ]; then
+    mkdir -p "$WORK/wt-issue-42"; echo payload > "$WORK/wt-issue-42/keep.txt"
+  fi
   GH_SCENARIO="$scenario" FAKE_SELF_WIN="${FAKE_SELF_WIN:-@1}" \
   WT_GONE="${WT_GONE:-0}" WIN_GONE="${WIN_GONE:-0}" \
   TMUX='' PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" \
@@ -115,9 +127,17 @@ case "$tok" in cleaned:*) ;; *) fail "1 expected cleaned:*, got '$tok'" "$err" ;
 # teardown ordering: kill-window BEFORE worktree-remove BEFORE branch-D
 order="$(tr '\n' ' ' < "$ORDER_LOG")"
 case "$order" in
-  "kill-window @7 "*"worktree-remove "*"branch-D"*) ;;
-  *) fail "1 teardown order wrong (want kill-window → worktree-remove → branch-D): [$order]" "$err" ;;
+  "kill-window @7 "*"worktree-prune "*"branch-D"*) ;;
+  *) fail "1 teardown order wrong (want kill-window → worktree drop/prune → branch-D): [$order]" "$err" ;;
 esac
+# The worktree is MOVED aside, never deleted inline (issue #586): a synchronous
+# delete of a 308k-file tree once held this teardown — and the whole daemon — for
+# 67 minutes. Assert the bytes are intact in the trash, i.e. it really was a rename.
+[ -e "$WORK/wt-issue-42" ] && fail "1 the worktree dir is still in place — no drop happened" "$err"
+trashed="$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-issue-42.*' 2>/dev/null | head -1)"
+[ -n "$trashed" ] || fail "1 the worktree was not renamed into .fleet-trash" "$err"
+[ "$(cat "$trashed/keep.txt" 2>/dev/null)" = payload ] \
+  || fail "1 trashed content missing — teardown deleted instead of renaming" "$err"
 # ledger row recorded BEFORE removal (it captured the still-live worktree path)
 [ -s "$LEDGER" ] || fail "1 no history ledger row was written" "$err"
 grep -q 'wt-issue-42' "$LEDGER" || fail "1 ledger row missing the worktree path (recorded after removal?)" "$err"
@@ -129,7 +149,9 @@ ok "1 MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull
 : > "$LEDGER"
 tok="$(run_clean closed)"; err="$(cat "$WORK/err")"
 [ "$tok" = "cleaned:closed" ] || fail "2 expected cleaned:closed, got '$tok'" "$err"
-grep -q 'worktree-remove' "$ORDER_LOG" || fail "2 closed-unmerged must reap the orphan worktree" "$err"
+[ -e "$WORK/wt-issue-42" ] && fail "2 closed-unmerged must reap the orphan worktree" "$err"
+[ -n "$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-issue-42.*' 2>/dev/null)" ] \
+  || fail "2 the orphan worktree was not dropped into .fleet-trash" "$err"
 [ -s "$PULL_LOG" ] && fail "2 closed-unmerged must NOT fast-forward the base (nothing merged)" "$err"
 [ -s "$LEDGER" ]   && fail "2 closed-unmerged must NOT record a landed-session ledger row" "$err"
 ok "2 CLOSED-unmerged → cleaned:closed, orphan reaped, no ledger, no base pull"
@@ -155,7 +177,11 @@ ok "4 already-torn-down → skip:nothing (idempotent, no dup ledger, no teardown
 tok="$(FAKE_SELF_WIN=@7 run_clean merged)"; err="$(cat "$WORK/err")"
 case "$tok" in cleaned:*) ;; *) fail "5 expected cleaned:* on the self-cwd path, got '$tok'" "$err" ;; esac
 grep -qx run-shell "$ORDER_LOG" || fail "5 self-cwd teardown must detach via tmux run-shell" "$err"
-grep -q 'worktree-remove' "$ORDER_LOG" && fail "5 self-cwd teardown must NOT remove the worktree inline (it detaches)" "$err"
+[ -d "$WORK/wt-issue-42" ] || fail "5 self-cwd teardown must NOT drop the worktree inline (it detaches)" "$err"
+case "$err" in
+  *fleet-worktree-drop.sh*) ;;
+  *) fail "5 the detached command must drive the drop shim (run-shell runs under /bin/sh)" "$err" ;;
+esac
 ok "5 self-cwd cleanup → teardown detaches into the tmux server"
 
 # --- 6. --dry-run → dry:*, no teardown, no mutation ---------------------------

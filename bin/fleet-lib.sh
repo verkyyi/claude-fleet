@@ -983,6 +983,147 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" -v m1="$mp1" -v m2="$mp2" '
   printf 'reaped:%s%s\n' " $list" "${survivors:+ (SIGKILL$survivors)}"
 }
 
+# ---- retiring a worktree without paying for its bytes (issue #586) ------------
+# `git worktree remove` deletes the tree SYNCHRONOUSLY, one unlink at a time. In a
+# monorepo worktree that is 2.8 GB / 308k files of node_modules, and it measured
+# ~0.4 files/s on a live machine: ONE teardown held the cleanup daemon for 67
+# minutes on 54 seconds of CPU. That daemon is a single-process loop on
+# `StartInterval=60`, so launchd will not start the next tick while the old one
+# lives — and the reaping of THREE fleets stopped dead behind it: merged workers
+# stayed on the dash holding their slots, and the base fast-forward (same script)
+# stalled with master four commits behind, so new workers branched off a stale base.
+# The second occurrence the same night was worse: the tick outlived its 300 s lease
+# TTL, the next tick stole the lease and SIGTERMed it mid-unlink, leaving a
+# half-deleted 359 MB orphan directory behind.
+#
+# So an UNATTENDED teardown never deletes a tree inline. It RENAMES it into a
+# sibling `.fleet-trash/` — one `mv`, O(1), milliseconds regardless of file count —
+# prunes git's admin entry so the worktree is gone from `git worktree list` at once,
+# and leaves the bytes to fleet_trash_sweep, which runs under a wall-clock budget
+# and can be interrupted at any point without consequence: what it does not finish
+# is already OUT of the worktree list and out of everyone's way, and the next sweep
+# picks it up.
+#
+# fleet_trash_dir <path> — the trash directory for a worktree: a `.fleet-trash`
+# SIBLING of it. Sibling, not a fixed location, because a rename is only O(1) (and
+# only atomic) within one filesystem, and a sibling shares one by construction.
+# Fleet worktrees are siblings of the base checkout, so passing either the worktree
+# or `$FLEET_MAIN` names the same trash — which is what lets the sweep find it.
+fleet_trash_dir() {
+  local d="${1:-}"
+  [ -n "$d" ] || return 1
+  d="${d%/}"
+  printf '%s/.fleet-trash' "$(dirname "$d")"
+}
+
+# fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
+# paying for its bytes. Prints exactly one token; rc 0 ⇔ the worktree is gone from
+# `git worktree list`:
+#
+#   trashed:<path>   renamed into .fleet-trash/ — the normal path
+#   removed:<dir>    the rename was impossible (unwritable parent, a mount point,
+#                    a cross-device layout) so it fell back to the old synchronous
+#                    `git worktree remove --force` rather than leave debris behind
+#   gone             nothing there — the admin entry is pruned anyway (idempotent)
+#   dirty            rc 1: uncommitted or untracked work and no --force. Same gate
+#                    plain `git worktree remove` (without -f) enforces: never move
+#                    someone's unsaved work out from under them.
+#   error:<reason>   rc 2 (usage, a refused broad root, no main checkout, failure)
+#
+# The dirty gate is the ONLY thing --force overrides; nothing here is destructive
+# by itself — the bytes survive in the trash until a sweep gets to them.
+fleet_worktree_drop() {
+  local main="" dir="" force=0 a
+  for a in "$@"; do
+    case "$a" in
+      --force|-f) force=1 ;;
+      -*)         printf 'error:bad-flag\n'; return 2 ;;
+      *)          if [ -z "$main" ]; then main="$a"; elif [ -z "$dir" ]; then dir="$a"; fi ;;
+    esac
+  done
+  [ -n "$main" ] && [ -n "$dir" ] || { printf 'error:usage\n'; return 2; }
+  dir="${dir%/}"
+  # Never accept a broad root — a caller with an empty variable must not turn this
+  # into a mass mv (the same refusal fleet_reap_worktree_procs makes).
+  case "$dir" in
+    ''|/|.|..|"$HOME"|/Users|/home|/tmp|/var|/private) printf 'error:refused\n'; return 2 ;;
+  esac
+  [ -e "$main/.git" ] || { printf 'error:no-main\n'; return 2; }
+
+  if [ ! -e "$dir" ]; then
+    git -C "$main" worktree prune >/dev/null 2>&1
+    printf 'gone\n'; return 0
+  fi
+
+  if [ "$force" != 1 ]; then
+    local st rc
+    st=$(git -C "$dir" status --porcelain 2>/dev/null); rc=$?
+    [ "$rc" -eq 0 ] || { printf 'error:not-a-worktree\n'; return 2; }
+    [ -n "$st" ] && { printf 'dirty\n'; return 1; }
+  fi
+
+  local trash target n=0
+  trash="$(fleet_trash_dir "$dir")"
+  if mkdir -p "$trash" 2>/dev/null; then
+    # Self-ignoring: a layout that parks worktrees INSIDE a checkout would otherwise
+    # make the trash show up as untracked in every `git status` (and read as dirty
+    # to the gate above). A `.gitignore` of `*` covers itself, so the directory has
+    # no non-ignored content and git stops reporting it, wherever it lands.
+    [ -f "$trash/.gitignore" ] || printf '*\n' > "$trash/.gitignore" 2>/dev/null
+    target="$trash/${dir##*/}.$(date +%s 2>/dev/null || echo 0).$$"
+    while [ -e "$target" ] && [ "$n" -lt 99 ]; do
+      n=$((n + 1)); target="$trash/${dir##*/}.$(date +%s 2>/dev/null || echo 0).$$.$n"
+    done
+    if mv "$dir" "$target" 2>/dev/null; then
+      git -C "$main" worktree prune >/dev/null 2>&1
+      printf 'trashed:%s\n' "$target"; return 0
+    fi
+  fi
+
+  # Rename impossible → the old synchronous delete. Slow, but a worktree left
+  # behind is worse: it holds a dash slot and blocks the next spawn on that issue.
+  if git -C "$main" worktree remove --force "$dir" >/dev/null 2>&1; then
+    git -C "$main" worktree prune >/dev/null 2>&1
+    printf 'removed:%s\n' "$dir"; return 0
+  fi
+  printf 'error:drop-failed\n'; return 2
+}
+
+# fleet_trash_sweep <main-or-worktree> [budget_seconds] — delete what
+# fleet_worktree_drop set aside, under a WALL-CLOCK BUDGET. This is the ONLY place
+# the fleet pays for those bytes, and it pays in bounded instalments: an entry the
+# budget cuts short stays half-deleted in the trash and the next sweep continues it.
+# That is safe precisely because a trashed tree is already unlinked from git's
+# worktree list — nothing waits on it.
+#
+# Budget: $2, else $FLEET_TRASH_SWEEP_BUDGET, else 20 s; 0 ⇒ unbudgeted.
+# Prints "swept:<n> left:<m>" and always returns 0 — a janitor never fails its
+# caller. Dotfiles are skipped, which is what keeps the trash's own .gitignore.
+fleet_trash_sweep() {
+  local main="${1:-}" budget="${2:-${FLEET_TRASH_SWEEP_BUDGET:-20}}"
+  case "$budget" in ''|*[!0-9]*) budget=20 ;; esac
+  [ "$budget" -gt 0 ] || budget=86400
+  [ -n "$main" ] || { printf 'swept:0 left:0\n'; return 0; }
+  local trash; trash="$(fleet_trash_dir "$main")"
+  case "${trash##*/}" in .fleet-trash) ;; *) printf 'swept:0 left:0\n'; return 0 ;; esac
+  [ -d "$trash" ] || { printf 'swept:0 left:0\n'; return 0; }
+
+  local deadline swept=0 left=0 e remaining
+  deadline=$(( $(date +%s 2>/dev/null || echo 0) + budget ))
+  for e in "$trash"/*; do
+    [ -e "$e" ] || continue                       # empty trash → the glob is literal
+    remaining=$(( deadline - $(date +%s 2>/dev/null || echo 0) ))
+    if [ "$remaining" -le 0 ]; then left=$((left + 1)); continue; fi
+    if fleet_timebox "$remaining" rm -rf "$e" >/dev/null 2>&1; then
+      swept=$((swept + 1))
+    else
+      left=$((left + 1))                          # timed out mid-delete — next sweep
+    fi
+  done
+  printf 'swept:%s left:%s\n' "$swept" "$left"
+  return 0
+}
+
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
 # empty when the argument is not a scratch identity (issue #466).
 #

@@ -11,7 +11,9 @@
 #   * no live fleet tmux SERVER is cwd'd inside it (issue #509 — a server chdir's
 #     itself into panes it spawns, and reaping the dir it sits in strands it on a
 #     deleted inode, breaking every future spawn on that server)
-#   * it is clean (no uncommitted changes; untracked counts as dirty)
+#   * it is clean (no uncommitted changes; untracked counts as dirty) — re-checked
+#     one last time by fleet_worktree_drop, which refuses a dirty worktree the same
+#     way plain `git worktree remove` (no -f) does
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is an ancestor of origin/<base>
 # On prune of a merged `issue-<N>` worktree, the bound issue #N is AUTO-CLOSED
@@ -226,9 +228,16 @@ process() {
   # shared tmux server (issue #151). Nothing should outlive its worktree.
   local rp; rp="$(fleet_reap_worktree_procs "$dir")"
   case "$rp" in no\ orphan\ procs) ;; *) log "REAP  $branch — $rp" ;; esac
-  if git -C "$REPO_ROOT" worktree remove "$dir" 2>/dev/null; then
+  # DROP, don't delete (issue #586): a rename into a sibling .fleet-trash/ plus a
+  # `worktree prune` — O(1) however many files the tree holds, so a node_modules
+  # worktree can't hold this janitor (nor, via fleet-cleanup.sh, a whole daemon
+  # tick) for an hour. No --force: this keeps the same dirty gate plain
+  # `git worktree remove` had, and the gates above already proved it clean+merged.
+  # The bytes are paid for by the budgeted fleet_trash_sweep at the end of the run.
+  local drop
+  if drop="$(fleet_worktree_drop "$REPO_ROOT" "$dir")"; then
     git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
-    log "PRUNED $branch ($merged) — removed ${dir##*/} + deleted branch"
+    log "PRUNED $branch ($merged) — ${dir##*/} $drop + deleted branch"
     removed=$((removed+1))
     rm -f "$SURF_DIR/$(scratch_key "$dir")" 2>/dev/null || true   # drop any scratch surface marker (#290)
     # auto-close the bound issue if still open (net for a PR lacking Closes #N)
@@ -242,7 +251,7 @@ process() {
       fi
     fi
   else
-    log "FAIL  could not remove $dir (branch $branch)"
+    log "FAIL  could not drop $dir (branch $branch) — $drop"
   fi
 }
 
@@ -270,6 +279,13 @@ $(git -C "$REPO_ROOT" worktree list --porcelain)
 EOF
   process   # flush last block
   git -C "$REPO_ROOT" worktree prune 2>/dev/null   # drop stale admin entries
+  # Pay for the bytes the drops set aside (issue #586), under a wall-clock budget.
+  # The cleanup daemon sweeps every tick; this is the backstop for a fleet with
+  # FLEET_CLEANUP=0 (or no cleanup daemon loaded at all), on the hourly cadence.
+  if [ "$DRY" = 0 ]; then
+    local sw; sw="$(fleet_trash_sweep "$REPO_ROOT" "${FLEET_TRASH_SWEEP_BUDGET:-20}")"
+    case "$sw" in "swept:0 left:0") ;; *) log "TRASH $REPO_ROOT — $sw" ;; esac
+  fi
 }
 
 # --- enumerate fleets: the global/default fleet, then each per-fleet conf ---
