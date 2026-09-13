@@ -4,6 +4,12 @@
 // the number here answers "what would this have cost at API rates", which is
 // useful for ranking endpoints and projects against each other and misleading
 // if read as an invoice. Every surface that displays it says so.
+//
+// One source breaks that rule and has to say so louder: gateway usage is
+// pay-per-call, so its figure IS the invoice (see gateway.go). cost_usd
+// therefore means two different things depending on source, which is worse
+// than mixing token counts because it looks like money. Costs from different
+// sources must never be summed.
 package pricing
 
 import (
@@ -55,6 +61,7 @@ func tier(input, output float64) Rates {
 // Table maps a normalized model id to its rates.
 type Table struct {
 	rates map[string]Rates
+	gw    gatewayPricing
 }
 
 // Default returns the built-in table.
@@ -77,7 +84,7 @@ func Default() *Table {
 		"claude-opus-4-5":   tier(5, 25),
 		"claude-sonnet-4-5": tier(3, 15),
 		"claude-haiku-4-5":  tier(1, 5),
-	}}
+	}, gw: defaultGateway()}
 }
 
 // dateSuffix matches the trailing snapshot date on ids like
@@ -96,8 +103,11 @@ func Normalize(id string) string {
 // the figure is unknown. Zero is a claim that the work was free, and a busy
 // endpoint running an unrecognised model would silently rank as idle.
 func (t *Table) Cost(ev *model.UsageEvent) *float64 {
-	if ev.Source == model.SourceCodex {
+	switch ev.Source {
+	case model.SourceCodex:
 		return codexCost(ev)
+	case model.SourceGateway:
+		return t.gatewayCost(ev)
 	}
 	r, ok := t.rates[Normalize(ev.Model)]
 	if !ok {
@@ -114,10 +124,14 @@ func (t *Table) Cost(ev *model.UsageEvent) *float64 {
 
 // Known reports whether a model has rates.
 func (t *Table) Known(modelID string) bool {
-	if _, ok := openAIRates[Normalize(modelID)]; ok {
+	id := Normalize(modelID)
+	if _, ok := openAIRates[id]; ok {
 		return true
 	}
-	_, ok := t.rates[Normalize(modelID)]
+	if _, ok := t.gw.rates[id]; ok {
+		return true
+	}
+	_, ok := t.rates[id]
 	return ok
 }
 
@@ -134,13 +148,24 @@ func (t *Table) LoadOverrides(path string) error {
 		return fmt.Errorf("read pricing overrides: %w", err)
 	}
 	var doc struct {
-		Models map[string]Rates `json:"models"`
+		Models  map[string]Rates `json:"models"`
+		Gateway *gatewayOverride `json:"gateway"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
 		return fmt.Errorf("parse pricing overrides %s: %w", path, err)
 	}
+	// Validate the whole file before applying any of it: a typo in the gateway
+	// block must not leave the table half-corrected.
+	if doc.Gateway != nil {
+		if err := doc.Gateway.validate(path); err != nil {
+			return err
+		}
+	}
 	for id, r := range doc.Models {
 		t.rates[Normalize(id)] = r
+	}
+	if doc.Gateway != nil {
+		t.gw.merge(doc.Gateway)
 	}
 	return nil
 }

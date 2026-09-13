@@ -709,6 +709,35 @@ dollar figures answer "what would this have cost at API rates" — useful for
 ranking endpoints against each other, misleading read as a bill. Rates live in
 `internal/pricing` and are overridable with `--pricing`.
 
+**Except on the `gateway` source, where the cost is real.** That source is an
+OpenAI-compatible gateway fronting non-Anthropic vendors on a pay-per-call
+contract, so its `cost_usd` is an actual charge rather than an estimate. Two
+consequences: **never add a gateway total to a Claude or Codex one** — same
+column, different kinds of money — and gateway rates ship with no built-in
+values at all, because a price is a contract term this build cannot know. State
+them in the `--pricing` file, in the currency the vendors publish:
+
+```json
+{
+  "gateway": {
+    "rates_as_of": "2026-09-12",
+    "cny_per_usd": 7.09,
+    "cny_per_usd_as_of": "2026-09-12",
+    "price_source": "https://internal.example/gateway/pricing",
+    "models": { "vendor-large": { "input": 7.0, "output": 70.0 } }
+  }
+}
+```
+
+Rates are **CNY per million tokens**, input and output only — the source
+carries no cache breakdown. They are converted to USD at `cny_per_usd`, a
+pinned constant rather than a live feed: a rate that moves on its own restates
+every historical figure each morning, which is worse than being slightly stale.
+Nothing here is dateless — an undated rate or conversion is rejected at load,
+and every priced event's `price_basis` names the rate, the conversion and both
+dates. A model with no configured rate stays unpriced and says so. Correcting
+one entry never drops the others.
+
 ## Development
 
 ```bash

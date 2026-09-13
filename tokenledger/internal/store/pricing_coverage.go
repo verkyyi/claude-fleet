@@ -58,6 +58,14 @@ func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error)
 			r.Reason = "Legacy Fast price not verified"
 		case "unpriced: unsupported service tier", "unpriced: unknown service tier":
 			r.Reason = "Service-tier price unavailable"
+		case "unpriced: no gateway rate configured":
+			r.Reason = "No gateway rate configured for this model"
+		case "unpriced: gateway rates cover input and output only":
+			r.Reason = "Gateway cache-token price unavailable"
+		case "unpriced: no usable CNY/USD rate":
+			r.Reason = "Gateway currency conversion unavailable"
+		case "unpriced: implausible token counts":
+			r.Reason = "Implausible token counts"
 		default:
 			r.Reason = "Price data unavailable"
 		}

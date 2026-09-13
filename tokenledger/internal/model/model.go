@@ -10,6 +10,10 @@ import "time"
 const (
 	SourceClaude = "claude"
 	SourceCodex  = "codex"
+	// SourceGateway is an OpenAI-compatible gateway fronting non-Anthropic
+	// vendors. Unlike the other two it is billed per call, so its CostUSD is
+	// an actual charge rather than an API-equivalent estimate.
+	SourceGateway = "gateway"
 )
 
 // UsageSource preserves compatibility with agents and rows predating sources.
@@ -45,9 +49,12 @@ type UsageEvent struct {
 	WebSearchRequests int64 `json:"web_search_requests"`
 	WebFetchRequests  int64 `json:"web_fetch_requests"`
 
-	// CostUSD is notional: what this turn would have cost at API rates. It is
-	// nil for models absent from the pricing table — never 0, because 0 is a
-	// claim and nil is an admission.
+	// CostUSD is notional on SourceClaude and SourceCodex: what this turn
+	// would have cost at API rates. On SourceGateway it is real spend — that
+	// source is billed per call — so costs from different sources are
+	// different kinds of money and must never be summed. It is nil for models
+	// absent from the pricing table — never 0, because 0 is a claim and nil
+	// is an admission.
 	CostUSD *float64      `json:"cost_usd"`
 	Details *UsageDetails `json:"details,omitempty"`
 	// Replayed prefix after a parser upgrade: enrich only, never resurrect a
