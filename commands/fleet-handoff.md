@@ -66,6 +66,13 @@ issue #311; installed by `/fleet-sync-install`'s skills pass). If that file is
 absent, say so and **stop** (nothing to arm around) — `fleet-doctor` flags this
 exact gap.
 
+**If this pane is running a `/loop`**, the base skill's `## Active /loop` section is
+the part that must not be skipped: the pending wakeup belongs to the session id that
+C3's `/clear` retires, so a doc without it hands the next session the work and none of
+the iteration. Record the invocation verbatim, and do **not** call `ScheduleWakeup` on
+this turn — that wakeup dies with the session, and C4 forbids the extra tool call
+anyway. §P re-arms it after the clear.
+
 Hold the composed doc text; **where** it is stored is C2's job.
 
 ### C2. Store the handoff durably — comment when issue-bound, else file
@@ -140,6 +147,10 @@ Then take the FIRST matching case:
 > in the comment — keep it in the local **file fallback** instead and have the
 > comment link it as `(local: <path>)`. This scrub applies to comment storage only;
 > a private local file needs no scrub.
+> **`## Active /loop` is a scrub surface too** — a loop prompt is standing operator
+> instruction and often carries internal detail. It must stay VERBATIM to be
+> re-armable, so it does not get edited down: if it isn't safe to publish, write it to
+> the local file and have the comment carry `(local: <path>)` in that section instead.
 
 ### C3. Arm the detached clear+resume — the LAST tool call of this turn
 
@@ -219,7 +230,11 @@ mode verbatim** on the resolved source:
    confirm the branch, and verify the doc's "Live state to restore / watch"
    claims still hold (treat the doc as *what was true when written*).
 3. **Restate in 3–5 lines**: objective, where things stand, the NEXT ACTION.
-4. **Resume from the NEXT ACTION** — don't redo finished work or re-investigate
+4. **Re-arm the `/loop`** if the handoff records one under `## Active /loop` (and it
+   isn't `—`): invoke the `loop` skill with that invocation verbatim, interval
+   included. The clear that brought you here killed the old one. Nothing to re-arm
+   when the section is missing or `—`.
+5. **Resume from the NEXT ACTION** — don't redo finished work or re-investigate
    ruled-out dead-ends.
 
 The hub pane needs no special-casing beyond the doc path: its `/clear` leaves a
@@ -228,7 +243,8 @@ plain `claude` session, and this pickup arrives as its first user turn.
 ## N. Report (keep it short)
 
 - **Cycle:** the one line from C3 (doc path + auto-clear notice). Nothing else.
-- **Pickup:** the 3–5 line restatement, then get to work.
+- **Pickup:** the 3–5 line restatement, plus one line if you re-armed a `/loop`, then
+  get to work.
 
 ---
 

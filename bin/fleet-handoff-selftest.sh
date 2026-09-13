@@ -277,5 +277,22 @@ grep -qi 'operator' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
 
 printf 'selftest: operator-hold legs PASS (present→abort w/o clear or unlatch · elsewhere/stale/off→clear · leaves→clear+pickup)\n' >&2
 
-printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate + deterministic marker + operator hold (#571) verified\n'
+# ---- LOOP-CARRY (issue #594): the cycle's `/clear` retires the session id a running
+# ---- `/loop` is scheduled against, so the ONLY thing that carries the loop across the
+# ---- boundary is the prose contract — the doc skeleton stores the invocation and the
+# ---- pickup re-arms it. Neither side is testable by driving the script (the cycle
+# ---- injects the same keys either way), so assert the contract text itself: without
+# ---- it a handoff silently converts a running loop into a one-shot.
+ROOT="$(cd "$BIN/.." && pwd)"
+SK="$ROOT/skills/handoff/SKILL.md"; CMD="$ROOT/commands/fleet-handoff.md"
+for f in "$SK" "$CMD"; do
+  [ -r "$f" ] || fail "loop-carry: $f missing (the handoff contract lives there)"
+  grep -q 'Active /loop' "$f" || fail "loop-carry: $f lost the '## Active /loop' contract (#594)"
+done
+grep -q 'ScheduleWakeup' "$SK" || fail "loop-carry: $SK must name ScheduleWakeup as the 'am I looping?' tell (#594)"
+grep -q 'loop. skill' "$SK"  || fail "loop-carry: $SK PICK-UP must re-arm via the loop skill (#594)"
+grep -q 'loop. skill' "$CMD" || fail "loop-carry: $CMD §P must re-arm via the loop skill (#594)"
+printf 'selftest: loop-carry legs PASS (skeleton stores the /loop invocation · pickup re-arms it, #594)\n' >&2
+
+printf 'selftest PASS: refusals + never-idle abort + exact key sequence + verify-gate + deterministic marker + operator hold (#571) + loop-carry (#594) verified\n'
 exit 0

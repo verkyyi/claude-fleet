@@ -27,6 +27,12 @@ Assume the next session has **zero memory of this one**. Optimize for: *someone 
 - `git status`, `git log --oneline -15`, current branch; open PRs (`gh pr list` / `gh pr view`).
 - Re-open the actual file/code at the resume point so the NEXT ACTION is exact (file:line, real symbol names).
 - List any **live external state you changed** that must be restored or is risky to leave: a feature flag toggled, a service redeployed, test data created, a background process/job left running, creds staged on a box.
+- **Are you inside a `/loop`?** You are if this session was entered via `/loop`, or if
+  your recent turns ended with a `ScheduleWakeup` call. A loop is **session-scoped**:
+  the pending wakeup dies with the session id, so the next session resumes the work
+  but never iterates again unless the doc carries the loop forward. Capture the
+  invocation verbatim (§ *Active /loop* below) — and on a handoff turn do **not**
+  bother calling `ScheduleWakeup`: that wakeup cannot survive.
 
 ### 2. Write the doc
 Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name, e.g. `vote-smoke`). If not a git repo or there's no `doc/`, use `./HANDOFF-<slug>.md`. Keep every section; drop only a section's *body* if truly N/A (write "—").
@@ -62,6 +68,12 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
 <External state THIS session changed: flags toggled, deploys, seeded test
  data, staged creds, running jobs. What to revert; what's safe to leave.>
 
+## Active /loop (re-arm on pickup)
+<The `/loop` invocation this session is cycling on, VERBATIM — the interval too
+ if it had one (`/loop 30m <prompt>` vs `/loop <prompt>`). Not in a loop → "—".
+ This section exists because a loop lives in the session, not on disk: without
+ it the pickup resumes the work and then stops after one iteration.>
+
 ## Artifacts
 - Branch: … | PR(s): … | Key files: … | This doc: <path>
 - Notable commits: <sha — one line each>
@@ -94,7 +106,8 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
      `Resuming from \`<path>\` (<date>).` — so the user can redirect if it's the wrong one.
 2. **Read it fully**, then re-establish ground truth: `git status` / `git log`, confirm the branch, and **verify the "Live state to restore / watch" claims still hold** (a flag it says is off → confirm; a file/symbol it cites → confirm it still exists). Treat the doc as *what was true when written*, not gospel.
 3. **Restate in 3–5 lines**: the objective, where things stand, and the NEXT ACTION you're about to take.
-4. **Resume from the NEXT ACTION.** Don't redo finished/verified work; don't re-investigate ruled-out dead-ends; honor the "safe vs unsafe" findings.
+4. **Re-arm the loop, if the doc records one.** If `## Active /loop` is present and not `—`, invoke the `loop` skill with that invocation **verbatim** (interval included) — say so in one line first. A loop does not survive the session boundary: skip this and the work resumes but never iterates again. Nothing to re-arm if the section is absent or `—`; never invent a loop the doc doesn't record.
+5. **Resume from the NEXT ACTION.** Don't redo finished/verified work; don't re-investigate ruled-out dead-ends; honor the "safe vs unsafe" findings.
 
 ---
 
@@ -104,3 +117,4 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
 - Prefer exact paths, commands, and `file:line` over prose.
 - Thoroughness scales with depth: a shallow task needs a short doc; a multi-day debug needs the full skeleton.
 - Never invent state — if you didn't verify it this turn, say "unverified" rather than asserting it.
+- If the session was looping, the doc MUST carry the `/loop` invocation verbatim — a handoff that drops it silently turns a running loop into a one-shot, and nobody notices until hours of no iterations have gone by.
