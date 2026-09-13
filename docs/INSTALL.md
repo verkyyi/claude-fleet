@@ -241,7 +241,9 @@ assumes — this doc is only the install/uninstall procedure.
      window whose worker did the merge. It scans the prmap cache pr-refresh already writes (MERGED/
      CLOSED rows, ZERO extra `gh`) for a final PR with a live worktree/window and
      drives `bin/fleet-cleanup.sh`, single-writer + disk-gated + rate-limited
-     (`FLEET_CLEANUP_MAX_PER_TICK`). It **merges nothing and
+     (`FLEET_CLEANUP_MAX_PER_TICK`), each candidate under a wall-clock budget
+     (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s) so one wedged reap can't stall
+     every fleet's pipeline behind it (#587). It **merges nothing and
      relaxes no approval gate**, so it is **ON by default** per fleet (opt out with
      `FLEET_CLEANUP=0`); it spends no tokens. `--dry-run` prints intent without
      reaping. This closes #260 (a web/collaborator merge is reaped too). Full design

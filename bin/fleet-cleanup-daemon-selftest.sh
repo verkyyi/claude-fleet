@@ -14,6 +14,10 @@
 #   • RATE-LIMIT         at most FLEET_CLEANUP_MAX_PER_TICK reaps per tick.
 #   • OFF SWITCH         FLEET_CLEANUP=0 → no-op (default is ON).
 #   • SINGLE-WRITER      a fresh per-repo lease held by someone else → skip.
+#   • CANDIDATE TIMEOUT  a candidate that WEDGES is killed at
+#                        FLEET_CLEANUP_CANDIDATE_TIMEOUT (tree and all — the
+#                        script AND its children), logged, and the tick carries
+#                        on to the remaining candidates (issue #587).
 #   • DISK GATE          diskguard --gate closed → no-op for the whole tick.
 #   • DRY-RUN            --dry-run mutates NOTHING (no reap, no lease taken).
 #
@@ -51,6 +55,13 @@ cat > "$WORK/bin/fleet-cleanup.sh" <<FAKE
 #!/bin/bash
 pr=''
 while [ "\$#" -gt 0 ]; do case "\$1" in --pr) shift; pr="\${1:-}";; -*) : ;; *) pr="\$1";; esac; shift; done
+# Wedge on demand (timeout test): park in a child, publish BOTH pids, never
+# record a reap. Mirrors the real hang — the script blocked inside a child.
+if grep -qxF "\$pr" "$WORK/hang" 2>/dev/null; then
+  sleep 300 & sp=\$!
+  printf '%s %s\n' "\$\$" "\$sp" > "$WORK/hangpids"
+  wait "\$sp"
+fi
 printf '%s\n' "\$pr" >> "$CLEAN_LOG"
 printf 'cleaned:fake%s\n' "\$pr"
 exit 0
@@ -174,5 +185,34 @@ run s1
 grep -q 'another cleaner holds the lease' "$WORK/log" || fail "should log the lease-held skip"
 rm -rf "$WORK/leases"/* 2>/dev/null || true
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer\n'
+# 7) CANDIDATE TIMEOUT (issue #587): #101 wedges → killed at the budget, and the
+#    tick still reaps #102 + #105. Without the budget the daemon blocks forever
+#    here and launchd starts no further tick for ANY fleet.
+reset
+printf '101\n' > "$WORK/hang"; rm -f "$WORK/hangpids"
+conf 'FLEET_CLEANUP_CANDIDATE_TIMEOUT=2'
+t0=$(date +%s)
+run s1
+t1=$(date +%s)
+rm -f "$WORK/hang"
+[ "$(reaped_list)" = "102 105" ] || fail "a wedged #101 must not stop the tick: expected [102 105], got [$(reaped_list)]"
+grep -q 'timeout after 2s' "$WORK/log" || fail "should log the per-candidate timeout for #101"
+grep -q '1 timed out' "$WORK/log" || fail "the tick summary should count the timeout"
+[ $((t1 - t0)) -lt 60 ] || fail "the tick took $((t1 - t0))s — the budget did not bound it"
+# The kill is a TREE kill: the wedged script AND the child it was blocked in.
+read -r hpid hchild < "$WORK/hangpids" 2>/dev/null || fail "the wedged fake never published its pids"
+kill -0 "$hpid" 2>/dev/null   && fail "the timed-out cleanup script (pid $hpid) survived the budget"
+kill -0 "$hchild" 2>/dev/null && fail "the timed-out cleanup's child (pid $hchild) survived the budget"
+
+# 8) The timeout SPENDS A SLOT: cap 1 + a wedged #101 → nothing else is tried,
+#    so one sick candidate can never stretch a tick to cap x budget + more.
+reset
+printf '101\n' > "$WORK/hang"
+conf 'FLEET_CLEANUP_CANDIDATE_TIMEOUT=2' 'FLEET_CLEANUP_MAX_PER_TICK=1'
+run s1
+rm -f "$WORK/hang"
+[ -s "$CLEAN_LOG" ] && fail "cap 1 spent on a timeout must reap nothing, got [$(reaped_list)]"
+grep -q 'slot 1/1' "$WORK/log" || fail "a timed-out candidate should consume slot 1/1"
+
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout\n'
 exit 0
