@@ -36,6 +36,16 @@
 # lands the window stops matching, so a stale banner left in the scrollback can
 # never make a second pass type again.
 #
+# DETECTION has two sources, because the banner alone is not enough (2026-09-12,
+# the second episode). The pane's banner is ephemeral — it scrolls past $SCROLL, and
+# a session that was merely IDLE when the cap landed never printed one — so
+# `--capped` also consults the durable (account, model) row that
+# `fleet-account.sh model-limited-until` keeps for FLEET_MODEL_LIMIT_TTL. Six
+# monorepo windows sat on fable for hours with that row holding 7 more days,
+# invisible to a banner-only sweep. A ledger match flips the model silently: the
+# session was at its prompt, not interrupted, so there is no turn to resume and
+# nudging it would only spend tokens on a worker that may be finished.
+#
 # That status-line gate is also what bounds the banner's FALSE POSITIVES. Pane
 # text is not a protocol: a session that merely PRINTS a wall banner — an
 # operator grepping this very repo, a worker reading a transcript — scans as
@@ -48,8 +58,9 @@
 # other half of why in place beats close + resume here.
 #
 #   fleet-model-switch.sh [opts] <window-id>…   switch these windows
-#   fleet-model-switch.sh [opts] --capped       every window whose pane shows a
-#                                               per-model cap it is still running on
+#   fleet-model-switch.sh [opts] --capped       every window still running a model
+#                                               that is capped — per its pane's own
+#                                               banner, or per the account ledger
 #   opts: --model <alias>    target model (default: FLEET_MODEL_FALLBACK, else opus)
 #         --session <fleet>  target fleet when run outside tmux (default: the caller's)
 #         --nudge <text>     message peer-sent after a verified flip; '' = none
@@ -59,8 +70,10 @@
 #         --toast            tmux display-message the summary (for run-shell -b callers)
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with
-# no live Claude process, windows mid-turn, and windows whose target model is
-# itself capped on that account (there the subscription path must take over).
+# no live Claude process, windows in a GENUINELY live turn (see cap_settled — a
+# window pinned at @claude_state=working by the Stop hook a cap never fires IS
+# taken), and windows whose target model is itself capped on that account (there the
+# subscription path must take over).
 # Exit 0 (per-window outcomes are printed); 2 = usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -97,14 +110,55 @@ model_matches() {
   return 1
 }
 
-# switch_selected <state> <pane-model> <capped-alias> <target> — 0 iff this
-# window is a candidate for an in-place switch. Pure, so the selftest can pin the
-# matrix without a tmux server: mid-turn is refused (Escape would cancel a live
-# turn), a pane no longer running the capped model is already recovered, and a
-# target equal to the capped model is a no-op.
+# cap_settled <cap-on-VISIBLE-screen 0|1> <@claude_state_ts> <now> <stale-secs>
+# — 0 iff a `working` window is nevertheless provably PAST the turn the cap
+# killed, so the mid-turn refusal below may be lifted for it.
+#
+# WHY this exists (the #569 regression, 2026-09-12). `@claude_state` is written
+# `done` by exactly one thing: the Stop hook. A per-model cap ABORTS the turn — it
+# prints the banner and returns to the prompt WITHOUT a Stop — so the walled
+# window stays pinned at `working` forever, and the mid-turn guard below then
+# deferred it on every 60 s tick: "mid-turn — left alone, the next pass takes it",
+# for as long as the operator left it. That is the whole population the sweep
+# exists to serve, so the guard was refusing exactly its own candidates. The #101
+# stuck-working demotion (bin/tmux-spinner.sh) was supposed to clear the pin, but
+# it fires only once `#{window_activity}` has been frozen ≥ FLEET_STUCK_WORKING_SECS
+# twice running, and a Claude pane parked at a prompt still repaints often enough
+# to stay under that — measured 80 s of activity age on four walled windows that
+# had been pinned at `working` for 368 s. So this script cannot outsource the
+# question; it judges staleness itself.
+#
+# TWO signals, both required, because the cost of being wrong here is cancelling a
+# live turn with Escape:
+#   • the cap banner is on the pane's VISIBLE screen, not just somewhere in the
+#     scrollback — a per-model cap is TERMINAL for its turn, so a banner that is
+#     still the pane's tail means nothing has happened since it landed; and
+#   • the window has not re-stamped `@claude_state_ts` for <stale-secs>
+#     (FLEET_STUCK_WORKING_SECS, default 120 — the same threshold #101 trusts).
+#     A session that resumed re-stamps at UserPromptSubmit and at every
+#     PostToolUse, so anything genuinely working is protected for that long.
+# stale-secs 0 (the #101 "disabled" value) or a missing/garbage stamp → refuse,
+# i.e. fall back to the old conservative behaviour.
+cap_settled() {
+  local vis="${1:-0}" ts="${2:-}" now="${3:-0}" stale="${4:-120}"
+  [ "$vis" = 1 ] || return 1
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  case "$stale" in ''|*[!0-9]*) stale=120 ;; esac
+  [ "$stale" -gt 0 ] || return 1
+  [ "$(( now - ts ))" -ge "$stale" ] || return 1
+  return 0
+}
+
+# switch_selected <state> <pane-model> <capped-alias> <target> [cap-settled 0|1]
+# — 0 iff this window is a candidate for an in-place switch. Pure, so the selftest
+# can pin the matrix without a tmux server: mid-turn is refused (Escape would
+# cancel a live turn) UNLESS cap_settled says the turn is over and only the missing
+# Stop hook is holding `working` up, a pane no longer running the capped model is
+# already recovered, and a target equal to the capped model is a no-op.
 switch_selected() {
-  local state="$1" pmodel="$2" capped="$3" target="$4"
-  [ "$state" = working ] && return 1
+  local state="$1" pmodel="$2" capped="$3" target="$4" settled="${5:-0}"
+  [ "$state" = working ] && [ "$settled" != 1 ] && return 1
   [ -n "$target" ] || return 1
   # Either direction is the same model family: a `fable 5` target against a
   # `fable` cap is as much a no-op as the reverse.
@@ -172,29 +226,65 @@ main() {
   fi
 
   for wid in "${targets[@]}"; do
-    local name state acct cpid text pmodel banner kind capped tuntil
+    local name state sts acct cpid text vis pmodel banner kind capped tuntil
+    local settled=0 via=banner lcap lu reason
     name=$(wopt "$wid" '#{window_name}')
     printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
     [ -n "$(wopt "$wid" '#{@hub}')" ] && continue
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
     [ -n "$cpid" ] || continue
     state=$(wopt "$wid" '#{@claude_state}')
+    sts=$(wopt "$wid" '#{@claude_state_ts}')
     acct=$(wopt "$wid" '#{@cc_account}')
     text=$(TM capture-pane -p -S "$SCROLL" -t "$wid" 2>/dev/null)
     pmodel=$(pane_model_of "$text")
     banner=$(printf '%s\n' "$text" | fleet_limit_banner)
     kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
+    # Is the cap the pane's CURRENT tail (the VISIBLE screen, no -S) rather than a
+    # line somewhere back in the scrollback? That is cap_settled's recency half.
+    vis=0
+    case "$(TM capture-pane -p -t "$wid" 2>/dev/null | fleet_limit_banner | fleet_limit_kind)" in
+      model:*) vis=1 ;;
+    esac
+    cap_settled "$vis" "$sts" "$(date +%s)" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
     case "$kind" in
       model:*) capped=${kind#model:} ;;
-      # An explicit window with no model cap on screen is still switched on the
-      # operator's word — they asked for THIS window. --capped only ever acts on
-      # a cap it can see.
-      *) if [ "$MODE" = capped ]; then continue; fi; capped=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1) ;;
+      *)
+        # An explicit window with no model cap on screen is still switched on the
+        # operator's word — they asked for THIS window.
+        if [ "$MODE" != capped ]; then
+          capped=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1)
+        else
+          # --capped used to `continue` here, i.e. act ONLY on a banner it could
+          # see. But the banner is not the durable fact — the LEDGER is. A
+          # (account, model) cap row lives for FLEET_MODEL_LIMIT_TTL, so a window
+          # still running a model this account is walled on is walled whether or
+          # not its banner survived. On 2026-09-12 six monorepo windows sat on
+          # fable for hours with the cap recorded and 7 days left to run, and this
+          # sweep never considered them for the single reason that their banner had
+          # scrolled past $SCROLL. A session that was merely IDLE when the cap
+          # landed never printed a banner at all, so the scrollback can never be
+          # the whole answer.
+          lcap=""
+          if [ -n "$acct" ] && [ -n "$pmodel" ]; then
+            lcap=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1)
+            lu=$("$BIN/fleet-account.sh" model-limited-until "$acct" "$lcap" 2>/dev/null)
+            case "$lu" in ''|*[!0-9]*) lu=0 ;; esac
+            [ "$lu" -gt "$(date +%s)" ] || lcap=""
+          fi
+          [ -n "$lcap" ] || continue
+          capped="$lcap"; via=ledger
+        fi ;;
     esac
 
-    if ! switch_selected "${state:--}" "$pmodel" "$capped" "$TARGET"; then
-      if [ "$state" = working ]; then
-        printf '  – %s (%s): mid-turn — left alone, the next pass takes it\n' "$wid" "$name"
+    if ! switch_selected "${state:--}" "$pmodel" "$capped" "$TARGET" "$settled"; then
+      # Ordered by the ACTUAL refusal, not by state: `working` is only the reason
+      # while cap_settled has not lifted it, otherwise a settled window refused for
+      # some other reason would be mislabelled "mid-turn".
+      if [ "$state" = working ] && [ "$settled" != 1 ]; then
+        reason=""
+        [ "$vis" = 1 ] && reason=$(printf ' (cap on screen, but @claude_state_ts is %ss old — still inside FLEET_STUCK_WORKING_SECS=%s)' "$(( $(date +%s) - ${sts:-0} ))" "${FLEET_STUCK_WORKING_SECS:-120}")
+        printf '  – %s (%s): mid-turn — left alone, the next pass takes it%s\n' "$wid" "$name" "$reason"
       elif ! model_matches "$capped" "$pmodel"; then
         printf '  – %s (%s): already off %s (now %s) — nothing to do\n' "$wid" "$name" "$capped" "${pmodel:-?}"
       else
@@ -215,7 +305,7 @@ main() {
     fi
 
     if [ "$DRY" = 1 ]; then
-      printf '  would: %s (%s) %s → %s in place%s\n' "$wid" "$name" "${pmodel:-?}" "$TARGET" "$([ -n "$acct" ] && printf ' [%s]' "$acct")"
+      printf '  would: %s (%s) %s → %s in place [via %s]%s\n' "$wid" "$name" "${pmodel:-?}" "$TARGET" "$via" "$([ -n "$acct" ] && printf ' [%s]' "$acct")"
       switched=$((switched+1)); continue
     fi
 
@@ -254,7 +344,14 @@ main() {
       # multibyte arrow into the variable NAME otherwise, and set -u then fires.
       switched=$((switched+1)); note "${name}→$TARGET"
       local msg="$NUDGE"
-      [ "$msg" = "__default__" ] && msg="$NUDGE_DEFAULT"
+      # The default nudge tells the session its TURN was interrupted and to pick the
+      # work back up. That is true of a banner detection and false of a ledger one:
+      # a window matched off the ledger printed no banner, so it was sitting IDLE at
+      # its prompt when the cap landed — possibly because it was finished. Waking a
+      # finished worker to "continue the task" spends tokens on nothing, so a ledger
+      # detection flips the model silently and lets the session notice on its own
+      # next turn. An explicit --nudge is still honoured either way.
+      [ "$msg" = "__default__" ] && { if [ "$via" = ledger ]; then msg=""; else msg="$NUDGE_DEFAULT"; fi; }
       if [ -n "$msg" ]; then
         msg=${msg//__MODEL__/$TARGET}
         # The SendMessage channel, never send-keys (#513): queued if the session
