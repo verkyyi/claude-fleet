@@ -301,6 +301,27 @@ assumes — this doc is only the install/uninstall procedure.
      Run `loginctl enable-linger "$USER"` so they run detached. Full recipe in
      `systemd/README.md`.
 
+   **Ship the units as written — the scheduling class is load-bearing** (issue
+   #588). Five plists deliberately carry `ProcessType=Standard` rather than the
+   `Background` the other seven use: **cleanup**, **worktree-autoclean**,
+   **diskguard**, **base-sync** and **dispatch**. `ProcessType=Background` puts
+   the job's whole process TREE at QoS BACKGROUND, and that class carries
+   **throttled disk I/O** — measured on macOS 26, two identical LaunchAgents
+   deleting two identical 20k-file trees ran at **104 files/s (Background) vs
+   10967 files/s (Standard)**, ~100x, and the gap widens as the machine gets
+   busier: in the field a `git worktree remove` of a 308k-file worktree crawled
+   at **~0.4 files/s** — 67 minutes of wall clock for 54 seconds of CPU. Those
+   five daemons do bulk filesystem work (worktree reclaim, `du` tree walks, a
+   base ff-pull under the shared land lease, a full checkout on spawn) that the
+   dash, the next worker or the operator is waiting behind, so throttling them
+   penalises exactly the wrong thing; their `StartInterval` is the throttle that
+   matters. The seven pollers (collect, pr-refresh, spinner, quotawatch,
+   issue-bridge, ledger-watch, webhook) only touch gh/tmux/network and stay
+   `Background`. Don't "normalise" the templates in either direction — the split
+   is asserted by `bin/daemon-processtype-selftest.sh`, which also fails on a new
+   daemon that hasn't been classified. On Linux the same rule reads as: no
+   `IOSchedulingClass=idle` and no positive `Nice=` on those five services.
+
    **Verify what you actually loaded.** `bin/fleet-doctor.sh` checks each optional
    daemon's agent, not just the fleet conf flag that asks for it (issue #492) — a
    fleet that wants ledger-watch but never had `com.claude-fleet.ledger-watch`
