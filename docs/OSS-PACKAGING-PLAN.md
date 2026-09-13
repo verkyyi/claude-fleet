@@ -106,8 +106,22 @@ codex-cli 0.154 实测）：
 > （`tool_name` "Bash" 带 `tool_input.command`，"apply_patch" 带 patch 文本）、
 > exit 2 阻断、hook 继承 pane env 含 `$TMUX_PANE`。
 
-所以中立层里**最难的那块（实时状态信号）在两家都是原生一等**，不用退化到 pane
-内容 checksum 启发式。这是收窄到两家的技术理由，不只是省事。
+所以中立层里**大部分状态信号在两家都是原生一等**，不用退化到 pane 内容 checksum
+启发式。这是收窄到两家的技术理由，不只是省事。
+
+> ⚠️ **一个重要例外（#608 查证纠正，2026-09-13）：`needs` 信号在 Codex 上不存在。**
+>
+> **Codex 没有 `Notification` 事件。** 0.154 的 hook 集是 PreToolUse ·
+> PermissionRequest · PostToolUse · Pre/PostCompact · SessionStart · SessionEnd ·
+> UserPromptSubmit · SubagentStart/Stop · Stop · Interrupt —— 最接近的
+> `PermissionRequest` 在 fleet 的 bypass 姿态下根本不会触发。
+>
+> 后果：**一个停下来等你回答的 Codex worker,在 dash 上显示为绿色 `done`**，
+> 和任何正常结束的回合一模一样。
+>
+> 这打在要害上 —— 注意力路由是我们三个差异化之一，而它**恰恰在最有价值的那个信号
+> （红色 `needs` + 响铃）上于 Codex 侧完全失效**。`working` / `done` 两家对等，
+> `needs` 不对等。宣传跨 agent 时必须明写这一条。
 
 ### 中立性分层(按我们栈的实际代码核过)
 
@@ -127,7 +141,17 @@ codex-cli 0.154 实测）：
 已经做对了一半 —— `@claude_state` 就是这个接缝（**应改名 `@agent_state`**）；
 `budget --json` 给 yes/no 而非 token 数，这是对的，别改。
 
-### 适配器能力矩阵(公开声明,不许藏)
+### 适配器能力矩阵(公开声明,不许藏) ✅ 已上线 2026-09-13
+
+> [#608](https://github.com/verkyyi/claude-fleet/issues/608) → PR #615 已合并并同步上线。
+> README 现有完整矩阵，且**由 CI 守着不漂**：表是从 `bin/fleet-codex.sh` 旁的
+> `MATRIX` 块生成的，`bin/codex-matrix.sh --check` 在 CI 里失败于任何漂移。
+>
+> 矩阵还区分了两类 ❌，这个区分很重要：
+> - **Codex 的限制** —— 例如无 `Notification` 事件、`SessionEnd` 永远 `reason=other`
+> - **我们的适配器缺口** —— 例如 `/fleet-handoff`：*"the mechanism is not missing
+>   on Codex, the adapter is"*；MCP：*"Deliberately skipped, **not** a Codex limit"*
+
 
 `FLEET_AGENT=codex` 路径（issue #547）已实现的与未实现的，逐条来自 `bin/fleet-codex.sh`：
 
@@ -559,7 +583,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 | [#609](https://github.com/verkyyi/claude-fleet/issues/609) | mini 改 N 个 OS login | 独立；**后面所有 per-person 功能的地基** |
 | [#611](https://github.com/verkyyi/claude-fleet/issues/611) | commands+hooks → plugin（**收益最大**） | 可 autofill |
 | [#610](https://github.com/verkyyi/claude-fleet/issues/610) | 用量代理 → `/usage` + OTEL | 可 autofill |
-| [#608](https://github.com/verkyyi/claude-fleet/issues/608) | 能力矩阵进 README | 随时，可 autofill |
+| ~~[#608](https://github.com/verkyyi/claude-fleet/issues/608)~~ | ~~能力矩阵进 README~~ | ✅ **已完成**（PR #615，含 CI 防漂） |
 
 ~~删 base-readonly-guard · 删 janitor · `.worktreeinclude`~~ —— 三条已证伪，见[第七章](#七瘦身清单--大部分已被证伪2026-09-13)。
 
@@ -601,7 +625,7 @@ worker+PR），全局 cap 10。
 | **M0** | 定价重算 · 并发复验 · 原生 worktree 覆盖面 | ✅ 全部完成（无需 issue，直接查证） |
 | **M1** | ccquota#16 README 主线改写 | ✅ 已落 main（PR #18 → #19） |
 | **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
-| **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL · [#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 | ⬜ #608 已派 autofill |
+| **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ 已完成） |
 | **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
 | **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch | ✅ 已上线（PR #604） |
 | **已证伪作废** | 删 base-readonly-guard · 删 janitor · `.worktreeinclude` | ❌ 见第七章 |
