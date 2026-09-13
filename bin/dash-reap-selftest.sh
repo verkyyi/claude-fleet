@@ -40,6 +40,20 @@
 #            - no @worktree    → degrade: just close the window (pre-#290 behavior)
 #          Nothing issue-bound is touched.
 #
+#   D. the NON-INTERACTIVE entry (issue #596) — `dash-reap.sh <handle>` is a public
+#      script interface, so it must not depend on a human being there:
+#        • --yes / --force on dirty    → KEEP the worktree, close window+issue, NO
+#                                        popup — identical to a confirmed ⌃x
+#        • --yes on clean+unmerged     → full reap, NO popup
+#        • --yes on clean+merged       → reaps SYNCHRONOUSLY (no run-shell dispatch),
+#                                        so the caller's exit is the outcome
+#        • no --yes, NO attached client → refuse with `skip:needs-confirm` rather
+#                                        than drawing a y/n box nobody can press
+#        • no --yes, client attached   → historic confirm popup, but the caller now
+#                                        reads `skip:needs-confirm` / rc 3, not "done"
+#        • every script-facing exit prints ONE token (`reaped:full` / `reaped:keep` /
+#          `skip:needs-confirm` / `refused:<slug>`) with a distinct exit status
+#
 #   C. the dash ⌃x bind wiring (issue #313) — a static check on tmux-dashboard.sh:
 #      the reap bind must be `ctrl-x:execute-silent(...)`, never a bare
 #      `ctrl-x:execute(...)`. `execute` suspends + clears fzf while dash-reap runs,
@@ -125,6 +139,9 @@ if [ "${1:-}" = "run-shell" ]; then
   exit 0
 fi
 case "$*" in
+  # attached-client probe (#596): CLIENTS unset ⇒ one fake client (the interactive
+  # ⌃x cases); CLIENTS="" ⇒ a headless fleet, where a popup must never be drawn.
+  *list-clients*) [ -n "${CLIENTS-}" ] && printf '%s\n' "$CLIENTS" ;;
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
@@ -189,6 +206,7 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
   # TMPDIR is redirected under $WORK so fleet-lib's cache dir (FLEET_C) — and the
   # raw path's summary-cache rm — stay hermetic (never touch the real cache).
   ISS="$iss" RAW="${RAW:-}" WID="${WID:-}" WT="${WT:-}" TMLOG="$TMLOG" GHLOG="$GHLOG" \
+  CLIENTS="${CLIENTS-fake-client}" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
   FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
@@ -196,10 +214,15 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
     bash "$BIN/dash-reap.sh" "$@"
 }
 
+# run_reap, capturing the #596 result token (stdout) and the exit status.
+run_reap_tok() { TOK="$(run_reap "$@")"; RC=$?; }
+
 # B1: no @issue (hub/panel) → refuse, no kill, no close
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "" "s1:9"
+run_reap_tok "" "s1:9"
 grep -q 'MSG.*no issue' "$TMLOG" || fail "no-issue row should refuse with 'no issue'"
+[ "$TOK" = "refused:no-issue" ] || fail "a refusal must print refused:no-issue (got [$TOK]) (#596)"
+[ "$RC" = 4 ] || fail "a refusal must exit 4, not a blanket 0 (got $RC) (#596)"
 grep -q 'KILL' "$TMLOG" && fail "no-issue row must not kill a window"
 [ -s "$GHLOG" ] && fail "no-issue row must not touch gh"
 
@@ -364,6 +387,107 @@ RAW=0 run_reap "" "s1:1"
 grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
+# --- D. the NON-INTERACTIVE entry (issue #596) --------------------------------
+# `dash-reap.sh <handle>` is documented as a script interface (fleet-keys.sh), but
+# it used to answer a dirty/unmerged row by opening a confirm popup on whatever
+# client the operator was looking at and returning `exit 0` — so a script both
+# interrupted a human who had pressed nothing AND read "reaped" off a row that was
+# still sitting there. Fresh fixtures throughout: these cases reap for real, and
+# reusing B's worktrees would silently pre-satisfy its assertions.
+git -C "$BASEDIR" worktree add -q -b issue-12 "$WORK/wt12" >/dev/null 2>&1
+printf 'c\n' > "$WORK/wt12/j"; git -C "$WORK/wt12" add j; git -C "$WORK/wt12" commit -qm w12
+printf 'dirt\n' > "$WORK/wt12/untracked"                       # dirty
+git -C "$BASEDIR" worktree add -q -b issue-13 "$WORK/wt13" >/dev/null 2>&1
+printf 'c\n' > "$WORK/wt13/j"; git -C "$WORK/wt13" add j; git -C "$WORK/wt13" commit -qm w13
+git -C "$BASEDIR" worktree add -q -b issue-14 "$WORK/wt14" >/dev/null 2>&1   # tip == base ⇒ ancestor
+git -C "$BASEDIR" worktree add -q -b issue-15 "$WORK/wt15" >/dev/null 2>&1
+printf 'dirt\n' > "$WORK/wt15/untracked"                       # dirty, never reaped below
+git -C "$BASEDIR" worktree add -q -b issue-16 "$WORK/wt16" >/dev/null 2>&1
+printf 'dirt\n' > "$WORK/wt16/untracked"                       # dirty, for the --force alias
+for n in 12 13 14 15 16; do transcript_for "$WORK/wt$n" "$n"; done
+
+# D1: --yes on a DIRTY row → the confirm branch, unasked: worktree KEPT, window +
+# issue closed, NO popup. Same semantics as a confirmed ⌃x — --yes skips the
+# question, never the dirty-worktree protection.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok "12" "s1:12" --yes
+grep -q 'POPUP' "$TMLOG" && fail "--yes on dirty must NOT open a confirm popup (#596)"
+[ -d "$WORK/wt12" ] || fail "--yes on dirty must KEEP the worktree (#596)"
+grep -q 'KILL' "$TMLOG" || fail "--yes on dirty should kill the window (#596)"
+grep -q 'CLOSE' "$GHLOG" || fail "--yes on dirty should close the issue (#596)"
+[ "$TOK" = "reaped:keep" ] || fail "--yes on dirty must print reaped:keep (got [$TOK]) (#596)"
+[ "$RC" = 0 ] || fail "--yes on dirty must exit 0 (got $RC) (#596)"
+[ "$(srows 12)" = 1 ] || fail "--yes must still record ONE /fleet-history row (#471+#596)" "$(cat "$LEDGER")"
+[ "$(scol 12 10)" = closed-unlanded ] || fail "a --yes dirty reap row must be closed-unlanded (got [$(scol 12 10)])"
+
+# D2: --yes on a clean+unmerged row → full reap (worktree + branch + issue), no popup.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok "13" "s1:13" --yes
+grep -q 'POPUP' "$TMLOG" && fail "--yes on unmerged must NOT open a confirm popup (#596)"
+[ -d "$WORK/wt13" ] && fail "--yes on clean+unmerged should remove the worktree (#596)"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-13 && fail "--yes should delete the issue-13 branch (#596)"
+grep -q 'CLOSE' "$GHLOG" || fail "--yes on unmerged should close the issue (#596)"
+[ "$TOK" = "reaped:full" ] || fail "--yes on unmerged must print reaped:full (got [$TOK]) (#596)"
+[ "$RC" = 0 ] || fail "--yes on unmerged must exit 0 (got $RC) (#596)"
+
+# D3: no --yes and NO attached client → never draw a popup nobody can press, and
+# say so instead of returning a blanket success. Nothing is touched.
+: > "$TMLOG"; : > "$GHLOG"
+CLIENTS="" run_reap_tok "15" "s1:15"
+grep -q 'POPUP' "$TMLOG" && fail "a headless fleet must NOT get a confirm popup (#596)"
+grep -q 'KILL' "$TMLOG" && fail "a refused confirm must not kill the window (#596)"
+[ -s "$GHLOG" ] && fail "a refused confirm must not touch gh (#596)"
+[ -d "$WORK/wt15" ] || fail "a refused confirm must keep the worktree (#596)"
+[ "$TOK" = "skip:needs-confirm" ] || fail "a headless dirty row must print skip:needs-confirm (got [$TOK]) (#596)"
+[ "$RC" = 3 ] || fail "skip:needs-confirm must exit 3, not 0 (got $RC) (#596)"
+[ "$(srows 15)" = 0 ] || fail "a refused confirm must record no ledger row (#596)" "$(cat "$LEDGER")"
+
+# D4: no --yes but a client IS attached → the historic confirm popup still opens
+# (⌃x is unchanged), yet the CALLER now learns it reaped nothing.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok "15" "s1:15"
+grep -q 'POPUP' "$TMLOG" || fail "an attached client should still get the ⌃x confirm popup (#289)"
+grep -q 'KILL' "$TMLOG" && fail "the popup pass must not kill the window itself"
+[ "$TOK" = "skip:needs-confirm" ] || fail "the popup pass must report skip:needs-confirm (got [$TOK]) (#596)"
+[ "$RC" = 3 ] || fail "the popup pass must exit 3 — it reaped nothing (got $RC) (#596)"
+
+# D5: --yes on a clean+merged row → reaped SYNCHRONOUSLY. The ⌃x path backgrounds
+# this (issue #304) so the bind returns instantly, but a script's `reaped:full`
+# must mean DONE, not "dispatched" — hence no run-shell re-exec here.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok "14" "s1:14" --yes
+grep -q 'RUNSHELL' "$TMLOG" && fail "--yes must reap in the foreground, not via run-shell (#596)"
+[ -d "$WORK/wt14" ] && fail "--yes on a merged row should remove the worktree (#596)"
+grep -q 'CLOSE' "$GHLOG" || fail "--yes on a merged row should close the issue (#596)"
+[ "$TOK" = "reaped:full" ] || fail "--yes on a merged row must print reaped:full (got [$TOK]) (#596)"
+[ "$(srows 14)" = 1 ] || fail "the synchronous --yes reap must still record its row (#471+#596)" "$(cat "$LEDGER")"
+
+# D6: --force is an alias for --yes.
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok "16" "s1:16" --force
+grep -q 'POPUP' "$TMLOG" && fail "--force must behave like --yes (no popup) (#596)"
+[ -d "$WORK/wt16" ] || fail "--force on dirty must KEEP the worktree (#596)"
+[ "$TOK" = "reaped:keep" ] || fail "--force must print reaped:keep (got [$TOK]) (#596)"
+
+# D7: the SCRATCH path gets the same treatment — dirty + --yes disposes without a
+# popup (worktree still KEPT), and a headless fleet refuses instead of popping.
+git -C "$BASEDIR" worktree add -q -b scratch-12 "$WORK/scr12" >/dev/null 2>&1
+printf 'exp\n' > "$WORK/scr12/untracked"
+transcript_for "$WORK/scr12" 112   # a session id of its own: record-closed dedups on it
+: > "$TMLOG"; : > "$GHLOG"
+CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "s1:9"
+grep -q 'POPUP' "$TMLOG" && fail "a headless dirty scratch must NOT get a popup (#596)"
+grep -q 'KILL' "$TMLOG" && fail "a refused scratch confirm must not close the window (#596)"
+[ "$TOK" = "skip:needs-confirm" ] || fail "a headless dirty scratch must print skip:needs-confirm (got [$TOK]) (#596)"
+[ "$RC" = 3 ] || fail "a headless dirty scratch must exit 3 (got $RC) (#596)"
+: > "$TMLOG"; : > "$GHLOG"
+RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "s1:9" --yes
+grep -q 'POPUP' "$TMLOG" && fail "--yes on a dirty scratch must NOT open a popup (#596)"
+grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the window (#596)"
+[ -d "$WORK/scr12" ] || fail "--yes on a dirty scratch must KEEP the worktree (#596)"
+[ "$TOK" = "reaped:keep" ] || fail "--yes on a dirty scratch must print reaped:keep (got [$TOK]) (#596)"
+[ "$(srows scratch-12)" = 1 ] || fail "a --yes scratch disposal must index the session (#466+#596)" "$(cat "$LEDGER")"
+
 # --- C. the dash ⌃x bind must be NON-BLOCKING (issue #313) --------------------
 # The blank-dash bug: `ctrl-x:execute(...)` makes fzf SUSPEND + clear the whole
 # display while dash-reap.sh runs — and dash-reap prints nothing to stdout (its
@@ -384,5 +508,5 @@ case "$cx" in
   *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
 esac
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + worker & scratch rows recorded before disposal + non-blocking ⌃x bind (#289+#290+#313+#466+#471)\n'
+printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + worker & scratch rows recorded before disposal + non-blocking ⌃x bind + non-interactive --yes/no-client/result tokens (#289+#290+#313+#466+#471+#596)\n'
 exit 0

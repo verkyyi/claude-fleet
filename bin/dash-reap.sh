@@ -32,13 +32,59 @@
 # Operates on THIS fleet only (the dash's resolved fleet); never another fleet's
 # worktree/issue. gh issue close is idempotent (a merge may have closed it
 # already); a kept dirty worktree stays on disk for later.
+#
+# NON-INTERACTIVE CALLERS (issue #596). `dash-reap.sh <target>` is a PUBLIC script
+# interface — fleet-keys.sh documents `dash-reap.sh a1`, and it accepts any window
+# handle/target — not merely the ⌃x bind, so it must never assume a human is
+# watching the fleet:
+#
+#   --yes | --force    skip the confirm popup and take the branch that popup would
+#                      have taken — dirty → KEEP the worktree (window + issue close
+#                      only), anything else → full reap. Semantics are IDENTICAL to
+#                      a confirmed ⌃x; only the question is skipped, so it opens NO
+#                      new data-loss path (a dirty worktree is still never removed,
+#                      and `git worktree remove` refuses one anyway). It runs
+#                      SYNCHRONOUSLY, so what it reports is the outcome, not a
+#                      dispatch receipt.
+#   no attached client never open a popup. Without --yes, a row that needs a confirm
+#                      is refused with a reason instead of drawing a y/n box onto
+#                      whichever client the operator happens to be looking at — a
+#                      box nobody asked for, and (with no client at all) one that
+#                      nobody could ever press.
+#   result token       one line on stdout + a distinct exit status, so a caller can
+#                      tell what actually happened instead of reading the blanket
+#                      `exit 0` this script used to answer everything with:
+#                        reaped:full         0  wt + branch + issue + window disposed
+#                        reaped:keep         0  window + issue closed, wt KEPT (dirty)
+#                        skip:needs-confirm  3  needs a y/n the caller did not grant
+#                        refused:<slug>      4  nothing to reap here (no-target /
+#                                               no-git / no-issue / no-repo)
+#                      The token names the ACTION taken, not which artifacts existed:
+#                      a scratch row with no worktree reports `reaped:full` because
+#                      closing its window IS its full disposal.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
-refuse() { tmux display-message "reap: $*" 2>/dev/null; exit 0; }
+# --- script-facing result (issue #596) ----------------------------------------
+# Print ONE token on stdout for the caller. The INTERACTIVE passes print UI, not
+# tokens: the ⌃x bind is `execute-silent` (stdout discarded, #313) and the confirm
+# popup's stdout IS the prompt the operator reads — so emit is a no-op there.
+emit() { [ "${confirm:-0}" = 1 ] || printf '%s\n' "$1"; }
+
+# refuse <slug> <human message> — the slug is what scripts match (`refused:no-issue`),
+# the message is what the operator sees on the status line. Exit 4, never 0: a
+# refusal that reported success is exactly what let a caller believe it had reaped.
+refuse() { local slug="$1"; shift; emit "refused:$slug"; tmux display-message "reap: $*" 2>/dev/null; exit 4; }
+
+# Is anyone attached to THIS fleet's tmux server? `tmux list-clients` with no -t
+# lists every client on the server, and one fleet = one server (issue #159), so
+# this is exactly "is an operator looking at this fleet". With none, a confirm
+# popup is drawn into the void — nobody can answer it, so the reap would hang on a
+# `y` that can never arrive while the caller walked away thinking it was done.
+have_client() { [ -n "$(tmux list-clients -F '#{client_name}' 2>/dev/null)" ]; }
 
 # close the bound issue (idempotent — a merge/janitor may have closed it already)
 close_issue() {
@@ -116,19 +162,48 @@ reap_keep() {
   tmux display-message "reaped #$iss ✓ (window + issue) — worktree kept (dirty)" 2>/dev/null || true
 }
 
+# The disposal tail shared by the backgrounded --exec pass and the synchronous
+# --yes path (issue #596). Reads the window metadata the ledger row needs WHILE THE
+# WINDOW STILL STANDS (reap_* kills it), pushes the child-report backstop, then acts
+# by verdict. $1 = the ACTION (full|keep); $reason = the gate verdict for the row.
+reap_dispatch() {
+  # Window id + NAME for the ledger row — read BEFORE reap_* kills the window
+  # (the summary cache FILE the id keys survives; neither would be resolvable
+  # afterwards). Empty is tolerated: the row just records no summary / no title.
+  wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
+  wname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
+  worigin="$(tmux display-message -t "$target" -p '#{@origin}' 2>/dev/null)"   # provenance (#503), read pre-kill
+  # Child-report BACKSTOP (issue #574): push the outcome to the session that
+  # spawned this one before reap_* kills the window. --only-once because the ship
+  # path already reported (and stamped @reported) for anything that landed on its
+  # own — this covers the ⌃x on a worker that never got there. A missing parent is
+  # a silent exit 0 inside the script, so it can never block the reap.
+  bash "$BIN/fleet-report-parent.sh" --win "$target" --only-once \
+    --state reaped --verdict "$1" --origin "$worigin" --issue "$iss" \
+    >/dev/null 2>&1 || :
+  case "$1" in keep) reap_keep ;; *) reap_full ;; esac
+}
+
 # --- parse args ---------------------------------------------------------------
-target="${1:-}"; [ -z "$target" ] && exit 0
+confirm=0; yes=0
+target="${1:-}"
+# Nothing to act on (an empty {1} from a dash with no rows) — still answer the
+# caller with a token rather than a bare success, but stay silent on the status
+# line: a ⌃x on an empty dash should not nag.
+[ -z "$target" ] && { emit "refused:no-target"; exit 4; }
 # A target may be the fleet's short window HANDLE (`a1`, issue #566) as well as the
 # `sess:idx` the dash row hands over. Normalise ONCE here, before the --exec
 # re-dispatch carries $target into the background pass, so both passes address the
 # same window; a non-handle passes through untouched. Bare tmux: ⌃x runs in the
 # dash pane and the --exec tail under run-shell, both on THIS fleet's socket.
 target="$(fleet_wid_target "$target")"
-confirm=0
 shift || true
-for a in "$@"; do case "$a" in confirm) confirm=1;; esac; done
+for a in "$@"; do case "$a" in
+  confirm)      confirm=1 ;;
+  --yes|--force) yes=1 ;;    # non-interactive: take the confirm branch unasked (#596)
+esac; done
 
-command -v git >/dev/null 2>&1 || refuse "git not found"
+command -v git >/dev/null 2>&1 || refuse no-git "git not found"
 
 # --- internal --exec <full|keep> [<gate-verdict>] (issue #304): the BACKGROUND reap
 # the interactive path dispatches (via fleet_bg) ONCE the merged-check decision is
@@ -153,21 +228,7 @@ if [ "${1:-}" = "--exec" ]; then
   branch="issue-$iss"
   wtdir=""; whead=""
   [ -n "$MAIN" ] && IFS=$'\t' read -r wtdir whead < <(fleet_worktree_head "$MAIN" "$branch")
-  # Window id + NAME for the ledger row — read BEFORE reap_* kills the window
-  # (the summary cache FILE the id keys survives; neither would be resolvable
-  # afterwards). Empty is tolerated: the row just records no summary / no title.
-  wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
-  wname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
-  worigin="$(tmux display-message -t "$target" -p '#{@origin}' 2>/dev/null)"   # provenance (#503), read pre-kill
-  # Child-report BACKSTOP (issue #574): push the outcome to the session that
-  # spawned this one before reap_* kills the window. --only-once because the ship
-  # path already reported (and stamped @reported) for anything that landed on its
-  # own — this covers the ⌃x on a worker that never got there. A missing parent is
-  # a silent exit 0 inside the script, so it can never block the reap.
-  bash "$BIN/fleet-report-parent.sh" --win "$target" --only-once \
-    --state reaped --verdict "$verdict" --origin "$worigin" --issue "$iss" \
-    >/dev/null 2>&1 || :
-  case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
+  reap_dispatch "$verdict"
   exit 0
 fi
 
@@ -201,9 +262,12 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   case "$sbranch" in scratch-*) ;; *) sbranch="" ;; esac   # scratch-only guard
 
   # No resolvable scratch worktree → historic behavior: just close the window.
+  # No confirm was ever involved here, so --yes changes nothing; closing the window
+  # IS this row's full disposal, hence `reaped:full` (#596).
   if [ -z "$sbranch" ]; then
     tmux kill-window -t "$target" 2>/dev/null || true
     tmux display-message "closed scratch ✓" 2>/dev/null || true
+    emit reaped:full
     exit 0
   fi
 
@@ -252,19 +316,45 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
       >/dev/null 2>&1 || :
   }
 
+  # The disposal tail, shared by the no-confirm path, the confirm popup and the
+  # non-interactive --yes (issue #596) so all three stay one behavior: record first
+  # (#466), KEEP a dirty worktree, close the window last. Echoes its result token.
+  scratch_dispose() {
+    scratch_record
+    [ "$sreason" = dirty ] || scratch_remove
+    tmux kill-window -t "$target" 2>/dev/null || true
+    if [ "$sreason" = dirty ]; then
+      tmux display-message "closed scratch ✓ — worktree kept (dirty)" 2>/dev/null || true
+      emit reaped:keep
+    else
+      tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true
+      emit reaped:full
+    fi
+  }
+
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
   # dirty/unmerged one opens a y/n confirm popup FIRST (a dirty worktree stays
   # KEPT). The initial keypress (no `confirm` arg) decides which.
   if [ "$confirm" = 0 ]; then
     case "$sreason" in
       merged-pr|ancestor)
-        scratch_record
-        scratch_remove
-        tmux kill-window -t "$target" 2>/dev/null || true
-        tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true ;;
+        scratch_dispose ;;
       *)   # dirty | unmerged — confirm before disposing / closing
-        tmux display-popup -w 90% -h 9 -E \
-          "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true ;;
+        # --yes takes the confirm branch unasked (#596); with no client attached a
+        # popup would be unanswerable, so refuse and say how to authorize it.
+        if [ "$yes" = 1 ]; then
+          scratch_dispose
+        elif have_client; then
+          tmux display-popup -w 90% -h 9 -E \
+            "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
+          emit skip:needs-confirm
+          exit 3
+        else
+          emit skip:needs-confirm
+          printf 'reap: %s is %s — needs a y/n confirm and no client is attached; pass --yes to dispose non-interactively\n' \
+            "$sbranch" "$sreason" >&2
+          exit 3
+        fi ;;
     esac
     exit 0
   fi
@@ -279,21 +369,14 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   printf '\n  %s\n\n  [y] reap    [n] cancel ' "$msg"
   read -rsn1 ans; echo
   case "$ans" in y|Y) ;; *) exit 0;; esac
-  scratch_record
-  [ "$sreason" = dirty ] || scratch_remove
-  tmux kill-window -t "$target" 2>/dev/null || true
-  if [ "$sreason" = dirty ]; then
-    tmux display-message "closed scratch ✓ — worktree kept (dirty)" 2>/dev/null || true
-  else
-    tmux display-message "closed scratch ✓ (worktree reaped)" 2>/dev/null || true
-  fi
+  scratch_dispose
   exit 0
 fi
 
 # --- resolve the row: bound issue, repo, branch, worktree, base ---------------
 iss="$(tmux display-message -t "$target" -p '#{@issue}' 2>/dev/null)"
 iss="${iss//[^0-9]/}"
-[ -z "$iss" ] && refuse "no issue on this row (hub/panel) — nothing to reap"
+[ -z "$iss" ] && refuse no-issue "no issue on this row (hub/panel) — nothing to reap"
 
 FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
 # Overlay THIS fleet's per-session conf so FLEET_MAIN/FLEET_BASE_BRANCH/FLEET_REPO
@@ -302,7 +385,7 @@ FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
 fleet_load_conf "$FLEET_SESSION"
 REPO="${FLEET_REPO:-}"
 _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
-[ -z "$REPO" ] && refuse "no repo resolved — cannot reap #$iss"
+[ -z "$REPO" ] && refuse no-repo "no repo resolved — cannot reap #$iss"
 
 MAIN="${FLEET_MAIN:-}"
 [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
@@ -337,16 +420,39 @@ reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_P
 if [ "$confirm" = 0 ]; then
   case "$reason" in
     dirty|unmerged)
+      # --yes (issue #596): take the branch the confirm popup would have taken —
+      # dirty KEEPs the worktree, unmerged force-reaps — without asking. Run it
+      # SYNCHRONOUSLY rather than through fleet_bg: the whole point is that the
+      # caller's exit is the outcome, not a dispatch receipt.
+      if [ "$yes" = 1 ]; then
+        if [ "$reason" = dirty ]; then reap_dispatch keep; emit reaped:keep
+        else                           reap_dispatch full; emit reaped:full; fi
+        exit 0
+      fi
+      # No attached client → never draw a confirm nobody can answer (#596): the
+      # caller would read the old `exit 0` as done while the row sat there forever.
+      if ! have_client; then
+        emit skip:needs-confirm
+        printf 'reap: #%s is %s — needs a y/n confirm and no client is attached; pass --yes to reap non-interactively\n' \
+          "$iss" "$reason" >&2
+        exit 3
+      fi
       tmux display-popup -w 90% -h 9 -E \
         "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
-      exit 0 ;;
+      # The popup is a SEPARATE invocation; this pass reaped nothing (#596).
+      emit skip:needs-confirm
+      exit 3 ;;
     # merged-pr | ancestor — clean+merged, no confirm. Background the reap (issue
     # #304): the slow git worktree remove + gh issue close run off the ⌃x bind, which
     # returns instantly; the row clears when the bg kill-window lands + the dash
     # refreshes.
     # The verdict rides along so the bg pass can record the right row kind (#471);
     # it is a fixed token from fleet_reap_ok, so it is shell-safe to interpolate.
-    *)  fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; exit 0 ;;
+    # --yes runs the same disposal in the foreground instead, so `reaped:full`
+    # means DONE for a script caller rather than "dispatched" (#596).
+    *)  if [ "$yes" = 1 ]; then reap_dispatch full
+        else fleet_bg "bash '$BIN/dash-reap.sh' '$target' --exec full '$reason'"; fi
+        emit reaped:full; exit 0 ;;
   esac
 fi
 
