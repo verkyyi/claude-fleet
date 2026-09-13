@@ -21,6 +21,9 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
 )
@@ -54,6 +57,117 @@ type Rates struct {
 	// table), but per Unit rather than per million tokens.
 	Unit  string  `json:"unit,omitempty"`
 	Price float64 `json:"price,omitempty"`
+
+	// Peak is a time-of-day surcharge on whichever shape above this rate
+	// carries. Nil means the contract charges one price around the clock.
+	//
+	// It exists because some contracts are priced by WHEN the call happened, and
+	// a table that can only say one number per model cannot express them at all.
+	// DeepSeek is the case that forced it: peak hours cost a multiple of
+	// off-peak, on a published schedule. Before this, the honest options were to
+	// leave the model unpriced (what this deployment did) or to pick one of the
+	// two numbers and be wrong for most of the day — LiteLLM's table fills in
+	// the peak price and therefore overstates roughly 79% of the hours.
+	//
+	// The base Input/Output/Price are the OFF-PEAK rate and Multiplier scales
+	// them inside the window. That direction is deliberate: the cheaper number
+	// is the one a contract quotes as its headline, so a reader who ignores the
+	// peak block entirely under-reads rather than over-reads the bill, and an
+	// unnoticed omission errs toward "look again" rather than a confident
+	// overcharge.
+	Peak *PeakWindow `json:"peak,omitempty"`
+}
+
+// PeakWindow is when a contract charges its surcharge, and how much.
+//
+// Hours are UTC and stated as "HH:MM-HH:MM" so a window reads the way the
+// contract writes it. A window may cross midnight ("22:30-02:00"). The event's
+// own timestamp decides — never "now" — so repricing an old event lands in the
+// same tier it did when it happened (see store.Reprice).
+type PeakWindow struct {
+	// Multiplier scales the off-peak rate inside the window. Greater than 1 by
+	// definition, which validation enforces: a "peak" that charges less is
+	// somebody's inverted window, and silently honouring it would underreport a
+	// real bill for most of the day.
+	Multiplier float64 `json:"multiplier"`
+	// UTCHours are the windows, each "HH:MM-HH:MM". At least one is required —
+	// a peak block naming no hours would apply the surcharge nowhere while
+	// looking configured.
+	UTCHours []string `json:"utc_hours"`
+	// WeekdaysOnly limits the windows to Mon-Fri UTC, which is how the
+	// contracts that have a peak tier tend to state it.
+	WeekdaysOnly bool `json:"weekdays_only,omitempty"`
+}
+
+// AppliesAt reports whether ts falls inside the surcharge.
+func (w *PeakWindow) AppliesAt(ts time.Time) bool {
+	if w == nil {
+		return false
+	}
+	t := ts.UTC()
+	if w.WeekdaysOnly {
+		switch t.Weekday() {
+		case time.Saturday, time.Sunday:
+			return false
+		}
+	}
+	mins := t.Hour()*60 + t.Minute()
+	for _, spec := range w.UTCHours {
+		from, to, ok := parseWindow(spec)
+		if !ok {
+			continue
+		}
+		switch {
+		case from == to:
+			// A zero-width window matches nothing; validation rejects it, and
+			// treating it as "all day" here would be the worst possible reading.
+		case from < to:
+			if mins >= from && mins < to {
+				return true
+			}
+		default:
+			// Crosses midnight: inside means after the start OR before the end.
+			if mins >= from || mins < to {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parseWindow reads "HH:MM-HH:MM" into minutes-from-midnight. The bool says
+// whether it parsed at all; validateGatewayRates rejects the ones that do not,
+// so a running hub never silently skips a window it could not read.
+func parseWindow(spec string) (from, to int, ok bool) {
+	a, b, found := strings.Cut(spec, "-")
+	if !found {
+		return 0, 0, false
+	}
+	from, ok = parseHHMM(a)
+	if !ok {
+		return 0, 0, false
+	}
+	to, ok = parseHHMM(b)
+	if !ok {
+		return 0, 0, false
+	}
+	return from, to, true
+}
+
+func parseHHMM(s string) (int, bool) {
+	h, m, found := strings.Cut(strings.TrimSpace(s), ":")
+	if !found {
+		return 0, false
+	}
+	hh, err := strconv.Atoi(h)
+	if err != nil || hh < 0 || hh > 23 {
+		return 0, false
+	}
+	mm, err := strconv.Atoi(m)
+	if err != nil || mm < 0 || mm > 59 {
+		return 0, false
+	}
+	return hh*60 + mm, true
 }
 
 // PricedByUnit says which of the two shapes this rate carries. It reads the

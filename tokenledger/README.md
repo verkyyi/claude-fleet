@@ -917,6 +917,43 @@ and every priced event's `price_basis` names the rate, the conversion and both
 dates. A model with no configured rate stays unpriced and says so. Correcting
 one entry never drops the others.
 
+A rate may instead be priced **per billing unit** — per image, per second, per
+char, per call — with `{"unit": "second", "price": 0.5}`. A rate carries exactly
+one shape; setting both is rejected at load, because it would price the same
+event twice. Per-unit rows price off the event's own declared usage and never
+fall back to the token columns: an image call carries no tokens, so a fallback
+would price every one of them at 0.00 and report a real bill as free.
+
+### Contracts priced by time of day
+
+Some contracts charge a multiple at peak hours. State the window and let the
+event's own timestamp decide which tier it fell in:
+
+```json
+"vendor-chat": {
+  "input": 1.0, "output": 2.0,
+  "peak": { "multiplier": 2, "utc_hours": ["01:00-04:00", "06:00-10:00"], "weekdays_only": true }
+}
+```
+
+**The base rate is the OFF-PEAK one** and `multiplier` scales it inside the
+window — including the per-unit `price`. That direction is deliberate: the
+cheaper number is the one a contract quotes as its headline, so a reader who
+ignores the peak block under-reads rather than over-reads the bill, and an
+unnoticed omission errs toward "look again" rather than a confident overcharge.
+
+Hours are UTC, `"HH:MM-HH:MM"`, start inclusive and end exclusive; a window may
+cross midnight (`"22:30-02:00"`). The **event's** timestamp decides, never the
+clock, so repricing old events lands them in the tier they actually happened in.
+A multiplier at or below 1, an empty `utc_hours`, an unreadable window or a
+zero-width one is rejected at load — each of those would otherwise leave a
+running hub reporting money that is quietly wrong.
+
+A contract this cannot express is better left unpriced than approximated: a
+model priced by modality, or one whose cache hits bill separately, cannot be
+reduced to one number, and `unpriced` is an honest "not known" where a single
+rate would be a confident wrong answer.
+
 ### Three kinds of money, never one number
 
 Because `cost_usd` means two different things depending on source, and a third
@@ -970,6 +1007,47 @@ returns a plausible number and fails silently:
 arithmetic, and `TestEveryRawCostSumDeclaresItself` fails the build if a new
 `SUM(cost_usd)` appears in the store without either going through the source
 split or stating in the SQL why its `GROUP BY` already covers it.
+
+## A rate you add today does not reach yesterday's events
+
+Pricing happens at **ingest**: an event's `cost_usd` is computed when it arrives
+and stored on the row. So filling in a contract you could not state last month
+prices only the events that arrive from now on — the month you already have stays
+`unpriced`, and in every total that skips it, unpriced is indistinguishable from
+free. `--rebuild-rollup` does not help: it refolds the per-event figures already
+stored, so it faithfully rebuilds the same stale money.
+
+To apply the table as it stands now to events already in the database:
+
+```bash
+ccquota hub --reprice                                  # every event
+ccquota hub --reprice --reprice-since 2026-09-01T00:00:00Z   # just this month
+```
+
+It recomputes each event's cost and price basis, then refolds the rollup in the
+**same transaction** — between rewriting an event and refolding its hour there is
+a state where the raw rows and every dashboard disagree about money, and one
+commit means that state is never observable. The flag is off by default: a hub
+started without it reprices nothing.
+
+**Costs that arrive with the event are never recomputed.** A `vendor_bill` or
+`voice` figure is an invoice or a collector's own charge — no rate table could
+reproduce one — so repricing refuses the whole run rather than overwrite one, and
+says which event moved.
+
+Read the log line before trusting the run:
+
+```
+reprice: scanned 443452 event(s), changed 24926 (38 newly priced, 0 back to unpriced),
+         net +0.007194 USD, largest single change 0.000589 USD, refolded 42248 hourly row(s)
+```
+
+`changed` is a row count and cannot tell a correction from a catastrophe, which
+is why the net and the largest single move are printed beside it. In that run —
+a real production snapshot — only 38 events gained a figure; the other 24,888
+were rows stored by an older build whose arithmetic rounds a hair differently,
+which is why the net is under a cent. A large `changed` with a near-zero net is
+that; a large net is a rate that moved.
 
 ## Upgrading to the provider dimension
 

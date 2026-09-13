@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
 )
@@ -183,8 +184,61 @@ func validateGatewayRates(path, provider string, models map[string]Rates) error 
 		if r.CacheWrite5m != 0 || r.CacheWrite1h != 0 || r.CacheRead != 0 {
 			return fmt.Errorf("pricing overrides %s: "+where+" sets a cache rate, but this source reports no cache tokens", path, id)
 		}
+		if err := validatePeak(path, where, id, r.Peak); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validatePeak rejects a surcharge block that would apply the wrong number, or
+// none at all, while looking configured.
+//
+// Every check here is a case where a running hub would otherwise report money
+// that is quietly wrong: an unparseable window is skipped (so peak calls bill at
+// off-peak), an empty list surcharges nothing, and a multiplier at or below 1
+// means somebody inverted the window and every peak hour under-reports.
+func validatePeak(path, where, id string, w *PeakWindow) error {
+	if w == nil {
+		return nil
+	}
+	if w.Multiplier <= 1 {
+		return fmt.Errorf("pricing overrides %s: "+where+" has a peak multiplier of %g -- a peak tier costs MORE than off-peak, "+
+			"and the base rate is the off-peak one; a value at or below 1 means the window is inverted", path, id, w.Multiplier)
+	}
+	if len(w.UTCHours) == 0 {
+		return fmt.Errorf("pricing overrides %s: "+where+" has a peak block with no utc_hours -- it would surcharge nothing while looking configured", path, id)
+	}
+	for _, spec := range w.UTCHours {
+		from, to, ok := parseWindow(spec)
+		if !ok {
+			return fmt.Errorf("pricing overrides %s: "+where+" has an unreadable peak window %q (want \"HH:MM-HH:MM\" in UTC)", path, id, spec)
+		}
+		if from == to {
+			return fmt.Errorf("pricing overrides %s: "+where+" has a zero-width peak window %q", path, id, spec)
+		}
+	}
+	return nil
+}
+
+// atPeak returns the rate as charged at ts, and a note for the price basis.
+//
+// The event's OWN timestamp decides, never the clock: repricing last month's
+// events (store.Reprice) has to land them in the tier they actually happened
+// in, and a rate that asked "is it peak now" would restate history by whatever
+// time of day the operator ran the command.
+func atPeak(r Rates, ts time.Time) (Rates, string) {
+	if !r.Peak.AppliesAt(ts) {
+		if r.Peak != nil {
+			return r, ", off-peak"
+		}
+		return r, ""
+	}
+	m := r.Peak.Multiplier
+	r.Input *= m
+	r.Output *= m
+	r.Price *= m
+	return r, fmt.Sprintf(", peak x%g", m)
 }
 
 // gatewayRate copies exactly the fields this source can price on.
@@ -197,7 +251,7 @@ func validateGatewayRates(path, provider string, models map[string]Rates) error 
 // already happened once, to Unit/Price (#6130), and the symptom was a
 // per-image rate quietly pricing as "CNY 0 in / 0 out per MTok".
 func gatewayRate(r Rates) Rates {
-	return Rates{Input: r.Input, Output: r.Output, Unit: r.Unit, Price: r.Price}
+	return Rates{Input: r.Input, Output: r.Output, Unit: r.Unit, Price: r.Price, Peak: r.Peak}
 }
 
 func (g *gatewayPricing) merge(o *gatewayOverride) {
@@ -292,6 +346,11 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 		return nil
 	}
 
+	// Which tier this call fell in, by its own timestamp. tier is "" for a
+	// contract with one price around the clock, so those price bases read
+	// exactly as they did before peak windows existed.
+	r, tier := atPeak(r, e.TS)
+
 	// ── the per-unit shape ───────────────────────────────────────────────
 	// Images by the picture, audio by the second: a growing share of what the
 	// gateway fronts is not billed per token at all. These rows price off the
@@ -320,8 +379,8 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 		if pricedBy != "" {
 			contract = "provider " + pricedBy
 		}
-		d.PriceBasis = fmt.Sprintf("billed: %s, CNY %g per %s × %g %s as of %s, converted at %.4f CNY/USD pinned %s",
-			contract, r.Price, r.Unit, *d.Usage, r.Unit, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
+		d.PriceBasis = fmt.Sprintf("billed: %s%s, CNY %g per %s × %g %s as of %s, converted at %.4f CNY/USD pinned %s",
+			contract, tier, r.Price, r.Unit, *d.Usage, r.Unit, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
 		return &usd
 	}
 
@@ -345,7 +404,7 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 	if pricedBy != "" {
 		contract = "provider " + pricedBy
 	}
-	d.PriceBasis = fmt.Sprintf("billed: %s, CNY %g in / %g out per MTok as of %s, converted at %.4f CNY/USD pinned %s",
-		contract, r.Input, r.Output, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
+	d.PriceBasis = fmt.Sprintf("billed: %s%s, CNY %g in / %g out per MTok as of %s, converted at %.4f CNY/USD pinned %s",
+		contract, tier, r.Input, r.Output, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
 	return &usd
 }
