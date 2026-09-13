@@ -160,10 +160,25 @@ func validateGatewayRates(path, provider string, models map[string]Rates) error 
 		where = "gateway provider " + provider + " model %q"
 	}
 	for id, r := range models {
-		// Zero is not a discount. A gateway call is never free, and a rate
-		// left at zero would understate a real bill in silence.
-		if r.Input <= 0 || r.Output <= 0 {
-			return fmt.Errorf("pricing overrides %s: "+where+" needs positive input and output rates in CNY per million tokens", path, id)
+		// A rate carries exactly one shape. Both at once would price the same
+		// event twice, and there is no reading of that result that is correct.
+		if r.PricedByUnit() && (r.Input != 0 || r.Output != 0) {
+			return fmt.Errorf("pricing overrides %s: "+where+" sets both a per-unit price and per-token rates — a rate carries one shape or the other", path, id)
+		}
+		if r.PricedByUnit() {
+			if !GatewayUnits[r.Unit] {
+				return fmt.Errorf("pricing overrides %s: "+where+" has unknown billing unit %q (want one of image, second, char, call)", path, id, r.Unit)
+			}
+			// Zero is not a discount — same rule as the token shape below.
+			// Rejecting it at startup beats an event that prices to 0.00 and
+			// reads as "this vendor gave it away".
+			if r.Price <= 0 {
+				return fmt.Errorf("pricing overrides %s: "+where+" needs a positive price per %s in CNY", path, id, r.Unit)
+			}
+		} else if r.Input <= 0 || r.Output <= 0 {
+			// Zero is not a discount. A gateway call is never free, and a rate
+			// left at zero would understate a real bill in silence.
+			return fmt.Errorf("pricing overrides %s: "+where+" needs positive input and output rates in CNY per million tokens, or a unit+price pair", path, id)
 		}
 		if r.CacheWrite5m != 0 || r.CacheWrite1h != 0 || r.CacheRead != 0 {
 			return fmt.Errorf("pricing overrides %s: "+where+" sets a cache rate, but this source reports no cache tokens", path, id)
@@ -172,9 +187,22 @@ func validateGatewayRates(path, provider string, models map[string]Rates) error 
 	return nil
 }
 
+// gatewayRate copies exactly the fields this source can price on.
+//
+// The field list is explicit, not a struct copy: the cache columns must never
+// survive into a gateway rate (this source reports no cache tokens, and
+// validateGatewayRates rejects a file that sets them — silently carrying one
+// through would make that rejection a lie). ★ The cost of an explicit list is
+// that a NEW field is dropped in silence unless someone adds it here; that
+// already happened once, to Unit/Price (#6130), and the symptom was a
+// per-image rate quietly pricing as "CNY 0 in / 0 out per MTok".
+func gatewayRate(r Rates) Rates {
+	return Rates{Input: r.Input, Output: r.Output, Unit: r.Unit, Price: r.Price}
+}
+
 func (g *gatewayPricing) merge(o *gatewayOverride) {
 	for id, r := range o.Models {
-		g.rates[Normalize(id)] = Rates{Input: r.Input, Output: r.Output}
+		g.rates[Normalize(id)] = gatewayRate(r)
 	}
 	for name, p := range o.Providers {
 		if p.Label != "" {
@@ -189,7 +217,7 @@ func (g *gatewayPricing) merge(o *gatewayOverride) {
 			g.byProvider[name] = at
 		}
 		for id, r := range p.Models {
-			at[Normalize(id)] = Rates{Input: r.Input, Output: r.Output}
+			at[Normalize(id)] = gatewayRate(r)
 		}
 	}
 	if o.RatesAsOf != "" {
@@ -259,6 +287,45 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 		}
 		return nil
 	}
+	if g.cnyPerUSD <= 0 {
+		d.PriceBasis = "unpriced: no usable CNY/USD rate"
+		return nil
+	}
+
+	// ── the per-unit shape ───────────────────────────────────────────────
+	// Images by the picture, audio by the second: a growing share of what the
+	// gateway fronts is not billed per token at all. These rows price off the
+	// event's own declared usage and NEVER fall back to the token columns —
+	// an image call carries no tokens, so a fallback would price every one of
+	// them at 0.00 and report a real bill as free.
+	if r.PricedByUnit() {
+		if d.Usage == nil {
+			d.PriceBasis = fmt.Sprintf("unpriced: %s is priced per %s, but this event declared no usage", e.Model, r.Unit)
+			return nil
+		}
+		// A mismatched unit is a wiring bug between the shipper and the rate
+		// table, and multiplying anyway would put a confidently wrong number
+		// in a column that means real money.
+		if d.UsageUnit != r.Unit {
+			d.PriceBasis = fmt.Sprintf("unpriced: %s is priced per %s, but this event reports usage in %q", e.Model, r.Unit, d.UsageUnit)
+			return nil
+		}
+		if *d.Usage < 0 {
+			d.PriceBasis = "unpriced: implausible usage"
+			return nil
+		}
+		cny := *d.Usage * r.Price
+		usd := cny / g.cnyPerUSD
+		contract := "any provider"
+		if pricedBy != "" {
+			contract = "provider " + pricedBy
+		}
+		d.PriceBasis = fmt.Sprintf("billed: %s, CNY %g per %s × %g %s as of %s, converted at %.4f CNY/USD pinned %s",
+			contract, r.Price, r.Unit, *d.Usage, r.Unit, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
+		return &usd
+	}
+
+	// ── the per-token shape ──────────────────────────────────────────────
 	if e.InputTokens < 0 || e.OutputTokens < 0 {
 		d.PriceBasis = "unpriced: implausible token counts"
 		return nil
@@ -271,11 +338,6 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 		d.PriceBasis = "unpriced: gateway rates cover input and output only"
 		return nil
 	}
-	if g.cnyPerUSD <= 0 {
-		d.PriceBasis = "unpriced: no usable CNY/USD rate"
-		return nil
-	}
-
 	const perMillion = 1_000_000.0
 	cny := float64(e.InputTokens)/perMillion*r.Input + float64(e.OutputTokens)/perMillion*r.Output
 	usd := cny / g.cnyPerUSD

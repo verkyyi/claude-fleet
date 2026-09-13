@@ -37,7 +37,39 @@ type Rates struct {
 	CacheWrite5m float64 `json:"cache_write_5m"`
 	CacheWrite1h float64 `json:"cache_write_1h"`
 	CacheRead    float64 `json:"cache_read"`
+
+	// Unit and Price are the OTHER shape a rate can take: a price per
+	// non-token billing unit — per image, per second of audio, per call.
+	// They exist because a growing share of what the gateway fronts is not
+	// billed per token at all, and the alternative (invent a token count and
+	// reuse Input/Output) is the one thing this package refuses: a made-up
+	// number would be summed into every token total in this hub and read as
+	// real. Same rule as Details.Usage, one layer up.
+	//
+	// A rate carries EXACTLY ONE shape. validateGatewayRates enforces that,
+	// because a rate carrying both would price the same event twice and there
+	// is no reading of the result that is correct.
+	//
+	// Price is in the same currency as Input/Output (CNY for the gateway
+	// table), but per Unit rather than per million tokens.
+	Unit  string  `json:"unit,omitempty"`
+	Price float64 `json:"price,omitempty"`
 }
+
+// PricedByUnit says which of the two shapes this rate carries. It reads the
+// unit, not the price: a rate naming a unit with a zero price is a
+// misconfiguration to be reported, not a token rate to fall back to.
+func (r Rates) PricedByUnit() bool { return r.Unit != "" }
+
+// GatewayUnits are the billing units the gateway table accepts. The list is
+// closed on purpose: a typo'd unit would never match an event's UsageUnit,
+// and the event would stay silently unpriced instead of loudly rejected at
+// startup.
+//
+// "call" is the flat-fee escape hatch (bill per request regardless of size);
+// it pairs with an event whose Usage is the number of calls the row covers,
+// which for a one-row-per-call source is 1.
+var GatewayUnits = map[string]bool{"image": true, "second": true, "char": true, "call": true}
 
 // Cache rates are published as multiples of the base input rate rather than as
 // independent numbers, so deriving them keeps the table honest: a corrected
