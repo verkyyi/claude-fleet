@@ -23,13 +23,24 @@
 #     read the prmap_<slug> cache pr-refresh already writes  → ZERO extra gh
 #     candidates = its MERGED/CLOSED PRs whose issue-<N> STILL has a live worktree
 #                  or window (a local git/tmux check — zero gh)
-#     clean up to FLEET_CLEANUP_MAX_PER_TICK of them via bin/fleet-cleanup.sh <pr>
+#     clean up to FLEET_CLEANUP_MAX_PER_TICK of them via bin/fleet-cleanup.sh <pr>,
+#       each under a FLEET_CLEANUP_CANDIDATE_TIMEOUT wall-clock budget
 #     release the lease
 #
 #   Serialization with base-movers is the SHARED per-repo land-lease INSIDE
 #   fleet-cleanup.sh (base fast-forward) — this daemon's own lease only stops two
 #   cleanup ticks from double-driving one repo. Idempotent: a PR whose worktree +
 #   window are already gone short-circuits (skip:nothing) inside fleet-cleanup.sh.
+#
+# EVERY CANDIDATE RUNS UNDER A WALL-CLOCK BUDGET (issue #587). This daemon is a
+# single process on StartInterval=60: launchd starts no new tick while the old one
+# is alive, so one wedged candidate does not slow this fleet down — it stops the
+# cleanup of EVERY fleet behind it. On 2026-09-13 a tick sat 67 MINUTES inside one
+# fleet-cleanup.sh call and froze all three fleets' pipelines. fleet-cleanup.sh has
+# several calls that can block indefinitely (gh pr view, git pull --ff-only, the
+# land-lease queue), and hardening them one at a time never covers the next one, so
+# the budget goes HERE, around the whole call. A timed-out candidate is killed tree
+# and all, logged, and skipped; the tick moves on to the next one.
 #
 # DETECTION IS CACHE + LOCAL ONLY. We read prmap_<slug> (branch<TAB>#num<TAB>state
 # <TAB>ci<TAB>ready) — the file the dash + watcher already read, written with
@@ -40,6 +51,7 @@
 # Env knobs (all per-fleet, in $FLEET_CONF_DIR/<session>.conf or global fleet.conf):
 #   FLEET_CLEANUP              0 to disable for this fleet          (default 1/on)
 #   FLEET_CLEANUP_MAX_PER_TICK max PRs reaped per fleet per tick    (default 4)
+#   FLEET_CLEANUP_CANDIDATE_TIMEOUT  per-candidate budget, seconds   (default 120)
 #   FLEET_CLEANUP_LEASE_TTL    lease lifetime, seconds              (default 300)
 #   FLEET_DISPATCH_LEASE_DIR   lease dir (shared)    (default ~/.claude/leases)
 set -uo pipefail
@@ -133,6 +145,14 @@ cleanup_fleet() { (
     exit 0
   fi
 
+  # Per-candidate wall-clock budget. A timed-out candidate spends a SLOT (not just
+  # its own budget), so a tick is bounded by k * timeout no matter how many sick
+  # candidates the prmap holds — the point of the exercise is that the NEXT tick
+  # starts on time. An explicit 0 disables the budget (the pre-#587 behaviour); a
+  # non-numeric value is a typo, not a request to disable, so it falls back to 120.
+  cto="${FLEET_CLEANUP_CANDIDATE_TIMEOUT:-120}"
+  case "$cto" in ''|*[!0-9]*) cto=120 ;; esac
+
   # Single-writer per REPO: two sessions serving one repo don't double-drive a reap.
   lease="$LEASE_DIR/cleanup-$slug.lock"
   me="cleanup:$sess:$$@$(hostname -s 2>/dev/null || echo host)"
@@ -160,7 +180,7 @@ cleanup_fleet() { (
     ftmux list-windows -t "$sess" -F '#{@issue}' 2>/dev/null | sed 's/[^0-9]//g'
   )
 
-  cleaned=0; considered=0
+  cleaned=0; considered=0; timedout=0
   while IFS=$'\t' read -r pr iss; do
     [ -z "$pr" ] && continue
     # live worktree or window for this issue?
@@ -176,26 +196,40 @@ cleanup_fleet() { (
 
     # Drive the shared mechanical janitor. Its ONE stdout line is the result token;
     # its progress notes go to stderr → this daemon's log. Pass FLEET_SESSION so it
-    # resolves THIS fleet's repo/main/socket (it has no $TMUX).
-    tok=$(FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" "$pr")
+    # resolves THIS fleet's repo/main/socket (it has no $TMUX) — via `env`, because
+    # fleet_timebox runs its argv directly (no eval, so no VAR=val prefix).
+    tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" "$pr")
     rc=$?
+    if [ "$rc" = 124 ]; then
+      # fleet_timebox TERMs the whole TREE, then KILLs the survivors a second later:
+      # fleet-cleanup.sh blocked in a child (gh, git) only reaches its own TERM trap
+      # once that child dies, and that trap is what releases the shared land lease.
+      # Whatever it still misses is steal-if-stale. The candidate keeps its debris
+      # and is re-tried next tick — a slot spent, not a pipeline stalled.
+      timedout=$((timedout + 1))
+      log "$sess: PR #$pr (#$iss) — timeout after ${cto}s (FLEET_CLEANUP_CANDIDATE_TIMEOUT) — killed, next candidate  [slot $((cleaned + timedout))/$k]"
+      [ "$((cleaned + timedout))" -ge "$k" ] && break
+      continue
+    fi
     case "$tok" in
-      cleaned:*) log "$sess: $tok  (PR #$pr, issue #$iss)  [slot $((cleaned + 1))/$k]"; cleaned=$((cleaned + 1)) ;;
+      cleaned:*) log "$sess: $tok  (PR #$pr, issue #$iss)  [slot $((cleaned + timedout + 1))/$k]"; cleaned=$((cleaned + 1)) ;;
       skip:*)    log "$sess: PR #$pr (#$iss) — $tok (nothing to reap)" ;;
       error:*)   log "$sess: PR #$pr cleanup error ($tok)" ;;
       *)         log "$sess: PR #$pr cleanup returned rc=$rc token='${tok:-none}'" ;;
     esac
-    [ "$cleaned" -ge "$k" ] && break
+    [ "$((cleaned + timedout))" -ge "$k" ] && break
   done <<EOF
 $(final_issue_prs "$prmf")
 EOF
 
+  to_note=""
+  [ "$timedout" -gt 0 ] && to_note=", $timedout timed out (${cto}s each)"
   if [ "$considered" -eq 0 ]; then
     log "$sess: no MERGED/CLOSED PRs with leftover worktree/window in the prmap cache"
   elif [ "$cleaned" -eq 0 ]; then
-    log "$sess: nothing reaped (all candidates already clean)"
+    log "$sess: nothing reaped (all candidates already clean$to_note)"
   else
-    log "$sess: reaped $cleaned PR(s) (cap/tick=$k)"
+    log "$sess: reaped $cleaned PR(s) (cap/tick=$k$to_note)"
   fi
 ) }
 

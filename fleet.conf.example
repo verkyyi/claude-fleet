@@ -325,6 +325,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # cooldown). Default 4.
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
 #FLEET_CLEANUP_MAX_PER_TICK=4
+# Wall-clock budget for ONE candidate's fleet-cleanup.sh call (issue #587). The daemon
+# is a single process on a ~60s interval, so a candidate that wedges (a hung `gh pr
+# view`, `git pull`, or lease queue) stalls the cleanup of EVERY fleet behind it — one
+# did, for 67 minutes. On expiry the whole process tree is TERMed then KILLed and the
+# tick moves to the next candidate. A timeout spends a slot, so a tick is bounded by
+# batch size x this. Default 120; 0 runs unbudgeted. See docs/CLEANUP.md.
+# @label=Cleanup per-candidate timeout @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_CLEANUP_CANDIDATE_TIMEOUT=120
 
 # --- Close-on-exit hook (bin/session-end-hook.sh, SessionEnd) --------------------
 # ON by default, GLOBALLY. The SessionEnd Claude Code hook reacts the instant an

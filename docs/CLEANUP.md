@@ -45,7 +45,7 @@ first, then the worktree, then the branch.
 | `/fleet-claim` ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force — it says so on the issue and stops. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
 | `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch. Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
-| `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each. Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
+| `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | *reap now* from the hub | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>` from the hub pane. Same mechanical core. |
 | `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green; the old dash `⌃l` arming affordance (`dash-arm-merge.sh`) was pruned in #289. Either way the cleanup daemon reaps afterwards. |
 | `bin/fleet-land-lease.sh` | Kept for the per-repo **base fast-forward** serialization (renamed conceptually to a base lease). `fleet-cleanup.sh` takes it only for the quick base pull — no hold-through-green. |
@@ -129,12 +129,44 @@ row and one close. **ON by default, globally** — set `FLEET_CLOSE_ON_EXIT=0` i
 per-fleet `FLEET_CLOSE_ON_EXIT` is ignored — the switch is global-only, not per-fleet.
 It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
 
+## A wedged candidate can't stall the pipeline
+
+The daemon is a **single process** on `StartInterval=60`: launchd starts no new
+tick while the previous one is still alive. So a `fleet-cleanup.sh` call that
+never returns does not merely slow *its* fleet down — it stops the cleanup of
+**every** fleet on the machine behind it. On 2026-09-13 one tick sat **67 minutes**
+inside a single candidate and froze all three fleets' pipelines (issue #587).
+
+`fleet-cleanup.sh` has several calls that can block indefinitely — `gh pr view`,
+`git pull --ff-only`, the land-lease queue — and hardening them one at a time
+never covers the next one. So the budget sits in the daemon, around the **whole**
+call: every candidate runs under `fleet_timebox` (`bin/fleet-lib.sh`; pure bash,
+because macOS ships neither `timeout(1)` nor `gtimeout`).
+
+On expiry the whole process **tree** is TERMed and then KILLed a second later —
+tree, because a script blocked in a child only reaches its own `TERM` trap once
+that child dies, and for `fleet-cleanup.sh` that trap is what releases the shared
+land lease. The daemon logs
+
+```
+… fleet-cleanup: <sess>: PR #123 (#45) — timeout after 120s (FLEET_CLEANUP_CANDIDATE_TIMEOUT) — killed, next candidate  [slot 1/4]
+```
+
+and moves on to the next candidate. The killed one keeps its debris and is simply
+re-tried next tick. A timeout **spends a per-tick slot**, so a tick is bounded by
+`FLEET_CLEANUP_MAX_PER_TICK × FLEET_CLEANUP_CANDIDATE_TIMEOUT` (default 8 minutes,
+worst case) however many sick candidates the `prmap` holds — the point being that
+the *next* tick starts on time. Set `FLEET_CLEANUP_CANDIDATE_TIMEOUT=0` to run
+unbudgeted (the pre-#587 behaviour); a non-numeric value is treated as a typo and
+falls back to 120.
+
 ## Config
 
 | Key | Default | Meaning |
 |---|---|---|
 | `FLEET_CLEANUP` | `1` (on) | Set `0` to opt a fleet out of the cleanup daemon (the worktree-autoclean janitor still backstops merged worktrees). |
 | `FLEET_CLEANUP_MAX_PER_TICK` | `4` | Max PRs reaped per fleet per tick (a stampede guard). |
+| `FLEET_CLEANUP_CANDIDATE_TIMEOUT` | `120` | Wall-clock budget (seconds) for ONE candidate's `fleet-cleanup.sh` call — see [A wedged candidate can't stall the pipeline](#a-wedged-candidate-cant-stall-the-pipeline). `0` disables the budget. |
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
 | `FLEET_CLOSE_ON_EXIT` | `1` (on) | **Global only** (`~/.claude/fleet/fleet.conf`). The `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). Set `0` to disable machine-wide; global-authoritative, so a per-fleet value is ignored. |
