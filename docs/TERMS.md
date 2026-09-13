@@ -111,6 +111,15 @@ they repaint instantly:
   so long-running work doesn't die at the context limit.
 - **Handoff** — a doc that lets a fresh Claude session continue the same work
   from where another left off.
+- **Spawn provenance / child report** — every spawned window carries `@origin`:
+  the key (`issue-<N>` / `scratch-<N>`) of the session that spawned it, empty for
+  the hub. The dash renders it as the `↳#483` tag and groups children under their
+  parent; since #574 it is also an **address** — `bin/fleet-report-parent.sh`
+  resolves it back to the parent's live window and pushes a fixed four-line
+  `[child-report]` over the peer inbox when the child merges, blocks, or is
+  reaped. So a worker that `--spawn`ed a follow-up hears the outcome instead of
+  polling for it. Hub-spawned work sends nothing; `FLEET_CHILD_REPORT=0` turns it
+  off per fleet.
 - **Account pool / failover** — an optional set of Claude *subscription* accounts
   (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
   launcher `bin/fleet-claude.sh` exports the **active** account's token per

@@ -159,6 +159,14 @@ if [ "${1:-}" = "--exec" ]; then
   wid="$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null)"
   wname="$(tmux display-message -t "$target" -p '#{window_name}' 2>/dev/null)"
   worigin="$(tmux display-message -t "$target" -p '#{@origin}' 2>/dev/null)"   # provenance (#503), read pre-kill
+  # Child-report BACKSTOP (issue #574): push the outcome to the session that
+  # spawned this one before reap_* kills the window. --only-once because the ship
+  # path already reported (and stamped @reported) for anything that landed on its
+  # own — this covers the ⌃x on a worker that never got there. A missing parent is
+  # a silent exit 0 inside the script, so it can never block the reap.
+  bash "$BIN/fleet-report-parent.sh" --win "$target" --only-once \
+    --state reaped --verdict "$verdict" --origin "$worigin" --issue "$iss" \
+    >/dev/null 2>&1 || :
   case "$verdict" in keep) reap_keep ;; *) reap_full ;; esac
   exit 0
 fi
@@ -235,6 +243,13 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   scratch_record() {
     fleet_reap_record "$sreason" "${FLEET_REPO:-}" "$MAIN" "" \
       "$swt" "$wid" "$FLEET_SESSION" "" "$sbranch" "$swname" "$sworigin"
+    # Child-report BACKSTOP (issue #574), in the same "while the window still
+    # stands" slot as the record — every path that closes this scratch calls
+    # scratch_record first, and only those paths. --only-once: a scratch that
+    # already reported its own outcome does not report again.
+    bash "$BIN/fleet-report-parent.sh" --win "$target" --only-once \
+      --state reaped --verdict "$sreason" --origin "$sworigin" --key "$sbranch" \
+      >/dev/null 2>&1 || :
   }
 
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a

@@ -5,9 +5,9 @@
 The one skill a freshly-spawned worker runs. It formalizes the whole worker
 lifecycle that the seed prompt used to spell out across three skills: **claim**
 the bound issue, **load your charter**, **ground** yourself in the issue + code,
-then implement under a **standing contract** that ends by **opening a PR and
-landing it yourself once the gate is green** — and signals a blocker loudly rather
-than stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee
+then implement under a **standing contract** that ends by **opening a PR, landing
+it yourself once the gate is green, and reporting the outcome back to whoever
+spawned you** — and signals a blocker loudly rather than stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee
 at claim time; issue comments as you go) — and, for adjacent work it spots, MAY
 file a *new* tracked issue through the one filer channel, and spawn a worker for
 it — then, at ship, pushes your branch, opens a PR, and merges it when the checks
@@ -39,7 +39,10 @@ checkout / merge method / seat), the **issue** it resolved from your window's
 `@issue` binding — falling back to the `issue-<N>` worktree in cwd for a window
 that lost the binding — with its title, state, labels, **assignees**, body and
 every comment; the **claim** verdict; your **charter layers**; and this fleet's
-**implementation directive**.
+**implementation directive**. It also prints an **`origin:`** line — who spawned
+you (issue #574). When it names a window key rather than `none`, a live session is
+waiting on this issue's outcome, and reporting back to it is the last step of the
+ship sequence below.
 
 Act on the exit code — these are the rails, one code each, each printed on stderr:
 
@@ -161,7 +164,9 @@ override them):
   follow-up is genuinely independent and worth a worker *now*; otherwise file it
   bare and let it sit on the backlog. What stays fixed either way: **don't chase
   it in THIS worktree** — one worktree, one issue, one PR. A spawned worker
-  claims and ships it on its own.
+  claims and ships it on its own, and **pushes a `[child-report]` back to you**
+  when it does (issue #574) — so don't poll for it, and see the acknowledge-don't-
+  take-over rule below for what to do when one arrives.
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane. You can't
   see your own context meter (Claude Code shows it to the human, not the model),
@@ -210,7 +215,20 @@ override them):
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.
-  5. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
+  5. **Report to whoever spawned you** (issue #574) — one command, right after the
+     merge is confirmed and before you stop:
+
+     ```sh
+     ~/.claude/fleet/bin/fleet-report-parent.sh --state merged --pr <PR> \
+       --summary 'one or two lines: what changed, anything the parent must know'
+     ```
+
+     It reads the `origin:` line the brief printed (your window's `@origin`) and
+     pushes a fixed 4-line report to that session over the peer channel. **A
+     hub-spawned worker needs no special case**: with no parent — or a parent that
+     has already been reaped — it exits 0 silently, so this is one unconditional
+     line on every ship path, never a decision. It cannot fail your merge.
+  6. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
      and records the resume ledger, so expect this window to vanish a minute or
      so after the merge — that's the reap, not a crash. Don't start new work in a
      landed worktree; a follow-up gets its own issue (and, if it's worth one now,
@@ -232,7 +250,21 @@ override them):
   wrapper) and set the window red so it's visible on the dash:
   `sh ~/.claude/fleet/bin/set-claude-state.sh needs`. Then stop — don't spin.
   This is visibility, not permission-seeking: everything you *can* unblock
-  yourself, you should.
+  yourself, you should. Blocked is an OUTCOME too, so report it the same way a
+  merge is reported:
+  `~/.claude/fleet/bin/fleet-report-parent.sh --state blocked --summary '<why>'`
+  — a session that spawned you and is waiting on the result should not learn it
+  by watching the dash go red.
+- **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** A
+  worker you spawned (`--spawn`) pushes its outcome to you when it lands, blocks,
+  or is reaped. It is four lines and it ends `no reply needed` — that is literal.
+  **Do not reply to it, do not open its PR, do not adopt its follow-up work.**
+  Note it, and go straight back to your own issue. The report is context, not a
+  task: replying costs you a turn you are not being asked for, and taking over
+  the child's work is how one worker ends up holding two issues and neither
+  worktree matches. If it says `BLOCKED` and the blocker is genuinely yours to
+  clear, clear it — in your own worktree, or by filing an issue — but that is the
+  exception, not the default reading.
 
 ## 3. Report + proceed
 

@@ -232,6 +232,24 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto-fill batch size @group=autofill @tier=advanced @scope=fleet @edit=int @unit=per tick
 #FLEET_AUTOFILL_MAX_PER_TICK=1
 
+# --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
+# ON by default. When a worker that was SPAWNED BY ANOTHER SESSION (`@origin` names
+# an `issue-<N>` / `scratch-<N>` window — a `fleet-issue-file.sh --spawn` follow-up,
+# a scratch escalation) merges its PR, hits a blocker, or is reaped, it PUSHES a
+# fixed four-line report to that session over the peer channel (fleet_peer_send, the
+# SendMessage inbox socket — never send-keys). Before this, the parent's only option
+# was to poll: the dash, `gh pr view`, ListAgents.
+#
+# COST, and why the switch exists: the report WAKES the parent for one turn, and the
+# context it spends is context that session did not choose to spend. A fan-out of
+# five children is five interrupts, and a parent near its handoff threshold can least
+# afford them — which is why the envelope is capped at five lines and ends
+# `no reply needed`. Hub-spawned work is unaffected either way (no parent ⇒ nothing
+# is ever sent), so turn this off only if you fan out widely AND find the interrupts
+# cost more than the polling they replace.
+# @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CHILD_REPORT=1
+
 # --- Default milestone for filed issues (bin/fleet-issue-file.sh, issue #433) ----
 # Guarantee EVERY filed issue gets a milestone so nothing lands unsorted. When set,
 # the one issue-filer channel (⌃n, the dash new-session box, the hub's file+spawn
