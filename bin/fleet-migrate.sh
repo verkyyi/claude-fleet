@@ -196,6 +196,12 @@ migrate_one() {
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     return 0
   fi
+  # A migrate is a CLOSE + RESUME, not a death: mark the window as already reported
+  # (issue #574) so the SessionEnd hook's child-report backstop does not tell this
+  # session's PARENT that its child was reaped — seconds before the same session
+  # comes back in a new window. The resumed session reports for real when it ships,
+  # and the new window below starts with the stamp cleared.
+  TM set-window-option -t "$wid" @reported 1 2>/dev/null
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
@@ -245,6 +251,9 @@ migrate_one() {
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
   fi
   TM set-window-option -t "$nw" @migrated "$(now)" 2>/dev/null
+  # …and clear the pre-exit suppression: the resumed session still owes its parent a
+  # report, and (on the CLOSE_ON_EXIT=0 branch) $nw IS the window that carries it.
+  TM set-window-option -t "$nw" -u @reported 2>/dev/null
   # 5. verify: the resumed process's token, read out of its environment.
   local ncp="" nl=""
   for ((i=1; i<=BOOT_WAIT; i++)); do

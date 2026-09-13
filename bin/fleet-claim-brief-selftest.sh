@@ -16,6 +16,9 @@
 #           cost 3–4 reads: the --comments dump, the --json assignees check, and
 #           the re-fetch every real session then did anyway). The assignee comes
 #           out of that same read — the claim is a READ here, never a write.
+#   ORIGIN  the `origin:` line (issue #574) — who spawned this worker. Present in
+#           EVERY shape, including "none": the child's ship step reports back to
+#           that session, and a silently-omitted line reads as a skipped step.
 #   ATOMIC  the charter layers + the per-fleet implementation directive are
 #           printed on EVERY successful run, and even when the gh read fails —
 #           they were separate steps a worker could skip, and #454 did skip them.
@@ -56,6 +59,7 @@ cat > "$WORK/fakebin/tmux" <<'TMUX_EOF'
 case " $* " in
   *'#{session_name}'*) printf '%s\n' "${FAKE_SESSION-}" ;;
   *'#{@issue}'*)       printf '%s\n' "${FAKE_AT_ISSUE-}" ;;
+  *'#{@origin}'*)      printf '%s\n' "${FAKE_AT_ORIGIN-}" ;;
   *)                   : ;;   # list-panes (hub lookup) → no hub pane
 esac
 exit 0
@@ -100,6 +104,7 @@ run() {
   OUT=$(cd "$dir" && env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK" \
           FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$CONF" TMUX_PANE='%9' \
           FAKE_SESSION="${FAKE_SESSION-$SESS}" FAKE_AT_ISSUE="${FAKE_AT_ISSUE-}" \
+          FAKE_AT_ORIGIN="${FAKE_AT_ORIGIN-}" \
           GH_CALLS="${GH_CALLS:-/dev/null}" GH_RC="${GH_RC:-0}" \
           GH_ASSIGNEES="${GH_ASSIGNEES-}" \
           bash "$CLI" "$@" 2>"$WORK/err"); RC=$?
@@ -188,6 +193,35 @@ has 'claim: UNCLAIMED' || fail "an unassigned issue must read as UNCLAIMED" "$OU
 has "gh issue edit 77 --repo $REPO --add-assignee @me" \
   || fail "the miss must print the exact assign command (the brief never writes)" "$OUT"
 ok "CLAIM an unassigned issue reads UNCLAIMED + prints the assign the caller runs"
+
+# ===== ORIGIN: who spawned this worker (issue #574) =============================
+# The brief is where a child first learns it HAS a parent — without this line the
+# only way to know would be a separate tmux read the worker has no reason to make,
+# and the ship step's report-back would never fire.
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=issue-483 run "$WORK/widgets-issue-12"
+has 'origin: issue-483' || fail "a worker-spawned child must be told its parent key" "$OUT"
+has 'issue #483'        || fail "the origin line should name the parent in issue form" "$OUT"
+has 'fleet-report-parent.sh' \
+  || fail "the origin line must point at the report-back command" "$OUT"
+ok "ORIGIN a worker parent is named, with the report-back command"
+
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-7 run "$WORK/widgets-issue-12"
+has 'origin: scratch-7' || fail "a scratch parent must be named too" "$OUT"
+has 'scratch session ~7' || fail "a scratch parent renders in the ~N grammar" "$OUT"
+ok "ORIGIN a scratch parent is named in the dash's own ~N grammar"
+
+# No parent: SAY so. A silent omission would read as "the step was skipped" — the
+# exact #454 failure the atomic brief exists to make impossible.
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN='' run "$WORK/widgets-issue-12"
+has 'origin: none' || fail "a hub-spawned worker must be told it has NO parent" "$OUT"
+has 'hub-spawned'  || fail "the no-parent case must state why (hub-spawned)" "$OUT"
+ok "ORIGIN hub-spawned reads 'origin: none', never a silent omission"
+
+# A daemon / cross-fleet origin is not an address — say that, don't imply a parent.
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=autofill run "$WORK/widgets-issue-12"
+has 'origin: autofill'    || fail "a daemon origin must still be shown" "$OUT"
+has 'not a live-window key' || fail "a non-key origin must be stated as un-addressable" "$OUT"
+ok "ORIGIN a daemon/cross-fleet origin is shown but marked un-addressable"
 
 # ===== ATOMIC: charter layers + per-fleet directive on EVERY run ================
 # No file layers and the tap-first flag off ⇒ the brief still says so explicitly,

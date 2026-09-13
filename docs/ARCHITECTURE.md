@@ -35,7 +35,8 @@ bridge and the migrator all agree on:
 | `@issue` | the GitHub issue this worker is bound to (absent ⇒ not a worker) |
 | `@raw` | `1` ⇒ a scratch session: no issue, its own `scratch-<N>` worktree |
 | `@worktree` | the git worktree the window owns (survives the pane `cd`-ing away) |
-| `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … |
+| `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window |
+| `@reported` | `1` ⇒ this window already pushed its outcome to its `@origin` parent (the reap-time backstop skips it) |
 | `@claude_state`, `@claude_state_ts` | the state glyph + when it last changed |
 | `@cc_account`, `@cc_agent` | which subscription account / which agent it runs |
 

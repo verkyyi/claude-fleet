@@ -137,6 +137,17 @@ if [ "${1:-}" = "--exec" ]; then
       # window is still alive, exactly like the name.
       worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
       fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
+
+      # Child-report BACKSTOP (issue #574). The ship path in /fleet-claim reports the
+      # outcome to the spawning session itself and stamps @reported, so --only-once
+      # makes this fire ONLY for a session that never got there — a crash, a hand
+      # ⌃d on unfinished work. Must run BEFORE the kill below: the script reads
+      # @origin/@reported off a window that is about to stop existing. Every "no
+      # parent" case (hub-spawned, parent already reaped, switch off) is a silent
+      # exit 0 inside it, and its failure can never affect the reap.
+      bash "$BIN/fleet-report-parent.sh" --win "$win" --only-once \
+        --state reaped --verdict "$verdict" --origin "$worigin" --key "$key" \
+        >/dev/null 2>&1 || :
     fi
     [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
     exit 0
@@ -185,6 +196,12 @@ if [ "${1:-}" = "--exec" ]; then
   # @origin rides along as the row's provenance (issue #503) — read pre-kill.
   worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
   fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch" "$wname" "$worigin"
+
+  # Child-report BACKSTOP (issue #574) — see the raw branch above for why this is
+  # --only-once and why it must precede the kill.
+  bash "$BIN/fleet-report-parent.sh" --win "$win" --only-once \
+    --state reaped --verdict "$verdict" --origin "$worigin" --issue "$iss" \
+    >/dev/null 2>&1 || :
 
   # CLOSE THE WINDOW FIRST (mirrors dash-reap reap_full, #313): it frees the pane's
   # shell if it was cwd'd inside the worktree, so the remove below isn't blocked, and

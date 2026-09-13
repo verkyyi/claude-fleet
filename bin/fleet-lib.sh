@@ -988,6 +988,71 @@ fleet_origin_canon() {
   printf '%s' "$ex"
 }
 
+# fleet_win_for_key <key> [socket] — the INVERSE of fleet_origin_key (issue #574):
+# a provenance key (`issue-<N>` / `scratch-<N>`) → the window id currently carrying
+# it on THIS fleet's socket, or nothing (exit 1). @origin has been stamped on every
+# spawned window since #503, but every consumer of it was display/archive (the dash's
+# `↳#483` tag + grouping, the ledger's provenance column) — nothing ever resolved it
+# back to a LIVE window. That resolution is what turns @origin into an ADDRESS, so a
+# finished child can push its outcome to the session that spawned it instead of the
+# parent polling for it.
+#
+# SCOPE is this socket, i.e. this fleet — which is the whole truth a key carries: a
+# key names a window in the fleet that minted it (#516 stamps the SOURCE FLEET NAME,
+# not a key, when a spawn crosses fleets, so a cross-fleet origin never reaches the
+# key branch here). `-a`: the server, matching fleet_wid_used — a warm-pool window
+# carries neither @issue nor a scratch worktree, so it can never answer to a key.
+#
+# Matching mirrors the two readers that already exist, so the three never disagree:
+#   issue-<N>    the window's @issue (what the spawner binds, fleet_origin_key's
+#                first branch)
+#   scratch-<N>  @worktree FIRST, pane cwd as the fallback, through the SAME strict
+#                digits-only basename rule as fleet_scratch_key / the dash's okey_v
+#                (inlined here for the same reason okey_v inlines it: no subshell
+#                per window)
+# First match wins; the spawners already refuse a second window for a bound issue.
+fleet_win_for_key() {
+  local key="${1:-}" sock="${2:-}" wl line wid rest iss wt path cand bn sn
+  case "$key" in
+    issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  # window_name is NOT read here: the free-text field would have to ride the same
+  # `|` separator (a tab/0x1f separator prints as a literal `\037` on tmux ≤3.4).
+  if [ -n "$sock" ]; then
+    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+  else
+    wl=$(tmux list-windows -a -F '#{window_id}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+  fi
+  [ -n "$wl" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    wid=${line%%|*};  rest=${line#*|}
+    iss=${rest%%|*};  rest=${rest#*|}
+    wt=${rest%%|*};   path=${rest#*|}
+    case "$key" in
+      issue-*)
+        [ -n "$iss" ] && [ "issue-$iss" = "$key" ] && { printf '%s' "$wid"; return 0; }
+        ;;
+      scratch-*)
+        for cand in "$wt" "$path"; do
+          bn=${cand##*/}
+          case "$bn" in
+            scratch-*)   sn=${bn#scratch-} ;;
+            *-scratch-*) sn=${bn##*-scratch-} ;;
+            *)           continue ;;
+          esac
+          case "$sn" in ''|*[!0-9]*) continue ;; esac
+          [ "scratch-$sn" = "$key" ] && { printf '%s' "$wid"; return 0; }
+        done
+        ;;
+    esac
+  done <<EOF
+$wl
+EOF
+  return 1
+}
+
 # The RECORD half of "record before remove" (issue #384): given a worktree a reaper
 # is ABOUT to prune, write the matching /fleet-history ledger row so the finished
 # session stays listed + resumable no matter WHICH janitor reaps it. History rows

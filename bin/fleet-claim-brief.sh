@@ -17,7 +17,9 @@
 # there is no separate step left to skip.
 #
 # It prints, in order:
-#   fleet     — session / repo / base branch / base checkout / merge method / seat
+#   fleet     — session / repo / base branch / base checkout / merge method / seat,
+#               and (issue #574) the window's `@origin`: WHO spawned this worker,
+#               so the child knows from turn one that it owes someone a report
 #   issue     — number, title, state, labels, ASSIGNEES (the claim), url, body and
 #               every comment, from ONE `gh issue view --json …` read
 #   claim     — already claimed (pre-claim at spawn) vs UNCLAIMED + the exact
@@ -82,6 +84,11 @@ main="${FLEET_MAIN:-}"
 # a window that lost its binding (hand-attached / renamed), mirroring fleet_seat.
 at_issue=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@issue}' 2>/dev/null)
 at_issue="${at_issue//[^0-9]/}"
+# Spawn provenance (issue #574): the SAME @origin the dash already renders as `↳#483`,
+# read here so the worker knows it has a parent to report back to at ship time. One
+# tmux read, zero gh cost; empty ≡ the operator spawned it from the hub.
+at_origin=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@origin}' 2>/dev/null)
+at_origin=$(printf '%s' "$at_origin" | tr -cd 'A-Za-z0-9._-')
 cwd=$(pwd -P 2>/dev/null)
 wt_issue=''
 case "$cwd" in
@@ -117,6 +124,16 @@ printf 'merge=%s  (how you land: gh pr merge --%s --delete-branch on a READY ver
 printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
   "$issue" "${at_issue:-none}" "${wt_issue:-none}" \
   "$([ -n "$issue_arg" ] && printf ' --issue=%s' "$issue_arg")"
+# The `origin:` line is the address half of the ship step (issue #574): when it
+# names a window key, /fleet-claim's last move before stopping is one
+# fleet-report-parent.sh call, so the session that spawned this one hears the
+# outcome instead of polling the dash for it.
+case "$at_origin" in
+  issue-*)   printf 'origin: %s (spawned by the worker on issue #%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#issue-}" ;;
+  scratch-*) printf 'origin: %s (spawned by scratch session ~%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#scratch-}" ;;
+  '')        printf 'origin: none (hub-spawned — the operator has the dash; nothing to report back to)\n' ;;
+  *)         printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin" ;;
+esac
 
 # --------------------------------------------------------------- the ONE gh read
 # ONE `gh issue view --json …` serves what used to be three separate reads: the
