@@ -48,6 +48,13 @@ func ProvenanceFor(source string) SourceProvenance {
 		p.RatesAsOf, p.Note = OpenAIRatesAsOf, OpenAIPriceNote
 	case model.SourceGateway:
 		p.RatesAsOf, p.Note = GatewayRatesAsOf, GatewayPriceNote
+	case model.SourceVendorBill:
+		// RatesAsOf stays empty on purpose: there is no rate table behind these
+		// rows, so there is no review date to state. Putting today's date here
+		// would claim a review that never happened; borrowing the gateway's
+		// would attribute these figures to rates that did not produce them.
+		// Each row's own billing period travels with it (TS + Model).
+		p.Note = VendorBillPriceNote
 	default:
 		p.Note = "Unrecognised source: this build has no rate table for it, so its cost figure " +
 			"has no stated basis and belongs in no total."

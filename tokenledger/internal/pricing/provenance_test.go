@@ -7,9 +7,23 @@ import (
 	"github.com/verkyyi/ccquota/internal/model"
 )
 
-// Every source this build knows must have a stated basis and a review date.
-// A figure with neither is a figure nobody can check, and a wrong note is
-// worse than none: it tells the reader the number is something it is not.
+// ratelessSources derive no figure from a rate table, so they have no review
+// date to state. Listing them here — rather than letting an empty RatesAsOf
+// pass for everyone — keeps the staleness guard sharp for every source that
+// DOES carry rates: adding one of those and forgetting its date still fails.
+//
+// A source earns a place here only by answering "where did this number come
+// from" some other way, and its note has to say so in words (asserted below).
+var ratelessSources = map[string]bool{
+	// The invoice is the basis. There is no rate to review, and stamping a date
+	// here would claim a review that never happened.
+	model.SourceVendorBill: true,
+}
+
+// Every source this build knows must have a stated basis: a rate review date,
+// or — for the rateless ones — a note that says where the number came from
+// instead. A figure with neither is a figure nobody can check, and a wrong note
+// is worse than none: it tells the reader the number is something it is not.
 func TestEverySourceHasAStatedBasis(t *testing.T) {
 	for _, s := range model.Sources {
 		p := ProvenanceFor(s)
@@ -19,7 +33,16 @@ func TestEverySourceHasAStatedBasis(t *testing.T) {
 		if p.Kind != model.CostKind(s) || p.Kind == model.CostUnknown {
 			t.Errorf("%s: kind = %q, want %q", s, p.Kind, model.CostKind(s))
 		}
-		if p.RatesAsOf == "" {
+		switch {
+		case ratelessSources[s]:
+			if p.RatesAsOf != "" {
+				t.Errorf("%s: has rates_as_of %q but is listed as rateless — one of the two is wrong", s, p.RatesAsOf)
+			}
+			// The escape hatch costs a sentence: say what the basis IS.
+			if !strings.Contains(strings.ToLower(p.Note), "invoice") {
+				t.Errorf("%s: rateless sources must name their basis in the note (no rate date to fall back on); got %q", s, p.Note)
+			}
+		case p.RatesAsOf == "":
 			t.Errorf("%s: no rates_as_of — a stale rate is a reporting bug and this is what exposes it", s)
 		}
 		if p.Note == "" {

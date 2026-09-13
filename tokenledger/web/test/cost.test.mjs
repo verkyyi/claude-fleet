@@ -39,11 +39,32 @@ test('no export produces a blended total', () => {
   }
 });
 
+// Read the source list out of the Go file instead of keeping a second copy of
+// it here. The old version of this test asserted a hand-written array while
+// calling itself "matches Go" — so the day Go grew a fourth source, the mirror
+// was wrong and the test still passed for every other reason. Now adding a
+// source in Go fails here until lib/cost.js is taught about it.
+function goSources() {
+  const modelDir = new URL('../../internal/model/', import.meta.url);
+  const consts = readFileSync(new URL('model.go', modelDir), 'utf8');
+  const list = readFileSync(new URL('cost.go', modelDir), 'utf8')
+    .match(/var Sources = \[\]string\{([^}]*)\}/);
+  assert.ok(list, 'cannot find model.Sources in internal/model/cost.go');
+  return list[1].split(',').map((s) => s.trim()).filter(Boolean).map((ident) => {
+    const m = consts.match(new RegExp(`${ident}\\s*=\\s*"([^"]+)"`));
+    assert.ok(m, `cannot resolve ${ident} to a string literal in internal/model/model.go`);
+    return m[1];
+  });
+}
+
 test('kinds match model.CostKind in Go', () => {
-  assert.deepEqual(SOURCES, ['claude', 'codex', 'gateway']);
+  assert.deepEqual(SOURCES, goSources(),
+    'lib/cost.js SOURCES has drifted from model.Sources in Go');
   assert.equal(kindOf('claude'), 'notional');
   assert.equal(kindOf('codex'), 'notional');
   assert.equal(kindOf('gateway'), 'billed');
+  // Read off a vendor invoice — different measurement, same kind of money.
+  assert.equal(kindOf('vendor_bill'), 'billed');
   // An unrecognised source is classified as neither, so it lands in no fold.
   assert.equal(kindOf('some-future-thing'), 'unknown');
   const future = { cost: [{ source: 'some-future-thing', kind: 'unknown', events: 1, cost_usd: 7, unpriced_events: 0 }] };

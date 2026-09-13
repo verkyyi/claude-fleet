@@ -5,11 +5,13 @@
 // useful for ranking endpoints and projects against each other and misleading
 // if read as an invoice. Every surface that displays it says so.
 //
-// One source breaks that rule and has to say so louder: gateway usage is
-// pay-per-call, so its figure IS the invoice (see gateway.go). cost_usd
-// therefore means two different things depending on source, which is worse
-// than mixing token counts because it looks like money. Costs from different
-// sources must never be summed.
+// Two sources break that rule and have to say so louder: gateway usage is
+// pay-per-call, so its figure IS the invoice (see gateway.go), and vendor-bill
+// rows are read straight off the provider's invoice (see vendorbill.go) —
+// that one is the only branch here that computes nothing at all. cost_usd
+// therefore means two different KINDS of thing depending on source, which is
+// worse than mixing token counts because it looks like money. Costs of
+// different kinds must never be summed; the two billed ones may be.
 package pricing
 
 import (
@@ -108,6 +110,8 @@ func (t *Table) Cost(ev *model.UsageEvent) *float64 {
 		return codexCost(ev)
 	case model.SourceGateway:
 		return t.gatewayCost(ev)
+	case model.SourceVendorBill:
+		return vendorBillCost(ev)
 	}
 	r, ok := t.rates[Normalize(ev.Model)]
 	if !ok {

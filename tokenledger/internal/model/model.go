@@ -14,6 +14,24 @@ const (
 	// vendors. Unlike the other two it is billed per call, so its CostUSD is
 	// an actual charge rather than an API-equivalent estimate.
 	SourceGateway = "gateway"
+	// SourceVendorBill is spend read straight off a vendor's invoice rather
+	// than metered from a request. It exists because some spend never passes
+	// through anything this hub can observe: asynchronous task APIs (video
+	// generation, file transcription) hand back a vendor-signed result URL and
+	// require publicly fetchable input, so no proxy sits in that data path —
+	// yet the money is real and, measured on the deployment that prompted this,
+	// larger than everything the gateway does see.
+	//
+	// Its CostUSD is THE INVOICE: taken as supplied and never recomputed from a
+	// rate table (see pricing.Table.Cost). Consequences, all deliberate:
+	//   - no per-app attribution. A daily invoice line has no consumer, and
+	//     splitting it by call share would be an estimate wearing real money's
+	//     clothes.
+	//   - no token counters. The billing unit is seconds, images or calls.
+	//   - the collector must only ingest a billing day once the vendor has
+	//     settled it: dedup is by MessageUUID, so a later revision of the same
+	//     day is ignored rather than corrected.
+	SourceVendorBill = "vendor_bill"
 )
 
 // UsageSource preserves compatibility with agents and rows predating sources.
