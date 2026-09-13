@@ -220,6 +220,17 @@ Interactive teardowns (`dash-reap.sh` ⌃x, `bin/session-end-hook.sh`) still cal
 `git worktree remove` directly — a human is watching there, and a follow-up issue
 tracks moving them over.
 
+`dash-reap.sh` is also a **script** interface (it accepts any window handle), and
+a script has no human to answer a confirm popup. Issue #596 gave it a
+non-interactive entry: `--yes` (alias `--force`) takes the branch the confirm
+would have taken — `dirty` → KEEP the worktree, close window + issue; anything
+else → full reap — synchronously, and with **no** attached client it refuses to
+draw a popup at all rather than blocking on a keypress nobody can make. Every
+script-facing exit prints one token on stdout with its own status:
+`reaped:full` / `reaped:keep` (0), `skip:needs-confirm` (3),
+`refused:<slug>` (4). `--yes` removes no dirty worktree, so it adds no data-loss
+path — it only skips the question.
+
 ## Config
 
 | Key | Default | Meaning |

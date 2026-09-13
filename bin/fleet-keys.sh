@@ -124,7 +124,7 @@ print_sheet() {
   key "$(dg scratch)" "raw scratch session — spawns instantly (the fleet's default agent in its own scratch-N worktree, no issue, no prompt)$(dn scratch)"
   key "$(dg agent)" "flip this fleet's default agent for NEW sessions (claude ⇄ codex) — the prompt line shows it (claude ▸ / codex ▸); written to the fleet's conf, so every spawn path follows — this key, prefix+c or FLEET_AGENT in the conf are the ways to pick it (no prompt-line prefix)$(dn agent)"
   key "$(dg rename)" "rename the highlighted window — edit inline on the query line (↵ commits · esc cancels)$(dn rename)"
-  key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean$(dn reap)"
+  key "$(dg reap)" "reap a finished worker (window + worktree + issue) — confirms when the row isn't merged+clean. From a SCRIPT: \`dash-reap.sh <handle> --yes\` takes that confirm branch unasked (a dirty worktree is still KEPT) and prints a result token (\`reaped:full\`/\`reaped:keep\`/\`skip:needs-confirm\`/\`refused:<slug>\`); with no client attached it never pops a box at you$(dn reap)"
   key "$(dg view)" "toggle live ⇄ closed (finished sessions + scratch)$(dn view)"
   key "$(dg restore)" "restore the highlighted landed session into a new window (claude --resume)$(dn restore)"
   key "enter (landed)" "resume the highlighted landed session — same as $(dg restore)"
