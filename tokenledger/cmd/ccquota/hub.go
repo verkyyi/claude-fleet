@@ -74,6 +74,19 @@ func runHub(args []string) error {
 			"can no longer reconstruct -- retention pruning has already deleted\n"+
 			"their only other record. Pass --rebuild-rollup-force too to proceed\n"+
 			"anyway and accept losing them")
+	reprice := fs.Bool("reprice", false,
+		"recompute every stored event's cost from the pricing table as it\n"+
+			"stands now, then refold the rollup -- then continue serving.\n"+
+			"Pricing happens at ingest, so a rate added today otherwise reaches\n"+
+			"only the events that arrive after it: the month you could not price\n"+
+			"last month stays unpriced forever, and --rebuild-rollup does not\n"+
+			"help (it refolds the same stale figures). Use this after correcting\n"+
+			"--pricing. Costs that ARRIVE with the event (vendor bills, voice\n"+
+			"charges) are never recomputed -- repricing refuses rather than\n"+
+			"overwrite an invoice")
+	repriceSince := fs.String("reprice-since", "",
+		"with --reprice, only touch events at or after this RFC3339 instant\n"+
+			"(for example 2026-09-01T00:00:00Z). Default: every event")
 	rebuildForce := fs.Bool("rebuild-rollup-force", false,
 		"with --rebuild-rollup, proceed even when the rollup holds hours\n"+
 			"usage_events can no longer reconstruct, accepting that those older\n"+
@@ -82,6 +95,21 @@ func runHub(args []string) error {
 			"hours are at stake")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Parse before anything opens a database or binds a port: an operator who
+	// mistyped the instant should get the complaint immediately, not after a
+	// restart has already taken the hub down.
+	var repriceFrom time.Time
+	if *repriceSince != "" {
+		if !*reprice {
+			return errors.New("--reprice-since without --reprice: nothing would be repriced")
+		}
+		t, err := time.Parse(time.RFC3339, *repriceSince)
+		if err != nil {
+			return fmt.Errorf("--reprice-since: %w (want an RFC3339 instant such as 2026-09-01T00:00:00Z)", err)
+		}
+		repriceFrom = t
 	}
 
 	dbFile, err := resolveDB(*dbPath)
@@ -147,6 +175,24 @@ func runHub(args []string) error {
 		if len(plans) > 0 {
 			log.Printf("pricing: recorded %d subscription plan price(s) from %s", len(plans), *pricingFile)
 		}
+	}
+
+	// After the table is loaded, and after any --pricing overrides are merged
+	// into it: repricing against the built-in table alone would restate every
+	// gateway figure as unpriced, which is the opposite of the point.
+	if *reprice {
+		scope := "every event"
+		if !repriceFrom.IsZero() {
+			scope = "events at or after " + repriceFrom.Format(time.RFC3339)
+		}
+		log.Printf("reprice: applying the current rate table to %s", scope)
+		res, err := st.Reprice(table, repriceFrom)
+		if err != nil {
+			return fmt.Errorf("--reprice: %w", err)
+		}
+		log.Printf("reprice: scanned %d event(s), changed %d (%d newly priced, %d back to unpriced), "+
+			"net %+.6f USD, largest single change %.6f USD, refolded %d hourly row(s)",
+			res.Scanned, res.Changed, res.NewlyPriced, res.Unpriced, res.NetUSD, res.MaxAbsUSD, res.RollupRows)
 	}
 
 	var tailnet *api.TailnetViewers

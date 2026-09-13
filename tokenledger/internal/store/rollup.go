@@ -117,6 +117,24 @@ func (s *Store) RebuildRollup(force bool) (int64, error) {
 	}
 	defer tx.Rollback()
 
+	n, err := rebuildRollupTx(tx, force)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return n, nil
+}
+
+// rebuildRollupTx is RebuildRollup's body, minus the transaction.
+//
+// Split out so a caller that has already changed usage_events in a transaction
+// can refold the rollup inside that SAME transaction — Store.Reprice does, and
+// must: between rewriting an event's cost and refolding the hour that contains
+// it there is a state where the raw rows and every dashboard figure disagree
+// about money. One commit means that state is never observable.
+func rebuildRollupTx(tx *sql.Tx, force bool) (int64, error) {
 	// The earliest hour usage_events can still attest to. NULL when
 	// usage_events is empty (nothing survives to rebuild from at all).
 	var earliestHour sql.NullString
@@ -165,9 +183,6 @@ func (s *Store) RebuildRollup(force bool) (int64, error) {
 	if _, err := tx.Exec(`INSERT INTO rollup_meta(key, value) VALUES ('usage_hourly_version', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, rollupVersion); err != nil {
 		return 0, fmt.Errorf("stamp rollup version: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return n, nil
 }

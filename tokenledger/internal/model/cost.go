@@ -48,6 +48,33 @@ func KnownSource(source string) bool {
 	return false
 }
 
+// CostIsSupplied reports whether a source's cost_usd ARRIVES with the event
+// rather than being computed from a rate table.
+//
+// It is a different axis from CostKind, and both matter. CostKind says what the
+// figure means (estimate vs charge); this says who produced it. A vendor bill
+// and a voice charge are read off an invoice or handed over by the reporting
+// collector — there is no rate table that could reproduce them, and nothing
+// downstream may try. Claude, Codex and gateway figures are derived, so a
+// corrected rate should change them.
+//
+// The distinction exists because repricing is a real operation (Store.Reprice):
+// a rate added today should reach the events it applies to, INCLUDING the ones
+// already stored. Run that over a supplied figure and it would overwrite an
+// invoice with whatever a rate table happened to say — the one error a ledger
+// of real money cannot make. So the reprice path asks here first and refuses to
+// write when a supplied figure would move.
+//
+// Kept beside CostKind on purpose: one place decides, so adding a source is one
+// edit and a failing test rather than a silently rewritten invoice.
+func CostIsSupplied(source string) bool {
+	switch UsageSource(source) {
+	case SourceVendorBill, SourceVoice:
+		return true
+	}
+	return false
+}
+
 // CostKind says which kind of money a source's cost_usd is.
 //
 // Every fold of a cost aggregate goes through this rather than testing source
