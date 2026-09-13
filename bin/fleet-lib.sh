@@ -785,6 +785,80 @@ fleet_proc_age() {
       printf "%d\n", s }'
 }
 
+# Kill a process AND every descendant it has — TERM the whole tree, brief grace,
+# then SIGKILL whatever survived (issue #582). Two reasons a plain
+# `kill -TERM <pid>` is not enough for a wedged daemon tick:
+#
+#   (1) bash DEFERS a trapped signal until the current FOREGROUND command
+#       returns. A tick blocked inside `x=$(slow-child)` keeps running for as
+#       long as the child takes — a 2026-09-13 quotawatch tick survived its
+#       supersede by 26 MINUTES against a 120 s deadline, because it sat in a
+#       `tmux display-message` that never came back.
+#   (2) killing only the script leaves its children (the actual tmux clients)
+#       attached to a loaded server, which is what made the next tick slow too.
+#
+# Walks children breadth-first via `pgrep -P` (no pgrep ⇒ just the root), so it
+# needs no job control and no process group of its own. Never touches pid ≤ 1 or
+# this process. Best-effort and always returns 0 — a caller aborting a tick must
+# not itself fail on a race with an exiting child.
+#
+#   $1  root pid (required)
+#   $2  grace seconds between TERM and KILL (default 2)
+fleet_kill_tree() {
+  local root="${1:-}" grace="${2:-2}" all="" frontier="" next="" p c i surv=""
+  case "$root" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$root" -gt 1 ] || return 0
+  [ "$root" != "$$" ] || return 0
+  frontier="$root"
+  while [ -n "$frontier" ]; do
+    all="$all $frontier"; next=""
+    for p in $frontier; do
+      for c in $(pgrep -P "$p" 2>/dev/null); do
+        [ "$c" != "$$" ] && next="$next $c"
+      done
+    done
+    frontier="${next# }"
+  done
+  all="${all# }"
+  [ -n "$all" ] || return 0
+  # Parents first: a TERMed parent cannot fork a replacement child mid-sweep.
+  kill -TERM $all 2>/dev/null
+  i=0; while [ "$i" -lt "$grace" ]; do sleep 1; i=$((i+1)); done
+  for p in $all; do kill -0 "$p" 2>/dev/null && surv="$surv $p"; done
+  [ -n "$surv" ] && kill -KILL $surv 2>/dev/null
+  return 0
+}
+
+# Run a command under a WALL-CLOCK budget (issue #582). Prints the command's
+# stdout/stderr through untouched, returns its exit status — or 124, GNU
+# timeout's convention, when the budget ran out and the whole tree was killed.
+#
+# Why not `timeout(1)`: it is coreutils, and macOS ships neither it nor
+# `gtimeout` unless someone installed them. This machine has neither, and the
+# daemons that most need a budget are exactly the ones running unattended there.
+#
+# The command is backgrounded and polled at 1 s granularity, so a budget is
+# accurate to about a second and a fast command still returns as soon as it is
+# done. Safe inside `$( )`: backgrounding does not change where stdout goes.
+#
+#   $1   budget in seconds (0 or non-numeric ⇒ run unbudgeted)
+#   $2+  the command and its arguments (not a shell string — no eval)
+fleet_timebox() {
+  local budget="${1:-0}"; shift
+  case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
+  [ "$budget" -gt 0 ] || { "$@"; return $?; }
+  "$@" &
+  local job=$! waited=0
+  while [ "$waited" -lt "$budget" ]; do
+    kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
+    sleep 1; waited=$((waited+1))
+  done
+  kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
+  fleet_kill_tree "$job" 1
+  wait "$job" 2>/dev/null
+  return 124
+}
+
 # Reap any processes still anchored to a worktree BEFORE it is removed (issue
 # #151). A worker can detach processes — selftest tmux servers, backgrounded
 # scripts, hung pipes — that outlive `git worktree remove`: reparented to init,
