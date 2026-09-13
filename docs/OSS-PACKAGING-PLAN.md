@@ -325,35 +325,71 @@ session start 自动读」—— 与 skills 同一个适配问题，不是新问
 > 附带收益：**团队 memory 本质上就是「还没来得及写进 CLAUDE.md 的那些 repo 事实」**。
 > 晋升流程给了口口相传的知识一个变成文档的出口。
 
-## 七、瘦身清单(原生已覆盖,该删)
+## 七、瘦身清单 —— 大部分已被证伪(2026-09-13)
 
-| fleet 里的东西 | 原生等价物 | 处置 |
-|---|---|---|
-| `hooks/base-readonly-guard.py` | worktree 隔离的四道强制检查 | ❌ **不可删（M0 已证伪，2026-09-13）**。防的不是同一件事 —— 见下方说明 |
-| worktree janitor（每小时） | marker + `git worktree lock` 的定期 sweep | **删**。原生更安全，marker+lock 比条件推断可靠 |
-| 各 worker 手工复制 `.env` 进 worktree | `.worktreeinclude` | **换** |
-| 本地 token 用量代理 | `/usage` 官方百分比 + OTEL | **换**。OTEL 中立可留，`/usage` 仅作 Claude 适配器 |
-| `conf/statusline.sh` 自算 context | statusline 原生 context + `prompt_cache` 字段 | **换** |
-| `commands/*.md` + 五条 hook 手工同步 | plugin（作为物化目标） | **换**，收益最大 |
+> ⚠️ **本章原本是方案里最大的工作量来源,查证后大幅缩水。**
+> 调研 agent 报告的「原生更严 / 原生更安全」比错了对象。
 
-保留：**issue↔branch 绑定语义**（原生没有，是真价值）。
+### 根因:我们的 worktree 不是 Claude Code 建的
 
-> **为什么 `base-readonly-guard.py` 删不得**（M0 查证结论，推翻了原 issue #4）
+[官方 worktree 文档](https://code.claude.com/docs/en/worktrees)原文：
+
+> The sweep leaves a worktree in place in these cases: … **You created the
+> worktree yourself with `git worktree add`**, even if you then ran a
+> `--worktree <name>` session in it and backgrounded that session.
 >
-> 两者的威胁模型不同：
-> - **原生 worktree 检查**：「session X 必须待在 worktree X 里」—— 每 session 一条边界
-> - **我们的 guard**：「**任何人**都不许编辑 base checkout」—— 一个共享只读资产
->
-> 决定性差别：**hub 和 scratch 本来就跑在 base checkout 里**（操作员从 hub 派活、
-> triage），那里根本没有 worktree 边界可言，原生管不着。
->
-> 而且同一份文件用 `apply_patch` matcher 挡着 **Codex** 的补丁（解析
-> `*** Add/Update/Delete File:` / `*** Move to:` 行，一条命中就整个补丁拒掉）。
-> 在跨 agent 是核心的前提下删掉它 = Codex worker 完全裸奔。
->
-> 📌 **#5（删 janitor）需要同样的检查再决定** —— 原生 sweep 只认它自己
-> （`claude --worktree`）建的 worktree，而我们的是 `cw` / `dash-issue-session.sh`
-> 建的。大概率也不是 drop-in。
+> Claude Code writes a marker into the git metadata of every worktree it creates
+> with git, and **the sweep keeps any worktree without one**.
+
+`.worktreeinclude` 同样只适用于 *"every worktree **Claude Code creates** with git:
+`--worktree` worktrees, subagent worktrees, and parallel sessions in the desktop app"*。
+
+我们的 worktree 由 `cw` / `dash-issue-session.sh` 用 `git worktree add` 建 —— 无 marker。
+**所有原生 worktree 机制按设计都不认它们。**
+
+这是个二选一，不能逐条绕过：
+
+| 路线 | 代价 |
+|---|---|
+| **保留自建 worktree 管理**（现状） | 自己维护 guard + janitor + env 复制 |
+| 改用 `claude --worktree` spawn | 失去 `issue-<N>` 分支命名与 issue 绑定 —— 而这正是我们的核心价值 |
+
+### 逐条结论
+
+| 原计划 | 结论 |
+|---|---|
+| 删 `hooks/base-readonly-guard.py` | ❌ **废**。威胁模型不同（原生防「session 越出自己的 worktree」，我们防「任何人编辑 base checkout」），且 hub/scratch 本就跑在 base 里、无 worktree 边界可言；还兼管 Codex 的 `apply_patch` |
+| 删 worktree janitor | ❌ **废**。原生是**按年龄**（`cleanupPeriodDays`）扫它自己建的 worktree；我们是**按合并态 + 存活态**扫所有 worktree。见下方判据对照 |
+| `.env` 复制 → `.worktreeinclude` | ❌ **废**。原生只处理它自己建的 worktree |
+| 本地 token 用量代理 → `/usage` + OTEL | ✅ **仍有效**。与 worktree 来源无关。OTEL 中立可留，`/usage` 仅作 Claude 适配器 |
+| `conf/statusline.sh` 自算 context | ✅ **仍有效**。原生已给结构化 `prompt_cache` 字段 |
+| `commands/*.md` + 五条 hook → plugin | ✅ **仍有效,且收益最大**。与 worktree 无关 |
+
+### janitor 判据对照(为什么原生替不了)
+
+`bin/worktree-autoclean.sh` 删一个 worktree 要求**同时**满足：
+
+1. 不是主 worktree
+2. 分支不在 `FLEET_PROTECTED_RE` 里
+3. 没有活 worker 绑定它 —— 没有活 pane 绑 `@issue=<N>`，**且**没有活 pane 的 cwd 在其中（#353：`@issue` 身份检查与 cwd 无关，所以 cwd 游走到子目录的忙碌 worker 不会被误杀）
+4. **没有活的 fleet tmux server cwd 在其中**（#509：server 会把自己 chdir 进它 spawn 的 pane，删掉它所在的目录会让它卡在一个被删的 inode 上，**该 server 之后所有 spawn 全废**）
+5. 干净（未提交算脏，**未跟踪也算脏**）
+6. **已合并** —— GitHub 上该分支有 MERGED 的 PR，或分支尖是 `origin/<base>` 的祖先
+
+附加行为，原生一件都没有：
+- 删除 `issue-<N>` worktree 时**自动关闭绑定的 issue #N** —— 给那些落地时没写 `Closes #N` 的 PR 兜底
+- **被保留的 worktree 也扫孤儿进程**（#469：实测 11 个进程在窗口关闭 2 天后仍活着，其中 2 个把一个核跑满）
+- tmux 没跑时**整体跳过**（看不到谁在用，就不动）
+- 多 fleet：活 pane 集合跨 fleet 共享，任一 session 开着的 worktree 在所有 fleet 都受保护
+
+原生只有：marker + `git worktree lock` + 按 `cleanupPeriodDays` 的年龄阈值。
+**没有合并态概念**（会删掉未合并的工作）、**没有 tmux 存活概念**（#509 那类事故它看不见）。
+
+### 净结论
+
+瘦身能做的只剩 **OTEL / statusline / plugin 三条**，而且它们本来就与 worktree 无关。
+M3 的工作量因此**显著下降**，但「让第二个人装得上」的目标没变 —— 只是路径从
+「删掉自建件」变成「把自建件打包好」。
 
 ## 八、该偷的(按性价比)
 
@@ -519,7 +555,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 |---|---|---|
 | 先单独跑 | 1 `@claude_state` → `@agent_state` | **必须独占** —— 碰所有文件，和任何人并行都会冲突 |
 | 然后 | P0#3 mini 改 N 个 OS login | 独立，但要停机窗口 |
-| 瘦身 | 4 删 base-readonly-guard · 5 删 janitor · 6 `.worktreeinclude` · 7 用量代理→OTEL · 8 → plugin | 开发并行（可 autofill），**落地一条一条来** |
+| 瘦身 | ~~4 删 base-readonly-guard~~ · ~~5 删 janitor~~ · ~~6 `.worktreeinclude`~~（三条已证伪，见第七章）· 7 用量代理→OTEL · 8 → plugin | 只剩两条，开发并行（可 autofill），**落地一条一条来** |
 | 收尾 | 2 能力矩阵进 README | 随时 |
 
 ⚠️ **瘦身的落地纪律**：每条 land 后 `/fleet-sync-install` + 冒烟，确认 fleet 没炸再 land 下一条。
