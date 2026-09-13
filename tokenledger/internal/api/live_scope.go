@@ -53,9 +53,8 @@ func (s *Server) FilterLive(in Snapshot, account, source string) Snapshot {
 		out.Sessions = append(out.Sessions, l)
 		eps[l.EndpointID] = true
 		out.SessionTokens += l.InputTokens + l.OutputTokens
-		out.SessionCost += l.CostUSD
+		out.addCost(l)
 		out.TokensPerMin += l.TokensPerMin
-		out.USDPerHour += l.USDPerHour
 		out.LinesAdded += l.LinesAdded
 		out.LinesRemoved += l.LinesRemoved
 		if l.CostUnknown {

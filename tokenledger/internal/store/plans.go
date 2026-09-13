@@ -196,26 +196,38 @@ type SubscriptionSpend struct {
 }
 
 // SubscriptionSpendOver reports real subscription spend per plan over
-// [from, to), one row per (source, plan) this hub actually holds accounts for.
+// [from, to), one row per (source, plan) the scope actually holds accounts for.
+//
+// account takes a uuid to price ONE subscription, or AllAccounts to price the
+// hub. The empty string is refused, matching UsageBy and Filter: this figure is
+// real money, and "which subscriptions is this the bill for" is not a question
+// a caller may leave to a default.
 //
 // Every plan with accounts is reported, priced or not. Dropping the unpriced
 // ones would hand back a total that is wrong in the one direction nobody
 // checks — too low — with nothing on screen to say so.
-func (s *Store) SubscriptionSpendOver(from, to time.Time) ([]SubscriptionSpend, error) {
+func (s *Store) SubscriptionSpendOver(account string, from, to time.Time) ([]SubscriptionSpend, error) {
+	if account == "" {
+		return nil, fmt.Errorf("account is required: pass a uuid, or store.AllAccounts to price every subscription")
+	}
 	from, to = from.UTC(), to.UTC()
 	if !to.After(from) {
 		return nil, fmt.Errorf("period must end after it starts: %s..%s", fmtTime(from), fmtTime(to))
 	}
 
-	// Which plans this hub holds, and how many accounts were on each during
+	// Which plans this scope holds, and how many accounts were on each during
 	// the period. An account counts if its observed lifetime overlaps the
 	// period at all: it was being paid for while it was in use.
+	where, args := "", []any{fmtTime(to), fmtTime(from)}
+	if account != AllAccounts {
+		where = " AND account_uuid = ?"
+		args = append(args, account)
+	}
 	rows, err := s.db.Query(`SELECT subscription_type, source, COUNT(*)
 		FROM accounts
-		WHERE subscription_type <> '' AND first_seen < ? AND last_seen >= ?
+		WHERE subscription_type <> '' AND first_seen < ? AND last_seen >= ?`+where+`
 		GROUP BY subscription_type, source
-		ORDER BY source, subscription_type`,
-		fmtTime(to), fmtTime(from))
+		ORDER BY source, subscription_type`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -14,6 +14,8 @@ import { apiQuery, withChip, GROUPS } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
 import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
+import { SOURCES, KIND_LABEL, kindOf, costOf,
+         activeSources, addCost, costLine, fmtSourceCost, fmtRealSpend } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
@@ -90,7 +92,10 @@ function normalizeSeries(rawSeries, gran, stackModels) {
       stackModels.forEach((name, i) => { stack[name] = (s.stack[i] && s.stack[i].tokens) || 0; });
     }
     return {
-      key: iso, ms: Date.parse(iso), events: s.events, tokens: s.tokens, cost_usd: s.cost_usd,
+      // `cost` travels as the per-source split all the way to the tooltip.
+      // It used to be a single cost_usd, which is the shape that made a
+      // blended figure the path of least resistance.
+      key: iso, ms: Date.parse(iso), events: s.events, tokens: s.tokens, cost: s.cost,
       unpriced_events: s.unpriced_events, sidechain_tokens: s.sidechain_tokens, stack, raw: s,
     };
   });
@@ -147,7 +152,7 @@ function timelineCard(result, ctx, state, app) {
   const data = result.value;
   const topModels = (data.stack_models || []).filter((m) => m !== 'other');
   const norm = normalizeSeries(data.series, gran, data.stack_models || []);
-  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost_usd: n.cost_usd, unpriced_events: n.unpriced_events, stack: n.stack }));
+  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost: n.cost, unpriced_events: n.unpriced_events, stack: n.stack }));
 
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;
@@ -191,24 +196,95 @@ function kpisCard(result) {
 
   const cacheHit = ratio(d.cache_read_tokens, d.cache_read_tokens + d.input_tokens + d.cache_create_tokens);
   const prevCacheHit = ratio(p.cache_read_tokens || 0, (p.cache_read_tokens || 0) + (p.input_tokens || 0) + (p.cache_create_tokens || 0));
-  const perM = d.output_tokens > 0 && !d.unpriced_events ? (d.cost_usd / d.output_tokens) * 1e6 : null;
-  const prevPerM = p.output_tokens > 0 && !p.unpriced_events ? (p.cost_usd / p.output_tokens) * 1e6 : null;
+  // $ per 1M output is only meaningful WITHIN one source. The numerator is
+  // that source's money and the denominator is that source's tokens; mixing
+  // them — a notional numerator over every source's output, or worse a
+  // blended numerator — produces a rate per million tokens that no source
+  // actually charges. So the tile answers only when the scope has exactly one
+  // source in it, and otherwise says to pick one.
+  const only = activeSources(d).length === 1 ? activeSources(d)[0] : null;
+  const perM = only && d.output_tokens > 0 && !d.unpriced_events
+    ? (costOf(d, only).cost_usd / d.output_tokens) * 1e6 : null;
+  const prevPerM = only && p.output_tokens > 0 && !p.unpriced_events && activeSources(p).length === 1
+    ? (costOf(p, only).cost_usd / p.output_tokens) * 1e6 : null;
   const subShare = ratio(d.sidechain_tokens, d.tokens);
   const prevSubShare = ratio(p.sidechain_tokens || 0, p.tokens || 0);
 
-  const spendTile = C.kpiTile({
-    id: 'kpi-spend', label: 'spend (notional)',
-    value: fmtCost(d),
-    delta: d.unpriced_events || p.unpriced_events ? null : delta(d.cost_usd, p.cost_usd),
+  // One tile per source that ran, each labelled with the kind of money it is,
+  // and NO combined spend tile. There used to be a single "spend (notional)"
+  // figure summing whatever sources the scope contained; once a pay-per-call
+  // source exists that number is an estimate and an invoice added together,
+  // and it looks exactly as plausible as a correct one.
+  const provenance = {};
+  (d.pricing || []).forEach((pr) => { provenance[pr.source] = pr; });
+  const sourceTiles = (activeSources(d).length ? activeSources(d) : ['claude']).map((src) => {
+    const c = costOf(d, src), pc = costOf(p, src);
+    const tile = C.kpiTile({
+      id: 'kpi-spend-' + src,
+      label: `${src} spend (${KIND_LABEL[kindOf(src)]})`,
+      value: fmtCost(c),
+      delta: c.unpriced_events || pc.unpriced_events ? null : delta(c.cost_usd, pc.cost_usd),
+      tone: TONE_MORE_IS_WORSE,
+    });
+    const pr = provenance[src];
+    tile.title = [
+      pr ? `Rates as of ${pr.rates_as_of || 'unstated'}. ${pr.note}` : null,
+      c.unpriced_events > 0
+        ? `${fmtFull(c.unpriced_events)} ${src} event(s) in this period have no price data — this figure is a lower bound.`
+        : null,
+    ].filter(Boolean).join('\n\n');
+    return tile;
+  });
+
+  const perMTile = C.kpiTile({
+    id: 'kpi-perm', label: '$ per 1M output',
+    value: perM == null ? '—' : fmtUSD(perM),
+    delta: perM == null || prevPerM == null ? null : delta(perM, prevPerM),
     tone: TONE_MORE_IS_WORSE,
   });
-  if (d.unpriced_events > 0) {
-    spendTile.title = `${fmtFull(d.unpriced_events)} event(s) in this period have no price data — spend is a lower bound.`;
+  perMTile.title = only
+    ? `${only}: ${KIND_LABEL[kindOf(only)]} cost per million output tokens.`
+    : 'This scope spans more than one source. A cost-per-token rate is only meaningful within one — filter by source to see it.';
+
+  // The one figure that is money owed: subscriptions plus metered charges.
+  // The notional figure is not a term in it and cannot become one — the API
+  // computes it from the billed sources alone.
+  const rs = d.real_spend;
+  const realTile = C.kpiTile({
+    id: 'kpi-real-spend', label: 'real spend',
+    value: fmtRealSpend(rs), delta: null, tone: TONE_MORE_IS_WORSE,
+  });
+  if (rs) {
+    realTile.title = [
+      `${fmtUSD(rs.subscription)} subscription + ${fmtUSD(rs.gateway)} gateway = ${fmtUSD(rs.total)} ${rs.currency}.`,
+      d.real_spend_note,
+      rs.complete ? null : 'Incomplete — ' + (rs.missing || []).join('; '),
+    ].filter(Boolean).join('\n\n');
   }
 
   const card = el('div', { class: 'card' }, el('h2', {}, 'KPIs'),
     el('p', { class: 'hint' }, 'Selection totals, each compared with the equal-length period right before it.'));
   if (d.pricing_note) card.appendChild(el('p', {class:'hint'}, d.pricing_note));
+  // Provenance per source, beside the columns it belongs to: which rate table,
+  // reviewed when, and which kind of money the figure is. One date printed
+  // once for the whole card could only ever be right about one source.
+  if ((d.pricing || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
+    el('summary', {}, 'Where each cost figure comes from · 计价来源'),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source'), el('th', {}, 'Kind'), el('th', {}, 'Rates as of'), el('th', {}, 'Basis'))),
+      el('tbody', {}, d.pricing.map((pr) => el('tr', {},
+        el('td', {}, pr.source), el('td', {}, KIND_LABEL[pr.kind] || pr.kind),
+        el('td', {}, pr.rates_as_of || '—'), el('td', {}, pr.note)))))));
+  if ((d.subscription_spend || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
+    el('summary', {}, 'Subscription spend over this period · 订阅实付'),
+    el('p', {class:'hint'}, d.real_spend_note || ''),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source / plan'), el('th', {}, 'Seats'), el('th', {}, 'Months'), el('th', {}, 'Amount'))),
+      el('tbody', {}, d.subscription_spend.map((sp) => el('tr', {},
+        el('td', {}, `${sp.source} / ${sp.plan}`), el('td', {}, fmtFull(sp.seats)),
+        el('td', {}, (sp.months || 0).toFixed(2)),
+        el('td', {}, sp.priced ? `${fmtUSD(sp.amount)} ${sp.currency}` : 'no recorded price')))))));
+  if ((d.cost_unclassified || []).length) card.appendChild(el('p', {class:'hint'},
+    'Cost from a source this build has no rate basis for, in no total: ' +
+    d.cost_unclassified.map((c) => `${c.source} ${fmtUSD(c.cost_usd)}`).join(', ')));
   const coverage = pricingCoverage(d);
   card.appendChild(el('div', {class:'pricing-coverage'},
     el('p', {}, el('b', {}, `Request pricing coverage · 计价覆盖率: ${coverage.percent}`)),
@@ -220,16 +296,12 @@ function kpisCard(result) {
   if (d.cache_write_known_events > 0) card.appendChild(el('p', {class:'hint'}, `Codex cache writes: ${fmtInt(d.cache_write_tokens)} tokens · breakdown available for ${fmtInt(d.cache_write_known_events)} requests. Included in input totals.`));
   card.appendChild(el('div', { class: 'kpis' },
     C.kpiTile({ id: 'kpi-tokens', label: 'tokens', value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
-    spendTile,
+    ...sourceTiles,
+    realTile,
     C.kpiTile({ id: 'kpi-turns', label: 'model requests', value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-sessions', label: 'sessions', value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-cachehit', label: 'cache hit', value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
-    C.kpiTile({
-      id: 'kpi-perm', label: '$ per 1M output',
-      value: perM == null ? '—' : fmtUSD(perM),
-      delta: perM == null || prevPerM == null ? null : delta(perM, prevPerM),
-      tone: TONE_MORE_IS_WORSE,
-    }),
+    perMTile,
     C.kpiTile({ id: 'kpi-subagent', label: 'subagent share', value: fmtPct(subShare), delta: delta(subShare, prevSubShare), tone: 'neutral' })));
   return card;
 }
@@ -318,7 +390,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
       const capped = d.pct != null && Math.abs(d.pct) >= DELTA_CAP_PCT;
       return {
         key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
-        right: `${fmtFull(b.tokens)} · ${fmtCost(b)} · ${d.text}`,
+        right: `${fmtFull(b.tokens)} · ${costLine(b)} · ${d.text}`,
         tip: capped
           ? `<b>${escapeHTML(displayLabel(b))}</b><br>${fmtFull(b.tokens)} tokens (was ${fmtFull(b.prev_tokens || 0)})` +
             `<br>exact change: ${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%`
@@ -332,7 +404,11 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     const tableBuckets = dim === 'project' ? buckets.map((b) => ({ ...b, label: shortProject(b.key) })) : buckets;
     const table = C.bucketTable(tableBuckets, DIM_LABEL[dim], [
       { label: 'Prev tokens', value: (b) => fmtFull(b.prev_tokens || 0) },
-      { label: 'Prev cost', value: (b) => fmtCost({cost_usd:b.prev_cost_usd || 0, events:b.prev_events, unpriced_events:b.prev_unpriced_events}) },
+      // Previous period, per source, for the same reason the current one is:
+      // one "prev cost" column would have re-blended what the row beside it
+      // keeps apart.
+      ...SOURCES.filter((src) => buckets.some((b) => costOf({ cost: b.prev_cost }, src).events > 0))
+        .map((src) => ({ label: `Prev ${src} $`, value: (b) => fmtSourceCost({ cost: b.prev_cost }, src) })),
     ]);
     C.withTable(body, chart, table, `review-breakdown-${n}`);
     if (!expanded && buckets.length > 12) {
@@ -351,7 +427,8 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
 
 function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   const card = el('div', { class: 'card' }, el('h2', {}, 'Efficiency'),
-    el('p', { class: 'hint' }, 'Token composition, how work was invoked, and notional cost per million output tokens by model.'));
+    el('p', { class: 'hint' }, 'Token composition, how work was invoked, and cost per million output tokens by model — ' +
+      'each rate within one source, labelled with the kind of money it is.'));
   if (summaryResult.status === 'rejected') {
     card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(summaryResult.reason)));
     return card;
@@ -404,11 +481,17 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   if (!source) {
     perMSection.appendChild(el('div', { class: 'empty' }, 'Query failed: model breakdown unavailable.'));
   } else {
+    // Same rule as the KPI tile: a cost-per-token rate belongs to one source.
+    // A model whose bucket spans sources is left out rather than given a
+    // numerator that mixes an estimate with an invoice; its cost is in the
+    // by-source breakdown, where it means something. In practice a model id
+    // belongs to one source anyway, so this drops nothing on a real hub.
     const rows = source
-      .filter((b) => (b.output_tokens || 0) > 0 && !b.unpriced_events)
+      .filter((b) => (b.output_tokens || 0) > 0 && !b.unpriced_events && activeSources(b).length === 1)
       .map((b) => {
-        const v = (b.cost_usd / b.output_tokens) * 1e6;
-        return { key: b.key, label: b.label || b.key, value: v, right: fmtUSD(v) };
+        const src = activeSources(b)[0];
+        const v = (costOf(b, src).cost_usd / b.output_tokens) * 1e6;
+        return { key: b.key, label: b.label || b.key, value: v, right: `${fmtUSD(v)} ${KIND_LABEL[kindOf(src)]}` };
       })
       .sort((a, c) => c.value - a.value);
     perMSection.appendChild(rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, 'No priced model with output tokens in this period.'));
@@ -442,8 +525,9 @@ function modelMixCard(result, ctx) {
     (n.raw.stack || []).forEach((b, i) => {
       const name = stackModels[i];
       if (!name) return;
-      const t = totals[name] || (totals[name] = { key: name, events: 0, tokens: 0, cost_usd: 0, unpriced_events: 0 });
-      t.events += b.events || 0; t.tokens += b.tokens || 0; t.cost_usd += b.cost_usd || 0;
+      const t = totals[name] || (totals[name] = { key: name, events: 0, tokens: 0, cost: [], unpriced_events: 0 });
+      t.events += b.events || 0; t.tokens += b.tokens || 0;
+      addCost(t.cost, b);
       t.unpriced_events += b.unpriced_events || 0;
     });
   }
@@ -555,7 +639,8 @@ function sessionRow(r, state, app) {
     el('td', {}, sessionDuration(r)),
     el('td', { class: 'num' }, fmtFull(r.turns)),
     el('td', { class: 'num' }, fmtInt(r.tokens)),
-    el('td', { class: 'num' }, fmtCost(r)),
+    el('td', { class: 'num', title: `${r.source || 'claude'}: ${KIND_LABEL[r.cost_kind || kindOf(r.source)]} cost` },
+      fmtCost(r), el('span', { class: 'kind' }, ` ${KIND_LABEL[r.cost_kind || kindOf(r.source)]}`)),
     el('td', { class: 'num' }, fmtPct(r.cache_hit || 0)),
     el('td', { class: 'num' }, fmtPct(r.sidechain_share || 0)));
 }
@@ -566,7 +651,7 @@ function sessionMobileCard(r, state, app) {
     el('div', {}, chipLink(state, app, 'project', r.cwd, shortProject(r.cwd)), ' — ', chipLink(state, app, 'login', r.os_user, r.os_user)),
     el('div', {}, `${r.model || '—'} · ${r.endpoint || r.endpoint_id}`),
     el('div', {}, `${new Date(r.started).toLocaleString()} · ${sessionDuration(r)}`),
-    el('div', {}, `${fmtInt(r.tokens)} tokens · ${fmtCost(r)} · ${fmtFull(r.turns)} turns`),
+    el('div', {}, `${fmtInt(r.tokens)} tokens · ${fmtCost(r)} ${KIND_LABEL[r.cost_kind || kindOf(r.source)]} · ${fmtFull(r.turns)} turns`),
     el('div', {}, `cache hit ${fmtPct(r.cache_hit || 0)} · subagent ${fmtPct(r.sidechain_share || 0)}`));
 }
 
@@ -578,6 +663,8 @@ const SESSION_COLS = [
   { key: 'duration', label: 'Duration', sort: 'duration', num: true },
   { key: 'turns', label: 'Turns', sort: 'turns', num: true },
   { key: 'tokens', label: 'Tokens', sort: 'tokens', num: true },
+  // Sorting by cost ranks rows that are each a single source's money; it
+  // never sums them, and each cell says which kind it is.
   { key: 'cost', label: '$', sort: 'cost', num: true },
   { key: 'cachehit', label: 'Cache hit', num: true },
   { key: 'subagent', label: 'Subagent %', num: true },

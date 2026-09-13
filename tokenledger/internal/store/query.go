@@ -222,13 +222,23 @@ const tokenSumExpr = `SUM` + tokenColumnsExpr
 
 // Bucket is one row of a breakdown.
 type Bucket struct {
-	Key       string  `json:"key"`
-	Label     string  `json:"label"`
-	Events    int64   `json:"events"`
-	Tokens    int64   `json:"tokens"`
-	CostUSD   float64 `json:"cost_usd"`
-	Unpriced  int64   `json:"unpriced_events"`
-	Sidechain int64   `json:"sidechain_tokens"`
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Events int64  `json:"events"`
+	Tokens int64  `json:"tokens"`
+
+	// Cost is kept split by source and has no blended member, because the
+	// figures in it are not the same kind of money. There was a CostUSD
+	// float64 here; it was removed rather than deprecated so that every
+	// surface which used to print one number had to be revisited by the
+	// compiler. See CostBySource.
+	Cost CostBySource `json:"cost"`
+
+	// Unpriced is the whole bucket's unpriced request COUNT, a count being
+	// the one thing here that adds up across sources. The per-source share of
+	// it is in Cost.
+	Unpriced  int64 `json:"unpriced_events"`
+	Sidechain int64 `json:"sidechain_tokens"`
 
 	// Composition, filled by rollup-backed queries only.
 	InputTokens       int64 `json:"input_tokens,omitempty"`
@@ -238,10 +248,10 @@ type Bucket struct {
 	ThinkingTokens    int64 `json:"thinking_tokens,omitempty"`
 
 	// The same key in the previous period, when the caller asked to compare.
-	PrevEvents   int64   `json:"prev_events,omitempty"`
-	PrevUnpriced int64   `json:"prev_unpriced_events,omitempty"`
-	PrevTokens   int64   `json:"prev_tokens,omitempty"`
-	PrevCostUSD  float64 `json:"prev_cost_usd,omitempty"`
+	PrevEvents   int64        `json:"prev_events,omitempty"`
+	PrevUnpriced int64        `json:"prev_unpriced_events,omitempty"`
+	PrevTokens   int64        `json:"prev_tokens,omitempty"`
+	PrevCost     CostBySource `json:"prev_cost,omitempty"`
 }
 
 // Dimension names a breakdown axis.
@@ -328,8 +338,10 @@ func (d Dimension) column() (string, error) {
 // span every one. The empty string is refused: see AllAccounts for why the
 // distinction matters.
 //
-// Token and cost figures are additive and may be summed across subscriptions.
-// Rate-limit utilization is NOT — see LimitsAcross.
+// Token figures are additive and may be summed across subscriptions.
+// Rate-limit utilization is NOT — see LimitsAcross. Cost is additive across
+// subscriptions but NOT across sources, which is why it comes back as a
+// CostBySource rather than a number.
 func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
 	if account == "" {
 		return nil, fmt.Errorf("account is required: pass a uuid, or store.AllAccounts to span every subscription")
@@ -346,17 +358,16 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		SELECT %s AS k,
 		       COUNT(*),
 		       %s,
-		       COALESCE(SUM(cost_usd), 0),
-		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
 		       COALESCE(SUM(CASE WHEN is_sidechain = 1
 		            THEN input_tokens + output_tokens + cache_create_5m_tokens
 		                 + cache_create_1h_tokens + cache_read_tokens
-		            ELSE 0 END), 0)
+		            ELSE 0 END), 0),
+		       %s
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?
 		GROUP BY k
 		ORDER BY 3 DESC
-		LIMIT ?`, col, tokenSumExpr, accountClause(account))
+		LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel, accountClause(account))
 
 	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end), limit)...)
 	if err != nil {
@@ -367,9 +378,12 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 	var out []Bucket
 	for rows.Next() {
 		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain); err != nil {
+		cs := eventCostSplit.scan()
+		if err := rows.Scan(append([]any{&b.Key, &b.Events, &b.Tokens, &b.Sidechain}, cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		b.Cost = cs.costs()
+		b.Unpriced = b.Cost.Unpriced()
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
@@ -490,12 +504,11 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 		SELECT strftime(?, ts) AS k,
 		       COUNT(*),
 		       %s,
-		       COALESCE(SUM(cost_usd), 0),
-		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
-		       0
+		       0,
+		       %s
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?
-		GROUP BY k ORDER BY k`, tokenSumExpr, accountClause(account))
+		GROUP BY k ORDER BY k`, tokenSumExpr, eventCostSplit.sel, accountClause(account))
 
 	// The strftime pattern is the first placeholder, so it leads the argument
 	// list ahead of the optional account scope.
@@ -509,9 +522,12 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 	var out []Bucket
 	for rows.Next() {
 		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain); err != nil {
+		cs := eventCostSplit.scan()
+		if err := rows.Scan(append([]any{&b.Key, &b.Events, &b.Tokens, &b.Sidechain}, cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		b.Cost = cs.costs()
+		b.Unpriced = b.Cost.Unpriced()
 		out = append(out, b)
 	}
 	return out, rows.Err()
@@ -677,12 +693,16 @@ type UserSummary struct {
 	// Teams is a LIST because a login can work on machines allocated to
 	// different teams. Collapsing it to one would attribute the rest of their
 	// spend to a team that never received it.
-	Teams    []string `json:"teams"`
-	Turns    int64    `json:"turns"`
-	Tokens   int64    `json:"tokens"`
-	CostUSD  float64  `json:"cost_usd"`
-	Projects int      `json:"projects"`
-	Machines int      `json:"machines"`
+	Teams  []string `json:"teams"`
+	Turns  int64    `json:"turns"`
+	Tokens int64    `json:"tokens"`
+
+	// Cost is split by source for the same reason Bucket.Cost is: a person
+	// who ran Claude and gateway work in the same week has two figures, and
+	// one of them is a real invoice.
+	Cost     CostBySource `json:"cost"`
+	Projects int          `json:"projects"`
+	Machines int          `json:"machines"`
 }
 
 // UserSummary totals one OS login over a period.
@@ -696,15 +716,18 @@ func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, 
 	}
 	out := &UserSummary{OSUser: osUser}
 
+	cs := eventCostSplit.scan()
 	q := fmt.Sprintf(`
-		SELECT COUNT(*), COALESCE(%s, 0), COALESCE(SUM(cost_usd), 0),
-		       COUNT(DISTINCT cwd), COUNT(DISTINCT endpoint_id)
+		SELECT COUNT(*), COALESCE(%s, 0),
+		       COUNT(DISTINCT cwd), COUNT(DISTINCT endpoint_id),
+		       %s
 		FROM usage_events
-		WHERE os_user = ? AND ts >= ? AND ts < ?`, tokenSumExpr)
-	if err := s.db.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).
-		Scan(&out.Turns, &out.Tokens, &out.CostUSD, &out.Projects, &out.Machines); err != nil {
+		WHERE os_user = ? AND ts >= ? AND ts < ?`, tokenSumExpr, eventCostSplit.sel)
+	dest := append([]any{&out.Turns, &out.Tokens, &out.Projects, &out.Machines}, cs.dest()...)
+	if err := s.db.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).Scan(dest...); err != nil {
 		return nil, fmt.Errorf("user summary: %w", err)
 	}
+	out.Cost = cs.costs()
 
 	rows, err := s.db.Query(`
 		SELECT DISTINCT e.team
@@ -729,8 +752,9 @@ func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, 
 // UsageByUser aggregates one OS login's spend along a dimension.
 //
 // Spans every subscription on purpose: a person's own page is about them, not
-// about which plan paid. Tokens and notional cost are additive, so this is a
-// legitimate total -- unlike utilization, which is never summed.
+// about which plan paid. Tokens are additive across subscriptions, so that
+// total is legitimate -- unlike utilization, which is never summed, and unlike
+// cost ACROSS SOURCES, which is why the cost here stays split.
 func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
 	if osUser == "" {
 		return nil, fmt.Errorf("os user is required")
@@ -744,11 +768,10 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 	}
 
 	q := fmt.Sprintf(`
-		SELECT %s AS k, COUNT(*), %s, COALESCE(SUM(cost_usd), 0),
-		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0
+		SELECT %s AS k, COUNT(*), %s, 0, %s
 		FROM usage_events
 		WHERE os_user = ? AND ts >= ? AND ts < ?
-		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr)
+		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel)
 
 	rows, err := s.db.Query(q, osUser, fmtTime(start), fmtTime(end), limit)
 	if err != nil {
@@ -759,9 +782,12 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 	var out []Bucket
 	for rows.Next() {
 		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain); err != nil {
+		cs := eventCostSplit.scan()
+		if err := rows.Scan(append([]any{&b.Key, &b.Events, &b.Tokens, &b.Sidechain}, cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		b.Cost = cs.costs()
+		b.Unpriced = b.Cost.Unpriced()
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {

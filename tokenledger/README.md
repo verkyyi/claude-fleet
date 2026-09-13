@@ -356,6 +356,10 @@ branch and asserts none of them appear.
 
 **Notional costs are off by default** (`--with-costs` to include them). A dollar
 figure shown to someone who does not know it is API-equivalent reads as a bill.
+And `--with-costs` publishes the *notional* figure only: metered gateway
+charges and subscription invoices — the hub's real spend — are never on a
+public link at any setting. A recipient of a share link cannot ask what a
+number means, so the strong promise is worth more than the caveat.
 
 Add `--expires 720h` for a link that dies on its own.
 
@@ -576,12 +580,13 @@ they are published; these cannot.
 
 Three things this is careful about:
 
-**It is real money, and it is the only real money the hub holds.** The
-`cost_usd` figure everywhere else is *notional* — what the tokens would have
-cost at API rates — and is explicitly not an invoice. Subscription spend may be
-added to a metered gateway bill. It must **never** be added to the notional
-figure, and there is a test that fails if recording a price moves any notional
-aggregate by a cent.
+**It is real money.** Together with metered gateway charges it is the only real
+money the hub holds — see [Three kinds of money](#three-kinds-of-money-never-one-number).
+The `cost_usd` figure on `claude` and `codex` is *notional* — what the tokens
+would have cost at API rates — and is explicitly not an invoice. Subscription
+spend may be added to a metered gateway bill; it must **never** be added to the
+notional figure, and there is a test that fails if recording a price moves any
+notional aggregate by a cent.
 
 **Prices are effective-dated and appended, never overwritten.** A single column
 on the account would rewrite history on every price change: last month's
@@ -792,6 +797,53 @@ Nothing here is dateless — an undated rate or conversion is rejected at load,
 and every priced event's `price_basis` names the rate, the conversion and both
 dates. A model with no configured rate stays unpriced and says so. Correcting
 one entry never drops the others.
+
+### Three kinds of money, never one number
+
+Because `cost_usd` means two different things depending on source, and a third
+kind of money is not in that column at all, **no surface in this hub reports a
+single blended cost figure.** There are three:
+
+| | what it is | billed? | where it lives |
+|---|---|---|---|
+| **subscription spend** | what the plans cost per month | **real** | `subscription_plans`, `ccquota plan --spend`, `subscription_spend` in the API |
+| **notional token cost** | "what this would have cost at API rates" (`claude`, `codex`) | no | the `notional` entries of `cost` |
+| **gateway cost** | metered per call | **real** | the `billed` entries of `cost` |
+
+Real spend is **subscription + gateway**. The notional figure is not a term in
+it, and adding it in invents spending that never happened.
+
+Every aggregate therefore returns cost as a *list*, one entry per source, each
+carrying the kind of money it is:
+
+```json
+"cost": [
+  {"source": "claude",  "kind": "notional", "events": 812, "cost_usd": 41.20, "unpriced_events": 0},
+  {"source": "codex",   "kind": "notional", "events":  93, "cost_usd":  6.05, "unpriced_events": 4},
+  {"source": "gateway", "kind": "billed",   "events":  57, "cost_usd": 12.80, "unpriced_events": 0}
+],
+"cost_notional": 47.25,
+"cost_billed": 12.80,
+"real_spend": {"currency": "USD", "subscription": 200, "gateway": 12.80, "total": 212.80, "complete": true}
+```
+
+`GET /v1/summary` adds `pricing` — one entry per source with its own
+`rates_as_of` and the note saying what that source's figure is — and
+`subscription_spend` for the same period. The dashboard renders one cost column
+per source, labelled with its kind, plus a single **real spend** tile. The MCP
+tools do the same, and their descriptions say which figures are notional and
+which are billed.
+
+The one aggregate that carries a plain `cost_usd` is a **session row**: sessions
+are grouped by source, so each row is a single kind of money and says so in
+`source` / `cost_kind`. Ranking by cost still works; nothing sums the column.
+
+Two tests keep this true rather than conventional, because a blended aggregate
+returns a plausible number and fails silently:
+`TestNoCostAggregateCrossesSources` checks every read path against per-source
+arithmetic, and `TestEveryRawCostSumDeclaresItself` fails the build if a new
+`SUM(cost_usd)` appears in the store without either going through the source
+split or stating in the SQL why its `GROUP BY` already covers it.
 
 ## Development
 

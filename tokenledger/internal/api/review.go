@@ -31,10 +31,41 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Real subscription invoices over the same period. Read here rather than
+	// derived from the cost column because it is not in that column at all:
+	// a plan is billed whether or not a token is spent.
+	//
+	// Scoped to the SAME account and source as everything else on the page. A
+	// hub-wide invoice figure sitting beside one subscription's usage would be
+	// the same category of error this endpoint exists to remove -- a number
+	// that is correct about something the reader is not looking at.
+	plans, err := s.Store.SubscriptionSpendOver(f.Account, f.Start, f.End)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	plans = PlansForSource(plans, f.Source)
 	out := map[string]any{
 		"account_uuid": f.Account, "all_accounts": f.Account == store.AllAccounts,
 		"since": f.Start, "until": f.End,
-		"events": sum.Events, "tokens": sum.Tokens, "sessions": sum.Sessions, "cost_usd": sum.CostUSD,
+		"events": sum.Events, "tokens": sum.Tokens, "sessions": sum.Sessions,
+		// cost is a LIST, one entry per source, and there is no blended
+		// cost_usd beside it. A single figure here would have to answer "which
+		// kind of money", and over a scope spanning sources there is no answer.
+		"cost": sum.Cost,
+		// The two folds that mean something, named for what they mean. Their
+		// sum is not a figure this hub reports anywhere.
+		"cost_notional": sum.Cost.Notional(),
+		"cost_billed":   sum.Cost.Billed(),
+		// The only total that is money owed.
+		"subscription_spend": nonNilSpend(plans),
+		"real_spend":         RealSpendOver(sum.Cost, plans),
+		"real_spend_note":    RealSpendNote,
+		// Provenance per source: rate date and the note each figure carries.
+		// One entry when the scope is filtered to a source, every known source
+		// when it is not -- there is one column per source either way.
+		"pricing":          pricing.Provenance(f.Source),
+		"pricing_note":     pricing.Note(f.Source),
 		"unpriced_reasons": reasons,
 		"priced_events":    sum.Events - sum.Unpriced,
 		"unpriced_events":  sum.Unpriced, "input_tokens": sum.InputTokens, "output_tokens": sum.OutputTokens,
@@ -45,8 +76,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"effort": nonNil(effort), "entrypoint": nonNil(entry),
 		"disclaimer": shareDisclaimer, "scope_note": scopeNote(f.Account),
 	}
-	if f.Source != "claude" {
-		out["pricing_note"] = pricing.OpenAIPriceNote
+	if unclassified := sum.Cost.Unclassified(); len(unclassified) > 0 {
+		// A source this build has no rate basis for belongs to neither fold.
+		// Surfacing it is the point: money in no column is how an unreviewed
+		// source stays unreviewed.
+		out["cost_unclassified"] = unclassified
 	}
 	if wantsCompare(r) {
 		prev, err := s.Store.Summary(f.Prev())
@@ -57,6 +91,30 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		out["prev"] = prev
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// PlansForSource narrows subscription spend to the scope's source. A gateway-
+// scoped page must not show a Claude plan's invoice next to its own charges:
+// the gateway has no subscription, and the honest answer to "what does this
+// source cost" is its metered bill alone.
+func PlansForSource(in []store.SubscriptionSpend, source string) []store.SubscriptionSpend {
+	if source == "" {
+		return in
+	}
+	out := []store.SubscriptionSpend{}
+	for _, p := range in {
+		if p.Source == source {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func nonNilSpend(p []store.SubscriptionSpend) []store.SubscriptionSpend {
+	if p == nil {
+		return []store.SubscriptionSpend{}
+	}
+	return p
 }
 
 func nonNil(b []store.Bucket) []store.Bucket {

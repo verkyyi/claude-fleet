@@ -28,7 +28,8 @@
 // sidesteps both.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtCost, fmtFull, relTime } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
+import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
 
 const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
@@ -93,21 +94,31 @@ export function rankedBars(rows, { onClick, selectedKey } = {}) {
 /** bucketTable is the relief the palette validator requires in light mode, and
  *  the accessible fallback for anyone who cannot read the charts. `extraCols`
  *  (Review's compare-with-previous-period columns) is `[{label, value(b)}]`,
- *  appended after Unpriced; omitted it behaves exactly as before. */
+ *  appended after Unpriced; omitted it behaves exactly as before.
+ *
+ *  Cost is ONE COLUMN PER SOURCE, headed with the kind of money it is, and
+ *  there is no total column. The three figures the hub holds are not addable —
+ *  a Claude column is an API-equivalent estimate for work billed by
+ *  subscription, a gateway column is an actual per-call charge — so a "Cost"
+ *  column summing whichever of them a scope happened to contain was a number
+ *  with no meaning and no way to notice. Only sources with usage in these
+ *  buckets get a column, so a single-source hub still shows exactly one. */
 export function bucketTable(buckets, keyLabel, extraCols = []) {
+  const sources = activeSourcesAcross(buckets);
   return el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, keyLabel),
       el('th', { class: 'num' }, 'Turns'),
       el('th', { class: 'num' }, 'Tokens'),
-      el('th', { class: 'num' }, 'Cost'),
+      ...sources.map((s) => el('th', { class: 'num', title: `${s}: ${KIND_LABEL[kindOf(s)]} cost — never added to another source's` },
+        `${s} $`, el('span', { class: 'kind' }, ` ${KIND_LABEL[kindOf(s)]}`))),
       el('th', { class: 'num' }, 'Unpriced'),
       ...extraCols.map((c) => el('th', { class: 'num' }, c.label)))),
     el('tbody', {}, buckets.map((b) => el('tr', {},
       el('td', { title: b.key }, b.label || b.key || '(unknown)'),
       el('td', { class: 'num' }, fmtFull(b.events)),
       el('td', { class: 'num' }, fmtFull(b.tokens)),
-      el('td', { class: 'num' }, fmtCost(b)),
+      ...sources.map((s) => el('td', { class: 'num' }, fmtSourceCost(b, s))),
       el('td', { class: 'num' }, b.unpriced_events ? fmtFull(b.unpriced_events) : '—'),
       ...extraCols.map((c) => el('td', { class: 'num' }, c.value(b))))))));
 }
@@ -231,7 +242,7 @@ export function bars(series, granularity) {
     const h = Math.max(s.tokens > 0 ? 1.5 : 0, (s.tokens / max) * ih);
     const x = PAD.l + i * (iw / n);
     const label = `<b>${escapeHTML(s.key)}</b><br>${fmtFull(s.tokens)} tokens<br>` +
-      `${fmtFull(s.events)} turns · ${fmtCost(s)} notional`;
+      `${fmtFull(s.events)} turns · ${escapeHTML(costLine(s))}`;
     g.appendChild(el('rect', {
       x, y: y(s.tokens), width: bw, height: h, rx: 2, fill: 'var(--s1)',
       onmousemove: (e) => showTip(e, label),

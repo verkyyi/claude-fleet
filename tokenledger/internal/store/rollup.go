@@ -75,7 +75,7 @@ INSERT INTO usage_hourly (
 SELECT strftime('%Y-%m-%dT%H:00:00Z', ts), account_uuid, endpoint_id, session_id, os_user, cwd, model, git_branch,
        effort, entrypoint, is_sidechain, source,
        COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_create_5m_tokens), SUM(cache_create_1h_tokens),
-       SUM(cache_read_tokens), SUM(thinking_tokens), COALESCE(SUM(cost_usd), 0),
+       SUM(cache_read_tokens), SUM(thinking_tokens), COALESCE(SUM(cost_usd), 0), /* cost-split-exempt: GROUP BY below includes source (column 12) */
        SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), MIN(ts), MAX(ts),SUM(cache_write_tokens),SUM(cache_write_known_events)
 FROM usage_events
 GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12`

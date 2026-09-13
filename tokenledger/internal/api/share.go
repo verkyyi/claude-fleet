@@ -61,6 +61,13 @@ type ShareView struct {
 	// CostUSD is present only when the link was minted with --with-costs, and
 	// is notional either way. A dollar figure shown to someone who does not
 	// know that reads as a bill.
+	//
+	// Notional ONLY, and now provably so: it is CostBySource.Notional(), which
+	// can hold nothing that is actually billed. The hub's real spend --
+	// metered gateway charges and subscription invoices -- is deliberately not
+	// on a public link at all. That is a stronger promise than "we did not add
+	// them", and the reason it is worth keeping is that a recipient of a share
+	// link cannot ask what the number means.
 	ShowCosts bool     `json:"show_costs"`
 	CostUSD   *float64 `json:"cost_usd,omitempty"`
 
@@ -204,14 +211,15 @@ func (s *Server) BuildShareView(link *store.ShareLink, days int) (*ShareView, er
 	if err != nil {
 		return nil, err
 	}
-	var cost float64
+	var cost store.CostBySource
 	for _, b := range totals {
 		v.Turns += b.Events
 		v.Tokens += b.Tokens
-		cost += b.CostUSD
+		cost.Add(b.Cost)
 	}
 	if link.ShowCosts {
-		v.CostUSD = &cost
+		notional := cost.Notional()
+		v.CostUSD = &notional
 	}
 
 	g := store.Daily

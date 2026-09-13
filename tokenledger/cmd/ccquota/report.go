@@ -144,12 +144,52 @@ func filterSince(evs []model.UsageEvent, since time.Time) []model.UsageEvent {
 	return out
 }
 
+// costs is one row's money, kept apart by kind.
+//
+// This report groups by model, project and day -- axes that cut ACROSS sources
+// -- so a single cost field here would blend an API-equivalent estimate with a
+// real per-call charge the first time a machine runs both. Two named fields
+// cost nothing and cannot be added by accident; see model.CostKind.
+type costs struct {
+	Notional     float64 `json:"notional_usd"`
+	Billed       float64 `json:"billed_usd"`
+	Unclassified float64 `json:"unclassified_usd,omitempty"`
+}
+
+func (c *costs) add(e *model.UsageEvent) {
+	if e.CostUSD == nil {
+		return
+	}
+	switch model.CostKind(e.Source) {
+	case model.CostNotional:
+		c.Notional += *e.CostUSD
+	case model.CostBilled:
+		c.Billed += *e.CostUSD
+	default:
+		c.Unclassified += *e.CostUSD
+	}
+}
+
+// text renders the row for a human. Billed money is named as such and only
+// shown when there is some -- a machine running Claude alone should not have
+// to read a column of zeroes to find its one figure.
+func (c costs) text() string {
+	out := fmt.Sprintf("$%.2f notional", c.Notional)
+	if c.Billed != 0 {
+		out += fmt.Sprintf(" + $%.2f billed", c.Billed)
+	}
+	if c.Unclassified != 0 {
+		out += fmt.Sprintf(" + $%.2f unclassified", c.Unclassified)
+	}
+	return out
+}
+
 // bucket accumulates one breakdown row.
 type bucket struct {
 	Key       string  `json:"key"`
 	Events    int     `json:"events"`
 	Tokens    int64   `json:"tokens"`
-	CostUSD   float64 `json:"cost_usd"`
+	Cost      costs   `json:"cost"`
 	Unpriced  int     `json:"unpriced_events"`
 	SortValue float64 `json:"-"`
 }
@@ -161,9 +201,14 @@ type report struct {
 	Since        time.Time       `json:"since"`
 	Events       int             `json:"events"`
 	Tokens       int64           `json:"tokens"`
-	CostUSD      float64         `json:"cost_usd"`
+	Cost         costs           `json:"cost"`
 	UnpricedRows int             `json:"unpriced_events"`
-	RatesAsOf    string          `json:"rates_as_of"`
+
+	// Pricing is one entry per source in this report, each with its own rate
+	// date and note. It replaces a single rates_as_of, which could only ever
+	// be right about one source and was printed beside figures from all of
+	// them.
+	Pricing []pricing.SourceProvenance `json:"pricing"`
 
 	ByModel   []bucket `json:"by_model"`
 	ByProject []bucket `json:"by_project"`
@@ -177,7 +222,7 @@ type report struct {
 }
 
 func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Table, since time.Time, top int) *report {
-	rep := &report{Identity: id, Since: since, RatesAsOf: pricing.RatesAsOf}
+	rep := &report{Identity: id, Since: since}
 
 	byModel := map[string]*bucket{}
 	bySource := map[string]*bucket{}
@@ -192,9 +237,8 @@ func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Tabl
 		}
 		b.Events++
 		b.Tokens += e.TotalTokens()
-		if e.CostUSD != nil {
-			b.CostUSD += *e.CostUSD
-		} else {
+		b.Cost.add(e)
+		if e.CostUSD == nil {
 			b.Unpriced++
 		}
 	}
@@ -203,9 +247,8 @@ func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Tabl
 		e := &evs[i]
 		rep.Events++
 		rep.Tokens += e.TotalTokens()
-		if e.CostUSD != nil {
-			rep.CostUSD += *e.CostUSD
-		} else {
+		rep.Cost.add(e)
+		if e.CostUSD == nil {
 			rep.UnpricedRows++
 		}
 		if e.IsSidechain {
@@ -219,6 +262,9 @@ func buildReport(id *model.Identity, evs []model.UsageEvent, table *pricing.Tabl
 
 	rep.ByModel = rank(byModel, top)
 	rep.BySource = rank(bySource, 0)
+	for _, b := range rep.BySource {
+		rep.Pricing = append(rep.Pricing, pricing.ProvenanceFor(b.Key))
+	}
 	rep.ByProject = rank(byProject, top)
 	rep.ByDay = chronological(byDay)
 	return rep
@@ -275,8 +321,8 @@ func chronological(m map[string]*bucket) []bucket {
 func (r *report) writeText(f *os.File) error {
 	fmt.Fprintf(f, "ccquota report — local usage on %s (%s/%s) · sources: %s\n",
 		r.Identity.Hostname, r.Identity.OS, r.Identity.Arch, strings.Join(r.Sources, ", "))
-	fmt.Fprintf(f, "since %s · %d turns · %s tokens · ~$%.2f notional\n\n",
-		r.Since.Format("2006-01-02"), r.Events, humanInt(r.Tokens), r.CostUSD)
+	fmt.Fprintf(f, "since %s · %d turns · %s tokens · ~%s\n\n",
+		r.Since.Format("2006-01-02"), r.Events, humanInt(r.Tokens), r.Cost.text())
 
 	r.writeLimits(f)
 
@@ -293,7 +339,9 @@ func (r *report) writeText(f *os.File) error {
 		fmt.Fprintf(f, "%d turns ran on models with no rate on file, so they are excluded from the cost.\n",
 			r.UnpricedRows)
 	}
-	fmt.Fprintf(f, "Costs are notional — what this would have cost at API rates (rates as of %s).\n", r.RatesAsOf)
+	for _, p := range r.Pricing {
+		fmt.Fprintf(f, "%s\n", p.Note)
+	}
 
 	if n := len(r.ScanWarnings); n > 0 {
 		fmt.Fprintf(f, "\n%d transcript(s) could not be fully read:\n", n)
@@ -368,7 +416,7 @@ func writeBuckets(f *os.File, title string, bs []bucket) {
 	w := tabwriter.NewWriter(f, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "  \tturns\ttokens\tcost")
 	for _, b := range bs {
-		cost := fmt.Sprintf("$%.2f", b.CostUSD)
+		cost := b.Cost.text()
 		if b.Unpriced > 0 {
 			cost += fmt.Sprintf(" (+%d unpriced)", b.Unpriced)
 		}

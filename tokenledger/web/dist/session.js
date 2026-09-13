@@ -25,6 +25,7 @@
 // collapsed server-side (rollup_query.go's SessionTurns query).
 import { el } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, shortProject } from './lib/format.js';
+import { KIND_LABEL, kindOf } from './lib/cost.js';
 import * as C from './charts.js';
 
 /* ------------------------------------------------------------------ state */
@@ -88,13 +89,22 @@ function errMsg(err) {
 /* ---------------------------------------------------------------- header */
 
 function headerNodes(s, app) {
+  // A session's rollup row is scoped to ONE source, so its cost_usd is a
+  // single kind of money -- but which kind changes what the number means, so
+  // the tile says so rather than hardcoding "notional" as it used to.
+  const kind = KIND_LABEL[s.cost_kind || kindOf(s.source)] || 'notional';
   const spendTile = C.kpiTile({
-    label: 'spend (notional)',
+    label: `spend (${kind})`,
     value: fmtCost(s),
   });
-  if (s.unpriced_events > 0) {
-    spendTile.title = `${fmtFull(s.unpriced_events)} event(s) in this session have no price data — spend is a lower bound.`;
-  }
+  spendTile.title = [
+    kind === 'billed'
+      ? 'Billed per call: this figure is an actual charge, not an API-equivalent estimate.'
+      : 'Notional: what these tokens would have cost at API rates. The subscription is what is actually billed.',
+    s.unpriced_events > 0
+      ? `${fmtFull(s.unpriced_events)} event(s) in this session have no price data — spend is a lower bound.`
+      : null,
+  ].filter(Boolean).join('\n\n');
 
   return [
     closeButton(),

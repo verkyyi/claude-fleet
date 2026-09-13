@@ -139,18 +139,30 @@ function fig(k, n, wide) {
   return el("div", { class: wide ? "fig wide" : "fig" }, el("div", { class: "n" }, n), el("div", { class: "k" }, k));
 }
 
+// COST_SOURCES / kindOf / costOf mirror web/dist/lib/cost.js. This page is a
+// standalone HTML document with no module graph of its own, so the three
+// lines are repeated rather than imported; the rule they encode is the same
+// one, and it is the rule that matters: cost arrives split by source and the
+// three kinds of money are never added.
+const COST_SOURCES = ["claude", "codex", "gateway"];
+const kindOf = (s) => (s === "gateway" ? "billed" : (s === "claude" || s === "codex" ? "notional" : "unclassified"));
+const costOf = (b, s) => (Array.isArray(b && b.cost) ? b.cost : []).find((c) => c.source === s) || null;
+const activeCostSources = (bs) => COST_SOURCES.filter((s) => (bs || []).some((b) => (costOf(b, s) || {}).events > 0));
+
 function bucketCard(title, hint, buckets, keyOf) {
   if (!buckets || !buckets.length) return null;
+  const sources = activeCostSources(buckets);
   const rows = buckets.map((b) => el("tr", {},
     el("td", { class: "path" }, keyOf(b)),
     el("td", { class: "n" }, fmtInt(b.tokens)),
-    el("td", { class: "n" }, fmtUSD(b.cost_usd))));
+    ...sources.map((s) => el("td", { class: "n" }, costOf(b, s) ? fmtUSD(costOf(b, s).cost_usd) : "\u2014"))));
   return el("div", { class: "card" },
     el("h2", {}, title),
     el("p", { class: "hint" }, hint),
     el("div", { class: "tw" }, el("table", {},
       el("thead", {}, el("tr", {},
-        el("th", {}, "Name"), el("th", { class: "n" }, "Tokens"), el("th", { class: "n" }, "Notional"))),
+        el("th", {}, "Name"), el("th", { class: "n" }, "Tokens"),
+        ...sources.map((s) => el("th", { class: "n" }, s + " (" + kindOf(s) + ")")))),
       el("tbody", {}, rows))));
 }
 
@@ -214,7 +226,10 @@ function render(d) {
       el("div", { class: "figures" },
         fig("tokens", fmtInt(d.tokens), true),
         fig("turns", fmtInt(d.turns)),
-        fig("notional cost", fmtUSD(d.cost_usd)),
+        // One figure per source that ran, each named with the kind of money
+        // it is. There was a single "notional cost" here, which would have
+        // quietly absorbed a per-call gateway charge the moment one existed.
+        ...activeCostSources([d]).map((s) => fig(s + " cost (" + kindOf(s) + ")", fmtUSD(costOf(d, s).cost_usd))),
         fig("machines", fmtInt(d.machines)),
         fig("projects", fmtInt(d.projects)))),
 

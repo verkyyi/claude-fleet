@@ -4,6 +4,7 @@ package store
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func TestRollupEquivalence(t *testing.T) {
 		for i := range got {
 			g, w := got[i], want[i]
 			if g.Key != w.Key || g.Events != w.Events || g.Tokens != w.Tokens || g.Unpriced != w.Unpriced ||
-				g.Sidechain != w.Sidechain || fmt.Sprintf("%.6f", g.CostUSD) != fmt.Sprintf("%.6f", w.CostUSD) {
+				g.Sidechain != w.Sidechain || costKey(g.Cost) != costKey(w.Cost) {
 				t.Fatalf("trial %d %+v by %s row %d: rollup %+v vs events %+v", trial, f, d, i, g, w)
 			}
 		}
@@ -100,11 +101,11 @@ func (s *Store) usageByEventsFiltered(f Filter, d Dimension) ([]Bucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	q := fmt.Sprintf(`SELECT %s AS k, COUNT(*), %s, COALESCE(SUM(cost_usd),0),
-		SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),
+	q := fmt.Sprintf(`SELECT %s AS k, COUNT(*), %s,
 		COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN input_tokens + output_tokens + cache_create_5m_tokens
-		  + cache_create_1h_tokens + cache_read_tokens ELSE 0 END),0)
-		FROM usage_events %s GROUP BY k ORDER BY 3 DESC, k LIMIT 100`, col, tokenSumExpr, where)
+		  + cache_create_1h_tokens + cache_read_tokens ELSE 0 END),0),
+		%s
+		FROM usage_events %s GROUP BY k ORDER BY 3 DESC, k LIMIT 100`, col, tokenSumExpr, eventCostSplit.sel, where)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -113,10 +114,23 @@ func (s *Store) usageByEventsFiltered(f Filter, d Dimension) ([]Bucket, error) {
 	var out []Bucket
 	for rows.Next() {
 		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain); err != nil {
+		cs := eventCostSplit.scan()
+		if err := rows.Scan(append([]any{&b.Key, &b.Events, &b.Tokens, &b.Sidechain}, cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		b.Cost = cs.costs()
+		b.Unpriced = b.Cost.Unpriced()
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// costKey renders a split so two of them can be compared as one string,
+// per source, without a float64 == float64.
+func costKey(c CostBySource) string {
+	var b strings.Builder
+	for _, sc := range c {
+		fmt.Fprintf(&b, "%s=%.6f/%d/%d;", sc.Source, sc.CostUSD, sc.Events, sc.Unpriced)
+	}
+	return b.String()
 }

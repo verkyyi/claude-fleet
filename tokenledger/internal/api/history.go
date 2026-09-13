@@ -11,13 +11,18 @@ import (
 
 // Series is one bucket of a time series, optionally stacked by model.
 type Series struct {
-	Key       string         `json:"key"`
-	Events    int64          `json:"events"`
-	Tokens    int64          `json:"tokens"`
-	CostUSD   float64        `json:"cost_usd"`
-	Unpriced  int64          `json:"unpriced_events"`
-	Sidechain int64          `json:"sidechain_tokens"`
-	Stack     []store.Bucket `json:"stack,omitempty"`
+	Key    string `json:"key"`
+	Events int64  `json:"events"`
+	Tokens int64  `json:"tokens"`
+
+	// Cost stays split all the way through the fold. Folding hours into days
+	// is where a per-source split is easiest to lose -- the arithmetic is
+	// "+=" and a float64 would have accepted every source into one accumulator
+	// without complaint.
+	Cost      store.CostBySource `json:"cost"`
+	Unpriced  int64              `json:"unpriced_events"`
+	Sidechain int64              `json:"sidechain_tokens"`
+	Stack     []store.Bucket     `json:"stack,omitempty"`
 }
 
 // bucketKey maps an hour key 'YYYY-MM-DDTHH:00:00Z' to the bucket it falls in.
@@ -103,7 +108,7 @@ func FoldHours(rows []store.HourRow, g string, stack bool, top []string) ([]Seri
 		s := &out[i]
 		s.Events += r.Events
 		s.Tokens += r.Tokens
-		s.CostUSD += r.CostUSD
+		s.Cost.Add(r.Cost)
 		s.Unpriced += r.Unpriced
 		s.Sidechain += r.Sidechain
 		if stack {
@@ -113,7 +118,8 @@ func FoldHours(rows []store.HourRow, g string, stack bool, top []string) ([]Seri
 			}
 			s.Stack[j].Tokens += r.Tokens
 			s.Stack[j].Events += r.Events
-			s.Stack[j].CostUSD += r.CostUSD
+			s.Stack[j].Cost.Add(r.Cost)
+			s.Stack[j].Unpriced = s.Stack[j].Cost.Unpriced()
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })

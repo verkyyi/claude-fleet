@@ -616,8 +616,10 @@ function buildBanners(state, endpointsR, limitsR) {
   if (state.sub === 'all') {
     // Nothing below is scoped to one subscription; say so once, at the top.
     banners.push(banner('warn', 'Showing all subscriptions.',
-      'Tokens and notional costs are summed across them. Rate-limit utilization is not — ' +
-      'each subscription is a separate quota pool and is shown separately.'));
+      'Tokens are summed across them, and so is each SOURCE\'s cost. Cost is never summed ' +
+      'across sources — a Claude figure is an API-equivalent estimate, a gateway figure is a ' +
+      'real per-call charge. Rate-limit utilization is not summed either: each subscription is ' +
+      'a separate quota pool and is shown separately.'));
   }
 
   if (limitsR.status === 'fulfilled' && state.sub !== 'all') {

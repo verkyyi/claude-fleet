@@ -58,7 +58,7 @@ func TestUsageByFilteredMatchesEventsAndCarriesComposition(t *testing.T) {
 	}
 	for i := range got {
 		if got[i].Tokens != want[i].Tokens || got[i].Events != want[i].Events ||
-			got[i].CostUSD != want[i].CostUSD || got[i].Unpriced != want[i].Unpriced || got[i].Sidechain != want[i].Sidechain {
+			costKey(got[i].Cost) != costKey(want[i].Cost) || got[i].Unpriced != want[i].Unpriced || got[i].Sidechain != want[i].Sidechain {
 			t.Fatalf("row %d: rollup %+v vs events %+v", i, got[i], want[i])
 		}
 	}
@@ -94,7 +94,7 @@ func TestSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sum.Events != 4 || sum.Sessions != 2 || sum.Unpriced != 1 || sum.OutputTokens != 270 ||
-		sum.CacheReadTokens != 1980 || sum.SidechainEvents != 1 || sum.CostUSD != 4.5 {
+		sum.CacheReadTokens != 1980 || sum.SidechainEvents != 1 || sum.Cost.Notional() != 4.5 {
 		t.Fatalf("%+v", sum)
 	}
 }

@@ -36,7 +36,7 @@ func TestCodexEnrichmentPreservesOriginalAttributionAndRollup(t *testing.T) {
 	}
 	f := Filter{Account: AllAccounts, Source: "codex", Start: at.Add(-time.Hour), End: at.Add(time.Hour)}
 	sum, err := s.Summary(f)
-	if err != nil || sum.Events != 1 || sum.Tokens != 170 || sum.Unpriced != 0 || sum.CostUSD != cost || sum.CacheWriteTokens != 40 || sum.CacheWriteKnownEvents != 1 {
+	if err != nil || sum.Events != 1 || sum.Tokens != 170 || sum.Unpriced != 0 || sum.Cost.Notional() != cost || sum.CacheWriteTokens != 40 || sum.CacheWriteKnownEvents != 1 {
 		t.Fatalf("bad enriched rollup: %+v %v", sum, err)
 	}
 	var acct, ep string

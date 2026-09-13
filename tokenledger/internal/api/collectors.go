@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
@@ -11,10 +12,19 @@ import (
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
+// querySource validates the ?source= chip against the sources this build
+// knows, rather than against a hand-written pair.
+//
+// It listed claude and codex literally, which made the third source
+// unaddressable from the dashboard and from MCP the moment it existed: a
+// gateway-scoped request was a 400, so the one scope in which a billed cost
+// figure can be read on its own could not be asked for. Deriving the set from
+// model.Sources means a source added there is addressable without a second
+// edit here.
 func querySource(w http.ResponseWriter, r *http.Request) (string, bool) {
 	source := r.URL.Query().Get("source")
-	if source != "" && source != model.SourceClaude && source != model.SourceCodex {
-		httpError(w, 400, "source must be claude or codex")
+	if source != "" && !model.KnownSource(source) {
+		httpError(w, 400, "source must be one of: "+strings.Join(model.Sources, ", "))
 		return "", false
 	}
 	return source, true

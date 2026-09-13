@@ -2,6 +2,7 @@ package store
 
 import (
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -149,7 +150,7 @@ func TestSubscriptionSpendDerivesSeatsFromAccounts(t *testing.T) {
 	}
 
 	end := time.Now().UTC()
-	rows, err := s.SubscriptionSpendOver(end.Add(-averageMonth), end)
+	rows, err := s.SubscriptionSpendOver(AllAccounts, end.Add(-averageMonth), end)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("spend=%+v err=%v", rows, err)
 	}
@@ -181,7 +182,7 @@ func TestSubscriptionSpendSplitsAcrossAPriceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := s.SubscriptionSpendOver(start, end)
+	rows, err := s.SubscriptionSpendOver(AllAccounts, start, end)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("spend=%+v err=%v", rows, err)
 	}
@@ -208,7 +209,7 @@ func TestSubscriptionSpendReportsUnpricedPlansRatherThanOmittingThem(t *testing.
 	seedAccount(t, s, "acct-a", "ep-1")
 
 	end := time.Now().UTC()
-	rows, err := s.SubscriptionSpendOver(end.Add(-averageMonth), end)
+	rows, err := s.SubscriptionSpendOver(AllAccounts, end.Add(-averageMonth), end)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("spend=%+v err=%v", rows, err)
 	}
@@ -223,7 +224,7 @@ func TestSubscriptionSpendReportsUnpricedPlansRatherThanOmittingThem(t *testing.
 func TestSubscriptionSpendRejectsAnEmptyPeriod(t *testing.T) {
 	s := newStore(t)
 	at := day(2026, 1, 1)
-	if _, err := s.SubscriptionSpendOver(at, at); err == nil {
+	if _, err := s.SubscriptionSpendOver(AllAccounts, at, at); err == nil {
 		t.Error("a zero-length period was accepted")
 	}
 }
@@ -249,7 +250,7 @@ func TestSubscriptionSpendNeverEntersTheNotionalCostTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.CostUSD == 0 {
+	if before.Cost.Notional() == 0 {
 		t.Fatal("fixture produced no notional cost; the guard would pass vacuously")
 	}
 
@@ -263,7 +264,7 @@ func TestSubscriptionSpendNeverEntersTheNotionalCostTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *after != *before {
+	if !reflect.DeepEqual(after, before) {
 		t.Errorf("recording a subscription price changed the notional summary:\n before=%+v\n  after=%+v", before, after)
 	}
 
@@ -273,7 +274,7 @@ func TestSubscriptionSpendNeverEntersTheNotionalCostTotal(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, r := range rows {
-			if r.CostUSD >= 99999 {
+			if r.Cost.Notional() >= 99999 || r.Cost.Billed() >= 99999 {
 				t.Errorf("subscription spend leaked into the notional %v breakdown: %+v", dim, r)
 			}
 		}
@@ -284,7 +285,7 @@ func TestSubscriptionSpendNeverEntersTheNotionalCostTotal(t *testing.T) {
 	// billed for the months it exists, which is not the window its stored
 	// turns happen to fall in.
 	now := time.Now().UTC()
-	spend, err := s.SubscriptionSpendOver(now.Add(-averageMonth), now)
+	spend, err := s.SubscriptionSpendOver(AllAccounts, now.Add(-averageMonth), now)
 	if err != nil || len(spend) != 1 || !spend[0].Priced {
 		t.Fatalf("real subscription spend unavailable: %+v err=%v", spend, err)
 	}

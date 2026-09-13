@@ -113,7 +113,7 @@ Flags:
 			return fmt.Errorf("--days must be at least 1, got %d", *days)
 		}
 		end := time.Now().UTC()
-		rows, err := st.SubscriptionSpendOver(end.AddDate(0, 0, -*days), end)
+		rows, err := st.SubscriptionSpendOver(store.AllAccounts, end.AddDate(0, 0, -*days), end)
 		if err != nil {
 			return err
 		}

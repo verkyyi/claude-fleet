@@ -35,12 +35,13 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 		limit = 50
 	}
 	q := fmt.Sprintf(`
-		SELECT %s AS k, SUM(events), SUM%s, SUM(cost_usd), SUM(unpriced_events),
+		SELECT %s AS k, SUM(events), SUM%s,
 		       SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END),
 		       SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens),
-		       SUM(cache_create_5m_tokens + cache_create_1h_tokens), SUM(thinking_tokens)
+		       SUM(cache_create_5m_tokens + cache_create_1h_tokens), SUM(thinking_tokens),
+		       %s
 		FROM usage_hourly %s
-		GROUP BY k ORDER BY 3 DESC, k LIMIT ?`, col, hourlyTokens, hourlyTokens, where)
+		GROUP BY k ORDER BY 3 DESC, k LIMIT ?`, col, hourlyTokens, hourlyTokens, hourlyCostSplit.sel, where)
 	rows, err := s.db.Query(q, append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by %s (rollup): %w", d, err)
@@ -49,10 +50,14 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 	var out []Bucket
 	for rows.Next() {
 		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Events, &b.Tokens, &b.CostUSD, &b.Unpriced, &b.Sidechain,
-			&b.InputTokens, &b.OutputTokens, &b.CacheReadTokens, &b.CacheCreateTokens, &b.ThinkingTokens); err != nil {
+		cs := hourlyCostSplit.scan()
+		if err := rows.Scan(append([]any{&b.Key, &b.Events, &b.Tokens, &b.Sidechain,
+			&b.InputTokens, &b.OutputTokens, &b.CacheReadTokens, &b.CacheCreateTokens, &b.ThinkingTokens},
+			cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		b.Cost = cs.costs()
+		b.Unpriced = b.Cost.Unpriced()
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
@@ -71,13 +76,13 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 
 // HourRow is one (hour, model) cell of the rollup.
 type HourRow struct {
-	Hour      string  `json:"hour"`
-	Model     string  `json:"model"`
-	Events    int64   `json:"events"`
-	Tokens    int64   `json:"tokens"`
-	CostUSD   float64 `json:"cost_usd"`
-	Unpriced  int64   `json:"unpriced_events"`
-	Sidechain int64   `json:"sidechain_tokens"`
+	Hour      string       `json:"hour"`
+	Model     string       `json:"model"`
+	Events    int64        `json:"events"`
+	Tokens    int64        `json:"tokens"`
+	Cost      CostBySource `json:"cost"`
+	Unpriced  int64        `json:"unpriced_events"`
+	Sidechain int64        `json:"sidechain_tokens"`
 }
 
 // HourlyByModel returns the rollup grouped by hour and model, oldest first.
@@ -88,9 +93,11 @@ func (s *Store) HourlyByModel(f Filter) ([]HourRow, error) {
 		return nil, err
 	}
 	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT hour, model, SUM(events), SUM%s, SUM(cost_usd), SUM(unpriced_events),
-		       SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END)
-		FROM usage_hourly %s GROUP BY hour, model ORDER BY hour, model`, hourlyTokens, hourlyTokens, where), args...)
+		SELECT hour, model, SUM(events), SUM%s,
+		       SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END),
+		       %s
+		FROM usage_hourly %s GROUP BY hour, model ORDER BY hour, model`,
+		hourlyTokens, hourlyTokens, hourlyCostSplit.sel, where), args...)
 	if err != nil {
 		return nil, fmt.Errorf("hourly by model: %w", err)
 	}
@@ -98,9 +105,12 @@ func (s *Store) HourlyByModel(f Filter) ([]HourRow, error) {
 	var out []HourRow
 	for rows.Next() {
 		var r HourRow
-		if err := rows.Scan(&r.Hour, &r.Model, &r.Events, &r.Tokens, &r.CostUSD, &r.Unpriced, &r.Sidechain); err != nil {
+		cs := hourlyCostSplit.scan()
+		if err := rows.Scan(append([]any{&r.Hour, &r.Model, &r.Events, &r.Tokens, &r.Sidechain}, cs.dest()...)...); err != nil {
 			return nil, err
 		}
+		r.Cost = cs.costs()
+		r.Unpriced = r.Cost.Unpriced()
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -108,20 +118,26 @@ func (s *Store) HourlyByModel(f Filter) ([]HourRow, error) {
 
 // Summary is the KPI strip's data: everything additive over a Filter.
 type Summary struct {
-	CacheWriteTokens      int64   `json:"cache_write_tokens"`
-	CacheWriteKnownEvents int64   `json:"cache_write_known_events"`
-	Events                int64   `json:"events"`
-	Tokens                int64   `json:"tokens"`
-	Sessions              int64   `json:"sessions"`
-	CostUSD               float64 `json:"cost_usd"`
-	Unpriced              int64   `json:"unpriced_events"`
-	InputTokens           int64   `json:"input_tokens"`
-	OutputTokens          int64   `json:"output_tokens"`
-	CacheReadTokens       int64   `json:"cache_read_tokens"`
-	CacheCreateTokens     int64   `json:"cache_create_tokens"`
-	ThinkingTokens        int64   `json:"thinking_tokens"`
-	SidechainTokens       int64   `json:"sidechain_tokens"`
-	SidechainEvents       int64   `json:"sidechain_events"`
+	CacheWriteTokens      int64 `json:"cache_write_tokens"`
+	CacheWriteKnownEvents int64 `json:"cache_write_known_events"`
+	Events                int64 `json:"events"`
+	Tokens                int64 `json:"tokens"`
+	Sessions              int64 `json:"sessions"`
+
+	// Cost is the KPI strip's money, split by source and with no blended
+	// member. The strip shows one column per source; a "total spend" tile, if
+	// the page shows one, adds Cost.Billed() to subscription spend and leaves
+	// Cost.Notional() out of it.
+	Cost CostBySource `json:"cost"`
+
+	Unpriced          int64 `json:"unpriced_events"`
+	InputTokens       int64 `json:"input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
+	CacheReadTokens   int64 `json:"cache_read_tokens"`
+	CacheCreateTokens int64 `json:"cache_create_tokens"`
+	ThinkingTokens    int64 `json:"thinking_tokens"`
+	SidechainTokens   int64 `json:"sidechain_tokens"`
+	SidechainEvents   int64 `json:"sidechain_events"`
 }
 
 func (s *Store) Summary(f Filter) (*Summary, error) { return readSummary(s.db, f) }
@@ -132,20 +148,25 @@ func readSummary(db interface{ QueryRow(string, ...any) *sql.Row }, f Filter) (*
 		return nil, err
 	}
 	var sum Summary
+	cs := hourlyCostSplit.scan()
+	dest := append([]any{
+		&sum.Events, &sum.Tokens, &sum.Sessions,
+		&sum.InputTokens, &sum.OutputTokens, &sum.CacheReadTokens, &sum.CacheCreateTokens, &sum.ThinkingTokens,
+		&sum.SidechainTokens, &sum.SidechainEvents, &sum.CacheWriteTokens, &sum.CacheWriteKnownEvents,
+	}, cs.dest()...)
 	err = db.QueryRow(fmt.Sprintf(`
 		SELECT COALESCE(SUM(events),0), COALESCE(SUM%s,0), COUNT(DISTINCT session_id),
-		       COALESCE(SUM(cost_usd),0), COALESCE(SUM(unpriced_events),0),
 		       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
 		       COALESCE(SUM(cache_create_5m_tokens + cache_create_1h_tokens),0), COALESCE(SUM(thinking_tokens),0),
 		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END),0),
-		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN events ELSE 0 END),0),COALESCE(SUM(cache_write_tokens),0),COALESCE(SUM(cache_write_known_events),0)
-		FROM usage_hourly %s`, hourlyTokens, hourlyTokens, where), args...).Scan(
-		&sum.Events, &sum.Tokens, &sum.Sessions, &sum.CostUSD, &sum.Unpriced,
-		&sum.InputTokens, &sum.OutputTokens, &sum.CacheReadTokens, &sum.CacheCreateTokens, &sum.ThinkingTokens,
-		&sum.SidechainTokens, &sum.SidechainEvents, &sum.CacheWriteTokens, &sum.CacheWriteKnownEvents)
+		       COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN events ELSE 0 END),0),COALESCE(SUM(cache_write_tokens),0),COALESCE(SUM(cache_write_known_events),0),
+		       %s
+		FROM usage_hourly %s`, hourlyTokens, hourlyTokens, hourlyCostSplit.sel, where), args...).Scan(dest...)
 	if err != nil {
 		return nil, fmt.Errorf("summary: %w", err)
 	}
+	sum.Cost = cs.costs()
+	sum.Unpriced = sum.Cost.Unpriced()
 	return &sum, nil
 }
 
@@ -163,8 +184,22 @@ type SessionRow struct {
 	Ended       time.Time `json:"ended"`
 	Turns       int64     `json:"turns"`
 	Tokens      int64     `json:"tokens"`
-	CostUSD     float64   `json:"cost_usd"`
-	Unpriced    int64     `json:"unpriced_events"`
+
+	// Source, CostKind and CostUSD travel together, and the row is scoped to
+	// ONE source (see Sessions' grouping) rather than carrying a split. That
+	// is the other half of the rule Bucket.Cost keeps: an aggregate either
+	// groups by source or is filtered to one, and a session is the natural
+	// place to filter — session ids come out of a single source's transcript,
+	// so a row spanning two would be a collision, not a session.
+	//
+	// CostKind is what stops the number being read as one currency of money:
+	// "billed" is an invoice, "notional" is an estimate for work billed by
+	// subscription. It is also why the cost SORT is safe to offer without
+	// being safe to add up — see sessionSorts.
+	Source   string  `json:"source"`
+	CostKind string  `json:"cost_kind"`
+	CostUSD  float64 `json:"cost_usd"`
+	Unpriced int64   `json:"unpriced_events"`
 
 	OutputTokens      int64 `json:"output_tokens"`
 	InputTokens       int64 `json:"input_tokens"`
@@ -176,6 +211,10 @@ type SessionRow struct {
 	SidechainShare float64 `json:"sidechain_share"` // sidechain_tokens / tokens
 }
 
+// sessionSorts ranks; it never totals. "cost" orders rows that are each scoped
+// to one source, so no row's figure is a blend — but two rows of different
+// CostKind next to each other are still two kinds of money, which is why every
+// row carries its kind and why nothing downstream adds this column up.
 var sessionSorts = map[string]string{
 	"tokens":   "tokens DESC",
 	"cost":     "cost_usd DESC",
@@ -193,12 +232,18 @@ var ErrUnknownSort = errors.New("unknown sort")
 // Sessions lists sessions under a Filter, from the rollup. The Filter's
 // Session field narrows to one session (used by Session).
 //
-// Grouped by (account_uuid, session_id), not session_id alone: the rollup's
-// dedup key is (account_uuid, message_uuid), so one session_id can
+// Grouped by (account_uuid, source, session_id), not session_id alone: the
+// rollup's dedup key is (account_uuid, message_uuid), so one session_id can
 // legitimately carry rows under two accounts (a session resumed under a
 // different login -- account_switches records exactly this seam). Grouping
 // by session_id alone would blend those into one row labelled with whichever
 // account_uuid happened to sort higher.
+//
+// source joined that key for the same reason and one more: it is what makes
+// this row's cost_usd a single kind of money. Session ids come from one
+// source's transcript, so in practice the extra term splits nothing; when it
+// does split a row, two ids from different sources collided and showing them
+// apart is the honest answer either way.
 func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionRow, error) {
 	order, ok := sessionSorts[sortBy]
 	if sortBy == "" {
@@ -219,16 +264,18 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 	}
 	q := fmt.Sprintf(`
 		SELECT * FROM (
-		  SELECT session_id, account_uuid, MAX(endpoint_id) AS endpoint_id,
+		  SELECT session_id, account_uuid, %s AS source, MAX(endpoint_id) AS endpoint_id,
 		         MAX(os_user) AS os_user, MAX(cwd) AS cwd,
 		         MIN(min_ts) AS started, MAX(max_ts) AS ended,
-		         SUM(events) AS turns, SUM%s AS tokens, SUM(cost_usd) AS cost_usd, SUM(unpriced_events) AS unpriced,
+		         SUM(events) AS turns, SUM%s AS tokens,
+		         COALESCE(SUM(cost_usd), 0) AS cost_usd, /* cost-split-exempt: this GROUP BY includes source, so the row is one kind of money */
+		         SUM(unpriced_events) AS unpriced,
 		         SUM(output_tokens) AS output_tokens, SUM(input_tokens) AS input_tokens,
 		         SUM(cache_read_tokens) AS cache_read, SUM(cache_create_5m_tokens + cache_create_1h_tokens) AS cache_create,
 		         SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END) AS sidechain
 		  FROM usage_hourly %s AND session_id != ''
-		  GROUP BY account_uuid, session_id
-		) ORDER BY %s LIMIT ? OFFSET ?`, hourlyTokens, hourlyTokens, where, order)
+		  GROUP BY account_uuid, source, session_id
+		) ORDER BY %s LIMIT ? OFFSET ?`, sourceExpr, hourlyTokens, hourlyTokens, where, order)
 	rows, err := s.db.Query(q, append(args, limit, offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: %w", err)
@@ -239,11 +286,12 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 	for rows.Next() {
 		var r SessionRow
 		var started, ended string
-		if err := rows.Scan(&r.SessionID, &r.AccountUUID, &r.EndpointID, &r.OSUser, &r.CWD, &started, &ended,
+		if err := rows.Scan(&r.SessionID, &r.AccountUUID, &r.Source, &r.EndpointID, &r.OSUser, &r.CWD, &started, &ended,
 			&r.Turns, &r.Tokens, &r.CostUSD, &r.Unpriced, &r.OutputTokens, &r.InputTokens,
 			&r.CacheReadTokens, &r.CacheCreateTokens, &r.SidechainTokens); err != nil {
 			return nil, err
 		}
+		r.CostKind = model.CostKind(r.Source)
 		r.Started, _ = time.Parse(rfc, started)
 		r.Ended, _ = time.Parse(rfc, ended)
 		if d := r.CacheReadTokens + r.InputTokens + r.CacheCreateTokens; d > 0 {

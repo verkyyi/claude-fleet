@@ -87,8 +87,17 @@ type ScopedView struct {
 	IsActive    bool       `json:"is_active"`
 }
 
+// shareDisclaimer is what every internal surface carries next to its figures.
+//
+// It no longer says "costs are notional" flatly. That was true of every source
+// this hub had until one started charging per call, and a blanket disclaimer
+// that is wrong about one column is worse than none: it tells the reader an
+// actual invoice is an estimate. Which kind a figure is now travels WITH the
+// figure (pricing.SourceProvenance), and this line says so.
 const shareDisclaimer = "The account-wide utilization is exact and already covers every device. " +
-	"Per-endpoint shares are proportional estimates. Costs are notional API-equivalent figures, not a bill."
+	"Per-endpoint shares are proportional estimates. Cost is reported per source and never summed " +
+	"across them: Claude and Codex figures are notional API-equivalents, not a bill, while gateway " +
+	"figures are actual per-call charges. Real spend is subscription plus gateway."
 
 // LimitsAcross is the answer to "am I about to hit the wall" when more than one
 // subscription is in view.
@@ -338,7 +347,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range buckets {
 			if p, ok := byKey[buckets[i].Key]; ok {
-				buckets[i].PrevEvents, buckets[i].PrevTokens, buckets[i].PrevCostUSD = p.Events, p.Tokens, p.CostUSD
+				buckets[i].PrevEvents, buckets[i].PrevTokens = p.Events, p.Tokens
+				buckets[i].PrevCost = p.Cost
 				buckets[i].PrevUnpriced = p.Unpriced
 			}
 		}

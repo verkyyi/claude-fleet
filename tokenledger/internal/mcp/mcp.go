@@ -23,6 +23,8 @@ import (
 
 	"github.com/verkyyi/ccquota/internal/api"
 	"github.com/verkyyi/ccquota/internal/findings"
+	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/pricing"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -32,9 +34,22 @@ const protocolVersion = "2025-06-18"
 // caveat is repeated in every tool description. An agent relaying these
 // numbers to a person will otherwise present an estimate with the confidence
 // of a measurement.
+//
+// The cost half of it is not a disclaimer but a shape: cost comes back as a
+// LIST keyed by source, because the figures in it are different kinds of money
+// and an agent handed one number would add it to something.
 const caveat = " The account-wide utilization is exact and already covers every device on " +
 	"the subscription; per-endpoint and per-project shares are proportional ESTIMATES. " +
-	"Costs are notional API-equivalent figures, never a bill."
+	costCaveat
+
+// costCaveat is the cost half, split out so tools that return no cost can take
+// the utilization half alone.
+const costCaveat = "Cost is reported PER SOURCE and must never be summed across sources: " +
+	"claude and codex figures are NOTIONAL (what the tokens would have cost at API rates — " +
+	"nobody is billed them, the plan is), while gateway figures are BILLED (an actual " +
+	"per-call charge). Each entry carries its own kind. Real spend is subscription " +
+	"invoices plus gateway charges; the notional figure is not part of it and adding it in " +
+	"invents spending that never happened."
 
 // Handler returns the /mcp handler.
 func Handler(srv *api.Server) http.Handler {
@@ -163,8 +178,9 @@ var accountProp = map[string]any{
 	"type": "string",
 	"description": `Subscription to report on: an account uuid, or "all" to span every ` +
 		`subscription on this hub. Omitted means "all" when the hub holds several, ` +
-		`and the single subscription when it holds one. Token and cost figures are ` +
-		`additive across subscriptions; rate-limit utilization is not.`,
+		`and the single subscription when it holds one. Token figures are additive ` +
+		`across subscriptions, and so is each SOURCE's cost; rate-limit utilization is ` +
+		`not, and neither is cost across sources.`,
 }
 
 var sinceProp = map[string]any{
@@ -185,7 +201,13 @@ var limitProp = map[string]any{
 // chipProps are the drill-down dimensions store.Filter accepts, at most one
 // value per dimension, ANDed together.
 var chipProps = map[string]any{
-	"source":   map[string]any{"type": "string", "description": "Limit token usage to a source, such as claude or codex."},
+	"source": map[string]any{
+		"type": "string", "enum": model.Sources,
+		"description": "Limit to one collector source. claude and codex are billed by " +
+			"subscription and their cost is notional; gateway is billed per call and its cost " +
+			"is a real charge. Filtering to one source is what makes a single cost figure " +
+			"meaningful — unfiltered, cost comes back split.",
+	},
 	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id."},
 	"user":     map[string]any{"type": "string", "description": "Limit to one OS login."},
 	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)."},
@@ -269,9 +291,12 @@ func toolSpecs() []toolSpec {
 			InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"], "limit": limitProp}),
 		},
 		{
-			Name:        "usage_by_source",
-			Title:       "Token usage by source",
-			Description: "Token and notional cost totals grouped by collector source, such as Claude Code or Codex." + caveat,
+			Name:  "usage_by_source",
+			Title: "Token usage by source",
+			Description: "Token and cost totals grouped by collector source — Claude Code, Codex or a " +
+				"pay-per-call gateway. This is the one breakdown whose rows are each a single kind of " +
+				"money, so it is the right tool for \"what did each source cost\"; the rows are still " +
+				"not addable to each other." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
 			})),
@@ -319,7 +344,8 @@ func toolSpecs() []toolSpec {
 			Name:  "usage_history",
 			Title: "Usage over time",
 			Description: "A time series of a subscription's usage plus a per-model split, for trend and " +
-				"capacity questions." + caveat,
+				"capacity questions. Every bucket's cost stays split by source across the fold, so a " +
+				"rising line is always one kind of money." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account":     accountProp,
 				"since":       sinceProp,
@@ -330,9 +356,13 @@ func toolSpecs() []toolSpec {
 		{
 			Name:  "usage_summary",
 			Title: "Totals for a period",
-			Description: "Totals for a period under optional drill-down filters: tokens, notional cost, " +
+			Description: "Totals for a period under optional drill-down filters: tokens, cost per source, " +
 				"turns, sessions, token composition (cache read / create, input, output, thinking), " +
-				"subagent share, and the same figures for the previous period of equal length." + caveat,
+				"subagent share, and the same figures for the previous period of equal length. " +
+				"Also the two figures that ARE real money — subscription_spend (what the plans cost over " +
+				"the period, billed whether or not a token was spent) and real_spend (subscriptions plus " +
+				"metered gateway charges). Quote real_spend when asked what something cost; quote " +
+				"cost_notional only as \"what this would have cost at API rates\"." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp,
 			})),
@@ -417,8 +447,13 @@ func (s *mcpServer) callTool(raw json.RawMessage) (any, *rpcError) {
 }
 
 func (s *mcpServer) run(name string, args map[string]any) (any, error) {
-	if source := str(args, "source"); source != "" && source != "claude" && source != "codex" {
-		return nil, fmt.Errorf("source must be claude or codex")
+	// Validated against the sources this build knows, not a hand-written
+	// pair. The pair left the gateway unaddressable over MCP -- an agent
+	// could not ask for the one scope in which a BILLED cost figure stands
+	// alone, which is the scope it most needs when asked what something
+	// actually cost (issue #4). api.querySource keeps the same rule.
+	if source := str(args, "source"); source != "" && !model.KnownSource(source) {
+		return nil, fmt.Errorf("source must be one of: %s", strings.Join(model.Sources, ", "))
 	}
 	switch name {
 	case "get_collectors":
@@ -557,6 +592,8 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			"account_uuid": f.Account, "granularity": string(g),
 			"since": f.Start, "until": f.End,
 			"series": series, "by_model": models,
+			"pricing":    pricing.Provenance(f.Source),
+			"cost_note":  pricing.Note(f.Source),
 			"disclaimer": strings.TrimSpace(caveat),
 		}
 		if note := scopeNote(f.Account); note != "" {
@@ -578,10 +615,23 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The real money, read from the plan ledger rather than from the cost
+		// column -- a subscription is billed whether or not a token is spent,
+		// so it is not in that column at all.
+		plans, err := s.api.Store.SubscriptionSpendOver(f.Account, f.Start, f.End)
+		if err != nil {
+			return nil, err
+		}
 		out := map[string]any{
 			"account_uuid": f.Account, "since": f.Start, "until": f.End,
 			"summary": sum, "prev": psum,
-			"disclaimer": strings.TrimSpace(caveat),
+			"cost_notional":      sum.Cost.Notional(),
+			"cost_billed":        sum.Cost.Billed(),
+			"subscription_spend": api.PlansForSource(plans, f.Source),
+			"real_spend":         api.RealSpendOver(sum.Cost, api.PlansForSource(plans, f.Source)),
+			"pricing":            pricing.Provenance(f.Source),
+			"cost_note":          pricing.Note(f.Source),
+			"disclaimer":         strings.TrimSpace(caveat),
 		}
 		if note := scopeNote(f.Account); note != "" {
 			out["all_accounts"] = true
@@ -704,6 +754,10 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 	out := map[string]any{
 		"account_uuid": account, "by": string(d),
 		"since": f.Start, "until": f.End, "buckets": buckets,
+		// Every bucket's cost is a list keyed by source; this says, once, what
+		// each of those sources' rates rest on and which kind of money it is.
+		"pricing":    pricing.Provenance(f.Source),
+		"cost_note":  pricing.Note(f.Source),
 		"disclaimer": strings.TrimSpace(caveat),
 	}
 	// An agent relaying a blended total without saying it is blended is the
@@ -732,7 +786,7 @@ func seriesToBuckets(series []api.Series) []store.Bucket {
 	out := make([]store.Bucket, len(series))
 	for i, s := range series {
 		out[i] = store.Bucket{
-			Key: s.Key, Events: s.Events, Tokens: s.Tokens, CostUSD: s.CostUSD,
+			Key: s.Key, Events: s.Events, Tokens: s.Tokens, Cost: s.Cost,
 			Unpriced: s.Unpriced, Sidechain: s.Sidechain,
 		}
 	}
@@ -745,8 +799,9 @@ func scopeNote(account string) string {
 	if account != store.AllAccounts {
 		return ""
 	}
-	return "Totals span every subscription on this hub. Tokens and notional costs are " +
-		"additive; rate-limit utilization is not and is reported per subscription."
+	return "Totals span every subscription on this hub. Tokens are additive, and so is each " +
+		"source's cost; rate-limit utilization is not and is reported per subscription, and " +
+		"cost is never added ACROSS sources — see the per-source breakdown and its kinds."
 }
 
 // account resolves the subscription, inferring it only when unambiguous.
