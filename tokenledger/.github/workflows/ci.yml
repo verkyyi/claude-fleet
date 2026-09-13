@@ -1,7 +1,14 @@
 name: ci
 
 on:
-  push: { branches: [main] }
+  # Name the branch commits actually land on. This read `[main]` while every
+  # commit was going to `dashboard-redesign`, so 56 commits reached production
+  # without a single push-CI run -- the last one fired 2026-09-02 (issue #9).
+  # `main` is the trunk again; `dashboard-redesign` stays listed until the
+  # branches cut from it have landed and it is retired.
+  push: { branches: [main, dashboard-redesign] }
+  # Unfiltered on purpose: this trigger was always the correct one, and it does
+  # not care what the base branch is called.
   pull_request:
 
 jobs:

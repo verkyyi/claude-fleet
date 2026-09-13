@@ -859,6 +859,21 @@ the complete artifact.
 
 Design notes are in `docs/superpowers/specs/`.
 
+### Trunk and CI
+
+`main` is the trunk. It is the default branch, it is what
+`go install github.com/verkyyi/ccquota/cmd/ccquota@latest` resolves to (there
+are no tags, so `@latest` follows the default branch), and it is what release
+images are cut from. `dashboard-redesign` is the *historical* trunk -- for two
+weeks production was built from it while `main` sat still -- and it is being
+retired; don't branch from it.
+
+Both the trunk and every pull request run `test`, `web`, and the four
+`cross-compile` legs. Those six are required checks on the trunk, so a pull
+request that is red cannot be merged. There is deliberately no required
+*review*: a solo maintainer cannot approve their own pull request, so requiring
+one would leave every pull request unmergeable.
+
 ## License
 
 MIT
