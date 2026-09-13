@@ -10,7 +10,15 @@
     <key>LANG</key><string>en_US.UTF-8</string>
     <key>PATH</key><string>__HOME__/.local/bin:__BREW_PREFIX__/bin:__BREW_PREFIX__/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
-  <key>ProcessType</key><string>Background</string>
+  <!-- ProcessType=Standard, NOT Background (issue #588). Background puts the whole
+       process TREE at QoS BACKGROUND, i.e. throttled disk I/O: measured on macOS 26,
+       20k unlinks ran at 104 files/s under Background vs 10967 files/s under
+       Standard (~100x, and the gap widens as the machine gets busier).
+       This daemon's `git pull --ff-only` rewrites the base working tree while it
+       holds the shared land lease, so a throttled checkout stalls the cleaner's
+       base-ff behind it.
+       Its natural throttle is its StartInterval, not the I/O scheduler. -->
+  <key>ProcessType</key><string>Standard</string>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>
   <key>StandardErrorPath</key><string>__HOME__/.claude/fleet/logs/base-sync.launchd.log</string>

@@ -8,9 +8,9 @@ name: selftests
 # run under one gate. shellcheck.yml stays separate.
 #
 # Triggered on bin/** (where the selftests and the code they test live) plus the
-# few fixtures some tests read from outside bin/ (see the paths below). A new
-# selftest is picked up automatically — the runner globs, so there's no list to
-# keep in sync.
+# few fixtures some tests read from outside bin/ — the guard hooks, conf/, and the
+# shipped launchd/systemd units (see the paths below). A new selftest is picked up
+# automatically — the runner globs, so there's no list to keep in sync.
 
 on:
   push:
@@ -25,6 +25,11 @@ on:
       # and conf/tmux-attention.conf (fleet-keys-selftest.sh cross-checks the
       # cheatsheet against the shipped tmux binds).
       - 'conf/**'
+      # The shipped daemon units, asserted directly by daemon-processtype-selftest.sh
+      # (issue #588 — a plist that drifts back to ProcessType=Background throttles
+      # its disk I/O ~100x), so a unit-only edit still re-runs the gate.
+      - 'launchd/**'
+      - 'systemd/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
   pull_request:
@@ -32,6 +37,8 @@ on:
       - 'bin/**'
       - 'hooks/**'
       - 'conf/**'
+      - 'launchd/**'
+      - 'systemd/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
 
