@@ -371,39 +371,103 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 （*"on most systems it could not read the others anyway"*）。
 现在共用一个 login 的话，**配额归因是错的**。这是配方不是代码，但必须先改。
 
-## 十一、可执行 issue 拆分
+## 十一、执行与落地
 
-**P0 — 先让两个 agent 对等**
-1. `@claude_state` → `@agent_state` 改名（接缝正名，纯机械改动）
-2. 适配器能力矩阵落进 README，公开声明分级（反 teamai-cli 的藏匿）
-3. mini 改 N 个 OS login + 每人一个 ccquota enroll token
+### 排序原则
 
-**P1 — 瘦身（每条一个 issue）**
-4. 删 `base-readonly-guard.py`，切原生 worktree 检查
-5. 删 janitor，切原生 marker + `git worktree lock` sweep
-6. `.env` 复制 → `.worktreeinclude`
-7. 用量代理 → OTEL（中立）+ `/usage`（Claude 适配器）
-8. `commands/*.md` + hooks → plugin 物化目标
+1. **先证伪,再开发。** 最贵的假设用最便宜的方式先验，否定了就省下几个月。
+2. **先用做完的那块试水。** ccquota 已公开、已是团队形态、0 star ——
+   用它测市场，再决定要不要投几个月改 fleet。
+3. **开发可并行,落地必须串行。** 瘦身那几条动的是你每天在用的机器。
 
-**P2 — 团队层**
-9. memory frontmatter 加 `scope:` 轴 + 全量回填分类
-10. `memory promote` 命令 + MR 模板 + 密钥扫描 gate
-11. 配置 source-of-truth 仓库 + 双 target 物化（plugin / AGENTS.md）
+### 跨仓库的操作性前提
 
-**P3 — 补 Codex 缺口 + 配额编排（核心卖点）**
-12. Codex 的 context % 与 handoff（需先解决无 transcript 的读取问题）
-13. 配额裁决接口中立化，Codex provider 适配
-17. **quotawatch 降级阶梯加「换 Codex」一级**（跨 provider 溢出池，头条功能）
-18. **池内 token 打标签** + 接上 ccquota 的 `team --set`（团队维度看预算，
-    人维度只看异常、不排名）
-19. **相位错开**：池内账号按 `5h / N` 错开首次启动（偷 clauth）
-20. **争用策略**：issue 的 `p0/p1/p2` 直接当池子优先级 + 人均熔断（单 login
-    每 5h 窗口最多吃池子 X%，防 `/loop` 跑飞）
-21. Codex 侧池化：多 `~/.codex` home 切换（③ 的完整版前置）
-22. 用当期定价重算「N 份 Max 池化 vs N 个席位」的每美元额度对照，写进 README
-23. README 措辞决策：「团队账号池」中性表述 vs 「共享队友订阅」
+23 条跨三个仓库，而 **fleet 是一 session 一 repo**：
 
-**P4 — 偷来的**
-14. clauth 相位错开
-15. friction 评分 Stop hook
-16. 双 anchor worktree 检测
+| 仓库 | 涉及 issue | 起法 |
+|---|---|---|
+| `verkyyi/claude-fleet` | 大多数 | 已有 fleet |
+| `verkyyi/ccquota` | 18（归因）、M1 全部 | **需要 `bin/fleet-up.sh verkyyi/ccquota` 起第三个 fleet** |
+| 团队 config repo | M4 | 还不存在，M4 时新建 |
+
+---
+
+### M0 — 先证伪(约半天,零代码)
+
+三条全是查证。**任何一条被否定都会改变后面的路线**，所以必须在写代码前做完。
+
+| # | 要验什么 | 否定了会怎样 |
+|---|---|---|
+| 22 | 用**当期定价**重算「N 份 Max 池化 vs N 个席位」的每美元可用额度 | 成本卖点的措辞要重写；若席位制更划算，整个 ccquota 定位塌一半 |
+| — | 复验「一机多 token 并发」：ccquota 当年实测同跑三份，**现在还成立吗** | 这是池化省钱的**物理前提**。不成立则 M2 整个作废 |
+| — | 原生 worktree 的四道检查**是否真覆盖**我们 `base-readonly-guard.py` 的威胁模型 | 决定 #4 能不能删。**不成立就别删**——那是在用文档承诺换掉一个在跑的安全件 |
+
+### M1 — 用已经做完的那块试水(1–2 天)
+
+ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队归属模型、
+已经是 hub/agent 架构。要做的只是**把 README 主线从「用量监控」换成
+「团队订阅池的成本可见性」**，然后发出去。
+
+- 改 README 开头与 Why 段，主线换成 M0 算出来的成本对照
+- 受众边界照[第二章](#受众边界必须写进-readme)写清楚
+- 发一次（HN / X / 相关 subreddit 任选），看有没有人接
+
+**这一步的价值是信息,不是代码**：花 1–2 天知道市场在不在，比闷头改三个月 fleet 划算。
+
+### M2 — 让池子真的成为池子(核心差异化)
+
+这组是方案的卖点，**hands-on,不要 autofill** —— 每条都含调度判断。
+
+```
+18 池内 token 打标签 + 接 ccquota team --set   ← 先做,其余都要读这个标签
+     ↓
+19 相位错开 5h/N          20 争用策略(p0/p1/p2 + 人均熔断)
+     ↓
+17 跨 provider 溢出 → Codex   ← 头条功能,可先上「换 agent」版
+     ↓
+21 Codex 侧多 ~/.codex home 池化   ← 17 的完整版前置,可延后
+```
+
+### M3 — 让第二个人装得上
+
+| 批次 | issue | 并行? |
+|---|---|---|
+| 先单独跑 | 1 `@claude_state` → `@agent_state` | **必须独占** —— 碰所有文件，和任何人并行都会冲突 |
+| 然后 | P0#3 mini 改 N 个 OS login | 独立，但要停机窗口 |
+| 瘦身 | 4 删 base-readonly-guard · 5 删 janitor · 6 `.worktreeinclude` · 7 用量代理→OTEL · 8 → plugin | 开发并行（可 autofill），**落地一条一条来** |
+| 收尾 | 2 能力矩阵进 README | 随时 |
+
+⚠️ **瘦身的落地纪律**：每条 land 后 `/fleet-sync-install` + 冒烟，确认 fleet 没炸再 land 下一条。
+这几条删的是安全件和守护进程，串行落地 + 每步可回滚，比一次推五条省事得多。
+
+### M4 — 团队层
+
+9 `scope:` 轴 + 10 `memory promote` + 11 config repo 双 target 物化。
+新建第三个仓库时再起对应 fleet。
+
+---
+
+### 并行策略:哪些能丢给 autofill
+
+memory 记着 autofill 已在两个 fleet armed（打 `autofill` 标签 → 有空位就自动起
+worker+PR），全局 cap 10。
+
+| 适合 autofill | 必须 hands-on |
+|---|---|
+| 6 `.worktreeinclude`、7 OTEL、8 plugin 物化 —— 机械、边界清楚 | M0 三条（是判断，不是实现） |
+| 2 能力矩阵进 README | M2 全部（含调度判断） |
+| 12 Codex context %（探索性但独立） | 1 rename（独占）、4/5（删安全件，要人来判断） |
+
+### 完整 issue 索引
+
+**M0** 22（定价重算）+ 两条复验（待建 issue）
+**M1** ccquota README 主线重写（待建 issue）
+**M2** 17 跨 provider 溢出 · 18 token 标签+team 归因 · 19 相位错开 · 20 争用策略 · 21 Codex 池化
+**M3** 1 `@agent_state` 正名 · 2 能力矩阵进 README · 3 mini 改 N 个 OS login ·
+4 删 base-readonly-guard · 5 删 janitor · 6 `.worktreeinclude` · 7 用量代理→OTEL ·
+8 commands+hooks→plugin
+**M4** 9 `scope:` 轴 · 10 `memory promote`+密钥扫描 · 11 config repo 双 target 物化
+**其他** 12 Codex context%/handoff · 13 配额裁决接口中立化 · 14 clauth 相位错开 ·
+15 friction Stop hook · 16 双 anchor worktree 检测 · 23 README 措辞决策
+
+> 14 与 19 是同一件事（clauth 的相位错开），建 issue 时合并。
