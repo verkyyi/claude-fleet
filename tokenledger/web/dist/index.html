@@ -9,18 +9,20 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<!-- The scope bar is deliberately minimal: wordmark, view tabs, theme toggle.
-     Subscription / span / chips are per-view scope, not global navigation —
-     each view mounts its own "scope controls" widget (web/dist/scope.js's
-     createScopeControls) on its first substantive card instead. See
-     scope.js for why. -->
+<!-- The bar holds the wordmark and the theme toggle, and nothing else.
+     There are no view tabs: the page is one continuous surface, because the
+     split those tabs named was a split of REFRESH RHYTHM, not of question —
+     "what is burning right now" and "what did this period cost" are the same
+     question at two time scales.
+     Subscription / span / chips are per-section scope, not global navigation:
+     each section mounts its own "scope controls" widget (web/dist/scope.js's
+     createScopeControls) on its first substantive card. See scope.js for why.
+     Section ids are structural on purpose — web/embed_test.go anchors on them,
+     and per #8 an anchor must not be a product name or a heading that a
+     rewording moves. -->
 <header class="scope" id="scope">
   <div class="row1">
     <h1>TokenLedger</h1>
-    <nav class="views" role="tablist">
-      <button role="tab" id="tab-now" aria-selected="true">Now</button>
-      <button role="tab" id="tab-review" aria-selected="false">Review</button>
-    </nav>
     <span class="spacer"></span>
     <button id="theme" title="Toggle light / dark">◐</button>
   </div>
@@ -28,8 +30,15 @@
 </header>
 <div class="wrap">
   <div id="banners"></div>
-  <main id="now" aria-busy="false"></main>
-  <main id="review" aria-busy="false" hidden></main>
+  <main id="page" aria-busy="false">
+    <section id="spend"></section>
+    <!-- now.js renders this whole block: live activity, quota gauges,
+         collector health and the fleet roster. "status", not "live",
+         because it is all four. -->
+    <section id="status"></section>
+    <section id="consumption"></section>
+    <section id="analysis"></section>
+  </main>
   <footer id="footer"></footer>
 </div>
 <aside id="detail" class="detail" hidden aria-modal="true" role="dialog"></aside>

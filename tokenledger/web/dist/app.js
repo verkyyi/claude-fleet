@@ -3,7 +3,11 @@ import { parse, format } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
 import { renderNav, renderScopeControls, setBusy } from './scope.js';
 import { renderNow } from './now.js';
-import { renderReview } from './review.js';
+import { renderReview, SUMMARY_INDEX } from './review.js';
+import { renderSpend } from './spend.js';
+import { renderConsumption } from './consumption.js';
+import { apiQuery } from './lib/state.js';
+import { extent, resolve } from './lib/brush.js';
 import { renderDetail, closeDetail } from './session.js';
 import { $, el } from './lib/dom.js';
 
@@ -28,7 +32,7 @@ export const app = {
   },
 };
 
-const loaders = { now: createLoader(), review: createLoader() };
+const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader() };
 let lastRendered = '';
 
 function route() {
@@ -46,24 +50,26 @@ function route() {
     const corrected = format(s);
     if (corrected !== location.hash) history.replaceState(null, '', corrected);
   }
-  // Handlers are shared by both calls below: renderNav only ever invokes
-  // onView, renderScopeControls only ever invokes the other four — same
-  // split the two functions had when this was one renderScope() call.
+  // Normalise the path the same way, for the same reason. parse() still
+  // accepts the retired /now and /review prefixes so old links keep working,
+  // but leaving one in the address bar means every copy of that link spreads
+  // a path this build no longer emits. replaceState, not push: reading a
+  // shared link is not a navigation the reader performed.
+  const canonical = format(s);
+  if (canonical !== location.hash) history.replaceState(null, '', canonical);
+  // renderNav takes no handlers any more: with the view gone the bar has
+  // nothing to invoke. These four belong to the scope-controls widgets.
   const cb = {
-    onView: (v) => app.setState({ ...s, view: v, session: null }),
     onSub: (sub) => app.setState({ ...s, sub }),
     onSource: (source) => { const chips = { ...s.chips }; if (source) chips.source = source; else delete chips.source; app.setState({ ...s, chips }); },
     onSpan: (span) => app.setState({ ...s, span, from: null, to: null }),
     onChipRemove: (dim) => { const chips = { ...s.chips }; delete chips[dim]; app.setState({ ...s, chips }); },
     onClear: () => app.setState({ ...s, chips: {} }),
   };
-  renderNav($('#scope'), s, cb);
-  // Updates EVERY view's scope-controls widget synchronously (whichever is
-  // visible right now, and the hidden one so it stays correct for later) —
-  // see scope.js's renderScopeControls doc comment.
+  renderNav($('#scope'));
+  // Updates EVERY section's scope-controls widget synchronously — see
+  // scope.js's renderScopeControls doc comment.
   renderScopeControls(s, app.accounts, cb);
-  $('#now').hidden = s.view !== 'now';
-  $('#review').hidden = s.view !== 'review';
   if (s.session) renderDetail($('#detail'), s, app); else closeDetail($('#detail'));
   const key = format({ ...s, session: null });
   if (key !== lastRendered) { lastRendered = key; load(); }
@@ -71,12 +77,40 @@ function route() {
 
 async function load() {
   const s = app.state;
-  const view = s.view;
-  const root = $('#' + view);
-  const r = view === 'now' ? renderNow(root, s, app) : renderReview(root, s, app);
+  const root = $('#page');
+  // Both sections render on every route. Two loaders, not one, because the
+  // rhythms genuinely differ -- status refreshes on the event stream and a
+  // 60s timer, analysis only when the brush touches the right edge -- and
+  // seq.js's per-loader sequencing is what stops a slow response from
+  // overwriting a newer scope.
+  const nowR = renderNow($('#status'), s, app);
+  const reviewR = renderReview($('#analysis'), s, app);
+  // Same range the analysis section resolves, so the consumption table and the
+  // charts below it are answering about one period. Duplicating the arithmetic
+  // here would let the two drift apart the first time the brush logic changes.
+  const range = resolve({ from: s.from, to: s.to }, s.span, app.now());
+  const consumptionR = {
+    fetchers: [(signal) => app.api('/v1/usage?' + apiQuery(s, {
+      from: range.from, to: range.to, omitDim: 'provider',
+      extra: { by: 'provider', limit: 50 },
+    }), signal)],
+    apply: ([r]) => renderConsumption($('#consumption'), r, s, app, range),
+  };
   root.setAttribute('aria-busy', 'true'); setBusy(true);
-  const ok = await loaders[view].run(r.fetchers, r.apply);
-  if (ok) { root.setAttribute('aria-busy', 'false'); setBusy(loaders.now.inFlight || loaders.review.inFlight); }
+  const [a, b, c] = await Promise.all([
+    loaders.now.run(nowR.fetchers, nowR.apply),
+    loaders.consumption.run(consumptionR.fetchers, consumptionR.apply),
+    loaders.review.run(reviewR.fetchers, (results) => {
+      // The spend headline reads the summary this loader already fetched.
+      const r = results[SUMMARY_INDEX];
+      renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
+      reviewR.apply(results);
+    }),
+  ]);
+  if (a && b && c) {
+    root.setAttribute('aria-busy', 'false');
+    setBusy(loaders.now.inFlight || loaders.review.inFlight || loaders.consumption.inFlight);
+  }
 }
 
 async function boot() {
@@ -84,12 +118,12 @@ async function boot() {
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, 'Cannot reach the hub: ' + err.message)); return; }
   addEventListener('hashchange', route);
   route();
-  // Now refreshes its stored cards every minute; Review only when the brush
-  // touches the right edge, every five minutes.
+  // The stored cards refresh every minute; the analysis section only when the
+  // brush is at the right edge, every five minutes.
   setInterval(async () => {
     try { app.accounts = await app.api('/v1/accounts'); route(); } catch {}
-    if (app.state.view === 'now') load();
+    load();
   }, 60_000);
-  setInterval(() => { if (app.state.view === 'review' && app.state.to == null) load(); }, 300_000);
+  setInterval(() => { if (app.state.to == null) load(); }, 300_000);
 }
 boot();

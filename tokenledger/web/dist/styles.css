@@ -384,3 +384,50 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
   font-weight: 400;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------- the spend headline
+   The page's first figure is the one somebody was actually charged, so it is
+   the only number given display size. Its terms sit directly under it in
+   muted text: the total is the answer, the terms are the working. */
+#real-spend .figure {
+  font-size: 2.6rem; font-weight: 650; line-height: 1.1;
+  margin: 6px 0 2px; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+#real-spend .terms {
+  color: var(--ink-2); margin: 0 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+#real-spend .hint.warn { color: var(--serious); }
+@media (max-width: 480px) {
+  #real-spend .figure { font-size: 2rem; }
+  #real-spend .terms { font-size: .9em; }
+}
+
+/* The three provenance tables inside the KPI card (rate basis, subscription
+   spend, unpriced reasons) are bare <table>s wide enough to push the page
+   sideways on a phone. They used to hide behind the Review tab; with one
+   continuous surface they are on the default page, so they get the same
+   overflow container every other wide table here has. */
+details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 100%; }
+
+/* Six group options do not fit a phone in one row. Wrapping beats a scroller
+   for a segmented control: every option should be reachable without the user
+   discovering that this particular strip scrolls. max-width keeps it inside
+   its card once it is allowed to be a multi-line box. */
+@media (max-width: 560px) {
+  .seg { flex-wrap: wrap; max-width: 100%; }
+  .seg button { border-right: 0; border-bottom: 1px solid var(--border); }
+}
+
+/* Consumption table. `.link` is a button that reads as a link: the provider
+   cell expands its models, and a bare <button> in a table cell reads as an
+   action on the row rather than a way into it. */
+#consumption-table button.link {
+  border: 0; background: none; padding: 0; color: var(--s1);
+  font: inherit; text-align: left; cursor: pointer;
+}
+#consumption-table button.link:hover { text-decoration: underline; }
+#consumption-table tr.models > td { padding: 4px 0 10px 18px; background: transparent; }
+#consumption-table table.sub { width: auto; font-size: 12.5px; }
+#consumption-table table.sub td { border: 0; padding: 2px 14px 2px 0; color: var(--ink-2); }

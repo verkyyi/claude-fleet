@@ -134,8 +134,8 @@ See [OpenAI's token accounting example](https://developers.openai.com/api/docs/g
 The dashboard's "turns" count represents model requests, including tool-use
 iterations, rather than user messages.
 
-The local report includes **By source**. **Now** and **Review** share a source
-selector; accounts follow that selection. Usage, quota history, findings,
+The local report includes **By source**. The dashboard is one continuous page
+with a single source selector; accounts follow that selection. Usage, quota history, findings,
 Live/SSE, machine lists and MCP accept `source=codex`. The all-time headline
 follows the selected account/source; project and machine chips narrow details.
 
@@ -319,6 +319,27 @@ If someone logs out and into a *different* account on a machine, ccquota records
 the switch and shows it in the UI. Rows already ingested keep their old
 attribution and cannot be corrected — see the known limits below. Two plans
 running side by side is **not** a switch, and is not recorded as one.
+
+## The dashboard
+
+One page, no tabs. It reads top to bottom: what this actually cost, what is
+running right now, every model that ran and what it cost, then the analysis
+and the fleet.
+
+The top-level axis is the **billing relationship**, not the product name.
+There are two ways a deployment is charged — a subscription that bills monthly
+whether or not a token is spent, and metered spend that bills per call — and
+the headline figure is the sum of those two, with the API-equivalent
+("notional") figure printed beside it and explicitly outside it.
+
+`gateway` is not on that axis. It is the channel one of the metered sources
+reports through, so it appears as a per-row attribute and in collection
+health, not as a peer of the subscriptions. The consumption table is keyed on
+**(provider, model)**: a gateway that fails over between vendors reaches one
+model id through several upstreams at several contracted prices, and a row
+keyed on the model alone would add two invoices together. Rows sort within a
+billing kind, never across one — a metered charge and an API-equivalent
+estimate are not comparable amounts.
 
 ## Showing it to someone else
 

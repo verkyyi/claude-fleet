@@ -4,7 +4,12 @@ export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project
 export const SPAN_VALUES = ['7d', '30d', '90d'];
 export const GROUPS = ['project', 'login', 'machine', 'model', 'branch', 'team', 'source'];
 export const SORTS = ['tokens', 'cost', 'started', 'duration', 'turns'];
-export const DEFAULTS = Object.freeze({ view: 'now', session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens' });
+// The consumption table's own sort. Kept apart from SORTS rather than merged:
+// that list belongs to the sessions table and carries `started`/`duration`,
+// which mean nothing for a provider row. One shared key would let a session
+// sort survive into a table that cannot honour it.
+export const CSORTS = ['cost', 'tokens', 'events'];
+export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost' });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -13,8 +18,13 @@ export function parse(hash) {
   const s = { ...DEFAULTS, chips: {} };
   const h = (hash || '').replace(/^#/, '');
   const [path, qs = ''] = h.split('?');
-  const m = path.match(/^\/(now|review)(?:\/session\/([^/?]+))?\/?$/);
-  if (m) { s.view = m[1]; if (m[2]) s.session = decodeURIComponent(m[2]); }
+  // `/now` and `/review` are consumed and dropped: the split they named is
+  // gone, but links to it are in people's history and in chat logs, and a
+  // shared link that lands on a blank page is how a rename loses readers
+  // nobody hears from. Everything after it -- the session id and the whole
+  // query string -- still resolves.
+  const m = path.match(/^\/(?:(?:now|review)\/?)?(?:session\/([^/?]+))?\/?$/);
+  if (m && m[1]) s.session = decodeURIComponent(m[1]);
   const p = new URLSearchParams(qs);
   if (p.get('sub')) s.sub = p.get('sub');
   s.span = pick(p.get('span'), SPAN_VALUES, DEFAULTS.span);
@@ -26,6 +36,7 @@ export function parse(hash) {
   s.g1 = pick(p.get('g1'), GROUPS, DEFAULTS.g1);
   s.g2 = pick(p.get('g2'), GROUPS, DEFAULTS.g2);
   s.sort = pick(p.get('sort'), SORTS, DEFAULTS.sort);
+  s.csort = pick(p.get('csort'), CSORTS, DEFAULTS.csort);
   return s;
 }
 
@@ -39,7 +50,8 @@ export function format(s) {
   if (s.g1 !== DEFAULTS.g1) p.set('g1', s.g1);
   if (s.g2 !== DEFAULTS.g2) p.set('g2', s.g2);
   if (s.sort !== DEFAULTS.sort) p.set('sort', s.sort);
-  const path = '#/' + s.view + (s.session ? '/session/' + encodeURIComponent(s.session) : '');
+  if (s.csort !== DEFAULTS.csort) p.set('csort', s.csort);
+  const path = '#/' + (s.session ? 'session/' + encodeURIComponent(s.session) : '');
   const qs = p.toString();
   return qs ? path + '?' + qs : path;
 }

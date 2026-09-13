@@ -8,18 +8,17 @@ test('parse defaults on empty and junk', () => {
 });
 
 test('round-trips every field', () => {
-  const s = { view: 'review', session: null, sub: 'abc', span: '7d', from: 1788300000000, to: 1788380000000,
-    chips: { machine: 'ep1', project: '/Users/x/p q' }, g1: 'login', g2: 'branch', sort: 'cost' };
+  const s = { session: null, sub: 'abc', span: '7d', from: 1788300000000, to: 1788380000000,
+    chips: { machine: 'ep1', project: '/Users/x/p q' }, g1: 'login', g2: 'branch', sort: 'cost', csort: 'tokens' };
   const h = format(s);
-  assert.match(h, /^#\/review\?/);
+  assert.match(h, /^#\/\?/);
   assert.deepEqual(parse(h), s);
 });
 
 test('session route', () => {
   const s = parse('#/review/session/abc-123?sub=all');
-  assert.equal(s.view, 'review');
   assert.equal(s.session, 'abc-123');
-  assert.equal(format(s), '#/review/session/abc-123');
+  assert.equal(format(s), '#/session/abc-123');
 });
 
 test('chips: one value per dimension, ordered, removable', () => {
@@ -27,7 +26,7 @@ test('chips: one value per dimension, ordered, removable', () => {
   s = withChip(s, 'machine', 'ep1');
   s = withChip(s, 'model', 'haiku');
   assert.deepEqual(s.chips, { machine: 'ep1', model: 'haiku' });
-  assert.equal(format(s), '#/now?machine=ep1&model=haiku');
+  assert.equal(format(s), '#/?machine=ep1&model=haiku');
   assert.deepEqual(withoutChip(s, 'machine').chips, { model: 'haiku' });
 });
 
@@ -48,4 +47,34 @@ test('source selection survives navigation and scopes API requests', () => {
   assert.deepEqual(parse(format(state)), state);
   assert.match(apiQuery(state, { from: 0, to: 3600000 }), /&source=codex/);
   assert.ok(!apiQuery(state, { from: 0, to: 3600000, omitDim: 'source' }).includes('&source='));
+});
+
+test('the hash has no view segment', () => {
+  const s = parse('#/?sub=abc&span=7d');
+  assert.equal(s.view, undefined);
+  assert.equal(s.sub, 'abc');
+  assert.equal(format(s), '#/?sub=abc&span=7d');
+});
+
+test('a session still round-trips', () => {
+  const s = parse('#/session/abc-123?span=7d');
+  assert.equal(s.session, 'abc-123');
+  assert.equal(format(s), '#/session/abc-123?span=7d');
+});
+
+// Old links are the only reason anyone types a URL twice. They must land on
+// the same page with the same scope, not on a blank one.
+test('old #/now and #/review links keep their scope', () => {
+  for (const old of ['#/now?sub=abc&span=7d', '#/review?sub=abc&span=7d']) {
+    const s = parse(old);
+    assert.equal(s.sub, 'abc', old);
+    assert.equal(s.span, '7d', old);
+    assert.equal(format(s), '#/?sub=abc&span=7d', old);
+  }
+});
+
+test('an old review session link keeps its session', () => {
+  const s = parse('#/review/session/abc-123');
+  assert.equal(s.session, 'abc-123');
+  assert.equal(format(s), '#/session/abc-123');
 });

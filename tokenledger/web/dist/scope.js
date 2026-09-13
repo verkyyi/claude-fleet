@@ -2,9 +2,9 @@
 // widget (subscription select · span segmented control · chips row).
 //
 // As of the Task 15 nav restructure, these are two SEPARATE things:
-//   - renderNav() draws the sticky bar itself — wordmark, Now/Review tabs,
-//     theme toggle. Nothing else. It is global navigation, not filtering, so
-//     it holds no scope state.
+//   - renderNav() draws the sticky bar itself — wordmark and theme toggle.
+//     Nothing else. There is no longer anything to navigate BETWEEN: the page
+//     is one surface, so the bar holds neither navigation nor scope state.
 //   - createScopeControls() builds ONE instance of the scope-controls widget
 //     (subscription + optional span + chips). Each view MOUNTS its own
 //     instance on its first substantive card — the card whose meaning the
@@ -24,6 +24,7 @@
 // back into whichever handlers were passed at update() time.
 import { DIMS } from './lib/state.js';
 import { shortProject } from './lib/format.js';
+import { accountGroups, SOURCE_LABEL } from './lib/providers.js';
 import { el, $ } from './lib/dom.js';
 // `app` is read only inside functions below (never at module-eval time), so
 // this is a safe circular import: app.js imports renderNav/renderScopeControls/
@@ -58,18 +59,14 @@ function chipLabel(dim, value) {
 
 /* ---------------------------------------------------------------- nav bar */
 
-let navHandlers = {};
-
-/** renderNav renders/updates the sticky top bar: wordmark, view tabs, theme
- *  toggle — nothing else. `root` is the static `<header id="scope">` from
+/** renderNav renders/updates the sticky top bar: wordmark and theme toggle —
+ *  nothing else. The view tabs are gone with the view: the page is one
+ *  continuous surface. `root` is the static `<header id="scope">` from
  *  index.html (always present, never recreated), so listeners are bound
  *  exactly once behind a `data-bound` guard the same way the whole bar used
  *  to be before Task 15 split it. */
-export function renderNav(root, state, cb) {
-  navHandlers = cb || {};
+export function renderNav(root) {
   if (!root.dataset.bound) {
-    $('#tab-now', root).addEventListener('click', () => navHandlers.onView && navHandlers.onView('now'));
-    $('#tab-review', root).addEventListener('click', () => navHandlers.onView && navHandlers.onView('review'));
     // Theme toggle: copied verbatim from the old page's click handler.
     $('#theme', root).addEventListener('click', () => {
       const cur = document.documentElement.getAttribute('data-theme');
@@ -79,8 +76,6 @@ export function renderNav(root, state, cb) {
     });
     root.dataset.bound = '1';
   }
-  $('#tab-now', root).setAttribute('aria-selected', String(state.view === 'now'));
-  $('#tab-review', root).setAttribute('aria-selected', String(state.view === 'review'));
 }
 
 export function setBusy(b) {
@@ -135,10 +130,16 @@ export function createScopeControls({ span = true } = {}) {
     handlers = cb || {};
 
     const relevant = accounts.filter((a) => !state.chips.source || (a.source || 'claude') === state.chips.source);
-    const opts = relevant.map((a) => el('option', { value: a.account_uuid },
-      `${a.source === 'codex' ? 'Codex · ' : 'Claude · '}${a.email || a.display_name || a.account_uuid}`));
-    opts.unshift(el('option', { value: 'all' }, `All ${relevant.length} accounts / usage pools`));
-    sel.replaceChildren(...opts);
+    // Grouped, not prefixed. The old `Claude · ` / `Codex · ` prefix asserted
+    // a two-source world and, worse, said "account" meant one thing when it
+    // means two: a subscription somebody pays for monthly, or one calling
+    // application on the gateway. The optgroup heading carries that now.
+    const groups = accountGroups(relevant).map((g) =>
+      el('optgroup', { label: g.label },
+        ...g.options.map((o) => el('option', { value: o.value }, o.text))));
+    sel.replaceChildren(
+      el('option', { value: 'all' }, `All ${relevant.length} accounts / usage pools`),
+      ...groups);
     sel.style.display = relevant.length ? '' : 'none';
     sel.value = state.sub;
 
@@ -147,7 +148,7 @@ export function createScopeControls({ span = true } = {}) {
       if (state.chips.source && !sources.includes(state.chips.source)) sources.push(state.chips.source);
       sourceSel.replaceChildren(el('option', { value: '' }, 'All sources'),
         ...sources.map((source) => el('option', { value: source },
-          ({ claude: 'Claude Code', codex: 'Codex' })[source] || source)));
+          SOURCE_LABEL[source] || source)));
       sourceSel.value = state.chips.source || '';
     }
 
