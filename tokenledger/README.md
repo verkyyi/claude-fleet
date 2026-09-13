@@ -3,17 +3,21 @@
 > 命令、模块路径、数据库路径与环境变量**仍然是 `ccquota`** —— 这一版只换对外的产品名。
 > 改标识符是另一件事（跨两个仓的 cutover），没做。
 
-Your Claude subscription is consumed by many machines. Anthropic tells you *how
-much* is left, and nothing about *where it went*. Every local tool tells you
-where it went on **one** machine, and has to guess at the quota.
+**Books for a team account pool.** A small team buys N Claude subscriptions
+centrally and schedules its work against whichever of them still has headroom.
+That is markedly cheaper per unit of quota than buying a seat per person — and
+it leaves the team with no reporting at all, because every first-party number is
+scoped either to one machine or to one seat.
 
-TokenLedger joins the two. One Go binary, an agent on every endpoint, a hub with a
-dashboard, and a read-only MCP server so any Claude session can ask.
+TokenLedger is the missing ledger. One hub that knows how much headroom each
+subscription has left, where the spend went (machine, OS login, project, team),
+what the subscriptions actually cost in real money, and a gate a scheduler can
+branch on before it starts more work.
 
-Token usage also covers **Codex**. The agent and local report collect Claude
-Code and Codex by default, with a source dimension for comparing or filtering
-them. Both sources support subscription-limit monitoring when a usable local
-login is available.
+One Go binary: an agent on every endpoint, a hub with a dashboard and an API,
+and a read-only MCP server so any Claude session can ask. Usage covers **Codex**
+alongside Claude Code, with a source dimension for comparing or filtering them;
+both support subscription-limit monitoring when a usable local login is present.
 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
@@ -28,6 +32,79 @@ login is available.
                 │  MCP at /mcp     │
                 └──────────────────┘
 ```
+
+## Why a pool rather than seats
+
+At list price, pooled capacity is **2.5× the quota per dollar** — and unlike a
+seat allowance it can go to whoever needs it that week:
+
+| monthly plan | cost / mo | total quota (× Pro) | quota per $ | poolable |
+|---|---:|---:|---:|:--:|
+| 5 × Team Standard seats | $125 | ~5× | 0.040 | ✗ each seat capped on its own |
+| 5 × Team Premium seats | $625 | ~25× | 0.040 | ✗ each seat capped on its own |
+| **2 × Max 20× pooled** | **$400** | **40×** | **0.100** | ✓ the whole pool draws on it |
+
+$400 of pooled Max buys 40×; $625 of Premium seats buys 25×, and that 25× cannot
+be lent between people. The gap is *before* idle capacity: on Teams and
+Enterprise, [each member's usage draws from a per-seat
+allowance](https://code.claude.com/docs/en/costs#claude-for-teams-and-enterprise),
+so the quota of anyone on holiday is quota nobody can spend, while a pool
+re-absorbs it.
+
+> Prices from [claude.com/pricing](https://claude.com/pricing), monthly billing,
+> **snapshot 2026-09-13**. Quota multipliers are approximate and relative to Pro.
+> Both drift — re-check before quoting them.
+
+## What the first party cannot show you
+
+Anthropic tells you *how much* of the plan is left — that figure is
+account-wide and exact. What no first-party surface tells you is *where it
+went*: the breakdown is scoped to the machine it was computed on, by
+construction. From [Anthropic's own
+documentation](https://code.claude.com/docs/en/costs):
+
+> `/usage` — "The figures are approximate and computed from local session
+> history on this machine, so usage from other devices or claude.ai is not
+> included."
+>
+> `/insights` — "Sessions from other devices and claude.ai aren't included."
+
+Per-user reporting does exist — but only where billing is already per user:
+Teams and Enterprise (the spend-report CSV, the Enterprise Analytics API) and
+the Console (the API dashboard). A team on pooled subscriptions is in neither
+bucket, so **no first-party surface merges several machines onto one set of
+books.**
+
+That is not a feature someone forgot to ship. Attribution follows billing, and a
+pooled subscription is not billed per person, so the merged cross-machine view
+stays missing for structural reasons rather than temporary ones. It is the one
+thing here worth building on.
+
+## Who this is for
+
+**A 3–8 person team that buys its subscriptions centrally and pools them.** The
+subscriptions belong to the team rather than to individuals, and the questions
+that matter are *how much headroom is left*, *which project ate the week*, and
+*whose budget does this machine's spend belong to*.
+
+It is **not** for:
+
+- **One person on one machine.** There is nothing to merge;
+  [ccusage](https://github.com/ccusage/ccusage) is a smaller tool and does that
+  job well.
+- **A company on Team or Enterprise seats.** There the first party already gives
+  you per-user spend and admin spend limits, and what is left here shrinks to
+  the Codex column and the cross-tool view. (Read the table above before
+  concluding that seats are the cheaper purchase.)
+
+**It is also not a scoreboard** — a constraint in the design, not a promise in
+the README. A pool's ledger can name people, so this one is careful where it
+does: teams are assigned on the hub and are never self-reported by a machine,
+and the per-person view is an unnumbered filter you reach by URL, never
+something the dashboard ranks or leads with. Read as a per-person performance
+ranking, an internal usage board fails by Goodhart — people avoid the tool or
+pad their usage — and either outcome destroys the cost data it exists to
+produce. [Teams](#teams) has the mechanics.
 
 ## Why not one of the existing tools
 
