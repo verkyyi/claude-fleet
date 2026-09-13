@@ -551,15 +551,21 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 
 ### M3 — 让第二个人装得上
 
-| 批次 | issue | 并行? |
-|---|---|---|
-| 先单独跑 | 1 `@claude_state` → `@agent_state` | **必须独占** —— 碰所有文件，和任何人并行都会冲突 |
-| 然后 | P0#3 mini 改 N 个 OS login | 独立，但要停机窗口 |
-| 瘦身 | ~~4 删 base-readonly-guard~~ · ~~5 删 janitor~~ · ~~6 `.worktreeinclude`~~（三条已证伪，见第七章）· 7 用量代理→OTEL · 8 → plugin | 只剩两条，开发并行（可 autofill），**落地一条一条来** |
-| 收尾 | 2 能力矩阵进 README | 随时 |
+**backlog 已全部建好（2026-09-13）**，瘦身三条证伪后只剩 5 条：
 
-⚠️ **瘦身的落地纪律**：每条 land 后 `/fleet-sync-install` + 冒烟，确认 fleet 没炸再 land 下一条。
-这几条删的是安全件和守护进程，串行落地 + 每步可回滚，比一次推五条省事得多。
+| issue | 内容 | 并行? |
+|---|---|---|
+| [#607](https://github.com/verkyyi/claude-fleet/issues/607) | `@claude_state` → `@agent_state` 正名 | ⚠️ **必须独占** —— 碰几乎所有文件 |
+| [#609](https://github.com/verkyyi/claude-fleet/issues/609) | mini 改 N 个 OS login | 独立；**后面所有 per-person 功能的地基** |
+| [#611](https://github.com/verkyyi/claude-fleet/issues/611) | commands+hooks → plugin（**收益最大**） | 可 autofill |
+| [#610](https://github.com/verkyyi/claude-fleet/issues/610) | 用量代理 → `/usage` + OTEL | 可 autofill |
+| [#608](https://github.com/verkyyi/claude-fleet/issues/608) | 能力矩阵进 README | 随时，可 autofill |
+
+~~删 base-readonly-guard · 删 janitor · `.worktreeinclude`~~ —— 三条已证伪，见[第七章](#七瘦身清单--大部分已被证伪2026-09-13)。
+
+⚠️ **落地纪律**：#607 开工前确认没有别的 PR 在途，落地后立刻 `/fleet-sync-install`，
+期间别派其他 worker。其余几条开发可并行，**落地仍一条一条来** —— 每条 land 后
+sync-install + 冒烟，确认 fleet 没炸再下一条。
 
 ### M4 — 团队层
 
