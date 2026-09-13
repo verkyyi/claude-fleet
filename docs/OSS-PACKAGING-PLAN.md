@@ -457,14 +457,23 @@ README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条
 >
 > **这与 ccquota 自己 PR #11 修过的是同一类 bug**（「push 触发器指向真正的主干
 > —— 57 个提交没被 push-CI 验过，因为它指着一条两周没动的分支」）。第二次犯。
-> 📌 未决：`FLEET_BASE_BRANCH` 是否改回 `main`。不改则该 fleet 之后每个 worker
-> 继续落废分支。
+> ✅ **已修复并上线 2026-09-13**（#603 → PR #604 → `/fleet-sync-install`）：
+> 新增 `fleet_resolve_base_branch()`（优先级 flag > gh default > origin/HEAD >
+> checkout > main，22 项 selftest 全过）、`fleet-up.sh` 在不一致或读不到默认分支时
+> **大声警告**、`fleet-doctor.sh` 新增 `base` 检查行。`fleet-ccquota` 的 conf 已改回
+> `main`，doctor 现在三个 fleet 全 PASS：
+> ```
+> PASS base  fleet-24haowan-monorepo: … base "master" is the repo default
+> PASS base  fleet-ccquota:           … base "main"   is the repo default
+> PASS base  fleet-claude-fleet:      … base "master" is the repo default
+> ```
 >
 > 💡 产品启示：**`fleet-up.sh` 不该默认拿当前 checkout 的分支当 base**，
 > 应取仓库的 default branch（或至少在两者不一致时警告）。这是打包给团队用之前
 > 必须修的 —— 陌生人装上之后踩这个坑，会以为整个工具不工作：他的 worker 看起来
 > 都在正常跑、PR 都在正常合，但主干上什么都没变。这是最难自查的一类失败。
-> → 已立 [claude-fleet#603](https://github.com/verkyyi/claude-fleet/issues/603)，已标 `autofill`。
+> → [claude-fleet#603](https://github.com/verkyyi/claude-fleet/issues/603) ✅ 已由 autofill
+> 自动接走、修复、落地并同步上线。**这是 autofill 端到端跑通的第一个完整闭环。**
 
 发布动作（HN / X / subreddit）**尚未做**，等操作员决定。
 
