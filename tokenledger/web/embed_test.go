@@ -25,7 +25,13 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		t.Fatalf("index.html unreadable: %v", err)
 	}
 	// A couple of anchors, so an empty or truncated shell cannot pass.
-	for _, want := range []string{"<title>ccquota</title>", `href="styles.css"`, `src="app.js"`} {
+	//
+	// The title anchor is deliberately NOT the product name. It was
+	// "<title>ccquota</title>", and renaming the product to TokenLedger broke
+	// this test — an anchor whose job is "the shell is not truncated" should not
+	// also be an assertion about branding, or every rename is a red build.
+	// `<title>` alone still proves the head survived.
+	for _, want := range []string{"<title>", `href="styles.css"`, `src="app.js"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html shell is missing %q", want)
 		}
