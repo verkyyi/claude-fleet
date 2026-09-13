@@ -54,7 +54,8 @@ view ctrl-t alt-t
 restore ctrl-o alt-o
 pr ctrl-p alt-p
 reap ctrl-x alt-x
-rename ctrl-e alt-e'
+rename ctrl-e alt-e
+answer ctrl-k alt-k'
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered
 # ctrl then alt: C-a → ctrl-a · M-a → alt-a · C-M-x / M-C-x → ctrl-alt-x ·

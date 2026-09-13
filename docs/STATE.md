@@ -59,6 +59,15 @@ discriminations so the fast signal does not cry wolf:
   window would masquerade as `working` the whole time it is really waiting on you,
   so the `busy` path inspects the hook's stdin JSON for
   `"tool_name":"AskUserQuestion"` and flips to `needs` + bell.
+  **Answer it from the dash** (`⌃k` → `bin/dash-answer.sh` → `bin/fleet-answer.sh`,
+  issue #605). A `SendMessage` structurally cannot: a peer message is delivered
+  *between* turns, and a pending question **is** the turn — measured, the frame
+  reaches the pane and only queues (`enqueue` … then `remove … "absorbed_mid_turn"`
+  once answered). So the message waits for the answer that waits for the message;
+  somebody has to answer first. `fleet-answer.sh` types the option's digit at the
+  pane, but only while the **transcript** shows an `AskUserQuestion` tool_use with
+  no tool_result — which is why it can never mistake the OTHER thing `needs` means,
+  a permission prompt, for a question (that one you still press yourself).
 - **Benign idle prompt → *leave*.** Claude Code emits an idle
   `Notification` (*"Claude is waiting for your input"*) ~60s after **any** session
   goes idle. Unfiltered, that would flip every finished window to `needs` + bell

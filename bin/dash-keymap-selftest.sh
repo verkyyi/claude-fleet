@@ -44,7 +44,7 @@ field() { printf '%s\n' "$1" | awk -v a="$2" -v n="$3" '$1==a {print $n}'; }
 
 # --- A. the table under the stock prefix: defaults, ctrl-v flip, clean ------------
 rows=$(km C-b '' list) || fail "A: list exited non-zero" "$rows"
-[ "$(printf '%s\n' "$rows" | grep -c .)" -eq 9 ] || fail "A: expected 9 dash actions" "$rows"
+[ "$(printf '%s\n' "$rows" | grep -c .)" -eq 10 ] || fail "A: expected 10 dash actions" "$rows"
 printf '%s\n' "$rows" | awk '$6!="ok"{bad=1} END{exit bad}' || fail "A: under C-b every action must resolve to its default (state ok)" "$rows"
 printf '%s\n' "$rows" | awk '$2!=$4{bad=1} END{exit bad}' || fail "A: under C-b key == default for every row" "$rows"
 [ "$(field "$rows" agent 2)" = ctrl-v ] || fail "A: the agent flip must default to ctrl-v (#556: ctrl-a is the operator's prefix)" "$rows"
@@ -54,13 +54,13 @@ printf '%s\n' "$rows" | awk '{print $4}' | grep -qx 'ctrl-b' && fail "A: no dash
 [ "$(km C-b '' glyph agent)" = '⌃v' ]  || fail "A: glyph agent → ⌃v"
 [ -z "$(km C-b '' collisions)" ]        || fail "A: no collisions under C-b" "$(km C-b '' collisions)"
 [ "$(km C-b '' prefixes)" = 'C-b -' ]   || fail "A: prefixes echoes 'C-b -'" "$(km C-b '' prefixes)"
-[ "$(km C-b '' actions | grep -c .)" -eq 9 ] || fail "A: actions lists 9 names"
+[ "$(km C-b '' actions | grep -c .)" -eq 10 ] || fail "A: actions lists 10 names"
 env_out=$(km C-b '' env) || fail "A: env exited non-zero" "$env_out"
 ( eval "$env_out"; [ "${DASH_KEY_AGENT:-}" = ctrl-v ] && [ "${DASH_GLYPH_AGENT:-}" = '⌃v' ] && [ -z "${DASH_REMAP_AGENT-x}" ] \
   && [ "${DASH_KEYSTATE_AGENT:-}" = ok ] && [ "${DASH_KEYMAP_PREFIX:-}" = C-b ] && [ -z "${DASH_KEYMAP_PREFIX2-x}" ] ) \
   || fail "A: env must eval to DASH_KEY_AGENT=ctrl-v / glyph ⌃v / no remap / state ok / prefix C-b" "$env_out"
 km C-b '' key nosuch >/dev/null 2>&1 && fail "A: an unknown action must exit non-zero"
-ok "A stock C-b: 9 actions at their defaults, agent = ctrl-v/⌃v, clean, env evals"
+ok "A stock C-b: 10 actions at their defaults, agent = ctrl-v/⌃v, clean, env evals"
 
 # --- B. the fallbacks stay off fzf's own alt keys ------------------------------------
 # fzf 0.74 binds alt-b/alt-f (word motion), alt-d (kill-word), alt-bs, alt-/ by
@@ -76,7 +76,7 @@ rows=$(km C-v '' list)
 [ "$(field "$rows" agent 3)" = '⌥v' ]     || fail "C: … glyph ⌥v" "$rows"
 [ "$(field "$rows" agent 5)" = C-v ]       || fail "C: … remap names the prefix it dodged" "$rows"
 [ "$(field "$rows" agent 6)" = remapped ]  || fail "C: … state remapped" "$rows"
-[ "$(printf '%s\n' "$rows" | awk '$6=="ok"' | grep -c .)" -eq 8 ] || fail "C: the other 8 actions stay put" "$rows"
+[ "$(printf '%s\n' "$rows" | awk '$6=="ok"' | grep -c .)" -eq 9 ] || fail "C: the other 9 actions stay put" "$rows"
 [ "$(km C-v '' collisions)" = 'agent ⌃v C-v ⌥v' ] || fail "C: collisions → 'agent ⌃v C-v ⌥v'" "$(km C-v '' collisions)"
 ( eval "$(km C-v '' env)"; [ "${DASH_KEY_AGENT:-}" = alt-v ] && [ "${DASH_REMAP_AGENT:-}" = C-v ] && [ "${DASH_KEYSTATE_AGENT:-}" = remapped ] ) \
   || fail "C: env carries the remap" "$(km C-v '' env)"

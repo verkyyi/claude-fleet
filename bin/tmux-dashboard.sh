@@ -169,7 +169,7 @@ run_dash() {
   # read the same resolution. The literals below are only the never-launch-
   # unbound floor for an install missing the helper.
   DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
-  DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e
+  DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e DASH_KEY_ANSWER=ctrl-k
   DASH_GLYPH_AGENT='⌃v'
   eval "$(bash "$KEYMAP" env 2>/dev/null)"
   # The ghost names the agent-flip key (issue #559): export the LAUNCH-TIME glyph
@@ -195,6 +195,7 @@ run_dash() {
     --bind "$DASH_KEY_PR:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
     --bind "$DASH_KEY_REAP:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
+    --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1
