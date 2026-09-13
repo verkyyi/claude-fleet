@@ -178,8 +178,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # override for scripts: `--agent codex|claude` on dash-issue-session.sh /
 # dash-raw-session.sh. A `--resume` /
 # `--continue` / `--from-pr` launch (restore, migrate, /fleet-history) is ALWAYS
-# Claude — those resume Claude transcripts. Not available to a Codex worker:
-# /fleet-handoff + auto-handoff, /fleet-context + the dash ctx %, account rotation.
+# Claude — those resume Claude transcripts. What a Codex worker does and does NOT
+# get is graded row by row in README.md's "Agents: Claude Code and Codex" matrix
+# (generated from bin/fleet-codex.sh's header — the single source of truth), so it
+# is not restated here and cannot drift from it.
 # ONE-TIME SETUP: Codex asks "Do you trust the contents of this directory?" once per
 # project, and a worktree inherits its main repo's trust — so trust the BASE
 # CHECKOUT once (`codex` in $FLEET_MAIN → 1/Yes). An untrusted base turns the first
