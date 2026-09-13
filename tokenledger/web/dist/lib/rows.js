@@ -56,7 +56,17 @@ export function sortRows(rows, key) {
       if (b.tokens == null) return -1;
       return b.tokens - a.tokens;
     }
-    if (key === 'cost') return b.cost - a.cost;
+    if (key === 'cost') {
+      // Sorting a subscription row by cost orders it on a figure the table does
+      // not print (that amount is an API-equivalent estimate, and the page
+      // reports subscription work in tokens). Ordering rows by an invisible
+      // number reads as no order at all, so inside the notional group "by cost"
+      // falls back to the visible proxy: tokens.
+      if (a.kind === 'notional' && b.kind === 'notional') {
+        return (b.tokens || 0) - (a.tokens || 0);
+      }
+      return b.cost - a.cost;
+    }
     return b.events - a.events;
   };
   return [...rows].sort((a, b) =>

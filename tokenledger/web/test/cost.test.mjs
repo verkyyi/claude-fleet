@@ -78,7 +78,9 @@ test('kinds match model.CostKind in Go', () => {
 
 test('a source with no usage renders as an absence, not as $0.00', () => {
   const claudeOnly = { cost: [{ source: 'claude', kind: 'notional', events: 3, cost_usd: 3, unpriced_events: 0 }] };
-  assert.equal(fmtSourceCost(claudeOnly, 'claude'), '$3.00');
+  // Two different absences, same glyph: claude HAS usage but no amount this page
+  // will print (subscription work — see below), and gateway did not run at all.
+  assert.equal(fmtSourceCost(claudeOnly, 'claude'), '—');
   assert.equal(fmtSourceCost(claudeOnly, 'gateway'), '—');
   assert.deepEqual(activeSources(claudeOnly), ['claude']);
   // …and a table over such buckets grows only the columns it needs.
@@ -88,13 +90,33 @@ test('a source with no usage renders as an absence, not as $0.00', () => {
 });
 
 test('a partially unpriced source reads as a lower bound', () => {
-  assert.equal(fmtSourceCost(bucket, 'codex'), '≥ $20.00');
-  assert.equal(fmtSourceCost(bucket, 'claude'), '$3.00');
+  // codex is notional too, so the page shows no figure for it either; the
+  // lower-bound form is what a BILLED source with unpriced events reads as.
+  assert.equal(fmtSourceCost(bucket, 'codex'), '—');
+  assert.equal(fmtSourceCost(bucket, 'claude'), '—');
+  const partlyPriced = { cost: [{ source: 'gateway', kind: 'billed', events: 9, cost_usd: 20, unpriced_events: 2 }] };
+  assert.equal(fmtSourceCost(partlyPriced, 'gateway'), '≥ $20.00');
+});
+
+// The page reports money that was charged. A subscription source's cost_usd is
+// an API-equivalent estimate of money nobody was billed, so no table, tooltip or
+// row prints it — decided here so every surface agrees. It is still in the API
+// as cost_notional, and still prices plan --spend's value-for-money ratio.
+test('subscription work shows no amount, whatever its stored figure', () => {
+  for (const src of ['claude', 'codex']) {
+    const b = { cost: [{ source: src, kind: 'notional', events: 500, cost_usd: 72953.51, unpriced_events: 0 }] };
+    assert.equal(fmtSourceCost(b, src), '—', `${src} printed an amount`);
+  }
+  const gw = { cost: [{ source: 'gateway', kind: 'billed', events: 5, cost_usd: 0.27, unpriced_events: 0 }] };
+  assert.equal(fmtSourceCost(gw, 'gateway'), '$0.27');
 });
 
 test('costLine names every source and never sums them', () => {
   const line = costLine(bucket);
-  assert.match(line, /claude \$3\.00 notional/);
+  // A subscription source is NAMED without a figure: dropping it would read as
+  // "nothing ran here", and pricing it would print money nobody was charged.
+  assert.match(line, /claude — subscription/);
+  assert.ok(!/claude \$/.test(line), `costLine priced subscription work: ${line}`);
   assert.match(line, /gateway \$100\.00 billed/);
   assert.ok(!line.includes('123'), `costLine produced a blend: ${line}`);
   assert.equal(costLine({ cost: [] }), 'no cost');

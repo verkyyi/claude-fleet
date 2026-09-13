@@ -202,7 +202,12 @@ function kpisCard(result) {
   // blended numerator — produces a rate per million tokens that no source
   // actually charges. So the tile answers only when the scope has exactly one
   // source in it, and otherwise says to pick one.
-  const only = activeSources(d).length === 1 ? activeSources(d)[0] : null;
+  // ...and only when that one source is BILLED. For subscription work the
+  // numerator was an estimate, so the rate answered "what would a million
+  // tokens have cost at API rates" — a question about a bill that does not
+  // exist.
+  const oneSource = activeSources(d).length === 1 ? activeSources(d)[0] : null;
+  const only = oneSource && kindOf(oneSource) === 'billed' ? oneSource : null;
   const perM = only && d.output_tokens > 0 && !d.unpriced_events
     ? (costOf(d, only).cost_usd / d.output_tokens) * 1e6 : null;
   const prevPerM = only && p.output_tokens > 0 && !p.unpriced_events && activeSources(p).length === 1
@@ -220,7 +225,13 @@ function kpisCard(result) {
   // No fallback to ['claude']. An empty scope is an empty scope; inventing a
   // Claude column for it is how this page came to read as Claude-first in the
   // first place.
-  const sourceTiles = activeSources(d).map((src) => {
+  // BILLED sources only. A "claude spend" tile carried an API-equivalent
+  // estimate of money nobody is charged, in the same tile shape, next to the
+  // gateway's real invoice — the two looked equally like a bill because nothing
+  // about a tile says which kind of money it holds. Subscription work is
+  // reported in tokens on this page; what it COSTS is the plan price, which is a
+  // term in the real-spend tile beside these.
+  const sourceTiles = activeSources(d).filter((src) => kindOf(src) === 'billed').map((src) => {
     const c = costOf(d, src), pc = costOf(p, src);
     const tile = C.kpiTile({
       id: 'kpi-spend-' + src,
@@ -246,8 +257,10 @@ function kpisCard(result) {
     tone: TONE_MORE_IS_WORSE,
   });
   perMTile.title = only
-    ? `${only}: ${KIND_LABEL[kindOf(only)]} cost per million output tokens.`
-    : 'This scope spans more than one source. A cost-per-token rate is only meaningful within one — filter by source to see it.';
+    ? `${only}: metered cost per million output tokens.`
+    : oneSource
+      ? `${oneSource} is subscription work: it is billed monthly, not per token, so there is no per-million rate to report. The plan's cost is in real spend.`
+      : 'This scope spans more than one source. A cost-per-token rate is only meaningful within one — filter by source to see it.';
 
   // The one figure that is money owed: subscriptions plus metered charges.
   // The notional figure is not a term in it and cannot become one — the API
@@ -495,7 +508,8 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
     // by-source breakdown, where it means something. In practice a model id
     // belongs to one source anyway, so this drops nothing on a real hub.
     const rows = source
-      .filter((b) => (b.output_tokens || 0) > 0 && !b.unpriced_events && activeSources(b).length === 1)
+      .filter((b) => (b.output_tokens || 0) > 0 && !b.unpriced_events && activeSources(b).length === 1
+        && kindOf(activeSources(b)[0]) === 'billed')
       .map((b) => {
         const src = activeSources(b)[0];
         const v = (costOf(b, src).cost_usd / b.output_tokens) * 1e6;
@@ -647,10 +661,33 @@ function sessionRow(r, state, app) {
     el('td', {}, sessionDuration(r)),
     el('td', { class: 'num' }, fmtFull(r.turns)),
     el('td', { class: 'num' }, fmtInt(r.tokens)),
-    el('td', { class: 'num', title: `${r.source || 'claude'}: ${KIND_LABEL[r.cost_kind || kindOf(r.source)]} cost` },
-      fmtCost(r), el('span', { class: 'kind' }, ` ${KIND_LABEL[r.cost_kind || kindOf(r.source)]}`)),
+    sessionCostCell(r),
     el('td', { class: 'num' }, fmtPct(r.cache_hit || 0)),
     el('td', { class: 'num' }, fmtPct(r.sidechain_share || 0)));
+}
+
+// A session's money, or the honest absence of it.
+//
+// Most sessions are subscription work, whose cost_usd is an API-equivalent
+// estimate — the figure this page no longer prints. Saying "subscription"
+// without an amount answers the question the column asks ("what did this cost")
+// more truthfully than a number nobody was billed.
+const sessionKind = (r) => r.cost_kind || kindOf(r.source);
+
+function sessionCostText(r) {
+  return sessionKind(r) === 'notional' ? 'subscription' : `${fmtCost(r)} ${KIND_LABEL[sessionKind(r)]}`;
+}
+
+function sessionCostCell(r) {
+  const kind = sessionKind(r);
+  if (kind === 'notional') {
+    return el('td', {
+      class: 'num',
+      title: `${r.source || 'claude'}: billed by the month, not per session — the plan's cost is in real spend`,
+    }, '—', el('span', { class: 'kind' }, ' subscription'));
+  }
+  return el('td', { class: 'num', title: `${r.source}: ${KIND_LABEL[kind]} cost` },
+    fmtCost(r), el('span', { class: 'kind' }, ` ${KIND_LABEL[kind]}`));
 }
 
 function sessionMobileCard(r, state, app) {
@@ -659,7 +696,7 @@ function sessionMobileCard(r, state, app) {
     el('div', {}, chipLink(state, app, 'project', r.cwd, shortProject(r.cwd)), ' — ', chipLink(state, app, 'login', r.os_user, r.os_user)),
     el('div', {}, `${r.model || '—'} · ${r.endpoint || r.endpoint_id}`),
     el('div', {}, `${new Date(r.started).toLocaleString()} · ${sessionDuration(r)}`),
-    el('div', {}, `${fmtInt(r.tokens)} tokens · ${fmtCost(r)} ${KIND_LABEL[r.cost_kind || kindOf(r.source)]} · ${fmtFull(r.turns)} turns`),
+    el('div', {}, `${fmtInt(r.tokens)} tokens · ${sessionCostText(r)} · ${fmtFull(r.turns)} turns`),
     el('div', {}, `cache hit ${fmtPct(r.cache_hit || 0)} · subagent ${fmtPct(r.sidechain_share || 0)}`));
 }
 

@@ -69,8 +69,9 @@ export function renderConsumption(root, result, state, app, range) {
   const card = el('div', { class: 'card', id: 'consumption-table' },
     el('h2', {}, 'Consumption'),
     el('p', { class: 'hint' },
-      'Every model that ran, by the upstream that served it. Sorted within each billing kind — ' +
-      'a metered charge and an API-equivalent estimate are not comparable amounts.'),
+      'Every model that ran, by the upstream that served it. Subscription rows show no amount: ' +
+      'a plan bills monthly, not per request, so its cost belongs to the plan rather than to any ' +
+      'row here. Their usage is the token count.'),
     sortControl(state, app));
 
   if (!rows.length) {
@@ -89,7 +90,12 @@ export function renderConsumption(root, result, state, app, range) {
       el('td', { title: `cost kind: ${KIND_LABEL[r.kind] || r.kind}` }, BILLING[r.kind]),
       el('td', { class: 'num' }, fmtInt(r.events)),
       el('td', { class: 'num' }, r.tokens == null ? '—' : fmtInt(r.tokens)),
-      el('td', { class: 'num' }, r.unpriced ? '≥ ' + fmtUSD(r.cost) : fmtUSD(r.cost)));
+      // An amount here would be an API-equivalent estimate for work billed by
+      // the month. Absent, not zero — the same nil-not-zero rule the tokens
+      // column keeps for rows that count no tokens at all.
+      el('td', { class: 'num' }, r.kind === 'notional'
+        ? '—'
+        : (r.unpriced ? '≥ ' + fmtUSD(r.cost) : fmtUSD(r.cost))));
     $('button', tr).addEventListener('click', () => expand(detail, r, state, app, range));
     body.append(tr, detail);
   }

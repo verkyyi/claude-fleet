@@ -104,7 +104,11 @@ export function rankedBars(rows, { onClick, selectedKey } = {}) {
  *  with no meaning and no way to notice. Only sources with usage in these
  *  buckets get a column, so a single-source hub still shows exactly one. */
 export function bucketTable(buckets, keyLabel, extraCols = []) {
-  const sources = activeSourcesAcross(buckets);
+  // Only BILLED sources get a money column. A subscription source's column was
+  // an API-equivalent estimate of money nobody was charged; now that the page
+  // does not print that figure, the column would be dashes all the way down —
+  // worse than absent, because an empty column reads as missing data.
+  const sources = activeSourcesAcross(buckets).filter((s) => kindOf(s) === 'billed');
   return el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, keyLabel),

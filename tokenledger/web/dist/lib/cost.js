@@ -75,6 +75,12 @@ export function activeSourcesAcross(buckets) {
 export const fmtSourceCost = (b, source) => {
   const c = costOf(b, source);
   if (!c.events) return '—';
+  // Subscription work carries no amount on this page. The figure the API holds
+  // for it is an API-equivalent estimate of money nobody was charged, and a
+  // ledger's largest number must not be one of those. Absent, not zero: the plan
+  // did cost something, it just is not attributable to this row. One place
+  // decides it, so every table and tooltip agrees.
+  if (c.kind === 'notional') return '—';
   return fmtCost(c);
 };
 
@@ -83,7 +89,15 @@ export const fmtSourceCost = (b, source) => {
 export const costLine = (b) => {
   const active = activeSources(b);
   if (!active.length) return 'no cost';
-  return active.map((s) => `${s} ${fmtSourceCost(b, s)} ${KIND_LABEL[costOf(b, s).kind]}`).join(' · ');
+  // A notional source is named without a figure rather than dropped: "this ran
+  // on a subscription" is the answer, and omitting it would read as "nothing
+  // ran here".
+  return active.map((s) => {
+    const c = costOf(b, s);
+    return c.kind === 'notional'
+      ? `${s} — subscription`
+      : `${s} ${fmtSourceCost(b, s)} ${KIND_LABEL[c.kind]}`;
+  }).join(' · ');
 };
 
 /** fold a list of splits into one, per source. Used where the page assembles

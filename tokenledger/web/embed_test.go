@@ -183,3 +183,51 @@ func TestDashboard_EverySourceIsNamedAndEveryChargeIsATerm(t *testing.T) {
 		}
 	}
 }
+
+// The page reports money that was actually charged, and nothing else.
+//
+// The API-equivalent figure ("notional") still exists in the API and still
+// prices subscription work for plan --spend's value-for-money ratio. It is kept
+// off this page on purpose, and that decision needs a guard rather than a
+// comment: it was already made once and undone by accretion, because every
+// individual re-addition looks harmless. Measured on this deployment when it was
+// removed: 30 days of real spend was $39.56 against $73,270 of API-equivalent
+// cost for the same window — 1,852x larger. Whatever label sits next to a figure
+// that size, it is the number a reader carries away.
+//
+// So: no page module may fold a notional total, and none may print the word as a
+// figure's unit. A module that needs the KIND of a source still asks kindOf —
+// this checks the FOLD, which only exists to produce a notional amount.
+func TestDashboard_ThePageReportsOnlyRealMoney(t *testing.T) {
+	assets := Assets()
+	// lib/cost.js DEFINES the fold (and its own tests guard the never-blend-kinds
+	// discipline), so it is the one file allowed to name it.
+	const definition = "lib/cost.js"
+	err := fs.WalkDir(assets, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".js") || path == definition {
+			return err
+		}
+		b, err := fs.ReadFile(assets, path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), "notionalCost") {
+			t.Errorf("%s folds a notional total; this page reports only money that was charged "+
+				"(the figure is still in the API as cost_notional)", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The live tiles described subscription work, so a per-hour DOLLAR rate there
+	// was an estimate of money nobody is billed. Tokens per minute answers the
+	// same question in the unit actually being consumed.
+	nowJS, err := fs.ReadFile(assets, "now.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(nowJS), "lv-uph") {
+		t.Error("now.js still renders the $/hour tile — that rate was notional")
+	}
+}

@@ -74,15 +74,21 @@ a { color: var(--s1); }
 /* Hero counter. The one number on this page that only ever grows.
    Rendered as the tokenman odometer: the character eats the dot stream while
    the fleet is working, and the wheels roll to follow the projection. */
-.hero { padding: 18px 4px 22px; font-size: clamp(20px, 3.4vw, 40px); }
-.hero .tm { display: flex; align-items: center; gap: .55em; flex-wrap: wrap; }
-.hero svg.pac { width: 1.7em; height: 1.7em; flex: none; }
+/* The lifetime token counter is a badge. Every metric inside it is in em, so
+   the one font-size below sets the whole thing -- it used to reach 40px. */
+.hero { padding: 0 0 14px; font-size: 15px; }
+.hero .tm {
+  display: inline-flex; align-items: center; gap: .4em; flex-wrap: nowrap;
+  padding: .26em .7em .26em .4em; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); max-width: 100%;
+}
+.hero svg.pac { width: 1.25em; height: 1.25em; flex: none; }
 .hero .ju, .hero .jl { transform-box: view-box; transform-origin: 24px 24px; }
 .hero .ju { transform: rotate(-22deg); animation: tm-ju .5s ease-in-out infinite; }
 .hero .jl { transform: rotate(22deg);  animation: tm-jl .5s ease-in-out infinite; }
 @keyframes tm-ju { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(-36deg); } }
 @keyframes tm-jl { 0%,100% { transform: rotate(6deg); }  50% { transform: rotate(36deg); } }
-.hero .dots { display: flex; gap: .34em; overflow: hidden; width: 3.6em; flex: none; }
+.hero .dots { display: flex; gap: .34em; overflow: hidden; width: 1.5em; flex: none; }
 .hero .dots .run { display: flex; gap: .34em; animation: tm-eat .5s linear infinite; }
 .hero .dots i { width: .22em; height: .22em; border-radius: 50%; background: var(--tm-dot); flex: none; }
 @keyframes tm-eat { to { transform: translateX(-.56em); } }
@@ -101,8 +107,9 @@ a { color: var(--s1); }
 .hero .strip.snap { transition: none; }
 .hero .strip span { display: block; height: 1.28em; line-height: 1.28em; text-align: center; }
 .hero .sep { color: var(--tm-comma); width: .32em; text-align: center; }
-.hero .k { color: var(--ink-3); font-size: 12px; margin-top: 10px;
-  text-transform: uppercase; letter-spacing: .08em; }
+/* Inline inside the badge now, not a caption row under it. */
+.hero .k { color: var(--ink-3); font-size: .68em; margin: 0 0 0 .15em;
+  text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
 /* Stale: the fleet has stopped reporting. The character stops eating and the
    whole thing fades -- a frozen counter that looks identical to a running one
    reads as "nothing is happening", not "we have lost contact". */

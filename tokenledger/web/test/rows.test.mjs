@@ -68,3 +68,34 @@ test('sortRows does not mutate its input', () => {
   sortRows(rows, 'tokens');
   assert.deepEqual(rows.map((r) => r.provider), before);
 });
+
+// The page no longer prints an amount for subscription rows, so ordering them by
+// that amount would order them on something invisible — which reads as no order
+// at all. Inside the notional group, "by cost" falls back to tokens.
+test('subscription rows sort by tokens under "by cost", since their amount is not shown', () => {
+  const rows = [
+    { provider: 'a', kind: 'notional', cost: 99, tokens: 10, events: 1 },
+    { provider: 'b', kind: 'notional', cost: 1, tokens: 500, events: 1 },
+    { provider: 'c', kind: 'notional', cost: 50, tokens: 100, events: 1 },
+  ];
+  assert.deepEqual(sortRows(rows, 'cost').map((r) => r.provider), ['b', 'c', 'a']);
+});
+
+// Billed rows still sort by the real charge — that figure IS printed.
+test('metered rows still sort by cost', () => {
+  const rows = [
+    { provider: 'a', kind: 'billed', cost: 1, tokens: 999, events: 1 },
+    { provider: 'b', kind: 'billed', cost: 50, tokens: 1, events: 1 },
+  ];
+  assert.deepEqual(sortRows(rows, 'cost').map((r) => r.provider), ['b', 'a']);
+});
+
+// Kinds stay grouped whatever the key: billed first, and the fallback above
+// must not let a token-heavy subscription row jump above a metered charge.
+test('a token-heavy subscription row never outranks a metered one', () => {
+  const rows = [
+    { provider: 'sub', kind: 'notional', cost: 0, tokens: 1e9, events: 1 },
+    { provider: 'gw', kind: 'billed', cost: 0.01, tokens: 5, events: 1 },
+  ];
+  assert.deepEqual(sortRows(rows, 'cost').map((r) => r.provider), ['gw', 'sub']);
+});
