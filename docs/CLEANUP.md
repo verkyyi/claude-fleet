@@ -26,7 +26,9 @@ cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
          → bin/fleet-cleanup.sh <PR>
               ├─ record the resume ledger (fleet-history.sh) BEFORE teardown
               ├─ git -C $FLEET_MAIN pull --ff-only   (under the shared land lease)
-              └─ teardown: kill window → remove worktree → delete branch
+              └─ teardown: kill window → DROP worktree → delete branch
+                           (drop = mv into .fleet-trash/ + prune; the bytes go to
+                            the tick-end budgeted sweep — issue #586)
 resume:  /fleet-history (or the dash ⌃t landed view) → claude --resume <session>
 ```
 
@@ -44,7 +46,7 @@ first, then the worktree, then the branch.
 |---|---|
 | `/fleet-claim` ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force — it says so on the issue and stops. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
 | `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
-| `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch. Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
+| `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch (the worktree is **dropped**, not deleted — see below). Idempotent; an already-reaped PR is a no-op. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | *reap now* from the hub | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>` from the hub pane. Same mechanical core. |
 | `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green; the old dash `⌃l` arming affordance (`dash-arm-merge.sh`) was pruned in #289. Either way the cleanup daemon reaps afterwards. |
@@ -160,6 +162,64 @@ the *next* tick starts on time. Set `FLEET_CLEANUP_CANDIDATE_TIMEOUT=0` to run
 unbudgeted (the pre-#587 behaviour); a non-numeric value is treated as a typo and
 falls back to 120.
 
+The budget is the **backstop**, not the cure for that particular 67 minutes: the
+teardown that caused it no longer deletes a worktree inline at all (next section).
+The two are complementary — one removes the known wedge, the other bounds the next
+unknown one.
+
+## Dropping a worktree — why teardown never deletes (issue #586)
+
+`git worktree remove` deletes the tree **synchronously, one unlink at a time**. In
+a monorepo worktree that is 2.8 GB / **308k files** of `node_modules`, and it
+measured **~0.4 files/s** on a live machine: one teardown held the cleanup daemon
+for **67 minutes** on 54 seconds of CPU. The daemon is a single-process loop on
+`StartInterval=60`, so launchd starts no new tick while the old one lives — and the
+reaping of **three fleets** stopped dead behind it. Merged workers stayed on the
+dash holding their slots, and the base fast-forward (same script) stalled with
+`master` four commits behind, so new workers branched off a stale base. The second
+occurrence the same night was worse: the tick outlived its 300 s lease TTL, the next
+tick stole the lease and SIGTERMed it mid-unlink, leaving a half-deleted 359 MB
+orphan directory.
+
+So **no unattended teardown deletes a tree inline.** It **drops** it:
+
+```
+fleet_worktree_drop <main> <worktree> [--force]      (bin/fleet-lib.sh)
+  1. mv <worktree> → <sibling>/.fleet-trash/<name>.<epoch>.<pid>   O(1), milliseconds
+  2. git -C <main> worktree prune                                  registry clean at once
+  3. the bytes wait for fleet_trash_sweep                           budgeted, interruptible
+```
+
+The trash is a **sibling** of the worktree, never a fixed path, because a rename is
+only O(1) (and only atomic) within one filesystem and a sibling shares one by
+construction. Fleet worktrees are siblings of `$FLEET_MAIN`, so the same directory
+is reachable from either. It carries a `.gitignore` of `*`, so a layout that parks
+worktrees inside a checkout can't make every later `git status` dirty.
+
+Without `--force` a worktree holding uncommitted or untracked work is **refused**
+(`dirty`, rc 1) — the same gate plain `git worktree remove` (no `-f`) enforces.
+Nothing here is destructive on its own: the bytes survive in the trash until a sweep
+reaches them.
+
+`fleet_trash_sweep <main> [budget]` is the only place the fleet pays for those
+bytes, and it pays in bounded instalments — `FLEET_TRASH_SWEEP_BUDGET` seconds
+(default 20) per cleanup-daemon tick, shared across every fleet's distinct base
+checkout. An entry the budget cuts short stays half-deleted and the next sweep
+continues it, which is harmless precisely because it is already out of
+`git worktree list` and nothing waits on it. The sweep runs **before** the diskguard
+gate: a closed gate means the volume is full, and emptying the trash is exactly what
+unsticks it — gating the sweep on free disk is the one ordering that can deadlock.
+
+| Caller | Uses |
+|---|---|
+| `bin/fleet-cleanup.sh` `teardown()` | `fleet_worktree_drop … --force` (the window is already killed, the PR is final) — and `bin/fleet-worktree-drop.sh`, the CLI shim, on the detached arm, because `tmux run-shell` runs its command string under `/bin/sh` where the bash library can't be sourced |
+| `bin/worktree-autoclean.sh` | `fleet_worktree_drop` with **no** `--force` — its liveness/merged gates already proved the worktree clean, and the drop's own dirty gate is the last check |
+| `bin/fleet-cleanup-daemon.sh` | `fleet_trash_sweep`, once per tick, before the disk gate |
+
+Interactive teardowns (`dash-reap.sh` ⌃x, `bin/session-end-hook.sh`) still call
+`git worktree remove` directly — a human is watching there, and a follow-up issue
+tracks moving them over.
+
 ## Config
 
 | Key | Default | Meaning |
@@ -170,6 +230,7 @@ falls back to 120.
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
 | `FLEET_CLOSE_ON_EXIT` | `1` (on) | **Global only** (`~/.claude/fleet/fleet.conf`). The `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). Set `0` to disable machine-wide; global-authoritative, so a per-fleet value is ignored. |
+| `FLEET_TRASH_SWEEP_BUDGET` | `20` | **Global only** (read once per tick, before any per-fleet conf). Seconds a cleanup-daemon tick may spend deleting the worktrees teardown renamed into `.fleet-trash/` (issue #586). `0` disables the sweep — the trash then only drains on `worktree-autoclean`'s hourly run. |
 | `FLEET_MERGE_METHOD` | `squash` | `squash` · `merge` · `rebase` — the strategy a worker lands its own PR with (`bin/fleet-lib.sh` `fleet_merge_method`; an unset/typo'd value falls back to `squash`). |
 
 ## What was retired
