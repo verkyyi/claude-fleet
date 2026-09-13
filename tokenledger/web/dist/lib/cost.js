@@ -23,14 +23,14 @@ import { fmtUSD, fmtCost } from './format.js';
 /** Display order. Sources absent from a scope still get a column, so a table's
  *  columns do not move when one source goes quiet; the entry's `events` is
  *  what says whether $0.00 is a figure or an absence. */
-export const SOURCES = ['claude', 'codex', 'gateway', 'vendor_bill'];
+export const SOURCES = ['claude', 'codex', 'gateway', 'vendor_bill', 'voice'];
 
 export const KIND_LABEL = { notional: 'notional', billed: 'billed', unknown: 'unclassified' };
 
 /** kindOf mirrors model.CostKind in Go: which kind of money a source's figure
  *  is. Kept here as well as arriving on every entry, so a column HEADER can be
  *  labelled before any row is read. */
-export const kindOf = (source) => ((source === 'gateway' || source === 'vendor_bill') ? 'billed'
+export const kindOf = (source) => ((source === 'gateway' || source === 'vendor_bill' || source === 'voice') ? 'billed'
   : (source === 'claude' || source === 'codex' ? 'notional' : 'unknown'));
 
 /** entries of a bucket/summary/series, always an array. */

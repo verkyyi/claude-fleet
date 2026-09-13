@@ -65,6 +65,10 @@ test('kinds match model.CostKind in Go', () => {
   assert.equal(kindOf('gateway'), 'billed');
   // Read off a vendor invoice — different measurement, same kind of money.
   assert.equal(kindOf('vendor_bill'), 'billed');
+  // Usage an app reported about its own WebSocket calls. Normally unpriced,
+  // but the kind describes what the money IS, not whether we know the number —
+  // classifying it notional would blend a real charge into the estimate fold.
+  assert.equal(kindOf('voice'), 'billed');
   // An unrecognised source is classified as neither, so it lands in no fold.
   assert.equal(kindOf('some-future-thing'), 'unknown');
   const future = { cost: [{ source: 'some-future-thing', kind: 'unknown', events: 1, cost_usd: 7, unpriced_events: 0 }] };

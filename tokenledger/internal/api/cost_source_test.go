@@ -225,6 +225,27 @@ func TestRealSpendReportsWhatItCouldNotAdd(t *testing.T) {
 	}
 }
 
+// Every billed source has to reach real spend on its own term. The bug this
+// guards is the cheap one: adding a source to the fold but forgetting the
+// switch in RealSpendOver, which drops its money out of Total silently — and
+// Total being too low is the direction nobody double-checks.
+func TestRealSpendCarriesEveryBilledSourceOnItsOwnTerm(t *testing.T) {
+	cost := store.CostBySource{
+		{Source: model.SourceGateway, Kind: model.CostBilled, CostUSD: 1},
+		{Source: model.SourceVendorBill, Kind: model.CostBilled, CostUSD: 2},
+		{Source: model.SourceVoice, Kind: model.CostBilled, CostUSD: 4},
+		// Notional money must not reach any of it.
+		{Source: model.SourceClaude, Kind: model.CostNotional, CostUSD: 9000},
+	}
+	rs := RealSpendOver(cost, nil)
+	if rs.Gateway != 1 || rs.VendorBill != 2 || rs.Voice != 4 {
+		t.Fatalf("real spend terms = %+v, want gateway 1 / vendor_bill 2 / voice 4", rs)
+	}
+	if rs.Total != 7 {
+		t.Errorf("total = %v, want 7 — a billed source is missing from the sum", rs.Total)
+	}
+}
+
 // Live sessions are an overlapping counter with its own never-add rule; the
 // same rule applies one level down, between the kinds of money in it.
 func TestLiveSnapshotKeepsBilledCostApart(t *testing.T) {

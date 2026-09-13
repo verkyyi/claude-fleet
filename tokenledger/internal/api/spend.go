@@ -27,7 +27,18 @@ type RealSpend struct {
 	// charge us anyway"), and a reader who sees one number labelled `gateway`
 	// has every right to assume it came from the gateway.
 	VendorBill float64 `json:"vendor_bill"`
-	Total      float64 `json:"total"`
+	// Voice is charged spend an application reported about its own WebSocket
+	// model calls. Its own term for the same reason VendorBill is: a reader
+	// seeing `gateway` is entitled to assume it came from the gateway, and
+	// these calls deliberately never went near it.
+	//
+	// It is normally 0 while the usage behind it is not: these rows carry
+	// attribution, not money (see model.SourceVoice), so the spend appears
+	// under vendor_bill instead. A non-zero figure here means a collector
+	// supplied charges — and that the matching billing item was removed from
+	// the bill collector's include list, or this would be counted twice.
+	Voice float64 `json:"voice"`
+	Total float64 `json:"total"`
 
 	// Complete is false when something real is missing from Total: a plan
 	// nobody has priced, or a plan priced in a currency this hub cannot
@@ -57,6 +68,8 @@ func RealSpendOver(cost store.CostBySource, plans []store.SubscriptionSpend) Rea
 			out.Gateway += sc.CostUSD
 		case model.SourceVendorBill:
 			out.VendorBill += sc.CostUSD
+		case model.SourceVoice:
+			out.Voice += sc.CostUSD
 		}
 	}
 	for _, p := range plans {
@@ -73,7 +86,7 @@ func RealSpendOver(cost store.CostBySource, plans []store.SubscriptionSpend) Rea
 			out.Subscription += p.Amount
 		}
 	}
-	out.Total = out.Subscription + out.Gateway + out.VendorBill
+	out.Total = out.Subscription + out.Gateway + out.VendorBill + out.Voice
 	return out
 }
 

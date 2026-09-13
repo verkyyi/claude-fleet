@@ -144,8 +144,8 @@ function fig(k, n, wide) {
 // lines are repeated rather than imported; the rule they encode is the same
 // one, and it is the rule that matters: cost arrives split by source and the
 // three kinds of money are never added.
-const COST_SOURCES = ["claude", "codex", "gateway", "vendor_bill"];
-const kindOf = (s) => ((s === "gateway" || s === "vendor_bill") ? "billed"
+const COST_SOURCES = ["claude", "codex", "gateway", "vendor_bill", "voice"];
+const kindOf = (s) => ((s === "gateway" || s === "vendor_bill" || s === "voice") ? "billed"
   : (s === "claude" || s === "codex" ? "notional" : "unclassified"));
 const costOf = (b, s) => (Array.isArray(b && b.cost) ? b.cost : []).find((c) => c.source === s) || null;
 const activeCostSources = (bs) => COST_SOURCES.filter((s) => (bs || []).some((b) => (costOf(b, s) || {}).events > 0));

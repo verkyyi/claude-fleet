@@ -34,7 +34,7 @@ const (
 // This is the closed set the cost split is built from: a source added to the
 // constants above and forgotten here is caught by the guard in cost_test.go,
 // because an unclassified source silently becomes CostUnknown everywhere.
-var Sources = []string{SourceClaude, SourceCodex, SourceGateway, SourceVendorBill}
+var Sources = []string{SourceClaude, SourceCodex, SourceGateway, SourceVendorBill, SourceVoice}
 
 // KnownSource reports whether source names a collector this build understands.
 // The empty string is not a source — it is "no constraint" to a filter and
@@ -57,7 +57,7 @@ func CostKind(source string) string {
 	switch UsageSource(source) {
 	case SourceClaude, SourceCodex:
 		return CostNotional
-	case SourceGateway, SourceVendorBill:
+	case SourceGateway, SourceVendorBill, SourceVoice:
 		// Both are real charges, and they are deliberately the same kind even
 		// though they are measured differently (metered per call vs. read off
 		// the invoice). Real spend is one question — "what did this cost" —

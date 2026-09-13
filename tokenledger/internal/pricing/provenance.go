@@ -55,6 +55,11 @@ func ProvenanceFor(source string) SourceProvenance {
 		// would attribute these figures to rates that did not produce them.
 		// Each row's own billing period travels with it (TS + Model).
 		p.Note = VendorBillPriceNote
+	case model.SourceVoice:
+		// Same reason as the vendor bill above: no rate table, so no review
+		// date to state. The engine that served each session travels with the
+		// row (Model), and the charge, when there is one, came from elsewhere.
+		p.Note = VoicePriceNote
 	default:
 		p.Note = "Unrecognised source: this build has no rate table for it, so its cost figure " +
 			"has no stated basis and belongs in no total."

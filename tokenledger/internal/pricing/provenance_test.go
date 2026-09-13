@@ -18,6 +18,10 @@ var ratelessSources = map[string]bool{
 	// The invoice is the basis. There is no rate to review, and stamping a date
 	// here would claim a review that never happened.
 	model.SourceVendorBill: true,
+	// Nobody has priced these rows at all: the app reports usage, the invoice
+	// carries the money. A rate date would be a review of a table that does
+	// not exist.
+	model.SourceVoice: true,
 }
 
 // Every source this build knows must have a stated basis: a rate review date,

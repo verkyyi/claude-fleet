@@ -112,6 +112,8 @@ func (t *Table) Cost(ev *model.UsageEvent) *float64 {
 		return t.gatewayCost(ev)
 	case model.SourceVendorBill:
 		return vendorBillCost(ev)
+	case model.SourceVoice:
+		return voiceCost(ev)
 	}
 	r, ok := t.rates[Normalize(ev.Model)]
 	if !ok {

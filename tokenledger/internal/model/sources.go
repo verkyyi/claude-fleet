@@ -15,9 +15,21 @@ type UsageDetails struct {
 	TurnID          string `json:"turn_id,omitempty"`
 	RootTurnID      string `json:"root_turn_id,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
-	PriceVersion    string `json:"price_version,omitempty"`
-	PriceBasis      string `json:"price_basis,omitempty"`
-	PriceSource     string `json:"price_source,omitempty"`
+	// Usage and UsageUnit carry how much of a NON-TOKEN billing unit an event
+	// consumed: seconds of speech recognised, characters synthesised, images
+	// generated. They exist because the token counters on UsageEvent are the
+	// wrong shape for those sources and borrowing them would be worse than
+	// leaving the number out — a speech session with an invented token count
+	// would be summed into every token total in this hub and read as real.
+	//
+	// Empty means the event has no non-token unit (every Claude/Codex/gateway
+	// row), not that the amount is zero.
+	Usage     *float64 `json:"usage,omitempty"`
+	UsageUnit string   `json:"usage_unit,omitempty"`
+
+	PriceVersion string `json:"price_version,omitempty"`
+	PriceBasis   string `json:"price_basis,omitempty"`
+	PriceSource  string `json:"price_source,omitempty"`
 }
 
 // QuotaWindow preserves a provider's actual window; primary is not always 5h.
