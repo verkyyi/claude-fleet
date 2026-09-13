@@ -227,11 +227,67 @@ tracks moving them over.
 | `FLEET_CLEANUP` | `1` (on) | Set `0` to opt a fleet out of the cleanup daemon (the worktree-autoclean janitor still backstops merged worktrees). |
 | `FLEET_CLEANUP_MAX_PER_TICK` | `4` | Max PRs reaped per fleet per tick (a stampede guard). |
 | `FLEET_CLEANUP_CANDIDATE_TIMEOUT` | `120` | Wall-clock budget (seconds) for ONE candidate's `fleet-cleanup.sh` call — see [A wedged candidate can't stall the pipeline](#a-wedged-candidate-cant-stall-the-pipeline). `0` disables the budget. |
+| `FLEET_CLEANUP_SCRATCH_HEADS` | `0` (off) | Set `1` to also reap a **MERGED** PR whose head branch is not `issue-<N>` — a scratch that grew into a PR (issue #589). Behind the strict gate below; `CLOSED`-unmerged non-issue heads are never included. |
 | `FLEET_BASE_SYNC` | `1` (on) | Set `0` to opt a fleet out of the base-sync daemon (the local base then only advances when the cleanup daemon reaps a merged PR). |
 | `FLEET_BASE_SYNC_LEASE_TTL` | `120` | Lifetime (seconds) of the shared land lease while base-sync holds it for its quick fetch + ff pull. |
 | `FLEET_CLOSE_ON_EXIT` | `1` (on) | **Global only** (`~/.claude/fleet/fleet.conf`). The `SessionEnd` hook: on a manual worker exit, close the window + gate-reap the worktree + record the `/fleet-history` row at once (the event-driven twin of `FLEET_LEDGER_WATCH`). Set `0` to disable machine-wide; global-authoritative, so a per-fleet value is ignored. |
 | `FLEET_TRASH_SWEEP_BUDGET` | `20` | **Global only** (read once per tick, before any per-fleet conf). Seconds a cleanup-daemon tick may spend deleting the worktrees teardown renamed into `.fleet-trash/` (issue #586). `0` disables the sweep — the trash then only drains on `worktree-autoclean`'s hourly run. |
 | `FLEET_MERGE_METHOD` | `squash` | `squash` · `merge` · `rebase` — the strategy a worker lands its own PR with (`bin/fleet-lib.sh` `fleet_merge_method`; an unset/typo'd value falls back to `squash`). |
+
+## Non-`issue-<N>` heads — the opt-in scratch reap (issue #589)
+
+Everything above is addressed by `issue-<N>`: the daemon's candidate filter, the
+"live worktree/window" set, and `fleet-cleanup.sh`'s teardown. So a session that
+started as a **scratch** (dash `⌃s` → a `scratch-<N>` worktree and branch), talked
+its way into real work, and shipped a PR is **never reaped** — not because the
+pipeline is stuck, but because it was never addressable. `worktree-autoclean.sh`
+is no backstop here: it only reaps a worktree whose *window is already gone*, and
+the window is exactly what never closes. Two such windows were found on one dash
+long after their PRs merged, holding 1.2 GB and 5.4 GB of worktree.
+
+Relaxing this unconditionally is not an option. **#543/#544 protects a non-issue
+head on purpose**: a `scratch-<N>` window is routinely the operator's own
+workbench, and it is normal for one to hold a merged PR *and* still be in use.
+Reaping on head branch alone kills live work.
+
+So the relaxation is opt-in and narrow. With `FLEET_CLEANUP_SCRATCH_HEADS=1`:
+
+- the daemon adds **MERGED** non-`issue-<N>` heads to its candidate set (`CLOSED`
+  stays issue-only — a closed-unmerged PR's work is still in its worktree), and
+  pre-screens each locally, spending no `gh` on a window that isn't `done`;
+- `bin/fleet-cleanup.sh` then applies the authoritative gate — so the manual
+  *reap now* path (`bash bin/fleet-cleanup.sh <PR>` from the hub) is gated
+  identically. **Every** condition must hold:
+
+| Gate | Refusal token |
+|---|---|
+| a worktree is checked out on the PR's head branch | `skip:nothing` |
+| it is not the base checkout, and the branch is not `FLEET_PROTECTED_RE` | `skip:protected` |
+| the local branch tip is **exactly** the commit GitHub merged | `skip:unmerged` |
+| the worktree is clean — untracked counts as dirty | `skip:dirty` |
+| a live window's pane cwd **is** inside the worktree (fails closed) | `skip:nothing` |
+| that window reports `@claude_state=done` — not `working`, `needs`, or unset | `skip:busy` |
+
+Three details are load-bearing.
+
+The window is addressed by **pane cwd**, not by `@issue` — a scratch window has no
+such binding, so cwd is the only link back (`fleet_wt_window`, exact-or-subdir, the
+same rule the janitor uses).
+
+That lookup therefore **fails closed**: a worktree with *no* window found is
+refused, not reaped. Any reason the path comparison comes up empty — a symlinked
+checkout, a pane whose cwd hasn't settled — would otherwise read as "nobody home"
+and kill a live session. Requiring the window costs nothing: a clean, merged
+worktree with no live pane is already `worktree-autoclean.sh`'s case, and that is
+the reaper that handles it.
+
+And the "nothing unmerged" check compares against the PR's **`headRefOid`**, not
+`merge-base --is-ancestor`: a squash merge (the fleet default) leaves the head tip
+off the base's history entirely, so an ancestor test would read *every*
+squash-merged branch as unmerged and the feature would never fire.
+
+The reaped session still lands in `/fleet-history`: with no issue number,
+`fleet_reap_record` keys the row by the branch's `scratch-<N>` slug (issue #466).
 
 ## What was retired
 

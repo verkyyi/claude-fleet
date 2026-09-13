@@ -13,6 +13,13 @@
 #                        candidate (nothing to reap).
 #   • RATE-LIMIT         at most FLEET_CLEANUP_MAX_PER_TICK reaps per tick.
 #   • OFF SWITCH         FLEET_CLEANUP=0 → no-op (default is ON).
+#   • SCRATCH HEADS OFF  (default) a MERGED PR whose head is NOT issue-<N> is
+#                        never a candidate — the historic behavior (issue #589).
+#   • SCRATCH HEADS ON   FLEET_CLEANUP_SCRATCH_HEADS=1 adds a MERGED non-issue
+#                        head whose worktree's window says `done`, and STILL
+#                        excludes: a window that is `working` (pre-screened
+#                        locally, zero gh), a CLOSED non-issue head, a head with
+#                        no worktree, and a worktree with no live window in it.
 #   • SINGLE-WRITER      a fresh per-repo lease held by someone else → skip.
 #   • CANDIDATE TIMEOUT  a candidate that WEDGES is killed at
 #                        FLEET_CLEANUP_CANDIDATE_TIMEOUT (tree and all — the
@@ -31,6 +38,12 @@
 #   issue-12 #103 OPEN    → not final     → skip
 #   issue-13 #104 MERGED  → no debris     → skip (already clean)
 #   issue-14 #105 MERGED  → live worktree → CANDIDATE
+#   scratch-99 #106 MERGED  → worktree + window `done`     → CANDIDATE iff armed
+#   scratch-98 #107 MERGED  → worktree + window `working`  → never (operator's own)
+#   scratch-97 #108 CLOSED  → worktree + window `done`     → never (MERGED-only)
+#   scratch-96 #109 MERGED  → no worktree                  → never (nothing live)
+#   scratch-95 #110 MERGED  → worktree, NO window in it    → never (fails closed —
+#                                             worktree-autoclean.sh owns that one)
 #
 # Exit 0 = pass. Non-zero = fail (prints the captured log + reap record).
 set -uo pipefail
@@ -85,25 +98,36 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/gh"
 
-# --- fake git: report live worktrees for issue-10 + issue-14 --------------------
-cat > "$WORK/fakepath/git" <<'FAKE'
+# --- fake git: live worktrees for issue-10/14 + the three scratch heads ---------
+# FULL porcelain blocks: the daemon's live set reads the `branch` lines, and
+# fleet_worktree_head (the scratch pre-screen) needs the `worktree <dir>` line too.
+cat > "$WORK/fakepath/git" <<FAKE
 #!/bin/bash
-if [ "${1:-}" = "-C" ]; then shift 2; fi
-case "${1:-}" in
+if [ "\${1:-}" = "-C" ]; then shift 2; fi
+case "\${1:-}" in
   worktree)
-    [ "${2:-}" = list ] && { printf 'branch refs/heads/issue-10\nbranch refs/heads/issue-14\n'; }
+    [ "\${2:-}" = list ] && {
+      for b in issue-10 issue-14 scratch-99 scratch-98 scratch-97 scratch-95; do
+        printf 'worktree %s/wt/%s\nHEAD deadbeef\nbranch refs/heads/%s\n\n' "$WORK" "\$b" "\$b"
+      done
+    }
     ;;
 esac
 exit 0
 FAKE
 chmod +x "$WORK/fakepath/git"
 
-# --- fake tmux: report a live window for issue-11 -------------------------------
-cat > "$WORK/fakepath/tmux" <<'FAKE'
+# --- fake tmux: a live window for issue-11 + the scratch windows' cwd/state -----
+cat > "$WORK/fakepath/tmux" <<FAKE
 #!/bin/bash
-if [ "${1:-}" = "-L" ]; then shift 2; fi
-case "${1:-}" in
-  list-windows) echo '11' ;;
+if [ "\${1:-}" = "-L" ]; then shift 2; fi
+case "\${1:-}" in
+  list-panes)    printf '@99 %s/wt/scratch-99\n@98 %s/wt/scratch-98\n@97 %s/wt/scratch-97\n' "$WORK" "$WORK" "$WORK" ;;
+  list-windows)
+    case "\$*" in
+      *claude_state*) printf '@99 done\n@98 working\n@97 done\n' ;;
+      *)              echo '11' ;;    # the @issue probe → issue-11 has a window
+    esac ;;
 esac
 exit 0
 FAKE
@@ -117,6 +141,11 @@ issue-11	#102	CLOSED	·	-
 issue-12	#103	OPEN	✓	ready
 issue-13	#104	MERGED	✓	ready
 issue-14	#105	MERGED	·	-
+scratch-99	#106	MERGED	✓	ready
+scratch-98	#107	MERGED	✓	ready
+scratch-97	#108	CLOSED	·	-
+scratch-96	#109	MERGED	✓	ready
+scratch-95	#110	MERGED	✓	ready
 PRMAP
 : > "$C/fleets/fake-repo/prmap.ts"
 
@@ -233,5 +262,25 @@ rm -f "$WORK/disk_closed"
 grep -q 'worktree trash swept:1 left:0' "$WORK/log" || fail "the sweep should log what it freed"
 [ -s "$CLEAN_LOG" ] && fail "a closed disk gate must still reap nothing"
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep\n'
+# 10) SCRATCH HEADS, DEFAULT OFF: a MERGED non-issue head is never a candidate.
+reset
+conf   # FLEET_CLEANUP_SCRATCH_HEADS unset → default OFF
+run s1
+[ "$(reaped_list)" = "101 102 105" ] || fail "the default must ignore non-issue heads, got [$(reaped_list)]"
+for n in 106 107 108 109; do
+  grep -qxF "$n" "$CLEAN_LOG" && fail "#$n (non-issue head) must NOT be a candidate by default"
+done
+
+# 11) SCRATCH HEADS ARMED: #106 joins (window `done`); 107/108/109 still excluded.
+reset
+conf 'FLEET_CLEANUP_SCRATCH_HEADS=1' 'FLEET_CLEANUP_MAX_PER_TICK=10'
+run s1
+[ "$(reaped_list)" = "101 102 105 106" ] || fail "armed should reap [101 102 105 106], got [$(reaped_list)]"
+grep -qxF 107 "$CLEAN_LOG" && fail "#107 must be pre-screened out — its window is 'working'"
+grep -q "not done" "$WORK/log" || fail "the 'working' pre-screen should log why #107 was left alone"
+grep -qxF 108 "$CLEAN_LOG" && fail "#108 must be excluded — a CLOSED non-issue head is never in scope"
+grep -qxF 109 "$CLEAN_LOG" && fail "#109 must be excluded — its head has no worktree"
+grep -qxF 110 "$CLEAN_LOG" && fail "#110 must be excluded — no live window sits in its worktree (fail closed)"
+
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed\n'
 exit 0

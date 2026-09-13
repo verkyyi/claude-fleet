@@ -333,6 +333,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # batch size x this. Default 120; 0 runs unbudgeted. See docs/CLEANUP.md.
 # @label=Cleanup per-candidate timeout @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_CANDIDATE_TIMEOUT=120
+# Also reap a MERGED PR whose head branch is NOT `issue-<N>` (issue #589). OFF by
+# default, and the default is the historic behavior byte for byte. The whole reap
+# chain is addressed by `issue-<N>`, so a session that started as a scratch
+# (dash ⌃s → a `scratch-<N>` branch) and grew into a PR is NEVER cleaned up: its
+# window hangs on the dash forever and its worktree keeps the disk (two were found
+# at 1.2 GB and 5.4 GB, both long merged). That protection is deliberate (#543/#544)
+# — a scratch window is routinely the OPERATOR's own workbench, so reaping on head
+# branch alone would kill live work. Set to 1 and the reap is allowed, but only
+# behind the worktree janitor's whole liveness gate PLUS "the window itself says it
+# is finished": a worktree is checked out on the PR's head branch, that branch is
+# not protected (FLEET_PROTECTED_RE) and is not the base checkout, its local tip is
+# EXACTLY the commit GitHub merged (nothing pushed past the merge), the worktree is
+# clean (untracked counts as dirty), and a live window's pane cwd sits inside the
+# worktree and reports @claude_state=done — not working, not needs, not unset.
+# The window lookup fails CLOSED: no window found means no reap (that worktree is
+# worktree-autoclean.sh's case), so a missed lookup can never kill a live session.
+# CLOSED-unmerged PRs are never included: that work never landed and stays put.
+# Arm it per fleet once you trust the gate. See docs/CLEANUP.md.
+# @label=Cleanup: reap non-issue (scratch) heads @group=bridge @tier=advanced @scope=fleet @edit=bool
+#FLEET_CLEANUP_SCRATCH_HEADS=0
 
 # --- Close-on-exit hook (bin/session-end-hook.sh, SessionEnd) --------------------
 # ON by default, GLOBALLY. The SessionEnd Claude Code hook reacts the instant an

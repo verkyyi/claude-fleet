@@ -21,8 +21,8 @@
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate)  → never reap on a full disk
 #     read the prmap_<slug> cache pr-refresh already writes  → ZERO extra gh
-#     candidates = its MERGED/CLOSED PRs whose issue-<N> STILL has a live worktree
-#                  or window (a local git/tmux check — zero gh)
+#     candidates = its MERGED/CLOSED PRs whose head branch STILL has a live
+#                  worktree or window (a local git/tmux check — zero gh)
 #     clean up to FLEET_CLEANUP_MAX_PER_TICK of them via bin/fleet-cleanup.sh <pr>,
 #       each under a FLEET_CLEANUP_CANDIDATE_TIMEOUT wall-clock budget
 #     release the lease
@@ -54,6 +54,9 @@
 #   FLEET_CLEANUP              0 to disable for this fleet          (default 1/on)
 #   FLEET_CLEANUP_MAX_PER_TICK max PRs reaped per fleet per tick    (default 4)
 #   FLEET_CLEANUP_CANDIDATE_TIMEOUT  per-candidate budget, seconds   (default 120)
+#   FLEET_CLEANUP_SCRATCH_HEADS 1 = ALSO consider a MERGED PR whose head is not
+#                              issue-<N> (a scratch that grew into a PR); the
+#                              strict gate lives in fleet-cleanup.sh (default 0/off)
 #   FLEET_CLEANUP_LEASE_TTL    lease lifetime, seconds              (default 300)
 #   FLEET_DISPATCH_LEASE_DIR   lease dir (shared)    (default ~/.claude/leases)
 #   FLEET_TRASH_SWEEP_BUDGET   seconds/tick spent deleting trashed worktrees
@@ -113,15 +116,22 @@ lease_release() { # $1 = lease path, $2 = my holder id
   return 0
 }
 
-# --- MERGED/CLOSED PRs with an issue-<N> head, from the prmap cache ------------
-# prmap row: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready. Prints "num<TAB>issue"
-# for every MERGED/CLOSED row whose head is issue-<N>.
-final_issue_prs() { # $1 = prmap file
-  local prmf="$1"
+# --- FINAL PRs worth a cleanup attempt, from the prmap cache -------------------
+# prmap row: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready. Prints "num<TAB>branch":
+#   * an issue-<N> head, MERGED or CLOSED — the historic candidate set;
+#   * ANY OTHER head, MERGED only, when FLEET_CLEANUP_SCRATCH_HEADS=1 (issue #589).
+# CLOSED stays issue-only on purpose: a closed-UNMERGED scratch PR abandoned work
+# that is still sitting in its worktree, and #543/#544 exists to keep exactly that.
+final_prs() { # $1 = prmap file, $2 = 1 when non-issue heads are armed
+  local prmf="$1" scratch="${2:-0}"
   [ -s "$prmf" ] || return 0
-  awk -F'\t' '
+  awk -F'\t' -v scratch="$scratch" '
+    $1 == "" { next }
     ($3=="MERGED" || $3=="CLOSED") && $1 ~ /^issue-[0-9]+$/ {
-      n=$2; sub(/^#/,"",n); iss=$1; sub(/^issue-/,"",iss); print n "\t" iss
+      n=$2; sub(/^#/,"",n); print n "\t" $1; next
+    }
+    scratch=="1" && $3=="MERGED" && $1 !~ /^issue-[0-9]+$/ {
+      n=$2; sub(/^#/,"",n); print n "\t" $1
     }' "$prmf" 2>/dev/null
 }
 
@@ -176,24 +186,45 @@ cleanup_fleet() { (
   # tmux socket helper: the daemon has no $TMUX → target the fleet's OWN socket.
   ftmux() { tmux -L "$(fleet_socket "$sess")" "$@"; }
 
-  # Collect the live issue-<N> worktrees + windows ONCE (local, zero gh) — a PR is
-  # a cleanup candidate only if its issue still has debris to reap.
+  # Collect the live BRANCHES ONCE (local, zero gh) — a PR is a cleanup candidate
+  # only if its head still has debris to reap. Keyed by branch name rather than by
+  # issue number since #589, so one set serves an issue-<N> head and a scratch head
+  # alike: every checked-out worktree branch, plus the issue-<N> a live window
+  # binds via @issue (identity, cwd-independent — issue #353).
   live=$'\n'
-  while IFS= read -r i; do [ -n "$i" ] && live="${live}${i}"$'\n'; done < <(
+  while IFS= read -r b; do [ -n "$b" ] && live="${live}${b}"$'\n'; done < <(
     git -C "$main" worktree list --porcelain 2>/dev/null | \
-      sed -n 's#^branch refs/heads/issue-\([0-9][0-9]*\)$#\1#p'
-    ftmux list-windows -t "$sess" -F '#{@issue}' 2>/dev/null | sed 's/[^0-9]//g'
+      sed -n 's#^branch refs/heads/##p'
+    ftmux list-windows -t "$sess" -F '#{@issue}' 2>/dev/null | \
+      sed 's/[^0-9]//g' | sed -n 's/^[0-9][0-9]*$/issue-&/p'
   )
 
   cleaned=0; considered=0; timedout=0
-  while IFS=$'\t' read -r pr iss; do
+  while IFS=$'\t' read -r pr branch; do
     [ -z "$pr" ] && continue
-    # live worktree or window for this issue?
-    case "$live" in *$'\n'"$iss"$'\n'*) : ;; *) continue ;; esac
+    # live worktree or window for this head branch?
+    case "$live" in *$'\n'"$branch"$'\n'*) : ;; *) continue ;; esac
+
+    # A NON-issue head (issue #589): the authoritative gate is in fleet-cleanup.sh,
+    # but reaching it costs a `gh pr view` EVERY tick. A scratch window is routinely
+    # the operator's own workbench and can sit MERGED-but-busy for hours, so
+    # pre-screen with the same LOCAL signal (zero gh) and spend the gh call only on
+    # a worktree whose window says it is `done`. A worktree with NO live window in
+    # it is not ours either — that one is worktree-autoclean.sh's.
+    case "$branch" in
+      issue-[0-9]*) : ;;
+      *) wt=$(fleet_worktree_head "$main" "$branch" | cut -f1)
+         [ -n "$wt" ] || continue
+         ws=$(fleet_wt_window "$sess" "$wt" | cut -f2)
+         if [ "$ws" != "done" ]; then
+           log "$sess: PR #$pr ($branch) — its window is '${ws:-none}', not done; leaving it alone"
+           continue
+         fi ;;
+    esac
     considered=$((considered + 1))
 
     if [ "$DRY" = 1 ]; then
-      log "$sess: would clean PR #$pr (issue #$iss)  [slot $((cleaned + 1))/$k]"
+      log "$sess: would clean PR #$pr ($branch)  [slot $((cleaned + 1))/$k]"
       cleaned=$((cleaned + 1))
       [ "$cleaned" -ge "$k" ] && break
       continue
@@ -212,19 +243,19 @@ cleanup_fleet() { (
       # Whatever it still misses is steal-if-stale. The candidate keeps its debris
       # and is re-tried next tick — a slot spent, not a pipeline stalled.
       timedout=$((timedout + 1))
-      log "$sess: PR #$pr (#$iss) — timeout after ${cto}s (FLEET_CLEANUP_CANDIDATE_TIMEOUT) — killed, next candidate  [slot $((cleaned + timedout))/$k]"
+      log "$sess: PR #$pr ($branch) — timeout after ${cto}s (FLEET_CLEANUP_CANDIDATE_TIMEOUT) — killed, next candidate  [slot $((cleaned + timedout))/$k]"
       [ "$((cleaned + timedout))" -ge "$k" ] && break
       continue
     fi
     case "$tok" in
-      cleaned:*) log "$sess: $tok  (PR #$pr, issue #$iss)  [slot $((cleaned + timedout + 1))/$k]"; cleaned=$((cleaned + 1)) ;;
-      skip:*)    log "$sess: PR #$pr (#$iss) — $tok (nothing to reap)" ;;
+      cleaned:*) log "$sess: $tok  (PR #$pr, $branch)  [slot $((cleaned + timedout + 1))/$k]"; cleaned=$((cleaned + 1)) ;;
+      skip:*)    log "$sess: PR #$pr ($branch) — $tok (nothing reaped)" ;;
       error:*)   log "$sess: PR #$pr cleanup error ($tok)" ;;
       *)         log "$sess: PR #$pr cleanup returned rc=$rc token='${tok:-none}'" ;;
     esac
     [ "$((cleaned + timedout))" -ge "$k" ] && break
   done <<EOF
-$(final_issue_prs "$prmf")
+$(final_prs "$prmf" "${FLEET_CLEANUP_SCRATCH_HEADS:-0}")
 EOF
 
   to_note=""
