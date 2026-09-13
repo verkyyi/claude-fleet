@@ -462,7 +462,9 @@ README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条
 >
 > 💡 产品启示：**`fleet-up.sh` 不该默认拿当前 checkout 的分支当 base**，
 > 应取仓库的 default branch（或至少在两者不一致时警告）。这是打包给团队用之前
-> 必须修的 —— 陌生人装上之后踩这个坑，会以为整个工具不工作。
+> 必须修的 —— 陌生人装上之后踩这个坑，会以为整个工具不工作：他的 worker 看起来
+> 都在正常跑、PR 都在正常合，但主干上什么都没变。这是最难自查的一类失败。
+> → 已立 [claude-fleet#603](https://github.com/verkyyi/claude-fleet/issues/603)，已标 `autofill`。
 
 发布动作（HN / X / subreddit）**尚未做**，等操作员决定。
 
@@ -484,17 +486,15 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 
 这组是方案的卖点，**hands-on,不要 autofill** —— 每条都含调度判断。
 
-```
-19 相位错开 5h/N  → claude-fleet#598 已建 2026-09-13   ← 最独立,先做
-     ↓
-18 池内 token 打标签 + 接 ccquota team --set
-     ↓
-20 争用策略(p0/p1/p2 + 人均熔断)
-     ↓
-17 跨 provider 溢出 → Codex   ← 头条功能,可先上「换 agent」版
-     ↓
-21 Codex 侧多 ~/.codex home 池化   ← 17 的完整版前置,可延后
-```
+**backlog 已全部建好（2026-09-13）**：
+
+| issue | 内容 | 依赖 |
+|---|---|---|
+| [#598](https://github.com/verkyyi/claude-fleet/issues/598) | 相位错开 `5h / N` | 最独立，先做 |
+| [#600](https://github.com/verkyyi/claude-fleet/issues/600) | 池内 token 打标签 + 接 ccquota team 归因 | #598 要读它的窗口起点 |
+| [#601](https://github.com/verkyyi/claude-fleet/issues/601) | 争用策略：issue 优先级 + 人均熔断 | 独立 |
+| [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出 → Codex（头条）** | 可先上「换 agent」版 |
+| [#602](https://github.com/verkyyi/claude-fleet/issues/602) | Codex 侧多 home 池化 | #599 完整版前置，可延后 |
 
 > 顺序调整：原定 18 先做（「其余都要读这个标签」），但查证发现 `@cc_account`
 > 窗口 option 与 `fleet-account.sh list` 的 per-account 5h/7d% **已经存在**，
