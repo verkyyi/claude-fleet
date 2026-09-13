@@ -1,8 +1,5 @@
 # TokenLedger
 
-> 命令、模块路径、数据库路径与环境变量**仍然是 `ccquota`** —— 这一版只换对外的产品名。
-> 改标识符是另一件事（跨两个仓的 cutover），没做。
-
 **Books for a team account pool.** A small team buys N Claude subscriptions
 centrally and schedules its work against whichever of them still has headroom.
 That is markedly cheaper per unit of quota than buying a seat per person — and
@@ -125,6 +122,13 @@ Download a binary from Releases, or:
 ```bash
 go install github.com/verkyyi/ccquota/cmd/ccquota@latest   # needs Go 1.25+
 ```
+
+**The product is TokenLedger; the binary is `ccquota`.** The rename is cosmetic
+so far — the command, the Go module path, the default database path and every
+`CCQUOTA_*` environment variable still read `ccquota`, and this release changes
+none of them. Renaming the identifiers is a separate cutover across two repos,
+and it has not been done. So wherever this README says TokenLedger, what you
+type is `ccquota`.
 
 No runtime, no database to provision, no Node. `CGO_ENABLED=0` cross-compiles to
 linux/amd64, linux/arm64, darwin, and windows.
