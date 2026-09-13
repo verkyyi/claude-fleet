@@ -356,7 +356,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if buckets == nil {
 		buckets = []store.Bucket{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"account_uuid": f.Account,
 		"all_accounts": f.Account == store.AllAccounts,
 		"by":           string(dim),
@@ -365,7 +365,21 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"buckets":      buckets,
 		"disclaimer":   shareDisclaimer,
 		"scope_note":   scopeNote(f.Account),
-	})
+	}
+	// Two different absences share the empty provider bucket -- a source that
+	// declares no upstream, and rows that predate the dimension. Naming them
+	// beats leaving a blank row for the reader to guess at. Only attached when
+	// there IS a blank row: an unconditional note reads as a caveat on figures
+	// that have none.
+	if dim == store.ByProvider {
+		for _, b := range buckets {
+			if b.Key == "" {
+				out["provider_note"] = store.ProviderNote
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

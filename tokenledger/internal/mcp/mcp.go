@@ -212,6 +212,7 @@ var chipProps = map[string]any{
 	"user":     map[string]any{"type": "string", "description": "Limit to one OS login."},
 	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)."},
 	"model":    map[string]any{"type": "string", "description": "Limit to one model id."},
+	"provider": map[string]any{"type": "string", "description": "Limit to one upstream provider. With a gateway that fails over between vendors this is NOT derivable from the model id: one model id is reachable through several upstreams at several contracted prices. An empty value in a result means the reporting side declared none."},
 	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch."},
 	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team."},
 	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id."},
@@ -297,6 +298,20 @@ func toolSpecs() []toolSpec {
 				"pay-per-call gateway. This is the one breakdown whose rows are each a single kind of " +
 				"money, so it is the right tool for \"what did each source cost\"; the rows are still " +
 				"not addable to each other." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_provider",
+			Title: "Spend by upstream provider",
+			Description: "Token and cost totals grouped by the upstream that actually served each " +
+				"call. Use it to answer \"which contract did this money go to\" — a question the model " +
+				"breakdown cannot answer, because failover sends one model id to several upstreams at " +
+				"several prices. Gateway rows are BILLED (a real per-call charge); rows from " +
+				"subscription sources are NOTIONAL and must never be added to them. An empty provider " +
+				"means the reporting side declared none — Claude transcripts carry no upstream — and " +
+				"is never a vendor called \"unknown\"." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
 			})),
@@ -556,6 +571,8 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return s.usage(args, store.ByEndpoint)
 	case "usage_by_source":
 		return s.usage(args, store.BySource)
+	case "usage_by_provider":
+		return s.usage(args, store.ByProvider)
 	case "usage_by_user":
 		return s.usage(args, store.ByUser)
 	case "usage_by_project":
@@ -735,7 +752,8 @@ func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
 	f := store.Filter{
 		Account: account, Start: start, End: end,
 		Endpoint: str(args, "endpoint"), OSUser: str(args, "user"), CWD: str(args, "project"),
-		Model: str(args, "model"), Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
+		Model: str(args, "model"), Provider: str(args, "provider"),
+		Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
 		Source: str(args, "source"),
 	}
 	return f.AlignHours(), nil

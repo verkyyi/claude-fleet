@@ -83,6 +83,7 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "team", "TEXT NOT NULL DEFAULT ''"},
 		{"accounts", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
+		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -97,6 +98,9 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	if err := migrateSources(db); err != nil {
+		return err
+	}
+	if err := migrateHourlyProvider(db); err != nil {
 		return err
 	}
 	return migrateDetails(db)
@@ -486,8 +490,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
-		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
@@ -502,6 +506,11 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 	for i := range evs {
 		e := &evs[i]
 		e.Source = model.UsageSource(e.Source)
+		// The shipper sends the upstream inside details; a sender that sets the
+		// field directly wins. Neither is inferred when both are absent.
+		if e.Provider == "" && e.Details != nil {
+			e.Provider = e.Details.Provider
+		}
 		if e.Source == model.SourceCodex {
 			res, err := tx.Exec(`INSERT OR IGNORE INTO codex_request_keys(message_uuid) VALUES(?)`, e.MessageUUID)
 			if err != nil {
@@ -530,7 +539,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			fmtTime(e.TS), e.Model,
 			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
-			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known)
+			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known, e.Provider)
 		if err != nil {
 			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
 		}

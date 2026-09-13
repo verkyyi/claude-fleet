@@ -263,6 +263,15 @@ const (
 	ByProject  Dimension = "project"
 	BySession  Dimension = "session"
 	ByModel    Dimension = "model"
+
+	// ByProvider is the upstream that actually served the request.
+	//
+	// It is derivable from neither the model id nor the source: a gateway with
+	// failover reaches one model id through several upstreams at several
+	// contracted prices, and one source fronts all of them. This is the axis
+	// that answers "which contract did this money go to". The empty bucket
+	// means the reporting side declared none -- see ProviderNote.
+	ByProvider Dimension = "provider"
 	ByBranch   Dimension = "branch"
 
 	// ByAccount makes the subscription an ordinary axis rather than a mode the
@@ -316,6 +325,8 @@ func (d Dimension) column() (string, error) {
 		return "session_id", nil
 	case ByModel:
 		return "model", nil
+	case ByProvider:
+		return "provider", nil
 	case ByBranch:
 		return "git_branch", nil
 	case ByUser:

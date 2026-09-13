@@ -31,6 +31,16 @@ func migrateDetails(db *sql.DB) error {
 			return err
 		}
 	}
+	// Lift the provider out of details_json for rows written before the column
+	// existed. The value has been arriving since the gateway shipper's first
+	// run; it was simply not groupable. Idempotent, and it never overwrites a
+	// provider a sender stated directly.
+	if _, err := db.Exec(`UPDATE usage_events
+		   SET provider = json_extract(details_json, '$.model_provider')
+		 WHERE provider = ''
+		   AND json_extract(details_json, '$.model_provider') IS NOT NULL`); err != nil {
+		return fmt.Errorf("backfill usage_events.provider: %w", err)
+	}
 	return nil
 }
 
@@ -48,11 +58,11 @@ func enrichCodex(tx *sql.Tx, e *model.UsageEvent) error {
 	if e.Source != model.SourceCodex || e.Details == nil {
 		return nil
 	}
-	var account, endpoint, session, user, cwd, m, branch, effort, entry, ts, oldJSON string
+	var account, endpoint, session, user, cwd, m, provider, branch, effort, entry, ts, oldJSON string
 	var side int
 	var input, output, read, oldWrite, oldKnown int64
 	var oldCost sql.NullFloat64
-	err := tx.QueryRow(`SELECT account_uuid,endpoint_id,session_id,os_user,cwd,model,git_branch,effort,entrypoint,is_sidechain,ts,input_tokens,output_tokens,cache_read_tokens,cost_usd,cache_write_tokens,cache_write_known_events,details_json FROM usage_events WHERE source='codex' AND message_uuid=?`, e.MessageUUID).Scan(&account, &endpoint, &session, &user, &cwd, &m, &branch, &effort, &entry, &side, &ts, &input, &output, &read, &oldCost, &oldWrite, &oldKnown, &oldJSON)
+	err := tx.QueryRow(`SELECT account_uuid,endpoint_id,session_id,os_user,cwd,model,provider,git_branch,effort,entrypoint,is_sidechain,ts,input_tokens,output_tokens,cache_read_tokens,cost_usd,cache_write_tokens,cache_write_known_events,details_json FROM usage_events WHERE source='codex' AND message_uuid=?`, e.MessageUUID).Scan(&account, &endpoint, &session, &user, &cwd, &m, &provider, &branch, &effort, &entry, &side, &ts, &input, &output, &read, &oldCost, &oldWrite, &oldKnown, &oldJSON)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -101,6 +111,6 @@ func enrichCodex(tx *sql.Tx, e *model.UsageEvent) error {
 	if _, err = tx.Exec(`UPDATE usage_events SET details_json=?,cost_usd=?,cache_write_tokens=?,cache_write_known_events=? WHERE source='codex' AND message_uuid=?`, string(b), cost, write, known, e.MessageUUID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(`UPDATE usage_hourly SET cost_usd=cost_usd+?,unpriced_events=unpriced_events+?,cache_write_tokens=cache_write_tokens+?,cache_write_known_events=cache_write_known_events+? WHERE hour=strftime('%Y-%m-%dT%H:00:00Z',?) AND account_uuid=? AND endpoint_id=? AND session_id=? AND os_user=? AND cwd=? AND model=? AND git_branch=? AND effort=? AND entrypoint=? AND is_sidechain=? AND source='codex'`, nextCost-oldCost.Float64, nextUnpriced-oldUnpriced, write-oldWrite, int64(known)-oldKnown, ts, account, endpoint, session, user, cwd, m, branch, effort, entry, side)
+	_, err = tx.Exec(`UPDATE usage_hourly SET cost_usd=cost_usd+?,unpriced_events=unpriced_events+?,cache_write_tokens=cache_write_tokens+?,cache_write_known_events=cache_write_known_events+? WHERE hour=strftime('%Y-%m-%dT%H:00:00Z',?) AND account_uuid=? AND endpoint_id=? AND session_id=? AND os_user=? AND cwd=? AND model=? AND provider=? AND git_branch=? AND effort=? AND entrypoint=? AND is_sidechain=? AND source='codex'`, nextCost-oldCost.Float64, nextUnpriced-oldUnpriced, write-oldWrite, int64(known)-oldKnown, ts, account, endpoint, session, user, cwd, m, provider, branch, effort, entry, side)
 	return err
 }

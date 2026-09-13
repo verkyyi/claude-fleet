@@ -648,8 +648,8 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Twenty read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
-`usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
+Twenty-one read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
+`usage_by_provider`, `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
 `usage_history`, `usage_summary`, `list_sessions`, `get_session`,
 `get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
@@ -784,10 +784,31 @@ them in the `--pricing` file, in the currency the vendors publish:
     "cny_per_usd": 7.09,
     "cny_per_usd_as_of": "2026-09-12",
     "price_source": "https://internal.example/gateway/pricing",
-    "models": { "vendor-large": { "input": 7.0, "output": 70.0 } }
+    "models": { "vendor-large": { "input": 7.0, "output": 70.0 } },
+    "providers": {
+      "dashscope.aliyuncs.com": {
+        "label": "阿里云百炼",
+        "models": { "qwen-plus": { "input": 0.8, "output": 2.0 } }
+      },
+      "ark.cn-beijing.volces.com": {
+        "label": "火山方舟",
+        "models": { "deepseek-v4-flash": { "input": 0.5, "output": 1.5 } }
+      }
+    }
   }
 }
 ```
+
+A gateway that fans out to several upstreams reaches the same model id at more
+than one contracted price, and failover decides which one served any given
+call — so a rate keyed on the model alone prices some calls at another
+vendor’s number. State each contract under `providers`, keyed by the provider
+string the reporting side sends (this deployment sends the upstream hostname).
+
+`models` at the top level still means **this price holds whoever serves it**,
+and answers only what a provider left unsaid: a provider block is authoritative
+for the models it names. `label` is display only and never affects a rate.
+Every priced event’s `price_basis` names the contract it used.
 
 Rates are **CNY per million tokens**, input and output only — the source
 carries no cache breakdown. They are converted to USD at `cny_per_usd`, a
@@ -809,6 +830,13 @@ single blended cost figure.** There are three:
 | **subscription spend** | what the plans cost per month | **real** | `subscription_plans`, `ccquota plan --spend`, `subscription_spend` in the API |
 | **notional token cost** | "what this would have cost at API rates" (`claude`, `codex`) | no | the `notional` entries of `cost` |
 | **gateway cost** | metered per call | **real** | the `billed` entries of `cost` |
+
+Provider is a grouping axis *inside* the billed kind, never a fourth kind of
+money. `usage_by_provider` (and `?by=provider`) returns the same per-source
+`cost` split as every other breakdown. An empty provider is the reporting side
+declaring none — Claude transcripts carry no upstream, and rollup rows
+aggregated before the hub gained the dimension were not re-attributed — not a
+vendor called "unknown"; responses containing one carry `provider_note`.
 
 Real spend is **subscription + gateway**. The notional figure is not a term in
 it, and adding it in invents spending that never happened.
@@ -844,6 +872,45 @@ returns a plausible number and fails silently:
 arithmetic, and `TestEveryRawCostSumDeclaresItself` fails the build if a new
 `SUM(cost_usd)` appears in the store without either going through the source
 split or stating in the SQL why its `GROUP BY` already covers it.
+
+## Upgrading to the provider dimension
+
+This release adds `provider` — the upstream that actually served a request — to
+`usage_events` and to `usage_hourly`'s primary key. It matters because a gateway
+that fails over between vendors reaches one model id through several upstreams
+at several contracted prices, so a rate keyed on the model alone prices some
+calls at another vendor's number.
+
+**Back up the database before the first start.** The `usage_hourly` change
+rebuilds the table (SQLite cannot alter a primary key); `~/.ccquota/backups/` is
+the conventional place.
+
+Existing raw events are backfilled from `details.model_provider`, which the
+reporting side has been sending all along, so no collector has to change.
+
+**Then rebuild the rollup, or the dimension reports nothing:**
+
+```bash
+ccquota hub --rebuild-rollup --rebuild-rollup-force
+```
+
+Every breakdown reads `usage_hourly`, and the migration carries pre-existing
+hour-rows across with an *empty* provider rather than guessing one — so until
+they are re-derived, the dimension answers "not declared" for all history and
+looks broken rather than empty. The rebuild re-derives whatever raw events
+retention still covers and leaves pre-retention hours untouched.
+`--rebuild-rollup` on its own **refuses**, precisely because it would otherwise
+erase hours whose raw rows have already been pruned; the `--force` variant is
+the one that skips them instead. The startup log names the affected row count
+and repeats this command.
+
+Rehearsed against a 394 MB production snapshot: 41,462 rows rebuilt in under ten
+seconds, every event count and token total unchanged, the only movement being
+the last bit of a float64 cost sum as the addition order changed.
+
+Gateway rates keyed on a bare model id keep working and now mean "this price
+holds whoever serves it". State per-contract rates under `gateway.providers`
+when two upstreams serve one model id at different prices.
 
 ## Development
 

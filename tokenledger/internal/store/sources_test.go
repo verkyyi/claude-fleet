@@ -90,3 +90,110 @@ func TestSourceRollupRebuildEqualsRaw(t *testing.T) {
 		t.Fatalf("rebuilt sources=%+v err=%v", rollup, err)
 	}
 }
+
+// ---- provider dimension -----------------------------------------------
+
+// The gateway shipper sends the upstream inside details.model_provider. The
+// hub lifts it onto the event so it can be grouped, without the shipper having
+// to change what it sends.
+func TestInsert_ProviderComesFromDetailsWhenUnset(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	e := ev("acct", "ep1", "u-gw-1", 10)
+	e.Source = model.SourceGateway
+	e.Model = "qwen-plus"
+	e.Details = &model.UsageDetails{Provider: "dashscope.aliyuncs.com"}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	if err := s.DB().QueryRow(
+		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-gw-1").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "dashscope.aliyuncs.com" {
+		t.Errorf("provider = %q, want dashscope.aliyuncs.com", got)
+	}
+}
+
+func TestInsert_ExplicitProviderWins(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	e := ev("acct", "ep1", "u-gw-2", 10)
+	e.Source = model.SourceGateway
+	e.Provider = "explicit.example"
+	e.Details = &model.UsageDetails{Provider: "details.example"}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	if err := s.DB().QueryRow(
+		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-gw-2").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "explicit.example" {
+		t.Errorf("provider = %q, want explicit.example", got)
+	}
+}
+
+// Absent is absent. A Claude transcript declares no upstream and must not
+// acquire an invented one.
+func TestInsert_NoProviderStaysEmpty(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	if _, _, err := s.InsertEvents([]model.UsageEvent{ev("acct", "ep1", "u-cc-1", 10)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	if err := s.DB().QueryRow(
+		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-cc-1").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("provider = %q, want empty", got)
+	}
+}
+
+// History is already in the database, inside details_json. The migration lifts
+// it out rather than starting the dimension from today.
+func TestMigrate_BackfillsProviderFromDetails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backfill.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAccount(t, s, "acct", "ep1")
+
+	e := ev("acct", "ep1", "u-old", 10)
+	e.Source = model.SourceGateway
+	e.Details = &model.UsageDetails{Provider: "ark.cn-beijing.volces.com"}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a row written before the column existed.
+	if _, err := s.DB().Exec(`UPDATE usage_events SET provider = '' WHERE message_uuid = ?`, "u-old"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(path) // reopening runs migrate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	var got string
+	if err := s2.DB().QueryRow(
+		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-old").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "ark.cn-beijing.volces.com" {
+		t.Errorf("backfilled provider = %q, want ark.cn-beijing.volces.com", got)
+	}
+}

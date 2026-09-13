@@ -14,7 +14,9 @@ import (
 // several commits. Nobody notices a doc that is merely out of date, so pin it to
 // the registration instead of to a reviewer's memory.
 
-var readmeToolSentence = regexp.MustCompile(`(?s)\b([A-Z][a-z]+) read-only tools:(.*?)\.\n`)
+// The count word may be hyphenated once the tool list passes twenty
+// ("Twenty-one"), which is ordinary English and not drift.
+var readmeToolSentence = regexp.MustCompile(`(?s)\b([A-Z][a-z]+(?:-[a-z]+)?) read-only tools:(.*?)\.\n`)
 
 var numberWords = map[int]string{
 	1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven",

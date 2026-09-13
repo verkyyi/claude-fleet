@@ -134,6 +134,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
   request_id             TEXT NOT NULL DEFAULT '',
   ts                     TEXT NOT NULL,          -- RFC3339 UTC
   model                  TEXT NOT NULL DEFAULT '',
+  -- The upstream that actually served the request. Empty means the reporting
+  -- side declared none, which is the honest state for a Claude transcript --
+  -- never a vendor called "unknown".
+  provider               TEXT NOT NULL DEFAULT '',
 
   input_tokens           INTEGER NOT NULL DEFAULT 0,
   output_tokens          INTEGER NOT NULL DEFAULT 0,
@@ -267,6 +271,7 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   os_user       TEXT NOT NULL DEFAULT '',
   cwd           TEXT NOT NULL DEFAULT '',
   model         TEXT NOT NULL DEFAULT '',
+  provider      TEXT NOT NULL DEFAULT '',
   git_branch    TEXT NOT NULL DEFAULT '',
   effort        TEXT NOT NULL DEFAULT '',
   entrypoint    TEXT NOT NULL DEFAULT '',
@@ -284,8 +289,10 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   min_ts                 TEXT NOT NULL,
   max_ts                 TEXT NOT NULL,
   source                 TEXT NOT NULL DEFAULT 'claude',
+  cache_write_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_known_events INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (hour, account_uuid, endpoint_id, session_id, os_user, cwd,
-               model, git_branch, effort, entrypoint, is_sidechain, source)
+               model, provider, git_branch, effort, entrypoint, is_sidechain, source)
 );
 CREATE INDEX IF NOT EXISTS idx_hourly_account_hour ON usage_hourly(account_uuid, hour);
 CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, session_id);

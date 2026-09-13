@@ -455,3 +455,35 @@ func TestSubscriptionSpendHonoursTheAccountScope(t *testing.T) {
 		t.Error(`an empty account was accepted; "which subscriptions is this the bill for" has no default`)
 	}
 }
+
+// Provider is a grouping axis inside the billed kind, never a fourth kind of
+// money. A provider bucket's cost must still arrive split by source and
+// classified exactly as its source is.
+func TestProviderBuckets_IntroduceNoNewMoneyKind(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	e := ev("acct", "ep1", "k1", 10)
+	e.Source = model.SourceGateway
+	e.Details = &model.UsageDetails{Provider: "ark.cn-beijing.volces.com"}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	got, err := s.UsageBy(AllAccounts, ByProvider, start, start.Add(48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("no provider buckets")
+	}
+	for _, b := range got {
+		for _, c := range b.Cost {
+			if c.Kind != model.CostKind(c.Source) {
+				t.Errorf("provider bucket %q: source %q classified %q, want %q",
+					b.Key, c.Source, c.Kind, model.CostKind(c.Source))
+			}
+		}
+	}
+}

@@ -57,6 +57,18 @@ type UsageEvent struct {
 	TS          time.Time `json:"ts"`
 	Model       string    `json:"model"`
 
+	// Provider is the upstream that actually served this request.
+	//
+	// It is a separate fact from Model and from Source. A gateway with failover
+	// reaches the same model id through more than one upstream at more than one
+	// contracted price, so the model id alone cannot identify the contract --
+	// see internal/pricing/gateway.go. Senders may set it directly; the hub also
+	// reads it from Details.Provider, which is what the gateway shipper sends.
+	//
+	// Empty means NOT DECLARED, which is the honest state for a Claude
+	// transcript. It is never filled in by inference.
+	Provider string `json:"provider,omitempty"`
+
 	InputTokens   int64 `json:"input_tokens"`
 	OutputTokens  int64 `json:"output_tokens"`
 	CacheCreate5m int64 `json:"cache_create_5m_tokens"`

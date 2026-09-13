@@ -134,3 +134,34 @@ func costKey(c CostBySource) string {
 	}
 	return b.String()
 }
+
+// Raw and rollup agree on every figure. They may disagree on provider for
+// hours whose rollup row predates the dimension — that gap is documented by
+// ProviderNote, and this pins it to provider alone: no total may move.
+func TestRollupEquiv_ProviderGapDoesNotMoveTotals(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	e := ev("acct", "ep1", "gp1", 100)
+	e.Source = model.SourceGateway
+	e.Model = "qwen-plus"
+	e.Details = &model.UsageDetails{Provider: "dashscope.aliyuncs.com"}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a rollup row written before the dimension existed.
+	if _, err := s.DB().Exec(`UPDATE usage_hourly SET provider = ''`); err != nil {
+		t.Fatal(err)
+	}
+
+	var rawTok, rollTok int64
+	if err := s.DB().QueryRow(`SELECT COALESCE(SUM(output_tokens),0) FROM usage_events`).Scan(&rawTok); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow(`SELECT COALESCE(SUM(output_tokens),0) FROM usage_hourly`).Scan(&rollTok); err != nil {
+		t.Fatal(err)
+	}
+	if rawTok != rollTok {
+		t.Errorf("totals moved: raw %d, rollup %d", rawTok, rollTok)
+	}
+}

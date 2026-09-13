@@ -404,3 +404,66 @@ func TestAccountSwitches_ScopesToOneAccount(t *testing.T) {
 		t.Fatalf("unscoped rows = %d, want 2", len(all))
 	}
 }
+
+func TestUsageBy_Provider(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	mk := func(uuid, provider string, out int64) model.UsageEvent {
+		e := ev("acct", "ep1", uuid, out)
+		e.Source = model.SourceGateway
+		e.Model = "deepseek-v4-flash"
+		e.Details = &model.UsageDetails{Provider: provider}
+		return e
+	}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		mk("p1", "dashscope.aliyuncs.com", 30),
+		mk("p2", "ark.cn-beijing.volces.com", 10),
+		mk("p3", "dashscope.aliyuncs.com", 5),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	got, err := s.UsageBy(AllAccounts, ByProvider, start, start.Add(48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d buckets, want 2: %+v", len(got), got)
+	}
+	if got[0].Key != "dashscope.aliyuncs.com" || got[0].Events != 2 {
+		t.Errorf("top bucket = %q with %d events; want dashscope.aliyuncs.com with 2", got[0].Key, got[0].Events)
+	}
+}
+
+func TestFilter_Provider(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep1")
+
+	mk := func(uuid, provider string) model.UsageEvent {
+		e := ev("acct", "ep1", uuid, 10)
+		e.Source = model.SourceGateway
+		e.Details = &model.UsageDetails{Provider: provider}
+		return e
+	}
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		mk("f1", "dashscope.aliyuncs.com"), mk("f2", "ark.cn-beijing.volces.com"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := Filter{
+		Account:  AllAccounts,
+		Start:    time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC),
+		Provider: "ark.cn-beijing.volces.com",
+	}
+	sum, err := s.Summary(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Events != 1 {
+		t.Errorf("filtered summary has %d events, want 1", sum.Events)
+	}
+}
