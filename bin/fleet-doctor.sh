@@ -572,6 +572,39 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 
+# --- base branch: does each fleet's conf point at the repo's REAL trunk? (#603) ---
+# FLEET_BASE_BRANCH is what every worker branches from and opens its PR against.
+# When it is wrong, nothing looks broken — workers claim, branch, push, CI passes,
+# PRs merge — onto a branch nobody ships from, and the trunk silently never moves.
+# It is the single hardest fleet fault to notice from the dash, which is exactly why
+# it needs a line here (2026-09-12: fleet-ccquota sat on 'dashboard-redesign' for a
+# whole round of work while the repo's default was 'main'). fleet-up.sh now refuses
+# to choose this quietly; this check catches the confs written before it did, and any
+# base that drifted after the repo renamed or re-pointed its default branch.
+if command -v gh >/dev/null 2>&1 && [ -d "$conf_dir" ]; then
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+    brepo=$(_conf_val "$cf" FLEET_REPO)
+    bbase=$(_conf_val "$cf" FLEET_BASE_BRANCH)
+    [ -n "$brepo" ] || { warn base "$sess: conf has no FLEET_REPO — cannot check the base branch"; continue; }
+    if [ -z "$bbase" ]; then
+      warn base "$sess: conf has no FLEET_BASE_BRANCH — the tooling has to guess this fleet's trunk; set it in $cf"
+      continue
+    fi
+    bdef=$(gh repo view "$brepo" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)
+    if [ -z "$bdef" ]; then
+      printf '        note: %s: could not read %s default branch (unauthed/offline) — base "%s" left unverified.\n' "$sess" "$brepo" "$bbase"
+    elif [ "$bbase" = "$bdef" ]; then
+      pass base "$sess: $brepo base \"$bbase\" is the repo default"
+    else
+      warn base "$sess: base \"$bbase\" is NOT $brepo's default branch (\"$bdef\") — every worker here branches from and merges into \"$bbase\", so the trunk never moves; fix: set FLEET_BASE_BRANCH=\"$bdef\" in $cf (prefix+c), or keep it deliberately if \"$bbase\" really is this fleet's trunk"
+    fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

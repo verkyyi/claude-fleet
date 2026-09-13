@@ -361,6 +361,58 @@ fleet_worker_charter() {
   fleet_tap_first_block
 }
 
+# ---- base branch: the repo's TRUNK, never "the branch you happened to be on" --
+# (issue #603) FLEET_BASE_BRANCH is what every worker branches from and opens its
+# PR against, so getting it wrong fails in the worst possible way: NOTHING looks
+# broken. Workers claim, branch, push, CI goes green, PRs merge — onto a branch
+# nobody ships from. The trunk just silently never moves.
+#   2026-09-12: fleet-ccquota was written with FLEET_BASE_BRANCH="dashboard-redesign"
+#   while verkyyi/ccquota's default branch was `main`. A full round of correct work
+#   landed five commits behind main, where no user would ever see it. ccquota's own
+#   PR #11 was the same mistake in a push trigger. Pointing at "the branch that
+#   happened to be checked out" instead of the repo's real trunk has now bitten twice.
+#
+# So: the ONE authoritative answer is the repo's GitHub default branch, and every
+# other answer is a GUESS that must announce itself. Resolution order:
+#   flag         an explicit --base — the operator's deliberate override
+#   default      `gh repo view --json defaultBranchRef` — authoritative
+#   origin-head  refs/remotes/origin/HEAD — the default branch as of the last clone
+#                / `git remote set-head`; right unless it has moved since
+#   checkout     the branch $dir is standing on — a real guess, and precisely the
+#                one that bit us, so it sits LAST-but-one, never first
+#   fallback     'main' — nothing else was knowable
+#
+# The gh lookup runs even when --base was passed: knowing the authoritative answer
+# is what lets the caller SAY that an explicit base disagrees with it (the silent
+# disagreement is the whole bug). Costs one API call on a path taken once per fleet.
+#
+# Args: $1=owner/repo  $2=checkout dir  $3=explicit --base ('' when not given)
+# Prints ONE tab-separated line: <branch> <TAB> <source> <TAB> <authoritative-default>
+# where <source> is one of the five tags above and <authoritative-default> is '' when
+# gh could not answer (missing / unauthed / offline). Branch names cannot contain a
+# tab, so the caller can split on it:
+#   IFS=$'\t' read -r base src default < <(fleet_resolve_base_branch "$repo" "$dir" "$flag")
+# This function NEVER warns or prompts — that is the caller's job (fleet-up.sh), the
+# only place that knows whether a human is watching.
+fleet_resolve_base_branch() {
+  local repo="${1:-}" dir="${2:-}" flag="${3:-}" default='' b=''
+  if command -v gh >/dev/null 2>&1; then
+    default=$(gh repo view "$repo" --json defaultBranchRef \
+                -q .defaultBranchRef.name 2>/dev/null) || default=''
+  fi
+  if [ -n "$flag" ]; then
+    printf '%s\t%s\t%s\n' "$flag" flag "$default"; return 0
+  fi
+  if [ -n "$default" ]; then
+    printf '%s\t%s\t%s\n' "$default" default "$default"; return 0
+  fi
+  b=$(git -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+  if [ -n "$b" ]; then printf '%s\t%s\t%s\n' "$b" origin-head "$default"; return 0; fi
+  b=$(git -C "$dir" branch --show-current 2>/dev/null)
+  if [ -n "$b" ]; then printf '%s\t%s\t%s\n' "$b" checkout "$default"; return 0; fi
+  printf '%s\t%s\t%s\n' main fallback "$default"
+}
+
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
 # truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_CLEANUP /

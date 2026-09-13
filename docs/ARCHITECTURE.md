@@ -258,11 +258,39 @@ Where "existing or newly-created checkout" is handled:
 2. Checkout: if `<dir>` exists and is that repo → use it; else clone it. This
    becomes `FLEET_MAIN`.
 3. Write `$FLEET_CONF_DIR/fleets/<session>/conf` (`FLEET_REPO`, `FLEET_MAIN`,
-   base branch from the repo's default branch).
+   `FLEET_BASE_BRANCH`).
 4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
    `work` shell + the `plan` hub, which holds the dash and nothing else — a
    fresh fleet no longer comes up with a hub Claude session).
 5. Kick the collector so the dash has data on first paint.
+
+#### The base branch is the repo's TRUNK, never "the branch you're standing on" (issue #603)
+
+`FLEET_BASE_BRANCH` is what every worker branches from and opens its PR against,
+so getting it wrong fails in the worst possible way: **nothing looks broken**.
+Workers claim, branch, push, CI goes green, PRs merge — onto a branch nobody ships
+from, and the trunk silently never moves. (2026-09-12: `fleet-ccquota` sat on
+`dashboard-redesign` while the repo's default was `main`; a full round of correct
+work landed five commits behind `main`.)
+
+So the only answer taken **quietly** is the repo's authoritative GitHub default.
+`fleet_resolve_base_branch()` (`bin/fleet-lib.sh`) is the one place that decides
+it, and it reports both the answer and *where it came from*:
+
+| source | how it was found | fleet-up's reaction |
+|---|---|---|
+| `flag` | an explicit `--base` | silent if it equals the repo default; otherwise warn in full, and **confirm on a tty** (a non-tty — e.g. `fleet-restore.sh` — warns into the log and proceeds) |
+| `default` | `gh repo view --json defaultBranchRef` | silent — authoritative |
+| `origin-head` | `refs/remotes/origin/HEAD` | warn: gh could not confirm the trunk |
+| `checkout` | the branch `<dir>` is on | warn — this is a real guess, and the one that bit us, so it is last-but-one |
+| `fallback` | `main` | warn |
+
+The gh lookup runs **even when `--base` was passed**: knowing the authoritative
+answer is what lets fleet-up say an explicit base disagrees with the repo instead
+of obeying it in silence. `fleet-doctor.sh` carries the matching `base` line — it
+re-checks every fleet's conf against its repo's default branch, so a conf written
+before this (or one that drifted when a repo re-pointed its default) shows up as a
+WARN with the one-line fix. `bin/fleet-base-branch-selftest.sh` pins the order.
 
 Teardown: `fleet-down.sh <session>` kills the session (checkout always left on
 disk); `--purge` also removes exactly `fleets/<session>/` (its whole durable

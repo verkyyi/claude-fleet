@@ -88,12 +88,45 @@ else
   else git clone "https://github.com/$REPO.git" "$DIR" || die "clone failed"; fi
 fi
 
-# --- base branch: flag > gh default > origin/HEAD > main ---
-if [ -z "$BASE" ] && command -v gh >/dev/null 2>&1; then
-  BASE=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)
-fi
-[ -z "$BASE" ] && BASE=$(git -C "$DIR" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
-[ -z "$BASE" ] && BASE=main
+# --- base branch: the repo's TRUNK, not "whatever branch we're standing on" ---
+# Order + the full why: fleet_resolve_base_branch() in fleet-lib.sh (issue #603).
+# Picking this wrong is the fleet's most expensive silent failure — every worker
+# works perfectly onto a branch nobody ships from — so the ONLY answer we accept
+# quietly is the repo's authoritative GitHub default. Everything else speaks up.
+IFS=$'\t' read -r BASE BASE_SRC BASE_DEFAULT \
+  < <(fleet_resolve_base_branch "$REPO" "$DIR" "$BASE")
+
+case "$BASE_SRC" in
+  default) : ;;   # authoritative — nothing to say
+  flag)
+    # An explicit --base that disagrees with the repo's default is either a
+    # deliberate choice or the bug. We cannot tell them apart, so make the
+    # operator own it out loud. fleet-restore.sh re-runs us with --base taken
+    # from the existing conf, so a base that was wrong ONCE arrives here on
+    # every restore — this is where it finally gets said.
+    if [ -n "$BASE_DEFAULT" ] && [ "$BASE" != "$BASE_DEFAULT" ]; then
+      echo "fleet-up: WARNING — --base '$BASE' is NOT $REPO's default branch ('$BASE_DEFAULT')." >&2
+      echo "          Every worker in this fleet will branch from and open PRs against '$BASE'." >&2
+      echo "          If that is not your trunk, the whole fleet's work lands where nobody ships from." >&2
+      # Prompt only with a human on both ends: fleet-restore.sh runs us with
+      # stdout in a log file, and a prompt there would hang the restore forever.
+      if [ -t 0 ] && [ -t 1 ]; then
+        printf '          use base branch '"'"'%s'"'"' anyway? [y/N] ' "$BASE" >&2
+        read -r ans
+        case "$ans" in
+          [yY]|[yY][eE][sS]) ;;
+          *) die "aborted — re-run with --base '$BASE_DEFAULT' (or no --base at all)";;
+        esac
+      else
+        echo "          (not a tty — proceeding; check it with: fleet-doctor.sh)" >&2
+      fi
+    fi ;;
+  *)
+    # gh could not tell us the default branch, so whatever we picked is a guess.
+    echo "fleet-up: WARNING — could not read $REPO's default branch from GitHub (gh missing, unauthed, or offline)." >&2
+    echo "          falling back to '$BASE' (source: $BASE_SRC) — VERIFY it is this repo's trunk." >&2
+    echo "          if it is not:  fleet-up.sh ... --base <trunk>   (or fix the conf and re-run fleet-doctor.sh)" >&2 ;;
+esac
 
 # --- write the per-fleet conf ---
 # PRESERVE any custom FLEET_* keys already in the conf (issue #170): a crash + `cf`
@@ -143,7 +176,7 @@ tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
 # --- populate caches now so the dash isn't empty on first paint ---
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
-echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE)"
+echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE [$BASE_SRC])"
 
 # --- land the caller on the new fleet ---
 # Each fleet is its OWN tmux server now, so switch-client (same-server only) can't
