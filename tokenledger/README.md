@@ -1,10 +1,13 @@
-# ccquota
+# TokenLedger
+
+> 命令、模块路径、数据库路径与环境变量**仍然是 `ccquota`** —— 这一版只换对外的产品名。
+> 改标识符是另一件事（跨两个仓的 cutover），没做。
 
 Your Claude subscription is consumed by many machines. Anthropic tells you *how
 much* is left, and nothing about *where it went*. Every local tool tells you
 where it went on **one** machine, and has to guess at the quota.
 
-ccquota joins the two. One Go binary, an agent on every endpoint, a hub with a
+TokenLedger joins the two. One Go binary, an agent on every endpoint, a hub with a
 dashboard, and a read-only MCP server so any Claude session can ask.
 
 Token usage also covers **Codex**. The agent and local report collect Claude
@@ -33,7 +36,7 @@ login is available.
 | [ccusage](https://github.com/ccusage/ccusage) | ✗ | ✗ | ✓ |
 | [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor) | ✗ | ✗ | ✗ |
 | [phuryn/claude-usage](https://github.com/phuryn/claude-usage) | ✗ | ✓ | ✗ |
-| **ccquota** | ✓ | ✓ | ✓ |
+| **TokenLedger** | ✓ | ✓ | ✓ |
 
 They are good tools; none of them answers "which of my six servers ate my
 week", and Anthropic [closed the request for it as not planned](https://github.com/anthropics/claude-code/issues/15434).
