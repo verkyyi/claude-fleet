@@ -449,7 +449,11 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 已经是 hub/agent 架构。要做的只是**把 README 主线从「用量监控」换成
 「团队订阅池的成本可见性」**，然后发出去。
 
-- 改 README 开头与 Why 段，主线换成 M0 算出来的成本对照
+**措辞已定（操作员 2026-09-13）：中性「团队账号池 / team account pool」** ——
+描述机制（一个 hub 管 N 份订阅、按余量调度、团队维度看预算），
+成本对照表照登，不点破凭据来源。
+
+- 改 README 开头与 Why 段，主线换成 M0 定稿的成本对照表
 - 受众边界照[第二章](#受众边界必须写进-readme)写清楚
 - 发一次（HN / X / 相关 subreddit 任选），看有没有人接
 
@@ -509,6 +513,7 @@ worker+PR），全局 cap 10。
 8 commands+hooks→plugin
 **M4** 9 `scope:` 轴 · 10 `memory promote`+密钥扫描 · 11 config repo 双 target 物化
 **其他** 12 Codex context%/handoff · 13 配额裁决接口中立化 · 14 clauth 相位错开 ·
-15 friction Stop hook · 16 双 anchor worktree 检测 · 23 README 措辞决策
+15 friction Stop hook · 16 双 anchor worktree 检测
+**已关闭** 4（M0 证伪）· 22（M0 完成）· 23（措辞已定：中性「团队账号池」）
 
 > 14 与 19 是同一件事（clauth 的相位错开），建 issue 时合并。
