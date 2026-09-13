@@ -27,6 +27,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-lib.sh"          # fleet_bg — the ONE silenced run-shell dispatch (#575)
 
 # --- colours (Tokyo Night; honour NO_COLOR + non-tty) -------------------------
 if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
@@ -131,10 +133,13 @@ if bash "$BIN/fleet-account.sh" use "$pick" >/dev/null 2>&1; then
   # now fleet-migrate.sh per #512: close + --resume in a new window), but only when
   # the active account actually changed — a re-pick of the current account moves
   # nothing. Backgrounded (issue #304): each move is a cold claude boot and would
-  # otherwise hold the popup OPEN. run-shell -b returns instantly and sets $TMUX,
-  # so migrate's bare tmux calls stay on THIS fleet's server; --toast reports.
+  # otherwise hold the popup OPEN. fleet_bg returns instantly and sets $TMUX, so
+  # migrate's bare tmux calls stay on THIS fleet's server; --toast reports. Via
+  # fleet_bg, NOT a hand-rolled `run-shell -b` (issue #575): migrate's say() report
+  # goes to stdout, which run-shell would paint over the operator's window as an
+  # Esc-to-dismiss view — fleet_bg silences it, the status line still gets --toast.
   if [ -n "$now" ] && [ "$now" != "$prev" ]; then
-    tmux run-shell -b "bash '$BIN/fleet-account.sh' migrate --idle --toast"
+    fleet_bg "bash '$BIN/fleet-account.sh' migrate --idle --toast"
     msg="${msg}  ·  moving idle sessions…"
   fi
   tmux display-message "$msg"

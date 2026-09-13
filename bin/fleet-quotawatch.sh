@@ -143,9 +143,12 @@ SOCKETS=$(fleet_sockets)
 # it needs no network, and a walled worker is the most urgent thing this daemon
 # can fix. The dry run is the cheap probe (no keystrokes, no sleeps); only a fleet
 # with at least one candidate gets the real pass, and that one is backgrounded via
-# `run-shell -b` so the ~5 s-per-window typing can never eat into DEADLINE.
-# run-shell sets $TMUX for the job, so the switch's bare tmux calls stay on THIS
-# fleet's server.
+# fleet_bg so the ~5 s-per-window typing can never eat into DEADLINE. run-shell
+# sets $TMUX for the job, so the switch's bare tmux calls stay on THIS fleet's
+# server. fleet_bg, not a hand-rolled `run-shell -b` (issue #575): the switch
+# prints a per-window report on stdout, and run-shell paints a backgrounded job's
+# stdout over the operator's window as an Esc-to-dismiss view — fleet_bg silences
+# it centrally; --toast still reports on the status line.
 if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
   hb "modelcap"
   for ms in $SOCKETS; do
@@ -157,7 +160,7 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
       continue
     fi
     printf 'fleet-quotawatch: %s walled window(s) on %s — switching in place\n' "$mplan" "$ms" >&2
-    tmux -L "$ms" run-shell -b "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast" 2>/dev/null
+    fleet_bg -L "$ms" "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast"
   done
 fi
 
@@ -262,7 +265,7 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       continue
     fi
     for qs in $SOCKETS; do
-      tmux -L "$qs" run-shell -b "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast" 2>/dev/null
+      fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
       tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null
     done
     if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
