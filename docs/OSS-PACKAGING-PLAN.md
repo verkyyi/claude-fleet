@@ -15,11 +15,11 @@
 > 让十几个跑了几天的 session 不失控、且没有一份额度闲置**」：
 > 配额编排、注意力路由、跨 context 续命 —— 这三件事在整张开源图上仍然是空的。
 
-其中**配额编排是成本卖点,也是唯一必须先解决合规问题的一条** ——
-经济效果靠「把任务路由给有余量的人」拿到，**不靠共享凭据**（那是条款明令禁止的，
-会让队友被封号）。详见[四之二](#四之二配额团队成本优势的合规实现)。
-而「Claude 撞墙 → 溢出到 Codex」的跨 provider 编排，整张 landscape 图上没有第二家 ——
+其中**配额编排是最直接的成本卖点**：一支小队手上 N 份订阅，池化 + 动态编排
+把「各自撞墙、各自闲置」变成一个整体额度池。而「Claude 池耗尽 → 溢出到 Codex」的
+跨 provider 编排，整张 landscape 图上没有第二家 ——
 **双 agent 不是为了兼容性好看,是为了让两家的订阅额度互为溢出池。**
+详见[四之二](#四之二配额编排团队额度池核心卖点)。
 
 ## 一、赛道判断:并行编排正在被上游吃掉
 
@@ -148,71 +148,79 @@ codex-cli 0.154 实测）：
 2. **配额治理在 Codex 上没有** —— Codex 的额度模型与 Claude 订阅不同构，
    跨 provider 只能靠**裁决接口**中立，数据层各做各的。
 
-## 四之二、配额:团队成本优势的合规实现
+## 四之二、配额编排:团队额度池(核心卖点)
 
-这是方案的核心经济卖点 —— **让一支小队的多个订阅额度互相填满,而不是各自撞墙各自闲置**。
-但实现方式决定它能不能公开发布。
+**一支小队手上有 N 份订阅,现状是各自撞墙、各自闲置。** 池化 + 动态编排把它们变成
+一个整体额度池 —— 这是本方案对小团队最直接的成本价值,也是整张 landscape 图上
+没人做完整的一块。
 
-### 红线:不能共享凭据
+### 为什么池化能省钱:并发上限来自订阅数,不是机器数
 
-[Anthropic 消费者条款](https://www.anthropic.com/legal/consumer-terms)原文：
+关键机制（ccquota README 实测）：**Claude Code 按 process 读 `CLAUDE_CODE_OAUTH_TOKEN`**，
+所以一台机器上并排的多个 session 可以跑在不同订阅上 —— 开发机上实测同时跑三份。
 
-> "You may not share your Account login information, Anthropic API key, or Account
-> credentials with anyone else. **You also may not make your Account available to
-> anyone else.**"
+于是一台共享 mini 的有效并发不由机器决定，由池里的订阅数决定：
 
-OpenAI 对个人订阅（Plus / Pro）同样明确禁止跨人共享，且风控会把多 IP 并发登录标记为
-异常并封号。
+```
+单份 Max：5h 窗口撞顶 → 整台机器的 fleet 停摆,等 reset
+N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet 不停
+```
 
-`claude setup-token` 产出的 `CLAUDE_CODE_OAUTH_TOKEN` **就是** Account credentials。
-所以下面这个实现是禁止的：
+对 3–8 人的小队，这是「买 8 份 Pro 各自闲置」与「池化后跑满」的差别。
 
-> ❌ 队友各自把 token 丢进共享 mini 的 `~/.config/claude-fleet/accounts/`，
-> 由 fleet 在人之间轮转。
+### 四条机制
 
-封号风险落在**队友**头上（他们的账号被停）。作为开源项目把它写成 README 的头条卖点，
-等于向陌生人推荐一个会让他们被封号的做法 —— 这比任何法律风险都更致命地让方案没法发。
-
-官方合规路径是席位制（Claude for Teams / ChatGPT Business），但那就回到了
-[受众边界](#受众边界必须写进-readme)那一节：上了席位制，ccquota 的价值大幅缩水。
-
-### 合规实现:路由任务给有余量的人,而不是路由凭据给任务
-
-同样的经济效果，四条机制，全部不需要任何凭据离开本人机器：
-
-| 机制 | 合规性 | 现状 |
+| # | 机制 | 状态 |
 |---|---|---|
-| ① 一个人在**自己的**多个订阅之间调度 | ✅ 本人账号 | 已有：`fleet-account.sh migrate/whoami`、85% bench+move、per-model cap 就地 `/model` 切换 |
-| ② **跨 provider 套利：Claude 撞墙 → 转 Codex** | ✅ 各用本人账号 | **缺口。真正的头条** |
-| ③ 团队余量可见性，不共享凭据 | ✅ 设计上即避开 | 已有：ccquota hub 聚合 per-(machine, user)、`budget --json` 裁决 |
-| ④ 按余量把**任务**分派给人 | ✅ 分派的是人 | **缺口，但 assignee=claim 原语已在** |
+| ① | **token 池 + owner 标签** —— 池化但仍按人归因 | 池已有（`~/.config/claude-fleet/accounts/<label>`）；**owner 元数据是缺口** |
+| ② | **相位错开**：N 份账号的 5h 窗口按 `5h / N` 错开启动 | **缺口。偷 clauth** |
+| ③ | **跨 provider 溢出**：Claude 池耗尽 → Codex 池 | **缺口。真正的头条** |
+| ④ | **公平份额**：争用时按贡献 plan 定优先级 | **缺口。全图无人做** |
 
-③ + ④ 合起来就是要的成本效果：dispatcher 看到 issue #123 未认领，ccquota 报
-Alice 余量 60% / Bob 95%，于是推给 Alice 的 fleet。
-**队伍整体的订阅额度被摊平用满,但没有任何一个人的凭据离开过他自己的机器。**
-额外收益：它对分布式团队也成立 —— 不要求大家挤在同一台 mini 上。
+#### ① 池化不等于放弃归因
 
-### ② 是整张 landscape 图上没人做过的
+即使额度是共用的，**仍然要知道每一份订阅烧了多少、被谁的任务烧掉** —— 否则
+无法结算、无法发现某个人的 `/loop` 在吃掉全队额度。
+ccquota 已经按 (machine, user) 归因，缺的是给**池里的每个 token 打 owner 标签**，
+让「这份额度是谁出的」和「这轮任务是谁的」成为两个独立可查的轴。
 
-配额治理最接近的是 [clauth](https://github.com/uwuclxdy/clauth)（149★），
-但它只在 Claude 一家内部切账号。
-**「Claude 的 5h 窗口满了,把这个 worker 的下一轮换到 Codex 跑」—— 跨 provider 的
-动态编排,没有第二家。**
+没有这一层，池化会退化成公地悲剧 —— 这是比合规更现实的失败模式。
 
-这也是「不仅支持 Claude，还支持 Codex」这句话真正的商业价值：
+#### ② 相位错开
+
+池子越大收益越明显：8 份账号若同时启动，5h 窗口会同时耗尽同时 reset，
+出现整段空窗。按 `5h / 8 = 37.5min` 错开首次启动，池子的可用余量就被摊平成一条直线。
+
+#### ③ 跨 provider 溢出 —— 双 agent 的真正商业价值
+
+```
+现在：Claude 账号 A 满 → 换账号 B → 池空 → bench
+加后：Claude 账号 A 满 → 换账号 B → 池空 → 换 Codex 池 → 都空 → bench
+```
+
+配额治理最接近的 [clauth](https://github.com/uwuclxdy/clauth)（149★）只在 Claude
+一家内部切账号。**跨 provider 的动态编排没有第二家。**
+
+这才是「不仅支持 Claude，还支持 Codex」的商业价值：
 **双 agent 不是为了兼容性好看,是为了让两家的订阅额度互为溢出池。**
 
-技术上离得不远：`FLEET_AGENT=codex` 的路已通（hook schema 相同），缺的是给
-quotawatch 的降级阶梯加一级：
-
-```
-现在：Claude 账号 A 满 → 换账号 B → 都满 → bench
-加后：Claude 账号 A 满 → 换账号 B → 都满 → 换 Codex → 都满 → bench
-```
-
-⚠️ 前置约束：Codex 侧无账号轮转（认证是 `codex login`，无 token env 等价物，
+⚠️ 技术前置：Codex 侧无账号轮转（认证是 `codex login`，无 token env 等价物，
 见[适配器能力矩阵](#适配器能力矩阵公开声明不许藏)），所以这一级是「换 agent」，
-不是「换 Codex 的第 N 个账号」。
+不是「换 Codex 的第 N 个账号」。要做 Codex 侧池化，得先解决多 `~/.codex` home
+的切换。
+
+#### ④ 公平份额
+
+Alice 出一份 Max、Bob 出一份 Pro，池子争用时谁优先？全图没人做过这个。
+最小可用版本：按贡献额度加权的令牌桶，欠费者降级到「只在池子空闲时跑」。
+这条不做也能上线，但做了才是「团队额度池」而不是「先到先得」。
+
+### 风险登记(一行,不阻塞设计)
+
+供应商条款禁止跨人共享账号凭据（[Anthropic 消费者条款](https://www.anthropic.com/legal/consumer-terms)
+明文；OpenAI 对 Plus/Pro 同）。这是团队自担的风险，**不作为本方案的设计约束**。
+唯一仍待决的是**公开 README 的措辞** —— 把功能写成中性的「账号池 / account pool」，
+还是写成「共享队友订阅」，这是产品定位选择，见[非目标](#九非目标)。
 
 ## 五、配置共享管线
 
@@ -347,8 +355,11 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 12. Codex 的 context % 与 handoff（需先解决无 transcript 的读取问题）
 13. 配额裁决接口中立化，Codex provider 适配
 17. **quotawatch 降级阶梯加「换 Codex」一级**（跨 provider 溢出池，头条功能）
-18. **按余量分派任务给人**：dispatcher 读 ccquota per-person 余量 → 推给有余量者的 fleet
-19. README 明确写「不共享凭据」，并给出合规路径对照（席位制 vs 本方案）
+18. **token 池加 owner 标签** + ccquota 按 owner 归因（防公地悲剧，池化的前提）
+19. **相位错开**：池内账号按 `5h / N` 错开首次启动（偷 clauth）
+20. **公平份额**：按贡献加权的令牌桶，欠费者降级到空闲才跑
+21. Codex 侧池化：多 `~/.codex` home 切换（③ 的完整版前置）
+22. README 措辞决策：「账号池」中性表述 vs 「共享队友订阅」
 
 **P4 — 偷来的**
 14. clauth 相位错开
