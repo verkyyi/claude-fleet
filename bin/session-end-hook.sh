@@ -291,13 +291,16 @@ hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)
 
 # 5. Dispatch the DETACHED reap. A numeric @issue → worker gate-reap; @raw=1 → record
 #    the scratch + close its window (#466); anything else (a panel/hub) → no-op.
-#    `run-shell -b` runs server-side so the work outlives this pane; pass everything as
-#    args (the window may be gone by the time it runs). Every value is shell-safe by
-#    construction (session = sanitized label, win = @<num>, issue = digits, scratch key
-#    = scratch-<digits> — which is WHY the raw path passes the key and not the raw
-#    @worktree path) — same quoting as dash-reap.sh's fleet_bg.
+#    fleet_bg's `run-shell -b` runs server-side so the work outlives this pane — and
+#    silences it: run-shell overlays a backgrounded job's stdout (and a nonzero exit)
+#    on the attached client as an Esc-to-dismiss view (#575), and this reap is meant
+#    to be invisible. Pass everything as args (the window may be gone by the time it
+#    runs). Every value is shell-safe by construction (session = sanitized label,
+#    win = @<num>, issue = digits, scratch key = scratch-<digits> — which is WHY the
+#    raw path passes the key and not the raw @worktree path) — same quoting as
+#    dash-reap.sh's fleet_bg.
 if [ -n "$issue" ]; then
-  tmux run-shell -b "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue'" 2>/dev/null
+  fleet_bg "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue'"
 elif [ "$raw" = 1 ]; then
   # @worktree is what dash-raw-session.sh binds at spawn; the pane cwd is the fallback
   # for a window that predates it. A key that doesn't resolve → the exec just closes
@@ -305,6 +308,6 @@ elif [ "$raw" = 1 ]; then
   wt=$(tmux display-message -p -t "$TMUX_PANE" '#{@worktree}' 2>/dev/null)
   [ -z "$wt" ] && wt=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_current_path}' 2>/dev/null)
   skey=$(fleet_scratch_key "$wt")
-  tmux run-shell -b "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}'" 2>/dev/null
+  fleet_bg "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}'"
 fi
 exit 0

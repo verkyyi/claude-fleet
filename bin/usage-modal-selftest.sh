@@ -34,13 +34,16 @@ command -v render_usage_detail >/dev/null 2>&1 \
 
 # --- the pick dispatches migrate --idle in the background (issues #263/#304/#512)
 CHECKS=$((CHECKS + 1))
-grep -Eq "run-shell -b .*fleet-account.sh' migrate --idle" "$SCRIPT" \
-  || fail "the account switch must dispatch 'fleet-account.sh migrate --idle' via run-shell -b"
+# Via fleet_bg, not a hand-rolled `tmux run-shell -b` (issue #575): migrate reports on
+# stdout, and run-shell turns a backgrounded job's stdout into an Esc-to-dismiss view
+# over the operator's window. fleet_bg is the one place that silencing lives.
+grep -Eq "fleet_bg .*fleet-account.sh' migrate --idle" "$SCRIPT" \
+  || fail "the account switch must dispatch 'fleet-account.sh migrate --idle' via fleet_bg (silenced background, #304/#575)"
 
 # --- the collector dispatches migrate --limited on a rotation (issue #495 → #512)
 CHECKS=$((CHECKS + 1))
-grep -Eq "run-shell -b .*fleet-account.sh' migrate --limited" "$BIN/tmux-dash-collect.sh" \
-  || fail "the collector must dispatch 'fleet-account.sh migrate --limited' via run-shell -b on a rotation"
+grep -Eq "fleet_bg .*fleet-account.sh' migrate --limited" "$BIN/tmux-dash-collect.sh" \
+  || fail "the collector must dispatch 'fleet-account.sh migrate --limited' via fleet_bg on a rotation (silenced background, #304/#575)"
 CHECKS=$((CHECKS + 1))
 grep -Eq -e '--restart-after-rotate' -e '--restart-idle' "$BIN/tmux-dash-collect.sh" "$SCRIPT" \
   && fail "retired restart subcommands still referenced (--restart-idle / --restart-after-rotate)"

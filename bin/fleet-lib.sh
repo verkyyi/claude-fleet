@@ -419,33 +419,65 @@ fleet_write_conf() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
-# fleet_bg <shell-command> — the shared "background this bind body" helper (issue
-# #304). Dispatch <shell-command> as a DETACHED, server-side background job (via
-# `tmux run-shell -b`) so the interactive fzf bind / popup that invoked it returns
-# INSTANTLY instead of freezing the dash on a slow gh (network) or `git worktree`
-# op. This is the ONE place the fleet's non-blocking-bind convention lives; the
-# fix pattern is: keep the CHEAP/authoritative checks + optimistic UI synchronous
-# on the bind, hand ONLY the slow tail to fleet_bg.
+# fleet_bg [-L <socket>] <shell-command> — the shared "background this bind body"
+# helper (issue #304). Dispatch <shell-command> as a DETACHED, server-side
+# background job (via `tmux run-shell -b`) so the interactive fzf bind / popup that
+# invoked it returns INSTANTLY instead of freezing the dash on a slow gh (network)
+# or `git worktree` op. This is the ONE place the fleet's non-blocking-bind
+# convention lives; the fix pattern is: keep the CHEAP/authoritative checks +
+# optimistic UI synchronous on the bind, hand ONLY the slow tail to fleet_bg.
+#
+# SILENCING IS THIS FUNCTION'S JOB (issue #575). `tmux run-shell` captures its
+# command's stdout and, when non-empty, opens a full-pane view-mode OVERLAY on the
+# attached client that the operator must dismiss with Esc/q — so a backgrounded
+# job that prints ANYTHING hijacks whatever window they were in. The rule used to
+# live in this comment as a contract each call site had to honour, and call sites
+# duly missed it (quotawatch/collector/usage-modal all redirected the OUTER tmux's
+# stderr — `2>/dev/null` outside the quotes — and handed the inner script's stdout
+# straight to tmux). So the wrap now happens HERE, once: the command is run as
+#     ( <shell-command>
+#     ) >/dev/null 2>&1 || :
+# which no caller can forget. An inner redirect a caller already has is harmless —
+# it just wins inside the group. Two details of that one line are load-bearing:
+#   • the closing paren sits on its OWN line, so a command ending in `&`, `;` or a
+#     trailing `#comment` still closes;
+#   • it is a SUBSHELL, not a `{ … }` brace group, because the `|| :` has to catch
+#     an `exit <n>` from the command — inside braces that exits the whole `sh -c`
+#     and the `|| :` never runs.
+#
+# The trailing `|| :` closes the SECOND route to the same overlay: tmux opens the
+# view on a NONZERO EXIT too, even when the job printed nothing (verified on tmux
+# 3.7 — it appends its own "did not exit successfully" line). dash-zoom.sh and
+# hub-zoom.sh each end in a hand-written `exit 0` for exactly this reason; a
+# backgrounded job has no such tail to add one to, so fleet_bg swallows the status
+# here. Nothing reads it anyway — `-b` is fire-and-forget.
 #
 # Contract for <shell-command> (it runs LATER, decoupled from the now-gone caller):
 #   • self-contained — it runs under `sh -c` with NO cwd/unexported-env guarantee,
 #     so use absolute paths (a self re-exec `bash "$0" … --bg` is the usual shape);
-#   • silent on stdout/stderr — `run-shell` surfaces any output as a view-mode
-#     overlay on the attached client (issue #192), so redirect chatter to
-#     /dev/null and report outcomes via `tmux display-message` instead;
-#   • reports its OWN outcome — the caller has already returned, so a failure must
-#     surface via `tmux display-message`, not an exit status nobody reads.
+#   • reports its OWN outcome — the caller has already returned AND its output is
+#     discarded, so both a result and a failure must surface via
+#     `tmux display-message` (the `--toast` flag the fleet scripts carry), never
+#     via stdout or an exit status nobody reads.
 #
 # Socket: run from INSIDE a fleet pane/popup, where $TMUX names THIS fleet's
-# server, bare `tmux run-shell` is correct and the backgrounded job inherits the
-# same $TMUX (its nested `tmux` calls stay on this fleet's socket). A HEADLESS
-# caller with no $TMUX (a daemon/selftest) passes its socket via FLEET_BG_SOCK.
-# Safe under a `set -u` caller.
+# server, bare `fleet_bg` is correct and the backgrounded job inherits the same
+# $TMUX (its nested `tmux` calls stay on this fleet's socket). A HEADLESS caller
+# with no $TMUX (a daemon fanning out over fleet_sockets, a selftest) names the
+# target socket with `-L <label>` — or, for a whole script, FLEET_BG_SOCK; the
+# explicit flag wins. Safe under a `set -u` caller.
 fleet_bg() {
-  if [ -n "${FLEET_BG_SOCK:-}" ]; then
-    tmux -L "$FLEET_BG_SOCK" run-shell -b "$1" 2>/dev/null
+  local _sock="${FLEET_BG_SOCK:-}" _body
+  if [ "${1:-}" = "-L" ]; then _sock="${2:-}"; shift 2; fi
+  # Newline before the paren: a command ending in `&`/`;`/`#…` must still close.
+  # Subshell + `|| :`: a nonzero exit opens the same view-mode overlay as output
+  # does, and only a subshell lets `|| :` catch an `exit` from the command.
+  _body="( ${1:-:}
+) >/dev/null 2>&1 || :"
+  if [ -n "$_sock" ]; then
+    tmux -L "$_sock" run-shell -b "$_body" 2>/dev/null
   else
-    tmux run-shell -b "$1" 2>/dev/null
+    tmux run-shell -b "$_body" 2>/dev/null
   fi
 }
 

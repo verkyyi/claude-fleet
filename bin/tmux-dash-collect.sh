@@ -545,7 +545,7 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
           if [ $(( $(now) - mig )) -gt 180 ]; then
             tmux -L "$sock" set-window-option -t "$wid" @model_migrating "$(now)" 2>/dev/null
             msw="$BIN/fleet-model-switch.sh"; [ -x "$msw" ] || msw="$BIN/fleet-migrate.sh"
-            tmux -L "$sock" run-shell -b "bash '$msw' --model '$fb' --session '$sock' --toast '$wid'" 2>/dev/null
+            fleet_bg -L "$sock" "bash '$msw' --model '$fb' --session '$sock' --toast '$wid'"
           fi
           mk="$G/model.limited.$acct.$lm"
           if ! fleet_same_window "$mk" "$muntil"; then
@@ -569,11 +569,14 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
     # a benched account — the banner window and any other on that account, mid-
     # turn or idle (their next request fails anyway) — is closed and `--resume`d
     # in a new window under the new active account (fleet-migrate.sh, issue
-    # #512), backgrounded via run-shell -b so the collector never blocks on the
+    # #512), backgrounded via fleet_bg so the collector never blocks on the
     # per-window exit/boot waits. run-shell sets $TMUX for the job, so migrate's
     # bare tmux calls stay on THIS fleet's server; --toast reports the count.
+    # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
+    # stdout, which run-shell would overlay on the operator's window (Esc to
+    # dismiss) — fleet_bg silences it; the status-line --toast is unchanged.
     if [ "$rc" -eq 10 ]; then
-      tmux -L "$sock" run-shell -b "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast" 2>/dev/null
+      fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast"
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription limit reached
 account **$acct** hit its usage limit — new sessions now use **${newact:-?}**; every session still on it is being moved (close + \`--resume\` in a new window)

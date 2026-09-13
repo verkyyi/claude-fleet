@@ -151,7 +151,12 @@ echo 90 > "$WORK/pct"; run_watch || fail "3c: 90% tick must exit 0"
 [ "$(cat "$G/quota.ceiling.a" 2>/dev/null)" = "$RESET1" ] || fail "3c: 90% ⇒ quota.ceiling.a = reset epoch"
 [ "$(awk -F'\t' '$1=="a"{print $3}' "$G/account.limited" 2>/dev/null)" = "ccquota: 5-hour window at 90%" ] || fail "3c: 90% ⇒ benched with the ccquota note (account.limited: $(cat "$G/account.limited" 2>/dev/null))"
 [ "$(migrates)" = 1 ] || fail "3c: 90% ⇒ one 'migrate --account a' run-shell (got $(migrates))"
-grep -q "run-shell -b bash '$WORK/bin/fleet-account.sh' migrate --account 'a' --session 'sessA' --toast" "$WORK/tmux.calls" || fail "3c: migrate goes through run-shell -b on the fleet socket with --session sessA"
+# The dispatch goes through fleet_bg, so the command tmux is handed is the SILENCED
+# wrapped form (issue #575): `( bash … --toast\n) >/dev/null 2>&1 || :`. Assert both
+# halves — the command AND the tail that keeps migrate's stdout (and a nonzero exit)
+# from becoming an Esc-to-dismiss view over whatever window the operator is in.
+grep -q "run-shell -b ( bash '$WORK/bin/fleet-account.sh' migrate --account 'a' --session 'sessA' --toast" "$WORK/tmux.calls" || fail "3c: migrate goes through fleet_bg (run-shell -b, subshell-wrapped) on the fleet socket with --session sessA"
+grep -qx ') >/dev/null 2>&1 || :' "$WORK/tmux.calls" || fail "3c: the backgrounded migrate must be SILENCED by fleet_bg (#575) — run-shell paints a job's stdout, and a nonzero exit, over the operator's window"
 grep -q 'rotated early' "$WORK/notify.log" || fail "3c: 90% ⇒ 'rotated early' notify"
 grep -q 'new sessions now use \*\*b\*\*' "$WORK/notify.log" || fail "3c: active pointer rotated to b (notify: $(grep 'new sessions' "$WORK/notify.log"))"
 [ "$(notifies)" = 2 ] || fail "3c: two notifies so far (got $(notifies))"
