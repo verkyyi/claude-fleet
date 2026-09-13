@@ -23,8 +23,13 @@
 #   account.quota(.ts)      — via `fleet-account.sh quota` (the TTL-gated fetch)
 #   quota.warn.<label>      — reset epoch the 70% warning was sent for
 #   quota.ceiling.<label>   — reset epoch the 85% bench+move was done for
-#   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/fetched
-#   quotawatch.lock/        — mkdir lock (pid + ts inside) — overlap guard
+#   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/
+#                             fetched, plus the per-phase breakdown t_modelcap/
+#                             t_fetch/t_policy (issue #582)
+#   quotawatch.lock/        — mkdir lock (pid + ts inside) — overlap guard,
+#                             released only by the tick that still holds it (#582)
+#   quotawatch.sweep.start  — fairness cursor: the fleet whose cap probe was cut
+#                             short last tick, swept first on the next one (#582)
 #
 # Staleness alarm (#551): `account.quota.ts` is the watch's liveness — every tick
 # restamps it even when the hub is unreachable (empty rows still refresh the
@@ -48,6 +53,21 @@
 # the backstop for installs whose daemon set predates this; `@model_migrating`
 # (180 s) and the pane's own status line keep the two callers from double-typing.
 #
+# BUDGETS (issue #582). The cap sweep is the unbounded half of this tick: ~8 tmux
+# round-trips per window per fleet, and on a loaded server one `display-message`
+# can block for minutes — so on 2026-09-13 a tick sat in a single probe for 26
+# MINUTES against a 120 s deadline. It could not be superseded (bash defers a
+# trapped signal until the foreground command returns) and, when it finally died,
+# its unconditional lock release deleted its successor's lock — so ticks piled up
+# three-deep on the same tmux server, each making the others slower. The unit
+# looked healthy the whole time (`launchctl list` → exit 0) while the launchd log
+# filled with `skip — still running` and the quota stamp aged past STALE: the
+# pre-emptive rotation this script exists for was BLIND. Now: each fleet's probe
+# runs under FLEET_QUOTAWATCH_PROBE_BUDGET (20 s, tree-killed on expiry), the
+# phase as a whole under FLEET_QUOTAWATCH_SWEEP_BUDGET (40 s), whatever is left
+# over is swept first next tick, and the ccquota fetch — the cheap half, ~1 s,
+# and the one whose stamp is the liveness signal — can no longer be starved by it.
+#
 # Fail-open, per job: the model sweep needs only an accounts pool (the cap ledger
 # is per-account), the ccquota policy needs a hub URL too. Neither configured →
 # exit 0 and nothing here runs.
@@ -55,6 +75,9 @@
 # Usage:
 #   fleet-quotawatch.sh [--caller <name>] [--dry-run]
 #   fleet-quotawatch.sh --status        # off | never | fresh | stale  <TAB> age-s
+#
+# Env: FLEET_QUOTAWATCH_DEADLINE (120) FLEET_QUOTAWATCH_PROBE_BUDGET (20)
+#      FLEET_QUOTAWATCH_SWEEP_BUDGET (40) FLEET_ACCOUNT_QUOTA_STALE (600)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -73,7 +96,7 @@ while [ "$#" -gt 0 ]; do
     --caller)  CALLER="${2:-daemon}"; shift ;;
     --dry-run) DRY=1 ;;
     --status)  STATUS=1 ;;
-    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,80p' "$0"; exit 0 ;;
     *) printf 'fleet-quotawatch: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -84,6 +107,18 @@ HB="$G/quotawatch.heartbeat"
 LOCK="$G/quotawatch.lock"
 STALE="${FLEET_ACCOUNT_QUOTA_STALE:-600}"
 DEADLINE="${FLEET_QUOTAWATCH_DEADLINE:-120}"   # a tick past this is stuck → superseded
+# Budgets for the model-cap sweep (issue #582) — the tick's unbounded half. The
+# sweep makes ~8 tmux round-trips per window per fleet (23 windows on the monorepo
+# fleet ⇒ ~180 client invocations), and on a loaded server a SINGLE
+# `tmux display-message` can block for minutes: one was observed stuck for 57 s,
+# inside a probe that had been running for 24. Unbudgeted, one wedged fleet
+# starves the ccquota fetch below — the fetch that writes the stamp `--status`
+# reads — so the watch goes stale and the pre-emptive rotation goes BLIND while
+# the launchd unit still reports exit 0. Both budgets are per-TICK and
+# best-effort: whatever is skipped is swept by the next tick, 60 s later.
+PROBE_BUDGET="${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}"   # one fleet's cap probe
+SWEEP_BUDGET="${FLEET_QUOTAWATCH_SWEEP_BUDGET:-40}"   # the whole modelcap phase
+SWEEP_START="$G/quotawatch.sweep.start"               # fairness rotation cursor
 
 # --status: off (pool/hub not configured) | never (configured, no stamp yet) |
 # fresh | stale, then TAB + the stamp's age in seconds (0 for off/never).
@@ -122,13 +157,25 @@ if ! mkdir "$LOCK" 2>/dev/null; then
       exit 0
     fi
     printf 'fleet-quotawatch: tick %s past the %ss deadline (%ss) — superseding it\n' "$opid" "$DEADLINE" "$age" >&2
-    kill -TERM "$opid" 2>/dev/null
+    # Kill the TREE, not just the script (issue #582). bash DEFERS a trapped
+    # signal until the current foreground command returns, so a tick sitting in
+    # `x=$(tmux …)` ignores its supersede for as long as that tmux takes — one
+    # survived 26 MINUTES against this 120 s deadline — and meanwhile its tmux
+    # clients keep loading the very server that wedged it. TERM the tree, brief
+    # grace, SIGKILL the survivors.
+    fleet_kill_tree "$opid" 2
   fi
   rm -rf "$LOCK"
   mkdir "$LOCK" 2>/dev/null || exit 0        # lost the takeover race → the other tick has it
 fi
 printf '%s' "$$" > "$LOCK/pid"; now > "$LOCK/ts"
-trap 'rm -rf "$LOCK"' EXIT
+# Release ONLY a lock we still hold (issue #582). The release used to be an
+# unconditional `rm -rf "$LOCK"`, so a superseded-but-still-alive tick deleted its
+# SUCCESSOR's lock the moment it finally died — admitting a third tick alongside
+# the second. That is the pileup in the launchd log: three concurrent cap probes
+# against one tmux server, each making the others slower, which wedges the next.
+release_lock() { [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"; return 0; }
+trap 'release_lock' EXIT
 trap 'exit 143' INT TERM                       # so the EXIT trap (lock release) runs on a supersede
 
 START=$(now)
@@ -149,10 +196,39 @@ SOCKETS=$(fleet_sockets)
 # prints a per-window report on stdout, and run-shell paints a backgrounded job's
 # stdout over the operator's window as an Esc-to-dismiss view — fleet_bg silences
 # it centrally; --toast still reports on the status line.
+T_MODEL=0; T_FETCH=0; T_POLICY=0; MTIMES=""; DEFERRED=""
 if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
   hb "modelcap"
-  for ms in $SOCKETS; do
-    mplan=$("$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null | grep -c '^  would:')
+  m0=$(now)
+  # Fairness rotation (issue #582): start from the fleet the LAST tick ran out of
+  # budget on, so a chronically slow fleet cannot permanently starve the ones
+  # behind it in fleet_sockets' fixed order. The cursor is cleared every tick and
+  # re-armed only by a defer or a timeout below.
+  msweep="$SOCKETS"; mfirst=$(cat "$SWEEP_START" 2>/dev/null)
+  if [ -n "$mfirst" ] && printf '%s\n' "$SOCKETS" | grep -qxF "$mfirst"; then
+    msweep=$(printf '%s\n' "$SOCKETS" | grep -xF "$mfirst"; printf '%s\n' "$SOCKETS" | grep -vxF "$mfirst")
+  fi
+  : > "$SWEEP_START"
+  for ms in $msweep; do
+    # Phase budget: stop probing once the sweep has spent SWEEP_BUDGET, so the
+    # ccquota fetch below always gets its turn within the 60 s period.
+    if [ $(( $(now) - m0 )) -ge "$SWEEP_BUDGET" ]; then
+      DEFERRED="$DEFERRED $ms"; [ -s "$SWEEP_START" ] || printf '%s' "$ms" > "$SWEEP_START"
+      continue
+    fi
+    p0=$(now)
+    mout=$(fleet_timebox "$PROBE_BUDGET" "$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null); mrc=$?
+    if [ "$mrc" = 124 ]; then
+      # Report it honestly rather than letting it eat the tick (issue #582): the
+      # probe and every tmux client under it are dead, and this fleet goes first
+      # on the next tick.
+      MTIMES="$MTIMES $ms=timeout"
+      [ -s "$SWEEP_START" ] || printf '%s' "$ms" > "$SWEEP_START"
+      printf 'fleet-quotawatch: modelcap probe on %s hit its %ss budget — killed, not swept this tick\n' "$ms" "$PROBE_BUDGET" >&2
+      continue
+    fi
+    MTIMES="$MTIMES $ms=$(( $(now) - p0 ))s"
+    mplan=$(printf '%s\n' "$mout" | grep -c '^  would:')
     case "$mplan" in ''|*[!0-9]*) mplan=0 ;; esac
     [ "$mplan" -gt 0 ] || continue
     if [ "$DRY" = 1 ]; then
@@ -162,9 +238,17 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
     printf 'fleet-quotawatch: %s walled window(s) on %s — switching in place\n' "$mplan" "$ms" >&2
     fleet_bg -L "$ms" "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast"
   done
+  T_MODEL=$(( $(now) - m0 ))
+  [ -n "$DEFERRED" ] && printf 'fleet-quotawatch: modelcap phase spent its %ss budget (%ss) — deferred to the next tick:%s\n' "$SWEEP_BUDGET" "$T_MODEL" "$DEFERRED" >&2
 fi
 
-[ "$QUOTA_POLICY" = 1 ] || { END=$(now); hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'; exit 0; }
+if [ "$QUOTA_POLICY" != 1 ]; then
+  END=$(now)
+  hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'"t_modelcap=$T_MODEL"$'\n'
+  printf 'fleet-quotawatch: tick done in %ss — modelcap %ss [%s ], no ccquota policy (no hub)\n' \
+    "$(( END - START ))" "$T_MODEL" "${MTIMES:- none}" >&2
+  exit 0
+fi
 
 # --- blind-spell alarm: how old was the stamp BEFORE this tick? A stamp older
 # than STALE (and not "never": a fresh install has no stamp) means no tick ran
@@ -175,11 +259,14 @@ blind=0
 if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$(( START - pre_ts )); fi
 
 hb "fetch"
+f0=$(now)
 qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
+T_FETCH=$(( $(now) - f0 ))
 post_ts=$(cat "$QTS" 2>/dev/null); case "$post_ts" in ''|*[!0-9]*) post_ts=0;; esac
 fetched=0; [ "$post_ts" -gt "$pre_ts" ] && fetched=1
 nrows=$(printf '%s' "$qrows" | grep -c .)
 hb "policy" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'
+y0=$(now)
 
 if [ "$blind" -gt 0 ]; then
   bm=$(( blind / 60 ))
@@ -297,6 +384,13 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
   fi
 done
 
+T_POLICY=$(( $(now) - y0 ))
 END=$(now)
-hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'
+hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'
+# One line per tick, so the launchd log can answer "which HALF was slow?" without
+# instrumenting anything after the fact (issue #582). Before this, the heartbeat
+# held only the phase currently running and overwrote it, so a tick that took
+# 143 s left no record of where the 143 s went.
+printf 'fleet-quotawatch: tick done in %ss — modelcap %ss [%s ], fetch %ss, policy %ss, %s row(s)\n' \
+  "$(( END - START ))" "$T_MODEL" "${MTIMES:- none}" "$T_FETCH" "$T_POLICY" "$nrows" >&2
 exit 0

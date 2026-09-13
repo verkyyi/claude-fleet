@@ -22,6 +22,12 @@
 #                 stale, the status-bar helper prints the age, and the next tick
 #                 notifies once that the watch was blind.
 #   7. human    — fleet_usage_human_secs coarsest-unit rendering.
+#   9. budget   — (#582) a cap probe that outlives FLEET_QUOTAWATCH_PROBE_BUDGET is
+#                 tree-killed and reported, the ccquota fetch still runs (the
+#                 stamp is the liveness signal — it must never be starved by the
+#                 sweep), the tick logs a per-phase breakdown, the phase budget
+#                 defers the remaining fleets and arms the fairness cursor, and a
+#                 tick never releases a lock some other tick now owns.
 #   8. nowhere  — (#567) EVERY account ≥ ceiling in one tick: both benched, both
 #                 ceiling markers, NO `migrate` fan-out (a move would cold-boot
 #                 each session back onto the account just benched), the toast +
@@ -75,6 +81,11 @@ cat > "$WORK/fakepath/notify" <<'FAKE'
 printf '%s\n---\n' "$1" >> "$FAKE_NOTIFY_LOG"
 FAKE
 printf '#!/bin/bash\nsleep 300\n' > "$WORK/fakepath/fleet-quotawatch-holder"
+# ...and one wedged the way a REAL tick wedges (#582): bash DEFERS a trapped
+# signal until the running FOREGROUND command returns, so this ignores SIGTERM
+# for the full 300 s. A plain `sleep 300` holder cannot catch that — it dies on
+# the first TERM — which is why the live supersede looked like it worked.
+printf '#!/bin/bash\ntrap %s INT TERM\nx=$(sleep 300)\n' "'exit 143'" > "$WORK/fakepath/fleet-quotawatch-wedged"
 chmod +x "$WORK/fakepath/"*
 
 iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
@@ -250,5 +261,86 @@ run_watch || fail "8c: next tick must exit 0"
 [ "$(migrates)" = "$m" ] || fail "8c: still no migrate"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567) (#551)\n' "$CHECKS"
+# 9. budgets — a wedged cap probe must not eat the tick (#582) -----------------
+# The shape that broke it live: the sweep probe blocks in tmux for minutes, the
+# tick blows past its own 60s period, the ccquota fetch behind it never runs, and
+# the stamp goes stale — while `launchctl list` still shows exit 0.
+cat > "$WORK/bin/fleet-model-switch.sh" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_SWITCH_LOG"
+if [ "${FAKE_SWITCH_SLEEP:-0}" -gt 0 ]; then
+  sleep "$FAKE_SWITCH_SLEEP"
+  printf 'completed\n' >> "$FAKE_SWITCH_DONE"     # only reached if the kill MISSED
+fi
+exit 0
+FAKE
+chmod +x "$WORK/bin/fleet-model-switch.sh"
+export FAKE_SWITCH_LOG="$WORK/switch.calls" FAKE_SWITCH_DONE="$WORK/switch.done"
+
+# 9a. probe over budget → killed + reported, and the fetch behind it STILL runs.
+export FAKE_SWITCH_SLEEP=6 FLEET_QUOTAWATCH_PROBE_BUDGET=2
+before=$(ccq_calls); t0=$(date +%s)
+run_watch || fail "9a: a tick whose probe timed out must still exit 0"
+elapsed=$(( $(date +%s) - t0 ))
+grep -q 'hit its 2s budget' "$WORK/stderr" || fail "9a: the timed-out probe must say so on stderr (stderr: $(cat "$WORK/stderr"))"
+[ "$(ccq_calls)" = $((before+1)) ] || fail "9a: the ccquota fetch must NOT be starved by a wedged sweep"
+[ "$elapsed" -lt 6 ] || fail "9a: the tick must not wait out the wedged probe (took ${elapsed}s, probe sleeps 6s)"
+pgrep -f "$WORK/bin/fleet-model-switch.sh" >/dev/null 2>&1 && fail "9a: the timed-out probe must be gone, not detached"
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = done ] || fail "9a: the tick must reach phase=done"
+ok
+
+# 9b. the whole TREE dies, not just the script: the fake's post-sleep marker is
+# the proof — a `sleep` reparented to init would still write it.
+sleep 5
+[ ! -f "$WORK/switch.done" ] || fail "9b: the probe's children must be killed too (marker was written)"
+ok
+
+# 9c. the log answers "which half was slow?" — per-phase breakdown, both places.
+grep -q 'tick done in .*modelcap .*fetch .*policy ' "$WORK/stderr" || fail "9c: the tick must log a per-phase breakdown (stderr: $(cat "$WORK/stderr"))"
+grep -q "^t_modelcap=" "$G/quotawatch.heartbeat" || fail "9c: heartbeat must carry t_modelcap"
+grep -q "^t_fetch="    "$G/quotawatch.heartbeat" || fail "9c: heartbeat must carry t_fetch"
+grep -q "^t_policy="   "$G/quotawatch.heartbeat" || fail "9c: heartbeat must carry t_policy"
+grep -q 'sessA=timeout' "$WORK/stderr" || fail "9c: the breakdown must name the fleet that timed out"
+ok
+
+# 9d. phase budget: 0s of budget → every fleet deferred, cursor armed, fetch runs.
+export FLEET_QUOTAWATCH_SWEEP_BUDGET=0
+before=$(ccq_calls)
+run_watch || fail "9d: a fully deferred sweep must still exit 0"
+grep -q 'deferred to the next tick: sessA' "$WORK/stderr" || fail "9d: a blown phase budget must name what it deferred (stderr: $(cat "$WORK/stderr"))"
+[ "$(cat "$G/quotawatch.sweep.start" 2>/dev/null)" = sessA ] || fail "9d: the fairness cursor must be armed with the deferred fleet"
+[ "$(ccq_calls)" = $((before+1)) ] || fail "9d: a deferred sweep must not stop the fetch"
+unset FLEET_QUOTAWATCH_SWEEP_BUDGET
+
+# 9e. a tick releases ONLY a lock it still holds — the bug that let ticks pile up
+# three-deep: a superseded-but-alive tick deleted its SUCCESSOR's lock on exit.
+export FAKE_SWITCH_SLEEP=4 FLEET_QUOTAWATCH_PROBE_BUDGET=20
+run_watch & WATCHER=$!
+i=0; while [ ! -f "$G/quotawatch.lock/pid" ] && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i+1)); done
+[ -f "$G/quotawatch.lock/pid" ] || { kill "$WATCHER" 2>/dev/null; fail "9e: the running tick must take the lock"; }
+printf '999999' > "$G/quotawatch.lock/pid"          # somebody else owns it now
+wait "$WATCHER" 2>/dev/null
+[ -d "$G/quotawatch.lock" ] || fail "9e: a tick must NOT remove a lock another tick now owns"
+[ "$(cat "$G/quotawatch.lock/pid")" = 999999 ] || fail "9e: the other tick's lock must be untouched"
+rm -rf "$G/quotawatch.lock"
+unset FAKE_SWITCH_SLEEP FLEET_QUOTAWATCH_PROBE_BUDGET
+ok
+
+# 9f. supersede must actually KILL a tick wedged in a command substitution.
+# `kill -TERM <pid>` alone does not: the trap is deferred until the foreground
+# child returns, so the "superseded" tick kept running — 26 minutes, live, against
+# a 120s deadline — and kept hammering the tmux server that wedged it.
+bash "$WORK/fakepath/fleet-quotawatch-wedged" >/dev/null 2>&1 </dev/null & HOLDER=$!; disown "$HOLDER"
+sleep 0.3
+mkdir -p "$G/quotawatch.lock"; printf '%s' "$HOLDER" > "$G/quotawatch.lock/pid"
+printf '%s' $(( $(date +%s) - 1000 )) > "$G/quotawatch.lock/ts"      # past the deadline
+run_watch || fail "9f: superseding tick must exit 0"
+grep -q 'superseding' "$WORK/stderr" || fail "9f: past the deadline ⇒ supersede on stderr"
+kill -0 "$HOLDER" 2>/dev/null && { kill -KILL "$HOLDER" 2>/dev/null
+  fail "9f: a tick wedged in a command substitution must be tree-killed, not just TERMed"; }
+HOLDER=''
+[ ! -d "$G/quotawatch.lock" ] || fail "9f: lock released after the superseding tick"
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582)\n' "$CHECKS"
 exit 0
