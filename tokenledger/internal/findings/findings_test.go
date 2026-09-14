@@ -197,3 +197,54 @@ func TestNowFindings(t *testing.T) {
 		t.Fatalf("control: %+v", fs)
 	}
 }
+
+// The free-allowance rule is the other half of pricing.Rates.FreeMonthlyTokens.
+// An event inside the allowance prices to 0 because that is what the vendor
+// charges; nothing in the pricing path can see the MONTH's total, so this rule
+// is the only thing standing between "the allowance was exceeded" and every
+// subsequent call still reporting 0.00.
+func TestFreeAllowance(t *testing.T) {
+	fs := freeAllowance([]FreeAllowanceStat{
+		{Model: "over", Tokens: 1_400_000, Allowance: 1_000_000},
+		{Model: "near", Tokens: 850_000, Allowance: 1_000_000},
+		{Model: "fine", Tokens: 2_014, Allowance: 1_000_000},
+		{Model: "exact", Tokens: 1_000_000, Allowance: 1_000_000},
+		// No allowance declared: nothing to say.
+		{Model: "none", Tokens: 9_000_000, Allowance: 0},
+	})
+	got := map[string]string{}
+	for _, f := range fs {
+		got[f.Scope["model"]] = f.Severity
+	}
+	if got["over"] != "critical" {
+		t.Errorf("an exceeded allowance is %q; it is money starting to be charged and reported as free", got["over"])
+	}
+	// Exactly at the allowance is spent, not nearly spent: the next call costs.
+	if got["exact"] != "critical" {
+		t.Errorf("an allowance used to the last token is %q; want critical", got["exact"])
+	}
+	if got["near"] != "warning" {
+		t.Errorf("85%% of an allowance is %q; want a warning", got["near"])
+	}
+	if _, ok := got["fine"]; ok {
+		t.Error("0.2% of an allowance raised a finding; this rule must not fire on ordinary usage")
+	}
+	if _, ok := got["none"]; ok {
+		t.Error("a model with no declared allowance raised a finding")
+	}
+}
+
+// The exceeded case must outrank the approaching one however they arrive: one
+// is money already being mischarged, the other is a heads-up.
+func TestFreeAllowance_ExceededOutranksApproaching(t *testing.T) {
+	fs := finish(freeAllowance([]FreeAllowanceStat{
+		{Model: "near", Tokens: 999_999, Allowance: 1_000_000},
+		{Model: "over", Tokens: 1_000_001, Allowance: 1_000_000},
+	}))
+	if len(fs) < 2 {
+		t.Fatalf("got %d findings; want both", len(fs))
+	}
+	if fs[0].Scope["model"] != "over" {
+		t.Errorf("first finding is %q; the exceeded allowance must lead", fs[0].Scope["model"])
+	}
+}

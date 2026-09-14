@@ -176,10 +176,28 @@ func validateGatewayRates(path, provider string, models map[string]Rates) error 
 			if r.Price <= 0 {
 				return fmt.Errorf("pricing overrides %s: "+where+" needs a positive price per %s in CNY", path, id, r.Unit)
 			}
+		} else if r.FreeMonthlyTokens > 0 {
+			// The one case where a gateway call IS free, because the vendor says
+			// so. A declared allowance is the difference between "free" and "we
+			// never configured this", which the table could not previously
+			// express -- and which reads identically in a total while meaning
+			// opposite things about whether anyone should act.
+			if r.Input < 0 || r.Output < 0 {
+				return fmt.Errorf("pricing overrides %s: "+where+" has a negative rate", path, id)
+			}
 		} else if r.Input <= 0 || r.Output <= 0 {
 			// Zero is not a discount. A gateway call is never free, and a rate
 			// left at zero would understate a real bill in silence.
-			return fmt.Errorf("pricing overrides %s: "+where+" needs positive input and output rates in CNY per million tokens, or a unit+price pair", path, id)
+			return fmt.Errorf("pricing overrides %s: "+where+" needs positive input and output rates in CNY per million tokens, or a unit+price pair, or a free_monthly_tokens allowance", path, id)
+		}
+		if r.FreeMonthlyTokens < 0 {
+			return fmt.Errorf("pricing overrides %s: "+where+" has a negative free_monthly_tokens allowance", path, id)
+		}
+		if r.FreeMonthlyTokens > 0 && r.PricedByUnit() {
+			// The allowance is counted in TOKENS. A per-image or per-second rate
+			// counts none, so the two together describe an allowance that can
+			// never be measured, let alone exceeded.
+			return fmt.Errorf("pricing overrides %s: "+where+" sets free_monthly_tokens on a rate priced per %s -- the allowance is measured in tokens, which this shape does not count", path, id, r.Unit)
 		}
 		if r.CacheWrite5m != 0 || r.CacheWrite1h != 0 || r.CacheRead != 0 {
 			return fmt.Errorf("pricing overrides %s: "+where+" sets a cache rate, but this source reports no cache tokens", path, id)
@@ -251,7 +269,8 @@ func atPeak(r Rates, ts time.Time) (Rates, string) {
 // already happened once, to Unit/Price (#6130), and the symptom was a
 // per-image rate quietly pricing as "CNY 0 in / 0 out per MTok".
 func gatewayRate(r Rates) Rates {
-	return Rates{Input: r.Input, Output: r.Output, Unit: r.Unit, Price: r.Price, Peak: r.Peak}
+	return Rates{Input: r.Input, Output: r.Output, Unit: r.Unit, Price: r.Price, Peak: r.Peak,
+		FreeMonthlyTokens: r.FreeMonthlyTokens}
 }
 
 func (g *gatewayPricing) merge(o *gatewayOverride) {
@@ -346,6 +365,23 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 		return nil
 	}
 
+	// A declared free monthly allowance answers before any rate does: while it
+	// holds, the vendor charges nothing, and 0 with a basis saying so is the
+	// truthful figure. This is the ONE place a zero cost is not a rate bug --
+	// everywhere else validateGatewayRates rejects a zero precisely so an event
+	// cannot price to 0.00 and read as "the vendor gave it away".
+	//
+	// Whether the allowance still holds is a property of the MONTH, not of this
+	// event, and Table.Cost cannot see the month (see Rates.FreeMonthlyTokens).
+	// So the basis states the allowance it is resting on, and findings watches
+	// the month's total against it.
+	if r.FreeMonthlyTokens > 0 {
+		d.PriceBasis = fmt.Sprintf("free: within %s's declared free monthly allowance of %d tokens (priced by %s)",
+			e.Model, r.FreeMonthlyTokens, pricedBy)
+		zero := 0.0
+		return &zero
+	}
+
 	// Which tier this call fell in, by its own timestamp. tier is "" for a
 	// contract with one price around the clock, so those price bases read
 	// exactly as they did before peak windows existed.
@@ -407,4 +443,36 @@ func (t *Table) gatewayCost(e *model.UsageEvent) *float64 {
 	d.PriceBasis = fmt.Sprintf("billed: %s%s, CNY %g in / %g out per MTok as of %s, converted at %.4f CNY/USD pinned %s",
 		contract, tier, r.Input, r.Output, g.ratesAsOf, g.cnyPerUSD, g.fxAsOf)
 	return &usd
+}
+
+// FreeAllowances is every gateway model that declares a free monthly allowance,
+// as model id -> tokens.
+//
+// Exported because the allowance is enforced in two places that cannot see each
+// other: Table.Cost prices an event inside it as free, and internal/findings
+// watches the MONTH's total against it. The second needs to know which models
+// have one without reaching into this package's maps.
+//
+// A model named by more than one provider contract reports the LARGEST
+// allowance any of them declares. That direction is deliberate: the finding
+// fires when the month passes the allowance, and the larger number fires later.
+// Erring toward "you still have room" on a threshold that costs money to cross
+// would be backwards, so this errs the other way -- it warns sooner than any one
+// contract strictly requires rather than later than all of them.
+func (t *Table) FreeAllowances() map[string]int64 {
+	out := map[string]int64{}
+	keep := func(id string, n int64) {
+		if n > 0 && n > out[Normalize(id)] {
+			out[Normalize(id)] = n
+		}
+	}
+	for id, r := range t.gw.rates {
+		keep(id, r.FreeMonthlyTokens)
+	}
+	for _, models := range t.gw.byProvider {
+		for id, r := range models {
+			keep(id, r.FreeMonthlyTokens)
+		}
+	}
+	return out
 }

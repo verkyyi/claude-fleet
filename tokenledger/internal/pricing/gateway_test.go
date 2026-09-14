@@ -519,3 +519,79 @@ func TestGatewayCost_TokenShapeStillWorksBesideUnitRates(t *testing.T) {
 		t.Errorf("token basis %q should still say per MTok", ev.Details.PriceBasis)
 	}
 }
+
+// A declared free monthly allowance is the one case where a gateway event
+// legitimately prices to 0 -- and the basis has to say WHY, because "0.00" and
+// "we never configured this" look identical in a total while meaning opposite
+// things about whether anyone should act.
+func TestGateway_FreeAllowancePricesToZeroAndSaysWhy(t *testing.T) {
+	tbl := gatewayTable(t, `{"gateway": {
+		"rates_as_of": "2026-09-14",
+		"cny_per_usd": 7.09, "cny_per_usd_as_of": "2026-09-14",
+		"models": {"doubao-seed-2-0-mini": {"free_monthly_tokens": 1000000}}
+	}}`)
+	ev := model.UsageEvent{
+		Source: model.SourceGateway, Model: "doubao-seed-2-0-mini",
+		InputTokens: 1000, OutputTokens: 500,
+		Details: &model.UsageDetails{Provider: "ark.cn-beijing.volces.com"},
+	}
+	got := tbl.Cost(&ev)
+	if got == nil {
+		t.Fatal("a model with a declared allowance came back unpriced")
+	}
+	if *got != 0 {
+		t.Errorf("cost = %v; a call inside the allowance costs nothing", *got)
+	}
+	basis := ev.Details.PriceBasis
+	for _, want := range []string{"free", "allowance", "1000000"} {
+		if !strings.Contains(basis, want) {
+			t.Errorf("price basis does not state %q: %s", want, basis)
+		}
+	}
+	// And it must NOT read as a missing rate: that is the fact this whole field
+	// exists to tell apart.
+	if strings.Contains(basis, "unpriced") {
+		t.Errorf("a free call was reported as unpriced: %s", basis)
+	}
+	if got := tbl.FreeAllowances()["doubao-seed-2-0-mini"]; got != 1_000_000 {
+		t.Errorf("FreeAllowances = %d; the allowance did not survive --pricing", got)
+	}
+}
+
+// A model reachable through two contracts reports the LARGEST allowance, so the
+// crossing finding fires sooner than any one contract strictly requires rather
+// than later than all of them. Erring toward "you still have room" on a
+// threshold that costs money to cross would be backwards.
+func TestGateway_FreeAllowanceTakesTheLargest(t *testing.T) {
+	tbl := gatewayTable(t, `{"gateway": {
+		"rates_as_of": "2026-09-14",
+		"models": {"m": {"free_monthly_tokens": 1000000}},
+		"providers": {
+			"a": {"models": {"m": {"free_monthly_tokens": 3000000}}},
+			"b": {"models": {"m": {"free_monthly_tokens": 2000000}}}
+		}
+	}}`)
+	if got := tbl.FreeAllowances()["m"]; got != 3_000_000 {
+		t.Errorf("FreeAllowances = %d; want the largest declared", got)
+	}
+}
+
+func TestGateway_FreeAllowanceValidation(t *testing.T) {
+	// An allowance is counted in tokens, so it cannot ride on a per-unit rate:
+	// an image call counts no tokens, and the allowance could never be measured.
+	if err := validateGatewayRates("f", "", map[string]Rates{
+		"img": {Unit: "image", Price: 1, FreeMonthlyTokens: 100},
+	}); err == nil {
+		t.Error("accepted a token allowance on a per-unit rate")
+	}
+	if err := validateGatewayRates("f", "", map[string]Rates{"m": {FreeMonthlyTokens: -1}}); err == nil {
+		t.Error("accepted a negative allowance")
+	}
+	// Zero rates are normally rejected -- an allowance is what makes them legal.
+	if err := validateGatewayRates("f", "", map[string]Rates{"m": {FreeMonthlyTokens: 10}}); err != nil {
+		t.Errorf("rejected a free-allowance-only rate: %v", err)
+	}
+	if err := validateGatewayRates("f", "", map[string]Rates{"m": {}}); err == nil {
+		t.Error("still accepted a rate that is neither priced nor declared free")
+	}
+}

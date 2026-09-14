@@ -7,6 +7,7 @@ import (
 
 	"github.com/verkyyi/ccquota/internal/findings"
 	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/pricing"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -39,8 +40,48 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		"since": f.Start, "until": f.End, "view": "review",
 		// findings.Review always returns a non-nil slice (finish() converts
 		// nil to []Finding{}), so this is never a JSON null.
-		"findings": findings.Review(in),
+		"findings": localizeFindings(findings.Review(in), localeOf(r)),
 	})
+}
+
+// freeAllowanceStats measures each model that declares a free monthly allowance
+// against THIS CALENDAR MONTH, not against the page's selection.
+//
+// The window is the whole point. An allowance resets on the first of the month,
+// so "is it used up" is a question about the month however the viewer has the
+// brush set -- asking it of a 7-day selection would report a fresh allowance
+// every week and never fire.
+//
+// The scope's account and source filters are kept: a hub holding two gateways
+// should answer for the one being looked at. Everything that narrows WITHIN a
+// month (project, session, model chips) is dropped, for the same reason the
+// range is: the vendor counts every call against the allowance, not the subset
+// somebody is currently filtered to.
+func (s *Server) freeAllowanceStats(f store.Filter) ([]findings.FreeAllowanceStat, error) {
+	if s.Pricing == nil {
+		return nil, nil
+	}
+	allowances := s.Pricing.FreeAllowances()
+	if len(allowances) == 0 {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	month := store.Filter{
+		Account: f.Account, Source: f.Source,
+		Start: monthStart, End: now,
+	}
+	rows, err := s.Store.UsageByFiltered(month.AlignHours(), store.ByModel, 200)
+	if err != nil {
+		return nil, err
+	}
+	var out []findings.FreeAllowanceStat
+	for _, r := range rows {
+		if n, ok := allowances[pricing.Normalize(r.Key)]; ok {
+			out = append(out, findings.FreeAllowanceStat{Model: r.Key, Tokens: r.Tokens, Allowance: n})
+		}
+	}
+	return out, nil
 }
 
 // GatherReview assembles findings.Inputs for one Filter -- the period-scale
@@ -78,6 +119,10 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	}
 	for _, m := range models {
 		in.Models = append(in.Models, findings.ModelStat{Model: m.Key, Tokens: m.Tokens, Unpriced: m.Unpriced})
+	}
+	in.FreeAllowances, err = s.freeAllowanceStats(f)
+	if err != nil {
+		return in, err
 	}
 	pts, err := s.Store.LimitsHistory(f.Account, f.Start, f.End, f.Source)
 	if err != nil {
@@ -166,7 +211,7 @@ func (s *Server) handleNowFindings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_uuid": account, "all_accounts": account == store.AllAccounts,
 		"view":     "now",
-		"findings": findings.Now(in),
+		"findings": localizeFindings(findings.Now(in), localeOf(r)),
 	})
 }
 

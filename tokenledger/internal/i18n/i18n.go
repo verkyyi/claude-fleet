@@ -111,3 +111,37 @@ func (t Text) In(locale string) string {
 	}
 	return t[EN]
 }
+
+// Interpolate fills {name} placeholders from args.
+//
+// An unknown placeholder is left STANDING rather than replaced with an empty
+// string: a typo in a template's variable name should look like a bug, not like
+// a sentence that quietly stopped saying how many. Mirrors the same rule in
+// web/dist/lib/i18n.js so a translator sees one convention, not two.
+func Interpolate(template string, args map[string]string) string {
+	if len(args) == 0 || !strings.Contains(template, "{") {
+		return template
+	}
+	var b strings.Builder
+	for {
+		i := strings.IndexByte(template, '{')
+		if i < 0 {
+			b.WriteString(template)
+			return b.String()
+		}
+		j := strings.IndexByte(template[i:], '}')
+		if j < 0 {
+			b.WriteString(template)
+			return b.String()
+		}
+		j += i
+		name := template[i+1 : j]
+		b.WriteString(template[:i])
+		if v, ok := args[name]; ok {
+			b.WriteString(v)
+		} else {
+			b.WriteString(template[i : j+1])
+		}
+		template = template[j+1:]
+	}
+}

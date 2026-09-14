@@ -244,7 +244,8 @@ func TestGatewayRate_CarriesEveryPriceableField(t *testing.T) {
 	full := Rates{
 		Input: 1, Output: 2, Unit: "second", Price: 3,
 		CacheWrite5m: 4, CacheWrite1h: 5, CacheRead: 6,
-		Peak: &PeakWindow{Multiplier: 2, UTCHours: []string{"01:00-04:00"}},
+		Peak:              &PeakWindow{Multiplier: 2, UTCHours: []string{"01:00-04:00"}},
+		FreeMonthlyTokens: 1_000_000,
 	}
 	// Guard the guard: if a field is added to Rates and not set above, this test
 	// would pass while checking nothing about it.

@@ -58,6 +58,28 @@ type Rates struct {
 	Unit  string  `json:"unit,omitempty"`
 	Price float64 `json:"price,omitempty"`
 
+	// FreeMonthlyTokens is a vendor's free monthly allowance for this model.
+	//
+	// It exists because "no rate configured" and "free" are different facts that
+	// this table could not previously tell apart. doubao ships a free monthly
+	// tier; leaving it unpriced happens to produce the right total today, but it
+	// produces it for the wrong reason — the model reads as a pricing GAP, and
+	// the day the allowance is exceeded nothing changes on its own.
+	//
+	// Declaring it flips both: an event inside the allowance prices to 0 with a
+	// basis that says WHY it is 0, and crossing the allowance raises a finding
+	// rather than passing silently.
+	//
+	// It is deliberately NOT applied per event by counting tokens as they
+	// arrive. Table.Cost is a pure function of one event and is shared by ingest
+	// and --reprice precisely so the two cannot disagree; a running monthly
+	// counter would make a price depend on the ORDER events were seen in, and a
+	// repriced month would no longer reproduce the month it replaced. The
+	// allowance is therefore priced as 0 while it holds, and the crossing is
+	// reported by internal/findings from the month's own totals — a fact the
+	// store can establish exactly, which a per-event function cannot.
+	FreeMonthlyTokens int64 `json:"free_monthly_tokens,omitempty"`
+
 	// Peak is a time-of-day surcharge on whichever shape above this rate
 	// carries. Nil means the contract charges one price around the clock.
 	//
