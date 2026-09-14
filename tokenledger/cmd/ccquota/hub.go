@@ -18,12 +18,23 @@ import (
 
 	"github.com/verkyyi/ccquota/internal/agent"
 	"github.com/verkyyi/ccquota/internal/api"
+	"github.com/verkyyi/ccquota/internal/fx"
 	"github.com/verkyyi/ccquota/internal/mcp"
 	"github.com/verkyyi/ccquota/internal/pricing"
 	"github.com/verkyyi/ccquota/internal/scan"
 	"github.com/verkyyi/ccquota/internal/store"
 	"github.com/verkyyi/ccquota/web"
 )
+
+// envOr lets an environment variable override a compiled-in default while an
+// unset variable still leaves the default in place -- unlike os.Getenv alone,
+// which turns "not configured" into "configured as empty".
+func envOr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
+}
 
 func runHub(args []string) error {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
@@ -64,6 +75,19 @@ func runHub(args []string) error {
 			"proxied through a cache that strips cookies. Off by default")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
+	// Display-side currency conversion. It converts NOTHING in the ledger --
+	// stored figures keep the currency they were billed in, and RealSpendOver
+	// still refuses to add two currencies rather than converting one. This only
+	// decides what a reader sees, and every converted figure on the page carries
+	// the rate and the date the feed last moved.
+	fxURL := fs.String("fx-url", envOr("CCQUOTA_FX_URL", fx.DefaultURL),
+		"exchange-rate feed for DISPLAY-ONLY currency conversion, keyed on USD.\n"+
+			"The dashboard shows a viewer the figures in their own currency and\n"+
+			"states the rate and its date beside them; nothing stored is converted\n"+
+			"and no total is computed through it. Set empty to disable, and every\n"+
+			"figure is shown in the currency it was billed in")
+	fxRefresh := fs.Duration("fx-refresh", fx.DefaultRefresh,
+		"how often to re-read --fx-url. Daily feeds do not move faster than this")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
 	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
 	rebuild := fs.Bool("rebuild-rollup", false,
@@ -225,8 +249,17 @@ func runHub(args []string) error {
 		}
 	}
 
+	// The pinned rate is the fallback, never the default: if the feed cannot be
+	// reached the page still converts, but says the rate is a pinned one rather
+	// than passing it off as today's. pricing.GatewayCNYPerUSD is already
+	// human-reviewed and dated, which is exactly what a fallback needs to be.
+	feed := fx.New(*fxURL, *fxRefresh,
+		map[string]float64{"CNY": pricing.GatewayCNYPerUSD},
+		"pinned in this build, reviewed "+pricing.GatewayFXAsOf)
+
 	srv := &api.Server{
 		Store:               st,
+		FX:                  feed,
 		SSO:                 sso,
 		Pricing:             table,
 		ViewerToken:         *token,
@@ -240,6 +273,11 @@ func runHub(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
+	// with no route to an FX feed is a working hub that shows every figure in
+	// the currency it was billed in.
+	go feed.Refreshing(ctx)
 
 	if *retentionDays > 0 {
 		go pruneLoop(ctx, st, *retentionDays)

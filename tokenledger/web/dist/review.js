@@ -13,13 +13,14 @@
 import { apiQuery, withChip, GROUPS } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
-import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
 import { SOURCES, KIND_LABEL, kindOf, costOf,
          activeSources, addCost, costLine, fmtSourceCost, fmtRealSpend } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
 import { pricingCoverage } from './lib/providers.js';
+import { t } from './lib/i18n.js';
 
 // Review's scope-controls widget: subscription select + span segmented
 // control + chips row (Task 15 nav restructure). Mounted on the Timeline
@@ -38,7 +39,9 @@ const GRAN = { '7d': 'hour', '30d': '6h', '90d': 'day' };
 // DIM_TO_API translates a URL/chip dimension name to the `by=`/filter query
 // value the Go API actually expects (internal/api/scope.go, store.Dimension).
 const DIM_TO_API = { project: 'project', login: 'user', machine: 'endpoint', model: 'model', branch: 'branch', team: 'team', source: 'source' };
-const DIM_LABEL = { project: 'Project', login: 'Login', machine: 'Machine', model: 'Model', branch: 'Branch', team: 'Team', source: 'Source' };
+// Same keys the chips row reads (scope.js), so a dimension is called one thing
+// on the group-by control and the chip it produces.
+const DIM_LABEL = { project: t('dim.project'), login: t('dim.login'), machine: t('dim.machine'), model: t('dim.model'), branch: t('dim.branch'), team: t('dim.team'), source: t('dim.source') };
 // kpiTile's `tone` only special-cases the literal string 'neutral' (its own
 // default) — anything else gets the up=red/down=green colouring. Named here
 // rather than passed as an arbitrary truthy string so every "more usage is
@@ -55,7 +58,7 @@ let brushTimer = 0;
 function errMsg(reason) { return (reason && reason.message) || String(reason); }
 function errCard(title, result) {
   return el('div', { class: 'card' }, el('h2', {}, title),
-    el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
 }
 function section(root, id) {
   let s = root.querySelector('#' + id);
@@ -136,15 +139,12 @@ function applyFindingScope(state, app, f) {
 // branching only on what comes AFTER it means the widget survives a failed
 // fetch exactly like it survives a successful one.
 function timelineCard(result, ctx, state, app) {
-  const card = el('div', { class: 'card' }, el('h2', {}, 'Timeline'),
-    el('p', { class: 'hint' },
-      'Tokens per bucket across the current span, stacked by model (top 6 + other). Drag the ' +
-      'body to move the selection every other card reports on, an edge to resize it, or ' +
-      'double-click to reset to the whole span.'),
+  const card = el('div', { class: 'card' }, el('h2', {}, t('timeline.title')),
+    el('p', { class: 'hint' }, t('timeline.hint')),
     reviewScope.el);
 
   if (result.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
 
@@ -157,7 +157,7 @@ function timelineCard(result, ctx, state, app) {
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;
     const len = to - s.from;
-    return `selected ${fmtMD(s.from)} → ${fmtMD(to)} (${fmtDur(len)}) · compared with the ${fmtDur(len)} before`;
+    return t('timeline.caption', { from: fmtMD(s.from), to: fmtMD(to), len: fmtDur(len) });
   };
   const caption = el('p', { class: 'caption' }, captionText({ from: sel.from, to: sel.live ? null : sel.to }));
 
@@ -181,7 +181,7 @@ function timelineCard(result, ctx, state, app) {
   });
   chart.appendChild(caption);
 
-  const table = C.bucketTable(data.series || [], 'Bucket');
+  const table = C.bucketTable(data.series || [], t('timeline.bucket'));
   const wrap = el('div', {});
   C.withTable(wrap, chart, table, 'review-timeline');
   card.appendChild(wrap);
@@ -191,7 +191,7 @@ function timelineCard(result, ctx, state, app) {
 /* -------------------------------------------------------------- card 2: kpis */
 
 function kpisCard(result) {
-  if (result.status === 'rejected') return errCard('KPIs', result);
+  if (result.status === 'rejected') return errCard(t('kpis.title'), result);
   const d = result.value, p = d.prev || {};
 
   const cacheHit = ratio(d.cache_read_tokens, d.cache_read_tokens + d.input_tokens + d.cache_create_tokens);
@@ -235,110 +235,115 @@ function kpisCard(result) {
     const c = costOf(d, src), pc = costOf(p, src);
     const tile = C.kpiTile({
       id: 'kpi-spend-' + src,
-      label: `${src} spend (${KIND_LABEL[kindOf(src)]})`,
+      label: t('kpis.spendTile', { source: src, kind: KIND_LABEL[kindOf(src)] }),
       value: fmtCost(c),
       delta: c.unpriced_events || pc.unpriced_events ? null : delta(c.cost_usd, pc.cost_usd),
       tone: TONE_MORE_IS_WORSE,
     });
     const pr = provenance[src];
     tile.title = [
-      pr ? `Rates as of ${pr.rates_as_of || 'unstated'}. ${pr.note}` : null,
+      pr ? t('kpis.ratesAsOf', { date: pr.rates_as_of || t('kpis.ratesUnstated'), note: pr.note }) : null,
       c.unpriced_events > 0
-        ? `${fmtFull(c.unpriced_events)} ${src} event(s) in this period have no price data — this figure is a lower bound.`
+        ? t('kpis.unpricedTip', { n: fmtFull(c.unpriced_events), source: src })
         : null,
     ].filter(Boolean).join('\n\n');
     return tile;
   });
 
   const perMTile = C.kpiTile({
-    id: 'kpi-perm', label: '$ per 1M output',
+    id: 'kpi-perm', label: t('kpis.perM'),
     value: perM == null ? '—' : fmtUSD(perM),
     delta: perM == null || prevPerM == null ? null : delta(perM, prevPerM),
     tone: TONE_MORE_IS_WORSE,
   });
   perMTile.title = only
-    ? `${only}: metered cost per million output tokens.`
+    ? t('kpis.perM.one', { source: only })
     : oneSource
-      ? `${oneSource} is subscription work: it is billed monthly, not per token, so there is no per-million rate to report. The plan's cost is in real spend.`
-      : 'This scope spans more than one source. A cost-per-token rate is only meaningful within one — filter by source to see it.';
+      ? t('kpis.perM.subscription', { source: oneSource })
+      : t('kpis.perM.many');
 
   // The one figure that is money owed: subscriptions plus metered charges.
   // The notional figure is not a term in it and cannot become one — the API
   // computes it from the billed sources alone.
   const rs = d.real_spend;
   const realTile = C.kpiTile({
-    id: 'kpi-real-spend', label: 'real spend',
+    id: 'kpi-real-spend', label: t('kpis.realSpend'),
     value: fmtRealSpend(rs), delta: null, tone: TONE_MORE_IS_WORSE,
   });
   if (rs) {
     realTile.title = [
-      `${fmtUSD(rs.subscription)} subscription + ${fmtUSD(rs.gateway)} gateway = ${fmtUSD(rs.total)} ${rs.currency}.`,
+      t('kpis.realSpendTip', {
+        subscription: fmtMoney(rs.subscription, rs.currency),
+        gateway: fmtMoney(rs.gateway, rs.currency),
+        total: fmtMoney(rs.total, rs.currency) }),
       d.real_spend_note,
-      rs.complete ? null : 'Incomplete — ' + (rs.missing || []).join('; '),
+      rs.complete ? null : t('spend.incomplete', { missing: (rs.missing || []).join('; ') }),
     ].filter(Boolean).join('\n\n');
   }
 
-  const card = el('div', { class: 'card' }, el('h2', {}, 'KPIs'),
-    el('p', { class: 'hint' }, 'Selection totals, each compared with the equal-length period right before it.'));
+  const card = el('div', { class: 'card' }, el('h2', {}, t('kpis.title')),
+    el('p', { class: 'hint' }, t('kpis.hint')));
   if (d.pricing_note) card.appendChild(el('p', {class:'hint'}, d.pricing_note));
   // Provenance per source, beside the columns it belongs to: which rate table,
   // reviewed when, and which kind of money the figure is. One date printed
   // once for the whole card could only ever be right about one source.
   if ((d.pricing || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, 'Where each cost figure comes from · 计价来源'),
-    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source'), el('th', {}, 'Kind'), el('th', {}, 'Rates as of'), el('th', {}, 'Basis'))),
+    el('summary', {}, t('kpis.provenance')),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.source')), el('th', {}, t('kpis.col.kind')), el('th', {}, t('kpis.col.ratesAsOf')), el('th', {}, t('kpis.col.basis')))),
       el('tbody', {}, d.pricing.map((pr) => el('tr', {},
         el('td', {}, pr.source), el('td', {}, KIND_LABEL[pr.kind] || pr.kind),
         el('td', {}, pr.rates_as_of || '—'), el('td', {}, pr.note)))))));
   if ((d.subscription_spend || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, 'Subscription spend over this period · 订阅实付'),
+    el('summary', {}, t('kpis.subSpend')),
     el('p', {class:'hint'}, d.real_spend_note || ''),
-    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source / plan'), el('th', {}, 'Seats'), el('th', {}, 'Months'), el('th', {}, 'Amount'))),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.sourcePlan')), el('th', {}, t('kpis.col.seats')), el('th', {}, t('kpis.col.months')), el('th', {}, t('kpis.col.amount')))),
       el('tbody', {}, d.subscription_spend.map((sp) => el('tr', {},
         el('td', {}, `${sp.source} / ${sp.plan}`), el('td', {}, fmtFull(sp.seats)),
         el('td', {}, (sp.months || 0).toFixed(2)),
-        el('td', {}, sp.priced ? `${fmtUSD(sp.amount)} ${sp.currency}` : 'no recorded price')))))));
+        // Each plan states its own currency -- store.SubscriptionSpend refuses
+        // to fold two of them into one row, so a row is never mixed.
+        el('td', {}, sp.priced ? fmtMoney(sp.amount, sp.currency) : t('kpis.noRecordedPrice'))))))));
   if ((d.cost_unclassified || []).length) card.appendChild(el('p', {class:'hint'},
-    'Cost from a source this build has no rate basis for, in no total: ' +
-    d.cost_unclassified.map((c) => `${c.source} ${fmtUSD(c.cost_usd)}`).join(', ')));
+    t('kpis.unclassified', { list: d.cost_unclassified.map((c) => `${c.source} ${fmtUSD(c.cost_usd)}`).join(', ') })));
   const coverage = pricingCoverage(d);
   card.appendChild(el('div', {class:'pricing-coverage'},
-    el('p', {}, el('b', {}, `Request pricing coverage · 计价覆盖率: ${coverage.percent}`)),
-    el('p', {class:'hint'}, `${fmtFull(coverage.priced)} priced / ${fmtFull(coverage.total)} collected model requests. ${fmtFull(coverage.unpriced)} unpriced requests still count toward token totals. This measures pricing coverage by request count, not collection completeness or remaining quota. API-equivalent cost is not your subscription bill.`)));
+    el('p', {}, el('b', {}, t('kpis.coverage', { pct: coverage.percent }))),
+    el('p', {class:'hint'}, t('kpis.coverageHint', {
+      priced: fmtFull(coverage.priced), total: fmtFull(coverage.total), unpriced: fmtFull(coverage.unpriced) }))));
   if (d.unpriced_reasons?.length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, `Why ${fmtFull(coverage.unpriced)} requests have no price · 未计价原因`),
-    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Source / model'), el('th', {}, 'Reason'), el('th', {}, 'Requests'))),
-      el('tbody', {}, d.unpriced_reasons.map((r) => el('tr', {}, el('td', {}, `${r.source} / ${r.model || 'unknown'}`), el('td', {}, r.reason), el('td', {}, fmtFull(r.events))))))));
+    el('summary', {}, t('kpis.whyUnpriced', { n: fmtFull(coverage.unpriced) })),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.sourceModel')), el('th', {}, t('kpis.col.reason')), el('th', {}, t('kpis.col.requests')))),
+      el('tbody', {}, d.unpriced_reasons.map((r) => el('tr', {}, el('td', {}, `${r.source} / ${r.model || t('common.unknownTime')}`), el('td', {}, r.reason), el('td', {}, fmtFull(r.events))))))));
   // With the Claude fallback gone, a scope that ran nothing has no spend tile
   // at all. Say so, rather than leaving a KPI row of zeroes that looks like a
   // measurement.
-  if (!sourceTiles.length) card.appendChild(el('p', { class: 'hint' },
-    'No usage in this selection, so there is no spend to attribute to a source.'));
-  if (d.cache_write_known_events > 0) card.appendChild(el('p', {class:'hint'}, `Codex cache writes: ${fmtInt(d.cache_write_tokens)} tokens · breakdown available for ${fmtInt(d.cache_write_known_events)} requests. Included in input totals.`));
+  if (!sourceTiles.length) card.appendChild(el('p', { class: 'hint' }, t('kpis.noSpend')));
+  if (d.cache_write_known_events > 0) card.appendChild(el('p', {class:'hint'},
+    t('kpis.cacheWrites', { tokens: fmtInt(d.cache_write_tokens), n: fmtInt(d.cache_write_known_events) })));
   card.appendChild(el('div', { class: 'kpis' },
-    C.kpiTile({ id: 'kpi-tokens', label: 'tokens', value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
+    C.kpiTile({ id: 'kpi-tokens', label: t('kpis.tile.tokens'), value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
     ...sourceTiles,
     realTile,
-    C.kpiTile({ id: 'kpi-turns', label: 'model requests', value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
-    C.kpiTile({ id: 'kpi-sessions', label: 'sessions', value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
-    C.kpiTile({ id: 'kpi-cachehit', label: 'cache hit', value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
+    C.kpiTile({ id: 'kpi-turns', label: t('kpis.tile.requests'), value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
+    C.kpiTile({ id: 'kpi-sessions', label: t('kpis.tile.sessions'), value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
+    C.kpiTile({ id: 'kpi-cachehit', label: t('kpis.tile.cacheHit'), value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
     perMTile,
-    C.kpiTile({ id: 'kpi-subagent', label: 'subagent share', value: fmtPct(subShare), delta: delta(subShare, prevSubShare), tone: 'neutral' })));
+    C.kpiTile({ id: 'kpi-subagent', label: t('kpis.tile.subagent'), value: fmtPct(subShare), delta: delta(subShare, prevSubShare), tone: 'neutral' })));
   return card;
 }
 
 /* --------------------------------------------------------- card 3: findings */
 
 function findingsCard(result, state, app) {
-  const card = el('div', { class: 'card findings' }, el('h2', {}, 'Findings'));
+  const card = el('div', { class: 'card findings' }, el('h2', {}, t('findings.title')));
   if (result.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
   const data = result.value;
   const list = (Array.isArray(data) ? data : (data.findings || [])).slice(0, 8);
   if (!list.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'Nothing unusual in this period.'));
+    card.appendChild(el('div', { class: 'empty' }, t('findings.empty')));
     return card;
   }
   for (const f of list) {
@@ -351,7 +356,7 @@ function findingsCard(result, state, app) {
         hasScope ? el('a', {
           href: '#', style: 'display:inline-block;margin-top:4px;font-size:12.5px',
           onclick: (e) => { e.preventDefault(); applyFindingScope(state, app, f); },
-        }, 'apply →') : null)));
+        }, t('findings.apply')) : null)));
   }
   return card;
 }
@@ -361,17 +366,21 @@ function findingsCard(result, state, app) {
 function breakdownCard(n, dim, result, state, app, hasTeam) {
   const stateKey = n === 1 ? 'g1' : 'g2';
   const groups = GROUPS.filter((g) => g !== 'team' || hasTeam || g === dim);
-  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': `group by (breakdown ${n})` },
+  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': t('breakdown.groupBy', { n }) },
     groups.map((g) => el('button', {
       type: 'button', 'aria-pressed': String(g === dim),
       onclick: () => app.setState({ ...state, [stateKey]: g }, { push: false }),
     }, DIM_LABEL[g])));
 
-  const card = el('div', { class: 'card' }, el('h2', {}, `Breakdown ${n}`),
-    el('p', { class: 'hint' }, `Grouped by ${DIM_LABEL[dim].toLowerCase()}, 50 rows requested, compared with the period before.`),
+  const card = el('div', { class: 'card' }, el('h2', {}, t('breakdown.title', { n })),
+    // toLowerCase() on the dimension name is English grammar, not a fact about
+    // the word: Chinese has no case, and lower-casing a translated label is at
+    // best a no-op and at worst wrong for a language that does. The dictionary
+    // supplies whatever form the sentence needs.
+    el('p', { class: 'hint' }, t('breakdown.hint', { dim: DIM_LABEL[dim] })),
     seg);
   if (result.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
 
@@ -383,7 +392,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
   const draw = () => {
     body.replaceChildren();
     if (!buckets.length) {
-      body.appendChild(el('div', { class: 'empty' }, 'No usage in this period.'));
+      body.appendChild(el('div', { class: 'empty' }, t('common.noUsagePeriod')));
       return;
     }
     const shown = expanded ? buckets.slice(0, 50) : buckets.slice(0, 12);
@@ -398,7 +407,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     // clipping it; every other surface (sessions table, findings, chips)
     // already uses it for exactly this reason. The chip/filter identity
     // (`r.key`, still `b.key`) and the row's tooltip stay the full raw path.
-    const displayLabel = (b) => (dim === 'project' ? shortProject(b.key) : (b.label || b.key || '(unknown)'));
+    const displayLabel = (b) => (dim === 'project' ? shortProject(b.key) : (b.label || b.key || t('common.unknown')));
     // delta() itself caps its rendered `text` past DELTA_CAP_PCT (a huge
     // percentage against a near-zero baseline carries no information beyond
     // "there was almost nothing before", and forced this exact row's width
@@ -413,8 +422,9 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
         key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
         right: `${fmtFull(b.tokens)} · ${costLine(b)} · ${d.text}`,
         tip: capped
-          ? `<b>${escapeHTML(displayLabel(b))}</b><br>${fmtFull(b.tokens)} tokens (was ${fmtFull(b.prev_tokens || 0)})` +
-            `<br>exact change: ${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%`
+          ? `<b>${escapeHTML(displayLabel(b))}</b><br>` +
+            `${escapeHTML(t('breakdown.tip.tokens', { tokens: fmtFull(b.tokens), prev: fmtFull(b.prev_tokens || 0) }))}<br>` +
+            `${escapeHTML(t('breakdown.tip.exact', { pct: `${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%` }))}`
           : null,
       };
     });
@@ -424,19 +434,19 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     // has to travel with the data, not just the rankedBars view.
     const tableBuckets = dim === 'project' ? buckets.map((b) => ({ ...b, label: shortProject(b.key) })) : buckets;
     const table = C.bucketTable(tableBuckets, DIM_LABEL[dim], [
-      { label: 'Prev tokens', value: (b) => fmtFull(b.prev_tokens || 0) },
+      { label: t('breakdown.prevTokens'), value: (b) => fmtFull(b.prev_tokens || 0) },
       // Previous period, per source, for the same reason the current one is:
       // one "prev cost" column would have re-blended what the row beside it
       // keeps apart.
       ...SOURCES.filter((src) => buckets.some((b) => costOf({ cost: b.prev_cost }, src).events > 0))
-        .map((src) => ({ label: `Prev ${src} $`, value: (b) => fmtSourceCost({ cost: b.prev_cost }, src) })),
+        .map((src) => ({ label: t('breakdown.prevSource', { source: src }), value: (b) => fmtSourceCost({ cost: b.prev_cost }, src) })),
     ]);
     C.withTable(body, chart, table, `review-breakdown-${n}`);
     if (!expanded && buckets.length > 12) {
       body.appendChild(el('a', {
         href: '#', style: 'display:inline-block;margin-top:10px',
         onclick: (e) => { e.preventDefault(); expanded = true; draw(); },
-      }, `show all ${buckets.length}`));
+      }, t('common.showAll', { n: buckets.length })));
     }
   };
   draw();
@@ -447,26 +457,25 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
 /* ------------------------------------------------------- card 5: efficiency */
 
 function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
-  const card = el('div', { class: 'card' }, el('h2', {}, 'Efficiency'),
-    el('p', { class: 'hint' }, 'Token composition, how work was invoked, and cost per million output tokens by model — ' +
-      'each rate within one source, labelled with the kind of money it is.'));
+  const card = el('div', { class: 'card' }, el('h2', {}, t('efficiency.title')),
+    el('p', { class: 'hint' }, t('efficiency.hint')));
   if (summaryResult.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(summaryResult.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(summaryResult.reason) })));
     return card;
   }
   const d = summaryResult.value;
 
   const parts = [
-    { key: 'cache read', tokens: d.cache_read_tokens, color: C.seriesColor(0) },
-    { key: 'cache create', tokens: d.cache_create_tokens, color: C.seriesColor(1) },
-    { key: 'output (non-thinking)', tokens: Math.max(0, (d.output_tokens || 0) - (d.thinking_tokens || 0)), color: C.seriesColor(2) },
-    { key: 'input', tokens: d.input_tokens, color: C.seriesColor(3) },
-    { key: 'thinking', tokens: d.thinking_tokens, color: C.seriesColor(4) },
+    { key: t('part.cacheRead'), tokens: d.cache_read_tokens, color: C.seriesColor(0) },
+    { key: t('part.cacheCreate'), tokens: d.cache_create_tokens, color: C.seriesColor(1) },
+    { key: t('part.output'), tokens: Math.max(0, (d.output_tokens || 0) - (d.thinking_tokens || 0)), color: C.seriesColor(2) },
+    { key: t('part.input'), tokens: d.input_tokens, color: C.seriesColor(3) },
+    { key: t('part.thinking'), tokens: d.thinking_tokens, color: C.seriesColor(4) },
   ];
   const compTotal = parts.reduce((a, p) => a + (p.tokens || 0), 0) || 1;
   const compChart = C.composition(parts);
   const compTable = el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {}, el('th', {}, 'Part'), el('th', { class: 'num' }, 'Tokens'), el('th', { class: 'num' }, 'Share'))),
+    el('thead', {}, el('tr', {}, el('th', {}, t('efficiency.col.part')), el('th', { class: 'num' }, t('efficiency.col.tokens')), el('th', { class: 'num' }, t('efficiency.col.share')))),
     el('tbody', {}, parts.map((p) => el('tr', {},
       el('td', {}, p.key), el('td', { class: 'num' }, fmtFull(p.tokens)),
       el('td', { class: 'num' }, ((p.tokens / compTotal) * 100).toFixed(1) + '%'))))));
@@ -476,20 +485,22 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
 
   const miniList = (title, rows) => el('div', {},
     el('h2', { style: 'margin-top:16px' }, title),
-    rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, 'No data.'));
+    rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, t('efficiency.noData')));
   const effortRows = (d.effort || []).map((e) => ({
-    key: e.key || 'default', value: e.tokens, right: `${fmtFull(e.tokens)} · ${fmtFull(e.events)} turns`,
+    key: e.key || t('efficiency.default'), value: e.tokens,
+    right: t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }),
   }));
   const entryRows = (d.entrypoint || []).map((e) => ({
-    key: e.key || '(unknown)', value: e.tokens, right: `${fmtFull(e.tokens)} · ${fmtFull(e.events)} turns`,
+    key: e.key || t('common.unknown'), value: e.tokens,
+    right: t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }),
   }));
   const mainEvents = Math.max(0, (d.events || 0) - (d.sidechain_events || 0));
   const subRows = [
-    { key: 'main thread', value: mainEvents, right: `${fmtFull(mainEvents)} turns` },
-    { key: 'subagent', value: d.sidechain_events || 0, right: `${fmtFull(d.sidechain_events || 0)} turns` },
+    { key: t('efficiency.mainThread'), value: mainEvents, right: t('efficiency.turnsOnly', { events: fmtFull(mainEvents) }) },
+    { key: t('efficiency.subagent'), value: d.sidechain_events || 0, right: t('efficiency.turnsOnly', { events: fmtFull(d.sidechain_events || 0) }) },
   ];
   card.appendChild(el('div', { class: 'eff-lists' },
-    miniList('Effort', effortRows), miniList('Entrypoint', entryRows), miniList('Turns: main vs. subagent', subRows)));
+    miniList(t('efficiency.effort'), effortRows), miniList(t('efficiency.entrypoint'), entryRows), miniList(t('efficiency.turns'), subRows)));
 
   // $ per 1M output by model: prefer breakdown 2's fuller (limit 50) list
   // when it is already grouped by model, otherwise fall back to the
@@ -498,9 +509,9 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   const source = state.g2 === 'model' && breakdown2Result.status === 'fulfilled'
     ? breakdown2Result.value.buckets
     : (modelResult.status === 'fulfilled' ? modelResult.value.buckets : null);
-  const perMSection = el('div', { style: 'margin-top:16px' }, el('h2', {}, '$ per 1M output tokens, by model'));
+  const perMSection = el('div', { style: 'margin-top:16px' }, el('h2', {}, t('efficiency.perMTitle')));
   if (!source) {
-    perMSection.appendChild(el('div', { class: 'empty' }, 'Query failed: model breakdown unavailable.'));
+    perMSection.appendChild(el('div', { class: 'empty' }, t('efficiency.perMFailed')));
   } else {
     // Same rule as the KPI tile: a cost-per-token rate belongs to one source.
     // A model whose bucket spans sources is left out rather than given a
@@ -516,7 +527,7 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
         return { key: b.key, label: b.label || b.key, value: v, right: `${fmtUSD(v)} ${KIND_LABEL[kindOf(src)]}` };
       })
       .sort((a, c) => c.value - a.value);
-    perMSection.appendChild(rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, 'No priced model with output tokens in this period.'));
+    perMSection.appendChild(rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, t('efficiency.perMEmpty')));
   }
   card.appendChild(perMSection);
   return card;
@@ -525,17 +536,17 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
 /* ------------------------------------------------------- card 6: model mix */
 
 function modelMixCard(result, ctx) {
-  if (result.status === 'rejected') return errCard('Model mix over time', result);
+  if (result.status === 'rejected') return errCard(t('modelMix.title'), result);
   const { gran, sel } = ctx;
   const data = result.value;
   const stackModels = data.stack_models || [];
   const norm = normalizeSeries(data.series, gran, stackModels);
   const inSel = norm.filter((n) => n.ms >= sel.from && n.ms < sel.to);
 
-  const card = el('div', { class: 'card' }, el('h2', {}, 'Model mix over time'),
-    el('p', { class: 'hint' }, 'Tokens per bucket by model, over the selected window (same buckets as the timeline).'));
+  const card = el('div', { class: 'card' }, el('h2', {}, t('modelMix.title')),
+    el('p', { class: 'hint' }, t('modelMix.hint')));
   if (!inSel.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'No usage in this period.'));
+    card.appendChild(el('div', { class: 'empty' }, t('common.noUsagePeriod')));
     return card;
   }
 
@@ -553,7 +564,7 @@ function modelMixCard(result, ctx) {
       t.unpriced_events += b.unpriced_events || 0;
     });
   }
-  const table = C.bucketTable(Object.values(totals), 'Model');
+  const table = C.bucketTable(Object.values(totals), t('modelMix.model'));
   const wrap = el('div', {});
   C.withTable(wrap, chart, table, 'review-model-mix');
   card.appendChild(wrap);
@@ -563,15 +574,15 @@ function modelMixCard(result, ctx) {
 /* -------------------------------------------------------------- card 7: when */
 
 function whenCard(result, ctx) {
-  if (result.status === 'rejected') return errCard('When', result);
+  if (result.status === 'rejected') return errCard(t('when.title'), result);
   const { sel } = ctx;
   const data = result.value;
   const series = data.series || [];
 
-  const card = el('div', { class: 'card' }, el('h2', {}, 'When'),
-    el('p', { class: 'hint' }, 'Hour × weekday, in your local time zone, folded from the selected window.'));
+  const card = el('div', { class: 'card' }, el('h2', {}, t('when.title')),
+    el('p', { class: 'hint' }, t('when.hint')));
   if (!series.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'No usage in this period.'));
+    card.appendChild(el('div', { class: 'empty' }, t('common.noUsagePeriod')));
     return card;
   }
 
@@ -582,7 +593,7 @@ function whenCard(result, ctx) {
     const { grid, events } = foldHourly(series);
     chart = el('div', {}, C.heatmap(grid, events), el('p', { class: 'hint', style: 'margin-top:10px' }, sentence(grid)));
   }
-  const table = C.bucketTable(series, 'Hour');
+  const table = C.bucketTable(series, t('when.hour'));
   const wrap = el('div', {});
   C.withTable(wrap, chart, table, 'review-when');
   card.appendChild(wrap);
@@ -592,10 +603,10 @@ function whenCard(result, ctx) {
 /* -------------------------------------------------------- card 8: wall history */
 
 function wallHistoryCard(result, ctx) {
-  const card = el('div', { class: 'card', id: 'wall-history' }, el('h2', {}, 'Wall history'),
-    el('p', { class: 'hint' }, 'Quota observations for the selected source and accounts. Each Codex window is separate; red marks ≥ 90%.'));
+  const card = el('div', { class: 'card', id: 'wall-history' }, el('h2', {}, t('wallHistory.title')),
+    el('p', { class: 'hint' }, t('wallHistory.hint')));
   if (result.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
   const { sel } = ctx;
@@ -608,7 +619,7 @@ function wallHistoryCard(result, ctx) {
     // the author's hub, and every other hub would show it verbatim and
     // wrongly. No response field gives an actual earliest-snapshot date to
     // derive it from, so say plainly that this period has none.
-    card.appendChild(el('div', { class: 'empty' }, 'No limit snapshots in this period.'));
+    card.appendChild(el('div', { class: 'empty' }, t('wallHistory.empty')));
     return card;
   }
 
@@ -619,12 +630,16 @@ function wallHistoryCard(result, ctx) {
   const chart = C.lines(lineAccounts, { start: sel.from, end: sel.to });
 
   const notes = el('div', { style: 'margin-top:10px' }, accounts.map((a) => el('p', { class: 'hint' },
-    `${a.label}: ${fmtFull(a.critical_episodes || 0)} critical episode${a.critical_episodes === 1 ? '' : 's'} · ` +
-    `${fmtDur((a.critical_seconds || 0) * 1000)} in critical (prev ${fmtDur((a.prev_critical_seconds || 0) * 1000)})`)));
+    t(a.critical_episodes === 1 ? 'wallHistory.note.one' : 'wallHistory.note.other', {
+      label: a.label,
+      n: fmtFull(a.critical_episodes || 0),
+      time: fmtDur((a.critical_seconds || 0) * 1000),
+      prev: fmtDur((a.prev_critical_seconds || 0) * 1000),
+    }))));
 
   const table = el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {}, el('th', {}, 'Subscription'), el('th', { class: 'num' }, 'Critical episodes'),
-      el('th', { class: 'num' }, 'Critical time'), el('th', { class: 'num' }, 'Prev critical time'))),
+    el('thead', {}, el('tr', {}, el('th', {}, t('wallHistory.col.subscription')), el('th', { class: 'num' }, t('wallHistory.col.episodes')),
+      el('th', { class: 'num' }, t('wallHistory.col.time')), el('th', { class: 'num' }, t('wallHistory.col.prev')))),
     el('tbody', {}, accounts.map((a) => el('tr', {},
       el('td', {}, a.label), el('td', { class: 'num' }, fmtFull(a.critical_episodes || 0)),
       el('td', { class: 'num' }, fmtDur((a.critical_seconds || 0) * 1000)),
@@ -675,7 +690,7 @@ function sessionRow(r, state, app) {
 const sessionKind = (r) => r.cost_kind || kindOf(r.source);
 
 function sessionCostText(r) {
-  return sessionKind(r) === 'notional' ? 'subscription' : `${fmtCost(r)} ${KIND_LABEL[sessionKind(r)]}`;
+  return sessionKind(r) === 'notional' ? t('cost.subscription') : `${fmtCost(r)} ${KIND_LABEL[sessionKind(r)]}`;
 }
 
 function sessionCostCell(r) {
@@ -683,10 +698,10 @@ function sessionCostCell(r) {
   if (kind === 'notional') {
     return el('td', {
       class: 'num',
-      title: `${r.source || 'claude'}: billed by the month, not per session — the plan's cost is in real spend`,
-    }, '—', el('span', { class: 'kind' }, ' subscription'));
+      title: t('sessions.subTip', { source: r.source || 'claude' }),
+    }, '—', el('span', { class: 'kind' }, ' ' + t('cost.subscription')));
   }
-  return el('td', { class: 'num', title: `${r.source}: ${KIND_LABEL[kind]} cost` },
+  return el('td', { class: 'num', title: t('sessions.costTip', { source: r.source, kind: KIND_LABEL[kind] }) },
     fmtCost(r), el('span', { class: 'kind' }, ` ${KIND_LABEL[kind]}`));
 }
 
@@ -696,31 +711,31 @@ function sessionMobileCard(r, state, app) {
     el('div', {}, chipLink(state, app, 'project', r.cwd, shortProject(r.cwd)), ' — ', chipLink(state, app, 'login', r.os_user, r.os_user)),
     el('div', {}, `${r.model || '—'} · ${r.endpoint || r.endpoint_id}`),
     el('div', {}, `${new Date(r.started).toLocaleString()} · ${sessionDuration(r)}`),
-    el('div', {}, `${fmtInt(r.tokens)} tokens · ${sessionCostText(r)} · ${fmtFull(r.turns)} turns`),
-    el('div', {}, `cache hit ${fmtPct(r.cache_hit || 0)} · subagent ${fmtPct(r.sidechain_share || 0)}`));
+    el('div', {}, t('sessions.mobile.tokens', { tokens: fmtInt(r.tokens), cost: sessionCostText(r), turns: fmtFull(r.turns) })),
+    el('div', {}, t('sessions.mobile.cache', { hit: fmtPct(r.cache_hit || 0), sub: fmtPct(r.sidechain_share || 0) })));
 }
 
 const SESSION_COLS = [
-  { key: 'started', label: 'Started', sort: 'started' },
-  { key: 'project', label: 'Project' },
-  { key: 'who', label: 'Login@machine' },
-  { key: 'model', label: 'Model' },
-  { key: 'duration', label: 'Duration', sort: 'duration', num: true },
-  { key: 'turns', label: 'Turns', sort: 'turns', num: true },
-  { key: 'tokens', label: 'Tokens', sort: 'tokens', num: true },
+  { key: 'started', label: t('sessions.col.started'), sort: 'started' },
+  { key: 'project', label: t('sessions.col.project') },
+  { key: 'who', label: t('sessions.col.who') },
+  { key: 'model', label: t('sessions.col.model') },
+  { key: 'duration', label: t('sessions.col.duration'), sort: 'duration', num: true },
+  { key: 'turns', label: t('sessions.col.turns'), sort: 'turns', num: true },
+  { key: 'tokens', label: t('sessions.col.tokens'), sort: 'tokens', num: true },
   // Sorting by cost ranks rows that are each a single source's money; it
   // never sums them, and each cell says which kind it is.
-  { key: 'cost', label: '$', sort: 'cost', num: true },
-  { key: 'cachehit', label: 'Cache hit', num: true },
-  { key: 'subagent', label: 'Subagent %', num: true },
+  { key: 'cost', label: t('sessions.col.cost'), sort: 'cost', num: true },
+  { key: 'cachehit', label: t('sessions.col.cacheHit'), num: true },
+  { key: 'subagent', label: t('sessions.col.subagent'), num: true },
 ];
 
 function sessionsCard(result, state, app, sel) {
-  const card = el('div', { class: 'card sessions', id: 'sessions' }, el('h2', {}, 'Sessions'),
-    el('p', { class: 'hint' },
-      `Sorted by ${state.sort}, 50 at a time. Click a row to open its detail; click the project or login to filter instead.`));
+  const sortLabel = (SESSION_COLS.find((c) => c.sort === state.sort) || {}).label || state.sort;
+  const card = el('div', { class: 'card sessions', id: 'sessions' }, el('h2', {}, t('sessions.title')),
+    el('p', { class: 'hint' }, t('sessions.hint', { sort: sortLabel })));
   if (result.status === 'rejected') {
-    card.appendChild(el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
 
@@ -741,7 +756,7 @@ function sessionsCard(result, state, app, sel) {
   const cardsWrap = el('div', { class: 'cards' }, rows.map((r) => sessionMobileCard(r, state, app)));
 
   if (!rows.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'No sessions in this period.'));
+    card.appendChild(el('div', { class: 'empty' }, t('sessions.empty')));
     return card;
   }
 
@@ -762,7 +777,7 @@ function sessionsCard(result, state, app, sel) {
         cardsWrap.replaceChildren(...rows.map((r) => sessionMobileCard(r, state, app)));
         drawMore();
       },
-    }, 'load more'));
+    }, t('common.loadMore')));
   };
   drawMore();
 

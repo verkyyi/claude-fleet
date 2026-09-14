@@ -434,7 +434,9 @@ func (s *Server) handleLiveSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.FilterLive(s.liveStore().Snapshot(), account, source))
+	snap := s.FilterLive(s.liveStore().Snapshot(), account, source)
+	snap.Note = liveNoteText.In(localeOf(r))
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // handleLiveStream pushes snapshots over Server-Sent Events.

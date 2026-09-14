@@ -1,4 +1,6 @@
 <!doctype html>
+<!-- lang="en" is the shell's own default; lib/i18n.js rewrites it to the
+     viewer's locale at module-eval time, before any card renders. -->
 <html lang="en" data-theme="auto">
 <head>
 <meta charset="utf-8">
@@ -24,7 +26,8 @@
   <div class="row1">
     <h1>TokenLedger</h1>
     <span class="spacer"></span>
-    <button id="theme" title="Toggle light / dark">◐</button>
+    <button id="lang" data-i18n-title="app.language" title="Language">中</button>
+    <button id="theme" data-i18n-title="app.theme" title="Toggle light / dark">◐</button>
   </div>
   <div class="progress" id="progress" hidden></div>
 </header>
@@ -61,15 +64,15 @@
          below on purpose: the page is three labelled bands, and the label is
          what says which question the cards under it answer. -->
     <div class="band">
-      <span class="band-title">Usage</span>
-      <span class="band-note">what drove the figures above</span>
+      <span class="band-title" data-i18n="band.usage">Usage</span>
+      <span class="band-note" data-i18n="band.usage.note">what drove the figures above</span>
     </div>
     <section id="analysis"></section>
 
     <details id="ops" class="ops">
       <summary>
-        <span class="ops-title">Operations</span>
-        <span class="ops-note">quota headroom · machines · collection health · sessions</span>
+        <span class="ops-title" data-i18n="ops.title">Operations</span>
+        <span class="ops-note" data-i18n="ops.note">quota headroom · machines · collection health · sessions</span>
       </summary>
       <!-- now.js renders this whole block: live activity, quota gauges,
            collector health and the fleet roster. "status", not "live",

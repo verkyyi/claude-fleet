@@ -6,6 +6,7 @@
 // together and present one plausible number. Pure — no DOM; the rendering
 // lives in ../consumption.js.
 import { activeSources, costOf, kindOf } from './cost.js';
+import { t } from './i18n.js';
 
 // Billed first: it is the money somebody was actually charged, and it is the
 // shorter list. Unknown last, because a source this build has not classified
@@ -30,7 +31,7 @@ export function consumptionRows(buckets) {
       provider: b.key,
       // Empty is the reporting side declaring none. Naming it beats a blank
       // cell the reader has to interpret, and it must not look like a vendor.
-      providerLabel: b.key || 'not declared',
+      providerLabel: b.key || t('rows.notDeclared'),
       sources,
       kind,
       events: b.events || 0,
@@ -100,7 +101,7 @@ export function foldTail(rows) {
   if (!folded.size) return rows;
 
   for (const row of folded.values()) {
-    row.providerLabel = `other ${row.foldedCount} providers · ≤${TAIL_MAX_EVENTS} requests, no charge`;
+    row.providerLabel = t('rows.foldedTail', { n: row.foldedCount, max: TAIL_MAX_EVENTS });
   }
 
   // Walk the kind RUNS rather than the whole list, so each fold row lands at the

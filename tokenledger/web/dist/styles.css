@@ -281,6 +281,12 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
 .scope { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
 .scope .row1 { display: flex; align-items: center; gap: 14px; padding: 11px 20px; flex-wrap: wrap; }
 .scope h1 { font-size: 17px; }
+/* The two "how this page is rendered for me" controls, as one pair at the right
+   of the bar. They sit tighter than the bar's own 14px gap because they belong
+   together, and #lang is width-locked: its label alternates between "EN" and
+   "中", and a button that changes width on click drags the theme toggle with it. */
+.scope #lang, .scope #theme { padding: 5px 0; width: 30px; text-align: center; }
+.scope #lang { margin-right: -8px; }
 .scope .views { display: inline-flex; gap: 2px; background: var(--grid); border-radius: 10px; padding: 3px; }
 .scope .views button { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; }
 .scope .views button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }

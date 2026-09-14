@@ -2,12 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/verkyyi/ccquota/internal/i18n"
 	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/recon"
 	"github.com/verkyyi/ccquota/internal/store"
@@ -28,6 +28,16 @@ type LimitsView struct {
 	AccountUUID string               `json:"account_uuid"`
 	Available   bool                 `json:"available"`
 	Reason      string               `json:"reason,omitempty"`
+
+	// ReasonCode names WHICH reason, so the dashboard's handler can restate it
+	// in the viewer's language without matching on the English sentence.
+	// Unserialised for the same reason store.UnpricedReason.Code is: the wire
+	// contract stays the prose.
+	ReasonCode string `json:"-"`
+	// ReasonEndpoint/ReasonDetail carry an endpoint's OWN reported reason, which
+	// is relayed verbatim: only the frame around it is this hub's wording.
+	ReasonEndpoint string `json:"-"`
+	ReasonDetail   string `json:"-"`
 
 	ObservedAt *time.Time `json:"observed_at,omitempty"`
 	// StaleSeconds is how old the reading is. The UI greys out a reading older
@@ -150,7 +160,8 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 			return nil, err
 		}
 		if source == model.SourceCodex {
-			view.Reason = "Codex local usage reports token consumption only; subscription limits are not collected"
+			view.ReasonCode = ReasonCodexNoLimits
+			view.Reason = LimitsReasonIn(view.ReasonCode, i18n.EN)
 			return view, nil
 		}
 		ep, reason, err := s.Store.LimitsReason(account)
@@ -158,9 +169,14 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 			return nil, err
 		}
 		if reason != "" {
-			view.Reason = fmt.Sprintf("%s reports: %s", ep, reason)
+			// The endpoint's own words, relayed. Only the frame around them is
+			// ours to translate -- rewriting what an agent reported would be
+			// putting words in its mouth.
+			view.ReasonCode, view.ReasonDetail, view.ReasonEndpoint = ReasonEndpointReports, reason, ep
+			view.Reason = endpointReports(ep, reason, i18n.EN)
 		} else {
-			view.Reason = "no endpoint on this subscription has been able to read its account-wide limits"
+			view.ReasonCode = ReasonNoEndpointReading
+			view.Reason = LimitsReasonIn(view.ReasonCode, i18n.EN)
 		}
 		return view, nil
 	}
@@ -273,11 +289,19 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	// Spanning subscriptions returns a different SHAPE — a list, not a total —
 	// because utilization cannot be added up. Callers must handle both.
+	loc := localeOf(r)
 	if isAllAccounts(r.URL.Query().Get("account")) {
 		across, err := s.LimitsForAllSource(source)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		across.Note = acrossNoteText.In(loc)
+		for i := range across.PerAccount {
+			localizeLimits(across.PerAccount[i].Limits, loc)
+		}
+		if across.Worst != nil {
+			localizeLimits(across.Worst.Limits, loc)
 		}
 		writeJSON(w, http.StatusOK, across)
 		return
@@ -291,6 +315,7 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	localizeLimits(view, loc)
 	writeJSON(w, http.StatusOK, view)
 }
 
@@ -363,8 +388,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"since":        f.Start,
 		"until":        f.End,
 		"buckets":      buckets,
-		"disclaimer":   shareDisclaimer,
-		"scope_note":   scopeNote(f.Account),
+		"disclaimer":   shareDisclaimerText.In(localeOf(r)),
+		"scope_note":   scopeNoteIn(f.Account, localeOf(r)),
 	}
 	// Two different absences share the empty provider bucket -- a source that
 	// declares no upstream, and rows that predate the dimension. Naming them
@@ -374,7 +399,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if dim == store.ByProvider {
 		for _, b := range buckets {
 			if b.Key == "" {
-				out["provider_note"] = store.ProviderNote
+				out["provider_note"] = store.ProviderNoteIn(localeOf(r))
 				break
 			}
 		}
@@ -424,7 +449,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		"series":       series,
 		"by_model":     models,
 		"stack_models": append(top, "other"),
-		"scope_note":   scopeNote(f.Account),
+		"scope_note":   scopeNoteIn(f.Account, localeOf(r)),
 	})
 }
 

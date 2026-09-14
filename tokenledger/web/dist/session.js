@@ -27,6 +27,7 @@ import { el } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtCost, fmtFull, fmtPct, fmtDur, shortProject } from './lib/format.js';
 import { KIND_LABEL, kindOf } from './lib/cost.js';
 import * as C from './charts.js';
+import { t } from './lib/i18n.js';
 
 /* ------------------------------------------------------------------ state */
 
@@ -79,7 +80,7 @@ function turnTokens(t) {
 }
 
 function closeButton() {
-  return el('button', { class: 'close', type: 'button', 'aria-label': 'Close', onclick: closeNow }, '×');
+  return el('button', { class: 'close', type: 'button', 'aria-label': t('session.close'), onclick: closeNow }, '×');
 }
 
 function errMsg(err) {
@@ -92,17 +93,15 @@ function headerNodes(s, app) {
   // A session's rollup row is scoped to ONE source, so its cost_usd is a
   // single kind of money -- but which kind changes what the number means, so
   // the tile says so rather than hardcoding "notional" as it used to.
-  const kind = KIND_LABEL[s.cost_kind || kindOf(s.source)] || 'notional';
+  const kind = KIND_LABEL[s.cost_kind || kindOf(s.source)] || KIND_LABEL.notional;
   const spendTile = C.kpiTile({
-    label: `spend (${kind})`,
+    label: t('session.spendTile', { kind }),
     value: fmtCost(s),
   });
   spendTile.title = [
-    kind === 'billed'
-      ? 'Billed per call: this figure is an actual charge, not an API-equivalent estimate.'
-      : 'Notional: what these tokens would have cost at API rates. The subscription is what is actually billed.',
+    kind === KIND_LABEL.billed ? t('session.billedNote') : t('session.notionalNote'),
     s.unpriced_events > 0
-      ? `${fmtFull(s.unpriced_events)} event(s) in this session have no price data — spend is a lower bound.`
+      ? t('session.unpricedNote', { n: fmtFull(s.unpriced_events) })
       : null,
   ].filter(Boolean).join('\n\n');
 
@@ -114,35 +113,35 @@ function headerNodes(s, app) {
       // title lists every model seen (SessionRow.Models, most tokens first),
       // same split review.js's session row already uses for its Model cell.
       el('span', { title: (s.models || []).join(', ') }, s.model || '—'),
-      ` · started ${s.started ? new Date(s.started).toLocaleString() : '—'}`),
+      t('session.started', { when: s.started ? new Date(s.started).toLocaleString() : '—' })),
     el('div', { class: 'kpis' },
-      C.kpiTile({ label: 'duration', value: sessionDuration(s) }),
-      C.kpiTile({ label: 'turns', value: fmtFull(s.turns) }),
-      C.kpiTile({ label: 'tokens', value: fmtInt(s.tokens) }),
+      C.kpiTile({ label: t('kpis.tile.duration'), value: sessionDuration(s) }),
+      C.kpiTile({ label: t('kpis.tile.turns'), value: fmtFull(s.turns) }),
+      C.kpiTile({ label: t('kpis.tile.tokens'), value: fmtInt(s.tokens) }),
       spendTile,
-      C.kpiTile({ label: 'cache hit', value: fmtPct(s.cache_hit || 0) }),
-      C.kpiTile({ label: 'subagent share', value: fmtPct(s.sidechain_share || 0) })),
+      C.kpiTile({ label: t('kpis.tile.cacheHit'), value: fmtPct(s.cache_hit || 0) }),
+      C.kpiTile({ label: t('kpis.tile.subagent'), value: fmtPct(s.sidechain_share || 0) })),
   ];
 }
 
 /* ------------------------------------------------------------------ body */
 
-function turnRow(t) {
+function turnRow(turn) {
   return el('tr', {},
-    el('td', {}, new Date(t.ts).toLocaleTimeString()),
-    el('td', {}, t.model || '—'),
-    el('td', {}, t.effort || '—'),
-    el('td', { class: 'num' }, fmtFull(t.input_tokens || 0)),
-    el('td', { class: 'num' }, fmtFull(t.output_tokens || 0)),
-    el('td', { class: 'num' }, fmtFull(t.cache_read_tokens || 0)),
-    el('td', { class: 'num' }, fmtFull(t.cache_create_tokens || 0)),
-    el('td', { class: 'num' }, fmtFull(t.thinking_tokens || 0)),
+    el('td', {}, new Date(turn.ts).toLocaleTimeString()),
+    el('td', {}, turn.model || '—'),
+    el('td', {}, turn.effort || '—'),
+    el('td', { class: 'num' }, fmtFull(turn.input_tokens || 0)),
+    el('td', { class: 'num' }, fmtFull(turn.output_tokens || 0)),
+    el('td', { class: 'num' }, fmtFull(turn.cache_read_tokens || 0)),
+    el('td', { class: 'num' }, fmtFull(turn.cache_create_tokens || 0)),
+    el('td', { class: 'num' }, fmtFull(turn.thinking_tokens || 0)),
     // Turn.CostUSD is a Go *float64 — null means "no price data for this
     // model/tier at this time", which is a different fact from "$0.00" and
     // must not collapse into it (kpisCard/spendTile above make the same
     // distinction at the session level via unpriced_events).
-    el('td', { class: 'num' }, t.cost_usd == null ? '—' : fmtUSD(t.cost_usd)),
-    el('td', {}, t.is_sidechain ? '✓' : ''));
+    el('td', { class: 'num' }, turn.cost_usd == null ? '—' : fmtUSD(turn.cost_usd)),
+    el('td', {}, turn.is_sidechain ? '✓' : ''));
 }
 
 // FIX (execution review, minor): a large session (one real example ran
@@ -162,10 +161,10 @@ function turnsTable(turns) {
   const tbody = el('tbody', {}, turns.slice(0, TURN_PAGE).map(turnRow));
   const table = el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
-      el('th', {}, 'Time'), el('th', {}, 'Model'), el('th', {}, 'Effort'),
-      el('th', { class: 'num' }, 'Input'), el('th', { class: 'num' }, 'Output'),
-      el('th', { class: 'num' }, 'Cache read'), el('th', { class: 'num' }, 'Cache create'),
-      el('th', { class: 'num' }, 'Thinking'), el('th', { class: 'num' }, '$'), el('th', {}, 'Sub'))),
+      el('th', {}, t('session.col.time')), el('th', {}, t('session.col.model')), el('th', {}, t('session.col.effort')),
+      el('th', { class: 'num' }, t('session.col.input')), el('th', { class: 'num' }, t('session.col.output')),
+      el('th', { class: 'num' }, t('session.col.cacheRead')), el('th', { class: 'num' }, t('session.col.cacheCreate')),
+      el('th', { class: 'num' }, t('session.col.thinking')), el('th', { class: 'num' }, t('session.col.cost')), el('th', {}, t('session.col.sub')))),
     tbody));
 
   const moreWrap = el('div', {});
@@ -182,7 +181,7 @@ function turnsTable(turns) {
         shown += next.length;
         drawMore();
       },
-    }, `load more (${turns.length - shown} left)`));
+    }, t('session.loadMoreLeft', { n: turns.length - shown })));
   };
   drawMore();
 
@@ -191,19 +190,24 @@ function turnsTable(turns) {
 
 function bodyNode(turns, pruned) {
   const wrap = el('div', {});
-  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, `Model requests (${fmtFull(turns.length)})`));
+  wrap.appendChild(el('h2', { style: 'margin-top:20px' }, t('session.turnsTitle', { n: fmtFull(turns.length) })));
   const details = turns.find(t => t.details)?.details;
   if (details) {
-    wrap.appendChild(el('p', {class:'hint'}, `${details.model_provider || 'provider unknown'} · client ${details.client_version || 'unknown'} · ${details.billing_mode || 'billing unknown'} · account: ${(details.account_basis || 'unassigned').replaceAll('_',' ')}`));
+    wrap.appendChild(el('p', {class:'hint'}, t('session.providerLine', {
+      provider: details.model_provider || t('session.providerUnknown'),
+      client: details.client_version || t('common.unknownTime'),
+      billing: details.billing_mode || t('session.billingUnknown'),
+      basis: (details.account_basis || t('session.unassigned')).replaceAll('_', ' '),
+    })));
     const bases = [...new Set(turns.map(t => t.details?.price_basis).filter(Boolean))];
     wrap.appendChild(el('p', {class:'hint'}, bases.join(' · ')));
   }
   if (pruned) {
-    wrap.appendChild(el('div', { class: 'empty' }, 'Turns older than the retention window are gone.'));
+    wrap.appendChild(el('div', { class: 'empty' }, t('session.retentionPruned')));
     return wrap;
   }
   if (!turns.length) {
-    wrap.appendChild(el('div', { class: 'empty' }, 'No turns recorded.'));
+    wrap.appendChild(el('div', { class: 'empty' }, t('session.noTurns')));
     return wrap;
   }
 
@@ -214,8 +218,15 @@ function bodyNode(turns, pruned) {
   wrap.appendChild(C.turnBars(chartTurns));
 
   wrap.appendChild(turnsTable(turns));
-  if (details) wrap.appendChild(el('details', {}, el('summary', {}, 'Request provenance and cache writes'),
-    el('div', {}, turns.slice(-100).map(t => el('p', {class:'hint'}, `${t.request_id || 'legacy request'} · turn ${t.details?.turn_id || 'unknown'} · root ${t.details?.root_turn_id || 'unknown'} · cache writes ${t.details?.cache_write_input_tokens == null ? 'unknown' : fmtInt(t.details.cache_write_input_tokens)} · tier ${t.details?.service_tier || 'not recorded'}`)))));
+  // `turn`, not `t` — `t` is the translator on this page now.
+  if (details) wrap.appendChild(el('details', {}, el('summary', {}, t('session.provenance')),
+    el('div', {}, turns.slice(-100).map((turn) => el('p', {class:'hint'}, t('session.turnLine', {
+      request: turn.request_id || t('session.legacyRequest'),
+      turn: turn.details?.turn_id || t('common.unknownTime'),
+      root: turn.details?.root_turn_id || t('common.unknownTime'),
+      writes: turn.details?.cache_write_input_tokens == null ? t('common.unknownTime') : fmtInt(turn.details.cache_write_input_tokens),
+      tier: turn.details?.service_tier || t('session.notRecorded'),
+    }))))));
   return wrap;
 }
 
@@ -227,7 +238,7 @@ function refocusClose(root) {
 }
 
 function renderSkeleton(root) {
-  root.replaceChildren(closeButton(), el('div', { class: 'empty' }, 'Loading…'));
+  root.replaceChildren(closeButton(), el('div', { class: 'empty' }, t('session.loading')));
 }
 
 // FIX (review, Finding 1): the previous version checked
@@ -245,7 +256,7 @@ function renderSkeleton(root) {
 // left alone.
 function renderError(root, err) {
   const hadFocus = root.contains(document.activeElement);
-  root.replaceChildren(closeButton(), el('div', { class: 'empty' }, 'Query failed: ' + errMsg(err)));
+  root.replaceChildren(closeButton(), el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(err) })));
   if (hadFocus) refocusClose(root);
 }
 
@@ -259,7 +270,7 @@ function renderLoaded(root, data, app) {
 export function renderDetail(root, state, app) {
   curState = state;
   curApp = app;
-  root.setAttribute('aria-label', 'Session detail');
+  root.setAttribute('aria-label', t('session.detail'));
   bindEscOnce(root);
 
   const justOpened = root.hidden;

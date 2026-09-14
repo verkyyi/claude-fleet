@@ -9,17 +9,18 @@ import { fmtInt, fmtUSD, fmtCost } from './lib/format.js';
 import { consumptionRows, foldTail, sortRows } from './lib/rows.js';
 import { CSORTS } from './lib/state.js';
 import { costOf, KIND_LABEL } from './lib/cost.js';
+import { t } from './lib/i18n.js';
 
-const SORT_LABEL = { cost: 'cost', tokens: 'tokens', events: 'requests' };
+const SORT_LABEL = { cost: t('sort.cost'), tokens: t('sort.tokens'), events: t('sort.events') };
 
 // What the row's kind means to somebody reading a bill, rather than what the
 // cost column calls it internally.
-const BILLING = { billed: 'metered', notional: 'subscription', unknown: 'unclassified' };
+const BILLING = { billed: t('billing.billed'), notional: t('billing.notional'), unknown: t('billing.unknown') };
 
 function sortControl(state, app) {
   const seg = el('div', { class: 'seg' });
   for (const k of CSORTS) {
-    const b = el('button', { type: 'button' }, 'by ' + SORT_LABEL[k]);
+    const b = el('button', { type: 'button' }, t('consumption.sortBy', { what: SORT_LABEL[k] }));
     b.setAttribute('aria-pressed', String(state.csort === k));
     b.addEventListener('click', () => app.setState({ ...state, csort: k }));
     seg.appendChild(b);
@@ -34,7 +35,7 @@ async function expand(tr, row, state, app, range) {
   tr.dataset.loaded = '1';
   tr.hidden = false;
   const cell = $('td', tr);
-  cell.replaceChildren(el('span', { class: 'hint' }, 'loading…'));
+  cell.replaceChildren(el('span', { class: 'hint' }, t('common.loading')));
   try {
     const qs = new URLSearchParams({
       account: state.sub || 'all', by: 'model', limit: '50',
@@ -43,8 +44,8 @@ async function expand(tr, row, state, app, range) {
     });
     const d = await app.api('/v1/usage?' + qs.toString());
     const models = (d.buckets || []).filter((b) => b.key);
-    if (!models.length) { cell.replaceChildren(el('span', { class: 'hint' }, 'no models in this period')); return; }
-    const t = el('table', { class: 'sub' },
+    if (!models.length) { cell.replaceChildren(el('span', { class: 'hint' }, t('consumption.noModels'))); return; }
+    const modelsTable = el('table', { class: 'sub' },
       el('tbody', {}, models.map((b) => {
         const c = costOf(b, row.sources[0] || 'gateway');
         return el('tr', {},
@@ -52,16 +53,16 @@ async function expand(tr, row, state, app, range) {
           el('td', { class: 'num' }, b.tokens ? fmtInt(b.tokens) : '—'),
           el('td', { class: 'num' }, fmtCost(c)));
       })));
-    cell.replaceChildren(t);
+    cell.replaceChildren(modelsTable);
   } catch (err) {
-    cell.replaceChildren(el('span', { class: 'hint' }, 'could not load models: ' + err.message));
+    cell.replaceChildren(el('span', { class: 'hint' }, t('consumption.modelsFailed', { error: err.message })));
   }
 }
 
 export function renderConsumption(root, result, state, app, range) {
   if (!result || result.status !== 'fulfilled') {
-    root.replaceChildren(el('div', { class: 'card' }, el('h2', {}, 'Consumption'),
-      el('p', { class: 'empty' }, result ? 'Could not load: ' + (result.reason && result.reason.message) : '')));
+    root.replaceChildren(el('div', { class: 'card' }, el('h2', {}, t('consumption.title')),
+      el('p', { class: 'empty' }, result ? t('consumption.couldNotLoad', { error: (result.reason && result.reason.message) }) : '')));
     return;
   }
   const d = result.value;
@@ -69,15 +70,12 @@ export function renderConsumption(root, result, state, app, range) {
   // rather than being ordered among the rows it replaces.
   const rows = foldTail(sortRows(consumptionRows(d.buckets), state.csort));
   const card = el('div', { class: 'card', id: 'consumption-table' },
-    el('h2', {}, 'Consumption'),
-    el('p', { class: 'hint' },
-      'Every model that ran, by the upstream that served it. Subscription rows show no amount: ' +
-      'a plan bills monthly, not per request, so its cost belongs to the plan rather than to any ' +
-      'row here. Their usage is the token count.'),
+    el('h2', {}, t('consumption.title')),
+    el('p', { class: 'hint' }, t('consumption.hint')),
     sortControl(state, app));
 
   if (!rows.length) {
-    card.appendChild(el('p', { class: 'empty' }, 'No usage in this selection.'));
+    card.appendChild(el('p', { class: 'empty' }, t('consumption.empty')));
     root.replaceChildren(card);
     return;
   }
@@ -101,7 +99,7 @@ export function renderConsumption(root, result, state, app, range) {
     const detail = el('tr', { class: 'models', hidden: true }, el('td', { colspan: '5' }));
     const tr = el('tr', { class: 'expandable' },
       el('td', {}, el('button', { type: 'button', class: 'link' }, r.providerLabel)),
-      el('td', { title: `cost kind: ${KIND_LABEL[r.kind] || r.kind}` }, BILLING[r.kind]),
+      el('td', { title: t('consumption.costKindTip', { kind: KIND_LABEL[r.kind] || r.kind }) }, BILLING[r.kind]),
       el('td', { class: 'num' }, fmtInt(r.events)),
       el('td', { class: 'num' }, r.tokens == null ? '—' : fmtInt(r.tokens)),
       // An amount here would be an API-equivalent estimate for work billed by
@@ -116,9 +114,9 @@ export function renderConsumption(root, result, state, app, range) {
   card.appendChild(el('div', { class: 'scroll' },
     el('table', {},
       el('thead', {}, el('tr', {},
-        el('th', {}, 'Provider'), el('th', {}, 'Billing'),
-        el('th', { class: 'num' }, 'Requests'), el('th', { class: 'num' }, 'Tokens'),
-        el('th', { class: 'num' }, 'Cost'))),
+        el('th', {}, t('consumption.col.provider')), el('th', {}, t('consumption.col.billing')),
+        el('th', { class: 'num' }, t('consumption.col.requests')), el('th', { class: 'num' }, t('consumption.col.tokens')),
+        el('th', { class: 'num' }, t('consumption.col.cost')))),
       body)));
 
   // Two different absences share the blank row, and neither is a vendor.

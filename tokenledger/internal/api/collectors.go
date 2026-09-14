@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/ccquota/internal/i18n"
 	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/recon"
 	"github.com/verkyyi/ccquota/internal/store"
@@ -37,7 +38,8 @@ func (s *Server) LimitsForSource(account, source string) (*LimitsView, error) {
 			return nil, err
 		}
 		if actual != source {
-			return &LimitsView{AccountUUID: account, Source: source, Reason: "account does not belong to the selected source"}, nil
+			return &LimitsView{AccountUUID: account, Source: source,
+				ReasonCode: ReasonWrongSource, Reason: LimitsReasonIn(ReasonWrongSource, i18n.EN)}, nil
 		}
 	}
 	return s.LimitsFor(account)
@@ -46,7 +48,8 @@ func (s *Server) LimitsForSource(account, source string) (*LimitsView, error) {
 func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
 	v := &LimitsView{Source: model.SourceCodex, AccountUUID: account, Disclaimer: shareDisclaimer}
 	if account == "codex:local" {
-		v.Reason = "Historical or unassigned Codex usage; select a linked Codex account to view its quota"
+		v.ReasonCode = ReasonCodexUnassigned
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
 		return v, nil
 	}
 	q, err := s.Store.LatestQuota(account)
@@ -54,7 +57,8 @@ func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
 		return nil, err
 	}
 	if q == nil {
-		v.Reason = "No verified Codex quota reading; local usage history is retained separately"
+		v.ReasonCode = ReasonCodexUnverified
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
 		cs, err := s.Store.Collectors(account, model.SourceCodex)
 		if err != nil {
 			return nil, err
@@ -70,7 +74,8 @@ func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
 	v.StaleSeconds = int64(time.Since(q.ObservedAt).Seconds())
 	v.Plan = q.Plan
 	if v.StaleSeconds > 600 {
-		v.Reason = "Codex quota reading is stale; waiting for a fresh observation"
+		v.ReasonCode = ReasonCodexStale
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
 		return v, nil
 	}
 	v.Credits = q.Credits
@@ -94,7 +99,8 @@ func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
 	}
 	v.Available = len(v.Windows) > 0 || len(v.Credits) > 0 || q.Blocked
 	if !v.Available {
-		v.Reason = "Codex quota window reset; waiting for a fresh reading"
+		v.ReasonCode = ReasonCodexWindowReset
+		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
 	}
 	return v, nil
 }
@@ -166,6 +172,7 @@ func (s *Server) handleAccountUsage(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 500, err.Error())
 		return
 	}
+	result["note"] = accountUsageNote.In(localeOf(r))
 	writeJSON(w, 200, result)
 }
 
@@ -187,5 +194,5 @@ func (s *Server) AccountUsageView(account, source string) (map[string]any, error
 		}
 		out = append(out, observation{AccountUsage: u, LocalTokens: sum.Tokens, LocalRequests: sum.Events})
 	}
-	return map[string]any{"observations": out, "comparable": false, "note": "Service totals and local attributed details overlap and must not be added. Historical unassigned sessions are excluded from the local account figure. Date boundaries, coverage and update delay are not yet comparable; a difference does not prove missing or cloud usage."}, nil
+	return map[string]any{"observations": out, "comparable": false, "note": accountUsageNoteEN}, nil
 }

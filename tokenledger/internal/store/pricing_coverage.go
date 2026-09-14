@@ -12,6 +12,16 @@ type UnpricedReason struct {
 	Model  string `json:"model"`
 	Reason string `json:"reason"`
 	Events int64  `json:"events"`
+
+	// Code names WHICH reason this is, so a surface can restate it in another
+	// language without matching on the English sentence. Unserialised: the
+	// wire contract is still the prose, and a second field saying the same
+	// thing in two forms is one more thing to keep in step.
+	//
+	// It is NOT the price_basis it was derived from. That string is written at
+	// ingest and is an audit record of which rate priced the event; these codes
+	// are a presentation concern and several basis strings map onto one.
+	Code string `json:"-"`
 }
 
 // SummaryWithPricing reads totals and their explanation in one SQLite
@@ -49,26 +59,27 @@ func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error)
 		}
 		switch basis {
 		case "unpriced: cache-write breakdown unavailable":
-			r.Reason = "Cache-write token breakdown unavailable"
+			r.Code = UnpricedCacheWriteUnavailable
 		case "unpriced: unsupported cache-write breakdown":
-			r.Reason = "Cache-write token breakdown unsupported"
+			r.Code = UnpricedCacheWriteUnsupported
 		case "unpriced: unknown provider or model":
-			r.Reason = "Verified provider/model price unavailable"
+			r.Code = UnpricedUnknownModel
 		case "unpriced: legacy Fast rate not verified":
-			r.Reason = "Legacy Fast price not verified"
+			r.Code = UnpricedLegacyFast
 		case "unpriced: unsupported service tier", "unpriced: unknown service tier":
-			r.Reason = "Service-tier price unavailable"
+			r.Code = UnpricedServiceTier
 		case "unpriced: no gateway rate configured":
-			r.Reason = "No gateway rate configured for this model"
+			r.Code = UnpricedNoGatewayRate
 		case "unpriced: gateway rates cover input and output only":
-			r.Reason = "Gateway cache-token price unavailable"
+			r.Code = UnpricedGatewayCacheToken
 		case "unpriced: no usable CNY/USD rate":
-			r.Reason = "Gateway currency conversion unavailable"
+			r.Code = UnpricedGatewayFX
 		case "unpriced: implausible token counts":
-			r.Reason = "Implausible token counts"
+			r.Code = UnpricedImplausibleTokens
 		default:
-			r.Reason = "Price data unavailable"
+			r.Code = UnpricedNoPriceData
 		}
+		r.Reason = UnpricedReasonIn(r.Code, "en")
 		out = append(out, r)
 		known[r.Source+"\x00"+r.Model] += r.Events
 	}
@@ -96,7 +107,8 @@ func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error)
 			return nil, nil, fmt.Errorf("pricing detail count exceeds rollup")
 		}
 		if r.Events > 0 {
-			r.Reason = "Historical request details no longer retained"
+			r.Code = UnpricedPruned
+			r.Reason = UnpricedReasonIn(r.Code, "en")
 			out = append(out, r)
 		}
 	}

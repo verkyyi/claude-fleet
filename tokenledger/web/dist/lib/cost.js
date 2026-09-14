@@ -18,14 +18,18 @@
 // Each entry is already shaped like the object fmtCost (lib/format.js) reads —
 // cost_usd, unpriced_events, events — so a per-source cell is fmtCost(entry).
 
-import { fmtUSD, fmtCost } from './format.js';
+import { fmtCost, fmtMoney } from './format.js';
+import { t } from './i18n.js';
 
 /** Display order. Sources absent from a scope still get a column, so a table's
  *  columns do not move when one source goes quiet; the entry's `events` is
  *  what says whether $0.00 is a figure or an absence. */
 export const SOURCES = ['claude', 'codex', 'gateway', 'vendor_bill', 'voice'];
 
-export const KIND_LABEL = { notional: 'notional', billed: 'billed', unknown: 'unclassified' };
+// Built at module-eval time, which is also when the locale is settled: a
+// viewer's language cannot change without a reload (lib/i18n.js's chooseLocale
+// says why), so a const map here can never go stale mid-page.
+export const KIND_LABEL = { notional: t('kind.notional'), billed: t('kind.billed'), unknown: t('kind.unknown') };
 
 /** kindOf mirrors model.CostKind in Go: which kind of money a source's figure
  *  is. Kept here as well as arriving on every entry, so a column HEADER can be
@@ -88,14 +92,14 @@ export const fmtSourceCost = (b, source) => {
  *  source named, never a sum. "no cost" when nothing ran. */
 export const costLine = (b) => {
   const active = activeSources(b);
-  if (!active.length) return 'no cost';
+  if (!active.length) return t('cost.noCost');
   // A notional source is named without a figure rather than dropped: "this ran
   // on a subscription" is the answer, and omitting it would read as "nothing
   // ran here".
   return active.map((s) => {
     const c = costOf(b, s);
     return c.kind === 'notional'
-      ? `${s} — subscription`
+      ? t('cost.sourceSubscription', { source: s })
       : `${s} ${fmtSourceCost(b, s)} ${KIND_LABEL[c.kind]}`;
   }).join(' · ');
 };
@@ -121,5 +125,8 @@ export function addCost(into, from) {
  *  in the direction nobody checks. */
 export function fmtRealSpend(rs) {
   if (!rs) return '—';
-  return fmtUSD(rs.total) + (rs.complete ? '' : ' ≥');
+  // rs.currency, not USD: RealSpend states the currency it is in, and a hub
+  // whose plans are priced in another one has been printing a dollar sign over
+  // it. Unconverted — see fmtMoney.
+  return fmtMoney(rs.total, rs.currency) + (rs.complete ? '' : ' ≥');
 }

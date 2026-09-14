@@ -31,6 +31,7 @@ import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
+import { t } from './lib/i18n.js';
 
 const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
 /** seriesColor assigns hues in FIXED order and never cycles. A ninth series
@@ -41,11 +42,12 @@ const OTHER_COLOR = 'var(--ink-3)';
 
 /** Utilization -> status. Four named bands so the label, not the hue, is what
  *  carries the meaning. */
+// `key` drives the CSS class and never changes; `label` is what a reader sees.
 const band = (pct) =>
-  pct >= 90 ? { key: 'critical', label: 'critical' }
-  : pct >= 75 ? { key: 'serious', label: 'high' }
-  : pct >= 50 ? { key: 'warning', label: 'moderate' }
-  : { key: 'good', label: 'healthy' };
+  pct >= 90 ? { key: 'critical', label: t('gauge.critical') }
+  : pct >= 75 ? { key: 'serious', label: t('gauge.high') }
+  : pct >= 50 ? { key: 'warning', label: t('gauge.moderate') }
+  : { key: 'good', label: t('gauge.healthy') };
 
 /* ------------------------------------------------------------- ranked bars */
 
@@ -112,14 +114,14 @@ export function bucketTable(buckets, keyLabel, extraCols = []) {
   return el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, keyLabel),
-      el('th', { class: 'num' }, 'Turns'),
-      el('th', { class: 'num' }, 'Tokens'),
-      ...sources.map((s) => el('th', { class: 'num', title: `${s}: ${KIND_LABEL[kindOf(s)]} cost — never added to another source's` },
+      el('th', { class: 'num' }, t('chart.turns')),
+      el('th', { class: 'num' }, t('chart.tokens')),
+      ...sources.map((s) => el('th', { class: 'num', title: t('chart.sourceCostTip', { source: s, kind: KIND_LABEL[kindOf(s)] }) },
         `${s} $`, el('span', { class: 'kind' }, ` ${KIND_LABEL[kindOf(s)]}`))),
-      el('th', { class: 'num' }, 'Unpriced'),
+      el('th', { class: 'num' }, t('chart.unpriced')),
       ...extraCols.map((c) => el('th', { class: 'num' }, c.label)))),
     el('tbody', {}, buckets.map((b) => el('tr', {},
-      el('td', { title: b.key }, b.label || b.key || '(unknown)'),
+      el('td', { title: b.key }, b.label || b.key || t('common.unknown')),
       el('td', { class: 'num' }, fmtFull(b.events)),
       el('td', { class: 'num' }, fmtFull(b.tokens)),
       ...sources.map((s) => el('td', { class: 'num' }, fmtSourceCost(b, s))),
@@ -136,7 +138,7 @@ export function withTable(card, chartEl, tableEl, cardId) {
   chartEl.hidden = showingTable;
   tableEl.hidden = !showingTable;
   const btn = el('button', {
-    class: 'tbl', type: 'button', title: 'Toggle table view',
+    class: 'tbl', type: 'button', title: t('chart.toggleTable'),
     onclick: () => {
       showingTable = !showingTable;
       chartEl.hidden = showingTable;
@@ -157,10 +159,12 @@ export function gauge(name, w) {
 
   let note = '';
   if (burn.exhausted_at) {
-    note = `At the current rate (${burn.percent_per_hour.toFixed(1)}%/h) this window fills around ` +
-           new Date(burn.exhausted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.';
+    note = t('gauge.fillsAround', {
+      rate: burn.percent_per_hour.toFixed(1),
+      time: new Date(burn.exhausted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    });
   } else if (burn.percent_per_hour > 0) {
-    note = `Burning ${burn.percent_per_hour.toFixed(1)}%/h — it resets before it fills.`;
+    note = t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) });
   }
 
   return el('div', { class: 'gauge' },
@@ -245,13 +249,14 @@ export function bars(series, granularity) {
   series.forEach((s, i) => {
     const h = Math.max(s.tokens > 0 ? 1.5 : 0, (s.tokens / max) * ih);
     const x = PAD.l + i * (iw / n);
-    const label = `<b>${escapeHTML(s.key)}</b><br>${fmtFull(s.tokens)} tokens<br>` +
-      `${fmtFull(s.events)} turns · ${escapeHTML(costLine(s))}`;
+    const label = `<b>${escapeHTML(s.key)}</b><br>` +
+      `${escapeHTML(t('chart.tip.tokens', { tokens: fmtFull(s.tokens) }))}<br>` +
+      `${escapeHTML(t('chart.tip.turnsCost', { turns: fmtFull(s.events), cost: costLine(s) }))}`;
     g.appendChild(el('rect', {
       x, y: y(s.tokens), width: bw, height: h, rx: 2, fill: 'var(--s1)',
       onmousemove: (e) => showTip(e, label),
       onmouseleave: hideTip,
-    }, el('title', {}, `${s.key}: ${fmtFull(s.tokens)} tokens`)));
+    }, el('title', {}, t('chart.tip.barTitle', { key: s.key, tokens: fmtFull(s.tokens) }))));
   });
 
   // Selective labels: first, last and the peak — never a number on every bar.
@@ -266,7 +271,7 @@ export function bars(series, granularity) {
   if (n > 4 && pi > 1 && pi < n - 2) g.appendChild(labelAt(peak, pi, 'middle'));
 
   return el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H,
-    role: 'img', 'aria-label': `Tokens per ${granularity}, peak ${fmtInt(max)}` }, g);
+    role: 'img', 'aria-label': t('chart.ariaTokensPer', { granularity, peak: fmtInt(max) }) }, g);
 }
 
 /* --------------------------------------------------------------- timeline */
@@ -345,7 +350,7 @@ export function timeline(series, opts) {
   built.forEach(({ ms, parts, other, total, s }) => {
     const x = xOf(ms);
     let base = 0;
-    const label = `<b>${escapeHTML(String(s.key))}</b><br>${fmtFull(total)} tokens`;
+    const label = `<b>${escapeHTML(String(s.key))}</b><br>${escapeHTML(t('chart.tip.tokens', { tokens: fmtFull(total) }))}`;
     const segs = other ? [...parts, other] : parts;
     segs.forEach((v, i) => {
       if (!v) return;
@@ -375,7 +380,7 @@ export function timeline(series, opts) {
     const hasOther = built.some((b) => b.other > 0);
     const legend = el('div', { class: 'legend' },
       names.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
-      hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), 'Other') : null);
+      hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), t('chart.other')) : null);
     container.appendChild(legend);
   }
 
@@ -519,7 +524,7 @@ export function stackedArea(series, stackNames) {
 
 /* ------------------------------------------------------------------ heatmap */
 
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DOW = [0, 1, 2, 3, 4, 5, 6].map((d) => t('day.' + d));
 
 /** heatmap renders lib/fold.js's 7x24 `grid` (tokens) / `events` (turns) as a
  *  weekday × hour grid, cell intensity `8 + 92 * tokens/max`. */
@@ -531,10 +536,13 @@ export function heatmap(grid, events) {
     row.forEach((tokens, hour) => {
       const pct = 8 + 92 * (tokens / max);
       const turns = (events && events[dow] && events[dow][hour]) || 0;
-      const label = `<b>${DOW[dow]} ${String(hour).padStart(2, '0')}:00</b><br>${fmtFull(tokens)} tokens · ${fmtFull(turns)} turns`;
+      const label = `<b>${escapeHTML(DOW[dow])} ${String(hour).padStart(2, '0')}:00</b><br>`
+        + escapeHTML(t('chart.tip.tokensTurns', { tokens: fmtFull(tokens), turns: fmtFull(turns) }));
       cells.push(el('i', {
         style: tokens > 0 ? `background:color-mix(in srgb, var(--s1) ${pct}%, var(--grid))` : null,
-        title: `${DOW[dow]} ${String(hour).padStart(2, '0')}:00 — ${fmtFull(tokens)} tokens, ${fmtFull(turns)} turns`,
+        title: t('chart.tip.heatCell', {
+          day: DOW[dow], hour: String(hour).padStart(2, '0') + ':00',
+          tokens: fmtFull(tokens), turns: fmtFull(turns) }),
         onmousemove: tokens > 0 ? (e) => showTip(e, label) : null,
         onmouseleave: tokens > 0 ? hideTip : null,
       }));
@@ -601,7 +609,8 @@ export function composition(parts) {
   const total = parts.reduce((a, p) => a + (p.tokens || 0), 0) || 1;
   const segs = parts.filter((p) => p.tokens > 0).map((p) => {
     const pct = (p.tokens / total) * 100;
-    const label = `<b>${escapeHTML(p.key)}</b><br>${fmtFull(p.tokens)} tokens · ${pct.toFixed(1)}%`;
+    const label = `<b>${escapeHTML(p.key)}</b><br>`
+      + escapeHTML(t('chart.tip.tokensPct', { tokens: fmtFull(p.tokens), pct: pct.toFixed(1) + '%' }));
     return el('div', {
       style: `flex:${Math.max(0.6, pct)} 0 0;background:${p.color}`,
       onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
@@ -626,31 +635,34 @@ export function composition(parts) {
 export function turnBars(turns) {
   const W = 900, H = 160, PAD = { t: 10, r: 8, b: 8, l: 8 };
   const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
-  const max = Math.max(1, ...turns.map((t) => t.tokens || 0));
+  const max = Math.max(1, ...turns.map((turn) => turn.tokens || 0));
   const n = Math.max(1, turns.length);
   const bw = Math.max(1, iw / n - 2);
   const models = [];
-  for (const t of turns) if (t.model && !models.includes(t.model)) models.push(t.model);
-  const anySidechain = turns.some((t) => t.sidechain);
+  for (const turn of turns) if (turn.model && !models.includes(turn.model)) models.push(turn.model);
+  const anySidechain = turns.some((turn) => turn.sidechain);
 
   const defs = el('defs', {}, el('pattern',
     { id: 'ccq-sidechain-hatch', width: '4', height: '4', patternTransform: 'rotate(45)', patternUnits: 'userSpaceOnUse' },
     el('rect', { width: '4', height: '4', fill: 'transparent' }),
     el('line', { x1: '0', y1: '0', x2: '0', y2: '4', stroke: 'var(--surface)', 'stroke-width': '2', 'stroke-opacity': '.6' })));
   const g = el('g', {}, defs);
-  turns.forEach((t, i) => {
-    const h = Math.max(1, ((t.tokens || 0) / max) * ih);
+  turns.forEach((turn, i) => {
+    const h = Math.max(1, ((turn.tokens || 0) / max) * ih);
     const x = PAD.l + i * (iw / n);
     const yTop = PAD.t + ih - h;
-    const head = t.ts ? new Date(t.ts).toLocaleTimeString() : (t.model || '?');
-    const meta = t.model ? `${escapeHTML(t.model)}${t.effort ? ' · ' + escapeHTML(t.effort) : ''}${t.sidechain ? ' · subagent' : ''}` : '';
+    const head = turn.ts ? new Date(turn.ts).toLocaleTimeString() : (turn.model || '?');
+    const meta = turn.model
+      ? `${escapeHTML(turn.model)}${turn.effort ? ' · ' + escapeHTML(turn.effort) : ''}${turn.sidechain ? ' · ' + escapeHTML(t('chart.subagent')) : ''}`
+      : '';
     const label = `<b>${escapeHTML(head)}</b>` + (meta ? `<br>${meta}` : '') +
-      `<br>${fmtFull(t.tokens || 0)} tokens` + (t.cost_usd != null ? ` · ${fmtUSD(t.cost_usd)}` : '');
+      `<br>${escapeHTML(t('chart.tip.tokens', { tokens: fmtFull(turn.tokens || 0) }))}` +
+      (turn.cost_usd != null ? ` · ${escapeHTML(fmtUSD(turn.cost_usd))}` : '');
     g.appendChild(el('rect', {
-      x, y: yTop, width: bw, height: h, fill: models.includes(t.model) ? seriesColor(models.indexOf(t.model)) : OTHER_COLOR,
+      x, y: yTop, width: bw, height: h, fill: models.includes(turn.model) ? seriesColor(models.indexOf(turn.model)) : OTHER_COLOR,
       onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
     }));
-    if (t.sidechain) g.appendChild(el('rect', { x, y: yTop, width: bw, height: h, fill: 'url(#ccq-sidechain-hatch)' }));
+    if (turn.sidechain) g.appendChild(el('rect', { x, y: yTop, width: bw, height: h, fill: 'url(#ccq-sidechain-hatch)' }));
   });
 
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
@@ -660,6 +672,6 @@ export function turnBars(turns) {
     models.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
     anySidechain ? el('span', {},
       el('i', { style: 'background:repeating-linear-gradient(45deg, var(--ink-3), var(--ink-3) 1px, transparent 1px, transparent 3px)' }),
-      'subagent') : null);
+      t('chart.subagent')) : null);
   return el('div', {}, svg, legend);
 }

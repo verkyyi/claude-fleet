@@ -24,8 +24,9 @@
 // back into whichever handlers were passed at update() time.
 import { DIMS } from './lib/state.js';
 import { shortProject } from './lib/format.js';
-import { accountGroups, SOURCE_LABEL } from './lib/providers.js';
+import { accountGroups, sourceLabel } from './lib/providers.js';
 import { el, $ } from './lib/dom.js';
+import { t, locale, LOCALES, LOCALE_LABEL, chooseLocale } from './lib/i18n.js';
 // `app` is read only inside functions below (never at module-eval time), so
 // this is a safe circular import: app.js imports renderNav/renderScopeControls/
 // setBusy from here, and by the time any of them is actually CALLED (from
@@ -59,8 +60,18 @@ function chipLabel(dim, value) {
 
 /* ---------------------------------------------------------------- nav bar */
 
-/** renderNav renders/updates the sticky top bar: wordmark and theme toggle —
- *  nothing else. The view tabs are gone with the view: the page is one
+/** SHORT_LOCALE is what the switch PRINTS. The button is one character wide
+ *  next to the theme toggle, so it cannot carry "简体中文" — and what it shows is
+ *  the language you would switch TO, written in that language, which is the one
+ *  form a reader of either language can act on without knowing the other. */
+const SHORT_LOCALE = { en: 'EN', 'zh-CN': '中' };
+
+/** nextLocale is the one the switch moves to. With two languages this is a
+ *  toggle; written as a rotation so a third dictionary needs no new code here. */
+export const nextLocale = (cur) => LOCALES[(LOCALES.indexOf(cur) + 1) % LOCALES.length];
+
+/** renderNav renders/updates the sticky top bar: wordmark, language switch and
+ *  theme toggle — nothing else. The view tabs are gone with the view: the page is one
  *  continuous surface. `root` is the static `<header id="scope">` from
  *  index.html (always present, never recreated), so listeners are bound
  *  exactly once behind a `data-bound` guard the same way the whole bar used
@@ -74,6 +85,18 @@ export function renderNav(root) {
       document.documentElement.setAttribute('data-theme', next);
       try { localStorage.setItem('ccquota-theme', next); } catch {}
     });
+    // The language switch. It persists and reloads (lib/i18n.js's
+    // chooseLocale says why a reload rather than a re-render), so there is
+    // nothing to update here afterwards — the fresh page renders in the new
+    // language from module-eval time.
+    const lang = $('#lang', root);
+    if (lang) {
+      const next = nextLocale(locale());
+      lang.textContent = SHORT_LOCALE[next] || next;
+      lang.setAttribute('title', LOCALE_LABEL[next] || next);
+      lang.setAttribute('aria-label', LOCALE_LABEL[next] || next);
+      lang.addEventListener('click', () => chooseLocale(nextLocale(locale())));
+    }
     root.dataset.bound = '1';
   }
 }
@@ -105,14 +128,14 @@ const instances = [];
 export function createScopeControls({ span = true } = {}) {
   let handlers = {};
 
-  const sel = el('select', { 'aria-label': 'Subscription' });
+  const sel = el('select', { 'aria-label': t('scope.subscription') });
   sel.addEventListener('change', (e) => handlers.onSub && handlers.onSub(e.target.value));
 
-  const sourceSel = el('select', { 'aria-label': 'Usage source' });
+  const sourceSel = el('select', { 'aria-label': t('scope.source') });
   if (sourceSel) sourceSel.addEventListener('change', (e) => handlers.onSource && handlers.onSource(e.target.value));
 
   const spanSeg = span
-    ? el('div', { class: 'seg', role: 'group', 'aria-label': 'Timeline span' },
+    ? el('div', { class: 'seg', role: 'group', 'aria-label': t('scope.span') },
         ['7d', '30d', '90d'].map((v) => el('button', { type: 'button', 'data-span': v }, v)))
     : null;
   if (spanSeg) {
@@ -138,7 +161,7 @@ export function createScopeControls({ span = true } = {}) {
       el('optgroup', { label: g.label },
         ...g.options.map((o) => el('option', { value: o.value }, o.text))));
     sel.replaceChildren(
-      el('option', { value: 'all' }, `All ${relevant.length} accounts / usage pools`),
+      el('option', { value: 'all' }, t('scope.allAccounts', { n: relevant.length })),
       ...groups);
     sel.style.display = relevant.length ? '' : 'none';
     sel.value = state.sub;
@@ -146,9 +169,8 @@ export function createScopeControls({ span = true } = {}) {
     if (sourceSel) {
       const sources = [...new Set(accounts.map((a) => a.source || 'claude'))];
       if (state.chips.source && !sources.includes(state.chips.source)) sources.push(state.chips.source);
-      sourceSel.replaceChildren(el('option', { value: '' }, 'All sources'),
-        ...sources.map((source) => el('option', { value: source },
-          SOURCE_LABEL[source] || source)));
+      sourceSel.replaceChildren(el('option', { value: '' }, t('scope.allSources')),
+        ...sources.map((source) => el('option', { value: source }, sourceLabel(source))));
       sourceSel.value = state.chips.source || '';
     }
 
@@ -165,12 +187,16 @@ export function createScopeControls({ span = true } = {}) {
       return;
     }
     chipsRow.hidden = false;
+    // The chip names its DIMENSION in the viewer's language, but its VALUE
+    // verbatim: a project path, a model id and an endpoint name are what the
+    // filter actually matches on, and translating one would make the chip
+    // disagree with the URL it stands for.
     const chips = dims.map((d) => el('span', { class: 'chip' },
-      d + ': ',
+      t('dim.' + d) + ': ',
       el('b', {}, chipLabel(d, state.chips[d])),
-      el('button', { type: 'button', 'aria-label': 'remove ' + d, onclick: () => handlers.onChipRemove && handlers.onChipRemove(d) }, '×')));
+      el('button', { type: 'button', 'aria-label': t('scope.removeChip', { dim: t('dim.' + d) }), onclick: () => handlers.onChipRemove && handlers.onChipRemove(d) }, '×')));
     chips.push(el('span', { class: 'chip clear' },
-      el('button', { type: 'button', onclick: () => handlers.onClear && handlers.onClear() }, 'Clear all')));
+      el('button', { type: 'button', onclick: () => handlers.onClear && handlers.onClear() }, t('scope.clearAll'))));
     chipsRow.replaceChildren(...chips);
   }
 

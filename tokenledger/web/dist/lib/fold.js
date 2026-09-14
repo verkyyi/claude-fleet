@@ -1,5 +1,7 @@
 // web/dist/lib/fold.js — hourly series → local weekday × hour grid. No DOM.
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+import { t } from './i18n.js';
+
+const DAYS = [0, 1, 2, 3, 4, 5, 6].map((d) => t('day.' + d));
 const zeros = () => Array.from({ length: 7 }, () => new Array(24).fill(0));
 
 // tzOffset(ms) → minutes east of UTC at that instant. The default asks the
@@ -45,7 +47,9 @@ const hh = (h) => String(h).padStart(2, '0') + ':00';
 
 export function sentence(grid) {
   const b = busiest(grid);
-  if (b.tokens <= 0) return 'No usage in this period.';
+  if (b.tokens <= 0) return t('common.noUsagePeriod');
   const q = quietest(grid, 4);
-  return `busiest hour: ${DAYS[b.dow]} ${hh(b.hour)} local. Quietest 4-hour window: ${hh(q.startHour)}–${hh(q.endHour)}.`;
+  return t('fold.sentence', {
+    day: DAYS[b.dow], hour: hh(b.hour), from: hh(q.startHour), to: hh(q.endHour),
+  });
 }

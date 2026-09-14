@@ -30,6 +30,18 @@ export const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
+/** localizeShell rewrites the strings that live in index.html itself — the
+ *  band labels, the operations summary, the two toolbar buttons' titles.
+ *
+ *  The markup keeps its English text as the WRITTEN default: it is what a
+ *  reader gets before this runs, and it keeps index.html legible on its own.
+ *  `data-i18n` names the key that replaces the text, `data-i18n-title` the key
+ *  that replaces the title attribute. Called once, from app.js's boot. */
+export function localizeShell(t, root = document) {
+  for (const n of root.querySelectorAll('[data-i18n]')) n.textContent = t(n.dataset.i18n);
+  for (const n of root.querySelectorAll('[data-i18n-title]')) n.setAttribute('title', t(n.dataset.i18nTitle));
+}
+
 export const escapeHTML = (s) => String(s).replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 

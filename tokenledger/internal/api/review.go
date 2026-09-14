@@ -60,13 +60,13 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		// The only total that is money owed.
 		"subscription_spend": nonNilSpend(plans),
 		"real_spend":         RealSpendOver(sum.Cost, plans),
-		"real_spend_note":    RealSpendNote,
+		"real_spend_note":    RealSpendNoteIn(localeOf(r)),
 		// Provenance per source: rate date and the note each figure carries.
 		// One entry when the scope is filtered to a source, every known source
 		// when it is not -- there is one column per source either way.
-		"pricing":          pricing.Provenance(f.Source),
-		"pricing_note":     pricing.Note(f.Source),
-		"unpriced_reasons": reasons,
+		"pricing":          pricing.ProvenanceIn(localeOf(r), f.Source),
+		"pricing_note":     pricing.NoteIn(f.Source, localeOf(r)),
+		"unpriced_reasons": localizedReasons(reasons, localeOf(r)),
 		"priced_events":    sum.Events - sum.Unpriced,
 		"unpriced_events":  sum.Unpriced, "input_tokens": sum.InputTokens, "output_tokens": sum.OutputTokens,
 		"cache_read_tokens": sum.CacheReadTokens, "cache_create_tokens": sum.CacheCreateTokens,
@@ -74,7 +74,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"sidechain_events":   sum.SidechainEvents,
 		"cache_write_tokens": sum.CacheWriteTokens, "cache_write_known_events": sum.CacheWriteKnownEvents,
 		"effort": nonNil(effort), "entrypoint": nonNil(entry),
-		"disclaimer": shareDisclaimer, "scope_note": scopeNote(f.Account),
+		"disclaimer": shareDisclaimerText.In(localeOf(r)), "scope_note": scopeNoteIn(f.Account, localeOf(r)),
 	}
 	if unclassified := sum.Cost.Unclassified(); len(unclassified) > 0 {
 		// A source this build has no rate basis for belongs to neither fold.

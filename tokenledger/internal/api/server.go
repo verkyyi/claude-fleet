@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/ccquota/internal/fx"
 	"github.com/verkyyi/ccquota/internal/store"
 )
 
@@ -39,6 +40,13 @@ type Server struct {
 	// camo strips cookies). Off by default: an operator who upgrades must not
 	// silently start serving without auth.
 	PublicBadges bool
+
+	// FX converts a figure from the currency it was BILLED in to the one a
+	// viewer reads. Presentation only: no stored figure and no total is ever
+	// computed through it, and every converted figure travels with the rate and
+	// its timestamp so it cannot be mistaken for the invoice. Nil means the
+	// dashboard shows each figure in its own currency, which is always correct.
+	FX *fx.Feed
 
 	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
 	// off centrally without touching every machine.
@@ -102,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
+	mux.Handle("/v1/fx", s.viewerOnly(http.HandlerFunc(s.handleFX)))
 	mux.Handle("/v1/collectors", s.viewerOnly(http.HandlerFunc(s.handleCollectors)))
 	mux.Handle("/v1/account-usage", s.viewerOnly(http.HandlerFunc(s.handleAccountUsage)))
 	mux.Handle("/v1/limits", s.viewerOnly(http.HandlerFunc(s.handleLimits)))

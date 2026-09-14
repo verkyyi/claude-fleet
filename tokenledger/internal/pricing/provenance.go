@@ -61,8 +61,7 @@ func ProvenanceFor(source string) SourceProvenance {
 		// row (Model), and the charge, when there is one, came from elsewhere.
 		p.Note = VoicePriceNote
 	default:
-		p.Note = "Unrecognised source: this build has no rate table for it, so its cost figure " +
-			"has no stated basis and belongs in no total."
+		p.Note = unknownSourceNoteEN
 	}
 	return p
 }

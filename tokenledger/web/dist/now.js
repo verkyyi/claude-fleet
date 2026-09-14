@@ -23,6 +23,7 @@ import { fmtInt, fmtFull, shortProject, ago } from './lib/format.js';
 import { withChip } from './lib/state.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
+import { t, withLocale } from './lib/i18n.js';
 
 // Now's scope-controls widget: subscription select + chips row, no span
 // control — Now has no time range, it is *right now* (see the module
@@ -67,7 +68,7 @@ function errMsg(reason) {
  *  back to on its own — one bad request never blanks the rest of the page. */
 function queryFailed(title, result) {
   return el('div', { class: 'card' }, el('h2', {}, title),
-    el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
 }
 
 /* ------------------------------------------------- hero counter (Q0) */
@@ -112,14 +113,14 @@ function applyCounter(c) {
     // directly above already say.
     heroWrapEl.replaceChildren(el('div', {
       class: 'hero', id: 'hero-root',
-      title: 'tokens consumed · selected account and source · all time · projected between measurements',
+      title: t('hero.title'),
     },
       el('div', { class: 'tm' }, pacSVG(), dotStream(),
         el('div', { class: 'odo', id: 'hero-odo' },
           // The tilde is the whole honesty marker: this figure is projected
           // between measurements and is not exact. One character, always present.
           el('span', { class: 'tilde' }, '~')),
-        el('span', { class: 'k' }, 'tokens · all time'))));
+        el('span', { class: 'k' }, t('hero.caption')))));
   }
   if (!hero.raf) tickHero();
 }
@@ -256,7 +257,7 @@ function liveRow(s, app) {
   const ctx = s.context_unknown ? null : Math.round(s.context_used_pct || 0);
   return el('div', {
       class: 'live-row', role: 'button', tabindex: '0',
-      title: 'click to filter by this session',
+      title: t('live.row.filterTip'),
       onclick: () => app.setState(withChip(app.state, 'session', s.session_id)),
       onkeydown: (e) => { if (e.key === 'Enter') app.setState(withChip(app.state, 'session', s.session_id)); },
     },
@@ -264,11 +265,11 @@ function liveRow(s, app) {
       el('b', {
         onclick: (e) => { e.stopPropagation(); app.setState(withChip(app.state, 'project', s.cwd)); },
       }, where), ' ',
-      el('span', {}, `${s.source === 'codex' ? 'Codex · recent activity · ' : 'Claude · '}${s.model || '?'}${s.effort ? ' · ' + s.effort : ''} · ${s.endpoint}${s.observed_at ? ' · ' + new Date(s.observed_at).toLocaleTimeString() : ''}`)),
+      el('span', {}, `${s.source === 'codex' ? t('live.row.codexPrefix') : t('live.row.claudePrefix')}${s.model || '?'}${s.effort ? ' · ' + s.effort : ''} · ${s.endpoint}${s.observed_at ? ' · ' + new Date(s.observed_at).toLocaleTimeString() : ''}`)),
     el('div', { class: 'rate' },
       `${fmtInt((s.input_tokens || 0) + (s.output_tokens || 0))}` +
-      (s.tokens_per_min > 0 ? ` · ${fmtInt(Math.round(s.tokens_per_min))}/min` : s.source === 'codex' ? ' · no new tokens' : ' · idle')),
-    ctx == null ? el('span', {class:'hint'}, 'context unknown') : el('div', { class: 'ctxbar', title: `context ${ctx}%` },
+      (s.tokens_per_min > 0 ? ` · ${fmtInt(Math.round(s.tokens_per_min))}/min` : ' · ' + (s.source === 'codex' ? t('live.row.noNewTokens') : t('live.row.idle')))),
+    ctx == null ? el('span', {class:'hint'}, t('live.row.contextUnknown')) : el('div', { class: 'ctxbar', title: t('live.row.contextTip', { pct: ctx }) },
       el('i', { style: `width:${Math.min(100, ctx)}%` })));
 }
 
@@ -282,24 +283,24 @@ function renderLive(snap, app) {
     liveWrapEl.replaceChildren(el('div', { class: 'live' },
       el('div', { class: 'live-head' },
         el('span', { class: 'pulse', id: 'live-pulse' }),
-        el('h2', {}, 'Right now'),
+        el('h2', {}, t('live.title')),
         el('span', { class: 'note', id: 'live-note' }, '')),
       el('div', { class: 'tiles' },
         // No "$ / hour": the live tiles describe subscription work, whose
         // per-hour dollar figure was an API-equivalent estimate of money nobody
         // is charged. Tokens per minute answers the same question ("how fast is
         // this burning") in the unit that is actually being consumed.
-        C.tile('lv-sessions', 'active / recent sessions'),
-        C.tile('lv-tpm', 'tokens / min'),
-        C.tile('lv-stok', 'tokens in flight')),
+        C.tile('lv-sessions', t('live.tile.sessions')),
+        C.tile('lv-tpm', t('live.tile.tpm')),
+        C.tile('lv-stok', t('live.tile.inflight'))),
       el('div', { class: 'live-rows', id: 'live-rows' })));
   }
 
   const pulse = $('#live-pulse', liveWrapEl), note = $('#live-note', liveWrapEl);
   pulse.className = 'pulse' + (active ? '' : ' off');
   note.textContent = active
-    ? `${snap.endpoints} endpoint${snap.endpoints === 1 ? '' : 's'} reporting · updates as sessions work`
-    : 'No recent activity. Codex uses log observations; Claude uses statusLine heartbeats.';
+    ? t(snap.endpoints === 1 ? 'live.reporting.one' : 'live.reporting.other', { n: snap.endpoints })
+    : t('live.noActivity');
 
   if (!snap) return;
   C.tween($('#lv-sessions', liveWrapEl), snap.active_sessions, (v) => String(Math.round(v)));
@@ -312,7 +313,7 @@ function renderLive(snap, app) {
   const rowsEl = $('#live-rows', liveWrapEl);
   if (!rows.length) {
     rowsEl.replaceChildren(el('div', { class: 'empty' },
-      all.length ? 'No live sessions match the current chips.' : 'no sessions reporting'));
+      all.length ? t('live.noMatch') : t('live.noSessions')));
     return;
   }
   rowsEl.replaceChildren(...rows.map((s) => liveRow(s, app)));
@@ -326,7 +327,7 @@ function connectLive(app) {
   if (liveState.es) liveState.es.close();
   try {
     const key = liveScopeKey(app);
-    const es = new EventSource('/v1/live/stream?' + key);
+    const es = new EventSource(withLocale('/v1/live/stream?' + key));
     liveState.es = es;
     es.onmessage = (e) => { if (liveState.es !== es || liveScopeKey(app) !== key) return; try { renderLive(JSON.parse(e.data), app); } catch {} };
     es.onerror = () => {
@@ -355,8 +356,7 @@ function connectLive(app) {
 // otherwise.
 function chipsIgnoredHint(chips) {
   if (!chips || !Object.keys(chips).some((k) => k !== 'source')) return null;
-  return el('p', { class: 'hint' },
-    'Quota follows the selected source and account. Project and machine filters apply to usage details; gauges cover the whole subscription.');
+  return el('p', { class: 'hint' }, t('wall.chipsIgnored'));
 }
 
 function wallCard(limits, chips) {
@@ -364,19 +364,18 @@ function wallCard(limits, chips) {
   // 19% are not 23% of anything.
   if (limits && Array.isArray(limits.per_account)) {
     const card = el('div', { class: 'card' },
-      el('h2', {}, 'Am I about to hit the wall?'),
+      el('h2', {}, t('wall.title')),
       el('p', { class: 'hint' }, limits.note),
       nowScope.el,
       chipsIgnoredHint(chips));
     if (limits.worst) {
       card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
-        `Closest to its limit: ${limits.worst.label} at ` +
-        `${highestQuota(limits.worst.limits).toFixed(1)}%.`));
+        t('wall.closest', { label: limits.worst.label, pct: highestQuota(limits.worst.limits).toFixed(1) })));
     }
     for (const entry of limits.per_account) {
       card.appendChild(el('h2', { style: 'margin-top:20px' }, entry.label));
       if (!entry.limits.available) {
-        card.appendChild(el('div', { class: 'empty' }, entry.limits.reason || 'No reading available.'));
+        card.appendChild(el('div', { class: 'empty' }, entry.limits.reason || t('wall.noReading')));
         continue;
       }
       card.append(...quotaGauges(entry.limits));
@@ -385,17 +384,15 @@ function wallCard(limits, chips) {
   }
 
   const card = el('div', { class: 'card' },
-    el('h2', {}, 'Am I about to hit the wall?'),
-    el('p', { class: 'hint' },
-      'Exact, account-wide, and already covering every device on the subscription.'),
+    el('h2', {}, t('wall.title')),
+    el('p', { class: 'hint' }, t('wall.exact')),
     nowScope.el,
     chipsIgnoredHint(chips));
 
   if (!limits.available) {
     // No gauge at all. A 0% bar rendered the same as a live one is the failure
     // this project exists to avoid.
-    card.appendChild(el('div', { class: 'empty' },
-      'No reading available — see the notice above.'));
+    card.appendChild(el('div', { class: 'empty' }, t('wall.noReadingSeeNotice')));
     return card;
   }
 
@@ -403,22 +400,22 @@ function wallCard(limits, chips) {
 
   for (const s of limits.scoped || []) {
     if (!s.model && !s.surface) continue;
-    card.appendChild(C.gauge(`${s.model || s.surface} · weekly`, s));
+    card.appendChild(C.gauge(t('quota.scopedWeekly', { name: s.model || s.surface }), s));
   }
 
   const shares = (limits.endpoint_shares || []).filter((s) => s.weighted_tokens > 0);
   if (shares.length) {
-    card.appendChild(el('h2', { style: 'margin-top:24px' }, 'Whose 5-hour window is it'));
+    card.appendChild(el('h2', { style: 'margin-top:24px' }, t('wall.whose')));
     card.appendChild(el('p', { class: 'hint' },
-      `Estimated split of the ${limits.five_hour.utilization.toFixed(1)}% above, by weighted spend.`));
+      t('wall.whoseHint', { pct: limits.five_hour.utilization.toFixed(1) })));
     card.appendChild(C.rankedBars(shares.map((s) => ({
       key: s.label || s.endpoint_id,
       value: s.estimated_utilization,
       right: s.estimated_utilization.toFixed(1) + '%',
       tip: `<b>${escapeHTML(s.label || s.endpoint_id)}</b><br>` +
-           `${(s.fraction_of_window * 100).toFixed(1)}% of this window's spend<br>` +
-           `${fmtFull(s.tokens)} tokens · ${s.events} turns<br>` +
-           `<span style="opacity:.7">≈ ${s.estimated_utilization.toFixed(1)}% of the limit (estimate)</span>`,
+           `${escapeHTML(t('wall.share.ofWindow', { pct: (s.fraction_of_window * 100).toFixed(1) }))}<br>` +
+           `${escapeHTML(t('wall.share.tokens', { tokens: fmtFull(s.tokens), events: s.events }))}<br>` +
+           `<span style="opacity:.7">${escapeHTML(t('wall.share.estimate', { pct: s.estimated_utilization.toFixed(1) }))}</span>`,
     }))));
   }
   return card;
@@ -439,9 +436,9 @@ function wallCard(limits, chips) {
 function wallCardFromResult(result, chips) {
   if (result.status === 'rejected') {
     return el('div', { class: 'card' },
-      el('h2', {}, 'Am I about to hit the wall?'),
+      el('h2', {}, t('wall.title')),
       nowScope.el,
-      el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+      el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
   }
   return wallCard(result.value, chips);
 }
@@ -457,8 +454,8 @@ function wallCardFromResult(result, chips) {
 // fix land in), treat it as the findings list directly.
 function alertsCard(result) {
   if (result.status === 'rejected') {
-    return el('div', { class: 'card findings' }, el('h2', {}, 'Alerts'),
-      el('div', { class: 'empty' }, 'Query failed: ' + errMsg(result.reason)));
+    return el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')),
+      el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
   }
   const data = result.value || {};
   const findings = Array.isArray(data) ? data : (data.findings || []);
@@ -468,7 +465,7 @@ function alertsCard(result) {
   // its own error card; "empty" here means the query succeeded and found
   // nothing, not that it failed.)
   if (!findings.length) return null;
-  const card = el('div', { class: 'card findings' }, el('h2', {}, 'Alerts'));
+  const card = el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')));
   for (const f of findings) {
     card.appendChild(el('div', { class: 'f' },
       el('span', { class: 'dot ' + (f.severity || 'info') }),
@@ -483,20 +480,18 @@ function alertsCard(result) {
 
 function endpointRosterCard(endpoints, app) {
   const card = el('div', { class: 'card' },
-    el('h2', {}, 'Endpoints'),
-    el('p', { class: 'hint' },
-      'Every machine reporting in, which subscription it is on, and what it could not ' +
-      'attribute. An agent that stops reporting is the usual reason a total looks too low.'));
+    el('h2', {}, t('endpoints.title')),
+    el('p', { class: 'hint' }, t('endpoints.hint')));
 
   if (!endpoints.length) {
-    card.appendChild(el('div', { class: 'empty' }, 'No endpoints enrolled yet.'));
+    card.appendChild(el('div', { class: 'empty' }, t('endpoints.empty')));
     return card;
   }
   card.appendChild(el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
-      el('th', {}, 'Name'), el('th', {}, 'Subscription'), el('th', {}, 'Platform'),
-      el('th', {}, 'Claude Code'), el('th', {}, 'Agent'),
-      el('th', {}, 'Last seen'), el('th', {}, 'Excluded'))),
+      el('th', {}, t('endpoints.col.name')), el('th', {}, t('endpoints.col.subscription')), el('th', {}, t('endpoints.col.platform')),
+      el('th', {}, t('endpoints.col.cc')), el('th', {}, t('endpoints.col.agent')),
+      el('th', {}, t('endpoints.col.lastSeen')), el('th', {}, t('endpoints.col.excluded')))),
     el('tbody', {}, endpoints.map((e) => {
       const secs = e.last_seen ? (Date.now() - new Date(e.last_seen)) / 1000 : null;
       const stale = secs == null || secs > 600;
@@ -508,14 +503,14 @@ function endpointRosterCard(endpoints, app) {
         el('td', {}, e.cc_version || '—'),
         el('td', {}, e.agent_version || '—'),
         el('td', { style: stale ? 'color:var(--ink-3)' : '' },
-          secs == null ? 'never reported' : ago(secs)),
+          secs == null ? t('endpoints.neverReported') : ago(secs)),
         el('td', { style: dropped ? '' : 'color:var(--ink-3)' },
-          dropped ? `${fmtInt(dropped)} turns` : '—'));
+          dropped ? t('endpoints.droppedTurns', { n: fmtInt(dropped) }) : '—'));
     })))));
   return card;
 }
 function endpointRosterCardFromResult(result, app) {
-  if (result.status === 'rejected') return queryFailed('Endpoints', result);
+  if (result.status === 'rejected') return queryFailed(t('endpoints.title'), result);
   return endpointRosterCard(result.value, app);
 }
 
@@ -534,28 +529,27 @@ function endpointAccountsCard(rows) {
   const concurrent = [...byEndpoint.values()].filter((v) => v.length > 1).length;
 
   const card = el('div', { class: 'card' },
-    el('h2', {}, 'What each machine is running'),
+    el('h2', {}, t('machines.title')),
     el('p', { class: 'hint' },
       concurrent
-        ? `${concurrent} of ${byEndpoint.size} endpoint(s) run more than one subscription at once. ` +
-          `That is normal — the account comes from each process's environment, not the machine.`
-        : `Each endpoint is running a single subscription.`));
+        ? t('machines.concurrent', { n: concurrent, total: byEndpoint.size })
+        : t('machines.single')));
 
   card.appendChild(el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
-      el('th', {}, 'Machine'), el('th', {}, 'Login'), el('th', {}, 'Subscription'),
-      el('th', {}, 'How'), el('th', {}, 'First seen'), el('th', {}, 'Last seen'))),
+      el('th', {}, t('machines.col.machine')), el('th', {}, t('machines.col.login')), el('th', {}, t('machines.col.subscription')),
+      el('th', {}, t('machines.col.how')), el('th', {}, t('machines.col.firstSeen')), el('th', {}, t('machines.col.lastSeen')))),
     el('tbody', {}, rows.map((r) => el('tr', {},
       el('td', {}, r.endpoint_name || r.endpoint_id),
       el('td', {}, r.os_user || '—'),
       el('td', { title: r.account_uuid }, r.account_name || r.account_uuid),
-      el('td', {}, r.origin === 'login' ? 'its own login' : 'seen in a session'),
+      el('td', {}, r.origin === 'login' ? t('machines.ownLogin') : t('machines.seenInSession')),
       el('td', {}, new Date(r.first_seen).toLocaleString()),
       el('td', {}, new Date(r.last_seen).toLocaleString())))))));
   return card;
 }
 function endpointAccountsCardFromResult(result) {
-  if (result.status === 'rejected') return queryFailed('What each machine is running', result);
+  if (result.status === 'rejected') return queryFailed(t('machines.title'), result);
   return endpointAccountsCard(result.value);
 }
 
@@ -563,19 +557,15 @@ function switchesCard(switches, app, endpoints) {
   if (!switches || !switches.length) return null;
 
   const card = el('div', { class: 'card' },
-    el('h2', {}, 'Subscription switches'),
-    el('p', { class: 'hint' },
-      'Machines that logged OUT of one subscription and INTO another. Turns recorded ' +
-      'before a switch keep their old attribution and cannot be corrected — these are ' +
-      'the seams where historical figures stop being reliable. Running several ' +
-      'subscriptions side by side is not a switch; see what each machine is running.'));
+    el('h2', {}, t('switches.title')),
+    el('p', { class: 'hint' }, t('switches.hint')));
 
   const epByID = {};
   for (const e of (endpoints || [])) epByID[e.endpoint_id] = e.label || e.hostname;
 
   card.appendChild(el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
-      el('th', {}, 'When'), el('th', {}, 'Machine'), el('th', {}, 'From'), el('th', {}, 'To'))),
+      el('th', {}, t('switches.col.when')), el('th', {}, t('switches.col.machine')), el('th', {}, t('switches.col.from')), el('th', {}, t('switches.col.to')))),
     el('tbody', {}, switches.map((s) => el('tr', {},
       el('td', {}, new Date(s.observed_at).toLocaleString()),
       el('td', {}, epByID[s.endpoint_id] || s.endpoint_id),
@@ -584,7 +574,7 @@ function switchesCard(switches, app, endpoints) {
   return card;
 }
 function switchesCardFromResult(result, app, endpoints) {
-  if (result.status === 'rejected') return queryFailed('Subscription switches', result);
+  if (result.status === 'rejected') return queryFailed(t('switches.title'), result);
   return switchesCard(result.value, app, endpoints);
 }
 
@@ -594,7 +584,7 @@ function fleetCard(roster, epAccounts, switches) {
   let open = false;
   try { open = localStorage.getItem('ccquota-fleet') === '1'; } catch {}
   const det = el('details', { class: 'fleet', open: open ? '' : false },
-    el('summary', {}, 'Fleet'),
+    el('summary', {}, t('fleet.title')),
     roster, epAccounts, switches);
   det.addEventListener('toggle', () => {
     try { localStorage.setItem('ccquota-fleet', det.open ? '1' : '0'); } catch {}
@@ -620,34 +610,30 @@ function buildBanners(state, endpointsR, limitsR) {
   for (const e of lossy) {
     const bits = [];
     if (e.dropped_pre_account > 0) {
-      bits.push(`${fmtFull(e.dropped_pre_account)} turn(s) older than this subscription` +
-        (e.earliest_dropped ? ` (back to ${e.earliest_dropped.slice(0, 10)})` : '') +
-        ' — they cannot belong to it, so they are excluded');
+      bits.push(t('banner.droppedPreAccount', {
+        n: fmtFull(e.dropped_pre_account),
+        range: e.earliest_dropped ? t('banner.backTo', { date: e.earliest_dropped.slice(0, 10) }) : '',
+      }));
     }
     if (e.dropped_beyond_backfill > 0) {
-      bits.push(`${fmtFull(e.dropped_beyond_backfill)} turn(s) beyond the ${e.backfill_limit} backfill window`);
+      bits.push(t('banner.droppedBeyondBackfill', { n: fmtFull(e.dropped_beyond_backfill), window: e.backfill_limit }));
     }
-    banners.push(banner('warn', `${e.label || e.hostname} excludes history.`, bits.join('; ') + '.'));
+    banners.push(banner('warn', t('banner.excludesHistory', { name: e.label || e.hostname }), bits.join('; ') + '.'));
   }
 
   if (state.sub === 'all') {
     // Nothing below is scoped to one subscription; say so once, at the top.
-    banners.push(banner('warn', 'Showing all subscriptions.',
-      'Tokens are summed across them, and so is each SOURCE\'s cost. Cost is never summed ' +
-      'across sources — a Claude figure is an API-equivalent estimate, a gateway figure is a ' +
-      'real per-call charge. Rate-limit utilization is not summed either: each subscription is ' +
-      'a separate quota pool and is shown separately.'));
+    banners.push(banner('warn', t('banner.allSubs.title'), t('banner.allSubs.body')));
   }
 
   if (limitsR.status === 'fulfilled' && state.sub !== 'all') {
     const limits = limitsR.value;
     if (!limits.available) {
-      banners.push(banner('warn', 'Account-wide limits unavailable.',
-        (limits.reason || '').replace(/\.?$/, '.') +
-        ' The usage totals below are still accurate; only the quota gauges are missing.'));
+      banners.push(banner('warn', t('banner.limitsUnavailable.title'),
+        t('banner.limitsUnavailable.body', { reason: (limits.reason || '').replace(/\.?$/, '.') })));
     } else if (limits.stale_seconds > 600) {
-      banners.push(banner('warn', 'Limits reading is stale.',
-        `Last read ${ago(limits.stale_seconds)}. An agent may have stopped polling.`));
+      banners.push(banner('warn', t('banner.limitsStale.title'),
+        t('banner.limitsStale.body', { ago: ago(limits.stale_seconds) })));
     }
   }
   return banners;

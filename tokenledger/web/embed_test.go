@@ -50,6 +50,18 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("index.html shell is missing %q", want)
 		}
 	}
+	// The shell's own strings (the band labels, the operations summary, the two
+	// toolbar buttons) live in this file, so they cannot be translated at render
+	// time like a card's can -- lib/dom.js's localizeShell rewrites them at boot
+	// from these attributes. Drop the attribute and that string stays English
+	// forever, in the middle of a page that translated around it.
+	for _, want := range []string{
+		`id="lang"`, `data-i18n="band.usage"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("index.html is missing the i18n hook %q", want)
+		}
+	}
 	// The retired view tabs must not come back by accident: the page is one
 	// continuous surface, and a stray tab would be navigation to nowhere.
 	for _, gone := range []string{`id="tab-now"`, `id="tab-review"`} {
@@ -81,6 +93,10 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		"styles.css": 4096, "app.js": 1024, "scope.js": 1024,
 		"charts.js": 4096, "now.js": 4096,
 		"lib/dom.js": 512, "lib/state.js": 512,
+		// A dictionary that fails to embed does not fail loudly: lib/i18n.js's
+		// t() falls back to the key, so the page renders `spend.title` where a
+		// card heading belongs. Embedding is the only place that can catch it.
+		"lib/i18n.js": 1024, "lib/i18n/en.js": 8192, "lib/i18n/zh-CN.js": 8192,
 	}
 	for name, min := range minBytes {
 		st, err := fs.Stat(assets, name)

@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 export function selectLive(snap, chips = {}, account = 'all') {
   const sessions = (snap.sessions || []).filter(s =>
     (!account || account === 'all' || s.account === account) &&
@@ -19,7 +21,10 @@ export function selectLive(snap, chips = {}, account = 'all') {
 
 export function windowName(w) {
   const n = w.minutes;
-  const span = !n ? 'window' : n % 1440 === 0 ? `${n / 1440}-day window` : n % 60 === 0 ? `${n / 60}-hour window` : `${n}-minute window`;
+  const span = !n ? t('quota.window')
+    : n % 1440 === 0 ? t('quota.windowDays', { n: n / 1440 })
+    : n % 60 === 0 ? t('quota.windowHours', { n: n / 60 })
+    : t('quota.windowMinutes', { n });
   return `${w.limit_id === 'codex' ? 'Codex' : (w.label || w.limit_id)} · ${span}`;
 }
 
@@ -29,11 +34,16 @@ export function pricingCoverage(d) {
   return {total, unpriced, priced, percent: total > 0 ? (100 * priced / total).toFixed(2) + '%' : '—'};
 }
 
+// The login states this build knows how to name. An unrecognised state falls
+// through to the "unavailable" wording rather than printing a bare identifier:
+// a state name is an internal token, and "retry_pending" on a card answers
+// nothing a reader can act on.
+const LOGIN_STATES = ['valid', 'refresh_due', 'access_expired', 'refreshing',
+  'retry_pending', 'reauth_required', 'no_credentials', 'unsupported'];
+
 export function loginLabel(login) {
-  const labels = {valid:'Signed in', refresh_due:'Renewal due', access_expired:'Access expired · renewal pending',
-    refreshing:'Renewing login', retry_pending:'Renewal retry scheduled', reauth_required:'Sign-in required',
-    no_credentials:'No file login', unsupported:'Login mode unsupported'};
-  return labels[login?.state] || 'Login status unavailable';
+  const state = login?.state;
+  return LOGIN_STATES.includes(state) ? t('login.' + state) : t('login.unavailable');
 }
 
 /** SOURCE_LABEL names a collector source for a human. Every source this build
@@ -45,6 +55,22 @@ export const SOURCE_LABEL = {
   gateway: 'AI gateway',
   vendor_bill: 'Vendor invoice',
   voice: 'Voice, app-reported',
+};
+
+/** sourceLabel is what a human should READ for a source, in their language.
+ *
+ *  SOURCE_LABEL above stays as the English text because web/embed_test.go
+ *  anchors on its shape (`claude: '`) to catch a source added to model.Sources
+ *  with no label at all — a guard that has caught one real omission (`voice`)
+ *  and must keep working. The translations live under `source.<id>` in the
+ *  dictionaries, and web/test/i18n.test.mjs asserts the English side of the two
+ *  never drifts apart. */
+export const sourceLabel = (source) => {
+  const key = 'source.' + source;
+  const label = t(key);
+  // t() returns the key itself when neither dictionary has it — which is
+  // exactly the case SOURCE_LABEL exists to cover.
+  return label === key ? (SOURCE_LABEL[source] || source) : label;
 };
 
 /** accountGroups splits the account list by what an account MEANS for its
@@ -60,7 +86,7 @@ export const SOURCE_LABEL = {
  *  promises options this hub does not have. */
 export function accountGroups(accounts) {
   const kind = (a) => (CALLER_SOURCES.has(UsageSource(a.source)) ? 'app' : 'sub');
-  const label = { sub: 'Subscriptions', app: 'Calling applications' };
+  const label = { sub: t('accounts.subscriptions'), app: t('accounts.apps') };
   const name = (a) => a.email || a.display_name || a.account_uuid;
   return ['sub', 'app']
     .map((k) => ({
