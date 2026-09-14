@@ -10,7 +10,9 @@
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
 #   window (inline on the query line; ↵ commits, esc cancels) · ⌃x reap a
 #   finished worker (confirms when the row isn't merged+clean) · ⌃t live⇄landed ·
-#   ⌃o restore a landed session ·
+#   ⌃o restore a landed session · ⌃y pin/unpin the highlighted window to the top
+#   of the list (#623 — a pin outranks the status sort, floats the window's
+#   children with it, and marks the row 📌) ·
 #   ⌃v flip this fleet's default agent for NEW sessions (claude ⇄ codex, #554 —
 #   written to the fleet's conf, so every spawn path follows; the prompt line
 #   reads `claude ▸ ` / `codex ▸ ` from the same conf, dash-agent-prompt.sh) ·
@@ -170,6 +172,7 @@ run_dash() {
   # unbound floor for an install missing the helper.
   DASH_KEY_AGENT=ctrl-v DASH_KEY_RELOAD=ctrl-r DASH_KEY_NEW=ctrl-n DASH_KEY_SCRATCH=ctrl-s DASH_KEY_VIEW=ctrl-t
   DASH_KEY_RESTORE=ctrl-o DASH_KEY_PR=ctrl-p DASH_KEY_REAP=ctrl-x DASH_KEY_RENAME=ctrl-e DASH_KEY_ANSWER=ctrl-k
+  DASH_KEY_PIN=ctrl-y
   DASH_GLYPH_AGENT='⌃v'
   eval "$(bash "$KEYMAP" env 2>/dev/null)"
   # The ghost names the agent-flip key (issue #559): export the LAUNCH-TIME glyph
@@ -194,6 +197,7 @@ run_dash() {
     --bind "$DASH_KEY_RESTORE:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PR:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
     --bind "$DASH_KEY_REAP:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \

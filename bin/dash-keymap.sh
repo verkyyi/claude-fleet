@@ -44,6 +44,18 @@
 # The table: action, default key, fallback key. A new dash bind goes HERE, then
 # `--bind "$DASH_KEY_<ACTION>:…"` in tmux-dashboard.sh and a `$(dg <action>)` row
 # in fleet-keys.sh — bin/fleet-keys-selftest.sh holds the three in lockstep.
+#
+# PICKING a default (issue #623): the ideal is a ⌃<letter> that is BOTH free in
+# fzf's own bind table AND nobody's tmux prefix — but the table has grown past the
+# point where such a letter exists (fzf claims a/b/d/e/f/h/j/k/l/n/p/u/w/y for the
+# input line plus c/g/q to abort, and the ten rows above hold the rest). So the
+# rule degrades in a fixed order: never a common prefix (⌃a ⌃b ⌃s ⌃g ⌃t ⌃x — the
+# whole point of #556), then take the fzf default whose loss costs the dash least.
+# `pin` took ctrl-y on that basis: fzf's ⌃y is `yank` (paste the clipboard into
+# the query), and the dash's query line is a short scratch NAME — the cheapest of
+# the remaining bindings to spend, and the mnemonic survives (yank the row up).
+# ⌃u / ⌃w (clear line / delete word) were deliberately left alone: those two are
+# what an operator uses to fix a mistyped name.
 set -uo pipefail
 
 TABLE='agent ctrl-v alt-v
@@ -55,7 +67,8 @@ restore ctrl-o alt-o
 pr ctrl-p alt-p
 reap ctrl-x alt-x
 rename ctrl-e alt-e
-answer ctrl-k alt-k'
+answer ctrl-k alt-k
+pin ctrl-y alt-y'
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered
 # ctrl then alt: C-a → ctrl-a · M-a → alt-a · C-M-x / M-C-x → ctrl-alt-x ·
