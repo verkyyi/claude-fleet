@@ -24,6 +24,11 @@
 #   global/account.limited  — label<TAB>until-epoch<TAB>banner  (one row per limited acct);
 #                             until-epoch is the banner's own "resets …" instant when it
 #                             carries one, else now+LIMIT_TTL (issue #490)
+#   global/account.phase    — label<TAB>slot-epoch<TAB>planned-at<TAB>note  (issue #598):
+#                             the 5h-window PHASE plan — the instant each idle account may
+#                             OPEN its next 5h window, so the pool's windows don't all
+#                             reset together. Pool-level state, hence global/ like the two
+#                             above. Absent ⇒ no phase policy at all (the historic default)
 #
 # Commands:
 #   active               — print the label new sessions should use (rotating past
@@ -67,6 +72,14 @@
 #                          (#567) — only a --model relaunch is exempt
 #   whoami <window-id>   — the account a window really runs (token truth; heals a
 #                          stale @cc_account stamp) — fleet-migrate.sh whoami
+#   phase [--plan [--apply]] [--clear [label]] [--hold-until <label>]
+#                        — the 5h-window PHASE stagger (issue #598). Bare: the pool's
+#                          phase table (each account's live window + any pending slot).
+#                          --plan computes the `5h / N` stagger for the accounts that
+#                          have NO live window and prints it; --apply also writes it, and
+#                          only then does anything change. --clear drops it. See
+#                          phase_plan() for the grid, and pick_active() for how a pending
+#                          slot is honoured (fail-open: it can never starve the pool).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -101,6 +114,42 @@ QUOTA_TTL="${FLEET_ACCOUNT_QUOTA_TTL:-60}"
 CCQUOTA="${FLEET_QUOTA_BIN:-ccquota}"
 STATE_QUOTA="$STATE_DIR/account.quota"
 STATE_QUOTA_TS="$STATE_DIR/account.quota.ts"
+# --- which account a new spawn lands on (issue #598) ---------------------------
+# PICK_MODE decides how the ccquota rows are RANKED once the ceiling gate has
+# thrown out the accounts that are too hot to use at all:
+#   5h      (default) 5h-headroom × 2 + 7d-headroom — the 5-HOUR window weighted
+#           double, the weekly still counted (see the score note below).
+#   minmax  the pre-#598 ranking: ccquota's own headroom_pct = 100 - max(5h, 7d).
+# Why the default changed. `minmax` reads the two windows as if they were the same
+# budget, and they are not: 5h capacity is USE-IT-OR-LOSE-IT — whatever a window
+# does not spend evaporates at its reset and can never be recovered — while 7d
+# capacity just sits there. So an account at `5h 0% · 7d 80%` scored 20 and an
+# account at `5h 77% · 7d 51%` scored 23, and every spawn kept piling onto the
+# second one. Live on 2026-09-13 that is exactly what happened: verky@24helpful
+# went 8% → 77% of its 5h window in four hours while ly297's 5h window sat at 0%
+# for the whole window and then reset — a full window of a paid subscription
+# thrown away, silently, with the fleet's own rotation logic doing the throwing.
+# Ranking on the 5h window puts the fresh window first; the 7d CEILING is what
+# still protects the weekly budget, as a gate rather than as a score.
+#
+# The score is `room5 * 2 + room7` — the 5h window counts DOUBLE because it
+# expires, the 7d window still counts because it gates. Not a lexicographic
+# ordering: `5h 0% · 7d 84%` (216) loses to `5h 30% · 7d 0%` (240), which is the
+# right call — the first account is one spawn from its weekly ceiling and would be
+# benched immediately, while the second has most of a window AND a fresh week. A
+# 5h-first tie-break alone would have picked the doomed one.
+PICK_MODE="${FLEET_ACCOUNT_PICK:-5h}"
+PICK_W5=2                                    # the expiring window's weight in the score
+PICK_HYST="${FLEET_ACCOUNT_PICK_HYST:-10}"   # keep the current account while it is within
+                                             # this many 5h-equivalent POINTS of the best,
+                                             # so near-equal accounts don't flip-flop
+# --- 5h-window phase stagger (issue #598) --------------------------------------
+# PHASE=0 is the kill switch: pick_active then ignores account.phase entirely, as
+# if no plan had ever been written. PHASE_AUTO is read by bin/fleet-quotawatch.sh,
+# not here — it decides whether the 60s watch re-plans on its own.
+PHASE_ON="${FLEET_ACCOUNT_PHASE:-1}"
+PHASE_WINDOW="${FLEET_ACCOUNT_PHASE_WINDOW:-18000}"   # the rolling window being staggered (5h)
+STATE_PHASE="$STATE_DIR/account.phase"
 
 now() { date +%s; }
 
@@ -344,34 +393,74 @@ cmd_quota() {
   quota_rows "$mode"
 }
 
-# Choose the account new sessions should use, starting from $1 (the current
-# active). With ccquota rows (issue #513): among ELIGIBLE (un-benched) accounts
-# under the ceiling, the one with the most headroom wins — but the current one
-# is kept while it is within 10 points of the best, so new spawns don't
-# flip-flop between near-equal accounts. Without rows (or with every account at
-# the ceiling): keep it if eligible; else the next eligible one round-robin; if
-# ALL are limited, keep the current (best effort) so sessions still launch.
-# Reads the quota CACHE only — this runs on the spawn path.
-pick_active() {
-  local cur="$1" rows best="" bestroom=-1 curroom=-1 l room u5 u7 util
-  rows=$(quota_rows cached)
-  if [ -n "$rows" ]; then
-    while IFS= read -r l; do
-      [ -n "$l" ] || continue
-      acct_eligible "$l" || continue
-      u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3); room=$(quota_field "$rows" "$l" 4)
-      [ -n "$room" ] || continue                       # not in ccquota → no opinion
-      util=$u5; [ "$u7" -gt "$util" ] && util=$u7
-      [ "$util" -ge "$CEILING" ] && continue          # at the ceiling → not a candidate
-      [ "$l" = "$cur" ] && curroom=$room
-      [ "$room" -gt "$bestroom" ] && { best=$l; bestroom=$room; }
-    done <<EOF
+# --- 5h-window PHASE stagger (issue #598) --------------------------------------
+# Epoch before which <label> should not OPEN a new 5h window (0 = free to use).
+# Self-expiring exactly like acct_limited_until: a slot in the past is no hold at
+# all, so a stale plan decays into a no-op instead of benching the pool forever.
+# Pure awk + one state file — this is on the spawn path.
+acct_phase_hold() {
+  [ "$PHASE_ON" = 0 ] && { echo 0; return; }
+  [ -f "$STATE_PHASE" ] || { echo 0; return; }
+  awk -F'\t' -v l="$1" -v now="$(now)" '
+    $1==l && ($2+0)>now && ($2+0)>u { u=$2+0 } END { print u+0 }' "$STATE_PHASE"
+}
+
+# pick_score <rows> <label> → how good this account is for a NEW session (higher
+# wins), or EMPTY when ccquota has no row for it (⇒ no opinion, not a candidate).
+# See PICK_MODE above for why 5h headroom is the primary key.
+pick_score() {
+  local rows="$1" l="$2" u5 u7 m
+  u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3)
+  [ -n "$u5" ] && [ -n "$u7" ] || return 0
+  case "$PICK_MODE" in
+    minmax) m=$u5; [ "$u7" -gt "$m" ] && m=$u7; printf '%s' $(( (100 - m) * PICK_W5 )) ;;
+    *)      printf '%s' $(( (100 - u5) * PICK_W5 + (100 - u7) )) ;;
+  esac
+}
+
+# pick_best <rows> <cur> <honour-holds> → the winning label, or EMPTY when there
+# is no candidate at all. A candidate is ELIGIBLE (un-benched), known to ccquota,
+# and under the CEILING on both windows; with honour-holds=1 a pending phase slot
+# also disqualifies it. The current account is KEPT while it is within PICK_HYST
+# points of the best, so near-equal accounts don't flip-flop between spawns.
+pick_best() {
+  local rows="$1" cur="$2" holds="$3" best="" bestsc=-1 cursc=-1 l sc u5 u7 util
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    acct_eligible "$l" || continue
+    [ "$holds" = 1 ] && [ "$(acct_phase_hold "$l")" -gt "$(now)" ] && continue
+    u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3)
+    [ -n "$u5" ] || continue                          # not in ccquota → no opinion
+    util=$u5; [ "$u7" -gt "$util" ] && util=$u7
+    [ "$util" -ge "$CEILING" ] && continue            # at the ceiling → not a candidate
+    sc=$(pick_score "$rows" "$l")
+    [ -n "$sc" ] || continue
+    [ "$l" = "$cur" ] && cursc=$sc
+    [ "$sc" -gt "$bestsc" ] && { best=$l; bestsc=$sc; }
+  done <<EOF
 $(acct_labels)
 EOF
-    if [ -n "$best" ]; then
-      if [ "$curroom" -ge 0 ] && [ $(( bestroom - curroom )) -le 10 ]; then printf '%s' "$cur"; else printf '%s' "$best"; fi
-      return 0
-    fi
+  [ -n "$best" ] || return 0
+  if [ "$cursc" -ge 0 ] && [ $(( bestsc - cursc )) -le $(( PICK_HYST * PICK_W5 )) ]
+  then printf '%s' "$cur"; else printf '%s' "$best"; fi
+}
+
+# Choose the account new sessions should use, starting from $1 (the current
+# active). With ccquota rows (issue #513): the best-ranked eligible account under
+# the ceiling wins (pick_best above). Two passes: the first honours the phase plan,
+# the second ignores it — a phase hold is a PREFERENCE about when to open a window
+# and must never be the reason a spawn has no account to run on (issue #598).
+# Without rows (or with every account at the ceiling): keep the current one if
+# eligible; else the next eligible one round-robin; if ALL are limited, keep the
+# current (best effort) so sessions still launch. Reads the quota CACHE only —
+# this runs on the spawn path.
+pick_active() {
+  local cur="$1" rows best
+  rows=$(quota_rows cached)
+  if [ -n "$rows" ]; then
+    best=$(pick_best "$rows" "$cur" 1)
+    [ -n "$best" ] || best=$(pick_best "$rows" "$cur" 0)
+    [ -n "$best" ] && { printf '%s' "$best"; return 0; }
   fi
   pick_active_rr "$cur"
 }
@@ -534,6 +623,212 @@ cmd_model_clear() {   # [label [model]] — no args clears everything
   acct_unlock
 }
 
+# --- the phase plan (issue #598) ------------------------------------------------
+# N subscriptions first used at around the same time have their 5-hour windows in
+# the SAME PHASE: they burn down together and reset together, so the pool's total
+# available headroom is a sawtooth whose trough is a full outage. Staggering the
+# phases by `5h / N` flattens that sawtooth into a line — at any instant some
+# account is early in its window.
+#
+# A 5h window's phase is NOT settable: the window opens when the account is first
+# used and runs 5 hours from there. So the only lever is WHEN each account is
+# first used, and the plan is therefore a queue of START SLOTS, not a rotation.
+#
+# phase_plan <rows> [now] → one TSV row per account IN the plan:
+#   label  slot-epoch  k  state
+#     running — a 5h window is already open on it. Its phase is a fact, not a
+#               choice, so slot-epoch is that window's real START and it is never
+#               held ("已在跑的 window 不受影响").
+#     queued  — no live window: it owns grid index k and should not open one
+#               before slot-epoch.
+#     missed  — its grid point already went by this window. Reported so the plan
+#               is readable, but NEVER held: see below.
+# Accounts that are BENCHED, or that ccquota has no row for, are absent from the
+# plan entirely ("被 bench 的账号不参与排相位") — no row, so no hold either.
+#
+# The grid. N = accounts in the plan, step = PHASE_WINDOW / N. The ring is
+# anchored on the EARLIEST live window start, so the accounts already running keep
+# their real phase and the idle ones are placed relative to them; with nothing
+# running the anchor is `now` — which is the issue's own example: 3 accounts,
+# step 100 min, slots at T+0 / T+100m / T+200m. Each running account claims the
+# grid index nearest its real start; the queued ones take the lowest FREE indices
+# in label order.
+#
+# A grid point that ALREADY WENT BY is not pushed into the next window — the
+# account is released at once (state `missed`). Waiting costs up to a full window
+# of a paid subscription, and buying a textbook phase with a window nobody spends
+# is the exact loss this whole issue is about. Verified against the live pool on
+# 2026-09-13: anchored on the account already running, the idle account's grid
+# point had gone by 90 minutes earlier, and projecting forward would have held it
+# out until 00:30 — parking its live, completely unused 5h window until the window
+# itself expired. One cycle of imperfect phase is the cheaper mistake, and the
+# next re-plan re-grids it anyway.
+#
+# Window start comes from ccquota, never from a local guess: `five_hour.resets_at
+# - 5h`. ccquota reports a resets_at even for an account with NO live window (it
+# is the next boundary, not a window), so `utilization > 0` is what says a window
+# is really open — read that, not the timestamp alone.
+#
+# python3 for the arithmetic (like quota_parse); the SPAWN path never comes here —
+# it only reads the written plan, in awk, via acct_phase_hold.
+phase_plan() {
+  local rows="$1" now_s="${2:-$(now)}" map="" l elig
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    elig=0; acct_eligible "$l" && elig=1
+    map="${map}${l}"$'\t'"${elig}"$'\n'
+  done <<EOF
+$(acct_labels)
+EOF
+  PP_MAP="$map" PP_ROWS="$rows" PP_NOW="$now_s" PP_W="$PHASE_WINDOW" python3 - <<'PY'
+import os, sys
+try:
+    W = int(os.environ.get("PP_W") or 18000)
+    now = int(os.environ.get("PP_NOW") or 0)
+except ValueError:
+    sys.exit(0)
+if W <= 0:
+    sys.exit(0)
+rows = {}
+for line in os.environ.get("PP_ROWS", "").splitlines():
+    c = line.split("\t")
+    if len(c) < 7:
+        continue
+    rows[c[0]] = c
+plan = []
+for line in os.environ.get("PP_MAP", "").splitlines():
+    if not line.strip():
+        continue
+    label, _, e = line.partition("\t")
+    if e.strip() != "1":                 # benched → not in the plan
+        continue
+    if label not in rows:                # ccquota has no opinion → not in the plan
+        continue
+    plan.append(label)
+if not plan:
+    sys.exit(0)
+def num(v):
+    try:    return int(v)
+    except (TypeError, ValueError): return 0
+running, queued = [], []
+for l in plan:
+    u5, r5 = num(rows[l][1]), num(rows[l][4])
+    if u5 > 0 and r5 > now: running.append((l, r5 - W))
+    else:                   queued.append(l)
+N = len(plan)
+step = max(1, W // N)
+anchor = min(st for _, st in running) if running else now
+claimed = {}
+for l, st in sorted(running, key=lambda p: p[1]):
+    k = int(round((((st - anchor) % W) / step))) % N
+    while k in claimed:                  # two live windows inside one step
+        k = (k + 1) % N
+    claimed[k] = l
+out = {}
+for k, l in claimed.items():
+    out[l] = (dict(running)[l], k, "running")
+free = [k for k in range(N) if k not in claimed]
+for l, k in zip(queued, free):
+    t = anchor + k * step
+    # that grid point already went by: release now rather than park a live window
+    out[l] = (t, k, "queued") if t >= now else (now, k, "missed")
+for l in plan:
+    if l in out:
+        t, k, st = out[l]
+        print("%s\t%d\t%d\t%s" % (l, t, k, st))
+PY
+}
+
+# phase_write <plan> — persist the rows that are actually a WAIT as holds. A
+# `running` row is a fact about a window already open and a `missed` row is an
+# account that should start now, so neither is written: holding either one would
+# bench live capacity for nothing. A queued slot that is already due is likewise
+# no hold, so it is not written either.
+phase_write() {
+  mkdir -p "$STATE_DIR"; acct_lock
+  printf '%s\n' "$1" | awk -F'\t' -v now="$(now)" '
+    $4=="queued" && ($2+0)>now { printf "%s\t%s\t%s\tphase slot %s (issue #598)\n", $1, $2, now, $3 }' \
+    | atomic_write "$STATE_PHASE"
+  acct_unlock
+}
+
+# phase: show | --plan [--apply] | --clear [label] | --hold-until <label>
+cmd_phase() {
+  local mode=show apply=0 label="" a plan rows l slot k st hold now_s u5
+  for a in "$@"; do
+    case "$a" in
+      --plan)       mode=plan ;;
+      --apply)      apply=1 ;;
+      --clear)      mode=clear ;;
+      --hold-until) mode=hold ;;
+      -*) printf 'phase: unknown flag %s (--plan [--apply] | --clear [label] | --hold-until <label>)\n' "$a" >&2; return 2 ;;
+      *)  label="$a" ;;
+    esac
+  done
+  [ -n "$(acct_labels)" ] || { printf 'multi-account: OFF (no token files in %s)\n' "$ACCT_DIR"; return 0; }
+  now_s=$(now)
+  case "$mode" in
+    hold)
+      [ -n "$label" ] || { echo "phase --hold-until: usage: phase --hold-until <label>" >&2; return 1; }
+      acct_phase_hold "$label"; return 0 ;;
+    clear)
+      [ -f "$STATE_PHASE" ] || return 0
+      acct_lock
+      if [ -z "$label" ]; then : | atomic_write "$STATE_PHASE"
+      else awk -F'\t' -v l="$label" '$1!=l' "$STATE_PHASE" | atomic_write "$STATE_PHASE"; fi
+      acct_unlock; return 0 ;;
+    plan)
+      rows=$(quota_rows)
+      [ -n "$rows" ] || { echo "phase: no ccquota rows — the plan needs real window starts, and guessing them is exactly what this must not do" >&2; return 1; }
+      plan=$(phase_plan "$rows" "$now_s")
+      [ -n "$plan" ] || { echo "phase: nothing to plan (every pool account is benched, or ccquota knows none of them)" >&2; return 1; }
+      printf '%s%-24s %-8s %-4s %s%s\n' "$A_DIM" ACCOUNT STATE SLOT WHEN "$A_RST"
+      while IFS=$'\t' read -r l slot k st; do
+        [ -n "$l" ] || continue
+        if [ "$st" = missed ]; then
+          printf '%-24s %s%-8s%s %-4s its slot went by — free to open one now\n' "$l" "$A_DIM" "$st" "$A_RST" "$k"
+        elif [ "$st" = running ]; then
+          printf '%-24s %s%-8s%s %-4s window opened %s ago · resets in %s\n' "$l" "$A_GRN" "$st" "$A_RST" "$k" \
+            "$(human_dur $(( now_s > slot ? now_s - slot : 0 )))" "$(human_dur $(( slot + PHASE_WINDOW > now_s ? slot + PHASE_WINDOW - now_s : 0 )))"
+        else
+          printf '%-24s %s%-8s%s %-4s may open its window in ~%s\n' "$l" "$A_YEL" "$st" "$A_RST" "$k" \
+            "$(human_dur $(( slot > now_s ? slot - now_s : 0 )))"
+        fi
+      done <<EOF
+$plan
+EOF
+      if [ "$apply" = 1 ]; then
+        phase_write "$plan"
+        printf '%sapplied%s → %s (new spawns honour these slots; FLEET_ACCOUNT_PHASE=0 disables, `phase --clear` drops it)\n' \
+          "$A_GRN" "$A_RST" "$STATE_PHASE"
+      else
+        printf '%sdry run%s — nothing written. Re-run with --apply to make new spawns honour these slots.\n' "$A_DIM" "$A_RST"
+      fi
+      return 0 ;;
+  esac
+  # show: the pool's phase state as it stands right now
+  rows=$(quota_rows cached)
+  printf '%s%-24s %-10s %s%s\n' "$A_DIM" ACCOUNT HOLD WINDOW "$A_RST"
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    hold=$(acct_phase_hold "$l")
+    slot=$(quota_field "$rows" "$l" 5); u5=$(quota_field "$rows" "$l" 2)
+    if [ -n "$slot" ] && [ "${u5:-0}" -gt 0 ] && [ "$slot" -gt "$now_s" ]; then
+      st="open, resets in $(human_dur $(( slot - now_s ))) (started $(human_dur $(( now_s - (slot - PHASE_WINDOW) ))) ago)"
+    else
+      st="${A_DIM}no live 5h window${A_RST}"
+    fi
+    if [ "$hold" -gt "$now_s" ]; then
+      printf '%-24s %s%-10s%s %s\n' "$l" "$A_YEL" "in $(human_dur $(( hold - now_s )))" "$A_RST" "$st"
+    else
+      printf '%-24s %-10s %s\n' "$l" "-" "$st"
+    fi
+  done <<EOF
+$(acct_labels)
+EOF
+  [ -f "$STATE_PHASE" ] || printf '%sno plan written — `phase --plan` to see one, `--plan --apply` to arm it%s\n' "$A_DIM" "$A_RST"
+}
+
 # Aligned, scannable table — first token of every data row is the bare label, so
 # usage-modal.sh can extract the pick with `awk '{print $1}'`. Colour lives only
 # in the marker glyph (fixed 1-col) and the trailing STATE field (no padding after
@@ -543,7 +838,7 @@ cmd_model_clear() {   # [label [model]] — no args clears everything
 #   reset time — a live bench ends at the banner's instant, shown in STATE)
 #   STATE(ok | limited · back in ~Nm | NO TOKEN)
 cmd_list() {
-  local labels active l until state tok w now_s hdr
+  local labels active l until state tok w now_s hdr r5 hold
   local fmt='%-*s  %s  %-7s %s\n'
   labels=$(acct_labels)
   if [ -z "$labels" ]; then
@@ -573,15 +868,27 @@ EOF
       if [ -n "$tok" ]; then state="${A_GRN}ok${A_RST}"; else state="${A_RED}NO TOKEN${A_RST}"; fi
     fi
     # ccquota columns when known (issue #513): "5h 42% · 7d 21%", coloured by the
-    # higher of the two against the warn/ceiling knobs.
+    # higher of the two against the warn/ceiling knobs. Then the WINDOW itself
+    # (issue #598): how long this account's live 5h window still has to run — the
+    # column that makes a phase stagger visible, and the one that shows an account
+    # sitting at `win idle` with a whole window going to waste. A pending phase
+    # slot is shown the way a bench is, so "why is nothing spawning here" reads.
     if [ -n "$qrows" ]; then
       u5=$(quota_field "$qrows" "$l" 2); u7=$(quota_field "$qrows" "$l" 3)
       if [ -n "$u5" ]; then
         util=$u5; [ "$u7" -gt "$util" ] && util=$u7
         qc="$A_GRN"; [ "$util" -ge "$WARN_PCT" ] && qc="$A_YEL"; [ "$util" -ge "$CEILING" ] && qc="$A_RED"
         state="$state ${A_DIM}·${A_RST} ${qc}5h ${u5}% · 7d ${u7}%${A_RST}"
+        r5=$(quota_field "$qrows" "$l" 5)
+        if [ "$u5" -gt 0 ] && [ -n "$r5" ] && [ "$r5" -gt "$now_s" ]; then
+          state="$state ${A_DIM}· win $(human_dur $(( r5 - now_s ))) left${A_RST}"
+        else
+          state="$state ${A_DIM}· win idle${A_RST}"
+        fi
       fi
     fi
+    hold=$(acct_phase_hold "$l")
+    [ "$hold" -gt "$now_s" ] && state="$state ${A_DIM}·${A_RST} ${A_YEL}phase${A_RST} ${A_DIM}· opens in ~$(human_dur $(( hold - now_s )))${A_RST}"
     printf "$fmt" "$w" "$l" \
       "$([ "$l" = "$active" ] && printf '%s●%s' "$A_GRN" "$A_RST" || printf ' ')" \
       "$(human_dur "$(acct_ttl "$l")")" "$state"
@@ -611,6 +918,7 @@ case "${1:-active}" in
   model-clear)   cmd_model_clear "${2:-}" "${3:-}" ;;
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
+  phase)         shift; cmd_phase "$@" ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|phase|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi

@@ -23,6 +23,8 @@
 #   account.quota(.ts)      — via `fleet-account.sh quota` (the TTL-gated fetch)
 #   quota.warn.<label>      — reset epoch the 70% warning was sent for
 #   quota.ceiling.<label>   — reset epoch the 85% bench+move was done for
+#   quota.phase             — reset epoch the 5h phase stagger was planned for
+#                             (issue #598; only with FLEET_ACCOUNT_PHASE_AUTO=1)
 #   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/
 #                             fetched, plus the per-phase breakdown t_modelcap/
 #                             t_fetch/t_policy (issue #582)
@@ -383,6 +385,40 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     [ "$DRY" = 1 ] && printf 'ok: %s at %s%% of its %s window (warn %s%%, ceiling %s%%)\n' "$ql" "$qutil" "$qwhich" "$qwarn" "$qceil"
   fi
 done
+
+# --- THIRD job (OPT-IN): re-plan the 5h-window PHASE stagger (issue #598) ------
+# N subscriptions first used at around the same time keep their 5h windows in the
+# same phase — they burn down together and reset together, so the pool's total
+# headroom is a sawtooth whose trough is a full outage. `phase --plan --apply`
+# staggers the accounts that have NO live window by 5h/N, which is a decision
+# about WHEN each account may open its next window (see fleet-account.sh
+# phase_plan). Once per window is the right cadence — the plan is a queue of
+# start slots, not a rotation — so it is keyed on the earliest 5h reset in these
+# rows, the same fleet_same_window dedup the ceiling/warn branches use.
+#
+# DEFAULT OFF. This tick is what keeps the fleet alive, and a phase hold makes an
+# account temporarily un-spawnable: it is fail-open in pick_active (a hold can
+# never be the reason a spawn has no account), but arming it is still the
+# operator's call, after they have watched `fleet-account.sh phase --plan` agree
+# with the pool they can see. FLEET_ACCOUNT_PHASE_AUTO=1 arms it;
+# FLEET_ACCOUNT_PHASE=0 disables the holds themselves, wherever they came from.
+if [ "${FLEET_ACCOUNT_PHASE_AUTO:-0}" = 1 ] && [ "${nrows:-0}" -gt 1 ]; then
+  qpmin=$(printf '%s\n' "$qrows" | awk -F'\t' 'BEGIN{m=0} ($5+0)>0 && (m==0 || ($5+0)<m){m=$5+0} END{print m+0}')
+  qpmk="$G/quota.phase"
+  if [ "$qpmin" -gt 0 ] && ! fleet_same_window "$qpmk" "$qpmin"; then
+    if [ "$DRY" = 1 ]; then
+      printf 'would: re-plan the 5h phase stagger —\n'
+      "$BIN/fleet-account.sh" phase --plan 2>&1 | sed 's/^/  /'
+    else
+      printf '%s' "$qpmin" | atomic_write "$qpmk"
+      if qpout=$("$BIN/fleet-account.sh" phase --plan --apply 2>&1); then
+        printf 'fleet-quotawatch: re-planned the 5h phase stagger (issue #598)\n%s\n' "$qpout" >&2
+      else
+        printf 'fleet-quotawatch: phase re-plan declined — %s\n' "$qpout" >&2
+      fi
+    fi
+  fi
+fi
 
 T_POLICY=$(( $(now) - y0 ))
 END=$(now)

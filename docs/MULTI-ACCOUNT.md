@@ -318,11 +318,78 @@ first thing by every collector tick — does, per pool account, every tick:
 | ≥ `FLEET_ACCOUNT_CEILING` (85%) | **bench** it until ccquota's reset instant (`fleet-account.sh bench`), which rotates the active pointer at once, then **move** every session still on it (`migrate --account <label>`, per fleet, backgrounded) — the same close + `--resume` a banner triggers, minus the wall. **Nowhere to move** (issue #567: every other account is benched or at its ceiling too) ⇒ bench only, no fan-out — the toast/notify say so, and the sessions stay put until the reset; a walled session waiting for its own reset beats one cold-booted back into the same wall |
 
 Each step fires once per (account, reset window). New sessions, meanwhile, go
-to the eligible account with the **most headroom** (`fleet-account.sh active`
-reads the cached ccquota rows; the current account is kept while it is within
-10 points of the best, so spawns don't flip-flop). Everything fails open: no
-ccquota on `PATH`, no URL, an unreachable hub or an `unknown` verdict → no
-rows → the banner path above, unchanged.
+to the eligible account that **ranks best** (`fleet-account.sh active` reads the
+cached ccquota rows; the current account is kept while it is within
+`FLEET_ACCOUNT_PICK_HYST` (10) points of the best, so spawns don't flip-flop) —
+see [the ranking](#which-account-a-new-spawn-lands-on-issue-598) for what "best"
+means. Everything fails open: no ccquota on `PATH`, no URL, an unreachable hub or
+an `unknown` verdict → no rows → the banner path above, unchanged.
+
+### Which account a new spawn lands on (issue #598)
+
+The ranking is `5h-headroom × 2 + 7d-headroom`, over the eligible accounts the
+ceiling has not already thrown out. **The 5-hour window counts double because it
+expires**: whatever a window does not spend evaporates at its reset and can never
+be recovered, while weekly headroom just sits there. The 7-day term still counts,
+so an account one spawn away from its weekly ceiling does not win on a fresh 5h
+window alone.
+
+It used to be ccquota's own `headroom_pct` = `100 - max(5h, 7d)`, which reads the
+two windows as if they were one budget. Live pool, 2026-09-13:
+
+```
+ly297@georgetown.edu     5h  0% · 7d 80%     headroom 20
+verky@24helpful.com   ●  5h 77% · 7d 51%     headroom 23
+```
+
+The account with a **completely unused 5-hour window** scored *below* the one
+that was already three-quarters through its own, so every spawn kept landing on
+the second — which went 8% → 77% in four hours while the first sat at 0% for the
+whole window and then reset. That is not a phase problem; that is a full window
+of a paid subscription thrown away by the fleet's own rotation logic. Under the
+ranking above the same rows score 220 and 95, and the spawn goes to the idle
+window.
+
+`FLEET_ACCOUNT_PICK=minmax` restores the old answer — a one-line rollback, not a
+recommendation.
+
+### Staggering the 5h windows so they don't all reset together (issue #598)
+
+N subscriptions first used at around the same time keep their 5-hour windows in
+the **same phase**: they burn down together and reset together, so the pool's
+total headroom is a sawtooth whose trough is a full outage. The bigger the pool,
+the sharper it gets.
+
+A window's phase is not settable — the window opens when the account is first
+used and runs five hours from there. So the only lever is **when each account is
+first used**, and the plan is a queue of start slots, not a rotation:
+
+```
+fleet-account.sh phase                  # the pool's phase table: live windows + pending slots
+fleet-account.sh phase --plan           # the 5h/N stagger it WOULD apply (dry run)
+fleet-account.sh phase --plan --apply   # …write it; new spawns honour the slots
+fleet-account.sh phase --clear [label]  # drop it
+```
+
+With three accounts and nothing running, that is the textbook case — slots at
+T+0, T+100min, T+200min. What it does *not* do matters as much:
+
+- **An account mid-window is never held.** Its phase is a fact, not a choice; the
+  plan is anchored on it and everything else is placed relative to it.
+- **A benched account is not in the plan at all** — no row, so no hold.
+- **A slot that already went by is released at once**, not pushed into the next
+  window. Waiting costs up to a full window of a paid subscription, and buying a
+  textbook phase with a window nobody spends is the loss this is here to stop.
+- **A hold can never starve the pool.** `pick_active` runs twice — once honouring
+  the plan, once ignoring it — so a spawn always has an account to run on.
+- Window starts come from ccquota (`five_hour.resets_at - 5h`), never from a
+  local guess. ccquota reports a `resets_at` even for an account with no live
+  window, so `utilization > 0` is what says a window is really open.
+
+`FLEET_ACCOUNT_PHASE=0` ignores any written plan (kill switch).
+`FLEET_ACCOUNT_PHASE_AUTO=1` lets the quota watch re-plan once per window instead
+of only when you run it by hand — **off by default**: that tick is what keeps the
+fleet alive, so arming it is a deliberate act.
 
 ### The watch is its own tick, and it tells you when it is blind (issue #551)
 
@@ -363,7 +430,11 @@ fleet-quotawatch.sh --status      # off | never | fresh | stale  + the cache age
 fleet-quotawatch.sh --dry-run     # what this tick WOULD do per account, no side effects
 fleet-account.sh quota            # what the watch sees: label · 5h% · 7d% · headroom · resets · %/h
 fleet-account.sh quota --refresh  # bypass the FLEET_ACCOUNT_QUOTA_TTL (60s) cache
-fleet-account.sh list             # …the same numbers, coloured, next to each account
+fleet-account.sh list             # …the same numbers, coloured, next to each account,
+                                  #    plus each live 5h window's time left (`win 40m left`)
+                                  #    or `win idle` — an idle window is capacity bleeding away
+fleet-account.sh phase            # the 5h-window phase table (issue #598)
+fleet-account.sh phase --plan     # the 5h/N stagger it would apply, dry
 fleet-doctor.sh                   # "quota" row: hub reachable, N/M pool labels mapped
 ```
 
