@@ -247,6 +247,14 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 > 主动武装；quotawatch 自动重排默认关；hold 永远 fail-open（两遍 `pick_active`）。
 > 一行回滚 `FLEET_ACCOUNT_PICK=minmax`。
 >
+> **上线后实测（2026-09-14，三个 fleet 共 12 个 worker 窗口的账号分布）：**
+> ```
+> 修复前   17 verky@24helpful · 1 verky.yi · 1 ly297     ← 全压在一份上
+> 修复后    7 ly297 · 5 verky@24helpful · 1 verky.yi      ← 真的在轮着用
+> ```
+> 同期 `ly297` 的 7d 用量从 8% 涨到 17%（此前四小时纹丝不动），`●` 也移了过去。
+> **排名修正是有效的,不只是理论上更对。**
+>
 > ⚠️ 未验证路径（PR 自陈）：quotawatch 自动重排块没在真实 daemon tick 跑过；
 > `migrate` 只做代码推理未实跑；相位的真实收益要一整个 5h 周期才看得出。
 
@@ -460,6 +468,30 @@ M3 的工作量因此**显著下降**，但「让第二个人装得上」的目�
 - 不拿 star 数当成功指标：`obra/superpowers` 285,822★ 无 eval harness，
   `microsoft/skills` 3,011★ 有 CI eval harness。**skills 类目里 star 是社交货币,
   不是质量信号。** 用 `claude plugin eval` 通过率。
+
+## 九之二、多机器的版本漂移(2026-09-14 实测发现)
+
+**`/fleet-sync-install` 是 per-machine 且手动的,所以第二台机器会静默落后。**
+
+实测：操作员问「mini 上的 fleet 是最新的吗」，查下来 **macmini 的 live install 落后
+28 个提交**（停在 PR #539），缺了 #603 base branch 修正、#617 配额排名修正、
+#608 能力矩阵 —— 而 mini 正是那台跑长时任务的共享机器。没有任何信号提示过它落后。
+
+同步它要手工处理：fast-forward + 5 个改动的 launchd 单元重载 + 1 个**新** daemon
+（quotawatch）模板化并 bootstrap + 3 个 commands + 1 个 skill 目录镜像。
+同步后 doctor 从「1 WARN」到 21 PASS 全绿（顺带修掉 memory 里挂了很久的
+macmini 信任 TODO）。
+
+### 对打包方案的影响
+
+| | |
+|---|---|
+| **这是打包前的真问题** | 一个 5 人团队有 5+ 台机器。按现在的机制，每台都要有人记得手工跑 `/fleet-sync-install`，而落后了**没有任何提示** |
+| **强化了 [#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）的优先级** | plugin 的 SessionStart 自动更新正好封死这个坑 —— 这也是 teamai-cli 那套 git 模型的核心价值 |
+| **doctor 应该能看见别的机器** | 现在 `fleet-doctor.sh` 只体检本机。多机器场景下需要一个「这台机器落后主干 N 个提交」的检查项 |
+
+> ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
+> tmux/fzf/gh/claude 全部 not found。远程体检要走 `zsh -lc`。
 
 ## 十、共享 mini 的正确形态
 
