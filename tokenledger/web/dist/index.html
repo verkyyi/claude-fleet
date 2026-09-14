@@ -69,6 +69,17 @@
     </div>
     <section id="analysis"></section>
 
+    <!-- The progress band. It is a band of its own, not a card inside Usage,
+         because it answers a different question: Usage says what drove the
+         figures above, this says what those figures BOUGHT. Renders as
+         nothing on a hub no shipper pushes repo facts to -- a feature nobody
+         turned on should leave the page exactly as it was. -->
+    <div class="band" id="repo-band" hidden>
+      <span class="band-title" data-i18n="band.progress">Progress</span>
+      <span class="band-note" data-i18n="band.progress.note">what the spend bought</span>
+    </div>
+    <section id="repo"></section>
+
     <details id="ops" class="ops">
       <summary>
         <span class="ops-title" data-i18n="ops.title">Operations</span>

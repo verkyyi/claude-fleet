@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 21 {
-		t.Fatalf("tools = %d, want 21", len(tools))
+	if len(tools) != 24 {
+		t.Fatalf("tools = %d, want 24", len(tools))
 	}
 
 	want := map[string]bool{
@@ -126,6 +126,7 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"usage_by_user": false, "usage_by_project": false,
 		"usage_by_session": false, "usage_history": false,
 		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
+		"list_repos": false, "repo_progress": false, "list_repo_issues": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
@@ -370,13 +371,16 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2", "a3")
 
-	countRows := func() (int, int) {
-		var ev, ep int
+	seedRepo(t, st)
+
+	countRows := func() (int, int, int) {
+		var ev, ep, ri int
 		st.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&ev)
 		st.DB().QueryRow(`SELECT COUNT(*) FROM endpoints`).Scan(&ep)
-		return ev, ep
+		st.DB().QueryRow(`SELECT COUNT(*) FROM repo_issues`).Scan(&ri)
+		return ev, ep, ri
 	}
-	beforeEv, beforeEp := countRows()
+	beforeEv, beforeEp, beforeRI := countRows()
 
 	for _, tool := range []string{
 		"list_accounts", "get_limits", "list_endpoints",
@@ -384,11 +388,14 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	} {
 		call(t, ts, tool, map[string]any{"account": "acct-a"})
 	}
+	call(t, ts, "list_repos", nil)
+	call(t, ts, "repo_progress", map[string]any{"repo": "o/r"})
+	call(t, ts, "list_repo_issues", map[string]any{"repo": "o/r"})
 
-	afterEv, afterEp := countRows()
-	if beforeEv != afterEv || beforeEp != afterEp {
-		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d",
-			beforeEv, afterEv, beforeEp, afterEp)
+	afterEv, afterEp, afterRI := countRows()
+	if beforeEv != afterEv || beforeEp != afterEp || beforeRI != afterRI {
+		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d, repo issues %d->%d",
+			beforeEv, afterEv, beforeEp, afterEp, beforeRI, afterRI)
 	}
 }
 

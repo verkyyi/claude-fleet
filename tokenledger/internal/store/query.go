@@ -86,7 +86,12 @@ func (s *Store) ListAccounts() ([]Account, error) {
 // ListEndpoints returns the endpoints for one account, or all when account is
 // empty.
 func (s *Store) ListEndpoints(account string, sources ...string) ([]Endpoint, error) {
-	q := endpointColumns + ` FROM endpoints WHERE 1=1`
+	// Repo shippers are enrolled endpoints but they are not part of the fleet:
+	// they never collect usage, so every surface fed from here -- the roster,
+	// the stale-agent finding -- would report one as a machine that stopped
+	// reporting. Their health is visible where it means something, on the
+	// repositories list's observed_at.
+	q := endpointColumns + ` FROM endpoints WHERE kind = 'agent'`
 	var args []any
 	if account != "" && account != AllAccounts {
 		q += ` AND (account_uuid = ? OR endpoint_id IN (SELECT endpoint_id FROM endpoint_accounts WHERE account_uuid = ?))`

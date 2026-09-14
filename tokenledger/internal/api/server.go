@@ -99,6 +99,10 @@ func (s *Server) Handler() http.Handler {
 	// Live reports authenticate per endpoint, like ingest.
 	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
 	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
+	// Repo progress ships on an enrollment token too, but carries no identity:
+	// see handleRepoIngest for why it is a sibling of /v1/ingest rather than
+	// another optional field on the usage batch.
+	mux.HandleFunc("/v1/ingest/repo", s.handleRepoIngest)
 
 	// The way in. Outside the viewer-token gate on purpose, and mounted
 	// unconditionally: when SSO is not configured the handler answers 404, so
@@ -127,6 +131,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
 	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
 	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
+	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
+	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))
+	mux.Handle("/v1/repo/issues", s.viewerOnly(http.HandlerFunc(s.handleRepoIssues)))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))

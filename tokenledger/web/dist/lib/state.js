@@ -9,7 +9,7 @@ export const SORTS = ['tokens', 'cost', 'started', 'duration', 'turns'];
 // which mean nothing for a provider row. One shared key would let a session
 // sort survive into a table that cannot honour it.
 export const CSORTS = ['cost', 'tokens', 'events'];
-export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost' });
+export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -37,6 +37,7 @@ export function parse(hash) {
   s.g2 = pick(p.get('g2'), GROUPS, DEFAULTS.g2);
   s.sort = pick(p.get('sort'), SORTS, DEFAULTS.sort);
   s.csort = pick(p.get('csort'), CSORTS, DEFAULTS.csort);
+  s.repo = p.get('repo') || DEFAULTS.repo;
   return s;
 }
 
@@ -51,6 +52,7 @@ export function format(s) {
   if (s.g2 !== DEFAULTS.g2) p.set('g2', s.g2);
   if (s.sort !== DEFAULTS.sort) p.set('sort', s.sort);
   if (s.csort !== DEFAULTS.csort) p.set('csort', s.csort);
+  if (s.repo) p.set('repo', s.repo);
   const path = '#/' + (s.session ? 'session/' + encodeURIComponent(s.session) : '');
   const qs = p.toString();
   return qs ? path + '?' + qs : path;

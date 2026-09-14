@@ -84,6 +84,7 @@ func migrate(db *sql.DB) error {
 		{"accounts", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "kind", "TEXT NOT NULL DEFAULT 'agent'"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -308,6 +309,20 @@ func (s *Store) Enroll(endpointID, label, tokenHash string) error {
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 	row := s.db.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)
 	return scanEndpoint(row)
+}
+
+// MarkRepoShipper records that this enrollment pushes repo progress rather
+// than usage, so the fleet surfaces stop reading its silence as a failure.
+//
+// Called on every repo push rather than once: it is a cheap idempotent write,
+// and making it conditional would mean reading the row first on a path whose
+// whole job is to be a sink.
+func (s *Store) MarkRepoShipper(endpointID string) error {
+	_, err := s.db.Exec(`UPDATE endpoints SET kind = 'repo_shipper' WHERE endpoint_id = ?`, endpointID)
+	if err != nil {
+		return fmt.Errorf("mark repo shipper: %w", err)
+	}
+	return nil
 }
 
 // endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they

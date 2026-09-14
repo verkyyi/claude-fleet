@@ -97,6 +97,19 @@ CREATE TABLE IF NOT EXISTS endpoints (
   -- credentials, and on a shared box the other homes are unreadable.
   os_user       TEXT NOT NULL DEFAULT '',
 
+  -- What this enrollment is FOR. 'agent' is a machine collecting usage;
+  -- 'repo_shipper' is a cron job pushing repo progress and nothing else.
+  --
+  -- The distinction is not cosmetic. Every fleet surface reads "enrolled but
+  -- silent" as a collection failure -- the roster, and the stale-agent
+  -- finding, which fires "<label> has never reported ... its share of every
+  -- total is under-counted until it returns". A repo shipper never reports
+  -- usage BY DESIGN, so without this column enrolling one buys a permanent
+  -- false alarm that no amount of fixing the shipper will clear. Stamped on
+  -- the first repo push, not at enrollment: what a token is for is only
+  -- knowable once it is used.
+  kind          TEXT NOT NULL DEFAULT 'agent',
+
   -- The team this endpoint's spend is allocated to.
   --
   -- Assigned by the operator, never reported by the endpoint. An endpoint that
@@ -335,3 +348,83 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
 
 CREATE INDEX IF NOT EXISTS idx_plans_period
   ON subscription_plans(source, plan, effective_from DESC);
+
+-- Repo progress: what the tokens BOUGHT.
+--
+-- Everything above this line is spend. None of it answers "this week's tokens,
+-- what actually landed?" -- the other half of that question is repo history.
+-- The issue NUMBER is the axis that joins the two: a fleet-style orchestrator
+-- binds a session to an issue, a commit convention binds a commit to an issue,
+-- and this hub already keys spend by session. Two tables sharing a binary gain
+-- nothing; the same key is what makes cost-per-issue answerable.
+--
+-- Deliberately NOT keyed by account_uuid, unlike every fact table above it.
+-- Those tables carry it because they are spend, and spend belongs to a
+-- subscription -- an isolation bug there shows one team's money to another. A
+-- repository is not owned by a subscription: one repo is worked by endpoints
+-- on several plans at once, and stamping one of them onto the row would be a
+-- guess presented as a fact. Repo rows are hub-wide, and the join back to
+-- spend goes through the issue number, never through the account.
+--
+-- Two tables because they have two lifetimes. repo_days is kept forever;
+-- repo_issues is bounded (see store.PruneRepoIssues). The hub is one Go binary
+-- and one SQLite file on a single replica, and that is a property to defend,
+-- not an accident to grow out of.
+CREATE TABLE IF NOT EXISTS repo_issues (
+  repo         TEXT    NOT NULL,          -- 'owner/name'
+  number       INTEGER NOT NULL,
+  title        TEXT    NOT NULL DEFAULT '',
+  state        TEXT    NOT NULL,          -- 'open' | 'closed'
+  created_at   TEXT    NOT NULL,          -- RFC3339 UTC
+  updated_at   TEXT,
+  closed_at    TEXT,                      -- NULL while open
+  labels_json  TEXT    NOT NULL DEFAULT '[]',
+  comments     INTEGER NOT NULL DEFAULT 0,
+  url          TEXT    NOT NULL DEFAULT '',
+  -- The work landed but the issue is still open: a merged commit whose
+  -- subject references this number. NULL means nobody looked, not that
+  -- nothing shipped.
+  shipped_at   TEXT,
+  shipped_ref  TEXT    NOT NULL DEFAULT '',
+  -- When a shipper last saw this row. An open issue that stops appearing in
+  -- snapshots (deleted, transferred, or made private) would otherwise sit in
+  -- the stalled list forever; ageing it out by last sighting is what makes
+  -- the backlog self-healing without a separate "this list is complete" flag
+  -- that every shipper would have to get right.
+  observed_at  TEXT    NOT NULL,
+  PRIMARY KEY (repo, number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_issues_state ON repo_issues(repo, state, created_at);
+CREATE INDEX IF NOT EXISTS idx_repo_issues_closed ON repo_issues(repo, closed_at);
+
+-- One UTC day of flow per repository, pre-aggregated by the shipper because it
+-- is the only party holding the full history.
+--
+-- This is the table that answers "what did the backlog look like two weeks
+-- ago" -- a question GitHub itself cannot answer retroactively, because its
+-- API exposes only each issue's CURRENT state. Storing rendered output instead
+-- would make that history impossible, which is why nothing here is HTML.
+--
+-- The percentile columns are NULL rather than 0 when the shipper did not
+-- compute them, for the same reason usage_events.cost_usd is NULL rather than
+-- 0: zero is a claim that issues close instantly, NULL is an admission that
+-- nobody measured. Every age judgement scales to these and never to a
+-- constant -- in a repo whose median issue closes in three hours, "stale after
+-- 30 days" carries no information.
+CREATE TABLE IF NOT EXISTS repo_days (
+  repo              TEXT    NOT NULL,
+  day               TEXT    NOT NULL,     -- YYYY-MM-DD, UTC, sorts as a string
+  opened            INTEGER NOT NULL DEFAULT 0,
+  closed            INTEGER NOT NULL DEFAULT 0,
+  open_at_end       INTEGER NOT NULL DEFAULT 0,
+  merged_prs        INTEGER,              -- NULL: the shipper does not track PRs
+  close_p50_seconds REAL,
+  close_p90_seconds REAL,
+  close_p95_seconds REAL,
+  closed_sample     INTEGER,              -- how many closes the percentiles cover
+  observed_at       TEXT    NOT NULL,
+  PRIMARY KEY (repo, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_days_day ON repo_days(repo, day DESC);

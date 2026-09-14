@@ -198,6 +198,20 @@ var limitProp = map[string]any{
 	"description": "Maximum rows to return (default 50).",
 }
 
+var repoProp = map[string]any{
+	"type":        "string",
+	"description": `Repository as "owner/name", exactly as GitHub spells it. Required: a backlog blended across repositories would be scaled by one repo's percentiles and read as if it applied to all of them. list_repos names the ones this hub holds.`,
+}
+
+// repoCaveat is the repo-progress counterpart of caveat. It says the two
+// things an agent reading these rows can get wrong: that the hub collected
+// them (it did not — a shipper pushed them, and they are only as fresh as that
+// shipper), and that an age can be judged without the repo's own distribution.
+const repoCaveat = " These rows are SHIPPED to the hub by an external collector, not gathered by it: " +
+	"observed_at is when that shipper read GitHub, and a stalled shipper shows a stale backlog " +
+	"rather than an empty one. Age is only ever meaningful against the same repo's close-time " +
+	"percentiles, never against a fixed number of days."
+
 // chipProps are the drill-down dimensions store.Filter accepts, at most one
 // value per dimension, ANDed together.
 var chipProps = map[string]any{
@@ -428,6 +442,61 @@ func toolSpecs() []toolSpec {
 					"description": `"review" (default) evaluates the period rules; "now" evaluates live alerts.`,
 				},
 			})),
+		},
+
+		// Repo progress. Agents read backlogs, humans read dashboards — one
+		// source, two renderers. Without these tools the agent side grows a
+		// second, drifting copy of the same rows.
+		{
+			Name:  "list_repos",
+			Title: "Repositories with progress data",
+			Description: "Repositories a shipper has pushed progress for, most recently observed first, " +
+				"with the open-issue count and the span of daily history held. Repo rows carry no " +
+				"account: a repository is not owned by a subscription, and the join back to spend " +
+				"goes through the ISSUE NUMBER." + repoCaveat,
+			InputSchema: obj(map[string]any{}),
+		},
+		{
+			Name:  "repo_progress",
+			Title: "Issue flow and the repo's own close-time scale",
+			Description: "Daily flow for one repository — opened, closed, open-at-end, merged PRs — plus " +
+				"the close-time percentiles measured on that repo. ALWAYS read the scale before " +
+				"judging any age: p50/p90/p95 differ by orders of magnitude between repositories, " +
+				"and a fixed threshold like \"stale after 30 days\" is meaningless where the median " +
+				"issue closes in three hours. A null scale means nobody has computed percentiles; " +
+				"say so rather than substituting one." + repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo":  repoProp,
+				"since": sinceProp,
+				"until": untilProp,
+			}, "repo"),
+		},
+		{
+			Name:  "list_repo_issues",
+			Title: "One repository's backlog, oldest first",
+			Description: "Per-issue rows for one repository, oldest first, each with age_seconds and the " +
+				"scale it should be read against. stale: true keeps only issues older than that " +
+				"repo's OWN p95 — there is deliberately no way to pass a day count. shipped: true " +
+				"keeps only issues whose work already landed in a merged commit while the issue " +
+				"stayed open; those are closes, not investigations. Per-issue rows are BOUNDED by " +
+				"retention (open issues plus recently-closed ones); the daily aggregates behind " +
+				"repo_progress are the complete long-term record." + repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo": repoProp,
+				"state": map[string]any{
+					"type": "string", "enum": []string{"open", "closed"},
+					"description": "Limit to open or closed issues. Omitted means both.",
+				},
+				"stale": map[string]any{
+					"type":        "boolean",
+					"description": "Keep only issues older than this repo's own p95 close time. Errors when no percentiles have been shipped, rather than picking a threshold.",
+				},
+				"shipped": map[string]any{
+					"type":        "boolean",
+					"description": "Keep only issues whose work already shipped in a merged commit.",
+				},
+				"limit": limitProp,
+			}, "repo"),
 		},
 	}
 }
@@ -736,9 +805,121 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}
 		return out, nil
 
+	case "list_repos":
+		rows, err := s.api.Store.Repos()
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []store.Repo{}
+		}
+		return map[string]any{"repos": rows, "disclaimer": strings.TrimSpace(repoCaveat)}, nil
+
+	case "repo_progress":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		start, end := repoRange(args)
+		days, err := s.api.Store.RepoDays(repo, start, end)
+		if err != nil {
+			return nil, err
+		}
+		if days == nil {
+			days = []model.RepoDay{}
+		}
+		scale, err := s.api.Store.RepoCloseScale(repo)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"repo":  repo,
+			"since": start.UTC().Format(model.RepoDayLayout),
+			"until": end.UTC().Format(model.RepoDayLayout),
+			"days":  days,
+			// Null on purpose when nobody has computed percentiles. An agent
+			// must report the scale as unknown, not invent one.
+			"scale":      scale,
+			"disclaimer": strings.TrimSpace(repoCaveat),
+		}, nil
+
+	case "list_repo_issues":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		state := str(args, "state")
+		if state != "" && state != model.RepoStateOpen && state != model.RepoStateClosed {
+			return nil, fmt.Errorf("state must be %q or %q", model.RepoStateOpen, model.RepoStateClosed)
+		}
+		limit := intArg(args, "limit")
+		if limit <= 0 {
+			limit = 50
+		}
+		scale, err := s.api.Store.RepoCloseScale(repo)
+		if err != nil {
+			return nil, err
+		}
+		f := store.RepoIssueFilter{
+			Repo: repo, State: state, Limit: limit,
+			ShippedOnly: boolArg(args, "shipped"), Now: time.Now(),
+		}
+		stale := boolArg(args, "stale")
+		if stale {
+			// Refusing beats answering. An agent handed a stalled list built
+			// from a threshold nobody measured cannot tell it from a measured
+			// one, and will report it as fact.
+			if scale == nil || scale.P95Seconds == nil {
+				return nil, fmt.Errorf("no close-time percentiles have been shipped for %s: "+
+					"staleness has no scale to be measured against", repo)
+			}
+			f.MinAgeSeconds = *scale.P95Seconds
+		}
+		rows, err := s.api.Store.RepoIssues(f)
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []store.RepoIssueRow{}
+		}
+		return map[string]any{
+			"repo": repo, "stale": stale, "issues": rows, "scale": scale,
+			"disclaimer": strings.TrimSpace(repoCaveat),
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
+}
+
+// repoRange mirrors timeRange but in whole days: repo flow is stored per UTC
+// day, and an hour-resolution window would silently clip the first and last.
+func repoRange(args map[string]any) (time.Time, time.Time) {
+	now := time.Now().UTC()
+	end := now.AddDate(0, 0, 1) // exclusive, so today's own row is included
+	if t, ok := parseWhen(str(args, "until"), now); ok {
+		end = t
+	}
+	start := end.AddDate(0, 0, -90)
+	if t, ok := parseWhen(str(args, "since"), now); ok {
+		start = t
+	}
+	if !start.Before(end) {
+		start = end.AddDate(0, 0, -90)
+	}
+	return start, end
+}
+
+// boolArg reads a JSON boolean, tolerating the string spellings a few clients
+// send for a checkbox.
+func boolArg(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
 }
 
 // filter builds a store.Filter from tool arguments, mirroring api.scope:

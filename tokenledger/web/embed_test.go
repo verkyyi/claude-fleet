@@ -45,6 +45,10 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		`id="page"`, `id="spend"`, `id="status"`, `id="consumption"`, `id="analysis"`,
 		// The three-tier shell: alerts above the tiers, operations folded.
 		`id="alerts"`, `id="ops"`, `id="ops-analysis"`,
+		// The progress band and its section. The band starts hidden and app.js
+		// unhides it only where a shipper has pushed repo facts, so the mount
+		// point has to exist in the shell whether or not this hub uses it.
+		`id="repo-band"`, `id="repo"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html shell is missing %q", want)
@@ -56,7 +60,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// from these attributes. Drop the attribute and that string stays English
 	// forever, in the middle of a page that translated around it.
 	for _, want := range []string{
-		`id="lang"`, `data-i18n="band.usage"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
+		`id="lang"`, `data-i18n="band.usage"`, `data-i18n="band.progress"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html is missing the i18n hook %q", want)

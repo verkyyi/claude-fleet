@@ -9,7 +9,8 @@ test('parse defaults on empty and junk', () => {
 
 test('round-trips every field', () => {
   const s = { session: null, sub: 'abc', span: '7d', from: 1788300000000, to: 1788380000000,
-    chips: { machine: 'ep1', project: '/Users/x/p q' }, g1: 'login', g2: 'branch', sort: 'cost', csort: 'tokens' };
+    chips: { machine: 'ep1', project: '/Users/x/p q' }, g1: 'login', g2: 'branch', sort: 'cost', csort: 'tokens',
+    repo: 'verkyyi/tokenledger' };
   const h = format(s);
   assert.match(h, /^#\/\?/);
   assert.deepEqual(parse(h), s);

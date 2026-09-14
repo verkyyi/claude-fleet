@@ -773,15 +773,118 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Twenty-one read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
+Twenty-four read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
 `usage_by_provider`, `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
 `usage_history`, `usage_summary`, `list_sessions`, `get_session`,
-`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
+`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`,
+`list_repos`, `repo_progress`, `list_repo_issues`.
+
+The last three read repo progress rather than spend. They exist because agents
+read backlogs and humans read dashboards: one source, two renderers. A second
+agent-facing copy of the same rows would drift from this one within a week.
 
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security
 surface than "tell me what my fleet spent".
+
+## Repo progress — what the tokens bought
+
+The sections above answer *how much* a subscription spent and *where* it went.
+They cannot answer what that spend produced. A hub can also hold repository
+progress — issues opened and closed, how long they live, what is stalled — and
+hold it **under the same key**:
+
+- the hub already keys spend by account / machine / session
+- a fleet-style orchestrator binds a session to an issue
+- a commit convention binds a commit to an issue
+
+`issue` is the axis that joins all three. That is why this is not a second
+dashboard beside the ledger: two dashboards sharing a binary gain nothing, and
+the same key is what makes cost-per-issue and cost-per-merged-PR answerable at
+all.
+
+**The collector is deliberately not in this binary.** Which repositories, which
+credentials, how often, behind which firewall — every one of those is a
+per-team decision, and folding them in here would couple hub releases to
+collection logic. The hub is a sink. A shipper POSTs snapshots into it, the way
+endpoint agents already do.
+
+### Shipping a snapshot
+
+Mint a token for the shipper the same way you enroll a machine, then POST:
+
+```bash
+curl -s https://your-hub/v1/ingest/repo \
+  -H "Authorization: Bearer $SHIPPER_TOKEN" \
+  -H 'Content-Type: application/json' -d @- <<'JSON'
+{
+  "repo": "owner/name",
+  "observed_at": "2026-09-14T03:00:00Z",
+  "issues": [
+    {"number": 32, "state": "open", "created_at": "2026-09-01T10:00:00Z",
+     "title": "hub: ingest repo-progress facts", "labels": ["enhancement"],
+     "comments": 3, "url": "https://github.com/owner/name/issues/32",
+     "shipped_at": "2026-09-12T08:00:00Z", "shipped_ref": "e10e39c"}
+  ],
+  "days": [
+    {"day": "2026-09-13", "opened": 4, "closed": 6, "open_at_end": 431,
+     "merged_prs": 5, "close_p50_seconds": 11232, "close_p90_seconds": 397440,
+     "close_p95_seconds": 941760, "closed_sample": 2257}
+  ]
+}
+JSON
+```
+
+It is an enrollment token, not the viewer token — one credential per shipper,
+revocable on its own. Unlike `/v1/ingest` it carries no identity: a repo shipper
+is a cron job with a GitHub token, not a machine running an agent, and making it
+invent an `account_uuid` to be let in would stamp a fabricated attribution on
+every row it writes. **Repo rows carry no account at all**, deliberately: one
+repository is worked by endpoints on several plans at once, so naming one of
+them would be a guess presented as a fact.
+
+Everything is upserted on `(repo, number)` and `(repo, day)`, so a retry is a
+no-op and a large backlog can be paged across several POSTs under one
+`observed_at`. An older snapshot never overwrites a newer one — after a retry
+they can arrive out of order, and a stale row would silently reopen a closed
+issue.
+
+### Two lifetimes, on purpose
+
+- **Daily rows are kept forever.** They are one row per repo per day, and they
+  are the only record of what the backlog looked like *last Tuesday* — a
+  question GitHub itself cannot answer retroactively, because its API exposes
+  only each issue's current state. This is also why the hub stores rows and
+  never rendered output: stored HTML makes history impossible.
+- **Per-issue rows are bounded** by the same `--retention-days` window the raw
+  event ledger uses. A closed issue ages out once the daily rows have absorbed
+  it, and an open issue no shipper has reported for a whole window ages out too
+  — it was deleted, transferred or made private upstream, and a phantom at the
+  top of a stalled list is where a wrong row does the most damage.
+
+One binary and one SQLite file on a single replica is a property worth
+defending. A reporting feature must not turn storage into an operational
+problem for what was previously just a token ledger.
+
+### Thresholds come from the repository, never from this README
+
+Nothing here says "stale after 30 days", and nothing in the code does either.
+The close-time percentiles a shipper sends are the scale every age is judged
+against, and they differ by orders of magnitude between repositories. Measured
+on one real repo — 2,688 issues in 82 days — the median issue closed in 0.13
+days, p90 was 4.6 and p95 10.9, with 149 of 431 open issues past p95. A
+threshold that fits that repository fits no other.
+
+So when no percentiles have been shipped, the hub does not substitute one:
+`/v1/repo/issues?stale=1` answers `409`, the MCP tool errors, and the dashboard
+card says the scale is unknown. A confident "12 stale issues" computed from a
+number nobody measured is worse than no answer, because a reader cannot tell it
+from a measured one.
+
+Read it back over `/v1/repos`, `/v1/repo/flow`, `/v1/repo/issues` — the
+dashboard's Progress band and the three MCP tools are two renderers over those
+same rows, never two copies of them.
 
 ## How it works, and what that costs you
 

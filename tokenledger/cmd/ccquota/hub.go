@@ -405,15 +405,30 @@ func isLoopback(host string) bool {
 
 // pruneLoop trims raw events past the retention window once a day. Rollups and
 // limit snapshots are kept: they are small and are the long-term record.
+//
+// Repo progress is bounded on the same schedule and by the same window, for
+// the same reason and with the same trade: repo_days is the long-term record
+// and is never touched, while the per-issue rows behind it are detail that
+// ages out. One knob rather than two, because a hub with two retention windows
+// has two ways to be surprised by its own disk.
 func pruneLoop(ctx context.Context, st *store.Store, days int) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
-		n, err := st.PruneEvents(time.Now().AddDate(0, 0, -days))
+		cut := time.Now().AddDate(0, 0, -days)
+		n, err := st.PruneEvents(cut)
 		if err != nil {
 			log.Printf("prune: %v", err)
 		} else if n > 0 {
 			log.Printf("pruned %d events older than %d days", n, days)
+		}
+		// A repo-progress failure must not stop event pruning, and vice
+		// versa: they are independent tables and the loop that keeps the disk
+		// bounded should not be taken out by whichever one broke.
+		if n, err := st.PruneRepoIssues(cut); err != nil {
+			log.Printf("prune repo issues: %v", err)
+		} else if n > 0 {
+			log.Printf("pruned %d repo issue rows older than %d days (day rows kept)", n, days)
 		}
 		select {
 		case <-ctx.Done():

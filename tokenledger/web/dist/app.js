@@ -6,6 +6,7 @@ import { renderNow } from './now.js';
 import { renderReview, SUMMARY_INDEX } from './review.js';
 import { renderSpend } from './spend.js';
 import { renderConsumption } from './consumption.js';
+import { renderRepo } from './repo.js';
 import { apiQuery } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { renderDetail, closeDetail } from './session.js';
@@ -16,6 +17,11 @@ import { useFxRate } from './lib/format.js';
 export const app = {
   state: parse(location.hash),
   accounts: [],
+  // Repositories a shipper has pushed progress for. Read once at boot: the
+  // list changes when somebody points a new shipper at this hub, which is not
+  // a per-minute event, and an empty list is the normal state of every hub
+  // that never turned the feature on.
+  repos: [],
   now: () => Date.now(),
   async api(path, signal) {
     // Every request carries the locale, in ONE place: the server's own notes
@@ -38,7 +44,7 @@ export const app = {
   },
 };
 
-const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader() };
+const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader(), repo: createLoader() };
 let lastRendered = '';
 
 function route() {
@@ -102,8 +108,14 @@ async function load() {
     }), signal)],
     apply: ([r]) => renderConsumption($('#consumption'), r, s, app, range),
   };
+  // The progress tier renders only where a shipper has pushed something. A
+  // hub that never turned the feature on must look exactly as it did before
+  // it landed -- no empty card, no band, no extra request per route.
+  const repoR = renderRepo($('#repo'), s, app, app.repos);
+  const band = $('#repo-band');
+  if (band) band.hidden = !repoR;
   root.setAttribute('aria-busy', 'true'); setBusy(true);
-  const [a, b, c] = await Promise.all([
+  const [a, b, c, d] = await Promise.all([
     loaders.now.run(nowR.fetchers, nowR.apply),
     loaders.consumption.run(consumptionR.fetchers, consumptionR.apply),
     loaders.review.run(reviewR.fetchers, (results) => {
@@ -112,10 +124,11 @@ async function load() {
       renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
       reviewR.apply(results);
     }),
+    repoR ? loaders.repo.run(repoR.fetchers, repoR.apply) : Promise.resolve(true),
   ]);
-  if (a && b && c) {
+  if (a && b && c && d) {
     root.setAttribute('aria-busy', 'false');
-    setBusy(loaders.now.inFlight || loaders.review.inFlight || loaders.consumption.inFlight);
+    setBusy(loaders.now.inFlight || loaders.review.inFlight || loaders.consumption.inFlight || loaders.repo.inFlight);
   }
 }
 
@@ -166,9 +179,19 @@ async function boot() {
     ? Promise.resolve(null)
     : app.api(`/v1/fx?base=USD&target=${encodeURIComponent(display)}`).catch(() => null);
   const accountsReq = app.api('/v1/accounts');
+  // Third request, sent at the same time as the other two and awaited after
+  // them. It depends on nothing, and #30 is the standing lesson about what
+  // putting a dependency-free request on the critical path costs a viewer
+  // outside the cluster: a whole round trip staring at an empty page.
+  //
+  // Failure is not an error state, for the same reason a missing FX feed is
+  // not: a hub with no repo data is a working hub, and it is also what every
+  // hub predating this feature looks like.
+  const reposReq = app.api('/v1/repos').catch(() => []);
   try { app.accounts = await accountsReq; }
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, t('app.unreachable', { error: err.message }))); return; }
   useFxRate(await fxReq);
+  app.repos = await reposReq;
   addEventListener('hashchange', route);
   route();
   // The stored cards refresh every minute; the analysis section only when the
