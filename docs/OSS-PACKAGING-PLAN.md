@@ -229,7 +229,27 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 
 没有这一层，池化会退化成公地悲剧 —— 这是比合规更现实的失败模式。
 
-#### ② 相位错开
+#### ② 相位错开 ✅ 已完成 2026-09-14（PR #617）
+
+> **实施时挖出一个更根本的 bug：池子根本没在轮着用。**
+> 旧排名把 5h 与 7d 当同一份预算比（`100 - max(5h,7d)`），于是 **5h 窗口一点没用过**
+> 的账号得分反而更低：
+> ```
+> ly297@georgetown.edu     5h  0% · 7d 80%   headroom 20   ← 整个 5h 窗口闲置
+> verky@24helpful.com   ●  5h 77% · 7d 51%   headroom 23   ← 每次 spawn 继续堆这里
+> ```
+> 新排名 `5h余量×2 + 7d余量` → 同样两行变成 **220 vs 95**。
+> 依据：**5h 窗口过期作废**，没花完的部分在 reset 时蒸发；周额度只是放在那里。
+> 上线后 `●` 当即从 `verky@24helpful` 移到 `ly297`。
+>
+> 分层安全取向（派工时明确要求不自落、留给操作员 review）：排名修正默认生效
+> （正在流血的伤口，且仍受 `CEILING` 门控）；相位 hold 需 `phase --plan --apply`
+> 主动武装；quotawatch 自动重排默认关；hold 永远 fail-open（两遍 `pick_active`）。
+> 一行回滚 `FLEET_ACCOUNT_PICK=minmax`。
+>
+> ⚠️ 未验证路径（PR 自陈）：quotawatch 自动重排块没在真实 daemon tick 跑过；
+> `migrate` 只做代码推理未实跑；相位的真实收益要一整个 5h 周期才看得出。
+
 
 池子越大收益越明显：8 份账号若同时启动，5h 窗口会同时耗尽同时 reset，
 出现整段空窗。按 `5h / 8 = 37.5min` 错开首次启动，池子的可用余量就被摊平成一条直线。
@@ -559,7 +579,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 
 | issue | 内容 | 依赖 |
 |---|---|---|
-| [#598](https://github.com/verkyyi/claude-fleet/issues/598) | 相位错开 `5h / N` | 最独立，先做 |
+| ~~[#598](https://github.com/verkyyi/claude-fleet/issues/598)~~ | ~~相位错开 `5h / N`~~ | ✅ **已完成并上线**（PR #617）—— 顺带挖出并修掉更根本的 bug，见下 |
 | [#600](https://github.com/verkyyi/claude-fleet/issues/600) | 池内 token 打标签 + 接 ccquota team 归因 | #598 要读它的窗口起点 |
 | [#601](https://github.com/verkyyi/claude-fleet/issues/601) | 争用策略：issue 优先级 + 人均熔断 | 独立 |
 | [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出 → Codex（头条）** | 可先上「换 agent」版 |
