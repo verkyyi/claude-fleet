@@ -142,19 +142,33 @@ async function boot() {
   // the page's furniture in one language while the cards arrive in another.
   localizeShell(t);
   wireOpsFold();
-  // The display rate, BEFORE the first render.
+  // The display rate and the account list, TOGETHER.
   //
-  // One fetch for the whole page, and it must land before any card draws: a
-  // card that rendered at no rate and a card that rendered at one would show
-  // the same money two ways on one screen. Failure is not an error state —
-  // a hub with no route to an FX feed shows every figure in the currency it
-  // was billed in, which is the truthful rendering anyway.
-  try {
-    const display = displayCurrency();
-    useFxRate(display === 'USD' ? null : await app.api(`/v1/fx?base=USD&target=${encodeURIComponent(display)}`));
-  } catch { useFxRate(null); }
-  try { app.accounts = await app.api('/v1/accounts'); }
+  // Both must be in hand before the first render — the rate because a card that
+  // drew at no rate beside one that drew at a rate would show the same money
+  // two ways on one screen, the accounts because route() resolves the
+  // subscription against them. But neither depends on the other, so they go out
+  // at the same time.
+  //
+  // They used to be sequential, and it cost a whole round trip on the critical
+  // path for exactly the viewers who need the rate: measured against the
+  // deployed hub, one request is ~600ms from outside the cluster, so a Chinese
+  // viewer waited ~600ms staring at an empty page before the account fetch even
+  // started. It was invisible in local testing, where the same hop is 4ms —
+  // which is precisely why it shipped.
+  //
+  // Failure of the rate is not an error state: a hub with no route to an FX
+  // feed shows every figure in the currency it was billed in, which is the
+  // truthful rendering anyway. Failure of the accounts IS, and only that one
+  // stops the boot.
+  const display = displayCurrency();
+  const fxReq = display === 'USD'
+    ? Promise.resolve(null)
+    : app.api(`/v1/fx?base=USD&target=${encodeURIComponent(display)}`).catch(() => null);
+  const accountsReq = app.api('/v1/accounts');
+  try { app.accounts = await accountsReq; }
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, t('app.unreachable', { error: err.message }))); return; }
+  useFxRate(await fxReq);
   addEventListener('hashchange', route);
   route();
   // The stored cards refresh every minute; the analysis section only when the

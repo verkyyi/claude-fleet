@@ -268,6 +268,46 @@ func TestDashboard_ThePageReportsOnlyRealMoney(t *testing.T) {
 	}
 }
 
+// The boot fetches must not be serialised behind one another.
+//
+// app.js needs two things before the first render: the account list (route()
+// resolves the subscription against it) and the display FX rate (a card drawn at
+// no rate beside one drawn at a rate shows the same money two ways). Neither
+// depends on the other, so both go out at once.
+//
+// They were sequential once, and the cost was invisible in every local test:
+// the hop is ~4ms against a hub on loopback and ~600ms against the deployed one,
+// so a viewer whose locale needs a rate waited most of a second on a blank page
+// while the account fetch had not even started. A latency regression that only
+// appears over a real network is exactly the kind that ships, which is why this
+// is a guard rather than a comment.
+func TestDashboard_BootFetchesAreConcurrent(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "app.js")
+	if err != nil {
+		t.Fatalf("app.js unreadable: %v", err)
+	}
+	src := string(b)
+	// Awaiting the rate before the account request is ISSUED is the regression:
+	// it puts a whole round trip in front of everything the page draws.
+	if strings.Contains(src, "await app.api(`/v1/fx") || strings.Contains(src, "await app.api('/v1/fx") {
+		t.Error("app.js awaits the FX rate inline; issue it alongside /v1/accounts and await both after, " +
+			"or every viewer needing a rate pays an extra round trip before the page starts loading")
+	}
+	// Both requests must be in flight before either is awaited.
+	fxAt := strings.Index(src, "/v1/fx")
+	accAt := strings.Index(src, "app.api('/v1/accounts')")
+	if fxAt < 0 || accAt < 0 {
+		t.Fatal("app.js no longer issues both boot fetches; this guard needs updating with them")
+	}
+	firstAwait := strings.Index(src[min(fxAt, accAt):], "await ")
+	if firstAwait < 0 {
+		return
+	}
+	if between := src[min(fxAt, accAt) : min(fxAt, accAt)+firstAwait]; !strings.Contains(between, "/v1/accounts") || !strings.Contains(between, "/v1/fx") {
+		t.Error("one boot fetch is awaited before the other is issued; they must both be in flight first")
+	}
+}
+
 // A card's own title must outrank the headings inside it.
 //
 // `.card > h2` styles only the direct child, so an h2 one level deeper falls
