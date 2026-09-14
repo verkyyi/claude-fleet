@@ -438,3 +438,7 @@ details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 10
 #consumption-table tr.models > td { padding: 4px 0 10px 18px; background: transparent; }
 #consumption-table table.sub { width: auto; font-size: 12.5px; }
 #consumption-table table.sub td { border: 0; padding: 2px 14px 2px 0; color: var(--ink-2); }
+
+/* The folded tail: present and countable, but visibly not one of the rows that
+   carry a number worth reading. */
+.folded td { color: var(--ink-3); font-style: italic; }

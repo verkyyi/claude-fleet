@@ -6,7 +6,7 @@
 // column's tooltip, and collection health further down.
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtCost } from './lib/format.js';
-import { consumptionRows, sortRows } from './lib/rows.js';
+import { consumptionRows, foldTail, sortRows } from './lib/rows.js';
 import { CSORTS } from './lib/state.js';
 import { costOf, KIND_LABEL } from './lib/cost.js';
 
@@ -65,7 +65,9 @@ export function renderConsumption(root, result, state, app, range) {
     return;
   }
   const d = result.value;
-  const rows = sortRows(consumptionRows(d.buckets), state.csort);
+  // Fold AFTER sorting, so each kind's tail row lands at the end of its own run
+  // rather than being ordered among the rows it replaces.
+  const rows = foldTail(sortRows(consumptionRows(d.buckets), state.csort));
   const card = el('div', { class: 'card', id: 'consumption-table' },
     el('h2', {}, 'Consumption'),
     el('p', { class: 'hint' },
@@ -82,6 +84,18 @@ export function renderConsumption(root, result, state, app, range) {
 
   const body = el('tbody');
   for (const r of rows) {
+    // The folded row stands for several providers at once, so there is no single
+    // ?provider= to expand it by. It renders as plain text rather than a button
+    // that would look clickable and do nothing.
+    if (r.provider === null) {
+      body.append(el('tr', { class: 'folded' },
+        el('td', {}, r.providerLabel),
+        el('td', {}, BILLING[r.kind]),
+        el('td', { class: 'num' }, fmtInt(r.events)),
+        el('td', { class: 'num' }, r.tokens == null ? '—' : fmtInt(r.tokens)),
+        el('td', { class: 'num' }, '—')));
+      continue;
+    }
     // NOT class="detail": that name is taken by the session overlay, which is
     // position:fixed — reusing it turns this row into a floating panel.
     const detail = el('tr', { class: 'models', hidden: true }, el('td', { colspan: '5' }));

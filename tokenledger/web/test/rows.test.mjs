@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { consumptionRows, sortRows } from '../dist/lib/rows.js';
+import { consumptionRows, foldTail, sortRows } from '../dist/lib/rows.js';
 
 const gw = (n, cost) => ({ source: 'gateway', kind: 'billed', events: n, cost_usd: cost, unpriced_events: 0 });
 const cc = (n, cost) => ({ source: 'claude', kind: 'notional', events: n, cost_usd: cost, unpriced_events: 0 });
@@ -98,4 +98,109 @@ test('a token-heavy subscription row never outranks a metered one', () => {
     { provider: 'gw', kind: 'billed', cost: 0.01, tokens: 5, events: 1 },
   ];
   assert.deepEqual(sortRows(rows, 'cost').map((r) => r.provider), ['gw', 'sub']);
+});
+
+// ── the tail fold ────────────────────────────────────────────────────────
+// Modelled on the real 30-day table: four bare-IP gateway "providers" with one
+// or two requests and no charge, beside a vendor bill of $38.37 that has only
+// SEVEN requests. Folding by request count alone would hide the largest amount
+// in the table.
+const realShape = () => [
+  { provider: 'dashscope.aliyuncs.com', kind: 'billed', events: 1555, tokens: 2326517, cost: 0.2678, unpriced: 35 },
+  { provider: 'api.deepseek.com', kind: 'billed', events: 107, tokens: 102122, cost: 0, unpriced: 107 },
+  { provider: 'volc', kind: 'billed', events: 7, tokens: null, cost: 38.3681, unpriced: 0 },
+  { provider: 'aliyun', kind: 'billed', events: 2, tokens: null, cost: 0.9241, unpriced: 0 },
+  { provider: '180.184.47.154', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 1 },
+  { provider: '39.96.198.249', kind: 'billed', events: 2, tokens: null, cost: 0, unpriced: 2 },
+  { provider: '39.96.213.166', kind: 'billed', events: 2, tokens: null, cost: 0, unpriced: 2 },
+  { provider: '8.140.217.18', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 1 },
+];
+
+test('the tail folds, and the money never does', () => {
+  const out = foldTail(realShape());
+  const names = out.map((r) => r.providerLabel || r.provider);
+  // The four bare IPs are gone as individual rows...
+  for (const ip of ['180.184.47.154', '39.96.198.249', '39.96.213.166', '8.140.217.18']) {
+    assert.ok(!names.includes(ip), `${ip} survived the fold`);
+  }
+  // ...and the quiet-but-expensive rows did not move.
+  assert.ok(names.includes('volc'), 'folded a row holding $38.37');
+  assert.ok(names.includes('aliyun'), 'folded a row holding $0.92');
+  const folded = out.find((r) => r.provider === null);
+  assert.equal(folded.foldedCount, 4);
+  assert.equal(folded.events, 6);
+  assert.match(folded.providerLabel, /other 4 providers/);
+});
+
+// The table must still add up to what it added up to. A fold that loses a
+// request is worse than a long table.
+test('folding conserves every total', () => {
+  const before = realShape();
+  const after = foldTail(before);
+  const sum = (rows, k) => rows.reduce((n, r) => n + (r[k] || 0), 0);
+  for (const k of ['events', 'cost', 'unpriced']) {
+    assert.equal(sum(after, k), sum(before, k), `${k} changed across the fold`);
+  }
+});
+
+// A row that cost money is never tail, however few requests it made.
+test('a priced row is never folded', () => {
+  const rows = [
+    { provider: 'a', kind: 'billed', events: 1, tokens: null, cost: 99, unpriced: 0 },
+    { provider: 'b', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'c', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'd', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+  ];
+  const out = foldTail(rows);
+  assert.ok(out.some((r) => r.provider === 'a'), 'folded a row that cost $99');
+  assert.equal(out.find((r) => r.provider === null).foldedCount, 3);
+});
+
+test('too small a tail is left alone', () => {
+  const rows = [
+    { provider: 'a', kind: 'billed', events: 500, tokens: 1, cost: 5, unpriced: 0 },
+    { provider: 'b', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'c', kind: 'billed', events: 2, tokens: null, cost: 0, unpriced: 0 },
+  ];
+  assert.deepEqual(foldTail(rows).map((r) => r.provider), ['a', 'b', 'c']);
+});
+
+// Kinds are never summed together — the one arithmetic this hub does not do.
+test('the fold is per kind, never across', () => {
+  const rows = [
+    { provider: 'g1', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'g2', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'n1', kind: 'notional', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'n2', kind: 'notional', events: 1, tokens: null, cost: 0, unpriced: 0 },
+  ];
+  const folded = foldTail(rows).filter((r) => r.provider === null);
+  assert.equal(folded.length, 2, 'kinds were folded into one row');
+  assert.deepEqual(folded.map((r) => r.kind).sort(), ['billed', 'notional']);
+});
+
+// Absent tokens stay absent: these rows count no tokens at all, and 0 would
+// claim they were measured.
+test('a folded row of token-less rows reports no tokens', () => {
+  const rows = [
+    { provider: 'a', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'b', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+    { provider: 'c', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 0 },
+  ];
+  assert.equal(foldTail(rows).find((r) => r.provider === null).tokens, null);
+});
+
+// Kinds stay grouped, always — including the rows the fold creates. Appending
+// every fold row at the end of the list put a BILLED "other" row below the
+// notional rows, which is the one ordering rule this table has.
+test('a fold row sits at the end of its own kind, not after every kind', () => {
+  const rows = sortRows([
+    { provider: 'gw', kind: 'billed', events: 900, tokens: 9, cost: 5, unpriced: 0 },
+    { provider: 'i1', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 1 },
+    { provider: 'i2', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 1 },
+    { provider: 'i3', kind: 'billed', events: 1, tokens: null, cost: 0, unpriced: 1 },
+    { provider: 'sub', kind: 'notional', events: 400, tokens: 99, cost: 70, unpriced: 0 },
+  ], 'cost');
+  const kinds = foldTail(rows).map((r) => r.kind);
+  assert.deepEqual(kinds, ['billed', 'billed', 'notional'],
+    'the folded billed row escaped its kind group');
 });
