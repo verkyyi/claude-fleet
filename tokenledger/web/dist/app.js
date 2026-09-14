@@ -113,7 +113,26 @@ async function load() {
   }
 }
 
+// The operations tier remembers whether it was open, per viewer.
+//
+// localStorage rather than the URL: the scope in the URL is what a link MEANS
+// ("this account, this window"), and pasting a link should not also reach into
+// how the recipient had their page folded. Same storage pattern the chart/table
+// toggles already use, and the same tolerance for it being unavailable -- a
+// private window throws on access, and the page must still open.
+const OPS_KEY = 'ccquota-ops-open';
+
+function wireOpsFold() {
+  const ops = $('#ops');
+  if (!ops) return;
+  try { ops.open = localStorage.getItem(OPS_KEY) === '1'; } catch {}
+  ops.addEventListener('toggle', () => {
+    try { localStorage.setItem(OPS_KEY, ops.open ? '1' : '0'); } catch {}
+  });
+}
+
 async function boot() {
+  wireOpsFold();
   try { app.accounts = await app.api('/v1/accounts'); }
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, 'Cannot reach the hub: ' + err.message)); return; }
   addEventListener('hashchange', route);

@@ -76,6 +76,7 @@ a { color: var(--s1); }
    the fleet is working, and the wheels roll to follow the projection. */
 /* The lifetime token counter is a badge. Every metric inside it is in em, so
    the one font-size below sets the whole thing -- it used to reach 40px. */
+#pulse:empty { display: none; }
 .hero { padding: 0 0 14px; font-size: 15px; }
 .hero .tm {
   display: inline-flex; align-items: center; gap: .4em; flex-wrap: nowrap;
@@ -442,3 +443,73 @@ details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 10
 /* The folded tail: present and countable, but visibly not one of the rows that
    carry a number worth reading. */
 .folded td { color: var(--ink-3); font-style: italic; }
+/* ── the operations tier ───────────────────────────────────────────────────
+   Folded by default. Not hidden: everything it holds still answers a real
+   question, and the page is still one continuous surface -- the fold only says
+   that "what did we pay" is asked more often than "which machine is near its
+   5-hour limit". */
+#alerts:empty { display: none; }
+
+.ops { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 4px; }
+.ops > summary {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 12px 2px; cursor: pointer; list-style: none; user-select: none;
+  color: var(--ink-2);
+}
+.ops > summary::-webkit-details-marker { display: none; }
+/* The marker is drawn, not inherited, so it can rotate and so its colour comes
+   from the same tokens as the text beside it. */
+.ops > summary::before {
+  content: "▸"; display: inline-block; color: var(--ink-3);
+  transition: transform .15s ease; font-size: 13px; line-height: 1;
+}
+.ops[open] > summary::before { transform: rotate(90deg); }
+.ops > summary:hover { color: var(--ink); }
+.ops > summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
+.ops-title { font-weight: 600; font-size: 14px; letter-spacing: .02em; }
+.ops-note { color: var(--ink-3); font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) { .ops > summary::before { transition: none; } }
+
+/* ── three tiers, three weights ────────────────────────────────────────────
+   Border, fill, radius and shadow each say "separate object". Spending all of
+   them equally on all twenty cards is what made the page flat: twenty things
+   shouting at one volume is the same as none of them shouting. So they are
+   spent by ROLE instead.
+
+   The band labels below and the operations <summary> are deliberately the same
+   type: the page is three labelled bands, and the label is what tells a reader
+   which question the cards under it answer. */
+.band {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-top: 26px; padding: 12px 2px; border-top: 1px solid var(--line);
+}
+.band-title { font-weight: 600; font-size: 14px; letter-spacing: .02em; color: var(--ink-2); }
+.band-note { color: var(--ink-3); font-size: 12.5px; }
+
+/* Tier 1 — the answer. More room, and the only tier whose figure is set at
+   display size (see #real-spend .figure). */
+#spend > .card,
+#consumption > .card { padding: 20px 22px; }
+
+/* Tier 3 — reference, behind a fold. These are read when something is wrong,
+   not scanned every visit, so they drop the shadow and tighten up: a card that
+   costs a shadow and 16px of padding is claiming to be a headline object, and
+   nine of them claiming it is how the page got flat in the first place. */
+#ops .card {
+  box-shadow: none; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+}
+#ops .card > h2 { font-size: 12px; }
+#ops .card > .hint { font-size: 11.5px; margin-bottom: 10px; }
+#ops .grid2 { gap: 10px; }
+
+/* A heading nested inside a card is a SUB-heading, and must not outrank the
+   card's own title.
+   `.card > h2` only ever styled the direct child, so every h2 one level deeper
+   (the Efficiency card's "Effort", "Entrypoint", "Turns: main vs. subagent",
+   "$ per 1M output tokens, by model") fell through to the browser default —
+   1.5em and bold, rendering LARGER than the "EFFICIENCY" title above it. The
+   hierarchy read backwards inside the card. */
+.card * h2 {
+  font-size: 12.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--ink-3); margin: 0 0 6px;
+}

@@ -673,9 +673,18 @@ function applyNow(root, state, app, results) {
   // bare `null` argument into a literal "null" text node instead of skipping
   // it, so every card here (all of which can legitimately be null-ish only
   // through a future edit) is filtered before it reaches the DOM.
+  // Alerts mount ABOVE the tiers, not inside this one. Everything else here is
+  // operational detail that the page now folds away by default, and an alert
+  // inside a fold is an alert nobody sees.
+  const alerts = alertsCard(findingsR);
+  const alertsRoot = $('#alerts');
+  if (alertsRoot) alertsRoot.replaceChildren(...(alerts ? [alerts] : []));
+
+  // The token badge mounts at the top of the page, not in this (folded) block.
+  const pulseRoot = $('#pulse');
+  if (pulseRoot && heroWrapEl.parentNode !== pulseRoot) pulseRoot.replaceChildren(heroWrapEl);
+
   root.replaceChildren(...[
-    alertsCard(findingsR),
-    heroWrapEl,
     wallCardFromResult(limitsR, state.chips),
     liveWrapEl,
     collectorsCard(collectorsR, endpoints, app.accounts),

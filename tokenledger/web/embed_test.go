@@ -43,6 +43,8 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	for _, want := range []string{
 		"<title>", `href="styles.css"`, `src="app.js"`,
 		`id="page"`, `id="spend"`, `id="status"`, `id="consumption"`, `id="analysis"`,
+		// The three-tier shell: alerts above the tiers, operations folded.
+		`id="alerts"`, `id="ops"`, `id="ops-analysis"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html shell is missing %q", want)
@@ -53,6 +55,24 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	for _, gone := range []string{`id="tab-now"`, `id="tab-review"`} {
 		if strings.Contains(string(b), gone) {
 			t.Errorf("index.html still has %q -- the Now/Review split is retired", gone)
+		}
+	}
+	// The operations tier is a <details>, and the money is NOT inside it.
+	//
+	// Both halves matter. A fold built from a hidden div plus a button would
+	// lose the keyboard and find-in-page behaviour <details> gives free; and
+	// the whole point of the tier is that the ledger opens unfolded, so a
+	// future edit that moves #spend or #consumption inside the fold has undone
+	// the thing this structure exists for.
+	shell := string(b)
+	opsAt := strings.Index(shell, `<details id="ops"`)
+	if opsAt < 0 {
+		t.Error("the operations tier is not a <details> -- a div+button fold loses keyboard and find-in-page for free behaviour")
+	} else {
+		for _, ledger := range []string{`id="spend"`, `id="consumption"`, `id="alerts"`} {
+			if at := strings.Index(shell, ledger); at > opsAt {
+				t.Errorf("%s is inside the folded operations tier; the ledger must open unfolded", ledger)
+			}
 		}
 	}
 	// Every module the shell depends on must actually be embedded, and none
@@ -229,5 +249,23 @@ func TestDashboard_ThePageReportsOnlyRealMoney(t *testing.T) {
 	}
 	if strings.Contains(string(nowJS), "lv-uph") {
 		t.Error("now.js still renders the $/hour tile — that rate was notional")
+	}
+}
+
+// A card's own title must outrank the headings inside it.
+//
+// `.card > h2` styles only the direct child, so an h2 one level deeper falls
+// through to the browser default — 1.5em bold — and renders LARGER than the
+// card title above it. That inversion shipped: the Efficiency card's "Effort",
+// "Entrypoint" and "Turns: main vs. subagent" were the biggest text in a card
+// whose own title was 13px. A descendant rule has to exist for the nested case.
+func TestDashboard_NestedCardHeadingsAreStyled(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), ".card * h2") {
+		t.Error("styles.css has no rule for headings nested inside a card; " +
+			"they will fall back to the browser default and outrank the card's own title")
 	}
 }

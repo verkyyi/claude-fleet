@@ -784,16 +784,21 @@ function applyAll(root, state, app, ctx, results) {
 
   section(root, 'r-timeline').replaceChildren(timelineCard(historyExtR, ctx, state, app));
   section(root, 'r-kpis').replaceChildren(kpisCard(summaryR));
-  section(root, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
+  // findings / when+wall / sessions answer operational questions, so they mount
+  // in the folded operations tier rather than beside the money. Falling back to
+  // `root` keeps this working if the ops block is ever absent (an embedded or
+  // cut-down page), rather than dropping the cards on the floor.
+  const ops = document.querySelector('#ops-analysis') || root;
+  section(ops, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
   section(root, 'r-breakdowns').replaceChildren(el('div', { class: 'grid2' },
     breakdownCard(1, state.g1, g1R, state, app, hasTeam),
     breakdownCard(2, state.g2, g2R, state, app, hasTeam)));
   section(root, 'r-effmix').replaceChildren(el('div', { class: 'grid2' },
     efficiencyCard(summaryR, modelR, g2R, state),
     modelMixCard(historyExtR, ctx)));
-  section(root, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
+  section(ops, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
     whenCard(hourR, ctx), wallHistoryCard(wallR, ctx)));
-  section(root, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
+  section(ops, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
 }
 
 /** SUMMARY_INDEX is where /v1/summary lands in the fetcher list above. It is
