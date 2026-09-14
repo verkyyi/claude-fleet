@@ -81,24 +81,26 @@ PATH="$WORK/bin:$PATH"; export PATH
 WLIST_FILE="$WORK/wlist"; export WLIST_FILE
 w() { printf '%s\n' "$SESS$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$8" >> "$WLIST_FILE"; }
 : > "$WLIST_FILE"
-#   idx name      cwd                 state    wid @issue @origin   @worktree
+# Every state is QUOTED: `done` is a shell keyword, and bare as an argument here
+# it reads to shellcheck as the close of a loop (SC1010).
+#   idx name      cwd                 state     wid @issue @origin   @worktree
 # R = a hub-spawned root with a 5-window subtree: 3 done, 1 working, 1 needs.
-w 1  R           /w/repo-issue-100    idle     @1  100 ''          /w/repo-issue-100
-w 2  kid-done    /w/repo-issue-101    done     @2  101 issue-100   /w/repo-issue-101
-w 3  kid-done2   /w/repo-issue-102    done     @3  102 issue-100   /w/repo-issue-102
-w 4  kid-work    /w/repo-issue-103    working  @4  103 issue-100   /w/repo-issue-103
-w 5  kid-needs   /w/repo-issue-104    needs    @5  104 issue-100   /w/repo-issue-104
+w 1  R           /w/repo-issue-100    'idle'    @1  100 ''          /w/repo-issue-100
+w 2  kid-done    /w/repo-issue-101    'done'    @2  101 issue-100   /w/repo-issue-101
+w 3  kid-done2   /w/repo-issue-102    'done'    @3  102 issue-100   /w/repo-issue-102
+w 4  kid-work    /w/repo-issue-103    'working' @4  103 issue-100   /w/repo-issue-103
+w 5  kid-needs   /w/repo-issue-104    'needs'   @5  104 issue-100   /w/repo-issue-104
 # a GRANDCHILD (spawned by kid-done, not by R) — #503 groups it under R, so #624
 # must COUNT it under R too, and kid-done itself must stay bare.
-w 6  grandkid    /w/repo-issue-105    done     @6  105 issue-101   /w/repo-issue-105
+w 6  grandkid    /w/repo-issue-105    'done'    @6  105 issue-101   /w/repo-issue-105
 # a root that never spawned anything → no badge at all.
-w 7  lonely      /w/repo-issue-200    idle     @7  200 ''          /w/repo-issue-200
+w 7  lonely      /w/repo-issue-200    'idle'    @7  200 ''          /w/repo-issue-200
 # an ORPHAN: @origin names a window that is not on this dash → counts for nobody.
-w 8  orph        /w/repo-issue-300    done     @8  300 issue-999   /w/repo-issue-300
+w 8  orph        /w/repo-issue-300    'done'    @8  300 issue-999   /w/repo-issue-300
 # a CJK-named SCRATCH parent with 2 children, neither in needs → `1/2 ✓`, no `!`.
-w 9  修复仪表盘   /w/repo-scratch-7    idle     @9  ''  ''          /w/repo-scratch-7
-w 10 s-kid-done  /w/repo-issue-401    done     @10 401 scratch-7   /w/repo-issue-401
-w 11 s-kid-idle  /w/repo-issue-402    idle     @11 402 scratch-7   /w/repo-issue-402
+w 9  修复仪表盘   /w/repo-scratch-7    'idle'    @9  ''  ''          /w/repo-scratch-7
+w 10 s-kid-done  /w/repo-issue-401    'done'    @10 401 scratch-7   /w/repo-issue-401
+w 11 s-kid-idle  /w/repo-issue-402    'idle'    @11 402 scratch-7   /w/repo-issue-402
 
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=$COLS bash "$ROWS" 2>&1) \
   || fail "rows producer exited non-zero" "$out"
