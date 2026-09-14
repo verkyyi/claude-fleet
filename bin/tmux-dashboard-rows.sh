@@ -132,8 +132,9 @@ LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 WLIST=$(tmux list-windows -a -F "$WFMT")
 
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<origin>` line per addressable
-# window, the parent-resolution table for the spawn-provenance grouping (#503) and,
-# since #623, for the pin bit a child inherits from its parent. @origin stays LAST:
+# window, the parent-resolution table for the spawn-provenance grouping (#503),
+# the pin bit a child inherits from its parent (#623) and, since #624, the subtree
+# progress each parent row reports. @origin stays LAST:
 # pass B peels the row with `${x#*\t}`, so only the final field may contain no tab.
 # The `_` placeholders after @worktree (@cc_agent since #547, @wid since #566)
 # are load-bearing: `read` gives the LAST name all remaining fields, so without
@@ -151,6 +152,54 @@ while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ pin; do
   state_v "$state"; pin_v "$pin"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
+
+# chain walk (issues #503/#623/#624): resolve a parent KEY to the ultimate LIVE
+# root — ≤4 hops, so a grandchild both GROUPS under and COUNTS toward the same row.
+# Sets, all as globals (no subshells — this runs per row at 4Hz):
+#   $croot    the root's key; EMPTY ⇒ orphan (the chain left this dash, or ran
+#             past 4 hops), and then $crk/$cidx keep the 9/99999 sink sentinel
+#   $crk/$cidx  that root's rank/idx — the group sort key
+#   $chops    hops taken; 0 ⇒ the named parent itself was missing
+#   $crootpin the root's @pin bit (#623), 0 when there is no live root
+#   $cpnrk/$cpnidx  the NEAREST pinned ANCESTOR's rank/idx, empty if none. Self is
+#             not considered here — the caller checks its own @pin first, so a
+#             pinned row is always its own pin root (#623's rule, unchanged).
+# Factored out of the render loop in #624 so the progress count and the grouping
+# can never disagree about who a row belongs to: one walker, two readers.
+chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; cpnrk=''; cpnidx=''
+  local cur="$1" t m prow prest porig prk pidx ppin
+  t=$'\n'"$KEYTAB"
+  while [ "$chops" -lt 4 ]; do
+    m=${t#*$'\n'"$cur"$'\t'}
+    [ "$m" = "$t" ] && return                               # parent not on this dash
+    prow=${m%%$'\n'*}
+    prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
+    pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    ppin=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+    [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
+    case "$porig" in
+      issue-*|scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
+      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; return ;;   # hub/autofill/none
+    esac
+  done
+}
+
+# pass A2 — KIDTAB: one `\n<root-key>\t<rk>\n` record per window that resolves to
+# a LIVE root, so a row that spawned work can report its subtree's progress
+# (issue #624). Attribution is #503's grouping verbatim — a grandchild counts
+# toward the ULTIMATE live root, which is the row it renders under, so the badge
+# always describes exactly the indented block beneath it — and an orphan (parent
+# window closed, or a chain past 4 hops) counts toward nobody. (The #623 pin tier
+# only re-sorts that block; it never re-parents anyone, so the count is unaffected.)
+# Each record carries its OWN leading AND trailing newline: the counting
+# substitutions in pass B replace non-overlapping matches, so records sharing one
+# separator newline would count `\nA\t1\n` twice in a row as ONE.
+KIDTAB=''
+while IFS=$'\t' read -r _ krk _ _ korig; do
+  case "$korig" in issue-*|scratch-*) ;; *) continue ;; esac
+  chain_v "$korig"
+  [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
+done <<< "$KEYTAB"
 
 buf=""
 while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd pin; do
@@ -315,25 +364,13 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$pin" = 1 ] && { pnrk=$rk; pnidx=$idx; }
   case "$origin" in
     issue-*|scratch-*)
-      grk=9; gidx=99999; depth=1
-      cur=$origin; hops=0
-      while [ "$hops" -lt 4 ]; do
-        t=$'\n'"$KEYTAB"
-        m=${t#*$'\n'"$cur"$'\t'}
-        # parent not on this dash at all (closed, or a key from ANOTHER fleet):
-        # keep the ↳ tag but drop the └ indent — an orphan sinks below every live
-        # group, and indenting it there reads as a child of an unrelated row.
-        [ "$m" = "$t" ] && { [ "$hops" -eq 0 ] && dname=$name; break; }
-        prow=${m%%$'\n'*}
-        prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
-        pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-        ppin=${prest%%$'\t'*}; porig=${prest#*$'\t'}
-        [ "$ppin" = 1 ] && [ -z "$pnrk" ] && { pnrk=$prk; pnidx=$pidx; pndepth=1; }
-        case "$porig" in
-          issue-*|scratch-*) cur=$porig; hops=$((hops+1)) ;;
-          *) grk=$prk; gidx=$pidx; rootpin=$ppin; break ;;
-        esac
-      done ;;
+      depth=1
+      chain_v "$origin"; grk=$crk; gidx=$cidx; rootpin=$crootpin
+      [ -z "$pnrk" ] && [ -n "$cpnrk" ] && { pnrk=$cpnrk; pnidx=$cpnidx; pndepth=1; }
+      # parent not on this dash at all (closed, or a key from ANOTHER fleet):
+      # keep the ↳ tag but drop the └ indent — an orphan sinks below every live
+      # group, and indenting it there reads as a child of an unrelated row.
+      [ -z "$croot" ] && [ "$chops" -eq 0 ] && dname=$name ;;
   esac
   pinned=1
   if [ "$rootpin" = 1 ]; then
@@ -342,12 +379,38 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
     [ "$pndepth" = 0 ] && dname=$name   # promoted to a group root → no └ indent
   fi
+  # --- subtree progress (issue #624) ------------------------------------------
+  # A row that SPAWNED work reports the state of the group rendered beneath it:
+  # `3/5 ✓` = 3 of its 5 descendants done, and a LOUD `· 1!` when one of them is
+  # asking for the operator. Before this the parent knew nothing: each child
+  # pushed its own report on landing (#574) and no row held the total.
+  # Counted off KIDTAB with the fork-free length-delta idiom (one substitution
+  # per figure, no subshell) so the 4Hz hot path keeps its exec budget.
+  # A row with no children draws NOTHING — the dash's quiet layer must not grow a
+  # badge on every line.
+  kidd=''; kidpfx=''
+  if [ -n "$okey" ]; then
+    kn=$'\n'"$okey"$'\t'; kt=${KIDTAB//"$kn"/}
+    ktot=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
+    if [ "$ktot" -gt 0 ]; then
+      kn=$'\n'"$okey"$'\t1'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 1 = done
+      kdone=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
+      kn=$'\n'"$okey"$'\t0'$'\n'; kt=${KIDTAB//"$kn"/}    # rk 0 = needs
+      kneed=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
+      # quiet by default — progress is not a call for attention. Only the needs
+      # count is loud, the same hierarchy the state glyph already keeps.
+      kidd="$kdone/$ktot ✓"; kidpfx="${GY}${kidd}${R}"
+      [ "$kneed" -gt 0 ] && { kidd="$kidd · $kneed!"
+                              kidpfx="${kidpfx}${GY} · ${R}${RD}${kneed}!${R}"; }
+    fi
+  fi
   # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
   # window sits right after the issue; act/PR/ctx right-align to the edge, the
   # flex gap between them absorbing the width so the metadata block stays pinned
   # right. The flex span used to carry the LLM one-liner (summary column, retired
-  # in issue #535 — it was the dash's only token-spending column); only the ↳
-  # provenance tag lives there now.
+  # in issue #535 — it was the dash's only token-spending column); the ↳
+  # provenance tag, the #623 pin mark and the #624 subtree-progress badge live
+  # there now.
   fld 3  "$hnd";  f_hnd=$fld_out
   fld 5  "$issd"; f_iss=$fld_out
   # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
@@ -363,14 +426,16 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
   fld 4  "$pct";  f_pct=$fld_out
-  # the ↳ tag (+ an agent tag, #547) is all that is drawn in the flex span; ↳/#/~
-  # are single-cell and the agent name ASCII, so ${#tagd} is its display width and
-  # the pad keeps act/PR/ctx pinned right.
+  # the flex span draws the ↳ tag (+ an agent tag, #547), then the #624 progress
+  # badge; ↳/#/~/✓/· are single-cell and the agent name ASCII, so ${#} is the
+  # display width of both and the pad keeps act/PR/ctx pinned right.
   # (fld() shares the same ${#}=chars assumption; its remaining inputs — issue/PR/
   #  ctx — are ASCII. The window column, where CJK names are ordinary since #534,
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
+  [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+                      tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
   # 📌 marks a pinned row (issue #623): without it the operator sees a row sitting
   # above a red `needs` one and has no idea why. It OPENS the flex span, ahead of
   # any ↳ tag, so every pin sits at the same column and the eye can scan for them.

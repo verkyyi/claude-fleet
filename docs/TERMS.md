@@ -119,7 +119,11 @@ they repaint instantly:
   `[child-report]` over the peer inbox when the child merges, blocks, or is
   reaped. So a worker that `--spawn`ed a follow-up hears the outcome instead of
   polling for it. Hub-spawned work sends nothing; `FLEET_CHILD_REPORT=0` turns it
-  off per fleet.
+  off per fleet. Since #624 the parent's own row also carries the **aggregate**
+  the individual reports never added up to — `3/5 ✓ · 1!`: three of its five
+  descendants done, one asking for you. Same attribution as the grouping, so the
+  count describes exactly the indented block under it; a row that spawned nothing
+  draws nothing.
 - **Account pool / failover** — an optional set of Claude *subscription* accounts
   (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
   launcher `bin/fleet-claude.sh` exports the **active** account's token per
