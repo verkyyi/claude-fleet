@@ -683,6 +683,30 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Auto re-plan the phase @group=accounts @tier=advanced @scope=global @edit=bool
 #FLEET_ACCOUNT_PHASE_AUTO=0
 
+# The FIRST PROMPT a moved session is resumed with (bin/fleet-migrate.sh, issue
+# #620 lifting it out of the script). A migrate is a close + `claude --resume`, so
+# this text lands at the tail of a transcript that may be forty turns long: it has
+# to say WHY the turn stopped, where to re-orient, and — the part that is easy to
+# lose — what language to keep speaking, because a model follows its most recent
+# instruction and everything the fleet injects is English.
+#
+#   FLEET_MIGRATE_NUDGE        the subscription-cap move (account A → account B)
+#   FLEET_MIGRATE_NUDGE_MODEL  the per-model cap relaunch (#524); `__MODEL__` is
+#                              substituted with the model it was relaunched on
+#
+# A value here REPLACES the built-in entirely — language rule included. If your
+# fleet is not English-only, end your text with a sentence of the same shape:
+# "Continue replying in the language this session was using before this
+# interruption." (bin/fleet-lang.sh holds the canonical wording.) Keep the value
+# free of single quotes and backticks: it is embedded single-quoted into the
+# launch command line (fleet-migrate.sh strips them anyway, mangling your text).
+# Unset ⇒ the built-in: the pre-#620 wording with the language rule appended.
+# `--nudge <text>` on one migrate still overrides both, verbatim.
+# @label=Migrate resume nudge @group=accounts @tier=advanced @scope=fleet @edit=str
+#FLEET_MIGRATE_NUDGE=""          # empty ⇒ the built-in in bin/fleet-migrate.sh
+# @label=Migrate resume nudge (model cap) @group=accounts @tier=advanced @scope=fleet @edit=str
+#FLEET_MIGRATE_NUDGE_MODEL=""    # empty ⇒ the built-in in bin/fleet-migrate.sh
+
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector
 # runs FLEET_NOTIFY_CMD with the message as $1. Plug in any notifier:

@@ -236,6 +236,20 @@ has 'base=trunk'    || fail "the brief must state the fleet's base branch" "$OUT
 has 'merge=rebase'  || fail "the brief must state how this fleet lands" "$OUT"
 ok "ATOMIC charter + directive + fleet facts are printed on the happy path"
 
+# ===== LANGUAGE: the Claude seed path's half of issue #620 ======================
+# conf/codex-preamble.md has told a CODEX worker to reply in the issue's language
+# since #547; the Claude path had no equivalent, so a worker spawned on a Chinese
+# issue answered in English purely because its scaffolding is English. And it must
+# be LAST: the bug is that a model follows its MOST RECENT instruction, so a rule
+# printed above the charter and the directive is outranked by them.
+has 'Reply in the language the issue is written in' \
+  || fail "the brief must carry the seed language rule (issue #620)" "$OUT"
+lang_at=$(printf '%s\n' "$OUT" | grep -n '===== language' | head -1 | cut -d: -f1)
+dir_at=$(printf '%s\n' "$OUT" | grep -n '===== implementation directive' | head -1 | cut -d: -f1)
+[ -n "$lang_at" ] && [ -n "$dir_at" ] && [ "$lang_at" -gt "$dir_at" ] \
+  || fail "the language section must be printed LAST — after the charter and the directive, or they outrank it" "$OUT"
+ok "LANGUAGE the seed language rule is printed, and printed last (#620)"
+
 # With an overlay charter present it is printed, in the charter section.
 printf 'OVERLAY-ORDERS: keep PRs small\n' > "$CONF/fleets/$SESS/worker.md"
 GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"

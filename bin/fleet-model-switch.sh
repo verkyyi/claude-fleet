@@ -88,7 +88,10 @@ PANEL_RE='^(plan|dash|backlog)$'
 SCROLL="${FLEET_MODEL_SWITCH_SCROLL:--200}"      # capture depth for the banner scan
 VERIFY_WAIT="${FLEET_MODEL_SWITCH_VERIFY:-15}"   # s to wait for the status line to flip
 DIALOG_TRIES="${FLEET_MODEL_SWITCH_DIALOG:-5}"   # Enter presses offered to "Switch model?"
-NUDGE_DEFAULT="Your previous turn was interrupted by a per-model usage limit: the model this session ran on is out of headroom on this account (the subscription itself is fine). The fleet switched this session to __MODEL__ IN PLACE with /model — same process, same transcript, nothing lost, and any background agent you started is still running. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task on this model. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling."
+# Ends with the language rule (issue #620): this lands as the most recent
+# instruction in a session whose transcript may be entirely non-English, and an
+# English tail with no such rule flips the rest of the session to English.
+NUDGE_DEFAULT="Your previous turn was interrupted by a per-model usage limit: the model this session ran on is out of headroom on this account (the subscription itself is fine). The fleet switched this session to __MODEL__ IN PLACE with /model — same process, same transcript, nothing lost, and any background agent you started is still running. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task on this model. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
 
 # Sourced by bin/fleet-model-switch-selftest.sh (it pins the pure helpers) →
 # define only; a direct run dispatches. Same guard idiom as fleet-migrate.sh.

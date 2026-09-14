@@ -336,7 +336,7 @@ restore() {
       # Keep the nudge free of single-quotes/backticks — it's embedded single-quoted.
       local nudge=""
       [ "$wstate" = "working" ] \
-        && nudge="The tmux server crashed and this session was restored via claude --resume, so its turn was interrupted. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete (PR open, nothing left to do), just stop. Otherwise, continue the task."
+        && nudge="The tmux server crashed and this session was restored via claude --resume, so its turn was interrupted. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete (PR open, nothing left to do), just stop. Otherwise, continue the task.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
       # Route through fleet-claude.sh like the spawner (dash-issue-session.sh) so a
       # restored worker launches under the active subscription account (multi-account
       # failover) + the fleet's default model — a bare `claude` would strand it on

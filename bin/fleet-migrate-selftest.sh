@@ -269,6 +269,10 @@ nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1
 out=$(bash "$SCRIPT" --session "$SESS" --model opus "$nw1" 2>&1)
 ok; grep -q -- '--model opus --resume sid-1111 ' "$WORK/launched" 2>/dev/null || fail "--model must reach the launcher ahead of --resume (launched: $(cat "$WORK/launched" 2>/dev/null); out: $out)"
 ok; grep -q -- 'model usage limit' "$WORK/launched" 2>/dev/null || fail "--model must select the model-cap nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
+# Issue #620: the nudge is the first thing the resumed model reads, after a
+# transcript that may be entirely non-English — it has to say "keep that language".
+ok; grep -q -- 'Continue replying in the language this session was using' "$WORK/launched" 2>/dev/null \
+  || fail "the default nudge must carry the language rule (issue #620) (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; printf '%s' "$out" | grep -q -- 'on opus' || fail "the report must name the fallback model: $out"
 
 # --- every account benched (issue #567). State: w1 on A (moved above), w2 on A

@@ -73,6 +73,14 @@ the iteration. Record the invocation verbatim, and do **not** call `ScheduleWake
 this turn — that wakeup dies with the session, and C4 forbids the extra tool call
 anyway. §P re-arms it after the clear.
 
+**Record the language this session has been speaking** — the base skill's skeleton
+carries a `Language:` line for it. This is the one piece of state that CANNOT be
+re-derived after the clear: a pickup session has no transcript, only the doc, and
+everything else around it (this skill, the fleet's nudges, the brief) is English —
+so a doc that stays silent turns a 中文 session into an English one mid-task, with
+nothing to point at (issue #620). Write the doc in the session's own language; only
+that label is fixed.
+
 Hold the composed doc text; **where** it is stored is C2's job.
 
 ### C2. Store the handoff durably — comment when issue-bound, else file
@@ -229,7 +237,11 @@ mode verbatim** on the resolved source:
 2. **Read it fully**, then re-establish ground truth — `git status` / `git log`,
    confirm the branch, and verify the doc's "Live state to restore / watch"
    claims still hold (treat the doc as *what was true when written*).
-3. **Restate in 3–5 lines**: objective, where things stand, the NEXT ACTION.
+3. **Restate in 3–5 lines**: objective, where things stand, the NEXT ACTION — **in
+   the language the doc records** (its `Language:` line, or failing that the language
+   the doc is written in), and keep the rest of the session in it. You have no
+   transcript: every English word around you is scaffolding, not a language choice
+   the operator made (issue #620).
 4. **Re-arm the `/loop`** if the handoff records one under `## Active /loop` (and it
    isn't `—`): invoke the `loop` skill with that invocation verbatim, interval
    included. The clear that brought you here killed the old one. Nothing to re-arm

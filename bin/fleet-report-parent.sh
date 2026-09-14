@@ -189,7 +189,11 @@ if [ -n "$SUMMARY" ]; then
   sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)
   [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
 fi
-msg="$msg"$'\n'"no reply needed"
+# The language rule (issue #620) rides ON the `no reply needed` line rather than
+# taking a fifth: the envelope's size is the point of the envelope, and a parent
+# near its handoff can least afford an extra line. `no reply needed` still LEADS
+# the line, which is what both audiences read first.
+msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
 
 if [ "$DRY" = 1 ]; then
   printf 'fleet-report-parent: would send to %s (%s, pid %s)\n--- envelope ---\n%s\n' \

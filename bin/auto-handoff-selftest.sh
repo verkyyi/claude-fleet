@@ -44,7 +44,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE="$BIN/../conf/statusline.sh"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 [ -f "$STATUSLINE" ] || { printf 'selftest: %s not found\n' "$STATUSLINE" >&2; exit 2; }
@@ -59,7 +59,7 @@ SESS='s1'
 # global conf) relative to its OWN path, so copying the pieces here makes the global
 # conf $WORK/inst/fleet.conf — hermetic wherever this runs (a live install's bin
 # has a real sibling fleet.conf with the operator's real threshold).
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 STATE="$WORK/inst/bin/set-claude-state.sh"
@@ -151,6 +151,11 @@ nudged "$out" || fail "GLOBAL conf FLEET_AUTO_HANDOFF_PCT=60 + clean env: the ho
 case "$out" in *'65%'*) : ;; *) fail "nudge reason must report the measured 65%, got: '$out'";; esac
 case "$out" in *'>= 60%'*) : ;; *) fail "nudge reason must report the conf threshold 60, got: '$out'";; esac
 case "$out" in *'/fleet-handoff'*) : ;; *) fail "nudge reason must direct the model to /fleet-handoff, got: '$out'";; esac
+# Issue #620: this directive is injected as the LAST instruction of a turn, so a
+# session held in Chinese would write its handoff doc — and everything after the
+# pickup — in English without the trailing language rule.
+case "$out" in *'Continue replying in the language this session was using'*) : ;;
+  *) fail "nudge reason must end with the language rule (issue #620), got: '$out'";; esac
 latched || fail "nudge must set the @handoff_armed latch"
 
 # ---- OFF ≠ BROKEN: no conf layer sets it → no nudge even at 95% ---------------

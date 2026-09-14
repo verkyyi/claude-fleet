@@ -39,6 +39,7 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
 
 ```
 # Handoff: <task> — <YYYY-MM-DD>
+Language: <the language this session has been conducted in, e.g. English / 中文>
 
 ## Objective
 <the standing goal, precise/verbatim. Why this work exists. Success = ?>
@@ -105,7 +106,7 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
    - **Always announce the chosen doc before reading it**, on its own line:
      `Resuming from \`<path>\` (<date>).` — so the user can redirect if it's the wrong one.
 2. **Read it fully**, then re-establish ground truth: `git status` / `git log`, confirm the branch, and **verify the "Live state to restore / watch" claims still hold** (a flag it says is off → confirm; a file/symbol it cites → confirm it still exists). Treat the doc as *what was true when written*, not gospel.
-3. **Restate in 3–5 lines**: the objective, where things stand, and the NEXT ACTION you're about to take.
+3. **Restate in 3–5 lines**: the objective, where things stand, and the NEXT ACTION you're about to take — **in the language the doc's `Language:` line names** (absent it, the language the doc is written in), and keep the rest of the session in that language. You have no transcript of the old session: the tooling around you speaks English whatever the user speaks, so an English default here is a silent language switch, not a choice anyone made.
 4. **Re-arm the loop, if the doc records one.** If `## Active /loop` is present and not `—`, invoke the `loop` skill with that invocation **verbatim** (interval included) — say so in one line first. A loop does not survive the session boundary: skip this and the work resumes but never iterates again. Nothing to re-arm if the section is absent or `—`; never invent a loop the doc doesn't record.
 5. **Resume from the NEXT ACTION.** Don't redo finished/verified work; don't re-investigate ruled-out dead-ends; honor the "safe vs unsafe" findings.
 
@@ -117,4 +118,5 @@ Path: `doc/handoff/<slug>.md` (create the dir; `<slug>` = short kebab task name,
 - Prefer exact paths, commands, and `file:line` over prose.
 - Thoroughness scales with depth: a shallow task needs a short doc; a multi-day debug needs the full skeleton.
 - Never invent state — if you didn't verify it this turn, say "unverified" rather than asserting it.
+- The `Language:` line is not decoration: the pickup session sees the doc and nothing else, so a doc that omits it hands a 中文 conversation to a session with no reason not to answer in English.
 - If the session was looping, the doc MUST carry the `/loop` invocation verbatim — a handoff that drops it silently turns a running loop into a one-shot, and nobody notices until hours of no iterations have gone by.
