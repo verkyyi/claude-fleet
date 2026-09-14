@@ -619,7 +619,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # com.claude-fleet.quotawatch since issue #551, and also run first thing by every
 # collector tick) reads each pool account's EXACT 5h/7d utilization and, per account:
 #   • prefers the eligible account with the most headroom for NEW sessions
-#     (kept while within 10 points of the best, so spawns don't flip-flop);
+#     (kept while within FLEET_ACCOUNT_PICK_HYST points of the best, so spawns
+#     don't flip-flop) — see FLEET_ACCOUNT_PICK below for what "most" means;
 #   • at FLEET_ACCOUNT_WARN_PCT messages every session running on it — over its
 #     own peer inbox, the SendMessage channel — that a move is coming, so it
 #     can commit WIP;
@@ -644,6 +645,43 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_NOTIFY_CMD from the next tick that does run. Default 600 = 10× the TTL.
 # @label=Quota watch stale after @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_STALE=600
+# How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
+# ones that are too hot to use at all (issue #598):
+#   5h      (default) score = 5h-headroom × 2 + 7d-headroom. The 5-hour window
+#           counts double because it EXPIRES — whatever a window does not spend
+#           evaporates at its reset and can never be recovered — while weekly
+#           headroom just sits there. The 7d term still counts, so an account one
+#           spawn from its weekly ceiling does not win on a fresh 5h window alone.
+#   minmax  the pre-#598 ranking, ccquota's headroom_pct = 100 - max(5h, 7d).
+#           It reads the two windows as one budget, and on 2026-09-13 that scored
+#           `5h 0% · 7d 80%` (20) BELOW `5h 77% · 7d 51%` (23): every spawn piled
+#           onto the account that was already burning, while the other account's
+#           whole 5-hour window went unspent and then reset. Kept as a one-line
+#           rollback, not as a recommendation.
+# @label=Spawn ranking @group=accounts @tier=advanced @scope=global @edit=str
+#FLEET_ACCOUNT_PICK=5h
+# Keep the CURRENT account while it is within this many points of the best, so
+# new spawns don't flip-flop between near-equal accounts. Points are 5h-headroom
+# equivalents (the score above), so 10 ≈ "10% of a 5-hour window".
+# @label=Spawn ranking hysteresis @group=accounts @tier=advanced @scope=global @edit=int
+#FLEET_ACCOUNT_PICK_HYST=10
+# 5h-WINDOW PHASE STAGGER (issue #598). N subscriptions first used at around the
+# same time keep their 5h windows in the same phase: they burn down together and
+# reset together, so the pool's total headroom is a sawtooth whose trough is a
+# full outage. `fleet-account.sh phase --plan --apply` staggers the accounts that
+# have NO live window by 5h/N — a queue of START SLOTS, since a window's phase is
+# set by when the account is first used and cannot be set any other way. Benched
+# accounts and accounts already mid-window are left out; a slot is always
+# fail-open (it can never be the reason a spawn has no account to run on).
+#   `FLEET_ACCOUNT_PHASE=0`      ignore any written plan entirely (kill switch)
+#   `FLEET_ACCOUNT_PHASE_AUTO=1` let the quota watch re-plan once per window,
+#                               instead of only when you run it by hand (OFF by
+#                               default: this is the tick that keeps the fleet
+#                               alive, so arming it is a deliberate act)
+# @label=Honour the phase plan @group=accounts @tier=advanced @scope=global @edit=bool
+#FLEET_ACCOUNT_PHASE=1
+# @label=Auto re-plan the phase @group=accounts @tier=advanced @scope=global @edit=bool
+#FLEET_ACCOUNT_PHASE_AUTO=0
 
 # Detached-attention escalation: when a session is blocked on your input for
 # FLEET_ESCALATE_AFTER seconds and NO tmux client is attached, the collector

@@ -14,6 +14,17 @@
 #                  duplicate rows → the furthest-future epoch wins).
 #   • pick_active — keep-current-if-eligible, rotate-past-limited round-robin
 #                  (incl. wraparound), and the all-limited best-effort fallback.
+#   • pick_score / pick_best — the ranking (issue #598): the 5h window counts
+#                  double because it expires, the 7d window still gates, the
+#                  hysteresis keeps a near-equal current account, and
+#                  FLEET_ACCOUNT_PICK=minmax restores the pre-#598 answer. The
+#                  headline case is the LIVE 2026-09-13 pool, which the old
+#                  ranking got backwards.
+#   • acct_phase_hold / phase_plan — the 5h-window phase stagger (issue #598):
+#                  the `5h / N` grid, live windows keeping their real phase,
+#                  benched accounts excluded, slots self-expiring, the
+#                  FLEET_ACCOUNT_PHASE=0 kill switch, and pick_active failing
+#                  OPEN when the holds would otherwise starve the pool.
 #   • banner_reset_epoch — the limit banner's "resets <time> (<zone>)" → epoch:
 #                  zone travels with the banner (host TZ must not change it),
 #                  midnight wrap, 12h-clock edges, a DST-transition day, and
@@ -53,6 +64,9 @@ ACCT_DIR="$WORK/accounts"
 TTL=18000
 FLEET_C="$WORK/cache"; mkdir -p "$FLEET_C"
 STATE_LIMITED="$FLEET_C/account.limited"   # only the limited-state file is read by the tested fns
+# pick_best/cmd_list read the phase plan too (issue #598) — repoint it, or a plan
+# armed on the DEVELOPER's real pool would silently steer these assertions.
+STATE_PHASE="$FLEET_C/account.phase"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -308,6 +322,135 @@ rc_is "cmd_bench: benching a non-active account does not rotate" 0 "$rc"
 rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
 
 # ============================================================================
+# the RANKING (issue #598) — which account a new spawn lands on
+# ============================================================================
+# The regression this pins is a real loss, not a hypothetical. Live pool,
+# 2026-09-13: ly297 sat at `5h 0% · 7d 80%` for a whole 5-hour window while
+# verky@24helpful went 8% → 77% of ITS window in four hours. ccquota's
+# headroom_pct = 100 - max(5h, 7d) scored them 20 and 23, so every spawn kept
+# landing on the account that was already burning — and ly297's window then reset
+# with nothing spent. 5h capacity is use-it-or-lose-it; that is why it counts
+# double here. The two rows below ARE that pool.
+: > "$STATE_LIMITED"; : > "$STATE_PHASE"; printf 'b\n' > "$STATE_ACTIVE"
+export FLEET_ACCOUNTS="a b"
+PN=$(now)                                            # the PINNED clock (see now() above)
+PFUT=$((PN + 10000)); PPAST=$((PN - 10000))
+R5=$((PN + 3600)); R7=$((PN + 86400))
+live=$(printf 'a\t0\t80\t20\t%s\t%s\t0\nb\t77\t51\t23\t%s\t%s\t19\n' "$R5" "$R7" "$R5" "$R7")
+printf '%s' "$live" > "$STATE_QUOTA"; now > "$STATE_QUOTA_TS"
+
+eq "pick_score: a fresh 5h window outranks a burning one" 220 "$(pick_score "$live" a)"
+eq "pick_score: burning 5h window, healthy week"           95 "$(pick_score "$live" b)"
+eq "pick_active(#598): the idle 5h window wins — the 2026-09-13 loss" a "$(pick_active b)"
+# the old ranking, kept as a one-line rollback
+PICK_MODE=minmax
+eq "pick_active(minmax): reproduces the pre-#598 answer" b "$(pick_active b)"
+# shellcheck disable=SC2034  # read by the sourced pick_score at CALL time
+PICK_MODE=5h
+
+# the 7d window still GATES (ceiling) and still counts in the score: an account
+# one spawn from its weekly ceiling must not win on a fresh 5h window alone.
+doomed=$(printf 'a\t0\t84\t16\t%s\t%s\t0\nb\t30\t0\t70\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
+printf '%s' "$doomed" > "$STATE_QUOTA"
+eq "pick_active: fresh 5h + nearly-spent week loses to most-of-a-window + fresh week" \
+   b "$(pick_active zzz)"
+# equal 5h → the weekly is the tie-break
+tie=$(printf 'a\t10\t20\t80\t%s\t%s\t0\nb\t10\t60\t40\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
+printf '%s' "$tie" > "$STATE_QUOTA"
+eq "pick_active: equal 5h → more weekly headroom wins" a "$(pick_active zzz)"
+eq "pick_score: no ccquota row → no opinion" "" "$(pick_score "$tie" nosuch)"
+
+# ============================================================================
+# the PHASE stagger (issue #598) — acct_phase_hold + phase_plan
+# ============================================================================
+export FLEET_ACCOUNTS="a b c"
+: > "$STATE_LIMITED"; printf 'a\n' > "$STATE_ACTIVE"
+
+# --- acct_phase_hold: self-expiring, and killable ---------------------------
+rm -f "$STATE_PHASE"
+eq "phase_hold: no plan file → 0" 0 "$(acct_phase_hold a)"
+{ printf 'a\t%s\t%s\tslot 1\n' "$PFUT" "$PN"
+  printf 'b\t%s\t%s\tslot 2\n' "$PPAST" "$PN"; } > "$STATE_PHASE"
+eq "phase_hold: future slot holds the account out" "$PFUT" "$(acct_phase_hold a)"
+eq "phase_hold: a slot in the past is no hold at all" 0 "$(acct_phase_hold b)"
+eq "phase_hold: unknown label → 0" 0 "$(acct_phase_hold zzz)"
+PHASE_ON=0
+eq "phase_hold: FLEET_ACCOUNT_PHASE=0 is a hard kill switch" 0 "$(acct_phase_hold a)"
+# shellcheck disable=SC2034  # read by the sourced acct_phase_hold at CALL time
+PHASE_ON=1
+
+# --- pick_active honours a hold, but NEVER starves the pool -----------------
+# a is held; b is the only unheld candidate → b, even though a scores higher.
+held=$(printf 'a\t0\t0\t100\t%s\t%s\t0\nb\t40\t10\t60\t%s\t%s\t0\n' "$R5" "$R7" "$R5" "$R7")
+printf '%s' "$held" > "$STATE_QUOTA"
+eq "pick_active: a pending phase slot keeps a new spawn off that account" b "$(pick_active b)"
+# now hold BOTH: the plan can no longer be honoured, so it is ignored wholesale
+# rather than leaving a spawn with nothing to run on.
+{ printf 'a\t%s\t%s\tslot 1\n' "$PFUT" "$PN"
+  printf 'b\t%s\t%s\tslot 2\n' "$PFUT" "$PN"; } > "$STATE_PHASE"
+eq "pick_active: holds must never starve the pool — fail open to the best account" \
+   a "$(pick_active b)"
+rm -f "$STATE_PHASE"
+
+# --- phase_plan: the 5h / N grid --------------------------------------------
+# Nothing running anywhere (every account at 5h 0%) → the issue's own example:
+# 3 accounts, step 100 min, slots at T+0 / T+100m / T+200m.
+PT=1789000000                                        # a fixed clock for the grid
+idle=$(printf 'a\t0\t10\t90\t%s\t%s\t0\nb\t0\t10\t90\t%s\t%s\t0\nc\t0\t10\t90\t%s\t%s\t0\n' \
+        "$((PT+600))" "$((PT+90000))" "$((PT+600))" "$((PT+90000))" "$((PT+600))" "$((PT+90000))")
+plan=$(phase_plan "$idle" "$PT")
+eq "phase_plan: 3 idle accounts → slot 0 at T+0" \
+   "a	$PT	0	queued" "$(printf '%s\n' "$plan" | grep '^a	')"
+eq "phase_plan: slot 1 at T+100min" \
+   "b	$((PT + 6000))	1	queued" "$(printf '%s\n' "$plan" | grep '^b	')"
+eq "phase_plan: slot 2 at T+200min" \
+   "c	$((PT + 12000))	2	queued" "$(printf '%s\n' "$plan" | grep '^c	')"
+
+# A LIVE window anchors the ring and is never touched: b is 2h into its window
+# (resets in 3h), so its real start is the anchor, it claims grid index 0, and the
+# two idle accounts take indices 1 and 2 relative to IT. Index 1 (anchor+100min)
+# already went by 20 min ago, so `a` is MISSED — released now, not parked until
+# the next window. That distinction is the live 2026-09-13 finding: projecting it
+# forward would have held an account whose 5h window was completely unused out
+# until the window expired, which is the loss this issue exists to stop.
+BSTART=$((PT - 7200))
+mixed=$(printf 'a\t0\t10\t90\t%s\t%s\t0\nb\t40\t10\t60\t%s\t%s\t0\nc\t0\t10\t90\t%s\t%s\t0\n' \
+        "$((PT+600))" "$((PT+90000))" "$((BSTART+18000))" "$((PT+90000))" "$((PT+600))" "$((PT+90000))")
+plan=$(phase_plan "$mixed" "$PT")
+eq "phase_plan: a live window keeps its REAL start and is never held" \
+   "b	$BSTART	0	running" "$(printf '%s\n' "$plan" | grep '^b	')"
+eq "phase_plan: a grid point that already went by → released NOW, never parked" \
+   "a	$PT	1	missed" "$(printf '%s\n' "$plan" | grep '^a	')"
+eq "phase_plan: a grid point still ahead → queued at it" \
+   "c	$((BSTART + 12000))	2	queued" "$(printf '%s\n' "$plan" | grep '^c	')"
+eq "phase_plan: a missed slot is not a hold" 0 "$(
+     printf '%s\n' "$plan" | awk -F'\t' '$1=="a" && $2>'"$PT"' {print 1}' | grep -c 1)"
+
+# A BENCHED account is not in the plan at all ("被 bench 的账号不参与排相位"), so
+# the step is 5h/2 = 150 min, not 5h/3.
+limit c
+plan=$(phase_plan "$idle" "$PT")
+eq "phase_plan: benched accounts are excluded — no row, so no hold" "" "$(printf '%s\n' "$plan" | grep '^c	' || true)"
+eq "phase_plan: N drops to 2 → step is 150 min" \
+   "b	$((PT + 9000))	1	queued" "$(printf '%s\n' "$plan" | grep '^b	')"
+clear_limits
+
+# An account ccquota knows nothing about gets no opinion and no slot.
+plan=$(phase_plan "$(printf '%s\n' "$idle" | grep -v '^c	')" "$PT")
+eq "phase_plan: unknown-to-ccquota account is excluded" "" "$(printf '%s\n' "$plan" | grep '^c	' || true)"
+eq "phase_plan: no rows at all → no plan" "" "$(phase_plan "" "$PT")"
+
+# phase_write persists ONLY a row that is really a WAIT.
+NOW_FIXED=$PT phase_write "$(phase_plan "$mixed" "$PT")"
+eq "phase_write: a running account is reported but never held" "" "$(grep '^b	' "$STATE_PHASE" || true)"
+eq "phase_write: a missed slot is reported but never held"      "" "$(grep '^a	' "$STATE_PHASE" || true)"
+eq "phase_write: only the genuine wait becomes a hold" 1 "$(grep -c . "$STATE_PHASE")"
+eq "phase_write: the slot epoch is what pick_best reads" \
+   "$((BSTART + 12000))" "$(awk -F'\t' '$1=="c"{print $2}' "$STATE_PHASE")"
+rm -f "$STATE_PHASE" "$STATE_QUOTA" "$STATE_QUOTA_TS"
+export FLEET_ACCOUNTS="a b c"
+
+# ============================================================================
 # model-specific caps (issue #524): banner_reset_epoch's DATED form + the
 # account.model-limited ledger — separate from the subscription bench, no rotation
 # ============================================================================
@@ -358,4 +501,4 @@ eq "model-limited: expired row dropped on write" 1 "$(wc -l < "$STATE_MODEL_LIMI
 cmd_model_clear b opus
 eq "model-clear: (b, opus) cleared" 0 "$(acct_model_limited_until b opus)"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench, #598 ranking + phase stagger)\n' "$CHECKS"

@@ -232,6 +232,7 @@ $TMPDIR/.claude-dash/
     collect.pid · collect.heartbeat           # collector overlap guard + per-phase heartbeat (#551)
     quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
     quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
+    account.phase · quota.phase              # 5h-window phase stagger + its re-plan marker (#598)
 ```
 
 The collector resolves each live tmux session → its repo and records it in
