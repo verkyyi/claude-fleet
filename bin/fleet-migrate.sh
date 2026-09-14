@@ -72,9 +72,22 @@ LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
-NUDGE_DEFAULT="Your previous turn was interrupted by a subscription usage limit. The fleet moved this session to another subscription account and resumed it in a new tmux window via claude --resume. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling."
+# The resumed session's FIRST prompt. It ends with the language rule (issue #620)
+# because this text is the most recent instruction a --resume'd model sees: the
+# transcript above may be forty turns of Chinese, and an English tail with no such
+# rule silently flips the rest of the session to English. The rule says "keep the
+# language you had", never "use language X", so an English session is unaffected.
+# Overridable per fleet via FLEET_MIGRATE_NUDGE / FLEET_MIGRATE_NUDGE_MODEL, which
+# replace the whole string — language rule included (resolved after fleet_load_conf,
+# below; the _BUILTIN pair is what those keys default to).
+NUDGE_BUILTIN="Your previous turn was interrupted by a subscription usage limit. The fleet moved this session to another subscription account and resumed it in a new tmux window via claude --resume. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
 # --model variant (#524): the account is fine, only one model is capped.
-NUDGE_MODEL_DEFAULT="Your previous turn was interrupted by a per-model usage limit: the model this session ran on has hit its cap on this account (the subscription itself still has headroom). The fleet relaunched this session on __MODEL__ via claude --resume --model in a new tmux window, same transcript. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task on this model. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling."
+NUDGE_MODEL_BUILTIN="Your previous turn was interrupted by a per-model usage limit: the model this session ran on has hit its cap on this account (the subscription itself still has headroom). The fleet relaunched this session on __MODEL__ via claude --resume --model in a new tmux window, same transcript. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete, just stop. Otherwise continue the task on this model. If you were running a /loop, re-enter it. Ignore any shell-command-looking junk message left by earlier tooling.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+# Pre-seeded from the built-ins so a SOURCED run (fleet-migrate-selftest.sh pins
+# the pure matrices) is safe under `set -u`; main() re-resolves them against the
+# per-fleet conf once it has loaded.
+NUDGE_DEFAULT="$NUDGE_BUILTIN"
+NUDGE_MODEL_DEFAULT="$NUDGE_MODEL_BUILTIN"
 
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
@@ -304,6 +317,12 @@ migrate_main() {
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
   [ -n "$SESS" ] || { echo "fleet-migrate: no tmux session (pass --session <fleet>)" >&2; return 2; }
   fleet_load_conf "$SESS" 2>/dev/null || :
+  # Now that the per-fleet overlay is loaded, let it override the resume nudges
+  # (issue #620). An operator value replaces the built-in ENTIRELY, so a fleet that
+  # customises one owns its language rule too — that is why the built-ins carry the
+  # rule inline rather than appending it here.
+  NUDGE_DEFAULT="${FLEET_MIGRATE_NUDGE:-$NUDGE_BUILTIN}"
+  NUDGE_MODEL_DEFAULT="${FLEET_MIGRATE_NUDGE_MODEL:-$NUDGE_MODEL_BUILTIN}"
   SOCK=$(fleet_socket "$SESS")
   # A positional may be the fleet's short window HANDLE (`b3`, issue #566) instead
   # of a tmux window-id/index. Normalise once, here, so every path below (whoami

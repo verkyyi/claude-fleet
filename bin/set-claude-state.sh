@@ -104,6 +104,13 @@ fi
 # exactly as before.
 if [ "$sem" = "done" ]; then
   _bin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+  # The language rule this hook's directive ends with (issue #620). This script is
+  # `sh`-wired and cannot source the bash-only fleet-lib.sh, which is exactly why
+  # the rules live in their own POSIX file — sourcing it costs no fork, and the
+  # ${VAR:+ …} at the call site means a missing file costs the rule, not the
+  # directive (and leaves no dangling separator behind).
+  # shellcheck source=/dev/null
+  [ -n "$_bin" ] && [ -r "$_bin/fleet-lang.sh" ] && . "$_bin/fleet-lang.sh"
   _kv=''
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
     && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS 2>/dev/null)
@@ -161,7 +168,11 @@ if [ "$sem" = "done" ]; then
       else
         # Latch FIRST (idempotent) so the next Stop skips, THEN emit the directive.
         tmux set-window-option -t "$TMUX_PANE" @handoff_armed 1 2>/dev/null
-        printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction."}\n' "$_ctx" "$_hp"
+        # The trailing %s is the language rule: this directive is injected as the
+        # LAST instruction of a turn, so without it a session held in Chinese
+        # writes its handoff doc — and every turn after the pickup — in English.
+        # It carries no quotes or backslashes, so it is safe inside this JSON.
+        printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction.%s"}\n' "$_ctx" "$_hp" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
       fi
     fi
   fi

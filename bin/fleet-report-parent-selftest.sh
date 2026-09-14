@@ -194,7 +194,7 @@ want = ('<cross-session-message from-name="fleet-report" from-mode="bypass">\n'
         '[child-report] issue #517 "backlog sort regression"\n'
         'state: MERGED (PR #522) · branch issue-517\n'
         'summary: rebuilt the comparator; selftest added\n'
-        'no reply needed\n'
+        "no reply needed \u2014 This notice is in English; keep replying in your session's language.\n"
         '</cross-session-message>')
 assert c == want, "envelope not canonical:\n got: %r\nwant: %r" % (c, want)
 PY
@@ -249,7 +249,7 @@ c = [f for f in frames if f.get("type") == "user"][-1]["message"]["content"]
 want = ('<cross-session-message from-name="fleet-report" from-mode="bypass">\n'
         '[child-report] issue #602 "orphanchild"\n'
         'state: REAPED (dirty) · branch issue-602\n'
-        'no reply needed\n'
+        "no reply needed \u2014 This notice is in English; keep replying in your session's language.\n"
         '</cross-session-message>')
 assert c == want, "got: %r\nwant: %r" % (c, want)
 PY
@@ -281,7 +281,10 @@ import json, sys
 frames = [json.loads(l) for l in open(sys.argv[1]).read().split("\n") if l.strip()]
 c = [f for f in frames if f.get("type") == "user"][-1]["message"]["content"]
 body = c.split("\n")[1:-1]
-assert body[-1] == "no reply needed", "the frame must end `no reply needed`: %r" % body
+assert body[-1].startswith("no reply needed"), "the frame must end with the `no reply needed` line: %r" % body
+assert "keep replying in your session" in body[-1], (
+    "the last line must carry the language rule (issue #620) — an all-English 4-line "
+    "notice landing in a non-English session flips it to English: %r" % body)
 assert len(body) <= 6, "the envelope must stay <= 6 lines even at its widest: %r" % body
 assert "l4" not in c and "l5" not in c, "the summary must be capped at 3 lines: %r" % c
 assert "state: FAILED · branch issue-517" in c, "a failed report must render FAILED: %r" % c

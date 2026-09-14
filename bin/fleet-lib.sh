@@ -60,6 +60,22 @@ if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}
   unset _flib_dir
 fi
 
+# The language-preservation rules (issue #620) — FLEET_LANG_RULE_RESUME / _SEED /
+# _NOTICE, the sentences every fleet-injected English text ends with so a Chinese
+# (or any non-English) session is not dragged back to English by the fleet's own
+# automation. Kept in their own POSIX file because bin/set-claude-state.sh is
+# `sh`-wired and cannot source this bash-only lib; sourcing it here means every
+# bash consumer that already sources fleet-lib.sh has the rules for free. Resolved
+# relative to THIS file (BASH_SOURCE, $0 under zsh) like the global conf above; a
+# bin/ without it is a clean no-op, and the ${VAR:-} defaults at every call site
+# keep a missing file from breaking an injection.
+if [ -z "${FLEET_LANG_RULE_SEED:-}" ]; then
+  _flang_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  # shellcheck source=/dev/null
+  [ -n "$_flang_dir" ] && [ -r "$_flang_dir/fleet-lang.sh" ] && . "$_flang_dir/fleet-lang.sh"
+  unset _flang_dir
+fi
+
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
 # name and lives under $FLEET_CONF_DIR/fleets/<sess>/ (conf, restore.map,

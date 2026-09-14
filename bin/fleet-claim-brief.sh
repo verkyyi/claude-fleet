@@ -26,6 +26,10 @@
 #               `gh issue edit … --add-assignee @me` to run on the (rare) miss
 #   charter   — fleet_worker_charter: the repo/overlay layers + tap-first block
 #   directive — fleet_worker_prompt_body: the per-fleet HOW-to guidance (#234)
+#   language  — the one rule that keeps a non-English session from being dragged
+#               back to English by the fleet's all-English scaffolding (#620),
+#               printed LAST because the most recent instruction is the one a
+#               model follows — which is the whole mechanism of that bug
 #
 # Exit codes (the skill's rails, one code each — the reason is also printed):
 #   0  OK — brief printed
@@ -194,5 +198,28 @@ else printf '(no file layers — you run on the built-in contract in /fleet-clai
 
 printf '\n===== implementation directive · this fleet (issue #234) =====\n'
 printf '%s\n' "$(fleet_worker_prompt_body "$issue" "$repo")"
+
+# ------------------------------------------------------------------- language
+# The Claude seed path's half of issue #620. conf/codex-preamble.md has told a
+# CODEX worker to "Reply in the language the issue is written in" since #547; the
+# Claude path was never given the equivalent, so a worker spawned on a Chinese
+# issue would answer in English for no reason other than that every word of its
+# scaffolding is English. This is that rule, single-sourced with the ones the
+# resume nudges and notices carry (bin/fleet-lang.sh).
+#
+# LAST on purpose. The whole bug this closes is that a model follows its most
+# recent instruction, and everything above this line — the fleet facts, the
+# charter, the directive — is English prose. Printing the rule last is what makes
+# it win over its own surroundings.
+#
+# The second sentence pre-empts the notice class: a worker that later takes a
+# quota warning or a child report in its pane has already been told those are
+# notices, not a language switch.
+if [ -n "${FLEET_LANG_RULE_SEED:-}" ]; then
+  printf '\n===== language · keep the session in ONE language (issue #620) =====\n'
+  printf '%s\n' "$FLEET_LANG_RULE_SEED" \
+                 "The fleet's own automation always speaks English (resume nudges, quota" \
+                 "warnings, child reports). Those are notices, never a signal to switch language."
+fi
 
 exit "${rc:-0}"

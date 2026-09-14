@@ -367,7 +367,10 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     if [ "$DRY" = 1 ]; then printf 'would: warn the sessions on %s (%s%% of %s, resets %s)\n' "$ql" "$qutil" "$qwhich" "$qresett"; continue; fi
     printf '%s' "$qreset" | atomic_write "$mk"
     qeta=""; [ "${qpph:-0}" -gt 0 ] && qeta=" (~$(( (100 - qutil) * 60 / qpph )) min to 100% at the current rate)"
-    qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed."
+    # The trailing language rule (issue #620) is what keeps this English notice
+    # from reading as a language switch to a session that has been speaking
+    # Chinese for forty turns — the notice itself needs no translation.
+    qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed.${FLEET_LANG_RULE_NOTICE:+ $FLEET_LANG_RULE_NOTICE}"
     qn=0
     for qs in $SOCKETS; do
       # space-separated: a window id has no spaces and a label is a file name
