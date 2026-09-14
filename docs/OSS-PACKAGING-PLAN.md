@@ -461,6 +461,30 @@ M3 的工作量因此**显著下降**，但「让第二个人装得上」的目�
   `microsoft/skills` 3,011★ 有 CI eval harness。**skills 类目里 star 是社交货币,
   不是质量信号。** 用 `claude plugin eval` 通过率。
 
+## 九之二、多机器的版本漂移(2026-09-14 实测发现)
+
+**`/fleet-sync-install` 是 per-machine 且手动的,所以第二台机器会静默落后。**
+
+实测：操作员问「mini 上的 fleet 是最新的吗」，查下来 **macmini 的 live install 落后
+28 个提交**（停在 PR #539），缺了 #603 base branch 修正、#617 配额排名修正、
+#608 能力矩阵 —— 而 mini 正是那台跑长时任务的共享机器。没有任何信号提示过它落后。
+
+同步它要手工处理：fast-forward + 5 个改动的 launchd 单元重载 + 1 个**新** daemon
+（quotawatch）模板化并 bootstrap + 3 个 commands + 1 个 skill 目录镜像。
+同步后 doctor 从「1 WARN」到 21 PASS 全绿（顺带修掉 memory 里挂了很久的
+macmini 信任 TODO）。
+
+### 对打包方案的影响
+
+| | |
+|---|---|
+| **这是打包前的真问题** | 一个 5 人团队有 5+ 台机器。按现在的机制，每台都要有人记得手工跑 `/fleet-sync-install`，而落后了**没有任何提示** |
+| **强化了 [#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）的优先级** | plugin 的 SessionStart 自动更新正好封死这个坑 —— 这也是 teamai-cli 那套 git 模型的核心价值 |
+| **doctor 应该能看见别的机器** | 现在 `fleet-doctor.sh` 只体检本机。多机器场景下需要一个「这台机器落后主干 N 个提交」的检查项 |
+
+> ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
+> tmux/fzf/gh/claude 全部 not found。远程体检要走 `zsh -lc`。
+
 ## 十、共享 mini 的正确形态
 
 **N 个 OS login,不是一个 login 跑 N 个 fleet。**
