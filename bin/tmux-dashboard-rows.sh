@@ -33,7 +33,11 @@ CY="${E}38;2;125;207;255m"; RD="${E}38;2;247;118;142m"; GN="${E}38;2;158;206;106
 IN="${E}38;2;187;154;247m"; GY="${E}38;2;86;95;137m";  TX="${E}38;2;169;177;214m"
 AM="${E}38;2;224;175;104m"   # amber — green PR that isn't land-ready (behind/blocked)
 R="${E}0m"; US=$'\x1f'
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}"
+# @pin (issue #623) is LAST on purpose: both passes below read it with `read`'s
+# last-name-takes-the-rest rule, so a field appended AFTER it would arrive glued to
+# the pin value. A new field goes BEFORE @pin, or pin_v's strict `1` test silently
+# reads every pinned window as unpinned.
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@pin}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -58,6 +62,11 @@ state_v() { case "$1" in
   looping) gc=$IN; gl='↻';      rk=3;;
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
+
+# @pin → 0/1 (issue #623). `1` is the ONLY pinned value; anything else — unset,
+# 0, or a stray trailing field glued on by a future WFMT addition — is ordinary.
+# Sets $pin; no subshells.
+pin_v() { case "$1" in 1) pin=1 ;; *) pin=0 ;; esac; }
 
 # window → its OWN ledger key (issue #503): `issue-<N>` from @issue, else the
 # `scratch-<N>` slug — read from @worktree FIRST and the pane cwd only as a
@@ -122,26 +131,29 @@ LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 # order); pass B renders. Herestring iteration, no extra forks.
 WLIST=$(tmux list-windows -a -F "$WFMT")
 
-# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<origin>` line per addressable window,
-# the parent-resolution table for the spawn-provenance grouping (issue #503).
-# The trailing `_` absorbs every field AFTER @worktree (@cc_agent since #547,
-# @wid since #566): `read` gives the LAST name all remaining fields, so without
-# it $wt arrived as `<path><US><agent><US><handle>` and okey_v's strict
+# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<origin>` line per addressable
+# window, the parent-resolution table for the spawn-provenance grouping (#503) and,
+# since #623, for the pin bit a child inherits from its parent. @origin stays LAST:
+# pass B peels the row with `${x#*\t}`, so only the final field may contain no tab.
+# The `_` placeholders after @worktree (@cc_agent since #547, @wid since #566)
+# are load-bearing: `read` gives the LAST name all remaining fields, so without
+# them $wt arrived as `<path><US><agent><US><handle>` and okey_v's strict
 # `scratch-<digits>` test could never match a @worktree-stamped scratch — the
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
+# $pin (#623) is named for the same reason: this pass needs it, and it is last.
 KEYTAB=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ pin; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
-  state_v "$state"
-  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$origin"$'\n'
+  state_v "$state"; pin_v "$pin"
+  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd pin; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -153,7 +165,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   branch='-'
   [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
 
-  state_v "$state"
+  state_v "$state"; pin_v "$pin"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
 
   # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind
@@ -282,7 +294,25 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # that root's (rank, idx) with depth=1 so it sorts right below it; a chain that
   # breaks (parent window closed) is an ORPHAN → the 9/99999 sentinel sinks the
   # row below every live group, sub-sorted by its own rank/idx.
-  grk=$rk; gidx=$idx; depth=0
+  #
+  # PIN (issue #623) is a tier ABOVE all of that: `pinned` (0 = pinned, 1 =
+  # ordinary) is the FIRST sort key, so a pinned window outranks every unpinned one
+  # whatever its status. The bit rides the SAME parent chain as (grk, gidx) — that
+  # is the load-bearing part: pinning a parent has to take its children up with it,
+  # or the pin strands them below and they read as orphans. Two rules make it exact:
+  #   • the ultimate live ROOT is pinned → the whole group is pinned and keeps the
+  #     grouping (and indentation) it already had — the everyday case;
+  #   • the root is NOT pinned but this row, or a MIDDLE ancestor, is → that pinned
+  #     node becomes the group's root for sorting, so a pinned child floats with its
+  #     own descendants still nested under it. A row that is its own pin root sheds
+  #     the └ indent, for the same reason an orphan does: its parent is no longer
+  #     the line above, and indenting under an unrelated row is a lie. The ↳ tag
+  #     stays either way, so the provenance is never lost.
+  grk=$rk; gidx=$idx; depth=0; rootpin=0
+  # nearest pinned ancestor-or-SELF, walking up — self first, so a pinned row is
+  # always its own pin root and can never be re-parented above itself.
+  pnrk=''; pnidx=''; pndepth=0
+  [ "$pin" = 1 ] && { pnrk=$rk; pnidx=$idx; }
   case "$origin" in
     issue-*|scratch-*)
       grk=9; gidx=99999; depth=1
@@ -296,13 +326,22 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         [ "$m" = "$t" ] && { [ "$hops" -eq 0 ] && dname=$name; break; }
         prow=${m%%$'\n'*}
         prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
-        pidx=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+        pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+        ppin=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+        [ "$ppin" = 1 ] && [ -z "$pnrk" ] && { pnrk=$prk; pnidx=$pidx; pndepth=1; }
         case "$porig" in
           issue-*|scratch-*) cur=$porig; hops=$((hops+1)) ;;
-          *) grk=$prk; gidx=$pidx; break ;;
+          *) grk=$prk; gidx=$pidx; rootpin=$ppin; break ;;
         esac
       done ;;
   esac
+  pinned=1
+  if [ "$rootpin" = 1 ]; then
+    pinned=0                            # whole group floats, exactly as it grouped
+  elif [ -n "$pnrk" ]; then
+    pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
+    [ "$pndepth" = 0 ] && dname=$name   # promoted to a group root → no └ indent
+  fi
   # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
   # window sits right after the issue; act/PR/ctx right-align to the edge, the
   # flex gap between them absorbing the width so the metadata block stays pinned
@@ -332,11 +371,25 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
+  # 📌 marks a pinned row (issue #623): without it the operator sees a row sitting
+  # above a red `needs` one and has no idea why. It OPENS the flex span, ahead of
+  # any ↳ tag, so every pin sits at the same column and the eye can scan for them.
+  # This is the file's one deliberate 2-cell glyph, and it is safe here precisely
+  # because the flex span is a COMPUTED pad, not an fld() cell: its width is the
+  # constant 3 below (glyph 2 + space), never a ${#} count, so the right-pinned
+  # act/PR/ctx block stays put whatever the terminal thinks the emoji measures.
+  # The mark follows @pin, NOT the inherited `pinned` tier: it means "this window
+  # carries the pin, ⌃y here takes it off". A child floated by its parent is
+  # explained by the └ indent under the marked row above it, and marking those too
+  # would make the top of the list a wall of pins with no way to see which one is
+  # the real handle.
+  pinpfx=''
+  [ "$pin" = 1 ] && { pinpfx='📌 '; dwidth=$(( dwidth + 3 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
-  buf+="$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
+  buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
@@ -352,12 +405,16 @@ h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
-# emit grouped by spawn provenance (issue #503): roots (hub/autofill/bridge
-# spawns) keep the status-rank order they always had; each root's children sort
-# directly below it (depth breaks the tie, then the child's own rank/idx);
-# orphans — children whose parent window closed — sink below every live group.
-printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n \
-| while IFS='	' read -r _ _ _ _ _ line; do
+# emit pinned-first (issue #623), then grouped by spawn provenance (issue #503):
+# pinned windows (and the subtrees that float with them) take the whole top of the
+# list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
+# the status-rank order they always had; each root's children sort directly below
+# it (depth breaks the tie, then the child's own rank/idx); orphans — children
+# whose parent window closed — sink below every live group. Pins sort AMONG
+# themselves by the same (grk, gidx) they always had, so the pinned block is the
+# ordinary list in miniature.
+printf '%s' "$buf" | sort -t'	' -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n \
+| while IFS='	' read -r _ _ _ _ _ _ line; do
   [ -z "$line" ] && continue
   printf '%s\n' "$line"
 done
