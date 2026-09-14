@@ -25,7 +25,7 @@ func runPlan(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota plan --list                                     every price, current and superseded
   ccquota plan --set max --monthly 200                    price a plan from now on
-  ccquota plan --set max --monthly 250 --from 2026-10-01  record a price change
+  ccquota plan --set max --monthly 250 --from 2026-10-01T00:00:00Z   record a price change
   ccquota plan --spend --days 30                          real subscription spend
 
 What a plan costs is the one figure the hub cannot observe: no transcript

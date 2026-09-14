@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Gateway rates for the README demo hub. Invented vendors, invented prices.",
+    "",
+    "The two providers deliberately serve the SAME model id at DIFFERENT rates.",
+    "That is the case the consumption table exists for: a gateway that fails",
+    "over reaches one model through several upstreams on several contracts, and",
+    "a row keyed on the model alone would add two invoices together.",
+    "",
+    "Nothing here is anyone's real contract. Do not copy these numbers.",
+    "",
+    "Rates are CNY per million tokens. Both sides must be positive: a model",
+    "with no output tokens needs a unit+price pair or a free allowance instead,",
+    "which is why there is no embedding model in this demo."
+  ],
+  "gateway": {
+    "rates_as_of": "2026-09-14",
+    "price_source": "invented for the README demo",
+    "models": {
+      "summarize-8b": { "input": 0.5, "output": 1.5 }
+    },
+    "providers": {
+      "vendor-a.example.com": {
+        "label": "Vendor A · contracted",
+        "models": {
+          "chat-70b": { "input": 0.6, "output": 2.4 }
+        }
+      },
+      "vendor-b.example.com": {
+        "label": "Vendor B · failover",
+        "models": {
+          "chat-70b": { "input": 0.9, "output": 3.6 }
+        }
+      }
+    }
+  }
+}

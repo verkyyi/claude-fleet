@@ -1,5 +1,10 @@
 # TokenLedger
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/badge-dark.svg">
+  <img alt="tokens counted by this hub" src="docs/img/badge-light.svg">
+</picture>
+
 **Books for a team account pool.** A small team buys N Claude subscriptions
 centrally and schedules its work against whichever of them still has headroom.
 That is markedly cheaper per unit of quota than buying a seat per person — and
@@ -15,6 +20,17 @@ One Go binary: an agent on every endpoint, a hub with a dashboard and an API,
 and a read-only MCP server so any Claude session can ask. Usage covers **Codex**
 alongside Claude Code, with a source dimension for comparing or filtering them;
 both support subscription-limit monitoring when a usable local login is present.
+
+![what it cost, and every model that ran](docs/img/dashboard.png)
+
+<sub>The headline is the sum of two <em>different kinds of money</em> — a
+subscription that bills monthly, and metered spend that bills per call — and the
+consumption table below it is keyed on (provider, model), because one gateway
+failing over between vendors reaches the same model id on two contracts.
+Screenshots on this page come from a throwaway hub with invented data —
+<code>docs/img/seed-demo.sh</code> stands that hub up again so the pictures can be
+re-shot when the UI moves. Endpoint ids and dates differ every run, so it
+reproduces the <em>state</em>, not the bytes.</sub>
 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
@@ -407,6 +423,11 @@ One page, no tabs. It reads top to bottom: what this actually cost, what is
 running right now, every model that ran and what it cost, then the analysis
 and the fleet.
 
+![the usage half: timeline and selection totals](docs/img/usage.png)
+
+<sub>Drag the timeline selection and every card below it re-reports on that
+span. Each tile is compared with the equal-length period right before it.</sub>
+
 The top-level axis is the **billing relationship**, not the product name.
 There are two ways a deployment is charged — a subscription that bills monthly
 whether or not a token is spent, and metered spend that bills per call — and
@@ -632,6 +653,8 @@ ccquota team --endpoint <endpoint-id> --set platform
 ccquota team --endpoint <endpoint-id> --set ""     # un-assign
 ```
 
+![ccquota team --list and ccquota plan --list](docs/img/cli.svg)
+
 Teams are assigned **here, on the hub**, and are never reported by an endpoint:
 a machine that could name its own team could move its spend onto another team's
 budget. Team is resolved when a query runs rather than stamped on each turn, so
@@ -661,7 +684,7 @@ transcript attests to what a plan costs, so an operator has to say:
 
 ```bash
 ccquota plan --set max --monthly 200                    # from now on
-ccquota plan --set max --monthly 250 --from 2026-10-01  # a price change
+ccquota plan --set max --monthly 250 --from 2026-10-01T00:00:00Z   # a price change
 ccquota plan --list                                     # every price, current and superseded
 ccquota plan --spend --days 30                          # real, billed spend
 ```
