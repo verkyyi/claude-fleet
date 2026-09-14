@@ -247,6 +247,14 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 > 主动武装；quotawatch 自动重排默认关；hold 永远 fail-open（两遍 `pick_active`）。
 > 一行回滚 `FLEET_ACCOUNT_PICK=minmax`。
 >
+> **上线后实测（2026-09-14，三个 fleet 共 12 个 worker 窗口的账号分布）：**
+> ```
+> 修复前   17 verky@24helpful · 1 verky.yi · 1 ly297     ← 全压在一份上
+> 修复后    7 ly297 · 5 verky@24helpful · 1 verky.yi      ← 真的在轮着用
+> ```
+> 同期 `ly297` 的 7d 用量从 8% 涨到 17%（此前四小时纹丝不动），`●` 也移了过去。
+> **排名修正是有效的,不只是理论上更对。**
+>
 > ⚠️ 未验证路径（PR 自陈）：quotawatch 自动重排块没在真实 daemon tick 跑过；
 > `migrate` 只做代码推理未实跑；相位的真实收益要一整个 5h 周期才看得出。
 
