@@ -271,6 +271,7 @@ next tick; reaping costs work nobody can get back. A deferral is not a leak:
 
 | Gate | Refusal token |
 |---|---|
+| no account **rotation** is in flight in the worktree ([lease](#the-rotation-gap--a-window-that-is-deliberately-missing-issue-550)) | `skip:live` |
 | the worktree is clean — untracked counts as dirty | `skip:dirty` |
 | the window is not `@claude_state=working` (a session mid-turn) | `skip:live` |
 | its newest human transcript is **older than the PR's `closedAt`** | `skip:live` |
@@ -315,6 +316,51 @@ only ever *save* a call, never decide a reap.
 The worker-side half of this lives in the charter (`commands/fleet-claim.md`):
 land with **one** `gh pr merge … --delete-branch`, never a chained
 `push --delete` — a failed merge must not delete the branch.
+
+## The rotation gap — a window that is deliberately missing (issue #550)
+
+Every reaper above asks tmux who is bound where. An **account rotation** makes
+tmux lie for a few seconds, and nothing in tmux says so.
+
+`bin/fleet-migrate.sh` moves a walled session onto another subscription account by
+**close + resume** — a running `claude` bakes its OAuth token in at launch and
+cannot change accounts in place (see its header). So it types `/exit`, waits for
+the pid to be gone, lets the SessionEnd hook close the window, and opens a *new*
+window seconds later, re-binding `@issue`/`@worktree` on the far side. Between
+those two moments the worktree has **no window, no `@issue`, and no settled
+`pane_current_path`** — the exact signature of a worker that finished.
+
+On **2026-09-11 17:18** the worktree janitor ticked inside one of those gaps. The
+worktree was dirty, so it took the KEEP-but-sweep-its-orphans path (#469) — and
+swept **15 pids**: the resumed `claude`, the pane's shell, and every child. The
+window died with them (`ledger-watch` recorded `#5596 vanished` 13 seconds later).
+Only the dirty tree itself survived, because `git worktree remove` refused it; the
+session was recovered by hand with `fleet-history resume`. Had the tree been clean
+and merged, the same gap would have **deleted it out from under a live session**.
+
+Two gates close it, and they are deliberately different in kind:
+
+| Gate | What it knows that tmux does not |
+|---|---|
+| **rotation lease** — `fleet_rotate_lease_{take,drop,held}` | That the gap is *intentional*. The mover takes a lease on the worktree before typing `/exit` and drops it once the new window carries its bindings again. This is the only signal that covers the instant when **nothing at all** is running in the tree (old `claude` exited, new one not yet booted). TTL-bounded by `FLEET_ROTATE_LEASE_TTL` (default 900s) and stamped in the file, so a mover killed mid-move can never park a worktree forever. |
+| **live pane processes** — `fleet_worktree_live_procs` | What is *actually running*, read from the process table instead of from window options: any process anchored to the worktree whose ancestry reaches a live **tmux server** is running in a pane, whatever that window says about itself right now. |
+
+The second one is also a rail inside `fleet_reap_worktree_procs` itself: it never
+kills a process with a live pane ancestor, wherever it is called from. An orphan
+proper — its window long gone — has been reparented to init and has no such
+ancestor, so #151/#469 reap it exactly as before. The guard spares panes, not
+everything.
+
+> **`pgrep` cannot answer this on macOS.** BSD `pgrep` excludes the **caller's own
+> ancestors** from every match unless given `-a`, so a `pgrep -x tmux` run from
+> inside a pane omits the one server that matters — the one running the caller.
+> (Verified on macOS 25.4: the fleet's own server was absent from `pgrep -x tmux`
+> while `ps` listed it.) Both helpers read `ps` and match on `comm`, which is also
+> immune to tmux's `setproctitle` rename.
+
+Pinned by `bin/worktree-autoclean-rotation-selftest.sh` (the janitor end to end,
+lease + expiry + live pane + the still-pruned control) and the pane-ancestry
+assertions in `bin/orphan-proc-reap-selftest.sh`.
 
 ## Non-`issue-<N>` heads — the opt-in scratch reap (issue #589)
 

@@ -174,6 +174,11 @@ migrate_selected() {
 
 # --- the move -------------------------------------------------------------------
 
+# Release a rotation lease if one was taken (issue #550). Never fails a migrate:
+# a lease that outlives its move expires on its own, it just costs the janitor a
+# cycle of caution in the meantime.
+lease_drop() { [ -n "${1:-}" ] && fleet_rotate_lease_drop "$1"; return 0; }
+
 migrate_one() {
   local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd
   # One display-message per field — NOT a joined format split on a control byte:
@@ -215,6 +220,16 @@ migrate_one() {
   # comes back in a new window. The resumed session reports for real when it ships,
   # and the new window below starts with the stamp cleared.
   TM set-window-option -t "$wid" @reported 1 2>/dev/null
+  # …and the same "not a death" fact, stated to the REAPERS (issue #550). From here
+  # until the new window is bound, this worktree has no window and no @issue
+  # binding, which is indistinguishable from a finished worker to anything that
+  # scans on a timer: the worktree janitor ran inside one of these gaps on
+  # 2026-09-11 and swept all 15 processes of a live worker. The lease says the gap
+  # is deliberate; it is TTL-bounded, so a migrate that dies here cannot park the
+  # worktree forever. Dropped on EVERY exit path below, including the failures.
+  local ldir=""
+  case "$wt" in ?*) ldir="$wt" ;; *) [ -n "$cwd" ] && [ "$cwd" != "${FLEET_MAIN:-}" ] && ldir="$cwd" ;; esac
+  [ -n "$ldir" ] && fleet_rotate_lease_take "$ldir" "migrate $name ($wid)"
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
@@ -226,7 +241,7 @@ migrate_one() {
     sleep 1
   done
   if [ "$alive" = 1 ]; then
-    say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
+    lease_drop "$ldir"; say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
   fi
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
@@ -237,7 +252,7 @@ migrate_one() {
   if ! window_closed "$wid"; then
     # … or it doesn't (FLEET_CLOSE_ON_EXIT=0): Claude is verified gone, the pane is
     # at its `exec $SHELL` — relaunch right there, keeping the window.
-    fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
+    fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { lease_drop "$ldir"; say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
     TM clear-history -t "$wid" 2>/dev/null || :     # drop the old limit banner (stale-banner cascade guard)
     SK -t "$wid" -l "$cmd" 2>/dev/null; SK -t "$wid" Enter 2>/dev/null
     nw="$wid"
@@ -248,7 +263,7 @@ migrate_one() {
     TM display-message -p -t "$wid" '' >/dev/null 2>&1 && TM kill-window -t "$wid" 2>/dev/null
     # 4. a NEW window, same name + cwd, resumed under the active account.
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$cmd" 2>/dev/null)
-    [ -n "$nw" ] || { say "  ✗ $name ($wid): new-window failed — session ${sid%%-*}… is closed but NOT resumed (resume by hand: cd $cwd && claude --resume $sid)"; skipped=$((skipped+1)); return 0; }
+    [ -n "$nw" ] || { lease_drop "$ldir"; say "  ✗ $name ($wid): new-window failed — session ${sid%%-*}… is closed but NOT resumed (resume by hand: cd $cwd && claude --resume $sid)"; skipped=$((skipped+1)); return 0; }
     [ -n "$iss" ] && TM set-window-option -t "$nw" @issue "$iss" 2>/dev/null
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
@@ -264,6 +279,12 @@ migrate_one() {
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
   fi
   TM set-window-option -t "$nw" @migrated "$(now)" 2>/dev/null
+  # The window exists and carries @issue/@worktree again — the gap is over, so the
+  # reapers get their normal signals back (issue #550). Dropped BEFORE the boot
+  # verification below: that loop waits up to BOOT_WAIT seconds on a window whose
+  # bindings are already in place, and a lease held across it would only delay the
+  # janitor for no further protection.
+  lease_drop "$ldir"
   # …and clear the pre-exit suppression: the resumed session still owes its parent a
   # report, and (on the CLOSE_ON_EXIT=0 branch) $nw IS the window that carries it.
   TM set-window-option -t "$nw" -u @reported 2>/dev/null
