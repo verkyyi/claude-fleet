@@ -1098,6 +1098,48 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Runaway CPU action @group=disk @tier=advanced @scope=global @edit=str
 #FLEET_RUNAWAY_CPU_ACTION=notify  # notify (forensics+notify only) | kill (also SIGTERM/KILL)
 
+# Orphaned-runaway watchdog (same daemon, issue #697) — ON by default, and the
+# only fleet defense that can see a process belonging to no worktree and no pane.
+# On 2026-09-15 a worker's hand-written load experiment leaked 8 spinning zsh
+# processes; they lived 3h20m at ~70% CPU each as PPID=1 orphans and took the
+# machine to load 108 until `ps` itself timed out. fleet_reap_worktree_procs, the
+# #353 liveness guard and the #550 pane gate all missed them, because each of
+# those finds its targets THROUGH a worktree or a pane.
+#
+# The watchdog above could not cover it either, and that is structural: its
+# discriminator is "no controlling terminal", which is equally true of every
+# healthy Claude Bash-tool shell — so it ships OFF and must. This one keys on
+# `PPID=1` (only a process whose parent DIED reparents to init) plus an argv
+# fingerprint of Claude/fleet shapes, which is precise enough to be on by
+# default. It is REPORT-ONLY by default: killing a real long task by mistake is
+# worse than missing one. Incidents land in ~/.config/claude-fleet/diskguard/
+# and fire FLEET_NOTIFY_CMD; bin/fleet-doctor.sh shows the live state on its
+# `machine` line, and `bin/fleet-diskguard.sh --orphans` lists them on demand.
+# @label=Orphan runaway CPU percent @group=disk @tier=advanced @scope=global @edit=int @unit=%
+#FLEET_ORPHAN_CPU_PCT=50        # %CPU that counts as hot; 0 = watchdog OFF
+# @label=Orphan runaway seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ORPHAN_CPU_SECS=300      # seconds sustained-hot before it's flagged
+# @label=Orphan runaway action @group=disk @tier=advanced @scope=global @edit=str
+#FLEET_ORPHAN_CPU_ACTION=notify # notify (report only — the default) | kill (SIGTERM/KILL the process GROUP)
+# @label=Extra orphan fingerprint @group=disk @tier=advanced @scope=global @edit=str
+#FLEET_ORPHAN_EXTRA_RE=         # an ERE OR'd into the built-in fleet fingerprint
+
+# The load line on `fleet-doctor`'s `machine` check (issue #697): 1-minute load
+# average divided by core count. Warns at or above this, so the number means the
+# same thing on a 4-core and a 16-core box.
+# @label=Doctor load warn per core @group=disk @tier=advanced @scope=global @edit=int
+#FLEET_LOAD_WARN_PER_CORE=4
+
+# Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
+# CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
+# orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
+# before the exec, plus a $SECONDS bound), so SIGKILLing the parent — or closing
+# the pane — cannot leak it. These caps bound a typo:
+# @label=Load-gen max burners @group=disk @tier=advanced @scope=global @edit=int
+#FLEET_LOADGEN_MAX_PROCS=64
+# @label=Load-gen max seconds @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_LOADGEN_MAX_SECS=900
+
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux
 # new-window -d) and NOT selected — you stay on your current window, and the new

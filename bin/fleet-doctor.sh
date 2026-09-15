@@ -726,6 +726,50 @@ if command -v fleet_daemon_unit_names >/dev/null 2>&1; then
   fi
 fi
 
+# --- machine load + orphaned runaways (issue #697) ------------------------------
+# The blind spot #697 was filed about. On 2026-09-15 this screen printed a steady
+# "1 warn" while the machine sat at load 108 with eight leaked PPID=1 CPU burners
+# on it — `ps` and `uptime` were themselves timing out, both daemons were wedged,
+# and the doctor had no line that could say any of it. Every other check here asks
+# "is the fleet installed correctly"; this one asks "is the machine it runs on
+# still usable", which is a different question and was nobody's.
+#
+# Severity is WARN, never FAIL, on purpose: the exit status gates an install
+# (`sh fleet-doctor.sh && …`) and a runaway is a transient condition, not a
+# missing dependency — failing here would block an install over something that
+# clears on its own. What it must not be is SILENT.
+mcores=$( { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } \
+          | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }' )
+mload=$( { sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' || awk '{print $1}' /proc/loadavg 2>/dev/null; } \
+         | head -1 | awk '{ if (NF) printf "%.2f", $1+0 }' )
+mper=$(awk -v l="${mload:-0}" -v c="$mcores" 'BEGIN{ printf "%.2f", (c>0 ? l/c : l) }')
+mwarn="${FLEET_LOAD_WARN_PER_CORE:-4}"
+# The orphan scan lives in the daemon that acts on it, so the doctor and the
+# watchdog can never disagree about what counts as a runaway.
+_dg="$(dirname "$0")/fleet-diskguard.sh"
+morph=''
+[ -f "$_dg" ] && morph="$(bash "$_dg" --orphans 2>/dev/null)"
+morphn=$(printf '%s' "$morph" | grep -c . 2>/dev/null || echo 0)
+
+if [ -z "$mload" ]; then
+  # Not a measurement bug to shrug at — "the load average would not come back" is
+  # the machine answering the question by refusing to.
+  warn machine "could not read the load average — on a healthy box this is instant, so a timeout here is itself the finding (\`uptime\`/\`ps\` were timing out at load 108 in issue #697)"
+elif [ "$morphn" -gt 0 ]; then
+  mtop=$(printf '%s\n' "$morph" | sort -t"$(printf '\t')" -k2,2nr | head -1)
+  mpid=$(printf '%s' "$mtop" | cut -f1); mcpu=$(printf '%s' "$mtop" | cut -f2)
+  met=$(printf '%s' "$mtop" | cut -f3)
+  # awk's substr, not `cut -c`: an argv can hold multibyte bytes and cut would
+  # slice one in half, and the "Illegal byte sequence" that follows would be the
+  # only thing the operator ever saw of this line.
+  mcmd=$(printf '%s' "$mtop" | cut -f4 | awk '{ print substr($0,1,70) }')
+  warn machine "load $mload on $mcores cores (${mper}/core) — and $morphn ORPHANED runaway(s): PPID=1, fleet-fingerprinted, burning CPU with no worktree or pane to reap them. Worst: pid $mpid at ${mcpu}%, up $met — \`${mcmd}…\`. Full list: \`bin/fleet-diskguard.sh --orphans\`; a leaked load experiment stops with \`bin/fleet-loadgen.sh --stop\`; forensics land in \${FLEET_CONF_DIR:-~/.config/claude-fleet}/diskguard/incident-orphan-*.log"
+elif awk -v p="$mper" -v w="$mwarn" 'BEGIN{ exit !(p>=w) }'; then
+  warn machine "load $mload on $mcores cores = ${mper}/core, at or over the ${mwarn}/core line — every fleet on this box is sharing it. No fleet-fingerprinted orphan is responsible (\`bin/fleet-diskguard.sh --orphans\` is empty), so look at what else is running"
+else
+  pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
+fi
+
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The optional Claude Code status line (conf/statusline.sh, wired install-time
 # into settings.json's statusLine — see docs/INSTALL.md step 8b) renders a

@@ -9,7 +9,7 @@ webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
 | `claude-fleet-spinner.service` | always-on (`Restart=always`) | `com.claude-fleet.spinner` (KeepAlive) | required |
 | `claude-fleet-webhook.service` | always-on (`Restart=always`) | `com.claude-fleet.webhook` (KeepAlive) | optional (fresh ~1s PR/issue/CI status via `gh webhook forward`, no public endpoint; needs FLEET_WEBHOOK=1 per fleet + the `cli/gh-webhook` extension) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
-| `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended |
+| `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended (disk gate + forensics; also the ON-by-default orphaned-runaway watchdog, issue #697 — a machine with no diskguard unit has no machine-level runaway defense) |
 | `claude-fleet-quotawatch.timer` | every 60s, +15s after start | `com.claude-fleet.quotawatch` | recommended with a ccquota hub (the pre-emptive account rotation's own tick, issue #551; no-op without `CCQUOTA_HUB_URL` + an accounts pool) |
 | `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
 | `claude-fleet-dispatch.timer` | every 60s, +20s after start | `com.claude-fleet.dispatch` | optional (autofill `autofill`-labelled backlog; needs FLEET_AUTOFILL=1 per fleet; LLM tokens) |

@@ -206,7 +206,8 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
     bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
     sweep.due         # /sweep scheduling ledger
   accounts/           # GLOBAL — multi-account tokens (unchanged)
-  diskguard/          # GLOBAL — disk-guard forensics (unchanged)
+  diskguard/          # GLOBAL — disk-guard + runaway forensics; orphan-seen /
+                      #   orphan-current are the #697 watchdog's cross-tick state
   restore/            # GLOBAL — auto-restore ARM flag + restore.log
 ```
 
