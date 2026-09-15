@@ -536,6 +536,14 @@ assumes — this doc is only the install/uninstall procedure.
    test goes through the same prelude: `run-selftests.sh fleet-context`, or a glob
    (`run-selftests.sh 'dash-*'`).
 
+   Expect ~9 minutes, and a **slowest-tests** table at the end — the number to
+   watch if the gate ever starts creeping toward its CI budget again (issue
+   #681). CI gets that time back by splitting the suite across four runners
+   (`--shard K/N`), one runner per slice; locally there is nothing to split
+   across, and running the slices side by side on one machine would *cost* you
+   reliability rather than time: several of these tests assert on real-time
+   windows that only hold while nothing else is competing for the box.
+
 ## Uninstall
 
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,

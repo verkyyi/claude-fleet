@@ -54,12 +54,80 @@ on:
 
 jobs:
   selftests:
+    # FANNED OUT over N runners (issue #681). The suite had grown to 120 tests and
+    # ~9 minutes against a 10-minute bound — one minute of margin, already spent
+    # once — and the consequence is not "CI is slow" but that green stops meaning
+    # anything, because a timeout red is indistinguishable from a real one. That
+    # would undo exactly what #660 just bought.
+    #
+    # Sharded rather than run concurrently INSIDE one runner, which was built,
+    # measured (196s against 1428s of summed test time, 8-wide) and rejected: ~9
+    # of these tests carry a real-time budget that only holds on an idle box —
+    # needs-reconcile drives the spinner with FLEET_NEEDS_RECONCILE_SECS=1, whose
+    # strike table goes stale after 3× that — and two went red on the first
+    # parallel run while passing alone. Widening those windows would loosen the
+    # assertions that make the tests worth having, to buy speed a second runner
+    # gives away. Sharded, every test still runs ALONE on its own box, under the
+    # conditions it was written for, so this cannot make the gate flakier.
+    #
+    # To change the width, edit `shard:` below and nothing else. K comes from the
+    # list entry, N from `strategy.job-total` (the matrix's own size), so the list
+    # is the single source of truth — and a list that is not 1..N (a dropped entry,
+    # a typo) produces a K outside 1..N, which the runner refuses loudly instead of
+    # quietly running the wrong slice.
+    name: shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # Bound the aggregate run well under GitHub's 6h default so a single hung or
-    # non-hermetic test can't wedge the whole gate for hours.
-    timeout-minutes: 10
+    strategy:
+      # Never cancel the siblings on a red: one shard failing must not hide
+      # whether the other three were green. A partial picture is what makes
+      # people re-run instead of read.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # Backstop only. The real bound is on the run STEP below, deliberately: a
+    # JOB-level timeout cancels the whole job, so the step that would tell you
+    # WHICH test hung never runs. This one just keeps a wedged runner off
+    # GitHub's 6h default.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run all selftests
-        run: bash bin/run-selftests.sh
+      - name: Run this shard's selftests
+        # ~2 minutes of work. The bound stays well clear of it so it only ever
+        # catches a HUNG test; a test merely getting SLOWER is caught by the
+        # timings step below, long before it reaches here. And because the suite
+        # now grows sideways, adding a selftest never needs this number touched.
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          bash bin/run-selftests.sh \
+            --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            2>&1 | tee selftests.log
+
+      - name: Per-test timings
+        if: always()
+        # Timings belong on the run's summary page, not only in a 4000-line log
+        # (issue #681, same reasoning as `over=` in #653): the point of measuring
+        # them is that someone notices a test getting slower BEFORE it eats the
+        # budget, and nobody opens a green run's log. Every matrix job appends
+        # here, so the four slices stack up on one page.
+        #
+        # If the run never reached its summary it was killed mid-shard, so name
+        # what was in flight instead: the last `=== NAME ===` header with no
+        # PASS/FAIL after it is the test that hung. That is what makes a timeout
+        # red diagnose itself rather than look like a real failure.
+        run: |
+          {
+            echo "## selftests · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo
+            echo '```'
+            if grep -q '^-* slowest' selftests.log 2>/dev/null; then
+              sed -n '/^-* slowest/,$p' selftests.log
+            else
+              echo 'the shard was cut short — this test started and never finished:'
+              awk '/^=== /{h=$2} /^(PASS|FAIL)  /{h=""}
+                   END{print "  " (h ? h : "(none identified — read the log)")}' \
+                selftests.log 2>/dev/null
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
