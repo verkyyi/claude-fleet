@@ -162,8 +162,18 @@ grep -q 'Escape' "$INJECT" 2>/dev/null && fail "never-idle must send NO keys at 
 # …and the abort must UNSET @handoff_armed (issue #571): the latch was set by the nudge
 # that led here; left armed, auto-handoff is dead for the rest of this session.
 unlatched || fail "a never-idle abort must unset @handoff_armed so a later Stop can re-nudge, setopt: $(cat "$SETOPT")"
+# …and it must SAY WHY (issue #677). "never went idle" restates the symptom; the
+# operator needs to know whether the stuck-working backstop (#101) was even running,
+# whether it demoted this window too late, and whether the two timeouts are still in
+# a workable relation — otherwise an overnight loop that silently stopped handing off
+# leaves nothing to read. The diag block is best-effort, so assert the line it can
+# always produce here: a verdict from bin/fleet-handoff-invariant.sh.
+grep -q 'diag:' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
+  || fail "a never-idle abort must log a backstop diagnosis (#677), log: $(cat "$WORK/logs/handoff-cycle.log")"
+grep -q 'diag:.*wait-idle' "$WORK/logs/handoff-cycle.log" 2>/dev/null \
+  || fail "the diagnosis must include the timeout-invariant verdict (#677), log: $(cat "$WORK/logs/handoff-cycle.log")"
 
-printf 'selftest: never-idle leg PASS (aborts without clearing)\n' >&2
+printf 'selftest: never-idle leg PASS (aborts without clearing, and says why — #677)\n' >&2
 
 # ---- KEY-SEQUENCE (idle + fresh capture) → exact ordered keys -----------------
 FAKE_STATE='done' FAKE_CAP='❯ \n  ? for shortcuts\n' run --pane "$PANE" --doc "$DOC" \

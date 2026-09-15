@@ -757,8 +757,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # window idle (window_activity stale) longer than this many seconds is demoted to
 # done and reclassified. Conservative by design — a live worker never exceeds ~1s
 # of activity age (validated), so 120 is a ~120× margin; bias is toward leaving a
-# stuck window a tick longer, never toward demoting a busy one. Set to 0 to
-# disable. GLOBAL: one spinner daemon serves every fleet.
+# stuck window a tick longer, never toward demoting a busy one. GLOBAL: one spinner
+# daemon serves every fleet.
+#
+# ⚠️ This is also the FLOOR under auto-handoff (issue #677): /fleet-handoff's cycle
+# waits for `working` to clear, and on a turn that never emitted Stop (a model cap,
+# #580) this demotion is the only thing that ever clears it — so
+# FLEET_STUCK_WORKING_SECS + 20s must stay well below FLEET_HANDOFF_IDLE_TIMEOUT
+# (above), or auto-handoff silently stops working. Setting it to 0 DISABLES the
+# demoter, which disables auto-handoff along with it — fleet-doctor.sh says so.
 # @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_STUCK_WORKING_SECS=120
 
@@ -845,6 +852,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # into autocompact. 0 = off (clear under the operator's fingers, the pre-#571 way).
 # @label=Handoff typing hold @group=handoff @tier=advanced @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_DEFER_SECS=30     # keypress at the pane's window within N s holds the handoff; 0 = off
+
+# The wait-idle ceiling of the handoff cycle (bin/fleet-handoff-cycle.sh): how long
+# it waits for the arming turn to end (@claude_state leaves `working`) before it
+# ABORTS WITHOUT CLEARING. A big handoff turn can legitimately run over two minutes.
+#
+# ⚠️ NOT a free number (issue #677). For the case auto-handoff exists to survive —
+# a turn that emitted no Stop hook at all (a model cap #580, a crash), which pins
+# @claude_state=working forever — the ONLY thing that can open that gate is the
+# stuck-working demotion below, which lands at worst
+#
+#     FLEET_STUCK_WORKING_SECS + 2 × 10s sweep     (140s at the defaults)
+#
+# Set this at or under that and auto-handoff can NEVER fire on a capped turn, and
+# it fails SILENTLY: the session just fills its context and stops. It must also
+# stay under FLEET_HANDOFF_HARD_TIMEOUT (300s) minus FLEET_HANDOFF_VERIFY_TIMEOUT
+# (25s), or the cycle's own watchdog kills it after /clear but before the pickup.
+# `bin/fleet-handoff-invariant.sh` is the check, fleet-doctor.sh prints its verdict,
+# and a selftest reds if either default is edited into a dangerous relation.
+# @label=Handoff wait-idle ceiling @group=handoff @tier=advanced @scope=fleet @edit=int @unit=sec
+#FLEET_HANDOFF_IDLE_TIMEOUT=240   # must stay well above FLEET_STUCK_WORKING_SECS + 20
 
 # The size of the model's context window, in tokens — the denominator
 # bin/fleet-context.sh (/fleet-context, issue #464) uses when it DERIVES a
