@@ -144,6 +144,27 @@ touches anything.
 Prefer manual? Every step is in [docs/INSTALL.md](docs/INSTALL.md); the pieces are
 plain shell scripts with no hidden state.
 
+### The Claude-Code side ships as a plugin
+
+The fleet's slash commands, the base `skills/` tree and the hook table also
+install as a **Claude Code plugin**, served by a marketplace in this same repo:
+
+```sh
+claude plugin marketplace add verkyyi/claude-fleet
+claude plugin install fleet@claude-fleet --scope user --yes
+```
+
+That replaces the copy-and-merge passes above for those three, and
+`/plugin update fleet` keeps them current — so on a second machine, or a
+teammate's, nobody has to remember `/fleet-sync-install` for them. Plugin
+commands are namespaced (`/fleet:fleet-claim`); the fleet detects which install
+path a machine has and seeds the form that resolves, so spawns work either way.
+
+It does **not** replace the playbook: `bin/`, `conf/`, the tmux layer and the
+daemons are machine-level and stay at `~/.claude/fleet`. A plugin's install path
+is version-scoped and moves on every update, so nothing with a stable absolute
+path — a launchd unit, a tmux bind, a hook command — can point into it.
+
 ### Dependencies
 
 tmux ≥ 3.2 · [fzf](https://github.com/junegunn/fzf) ≥ 0.45 (the dashboard binds
@@ -336,9 +357,10 @@ every already-running session, are untouched.
 ## Fleet commands (`/skill`s)
 
 Optional repo-shipped Claude Code slash commands that operate on the current
-fleet (its `$FLEET_REPO` only), installed by appending `commands/*.md` into
-`~/.claude/commands/`. Each declares an owner seat (`worker` / `hub` / `either`)
-and refuses from the wrong one. Live so far:
+fleet (its `$FLEET_REPO` only), installed either as [the plugin](#the-claude-code-side-ships-as-a-plugin)
+(typed `/fleet:fleet-claim`) or by appending `commands/*.md` into
+`~/.claude/commands/` (typed `/fleet-claim`). Each declares an owner seat
+(`worker` / `hub` / `either`) and refuses from the wrong one. Live so far:
 
 - **`/fleet-claim`** (worker) — the whole worker lifecycle, and the one skill a
   freshly-spawned worker runs. Its whole preamble is ONE call

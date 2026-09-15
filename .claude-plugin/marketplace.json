@@ -1,0 +1,12 @@
+{
+  "name": "claude-fleet",
+  "description": "claude-fleet — a tmux + Claude Code setup for running many parallel sessions, one window per GitHub issue.",
+  "owner": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "plugins": [
+    {
+      "name": "fleet",
+      "source": "./",
+      "description": "The fleet slash commands, base skills, and hooks."
+    }
+  ]
+}

@@ -53,7 +53,9 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 # temp install root: bin/ holds symlinks to the scripts under test; commands/,
 # conf/, hooks/ are the repo's own (fleet-codex.sh resolves them as $BIN/..).
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/f1" "$WORK/conf/fleets/f2" "$WORK/wt/repo-issue-42"
-for s in fleet-claude.sh fleet-codex.sh fleet-lib.sh set-claude-state.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
+# fleet-hooks-emit.sh materialises the codex hook table from hooks/*.json
+# (issue #611) — without it the launcher wires no hooks at all.
+for s in fleet-claude.sh fleet-codex.sh fleet-lib.sh set-claude-state.sh fleet-hooks-emit.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
 ln -s "$ROOT/commands" "$WORK/commands"
 ln -s "$ROOT/conf"     "$WORK/conf-real"
 ln -s "$ROOT/hooks"    "$WORK/hooks"

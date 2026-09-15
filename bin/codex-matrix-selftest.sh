@@ -90,12 +90,26 @@ ok "missing block / missing marker → exit 2"
 code="$(sed -n '/^set -uo pipefail/,$p' "$SRC" | grep -v '^[[:space:]]*#')"
 has() { printf '%s\n' "$code" | grep -q -- "$1"; }
 
-# ✅ rows: the guardrails, the project doc, the four wired hook events.
+# ✅ rows: the guardrails, the project doc, the model knob.
 for tok in 'dangerously-bypass-approvals-and-sandbox' 'dangerously-bypass-hook-trust' \
-           'project_doc_fallback_filenames' 'hooks.PreToolUse' 'hooks.PostToolUse' \
-           'hooks.UserPromptSubmit' 'hooks.Stop' 'bash-guard.py' 'base-readonly-guard.py' \
-           'FLEET_CODEX_MODEL'; do
+           'project_doc_fallback_filenames' 'FLEET_CODEX_MODEL'; do
   has "$tok" || fail "matrix claims a ✅ the launcher no longer implements: $tok is gone from $SRC"
+done
+
+# The four hook events are no longer literals in the launcher (issue #611): it
+# reads them from bin/fleet-hooks-emit.sh, which materialises hooks/settings-hooks.json
+# through the declared Codex delta. So check what is actually EMITTED — a stronger
+# assertion than the old grep, and one that survives the indirection.
+has 'fleet-hooks-emit.sh' || fail "the launcher no longer calls fleet-hooks-emit.sh — where do its hooks come from?"
+emitted="$("$BIN/fleet-hooks-emit.sh" --target codex 2>/dev/null)" \
+  || fail "fleet-hooks-emit.sh --target codex failed — a codex worker would launch with NO hooks"
+for ev in PreToolUse PostToolUse UserPromptSubmit Stop; do
+  printf '%s\n' "$emitted" | grep -q "^$ev	" \
+    || fail "matrix claims a ✅ that is not emitted: hooks.$ev is missing from the codex target" "$emitted"
+done
+for tok in 'bash-guard.py' 'base-readonly-guard.py'; do
+  printf '%s\n' "$emitted" | grep -q -- "$tok" \
+    || fail "matrix claims the bypass-permissions guards ride along, but $tok is not in the emitted table" "$emitted"
 done
 ok "✅ rows: guardrails, project doc and the four hook events are really wired"
 

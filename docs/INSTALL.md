@@ -104,7 +104,11 @@ assumes — this doc is only the install/uninstall procedure.
    out. All are overridable from the user's own `~/.tmux.conf` after the `source-file`
    line, or comment them out — the same framing as the rest of the baseline block.
 
-5. **Merge Claude Code hooks.** Merge `hooks/settings-hooks.json` into
+5. **Wire the Claude Code hooks.** Two ways, and **the plugin in step 8 does
+   this for you** — if you install it, skip the merge below and read this section
+   only for what the hooks are.
+
+   By hand: merge `hooks/settings-hooks.json` into
    `~/.claude/settings.json` — APPEND to any existing hook arrays, never
    replace them (jq: `.hooks.PreToolUse += [...]` etc., creating keys that
    don't exist). Back up settings.json first. These hooks are no-ops outside
@@ -366,39 +370,67 @@ assumes — this doc is only the install/uninstall procedure.
    `prefix+c` or the conf are the ways to pick the agent — typed text on the
    prompt line is only ever the window name (issue #559).
 
-8. **Fleet commands (optional).** Copy `commands/*.md` → `~/.claude/commands/`
-   — **APPEND**; do not clobber existing personal commands (e.g. `sweep.md`).
-   These are repo-shipped, fleet-aware `/skill`s (optional quality-of-life):
-   `fleet-claim` (the whole worker lifecycle — claim via the assignee, load a
-   layered charter, ground, implement, then open the PR and land it on a green
-   gate — issue #283 folded the retired `fleet-ship` + `fleet-blocked` into it,
-   #441 gave it the merge), `fleet-history` (hub pane: browse & resume closed
-   worker sessions), `fleet-sync-install`, and `fleet-handoff`
-   (either seat: writes a handoff doc, then a detached helper auto-`/clear`s the
-   pane and resumes from it — `bin/fleet-handoff-cycle.sh`) (plus the
-   contract/template — `commands/README.md`,
-   `commands/_template.md`). `fleet-doctor.sh` reports how many are installed
-   (warn, not fail, if none — they're optional). See `commands/README.md` for
-   the skill contract.
+8. **Fleet commands + skills (optional) — install the plugin.** The fleet's
+   Claude-Code-side surface (the `/fleet-*` slash commands, the base `skills/`
+   tree they delegate to, and the hook table from step 5) ships as a **Claude
+   Code plugin**, served by a marketplace in this same repo (issue #611):
 
-   **Also copy the base skills tree** (issues #311, #354): copy each **skill
-   directory** `skills/<name>/` → `~/.claude/skills/<name>/` (`mkdir -p` the dir,
-   copy every file preserving executable bits — `cp -p`; **APPEND** — never
-   clobber a personal `~/.claude/skills/*`). A skill is the whole dir, not just
-   its `SKILL.md`: `skills/handoff/` is SKILL.md-only, but `skills/doc-preview/`
-   ships `share.sh` + `server.py` + `render.mjs` beside its SKILL.md — and that
-   SKILL.md invokes them at `~/.claude/skills/doc-preview/…`, so the scripts must
-   land alongside it or the skill is a broken stub. These are repo-versioned base
-   skills a fleet command or the agent delegates to — `skills/handoff/` is the
-   base that `/fleet-handoff` runs verbatim, so **install it whenever you install
-   `fleet-handoff`** or the command points at a missing dependency
-   (`fleet-doctor.sh` warns on exactly that combination). Each ships a
-   `<!-- fleet skill -->` marker **in its `SKILL.md`**; a fleet's own
-   `~/.claude/skills/<name>/SKILL.md` that predates this adoption is a personal
-   file — if it differs from the repo copy, leave it and reconcile by hand (adopt
-   the marked repo version) rather than overwriting operator edits. After the
-   initial copy these flow through `land → /fleet-sync-install` like `commands/*`
-   (its skills pass, same marker gate + never-clobber rule).
+   ```sh
+   claude plugin marketplace add verkyyi/claude-fleet
+   claude plugin install fleet@claude-fleet --scope user --yes
+   ```
+
+   That is the whole step — no copying, no never-clobber rules, and
+   `/plugin update fleet` replaces the `commands`/`skills`/hooks passes of
+   `/fleet-sync-install` from then on. Three things to know:
+
+   - **Plugin commands are NAMESPACED**: `/fleet:fleet-claim`, not
+     `/fleet-claim`. The fleet resolves this itself — `fleet_cmd` in
+     `bin/fleet-lib.sh` probes which install path this machine has and seeds the
+     form that expands, so spawns work unchanged. `FLEET_CMD_PREFIX` forces it
+     either way.
+   - **Register it in `settings.json` for a team**, so a teammate's machine picks
+     it up (and keeps itself current) without anyone running `/plugin`:
+
+     ```json
+     {
+       "extraKnownMarketplaces": {
+         "claude-fleet": {
+           "source": { "source": "github", "repo": "verkyyi/claude-fleet" },
+           "autoUpdate": true
+         }
+       },
+       "enabledPlugins": { "fleet@claude-fleet": true }
+     }
+     ```
+
+     ⚠️ `autoUpdate` is **marketplace-level and off by default** for third-party
+     marketplaces — a plugin does *not* get session-start auto-update merely by
+     existing. With it on, the update lands after a session starts (with a short
+     random delay) and applies to the **next** session, not the running one. A
+     first install on a new machine still needs the `claude plugin install` line
+     above; `enabledPlugins` alone does not fetch an external source.
+   - **It does not replace this playbook.** The plugin covers only what Claude
+     Code loads. `bin/`, `conf/`, the tmux layer and the daemons are machine-level
+     and stay at `~/.claude/fleet` — steps 2, 4, 6 and 7. That split is
+     deliberate: a plugin's install path is **version-scoped**
+     (`…/plugins/cache/<marketplace>/fleet/<version>/`) and moves on every update,
+     so nothing with a stable absolute path — a launchd/systemd unit, a tmux bind,
+     a hook command — can point into it. The hook table therefore keeps naming
+     `~/.claude/fleet/...` on **both** install paths.
+
+   **Copy install (fallback).** Without the plugin — no `claude plugin` CLI, an
+   air-gapped machine, or a fleet that predates it — the historic path still works
+   and is still supported: copy `commands/*.md` → `~/.claude/commands/` and each
+   skill **directory** `skills/<name>/` → `~/.claude/skills/<name>/`. Follow
+   **steps 5 and 5b of `commands/fleet-sync-install.md`** rather than a second
+   copy of the rules here — they are the same passes (append-never-clobber, the
+   `<!-- fleet skill -->` marker gate, whole dirs with `cp -p` so
+   `skills/doc-preview/`'s scripts land beside its SKILL.md), and every later
+   update runs them anyway.
+
+   `fleet-doctor.sh` reports which path is in use (or warns if neither — they're
+   optional). See `commands/README.md` for the skill contract.
 
 8b. **Status line (optional, opt-in).** Offer to wire the Claude Code status
    line (`conf/statusline.sh` — context-window mini-bar, cwd, git branch, model).

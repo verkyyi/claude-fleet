@@ -6,10 +6,25 @@ the fleet-aware cousins of your personal `~/.claude/commands/` skills
 (`/sweep`, …) — optional quality-of-life helpers a fleet operator
 runs from inside a session.
 
-They are **installed by copying** `commands/*.md` into the Claude Code user
-commands dir (`~/.claude/commands/`), appended alongside — never clobbering —
-any personal commands you already have. See the install step in
-[`docs/INSTALL.md`](../docs/INSTALL.md).
+They reach a session by one of **two install paths** (issue #611):
+
+| | how | typed as |
+|---|---|---|
+| **plugin** (preferred) | `claude plugin install fleet@claude-fleet` — the repo root IS the plugin ([`.claude-plugin/`](../.claude-plugin)), shipping these commands, the [`skills/`](../skills) tree and the hook table together; `/plugin update` keeps them current | `/fleet:fleet-claim` — Claude Code namespaces every plugin command |
+| **copy** (historic, still supported) | `commands/*.md` → `~/.claude/commands/`, appended alongside — never clobbering — any personal commands you already have | `/fleet-claim` |
+
+Both may be installed at once; they coexist. Nothing in the fleet hardcodes
+either spelling — `fleet_cmd` in [`bin/fleet-lib.sh`](../bin/fleet-lib.sh) probes
+which path a machine has and returns the form that resolves, which is how the
+spawn seed ([`bin/dash-issue-session.sh`](../bin/dash-issue-session.sh)) stays
+correct on both. `FLEET_CMD_PREFIX` forces it either way.
+
+⚠️ **A new `commands/fleet-*.md` must be listed in
+[`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)'s `commands` array**
+or it ships to copy installs and silently not to plugin installs.
+`bin/fleet-plugin-selftest.sh` fails on exactly that drift.
+
+See the install step in [`docs/INSTALL.md`](../docs/INSTALL.md).
 
 > Phase 0 landed **just the contract** — this README and
 > [`_template.md`](_template.md); the functional skills (`/fleet-claim`,

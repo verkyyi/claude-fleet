@@ -2513,3 +2513,64 @@ fleet_wid_target() {
   fi
   printf '%s' "$t"
 }
+
+# --- fleet commands: bare vs. plugin-namespaced (issue #611) ------------------
+# The fleet's slash commands reach a session by ONE of two install paths:
+#
+#   copy install   `commands/*.md` → ~/.claude/commands/   → typed `/fleet-claim`
+#   plugin install fleet@claude-fleet via /plugin          → typed `/fleet:fleet-claim`
+#
+# Claude Code NAMESPACES every plugin-provided command as `/<plugin>:<command>`
+# (that is why the built-ins show up as `superpowers:brainstorming`,
+# `frontend-design:frontend-design`, …). A bare `/fleet-claim` therefore does NOT
+# resolve in a plugin-only install — and the spawn seed is exactly that bare slash
+# (bin/dash-issue-session.sh, issue #299), so every spawn would land on an
+# unexpanded literal. `fleet_cmd` is the one place that knows which form to type.
+#
+# Resolution order, cheapest first — a filesystem probe, no `claude` round-trip:
+#   1. FLEET_CMD_PREFIX set   → honour it verbatim ('' = bare; 'fleet' = /fleet:…)
+#   2. ~/.claude/commands/<name>.md exists → BARE. The copy install wins because
+#      it is what every pre-#611 fleet has, and a bare command still resolves when
+#      BOTH are installed (they coexist — different invocation paths).
+#   3. the plugin ships <name>.md in its cache → `/<plugin>:<name>`
+#   4. neither → BARE (unchanged behaviour; a missing command is the operator's
+#      problem to see, not something to paper over with a wrong prefix)
+FLEET_PLUGIN_NAME="${FLEET_PLUGIN_NAME:-fleet}"
+
+# fleet_plugin_installed [<file>] — 0 when the fleet plugin is installed, and (with
+# <file>) ships that path. Probes the plugin cache directly: `claude plugin list`
+# costs a node startup and this runs on the spawn path.
+fleet_plugin_installed() {
+  local want="${1:-}" cdir base d
+  cdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  base="$cdir/plugins/cache"
+  [ -d "$base" ] || return 1
+  # cache/<marketplace>/<plugin>/<version>/ — the version dir moves on every
+  # update, so glob it rather than remembering one.
+  for d in "$base"/*/"$FLEET_PLUGIN_NAME"/*/; do
+    [ -d "$d" ] || continue
+    [ -n "$want" ] && { [ -e "$d$want" ] || continue; }
+    return 0
+  done
+  return 1
+}
+
+# fleet_cmd <name> [<args…>] — the slash command to TYPE for fleet command <name>.
+# Echoes it with any args appended, so a caller can seed it verbatim.
+fleet_cmd() {
+  local name="${1:-}" pfx
+  [ -n "$name" ] || return 1
+  shift
+  if [ -n "${FLEET_CMD_PREFIX+x}" ]; then
+    pfx="$FLEET_CMD_PREFIX"
+  elif [ -f "${CLAUDE_COMMANDS_DIR:-$HOME/.claude/commands}/$name.md" ]; then
+    pfx=''
+  elif fleet_plugin_installed "commands/$name.md"; then
+    pfx="$FLEET_PLUGIN_NAME"
+  else
+    pfx=''
+  fi
+  printf '/%s%s' "${pfx:+$pfx:}" "$name"
+  [ "$#" -gt 0 ] && printf ' %s' "$*"
+  return 0
+}

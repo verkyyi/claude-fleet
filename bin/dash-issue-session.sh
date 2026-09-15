@@ -294,13 +294,18 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # fleet_worker_prompt_body, and owns the steps that used to live in the separate
 # /fleet-ship and /fleet-blocked prompts. The claim stays native (assign @me).
 #
-# BARE slash on purpose: claude EXPANDS a slash command supplied as the initial
-# prompt (verified — it injects the skill's text deterministically), which is more
+# SLASH on purpose: claude EXPANDS a slash command supplied as the initial prompt
+# (verified — it injects the skill's text deterministically), which is more
 # reliable than seeding a prose "Run /fleet-claim" and hoping the model chooses to
-# invoke it. If a future claude ever stops expanding a bare initial-prompt slash
+# invoke it. If a future claude ever stops expanding an initial-prompt slash
 # command, the documented fallback is to seed `Run /fleet-claim` instead. Scouts
 # keep their OWN seed (read-only, never ship) and never route through this spawn.
-printf '/fleet-claim' > "$tf"
+#
+# NOT hardcoded (issue #611): a plugin-installed fleet serves the SAME command
+# namespaced — `/fleet:fleet-claim` — and a bare slash does not resolve there, so
+# the seed would land as literal text and the worker would never claim. fleet_cmd
+# probes which install path this machine has and types the form that resolves.
+printf '%s' "$(fleet_cmd fleet-claim)" > "$tf"
 git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
 if [ ! -d "$wt" ]; then
   # >/dev/null 2>&1 (BOTH streams), not just 2>/dev/null: `git worktree add`

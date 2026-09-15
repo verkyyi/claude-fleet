@@ -322,8 +322,21 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 绑定。plugin 的便利要拿，绑定不要。）
 
 - Claude Code target：plugin（commands/agents/skills/hooks/mcpServers 一并），
-  `/plugin update` 顺带拿到 SessionStart 自动更新
+  `/plugin update` 替代手工 copy+merge ✅ **已上线（#611，PR 见下）**
 - Codex target：AGENTS.md + `~/.codex/config.toml` + 内联 `-c hooks.*`
+  ✅ **hook 表已同源**（`bin/fleet-hooks-emit.sh` + `hooks/codex-map.json`）
+
+> ⚠️ **更正一条早期记述：「plugin 白拿 SessionStart 自动更新」是错的。**
+> 实测（claude 2.1.x）：自动更新是 **marketplace 级**、第三方 marketplace **默认关**，
+> 要在 `settings.json` 的 `extraKnownMarketplaces` 里显式 `"autoUpdate": true`；
+> 开了之后更新在会话启动后延迟若干分钟落地，且 **只对下一个会话生效**，不改当前会话。
+> 另外 `enabledPlugins` 单独不会拉取外部源 —— 新机器第一次仍要跑一次
+> `claude plugin install`。所以它封的是「**别人**的机器忘了同步」，不是「**这个**会话
+> 立刻拿到新版」。
+>
+> 真正白拿的是 **版本号**：plugin.json 不写 `version` 时，安装版本就是 marketplace 的
+> commit sha（实测 `frontend-design` 装成 `da823e86c8fe`），于是每个合并的 commit 都是
+> 新版本，`/plugin update` 必定落地 —— 不需要任何人记得 bump。
 
 ## 六、本地 MEMORY → 团队 MEMORY
 
@@ -448,6 +461,7 @@ M3 的工作量因此**显著下降**，但「让第二个人装得上」的目�
 1. **[clauth](https://github.com/uwuclxdy/clauth) 的相位错开** —— 各账号 5h 窗口按
    `5h / 账号数` 错开启动。我们没做，纯赚。
 2. **SessionStart 自动更新** —— 用 `/plugin update` 实现，别抄 teamai-cli 的 `pull`。
+   ⚠️ 不是白拿的，要 marketplace 侧 `autoUpdate: true`；见[第五章](#五配置共享管线)的更正。
 3. **teamai-cli 的双 anchor worktree 检测**
    （`git worktree list --porcelain` 首条 vs `rev-parse --show-toplevel`）。
    附带两条硬事实：没有 AI 工具会顺 `git-common-dir` 回溯主 checkout；
@@ -487,7 +501,7 @@ macmini 信任 TODO）。
 | | |
 |---|---|
 | **这是打包前的真问题** | 一个 5 人团队有 5+ 台机器。按现在的机制，每台都要有人记得手工跑 `/fleet-sync-install`，而落后了**没有任何提示** |
-| **强化了 [#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）的优先级** | plugin 的 SessionStart 自动更新正好封死这个坑 —— 这也是 teamai-cli 那套 git 模型的核心价值 |
+| **[#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）封掉了一半** ✅ | plugin 覆盖 commands / skills / hook 表这半边：marketplace 开 `autoUpdate` 后别的机器自己跟上，不用谁记得跑 `/fleet-sync-install`。**但只有这半边** —— `bin/`、`conf/`、daemon 住在稳定的 `~/.claude/fleet`（plugin 安装路径带版本号、每次更新都变，launchd 单元和 tmux bind 没法指进去），那半边仍然是 per-machine 手工的 |
 | **doctor 应该能看见别的机器** | 现在 `fleet-doctor.sh` 只体检本机。多机器场景下需要一个「这台机器落后主干 N 个提交」的检查项 |
 
 > ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
@@ -695,7 +709,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 |---|---|---|
 | [#607](https://github.com/verkyyi/claude-fleet/issues/607) | `@claude_state` → `@agent_state` 正名 | ⚠️ **必须独占** —— 碰几乎所有文件 |
 | [#609](https://github.com/verkyyi/claude-fleet/issues/609) | mini 改 N 个 OS login | 独立；**后面所有 per-person 功能的地基** |
-| [#611](https://github.com/verkyyi/claude-fleet/issues/611) | commands+hooks → plugin（**收益最大**） | 可 autofill |
+| ~~[#611](https://github.com/verkyyi/claude-fleet/issues/611)~~ | ~~commands+hooks → plugin~~ | ✅ **已完成** —— 仓库根即 plugin（`.claude-plugin/`），commands+skills+hooks 一并；Codex hook 表同源；INSTALL 第 8 步收成两行命令 |
 | [#610](https://github.com/verkyyi/claude-fleet/issues/610) | 用量代理 → `/usage` + OTEL | 可 autofill |
 | ~~[#608](https://github.com/verkyyi/claude-fleet/issues/608)~~ | ~~能力矩阵进 README~~ | ✅ **已完成**（PR #615，含 CI 防漂） |
 
@@ -754,7 +768,7 @@ worker+PR），全局 cap 10。
 | **M0** | 定价重算 · 并发复验 · 原生 worktree 覆盖面 | ✅ 全部完成（无需 issue，直接查证） |
 | **M1** | ccquota#16 README 主线改写 | ✅ 已落 main（PR #18 → #19） |
 | **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
-| **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ 已完成） |
+| **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin ✅ 已完成） |
 | **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
 | **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch · [#620](https://github.com/verkyyi/claude-fleet/issues/620) 语言保持 · [#623](https://github.com/verkyyi/claude-fleet/issues/623) dash pin · [#624](https://github.com/verkyyi/claude-fleet/issues/624) 父行聚合计数 | ✅ 全部已上线双机同步 |
 | **团队协作方向（已设计未建 issue）** | claim 租约（assignee → 带 TTL 的租约）· managed-settings.json 作团队策略基线 · 复用 ccquota hub 做跨设备 presence | ⬜ 见[第九之三章](#九之三团队协作跨-fleet--跨设备--多人) |

@@ -87,23 +87,46 @@ else
 fi
 
 # --- fleet quality-of-life commands (optional: repo-shipped /skills) ---
-# Installed by copying the repo's commands/*.md into the Claude Code user
-# commands dir (see docs/INSTALL.md). Optional — the fleet runs without them — so a
-# missing set is a warn, never a fail. Each fleet skill carries a `fleet skill ·
-# owner:` marker just under its title (see commands/README.md); count how many
-# landed. Match only the file head so README.md — which merely quotes the marker
-# in prose — isn't miscounted as a skill.
+# TWO install paths reach a session with these (issue #611), and the fleet runs
+# without either, so a missing set is a warn and never a fail:
+#
+#   plugin  `/plugin install fleet@claude-fleet` — commands, skills and the hook
+#           table together, updated by `/plugin update`. Typed NAMESPACED:
+#           `/fleet:fleet-claim`.
+#   copy    commands/*.md → ~/.claude/commands/ (the historic path, still
+#           supported). Typed bare: `/fleet-claim`.
+#
+# Each fleet skill carries a `fleet skill · owner:` marker just under its title
+# (see commands/README.md); count how many landed in the copy dir. Match only the
+# file head so README.md — which merely quotes the marker in prose — isn't
+# miscounted as a skill.
 cmd_dir="${CLAUDE_COMMANDS_DIR:-$HOME/.claude/commands}"
+n=0
 if [ -d "$cmd_dir" ]; then
-  n=0
   for f in "$cmd_dir"/*.md; do
     [ -f "$f" ] || continue   # literal *.md when the glob matches nothing
     head -n 3 "$f" 2>/dev/null | grep -qF 'fleet skill · owner:' && n=$((n+1))
   done
-  if [ "$n" -gt 0 ]; then pass commands "$n fleet command(s) in $cmd_dir"
-  else warn commands "no fleet commands in $cmd_dir — optional /skills not installed (copy commands/*.md)"; fi
+fi
+# The plugin ships the same commands from its own cache. Doctor is /bin/sh and
+# cannot source the bash-only fleet-lib.sh, so this inlines fleet_plugin_installed
+# — KEEP IN SYNC with it. The cache path is
+# <config>/plugins/cache/<marketplace>/<plugin>/<version>/, and the version dir
+# moves on EVERY update, so glob it rather than remembering one.
+plug=0
+for _d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/fleet/*/; do
+  [ -f "$_d/commands/fleet-claim.md" ] && { plug=1; break; }
+done
+if [ "$n" -gt 0 ] && [ "$plug" = 1 ]; then
+  pass commands "$n fleet command(s) in $cmd_dir + the fleet plugin (both resolve; the bare /fleet-claim wins)"
+elif [ "$plug" = 1 ]; then
+  pass commands "fleet plugin installed — commands are namespaced (/fleet:fleet-claim), updated by /plugin update"
+elif [ "$n" -gt 0 ]; then
+  pass commands "$n fleet command(s) in $cmd_dir (copy install; \`/plugin install fleet@claude-fleet\` replaces the copying)"
+elif [ -d "$cmd_dir" ]; then
+  warn commands "no fleet commands in $cmd_dir and no fleet plugin — optional /skills not installed (install the plugin, or copy commands/*.md)"
 else
-  warn commands "$cmd_dir absent — optional fleet /skills not installed"
+  warn commands "$cmd_dir absent and no fleet plugin — optional fleet /skills not installed"
 fi
 
 # --- fleet skills tree (optional: repo-shipped skills/ base skills) ---
@@ -113,8 +136,10 @@ fi
 # `handoff` skill VERBATIM: with the command present but the skill missing,
 # /fleet-handoff points at a dependency a fresh install never shipped (issue #311).
 # So specifically flag that combination — command installed, base skill absent.
+# A plugin install ships commands AND skills from the same cache, so the pair can
+# never be half-present there — this gap is specific to the copy path.
 skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
-if [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
+if [ "$plug" = 0 ] && [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
 fi
 
