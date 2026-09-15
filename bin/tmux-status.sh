@@ -1,6 +1,7 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat> [│ ⚠ quota stale 47m]
+# Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
+#        [│ ⚠ quota stale 47m] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
@@ -144,6 +145,35 @@ if [ -n "$qstale" ]; then
     quota_seg="${DIM}│ ${RED}⚠ quota stale $(fleet_usage_human_secs "$qstale") "
 fi
 
+# --- collector staleness + self-heal trace (issue #636): the SECOND always-on
+# alarm. Every number the dash draws comes out of the collector's caches, so a
+# collector that stops does not empty the dash — it freezes it, confidently, with
+# no tell. On 2026-09-14 launchd pended com.claude-fleet.collect for 103 minutes
+# (`pended nondemand spawn = interval`, last exit 0) and the dash showed a
+# two-hour-old world; the only signal was one line in the hand-run fleet-doctor.
+# So: red `⚠ dash stale 47m` off the collector's own heartbeat, and — since
+# `launchctl kickstart -k` fixes it instantly — a rate-limited self-heal, whose
+# `↻` trace stays on the bar for FLEET_COLLECT_KICK_TRACE AFTER recovery so the
+# outage is never silently papered over. The kick is gated in-process first
+# (two file reads) and only then forked, detached: this runs every 5s per client.
+collect_seg=""
+cstale=$(fleet_collect_stale_age)
+ckick=$(fleet_collect_kick_age)
+ktrace="${FLEET_COLLECT_KICK_TRACE:-1800}"
+if [ -n "$cstale" ]; then
+    collect_seg="${DIM}│ ${RED}⚠ dash stale $(fleet_usage_human_secs "$cstale")"
+    if [ -n "$ckick" ] && [ "$ckick" -lt "$ktrace" ]; then
+        collect_seg="${collect_seg} ↻$(fleet_usage_human_secs "$ckick")"
+    fi
+    collect_seg="${collect_seg} "
+    if fleet_collect_kick_due; then
+        ( bash "$BIN/fleet-collect-kick.sh" </dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1
+    fi
+elif [ -n "$ckick" ] && [ "$ckick" -lt "$ktrace" ]; then
+    # Recovered, but recently self-healed — leave the trace up.
+    collect_seg="${DIM}│ ${YELLOW}↻ dash kicked $(fleet_usage_human_secs "$ckick") "
+fi
+
 # --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
 # fleet-wide global/account.active pointer, i.e. "the account new sessions use".
 # Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
@@ -154,5 +184,5 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s" \
-    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg" "$quota_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg" "$quota_seg" "$collect_seg"

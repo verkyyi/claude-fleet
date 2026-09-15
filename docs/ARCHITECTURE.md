@@ -230,6 +230,7 @@ $TMPDIR/.claude-dash/
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state
     collect.pid · collect.heartbeat           # collector overlap guard + per-phase heartbeat (#551)
+    collect.kick.ts · collect.kick.lock/      # collector self-heal: rate limit + dash trace (#636)
     quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
     quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
     account.phase · quota.phase              # 5h-window phase stagger + its re-plan marker (#598)
