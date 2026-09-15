@@ -268,8 +268,8 @@ rm -f "$BIN/../logs/.needs-strikes"
 # PART B is done asserting on the two empty-subtype reds that must stay red, and a
 # pass walks its candidates in window order under NEEDS_BUDGET=8 — leaving them red
 # would let w-debounce, created last, be the one starved out of a pass. Retire them.
-tf set-window-option -t w-plainnew @claude_state done 2>/dev/null
-tf set-window-option -t w-plainpnd @claude_state done 2>/dev/null
+tf set-window-option -t w-plainnew @claude_state 'done' 2>/dev/null
+tf set-window-option -t w-plainpnd @claude_state 'done' 2>/dev/null
 mkwin w-debounce yes needs perm "$OLD" Bash answered
 
 one_pass() { env FLEET_NEEDS_RECONCILE_SECS=1 sh "$SPINNER" --needs-check >/dev/null 2>&1; }
