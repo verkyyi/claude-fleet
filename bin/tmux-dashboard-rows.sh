@@ -393,18 +393,22 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
   # word for autofill/bridge). └ indent: only when the parent is a WINDOW kind
   # (issue-*/scratch-*), i.e. the row is a child in the grouped list.
-  tagd=''; dname=$name
+  # Built as TWO pieces and composed after the chain walk below, because whether the
+  # provenance half survives depends on where the row ends up nesting — and the
+  # agent half must survive either way.
+  provd=''; dname=$name
   case "$origin" in
     '') : ;;
-    issue-*)   tagd="↳#${origin#issue-}";   dname="└ $name" ;;
-    scratch-*) tagd="↳~${origin#scratch-}"; dname="└ $name" ;;
-    *)         tagd="↳$origin" ;;
+    issue-*)   provd="↳#${origin#issue-}";   dname="└ $name" ;;
+    scratch-*) provd="↳~${origin#scratch-}"; dname="└ $name" ;;
+    *)         provd="↳$origin" ;;
   esac
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
   # by bin/fleet-codex.sh) shows its agent name in the same flex span, after the
   # provenance tag — a Claude window carries no @cc_agent and draws nothing. ASCII
   # only, so the ${#tagd} width math below stays exact.
-  case "$agent" in ''|claude) : ;; *) tagd="${tagd:+$tagd }${agent//[^A-Za-z0-9_-]/}" ;; esac
+  agentd=''
+  case "$agent" in ''|claude) : ;; *) agentd="${agent//[^A-Za-z0-9_-]/}" ;; esac
   # group sort key: a root keeps its own (rank, idx); a child resolves its parent
   # CHAIN (≤4 hops, grandchildren group under the ultimate live root) and inherits
   # that root's (rank, idx) with depth=1 so it sorts right below it; a chain that
@@ -471,6 +475,24 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   if [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$rk" != 0 ] && [ "$crootexp" != 1 ]; then
     continue
   fi
+  # --- the ↳ tag, once the nesting is known ------------------------------------
+  # DROP it where the `└` indent already says the same thing: the row is drawn
+  # inside a block AND the session it came from is the very row that block hangs
+  # off. That is the everyday case — a worker spawned by the parent right above it
+  # — and there the tag was pure duplication.
+  # It STAYS wherever the indent does NOT say it, which is every case the fold and
+  # the two-level-flat grouping cannot express:
+  #   • a GRANDCHILD — it is drawn at the same indent as a child, under the ultimate
+  #     root, so `↳#<middle>` is the only thing naming its actual parent;
+  #   • an ORPHAN (parent window closed) — it has no indent at all, and the tag is
+  #     the only surviving trace of where it came from;
+  #   • a row #623 promoted to its own pin root — it sheds the indent on purpose;
+  #   • a non-window origin (`autofill`, `bridge`) — never indented, never nested.
+  # The agent tag (#547) is unaffected: it describes the row, not its parentage.
+  [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
+  tagd="$provd"
+  [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
+
   # --- subtree progress (issue #624) ------------------------------------------
   # A row that SPAWNED work reports the state of the group rendered beneath it:
   # `3/5 ✓` = 3 of its 5 descendants done, and a LOUD `· 1!` when one of them is

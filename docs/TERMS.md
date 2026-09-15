@@ -116,8 +116,14 @@ they repaint instantly:
   from where another left off.
 - **Spawn provenance / child report** — every spawned window carries `@origin`:
   the key (`issue-<N>` / `scratch-<N>`) of the session that spawned it, empty for
-  the hub. The dash renders it as the `↳#483` tag and groups children under their
-  parent; since #574 it is also an **address** — `bin/fleet-report-parent.sh`
+  the hub. The dash GROUPS children under their parent (`└` indent) and renders
+  `@origin` as a `↳#483` tag — but only where that indent cannot say the same
+  thing: a direct child of the row its block hangs off draws no tag (the indent is
+  the tag), while a **grandchild** keeps one (the grouping is two-level-flat, so it
+  is drawn under the ultimate root beside its own parent, and `↳#<middle>` is the
+  only thing naming that parent), as do an **orphan** whose parent window is gone
+  (no indent at all) and a non-window origin (`↳autofill`, `↳bridge`).
+  Since #574 `@origin` is also an **address** — `bin/fleet-report-parent.sh`
   resolves it back to the parent's live window and pushes a fixed four-line
   `[child-report]` over the peer inbox when the child merges, blocks, or is
   reaped. So a worker that `--spawn`ed a follow-up hears the outcome instead of

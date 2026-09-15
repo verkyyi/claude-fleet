@@ -734,6 +734,13 @@ cmd_rows() {
       scratch-*) tagd="↳~${origin#scratch-}" ;;
       *)         tagd="↳$origin" ;;
     esac
+    # DROP it where the `└` indent already says the same thing — the row is drawn
+    # inside a block AND the session it came from IS the row that block hangs off.
+    # It stays wherever the indent cannot say it: a GRANDCHILD (drawn at the same
+    # indent as a child, so the tag is the only thing naming its real parent), an
+    # ORPHAN (parent never reached this list, so no indent at all), and a
+    # non-session origin. Same rule as the live list.
+    [ "$ldepth" -gt 0 ] && [ -n "$lroot" ] && [ "${origin:-}" = "$lroot" ] && tagd=''
     # fold caret + subtree tally — ONLY on a row that owns a block, so the list
     # does not grow a mark on every line. `▸` shut / `▾` open, then `<landed>/<total>
     # ✓`: how many of the block merged (a ✗ closed-unlanded row did not). Counted

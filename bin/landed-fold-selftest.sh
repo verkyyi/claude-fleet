@@ -121,8 +121,10 @@ eq "unfolded: the block sits under its parent, newest first inside it" \
   "$(printf '#100\n#101\n#102\n#103\n~5\n#200\n#300')" "$(order "$out")"
 contains "a restored child is indented" "$out" "└ child-a"
 contains "a restored grandchild is indented" "$out" "└ the-grandchild"
-contains "a child keeps its ↳ tag" "$(row_of '#101' "$out")" "↳#100"
-contains "a grandchild's tag names ITS OWN parent, not the root" "$(row_of '#102' "$out")" "↳#101"
+# The ↳ tag survives only where the indent cannot say the same thing.
+not_contains "a direct child drops its ↳ tag — the └ indent says it" "$(row_of '#101' "$out")" "↳"
+contains "a GRANDCHILD keeps its tag: it names ITS OWN parent, which the indent cannot — the grouping is two-level-flat, so it is drawn under the root beside its own parent" "$(row_of '#102' "$out")" "↳#101"
+contains "an orphan keeps its tag too" "$(row_of '#300' "$out")" "↳#999"
 contains "an open block is marked ▾" "$(row_of '#100' "$out")" "▾"
 not_contains "… and no longer ▸" "$(row_of '#100' "$out")" "▸"
 contains "the tally is unchanged by unfolding" "$(row_of '#100' "$out")" "2/3 ✓"
