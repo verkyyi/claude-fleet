@@ -592,8 +592,43 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 | 仓库 | 涉及 issue | 起法 |
 |---|---|---|
 | `verkyyi/claude-fleet` | 大多数 | 已有 fleet |
-| `verkyyi/tokenledger`（2026-09-14 从 `ccquota` 改名，二进制仍叫 `ccquota`） | 18（归因）、M1 全部 | ✅ **`fleet-ccquota` 已存在**（M0 查证时发现），直接用 |
+| `verkyyi/tokenledger` | 18（归因）、M1 全部 | ✅ **`fleet-tokenledger` 已存在**，直接用 |
 | 团队 config repo | M4 | 还不存在，M4 时新建 |
+
+#### TokenLedger 的「四名一体」—— 每次都绕，写一次
+
+2026-09-14 那次改名只改了**仓库名和 fleet 名**，标识符一个没动，所以同一个东西有四个名字，
+四个都还在用：
+
+| 维度 | 今天的名字 |
+|---|---|
+| GitHub 仓库 | `verkyyi/tokenledger` |
+| 本地检出 | `~/projects/ccquota` |
+| fleet session / socket | `fleet-tokenledger`（`tmux -L fleet-tokenledger`、`dash-issue-session.sh <N> fleet-tokenledger`；base branch `main`） |
+| 命令 / Go module / env 前缀 | **全是 `ccquota`** —— 二进制 `ccquota`、`module github.com/verkyyi/ccquota`、`CCQUOTA_HUB_URL` / `CCQUOTA_ACCOUNT` / `CCQUOTA_VIEWER_TOKEN` |
+
+⚠️ 两个照着新名字会扑空的地方：**`go install` 必须用旧 module 路径**
+（`go.mod` 里就是 `github.com/verkyyi/ccquota`，标识符 cutover 没做，见 #629 的约束）；
+按改名前的 fleet 名去 `tmux -L` 也扑空 —— `fleet_sockets` 里只有 `fleet-tokenledger`。
+
+#### 决定:不把 TokenLedger 合进 claude-fleet（2026-09-14 评估，结论已定）
+
+评估过一次，结论是**不合并**，两边继续各自发布。理由和支撑事实记在这里，
+免得下一个读这份文档的人再论证一遍：
+
+- **依赖严格单向**：fleet → TokenLedger。TokenLedger 的 Go 代码**零依赖** fleet
+  （全仓库 `*.go` / `go.mod` 里没有任何 `claude-fleet` 或 `FLEET_` 引用）。
+  合并会凭空造出一条反向耦合
+- **接口面很小且已枚举完**，不需要靠同仓库来维持：
+  `ccquota budget [--ceiling|--account|--json|--timeout]` + **`exit 3` = hold**
+  + `CCQUOTA_HUB_URL` / `CCQUOTA_ACCOUNT` / `CCQUOTA_VIEWER_TOKEN`
+  + `FLEET_QUOTA_BIN`（**换实现的接缝** —— fleet 侧早就没有硬编码路径）
+- **真实调用点只有 3 个**（`"$CCQUOTA"` 实际被执行的位置，不含 `command -v` 探测）：
+  `bin/fleet-account.sh` 的 `quota_fetch()` 与 `cmd_quota() --json`、
+  `bin/fleet-quotaguard.sh` 的 `run_ccquota()`
+- **不合并的真正理由**：合并会把**唯一已经站得住的那块**（TokenLedger 已公开、
+  已是团队形态）绑死在 fleet 这条还在验证的赛道上。这正是[开篇结论](#结论)
+  「拆三块发，不发整体」已经否决过一次的事 —— 合并等于把它悄悄撤销
 
 ---
 
@@ -625,7 +660,7 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 ```
 fleet-claude-fleet       ×6   verky@24helpful.com
 fleet-24haowan-monorepo  ×11  verky@24helpful.com ×9 · verky.yi@gmail.com ×1 · ly297@georgetown.edu ×1
-fleet-ccquota            ×1   verky@24helpful.com
+fleet-tokenledger        ×1   verky@24helpful.com
 ```
 
 三个账号同时在跑，证实 `CLAUDE_CODE_OAUTH_TOKEN` 仍是 per-process 生效。
@@ -638,7 +673,7 @@ README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条
 （还主动写了**不适用**人群）、跨机器差异化引文、反 Goodhart 设计保留、措辞红线未碰。
 
 > ⚠️ **踩到的坑（值得记住）**：worker 干完活却落在 `dashboard-redesign` 上，
-> 因为 `~/.config/claude-fleet/fleets/fleet-ccquota/conf` 的
+> 因为 `~/.config/claude-fleet/fleets/fleet-tokenledger/conf`（当时还是旧 fleet 名）的
 > `FLEET_BASE_BRANCH="dashboard-redesign"` —— fleet-up.sh 建 fleet 时抓了当时
 > checkout 所在的分支，而默认分支是 `main`。那是条落后 main 5 个提交的废分支，
 > 成果等于石沉大海，靠 PR #19 才捞回来。
@@ -648,11 +683,11 @@ README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条
 > ✅ **已修复并上线 2026-09-13**（#603 → PR #604 → `/fleet-sync-install`）：
 > 新增 `fleet_resolve_base_branch()`（优先级 flag > gh default > origin/HEAD >
 > checkout > main，22 项 selftest 全过）、`fleet-up.sh` 在不一致或读不到默认分支时
-> **大声警告**、`fleet-doctor.sh` 新增 `base` 检查行。`fleet-ccquota` 的 conf 已改回
+> **大声警告**、`fleet-doctor.sh` 新增 `base` 检查行。该 fleet 的 conf 已改回
 > `main`，doctor 现在三个 fleet 全 PASS：
 > ```
 > PASS base  fleet-24haowan-monorepo: … base "master" is the repo default
-> PASS base  fleet-ccquota:           … base "main"   is the repo default
+> PASS base  fleet-tokenledger:       … base "main"   is the repo default
 > PASS base  fleet-claude-fleet:      … base "master" is the repo default
 > ```
 >
