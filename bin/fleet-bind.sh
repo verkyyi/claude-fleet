@@ -173,6 +173,14 @@ tmux set-window-option -t "$WIN" @issue "$num" 2>/dev/null
 tmux set-window-option -t "$WIN" -u @raw 2>/dev/null
 tmux rename-window -t "$WIN" -- "$wname" 2>/dev/null
 
+# Lifecycle fact (issue #625): a scratch just became the worker for #N. Without
+# THIS transition every scratch that turned into real work is attributed to
+# nothing downstream — the session spent tokens under `scratch-K` and landed a PR
+# under `issue-N`, and only this line joins the two. Off unless the fleet
+# configured an endpoint, and it can never fail the bind (it already happened).
+bash "$BIN/fleet-emit.sh" session.bind --session "$SESS" --repo "$REPO" \
+  --issue "$num" --branch "$branch" --from-branch "$slug" >/dev/null 2>&1 || :
+
 printf 'bound: this session is now the worker for #%s (branch %s, worktree %s)\n' "$num" "$branch" "$WT"
 printf 'ship it the usual way: git push -u origin %s · PR body "Closes #%s" · merge on a READY verdict\n' "$branch" "$num"
 exit 0

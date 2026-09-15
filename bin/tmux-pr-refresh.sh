@@ -96,38 +96,81 @@ PR_TTL=$(( INT > 4 ? INT - 3 : 1 ))
 # live session — NOT a primary; issue #180), add every repo a live session
 # resolved to, then the configured
 # fleets (FLEET_REPOS + per-fleet confs) so a watched-but-unopened repo refreshes.
-declare -a Q_REPO Q_SLUG          # unique (repo,slug) fetch queue (bash 3.2 ok)
+# Q_SESS carries the FLEET SESSION that owns each queued repo (issue #625). The
+# lifecycle emit resolves FLEET_EMIT_URL through the per-fleet conf overlay, and
+# this daemon runs OUTSIDE any session (no $TMUX to resolve one from), so the
+# session has to be carried from wherever the repo was discovered. Empty is fine —
+# the emit then sees only the global fleet.conf.
+declare -a Q_REPO Q_SLUG Q_SESS   # unique (repo,slug,session) fetch queue (bash 3.2 ok)
 SEEN=' '
-queue() {                          # $1=repo → add once
-  local r="$1" s
+queue() {                          # $1=repo [$2=fleet session] → add once
+  local r="$1" se="${2:-}" s
   [ -z "$r" ] && return
   s=$(fleet_slug "$r")
   case "$SEEN" in *" $s "*) return;; esac
-  SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s")
+  SEEN="$SEEN$s "; Q_REPO+=("$r"); Q_SLUG+=("$s"); Q_SESS+=("$se")
 }
 if [ -n "$TARGET_REPO" ]; then
   # Targeted kick: JUST this repo (forced fetch below); skip the broad enumeration.
-  queue "$(fleet_norm_repo "$TARGET_REPO")"
+  # Its owning session still comes off the collector's sessmap, so a webhook-driven
+  # refresh emits against the same fleet conf a polled one would.
+  _tr=$(fleet_norm_repo "$TARGET_REPO"); _ts=''
+  SESSMAP=$(fleet_sessmap_file)
+  [ -f "$SESSMAP" ] && _ts=$(awk -F'\t' -v r="$_tr" '$3==r {print $1; exit}' "$SESSMAP" 2>/dev/null)
+  queue "$_tr" "$_ts"
 else
-  [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")"
+  [ -n "$REPO" ] && queue "$(fleet_norm_repo "$REPO")" "${FLEET_SESSION:-}"
   SESSMAP=$(fleet_sessmap_file)
   if [ -f "$SESSMAP" ]; then
-    while IFS=$'\t' read -r _ _ rp; do
-      [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")"
+    while IFS=$'\t' read -r se _ rp; do
+      [ -n "$rp" ] && queue "$(fleet_norm_repo "$rp")" "$se"
     done < "$SESSMAP"
   fi
   for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
     r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")" "$_s"
   done < <(fleet_each_conf)
 fi
+
+# --- session.pr: the PR half of the lifecycle facts (issue #625) ---------------
+# The prmap this daemon rewrites every ~15s already IS the fleet's picture of every
+# PR's state, so a PR transition is a DIFF of the file about to be replaced against
+# the one just fetched — no second poller, no second source of truth.
+#
+# A COLD prmap emits nothing. With no previous file every one of up to 100 PRs
+# would read as a transition, which is both a flood and a lie (they did not just
+# happen). The first fetch seeds silently and the second one onward reports.
+emit_pr_transitions() {
+  local oldf="$1" newf="$2" rp="$3" se="$4"
+  [ -s "$oldf" ] || return 0
+  [ -f "$BIN/fleet-emit.sh" ] || return 0
+  awk -F'\t' -v OFS='\t' '
+    NR==FNR { old[$2]=$3; next }
+    {
+      prev = ($2 in old) ? old[$2] : ""
+      if (prev == $3) next
+      action = ($3 == "MERGED") ? "merged" : (($3 == "CLOSED") ? "closed" : "opened")
+      n = $2; sub(/^#/, "", n)
+      print n, $1, $3, action
+    }
+  ' "$oldf" "$newf" 2>/dev/null |
+  while IFS=$'\t' read -r num br state action; do
+    [ -n "$num" ] || continue
+    iss=''
+    case "$br" in issue-*) iss="${br#issue-}"; iss="${iss//[^0-9]/}" ;; esac
+    bash "$BIN/fleet-emit.sh" session.pr --session "$se" --repo "$rp" \
+      --pr "$num" --issue "$iss" --branch "$br" --state "$state" --action "$action" \
+      >/dev/null 2>&1 || :
+  done
+  return 0
+}
 
 # --- per-repo PR map (TTL-gated) — the ONLY writer of prmap_<slug> ---
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
-  rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
+  rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; se="${Q_SESS[$i]}"; i=$((i+1))
   command -v gh >/dev/null 2>&1 || break
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=$(cat "$FD/prmap.ts" 2>/dev/null || echo 0)
@@ -139,7 +182,9 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     gh pr list --repo "$rp" --state all --limit 100 \
       --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit \
       --jq "$FLEET_PRMAP_JQ" \
-      > "$FD/prmap.$$" 2>/dev/null && mv "$FD/prmap.$$" "$FD/prmap"
+      > "$FD/prmap.$$" 2>/dev/null \
+      && { emit_pr_transitions "$FD/prmap" "$FD/prmap.$$" "$rp" "$se"
+           mv "$FD/prmap.$$" "$FD/prmap"; }
     now > "$FD/prmap.ts"
   fi
 done

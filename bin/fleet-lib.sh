@@ -1465,16 +1465,44 @@ fleet_reap_record() {
   [ -n "$key" ] || return 0
   local _bin hist
   _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+
+  # Resolve the merged PR for the branch when the caller didn't hand us one
+  # (worktree-autoclean knows the branch, not the PR number). Hoisted out of the
+  # record case below so the lifecycle emit and the ledger row report the same
+  # PR number — the emit runs even on installs where fleet-history.sh is absent.
+  if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
+    case "$outcome" in
+      merged-pr|merged-PR|merged)
+        pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
+                --json number -q '.[0].number' 2>/dev/null)" ;;
+    esac
+  fi
+
+  # THE session.end LIFECYCLE FACT (issue #625). This function is the ONE choke
+  # point every reaper funnels through — the SessionEnd hook's detached --exec, the
+  # dash ⌃x reap, the cleanup daemon, ledger-watch — so hanging the emit here is
+  # what keeps "how the work ended" a single source of truth instead of a fifth
+  # copy of the reap rules. `via=reap` distinguishes it from the SessionEnd hook's
+  # `via=hook` end, which knows the Claude session id and the CLI's reason but not
+  # the outcome; together they are the whole picture. Off unless the fleet
+  # configured an endpoint, and it can never affect the reap (the row still gets
+  # written below, whatever this does).
+  local _oc=''
+  case "$outcome" in
+    merged-pr|merged-PR|merged)             _oc=landed ;;
+    ancestor|ancestor-of-*|unmerged|dirty)  _oc=closed-unlanded ;;
+  esac
+  if [ -n "$_oc" ] && [ -n "$_bin" ] && [ -f "$_bin/fleet-emit.sh" ]; then
+    bash "$_bin/fleet-emit.sh" session.end --via reap \
+      --session "$sess" --repo "$repo" --issue "$issue" --pr "$pr" \
+      --branch "${branch:-$key}" --outcome "$_oc" --verdict "$outcome" \
+      >/dev/null 2>&1 || :
+  fi
+
   hist="$_bin/fleet-history.sh"
   [ -f "$hist" ] || return 0
   case "$outcome" in
     merged-pr|merged-PR|merged)
-      # Resolve the merged PR for the branch when the caller didn't hand us one
-      # (worktree-autoclean knows the branch, not the PR number).
-      if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
-        pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
-                --json number -q '.[0].number' 2>/dev/null)"
-      fi
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
         --pr "$pr" --key "$key" --worktree "$wt" --win "$win" \
         --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0

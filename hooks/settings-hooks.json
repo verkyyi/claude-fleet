@@ -57,7 +57,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "sh ~/.claude/fleet/bin/handoff-latch-reset-hook.sh" }
+          { "type": "command", "command": "sh ~/.claude/fleet/bin/handoff-latch-reset-hook.sh" },
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.start --stdin-json" }
         ]
       }
     ],
@@ -66,6 +67,11 @@
         "matcher": "prompt_input_exit|logout",
         "hooks": [
           { "type": "command", "command": "bash ~/.claude/fleet/bin/session-end-hook.sh" }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.end --via hook --stdin-json" }
         ]
       }
     ]

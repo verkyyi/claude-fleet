@@ -122,7 +122,11 @@ the collector/hub/dash actually are), **[docs/ARCHITECTURE.md](docs/ARCHITECTURE
 covers the shared-vs-per-fleet split and the path to running **many fleets on
 one machine** (one tmux session per repo), and **[docs/STATE.md](docs/STATE.md)**
 traces how each window's Claude state (`working`/`done`/`needs`/`looping`) is set,
-rendered, and corrected.
+rendered, and corrected. **[docs/EMIT.md](docs/EMIT.md)** covers the optional,
+off-by-default emitter that POSTs session lifecycle facts (session → issue → PR)
+so an external ledger can join what a week of agent work **cost** to what it
+**produced** — including the exact list of what does, and does not, leave the
+machine.
 
 ## Install
 

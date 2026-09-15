@@ -419,6 +419,42 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # disables). See docs/WEBHOOK.md.
 
 
+# ── session lifecycle emitter (issue #625) ────────────────────────────────────
+# OFF unless FLEET_EMIT_URL is set — and OFF means OFF: no spool file, no socket,
+# no behaviour change anywhere. The fleet's value is that it works on a laptop with
+# nothing else installed, and that stays true.
+#
+# WHAT IT IS FOR. The fleet is the only component that knows what a session was
+# FOR: it binds a session to an issue, gives it a worktree, and watches the PR that
+# comes out of it. A usage ledger downstream knows what each session COST, keyed by
+# session id, with no idea which issue was worked — so you can see that a week
+# burned N tokens and, separately, that M issues closed, and you cannot connect
+# them. This emitter is the one field that joins the two. It is an emitter ONLY:
+# the fleet stays a tmux product, and the cross-session, over-time view (spend
+# against outcome, backlog flow) is a different product's job.
+#
+# WHAT IS SENT — the whole list: event name, timestamp, the fleet's session name,
+# the Claude session id, repo, issue number, PR number, branch, and the outcome
+# words (source/reason/state/action/outcome/verdict). NO prompt or transcript
+# content, no file paths, no issue or window titles, no hostname or username, no
+# credentials. Four events: session.start, session.bind, session.pr, session.end.
+# Fire-and-forget over a bounded spool — a dead endpoint is a silent no-op, never a
+# stalled worker. See docs/EMIT.md, which lists every field of every event.
+#
+# PER-FLEET: two fleets watching different repos can report to different endpoints.
+# @label=Session lifecycle endpoint @group=bridge @tier=advanced @scope=fleet @edit=str
+#FLEET_EMIT_URL=""
+# Bearer token sent as `Authorization: Bearer <token>`. Identity rides HERE, which
+# is why the payload carries no hostname or user. Keep it out of the conf in a real
+# deploy — every emit path reads it from the environment just as happily.
+# @label=Session lifecycle token @group=bridge @tier=advanced @scope=fleet @edit=str
+#FLEET_EMIT_TOKEN=""
+# Advanced env-only knobs (NOT in this modal): `FLEET_EMIT_QUEUE_MAX`, the spool cap
+# in events (default 500 — on overflow the OLDEST are dropped, so a permanently
+# dead endpoint costs bounded disk and keeps the fresh tail), and
+# `FLEET_EMIT_TIMEOUT`, the per-POST curl timeout in seconds (default 5).
+
+
 # Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
 # before re-fetching from gh. Lower = fresher body/comments, more API chatter.
 # GLOBAL: read by the preview tool from the global env — a per-fleet override
