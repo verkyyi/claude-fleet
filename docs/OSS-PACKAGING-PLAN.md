@@ -493,6 +493,68 @@ macmini 信任 TODO）。
 > ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
 > tmux/fzf/gh/claude 全部 not found。远程体检要走 `zsh -lc`。
 
+## 九之三、团队协作:跨 fleet / 跨设备 / 多人
+
+拓扑：一个人多台设备、多个人同一个 repo、每人多个 fleet —— **唯一的共享状态是 repo 的 issues**。
+
+### 能从「企业功能」白拿的:managed-settings.json 根本不看计划
+
+它是**机器上的一个文件**（macOS `/Library/Application Support/ClaudeCode/`、
+Linux `/etc/claude-code/`），**不需要组织账号、不看订阅计划**
+（[官方文档](https://code.claude.com/docs/en/managed-settings)）。给的是完整的强制策略层：
+
+| 能力 | 作用 |
+|---|---|
+| `allowManagedPermissionRulesOnly` | 只认管理员的 permission 规则，用户自己的 allow 全丢 |
+| `allowedMcpServers` / `managedMcpServers` | MCP 白名单 |
+| `availableModels` | 模型限制 |
+| marketplace 约束 | 只许装认可的 plugin |
+| hooks / sandbox locks | 强制护栏 |
+| `policyHelper` | 可执行程序**动态**算策略 |
+
+**[#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin 分发解决「装什么」，
+managed settings 解决「不许改什么」** —— 互补，不重复。而且它比自建同步可靠：用户改不掉。
+
+真正复刻不了的只有 **server-managed settings**（远程下发，endpoint 版要去每台机器放文件）、
+**Analytics API / per-user spend**、**SSO / 席位**。但 Analytics 这条**我们已经赢了一半** ——
+第一方对订阅用户根本不提供跨机器合并，ccquota 做的正是这个。身份则 GitHub 已经是了。
+
+### 最紧急的裂缝:claim 是布尔锁,永不过期
+
+`bin/dash-issue-session.sh:213` 的判据就一句：
+
+```sh
+cs=$(gh issue view "$num" --json assignees,state --jq '"\(.assignees|length)\t\(.state)"')
+```
+
+**`assignees` 非空 → 拒绝 spawn。** 没有时间、没有持有者身份、没有存活性。
+脚本头注自己承认了失败模式：*"a dead/abandoned peer worker that left the issue
+assigned+marked forever"*，唯一出路是人工 `--force`。
+
+一个人用会发现；**N 个人跨设备时死 claim 静默累积** —— 一条挂着 assignee 的 issue，
+你分不清是「有人在做」还是「三天前某台机器关机了」。而 issues 是**唯一**的共享状态，
+这把锁不可靠，整个协作模型就不可靠。2026-09-14 的 triage 扫描已抓到一条实例（#565）。
+
+**租约设计**：claim 带有效期，持有者活着续期，不续自动失效。存在**一条固定评论里原地编辑**
+（`<!-- fleet-lease: owner=… until=… -->`），GitHub 保留编辑历史、不刷屏、人机都可读。
+三个关键点：**续期方是 collector 不是 worker**（collector 按 `@issue` 绑定判存活更准，
+且是一次批量调用）；**过期 ≠ 立刻抢**（要宽限期 + 抢占留痕）；
+**读不到 GitHub 时保持 fail-open**（与现有 dedup 一致，离线宁可重复劳动也不要全线卡死）。
+
+### 参考:主流工具在团队维度做到哪
+
+- **Claude Code Agent Teams** —— 任务表 session-scoped、**纯本地、从不上传**、一 session 一 team。
+  是「会话内的团队」不是「跨设备的团队」
+- **cross-session messaging** —— 同一台机器限定
+- **coder / OpenHands** —— 有真 server + SSO + 审计，但要运维一整套基础设施
+- **整张 OSS 图上没人做跨设备的 agent session presence** —— 若要做，**复用已在跨机器聚合的
+  ccquota hub，不要新建第二个服务**
+
+### 别做
+
+自建 SSO（GitHub 就是身份）· 自建审计（issue/PR 历史就是审计）·
+复刻 Analytics（ccquota 已覆盖第一方给不了的那半）。
+
 ## 十、共享 mini 的正确形态
 
 **N 个 OS login,不是一个 login 跑 N 个 fleet。**
@@ -657,6 +719,21 @@ sync-install + 冒烟，确认 fleet 没炸再下一条。
 
 ---
 
+### 派工的流程教训（2026-09-14 实测）
+
+**① 两条 issue 改同一文件时,提前警告没用 —— 要串行派工。**
+#623（dash pin，改排序键）与 #624（父行聚合，改 flex span）同时 autofill，都动
+`bin/tmux-dashboard-rows.sh`。我提前给两边发了冲突预警，但**先落地的那条必然让后者变
+`DIRTY`** —— 预警改变不了这个。真正有效的是落地后立刻发**精确的解冲突指令**
+（"冲突在排序键那段，保留 #623 的 `pinned` 档，把你的计数并进 flex span"），
+worker 自己 rebase 掉了，没浪费一轮。
+**→ 派工前先查文件重叠，重叠就串行；若已并行，落地后立刻给后者精确指令。**
+
+**② fleet pane 里不能直接 `gh issue comment`。**
+`bash-guard.py` 会拦，必须走 `bin/fleet-comment.sh <issue> --note|--to-worker`。
+且对**正在跑**的 worker 要用 `--to-worker` —— `--note` 只落在 issue 上，
+已经读过 issue 的 worker 看不到。
+
 ### 并行策略:哪些能丢给 autofill
 
 memory 记着 autofill 已在两个 fleet armed（打 `autofill` 标签 → 有空位就自动起
@@ -679,7 +756,9 @@ worker+PR），全局 cap 10。
 | **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
 | **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ 已完成） |
 | **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
-| **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch | ✅ 已上线（PR #604） |
+| **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch · [#620](https://github.com/verkyyi/claude-fleet/issues/620) 语言保持 · [#623](https://github.com/verkyyi/claude-fleet/issues/623) dash pin · [#624](https://github.com/verkyyi/claude-fleet/issues/624) 父行聚合计数 | ✅ 全部已上线双机同步 |
+| **团队协作方向（已设计未建 issue）** | claim 租约（assignee → 带 TTL 的租约）· managed-settings.json 作团队策略基线 · 复用 ccquota hub 做跨设备 presence | ⬜ 见[第九之三章](#九之三团队协作跨-fleet--跨设备--多人) |
+| **待派工** | [#622](https://github.com/verkyyi/claude-fleet/issues/622) 常驻只读 triage worker（阶段 1） | ⬜ 要起常驻 session，需操作员点头 |
 | **已证伪作废** | 删 base-readonly-guard · 删 janitor · `.worktreeinclude` | ❌ 见第七章 |
 | **其他（低优先）** | Codex context%/handoff · 配额裁决接口中立化 · friction Stop hook · 双 anchor worktree 检测 | ⬜ 未建 issue |
 
