@@ -65,6 +65,25 @@ eq "pane_model_of: a dotted version" "Fable 5.1" "$(pane_model_of '  ◆ Fable 5
 eq "pane_model_of: last line wins"   "Opus 5"    "$(pane_model_of '  ◆ Fable 5.1  [█░] 9% x
   ◆ Opus 5  [█░] 9% x')"
 eq "pane_model_of: no status line"   ""          "$(pane_model_of 'just some output')"
+# The #706 rewrite dropped the `printf | sed | tail` (three forks, once per window,
+# inside a probe whose whole bug was its fork count) for parameter expansion plus
+# one bash ERE. These pin the grammar it must NOT have loosened on the way — each
+# is a shape the old sed refused, and a looser reader would hand back a bogus
+# model name, which is a `/model` typed at a window that never needed one.
+eq "pane_model_of: no column gap"    ""          "$(pane_model_of '  ◆ Opus 5 [█░] 9%')"
+eq "pane_model_of: name must start alnum" ""    "$(pane_model_of '  ◆ -weird  [█░] 9%')"
+eq "pane_model_of: no name after the diamond" "" "$(pane_model_of '  ◆   [█░] 9%')"
+eq "pane_model_of: diamond at the very end" ""  "$(pane_model_of 'some output ◆ ')"
+eq "pane_model_of: gap on a LATER line does not rescue an earlier diamond" "" "$(pane_model_of '  ◆ Opus 5
+next  line  here')"
+
+# _lc — the fork-free lowercase that replaced `printf | tr` on the same hot path.
+command -v _lc >/dev/null 2>&1 || fail "_lc not defined after sourcing"
+_lc "Fable";   eq "_lc: a model name"        "fable"     "$_LC"
+_lc "Opus 5";  eq "_lc: digits and spaces"   "opus 5"    "$_LC"
+_lc "";        eq "_lc: empty in, empty out" ""          "$_LC"
+_lc "a*b?c";   eq "_lc: glob chars stay literal" "a*b?c" "$_LC"
+_lc "5.1";     eq "_lc: nothing to fold"     "5.1"       "$_LC"
 
 ok; model_matches opus  "Opus 5"    || fail "model_matches: opus ↔ Opus 5"
 ok; model_matches fable "Fable 5.1" || fail "model_matches: fable ↔ Fable 5.1"
@@ -241,6 +260,15 @@ RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$
 # --- --dry-run touches nothing ------------------------------------------------
 out=$(RUN --capped --model opus --dry-run)
 ok; has 'would:' "$out" || fail "--dry-run should print a plan" "$out"
+# The batched window read must not SHIFT its columns (issue #706). Five
+# `display-message` per window became one `list-windows -F` with tab-separated
+# fields, and tab is IFS whitespace — so a `read -r a b c …` split would COLLAPSE
+# runs of empty fields, and every column after the first empty one would shift by
+# one. A worker window is full of them: @hub, @claude_state and @claude_state_ts
+# are all unset on an idle worker — three empties in a row ahead of @cc_account.
+# The account is the visible end of that chain, so a collapsed split shows up here
+# as a missing `[acctA]` on the plan line.
+ok; has '[acctA]' "$out" || fail "the batched window read must survive three empty option columns ahead of @cc_account" "$out"
 eq "--dry-run types nothing" "" "$(cat "$WORK/typed.walled")"
 eq "--dry-run writes no ledger row" "" "$(cat "$CAPLEDGER" 2>/dev/null)"
 
@@ -313,6 +341,52 @@ eq "nothing typed when the fallback is capped too" "" "$(cat "$WORK/typed.walled
 out=$(RUN --capped --model opus)
 ok; has '1 switched' "$out" || fail "once the fallback clears, the window switches" "$out"
 ok; has '/model opus' "$(cat "$WORK/typed.walled2")" || fail "walled2 should have been switched"
+
+# --- the batched pane→Claude walk (issue #706) ------------------------------
+# fleet_pane_claude_pid now wraps fleet_pane_claude_pids, so there is ONE walk to
+# keep correct; the batch form is what made the probe affordable (a `ps` plus two
+# forked `awk`s per tree NODE, per window, was 4.3 s of its 12 s). The pair must
+# agree window for window — including on a pane with no Claude under it, which
+# must print nothing rather than somebody else's pid.
+bp=""
+for w in "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"; do
+  bp="$bp $(tmux -L "$LBL" display-message -p -t "$w" '#{pane_pid}' 2>/dev/null)"
+done
+# shellcheck disable=SC2086  # deliberate word-split: one pane pid per word
+batch=$(fleet_pane_claude_pids $bp 2>/dev/null)
+ok; [ "$(printf '%s\n' "$batch" | grep -c .)" = 4 ] || fail "the batch walk must resolve every one of the 4 fake-claude panes" "$batch"
+for w in "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"; do
+  pp=$(tmux -L "$LBL" display-message -p -t "$w" '#{pane_pid}' 2>/dev/null)
+  one=$(fleet_pane_claude_pid "$w" "$LBL" 2>/dev/null)
+  many=$(printf '%s\n' "$batch" | awk -v p="$pp" '$1==p{print $2}')
+  ok; [ -n "$one" ] && [ "$one" = "$many" ] || fail "batch and single walk disagree for $w (single=$one batch=$many)"
+done
+# the dash panel runs `sleep 600`, not a Claude — it must resolve to nothing
+dpp=$(tmux -L "$LBL" display-message -p -t dash '#{pane_pid}' 2>/dev/null)
+ok; [ -z "$(fleet_pane_claude_pids "$dpp" 2>/dev/null)" ] || fail "a pane with no Claude must resolve to nothing, not to a neighbour"
+ok; [ -z "$(fleet_pane_claude_pids 2>/dev/null)" ] || fail "no pids in, nothing out"
+
+# --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
+# fleet-quotawatch runs this probe under fleet_timebox and kills the tree at the
+# budget, so nothing the probe prints survives a timeout. The trace file is the
+# only thing that can answer "which step ate the 20s" — for 788 of 1136 live ticks
+# the answer was simply unavailable.
+TRACEF="$WORK/probe.trace"
+FLEET_MODEL_SWITCH_TRACE="$TRACEF" RUN --capped --model opus --dry-run >/dev/null
+[ -s "$TRACEF" ] || fail "FLEET_MODEL_SWITCH_TRACE must be written"
+ok; has 'step=' "$(cat "$TRACEF")"  || fail "the breadcrumb must name the current step" "$(cat "$TRACEF")"
+ok; has 'win='  "$(cat "$TRACEF")"  || fail "the breadcrumb must say how far into the sweep it got" "$(cat "$TRACEF")"
+ok; has 'steps=' "$(cat "$TRACEF")" || fail "the breadcrumb must carry the per-step timings" "$(cat "$TRACEF")"
+eq "a completed probe ends its breadcrumb at done" "step=done" "$(sed -n '1p' "$TRACEF")"
+# …and the sweep must have actually visited every window, not stopped at the first.
+ok; case "$(sed -n 's/^win=//p' "$TRACEF" | head -1)" in */*) ;; *) fail "win= must read i/N" "$(cat "$TRACEF")";; esac
+
+# Without the variable there is no file and no cost — the trace is opt-in, because
+# every step boundary would otherwise be a write on a path that exists to avoid I/O.
+rm -f "$TRACEF"
+RUN --capped --model opus --dry-run >/dev/null
+[ ! -f "$TRACEF" ] || fail "the breadcrumb must be opt-in (no FLEET_MODEL_SWITCH_TRACE, no file)"
+ok
 
 # --- panels and the hub are never touched ------------------------------------
 eq "the dash panel was never typed into" "" "$(cat "$WORK/typed.dash" 2>/dev/null)"

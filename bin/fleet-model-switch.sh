@@ -69,6 +69,29 @@
 #         --dry-run          print the plan, touch nothing
 #         --toast            tmux display-message the summary (for run-shell -b callers)
 #
+# COST, and why it is a correctness property here (issue #706). `--capped
+# --dry-run` is the probe fleet-quotawatch runs for every fleet on every 60 s
+# tick, under a 20 s FLEET_QUOTAWATCH_PROBE_BUDGET that tree-kills it. That daemon
+# is a macOS ProcessType=Background unit — QoS BACKGROUND, where a fork costs
+# roughly 10x what it costs in the foreground (#588 measured the same multiplier
+# on bulk I/O and classified this unit as a "pure poller"; the poller had grown a
+# fork-heavy half). At ~12 forks per window the probe measured 1.7 s foreground
+# and 21–25 s at background QoS on a 9-window fleet, so it timed out on 69% of
+# ALL ticks and 100% of recent ones — and a timed-out probe means that fleet's
+# model-cap detection is simply off, with the #569 failure mode waiting behind it
+# (a capped turn fires no Stop hook, so the window stays `working` forever and
+# this very sweep defers its own candidate as "mid-turn"). Only 4.4 s of those
+# 21 s was CPU. So the per-window path is written to fork as little as possible:
+# ONE `list-windows` for every window option, ONE batched pane→Claude walk
+# (fleet_pane_claude_pids), a fork-free banner reject, pane_model_of and _lc in
+# pure bash, and one clock for the run. 4.7 s at background QoS, and it scales
+# with window count instead of falling off a cliff at it.
+#
+# Env: FLEET_MODEL_SWITCH_TRACE=<file> — opt-in breadcrumb, rewritten at every step
+# boundary (step=/win=/elapsed=/steps=). fleet-quotawatch sets it and reads it off
+# the probe's corpse, because a tree-killed probe reports nothing itself.
+# Also FLEET_MODEL_SWITCH_SCROLL (-200), _VERIFY (15), _DIALOG (5).
+#
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with
 # no live Claude process, windows in a GENUINELY live turn (see cap_settled — a
 # window pinned at @claude_state=working by the Stop hook a cap never fires IS
@@ -175,10 +198,40 @@ switch_selected() {
 # status line ("◆ Opus 5  [████░░░░░░] 38% …" → "Opus 5"). The name runs to the
 # column gap (2+ spaces) that separates it from the context meter; a pane with no
 # status line prints nothing.
+# Fork-free since #706: this runs once per window inside a probe whose whole
+# problem was its fork count, and `$(printf | sed | tail)` is three. The grammar
+# is unchanged and pinned by bin/fleet-model-switch-selftest.sh — `##*◆ ` is
+# exactly sed's greedy `.*◆ ` plus `tail -1` (the LAST diamond in the text
+# wins), and the bash ERE below is sed's capture group verbatim, applied to the
+# one short candidate instead of to 200 lines of scrollback.
 pane_model_of() {
-  printf '%s\n' "${1:-}" \
-    | sed -nE 's/.*◆ ([A-Za-z0-9][A-Za-z0-9.]*([ ][A-Za-z0-9.]+)*)[[:space:]][[:space:]]+.*/\1/p' \
-    | tail -1
+  local t="${1:-}" c
+  case "$t" in *"◆ "*) ;; *) return 0 ;; esac
+  c=${t##*"◆ "}           # after the last diamond — "last line wins"
+  c=${c%%$'\n'*}          # … on that line only
+  case "$c" in *"  "*) ;; *) return 0 ;; esac   # the column gap must EXIST
+  c=${c%%  *}             # … and the name runs up to it
+  [[ "$c" =~ ^[A-Za-z0-9][A-Za-z0-9.]*([ ][A-Za-z0-9.]+)*$ ]] || return 0
+  printf '%s\n' "$c"
+}
+
+# _lc <word> → $_LC, lowercased WITHOUT a fork (issue #706). bash 3.2 (macOS) has
+# no ${v,,}, and `$(printf '%s' "$w" | tr ...)` is two processes — paid per window
+# on the hot path of a probe that was timing out on its fork count alone. The
+# index trick: `${_LC_U%%"$c"*}` is the whole alphabet when $c is not in it (leave
+# the character alone) and otherwise the prefix BEFORE it, whose length is its
+# index. $c is quoted inside the pattern, so a `*` or `?` in the input stays
+# literal.
+_LC_U=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+_LC_L=abcdefghijklmnopqrstuvwxyz
+_LC=""
+_lc() {
+  local s="${1:-}" c h i
+  _LC=""
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}; h=${_LC_U%%"$c"*}
+    if [ "$h" != "$_LC_U" ]; then _LC="$_LC${_LC_L:${#h}:1}"; else _LC="$_LC$c"; fi
+  done
 }
 
 # ledger_until <account> <model> — `fleet-account.sh model-limited-until`, memoized
@@ -246,39 +299,170 @@ main() {
   local switched=0 skipped=0 failed=0 handed=0 REPORT=""
   note() { REPORT="${REPORT}${REPORT:+; }$1"; }
 
-  local targets=() wid
-  if [ "$MODE" = explicit ]; then targets=("${WIDS[@]}"); else
-    while IFS= read -r wid; do [ -n "$wid" ] && targets+=("$wid"); done \
-      < <(TM list-windows -t "$SESS" -F '#{window_id}' 2>/dev/null)
-  fi
+  # ---- the breadcrumb (issue #706) -----------------------------------------
+  # FLEET_MODEL_SWITCH_TRACE names a file this run rewrites at every step
+  # boundary. It exists because the caller that most needs the number can never
+  # read our output: fleet-quotawatch runs this probe under fleet_timebox, and on
+  # expiry the whole process TREE is killed — so "timeout" was the entire
+  # diagnosis available for the 69% of ticks that hit it, and nobody could say
+  # which step had eaten the 20 s. The file is written with a plain builtin
+  # redirect (no fork, and the loop below exists to avoid forks), so the killer
+  # can read where its victim stood. Same argument as #653's `over=` and #700's
+  # `x/ys`: without the number, the next person measures it from scratch.
+  #
+  # Seconds, off bash's SECONDS, not milliseconds: $(date) is a fork per step and
+  # the budget being diagnosed is 20 s, so whole seconds are the right resolution
+  # and the free one.
+  local TRACE="${FLEET_MODEL_SWITCH_TRACE:-}"
+  local TR_STEP="" TR_LAST=0 TR_I=0 TR_N=0 TR_WID="" TR_NAME=""
+  local TRN=() TRS=()
+  trace() {   # <step> — close the previous step's clock, open this one, rewrite
+    [ -n "$TRACE" ] || return 0
+    local d i found=0 acc=""
+    if [ -n "$TR_STEP" ]; then
+      d=$(( SECONDS - TR_LAST ))
+      for ((i = 0; i < ${#TRN[@]}; i++)); do
+        [ "${TRN[$i]}" = "$TR_STEP" ] || continue
+        TRS[$i]=$(( ${TRS[$i]} + d )); found=1; break
+      done
+      [ "$found" = 1 ] || { TRN+=("$TR_STEP"); TRS+=("$d"); }
+    fi
+    TR_STEP="$1"; TR_LAST=$SECONDS
+    for ((i = 0; i < ${#TRN[@]}; i++)); do acc="$acc t_${TRN[$i]}=${TRS[$i]}"; done
+    printf 'step=%s\nwin=%s/%s\nwid=%s\nelapsed=%s\nsteps=%s\nname=%s\n' \
+      "$1" "$TR_I" "$TR_N" "$TR_WID" "$SECONDS" "${acc# }" "$TR_NAME" >"$TRACE" 2>/dev/null || :
+  }
 
-  for wid in "${targets[@]}"; do
+  # ---- ONE round trip for every window option the loop reads (issue #706) ----
+  # This used to be five `display-message` per window, i.e. 5N round trips, and
+  # this probe runs inside a daemon at QoS BACKGROUND where each one costs ~10x.
+  # Tab-separated with the window NAME last — the idiom fleet-dispatch.sh's
+  # trust_sweep already uses, for the same reason: a name is the only field that
+  # can contain the separator. The split below is parameter expansion rather than
+  # `read -r a b c …` BECAUSE tab is IFS whitespace, so `read` COLLAPSES the empty
+  # fields this is full of (an unset @hub next to an unset @claude_state) and every
+  # column after the first empty one would shift. Same trap fleet-dispatch.sh
+  # documents; it escapes via `awk -F'\t'`, this escapes without the fork.
+  local W_ID=() W_PPID=() W_HUB=() W_STATE=() W_STS=() W_ACCT=() W_NAME=()
+  local _row _r TB=$'\t'
+  while IFS= read -r _row; do
+    [ -n "$_row" ] || continue
+    _r="$_row"
+    W_ID+=("${_r%%$'\t'*}");    _r="${_r#*$'\t'}"
+    W_PPID+=("${_r%%$'\t'*}");  _r="${_r#*$'\t'}"
+    W_HUB+=("${_r%%$'\t'*}");   _r="${_r#*$'\t'}"
+    W_STATE+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
+    W_STS+=("${_r%%$'\t'*}");   _r="${_r#*$'\t'}"
+    W_ACCT+=("${_r%%$'\t'*}");  _r="${_r#*$'\t'}"
+    W_NAME+=("$_r")
+  done < <(TM list-windows -t "$SESS" -F "#{window_id}$TB#{pane_pid}$TB#{@hub}$TB#{@claude_state}$TB#{@claude_state_ts}$TB#{@cc_account}$TB#{window_name}" 2>/dev/null)
+
+  # load_meta <wid> → M_* . From the batch; an EXPLICIT window the batch does not
+  # cover (another session on this socket — the fleet's own callers never do this,
+  # but the old per-window path accepted it) still resolves the slow way, so this
+  # is a speedup on the hot path and not a narrowing of what the script accepts.
+  local M_PPID M_HUB M_STATE M_STS M_ACCT M_NAME
+  load_meta() {
+    local w="$1" i
+    for ((i = 0; i < ${#W_ID[@]}; i++)); do
+      [ "${W_ID[$i]}" = "$w" ] || continue
+      M_PPID="${W_PPID[$i]}"; M_HUB="${W_HUB[$i]}";   M_STATE="${W_STATE[$i]}"
+      M_STS="${W_STS[$i]}";   M_ACCT="${W_ACCT[$i]}"; M_NAME="${W_NAME[$i]}"
+      return 0
+    done
+    M_PPID=$(wopt "$w" '#{pane_pid}');        M_HUB=$(wopt "$w" '#{@hub}')
+    M_STATE=$(wopt "$w" '#{@claude_state}');  M_STS=$(wopt "$w" '#{@claude_state_ts}')
+    M_ACCT=$(wopt "$w" '#{@cc_account}');     M_NAME=$(wopt "$w" '#{window_name}')
+  }
+
+  local targets=() wid
+  # ${a[@]+"${a[@]}"}: bash 3.2 (macOS) treats an EMPTY array expansion as an
+  # unbound variable under `set -u` — a fleet whose list-windows came back empty
+  # must yield an empty sweep, not a crash.
+  if [ "$MODE" = explicit ]; then targets=(${WIDS[@]+"${WIDS[@]}"}); else targets=(${W_ID[@]+"${W_ID[@]}"}); fi
+  TR_N=${#targets[@]}
+  trace meta
+
+  # ---- the pane→Claude walk, ONCE for every window (issue #706) -------------
+  # The single-pane form costs a `ps` plus two forked `awk`s per tree NODE, and it
+  # was called per window: measured at 4.3 s of the probe's 21 s at background QoS
+  # on a 9-window fleet, the single largest item. fleet_pane_claude_pids does the
+  # whole sweep in three forks. Panels and the hub are filtered out FIRST so their
+  # trees are never walked at all.
+  local ppids=()
+  for wid in ${targets[@]+"${targets[@]}"}; do
+    load_meta "$wid"
+    [[ "$M_NAME" =~ $PANEL_RE ]] && continue
+    [ -n "$M_HUB" ] && continue
+    [ -n "$M_PPID" ] && ppids+=("$M_PPID")
+  done
+  # "|<pane-pid>=<claude-pid>|…" — the `case` memo idiom ledger_until uses, because
+  # bash 3.2 (macOS) has no associative arrays.
+  local CPIDS="|"
+  if [ "${#ppids[@]}" -gt 0 ]; then
+    while IFS= read -r _row; do
+      [ -n "$_row" ] || continue
+      CPIDS="$CPIDS${_row%% *}=${_row##* }|"
+    done < <(fleet_pane_claude_pids ${ppids[@]+"${ppids[@]}"} 2>/dev/null)
+  fi
+  cpid_of() {   # <pane-pid> → the Claude pid under it, or nothing (exit 1)
+    local hit
+    case "$CPIDS" in
+      *"|$1="*) hit=${CPIDS#*"|$1="}; printf '%s' "${hit%%|*}"; return 0 ;;
+    esac
+    return 1
+  }
+  trace panepids
+
+  # One clock for the whole run, not a `date` fork per comparison per window: a
+  # probe lasts seconds, so a single stamp is both cheaper and more self-consistent
+  # than five that disagree by a second.
+  local NOW_S; NOW_S=$(date +%s)
+
+  for wid in ${targets[@]+"${targets[@]}"}; do
     local name state acct cpid text pmodel banner kind capped tuntil
     local settled=0 vis=0 sts="" via=banner lcap lu reason
-    name=$(wopt "$wid" '#{window_name}')
-    printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
-    [ -n "$(wopt "$wid" '#{@hub}')" ] && continue
-    cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
+    TR_I=$((TR_I + 1)); TR_WID="$wid"
+    load_meta "$wid"
+    name="$M_NAME"; TR_NAME="$name"
+    # bash's own regex match, not `printf | grep -qE`: two forks per window bought
+    # nothing a builtin cannot do (issue #706).
+    [[ "$name" =~ $PANEL_RE ]] && continue
+    [ -n "$M_HUB" ] && continue
+    cpid=$(cpid_of "$M_PPID") || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
     [ -n "$cpid" ] || continue
-    state=$(wopt "$wid" '#{@claude_state}')
-    acct=$(wopt "$wid" '#{@cc_account}')
+    state="$M_STATE"
+    acct="$M_ACCT"
+    trace capture
     text=$(TM capture-pane -p -S "$SCROLL" -t "$wid" 2>/dev/null)
+    trace banner
     pmodel=$(pane_model_of "$text")
-    banner=$(printf '%s\n' "$text" | fleet_limit_banner)
-    kind=$(printf '%s\n' "$banner" | fleet_limit_kind)
+    # The same fork-free reject usage-lib's fleet_limit_banner now opens with, and
+    # here it skips the SUBSHELLS too: a pane with no `limit` anywhere in $SCROLL
+    # lines — nearly every window, nearly every tick — costs zero processes to
+    # classify instead of ten (issue #706). Empty banner → empty kind is exactly
+    # what the pipeline produced for this input.
+    banner=""; kind=""
+    case "$text" in
+      *limit*)
+        banner=$(printf '%s\n' "$text" | fleet_limit_banner)
+        [ -n "$banner" ] && kind=$(printf '%s\n' "$banner" | fleet_limit_kind) ;;
+    esac
     # cap_settled is consulted ONLY for a `working` window, so nothing below it is
     # worth paying for on any other window — and most windows are not working. This
     # probe runs synchronously inside the 60 s quotawatch tick, so it stays cheap:
     # one extra capture-pane and two window options for the working few, nothing for
     # everyone else.
     if [ "$state" = working ]; then
-      sts=$(wopt "$wid" '#{@claude_state_ts}')
+      sts="$M_STS"
+      trace visible
       # Is the cap the pane's CURRENT tail (the VISIBLE screen, no -S) rather than a
       # line somewhere back in the scrollback? That is cap_settled's recency half.
       case "$(TM capture-pane -p -t "$wid" 2>/dev/null | fleet_limit_banner | fleet_limit_kind)" in
         model:*) vis=1 ;;
       esac
-      cap_settled "$vis" "$sts" "$(date +%s)" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
+      cap_settled "$vis" "$sts" "$NOW_S" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
+      trace banner
     fi
     case "$kind" in
       model:*) capped=${kind#model:} ;;
@@ -286,7 +470,7 @@ main() {
         # An explicit window with no model cap on screen is still switched on the
         # operator's word — they asked for THIS window.
         if [ "$MODE" != capped ]; then
-          capped=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1)
+          _lc "${pmodel%% *}"; capped="$_LC"
         else
           # --capped used to `continue` here, i.e. act ONLY on a banner it could
           # see. But the banner is not the durable fact — the LEDGER is. A
@@ -300,9 +484,14 @@ main() {
           # the whole answer.
           lcap=""
           if [ -n "$acct" ] && [ -n "$pmodel" ]; then
-            lcap=$(printf '%s' "$pmodel" | tr '[:upper:]' '[:lower:]' | cut -d' ' -f1)
+            # `${pmodel%% *}` first, so the one surviving fork lowercases a WORD
+            # rather than a line (issue #706 — this branch is the COMMON path of a
+            # --capped sweep: most windows carry no banner at all).
+            trace ledger
+            _lc "${pmodel%% *}"; lcap="$_LC"
             lu=$(ledger_until "$acct" "$lcap")
-            [ "$lu" -gt "$(date +%s)" ] || lcap=""
+            [ "$lu" -gt "$NOW_S" ] || lcap=""
+            trace banner
           fi
           [ -n "$lcap" ] || continue
           capped="$lcap"; via=ledger
@@ -315,7 +504,7 @@ main() {
       # some other reason would be mislabelled "mid-turn".
       if [ "$state" = working ] && [ "$settled" != 1 ]; then
         reason=""
-        [ "$vis" = 1 ] && reason=$(printf ' (cap on screen, but @claude_state_ts is %ss old — still inside FLEET_STUCK_WORKING_SECS=%s)' "$(( $(date +%s) - ${sts:-0} ))" "${FLEET_STUCK_WORKING_SECS:-120}")
+        [ "$vis" = 1 ] && reason=$(printf ' (cap on screen, but @claude_state_ts is %ss old — still inside FLEET_STUCK_WORKING_SECS=%s)' "$(( NOW_S - ${sts:-0} ))" "${FLEET_STUCK_WORKING_SECS:-120}")
         printf '  – %s (%s): mid-turn — left alone, the next pass takes it%s\n' "$wid" "$name" "$reason"
       elif ! model_matches "$capped" "$pmodel"; then
         printf '  – %s (%s): already off %s (now %s) — nothing to do\n' "$wid" "$name" "$capped" "${pmodel:-?}"
@@ -328,8 +517,10 @@ main() {
     # A fallback that is itself capped on this account is no fallback: hand the
     # window to the subscription path rather than flip it onto a second wall.
     if [ -n "$acct" ]; then
+      trace ledger
       tuntil=$(ledger_until "$acct" "$TARGET")
-      if [ "$tuntil" -gt "$(date +%s)" ]; then
+      trace select
+      if [ "$tuntil" -gt "$NOW_S" ]; then
         printf '  – %s (%s): %s is ALSO capped on %s — skipped (subscription path)\n' "$wid" "$name" "$TARGET" "$acct"
         skipped=$((skipped+1)); continue
       fi
@@ -350,6 +541,7 @@ main() {
     TM set-window-option -t "$wid" @model_migrating "$(date +%s)" 2>/dev/null
 
     # --- the four sanctioned keystrokes -------------------------------------
+    trace switch
     SK -t "$wid" Escape 2>/dev/null; sleep 0.4
     SK -t "$wid" -l -- "/model $TARGET" 2>/dev/null; sleep 1.2
     SK -t "$wid" Enter 2>/dev/null; sleep 2
@@ -361,6 +553,7 @@ main() {
     done
 
     # --- verify off the status line, never off our own keystrokes ------------
+    trace verify
     local ok=0 waited=0 nowm
     while [ "$waited" -lt "$VERIFY_WAIT" ]; do
       nowm=$(pane_model_of "$(cap "$wid")")
@@ -401,6 +594,7 @@ main() {
     fi
   done
 
+  trace 'done'
   local sum
   sum="fleet-model-switch: $switched switched, $skipped skipped, $failed unverified$([ "$handed" -gt 0 ] && printf ', %s handed to migrate' "$handed")"
   printf '%s%s\n' "$sum" "$([ -n "$REPORT" ] && printf ' (%s)' "$REPORT")"

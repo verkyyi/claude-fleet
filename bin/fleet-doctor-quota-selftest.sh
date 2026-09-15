@@ -93,6 +93,16 @@ quota_line() {
     bash "$WORK/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+quota([[:space:]]|$)' | head -1
 }
 
+# The same run, read for its `qwatch` lines instead — that is where the model-cap
+# probe's health lands (issue #706).
+qwatch_lines() {
+  PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
+  FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="http://hub.test:8787" \
+  FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_VERDICT_FILE="$WORK/verdict" \
+  FAKE_VERSION="$VER" FAKE_NO_VERSION="$NO_VER" \
+    bash "$WORK/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+qwatch([[:space:]]|$)'
+}
+
 # 1. both accounts readable → PASS, n/n mapped. `verdict:"go"` is ccquota's own
 # word for it (never "ok"), and the line names the build that said so (#668).
 printf '' > "$WORK/b-shape"; printf 'go' > "$WORK/verdict"
@@ -162,5 +172,62 @@ case "$l" in *"cross-endpoint"*|*"Usage:"*) fail "7: usage text is not a version
 case "$l" in *"ccquota → hub"*) ;; *) fail "7: an unusable version answer must degrade to a bare \`ccquota\`" "$l";; esac
 ok
 
-printf 'selftest OK: fleet-doctor quota verdict (%s cases — clean PASS, unreadable account WARN+named, unknown shape FAIL, unmapped label unchanged, verdict hold still mapped, all four lines version-stamped, and graceful when the build has no usable version)\n' "$CHECKS"
+# --- the model-cap probe's health (issue #706) --------------------------------
+# A cap probe that keeps timing out is not a slow tick, it is a BLIND fleet: the
+# probe is the only input to model-cap detection, and a capped turn never fires
+# the Stop hook — so a walled worker sits at @claude_state=working forever while
+# the sweep defers its own candidate as "mid-turn". Live, one fleet timed out on
+# 788 of 1136 ticks and 18 of the last 18, and the ONLY place that was written
+# down was logs/quotawatch.launchd.log. A health check nobody reads is not a
+# health check.
+printf '' > "$WORK/b-shape"; printf 'go' > "$WORK/verdict"
+
+# 8. no health file at all (a fleet whose probe has never timed out) → silence.
+#    The glob must not turn its own no-match into a verdict either.
+rm -f "$WORK/.claude-dash/global/quotawatch.modelcap."*
+l=$(qwatch_lines)
+case "$l" in *"model-cap probe"*) fail "8: a fleet with no probe trouble must produce no cap-probe line" "$l";; esac
+ok
+
+# 9. one timeout is noise — below the streak threshold it must stay quiet, or the
+#    verdict fires on every loaded tmux server and stops meaning anything.
+printf 'streak=1\nlastok=%s\nstep=capture\nat=%s\n' "$(date +%s)" "$(date +%s)" \
+  > "$WORK/.claude-dash/global/quotawatch.modelcap.sessA"
+l=$(qwatch_lines)
+case "$l" in *"model-cap probe"*) fail "9: a single timeout must not raise a verdict" "$l";; esac
+ok
+
+# 10. a STREAK does speak — FAIL, naming the fleet, the count, and the STEP the
+#     budget went into, because that is what decides the fix.
+printf 'streak=7\nlastok=%s\nstep=ledger\nat=%s\n' "$(( $(date +%s) - 3600 ))" "$(date +%s)" \
+  > "$WORK/.claude-dash/global/quotawatch.modelcap.sessA"
+l=$(qwatch_lines)
+case "$l" in *FAIL*qwatch*"model-cap probe"*) ;; *) fail "10: a chronic probe timeout must FAIL the qwatch check" "$l";; esac
+case "$l" in *sessA*)   ;; *) fail "10: the verdict must name the fleet" "$l";; esac
+case "$l" in *"7 ticks"*) ;; *) fail "10: the verdict must carry the streak" "$l";; esac
+case "$l" in *"'ledger'"*) ;; *) fail "10: the verdict must name the step the budget went into" "$l";; esac
+case "$l" in *"60m ago"*) ;; *) fail "10: the verdict must say how long it has been blind" "$l";; esac
+ok
+
+# 11. a probe that has NEVER completed reads differently from one that used to.
+printf 'streak=9\nlastok=0\nstep=panepids\nat=%s\n' "$(date +%s)" \
+  > "$WORK/.claude-dash/global/quotawatch.modelcap.sessA"
+l=$(qwatch_lines)
+case "$l" in *"never completed"*) ;; *) fail "11: lastok=0 must read as never completed, not '0m ago'" "$l";; esac
+ok
+rm -f "$WORK/.claude-dash/global/quotawatch.modelcap."*
+
+# 12. …but the record must be CURRENT. A health file outlives the fleet it
+#     describes — `fleet-down` removes the session, not this file — so a stale
+#     record must go quiet rather than FAIL forever about a fleet that is gone.
+#     A check that can cry wolf is worse than no check (the #639/#658 lesson):
+#     the streak here is worse than case 10's, and it must still say nothing.
+printf 'streak=99\nlastok=0\nstep=ledger\nat=%s\n' "$(( $(date +%s) - 7200 ))" \
+  > "$WORK/.claude-dash/global/quotawatch.modelcap.sessGone"
+l=$(qwatch_lines)
+case "$l" in *"model-cap probe"*) fail "12: a stale health record must not FAIL forever (torn-down fleet, or a daemon that stopped ticking — the staleness check above already owns that)" "$l";; esac
+ok
+rm -f "$WORK/.claude-dash/global/quotawatch.modelcap."*
+
+printf 'selftest OK: fleet-doctor quota verdict (%s cases — clean PASS, unreadable account WARN+named, unknown shape FAIL, unmapped label unchanged, verdict hold still mapped, all four lines version-stamped, graceful when the build has no usable version, and the blind-fleet verdict for the model-cap probe, which stays quiet on one timeout and on a stale record #706)\n' "$CHECKS"
 exit 0

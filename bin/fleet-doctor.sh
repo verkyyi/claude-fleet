@@ -318,6 +318,42 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         warn qwatch "last quotawatch tick took ${qhb_dur:-?}s against its ${qhb_budget:-?}s budget (FLEET_QUOTAWATCH_TICK_BUDGET)$qhb_detail — it wound down instead of overrunning, which is by design, but a tick that keeps deferring is one whose work no longer fits in 60s"
       fi
     fi
+    # --- the per-fleet model-cap probe (issue #706) --------------------------
+    # A cap probe that times out is not a slow tick, it is a BLIND fleet: the probe
+    # is the only input to model-cap detection, which is the only trigger for
+    # fleet-model-switch.sh --capped. And a walled worker fails in the ugliest way
+    # there is — a capped turn never fires the Stop hook, so @claude_state stays
+    # `working` forever and the sweep keeps deferring its own candidate as
+    # "mid-turn". On 2026-09-15 one fleet had timed out on 788 of 1136 ticks, 18 of
+    # the last 18, and nothing outside logs/quotawatch.launchd.log ever said so.
+    # A single timeout is noise; the STREAK the watch keeps is the verdict.
+    #
+    # And the record must be CURRENT, not merely bad. A health file outlives the
+    # fleet it describes — `fleet-down` removes the session, not this file — so
+    # without an age gate a torn-down fleet would leave a doctor line that FAILs
+    # forever about something that no longer exists, and the same goes for any
+    # window in which the daemon itself is not ticking (which the staleness check
+    # above already reports, once, in the right words). That is the #639/#658
+    # lesson: a check that can cry wolf is worse than no check, because the next
+    # real one gets scrolled past. FLEET_ACCOUNT_QUOTA_STALE is the horizon the
+    # rest of this section already uses for "no tick has run".
+    for qmf in "${TMPDIR:-/tmp}/.claude-dash/global/quotawatch.modelcap."*; do
+      case "$qmf" in *'quotawatch.modelcap.*') continue ;; esac   # an unmatched glob
+      [ -f "$qmf" ] || continue
+      qmfleet=${qmf##*/quotawatch.modelcap.}
+      qmstreak=$(sed -n 's/^streak=//p' "$qmf" | head -1)
+      qmstep=$(sed -n 's/^step=//p' "$qmf" | head -1)
+      qmlastok=$(sed -n 's/^lastok=//p' "$qmf" | head -1)
+      qmat=$(sed -n 's/^at=//p' "$qmf" | head -1)
+      case "$qmstreak" in ''|*[!0-9]*) qmstreak=0 ;; esac
+      case "$qmlastok" in ''|*[!0-9]*) qmlastok=0 ;; esac
+      case "$qmat" in ''|*[!0-9]*) qmat=0 ;; esac
+      [ "$qmstreak" -ge "${FLEET_QUOTAWATCH_MODELCAP_STREAK:-3}" ] || continue
+      [ $(( $(date +%s) - qmat )) -lt "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ] || continue
+      if [ "$qmlastok" -gt 0 ]; then qmago="last completed $(( ( $(date +%s) - qmlastok ) / 60 ))m ago"
+      else qmago="it has never completed"; fi
+      fail qwatch "$qmfleet: the model-cap probe has timed out $qmstreak ticks running (in step '${qmstep:-?}'; $qmago) — model-cap detection on that fleet is BLIND, so a worker walled on its model will sit at @claude_state=working forever and \`fleet-model-switch.sh --capped\` will never fire for it. The step name says where the budget went; raise FLEET_QUOTAWATCH_PROBE_BUDGET (${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}s) only after reading it, and check \`bash bin/fleet-model-switch.sh --capped --dry-run --session $qmfleet\`"
+    done
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
       # NAME the binary on the other side of this contract (issue #668). ccquota
       # ships no tagged release (docs/INSTALL.md) — everyone installs it with

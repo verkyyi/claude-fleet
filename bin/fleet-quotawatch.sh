@@ -35,6 +35,13 @@
 #                             released only by the tick that still holds it (#582)
 #   quotawatch.sweep.start  — fairness cursor: the fleet whose cap probe was cut
 #                             short last tick, swept first on the next one (#582)
+#   quotawatch.modelcap.<fleet> — that fleet's cap-probe health: streak= of
+#                             consecutive timeouts, lastok= when it last finished,
+#                             step= where the last timeout died (#706)
+#   quotawatch.probe.trace.<fleet> — the live breadcrumb of that fleet's cap
+#                             probe, read off its corpse when the budget kills it
+#                             (#706). Deliberately NOT under the .modelcap.
+#                             prefix: fleet-doctor globs that one by fleet name.
 #
 # Staleness alarm (#551): `account.quota.ts` is the watch's liveness — every tick
 # restamps it even when the hub is unreachable (empty rows still refresh the
@@ -132,6 +139,7 @@
 #      FLEET_QUOTAWATCH_FETCH_BUDGET (30) FLEET_QUOTAWATCH_POLICY_BUDGET (40)
 #      FLEET_QUOTAWATCH_KICK_BUDGET (15) FLEET_QUOTAWATCH_TMUX_BUDGET (10)
 #      FLEET_ACCOUNT_QUOTA_STALE (600)
+# Read by fleet-doctor, not here: FLEET_QUOTAWATCH_MODELCAP_STREAK (3).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -204,6 +212,12 @@ DEADLINE="${FLEET_QUOTAWATCH_DEADLINE:-120}"   # a tick past this is stuck → s
 PROBE_BUDGET="${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}"   # one fleet's cap probe
 SWEEP_BUDGET="${FLEET_QUOTAWATCH_SWEEP_BUDGET:-40}"   # the whole modelcap phase
 SWEEP_START="$G/quotawatch.sweep.start"               # fairness rotation cursor
+# Per-fleet cap-probe health (issue #706): a timeout STREAK and the last time the
+# probe actually finished. The probe's outcome used to live only in this log, so a
+# fleet whose model-cap detection had been blind for 788 ticks looked exactly like
+# a healthy one to `fleet-doctor`. One file per fleet; the session name is already
+# filename-safe (it IS the socket label).
+MODELCAP_STATE="$G/quotawatch.modelcap"
 # The tick's SELF-budget and the per-phase budgets it clamps (issue #698 — see the
 # header). Every one of these is per-tick and best-effort: what a tick does not
 # reach, the next tick 60 s later does.
@@ -386,6 +400,21 @@ SOCKETS=$(fleet_sockets)
 # prints a per-window report on stdout, and run-shell paints a backgrounded job's
 # stdout over the operator's window as an Esc-to-dismiss view — fleet_bg silences
 # it centrally; --toast still reports on the status line.
+# modelcap_health <fleet> <ok|timeout> <step> — keep the per-fleet cap-probe
+# streak fleet-doctor reads (issue #706). A single timeout is noise (a loaded
+# tmux server, a tick that started with almost no budget left); a STREAK is the
+# thing worth a verdict, because it means that fleet's model-cap detection — and
+# so fleet-model-switch.sh --capped, and so every walled worker on it — has been
+# dark the whole time. Cheap enough to run every tick: two small file writes.
+modelcap_health() {
+  local f="$MODELCAP_STATE.$1" st=0 lo=0
+  [ -f "$f" ] && { st=$(sed -n 's/^streak=//p' "$f" | head -1); lo=$(sed -n 's/^lastok=//p' "$f" | head -1); }
+  case "$st" in ''|*[!0-9]*) st=0 ;; esac
+  case "$lo" in ''|*[!0-9]*) lo=0 ;; esac
+  if [ "$2" = ok ]; then st=0; lo=$(now); else st=$(( st + 1 )); fi
+  printf 'streak=%s\nlastok=%s\nstep=%s\nat=%s\n' "$st" "$lo" "${3:-}" "$(now)" > "$f" 2>/dev/null || :
+}
+
 T_MODEL=0; T_FETCH=0; T_POLICY=0; MTIMES=""; DEFERRED=""
 if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
   hb "modelcap"
@@ -412,17 +441,29 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
     fi
     mpb="$PROBE_BUDGET"; [ "$mpb" -gt "$mleft" ] && mpb="$mleft"   # the phase/tick budget wins
     p0=$(now)
-    mout=$(fleet_timebox "$mpb" "$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null); mrc=$?
+    # The breadcrumb (issue #706). fleet_timebox tree-KILLS the probe on expiry, so
+    # nothing the probe was about to print survives — which is why a timeout used
+    # to be the whole diagnosis, for 69% of all ticks, with no way to tell a slow
+    # tmux from a slow ledger read without re-measuring by hand. The probe rewrites
+    # this file at every step boundary; we read it off its corpse.
+    mtr="$G/quotawatch.probe.trace.$ms"; : > "$mtr" 2>/dev/null || :
+    mout=$(FLEET_MODEL_SWITCH_TRACE="$mtr" fleet_timebox "$mpb" "$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null); mrc=$?
     if [ "$mrc" = 124 ]; then
       # Report it honestly rather than letting it eat the tick (issue #582): the
       # probe and every tmux client under it are dead, and this fleet goes first
       # on the next tick.
-      MTIMES="$MTIMES $ms=timeout"
+      mstep=$(sed -n 's/^step=//p' "$mtr" 2>/dev/null | head -1)
+      mwin=$(sed -n 's/^win=//p' "$mtr" 2>/dev/null | head -1)
+      msteps=$(sed -n 's/^steps=//p' "$mtr" 2>/dev/null | head -1)
+      MTIMES="$MTIMES $ms=timeout@${mstep:-?}${mwin:+ ($mwin w)}"
       QW_OVER="${QW_OVER}${QW_OVER:+ }modelcap:$ms"
       [ -s "$SWEEP_START" ] || printf '%s' "$ms" > "$SWEEP_START"
-      printf 'fleet-quotawatch: modelcap probe on %s hit its %ss budget — killed, not swept this tick\n' "$ms" "$mpb" >&2
+      modelcap_health "$ms" timeout "${mstep:-?}"
+      printf 'fleet-quotawatch: modelcap probe on %s hit its %ss budget in step %s (window %s) — killed, not swept this tick [%s]\n' \
+        "$ms" "$mpb" "${mstep:-?}" "${mwin:-?}" "${msteps:-no step timings}" >&2
       continue
     fi
+    modelcap_health "$ms" ok ""
     MTIMES="$MTIMES $ms=$(( $(now) - p0 ))s"
     mplan=$(printf '%s\n' "$mout" | grep -c '^  would:')
     case "$mplan" in ''|*[!0-9]*) mplan=0 ;; esac
