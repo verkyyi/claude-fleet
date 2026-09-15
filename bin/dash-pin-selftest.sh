@@ -71,11 +71,17 @@ esac
 # checkout whose dir name ends `-scratch-<N>` the window would key as that scratch.
 tmux new-session -d -s fleetP -x 220 -y 50 -c "$WORK" 'sleep 300' \
   || fail "could not start the 'fleetP' session"
+# @expand=1 on every fixture window: a subtree is COLLAPSED BY DEFAULT (the ←/→
+# fold), and the whole point of this part is how a PIN moves children and
+# grandchildren around — which is only observable with the blocks open. The pin
+# tier and the fold are deliberately independent (a pin re-sorts, it never
+# unfolds); bin/dash-fold-selftest.sh pins that they compose.
 mk_win() { # <name> [issue] [origin] → window id
   local n="$1" iss="${2:-}" org="${3:-}" wid
   wid=$(tmux new-window -d -P -F '#{window_id}' -t fleetP: -n "$n" -c "$WORK" 'sleep 300')
   [ -n "$iss" ] && tmux set-window-option -t "$wid" @issue "$iss"
   [ -n "$org" ] && tmux set-window-option -t "$wid" @origin "$org"
+  tmux set-window-option -t "$wid" @expand 1
   printf '%s' "$wid"
 }
 # pA ─ cA ─ gA      (a three-deep chain: the inheritance cases)

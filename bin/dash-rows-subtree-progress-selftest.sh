@@ -78,14 +78,22 @@ PATH="$WORK/bin:$PATH"; export PATH
 # --- fixture windows ----------------------------------------------------------
 # Field order MUST match WFMT in tmux-dashboard-rows.sh:
 #   session idx name path state state_ts window_id @issue @origin @worktree
+#                                        … @cc_agent @wid @claude_needs @expand
+# The trailing @expand (arg 9, empty unless given) is the ←/→ fold bit. Mind the
+# run of EMPTY separators ahead of it: it has to land on the field WFMT actually
+# put it in, and #640 inserted @claude_needs between @wid and it. A subtree
+# is COLLAPSED BY DEFAULT, so the two PARENTS below carry `1` — this file is about
+# the #624 badge, which you can only read against the block it describes. That the
+# badge stays right while the block is SHUT is the load-bearing case and lives in
+# bin/dash-fold-selftest.sh.
 WLIST_FILE="$WORK/wlist"; export WLIST_FILE
-w() { printf '%s\n' "$SESS$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$8" >> "$WLIST_FILE"; }
+w() { printf '%s\n' "$SESS$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$8$US$US$US$US${9:-}" >> "$WLIST_FILE"; }
 : > "$WLIST_FILE"
 # Every state is QUOTED: `done` is a shell keyword, and bare as an argument here
 # it reads to shellcheck as the close of a loop (SC1010).
 #   idx name      cwd                 state     wid @issue @origin   @worktree
 # R = a hub-spawned root with a 5-window subtree: 3 done, 1 working, 1 needs.
-w 1  R           /w/repo-issue-100    'idle'    @1  100 ''          /w/repo-issue-100
+w 1  R           /w/repo-issue-100    'idle'    @1  100 ''          /w/repo-issue-100 1
 w 2  kid-done    /w/repo-issue-101    'done'    @2  101 issue-100   /w/repo-issue-101
 w 3  kid-done2   /w/repo-issue-102    'done'    @3  102 issue-100   /w/repo-issue-102
 w 4  kid-work    /w/repo-issue-103    'working' @4  103 issue-100   /w/repo-issue-103
@@ -98,7 +106,7 @@ w 7  lonely      /w/repo-issue-200    'idle'    @7  200 ''          /w/repo-issu
 # an ORPHAN: @origin names a window that is not on this dash → counts for nobody.
 w 8  orph        /w/repo-issue-300    'done'    @8  300 issue-999   /w/repo-issue-300
 # a CJK-named SCRATCH parent with 2 children, neither in needs → `1/2 ✓`, no `!`.
-w 9  修复仪表盘   /w/repo-scratch-7    'idle'    @9  ''  ''          /w/repo-scratch-7
+w 9  修复仪表盘   /w/repo-scratch-7    'idle'    @9  ''  ''          /w/repo-scratch-7 1
 w 10 s-kid-done  /w/repo-issue-401    'done'    @10 401 scratch-7   /w/repo-issue-401
 w 11 s-kid-idle  /w/repo-issue-402    'idle'    @11 402 scratch-7   /w/repo-issue-402
 
