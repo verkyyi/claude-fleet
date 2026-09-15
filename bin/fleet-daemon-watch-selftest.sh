@@ -224,8 +224,12 @@ grep -q 'kick .*unit=cleanup .*mgr=launchd.*rc=0' "$KICKLOG" \
 # -------------------------------------------------------------- 5. running ----
 # The guard that makes the tighter threshold safe: a tick that is merely BEHIND is
 # still doing the work, and kickstart -k would abort it.
+#
+# 400s is stale (>= the 300s threshold) but well inside the 900s WEDGED bound that
+# #682 added — this section is about the SLOW half of that split, and §16 covers
+# the other. It used to stamp 900s, which is now exactly the wedge threshold.
 : > "$FAKE_KICK_LOG"; rm -f "$G/dispatch.kick.ts"
-tick dispatch 900
+tick dispatch 400
 FAKE_RUNNING=dispatch watch --unit dispatch
 [ "$(kicks)" -eq 0 ] || fail "5: killed a RUNNING tick with kickstart -k"; ok
 grep -q 'slow .*unit=dispatch' "$KICKLOG" || fail "5: a slow unit was not logged: $(cat "$KICKLOG")"; ok
@@ -472,8 +476,9 @@ wipe; tick base-sync 900
 : > "$FAKE_LC_STATE/base-sync.out"          # pretend it was booted out
 dry_is_inert base-sync 'would BOOTSTRAP'
 [ -f "$FAKE_LC_STATE/base-sync.out" ] || fail "14: dry-run actually bootstrapped the unit"; ok
-# a running tick → would not touch it
-wipe; tick dispatch 900
+# a running tick → would not touch it (400s: stale, but inside the 900s wedge
+# bound #682 added — §16 covers the dry-run report for a WEDGED unit)
+wipe; tick dispatch 400
 : > "$FAKE_KICK_LOG"
 out="$(FAKE_RUNNING=dispatch watch_err --unit dispatch --dry-run)"
 case "$out" in *'would NOT touch it'*) ok ;; *) fail "14: dry-run on a running unit: $out" ;; esac
@@ -492,5 +497,47 @@ watch --unit cleanup
 [ "$(kicks)" -eq 1 ] || fail "15: stale lock debris was not taken over"; ok
 [ ! -d "$G/cleanup.kick.lock" ] || fail "15: the winning kicker left its own lock behind"; ok
 
-printf 'selftest PASS: %s assertions (registry · relative · never · pended · running · per-unit · scoping · status · bar · stamps · off · escalate · inflight · dry-run · lock)\n' "$CHECKS"
+# --------------------------------------------------------------- 16. wedged ----
+# #639 made "a RUNNING unit is never kicked" absolute, and #682 is the bill: on
+# 2026-09-15 collect and quotawatch each sat `state = running` and frozen for ~54
+# minutes. `--status` correctly called both stale, the alarm was accurate, and the
+# self-heal stood down BY DESIGN while the dash served 53-minute-old data with
+# nothing left that could recover it.
+#
+# The split is by DURATION, not by liveness: past fleet_daemon_wedged_secs (3x the
+# unit's own stale threshold) a RUNNING unit has stopped advancing its heartbeat
+# for three whole alarm windows, and takes the ordinary ladder. §5 pins the slow
+# half; this pins the wedged half and the knob that turns it off.
+wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
+
+# the threshold itself, and both knobs
+[ "$(lib 'fleet_daemon_wedged_secs collect')" = 900 ]   || fail "16: collect's wedge bound is not 3x its 300s stale threshold"; ok
+[ "$(FLEET_DAEMON_WEDGED_MULT=2 lib 'fleet_daemon_wedged_secs collect')" = 600 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT does not retune the bound"; ok
+[ "$(FLEET_DAEMON_WEDGED_MULT=0 lib 'fleet_daemon_wedged_secs collect')" = 0 ]   || fail "16: MULT=0 must disable the wedge verdict"; ok
+[ "$(FLEET_DAEMON_WEDGED_DISPATCH=360 lib 'fleet_daemon_wedged_secs dispatch')" = 360 ]   || fail "16: a per-unit override must win outright"; ok
+
+# RUNNING + stale past the bound ⇒ healed, and said so in the log
+tick dispatch 1200
+FAKE_RUNNING=dispatch watch --unit dispatch
+[ "$(kicks)" -eq 1 ]   || fail "16: a RUNNING unit frozen for 1200s was not healed — this is the #682 stand-down"; ok
+grep -q 'wedged .*unit=dispatch' "$KICKLOG"   || fail "16: the wedge verdict was not logged: $(cat "$KICKLOG")"; ok
+
+# …and the knob restores the pre-#682 hands-off guard exactly.
+wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
+tick dispatch 1200
+FLEET_DAEMON_WEDGED_MULT=0 FAKE_RUNNING=dispatch watch --unit dispatch
+[ "$(kicks)" -eq 0 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT=0 must never touch a running unit"; ok
+grep -q 'slow .*unit=dispatch' "$KICKLOG"   || fail "16: with the knob off a frozen unit must still log as slow"; ok
+
+# The dry-run verdict and the real one must not be able to disagree (they are
+# decided in one place, beside do_reload).
+wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
+tick dispatch 1200
+case "$(FAKE_RUNNING=dispatch watch_err --unit dispatch --dry-run)" in
+  *"RUNNING but WEDGED"*) ok ;;
+  *) fail "16: --dry-run does not report the wedge verdict the real run acts on" ;;
+esac
+[ "$(kicks)" -eq 0 ] || fail "16: --dry-run kicked"; ok
+
+printf 'selftest PASS: %s assertions (registry · relative · never · pended · running · per-unit · scoping · status · bar · stamps · off · escalate · inflight · dry-run · lock · wedged)\n' "$CHECKS"
 exit 0

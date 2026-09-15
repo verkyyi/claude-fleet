@@ -922,8 +922,9 @@ fleet_proc_age() {
 }
 
 # Kill a process AND every descendant it has — TERM the whole tree, brief grace,
-# then SIGKILL whatever survived (issue #582). Two reasons a plain
-# `kill -TERM <pid>` is not enough for a wedged daemon tick:
+# then SIGKILL whatever survived (issue #582) — and then VERIFY that it is
+# actually gone (issue #682). Two reasons a plain `kill -TERM <pid>` is not
+# enough for a wedged daemon tick:
 #
 #   (1) bash DEFERS a trapped signal until the current FOREGROUND command
 #       returns. A tick blocked inside `x=$(slow-child)` keeps running for as
@@ -933,18 +934,40 @@ fleet_proc_age() {
 #   (2) killing only the script leaves its children (the actual tmux clients)
 #       attached to a loaded server, which is what made the next tick slow too.
 #
-# Walks children breadth-first via `pgrep -P` (no pgrep ⇒ just the root), so it
-# needs no job control and no process group of its own. Never touches pid ≤ 1 or
-# this process. Best-effort and always returns 0 — a caller aborting a tick must
-# not itself fail on a race with an exiting child.
+# TWO ways to reach the tree, used together (issue #682):
+#
+#   (a) PROCESS GROUP, when <root> leads its own — `kill -<sig> -<pgid>`. This is
+#       the one that cannot race: one syscall reaches every descendant, including
+#       the ones forked AFTER the sweep began, and it keeps reaching orphans
+#       after the root itself is gone (they keep the pgid; they lose the parent).
+#       fleet_timebox launches under `set -m` precisely so its job is a leader.
+#   (b) the `pgrep -P` walk, for a root we did not launch — quotawatch supersedes
+#       a pid read off its lock dir — or where the leader bit is not ours to have.
+#
+# Why (b) alone was not enough, i.e. the #682 incident. fleet_timebox logged
+# "killed" for phase after phase whose trees were still running, and the next tick
+# started fresh ones on top of them: at load 170+ under launchd
+# `ProcessType=Background`, every `pgrep` fork in the walk is itself starved for
+# tens of seconds, so the set being signalled was already minutes stale when the
+# signal landed, and everything forked in the gap survived as an orphan. Budgets
+# were being enforced against a SNAPSHOT of a tree, which is not enforcement:
+# `FLEET_COLLECT_TICK_BUDGET` read 120s while the tick ran 3259s.
+#
+# Returns 0 when the tree is gone, 1 when something outlived the SIGKILL — so a
+# caller that must not proceed over a live tree can finally tell. It still never
+# fails on a race with a normally-exiting child: a tree that leaves on its own
+# reads as gone.
 #
 #   $1  root pid (required)
 #   $2  grace seconds between TERM and KILL (default 2)
-fleet_kill_tree() {
-  local root="${1:-}" grace="${2:-2}" all="" frontier="" next="" p c i surv=""
+
+# _fleet_proc_tree <root> [pgid] — every live pid in the tree, root first, one per
+# line. Walks `pgrep -P` breadth-first; when <pgid> is given, the group membership
+# is unioned in, which is what still sees ORPHANS once the root has been reaped.
+# Never lists this process or pid ≤ 1. No pgrep ⇒ just the root.
+_fleet_proc_tree() {
+  local root="${1:-}" pgid="${2:-}" all="" frontier="" next="" p c
   case "$root" in ''|*[!0-9]*) return 0 ;; esac
-  [ "$root" -gt 1 ] || return 0
-  [ "$root" != "$$" ] || return 0
   frontier="$root"
   while [ -n "$frontier" ]; do
     all="$all $frontier"; next=""
@@ -955,14 +978,59 @@ fleet_kill_tree() {
     done
     frontier="${next# }"
   done
-  all="${all# }"
-  [ -n "$all" ] || return 0
-  # Parents first: a TERMed parent cannot fork a replacement child mid-sweep.
-  kill -TERM $all 2>/dev/null
-  i=0; while [ "$i" -lt "$grace" ]; do sleep 1; i=$((i+1)); done
-  for p in $all; do kill -0 "$p" 2>/dev/null && surv="$surv $p"; done
-  [ -n "$surv" ] && kill -KILL $surv 2>/dev/null
-  return 0
+  case "$pgid" in
+    ''|*[!0-9]*) : ;;
+    *) for p in $(pgrep -g "$pgid" 2>/dev/null); do
+         [ "$p" != "$$" ] && all="$all $p"
+       done ;;
+  esac
+  for p in $all; do
+    [ "$p" -gt 1 ] 2>/dev/null || continue
+    [ "$p" = "$$" ] && continue
+    kill -0 "$p" 2>/dev/null && printf '%s\n' "$p"
+  done | sort -un
+}
+
+fleet_kill_tree() {
+  local root="${1:-}" grace="${2:-2}" pgid="" live="" round=0
+  case "$root" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$root" -gt 1 ] || return 0
+  [ "$root" != "$$" ] || return 0
+  case "$grace" in ''|*[!0-9]*) grace=2 ;; esac
+
+  # Is the root its own group leader? Only then may we signal the GROUP — a
+  # negative pid that is not our own job's group could reach a whole unrelated
+  # session, so this is checked, never assumed.
+  pgid=$(ps -o pgid= -p "$root" 2>/dev/null | tr -d ' ')
+  case "$pgid" in ''|*[!0-9]*) pgid='' ;; esac
+  [ "$pgid" = "$root" ] || pgid=''
+  [ "$pgid" = "$$" ] && pgid=''
+
+  # Round 1 — TERM. Parents first: a TERMed parent cannot fork a replacement
+  # child mid-sweep. The group signal goes first because it is the one that does
+  # not depend on the walk finishing in time.
+  [ -n "$pgid" ] && kill -TERM -"$pgid" 2>/dev/null
+  live=$(_fleet_proc_tree "$root" "$pgid")
+  [ -n "$live" ] || return 0
+  kill -TERM $live 2>/dev/null
+  sleep "$grace"
+
+  # Rounds 2-3 — SIGKILL, RE-ENUMERATING each round. The re-read is the whole
+  # point: the previous round's signal landed on a set that may have grown while
+  # the walk was being starved. SIGKILL cannot be deferred or trapped, so a tree
+  # that is still there after two rounds is not merely slow to die.
+  while [ "$round" -lt 2 ]; do
+    [ -n "$pgid" ] && kill -KILL -"$pgid" 2>/dev/null
+    live=$(_fleet_proc_tree "$root" "$pgid")
+    [ -n "$live" ] || return 0
+    kill -KILL $live 2>/dev/null
+    round=$((round+1))
+  done
+
+  # The verdict is a READ, never an assumption — that is the #682 lesson.
+  live=$(_fleet_proc_tree "$root" "$pgid")
+  [ -n "$live" ] || return 0
+  return 1
 }
 
 # Run a command under a WALL-CLOCK budget (issue #582). Prints the command's
@@ -993,9 +1061,15 @@ fleet_kill_tree() {
 # takes, the loop stops at the first poll past it, so the overshoot is bounded by
 # ONE poll instead of multiplying with the load.
 #
-# The deadline costs one `date` fork per poll on top of the `sleep` that was
-# already there. That is the right trade: the fork is the same cost class as the
-# sleep, and an honest budget is worth more than halving the cost of measuring it.
+# READING that deadline must itself be free, which is the #682 half. The check
+# used to be `$(date +%s)` — a FORK, once per poll — and a fork is precisely what
+# is starved under `ProcessType=Background`: measured on the incident host at load
+# 170+, a background-QoS process could not complete three 5-second budgets in 600
+# seconds, while the same script at normal priority took 6. So the loop could not
+# OBSERVE its own deadline often enough to enforce it, and #653's honest budget
+# went unread. `SECONDS` is a bash builtin counting wall clock since the shell
+# started: same clock, no fork. The one remaining fork per poll is the `sleep`
+# itself, and a starved one now costs a single overshoot instead of compounding.
 #
 #   $1   budget in seconds (0 or non-numeric ⇒ run unbudgeted)
 #   $2+  the command and its arguments (not a shell string — no eval)
@@ -1003,19 +1077,40 @@ fleet_timebox() {
   local budget="${1:-0}"; shift
   case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
   [ "$budget" -gt 0 ] || { "$@"; return $?; }
-  "$@" &
-  local job=$! deadline
-  deadline=$(( $(date +%s) + budget ))
+
+  # Launch the job as its own PROCESS-GROUP LEADER (issue #682), so the kill below
+  # is a group signal and not a race against a tree that keeps forking. `set -m`
+  # in a non-interactive shell does exactly that; it is restored immediately, so
+  # the caller's job-control setting is untouched.
+  # stdin from /dev/null EXPLICITLY. Without job control bash gives a background
+  # job /dev/null by itself; with `set -m` it hands over the caller's stdin
+  # instead, which on a tty would let a phase stop on SIGTTIN rather than see EOF.
+  # No caller feeds a timeboxed command anything on stdin, so this just keeps the
+  # behaviour the job always effectively had.
+  local mflag=0; case "$-" in *m*) mflag=1 ;; esac
+  set -m
+  "$@" </dev/null &
+  local job=$!
+  [ "$mflag" = 1 ] || set +m
+
+  local start=$SECONDS name="${1:-job}"
   # Poll order is: is the job done? → is the clock up? → wait a second. So a job
   # that finishes is always noticed before the deadline is declared blown, and the
   # loop never sleeps past a deadline it has already reached.
   while :; do
     kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
-    [ "$(date +%s)" -lt "$deadline" ] || break
+    [ $(( SECONDS - start )) -lt "$budget" ] || break
     sleep 1
   done
   kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
-  fleet_kill_tree "$job" 1
+
+  # SAY SO when the kill did not take. Before #682 this path returned 124 either
+  # way and every caller printed "killed", which is how a machine came to be
+  # running fifty-four minutes of phases that the log said had been killed.
+  if ! fleet_kill_tree "$job" 1; then
+    printf 'fleet_timebox: %s (pid %s) SURVIVED its %ss budget and the SIGKILL — orphans are still running; the next tick will start another one on top\n' \
+      "$name" "$job" "$budget" >&2
+  fi
   wait "$job" 2>/dev/null
   return 124
 }

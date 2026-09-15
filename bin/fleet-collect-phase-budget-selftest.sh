@@ -47,7 +47,9 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed 
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/collect-phase-budget-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
-trap 'rm -rf "$WORK"' EXIT
+# Unique per run, so a peer selftest's wedge is never counted as this one's.
+HANGMARK="collect-phase-budget-hang-$$"
+trap 'pkill -9 -f "$HANGMARK" >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
 for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-restore.sh; do
   cp "$BIN/$f" "$WORK/bin/"
@@ -81,7 +83,12 @@ cat > "$WORK/fakepath/git" <<'FAKE'
 #!/bin/bash
 path=''
 if [ "${1:-}" = "-C" ]; then path="$2"; shift 2; fi
-case "$path" in *"${FAKE_GIT_HANG:-__nomatch__}") sleep 120 ;; esac
+# The marker makes the wedged child findable in the process table, so a tick can
+# be asked whether it left ORPHANS behind rather than only whether it returned
+# (issue #682).
+case "$path" in *"${FAKE_GIT_HANG:-__nomatch__}")
+  exec bash -c "sleep 120 # ${FAKE_HANG_MARK:-fleet-collect-hang}" ;;
+esac
 case "${1:-} ${2:-}" in
   'rev-parse --git-dir')    printf '.git\n';   exit 0 ;;
   'rev-parse --abbrev-ref') printf 'b-%s\n' "${path##*/}"; exit 0 ;;
@@ -112,6 +119,7 @@ run_collector() {
   FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="http://hub.test:8787" FLEET_ACCOUNT_QUOTA_TTL=999999 \
   FAKE_PANEPATHS="$WORK/panepaths" FAKE_GH_LOG="$GH_LOG" FAKE_GIT_HANG="${HANG:-}" \
+  FAKE_HANG_MARK="$HANGMARK" \
   FLEET_COLLECT_TICK_BUDGET="${TICK:-120}" FLEET_COLLECT_GIT_BUDGET="${GITB:-30}" \
     bash "$WORK/bin/tmux-dash-collect.sh" >"$WORK/stdout" 2>"$WORK/stderr"
 }
@@ -126,6 +134,10 @@ hbget()  { sed -n "s/^$1=//p" "$G/collect.heartbeat" | head -1; }
 order()  { hbget phases | tr ' ' '\n' | cut -d= -f1 | tr '\n' ' '; }
 pcur()   { cat "$G/collect.phase.cursor" 2>/dev/null; }
 has()    { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
+# hang_survivors — wedged children still alive. A tick is only bounded if the
+# PROCESSES stop too (issue #682): the budget used to bound the ledger, printing
+# "killed" over a tree that ran on, and the next tick piled another on top.
+hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '; }
 
 # 1. CLEAN TICK — every phase runs, in the historical order, nothing deferred ------
 run_collector || fail "1: a full tick must exit 0"
@@ -158,7 +170,10 @@ has git "$(hbget over)" || fail "3: over= must name the phase that spent its bud
 grep -q 'phase git hit the 3s budget (FLEET_COLLECT_GIT_BUDGET)' "$WORK/stderr" \
   || fail "3: stderr must name the phase, its budget and its knob"
 case "$(order)" in *' snapshot '*) : ;; *) fail "3: every later phase must still run (got: $(order))" ;; esac
+n=$(hang_survivors)
+[ "$n" = 0 ] || fail "3: $n wedged child(ren) outlived the tick — the budget bounded the ledger, not the processes (#682)"
 ok "a wedged phase is killed at its own budget, named on stderr, and the tick runs on"
+ok "…and leaves NO residue: the wedged child is gone once the tick returns"
 
 # 4. WHOLE-TICK BUDGET — truncation, and the cursor parks where it stopped ---------
 # git wedges for longer than the whole tick has left, so the phases after it get no

@@ -215,7 +215,13 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     # survived 26 MINUTES against this 120 s deadline — and meanwhile its tmux
     # clients keep loading the very server that wedged it. TERM the tree, brief
     # grace, SIGKILL the survivors.
-    fleet_kill_tree "$opid" 2
+    # SAY SO if the supersede did not take (issue #682). This path used to assume
+    # the kill worked and take the lock regardless; a tree that outlived SIGKILL
+    # means two ticks are live against one tmux server, which is the pileup #582
+    # was about — and it must be in the log, not inferred later from `ps`.
+    if ! fleet_kill_tree "$opid" 2; then
+      printf 'fleet-quotawatch: supersede could NOT kill tick %s — it outlived SIGKILL; taking the lock anyway, so two ticks may now be live\n' "$opid" >&2
+    fi
   fi
   rm -rf "$LOCK"
   mkdir "$LOCK" 2>/dev/null || exit 0        # lost the takeover race → the other tick has it
