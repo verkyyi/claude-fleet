@@ -182,7 +182,7 @@ sb() { tf display-message -p -t "$1" '#{@claude_needs}' 2>/dev/null; }
 
 # Converge or give up: poll the three windows that MUST move.
 for _ in $(seq 1 50); do
-  [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = done ] && [ "$(sb w-askfix)" = ask ] && break
+  [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = "done" ] && [ "$(sb w-askfix)" = ask ] && break
   sleep 0.5
 done
 
@@ -190,7 +190,7 @@ done
 CHECKS=$((CHECKS+1)); [ -z "$(st w-dead)" ] \
   || fail "a red window whose Claude exited must be cleared to idle" "state=$(st w-dead)"
 CHECKS=$((CHECKS+1)); [ -z "$(sb w-dead)" ] || fail "…and its subtype cleared with it" "needs=$(sb w-dead)"
-CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = done ] \
+CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = "done" ] \
   || fail "a red 'perm' with nothing pending in the transcript must clear to done" "state=$(st w-stale)"
 CHECKS=$((CHECKS+1)); [ -z "$(sb w-stale)" ] || fail "…and drop the stale reason" "needs=$(sb w-stale)"
 
@@ -240,7 +240,7 @@ one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
   || fail "the FIRST reconcile pass may only arm a strike, never act — a stamp gets one check of grace" "state=$(st w-debounce)"
 one_pass
-CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = done ] \
+CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
   || fail "the SECOND pass agreeing with the first must act" "state=$(st w-debounce)"
 
 # A strike table older than 3x the interval is not "the previous check" — after a
