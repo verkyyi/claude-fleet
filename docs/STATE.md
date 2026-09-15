@@ -5,8 +5,8 @@
 Every fleet window carries a **semantic state** — what its Claude session is
 doing right now — that the dashboard, the needs badge, and the watcher all read.
 This doc traces the whole refresh path: **who sets the state, where it lives, how
-it is rendered, and the two backstops that correct it** when the fast signal is
-wrong.
+it is rendered, and the backstops that correct it** when the fast signal is wrong —
+or when it was right once and nothing has re-checked it since.
 
 The design rule underneath it all (see [ARCHITECTURE.md](ARCHITECTURE.md) and the
 README): **hooks are fast but semantically blind; the LLM is smart but slow.**
@@ -68,12 +68,17 @@ failure (no `python3`, no `transcript_path`, unreadable file) also falls back to
 answer channel that is not there.
 
 **Freshness is by construction, not by timestamp.** `@claude_needs` is written on
-*every* non-`leave` state write — a `working`/`done` write clears it — and the two
-other writers of `@claude_state`
+*every* non-`leave` state write — a `working`/`done` write clears it — and the other
+writers of `@claude_state`
 ([`classify-sessions.sh`](../bin/classify-sessions.sh), the spinner's
 stale-`working` demote) clear it as well. So no reader can ever pair a fresh state
 with a stale reason, and readers consult it only while the state is `needs`.
 Pinned end to end by [`bin/needs-reason-selftest.sh`](../bin/needs-reason-selftest.sh).
+
+Construction keeps the reason *consistent with its state*; it cannot keep either
+consistent with **reality**, because both are written on events and a blocked session
+produces no further event. That is what the [stale-`needs`
+reconcile](#the-other-backstop--stale-needs-reconcile-658) below is for.
 
 ## The fast path — Claude Code hooks (instant, semantic-blind)
 
@@ -242,19 +247,92 @@ kicked to refine it into `done` / `needs` / `looping`. The large threshold + the
 debounce make a false demote of a live session effectively impossible. Set
 `FLEET_STUCK_WORKING_SECS=0` to disable.
 
+## The other backstop — stale-`needs` reconcile (#658)
+
+Every writer above fires on an **event**. Nothing re-reads a stamp afterwards — so a
+red that was right when it was written stays red once its cause is gone, and a
+window that has stopped moving is exactly the window nothing will re-evaluate. Two
+shapes of that were live on 2026-09-14:
+
+- a window whose Claude **exited** while red — no hook can ever fire there again;
+- two windows showing `⊘` (*"only a human may press this"*) over an **open
+  `AskUserQuestion`**. They were stamped by the pre-#657 wording rule minutes before
+  that fix went live, and were out of its reach forever after, because a session
+  blocked on a dialog fires no further hook. The mislabel is **self-sealing**: it is
+  precisely what tells the operator not to answer the thing that would end it.
+
+So the spinner reconciles the stamp against the **transcript**, using the same
+[`bin/fleet-pending-tool.sh`](../bin/fleet-pending-tool.sh) oracle that set the
+subtype in the first place — asked now about a **window** rather than a file
+(`fleet-pending-tool.sh [-L <sock>] <target>` resolves pane → Claude pid → the
+session registry's `sessionId` → the transcript, and reports *no live Claude* and
+*could not find out* as distinct exit codes, because a reconcile must act on the
+first and never on the second). Per red window:
+
+| What the oracle says | Verdict |
+|---|---|
+| subtype `ask`/`perm`, **nothing** pending | clear to `done` — the red is provably over |
+| **no live Claude** in the pane (any subtype) | clear to *(empty)* — nothing can be waiting |
+| subtype `ask`/`perm`, something pending | re-settle the **subtype** only (`ask` ⇄ `perm`); the window stays red and `@claude_state_ts` is left alone — the session's activity did not move, only our reading of it |
+| anything unknown (no transcript, no `python3`, …) | **leave it alone** |
+
+Three rails make this safe to run unattended:
+
+- **One direction only.** It never creates a `needs` and never re-reddens a window;
+  inferring a red out of band is the hook's job, and a second guesser would only
+  manufacture false alarms. It also does *not* kick the classifier afterwards (the
+  stuck-`working` demote does): the classifier can return `needs` off a stale screen,
+  which would re-redden what was just cleared, every tick.
+- **Only `ask`/`perm` are clearable.** Those two subtypes are *defined* by a pending
+  `tool_use` (#656 settles both off this very oracle), so "nothing pending" proves the
+  stamp stale. A **plain `needs`** (empty subtype) is a judgement about the *screen* —
+  the classifier's `WAITING`/`ERROR`, or a worker's own `set-claude-state.sh needs`
+  beside a `⛔ blocked` comment. Neither has a `tool_use` open, so clearing those
+  would silently delete the blocked signal.
+- **Grace on both axes.** A stamp younger than `FLEET_NEEDS_RECONCILE_SECS`
+  (default **20s**, `0` disables) is still settling, and the same verdict must repeat
+  across **two consecutive checks** before anything is written — the same 2-strike
+  idiom as the stuck-`working` sweep, keyed on the *verdict* so a changed reading
+  restarts the count. The strike table is a file, aged out at 3× the interval, so a
+  restart cannot let one stale reading count as agreement.
+
+Cost, measured on the machine that reported #658: **0.33 s for one pass over the
+whole estate** (4 fleet sockets, 22 windows, 2 of them red) — ~150 ms per *candidate*
+(a `ps` tree walk for the pane's Claude, plus a `python3` read of the transcript:
+35 ms on a 2.1 MB file), and 0.03 s for the window scans. Candidates are only windows
+already stamped `needs`, which is 0–2 on a live fleet. At one pass per 20 s that is a
+**1.7% duty cycle**, and the cost inside a *frame* is one integer compare — the 0.12 s
+animation loop is untouched. `NEEDS_BUDGET` caps a pathological fleet at 8 windows
+per pass; the rest are picked up by the next one.
+
+`tmux-spinner.sh --needs-check` runs exactly **one** pass and exits — for an operator
+who wants a stale red re-judged now instead of at the next tick, and for
+[`bin/needs-reconcile-selftest.sh`](../bin/needs-reconcile-selftest.sh), which drives
+passes one at a time so the two-checks-agree rule is pinned by *count* rather than by
+wall clock (a wall-clock assertion passes for the wrong reason, which is the mistake
+#658 itself was filed on).
+
+> The spinner carries this errand — as it carries the stuck-`working` sweep and the
+> interval-daemon self-heal — because it is **KeepAlive**: one process, up since
+> boot, while every other fleet daemon is a `StartInterval` unit,
+> and #639 showed those can be pended by launchd for over an hour. A reconcile that
+> lived in an interval unit would go dark alongside its patient.
+
 ## Who writes `@claude_state` — the whole picture
 
-Three writers, one option, exactly one source of truth per window:
+Four writers, one option, exactly one source of truth per window:
 
 | Writer | When | Writes |
 |---|---|---|
 | `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
 | `classify-sessions.sh` (haiku) | on `Stop`, and after a stuck-demote — ~1–2s / change-gated | `done` / `needs` / `looping` (reason **cleared**) |
 | `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s | `done` (reason **cleared**; then kicks the classifier) |
+| `tmux-spinner.sh` needs-reconcile | a `needs` window the transcript contradicts, ≥2 checks running | `done` / *(empty)*, or the **reason** re-settled — never a new `needs` |
 
-Only the hook knows *why* a window went red, so only the hook sets
-`@claude_needs`; the other two clear it rather than let a stale `ask`/`perm` ride a
-state they just rewrote.
+Only the hook knows *why* a window went red, so only the hook **invents**
+`@claude_needs`; the classifier and the stuck-demote clear it rather than let a stale
+`ask`/`perm` ride a state they just rewrote, and the reconcile only ever corrects it
+against the same transcript the hook read.
 
 ```
 Claude Code hooks (PreToolUse / PostToolUse / UserPromptSubmit / Stop / Notification)
@@ -270,6 +348,8 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
       ▲
       │
    stuck-working demote (spinner, #101): a working pane frozen ≥120s → done → re-classify
+   stale-needs reconcile (spinner, #658): a `needs` the TRANSCRIPT contradicts → cleared
+                                          (or its reason re-settled) — never re-reddened
 ```
 
 ## Related
