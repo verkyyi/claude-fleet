@@ -688,14 +688,32 @@ fi
 # fresh install, or a unit this machine never had (#492 — ledger-watch was missing
 # for months while the doctor printed PASS), and fleet-daemon-loaded.sh above is
 # the check that answers "is it installed?".
+#
+# AND WHY THE PER-UNIT LINES ARE NOT ALWAYS THE RIGHT ANSWER (issue #711). On
+# 2026-09-15 this section printed NINE of them at once — every interval unit on
+# the host, each line true, the nine together false. The fleet's daemons were
+# fine: the whole `gui/501` launchd domain had stopped spawning jobs, which a
+# throwaway agent sharing nothing with the fleet proved in 40 seconds by never
+# running once (not even its RunAtLoad), and which the SAME install on the SAME
+# commit did not do on the other machine. Nine unit-shaped warnings send the
+# operator to read plists, ProcessType and load — none of which is the fault, and
+# none of which they can fix, because the remedy is to log out or reboot.
+#
+# So when the stall has the DOMAIN signature — see the two of them below the loop —
+# the per-unit lines are held back and bin/fleet-launchd-probe.sh is asked the
+# question one level up. A verdict is cached for FLEET_LAUNCHD_PROBE_TTL, so
+# repeated doctor runs during an incident pay for the measurement once. Probing
+# NEVER happens on a healthy host: the signature gate is checked first, and it
+# needs a real stall — or a self-heal already working overtime — to open.
 if command -v fleet_daemon_unit_names >/dev/null 2>&1; then
   d_root="$(dirname "$0")/.."
-  d_over=0; d_never=0; d_fresh=0
+  d_over=0; d_never=0; d_fresh=0; d_names=''; d_lines=''
   for d_u in $(fleet_daemon_unit_names); do
     if [ "$(fleet_daemon_tick_ts "$d_u" "$d_root")" -le 0 ]; then d_never=$((d_never+1)); continue; fi
     d_age=$(fleet_daemon_overdue "$d_u" "$d_root")
     if [ -z "$d_age" ]; then d_fresh=$((d_fresh+1)); continue; fi
     d_over=$((d_over+1))
+    d_names="${d_names:+$d_names,}$d_u"
     d_int=$(fleet_daemon_interval "$d_u"); d_thr=$(fleet_daemon_stale_secs "$d_u")
     d_f=$(fleet_daemon_kick_fails "$d_u" "$d_root")
     # A kickstart buys ONE execution, not restored scheduling (#639 measured six
@@ -708,9 +726,103 @@ if command -v fleet_daemon_unit_names >/dev/null 2>&1; then
       d_note=", self-healed ${d_f}× with no effect"
       [ "$d_f" -ge "$(fleet_daemon_reload_after)" ] && d_note="$d_note — escalated to unload+reload"
     fi
-    warn daemons "com.claude-fleet.$d_u last ticked $((d_age/60))m ago — $((d_age/d_int))× its own ${d_int}s StartInterval (alarms past ${d_thr}s)${d_note}. Nothing is scheduling it; bin/fleet-daemon-watch.sh drives the self-heal from the KeepAlive spinner (history: logs/daemon-kick.log)"
+    # HELD, not printed: the domain check below decides whether these nine lines
+    # are the finding or the symptom. Newline-joined in one variable — this doctor
+    # is /bin/sh, so no arrays, and every message here is single-line by
+    # construction.
+    d_lines="$d_lines$(printf 'com.claude-fleet.%s last ticked %sm ago — %s× its own %ss StartInterval (alarms past %ss)%s. Nothing is scheduling it; bin/fleet-daemon-watch.sh drives the self-heal from the KeepAlive spinner (history: logs/daemon-kick.log)' \
+      "$d_u" "$((d_age/60))" "$((d_age/d_int))" "$d_int" "$d_thr" "$d_note")
+"
   done
-  if [ "$d_over" = 0 ]; then
+
+  # --- domain signature → ask the probe ----------------------------------------
+  # TWO signatures, because the obvious one stops working exactly when the
+  # self-heal starts:
+  #
+  #   stalled-together — several units overdue AT ONCE, and at least half of the
+  #     ones that have ever ticked here. One stalled unit is that unit's problem;
+  #     eight of nine is not a coincidence. This is the shape #711 was filed from.
+  #
+  #   healed-together — several units KICKED inside the last hour. Each kick buys
+  #     one execution, so a kicked unit reads fresh again for a whole interval and
+  #     the first signature collapses to one or two units. Measured on the wedged
+  #     host while the kicks were running: 1 overdue, 9 kicked in the previous two
+  #     minutes, all nine logging the same `kick → stale → kick` cycle. Without
+  #     this second test the doctor would go quiet on a machine whose every daemon
+  #     is running at its self-heal cooldown instead of its StartInterval — the
+  #     WORSE state, because nothing on screen says so.
+  d_seen=$((d_over + d_fresh))
+  d_domain=''
+  d_probe="$(dirname "$0")/fleet-launchd-probe.sh"
+  d_min="${FLEET_DAEMON_DOMAIN_MIN:-3}"
+  case "$d_min" in ''|*[!0-9]*) d_min=3 ;; esac
+  d_kicked=$(fleet_daemon_kicked_recently "$d_root" "${FLEET_DAEMON_DOMAIN_KICK_WINDOW:-3600}")
+  d_sig=''
+  if [ "$d_over" -ge "$d_min" ] && [ "$((d_over * 2))" -ge "$d_seen" ]; then
+    d_sig="$d_over interval units are stalled together"
+  elif [ "$d_kicked" -ge "$d_min" ]; then
+    d_sig="$d_kicked interval units are only ticking because the self-heal kicks them"
+  fi
+  if [ -n "$d_sig" ] && [ -f "$d_probe" ]; then
+    d_domain=$(fleet_daemon_probe_verdict "$d_root")
+    if [ -z "$d_domain" ] && [ "${FLEET_LAUNCHD_PROBE:-1}" != 0 ] && command -v launchctl >/dev/null 2>&1; then
+      printf '        note: %s — measuring whether launchd still spawns anything (~%ss)…\n' \
+        "$d_sig" "${FLEET_LAUNCHD_PROBE_WINDOW:-40}"
+      bash "$d_probe" --quiet >/dev/null 2>&1
+      d_domain=$(fleet_daemon_probe_verdict "$d_root")
+    fi
+  fi
+
+  case "$d_domain" in
+    no-spawn|no-interval)
+      # ONE line instead of $d_over. The units are listed, not warned about: they
+      # are the symptom, and naming them keeps the old information without
+      # reinstating the wrong diagnosis.
+      if [ "$d_domain" = no-spawn ]; then
+        d_what="spawns NOTHING automatically — a throwaway agent bootstrapped beside the fleet's never ran once, not even its RunAtLoad"
+      else
+        d_what="ran a throwaway agent at load but NEVER on its StartInterval — interval scheduling is pended domain-wide"
+      fi
+      # Say which of the two signatures brought us here. With the self-heal
+      # working, `$d_over` is routinely 0 or 1 and the fleet is STILL crippled —
+      # so a message written only for the stalled-together case would read as
+      # though nothing much were wrong.
+      d_who=''
+      [ "$d_over" -gt 0 ] && d_who="$d_over interval unit(s) ($d_names) are stalled for that reason, and their plists/scripts are not the fault"
+      if [ "$d_kicked" -ge "$d_min" ]; then
+        d_who="${d_who:+$d_who; }$d_kicked unit(s) were kicked in the last hour, i.e. anything that does NOT read stale is ticking at its self-heal cooldown rather than its own StartInterval"
+      fi
+      [ -n "$d_who" ] || d_who="no unit is stale yet, but nothing here is being scheduled either"
+      warn launchd "the gui/$(id -u) launchd domain $d_what. This is MACHINE state, not fleet state: $d_who. Nothing in the fleet can fix it — log out and back in, or reboot. Until then the self-heal's kicks are the only thing running these daemons (\`launchctl kickstart\` is an explicit command, so it bypasses the stuck spawn path). Re-measure: bin/fleet-launchd-probe.sh"
+      d_pa=$(fleet_daemon_probe_age "$d_root")
+      printf '        note: verdict `%s` measured %ss ago by bin/fleet-launchd-probe.sh (cached for %ss; --cached reads it without re-probing).\n' \
+        "$d_domain" "${d_pa:-?}" "${FLEET_LAUNCHD_PROBE_TTL:-900}"
+      ;;
+    *)
+      # Either the stall is not domain-shaped, or the probe says the domain is
+      # fine (so these units really are individually stuck), or nothing could be
+      # measured. All three want the per-unit detail — an UNMEASURED domain must
+      # never be reported as a healthy one.
+      # A here-doc, NOT a pipe: a `while` on the right of `|` runs in a subshell,
+      # where every warn() would print correctly and increment a copy of $warns
+      # that dies with it — the run would end "all good" under nine warnings.
+      while IFS= read -r d_l; do
+        [ -n "$d_l" ] && warn daemons "$d_l"
+      done <<EOF
+$d_lines
+EOF
+      if [ -n "$d_sig" ]; then
+        printf '        note: %s — that is the DOMAIN-stall signature (#711), not a per-unit one. Before reading any plist, run bin/fleet-launchd-probe.sh: it settles machine-vs-fleet in ~%ss.\n' \
+          "$d_sig" "${FLEET_LAUNCHD_PROBE_WINDOW:-40}"
+      fi
+      ;;
+  esac
+
+  # A green PASS under a red domain would be the same lie in the other direction:
+  # with the self-heal keeping every unit inside its staleness window, "10 units
+  # ticking" is TRUE and completely misleading — they are ticking once per
+  # cooldown, not once per StartInterval.
+  if [ "$d_over" = 0 ] && [ "$d_domain" != no-spawn ] && [ "$d_domain" != no-interval ]; then
     d_note=''
     # "Never seen" is not a complaint — see the note above — but it IS the number
     # that tells you whether this host is running the daemons you think it is.

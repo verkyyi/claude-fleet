@@ -325,6 +325,7 @@ $TMPDIR/.claude-dash/
     <unit>.tick                               # each interval daemon's SCHEDULING stamp (#639)
     <unit>.kick.ts · <unit>.kick.lock/        # per-unit self-heal: rate limit + dash trace (#636, #639)
     <unit>.kick.fails · <unit>.reload.ts      # …and its escalation ladder (#639)
+    launchd-probe.verdict · launchd-probe.lock/ # is the DOMAIN still spawning at all? (#711)
     quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
     quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
     account.phase · quota.phase              # 5h-window phase stagger + its re-plan marker (#598)
@@ -369,6 +370,58 @@ Two asymmetries make the design work:
   ineffective kicks are counted per unit and escalate to a real
   `bootout`+`bootstrap`, verified afterwards, since a unit left *unloaded* is the
   one outcome worse than a pended one.
+
+#### …and sometimes the unit is not the patient (issue #711)
+
+Every rung of that ladder assumes the fault is **one unit's**. On 2026-09-15 it
+was not: nine of nine interval units stopped inside the same minute, `launchctl
+print` showed `runs` frozen on all of them, and a brand-new throwaway agent —
+different label, `ProcessType=Standard`, a one-line `/bin/sh`, bootstrapped
+alongside them — **never ran once, not even its `RunAtLoad`**. The whole `gui/501`
+domain had stopped spawning jobs. The same install at the same commit was ticking
+normally on the other machine.
+
+The fleet-visible cost of that is a **misdiagnosis**, and it is expensive:
+`fleet-doctor` printed nine lines each saying "nothing is scheduling
+com.claude-fleet.`<x>`" — nine true statements that add up to "the fleet's daemons
+are broken", sending the operator to read plists, `ProcessType` and load, none of
+which is the fault and none of which they can fix. So the doctor now asks the
+question one level up before printing any of them. `bin/fleet-launchd-probe.sh`
+bootstraps that same throwaway agent and counts how often launchd runs it:
+
+| ticks in the window | verdict | means |
+|---|---|---|
+| ≥ 2 | `ok` | the domain schedules — a stale unit is that unit's problem |
+| 1 | `no-interval` | `RunAtLoad` fired, the interval never did |
+| 0 | `no-spawn` | the domain spawns nothing automatically |
+| — | `unknown` | nothing was measured; **never** reported as a verdict |
+
+On `no-spawn`/`no-interval` the N unit lines collapse into one that says *machine,
+not fleet — log out or reboot*. The verdict is cached for
+`FLEET_LAUNCHD_PROBE_TTL`, and the probe's own deadline lives **inside the job**,
+not in the parent's trap, for the reason #697 taught: what leaks here is a
+registered LaunchAgent that would tick for ever.
+
+Two details are the difference between this working and not:
+
+- **The trigger cannot be "how many are overdue right now."** That signal dies the
+  moment the self-heal is any good: a kick buys one execution, so the unit reads
+  fresh again for a whole interval. Measured on the wedged host *with kicks
+  running*: **1** unit overdue, **9** units kicked in the previous two minutes. So
+  "N units kicked inside the last hour" is the second, load-bearing signature —
+  and it is the one that catches the quieter, worse state, where nothing looks
+  stale because every daemon is running at its self-heal cooldown.
+- **The cooldown therefore is the period.** `launchctl kickstart` is an *explicit*
+  command, so it keeps working when nothing is being scheduled — which makes the
+  self-heal's cooldown every daemon's real cadence. A flat 600s (sized for the 60s
+  units) turned `issue-bridge` and `pr-refresh`, both `StartInterval=15`, into
+  ten-minute daemons: a `--to-worker` relay that should land in 15s took up to ten
+  minutes. It now scales — `max(3 × interval, 60s)` — which keeps it at or below
+  every unit's staleness threshold, handing the rate-limiting back to that
+  already-per-unit number.
+
+Recovering the domain itself is **not** automated and should not be: it is a log
+out or a reboot, and that is the operator's call.
 
 Stamps are scoped to the **install root**: the live install writes the shared
 `global/` bucket above, and any other checkout writes a `dev-<hash>/` sibling — a

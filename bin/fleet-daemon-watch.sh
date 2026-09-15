@@ -13,10 +13,14 @@
 # scoped to the install root.
 #
 # THE THREE RAILS, NOW PER UNIT (all three are the point, not decoration):
-#   1. rate limit — one kick per unit per cooldown (FLEET_DAEMON_KICK_COOLDOWN,
-#      600s), claimed atomically under a per-unit mkdir lock, so a permanently
-#      broken daemon costs one kick per 10 min instead of one per caller. Callers
-#      pre-filter with fleet_daemon_kick_due; the claim HERE is the actual limit.
+#   1. rate limit — one kick per unit per cooldown, claimed atomically under a
+#      per-unit mkdir lock, so a permanently broken daemon costs one kick per
+#      cooldown instead of one per caller. Callers pre-filter with
+#      fleet_daemon_kick_due; the claim HERE is the actual limit. The cooldown
+#      SCALES with the unit's own interval (max(3x interval, 60s)) — it was a flat
+#      600s until #711, which was sized for the 60s units and turned the 15s ones
+#      into 10-minute daemons on a host where kicking was the only execution path
+#      left. See fleet_daemon_kick_cooldown.
 #   2. log — every kick, and every refusal to kick, appends to
 #      logs/daemon-kick.log with the unit, the staleness that triggered it and the
 #      exit code, so "did it self-heal, and did it work?" is answerable later.
@@ -91,7 +95,10 @@
 #
 # Env: FLEET_DAEMON_STALE_MULT (5)  FLEET_DAEMON_STALE_FLOOR (180)
 #      FLEET_DAEMON_STALE_<UNIT> / FLEET_COLLECT_STALE  — absolute per-unit override
-#      FLEET_DAEMON_KICK_COOLDOWN (600)  FLEET_DAEMON_KICK_COOLDOWN_<UNIT>
+#      FLEET_DAEMON_KICK_COOLDOWN (absolute override; default is
+#        max(FLEET_DAEMON_KICK_COOLDOWN_MULT=3 x interval,
+#            FLEET_DAEMON_KICK_COOLDOWN_FLOOR=60))
+#      FLEET_DAEMON_KICK_COOLDOWN_<UNIT>
 #      FLEET_DAEMON_KICK_TRACE (1800)
 #      FLEET_DAEMON_KICK (1 — set 0 to disable every self-heal and keep the alarm)
 #      FLEET_DAEMON_WEDGED_MULT (3 — x the unit's stale threshold before a RUNNING
