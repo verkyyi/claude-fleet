@@ -74,10 +74,27 @@ if [ -n "${TMUX:-}" ] && type fleet_load_conf >/dev/null 2>&1; then
 fi
 
 # --- tunables (env-overridable; the selftest drives them tiny for speed) --------
-IDLE_TIMEOUT="${FLEET_HANDOFF_IDLE_TIMEOUT:-180}"   # wait-idle ceiling (s) — a big
+IDLE_TIMEOUT="${FLEET_HANDOFF_IDLE_TIMEOUT:-240}"   # wait-idle ceiling (s) — a big
                                                     # handoff turn can legitimately
-                                                    # run >2min (#345 WAIT-IDLE miss);
-                                                    # stays < HARD_TIMEOUT - VERIFY.
+                                                    # run >2min (#345 WAIT-IDLE miss).
+# ⚠️ LOAD-BEARING, and NOT independent (issue #677). Two other numbers bound this one:
+#
+#   floor  — for a turn that never emits Stop (a model cap, #580; a crash), the ONLY
+#            thing that can ever open the gate below is the spinner's stuck-working
+#            demotion (#101), which lands at worst
+#            FLEET_STUCK_WORKING_SECS + 2 × STUCK_CHECK_SECS = 140s by default.
+#            Below that, WAIT-IDLE aborts first and auto-handoff SILENTLY never
+#            happens — the session just fills its context and stops.
+#   ceiling— IDLE_TIMEOUT + VERIFY_TIMEOUT must stay under HARD_TIMEOUT, or this
+#            script's own watchdog TERMs it after /clear was typed but before the
+#            pickup was sent.
+#
+# 180 left only a 40s floor margin that nobody was guarding; 240 makes it 100s and
+# still leaves 35s under the watchdog. Raising THIS side rather than lowering
+# FLEET_STUCK_WORKING_SECS is deliberate: 120s is the validated-conservative
+# threshold that keeps the demoter from ever false-demoting a live worker, and
+# bin/fleet-model-switch.sh reads the same knob. bin/fleet-handoff-invariant.sh is
+# the check; fleet-doctor.sh prints it; the selftest goes red if this edit reverses.
 VERIFY_TIMEOUT="${FLEET_HANDOFF_VERIFY_TIMEOUT:-25}" # fresh-session detect (s) — the
                                                     # deterministic marker confirms in
                                                     # <1s; the wider window only backs
@@ -215,6 +232,57 @@ log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIME
 # Stop hook flips @claude_state off `working` (turn ended). `done` is the normal
 # terminal state; `needs`/`looping` also mean the turn ended, so any non-working,
 # non-empty state satisfies the gate. Timeout ⇒ ABORT WITHOUT CLEARING.
+#
+# When that gate never opens, the interesting question is WHOSE fault it is (issue
+# #677) — and the abort notice used to answer it with "never went idle", which is
+# a restatement, not a diagnosis. For the load-bearing case (a turn that emitted no
+# Stop at all: a model cap #580, a crash) the gate can only ever be opened by the
+# spinner's stuck-working demotion (#101). So an abort is one of three things, and
+# each leaves its own trace:
+#
+#   the demoter is not running        → no/stale logs/spinner.heartbeat
+#   it ran but landed too late        → a NEW logs/stuck.log line for this window
+#   the timeouts are mis-set          → fleet-handoff-invariant.sh says VIOLATED/THIN
+#
+# Snapshot the stuck.log trace BEFORE waiting so the comparison afterwards is exact
+# rather than a timestamp guess — that log records HH:MM:SS with no date, which
+# cannot be aged reliably.
+STUCK_LOG="$BIN/../logs/stuck.log"
+[ -f "$STUCK_LOG" ] || STUCK_LOG="$LOG_DIR/stuck.log"
+SPIN_HB="$BIN/../logs/spinner.heartbeat"
+[ -f "$SPIN_HB" ] || SPIN_HB="$LOG_DIR/spinner.heartbeat"
+# The spinner keys its log by "<socket>:<window_id>"; match the window half.
+stuck_sig() { [ -n "${WID:-}" ] && grep -F ":$WID " "$STUCK_LOG" 2>/dev/null | tail -1; }
+STUCK_SIG0="$(stuck_sig)"
+
+# backstop_diag — log WHY the wait-idle gate never opened, in the order that
+# narrows it fastest. Best-effort throughout: a diagnosis must never be able to
+# change the outcome of a fail-safe abort.
+backstop_diag() {
+  _hb_age=''
+  if [ -f "$SPIN_HB" ]; then
+    _hb=$(cat "$SPIN_HB" 2>/dev/null)
+    case "$_hb" in ''|*[!0-9]*) ;; *) _hb_age=$(( $(date +%s 2>/dev/null || echo 0) - _hb )) ;; esac
+  fi
+  if [ -z "$_hb_age" ]; then
+    log "  diag: no spinner heartbeat at $SPIN_HB — cannot tell whether the stuck-working backstop is even running (com.claude-fleet.spinner)"
+  elif [ "$_hb_age" -gt 180 ]; then
+    log "  diag: spinner heartbeat is ${_hb_age}s old — the demoter daemon is NOT running, so nothing was ever going to clear a pinned \`working\` (com.claude-fleet.spinner)"
+  else
+    log "  diag: spinner alive (heartbeat ${_hb_age}s ago)"
+  fi
+  _sig="$(stuck_sig)"
+  if [ -n "$_sig" ] && [ "$_sig" != "$STUCK_SIG0" ]; then
+    log "  diag: the backstop DID demote this window during the wait — but too late for the ${IDLE_TIMEOUT}s ceiling: $_sig"
+  elif [ -n "${WID:-}" ]; then
+    log "  diag: no stuck-working demote for $WID in $STUCK_LOG — either the turn is genuinely still running, or FLEET_STUCK_WORKING_SECS=0 (backstop disabled)"
+  fi
+  if [ -x "$BIN/fleet-handoff-invariant.sh" ]; then
+    sh "$BIN/fleet-handoff-invariant.sh" --session "$(fleet_current_session 2>/dev/null)" 2>/dev/null \
+      | while IFS= read -r _l; do log "  diag: $_l"; done
+  fi
+}
+
 idle=0 held=0 idl_deadline=$(( $(date +%s 2>/dev/null || echo 0) + IDLE_TIMEOUT ))
 while [ "$(date +%s 2>/dev/null || echo 0)" -lt "$idl_deadline" ]; do
   st="$(TM display-message -p -t "$PANE" '#{@claude_state}' 2>/dev/null)"
@@ -240,7 +308,8 @@ if [ "$idle" != 1 ]; then
     notify "operator still active at this pane after ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE); run /fleet-handoff pickup when ready"
   else
     unlatch
-    notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE)"
+    notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE); see the diag lines below in $LOG"
+    backstop_diag
   fi
   exit 0   # fail-safe: doc intact, context untouched
 fi

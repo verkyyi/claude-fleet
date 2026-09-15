@@ -63,6 +63,29 @@ Do not install from memory: read the doc and work from it.
   one; and a test that builds its OWN sandbox `bin/` + `fleet.conf` keeps working,
   because the isolation is a root swap, not an env override.
   `bin/selftest-isolation-selftest.sh` pins all of it. Run one test through the
-  same prelude with `run-selftests.sh <name>` (globs work).
+  same prelude with `run-selftests.sh <name>` (globs work). ⚠️ The shadow's `bin/`
+  is symlinks to the LIVE files, so **don't edit `bin/` while the gate is
+  running** — a test (or the runner itself) re-reads a half-written script and
+  dies on a syntax error that has nothing to do with your change.
+- **CI SHARDS the gate; the tests themselves still run one at a time**
+  (issue #681). `run-selftests.sh --shard K/N` takes every N-th test of the
+  sorted list, and `.github/workflows/selftests.yml` fans that over a 6-job
+  matrix — ~1-2 min a shard, where the whole suite was 9 minutes against a
+  10-minute bound. Edit the `shard:` list to change the width and nothing else:
+  the split reads `strategy.job-total`. The width is set by measured runner
+  VARIANCE, not suite size — at 4 the same shard ran 2m36s and 4m2s on the same
+  commit in sibling runs. In-runner concurrency was built, measured
+  (196s vs 1428s of summed test time, 8-wide) and **rejected** — ~9 tests carry a
+  real-time budget that only holds on an idle box (needs-reconcile drives the
+  spinner at `FLEET_NEEDS_RECONCILE_SECS=1`, whose strike table goes stale after
+  3× that), and two went red under load while passing alone. Widening those
+  windows would loosen the assertions worth having, to buy speed a second runner
+  gives away.
+- **Every run prints each test's duration and the slowest few.** Same reasoning
+  as `over=` in #653: without the number, the next approach to the ceiling is a
+  manual hunt across the whole suite. `FLEET_SELFTEST_SLOWEST` sets how many
+  (default 10). The matrix jobs each append theirs to the run's summary page, so
+  a test getting slower surfaces on the run that made it slower — not on the run
+  that went red.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.

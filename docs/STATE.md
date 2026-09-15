@@ -247,6 +247,35 @@ kicked to refine it into `done` / `needs` / `looping`. The large threshold + the
 debounce make a false demote of a live session effectively impossible. Set
 `FLEET_STUCK_WORKING_SECS=0` to disable.
 
+### This backstop is the floor under auto-handoff (#677)
+
+It is not only a cosmetic fix for a stale window colour. `/fleet-handoff`'s
+auto-cycle waits for `@claude_state` to leave `working` and, past
+`FLEET_HANDOFF_IDLE_TIMEOUT`, **aborts without clearing**. For the case that
+matters most — a turn that emitted no `Stop` hook *at all* (a model cap, #580; a
+crash), which pins `working` forever — this demotion is the **only** thing that
+can ever open that gate. So two numbers in two different files are load-bearing
+on each other:
+
+```
+FLEET_STUCK_WORKING_SECS + 2 × STUCK_CHECK_SECS  <  FLEET_HANDOFF_IDLE_TIMEOUT
+            (bin/tmux-spinner.sh)                      (bin/fleet-handoff-cycle.sh)
+```
+
+Reverse it and nothing errors: an overnight loop simply fills its context and
+stops. Shipped, the margin was 40s and nothing was guarding it; it is now 100s
+(140s vs 240s), with a required minimum, because the spinner runs at launchd's
+lowest CPU/IO tier where a sweep can slip several-fold under load (#653).
+
+`bin/fleet-handoff-invariant.sh` is the explicit check — it parses both constants
+out of the two scripts rather than re-declaring them, then layers the conf on top.
+`fleet-doctor.sh` prints its verdict per fleet next to a spinner liveness line
+(`logs/spinner.heartbeat`, stamped every ~20s — this unit is KeepAlive, so it is
+absent from the interval-daemon registry every other daemon's liveness comes
+from), `fleet-handoff-cycle.sh` reads both when it has to explain a wait-idle
+abort, and `bin/fleet-handoff-invariant-selftest.sh` reds if either default moves
+into a dangerous relation.
+
 ## The other backstop — stale-`needs` reconcile (#658)
 
 Every writer above fires on an **event**. Nothing re-reads a stamp afterwards — so a

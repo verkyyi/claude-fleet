@@ -104,6 +104,30 @@ sc=0            # frame counter for the throttle
 KICK_CHECK_SECS=30
 KICK_EVERY=$(awk -v c="$KICK_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 kc=0
+
+# --- liveness heartbeat (issue #677) -----------------------------------------
+# This daemon is the ONLY thing that can unpin a window whose Stop hook never
+# fired — and /fleet-handoff's whole auto-cycle rests on that (a capped turn, #580,
+# is otherwise `working` forever and WAIT-IDLE can only time out). So "is the
+# spinner running?" stopped being a cosmetic question and became a load-bearing
+# one, and nothing could answer it: this unit is KeepAlive, so it is deliberately
+# absent from the interval-daemon registry (bin/fleet-daemon-lib.sh) that every
+# other daemon's liveness is read from, and `launchctl list` only reports whether
+# launchd HOLDS a pid — not whether the frame loop is still turning.
+#
+# So stamp one. A wedged-but-alive spinner is the failure that matters (a dead one
+# KeepAlive restarts within seconds), and only the loop itself can disprove that.
+# Read by fleet-doctor.sh and by fleet-handoff-cycle.sh's abort diagnosis.
+SPIN_HB="$BIN/../logs/spinner.heartbeat"
+HB_CHECK_SECS=20   # nominal; it is a FRAME count, so the real cadence is ~20-30s
+HB_EVERY=$(awk -v c="$HB_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+hbc=0
+# tmp+rename so a reader never catches a half-written stamp; one fork per write.
+hb_stamp() { date +%s > "$SPIN_HB.tmp" 2>/dev/null && mv -f "$SPIN_HB.tmp" "$SPIN_HB" 2>/dev/null; }
+hb_stamp   # once at startup, so a freshly (re)started spinner is never read as dead
+           # during the first throttle window — on a KeepAlive unit that window is
+           # every restart, and "no heartbeat at all" is the doctor's loudest verdict.
+
 STUCK_STRIKES='|'   # window_ids that were stale on the PREVIOUS check (2-strike debounce)
 
 # stuck_check — one throttled sweep: demote any working window whose pane has
@@ -319,7 +343,14 @@ while :; do
   # re-probing) while no fleet is up so a freshly-spawned fleet is picked up fast.
   socc=$((socc + 1))
   if [ "$socc" -ge "$SOCK_EVERY" ] || [ -z "$SOCKETS" ]; then socc=0; SOCKETS=$(fleet_sockets); fi
-  if [ -z "$SOCKETS" ]; then sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; continue; fi
+  # Stamp liveness BEFORE the no-fleet bail: with no fleet up the loop still turns,
+  # and a heartbeat that went stale every time the machine was quiet would be a
+  # false alarm exactly when the operator is least able to check (issue #677).
+  # This branch already sleeps 2s, so an unthrottled stamp here costs one fork/2s.
+  if [ -z "$SOCKETS" ]; then hb_stamp; sleep 2; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; continue; fi
+
+  hbc=$((hbc + 1))
+  [ "$hbc" -ge "$HB_EVERY" ] && { hbc=0; hb_stamp; }
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.

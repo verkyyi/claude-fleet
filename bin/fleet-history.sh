@@ -706,7 +706,16 @@ cmd_rows() {
     local f_hnd f_iss f_name f_act f_pr f_ctx
     fld 3  "·";       f_hnd=$fld_out
     fld 5  "$issd";   f_iss=$fld_out
-    fld 22 "$wname";  f_name=$fld_out
+    # window cell: pad/clip by DISPLAY width, not code points — the same #534 fix
+    # the live dash carries. Since issue #579 fleet_win_name derives CJK names, so a
+    # 2-column glyph counted as 1 by fld()'s ${#} pad would shove this list's
+    # right-pinned act/PR/dep block over, exactly as it did on the live rows. ASCII
+    # stays on fld()'s fork-free path; only a non-ASCII name pays the wcwidth fork.
+    case "$wname" in
+      *[![:ascii:]]*) fleet_clip_display 22 "$wname"
+                      printf -v f_name '%s%*s' "${clip_out:-}" $(( 22 - ${clip_w:-0} )) '' ;;
+      *)              fld 22 "$wname"; f_name=$fld_out ;;
+    esac
     fld "$ACTW" "$act"; f_act=$fld_out
     fld 7  "$prcell"; f_pr=$fld_out
     fld 4  "$depc";   f_ctx=$fld_out

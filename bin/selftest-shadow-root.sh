@@ -51,9 +51,18 @@
 # `logs/` is emptied for the same reason one level down: it is not config, it is
 # live STATE. `bin/tmux-spinner.sh` keeps its needs-reconcile strike table at
 # `$BIN/../logs/.needs-strikes` and `bin/classify-sessions.sh` its change-gate
-# hashes at `$BIN/../logs/.classify-cache` — needs-reconcile-selftest.sh and
-# helper-auth-selftest.sh write both. Symlinked through, a suite run on a live
-# install would read AND CLOBBER the running fleet's own state.
+# hashes at `$BIN/../logs/.classify-cache`. Symlinked through, a suite run on a
+# live install would read AND CLOBBER the running fleet's own state.
+#
+# SIX selftests reach those two files, not two — and not through their own code
+# but through the scripts they drive: attn-signal, fleet-collect-stale and
+# needs-reconcile all run tmux-spinner.sh, while helper-auth, auto-handoff and
+# fleet-history all run classify-sessions.sh. They are safe only because the
+# suite runs its tests ONE AT A TIME (each shard sequential, issue #681): two of
+# a group in flight at once in the same root would trade state. Anything that
+# would run them concurrently needs a root per concurrent slot, not a list of
+# known state files — the #660 lesson is that such a list always misses the next
+# script to keep something here.
 #
 # `fleet.conf.bak*` is skipped alongside `fleet.conf`: those are the config modal's
 # backup slots (`fcfg_write`, bin/fleet-config-lib.sh) and older residue, and
@@ -71,9 +80,31 @@
 # The temp dir is named `fleet-selftest-root.*` so that `fleet-selftest-reap.sh`
 # (which sweeps aged `*selftest*` mktemp dirs) collects one orphaned by a SIGKILLed
 # run.
+#
+# The links are made in ONE `ln -s src… dir/` per group rather than one fork per
+# entry: bin/ holds 233 files, and a fork each cost ~1.6s of every gate run (and
+# every nested one) for nothing. Batched it is ~50-250ms — which also keeps the
+# prelude honest now that CI pays it once per shard job (issue #681).
 set -u
 
 unset CDPATH
+
+# link_into <target-dir> <src>... — symlink each src into target-dir under its own
+# basename. Batched into a single `ln -s` (see above); a name carrying whitespace
+# or a glob character cannot ride in an unquoted list, so it gets its own call.
+link_into() {
+  _d=$1; shift
+  _batch=''
+  for _s in "$@"; do
+    case "$_s" in
+      *[!A-Za-z0-9_./+@:,=~-]*) ln -s "$_s" "$_d/${_s##*/}" || return 1 ;;
+      *) _batch="$_batch $_s" ;;
+    esac
+  done
+  [ -n "$_batch" ] || return 0
+  # shellcheck disable=SC2086  # intentional: $_batch is the batched source list
+  ln -s $_batch "$_d/"
+}
 
 self_dir=$(cd -- "$(dirname -- "$0")" && pwd) || exit 2
 real=${1:-$(cd -- "$self_dir/.." && pwd)} || exit 2
@@ -84,6 +115,7 @@ mkdir -p "$shadow/bin" "$shadow/logs" "$shadow/conf-dir" || exit 2
 
 # Top-level entries, dotfiles included. An unmatched glob stays literal under sh,
 # which the -e/-L guard drops; `..?*` catches a `..foo` without ever matching `..`.
+set --
 for e in "$real"/* "$real"/.[!.]* "$real"/..?*; do
   [ -e "$e" ] || [ -L "$e" ] || continue
   b=${e##*/}
@@ -96,16 +128,19 @@ for e in "$real"/* "$real"/.[!.]* "$real"/..?*; do
     # fake failure by another route. The manifests are two small JSON files; copy them.
     .claude-plugin) cp -R "$e" "$shadow/$b" || exit 2; continue ;;
   esac
-  ln -s "$e" "$shadow/$b" || exit 2
+  set -- "$@" "$e"
 done
+[ "$#" -eq 0 ] || link_into "$shadow" "$@" || exit 2
 
 # Same three globs for bin/: it holds DOTFILES too — `.fleet-restore-resolve.py` is
 # a private helper bin/dash-raw-session.sh resolves as `$BIN/.fleet-restore-resolve.py`,
 # and a `*`-only mirror silently drops it (the selftest that needs it then fails setup,
 # which is the same fake red this whole file exists to prevent).
+set --
 for f in "$real"/bin/* "$real"/bin/.[!.]* "$real"/bin/..?*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
-  ln -s "$f" "$shadow/bin/${f##*/}" || exit 2
+  set -- "$@" "$f"
 done
+[ "$#" -eq 0 ] || link_into "$shadow/bin" "$@" || exit 2
 
 printf '%s\n' "$shadow"
