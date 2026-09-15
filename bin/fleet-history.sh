@@ -960,21 +960,42 @@ cmd_fold() {
     return 0
   fi
   # Shut from INSIDE: the cursor's row just vanished, so put the cursor on the
-  # parent that swallowed it. Index read from the producer itself (field1 is the
-  # row's target), minus the one header line fzf consumes via --header-lines=1.
-  # Best-effort — a plain reload if the row cannot be found, never a wrong jump.
-  local htgt hpr pos='' US2; US2=$(printf '\037')
-  hpr=$(printf '%s\n' "$out" | awk -F'\t' -v k="$holder" '{ o=$2; if (o !~ /^scratch-/) o="issue-" o; if (o==k) {print $4; exit} }')
-  case "$holder" in scratch-*) htgt=$(landed_target "$holder" "$hpr") ;;
-                    *)         htgt=$(landed_target "${holder#issue-}" "$hpr") ;; esac
+  # parent that swallowed it. That needs the parent's new INDEX, which only the
+  # row renderer knows — field1 of each row is its target, and the index is its
+  # line number minus the one header line fzf consumes via --header-lines=1.
+  #
+  # ONE render, not two — the same rule the live side keeps (bin/dash-fold-toggle.sh):
+  # rendering is the expensive thing (issue #662), so the render done to FIND the
+  # index is the one fzf is then pointed at, via a per-fleet snapshot. That also
+  # makes the list fzf draws byte-identical to the one the index was computed
+  # against, so the two cannot disagree about where the parent is. Written temp+mv
+  # so fzf can never cat a half-written file, under one fixed name per fleet so it
+  # is overwritten rather than accumulated. Any failure falls back to the plain
+  # reload: an extra render is fine, a blank list is not.
+  #
   # cmd_rows, NOT a re-exec of the dash producer: that producer picks live-vs-landed
   # off the view toggle file, so asking it would tie this index to state that has
   # nothing to do with the fold — and would re-enter this script for no reason. The
-  # RELOAD action still names the producer, because that is what fzf must run.
-  pos=$(cmd_rows 2>/dev/null | awk -F"$US2" -v t="$htgt" 'NR>1 && $1==t {print NR-1; exit}')
+  # FALLBACK action still names the producer, because that is what fzf must run.
+  local htgt hpr pos='' US2 snap; US2=$(printf '\037')
+  hpr=$(printf '%s\n' "$out" | awk -F'\t' -v k="$holder" '{ o=$2; if (o !~ /^scratch-/) o="issue-" o; if (o==k) {print $4; exit} }')
+  case "$holder" in scratch-*) htgt=$(landed_target "$holder" "$hpr") ;;
+                    *)         htgt=$(landed_target "${holder#issue-}" "$hpr") ;; esac
+  snap="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
+  mkdir -p "${snap%/*}" 2>/dev/null || true
+  if cmd_rows > "$snap.$$" 2>/dev/null && [ -s "$snap.$$" ]; then
+    mv -f "$snap.$$" "$snap"
+    pos=$(awk -F"$US2" -v t="$htgt" 'NR>1 && $1==t {print NR-1; exit}' "$snap" 2>/dev/null)
+  else
+    rm -f "$snap.$$"
+  fi
+  # An fzf action's argument ends at the matching `)`, and its command is split on
+  # whitespace — a snapshot path holding a paren or a space would truncate the
+  # action or turn `cat` into a two-file read. Fall back to the plain reload.
+  case "$snap" in *' '*|*'('*|*')'*) pos='' ;; esac
   case "$pos" in
     ''|*[!0-9]*) printf 'reload(%s)\n' "$ROWSCMD" ;;
-    *)           printf 'reload-sync(%s)+pos(%s)\n' "$ROWSCMD" "$pos" ;;
+    *)           printf 'reload-sync(cat %s)+pos(%s)\n' "$snap" "$pos" ;;
   esac
 }
 
