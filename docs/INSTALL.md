@@ -46,7 +46,17 @@ assumes — this doc is only the install/uninstall procedure.
 1. **Preflight.** Run `sh ~/.claude/fleet/bin/fleet-doctor.sh` (or from the repo
    before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.45 · gh (+ auth) · python3 ·
    claude · perl `Time::HiRes` and prints pass/warn/fail. Offer to
-   `brew install` anything that fails. Notes: standalone `jq` is **not** needed
+   `brew install` anything that fails. On a machine that already has a live
+   install its `install` line answers the question nothing used to (issue #635):
+   **is this machine's `~/.claude/fleet` current?** — one `git fetch` of one
+   branch, then `PASS install … up to date` or `WARN install … is N commit(s)
+   behind` with the fix (`git -C ~/.claude/fleet pull --ff-only`, then
+   `/fleet-sync-install`, which also reloads the changed daemons). A fetch that
+   fails reports **unknown**, never up-to-date: on 2026-09-14 macmini sat 28
+   commits behind master with a fully green doctor on both machines, and silence
+   reading as green is the whole failure. `bin/fleet-install-version.sh` is the
+   same check standalone (`--json` for a reporter, `--no-fetch` for anything that
+   must not touch the network). Notes: standalone `jq` is **not** needed
    (the collector only uses `gh --jq`, which is built in); perl `Time::HiRes` is
    a soft dep (without it the dash spinner ticks at whole-second granularity).
    If `gh` is not authed, the backlog/PR features silently show nothing — tell

@@ -18,6 +18,10 @@
 #   claude       the sessions you run + the optional classify hook
 #   perl HiRes   soft — dash spinner sub-second frames (degrades to 1s ticks)
 #   jq is NOT required standalone: the collector only uses `gh --jq` (built in).
+#
+# Network: doctor is a HUMAN-run preflight, so it may pay for network reads no
+# daemon could afford — `gh` for the base-branch check, and one `git fetch` of a
+# single branch for the live-install freshness check (issue #635).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 
 # --- output helpers (color only on a tty) ---
@@ -149,6 +153,51 @@ fi
 # install. Warn, never fail — the fleet runs fine without it (issue #354).
 if [ -f "$skills_dir/doc-preview/SKILL.md" ] && ! command -v tailscale >/dev/null 2>&1; then
   warn skills "doc-preview skill installed but tailscale not on PATH — the skill is a no-op without it (it serves docs over the tailnet); install/enable Tailscale to use it"
+fi
+
+# --- live install freshness: is THIS machine's ~/.claude/fleet current? (#635) ---
+# The commands/skills checks above answer "is it installed". This answers "is it
+# CURRENT", which nothing used to. `/fleet-sync-install` is per-machine and
+# manual, so machine #2 goes stale in silence: on 2026-09-14 macmini's live
+# install sat 28 commits behind master — no #603 base-branch fix, no #617 quota
+# ranking, no #608 matrix — and doctor was green on BOTH boxes. The plugin path
+# (#611) fixed this for commands/skills/hooks only; `bin/`, `conf/` and the
+# daemons still ride a hand-run `git pull`, and that half is what this measures.
+#
+# It costs ONE `git fetch` of one branch (~1s). That is fine here — doctor is
+# run by a human — and is exactly why the fetching form must never be put on the
+# collector's 60s tick (fleet-install-version.sh --no-fetch is the free read).
+#
+# A machine with no ~/.claude/fleet is not a fault: doctor's other job is
+# preflight BEFORE an install exists. Nothing is printed in that case.
+iv="$(dirname "$0")/fleet-install-version.sh"
+live_dir="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
+if [ -f "$iv" ] && [ -d "$live_dir" ]; then
+  ivout=$(sh "$iv" 2>/dev/null)
+  # Parse the human form, not --json: these keys are line-anchored, so a path or
+  # a message containing a quote can't shift the fields (doctor has no jq).
+  _ivf() { printf '%s\n' "$ivout" | sed -n "s/^$1:  *//p"; }
+  iv_verdict=$(_ivf verdict); iv_behind=$(_ivf behind); iv_ahead=$(_ivf ahead)
+  iv_trunk=$(_ivf trunk); iv_head=$(_ivf head); iv_note=$(_ivf note); iv_dirty=$(_ivf dirty)
+  iv_fix="git -C $live_dir pull --ff-only, then /fleet-sync-install (which also reloads the changed daemons — a bare pull does not)"
+  case "$iv_verdict" in
+    CURRENT)
+      pass install "$live_dir at ${iv_head:-?} — up to date with ${iv_trunk%% *}"
+      [ "$iv_dirty" = yes ] && printf '        note: the live install has uncommitted tracked changes — the next fast-forward will refuse.\n'
+      ;;
+    BEHIND)
+      warn install "$live_dir is $iv_behind commit(s) behind ${iv_trunk%% *} — this machine runs old bin/ + daemons while master has moved (the drift nothing used to report, #635); fix: $iv_fix"
+      ;;
+    AHEAD)
+      warn install "$live_dir has $iv_ahead local commit(s) not on ${iv_trunk%% *} — someone edited/tested in place; the next \`pull --ff-only\` will refuse until that is resolved"
+      ;;
+    DIVERGED)
+      warn install "$live_dir has diverged from ${iv_trunk%% *} ($iv_ahead local commit(s), $iv_behind upstream) — \`pull --ff-only\` will refuse; resolve before the next sync"
+      ;;
+    *)
+      warn install "could not tell whether $live_dir is current — reporting unknown, NOT up to date (${iv_note:-no reason given})"
+      ;;
+  esac
 fi
 
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
