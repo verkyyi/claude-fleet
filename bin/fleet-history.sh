@@ -53,6 +53,16 @@
 #           same way `record` does.
 #   list    [--repo R] [filter]      Human table, newest first (optional substring filter).
 #   rows                             Dash US-delimited rows (closed view of the dashboard).
+#           NESTED like the live list: ledger col 11 is the spawning session, so a
+#           child renders under its parent (`↳` tag + `└` indent) and the parent
+#           carries a `<landed>/<total> ✓` tally for the block. Blocks are FOLDED by
+#           default — see `fold`.
+#   fold    <expand|collapse> <landed:… target>
+#           The landed view's ←/→. Prints fzf ACTIONS (nothing = a dead keystroke);
+#           bin/dash-fold-toggle.sh delegates every `landed:*` target here. The live
+#           dash keeps its fold bit on the tmux window (@expand); a landed row has
+#           none, so the expanded set is one per-fleet file the dash clears at every
+#           (re)launch.
 #   resume  --repo R --main M <key|#pr>     Reconstruct the worktree off the SHA and
 #           print how to resume (RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
 #           Reuses an already-present worktree (skips the slow `git worktree add`, #319) —
@@ -106,6 +116,64 @@ key_label() {
 }
 # is this ledger key a scratch (@raw) session rather than an issue-bound worker?
 is_scratch_key() { case "${1:-}" in scratch-*) return 0 ;; *) return 1 ;; esac; }
+
+# ledger key (col 2) → the @origin spelling of the SAME session. The two columns
+# disagree on purpose and always have: col 2 holds a BARE issue number (`231`)
+# while col 11 — the spawning session, #503 — holds the window-key form
+# (`issue-231`), because that is what the tmux window option carries. Every
+# parent/child lookup below crosses that boundary, so it crosses it here, once.
+# A scratch key is already in window-key form (`scratch-5`) and passes through.
+lkey_okey() { case "${1:-}" in scratch-*) printf '%s' "$1" ;; *) printf 'issue-%s' "${1:-}" ;; esac; }
+
+# the dash row target for a ledger row — what ⌃o / Enter hand to
+# dash-restore-session.sh, and what the fold below matches a keystroke against.
+# A scratch row is addressed by its own key (#466) even when it escalated into a
+# PR, so the restorer knows to rebuild an @raw window rather than bind a
+# nonexistent @issue.
+landed_target() { # <ledger key> <pr>
+  if is_scratch_key "$1"; then printf 'landed:scratch:%s' "$1"; return; fi
+  case "${2:-}" in ''|-) printf 'landed:issue:%s' "$1" ;; *) printf 'landed:%s' "${2#\#}" ;; esac
+}
+
+# --- the landed view's fold state --------------------------------------------
+# The live dash hangs its fold bit on the tmux WINDOW (`@expand`, #623's pattern:
+# it dies with the window, nothing to clean up). A landed row has no window — that
+# is what "landed" means — so this view keeps the expanded set in one per-fleet
+# file, one ledger key per line, absent ⇒ folded (the same default-collapsed
+# polarity). The dash DELETES it on every (re)launch, exactly as it resets
+# dash_view_<session>, so the landed peek always opens folded and the file can
+# never accumulate keys for sessions nobody will look at again.
+landed_fold_file() {
+  printf '%s/global/dash_fold_landed_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${FLEET_SESSION:-default}"
+}
+landed_is_open() { # <root key, @origin spelling> → 0 when its block is unfolded
+  local f; f=$(landed_fold_file)
+  [ -f "$f" ] || return 1
+  grep -qxF -- "${1:-}" "$f" 2>/dev/null
+}
+
+# lchain <parent key> — walk up to the ultimate root PRESENT IN THIS VIEW, ≤4 hops
+# (the live dash's own bound), so a grandchild both nests under and counts toward
+# the same row. Reads the caller's `$lkeytab` (key → seq · origin) and sets
+# $lroot/$lrootseq; $lroot EMPTY ⇒ the chain leaves this list — the parent is still
+# live, or was never recorded — and that row is an ORPHAN, rendered top-level with
+# its ↳ tag intact. Unlike the live dash an orphan is NOT sunk to the bottom here:
+# this list is ordered by when a session FINISHED, and a row whose parent is missing
+# finished when it finished.
+lchain() { lroot=''; lrootseq=0
+  local cur="$1" t m row rseq rorg hops=0
+  t=$'\n'"${lkeytab:-}"
+  while [ "$hops" -lt 4 ]; do
+    m=${t#*$'\n'"$cur"$'\t'}
+    [ "$m" = "$t" ] && return
+    row=${m%%$'\n'*}
+    rseq=${row%%$'\t'*}; rorg=${row#*$'\t'}
+    case "$rorg" in
+      issue-*|scratch-*) cur=$rorg; hops=$((hops+1)) ;;
+      *) lroot=$cur; lrootseq=$rseq; return ;;
+    esac
+  done
+}
 
 # worktree path → transcript dir under ~/.claude/projects. The encoding rule
 # lives in fleet_transcript_dir (bin/fleet-lib.sh) so this and bin/fleet-context.sh
@@ -430,18 +498,24 @@ cmd_list() {
 # `#<issue>`, its scratch-<N>/custom window name, and an em-dash PR.
 # Column widths MUST match tmux-dashboard-rows.sh (LEFTW/ACTW/RIGHTW) or the two
 # lists won't line up.
-cmd_rows() {
-  # Resolve the viewing fleet's repo so we read ITS ledger, not "default". The
-  # dash execs into us with FLEET_SESSION exported but NOT FLEET_REPO, so try, in
-  # order: the collector's sessmap (multi-fleet), the per-session conf overlay
-  # (fresh fleet the collector hasn't mapped yet), then the global FLEET_REPO
-  # (single-fleet, from the fleet.conf sourced at top).
+# Resolve the viewing fleet's repo so we read ITS ledger, not "default". The dash
+# execs into us with FLEET_SESSION exported but NOT FLEET_REPO, so try, in order:
+# the collector's sessmap (multi-fleet), the per-session conf overlay (fresh fleet
+# the collector hasn't mapped yet), then the global FLEET_REPO (single-fleet, from
+# the fleet.conf sourced at top). Shared by `rows` and `fold` so a keystroke can
+# never read a different ledger than the list it was aimed at.
+rows_repo() {
   local repo="${FLEET_REPO:-}"
   if [ -n "${FLEET_SESSION:-}" ]; then
     local r; r=$(fleet_repo_cached "$FLEET_SESSION" 2>/dev/null)
     if [ -n "$r" ]; then repo="$r"
     else fleet_load_conf "$FLEET_SESSION" 2>/dev/null; repo="${FLEET_REPO:-$repo}"; fi
   fi
+  printf '%s' "$repo"
+}
+
+cmd_rows() {
+  local repo; repo=$(rows_repo)
   export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} counts chars
   local E=$'\033[' US=$'\x1f'
   local GN="${E}38;2;158;206;106m" IN="${E}38;2;187;154;247m" TX="${E}38;2;169;177;214m"
@@ -461,6 +535,44 @@ cmd_rows() {
   local now; now=$(date +%s 2>/dev/null)
 
   local out; out=$(read_ledger "$repo")
+
+  # --- nesting (issue #503, applied to the closed list) ------------------------
+  # Ledger col 11 IS the spawning session — recorded at land/close time from the
+  # same @origin the live dash groups by — so the finished list can show the same
+  # shape the live one does: a child under the parent that spawned it, `└` indent
+  # and `↳` tag, its block folded by default.
+  #
+  # pass A — the parent table: key → seq · origin, keyed in @origin spelling.
+  # `seq` is the row's position in the newest-first list, which is this view's sort
+  # the way (rank, index) is the live one's. The ledger is append-only and a key can
+  # recur (a reopened issue, a re-landed scratch), so the FIRST row wins — newest
+  # first means the newest one, the one a reader means by that number.
+  local lkeytab='' lseq=0 lk_o lorg0
+  while IFS=$'\t' read -r _ lk0 _ _ _ _ _ _ _ _ lorg0; do
+    [ -n "$lk0" ] || continue
+    lseq=$((lseq+1))
+    lk_o=$(lkey_okey "$lk0")
+    case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
+    lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
+  done <<< "$out"
+
+  # pass A2 — per-root subtree tally, the landed twin of the live badge (#624):
+  # `<landed>/<total> ✓`, i.e. how many of the block actually merged (a
+  # closed-unlanded row, the ✗ glyph, did not). Attribution is pass A's grouping
+  # verbatim — a grandchild counts toward the ultimate root, the row it renders
+  # under — so the badge always describes exactly the block beneath it, folded or
+  # not. Each record carries its own leading AND trailing newline: the counting
+  # substitutions below replace non-overlapping matches, so records sharing one
+  # separator newline would count two in a row as ONE.
+  local lkidtab='' lm
+  while IFS=$'\t' read -r _ lk0 _ _ _ _ _ _ _ lst0 lorg0; do
+    [ -n "$lk0" ] || continue
+    case "${lorg0:-}" in issue-*|scratch-*) ;; *) continue ;; esac
+    lchain "$lorg0"
+    [ -n "$lroot" ] || continue
+    case "$lst0" in closed-unlanded) lm=0 ;; *) lm=1 ;; esac
+    lkidtab+=$'\n'"$lroot"$'\t'"$lm"$'\n'
+  done <<< "$out"
 
   # deploy state per landed row (issue #541): the ledger's own sha is the pre-squash
   # worktree HEAD (never on master), so the merge sha comes from this fleet's prmap
@@ -487,16 +599,36 @@ cmd_rows() {
   printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
+  # Rows are BUFFERED, not printed straight out (they used to be): nesting has to
+  # re-order them — a child sorts under its parent rather than at its own merge
+  # time — so the emit moved below the loop, behind one sort. `<<<` rather than a
+  # pipe for the same reason: a piped `while` is a subshell and $lbuf would not
+  # survive it.
+  local lbuf='' lrow=0 ldepth lgrp lroot lrootseq
+  while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
     [ -z "$iss" ] && continue
-    local target fzfkey
+    lrow=$((lrow + 1))
+    local target fzfkey okey
     fzfkey="${sid:--}"
-    # field1 target — what ⌃o / Enter hand to dash-restore-session.sh. A scratch row
-    # is addressed by its own key (#466) even when it escalated into a PR, so the
-    # restorer knows to rebuild an @raw window rather than bind a nonexistent @issue.
-    if is_scratch_key "$iss"; then target="landed:scratch:$iss"
-    else case "$pr" in ''|-) target="landed:issue:$iss";; *) target="landed:${pr#\#}";; esac
-    fi
+    okey=$(lkey_okey "$iss")
+    target=$(landed_target "$iss" "$pr")
+    # --- where this row nests ---------------------------------------------------
+    # A child sorts under the ultimate root's slot (depth 1 breaks the tie, then its
+    # own position); a root, and an orphan whose parent never reached this list,
+    # keeps its own chronological slot at depth 0.
+    ldepth=0; lgrp=$lrow; lroot=''
+    case "${origin:-}" in
+      issue-*|scratch-*)
+        lchain "$origin"
+        [ -n "$lroot" ] && { ldepth=1; lgrp=$lrootseq; } ;;
+    esac
+    # --- the fold ---------------------------------------------------------------
+    # Folded by default, and only a `depth>0` row — one drawn with the `└` indent
+    # under the line above — can hide. A root and an orphan carry depth 0 and are
+    # never touched, so nothing disappears with no caret-marked row to open it
+    # from. The block's tally below is counted over the WHOLE subtree either way,
+    # so a shut block still says what is in it.
+    if [ "$ldepth" -gt 0 ] && ! landed_is_open "$lroot"; then continue; fi
     # state glyph: indigo ✓ for a landed (merged) row, muted ✗ for a closed-unlanded
     # one (#320). Empty state == a legacy pre-#320 row → landed. The target/key
     # scheme is identical for both so the dash's resume action is unchanged.
@@ -554,6 +686,9 @@ cmd_rows() {
     # so the cell carries the muted dot this skeleton already uses for "no live
     # meaning" (the ctx column's own convention). It is not dead space: it holds
     # the live list's `id` column open so ⌃t keeps both lists on one grid.
+    # `└ ` marks a nested row, the live list's own indent (#503) — only when the
+    # parent really is the line above, which after the fold filter it always is.
+    [ "$ldepth" -gt 0 ] && wname="└ $wname"
     local f_hnd f_iss f_name f_act f_pr f_ctx
     fld 3  "·";       f_hnd=$fld_out
     fld 5  "$issd";   f_iss=$fld_out
@@ -576,17 +711,46 @@ cmd_rows() {
       scratch-*) tagd="↳~${origin#scratch-}" ;;
       *)         tagd="↳$origin" ;;
     esac
+    # fold caret + subtree tally — ONLY on a row that owns a block, so the list
+    # does not grow a mark on every line. `▸` shut / `▾` open, then `<landed>/<total>
+    # ✓`: how many of the block merged (a ✗ closed-unlanded row did not). Counted
+    # off lkidtab with the same fork-free length-delta idiom the live producer uses.
+    # A count > 0 already implies depth 0 — pass A2 attributes every descendant to
+    # its ULTIMATE root — so a caret is guaranteed present for every block the fold
+    # above can hide.
+    local carg='' kidd='' lkn lkt ltot lland lextra=0
+    lkn=$'\n'"$okey"$'\t'; lkt=${lkidtab//"$lkn"/}
+    ltot=$(( (${#lkidtab} - ${#lkt}) / ${#lkn} ))
+    if [ "$ltot" -gt 0 ]; then
+      lkn=$'\n'"$okey"$'\t1'$'\n'; lkt=${lkidtab//"$lkn"/}
+      lland=$(( (${#lkidtab} - ${#lkt}) / ${#lkn} ))
+      kidd="$lland/$ltot ✓"
+      if landed_is_open "$okey"; then carg='▾'; else carg='▸'; fi
+      # the caret rides a CONSTANT 2 (glyph + space), never a ${#} count: ▸/▾ are
+      # East-Asian AMBIGUOUS width and a CJK-wide terminal may draw them 2 cells,
+      # which a character count would walk the right-pinned act/PR/dep block off by.
+      lextra=$(( 2 + ${#kidd} + 1 ))
+    fi
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
     [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
+    avail=$(( avail - lextra )); [ "$avail" -lt 0 ] && avail=0
     fleet_clip_display "$avail" "$dsmry"; dsmry="${clip_out:-}"
     local dw=${clip_w:-0}
     [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dw=$(( dw + ${#tagd} + 1 )); }
+    [ -n "$carg" ] && { tagpfx+="${GY}${carg}${R} ${GY}${kidd}${R} "; dw=$(( dw + lextra )); }
     local pad=$(( USABLE - LEFTW - dw - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
-    printf '%s%s%s%s%s\n' \
-      "$target" "$US" "$fzfkey" "$US" \
-      "${glyph_c}${glyph}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"
-  done
+    lbuf+="$lgrp"$'\t'"$ldepth"$'\t'"$lrow"$'\t'
+    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
+  done <<< "$out"
+
+  # Emit newest-first, nested: the group slot first (a root's own position, which a
+  # child inherits), then depth, then the row's own position — a lexical pre-order
+  # walk, so a child lands directly under its parent and a childless row keeps the
+  # chronological place it always had. LC_ALL=C: every sort key is ASCII digits, so
+  # C byte order IS the intended numeric order, and it tolerates any invalid-UTF-8
+  # byte elsewhere in a rendered title instead of aborting the whole list.
+  printf '%s' "$lbuf" | LC_ALL=C sort -t"$(printf '\t')" -k1,1n -k2,2n -k3,3n | cut -f4-
 }
 
 # ============================================================================
@@ -699,6 +863,107 @@ usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
 }
 
+# ============================================================================
+# fold — the landed view's ←/→ (bin/dash-fold-toggle.sh delegates here)
+# ============================================================================
+# The live dash hangs its fold bit on the tmux window; a landed row has no window,
+# so this side owns the state (landed_fold_file) and this command owns the writes.
+# Same contract as the live toggle: print fzf ACTIONS on stdout, print NOTHING for
+# a keystroke with nothing to do. The query check already happened upstream — by
+# the time a landed target reaches here the prompt line was empty.
+cmd_fold() {
+  local verb="${1:-}" target="${2:-}"
+  case "$verb" in expand|collapse) ;; *) return 0 ;; esac
+  case "$target" in landed:*) ;; *) return 0 ;; esac
+
+  local repo; repo=$(rows_repo)
+  local out; out=$(read_ledger "$repo"); [ -n "$out" ] || return 0
+
+  # the same key table cmd_rows builds — and, in the same pass, which key the
+  # keystroke landed on, matched through landed_target so the mapping from a row to
+  # its target can only ever be defined in one place.
+  # Built WITHOUT a subshell per row (no $(lkey_okey) / $(landed_target) fork): this
+  # runs on a keystroke, and a fleet with a few hundred landed rows would otherwise
+  # pay a few hundred forks before the arrow did anything.
+  local lkeytab='' lseq=0 lk0 pr0 lorg0 lk_o ltgt selfkey='' lroot lrootseq
+  while IFS=$'\t' read -r _ lk0 _ pr0 _ _ _ _ _ _ lorg0; do
+    [ -n "$lk0" ] || continue
+    lseq=$((lseq+1))
+    case "$lk0" in scratch-*) lk_o=$lk0; ltgt="landed:scratch:$lk0" ;;
+      *) lk_o="issue-$lk0"
+         case "${pr0:-}" in ''|-) ltgt="landed:issue:$lk0" ;; *) ltgt="landed:${pr0#\#}" ;; esac ;;
+    esac
+    [ -z "$selfkey" ] && [ "$ltgt" = "$target" ] && selfkey=$lk_o
+    case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
+    lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
+  done <<< "$out"
+  [ -n "$selfkey" ] || return 0
+
+  # the block this row is in: itself when it is a root, else the ultimate root.
+  # An orphan owns no block and is in none — nothing to fold either way.
+  local holder=$selfkey selforg
+  selforg=$(awk -F'\t' -v k="$selfkey" '$1==k{print $3; exit}' <<< "$lkeytab")
+  case "${selforg:-}" in
+    issue-*|scratch-*) lchain "$selforg"; [ -n "$lroot" ] || return 0; holder=$lroot ;;
+  esac
+
+  # does the holder actually have a block? A DIRECT child in the ledger is the
+  # test: a grandchild whose own parent never landed has a broken chain and is an
+  # orphan in this view, so it is not part of any block here either.
+  local haskids=0 korg
+  while IFS=$'\t' read -r _ _ korg; do
+    [ "$korg" = "$holder" ] && { haskids=1; break; }
+  done <<< "$lkeytab"
+  [ "$haskids" = 1 ] || return 0
+
+  local f; f=$(landed_fold_file)
+  # The dash's producer, not this file's `rows`: in the landed view it is what fzf
+  # reloads, and it execs straight into us. Kept as a PATH plus a separately built
+  # command string so a repo path containing a space can never word-split.
+  local ROWSBIN ROWSCMD
+  ROWSBIN="$(cd "$(dirname "$0")" && pwd)/tmux-dashboard-rows.sh"
+  ROWSCMD="bash $ROWSBIN"
+
+  if [ "$verb" = expand ]; then
+    # `→` opens the block the row OWNS; on a row inside one it is a no-op, since
+    # that row is only on screen because its block is already open.
+    [ "$holder" = "$selfkey" ] || return 0
+    landed_is_open "$holder" && return 0
+    mkdir -p "$(dirname "$f")" 2>/dev/null || true
+    printf '%s\n' "$holder" >> "$f"
+    printf 'reload(%s)\n' "$ROWSCMD"
+    return 0
+  fi
+
+  # `←` shuts the block the row is IN — from the parent row or from anywhere
+  # inside it, which is the gesture that actually gets used.
+  landed_is_open "$holder" || return 0
+  local tmp="$f.$$"
+  grep -vxF -- "$holder" "$f" > "$tmp" 2>/dev/null || :
+  if [ -s "$tmp" ]; then mv -f "$tmp" "$f"; else rm -f "$tmp" "$f"; fi   # empty set ⇒ no file, the pristine state
+  if [ "$holder" = "$selfkey" ]; then
+    printf 'reload(%s)\n' "$ROWSCMD"
+    return 0
+  fi
+  # Shut from INSIDE: the cursor's row just vanished, so put the cursor on the
+  # parent that swallowed it. Index read from the producer itself (field1 is the
+  # row's target), minus the one header line fzf consumes via --header-lines=1.
+  # Best-effort — a plain reload if the row cannot be found, never a wrong jump.
+  local htgt hpr pos='' US2; US2=$(printf '\037')
+  hpr=$(printf '%s\n' "$out" | awk -F'\t' -v k="$holder" '{ o=$2; if (o !~ /^scratch-/) o="issue-" o; if (o==k) {print $4; exit} }')
+  case "$holder" in scratch-*) htgt=$(landed_target "$holder" "$hpr") ;;
+                    *)         htgt=$(landed_target "${holder#issue-}" "$hpr") ;; esac
+  # cmd_rows, NOT a re-exec of the dash producer: that producer picks live-vs-landed
+  # off the view toggle file, so asking it would tie this index to state that has
+  # nothing to do with the fold — and would re-enter this script for no reason. The
+  # RELOAD action still names the producer, because that is what fzf must run.
+  pos=$(cmd_rows 2>/dev/null | awk -F"$US2" -v t="$htgt" 'NR>1 && $1==t {print NR-1; exit}')
+  case "$pos" in
+    ''|*[!0-9]*) printf 'reload(%s)\n' "$ROWSCMD" ;;
+    *)           printf 'reload-sync(%s)+pos(%s)\n' "$ROWSCMD" "$pos" ;;
+  esac
+}
+
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   record)        cmd_record "$@";;
@@ -708,6 +973,7 @@ case "$cmd" in
   resume) cmd_resume "$@";;
   path)   cmd_path "$@";;
   meta)   cmd_meta "$@";;
+  fold)   cmd_fold "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|list|rows|resume|path|meta)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|list|rows|resume|path|meta|fold)" >&2; exit 2;;
 esac

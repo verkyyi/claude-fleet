@@ -3,7 +3,11 @@
 # Rows come from tmux-dashboard-rows.sh (footer glyphs+palette; issue · model ·
 # context% · one-line LLM summary). Reads like the tmux status bar with columns,
 # but you can drive it:
-#   ↑/↓ move · Enter jump to that window · type a name + Enter → an EMPTY scratch
+#   ↑/↓ move · ←/→ fold/unfold the highlighted row's subtree (children are
+#   COLLAPSED BY DEFAULT — the parent's `3/5 ✓ · 1!` badge speaks for the block;
+#   a child in `needs` stays visible anyway; on a non-empty prompt line ←/→ are
+#   the query line's cursor keys, as always) ·
+#   Enter jump to that window · type a name + Enter → an EMPTY scratch
 #   session named after it, no prompt sent (#534; the prompt line at the bottom is
 #   always visible; dash-enter.sh hands the text to dash-raw-session.sh --name-file) ·
 #   ⌃n file an issue + spawn its worker ·
@@ -132,6 +136,13 @@ run_dash() {
   # esc-relaunch (and never hides the live session list on reopen). Per-fleet
   # keyed, matching dash-view-toggle.sh (#130).
   rm -f "$C/global/dash_view_${FLEET_SESSION:-default}"
+  # …and with it the LANDED view's fold state (fleet-history.sh landed_fold_file).
+  # The live list keeps its fold on the tmux window, where it dies with the window;
+  # a landed row has no window, so its expanded set is a file — and this is what
+  # keeps that file from accumulating keys for sessions nobody will open again. The
+  # landed peek therefore always opens folded, which is the same default the live
+  # list has.
+  rm -f "$C/global/dash_fold_landed_${FLEET_SESSION:-default}"
   # Interactive binds use execute-SILENT so fzf never suspends + clears the whole
   # display while the bind runs — a bare `execute` blanks the entire dash for the
   # bind's duration (⌃x reap, issue #313: its output goes to the tmux status line,
@@ -159,6 +170,12 @@ run_dash() {
   # non-empty one → `put(?)`, i.e. the character goes into the task you're typing.
   # (dash-rename.sh still unbinds it outright for the length of a rename, where the
   # query is pre-filled and may be emptied mid-edit.)
+  # ←/→ are transforms for the SAME reason `?` is: the prompt line is always
+  # visible, and fzf binds the arrows to backward-char/forward-char for editing
+  # what you type into it. dash-fold-toggle.sh looks at {q} first — non-empty ⇒ it
+  # prints the cursor move back and nothing folds; empty ⇒ it shuts or opens the
+  # block the cursor is in and prints the reload. Every "nothing to fold here"
+  # branch prints nothing, which fzf treats as a dead keystroke.
   # ⌃v is a transform (issue #554): dash-agent-toggle.sh flips FLEET_AGENT in the
   # fleet's conf via the config-modal write path, toasts, and emits the
   # change-prompt/change-ghost that relabels the line at once. `load`/⌃r re-derive
@@ -200,6 +217,8 @@ run_dash() {
     --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \
+    --bind "left:transform(bash $BIN/dash-fold-toggle.sh collapse {1} {q})" \
+    --bind "right:transform(bash $BIN/dash-fold-toggle.sh expand {1} {q})" \
     --bind "enter:transform(bash $BIN/dash-enter.sh {1} {q})$ENTER_TAIL" \
     --bind "esc:transform(bash $BIN/dash-esc.sh {q})" \
     >/dev/null 2>&1

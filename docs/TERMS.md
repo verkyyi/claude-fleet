@@ -127,6 +127,17 @@ they repaint instantly:
   descendants done, one asking for you. Same attribution as the grouping, so the
   count describes exactly the indented block under it; a row that spawned nothing
   draws nothing.
+- **Fold** — a parent's block is **collapsed by default** on the dash: the list
+  shows one line per parent, marked `▸`, and its aggregate badge is what the
+  folded block says. `→` opens the block the cursor's row owns, `←` shuts the
+  block the cursor is *in* (from the parent or from any row inside it, which puts
+  the cursor back on the parent); with text typed on the prompt line the arrows
+  stay that line's cursor keys. Two things never fold: a child in `needs` (the
+  quiet layer folds, the loud one does not) and an **orphan**, whose parent
+  window is gone — there would be no row left to open it from. The live list
+  keeps the bit on the window (`@expand`, so it dies with the window); the
+  **landed** list nests the same way off ledger col 11 and keeps its expanded set
+  in a per-fleet file the dash clears at every launch.
 - **Account pool / failover** — an optional set of Claude *subscription* accounts
   (one `claude setup-token` OAuth token per file under `FLEET_ACCOUNTS_DIR`). The
   launcher `bin/fleet-claude.sh` exports the **active** account's token per

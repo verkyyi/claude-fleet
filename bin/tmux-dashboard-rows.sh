@@ -36,8 +36,10 @@ R="${E}0m"; US=$'\x1f'
 # @pin (issue #623) is LAST on purpose: both passes below read it with `read`'s
 # last-name-takes-the-rest rule, so a field appended AFTER it would arrive glued to
 # the pin value. A new field goes BEFORE @pin, or pin_v's strict `1` test silently
-# reads every pinned window as unpinned.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@claude_needs}${US}#{@pin}"
+# reads every pinned window as unpinned. @claude_needs (#640) and @expand (the
+# fold bit) are the two newest such fields and sit exactly there, ahead of @pin,
+# for that reason.
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -80,6 +82,13 @@ esac; }
 # 0, or a stray trailing field glued on by a future WFMT addition — is ordinary.
 # Sets $pin; no subshells.
 pin_v() { case "$1" in 1) pin=1 ;; *) pin=0 ;; esac; }
+
+# @expand → 0/1 (the fold bit). A parent row's subtree is COLLAPSED BY DEFAULT, so
+# the absent option must mean folded: `1` is the only expanded value and anything
+# else — unset, 0, a stray field — folds. That polarity is the whole feature: a
+# window that never heard of folding, and every freshly spawned parent, starts
+# collapsed with no writer having to touch it. Sets $exp; no subshells.
+exp_v() { case "$1" in 1) exp=1 ;; *) exp=0 ;; esac; }
 
 # window → its OWN ledger key (issue #503): `issue-<N>` from @issue, else the
 # `scratch-<N>` slug — read from @worktree FIRST and the pane cwd only as a
@@ -144,10 +153,11 @@ LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 # order); pass B renders. Herestring iteration, no extra forks.
 WLIST=$(tmux list-windows -a -F "$WFMT")
 
-# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<origin>` line per addressable
-# window, the parent-resolution table for the spawn-provenance grouping (#503),
-# the pin bit a child inherits from its parent (#623) and, since #624, the subtree
-# progress each parent row reports. @origin stays LAST:
+# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<origin>` line per
+# addressable window, the parent-resolution table for the spawn-provenance grouping
+# (#503), the pin bit a child inherits from its parent (#623), the @expand fold bit
+# its children are hidden by, and the subtree progress each parent row reports
+# (#624). @origin stays LAST:
 # pass B peels the row with `${x#*\t}`, so only the final field may contain no tab.
 # The `_` placeholders after @worktree (@cc_agent since #547, @wid since #566)
 # are load-bearing: `read` gives the LAST name all remaining fields, so without
@@ -156,14 +166,14 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it, and it is last.
 KEYTAB=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub pin; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
-  state_v "$state" "$nsub"; pin_v "$pin"
-  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$origin"$'\n'
+  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
+  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
 
 # chain walk (issues #503/#623/#624): resolve a parent KEY to the ultimate LIVE
@@ -174,13 +184,15 @@ done <<< "$WLIST"
 #   $crk/$cidx  that root's rank/idx — the group sort key
 #   $chops    hops taken; 0 ⇒ the named parent itself was missing
 #   $crootpin the root's @pin bit (#623), 0 when there is no live root
+#   $crootexp the root's @expand fold bit, 0 when there is no live root
 #   $cpnrk/$cpnidx  the NEAREST pinned ANCESTOR's rank/idx, empty if none. Self is
 #             not considered here — the caller checks its own @pin first, so a
 #             pinned row is always its own pin root (#623's rule, unchanged).
 # Factored out of the render loop in #624 so the progress count and the grouping
 # can never disagree about who a row belongs to: one walker, two readers.
-chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; cpnrk=''; cpnidx=''
-  local cur="$1" t m prow prest porig prk pidx ppin
+chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; crootexp=0
+  cpnrk=''; cpnidx=''
+  local cur="$1" t m prow prest porig prk pidx ppin pexp
   t=$'\n'"$KEYTAB"
   while [ "$chops" -lt 4 ]; do
     m=${t#*$'\n'"$cur"$'\t'}
@@ -188,11 +200,12 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; cpnrk=''; cpnidx='
     prow=${m%%$'\n'*}
     prk=${prow%%$'\t'*}; prest=${prow#*$'\t'}
     pidx=${prest%%$'\t'*}; prest=${prest#*$'\t'}
-    ppin=${prest%%$'\t'*}; porig=${prest#*$'\t'}
+    ppin=${prest%%$'\t'*}; prest=${prest#*$'\t'}
+    pexp=${prest%%$'\t'*}; porig=${prest#*$'\t'}
     [ "$ppin" = 1 ] && [ -z "$cpnrk" ] && { cpnrk=$prk; cpnidx=$pidx; }
     case "$porig" in
       issue-*|scratch-*) cur=$porig; chops=$((chops+1)) ;;  # a child too — keep climbing
-      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; return ;;   # hub/autofill/none
+      *) croot=$cur; crk=$prk; cidx=$pidx; crootpin=$ppin; crootexp=$pexp; return ;;   # hub/autofill/none
     esac
   done
 }
@@ -208,14 +221,14 @@ chain_v() { croot=''; crk=9; cidx=99999; chops=0; crootpin=0; cpnrk=''; cpnidx='
 # substitutions in pass B replace non-overlapping matches, so records sharing one
 # separator newline would count `\nA\t1\n` twice in a row as ONE.
 KIDTAB=''
-while IFS=$'\t' read -r _ krk _ _ korig; do
+while IFS=$'\t' read -r _ krk _ _ _ korig; do
   case "$korig" in issue-*|scratch-*) ;; *) continue ;; esac
   chain_v "$korig"
   [ -n "$croot" ] && KIDTAB+=$'\n'"$croot"$'\t'"$krk"$'\n'
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub pin; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -227,7 +240,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   branch='-'
   [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
 
-  state_v "$state" "$nsub"; pin_v "$pin"
+  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
 
   # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind
@@ -392,6 +405,31 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
     [ "$pndepth" = 0 ] && dname=$name   # promoted to a group root → no └ indent
   fi
+  # --- fold: a collapsed holder hides its subtree ------------------------------
+  # Default-collapsed (the @expand polarity in exp_v): a row only survives here if
+  # the row it renders UNDER is expanded. Three rails keep that from hiding
+  # anything the operator needs:
+  #   • only `depth>0` rows can hide — precisely the ones drawn with the `└` indent
+  #     under the line above. A root, an ORPHAN (parent window closed) and a row
+  #     promoted to its own pin root all carry depth 0 and are never touched, so
+  #     nothing can disappear with no visible parent to expand it back from;
+  #   • `rk != 0` — a child in `needs` (the red `!`) is EXEMPT and stays on the
+  #     list whatever the fold says. The dash's whole job is surfacing the row
+  #     that is waiting on you, and the fleet's rule is that the quiet layer folds
+  #     while the loud one never does;
+  #   • the governing bit is the ULTIMATE LIVE ROOT's ($crootexp) — the SAME
+  #     attribution pass A2 counts by and the caret below is drawn from, so every
+  #     fold that hides a row has a visible, caret-marked row to expand it back
+  #     from. (A row with a broken chain has no live root at all — `$croot` empty,
+  #     the 9/99999 orphan sentinel — and is never hidden: there would be nothing
+  #     on the list to unfold it.) The #623 pin tier re-SORTS a subtree and never
+  #     re-parents it, here exactly as in the count.
+  # Hiding is a RENDER filter only: KIDTAB was counted in pass A2 over every window,
+  # so a collapsed parent's `3/5 ✓ · 1!` badge still describes the whole subtree —
+  # which is exactly what makes the fold safe to have on by default.
+  if [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$rk" != 0 ] && [ "$crootexp" != 1 ]; then
+    continue
+  fi
   # --- subtree progress (issue #624) ------------------------------------------
   # A row that SPAWNED work reports the state of the group rendered beneath it:
   # `3/5 ✓` = 3 of its 5 descendants done, and a LOUD `· 1!` when one of them is
@@ -401,7 +439,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # per figure, no subshell) so the 4Hz hot path keeps its exec budget.
   # A row with no children draws NOTHING — the dash's quiet layer must not grow a
   # badge on every line.
-  kidd=''; kidpfx=''
+  kidd=''; kidpfx=''; carg=''
   if [ -n "$okey" ]; then
     kn=$'\n'"$okey"$'\t'; kt=${KIDTAB//"$kn"/}
     ktot=$(( (${#KIDTAB} - ${#kt}) / ${#kn} ))
@@ -415,6 +453,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       kidd="$kdone/$ktot ✓"; kidpfx="${GY}${kidd}${R}"
       [ "$kneed" -gt 0 ] && { kidd="$kidd · $kneed!"
                               kidpfx="${kidpfx}${GY} · ${R}${RD}${kneed}!${R}"; }
+      # fold caret — ONLY on a row that has a subtree, so the quiet layer still
+      # doesn't grow a mark on every line. It reads this row's OWN @expand,
+      # because this row is the one ←/→ toggles. `ktot>0` already implies depth 0:
+      # pass A2 attributes every descendant to its ULTIMATE root, and a root's
+      # @origin is hub/autofill/none, so only a top-level row can carry a count —
+      # which is why a caret is guaranteed present for every subtree the filter
+      # above can hide.
+      if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
     fi
   fi
   # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
@@ -447,8 +493,13 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
-  [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                      tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
+  # The caret rides the 📌 rule, not the ${#} one: its width is the CONSTANT 2
+  # (glyph + space) below, never a character count — ▸/▾ are East-Asian AMBIGUOUS
+  # width, so a CJK-wide terminal may draw them 2 cells and a ${#}=1 pad would
+  # walk the right-pinned act/PR/ctx block off by a column on parent rows only.
+  [ -n "$carg" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+                      tagpfx+="${GY}${carg}${R} "; dwidth=$(( dwidth + 2 )); }
+  [ -n "$kidd" ] && { tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
   # 📌 marks a pinned row (issue #623): without it the operator sees a row sitting
   # above a red `needs` one and has no idea why. It OPENS the flex span, ahead of
   # any ↳ tag, so every pin sits at the same column and the eye can scan for them.

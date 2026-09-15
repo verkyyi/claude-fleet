@@ -188,11 +188,16 @@ mkdir -p "$WORK/wt/repo-scratch-5"
 # selftest from a checkout whose dir name happens to end `-scratch-<N>` would give
 # that window the same scratch key as scrP and shadow the parent lookup.
 tmux new-session -d -s fleetC -x 220 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetC' session"
+# @expand=1 on every fixture window: a subtree is COLLAPSED BY DEFAULT (the ←/→
+# fold, bin/dash-fold-toggle.sh), and this part is about the #503 GROUPING — where
+# a child sorts and how it is tagged and indented — which you can only read on an
+# open block. The fold's own behaviour is pinned in bin/dash-fold-selftest.sh.
 mk_win() { # <name> [issue] [origin] [cwd] → window id
   local n="$1" iss="${2:-}" org="${3:-}" cwd="${4:-$WORK}" wid
   wid=$(tmux new-window -d -P -F '#{window_id}' -t fleetC: -n "$n" -c "$cwd" 'sleep 300')
   [ -n "$iss" ] && tmux set-window-option -t "$wid" @issue "$iss"
   [ -n "$org" ] && tmux set-window-option -t "$wid" @origin "$org"
+  tmux set-window-option -t "$wid" @expand 1
   printf '%s' "$wid"
 }
 mk_win rootA 100 ''            >/dev/null
