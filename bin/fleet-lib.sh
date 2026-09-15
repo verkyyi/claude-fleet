@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -1051,15 +1051,25 @@ fleet_timebox() {
 # kept-worktree sweep in worktree-autoclean.sh passes ~600 so only something that
 # has genuinely settled in is eligible.
 #
-# Never touches this process, its parent, pid≤1, or the shared tmux server. Prints
-# a one-line summary to stdout (the caller logs it). Best-effort: absent pgrep/lsof
-# simply narrow the search; it never fails the caller.
-fleet_reap_worktree_procs() {
-  local dir="${1:-}" mode="${2:-kill}" grace="${3:-2}" minage="${4:-0}"
-  [ -n "$dir" ] || { printf 'no worktree dir\n'; return 0; }
+# Never touches this process, its parent, pid≤1, the shared tmux server, or a
+# process running under a live tmux PANE (issue #550). Prints a one-line summary to
+# stdout (the caller logs it). Best-effort: absent pgrep/lsof simply narrow the
+# search; it never fails the caller.
+#
+# The MATCHER itself is _fleet_worktree_anchored_pids below — the same three ways,
+# without the killing — because the janitor has to ask the question too, and a
+# second copy of it would be a second thing to get wrong.
+# Candidate pids ANCHORED to a worktree by the three matchers above. Split out of
+# the reaper (issue #550) so a caller can ask the SAME question without killing
+# anything — "is anything still running in here?" is the janitor's liveness
+# question, and it must be answered by the process table, not by tmux metadata.
+# Prints one numeric pid per line, sorted + deduped; prints NOTHING for an empty
+# dir or a broad root (each caller does its own refusing).
+_fleet_worktree_anchored_pids() {
+  local dir="${1:-}"
+  [ -n "$dir" ] || return 0
   dir="${dir%/}"
-  # Never sweep a broad root — a bad caller must not turn this into a mass kill.
-  case "$dir" in ""|/|/Users|/home|/tmp|/var|"$HOME") printf 'refused (broad root: %s)\n' "$dir"; return 0 ;; esac
+  case "$dir" in /|/Users|/home|/tmp|/var|"$HOME") return 0 ;; esac
 
   # Canonical (symlink-resolved) form for the cwd match: lsof/readlink report the
   # PHYSICAL path (macOS /var → /private/var), so compare against that. argv match
@@ -1114,14 +1124,164 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" -v m1="$mp1" -v m2="$mp2" '
     done
   fi
 
-  # Dedupe → drop self, parent, pid≤1, and the shared tmux server → keep runnable.
-  local self=$$ parent="${PPID:-0}" list="" tmuxpid=""
-  command -v pgrep >/dev/null 2>&1 && tmuxpid="$(pgrep -x tmux 2>/dev/null; pgrep -f 'tmux: server' 2>/dev/null)"
-  for p in $(printf '%s\n' $pids | grep -E '^[0-9]+$' | sort -un); do
+  printf '%s\n' $pids | grep -E '^[0-9]+$' | sort -un
+}
+
+# Live tmux SERVER pids — the root of every pane's process tree (issue #550).
+# Socket-agnostic on purpose: this answers "is a tmux running it", which is true of
+# a pane on ANY socket, including a fleet whose conf this process cannot read and a
+# selftest's private `-S` one.
+#
+# Read from `ps`, NOT pgrep, and that is the whole point: macOS pgrep excludes the
+# CALLER'S OWN ANCESTORS from every match unless given -a. So a `pgrep -x tmux` run
+# from inside a pane silently omits the one server that matters — the server that
+# is running the caller — which is how a reaper invoked from a fleet pane could
+# fail to recognise its own tmux (verified on macOS 25.4: the fleet's server was
+# absent from `pgrep -x tmux` while `ps` listed it). `comm` is the executable, so
+# a basename match is immune to tmux's setproctitle rename ("tmux: server (…)").
+fleet_tmux_server_pids() {
+  ps -eo pid=,comm= 2>/dev/null | awk '
+    { c = $2; sub(/.*\//, "", c)
+      if (c == "tmux" || c ~ /^tmux:/) print $1 + 0 }' | sort -un
+}
+
+# fleet_pids_under_tmux <pid>… — of the pids given, print those whose ancestry
+# reaches a live tmux server, i.e. the ones running inside a live PANE (issue
+# #550). A tmux server is the parent of every pane's shell, so this is the one
+# liveness signal that does not depend on a window option being set yet: during an
+# account rotation's close→resume gap the new window exists with no @issue binding
+# and a pane_current_path that has not settled, and every tmux-metadata gate reads
+# it as dead while a very much alive claude runs under it.
+#
+# ONE `ps` snapshot — parent map and server set from the same rows, so the two can
+# never disagree — walked upward per pid with a hop cap (a table read while the
+# machine forks can contain a cycle). `want` is SPACE-joined because macOS awk
+# rejects a literal newline inside a -v assignment. No usable ps → prints nothing,
+# which leaves every caller exactly as conservative as it was before this existed.
+fleet_pids_under_tmux() {
+  [ "$#" -gt 0 ] || return 0
+  ps -eo pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s ' "$@")" '
+    { p = $1 + 0; par[p] = $2 + 0
+      c = $3; sub(/.*\//, "", c)
+      if (c == "tmux" || c ~ /^tmux:/) srv[p] = 1 }
+    END {
+      m = split(want, w, /[ \t\n]+/)
+      for (i = 1; i <= m; i++) {
+        pid = w[i] + 0; if (pid <= 1) continue
+        p = pid; hops = 0
+        while (p > 1 && hops++ < 64) {
+          if (srv[p]) { print pid; break }
+          if (!(p in par)) break
+          q = par[p]; if (q == p) break
+          p = q
+        }
+      }
+    }'
+}
+
+# fleet_worktree_live_procs <dir> — the pids anchored to <dir> that are running
+# under a live tmux pane, space-separated (empty = nothing live in there). This is
+# the janitor's THIRD liveness gate (issue #550): the first two ask tmux what it
+# thinks is bound where, this one asks the process table what is actually running.
+fleet_worktree_live_procs() {
+  local pids; pids="$(_fleet_worktree_anchored_pids "${1:-}")"
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086
+  fleet_pids_under_tmux $pids | tr '\n' ' ' | sed 's/ *$//'
+}
+
+# ---- rotation lease: "this worktree is mid-account-move" (issue #550) ---------
+# An account rotation (bin/fleet-migrate.sh) is a CLOSE + RESUME, never an in-place
+# swap: the window is asked to /exit, the SessionEnd hook closes it, and a NEW
+# window is opened and re-bound seconds later. Through that gap the worktree has no
+# window, no @issue binding and — for part of it — no process at all, so it reads
+# to any timer-driven reaper exactly like a worker that finished. On 2026-09-11 the
+# janitor ran inside one and swept 15 pids of a live worker, claude included.
+#
+# The lease is the one thing a scan cannot infer: the mover STATES that the gap is
+# deliberate. It is a hint that fails OPEN — TTL-bounded (FLEET_ROTATE_LEASE_TTL,
+# default 900s, stamped in the file so a long move can ask for more) so a mover
+# that dies mid-move can never make a worktree unreapable, and an unwritable state
+# dir simply means no lease rather than a broken rotation.
+fleet_rotate_lease_file() {   # $1=worktree dir → path (creates the dir)
+  local dir="${1:-}"; [ -n "$dir" ] || return 1
+  dir="${dir%/}"
+  # Key on the PHYSICAL path: the mover reads the window's @worktree while the
+  # janitor reads `git worktree list`, and on macOS those two can spell the same
+  # directory differently (/var vs /private/var). A lease nobody can find again is
+  # worse than no lease, so both sides resolve before hashing.
+  local phys; phys="$(cd "$dir" 2>/dev/null && pwd -P)"; [ -n "$phys" ] && dir="$phys"
+  local d="$FLEET_CONF_DIR/rotating"
+  mkdir -p "$d" 2>/dev/null || return 1
+  printf '%s/%s' "$d" "$(printf '%s' "$dir" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+}
+
+fleet_rotate_lease_take() {   # $1=worktree dir  [$2=note]  [$3=ttl seconds]
+  local f; f="$(fleet_rotate_lease_file "${1:-}")" || return 1
+  printf '%s %s %s %s\n' "$$" "$(date +%s 2>/dev/null || echo 0)" \
+    "${3:-${FLEET_ROTATE_LEASE_TTL:-900}}" "${2:-}" > "$f" 2>/dev/null || return 1
+  return 0
+}
+
+fleet_rotate_lease_drop() {   # $1=worktree dir
+  local f; f="$(fleet_rotate_lease_file "${1:-}")" || return 1
+  rm -f "$f" 2>/dev/null
+  return 0
+}
+
+# exit 0 iff a lease on $1 exists and has not expired; prints "<age>s <note>".
+# An unreadable/garbled stamp reads as epoch 0 ⇒ expired ⇒ NOT held: a lease file
+# that cannot be understood must not park a worktree forever.
+fleet_rotate_lease_held() {   # $1=worktree dir
+  local f pid took ttl note now
+  f="$(fleet_rotate_lease_file "${1:-}")" || return 1
+  [ -f "$f" ] || return 1
+  read -r pid took ttl note < "$f" 2>/dev/null
+  case "${took:-}" in ''|*[!0-9]*) took=0 ;; esac
+  case "${ttl:-}"  in ''|*[!0-9]*) ttl="${FLEET_ROTATE_LEASE_TTL:-900}" ;; esac
+  now="$(date +%s 2>/dev/null || echo 0)"
+  [ "$took" -gt 0 ] 2>/dev/null || return 1
+  [ $((now - took)) -lt "$ttl" ] 2>/dev/null || return 1
+  printf '%ss%s' "$((now - took))" "${note:+ $note}"
+  return 0
+}
+
+fleet_reap_worktree_procs() {
+  local dir="${1:-}" mode="${2:-kill}" grace="${3:-2}" minage="${4:-0}"
+  [ -n "$dir" ] || { printf 'no worktree dir\n'; return 0; }
+  dir="${dir%/}"
+  # Never sweep a broad root — a bad caller must not turn this into a mass kill.
+  case "$dir" in ""|/|/Users|/home|/tmp|/var|"$HOME") printf 'refused (broad root: %s)\n' "$dir"; return 0 ;; esac
+
+  local pids p list="" tmuxpid="" livepids=""
+  pids="$(_fleet_worktree_anchored_pids "$dir")"
+
+  # Drop self, parent, pid≤1, the shared tmux server, and anything running UNDER a
+  # live tmux pane → keep runnable.
+  local self=$$ parent="${PPID:-0}"
+  tmuxpid="$(fleet_tmux_server_pids)"
+  # The pane-ancestry rail (issue #550). A process whose ancestry reaches a live
+  # tmux server is a PANE's process — by definition not an orphan, whatever the
+  # window's @issue binding reads at this instant. Without it the sweep is only as
+  # correct as tmux's metadata: on 2026-09-11 an account rotation's close→resume
+  # gap made a live worker's worktree look unbound, and this reaper killed all 15
+  # of its processes — claude and the pane's shell included, so the window went
+  # with them. An orphan proper (its window long gone) is reparented to init, has
+  # no tmux ancestor, and is still reaped exactly as #151/#469 intend.
+  #
+  # The explicit reapers (dash ⌃x, the SessionEnd hook, the janitor's own prune
+  # path) kill the WINDOW first, so by the time they get here the guard has nothing
+  # to spare. Should one of them beat the kernel's reparenting by a moment, the cost
+  # is a lingering orphan that the next hourly sweep takes — which is the deal
+  # #469 already makes, and strictly cheaper than the reverse mistake.
+  # shellcheck disable=SC2086
+  [ -n "$pids" ] && livepids="$(fleet_pids_under_tmux $pids)"
+  for p in $pids; do
     [ "$p" -gt 1 ] 2>/dev/null || continue
     [ "$p" = "$self" ] && continue
     [ "$p" = "$parent" ] && continue
     printf '%s\n' $tmuxpid | grep -qx "$p" && continue
+    printf '%s\n' $livepids | grep -qx "$p" && continue
     # Age gate (issue #469): skip anything younger than $minage seconds — matcher
     # (1) greps argv, so a live session's transient command that merely names the
     # path would otherwise be caught by a recurring sweep. 0 = gate off.

@@ -61,6 +61,18 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Kept-worktree reap min age @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
 #FLEET_REAP_KEPT_MINAGE=600
 
+# --- Rotation lease TTL (issue #550) -------------------------------------------
+# An account rotation (bin/fleet-migrate.sh) closes a walled window and opens its
+# replacement seconds later. Through that gap the worktree has no window and no
+# @issue binding, so it reads to every timer-driven reaper exactly like a worker
+# that finished — the janitor hit one on 2026-09-11 and swept all 15 processes of
+# a live worker. The mover now takes a LEASE on the worktree for the duration and
+# the reapers leave a leased worktree alone. This is how long an unreleased lease
+# stays believed: long enough for the slowest move (exit wait + cold boot), short
+# enough that a mover killed mid-move cannot park a worktree forever. Default 900.
+# @label=Rotation lease TTL @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+#FLEET_ROTATE_LEASE_TTL=900
+
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
 # ON by default, GLOBALLY. bin/classify-sessions.sh reads a pane and answers in one
 # word (the dash summarizer that shared this flag retired in issue #535). Left unflagged, EVERY such call boots the

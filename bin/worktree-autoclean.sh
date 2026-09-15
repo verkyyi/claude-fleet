@@ -11,6 +11,11 @@
 #   * no live fleet tmux SERVER is cwd'd inside it (issue #509 — a server chdir's
 #     itself into panes it spawns, and reaping the dir it sits in strands it on a
 #     deleted inode, breaking every future spawn on that server)
+#   * no account ROTATION is in flight in it, and nothing is running in it under a
+#     live tmux pane (issue #550 — every gate above reads tmux metadata, all of
+#     which is momentarily false while fleet-migrate.sh closes a walled window and
+#     opens its replacement; the janitor caught one such gap and swept a live
+#     worker's 15 processes)
 #   * it is clean (no uncommitted changes; untracked counts as dirty) — re-checked
 #     one last time by fleet_worktree_drop, which refuses a dirty worktree the same
 #     way plain `git worktree remove` (no -f) does
@@ -168,6 +173,30 @@ process() {
   # server), so a claude-fleet server drifted into a 24haowan worktree protects it.
   if printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qxF "$dir" || printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qF "$dir/"; then
     say "KEEP  $branch  (a tmux server is cwd'd here)"; kept=$((kept+1)); return
+  fi
+  # --- the rotation gap (issue #550) -------------------------------------------
+  # Every gate above reads tmux METADATA, and all of it is momentarily false during
+  # an account rotation: fleet-migrate.sh closes the walled window and opens a new
+  # one seconds later, so for that gap no pane binds @issue=<N>, no pane_current_path
+  # sits in the worktree, and the worktree reads as a finished worker. On 2026-09-11
+  # the janitor ran inside one such gap and swept all 15 processes of a live worker
+  # (claude and the pane's shell included, so the window died with them). Two gates
+  # close it, in the order that costs least:
+  #
+  #   1. the mover's LEASE — it STATES the gap is deliberate, which covers even the
+  #      instant when nothing at all is running in the worktree (old claude exited,
+  #      new one not yet booted). TTL-bounded, so a dead mover cannot park a
+  #      worktree forever.
+  #   2. live PANE PROCESSES — the process table, not tmux's metadata: anything
+  #      anchored here whose ancestry reaches a live tmux server is running in a
+  #      pane, whatever that window's options say about itself right now.
+  local _lease _lp
+  if _lease="$(fleet_rotate_lease_held "$dir")"; then
+    say "KEEP  $branch  (account rotation in flight — lease $_lease)"; kept=$((kept+1)); return
+  fi
+  _lp="$(fleet_worktree_live_procs "$dir")"
+  if [ -n "$_lp" ]; then
+    say "KEEP  $branch  (live pane procs here: $_lp)"; kept=$((kept+1)); return
   fi
   # clean + merged? — the shared gate (identical logic in dash-reap.sh).
   local merged is_scratch=0

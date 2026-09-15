@@ -55,10 +55,25 @@ CHECKS=$((CHECKS + 2))
 # A2. nothing anchored → clean no-op report.
 eq "reap: empty worktree → no orphans" "no orphan procs" "$(fleet_reap_worktree_procs "$WT")"
 
+# The probes below are DOUBLE-FORKED into real orphans (reparented to init). A plain
+# background child inherits this script's ancestry, and when the suite runs from a
+# fleet pane that ancestry reaches a tmux server — which the reaper reads (rightly)
+# as "a live pane is running this, it is not an orphan" and spares (issue #550). The
+# probe would then be spared and these assertions would fail on a worker's machine
+# while passing in CI. A real orphan has no such ancestor.
+orphan() {   # "<cmd…>" → sets ORPHAN_PID to a pid reparented to init
+  local pf="$WORK/.orphan.pid"; rm -f "$pf"
+  ( eval "$1" >/dev/null 2>&1 &
+    printf '%s' "$!" > "$pf" ) &
+  wait $! 2>/dev/null
+  ORPHAN_PID="$(cat "$pf" 2>/dev/null)"
+  [ -n "$ORPHAN_PID" ] || fail "could not spawn an orphan probe for: $1"
+  SPAWNED="$SPAWNED $ORPHAN_PID"
+}
+
 # A3. dry mode REPORTS but does not kill. Anchor a process by argv (path in args).
 touch "$WT/marker"
-tail -f "$WT/marker" >/dev/null 2>&1 & tpid=$!; SPAWNED="$SPAWNED $tpid"
-disown "$tpid" 2>/dev/null || true        # silence bash job-control "Terminated" chatter
+orphan "exec tail -f '$WT/marker'"; tpid="$ORPHAN_PID"
 sleep 1                                   # let it settle so pgrep/lsof see it
 dry="$(fleet_reap_worktree_procs "$WT" dry)"
 case "$dry" in would\ reap:*) ;; *) fail "A3 dry did not report a would-reap (got [$dry])";; esac
@@ -69,8 +84,7 @@ CHECKS=$((CHECKS + 2))
 #   - argv match: the tail above (path is in its command line)
 #   - cwd  match: a sleep whose cwd is inside the worktree (relative argv, like the
 #     crash-#3 orphan) — only the lsof/proc cwd scan can find it.
-( cd "$WT" && exec sleep 300 ) & spid=$!; SPAWNED="$SPAWNED $spid"
-disown "$spid" 2>/dev/null || true
+orphan "cd '$WT' && exec sleep 300"; spid="$ORPHAN_PID"
 sleep 1
 rep="$(fleet_reap_worktree_procs "$WT" kill 1)"
 case "$rep" in reaped:*) ;; *) fail "A4 unexpected reap report: [$rep]";; esac

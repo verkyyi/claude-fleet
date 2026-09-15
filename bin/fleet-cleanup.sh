@@ -259,6 +259,15 @@ scratch_head_gate() {
 # back. A deferral is not a leak — worktree-autoclean.sh reaps a clean, windowless
 # worktree on its own schedule.
 closed_reap_gate() {
+  # (0) An account ROTATION is in flight in this worktree (issue #550). A migrate
+  # is a close + resume, so the window is deliberately gone for a few seconds —
+  # every "no window ⇒ no session" inference below is false for that window, and
+  # the mover says so explicitly. TTL-bounded, so this can only ever defer.
+  local _rl
+  if [ -n "$WT" ] && _rl="$(fleet_rotate_lease_held "$WT")"; then
+    note "  refusing $BRANCH: an account rotation is in flight in $WT (lease $_rl) — deferred."
+    done_token "skip:live"; return 1
+  fi
   # (1) Dirty ⇒ hands off, and that includes the WINDOW: uncommitted work is the
   # whole thing we lost. worktree-autoclean.sh already answers this case with
   # `KEEP (dirty — uncommitted changes)`; the two reapers disagreeing about a
