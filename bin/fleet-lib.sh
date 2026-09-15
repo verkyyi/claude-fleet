@@ -1798,6 +1798,15 @@ fleet_from_marker() {
 # `autoland` is a known-stale label (its daemon retired in #277) but is kept in
 # the set FOR NOW; retiring it is deferred to a separate follow-up.
 #
+# DESCRIPTIONS ARE READ BY STRANGERS (issue #678). This set is seeded into every
+# fleet repo, and a fleet repo is not always the operator's own sandbox — on a
+# TEAM repo these labels appear in the label picker of people who have never
+# heard of claude-fleet. So each description says what the label MEANS and who
+# acts on it in plain words, and names claude-fleet where the actor is the fleet
+# rather than a human; "the autofill dispatcher" told a teammate nothing.
+# `epic` is the tracking parent of a planned batch (`/fleet-epic`): the EPIC
+# issue carries it, each slice is an ordinary sub-issue underneath.
+#
 # fleet_labels_canonical — prints the taxonomy as `name|color|description` rows,
 # one per line (`|` never appears in a name/color/description). The seed script
 # reads all three columns; fleet_labels_allowed reads only the first.
@@ -1814,9 +1823,10 @@ scout|0e8a16|Read-only investigation (no PR expected)
 priority:p0|B60205|Highest priority — sorts first in the backlog (tier 0)
 priority:p1|D93F0B|High priority — backlog tier 1 (after all p0)
 priority:p2|FBCA04|Medium priority — backlog tier 2 (after all p1)
-blocked|b60205|Blocked on another issue — excluded from autofill
+blocked|b60205|Blocked on other work — claude-fleet skips it when picking what to start next
 autoland|0e8a16|Opt this issue's PR into hands-off auto-land
-autofill|0e8a16|Opt this issue into hands-off auto-spawn (the autofill dispatcher)
+autofill|0e8a16|Opt this issue into hands-off auto-start: claude-fleet spawns a worker for it when a slot frees
+epic|8250DF|Tracking parent for a batch of sub-issues planned and run together by claude-fleet
 EOF
 }
 
