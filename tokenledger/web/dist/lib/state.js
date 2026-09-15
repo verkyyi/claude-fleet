@@ -9,7 +9,12 @@ export const SORTS = ['tokens', 'cost', 'started', 'duration', 'turns'];
 // which mean nothing for a provider row. One shared key would let a session
 // sort survive into a table that cannot honour it.
 export const CSORTS = ['cost', 'tokens', 'events'];
-export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null });
+// The stalled table's own sort, kept apart from the other two for the same
+// reason they are kept apart from each other: `tokens` and `cost` mean nothing
+// for an issue, and `age` means nothing for a provider row. One shared key
+// would let a sort survive into a table that cannot honour it.
+export const RSORTS = ['age', 'comments'];
+export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -38,6 +43,15 @@ export function parse(hash) {
   s.sort = pick(p.get('sort'), SORTS, DEFAULTS.sort);
   s.csort = pick(p.get('csort'), CSORTS, DEFAULTS.csort);
   s.repo = p.get('repo') || DEFAULTS.repo;
+  s.rsort = pick(p.get('rsort'), RSORTS, DEFAULTS.rsort);
+  // A label is DATA, not one of a fixed set, so there is no allowlist to check
+  // it against -- a repository grows labels without this file hearing about
+  // it. A label nothing currently carries is still honoured rather than
+  // dropped: repo.js keeps it in the picker at zero, so the control and the
+  // (empty) table agree. Silently clearing it here would leave the picker
+  // reading "all" over a filtered set.
+  s.rlabel = p.get('rlabel') || DEFAULTS.rlabel;
+  s.rshipped = p.get('rshipped') === '1' ? '1' : DEFAULTS.rshipped;
   return s;
 }
 
@@ -53,9 +67,28 @@ export function format(s) {
   if (s.sort !== DEFAULTS.sort) p.set('sort', s.sort);
   if (s.csort !== DEFAULTS.csort) p.set('csort', s.csort);
   if (s.repo) p.set('repo', s.repo);
+  if (s.rsort !== DEFAULTS.rsort) p.set('rsort', s.rsort);
+  if (s.rlabel) p.set('rlabel', s.rlabel);
+  if (s.rshipped) p.set('rshipped', '1');
   const path = '#/' + (s.session ? 'session/' + encodeURIComponent(s.session) : '');
   const qs = p.toString();
   return qs ? path + '?' + qs : path;
+}
+
+// PRESENTATION_KEYS narrow or reorder rows the page ALREADY HAS. None of them
+// appears in any request: the stalled table's filter and sort are applied to
+// the same 348 issues the tier fetched once.
+//
+// dataKey is `format` with those keys flattened back to their defaults, so two
+// states that ask the hub for exactly the same thing produce the same key.
+// That is how app.js tells "redraw" from "re-fetch" -- without it, hiding some
+// rows costs a round trip for every one of them, and the control that did the
+// hiding goes on reporting its old value until the answer lands.
+export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped'];
+export function dataKey(s) {
+  const flat = { ...s, session: null };
+  for (const k of PRESENTATION_KEYS) flat[k] = DEFAULTS[k];
+  return format(flat);
 }
 
 export const withChip = (s, dim, value) => ({ ...s, chips: { ...s.chips, [dim]: value } });

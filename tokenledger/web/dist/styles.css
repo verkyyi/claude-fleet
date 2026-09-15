@@ -519,3 +519,15 @@ details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 10
   font-size: 12.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
   color: var(--ink-3); margin: 0 0 6px;
 }
+
+/* A sortable column header is a control and has to look like one. Both the
+   sessions table and the stalled table mark theirs role="button", which is
+   what a screen reader hears — a sighted reader got nothing at all, so the
+   only way to discover that a header could be clicked was to click it. */
+th[role="button"] { cursor: pointer; user-select: none; }
+th[role="button"]:hover { color: var(--ink-2); }
+th[aria-sort] { color: var(--ink); }
+
+/* An age reads "71.2 d" with a space in Chinese, and the age column is the
+   narrowest one here — left to wrap, every row becomes two lines tall. */
+#repo-stalled td.num { white-space: nowrap; }

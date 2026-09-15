@@ -17,9 +17,8 @@ import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { t } from './lib/i18n.js';
 import { fmtInt } from './lib/format.js';
 import { rankedBars } from './charts.js';
-import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo } from './lib/repo.js';
-
-const STALLED_SHOWN = 12;
+import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo,
+         labelFacets, filterStalled, sortStalled } from './lib/repo.js';
 
 /** renderRepo mounts the progress tier. It returns the {fetchers, apply} pair
  *  app.js's loader expects, or null when this hub holds no repo data at all —
@@ -61,7 +60,7 @@ function apply(root, results, repo, repos, state, app) {
   const age = issues === null
     ? errCard(t('repo.backlog.title'), issuesR.reason)
     : ageCard(issues, scale);
-  const below = issues === null ? [] : [stalledCard(issues, scale, repo)];
+  const below = issues === null ? [] : [stalledCard(issues, scale, state, app)];
   root.replaceChildren(...(head ? [head] : []), el('div', { class: 'grid2' }, flow, age), ...below);
 }
 
@@ -206,7 +205,12 @@ function scaleLine(scale) {
 
 /* --------------------------------------------------------------- stalled */
 
-function stalledCard(issues, scale, repo) {
+/** SORT_LABEL names each axis for the hint line and for the column header a
+ *  reader clicks. Read through t() at call time, not at module eval: the
+ *  language switcher re-renders, it does not reload. */
+const SORT_LABEL = { age: 'repo.sort.age', comments: 'repo.sort.comments' };
+
+function stalledCard(issues, scale, state, app) {
   const card = el('div', { class: 'card', id: 'repo-stalled' },
     el('h2', {}, t('repo.stalled.title')),
     el('p', { class: 'hint' }, t('repo.stalled.hint')));
@@ -219,12 +223,84 @@ function stalledCard(issues, scale, repo) {
     card.appendChild(el('div', { class: 'empty' }, t('repo.stalled.none')));
     return card;
   }
-  const head = el('tr', {},
-    el('th', {}, t('repo.col.issue')),
-    el('th', {}, t('repo.col.age')),
-    el('th', {}, t('repo.col.comments')),
-    el('th', {}, t('repo.col.shipped')));
-  const body = rows.slice(0, STALLED_SHOWN).map((i) => el('tr', {},
+
+  card.appendChild(stalledControls(rows, state, app));
+
+  const shown = sortStalled(
+    filterStalled(rows, { label: state.rlabel, shippedOnly: Boolean(state.rshipped) }),
+    state.rsort);
+  if (!shown.length) {
+    // Not the same sentence as "nothing is stalled". The reader narrowed this
+    // themselves and the controls above still say how, so the card says the
+    // filter came up empty rather than implying the backlog is clean.
+    card.appendChild(el('div', { class: 'empty' }, t('repo.stalled.noMatch')));
+    return card;
+  }
+  card.appendChild(el('div', { class: 'scroll' }, stalledTable(shown, state, app)));
+  card.appendChild(el('p', { class: 'hint' },
+    t('repo.stalled.count', { shown: fmtInt(shown.length), total: fmtInt(rows.length) })
+    + ' ' + t('repo.stalled.sortedBy', { what: t(SORT_LABEL[state.rsort] || SORT_LABEL.age) })));
+  return card;
+}
+
+/** stalledControls is the whole "can be narrowed" half.
+ *
+ *  Both settings live in the URL rather than in this card, and that is the
+ *  point rather than an implementation detail: the tier re-renders on the
+ *  page's 60-second timer, so a picker holding its own value would silently
+ *  reset itself every minute — and a narrowed list nobody can paste to a
+ *  colleague is half a view on a page whose reason to exist is being the one
+ *  everybody looks at. */
+function stalledControls(rows, state, app) {
+  // No history entry per keystroke: narrowing a table is not a navigation,
+  // and pushing one would make Back mean "undo one filter" for as many
+  // presses as the reader fiddled. Same call shape review.js's sort uses.
+  const set = (patch) => app.setState({ ...state, ...patch }, { push: false });
+
+  const facets = labelFacets(rows, state.rlabel);
+  const sel = el('select', {
+    'aria-label': t('repo.stalled.byLabel'),
+    onchange: (e) => set({ rlabel: e.target.value || null }),
+  },
+    el('option', { value: '', selected: state.rlabel ? null : true }, t('repo.stalled.allLabels', { n: fmtInt(rows.length) })),
+    facets.map((f) => el('option', { value: f.label, selected: f.label === state.rlabel || null },
+      `${f.label} (${fmtInt(f.count)})`)));
+
+  const shippedN = rows.filter((r) => r.shipped_at).length;
+  const ship = el('button', {
+    type: 'button',
+    'aria-pressed': String(Boolean(state.rshipped)),
+    // Disabled rather than hidden when the subset is empty: a control that
+    // comes and goes with the data reads as a bug, and its absence would also
+    // hide the fact that nothing stalled has shipped -- which is itself worth
+    // knowing.
+    disabled: shippedN ? null : true,
+    onclick: () => set({ rshipped: state.rshipped ? null : '1' }),
+  }, t('repo.stalled.onlyShipped', { n: fmtInt(shippedN) }));
+
+  return el('div', { class: 'controls' },
+    el('span', { class: 'label' }, t('repo.stalled.byLabel')), sel, ship);
+}
+
+const STALLED_COLS = [
+  { key: 'issue', label: 'repo.col.issue' },
+  { key: 'age', label: 'repo.col.age', sort: 'age', num: true },
+  { key: 'comments', label: 'repo.col.comments', sort: 'comments', num: true },
+  { key: 'shipped', label: 'repo.col.shipped' },
+];
+
+function stalledTable(shown, state, app) {
+  const setSort = (s) => () => app.setState({ ...state, rsort: s }, { push: false });
+  const head = el('tr', {}, STALLED_COLS.map((c) => el('th', {
+    class: c.num ? 'num' : null,
+    role: c.sort ? 'button' : null,
+    tabindex: c.sort ? '0' : null,
+    'aria-sort': c.sort && state.rsort === c.sort ? 'descending' : null,
+    onclick: c.sort ? setSort(c.sort) : null,
+    onkeydown: c.sort ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSort(c.sort)(); } } : null,
+  }, t(c.label))));
+
+  const body = shown.map((i) => el('tr', {},
     el('td', {}, i.url
       ? el('a', { href: i.url, target: '_blank', rel: 'noopener noreferrer' }, `#${i.number} ${i.title || ''}`.trim())
       : `#${i.number} ${i.title || ''}`.trim()),
@@ -236,9 +312,6 @@ function stalledCard(issues, scale, repo) {
     el('td', {}, i.shipped_at
       ? el('span', { class: 'warn', title: i.shipped_ref || '' }, t('repo.stalled.shipped'))
       : '')));
-  card.appendChild(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, head), el('tbody', {}, body))));
-  if (rows.length > STALLED_SHOWN) {
-    card.appendChild(el('p', { class: 'hint' }, t('repo.stalled.more', { n: rows.length - STALLED_SHOWN, repo })));
-  }
-  return card;
+
+  return el('table', {}, el('thead', {}, head), el('tbody', {}, body));
 }

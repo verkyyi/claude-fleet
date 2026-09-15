@@ -1,5 +1,5 @@
 // web/dist/app.js — boot, router, loader wiring.
-import { parse, format } from './lib/state.js';
+import { parse, format, dataKey } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
 import { renderNav, renderScopeControls, setBusy } from './scope.js';
 import { renderNow } from './now.js';
@@ -46,6 +46,10 @@ export const app = {
 
 const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader(), repo: createLoader() };
 let lastRendered = '';
+// The progress tier's last results, kept so a presentation-only change can be
+// drawn from them. See the `reuse` branch in load() for why.
+let lastDataKey = null;
+let lastRepoResults = null;
 
 function route() {
   app.state = parse(location.hash);
@@ -84,10 +88,19 @@ function route() {
   renderScopeControls(s, app.accounts, cb);
   if (s.session) renderDetail($('#detail'), s, app); else closeDetail($('#detail'));
   const key = format({ ...s, session: null });
-  if (key !== lastRendered) { lastRendered = key; load(); }
+  if (key !== lastRendered) {
+    // Did this change alter what we ASK for, or only how we show it? Narrowing
+    // the stalled table to one label changes neither request the progress tier
+    // makes, so it redraws from the rows already in hand.
+    const dk = dataKey(s);
+    const reuse = lastDataKey === dk;
+    lastRendered = key;
+    lastDataKey = dk;
+    load(reuse);
+  }
 }
 
-async function load() {
+async function load(reuse = false) {
   const s = app.state;
   const root = $('#page');
   // Both sections render on every route. Two loaders, not one, because the
@@ -114,6 +127,17 @@ async function load() {
   const repoR = renderRepo($('#repo'), s, app, app.repos);
   const band = $('#repo-band');
   if (band) band.hidden = !repoR;
+  // Applied SYNCHRONOUSLY on a presentation-only change, and that is the whole
+  // point: measured against the deployed hub, re-fetching this tier to hide
+  // some of its own rows took 4.4 seconds, and for those 4.4 seconds the
+  // toggle the reader had just pressed still showed its old value. A control
+  // that misreports its own state is worse than one that is merely slow.
+  //
+  // The 60-second refresh and the repo picker both call load() with no
+  // argument, so neither can be served a stale page from here.
+  const repoDone = !repoR ? Promise.resolve(true)
+    : reuse && lastRepoResults ? (repoR.apply(lastRepoResults), Promise.resolve(true))
+    : loaders.repo.run(repoR.fetchers, (results) => { lastRepoResults = results; repoR.apply(results); });
   root.setAttribute('aria-busy', 'true'); setBusy(true);
   const [a, b, c, d] = await Promise.all([
     loaders.now.run(nowR.fetchers, nowR.apply),
@@ -124,7 +148,7 @@ async function load() {
       renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
       reviewR.apply(results);
     }),
-    repoR ? loaders.repo.run(repoR.fetchers, repoR.apply) : Promise.resolve(true),
+    repoDone,
   ]);
   if (a && b && c && d) {
     root.setAttribute('aria-busy', 'false');

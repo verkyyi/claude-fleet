@@ -129,6 +129,61 @@ export function stalled(issues, scale) {
 export const shippedButOpen = (issues) =>
   (issues || []).filter((i) => i.state === 'open' && i.shipped_at);
 
+/** STALLED_SORTS are the axes the stalled table can be ordered by.
+ *
+ *  Both read DESCENDING and there is no direction to flip: "oldest first" and
+ *  "most argued about first" are the questions somebody opens this table with,
+ *  and their opposites ("show me the newest thing that is already stalled")
+ *  are not. A toggle would add an arrow whose meaning a reader has to
+ *  remember in exchange for an ordering nobody asked for. */
+export const STALLED_SORTS = ['age', 'comments'];
+
+/** labelFacets counts the labels carried by a set of rows, commonest first.
+ *
+ *  The counts deliberately do NOT sum to the number of rows: an issue carries
+ *  as many labels as it carries, and eight of the twenty-four stalled issues
+ *  on the repo this was built against carry none at all. Printing a total
+ *  beside them would be a number no filter could ever reproduce.
+ *
+ *  `selected` is kept in the list at zero when nothing carries it any more.
+ *  Dropping it would leave the picker reading "all" while the table showed a
+ *  filtered set — a control that misreports its own state is worse than an
+ *  empty table, because the reader cannot see that anything is being hidden. */
+export function labelFacets(rows, selected = null) {
+  const counts = new Map();
+  for (const r of rows || []) for (const l of r.labels || []) counts.set(l, (counts.get(l) || 0) + 1);
+  const out = [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : 1));
+  if (selected && !counts.has(selected)) out.push({ label: selected, count: 0 });
+  return out;
+}
+
+/** filterStalled narrows the table by label and by "the work already landed".
+ *
+ *  The second one is not a convenience: a stalled issue whose commit is
+ *  already on the trunk is a CLOSE, not an investigation, and it is the only
+ *  subset of this table anybody can clear without reading a line of code. */
+export function filterStalled(rows, { label = null, shippedOnly = false } = {}) {
+  return (rows || []).filter((r) =>
+    (!label || (r.labels || []).includes(label)) &&
+    (!shippedOnly || Boolean(r.shipped_at)));
+}
+
+/** sortStalled orders the table, ties broken on issue number.
+ *
+ *  The tie-break is not cosmetic. This card re-renders on the page's 60-second
+ *  timer, and two issues with equal comment counts would otherwise swap places
+ *  every minute on their own — a table that reorders itself while nobody
+ *  touched it teaches a reader not to trust that it is showing the same thing
+ *  twice. */
+export function sortStalled(rows, sort) {
+  const key = sort === 'comments'
+    ? (r) => Number(r.comments) || 0
+    : (r) => Number(r.age_seconds) || 0;
+  return (rows || []).slice().sort((a, b) => key(b) - key(a) || (a.number || 0) - (b.number || 0));
+}
+
 /** pickRepo resolves which repository to show: the URL's choice when it names
  *  one this hub actually holds, otherwise the most recently observed.
  *
