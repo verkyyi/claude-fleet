@@ -103,6 +103,9 @@ func (s *Server) Handler() http.Handler {
 	// see handleRepoIngest for why it is a sibling of /v1/ingest rather than
 	// another optional field on the usage batch.
 	mux.HandleFunc("/v1/ingest/repo", s.handleRepoIngest)
+	// The business ledger ships the same way and for the same reasons: its own
+	// enrollment token, no identity in the body, one whole day per push.
+	mux.HandleFunc("/v1/ingest/growth", s.handleGrowthIngest)
 
 	// The way in. Outside the viewer-token gate on purpose, and mounted
 	// unconditionally: when SSO is not configured the handler answers 404, so
@@ -147,6 +150,14 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
 	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
+
+	// The business board. Gated like every other human surface -- these are
+	// the most sensitive figures this binary holds -- and mounted at a fixed
+	// path rather than inside the dashboard's hash router because it is
+	// server-rendered; see serveGrowthPage. Both spellings, so /growth/ is the
+	// board rather than the SPA's index.html fallback.
+	mux.Handle("/growth", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
+	mux.Handle("/growth/", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.

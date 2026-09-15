@@ -450,3 +450,49 @@ CREATE TABLE IF NOT EXISTS repo_health (
   stale_after_seconds REAL,                           -- NULL = the shipper did not say how long these stay current
   readings_json       TEXT    NOT NULL                -- []model.RepoReading, verbatim
 );
+
+-- The business ledger: what the company earns while the two books above are
+-- running. One row per (shipper, UTC day), whole-document upsert.
+--
+-- Everything here is a LEVEL -- money on the books, accounts alive that day --
+-- so nothing is additive and a replayed push is a no-op rather than a double
+-- count. There is deliberately no watermark and no back-fill: a day nobody
+-- shipped stays missing, which is the honest record of a cron job that did not
+-- run. Inventing the gap from its neighbours would put revenue on a board that
+-- no query can reproduce.
+--
+-- ai_updated_at is the load-bearing column. The h5_* figures come off a
+-- production database every night; the ai_* figures are typed in by a person,
+-- and this records when a person last confirmed them. A surface that shows
+-- those three numbers without reading this one is printing last week's guess
+-- as today's fact -- see model.AIStaleAfter.
+CREATE TABLE IF NOT EXISTS growth_facts (
+  source                    TEXT    NOT NULL,  -- the shipper, e.g. 'growth-facts'
+  day                       TEXT    NOT NULL,  -- YYYY-MM-DD, UTC, sorts as a string
+
+  -- Money is whole CNY, as the frozen shipper contract sends it.
+  h5_arr_cny                INTEGER NOT NULL DEFAULT 0,
+  h5_expiring_in_window_cny INTEGER NOT NULL DEFAULT 0,
+  h5_expiring_accounts      INTEGER NOT NULL DEFAULT 0,
+  h5_churned_accounts       INTEGER NOT NULL DEFAULT 0,
+  h5_active_accounts        INTEGER NOT NULL DEFAULT 0,
+
+  ai_signed_deals           INTEGER NOT NULL DEFAULT 0,
+  ai_qualified_leads        INTEGER NOT NULL DEFAULT 0,
+  ai_arr_cny                INTEGER NOT NULL DEFAULT 0,
+  ai_updated_at             TEXT    NOT NULL,  -- when a PERSON last confirmed the three above
+
+  okr_focus                 TEXT    NOT NULL DEFAULT '',
+  okr_quarter               TEXT    NOT NULL DEFAULT '',
+  okr_target_annualized     INTEGER NOT NULL DEFAULT 0,
+  -- Signed: the kill-switch date passes whether or not anyone re-decided.
+  okr_days_to_kill_switch   INTEGER NOT NULL DEFAULT 0,
+
+  -- The hub's own clock, for an operator asking "did tonight's job run?".
+  -- Never used to order two pushes: the contract carries no observation time,
+  -- so the hub cannot tell a retry from a correction and does not pretend to.
+  received_at               TEXT    NOT NULL,
+  PRIMARY KEY (source, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_growth_facts_day ON growth_facts(day DESC);

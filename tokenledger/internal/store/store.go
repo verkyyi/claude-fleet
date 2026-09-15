@@ -357,9 +357,24 @@ func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 // and making it conditional would mean reading the row first on a path whose
 // whole job is to be a sink.
 func (s *Store) MarkRepoShipper(endpointID string) error {
-	_, err := s.write.Exec(`UPDATE endpoints SET kind = 'repo_shipper' WHERE endpoint_id = ?`, endpointID)
+	return s.markShipper(endpointID, "repo_shipper")
+}
+
+// MarkGrowthShipper is the same for a business-facts shipper. It gets its own
+// kind rather than borrowing the repo one: the roster only cares that this is
+// not an agent, but an operator staring at a silent enrollment wants to know
+// WHICH nightly job stopped running.
+func (s *Store) MarkGrowthShipper(endpointID string) error {
+	return s.markShipper(endpointID, "growth_shipper")
+}
+
+// markShipper moves an enrollment out of the agent roster. Every surface that
+// hunts for stale agents filters on kind = 'agent', so this is what keeps a
+// cron job that never reports usage from being reported as a broken machine.
+func (s *Store) markShipper(endpointID, kind string) error {
+	_, err := s.write.Exec(`UPDATE endpoints SET kind = ? WHERE endpoint_id = ?`, kind, endpointID)
 	if err != nil {
-		return fmt.Errorf("mark repo shipper: %w", err)
+		return fmt.Errorf("mark %s: %w", kind, err)
 	}
 	return nil
 }

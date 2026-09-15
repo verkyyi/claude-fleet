@@ -930,6 +930,66 @@ Read it back over `/v1/repos`, `/v1/repo/flow`, `/v1/repo/issues` — the
 dashboard's Progress band and the three MCP tools are two renderers over those
 same rows, never two copies of them.
 
+## Growth facts — what the company earned while it ran
+
+Two books answer *how much a subscription spent* and *what that spend shipped*.
+`POST /v1/ingest/growth` adds the third: what the business actually earns,
+kept in the same SQLite file and read at `/growth`.
+
+It is on the hub rather than in a product admin for the reasons the ledger
+already is — one internal binary to redeploy instead of a public front door to
+roll, an existing `/v1/ingest/*` sink instead of a new table in a product
+database, and a narrow SSO list instead of an operator account system.
+
+```bash
+curl -s https://your-hub/v1/ingest/growth \
+  -H "Authorization: Bearer $GROWTH_SHIPPER_TOKEN" \
+  -H 'Content-Type: application/json' -d @- <<'JSON'
+{
+  "source": "growth-facts",
+  "day": "2026-09-15",
+  "h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
+          "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 },
+  "ai": { "signed_deals": 0, "qualified_leads": 0, "arr_cny": 0,
+          "updated_at": "2026-09-14T00:00:00Z" },
+  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-first-deal",
+           "target_annualized": 420000, "days_to_kill_switch": 76 }
+}
+JSON
+```
+
+Its own enrollment token, like every other shipper — **one shipper, one token**.
+Sharing one across the gateway, the billing job and this one makes revoking any
+of them a way to stop all of them.
+
+One whole document per `(source, day)`, upserted. Everything here is a *level* —
+money on the books, accounts alive today — so nothing is additive and a replayed
+push is a no-op rather than a double count. There is deliberately **no watermark
+and no back-fill**: a night the cron job missed stays missing, because a figure
+interpolated from its neighbours is one no query can reproduce.
+
+### The half a machine cannot produce
+
+`h5.*` comes off a production database every night. `ai.*` is typed in by a
+person, because those deals live in conversations and there is nothing to query.
+That asymmetry is the whole reason `ai.updated_at` is a required field:
+
+> When nobody has confirmed the hand-filled figures for more than three days,
+> `/growth` stops printing them as today's. It says how many days it has been,
+> and shows the last filing **dated and named as a filing** instead.
+
+A board that prints last week's hand-filled number in today's slot lies more
+convincingly than one that prints nothing, because the reader cannot tell.
+Same discipline as the repo percentiles above: where the hub does not know, it
+says so rather than substituting something that looks authoritative.
+
+`/growth` sits behind the viewer gate like every other human surface — revenue
+is the most sensitive thing this binary holds. It is server-rendered rather than
+another module in the dashboard's SPA: the board is a projection of one day's
+figures with nothing to ask of it, and rendering it in Go is what lets a test
+read the staleness rule in the bytes that go out. It renders in Chinese by
+default and in English on `?locale=en`.
+
 ## How it works, and what that costs you
 
 **Two numbers, kept apart.** The agent reads
