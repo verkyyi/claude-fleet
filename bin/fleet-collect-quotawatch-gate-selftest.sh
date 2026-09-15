@@ -92,11 +92,26 @@ STATE="$(TMPDIR="$WORK" HOME="$WORK" bash -c '. "$1/bin/fleet-daemon-lib.sh"; fl
 [ -n "$STATE" ] || { printf 'selftest: could not resolve the daemon state dir\n' >&2; exit 2; }
 mkdir -p "$STATE"
 
+# Nine ticks of a full collector cost ~90s of the CI gate's 10-minute wall, and
+# almost all of it is spent on the ROTATING body — phases that run after the head
+# and cannot reach the gate under test. So the tick budget is cut to TICK_BUDGET:
+# the head (quotawatch, then sockets) runs exactly as it does in production and the
+# rotation is truncated away, taking a tick from ~10s to ~3s. The gate lives in the
+# head, before the first rotating phase, so nothing under test is elided — and
+# `phase=done` is still reached, which case 1 asserts.
+#
+# The budget must stay clear of the collector's own PHASE_MIN (5s): `quotawatch` is
+# the first phase, so it starts only while TICK_BUDGET minus the tick's setup is
+# still ≥ 5. 7 leaves 2s of slack for a loaded runner, and gate_decided below turns
+# the remaining sliver into a NAMED failure rather than a mystery — a tick that lost
+# the phase to its budget cannot be read as the gate having skipped it.
+TICK_BUDGET=7
 run_collector() {   # $1.. = extra env assignments
   : > "$QW_LOG"
   env PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
     FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$WORK/conf" \
     FLEET_ACCOUNTS_DIR="$WORK/no-accounts" CCQUOTA_HUB_URL="" \
+    FLEET_COLLECT_TICK_BUDGET="$TICK_BUDGET" \
     FAKE_QW_LOG="$QW_LOG" "$@" \
     bash "$WORK/bin/tmux-dash-collect.sh" >"$WORK/stdout" 2>"$WORK/stderr"
 }
@@ -106,6 +121,15 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- quotawatch calls ---\n' >&2; cat "$QW_LOG" >&2 2>/dev/null
          exit 1; }
 ok()     { printf '  ok — %s\n' "$1"; }
+# Every case reads "did the GATE run the watch?" out of the call log — which is only
+# an answer if the tick actually reached the phase. A tick that truncated `quotawatch`
+# away under its own budget (see TICK_BUDGET above) would look exactly like a gated-off
+# one, so say so instead of asserting on it.
+gate_decided() {
+  case " $(hbget skipped) " in *" quotawatch "*)
+    fail "$1: the TICK budget truncated the quotawatch phase away — the gate never got to decide. Raise TICK_BUDGET in this test (skipped: $(hbget skipped))" ;;
+  esac
+}
 hbget()  { sed -n "s/^$1=//p" "$G/collect.heartbeat" | head -1; }
 order()  { hbget phases | tr ' ' '\n' | cut -d= -f1 | tr '\n' ' '; }
 phsecs() { hbget phases | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
@@ -117,6 +141,7 @@ now()      { date +%s; }
 #    daemon set predates #551. The #551 fallback must be fully intact here. --------
 rm -f "$STATE/quotawatch.tick"
 run_collector || fail "1: a full tick must exit 0"
+gate_decided 1
 [ "$(hbget phase)" = "done" ] || fail "1: the tick must reach phase=done"
 [ "$(calls)" = 1 ] || fail "1: with no quotawatch stamp the collector must run the watch itself (calls: $(calls))"
 grep -q -- '--caller collect' "$QW_LOG" || fail "1: the in-tick run must identify itself as --caller collect"
@@ -125,6 +150,7 @@ ok "no quotawatch stamp (no unit / pre-#551 install) — the collector runs the 
 # 2. UNIT TICKING — the whole point of #671: a healthy install pays ~0 ------------
 set_tick "$(now)"
 run_collector || fail "2: a full tick must exit 0"
+gate_decided 2
 [ "$(calls)" = 0 ] || fail "2: with the unit ticking the collector must NOT run the watch (calls: $(calls))"
 ok "quotawatch unit ticking — the collector skips it, no duplicate sweep"
 
@@ -132,7 +158,11 @@ ok "quotawatch unit ticking — the collector skips it, no duplicate sweep"
 #    shows up as a number in the heartbeat instead of a phase that vanished. ------
 case "$(order)" in quotawatch\ *) : ;; *) fail "7: quotawatch must stay the FIRST phase even when gated off (got: $(order))" ;; esac
 s=$(phsecs quotawatch); case "$s" in ''|*[!0-9]*) fail "7: phases= must carry a numeric quotawatch= even when gated off (got: $(hbget phases))" ;; esac
-[ "$s" -le 2 ] || fail "7: a gated-off quotawatch phase must cost ~0s (got ${s}s)"
+# The floor is not 0: run_phase measures the boundary in whole seconds and
+# fleet_timebox polls at 1s, so even a function that returns instantly reads 1-2s
+# here. The number that moved is the one in the issue — 46 · 56 · 35 · 57 · 25 · 17
+# · 10 · 3 — and over= below is the sharper half of the same assertion.
+[ "$s" -le 3 ] || fail "7: a gated-off quotawatch phase must cost ~0s, not a sweep (got ${s}s)"
 case " $(hbget over) " in *" quotawatch "*) fail "7: a gated-off quotawatch must never land in over= (got: $(hbget over))" ;; esac
 ok "gated off, quotawatch is still the first phase, costs ${s}s, and is absent from over="
 
@@ -140,17 +170,20 @@ ok "gated off, quotawatch is still the first phase, costs ${s}s, and is absent f
 #    stale, so the fallback must come back on its own. -----------------------------
 set_tick "$(( $(now) - 400 ))"     # > max(5 × 60s interval, 180s floor) = 300s
 run_collector || fail "3: a full tick must exit 0"
+gate_decided 3
 [ "$(calls)" = 1 ] || fail "3: a STALE quotawatch stamp (unit pended) must re-engage the in-tick fallback (calls: $(calls))"
 ok "quotawatch unit pended (stale stamp) — the fallback re-engages by itself"
 
 # 4/5. the escape hatches ---------------------------------------------------------
 set_tick "$(now)"
 run_collector FLEET_COLLECT_QUOTAWATCH=always || fail "4: a full tick must exit 0"
+gate_decided 4
 [ "$(calls)" = 1 ] || fail "4: FLEET_COLLECT_QUOTAWATCH=always must restore the unconditional pre-#671 call (calls: $(calls))"
 ok "FLEET_COLLECT_QUOTAWATCH=always — unconditional, even with the unit ticking"
 
 rm -f "$STATE/quotawatch.tick"
 run_collector FLEET_COLLECT_QUOTAWATCH=never || fail "5: a full tick must exit 0"
+gate_decided 5
 [ "$(calls)" = 0 ] || fail "5: FLEET_COLLECT_QUOTAWATCH=never must suppress the in-tick run (calls: $(calls))"
 ok "FLEET_COLLECT_QUOTAWATCH=never — suppressed, even with no unit stamp"
 
@@ -160,6 +193,7 @@ ok "FLEET_COLLECT_QUOTAWATCH=never — suppressed, even with no unit stamp"
 mv "$WORK/bin/fleet-daemon-lib.sh" "$WORK/daemon-lib.parked"
 set_tick "$(now)"                       # fresh stamp: only the missing lib can decide this
 run_collector || fail "6: a full tick must exit 0"
+gate_decided 6
 [ "$(calls)" = 1 ] || fail "6: with fleet-daemon-lib.sh missing the gate must fail OPEN and run the watch (calls: $(calls))"
 mv "$WORK/daemon-lib.parked" "$WORK/bin/fleet-daemon-lib.sh"
 ok "fleet-daemon-lib.sh missing — the gate fails open rather than leaving the fleet blind"
@@ -169,12 +203,21 @@ ok "fleet-daemon-lib.sh missing — the gate fails open rather than leaving the 
 #    fallback would silently switch itself off (#639's blind spot, reintroduced). ---
 real_watch
 rm -f "$STATE/quotawatch.tick"
-run_collector || fail "8: a full tick must exit 0"
-[ ! -f "$STATE/quotawatch.tick" ] \
-  || fail "8: the collector's own --caller collect run stamped quotawatch.tick — the gate would fake itself healthy and switch the fallback off"
-run_collector || fail "8: a second tick must exit 0"
-[ ! -f "$STATE/quotawatch.tick" ] \
-  || fail "8: a second in-tick fallback stamped quotawatch.tick — the fallback must stay engaged until the UNIT ticks"
+# "No stamp" is only evidence if the real script actually RAN TO COMPLETION — a run
+# killed at its budget would leave no stamp either, and pass this vacuously. So every
+# tick here also asserts the phase stayed out of over=. (It is cheap: with no accounts
+# pool and no hub the real watch hits its fail-open gate and exits in well under a
+# second, long after the stamp guard it is being tested on.)
+ran_whole_watch() { case " $(hbget over) " in *" quotawatch "*) return 1 ;; esac; return 0; }
+for pass in first second; do
+  run_collector || fail "8: the $pass tick must exit 0"
+  gate_decided "8/$pass"
+  ran_whole_watch || fail "8: the $pass in-tick watch was KILLED at its budget — 'it did not stamp' proves nothing about a run that did not finish (over: $(hbget over))"
+  [ "$(calls)" = 0 ] || [ ! -f "$STATE/quotawatch.tick" ] \
+    || fail "8: the collector's own --caller collect run stamped quotawatch.tick on the $pass tick — the gate would fake itself healthy and switch the fallback off"
+  [ ! -f "$STATE/quotawatch.tick" ] \
+    || fail "8: the $pass in-tick fallback stamped quotawatch.tick — the fallback must stay engaged until the UNIT ticks"
+done
 ok "the in-tick fallback never stamps the scheduling heartbeat — it cannot switch itself off"
 
 printf 'selftest PASS: the collector runs fleet-quotawatch.sh only when the unit is not ticking (issue #671)\n'
