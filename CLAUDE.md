@@ -53,5 +53,16 @@ Do not install from memory: read the doc and work from it.
   the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
   `shell/cw.zsh` refuses the common accidental forms; `FLEET_ALLOW_TMUX_DESTROY=1`
   passes a deliberate destroy through.
+- **The selftest gate isolates at the ROOT, not per test** (issue #660).
+  `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
+  root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as
+  symlinks inside a REAL dir so `$BIN/..` stays inside the shadow, no
+  `fleet.conf` beside it, an empty `logs/` and `FLEET_CONF_DIR`, and every
+  `FLEET_*`/`CCQUOTA_*` variable stripped from the environment. So a new selftest
+  needs no "unset the operator's config" preamble of its own — and must not add
+  one; and a test that builds its OWN sandbox `bin/` + `fleet.conf` keeps working,
+  because the isolation is a root swap, not an env override.
+  `bin/selftest-isolation-selftest.sh` pins all of it. Run one test through the
+  same prelude with `run-selftests.sh <name>` (globs work).
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.
