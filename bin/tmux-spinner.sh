@@ -203,13 +203,41 @@ EOF
 # the classifier CAN return `needs` off a stale screen, which would re-redden what
 # was just cleared and flap every tick.
 #
-# WHY ONLY ask/perm ARE CLEARABLE. Those two subtypes are DEFINED by a pending
-# tool_use — #656 settles both off this very oracle — so "nothing pending" proves
-# the stamp stale. A plain `needs` (empty subtype) is a judgement about the SCREEN:
-# the classifier's WAITING/ERROR verdict, or a worker's own `set-claude-state.sh
-# needs` beside a `⛔ blocked` issue comment (the charter's blocked rail). Neither
-# has a tool_use pending, so clearing those would silently delete the blocked
-# signal — the one red the operator most needs to see.
+# WHAT "nothing pending" PROVES — AND HOW LONG TO WAIT BEFORE ACTING ON IT (#699).
+# `ask`/`perm` are DEFINED by a pending tool_use (#656 settles both off this very
+# oracle), so an empty transcript refutes the stamp outright: clear it at the ordinary
+# grace. An EMPTY subtype is weaker evidence, and #658 treated it as no evidence at
+# all — it required ask|perm here, so a plain `needs` produced NO verdict and nothing
+# ever cleared it. That is the 1.5-hour zombie red #699 was filed on.
+#
+# That guard stranded a whole red PATH, not a handful of legacy stamps. An empty
+# subtype is what bin/classify-sessions.sh writes — it clears the subtype by design
+# (#640: a screen read cannot justify one) — and the classifier only ever runs at
+# Stop, where a pending tool_use cannot exist. So "empty ⇒ never clearable" meant
+# "the classifier's red is never clearable", however stale it got.
+#
+# But clearing it at the SAME 20s grace is no better, because that red is a real
+# CATEGORY and not merely a relic: a worker that ends its turn asking the operator a
+# question IN PROSE is genuinely waiting on a human, with no tool_use open. (Live,
+# 2026-09-15: a window stopped after #648 with "merging is outward-facing and
+# irreversible — you haven't said to merge". That red was correct. It became a zombie
+# only once the operator merged by hand and nothing came back to clear it.) At 20s
+# that red would be gone before the operator ever looked — a useful signal destroyed
+# to fix a stale one.
+#
+# So the empty subtype gets its own, much longer age: FLEET_NEEDS_PLAIN_SECS. THE
+# NUMBER IS A TRADE, and that trade is the whole reason the knob is separate:
+#   lower  → a real "I asked you something" red fades while the operator is away from
+#            the dash — the signal exists and is never seen.
+#   higher → a stale red survives longer; the zombie ceiling rises with it.
+# 900s (15 min) keeps a real question inside an operator's dash-checking rhythm while
+# capping a zombie at a quarter hour instead of the 1.5 hours #699 measured. 0
+# collapses it onto the ordinary grace (#699's literal proposal); a very large value
+# restores #658's "an empty subtype is never clearable".
+#
+# The DEAD verdict below is deliberately NOT slowed by any of this: "no live Claude
+# under the pane" is not weak evidence about what is open — it is proof that nothing
+# can be.
 #
 # GRACE ON BOTH AXES. A stamp younger than one window is still settling (PreToolUse
 # stamps `ask` a beat before the transcript line lands), and the same verdict must
@@ -227,6 +255,10 @@ EOF
 # Set FLEET_NEEDS_RECONCILE_SECS=0 to disable.
 NEEDS_SECS="${FLEET_NEEDS_RECONCILE_SECS:-20}"
 case "$NEEDS_SECS" in ''|*[!0-9]*) NEEDS_SECS=20 ;; esac   # non-integer -> default (0 disables)
+# The EMPTY-subtype dwell (issue #699) — see the trade documented above. It gates the
+# `idle` verdict only: `dead` stays on NEEDS_SECS, and 0 means "no extra dwell".
+NEEDS_PLAIN_SECS="${FLEET_NEEDS_PLAIN_SECS:-900}"
+case "$NEEDS_PLAIN_SECS" in ''|*[!0-9]*) NEEDS_PLAIN_SECS=900 ;; esac
 NEEDS_LOG="$BIN/../logs/needs.log"
 NEEDS_BUDGET=8
 NEEDS_EVERY=$(awk -v c="$NEEDS_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
@@ -273,7 +305,10 @@ needs_check() {
       verdict=''; want=''
       case "$prc" in
         3) verdict=dead ;;                                # no Claude under the pane
-        1) case "$nsub" in ask|perm) verdict=idle ;; esac ;;   # read the transcript: nothing open
+        1) case "$nsub" in                                # read the transcript: nothing open
+             ask|perm) verdict=idle ;;                    # transcript-defined ⇒ refuted outright
+             *) if [ $(( nows - ts )) -ge "$NEEDS_PLAIN_SECS" ]; then verdict=idle; fi ;;
+           esac ;;                                        # …a screen verdict serves its dwell first
         0) case "$nsub" in                                # something IS open — is it what we said?
              ask|perm)
                want=perm; [ "$name" = AskUserQuestion ] && want=ask
@@ -292,15 +327,15 @@ needs_check() {
           tmux -L "$sock" set-window-option -t "$wid" @claude_state '' 2>/dev/null
           tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null
           tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
-          msg="needs/$nsub -> (idle)   no live Claude under the pane" ;;
+          msg="needs/${nsub:--} -> (idle)   no live Claude under the pane" ;;
         idle)
           tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
           tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null
           tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
-          msg="needs/$nsub -> done     no tool_use pending in the transcript" ;;
+          msg="needs/${nsub:--} -> done     no tool_use pending in the transcript" ;;
         *)
           tmux -L "$sock" set-window-option -t "$wid" @claude_needs "$want" 2>/dev/null
-          msg="needs/$nsub -> needs/$want  pending tool_use is $name" ;;
+          msg="needs/${nsub:--} -> needs/$want  pending tool_use is $name" ;;
       esac
       printf '%s  %-24s %s\n' "$(date +%H:%M:%S)" "$sock:$wid" "$msg" >> "$NEEDS_LOG"
       touched=1
