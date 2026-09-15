@@ -4,6 +4,12 @@
 # bin/fleet-collect-kick.sh and bin/tmux-status.sh against a fake `launchctl` on
 # PATH — no launchd, no tmux server, no network.
 #
+# Since issue #639 the kick itself lives in bin/fleet-daemon-watch.sh, which does
+# the same for every interval unit; fleet-collect-kick.sh is the collector's entry
+# point onto it and its contract is UNCHANGED, which is exactly what this file
+# pins. The registry, the relative-interval thresholds and the per-unit rails are
+# covered by bin/fleet-daemon-watch-selftest.sh.
+#
 # Why this is worth pinning. When the collector stops, the dash does NOT go
 # blank; it keeps drawing the last tick's world with no tell (launchd pended
 # com.claude-fleet.collect for 103 minutes on 2026-09-14, `last exit code = 0`).
@@ -26,8 +32,8 @@
 #   6. trace    — after a kick the bar shows `↻` WHILE stale, and keeps showing
 #                 `↻ dash kicked` after the collector recovers, until the trace
 #                 window expires. Then the bar is clean again.
-#   7. log      — every kick appends one line to logs/collect-kick.log with the
-#                 staleness and the kickstart's exit code.
+#   7. log      — every kick appends one line to logs/daemon-kick.log with the
+#                 unit, the staleness and the kickstart's exit code.
 #   8. off      — FLEET_COLLECT_KICK=0 keeps the alarm and kicks nothing.
 #   9. no-unit  — no launchd/systemd unit loaded ⇒ no kick, logged as `no-unit`,
 #                 and the alarm is left standing.
@@ -37,11 +43,16 @@
 #  11. callers  — the three discovery paths are still wired: the status bar, the
 #                 KeepAlive spinner (the only daemon that survived the launchd
 #                 stall) and the quotawatch backstop.
+#  12. relative  — with FLEET_COLLECT_STALE unset the threshold is MULTIPLES of the
+#                 unit's own 60s StartInterval, not the old absolute 600s: the
+#                 7–14-minute collector #639 measured alarms instead of reading
+#                 `fresh 401 472` forever.
 #
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-collect-kick.sh usage-lib.sh tmux-status.sh; do
+FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh'
+for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
@@ -49,12 +60,12 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/collect-stale-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"   # physical path: the scripts resolve $BIN via pwd
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/.claude-dash/global"
-for f in fleet-collect-kick.sh usage-lib.sh tmux-status.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in $FILES; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 G="$WORK/.claude-dash/global"
 HB="$G/collect.heartbeat"
 KTS="$G/collect.kick.ts"
-KICKLOG="$WORK/logs/collect-kick.log"
+KICKLOG="$WORK/logs/daemon-kick.log"
 
 # --- fake launchctl: `print <target>` succeeds iff the unit is "loaded"
 # ($FAKE_UNIT_LOADED), `kickstart` logs the call and returns $FAKE_KICK_RC.
@@ -75,6 +86,19 @@ chmod +x "$WORK/fakepath/launchctl" "$WORK/fakepath/systemctl"
 
 export PATH="$WORK/fakepath:$PATH"
 export TMPDIR="$WORK"                 # every cache read/write lands under WORK
+# The stamps a NON-live checkout writes are scoped away from the shared global/
+# cache on purpose (issue #639: a worker testing the self-heal in its own
+# worktree wrote `↻ dash kicked` onto the live operator's status bar). This work
+# tree IS the install under test, so declare it live — otherwise the writer and
+# the reader here would deliberately disagree. The scoping itself is asserted in
+# bin/fleet-daemon-watch-selftest.sh.
+export FLEET_LIVE_ROOT="$WORK"
+# …and it has NO installed plists. §9 asserts the "nothing to kick" path, which
+# since #639 first checks whether the unit's plist is on disk (a not-loaded unit
+# with a plist is bootstrapped back rather than given up on). Pointing this at the
+# real ~/Library/LaunchAgents would make §9 depend on the operator's own machine.
+mkdir -p "$WORK/agents"
+export FLEET_LAUNCHD_AGENTS_DIR="$WORK/agents"
 export FAKE_KICK_LOG="$WORK/kicks.log"
 export FLEET_COLLECT_STALE=300
 export FLEET_COLLECT_KICK_COOLDOWN=600
@@ -100,8 +124,11 @@ hb_running() {
     "$(( $(now) - $1 ))" "$(( $(now) - $2 ))" > "$HB"
 }
 
-lib() {  # run one expression against the real helpers, in a clean shell
-  bash -c 'set -uo pipefail; . "$1/usage-lib.sh"; shift; eval "$@"' _ "$WORK/bin" "$@"
+lib() {  # run one expression against the real helpers, in a clean shell.
+  # Both libs, in the order the real consumers source them: fleet_collect_stale_secs
+  # delegates to fleet_daemon_stale_secs when it is defined (issue #639), and a
+  # test that sourced only usage-lib.sh would silently exercise the fallback.
+  bash -c 'set -uo pipefail; . "$1/usage-lib.sh"; . "$1/fleet-daemon-lib.sh"; shift; eval "$@"' _ "$WORK/bin" "$@"
 }
 kick()   { bash "$WORK/bin/fleet-collect-kick.sh" "$@" 2>>"$WORK/kick.err"; }
 # The status bar SELF-HEALS (it forks the kick when one is due), which is the
@@ -174,7 +201,7 @@ printf '%s\n' "$(( $(now) - 2000 ))" > "$KTS"    # …and the trace window expir
 case "$(bar)" in *"dash kicked"*|*"dash stale"*) fail "6: trace outlived its window: $(bar)" ;; esac; ok
 
 # ------------------------------------------------------------------ 7. log ----
-[ -f "$KICKLOG" ] || fail "7: no logs/collect-kick.log"; ok
+[ -f "$KICKLOG" ] || fail "7: no logs/daemon-kick.log"; ok
 [ "$(grep -c '^.* kick ' "$KICKLOG")" -eq 2 ] || fail "7: expected 2 logged kicks, got: $(cat "$KICKLOG")"; ok
 grep -q 'stale=.*mgr=launchd.*rc=0' "$KICKLOG" || fail "7: log line missing staleness/mgr/rc: $(cat "$KICKLOG")"; ok
 
@@ -206,8 +233,8 @@ case "$(bar)" in *"dash stale"*"↻"*) ok ;; *) fail "10: no trace after the bar
 # every StartInterval unit, quotawatch included, was pended together — so a
 # self-heal wired ONLY into another interval unit would have been asleep next to
 # its patient. Both call sites must stay.
-grep -q 'fleet-collect-kick.sh' "$BIN/tmux-spinner.sh" \
-  || fail "11: the KeepAlive spinner no longer runs the collector self-heal — the headless path is gone"; ok
+grep -q 'fleet-daemon-watch.sh' "$BIN/tmux-spinner.sh" \
+  || fail "11: the KeepAlive spinner no longer runs the daemon self-heal — the headless path is gone"; ok
 grep -q 'KICK_EVERY' "$BIN/tmux-spinner.sh" \
   || fail "11: the spinner's self-heal lost its frame throttle"; ok
 grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
@@ -215,5 +242,44 @@ grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
 grep -q 'fleet_collect_kick_due' "$BIN/tmux-status.sh" \
   || fail "11: the status bar no longer self-heals"; ok
 
-printf 'selftest PASS: %s assertions (fresh · inflight · never · stale · cooldown · trace · log · off · no-unit · bar-self-heal · callers)\n' "$CHECKS"
+# ------------------------------------------------------------- 12. relative ----
+# 12b (below) also covers the in-flight guard end-to-end: it is the STATUS BAR
+# that has to stay quiet while a tick is legitimately long, and the bar reads
+# fleet_collect_stale_age — so the guard has to be visible from there, not only
+# from the daemon lib's own helper.
+
+# The regression #639 is about: `FLEET_COLLECT_STALE=600` (the collector's own
+# supersede deadline) is above the age a 7–14-minute collector ever reaches
+# between spawns, so the alarm that #638 shipped never fired on the degradation
+# that actually happens — only on a full stop. Unset, the threshold is now
+# FLEET_DAEMON_STALE_MULT × the unit's own 60s interval.
+unset FLEET_COLLECT_STALE
+[ "$(lib 'fleet_collect_stale_secs')" = 300 ] \
+  || fail "12: default threshold is not 5× the 60s interval (got $(lib 'fleet_collect_stale_secs'))"; ok
+[ "$(FLEET_DAEMON_STALE_MULT=10 lib 'fleet_collect_stale_secs')" = 600 ] \
+  || fail "12: FLEET_DAEMON_STALE_MULT does not scale the threshold"; ok
+[ "$(FLEET_COLLECT_STALE=900 lib 'fleet_collect_stale_secs')" = 900 ] \
+  || fail "12: the absolute FLEET_COLLECT_STALE override stopped winning"; ok
+# 401s — the exact staleness #639 measured reading `fresh` — now alarms.
+hb 401
+[ -n "$(lib 'fleet_collect_stale_age')" ] \
+  || fail "12: a collector 401s behind a 60s interval still reads fresh (the #639 blind spot)"; ok
+[ -z "$(FLEET_COLLECT_STALE=600 lib 'fleet_collect_stale_age')" ] \
+  || fail "12: 401s should be fresh under the OLD absolute 600s threshold — the fixture no longer reproduces #639"; ok
+case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "12: the bar did not alarm at 401s: $(bar)" ;; esac
+
+# 12b. …and a tick that is IN FLIGHT silences it again, straight from the bar. A
+# 551s git phase is on record from a monorepo fleet: without this the tighter
+# threshold would paint the bar red through every one of that fleet's ticks.
+printf 'pid=1234\nstart=%s\nphase=git\nphase_ts=%s\n' \
+  "$(( $(now) - 900 ))" "$(( $(now) - 900 ))" > "$HB"
+case "$(bar)" in *"⚠ dash stale"*) ok ;; *) fail "12b: no alarm with a 900s-silent heartbeat and no tick: $(bar)" ;; esac
+printf '%s\t%s\n' "$$" "$(( $(now) - 400 ))" > "$G/collect.pid"
+[ -z "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a live tick 400s in was still called stale"; ok
+case "$(bar)" in *"dash stale"*) fail "12b: the bar alarmed while a tick was in flight: $(bar)" ;; esac; ok
+printf '%s\t%s\n' "$$" "$(( $(now) - 900 ))" > "$G/collect.pid"   # past the deadline ⇒ wedged
+[ -n "$(lib 'fleet_collect_stale_age')" ] || fail "12b: a tick past the supersede deadline still counted as alive"; ok
+rm -f "$G/collect.pid"
+
+printf 'selftest PASS: %s assertions (fresh · inflight · never · stale · cooldown · trace · log · off · no-unit · bar-self-heal · callers · relative · in-flight)\n' "$CHECKS"
 exit 0

@@ -51,6 +51,27 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+# --- scheduling heartbeat (issue #639) ---------------------------------------
+# Stamped at the TOP, before any early exit, so "launchd never spawned me" stays
+# distinguishable from "I ran and had nothing to do" — a conf-gated tick that
+# exits immediately still proves it was scheduled. bin/fleet-daemon-watch.sh
+# alarms on, and kicks, a unit whose stamp ages past FLEET_DAEMON_STALE_MULT ×
+# this unit's StartInterval; without it, a pended unit is silent (issue #639:
+# launchd stopped scheduling EVERY interval unit in this user domain and the only
+# daemon anyone noticed was the one collector heartbeat #638 had instrumented).
+# Only the UNIT's own mode counts: `--gate` is called by cleanup / dispatch /
+# base-sync / ledger-watch on every one of THEIR ticks, and crediting those
+# would keep this stamp fresh while com.claude-fleet.diskguard was never run.
+# Sourcing inside the case also keeps `--gate` — four other daemons' hot path —
+# from loading a lib it has no use for.
+# The source is GUARDED and the stamp is a side errand: liveness instrumentation
+# must never be able to kill the daemon it instruments. A half-synced install
+# missing the lib then costs this unit its alarm (it reads `never`, which is
+# silent by design) instead of costing the fleet the daemon.
+# shellcheck source=/dev/null
+case " $* " in *' --watch '*) [ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/fleet-daemon-lib.sh"
+  fleet_daemon_stamp_tick diskguard "$BIN/.."; } ;; esac
+
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
 

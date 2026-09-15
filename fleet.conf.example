@@ -472,10 +472,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # old (2026-09-14: launchd PENDED com.claude-fleet.collect for 103 minutes,
 # `last exit code = 0`, and the dash showed a two-hour-old world). Once
 # global/collect.heartbeat has not advanced for this long the status bar shows
-# `⚠ dash stale 47m`. Defaults to FLEET_COLLECT_DEADLINE, which is by
-# construction above any legitimate tick (a tick past it is killed and
-# superseded) — lower it only if your ticks are reliably fast, or a slow-but-
-# working tick will trip the alarm. GLOBAL: one collector, one threshold.
+# `⚠ dash stale 47m`.
+#
+# AN ABSOLUTE OVERRIDE, and normally leave it unset (issue #639). It used to
+# default to FLEET_COLLECT_DEADLINE (600s) on the reasoning that a tick past the
+# deadline is killed, so nothing legitimate could be older — true, and blind to
+# the failure that actually happens: launchd running this 60s unit once per 7–14
+# MINUTES. Every number on the dash twelve times too old, and the heartbeat age
+# never crossing 600s, so the verdict read `fresh` for hours. Unset, the threshold
+# is FLEET_DAEMON_STALE_MULT × this unit's own 60s interval (300s), which catches
+# the degradation and the full stop with one number. A long-but-WORKING tick is
+# not affected: an in-flight tick (global/collect.pid, younger than
+# FLEET_COLLECT_DEADLINE above) counts as evidence of life on its own, so a fleet
+# whose single git phase runs for minutes — 551s is on record from a monorepo —
+# still never trips the alarm. GLOBAL: one collector, one threshold.
 # @label=Dash staleness alarm @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_STALE=600
 
@@ -499,6 +509,79 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # exists to surface, so the trace outlives the alarm by design. GLOBAL.
 # @label=Self-heal trace window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_KICK_TRACE=1800
+
+# ---- interval-daemon liveness: EVERY unit, not just the collector (#639) ----
+# #636 instrumented the collector. Two days later the same machine showed the
+# fault is domain-wide: launchd stopped scheduling every StartInterval unit at
+# once, all of their logs freezing inside the same two minutes, while the two
+# KeepAlive units never missed a frame. Measured over 27.8 minutes by `runs`:
+# collect got 3 of ~28 due, and cleanup / dispatch / base-sync / issue-bridge /
+# ledger-watch / quotawatch got ZERO — each having last run at a hand-kick
+# minutes earlier. So cleanup stops reaping workers, dispatch stops autofilling,
+# base-sync stops fast-forwarding the base, issue-bridge stops relaying comments
+# (`fleet-comment.sh --to-worker` silently reaches nobody), ledger-watch stops
+# indexing closed sessions — none of it visible, because nothing errors.
+#
+# bin/fleet-daemon-watch.sh watches all of them off a per-unit scheduling stamp,
+# alarms on the status bar (`⚠ daemon stale cleanup,dispatch+2`) and in
+# fleet-doctor, and self-heals — driven by the KeepAlive spinner, because an
+# interval unit is being pended right alongside its patient.
+
+# Staleness MULTIPLIER: a unit is stale once its last tick is this many times its
+# own StartInterval old. Relative, because the units differ by 240× (15s for
+# issue-bridge, 3600s for worktree-autoclean) and because DEGRADATION — not a
+# clean stop — is the usual shape, which no single absolute number can see. 5 is
+# well clear of one slow tick yet far below the 7–14-minute cadence #639
+# measured; raise it on a fleet whose ticks are genuinely long. GLOBAL.
+# @label=Daemon staleness multiplier @group=cache @tier=advanced @scope=global @edit=int
+#FLEET_DAEMON_STALE_MULT=5
+
+# Floor under that multiple, so the 15s units (issue-bridge, pr-refresh) do not
+# alarm on one slow `gh` round-trip. GLOBAL.
+# @label=Daemon staleness floor @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_STALE_FLOOR=180
+
+# Per-unit ABSOLUTE override, in place of the multiple: add a line of the form
+# FLEET_DAEMON_STALE_<UNIT>=<seconds>, the unit name uppercased with `-` → `_`
+# (so `base-sync` is FLEET_DAEMON_STALE_BASE_SYNC). Use it for a unit whose real
+# cadence is not its StartInterval; FLEET_COLLECT_STALE above is the same thing
+# for `collect`. Deliberately not listed as a key here — the set is per unit, so
+# the config modal would show ten arbitrary rows nobody edits. The same shape
+# exists for the kick cooldown (FLEET_DAEMON_KICK_COOLDOWN_<UNIT>) and for a host
+# that templated a different cadence (FLEET_DAEMON_INTERVAL_<UNIT>).
+
+# Daemon SELF-HEAL master switch. 0 keeps every alarm and kicks nothing — the
+# right setting while you are diagnosing WHY a unit stalls. GLOBAL.
+# @label=Daemon self-heal @group=cache @tier=advanced @scope=global @edit=bool
+#FLEET_DAEMON_KICK=1
+
+# Minimum seconds between two kicks OF THE SAME UNIT. Per unit, so a second
+# stalled daemon is still helped while the first is cooling down. Every kick, and
+# every refusal to kick, is logged to logs/daemon-kick.log. GLOBAL.
+# @label=Daemon self-heal cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_KICK_COOLDOWN=600
+
+# How long the status bar keeps the aggregate trace up (`↻ daemon kicked 3m`)
+# after the units recover. GLOBAL.
+# @label=Daemon trace window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_KICK_TRACE=1800
+
+# Ineffective kicks before ESCALATING to a real unload + reload of the unit
+# (`launchctl bootout` + `bootstrap`). A kickstart buys ONE execution, not
+# restored scheduling — that is the whole lesson of the `runs` table above, where
+# every dead unit had been hand-kicked minutes before and never ran again. The
+# counter resets the moment the unit ticks. 0 disables the escalation and leaves
+# kickstart as the only remedy. GLOBAL.
+# @label=Daemon reload after N kicks @group=cache @tier=advanced @scope=global @edit=int
+#FLEET_DAEMON_RELOAD_AFTER=3
+
+# Minimum seconds between two reloads of the same unit — much longer than the
+# kick cooldown, because a reload takes the unit out of the domain and puts it
+# back. A reload that leaves it UNLOADED does NOT consume this: the next pass
+# bootstraps it again at once, since an unloaded unit is worse than a pended one.
+# GLOBAL.
+# @label=Daemon reload cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_RELOAD_COOLDOWN=1800
 
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
 # PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
