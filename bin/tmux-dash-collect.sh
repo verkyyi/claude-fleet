@@ -16,9 +16,14 @@
 #   fleets/<slug>/parents — child<TAB>parent per repo for sub-issues (issue #335), from
 #                           a small separate GraphQL pass (parent isn't in `gh issue
 #                           list --json`). Lets the backlog nest a child under its parent
-#   global/git_<key>      — branch<TAB>dirty  per live worktree (every run). Keyed by a
-#                           globally-unique worktree path, so it lives in global/ (not
-#                           per-fleet) — the reader resolves it without a slug lookup
+#   global/git_<key>      — branch<TAB>  per live worktree (budgeted, round-robin —
+#                           issue #552). Keyed by a globally-unique worktree path, so it
+#                           lives in global/ (not per-fleet) — the reader resolves it
+#                           without a slug lookup. Field 2 was a dirty star no reader
+#                           ever consumed and is now always empty; see the git phase
+#                           below for why `git status` is gone
+#   global/collect.git.cursor — the worktree the git phase CLAIMED last; the next tick
+#                           resumes after it, so one wedged worktree can't starve the rest
 #   global/ctx_<key>      — model<TAB>context-tokens per worktree (every run)
 #   global/usage          — token-consumption proxy 5h/7d       (≥300s)
 #   global/usage.filecache— per-file raw token sums keyed by (mtime,size) — memoizes
@@ -362,18 +367,87 @@ done
 # resolved fleet and only falls back to the un-slug'd name during cold start.
 
 hb_phase git
-# --- git per live worktree (every run) ---
-lw_all '#{pane_current_path}' | sort -u | while read -r path; do
-  [ -z "$path" ] && continue
-  git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
-  key=$(cache_key "$path")
-  branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null); dirty=''
-  [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ] && dirty='✱'
-  ab=$(git -C "$path" rev-list --left-right --count "$BASE...HEAD" 2>/dev/null)
-  behind=$(echo "$ab" | awk '{print $1+0}'); ahead=$(echo "$ab" | awk '{print $2+0}')
-  [ "${ahead:-0}" != 0 ] && branch="$branch+$ahead"; [ "${behind:-0}" != 0 ] && branch="$branch-$behind"
-  printf '%s\t%s' "$branch" "$dirty" | atomic_write "$G/git_$key"
-done
+# --- git per live worktree (every run) — BUDGETED + round-robin (issue #552) ------
+# This phase was the tick's sinkhole. One `git status --porcelain` on a
+# 24haowan-monorepo worktree held the loop for 4m42s, and with ~15 such worktrees
+# live the phase alone ran minutes. launchd does NOT overlap a StartInterval job,
+# so a tick longer than its own 60s interval degrades the collector's REAL cadence
+# to "one tick's duration" — measured at 5.3 min between runs, which is why the
+# dash could show a two-hours-stale world (#636). Three changes fix it:
+#
+#   1. NO `git status`. The dirty column (✱) this loop used to compute is read by
+#      NOTHING: tmux-dashboard-rows.sh takes field 1 (`read -r branch _`) and
+#      tmux-pr-refresh.sh does `cut -f1`. So the most expensive call per worktree —
+#      a full working-tree scan of a large monorepo — produced a value nobody
+#      consumed. The on-disk format is unchanged (branch<TAB>, field 2 now always
+#      empty = byte-identical to what a clean worktree already wrote), so no reader
+#      moves. A future reader that wants dirtiness back must fetch it INSIDE the
+#      budget below, never as an un-timeboxed call here.
+#   2. A WALL-CLOCK BUDGET around the whole phase (FLEET_COLLECT_GIT_BUDGET, 30s).
+#      Around the whole phase, not each call: fleet_timebox polls at 1s, so
+#      per-call it puts a 1s FLOOR on ~50 calls (measured: 53s for a scan whose
+#      real work is ~1.5s). One box costs ~1s a tick and still kills the tree.
+#   3. ROUND-ROBIN, so the budget cannot starve anyone. The cursor
+#      (global/collect.git.cursor) is stamped with a worktree BEFORE its git work
+#      and the next tick resumes at the one AFTER it — a worktree that wedges is
+#      retried once per rotation instead of eating every tick's budget, and the
+#      worktrees behind it still refresh.
+#
+# A worktree slower than FLEET_COLLECT_GIT_SLOW (10s) is named on stderr (→
+# logs/collect.launchd.log): the heartbeat only carries the phase total.
+GIT_BUDGET="${FLEET_COLLECT_GIT_BUDGET:-30}"
+GIT_SLOW="${FLEET_COLLECT_GIT_SLOW:-10}"
+GIT_CURSOR="$G/collect.git.cursor"
+GIT_DONE="$G/collect.git.done.$$"   # how far the scan got; read back after the box
+                                    # (it runs in fleet_timebox's subshell, so a
+                                    # counter variable would not survive). The $$
+                                    # suffix puts it in the EXIT trap's sweep.
+# shellcheck disable=SC2329  # invoked as fleet_timebox's argv below, not by name
+git_scan() {
+  local p n i pos=0 cur key branch ab behind ahead s0 d
+  local -a paths; paths=()
+  while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done \
+    < <(lw_all '#{pane_current_path}' | sort -u)
+  n=${#paths[@]}; [ "$n" -gt 0 ] || return 0
+  # Resume just AFTER the worktree the last tick was working on (the cursor names
+  # the one it CLAIMED, which is the one that wedged if the budget blew).
+  cur=$(cat "$GIT_CURSOR" 2>/dev/null)
+  if [ -n "$cur" ]; then
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      [ "${paths[$i]}" = "$cur" ] && { pos=$(( (i + 1) % n )); break; }
+      i=$((i+1))
+    done
+  fi
+  SECONDS=0   # per-worktree timing with no `date` fork (bash builtin)
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    p="${paths[$(( (pos + i) % n ))]}"; i=$((i+1))
+    printf '%s' "$p" > "$GIT_CURSOR"    # claim BEFORE the work: a wedge rotates back
+    printf '%s' "$i" > "$GIT_DONE"
+    s0=$SECONDS
+    if git -C "$p" rev-parse --git-dir >/dev/null 2>&1; then
+      key=$(cache_key "$p")
+      branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      ab=$(git -C "$p" rev-list --left-right --count "$BASE...HEAD" 2>/dev/null)
+      # "<behind>\t<ahead>" → two ints with no awk fork (2 per worktree, every tick)
+      behind=0; ahead=0
+      case "$ab" in *[0-9]*) behind=${ab%%[!0-9]*}; ahead=${ab##*[!0-9]} ;; esac
+      [ "$ahead"  != 0 ] && branch="$branch+$ahead"
+      [ "$behind" != 0 ] && branch="$branch-$behind"
+      printf '%s\t' "$branch" | atomic_write "$G/git_$key"
+    fi
+    d=$(( SECONDS - s0 ))
+    [ "$d" -ge "$GIT_SLOW" ] && printf 'fleet-collect: git took %ss on %s\n' "$d" "$p" >&2
+  done
+  return 0
+}
+fleet_timebox "$GIT_BUDGET" git_scan; git_rc=$?
+if [ "$git_rc" = 124 ]; then
+  printf 'fleet-collect: git phase hit the %ss budget (FLEET_COLLECT_GIT_BUDGET) after %s worktree(s) — the rest keep last tick'\''s branch; next tick resumes after %s\n' \
+    "$GIT_BUDGET" "$(cat "$GIT_DONE" 2>/dev/null || echo 0)" "$(cat "$GIT_CURSOR" 2>/dev/null)" >&2
+fi
+rm -f "$GIT_DONE"
 
 hb_phase ctx
 # --- per-window context tokens (every run): newest transcript's last-turn input+cache ---
