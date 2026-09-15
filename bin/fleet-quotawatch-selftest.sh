@@ -72,7 +72,8 @@ case "$(cat "$FAKE_B_SHAPE_FILE" 2>/dev/null)" in
   shape)   b='{"account_uuid":"u-b","label":"b","headroom_pct":0}' ;;
   *)       b=$(printf '{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}' "$((100-pb))" "$pb" "$r5") ;;
 esac
-printf '{"verdict":"ok","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},%s]}' "$((100-p))" "$p" "$r5" "$b"
+# verdict: go|hold|unknown only (cmd/ccquota/budget.go) — never "ok" (issue #668).
+printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},%s]}' "$((100-p))" "$p" "$r5" "$b"
 FAKE
 # --- fake tmux: strips -L; one live fleet `sessA`; two windows (@1 on a, @2 on b);
 # display-message -p answers a pane pid (ours — no claude under it, so the peer
