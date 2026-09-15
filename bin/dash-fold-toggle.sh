@@ -169,21 +169,47 @@ if [ "$holder" = "$selfkey" ]; then
   exit 0
 fi
 # Collapsed from INSIDE the block: the cursor's row just vanished, so put the
-# cursor on the parent that swallowed it. The new index is read from the producer
-# itself (field1 is the row's `sess:idx` target) — line number minus the one
-# header line fzf consumes via --header-lines=1. reload-SYNC so the list is in
-# place before pos() moves into it; best-effort — a plain reload if the row
-# cannot be found, never a wrong jump.
+# cursor on the parent that swallowed it. That needs the parent's new INDEX, which
+# only the producer knows — field1 of each row is its `sess:idx` target, and the
+# index is its line number minus the one header line fzf consumes via
+# --header-lines=1.
+#
+# ONE render, not two. The obvious shape — compute the index from a render here,
+# then hand fzf `reload(bash <producer>)` — makes this the only keystroke on the
+# dash that renders the list TWICE, and a render is the expensive thing here (the
+# whole of issue #662). So the render is KEPT: it goes to a per-fleet snapshot and
+# fzf is pointed at THAT. A second benefit falls out — the list fzf draws is
+# byte-identical to the one the index was computed against, so the two cannot
+# disagree about where the parent is, however busy the fleet is at that instant.
+# The 1Hz tick repaints from the live producer a moment later, so the snapshot is
+# never what is on screen for long. (Measured on a live fleet: the reload drops
+# from 97ms to 6ms.)
+# Written temp+mv so fzf can never cat a half-written file, and under ONE fixed
+# name per fleet, so it is overwritten rather than accumulated — nothing to clean
+# up. Any failure falls back to the plain reload: a keystroke that costs an extra
+# render is fine, a blank list is not.
 htgt=$(tmux display-message -p -t "$hwid" '#{session_name}:#{window_index}' 2>/dev/null) || htgt=''
+SNAP="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
 pos=''
 if [ -n "$htgt" ]; then
-  # -F"$US", never -F'\x1f': `\x` in a field separator is a GAWK extension and BSD
-  # awk (macOS) takes it literally, so the split never happens and every lookup
-  # comes back empty — a silently pos()-less fold on exactly the operator's machine.
-  pos=$(bash "$ROWS" 2>/dev/null | awk -F"$US" -v t="$htgt" 'NR>1 && $1==t {print NR-1; exit}')
+  mkdir -p "${SNAP%/*}" 2>/dev/null || true
+  if bash "$ROWS" > "$SNAP.$$" 2>/dev/null && [ -s "$SNAP.$$" ]; then
+    mv -f "$SNAP.$$" "$SNAP"
+    # -F"$US", never -F'\x1f': `\x` in a field separator is a GAWK extension and BSD
+    # awk (macOS) takes it literally, so the split never happens and every lookup
+    # comes back empty — a silently pos()-less fold on exactly the operator's machine.
+    pos=$(awk -F"$US" -v t="$htgt" 'NR>1 && $1==t {print NR-1; exit}' "$SNAP" 2>/dev/null)
+  else
+    rm -f "$SNAP.$$"
+  fi
 fi
+# An fzf action's argument ends at the matching `)`, and its command is split on
+# whitespace — so a snapshot path holding a paren or a space would truncate the
+# action or turn `cat` into a two-file read. Neither happens under a normal TMPDIR,
+# and if it ever does the plain reload is the right answer, not a mangled list.
+case "$SNAP" in *' '*|*'('*|*')'*) pos='' ;; esac
 case "$pos" in
   ''|*[!0-9]*) echo "reload(bash $ROWS)" ;;
-  *)           echo "reload-sync(bash $ROWS)+pos($pos)" ;;
+  *)           echo "reload-sync(cat $SNAP)+pos($pos)" ;;
 esac
 exit 0

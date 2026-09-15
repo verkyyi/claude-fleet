@@ -173,12 +173,35 @@ eq "← again is a no-op" "" "$(bash "$HIST" fold collapse landed:900)"
 
 # B3. ← from INSIDE the block shuts that block — from a child AND a grandchild
 #     (a 2-hop walk) — and moves the cursor to the parent that swallowed the row.
+# As on the live side, what is pinned is the INVARIANT: the index fzf jumps to must
+# be the parent's row in the very list fzf is told to load, and that list must be
+# the snapshot already rendered — pointing fzf back at the producer would render
+# twice (issue #662).
+assert_cursor_lands_on_parent() { # <action> <expected field1> <label>
+  local act="$1" want="$2" label="$3" path idx got
+  case "$act" in
+    "reload-sync(cat "*")+pos("*")") ;;
+    *) fail "$label — expected a snapshot reload + pos(), got" "$act" ;;
+  esac
+  CHECKS=$((CHECKS+1))
+  case "$act" in
+    *tmux-dashboard-rows.sh*) fail "$label — the action re-runs the producer, so the keystroke renders TWICE (issue #662)" "$act" ;;
+  esac
+  CHECKS=$((CHECKS+1))
+  path=${act#reload-sync(cat }; path=${path%%)*}
+  idx=${act##*+pos(}; idx=${idx%)}
+  [ -s "$path" ] || fail "$label — the snapshot fzf is pointed at is missing or empty: $path"
+  CHECKS=$((CHECKS+1))
+  got=$(awk -F"$US" -v n=$(( idx + 1 )) 'NR==n {print $1; exit}' "$path")
+  [ "$got" = "$want" ] || fail "$label — pos($idx) lands on [$got], not the parent [$want]" "$(cat "$path")"
+  CHECKS=$((CHECKS+1))
+}
+
 for inner in landed:901 landed:902; do
   bash "$HIST" fold expand landed:900 >/dev/null
   act=$(bash "$HIST" fold collapse "$inner")
   eq "← from $inner shuts the block it is in" "0" "$( [ -e "$FOLDFILE" ] && echo 1 || echo 0 )"
-  contains "← from $inner repaints" "$act" "reload"
-  case "$act" in *"pos("*) CHECKS=$((CHECKS+1)) ;; *) fail "← from $inner should put the cursor on the parent" "$act" ;; esac
+  assert_cursor_lands_on_parent "$act" "landed:900" "← from $inner"
 done
 
 # B4. → from inside a block is a no-op: the row is only on screen because the

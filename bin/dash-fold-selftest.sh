@@ -220,14 +220,52 @@ eq "← again is a no-op (already shut)" "" "$(bash "$FOLD" collapse "$(idx_of "
 
 # B4. ← from INSIDE the block shuts that block and moves the cursor to the parent
 #     that swallowed the row — from a child AND from a grandchild (a 2-hop walk).
+#
+# What is actually pinned is the INVARIANT, not the shape of the action: the index
+# fzf is told to jump to must be the parent's row in the very list fzf is told to
+# load. And that list must be the snapshot the helper ALREADY rendered — pointing
+# fzf back at the producer would make this the one keystroke that renders twice,
+# which is the whole of issue #662 creeping back in.
+assert_cursor_lands_on_parent() { # <action> <expected field1> <label>
+  local act="$1" want="$2" label="$3" path idx got
+  case "$act" in
+    "reload-sync(cat "*")+pos("*")") ;;
+    *) fail "$label — expected a snapshot reload + pos(), got" "$act" ;;
+  esac
+  CHECKS=$((CHECKS+1))
+  case "$act" in
+    *tmux-dashboard-rows.sh*) fail "$label — the action re-runs the producer, so the keystroke renders TWICE (issue #662)" "$act" ;;
+  esac
+  CHECKS=$((CHECKS+1))
+  path=${act#reload-sync(cat }; path=${path%%)*}
+  idx=${act##*+pos(}; idx=${idx%)}
+  [ -s "$path" ] || fail "$label — the snapshot fzf is pointed at is missing or empty: $path"
+  CHECKS=$((CHECKS+1))
+  # +1: fzf consumes the producer's first line as --header-lines=1, so item N is
+  # line N+1 of the file.
+  got=$(awk -F"$US" -v n=$(( idx + 1 )) 'NR==n {print $1; exit}' "$path")
+  [ "$got" = "$want" ] || fail "$label — pos($idx) lands on [$got], not the parent [$want]" "$(cat "$path")"
+  CHECKS=$((CHECKS+1))
+}
+
 for inner in "$W_kid" "$W_grand"; do
   nm=$(tmux display-message -p -t "$inner" '#{window_name}')
   tmux set-window-option -t "$W_root" @expand 1
   act=$(bash "$FOLD" collapse "$(idx_of "$inner")" '')
   eq "← from '$nm' shuts the block it is in" "" "$(opt "$W_root")"
-  contains "← from '$nm' repaints" "$act" "reload"
-  case "$act" in *"pos("*) CHECKS=$((CHECKS+1)) ;; *) fail "← from '$nm' should put the cursor back on the parent" "$act" ;; esac
+  assert_cursor_lands_on_parent "$act" "$(idx_of "$W_root")" "← from '$nm'"
 done
+
+# B4b. …but only when the snapshot path is safe to splice into an fzf action.
+#      An action's argument ends at the matching `)` and its command is split on
+#      whitespace, so a path holding a space or a paren has to fall back to the
+#      plain reload — an extra render, never a truncated action or a `cat` reading
+#      two files. Driven through TMPDIR, which is what FLEET_C derives from.
+mkdir -p "$WORK/with space"
+tmux set-window-option -t "$W_root" @expand 1
+act=$(TMPDIR="$WORK/with space" bash "$FOLD" collapse "$(idx_of "$W_kid")" '')
+eq "a space in the snapshot path falls back to the plain reload"   "reload(bash $ROWS)" "$act"
+eq "… and the fold itself still happened" "" "$(opt "$W_root")"
 
 # B5. → from inside a block is a no-op: the row is only on screen because its
 #     block is already open, and folding something else under the cursor would be
