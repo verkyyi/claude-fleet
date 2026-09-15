@@ -104,7 +104,9 @@ cleanup
 t0=$SECONDS; out=$(fleet_timebox "$BUDGET" forker 2>/dev/null); rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
 if [ "$el" -gt "$CEILING" ]; then
-  fail "3: \$( ) blocked ${el}s on a ${BUDGET}s budget — an orphan is holding the pipe open"
+  fail "3: \$( ) blocked ${el}s on a ${BUDGET}s budget — an orphan is holding the pipe open (captured: ${out:-<empty>})"
+elif [ "$rc" != 124 ]; then
+  fail "3: a budget blown inside \$( ) must still return 124, got $rc"
 elif [ "$n" != 0 ]; then
   fail "3: $n orphan(s) survived a budget blown inside \$( )"
 else
