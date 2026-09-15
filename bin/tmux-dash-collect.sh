@@ -47,6 +47,21 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+# --- scheduling heartbeat (issue #639) ---------------------------------------
+# collect.heartbeat below already proves PROGRESS (phase_ts advances at every
+# phase boundary, so a long tick keeps saying it is alive). This stamp proves
+# SCHEDULING, which is a different question and the one #639 is about: a tick
+# that skips because a younger one holds collect.pid, or bails before its first
+# phase, writes no heartbeat at all — yet launchd did spawn it. Stamped before
+# every early exit so the two signals can only ever agree upward.
+# The source is GUARDED and the stamp is a side errand: liveness instrumentation
+# must never be able to kill the daemon it instruments. A half-synced install
+# missing the lib then costs this unit its alarm (it reads `never`, which is
+# silent by design) instead of costing the fleet the daemon.
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/fleet-daemon-lib.sh"
+  fleet_daemon_stamp_tick collect "$BIN/.."; }
+
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"     # fleet_limit_banner (pure lib, no dispatch)

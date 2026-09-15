@@ -32,6 +32,12 @@ else
   R=''; G=''; Y=''; B=''; Z=''
 fi
 fails=0; warns=0
+
+# The interval-daemon liveness registry (issue #639). POSIX-clean on purpose so
+# this /bin/sh doctor can source it, unlike the bash-only fleet-lib.sh.
+_dlib="$(dirname "$0")/fleet-daemon-lib.sh"
+# shellcheck source=/dev/null
+[ -f "$_dlib" ] && . "$_dlib"
 pass() { printf '  %sPASS%s  %-8s %s\n'  "$G" "$Z" "$1" "$2"; }
 warn() { printf '  %sWARN%s  %-8s %s\n'  "$Y" "$Z" "$1" "$2"; warns=$((warns+1)); }
 fail() { printf '  %sFAIL%s  %-8s %s\n'  "$R" "$Z" "$1" "$2"; fails=$((fails+1)); }
@@ -528,7 +534,7 @@ if [ -f "$hb" ]; then
   if [ "$hb_end" -gt 0 ]; then
     hb_age=$((hb_now - hb_end))
     if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
-      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-collect-kick.sh self-heals, see below)"
+      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-daemon-watch.sh self-heals, see below)"
     else
       pass collect "last tick ${hb_age}s ago, took ${hb_dur:-?}s (slowest phase ${hb_slow:-?}; deadline ${FLEET_COLLECT_DEADLINE:-600}s)"
     fi
@@ -544,20 +550,60 @@ else
   printf '        note: no collector heartbeat yet (global/collect.heartbeat) — the collector has not completed a tick since #551; run bin/tmux-dash-collect.sh once or check com.claude-fleet.collect.\n'
 fi
 
-# --- collector self-heal trace (issue #636) -------------------------------------
-# launchd can PEND com.claude-fleet.collect for hours (`pended nondemand spawn =
-# interval`, `last exit code = 0`) — the dash then shows an old world rather than
-# an empty one. bin/fleet-collect-kick.sh kicks the unit when the heartbeat above
-# goes stale, at most once per FLEET_COLLECT_KICK_COOLDOWN. A kick is not a
-# problem solved: it is evidence the daemon stalled, so say so here for as long as
-# the stamp is worth reading, and point at the log that has the whole history.
-kick_ts_f="${TMPDIR:-/tmp}/.claude-dash/global/collect.kick.ts"
-if [ -f "$kick_ts_f" ]; then
-  kick_ts=$(cat "$kick_ts_f" 2>/dev/null); case "$kick_ts" in ''|*[!0-9]*) kick_ts=0;; esac
-  if [ "$kick_ts" -gt 0 ]; then
-    kick_age=$(( $(date +%s) - kick_ts ))
-    printf '        note: collector self-heal last kicked com.claude-fleet.collect %sm ago — the daemon had stopped ticking; history in logs/collect-kick.log.\n' \
-      "$(( kick_age / 60 ))"
+# --- interval-daemon liveness + self-heal (issues #636, #639) -------------------
+# launchd can PEND a StartInterval unit for hours (`state = not running`, `pended
+# nondemand spawn = interval`, `last exit code = 0`) — and #639 measured it doing
+# that to EVERY interval unit in this user domain at once, every log freezing
+# inside the same two minutes while the two KeepAlive units never missed a frame.
+# Nothing errors and nothing empties: the collector just serves a two-hour-old
+# world, cleanup stops reaping workers, dispatch stops autofilling, base-sync
+# stops fast-forwarding the base, issue-bridge stops relaying comments,
+# ledger-watch stops indexing closed sessions.
+#
+# So every unit is checked here, each against its OWN StartInterval rather than
+# one absolute number — the failure is usually DEGRADATION, not a stop: the
+# measured collector was running once per 7–14 minutes against a 60s interval and
+# the old absolute 600s threshold called that `fresh` for hours.
+#
+# A unit that has NEVER ticked on this host is counted, not warned: that is a
+# fresh install, or a unit this machine never had (#492 — ledger-watch was missing
+# for months while the doctor printed PASS), and fleet-daemon-loaded.sh above is
+# the check that answers "is it installed?".
+if command -v fleet_daemon_unit_names >/dev/null 2>&1; then
+  d_root="$(dirname "$0")/.."
+  d_over=0; d_never=0; d_fresh=0
+  for d_u in $(fleet_daemon_unit_names); do
+    if [ "$(fleet_daemon_tick_ts "$d_u" "$d_root")" -le 0 ]; then d_never=$((d_never+1)); continue; fi
+    d_age=$(fleet_daemon_overdue "$d_u" "$d_root")
+    if [ -z "$d_age" ]; then d_fresh=$((d_fresh+1)); continue; fi
+    d_over=$((d_over+1))
+    d_int=$(fleet_daemon_interval "$d_u"); d_thr=$(fleet_daemon_stale_secs "$d_u")
+    d_f=$(fleet_daemon_kick_fails "$d_u" "$d_root")
+    # A kickstart buys ONE execution, not restored scheduling (#639 measured six
+    # units at ZERO runs over 27.8 min right after a hand-kick), so the count of
+    # kicks that did NOT bring it back is the number worth reading: past
+    # FLEET_DAEMON_RELOAD_AFTER the watch escalates to a real unload + reload, and
+    # a unit still stalled after THAT is one only a human can fix.
+    d_note=''
+    if [ "$d_f" -gt 0 ]; then
+      d_note=", self-healed ${d_f}× with no effect"
+      [ "$d_f" -ge "$(fleet_daemon_reload_after)" ] && d_note="$d_note — escalated to unload+reload"
+    fi
+    warn daemons "com.claude-fleet.$d_u last ticked $((d_age/60))m ago — $((d_age/d_int))× its own ${d_int}s StartInterval (alarms past ${d_thr}s)${d_note}. Nothing is scheduling it; bin/fleet-daemon-watch.sh drives the self-heal from the KeepAlive spinner (history: logs/daemon-kick.log)"
+  done
+  if [ "$d_over" = 0 ]; then
+    d_note=''
+    # "Never seen" is not a complaint — see the note above — but it IS the number
+    # that tells you whether this host is running the daemons you think it is.
+    [ "$d_never" -gt 0 ] && d_note=" ($d_never never seen on this host)"
+    pass daemons "$d_fresh interval unit(s) ticking inside ${FLEET_DAEMON_STALE_MULT:-5}× their own StartInterval$d_note"
+  fi
+  # A kick is not a problem solved: it is evidence a daemon stalled, so say so for
+  # as long as the stamp is worth reading and point at the whole history.
+  d_kick=$(fleet_daemon_recent_kick "$d_root")
+  if [ -n "$d_kick" ]; then
+    printf '        note: daemon self-heal last kicked a unit %sm ago — it had stopped being scheduled; per-unit history in logs/daemon-kick.log.\n' \
+      "$(( d_kick / 60 ))"
   fi
 fi
 

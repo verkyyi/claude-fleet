@@ -231,7 +231,9 @@ $TMPDIR/.claude-dash/
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state
     collect.pid · collect.heartbeat           # collector overlap guard + per-phase heartbeat (#551)
-    collect.kick.ts · collect.kick.lock/      # collector self-heal: rate limit + dash trace (#636)
+    <unit>.tick                               # each interval daemon's SCHEDULING stamp (#639)
+    <unit>.kick.ts · <unit>.kick.lock/        # per-unit self-heal: rate limit + dash trace (#636, #639)
+    <unit>.kick.fails · <unit>.reload.ts      # …and its escalation ladder (#639)
     quotawatch.lock/ · quotawatch.heartbeat   # quota watch (bin/fleet-quotawatch.sh) lock + heartbeat
     quota.warn.<acct> · quota.ceiling.<acct>  # once-per-reset-window rotation markers (#513)
     account.phase · quota.phase              # 5h-window phase stagger + its re-plan marker (#598)
@@ -246,6 +248,41 @@ reader shows "loading" until the fetch lands. The `git_`/`ctx_` caches
 are keyed by a globally-unique worktree path (so they cannot
 collide across fleets) and live under `global/`, keeping the fork-free dashboard
 hot path a single slug lookup per repaint.
+
+#### Daemon liveness lives in that bucket too (issue #639)
+
+Every fleet daemon except two is a `StartInterval` unit, and launchd has been
+observed to simply stop scheduling *all* of them in a user domain at once — no
+error, no exit code, every log freezing inside the same two minutes. Nothing
+breaks loudly: the dash serves a two-hour-old world, workers stop being reaped,
+autofill stops, the base stops fast-forwarding, `--to-worker` comments reach
+nobody. So each daemon stamps `global/<unit>.tick` at the top of its script
+(before any early exit — "launchd never spawned me" must stay distinguishable
+from "I ran and had nothing to do"), and `bin/fleet-daemon-watch.sh` judges each
+against **multiples of that unit's own `StartInterval`** rather than one absolute
+number, because the usual shape is degradation: a 60s collector running once per
+7–14 minutes never looked stale against the old 600s threshold. A tighter
+threshold is only safe because an **in-flight** tick counts as evidence of life
+on its own (`global/collect.pid`, while younger than the supersede deadline) — the
+collector's heartbeat advances at phase *boundaries*, and one phase can
+legitimately run for minutes.
+
+Two asymmetries make the design work:
+
+- **Only a KeepAlive unit may do the healing.** The spinner
+  (`com.claude-fleet.spinner`) carries the watch, because an interval unit is
+  pended right alongside its patient. That is the same reason the stuck-`working`
+  sweep lives there.
+- **A `kickstart` buys one execution, not a restored schedule** — measured: six
+  units logged zero runs across 27.8 minutes *after* being hand-kicked. So
+  ineffective kicks are counted per unit and escalate to a real
+  `bootout`+`bootstrap`, verified afterwards, since a unit left *unloaded* is the
+  one outcome worse than a pended one.
+
+Stamps are scoped to the **install root**: the live install writes the shared
+`global/` bucket above, and any other checkout writes a `dev-<hash>/` sibling — a
+worker testing the self-heal inside its own worktree must not put `↻ dash kicked`
+on the operator's status bar.
 
 ### Bootstrap: `fleet-up.sh [<owner/repo>] [<dir>]`
 

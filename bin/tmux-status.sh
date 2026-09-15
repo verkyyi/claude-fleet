@@ -2,6 +2,7 @@
 # tmux-status.sh — right side of the tmux status bar.
 # Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
 #        [│ ⚠ quota stale 47m] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
+#        [│ ⚠ daemon stale cleanup,dispatch+2 ↻3m | ↻ daemon kicked 3m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
 #               DSK green >1.5×floor, yellow ≤1.5×floor, red ≤FLEET_DISK_FLOOR_GB.
@@ -12,6 +13,11 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/usage-lib.sh"
+# The interval-daemon liveness registry + relative-interval thresholds (issue
+# #639). Sourced HERE and not from usage-lib.sh so nothing has to guess a lib's
+# own directory: it is also what makes fleet_collect_stale_secs relative rather
+# than the absolute 600s that read `fresh` through a 7–14-minute collector.
+. "$BIN/fleet-daemon-lib.sh"
 
 # Palette (Tokyo Night)
 RED="#[fg=#f7768e]"
@@ -174,6 +180,43 @@ elif [ -n "$ckick" ] && [ "$ckick" -lt "$ktrace" ]; then
     collect_seg="${DIM}│ ${YELLOW}↻ dash kicked $(fleet_usage_human_secs "$ckick") "
 fi
 
+# --- every OTHER interval daemon (issue #639): the THIRD always-on alarm. The
+# collector was only the unit we happened to have instrumented. When launchd stops
+# scheduling this user domain it stops scheduling all of them at once — cleanup
+# stops reaping workers, dispatch stops autofilling, base-sync stops
+# fast-forwarding the base, issue-bridge stops relaying comments, ledger-watch
+# stops indexing closed sessions — and every one of those failures is INVISIBLE:
+# nothing empties, nothing errors, the fleet just quietly stops doing its
+# housekeeping. So one compact red segment naming the units, on the same
+# always-on terms as the two alarms above (never freshness-gated, never silent),
+# with the same `↻` trace that outlives the recovery.
+#
+# `collect` is excluded because it has the segment above — a frozen dash is the
+# symptom the operator already knows `⚠ dash stale` for, and printing it twice
+# would only make the bar noisier at the moment it needs to be read. Names are
+# capped at two plus a `+N` so a whole-domain outage (all ten units) stays one
+# glance wide instead of wrapping the bar. The KICK is NOT driven from here: the
+# spinner is KeepAlive, i.e. the one daemon that cannot itself be pended, and it
+# runs the watch every 30s whether or not anybody is attached (bin/tmux-spinner.sh).
+daemon_seg=""
+dtrace="${FLEET_DAEMON_KICK_TRACE:-$ktrace}"
+dnames=""; dn=0
+for du in $(fleet_daemon_overdue_list "$BIN/.." collect); do
+    dn=$((dn + 1))
+    [ "$dn" -le 2 ] && dnames="${dnames:+$dnames,}$du"
+done
+dkick=$(fleet_daemon_recent_kick "$BIN/.." collect)
+if [ "$dn" -gt 0 ]; then
+    [ "$dn" -gt 2 ] && dnames="$dnames+$((dn - 2))"
+    daemon_seg="${DIM}│ ${RED}⚠ daemon stale $dnames"
+    if [ -n "$dkick" ] && [ "$dkick" -lt "$dtrace" ]; then
+        daemon_seg="${daemon_seg} ↻$(fleet_usage_human_secs "$dkick")"
+    fi
+    daemon_seg="${daemon_seg} "
+elif [ -n "$dkick" ] && [ "$dkick" -lt "$dtrace" ]; then
+    daemon_seg="${DIM}│ ${YELLOW}↻ daemon kicked $(fleet_usage_human_secs "$dkick") "
+fi
+
 # --- No account chip. The green `◉ <account>` segment (issue #289) mirrored the
 # fleet-wide global/account.active pointer, i.e. "the account new sessions use".
 # Since #513 that pointer is RE-PICKED on every spawn from ccquota headroom, so
@@ -184,5 +227,5 @@ fi
 
 # --- Output --- (claude count + hostname dropped — the window list and dash cover those;
 # name your tmux session after your fleet so status-left carries the title)
-printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s%s" \
-    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg" "$quota_seg" "$collect_seg"
+printf " %s${BLUE}CPU %s ${DIM}│ ${BLUE}MEM %s %s%s%s%s%s" \
+    "$container" "$cpu_out" "$mem_out" "$dsk_seg" "$usage_seg" "$quota_seg" "$collect_seg" "$daemon_seg"

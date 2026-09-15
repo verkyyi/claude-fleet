@@ -16,7 +16,7 @@
 #
 # Two throttled side errands ride this loop, because being KeepAlive makes it the
 # one fleet daemon that is always already running: the stuck-working sweep
-# (issue #101) and the dash collector's self-heal (issue #636).
+# (issue #101) and the INTERVAL-DAEMON self-heal (issues #636, #639).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 INTERVAL="${SPIN_INTERVAL:-0.12}"
 NFRAMES=10
@@ -95,7 +95,7 @@ STUCK_CHECK_SECS=10   # evaluate at most ~every 10s, not every frame
 STUCK_EVERY=$(awk -v c="$STUCK_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 sc=0            # frame counter for the throttle
 
-# --- collector self-heal throttle (issue #636) -------------------------------
+# --- interval-daemon self-heal throttle (issues #636, #639) ------------------
 # See the call site in the frame loop for why the SPINNER is the daemon that
 # carries this. Same throttle idiom as the stuck sweep above: frames, computed
 # once from the frame interval, at least 1.
@@ -163,23 +163,26 @@ while :; do
     [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
   fi
 
-  # Throttled collector self-heal (issue #636). This daemon is KeepAlive — a
-  # single process that has been up since boot — while EVERY other fleet daemon
-  # is a StartInterval unit. On 2026-09-14 launchd stopped spawning the interval
-  # units in this user domain for 103 minutes (collect, quotawatch, cleanup,
-  # dispatch, base-sync, issue-bridge, ledger-watch: every log stopped inside the
-  # same two minutes, and `kickstart -k` revived them instantly); the spinner and
-  # the webhook, the two long-running ones, never missed a frame. So the spinner
-  # is the ONE daemon that can be relied on to notice, and a self-heal that lived
-  # only in another interval unit would have been pended right alongside its
-  # patient. The status bar kicks too, but only while somebody is attached.
-  # Cost: one integer compare per frame; the kick script itself (~30 ms, and it
-  # exits on a heartbeat read when the collector is healthy) at most every
-  # KICK_CHECK_SECS, and the rate limit + log + dash trace live inside it.
+  # Throttled interval-daemon self-heal (issues #636, #639). This daemon is
+  # KeepAlive — a single process that has been up since boot — while EVERY other
+  # fleet daemon is a StartInterval unit. On 2026-09-14 launchd stopped spawning
+  # the interval units in this user domain for 103 minutes (collect, quotawatch,
+  # cleanup, dispatch, base-sync, issue-bridge, ledger-watch: every log stopped
+  # inside the same two minutes, and `kickstart -k` revived them instantly); the
+  # spinner and the webhook, the two long-running ones, never missed a frame. So
+  # the spinner is the ONE daemon that can be relied on to notice, and a self-heal
+  # that lived only in another interval unit would have been pended right
+  # alongside its patient — which is precisely why #639 moved the kick from the
+  # collector-only script to the whole registry HERE, and not into a new unit.
+  # The status bar kicks the collector too, but only while somebody is attached.
+  # Cost: one integer compare per frame; the watch itself at most every
+  # KICK_CHECK_SECS, and it costs ~10 forkless stamp reads when every unit is
+  # healthy (a launchctl round-trip only for a unit that already looks overdue).
+  # The rate limit, the log and the dash trace all live inside it, per unit.
   kc=$((kc + 1))
   if [ "$kc" -ge "$KICK_EVERY" ]; then
     kc=0
-    [ -x "$BIN/fleet-collect-kick.sh" ] && bash "$BIN/fleet-collect-kick.sh" >/dev/null 2>&1
+    [ -x "$BIN/fleet-daemon-watch.sh" ] && bash "$BIN/fleet-daemon-watch.sh" >/dev/null 2>&1
   fi
 
   set -- '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏';                                eval "frame=\${$i}"

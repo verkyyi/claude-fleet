@@ -178,13 +178,24 @@ fleet_usage_human_secs() {
 # `⚠ dash stale 47m` on the status bar, self-healed by bin/fleet-collect-kick.sh,
 # and reported by fleet-doctor. POSIX sh — fleet-doctor sources nothing bash-only.
 
-# fleet_collect_stale_secs — the staleness threshold. Defaults to the collector's
-# own supersede deadline (600s), which is by construction above any legitimate
-# tick: a tick that outlives it is killed and superseded, so it can never be the
-# reason the heartbeat is old. A healthy tick is 1–3 min (the git phase alone has
-# been seen at 551s on a big monorepo fleet), so a threshold BELOW the deadline
-# would alarm on slow-but-working ticks — set it lower only if your ticks are fast.
-fleet_collect_stale_secs() { printf '%s' "${FLEET_COLLECT_STALE:-${FLEET_COLLECT_DEADLINE:-600}}"; }
+# fleet_collect_stale_secs — the staleness threshold. RELATIVE to the collector's
+# own StartInterval since issue #639: FLEET_DAEMON_STALE_MULT (×5) × 60s = 300s.
+# It used to default to the collector's supersede deadline (600s), which sounded
+# safe — a tick that outlives the deadline is killed and superseded, so it can
+# never be the reason the heartbeat is old — but it is blind to the failure that
+# actually happens. #639 measured launchd running this 60s unit once per 7–14
+# MINUTES: every number on the dash twelve times too old, and the heartbeat age
+# never crossing 600s, so the verdict read `fresh 401 472` throughout. Age
+# measured in MULTIPLES OF THE INTERVAL catches the degraded case and the stopped
+# one with one number. The single definition lives in bin/fleet-daemon-lib.sh,
+# which the collector-liveness consumers source alongside this file; the literal
+# below is the fallback for a caller that did not (same value this shipped with).
+fleet_collect_stale_secs() {
+  if command -v fleet_daemon_stale_secs >/dev/null 2>&1; then
+    fleet_daemon_stale_secs collect; return 0
+  fi
+  printf '%s' "${FLEET_COLLECT_STALE:-${FLEET_COLLECT_DEADLINE:-600}}"
+}
 
 # fleet_collect_hb_ts — epoch of the collector's last provable progress, or 0 when
 # there is no heartbeat at all. phase_ts first (always written, and it is the one
@@ -205,6 +216,17 @@ fleet_collect_hb_ts() {
 # collector by hand has no daemon to be pended — fleet-doctor's note covers that
 # case, and a red bar on every new machine would only teach people to ignore it.
 fleet_collect_stale_age() {
+  # Delegate when bin/fleet-daemon-lib.sh is loaded: it asks the same question of
+  # a WIDER set of evidence — the phase heartbeat below PLUS the scheduling stamp
+  # and, crucially, `global/collect.pid`. A live tick counts as proof of life on
+  # its own, which is what lets #639's much tighter threshold (300s, not 600s) be
+  # safe: the phase heartbeat only advances at phase BOUNDARIES, and a single
+  # phase can legitimately run for minutes (551s on a big monorepo fleet), so
+  # without the pid guard the tighter threshold would paint `⚠ dash stale` over a
+  # collector that is working perfectly well.
+  if command -v fleet_daemon_overdue >/dev/null 2>&1; then
+    fleet_daemon_overdue collect; return 0
+  fi
   _cts=$(fleet_collect_hb_ts)
   [ "$_cts" -gt 0 ] || return 0
   _cage=$(( $(date +%s) - _cts ))

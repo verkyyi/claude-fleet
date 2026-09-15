@@ -47,7 +47,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 # the one sourced under `sh` by the conf's hub-zoom path (the #414 failure).
 # The siblings are guarded defensively to keep the shared lib layer free of the
 # same syntax-error class. Extend this list when a new sourceable lib lands.
-LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh'
+LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'
 
 have_bash=0; command -v bash >/dev/null 2>&1 && have_bash=1
 have_dash=0; command -v dash >/dev/null 2>&1 && have_dash=1

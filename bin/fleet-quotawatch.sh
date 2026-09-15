@@ -114,6 +114,29 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# --- scheduling heartbeat (issue #639) ---------------------------------------
+# ONLY the daemon's own tick stamps. The collector runs this watch first thing
+# every tick (`--caller collect`), which is why #551 gave the watch its own 60s
+# unit — and why the heartbeat below cannot answer "did MY unit run?": #639 found
+# a quotawatch.heartbeat that looked perfectly fresh and read `caller=collect`
+# throughout, i.e. the independence #551 bought had silently lapsed while
+# com.claude-fleet.quotawatch was pended. A stamp that credited the collector's
+# invocation would reproduce exactly that blind spot, so it does not.
+#
+# Only a WORKING tick counts, which rules out more than the collector: `--status`
+# is a pure query and fleet-doctor runs it on every invocation, so crediting it
+# would have fleet-doctor itself refreshing the stamp that is supposed to tell it
+# this unit has stopped. `--dry-run` is excluded on the same principle.
+# The source is GUARDED and the stamp is a side errand: liveness instrumentation
+# must never be able to kill the daemon it instruments. A half-synced install
+# missing the lib then costs this unit its alarm (it reads `never`, which is
+# silent by design) instead of costing the fleet the daemon.
+# shellcheck source=/dev/null
+if [ "$CALLER" != collect ] && [ "$STATUS" = 0 ] && [ "$DRY" = 0 ] \
+   && [ -f "$BIN/fleet-daemon-lib.sh" ]; then
+  . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_stamp_tick quotawatch "$BIN/.."
+fi
+
 QTS="$G/account.quota.ts"
 QDIAG="$G/quota.diag"                                 # last tick's quota_parse complaints (#628)
 HB="$G/quotawatch.heartbeat"
