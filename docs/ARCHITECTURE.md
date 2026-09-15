@@ -92,6 +92,43 @@ manage. One shared collector does the global work once, then fans the GitHub
 fetch out over the repo set. Fewer processes, less redundant work, no
 launchd-per-fleet plumbing.
 
+### Every collector phase is budgeted, and so is the whole tick (issue #653)
+
+The collector's tick is a serial chain of phases — quota watch, sockets, sessmap,
+issues, git, ctx, usage, scrape, banner, escalate, snapshot. launchd never overlaps
+a `StartInterval` job, so **tick duration IS the collector's real cadence**: a tick
+that runs 454s against a 60s interval means every cache on the dash is minutes old,
+which is not an empty dash but a frozen one.
+
+Budgeting the phases one at a time turned out to be a losing game. #552 boxed the
+`git` phase (571s → 56s) and the very next tick measured
+`dur=454 … git=126 usage=226` — the bottleneck had simply moved to `usage`, which
+had no budget, and `runs` advanced once in 514s. So the rule is now general:
+
+- **Per-phase budget.** Every phase runs under `fleet_timebox` with its own knob.
+  A phase that blows it is killed; the tick runs on and stderr names the phase and
+  the knob to change.
+- **Whole-tick budget** (`FLEET_COLLECT_TICK_BUDGET`, 2× the interval). Each
+  phase's budget is *clamped* to the time left in the tick, so ten phases each
+  inside their own budget cannot still sum past the interval.
+- **Rotation, not starvation.** The phase a tick truncated at is parked in
+  `global/collect.phase.cursor`; the next tick starts there and wraps round, so a
+  deferred phase waits one round. A tick that completes clears the cursor, so a
+  healthy machine always runs the historical order.
+
+Two things make this work. The phases are **independent within a tick** — the one
+real handoff, sessmap → issues, travels through `global/collect.repoqueue` on disk,
+both because a budgeted phase runs in a subshell and because rotation can reach
+`issues` in a tick that skipped `sessmap`. And `fleet_timebox` measures **wall
+clock**: it used to count `sleep 1` iterations, which under this daemon's
+`ProcessType=Background` tier (lowest CPU + I/O) inflated a 30s budget to 126s at
+load 40+ — the budget loosening by exactly the factor that made the work slow. Ten
+phases holding an elastic budget would have been ten copies of one bug.
+
+The heartbeat already timed every phase, so *which* phase ate the tick was free
+information nobody printed; `over=` and `skipped=` now carry it and `fleet-doctor`
+reports it, so the next time the bottleneck moves it does not cost an investigation.
+
 ### Repo-set source — how the shared collector knows which repos to fetch
 
 The collector needs the list of repos to fetch PRs/issues for. It's **emergent,
@@ -227,6 +264,8 @@ $TMPDIR/.claude-dash/
     sessmap            #   session<TAB>slug<TAB>repo (collector)
     git_<key>          #   per worktree (globally-unique path key)
     collect.git.cursor #   git-phase round-robin cursor (#552)
+    collect.repoqueue  #   repo<TAB>slug: sessmap → issues handoff (#653)
+    collect.phase.cursor #  the phase the tick was truncated at; next tick resumes there (#653)
     ctx_<key>          #   per Claude session
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state

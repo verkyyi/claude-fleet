@@ -24,15 +24,27 @@
 #                           below for why `git status` is gone
 #   global/collect.git.cursor — the worktree the git phase CLAIMED last; the next tick
 #                           resumes after it, so one wedged worktree can't starve the rest
+#   global/collect.repoqueue — repo<TAB>slug the sessmap phase resolved, read by the
+#                           issues phase. On disk, not in a shell array, because each
+#                           phase now runs inside fleet_timebox's subshell and the
+#                           phase rotation can reach `issues` in a tick that skipped
+#                           `sessmap` (issue #653)
+#   global/collect.phase.cursor — the phase the last tick was TRUNCATED at (whole-tick
+#                           budget); the next tick starts there and wraps round, so a
+#                           truncated phase waits one round instead of starving. Absent
+#                           ⇒ the last tick completed and this one starts at the top
 #   global/ctx_<key>      — model<TAB>context-tokens per worktree (every run)
 #   global/usage          — token-consumption proxy 5h/7d       (≥300s)
 #   global/usage.filecache— per-file raw token sums keyed by (mtime,size) — memoizes
 #                           the usage scan so unchanged transcripts aren't re-read
 #   global/ratelimit      — last-seen official weekly-% line + epoch (scrape, every run)
 #   global/collect.pid    — "pid<TAB>start-epoch" of the running tick (overlap guard, #551)
-#   global/collect.heartbeat — key=value: pid/start/phase/phase_ts/phases/end/dur — the
-#                           tick's progress + per-phase seconds (last complete tick), so a
-#                           slow or wedged phase is visible in one look (#551)
+#   global/collect.heartbeat — key=value: pid/start/phase/phase_ts/phases/over/skipped/
+#                           end/dur — the tick's progress + per-phase seconds (last
+#                           complete tick), so a slow or wedged phase is visible in one
+#                           look (#551). over= names the phases that spent their own
+#                           budget and skipped= the ones the whole-tick budget deferred
+#                           (#653); fleet-doctor.sh prints both with the slowest phase
 # The ccquota PRE-EMPTIVE rotation (issue #513) is NOT a block of this tick any more
 # (issue #551): it lives in bin/fleet-quotawatch.sh, its own 60s daemon
 # (com.claude-fleet.quotawatch), and is ALSO run first thing below — before any gh
@@ -77,6 +89,12 @@ trap 'exit 143' INT TERM   # a supersede's SIGTERM still runs the EXIT trap (tem
 REPO="${FLEET_REPO:-}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 now() { date +%s; }
+# ASCII unit separator: the field delimiter for the multi-field `tmux list-windows`
+# formats below (a window name can contain anything a tab or colon could, so the
+# separator has to be a byte no name carries). Defined HERE, in the head, because
+# both the banner and escalate phases read it and the phase rotation (issue #653)
+# does not guarantee which of them runs first.
+US=$'\x1f'
 
 # utf8_scrub — DROP invalid-UTF-8 byte sequences from stdin (issue #382). A stray
 # non-UTF-8 byte in an issue title/milestone (surfaced in the monorepo fleet) makes
@@ -239,12 +257,126 @@ printf '%s\t%s\n' "$$" "$(now)" > "$PIDF"
 # end + dur once complete. `fleet-doctor.sh` reads it (last tick age, duration,
 # slowest phase); a tick that died mid-way leaves phase=<where> with no end=.
 HB="$G/collect.heartbeat"; HB_START=$(now); HB_PHASE=''; HB_PHASE_TS=$HB_START; HB_PHASES=''
+HB_OVER=''      # phases that spent their own budget this tick (issue #653)
+HB_SKIP=''      # phases the TICK budget truncated away this tick (issue #653)
 hb_phase() {  # $1 = the phase now starting ('' = the tick is done)
   local t; t=$(now)
   [ -n "$HB_PHASE" ] && HB_PHASES="${HB_PHASES}${HB_PHASES:+ }${HB_PHASE}=$(( t - HB_PHASE_TS ))"
   HB_PHASE="$1"; HB_PHASE_TS=$t
   { printf 'pid=%s\nstart=%s\nphase=%s\nphase_ts=%s\nphases=%s\n' "$$" "$HB_START" "${HB_PHASE:-done}" "$t" "$HB_PHASES"
+    # over=/skipped= are APPENDED keys (issue #653): every reader looks its key up
+    # with `sed -n 's/^k=//p'`, so adding lines cannot move an existing one.
+    printf 'over=%s\nskipped=%s\n' "$HB_OVER" "$HB_SKIP"
     [ -z "$HB_PHASE" ] && printf 'end=%s\ndur=%s\n' "$t" "$(( t - HB_START ))"; } | atomic_write "$HB"
+}
+
+# --- every phase has a budget, and so does the whole tick (issue #653) ------------
+# The tick is a serial chain of phases, and for a long time only ONE of them had a
+# budget. That is a losing game: whichever phase is currently the most expensive
+# drags the whole tick past its own 60s StartInterval — launchd does not overlap a
+# StartInterval job, so "tick duration" IS the collector's real cadence — and then
+# we file an issue for that one phase and box it. #552 boxed `git` (571s → 56s) and
+# the very next tick measured:
+#
+#   dur=454  phases=quotawatch=17 sessmap=12 issues=14 git=126 ctx=34 usage=226 …
+#
+# i.e. the bottleneck had simply moved to `usage`, which had no budget at all, and
+# `runs` advanced once in 514s against a 60s interval. So budget them ALL, the same
+# way, and bound their sum:
+#
+#   1. PER-PHASE — every phase runs under fleet_timebox with its own knob. A phase
+#      that blows its budget is killed and the tick CONTINUES; it never takes the
+#      rest of the tick down with it.
+#   2. WHOLE-TICK — FLEET_COLLECT_TICK_BUDGET bounds the sum. Before each phase the
+#      remaining time is checked, and each phase's own budget is CLAMPED to what is
+#      left, so the tick cannot overrun by more than the last phase's tail. Without
+#      the clamp a phase starting one second before the deadline could still add
+#      its full budget on top.
+#   3. ROUND-ROBIN — truncation is not starvation. The phase the tick stopped at is
+#      parked in global/collect.phase.cursor and the NEXT tick starts there, wrapping
+#      round. A tick that completes clears the cursor, so a healthy machine always
+#      runs the historical order. Better some caches miss a round than the whole
+#      tick drifting away from its interval.
+#
+# This only works because fleet_timebox measures WALL CLOCK (issue #653 again): it
+# used to count `sleep 1` iterations, which under this daemon's
+# `ProcessType=Background` tier inflated a 30s budget to 126s — the same factor that
+# made the work slow. Ten phases each holding an elastic budget would have been ten
+# copies of one bug; see bin/fleet-lib.sh.
+TICK_BUDGET="${FLEET_COLLECT_TICK_BUDGET:-120}"   # 2x the 60s StartInterval
+case "$TICK_BUDGET" in ''|*[!0-9]*) TICK_BUDGET=120 ;; esac
+PHASE_CURSOR="$G/collect.phase.cursor"
+PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a phase at all
+
+# The rotating body, in the order a healthy tick runs them. Rotation is only safe
+# because no phase reads shell state another one set THIS tick: the expensive
+# handoff (sessmap → issues) goes through global/collect.repoqueue on disk, so
+# `issues` works off the last good queue whatever order it is reached in. $SOCKETS
+# and the shared helpers are resolved in the head below, before any of them.
+#
+# `quotawatch` is deliberately NOT in this list: #551 put it first precisely so its
+# cadence never rides the tick's gh/git latency, and rotating it would hand it back
+# the variable position it was moved out of. It runs in the head, budgeted like
+# everything else, and the tick budget still bounds it.
+PHASE_LIST=(sessmap issues git ctx usage scrape banner escalate snapshot)
+
+# phase_budget NAME — seconds. Each has its own knob so one slow phase can be given
+# room without loosening the others; the tick budget is the backstop over all of them.
+phase_budget() {
+  case "$1" in
+    quotawatch) printf '%s' "${FLEET_COLLECT_QUOTAWATCH_BUDGET:-30}" ;;
+    sockets)    printf '%s' "${FLEET_COLLECT_SOCKETS_BUDGET:-20}" ;;
+    sessmap)    printf '%s' "${FLEET_COLLECT_SESSMAP_BUDGET:-30}" ;;
+    issues)     printf '%s' "${FLEET_COLLECT_ISSUES_BUDGET:-45}" ;;
+    git)        printf '%s' "${FLEET_COLLECT_GIT_BUDGET:-30}" ;;
+    ctx)        printf '%s' "${FLEET_COLLECT_CTX_BUDGET:-45}" ;;
+    usage)      printf '%s' "${FLEET_COLLECT_USAGE_BUDGET:-60}" ;;
+    scrape)     printf '%s' "${FLEET_COLLECT_SCRAPE_BUDGET:-30}" ;;
+    banner)     printf '%s' "${FLEET_COLLECT_BANNER_BUDGET:-30}" ;;
+    escalate)   printf '%s' "${FLEET_COLLECT_ESCALATE_BUDGET:-30}" ;;
+    snapshot)   printf '%s' "${FLEET_COLLECT_SNAPSHOT_BUDGET:-30}" ;;
+    *)          printf '30' ;;
+  esac
+}
+
+# phase_knob NAME — the env var that tunes it, named in the over-budget line so the
+# log says what to change and not just that something was cut off.
+phase_knob() {
+  case "$1" in
+    git) printf 'FLEET_COLLECT_GIT_BUDGET' ;;   # predates the others (issue #552)
+    *)   printf 'FLEET_COLLECT_%s_BUDGET' "$(printf '%s' "$1" | tr 'a-z' 'A-Z')" ;;
+  esac
+}
+
+# tick_left — seconds of the whole-tick budget still unspent (never negative).
+tick_left() {
+  local spent=$(( $(now) - HB_START ))
+  [ "$spent" -ge "$TICK_BUDGET" ] && { printf '0'; return 0; }
+  printf '%s' $(( TICK_BUDGET - spent ))
+}
+
+# run_phase NAME — mark the boundary, run ph_NAME under its (clamped) budget, and
+# account for it. Returns 1 when there was no room left in the tick to start it —
+# the driver parks the cursor there and stops.
+run_phase() {
+  local name="$1" b left rc
+  left=$(tick_left)
+  [ "$left" -lt "$PHASE_MIN" ] && return 1
+  b=$(phase_budget "$name")
+  case "$b" in ''|*[!0-9]*) b=30 ;; esac
+  [ "$b" -gt "$left" ] && b="$left"        # clamp: the tick budget wins
+  hb_phase "$name"
+  fleet_timebox "$b" "ph_$name"; rc=$?
+  if [ "$rc" = 124 ]; then
+    HB_OVER="${HB_OVER}${HB_OVER:+ }$name"
+    printf 'fleet-collect: phase %s hit the %ss budget (%s) — killed; the tick runs on (next tick retries it)\n' \
+      "$name" "$b" "$(phase_knob "$name")" >&2
+    # Optional per-phase postscript: detail only that phase can give (how far its
+    # own round-robin got, say). Runs in the PARENT, because the phase's subshell
+    # has just been killed and cannot report anything itself.
+    command -v "ph_${name}_over" >/dev/null 2>&1 && "ph_${name}_over"
+  fi
+  return 0
 }
 
 # --- quota watch FIRST (issue #551): before any gh/git/python work ---------------
@@ -253,8 +385,15 @@ hb_phase() {  # $1 = the phase now starting ('' = the tick is done)
 # predates #551 watching at THIS tick's cadence — and costs nothing on a healthy
 # one (its fetch is TTL-gated, its lock skips an in-flight tick, its markers dedup
 # every action). stderr passes through to the collector log.
-hb_phase quotawatch
-bash "$BIN/fleet-quotawatch.sh" --caller collect >/dev/null || true
+#
+# It stays FIRST and out of the phase rotation (issue #653). #551 moved it to the
+# top precisely so its cadence never rides this tick's gh/git latency; letting the
+# rotation place it would hand back the variable position it was moved out of. It is
+# budgeted like every other phase, and the whole-tick budget still bounds it.
+ph_quotawatch() {
+  bash "$BIN/fleet-quotawatch.sh" --caller collect >/dev/null || true
+}
+run_phase quotawatch || true
 
 # Each fleet runs on its OWN tmux server/socket now (issue #159), so there is no
 # single shared server to probe — enumerate the live fleet sockets ONCE and fan
@@ -263,7 +402,26 @@ bash "$BIN/fleet-quotawatch.sh" --caller collect >/dev/null || true
 # every CONFIGURED repo's cache even with no live fleet, so the backlog has data
 # the moment a fleet opens. The tmux-dependent sections (sessmap, git/ctx, capture,
 # escalation, snapshot) each iterate $SOCKETS / lw_all and simply no-op when empty.
-SOCKETS=$(fleet_sockets)
+#
+# This is the tick's one PRECONDITION rather than a rotating phase — every tmux
+# phase needs it — so it runs in the head and is never skipped. It is still budgeted
+# and still shows up in the heartbeat (issue #653): `fleet_sockets` does a
+# `tmux has-session` per configured fleet, and a wedged tmux server used to charge
+# that silently to whichever phase happened to follow.
+#
+# On a timeout the PARTIAL list is discarded rather than used. A truncated
+# enumeration is not a smaller fleet, it is an incomplete view of the same one, and
+# sessmap's write-guard (#203) only protects against an EMPTY map — a partial one
+# would publish, dropping live sessions from the dash's session→repo resolution.
+# Empty is a state every consumer already handles ("no live fleet"): the guard keeps
+# the last good map and the git/ctx caches keep their last values.
+hb_phase sockets
+SOCKETS=$(fleet_timebox "$(phase_budget sockets)" fleet_sockets); sock_rc=$?
+if [ "$sock_rc" = 124 ]; then
+  printf 'fleet-collect: socket enumeration hit the %ss budget (FLEET_COLLECT_SOCKETS_BUDGET) — dropping the partial list; this tick sees no live fleet and every cache keeps its last value\n' \
+    "$(phase_budget sockets)" >&2
+  SOCKETS=''
+fi
 # lw_all FMT — the per-fleet-socket replacement for the old `tmux list-windows -a
 # -F FMT`: run it against every live fleet socket and concatenate. Reuses the
 # cached $SOCKETS (no re-probe). Read-only callers use this; writers loop $SOCKETS
@@ -286,13 +444,21 @@ have_py3() {
 # vs API chatter; GH_TTL=0 on a one-off run forces a fetch.
 GH_TTL="${GH_TTL:-${FLEET_GH_TTL:-90}}"
 
-hb_phase sessmap
 # --- resolve the repo set from live tmux sessions (multi-fleet) ---
 # Each tmux session ≡ one fleet ≡ one repo. Seed the fetch queue with the global
 # FLEET_REPO (so its slug'd cache stays fresh even with no live session), then add
 # every other repo a live session resolves to. No fleet is "primary": every fleet's
 # cache is issues_<slug> only, and no flat mirror is written as any one fleet's copy
 # (issue #180). Write sessmap for the read-side producers.
+#
+# The (repo,slug) queue this builds is handed to the `issues` phase through
+# global/collect.repoqueue rather than a shell array (issue #653). Two reasons, and
+# both are requirements now: a budgeted phase runs in fleet_timebox's SUBSHELL, so
+# an array it built would not survive; and the phase rotation can reach `issues` in
+# a tick where `sessmap` was skipped, which the file handles by simply serving the
+# last good queue. The queue is derived state, so a stale one is at worst a round
+# late — never wrong.
+ph_sessmap() {
 declare -a Q_REPO Q_SLUG          # unique (repo,slug) fetch queue (indexed arrays; bash 3.2 ok)
 SEEN=' '
 queue() {                          # $1=repo → add once
@@ -364,24 +530,39 @@ while IFS=$'\t' read -r _s cf; do
   [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
 done < <(fleet_each_conf)
 
-hb_phase issues
+# Publish the queue for the `issues` phase. Same write-guard reasoning as sessmap
+# above: never let an empty queue replace a good one — a momentary discovery hiccup
+# would otherwise stop every repo's issues cache refreshing until sessmap next
+# succeeds.
+if [ "${#Q_REPO[@]}" -gt 0 ]; then
+  i=0
+  while [ "$i" -lt "${#Q_REPO[@]}" ]; do
+    printf '%s\t%s\n' "${Q_REPO[$i]}" "${Q_SLUG[$i]}"; i=$((i+1))
+  done | atomic_write "$G/collect.repoqueue"
+fi
+}
+
 # --- per-repo issues (TTL-gated per repo) ---
 # NB: PR status (prmap_<slug> + the flat prmap mirror + @prci/@pfg) is NOT built
 # here anymore — it moved to bin/tmux-pr-refresh.sh so it can refresh on a ~15s
 # cadence instead of this 60s tick. That script is the SINGLE writer of all PR
 # state; the collector only touches issues/git/usage. See issue #81.
-i=0
-while [ "$i" -lt "${#Q_REPO[@]}" ]; do
-  rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; i=$((i+1))
-  command -v gh >/dev/null 2>&1 || break
-  fetch_issues_for "$rp" "$sg" 0     # TTL-gated (see fetch_issues_for above)
-done
+# Reads the (repo,slug) queue `sessmap` published (global/collect.repoqueue) —
+# see there for why it travels on disk rather than in an array (issue #653).
+ph_issues() {
+  local rp sg
+  command -v gh >/dev/null 2>&1 || return 0
+  [ -f "$G/collect.repoqueue" ] || return 0
+  while IFS=$'\t' read -r rp sg; do
+    [ -n "$rp" ] && [ -n "$sg" ] || continue
+    fetch_issues_for "$rp" "$sg" 0   # TTL-gated (see fetch_issues_for above)
+  done < "$G/collect.repoqueue"
+}
 
 # No flat issues mirror is written (issue #180 — all fleets equal, no primary):
 # every reader routes through fleet_cache, which returns issues_<slug> for a
 # resolved fleet and only falls back to the un-slug'd name during cold start.
 
-hb_phase git
 # --- git per live worktree (every run) — BUDGETED + round-robin (issue #552) ------
 # This phase was the tick's sinkhole. One `git status --porcelain` on a
 # 24haowan-monorepo worktree held the loop for 4m42s, and with ~15 such worktrees
@@ -402,6 +583,9 @@ hb_phase git
 #      Around the whole phase, not each call: fleet_timebox polls at 1s, so
 #      per-call it puts a 1s FLOOR on ~50 calls (measured: 53s for a scan whose
 #      real work is ~1.5s). One box costs ~1s a tick and still kills the tree.
+#      The box is now applied by run_phase like every other phase's (issue #653) —
+#      this phase stopped being the only budgeted one. FLEET_COLLECT_GIT_BUDGET is
+#      unchanged and still the knob; it is read through phase_budget.
 #   3. ROUND-ROBIN, so the budget cannot starve anyone. The cursor
 #      (global/collect.git.cursor) is stamped with a worktree BEFORE its git work
 #      and the next tick resumes at the one AFTER it — a worktree that wedges is
@@ -410,15 +594,14 @@ hb_phase git
 #
 # A worktree slower than FLEET_COLLECT_GIT_SLOW (10s) is named on stderr (→
 # logs/collect.launchd.log): the heartbeat only carries the phase total.
-GIT_BUDGET="${FLEET_COLLECT_GIT_BUDGET:-30}"
 GIT_SLOW="${FLEET_COLLECT_GIT_SLOW:-10}"
 GIT_CURSOR="$G/collect.git.cursor"
 GIT_DONE="$G/collect.git.done.$$"   # how far the scan got; read back after the box
                                     # (it runs in fleet_timebox's subshell, so a
                                     # counter variable would not survive). The $$
                                     # suffix puts it in the EXIT trap's sweep.
-# shellcheck disable=SC2329  # invoked as fleet_timebox's argv below, not by name
-git_scan() {
+# shellcheck disable=SC2329  # invoked as run_phase's "ph_$name", not by name
+ph_git() {
   local p n i pos=0 cur key branch ab behind ahead s0 d
   local -a paths; paths=()
   while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done \
@@ -457,14 +640,17 @@ git_scan() {
   done
   return 0
 }
-fleet_timebox "$GIT_BUDGET" git_scan; git_rc=$?
-if [ "$git_rc" = 124 ]; then
-  printf 'fleet-collect: git phase hit the %ss budget (FLEET_COLLECT_GIT_BUDGET) after %s worktree(s) — the rest keep last tick'\''s branch; next tick resumes after %s\n' \
-    "$GIT_BUDGET" "$(cat "$GIT_DONE" 2>/dev/null || echo 0)" "$(cat "$GIT_CURSOR" 2>/dev/null)" >&2
-fi
-rm -f "$GIT_DONE"
+# ph_git_over — run_phase calls ph_<name>_over (when defined) after a phase spends
+# its budget, for detail only that phase can give. The generic line names the phase
+# and the budget; this adds how far the rotation got, which is what tells you a
+# wedged worktree is being retried once per rotation rather than eating every tick.
+# shellcheck disable=SC2329  # invoked as run_phase's "ph_${name}_over", not by name
+ph_git_over() {
+  printf 'fleet-collect: git covered %s worktree(s) — the rest keep last tick'\''s branch; next tick resumes after %s\n' \
+    "$(cat "$GIT_DONE" 2>/dev/null || echo 0)" "$(cat "$GIT_CURSOR" 2>/dev/null)" >&2
+  rm -f "$GIT_DONE"
+}
 
-hb_phase ctx
 # --- per-window context tokens (every run): newest transcript's last-turn input+cache ---
 # Claude Code writes transcripts to ~/.claude/projects/<cwd-slug>/*.jsonl; the last
 # assistant turn's input+cache tokens = the conversation's current context weight.
@@ -473,6 +659,8 @@ hb_phase ctx
 # space stays a single argv entry end-to-end. Guard the length for bash 3.2,
 # where "${arr[@]}" on an empty array trips `set -u`. $$ lets Python suffix its
 # temp files so the EXIT trap can sweep any it orphans.
+ph_ctx() {
+local p
 CTX_PATHS=()
 while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
   < <(lw_all '#{pane_current_path}' | sort -u)
@@ -504,8 +692,8 @@ for path in sys.argv[3:]:
     os.replace(tmp, f'{C}/ctx_{key}')                     # atomic: readers never see a partial cache
 PY
 fi
+}
 
-hb_phase usage
 # --- token-usage proxy (≥300s): sum across ALL session transcripts, 5h + 7d ---
 # The official rate-limit % is not exposed by any API, so this is a local proxy
 # over Claude's official limit windows (rolling 5h + 7d), weighted like limits
@@ -520,6 +708,25 @@ hb_phase usage
 # mtime (a cached-mtime-vs-cutoff compare, no re-read) exactly as before, so the
 # rolling cutoffs still move correctly. Weighting is linear, so summing raw tokens
 # per file then weighting is identical to weighting per line: warm == cold output.
+#
+# The scan CHECKPOINTS that memo cache as it goes (issue #653), which is what makes
+# it safe to put a budget on this phase at all. This was the tick's biggest
+# unbudgeted block — 226s measured, against 0.2s for the same glob+stat at
+# foreground priority — and it is otherwise all-or-nothing: a killed scan would
+# throw away everything it read, so a budget smaller than one full scan would mean
+# the usage cache NEVER refreshed rather than refreshing late. Writing the per-file
+# sums out periodically makes progress monotone instead: each tick starts warmer
+# than the last and the scan converges. The checkpoint MERGES over the previous
+# cache rather than replacing it (a partial `new` would prune every file the scan
+# had not reached yet, which is the memo it is trying to keep), so pruning of
+# vanished / >7d files still only happens on a pass that completes.
+#
+# The AGGREGATE is still written only on a complete pass. A partial 5h/7d sum is not
+# a stale number, it is a WRONG-LOW one, and this feeds the account rotation
+# decisions (FLEET_ACCOUNT_WARN_PCT / FLEET_ACCOUNT_CEILING) — under-reporting usage
+# there is worse than reporting it a few minutes late.
+ph_usage() {
+local uts
 uts=$(cat "$G/usage.ts" 2>/dev/null || echo 0)
 if [ $(( $(now) - uts )) -ge 300 ] && have_py3; then
   python3 - "$G/usage" "$$" <<'PY'
@@ -535,7 +742,20 @@ try:
 except Exception:
     old={}
 new={}                                                 # rebuilt fresh → prunes vanished / >7d files
+ckpt=cachef+'.'+pid                                    # checkpoint temp (swept by the EXIT trap)
+def checkpoint():
+    # Merge over the prior cache: `new` is partial mid-scan, and writing it alone
+    # would drop the memo for every file not yet visited.
+    try:
+        merged=dict(old); merged.update(new)
+        with open(ckpt,'w') as fh: json.dump(merged, fh)
+        os.replace(ckpt, cachef)
+    except Exception:
+        pass                                           # a checkpoint is an optimisation, never a failure
+last_ck=time.time()
 for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
+    if time.time()-last_ck >= 10:                      # ~every 10s of wall clock
+        checkpoint(); last_ck=time.time()
     try: st=os.stat(f)
     except OSError: continue
     mt=st.st_mtime
@@ -569,33 +789,36 @@ tmp=f'{out}.{pid}'
 with open(tmp,'w') as fh: fh.write(f"5h {fmt(agg['5h'])} · 7d {fmt(agg['7d'])}")
 os.replace(tmp, out)                                   # atomic: readers never see a partial cache
 ctmp=f'{cachef}.{pid}'
-with open(ctmp,'w') as fh: json.dump(new, fh)
+with open(ctmp,'w') as fh: json.dump(new, fh)          # the COMPLETE pass: `new` alone, so it prunes
 os.replace(ctmp, cachef)                               # atomic: overlapping collectors can't corrupt it
 PY
   now > "$G/usage.ts"
 fi
+}
 
-hb_phase scrape
 # --- opportunistic scrape of the official weekly-% line (every run) ---
 # If any session happens to print "N% of your weekly limit", capture it.
 # tolerant by design: grep exits 1 when no session shows the line (the common
 # case) — that non-zero pipeline status is intentionally discarded; only the
 # captured $line matters.
+ph_scrape() {
+local line sock w
 line=$(for sock in $SOCKETS; do
   for w in $(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index}' 2>/dev/null); do
     tmux -L "$sock" capture-pane -p -S -600 -t "$w" 2>/dev/null
   done
 done | grep -aoE "[0-9]+% of your (weekly|[0-9]+-hour) limit[^│]*" | tail -1)
 if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/ratelimit"; fi
+}
 
-hb_phase banner
 # --- multi-account auto-switch (every run) ---
 # When a window running under a registered account shows the "You've hit your …
 # limit · resets …" banner, mark THAT account limited and rotate the active
 # pointer so NEW sessions spawn on a fresh subscription. The window carries its
 # account label in @cc_account (stamped by bin/fleet-claude.sh at launch).
 # No-op unless accounts are registered — so single-account installs skip it.
-US=$'\x1f'
+ph_banner() {
+local sock win wid acct banner kind lm fb muntil mig msw mk muntilt newact rc
 if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   for sock in $SOCKETS; do
   tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_id}${US}#{@cc_account}" 2>/dev/null | \
@@ -676,6 +899,8 @@ account **$acct** hit its usage limit — new sessions now use **${newact:-?}**;
   done
 fi
 
+}
+
 # NB: the ccquota-driven PRE-EMPTIVE rotation (issue #513) — warn at
 # FLEET_ACCOUNT_WARN_PCT, bench + migrate at FLEET_ACCOUNT_CEILING — used to sit
 # HERE, at the tail of the tick. It moved to bin/fleet-quotawatch.sh (issue #551):
@@ -686,7 +911,6 @@ fi
 # bin/tmux-pr-refresh.sh (single writer, ~15s cadence) — see #81. The collector
 # no longer touches it.
 
-hb_phase escalate
 # --- detached-attention escalation (every run) ---
 # A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is
 # attached → run FLEET_NOTIFY_CMD (fleet.conf) with the message as $1 — plug in
@@ -695,6 +919,8 @@ hb_phase escalate
 # PER FLEET (its own server), so an unwatched fleet still escalates even while
 # you're attached to a DIFFERENT fleet — strictly better than the old shared
 # server, where any attached client suppressed escalation for every fleet.
+ph_escalate() {
+local ESC_AFTER nowts sock win name st ts esc wid msg
 ESC_AFTER="${FLEET_ESCALATE_AFTER:-300}"
 if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   nowts=$(now)
@@ -714,12 +940,51 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   done
 fi
 
-hb_phase snapshot
+}
+
 # --- crash-recovery snapshot (every run) ---
 # Durably record the live fleet layout (which fleets, work windows, worktrees,
 # Claude session ids) so fleet-restore.sh can rebuild every fleet and
 # `claude --resume` every session after a tmux-server-wide crash. Cheap; never
 # fatal to the collector.
-bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
+ph_snapshot() {
+  bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
+}
+
+# --- run the phases: rotate, budget, truncate (issue #653) -----------------------
+# Start where the last tick was truncated and wrap round, so truncation costs a
+# phase one ROUND rather than starving it: a tick that ran out of budget at `usage`
+# begins the next one at `usage`, and the phases that already ran this tick are the
+# ones that wait. A tick that gets all the way round clears the cursor, so a healthy
+# machine always runs the historical order and this is invisible.
+PH_N=${#PHASE_LIST[@]}
+PH_START=0
+_cur=$(cat "$PHASE_CURSOR" 2>/dev/null || true)
+if [ -n "$_cur" ]; then
+  _i=0
+  while [ "$_i" -lt "$PH_N" ]; do
+    [ "${PHASE_LIST[$_i]}" = "$_cur" ] && { PH_START=$_i; break; }
+    _i=$((_i+1))
+  done
+fi
+
+PH_TRUNC=''
+_i=0
+while [ "$_i" -lt "$PH_N" ]; do
+  _name="${PHASE_LIST[$(( (PH_START + _i) % PH_N ))]}"; _i=$((_i+1))
+  if [ -z "$PH_TRUNC" ] && run_phase "$_name"; then continue; fi
+  # No room left in the tick: this phase and every one after it wait for the next.
+  [ -z "$PH_TRUNC" ] && PH_TRUNC="$_name"
+  HB_SKIP="${HB_SKIP}${HB_SKIP:+ }$_name"
+done
+
+if [ -n "$PH_TRUNC" ]; then
+  printf '%s' "$PH_TRUNC" | atomic_write "$PHASE_CURSOR"
+  printf 'fleet-collect: tick hit its %ss budget (FLEET_COLLECT_TICK_BUDGET) — deferred to the next tick, resuming at %s: %s\n' \
+    "$TICK_BUDGET" "$PH_TRUNC" "$HB_SKIP" >&2
+else
+  rm -f "$PHASE_CURSOR"    # a full round: the next tick starts at the top again
+fi
+
 hb_phase ''
 exit 0
