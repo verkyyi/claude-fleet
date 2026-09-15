@@ -19,7 +19,12 @@
 #
 # HOW the dialog is driven (all measured — first on 2.1.270, re-measured on 2.1.272
 # for #656, unchanged):
-#   • single-select     a DIGIT selects AND submits — no Enter.
+#   • single-select     a DIGIT selects AND submits — no Enter. A TUI on which the
+#                       digit only MOVES the selection (the `↑/↓ to navigate · Enter
+#                       to select` shape) is already handled, and without a key table
+#                       to go stale: see SUBMIT SHAPE below, which re-reads the pane
+#                       and adds the Enter only when the cursor is read back parked on
+#                       the row it chose. So both variants work off one code path.
 #   • multi-question    a tab bar (`←  ☐ Fruit  ☐ Colors  ✔ Submit  →`); each tab's
 #                       digit auto-advances to the next tab.
 #   • multiSelect       a digit TOGGLES `[✔]` and leaves the cursor where it is; then
@@ -51,6 +56,17 @@
 #      gives it. It never trusts its own arithmetic about row numbers. A TUI that
 #      renumbers, reorders or truncates its rows therefore degrades to "not answered"
 #      (exit 3, nothing sent) — never to "answered the wrong option".
+#
+#      THE ANCHOR IS THE ROW, NOT THE QUESTION (issue #702). Every screen check here
+#      asks "is the row I am about to press on the screen?", never "is the question
+#      text on the screen?". The question text is the weaker of the two — it proves
+#      the dialog exists, not that the row exists — and it is also the part that
+#      scrolls away first: options with per-option descriptions routinely run taller
+#      than the pane, so the question goes off the top while every option row is
+#      still visible. Anchored on the question, the gate refused dialogs that were
+#      plainly on the screen; anchored on the row, it refuses exactly when it should.
+#      `right_tab` retains the only thing the question text was load-bearing for —
+#      that a multi-question dialog is on OUR tab.
 #
 #      WRAPPING IS NOT A MISMATCH (issue #656). Every screen comparison here is
 #      whitespace-INSENSITIVE: both sides are squashed to their non-whitespace
@@ -319,6 +335,19 @@ grab() { TM capture-pane -p -t "$PANE" > "$CAP" 2>/dev/null || : > "$CAP"; }
 # whitespace-insensitive throughout, because a CJK wrap inserts no space and a Latin
 # one eats the space it broke at. An EXACT match outranks the `>= 3 chars` prefix
 # fallback, so a label that is a prefix of another option no longer refuses.
+#
+# THE PREVIEW PANEL IS NOT PART OF THE ROW (issue #702). When the options carry
+# `preview` text the dialog renders a bordered panel in a RIGHT-HAND COLUMN, so every
+# option row — and every wrapped continuation of one — has a slice of that panel
+# appended to it:
+#     `  2. 只打印我自己这个窗口         ├─── ✂ ─── 12 lines hidden ────┤`
+# "the row's text equals the label" is then false for EVERY row at once, and squashing
+# the whitespace only pulls the panel's own words into the comparison. So each line is
+# cut at its column boundary before anything else looks at it: the panel sits in a
+# gutter, so its left border is a box-drawing character (U+2500–U+257F) preceded by
+# whitespace, and everything from there rightwards belongs to another column. A label
+# that itself contained a space-separated box-drawing character would be cut short —
+# and that degrades to a PREFIX, i.e. to a refusal, never to a wrong row.
 digit_for() {
   FA_LAB="$1" python3 - "$CAP" <<'PY'
 import os, re, sys
@@ -326,11 +355,17 @@ import os, re, sys
 def squash(t):
     return re.sub(r"\s+", "", t)
 
+# everything from the first whitespace-preceded box-drawing char is another column
+PANEL = re.compile(r"\s[\u2500-\u257f].*$")
+
+def cut(t):
+    return PANEL.sub("", t)
+
 want = squash(os.environ["FA_LAB"])
 OPT  = re.compile(r"^[\s❯>]*(\d+)\.\s+(?:\[[^\]]*\]\s+)?(.*)$")
 RULE = re.compile(r"^[\s\u2500-\u257f]+$")
 
-lines = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8", errors="replace")]
+lines = [cut(l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8", errors="replace")]
 exact, prefix = [], []
 for i, line in enumerate(lines):
     m = OPT.match(line)
@@ -357,13 +392,17 @@ sys.exit(1) if len(set(hits)) != 1 else print(hits[0])
 PY
 }
 # screen_has <text> — is <text> on the captured screen, ignoring every line break and
-# run of spaces the pane's width introduced? This is the wrap-proof `grep -F` (#656).
+# run of spaces the pane's width introduced? This is the wrap-proof `grep -F` (#656),
+# reading the same COLUMNS digit_for does (#702) — without the cut, a right-hand
+# preview panel interleaves its own words between the halves of a wrapped question
+# and the squashed haystack no longer contains it.
 screen_has() {
   FA_NEEDLE="$1" python3 - "$CAP" <<'PY'
 import os, re, sys
+PANEL  = re.compile(r"\s[\u2500-\u257f].*$")   # the column cut — see digit_for
 squash = lambda t: re.sub(r"\s+", "", t)
 with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
-    hay = squash(fh.read())
+    hay = squash("\n".join(PANEL.sub("", l.rstrip("\n")) for l in fh))
 sys.exit(0 if squash(os.environ["FA_NEEDLE"]) in hay else 1)
 PY
 }
@@ -380,9 +419,40 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         break
 PY
 }
-on_screen()      { screen_has "$1"; }
-cursor_submit()  { grep -q '^[[:space:]]*❯.*Submit' "$CAP"; }
-review_screen()  { screen_has 'Ready to submit your answers?'; }
+# cursor_submit — is the cursor parked on the multiSelect `Submit` row? Same pattern
+# it has always used, but reading the same COLUMNS digit_for does (#702): the panel
+# text is arbitrary — it is the option's own `preview` — so a preview containing the
+# word "Submit" would otherwise satisfy this from an OPTION row, and the walk would
+# stop early and press Enter there. The cut makes the panel unable to answer for the
+# left column at all.
+cursor_submit() {
+  python3 - "$CAP" <<'PY'
+import re, sys
+PANEL = re.compile(r"\s[\u2500-\u257f].*$")   # the column cut — see digit_for
+CUR   = re.compile(r"^\s*❯.*Submit")
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if CUR.match(PANEL.sub("", line.rstrip("\n"))):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# right_tab <qi> — is the dialog on question <qi>'s tab? A single-question dialog has
+# no tab bar, so it is trivially true. For a multi-question one it is true when our
+# question's text is on the screen and ALSO when NO question's text is — the whole
+# header block can scroll off (issue #702), and that must not read as "wrong tab". It
+# is false only when some OTHER question of this dialog is the one showing, which is
+# the single hazard the old question-text gate was really guarding against.
+right_tab() {
+  [ "$NQ" -le 1 ] && return 0
+  screen_has "$(q_field "$1" 5)" && return 0
+  local i=0
+  while [ "$i" -lt "$NQ" ]; do
+    if [ "$i" != "$1" ] && screen_has "$(q_field "$i" 5)"; then return 1; fi
+    i=$((i + 1))
+  done
+  return 0
+}
 
 deadline=$(( $(date +%s) + TIMEOUT ))
 nap() { sleep "$POLL" 2>/dev/null || true; }
@@ -400,21 +470,37 @@ bail() { printf 'fleet-answer: %s\n' "$1" >&2; [ "$SENT" = 0 ] && exit 3 || exit
 
 qi=0
 while [ "$qi" -lt "$NQ" ]; do
-  qtext=$(q_field "$qi" 5); multi=$(q_field "$qi" 3)
+  multi=$(q_field "$qi" 3)
+  IFS=$'\t' read -r -a labs <<< "${WANT[$qi]}"
 
-  # Wait for THIS question's tab to be the one on screen. Never seeing it is the
-  # LABEL GATE tripping: the pane is showing some other dialog, so we refuse.
-  seen=0
+  # THE SCREEN GATE, anchored on THE ROW WE ARE ABOUT TO PRESS (issue #702).
+  # It used to wait for the QUESTION TEXT, and that is the wrong anchor: options with
+  # per-option descriptions routinely run longer than the pane is tall, so the
+  # question scrolls off while every option row is still sitting right there — and a
+  # dialog that was plainly visible, and that `--show` had just parsed correctly, got
+  # refused. The gate's two purposes (#605) are "never type into a dialog we cannot
+  # see" and "locate by label, never blind-press a number", and BOTH are served by the
+  # chosen row being on the screen — neither is served by the question text, which
+  # proves only that the dialog exists, not that the row we are aiming at does. So the
+  # anchor is the label, and `right_tab` keeps the one thing the question text was
+  # really buying: that a multi-question dialog is on OUR tab. Still on the wrong tab
+  # (or the row still absent) when the budget runs out ⇒ refuse, nothing sent.
+  seen=0 why=''
   while :; do
     grab
-    if on_screen "$qtext"; then seen=1; break; fi
+    if ! digit_for "${labs[0]}" >/dev/null 2>&1; then
+      why="option \"${labs[0]}\" is not on the screen (or matches several rows) for question $((qi + 1)) — refusing to type at a row we cannot see"
+    elif right_tab "$qi"; then
+      seen=1; break
+    else
+      why="question $((qi + 1))'s text is off-screen while ANOTHER question of this dialog is the one showing — refusing to type at the wrong tab"
+    fi
     expired && break
     nap
   done
-  [ "$seen" = 1 ] || bail "the pane is not showing question $((qi + 1)) (\"$qtext\") — refusing to type into a dialog we cannot see"
+  [ "$seen" = 1 ] || bail "$why"
 
   # Toggle / select each pick by the digit the SCREEN gives its label.
-  IFS=$'\t' read -r -a labs <<< "${WANT[$qi]}"
   d='' lab1=''
   for lab in "${labs[@]}"; do
     lab1="$lab"
@@ -438,14 +524,17 @@ while [ "$qi" -lt "$NQ" ]; do
     submitted=0; parked=0
     while :; do
       grab
-      # "our row is still the one on offer" is the conjunction of all three: the
-      # question text on screen, the chosen LABEL still sitting on row $d, and the
-      # cursor on it. The label leg is what the question text alone cannot give —
-      # once answered, the pane echoes `· <question> → <label>` in the transcript
-      # area, and on a multi-question dialog the next tab is already up, so text
-      # alone would read "still open" forever and could send Enter at a DIFFERENT
-      # tab's row 1. No label on row $d ⇒ this dialog has moved on ⇒ submitted.
-      on_screen "$qtext" && [ "$(digit_for "$lab1" 2>/dev/null)" = "$d" ] || { submitted=1; break; }
+      # "our row is still the one on offer" = the chosen LABEL still sitting on row
+      # $d, on OUR tab, with the cursor on it. The LABEL is the load-bearing leg:
+      # once answered the pane echoes `· <question> → <label>` in the transcript area,
+      # which carries no `<digit>. ` prefix so no row matches, and on a multi-question
+      # dialog the next tab is already up with different labels. No label on row $d ⇒
+      # this dialog has moved on ⇒ submitted. The question text used to be a REQUIRED
+      # leg here as well, and issue #702 is why it no longer is: with the question
+      # scrolled off, a digit that had only MOVED the cursor read as "submitted", the
+      # Enter that would have finished it was never sent, and the answer then timed out
+      # unconfirmed. `right_tab` keeps the multi-question half of that leg.
+      [ "$(digit_for "$lab1" 2>/dev/null)" = "$d" ] && right_tab "$qi" || { submitted=1; break; }
       if [ "$(cursor_digit)" = "$d" ]; then
         parked=$((parked + 1)); [ "$parked" -ge 2 ] && break
       else
@@ -491,16 +580,18 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 if [ "$NQ" -gt 1 ]; then
+  # Same anchor as every other step (#702): the row we are about to press. The
+  # "Ready to submit your answers?" line this used to wait for is one more thing a
+  # long answer list scrolls off, while the `Submit answers` ROW is both what we need
+  # and proof the review screen is up.
+  ok=0
   while :; do
     grab
-    if review_screen; then
-      d=$(digit_for 'Submit answers') \
-        || bail 'the review screen has no "Submit answers" row — answers entered but NOT submitted'
-      send "$d"; nap; break
-    fi
+    if d=$(digit_for 'Submit answers'); then send "$d"; nap; ok=1; break; fi
     expired && break
     nap
   done
+  [ "$ok" = 1 ] || bail 'the review screen never offered a "Submit answers" row — answers entered but NOT submitted'
 fi
 
 # --- the verdict comes from the TRANSCRIPT, not the screen -------------------
