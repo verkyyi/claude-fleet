@@ -180,11 +180,19 @@ wo() { tf show-window-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{$1="";s
 st() { tf display-message -p -t "$1" '#{@claude_state}' 2>/dev/null; }
 sb() { tf display-message -p -t "$1" '#{@claude_needs}' 2>/dev/null; }
 
-# Converge or give up: poll the three windows that MUST move.
-for _ in $(seq 1 50); do
-  [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = "done" ] && [ "$(sb w-askfix)" = ask ] && break
+# Converge or give up: poll EVERY window that must move — all four, not a subset.
+# One pass walks its candidates in window order and re-reads a transcript per
+# candidate, so the writes inside a single pass are hundreds of milliseconds apart:
+# breaking as soon as the 3rd window settled read the 4th before its own write had
+# landed, and CI failed on it (the 1-in-2 flake this comment exists to prevent).
+for _ in $(seq 1 60); do
+  [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = "done" ] \
+    && [ "$(sb w-askfix)" = ask ] && [ "$(sb w-permfix)" = perm ] && break
   sleep 0.5
 done
+# …then let a few more passes run before asserting what must NOT have moved. A rail
+# that the reconcile would wrongly touch gets several chances to prove it.
+sleep 3
 
 # The clears.
 CHECKS=$((CHECKS+1)); [ -z "$(st w-dead)" ] \
