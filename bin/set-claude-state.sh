@@ -69,10 +69,10 @@ case "${1:-}" in
     # after ANY session goes idle. Left unfiltered it flips every finished session
     # to needs+bell and re-flips the classifier's verdict — cry-wolf. Discriminate
     # on the payload (mirrors the AskUserQuestion stdin-inspection in 'busy'). 2.1.272
-    # carries a structured `notification_type` beside `message` (#656) — matched here
-    # FIRST because it survives a rewording — with the historic substring kept as the
-    # fallback for older CLIs. Neither matching ⇒ needs+bell, the safe direction (an
-    # idle session rings, not a real prompt silently missed).
+    # carries a structured `notification_type` beside `message` (#656), so the idle
+    # leg matches EITHER spelling — the type survives a rewording of the message, and
+    # the message covers CLIs older than the field. Neither matching ⇒ needs+bell,
+    # the safe direction (an idle session rings, not a real prompt silently missed).
     # A benign idle prompt -> 'leave': DON'T write state, just drop the bell, so
     # whatever the Stop-hook classifier decided (done for finished, needs for a
     # real pending question) stays authoritative. A real permission/elicitation
@@ -88,7 +88,11 @@ case "${1:-}" in
       case "$_payload" in
         *'waiting for your input'*|*'"notification_type":"idle_prompt"'*)
           sem="leave"; set -- "leave" ;;   # idle_prompt: leave state as-is, no bell
-        *permission*|*'"notification_type":"permission_prompt"'*)
+        *permission*)
+          # No `notification_type` alternative here: 2.1.272's value is literally
+          # `permission_prompt`, so the substring already covers the structured form
+          # (shellcheck SC2222 says so too). The idle leg above needs both spellings
+          # because its message and its type share no substring.
           sub="perm" ;;                    # a dialog is open — WHICH one, the transcript says
       esac
       # …and the transcript overrules the wording. `permission_prompt` is what Claude
