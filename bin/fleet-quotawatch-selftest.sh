@@ -32,6 +32,11 @@
 #                 ceiling markers, NO `migrate` fan-out (a move would cold-boot
 #                 each session back onto the account just benched), the toast +
 #                 notify say "nowhere to move"; --dry-run says the same.
+#  10. noread   — (#628) ccquota says it CANNOT read b (available:false): b gets no
+#                 row, so it is never benched and — the point — never the landing
+#                 spot a ceiling fan-out moves a's sessions onto; the tick LOGS the
+#                 reason, does not repeat it every 60 s, announces the recovery,
+#                 and is equally loud about a payload shape it cannot parse.
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -58,7 +63,16 @@ cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
 p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>/dev/null || echo 20); r5=$(cat "$FAKE_RESET_FILE")
-printf '{"verdict":"ok","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}]}' "$((100-p))" "$p" "$r5" "$((100-pb))" "$pb" "$r5"
+# b's SHAPE is switchable (issue #628): `unavail` is TokenLedger saying out loud
+# that it cannot read the account (available:false + reason, both omitempty
+# windows gone from the JSON), `shape` is a payload this fleet does not
+# understand (no window, no flag). Anything else = the ordinary readable account.
+case "$(cat "$FAKE_B_SHAPE_FILE" 2>/dev/null)" in
+  unavail) b='{"account_uuid":"u-b","label":"b","available":false,"reason":"no reading","headroom_pct":0}' ;;
+  shape)   b='{"account_uuid":"u-b","label":"b","headroom_pct":0}' ;;
+  *)       b=$(printf '{"account_uuid":"u-b","label":"b","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}' "$((100-pb))" "$pb" "$r5") ;;
+esac
+printf '{"verdict":"ok","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":%d,"five_hour":{"utilization":%d,"resets_at":"%s","percent_per_hour":30},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},%s]}' "$((100-p))" "$p" "$r5" "$b"
 FAKE
 # --- fake tmux: strips -L; one live fleet `sessA`; two windows (@1 on a, @2 on b);
 # display-message -p answers a pane pid (ours — no claude under it, so the peer
@@ -92,6 +106,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-
 NOW=$(date +%s)
 RESET1=$(( NOW + 10800 )); RESET2=$(( NOW + 10800 + 14400 ))   # two windows, 4h apart (> the 15-min tolerance)
 RESET3=$(( RESET2 + 14400 ))                                    # a third, for the every-account-capped case (#567)
+RESET4=$(( RESET3 + 14400 ))                                    # a fourth, for the unreadable-account case (#628)
 iso "$RESET1" > "$WORK/reset"
 HUB="http://hub.test:8787"
 ACCTS=""            # per-case override of the accounts pool (see case 1)
@@ -101,6 +116,7 @@ run_watch() {
   FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
+  FAKE_B_SHAPE_FILE="$WORK/b-shape" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -251,7 +267,7 @@ run_watch || fail "8b: the every-account-capped tick must exit 0"
 [ "$(awk -F'\t' '$1=="b"{print $3}' "$G/account.limited" 2>/dev/null)" = "ccquota: 5-hour window at 95%" ] || fail "8b: b must be benched too (account.limited: $(cat "$G/account.limited" 2>/dev/null))"
 [ "$(migrates)" = "$m" ] || fail "8b: NO migrate --account a when every account is capped (got $(( $(migrates) - m )) new)"
 ! grep -q "migrate --account 'b'" "$WORK/tmux.calls" || fail "8b: NO migrate --account b either"
-grep -q 'display-message fleet: a at 90%.*nowhere to move: every account is at its ceiling' "$WORK/tmux.calls" || fail "8b: the toast must say nowhere to move (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
+grep -q 'display-message fleet: a at 90%.*nowhere to move: no other account is readable and under the ceiling' "$WORK/tmux.calls" || fail "8b: the toast must say nowhere to move (tmux.calls: $(grep display-message "$WORK/tmux.calls" | tail -2))"
 grep -q '# subscription at its limit — nowhere to move' "$WORK/notify.log" || fail "8b: the notify must say nowhere to move"
 grep -q 'sessions were NOT moved: they stay on \*\*b\*\*' "$WORK/notify.log" || fail "8b: the notify names the account the sessions stay on (notify: $(tail -4 "$WORK/notify.log"))"
 [ "$(notifies)" = $((n+2)) ] || fail "8b: one notify per capped account (got $(( $(notifies) - n )))"
@@ -342,5 +358,43 @@ HOLDER=''
 [ ! -d "$G/quotawatch.lock" ] || fail "9f: lock released after the superseding tick"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582)\n' "$CHECKS"
+# 10. an account ccquota cannot READ is not a landing spot (#628) ---------------
+# The old parser turned TokenLedger's `available:false, reason: no reading` into
+# a row of zeroes — 0% used AND 0% headroom — so b looked like a brand-new idle
+# subscription: never benched, and the FIRST account quota_move_target handed a's
+# sessions to. Now it produces no row, and no row is no target.
+iso "$RESET4" > "$WORK/reset"; echo 90 > "$WORK/pct"; echo 20 > "$WORK/pct-b"; echo unavail > "$WORK/b-shape"
+: > "$G/account.limited"        # case 8 benched both; a bench would keep b out of
+                                # quota_move_target for the wrong reason
+m=$(migrates); n=$(notifies)
+run_watch || fail "10: the tick must exit 0"
+grep -q 'has no reading for b (available=false, reason: no reading)' "$WORK/stderr" \
+  || fail "10: the tick must LOG that ccquota cannot read b (stderr: $(cat "$WORK/stderr"))"
+[ "$(cat "$G/quota.ceiling.a" 2>/dev/null)" = "$RESET4" ] || fail "10: a at 90% must still be benched for the new window"
+[ -z "$(awk -F'\t' '$1=="b"{print $3}' "$G/account.limited" 2>/dev/null)" ] || fail "10: b has no row ⇒ the policy loop never sees it ⇒ no bench"
+[ "$(migrates)" = "$m" ] || fail "10: NO migrate onto an account ccquota cannot read (got $(( $(migrates) - m )) new)"
+grep -q 'nowhere to move' "$WORK/stderr" || fail "10: the tick must say nowhere to move (stderr: $(cat "$WORK/stderr"))"
+grep -q 'unreadable to ccquota' "$WORK/notify.log" || fail "10: the notify must name the unreadable account as a reason (notify: $(tail -4 "$WORK/notify.log"))"
+ok
+
+# 10b. deduped: the same complaint every 60 s would drown the tick log — one line
+# per CHANGE, including the change back to clean.
+run_watch || fail "10b: the next tick must exit 0"
+! grep -q 'has no reading for b' "$WORK/stderr" || fail "10b: an unchanged complaint must not be re-logged every tick"
+echo '' > "$WORK/b-shape"
+run_watch || fail "10c: the recovering tick must exit 0"
+grep -q 'reads every pool account again' "$WORK/stderr" || fail "10c: going clean again must be announced once (stderr: $(cat "$WORK/stderr"))"
+ok
+
+# 10d. a payload shape the parser does not know is the LOUD half: same no-row
+# rail, but fleet-doctor.sh turns the quota line RED on it (it means ccquota and
+# the fleet have drifted, not that one account is unreadable today).
+echo shape > "$WORK/b-shape"
+run_watch || fail "10d: the tick must exit 0"
+grep -q 'payload shape not recognized for b' "$WORK/stderr" || fail "10d: an unparseable account must be logged (stderr: $(cat "$WORK/stderr"))"
+[ "$(migrates)" = "$m" ] || fail "10d: still no migrate onto it"
+echo '' > "$WORK/b-shape"
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628)\n' "$CHECKS"
 exit 0

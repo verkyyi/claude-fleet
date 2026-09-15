@@ -105,6 +105,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 QTS="$G/account.quota.ts"
+QDIAG="$G/quota.diag"                                 # last tick's quota_parse complaints (#628)
 HB="$G/quotawatch.heartbeat"
 LOCK="$G/quotawatch.lock"
 STALE="${FLEET_ACCOUNT_QUOTA_STALE:-600}"
@@ -262,7 +263,19 @@ if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$((
 
 hb "fetch"
 f0=$(now)
-qrows=$("$BIN/fleet-account.sh" quota 2>/dev/null)
+# stderr is KEPT (issue #628): quota_parse complains there about an account
+# ccquota cannot read (available=false) and about a payload shape it does not
+# understand — the rows themselves can only say it by being absent. Deduped
+# against the last tick's text so a persistent condition costs one line, not one
+# per 60 s, and a change (including back to clean) is always announced.
+qdiagf="$G/quota.diag.$$.new"    # NOT quota.diag.$$ — that is atomic_write's own temp
+qrows=$("$BIN/fleet-account.sh" quota 2>"$qdiagf")
+if ! cmp -s "$qdiagf" "$QDIAG" 2>/dev/null; then
+  if [ -s "$qdiagf" ]; then cat "$qdiagf" >&2
+  elif [ -s "$QDIAG" ]; then printf 'fleet-quotawatch: ccquota reads every pool account again — the earlier no-reading/shape complaints are cleared\n' >&2; fi
+  atomic_write "$QDIAG" < "$qdiagf"
+fi
+rm -f "$qdiagf"
 T_FETCH=$(( $(now) - f0 ))
 post_ts=$(cat "$QTS" 2>/dev/null); case "$post_ts" in ''|*[!0-9]*) post_ts=0;; esac
 fetched=0; [ "$post_ts" -gt "$pre_ts" ] && fetched=1
@@ -310,6 +323,18 @@ qceil="${FLEET_ACCOUNT_CEILING:-85}"; qwarn="${FLEET_ACCOUNT_WARN_PCT:-70}"
 # know), skip the move, say so. Rows matter too: an account that crosses the
 # ceiling in the SAME tick (a later row, not benched yet) is no target either —
 # its own row benches it seconds later and would bounce those sessions again.
+# NO ROW is no target either (issue #628). It used to be the opposite: a label
+# absent from the rows fell through the `[ -n "$u" ]` guard and was returned as a
+# free account — so an account ccquota had just said `available:false, reason:
+# no reading` about (which parsed into a row of zeroes, i.e. 0% used, and since
+# #628 into no row at all) was the FIRST place a ceiling fan-out sent N sessions.
+# Moving N sessions onto an account whose headroom nobody can read is the same
+# gamble #567 refused: better to bench, say nothing moved, and let the operator
+# see it — the doctor's quota line names the unreadable accounts. It also puts
+# this in step with the SPAWN path, which has always worked that way: pick_best
+# skips a label with no row outright, and only falls back to round-robin when NOT
+# ONE account has a reading. A rowless label being un-spawnable but a legitimate
+# landing spot for a dozen at once was never a defensible pair.
 quota_move_target() {
   local skip="$1" f l u
   for f in "$ACCT_DIR"/*; do
@@ -318,7 +343,8 @@ quota_move_target() {
     [ "$l" != "$skip" ] || continue
     [ "$("$BIN/fleet-account.sh" limited-until "$l" 2>/dev/null || echo 0)" -le "$(now)" ] || continue
     u=$(printf '%s\n' "$qrows" | awk -F'\t' -v l="$l" '$1==l{print (($2+0)>($3+0))?$2+0:$3+0; exit}')
-    [ -n "$u" ] && [ "$u" -ge "$qceil" ] && continue
+    [ -n "$u" ] || continue                           # no ccquota reading — see the header
+    [ "$u" -ge "$qceil" ] && continue
     printf '%s' "$l"; return 0
   done
   return 1
@@ -335,7 +361,7 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     qto=$(quota_move_target "$ql") || qto=""
     if [ "$DRY" = 1 ]; then
       if [ -n "$qto" ]; then printf 'would: bench %s (%s%% of %s, resets %s) + migrate --account %s on: %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$(printf '%s' "$SOCKETS" | tr '\n' ' ')"
-      else printf 'would: bench %s (%s%% of %s, resets %s) — nowhere to move: every other account is benched or at its ceiling; its sessions would stay on %s until %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$qresett"; fi
+      else printf 'would: bench %s (%s%% of %s, resets %s) — nowhere to move: every other account is benched, at its ceiling, or has no ccquota reading; its sessions would stay on %s until %s\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" "$qresett"; fi
       continue
     fi
     printf '%s' "$qreset" | atomic_write "$mk"
@@ -343,13 +369,13 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     qnew=$("$BIN/fleet-account.sh" active 2>/dev/null)
     if [ -z "$qto" ]; then
       # #567: the bench is recorded (a new spawn must know), the move is not made.
-      printf 'fleet-quotawatch: %s at %s%% of its %s window — benched until %s; nowhere to move: every account is at its ceiling, its sessions stay on %s until then\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" >&2
+      printf 'fleet-quotawatch: %s at %s%% of its %s window — benched until %s; nowhere to move: no other account is both readable and under the ceiling, its sessions stay on %s until then\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" >&2
       for qs in $SOCKETS; do
-        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: every account is at its ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
       done
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription at its limit — nowhere to move
-**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett, but every other account is benched or at its ceiling too, so its sessions were NOT moved: they stay on **$ql** until $qresett (a walled session waiting for its own reset beats one cold-booted back into the same wall)" >/dev/null 2>&1
+**$ql** is at ${qutil}% of its $qwhich window (ccquota, exact) — benched until $qresett, but every other account is benched, at its ceiling, or unreadable to ccquota, so its sessions were NOT moved: they stay on **$ql** until $qresett (a walled session waiting for its own reset beats one cold-booted back into the same wall)" >/dev/null 2>&1
       fi
       continue
     fi

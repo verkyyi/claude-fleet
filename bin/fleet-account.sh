@@ -60,6 +60,9 @@
 #                          7d-reset · %/h, one TSV row each. Cached FLEET_ACCOUNT_QUOTA_TTL s
 #                          (--refresh forces; --cached never fetches). Fail-open: no
 #                          ccquota / no CCQUOTA_HUB_URL / hub unreachable → no rows, exit 0.
+#                          An account ccquota says it CANNOT read (available:false) gets
+#                          no row either, and says why on stderr (issue #628) — never a
+#                          row of zeroes, which reads as a brand-new idle subscription.
 #   bench <label> <until-epoch> [reason]
 #                        — bench <label> until an EXACT instant (ccquota's reset) and
 #                          rotate if it was active; exit 10 iff rotated (like mark-limited)
@@ -318,6 +321,26 @@ acct_eligible() { [ "$(acct_limited_until "$1")" -le "$(now)" ]; }
 # Accounts ccquota knows but the pool doesn't (and vice versa) are simply absent.
 # %/h is the 5h window's burn rate when ccquota reports one (else 0). Pure
 # (python3 + stdin), so the selftest pins it on a fixture.
+#
+# NO ROW is the only honest answer for an account we have no reading for (issue
+# #628), and it is the SAME word the pool already uses for "ccquota has never
+# heard of this label": every consumer treats a missing row as no opinion —
+# pick_best skips it, `list` prints no quota columns, the quotawatch policy loop
+# never sees it, and (since #628) quota_move_target refuses it as a landing spot.
+# The two ways a reading goes missing, both of which used to become `0`:
+#   available:false — TokenLedger SAYS SO (cmd/ccquota/budget.go flatten: it sets
+#     available+reason, then returns early, so headroom_pct stays at its 0 value
+#     and both omitempty windows vanish from the JSON). Publishing a row here
+#     printed `label 0 0 0 …` — 0% used AND 0% headroom — which reads to the
+#     rotation as a brand-new idle subscription: never benched, and the FIRST
+#     account a ceiling fan-out would move N sessions onto.
+#   neither window present — a payload shape this parser does not understand.
+#     That one is loud (stderr + a RED `quota` line in fleet-doctor.sh), because
+#     it means ccquota and the fleet have drifted apart, not that an account is
+#     unreadable today.
+# Both diagnostics go to stderr, which quota_fetch lets through: the quotawatch
+# tick logs them (deduped, see fleet-quotawatch.sh) and `quota --refresh` hands
+# them to the doctor. Silence here is what made this a 2026-09-11-shaped bug.
 quota_parse() {
   local map="" l conf u
   while IFS= read -r l; do
@@ -339,10 +362,26 @@ except Exception:
 accts = d.get("accounts") or []
 if not accts or d.get("verdict") == "unknown":
     sys.exit(0)
-def ep(iso):
-    if not iso: return 0
+def diag(fmt, *a):
+    sys.stderr.write(("fleet-account: ccquota " + fmt + "\n") % a)
+def num(v):
+    """A utilization/headroom as a number, or None when it is absent or not one.
+    None is 'no reading' — never 0: see the header. A non-numeric value is the
+    same unknown (and falls into the shape complaint below) rather than an
+    exception that would drop EVERY account's row."""
+    if v is None or isinstance(v, bool): return None
+    try: return float(v)
+    except (TypeError, ValueError): return None
+def ep(v):
+    """Reset instant → epoch seconds. `budget --json` states it as RFC3339
+    (cmd/ccquota/budget.go: resets_at is a *time.Time) — that is the shape this
+    parser is pinned to. The stamp API in the same binary (stamp.go) uses unix
+    seconds instead, and feeding one of those in used to except into 0, which
+    silently flattened every fleet_same_window comparison; accept both."""
+    if v is None or v == "" or isinstance(v, bool): return 0
+    if isinstance(v, (int, float)): return int(v)
     try:
-        return int(datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+        return int(datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp())
     except Exception:
         return 0
 by_uuid = {a.get("account_uuid"): a for a in accts}
@@ -352,17 +391,34 @@ for line in os.environ.get("QP_MAP", "").splitlines():
     label, _, uuid = line.partition("\t")
     a = by_uuid.get(uuid) if uuid else by_label.get(label)
     if not a: continue
+    av = a.get("available")
+    if av is not None and not av:                      # TokenLedger: "I cannot read this one"
+        why = a.get("reason") or "no reason given"
+        diag("has no reading for %s (available=false, reason: %s) — no row: "
+             "not a rotation candidate, not a migrate target", label, why)
+        continue
     fh, sd = a.get("five_hour") or {}, a.get("seven_day") or {}
-    u5, u7 = fh.get("utilization"), sd.get("utilization")
+    u5, u7 = num(fh.get("utilization")), num(sd.get("utilization"))
+    if u5 is None and u7 is None:                      # neither window — shape we don't know
+        diag("payload shape not recognized for %s: available is not false, yet "
+             "neither five_hour nor seven_day carries a utilization — no row "
+             "(is ccquota newer than this fleet?)", label)
+        continue
+    # One window missing while the other is real IS a reading: every consumer
+    # ranks on max(5h, 7d), so a 0 for the absent one simply never wins.
     u5 = 0 if u5 is None else u5; u7 = 0 if u7 is None else u7
-    room = a.get("headroom_pct"); room = 100 - max(u5, u7) if room is None else room
+    room = num(a.get("headroom_pct")); room = 100 - max(u5, u7) if room is None else room
     print("%s\t%d\t%d\t%d\t%d\t%d\t%d" % (label, round(u5), round(u7), round(room),
-          ep(fh.get("resets_at")), ep(sd.get("resets_at")), round(fh.get("percent_per_hour") or 0)))
+          ep(fh.get("resets_at")), ep(sd.get("resets_at")), round(num(fh.get("percent_per_hour")) or 0)))
 PY
 }
 # quota_fetch — ask ccquota (10s cap) and rewrite the cache; silent no-op without
 # ccquota / a hub URL. Empty rows (unknown verdict, unreachable) still refresh the
-# stamp so a dead hub is retried at TTL cadence, not on every call.
+# stamp so a dead hub is retried at TTL cadence, not on every call. ccquota's own
+# stderr is dropped, quota_parse's is NOT: its no-reading / bad-shape complaints
+# (issue #628) are the only place the chain speaks up, and the stamp below says
+# nothing about them — it is refreshed unconditionally, which is exactly why
+# #551's `⚠ quota stale` can never catch a cache full of confident zeroes.
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
   [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0

@@ -441,6 +441,47 @@ fleet-doctor.sh                   # "quota" row: hub reachable, N/M pool labels 
 Label ↔ account: ccquota's name for the account (`ccquota name`) must equal the
 fleet label, or pin `CCQUOTA_ACCOUNT=<uuid>` in the label's `<label>.conf`.
 
+**No reading ⇒ no row** (issue #628). ccquota is explicit when it cannot read an
+account — `"available": false` with a `reason`, and then its `five_hour` /
+`seven_day` keys disappear from the JSON entirely (they are `omitempty`, and
+TokenLedger returns before filling them). The fleet used to read neither, so such
+an account arrived as `label 0 0 0 …`: **0% used and 0% headroom at the same
+time**. A 0 never crosses the 85% ceiling, so it was never benched — and `u < 85`
+is exactly what qualifies a *migrate target*, so it was the first account a
+ceiling fan-out moved N sessions onto. Now `quota_parse` drops it: no row, which
+is the same word the pool already uses for "ccquota has never heard of this
+label", and every consumer already reads it as *no opinion* — `pick_active` skips
+it, `list` prints no quota columns for it, the watch's policy loop never sees it,
+and `quota_move_target` refuses it as a landing spot (a bench with nowhere to move
+beats moving 12 sessions onto an account nobody can read — the #567 reasoning).
+
+That last one is a **behaviour change worth knowing**: a ceiling fan-out now
+requires the destination to have an actual reading under the ceiling, so a pool
+label ccquota does not cover — for any reason, unreadable *or* merely unmapped —
+is no longer a migrate target. It puts the fan-out in step with the spawn path,
+which has always worked that way (`pick_best` skips a label with no row and falls
+back to round-robin only when *no* account has one); a label being un-spawnable
+yet a legitimate landing spot for a dozen sessions at once was never a defensible
+pair. Map the pool (`ccquota name`, or `CCQUOTA_ACCOUNT=` in `<label>.conf`) and
+`fleet-doctor.sh` goes back to a green `quota` line.
+
+Because "no row" is silent by construction, the diagnosis is on **stderr** and in
+the doctor:
+
+- `fleet-account.sh quota --refresh` prints one line per unreadable account
+  (`ccquota has no reading for <label> (available=false, reason: …)`), and the
+  watch tick logs the same — **once per change**, not once per 60s tick, with a
+  line when the condition clears.
+- `fleet-doctor.sh` **WARNs** its `quota` line and *names* the accounts.
+- A payload carrying **neither window** for an account that is *not* flagged
+  unavailable is a different animal — the contract drifted — and turns that line
+  **red (FAIL)**: `bin/fleet-doctor-quota-selftest.sh` pins all four verdicts.
+
+One more shape note: `budget --json` states `resets_at` as **RFC3339**
+(`cmd/ccquota/budget.go`), while the stamp API in the same binary uses **unix
+seconds** (`stamp.go`). `quota_parse` now accepts either — an integer used to
+except into `0`, which silently flattened every `fleet_same_window` comparison.
+
 ## Moving live sessions
 
 `fleet-account.sh migrate …` (`bin/fleet-migrate.sh`, issue #512) is the one
