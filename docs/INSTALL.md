@@ -516,6 +516,20 @@ assumes — this doc is only the install/uninstall procedure.
    (needs the collector to have run once — trigger it by hand:
    `bash ~/.claude/fleet/bin/tmux-dash-collect.sh`). Report each check.
 
+   Then run the code's own gate — **it is safe to run from the live install**:
+   `sh ~/.claude/fleet/bin/run-selftests.sh </dev/null`, expect `all green`.
+   (Redirect stdin: backgrounded without it, `auto-handoff-selftest` blocks
+   forever on a hook that `cat`s an open stdin.) It re-runs itself from a
+   throwaway **shadow install root** — your `bin/` mirrored by symlink, with no
+   `fleet.conf` beside it, an empty `logs/`, an empty `FLEET_CONF_DIR`, and every
+   `FLEET_*`/`CCQUOTA_*` variable stripped from the environment — so the verdict
+   is about the code, never about this machine's config, and a run cannot read or
+   clobber a running fleet's state (issue #660: before that, six tests went red on
+   a live install while the same commit was all-green from a checkout, which made
+   the answer to "does the code on this machine run?" worthless). Chasing one red
+   test goes through the same prelude: `run-selftests.sh fleet-context`, or a glob
+   (`run-selftests.sh 'dash-*'`).
+
 ## Uninstall
 
 Remove the LaunchAgents (`launchctl bootout gui/$(id -u)/com.claude-fleet.*`,
