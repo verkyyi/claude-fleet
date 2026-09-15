@@ -170,6 +170,10 @@ contains "an unfolded parent is marked ▾" "$(row_of root "$out")" "▾"
 not_contains "… and no longer ▸" "$(row_of root "$out")" "▸"
 contains "a restored child keeps its └ indent" "$out" "└ kid"
 contains "a restored grandchild keeps its └ indent" "$out" "└ grand"
+# The ↳ tag now survives only where that indent cannot say the same thing.
+not_contains "a direct child drops its ↳ tag — the indent already says it" "$(row_of kid "$out")" "↳"
+contains "a GRANDCHILD keeps its tag: it names ITS OWN parent (kid = #101), which the indent cannot — it is drawn under the ROOT, at the same depth as kid" \
+  "$(row_of grand "$out")" "↳#101"
 # the grouping is two-level-flat: `kid` owns no fold of its own, so it draws no
 # caret — otherwise the operator would press → on it and nothing would happen.
 not_contains "an intermediate parent draws no caret" "$(row_of kid "$out")" "▸"

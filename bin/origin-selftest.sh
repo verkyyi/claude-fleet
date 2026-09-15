@@ -228,12 +228,17 @@ for v in "$l_rootA" "$l_rootB" "$l_kidA" "$l_scrP" "$l_kidS"; do
 done
 CHECKS=$((CHECKS + 8))
 
-# tags + indent
-contains "grouping: kidA carries the ↳#100 tag" "$out" "↳#100"
+# tags + indent. The ↳ tag is drawn ONLY where the `└` indent cannot say the same
+# thing: a direct child of the row its block hangs off drops it (that is what the
+# indent means), an ORPHAN keeps it (it has no indent at all, so the tag is the
+# only trace of where it came from).
+row_of() { printf '%s\n' "$out" | grep -- "$1" | head -1; }
 contains "grouping: kidA is indented" "$out" "└ kidA"
-contains "grouping: kidS carries the ↳~5 tag" "$out" "↳~5"
-contains "grouping: orphX keeps its tag" "$out" "↳#999"
-rootA_line=$(printf '%s\n' "$out" | grep -- ' rootA')
+not_contains "grouping: a direct child drops the ↳ tag — the indent already says it" "$(row_of 'kidA')" "↳"
+contains "grouping: kidS is indented under its scratch parent" "$out" "└ kidS"
+not_contains "grouping: … and drops its ↳~5 tag for the same reason" "$(row_of 'kidS')" "↳"
+contains "grouping: orphX KEEPS its tag — no indent to say it" "$out" "↳#999"
+rootA_line=$(row_of ' rootA')
 not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 
 printf 'origin-selftest OK (%d checks)\n' "$CHECKS"
