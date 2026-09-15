@@ -14,9 +14,11 @@
 # once. Run from launchd (com.claude-fleet.spinner, KeepAlive) or any daemon
 # supervisor. SPIN_INTERVAL = seconds per frame.
 #
-# Two throttled side errands ride this loop, because being KeepAlive makes it the
+# Three throttled side errands ride this loop, because being KeepAlive makes it the
 # one fleet daemon that is always already running: the stuck-working sweep
-# (issue #101) and the INTERVAL-DAEMON self-heal (issues #636, #639).
+# (issue #101), the stale-`needs` reconcile (issue #658) and the INTERVAL-DAEMON
+# self-heal (issues #636, #639). All three exist for the same reason — a state
+# written on an event and never re-checked outlives the event.
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 INTERVAL="${SPIN_INTERVAL:-0.12}"
 NFRAMES=10
@@ -143,6 +145,169 @@ EOF
     { tail -n 300 "$STUCK_LOG" > "$STUCK_LOG.tmp" 2>/dev/null && mv "$STUCK_LOG.tmp" "$STUCK_LOG" 2>/dev/null; }
 }
 
+# --- stale-`needs` reconcile (issue #658) ------------------------------------
+# @claude_state is written on EVENTS — a hook edge, a classifier verdict — and then
+# never re-read against reality, so a red that was RIGHT when it was stamped stays
+# red long after its cause is gone: nothing re-evaluates a window that is not moving.
+# Two shapes of that were live on 2026-09-14. A window whose Claude EXITED while red
+# can never fire another hook. And two windows sat at `⊘` ("only a human may press
+# this") over an open AskUserQuestion — stamped by the pre-#657 wording rule minutes
+# before the fix went live, and unreachable by it afterwards, because a session
+# BLOCKED on a dialog fires no further hook. A red the operator is told not to touch,
+# on a question they could have answered from the dash with ⌃k, is #640's value
+# exactly inverted — and it is self-sealing, because the mislabel is what stops the
+# operator from ending it.
+#
+# So the spinner reconciles the stamp against the transcript. It is the daemon that
+# can: KeepAlive, already iterating every window, and the one unit still alive when
+# launchd stops spawning the interval units (#639). Per candidate window it asks
+# bin/fleet-pending-tool.sh — the SAME "tool_use with no tool_result" oracle that
+# stamped the subtype (#656) and that fleet-answer.sh/fleet-permission.sh act on —
+# and applies one of three verdicts:
+#
+#   ask|perm + nothing pending   → clear to `done` (the red is provably over)
+#   any subtype + no live Claude → clear to ``     (nothing can be waiting)
+#   ask|perm + something pending → re-settle the SUBTYPE only (ask ⇄ perm); the
+#                                  window stays red, and @claude_state_ts is left
+#                                  alone because the session's last activity did
+#                                  not move — only our reading of it did.
+#
+# ONE DIRECTION ONLY. It never creates a `needs` and never re-reddens a window.
+# Inferring a red out of band is the hook's job; a second guesser would only
+# manufacture false alarms, which is the failure this whole file exists to avoid.
+# It also does NOT kick the classifier afterwards (unlike the stuck-working demote):
+# the classifier CAN return `needs` off a stale screen, which would re-redden what
+# was just cleared and flap every tick.
+#
+# WHY ONLY ask/perm ARE CLEARABLE. Those two subtypes are DEFINED by a pending
+# tool_use — #656 settles both off this very oracle — so "nothing pending" proves
+# the stamp stale. A plain `needs` (empty subtype) is a judgement about the SCREEN:
+# the classifier's WAITING/ERROR verdict, or a worker's own `set-claude-state.sh
+# needs` beside a `⛔ blocked` issue comment (the charter's blocked rail). Neither
+# has a tool_use pending, so clearing those would silently delete the blocked
+# signal — the one red the operator most needs to see.
+#
+# GRACE ON BOTH AXES. A stamp younger than one window is still settling (PreToolUse
+# stamps `ask` a beat before the transcript line lands), and the same verdict must
+# repeat across two consecutive checks before anything is written — the 2-strike
+# idiom the stuck-working sweep above uses, keyed on the VERDICT so a changed reading
+# restarts the count. Effective grace: FLEET_NEEDS_RECONCILE_SECS to 2×.
+#
+# COST, measured on this machine (2026-09-14): ~150 ms per CANDIDATE — a bash hop +
+# `ps` tree walk to find the pane's Claude (~70 ms) and a python read of the
+# transcript (~35 ms on a 2.1 MB file), plus two `sh` startups. Candidates are only
+# windows already stamped `needs` (0-2 on a live fleet), the check runs at most every
+# FLEET_NEEDS_RECONCILE_SECS, and the per-FRAME cost is one integer compare — the
+# frame loop's own budget is untouched. NEEDS_BUDGET bounds a pathological fleet from
+# stalling the animation; the windows it skips are picked up by the next check.
+# Set FLEET_NEEDS_RECONCILE_SECS=0 to disable.
+NEEDS_SECS="${FLEET_NEEDS_RECONCILE_SECS:-20}"
+case "$NEEDS_SECS" in ''|*[!0-9]*) NEEDS_SECS=20 ;; esac   # non-integer -> default (0 disables)
+NEEDS_LOG="$BIN/../logs/needs.log"
+NEEDS_BUDGET=8
+NEEDS_EVERY=$(awk -v c="$NEEDS_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+nc=0
+# The strike table is a FILE, not a variable, for two reasons: `tmux-spinner.sh
+# --needs-check` runs one pass out of band (an operator forcing a reconcile without
+# waiting for the daemon; the selftest driving exactly N passes), and it must observe
+# the same two-checks-agree rule the daemon does. Its first field is the epoch of the
+# check that wrote it: strikes older than 3x the interval are DISCARDED, so a restart
+# — or a long-dead one-shot — never lets a single stale reading count as agreement.
+NEEDS_STRIKE_F="$BIN/../logs/.needs-strikes"
+
+# needs_check — one reconcile pass over the `needs` windows. Runs in the current
+# shell (here-doc, no pipe) so the budget and the strike accumulator persist.
+needs_check() {
+  nows=$(date +%s)
+  new='|'
+  prev='|'
+  # Last check's readings, if they are recent enough to mean "the previous check".
+  if [ -f "$NEEDS_STRIKE_F" ]; then
+    _pl=$(cat "$NEEDS_STRIKE_F" 2>/dev/null)
+    _pt=${_pl%% *}
+    case "$_pt" in
+      ''|*[!0-9]*) : ;;
+      *) [ $(( nows - _pt )) -le $(( NEEDS_SECS * 3 )) ] && prev="${_pl#* }" ;;
+    esac
+  fi
+  left="$NEEDS_BUDGET"
+  touched=0
+  for sock in $SOCKETS; do
+    [ "$left" -gt 0 ] || break
+    # Own scan, like stuck_check's: window_id (the write target, stable across
+    # re-slotting) plus the three stamps the verdict needs. '-'/'0' placeholders keep
+    # the fields parsing when an option is empty (issue #105).
+    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0}' 2>/dev/null) || continue
+    while read -r wid st nsub ts; do
+      [ -n "$wid" ] || continue
+      [ "$st" = needs ] || continue                       # ONLY red windows are candidates
+      [ "$left" -gt 0 ] || continue                       # budget spent; next check resumes
+      case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+      [ $(( nows - ts )) -ge "$NEEDS_SECS" ] || continue   # fresh stamp — still settling
+      left=$((left - 1))
+      name=$("$BIN/fleet-pending-tool.sh" -L "$sock" "$wid" 2>/dev/null); prc=$?
+      verdict=''; want=''
+      case "$prc" in
+        3) verdict=dead ;;                                # no Claude under the pane
+        1) case "$nsub" in ask|perm) verdict=idle ;; esac ;;   # read the transcript: nothing open
+        0) case "$nsub" in                                # something IS open — is it what we said?
+             ask|perm)
+               want=perm; [ "$name" = AskUserQuestion ] && want=ask
+               [ "$want" = "$nsub" ] || verdict="sub-$want" ;;
+           esac ;;
+        *) : ;;                                           # 4 (unknown) / anything else -> leave it
+      esac
+      [ -n "$verdict" ] || continue
+      skey="$sock:$wid:$verdict"
+      case "$prev" in
+        *"|$skey|"*) : ;;                                 # same reading twice -> act
+        *) new="$new$skey|"; continue ;;                  # 1st strike -> arm for next check
+      esac
+      case "$verdict" in
+        dead)
+          tmux -L "$sock" set-window-option -t "$wid" @claude_state '' 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
+          msg="needs/$nsub -> (idle)   no live Claude under the pane" ;;
+        idle)
+          tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null
+          tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
+          msg="needs/$nsub -> done     no tool_use pending in the transcript" ;;
+        *)
+          tmux -L "$sock" set-window-option -t "$wid" @claude_needs "$want" 2>/dev/null
+          msg="needs/$nsub -> needs/$want  pending tool_use is $name" ;;
+      esac
+      printf '%s  %-24s %s\n' "$(date +%H:%M:%S)" "$sock:$wid" "$msg" >> "$NEEDS_LOG"
+      touched=1
+    done <<EOF
+$wl
+EOF
+  done
+  printf '%s %s\n' "$nows" "$new" > "$NEEDS_STRIKE_F" 2>/dev/null
+  [ "$touched" = 1 ] && [ -f "$NEEDS_LOG" ] && \
+    { tail -n 300 "$NEEDS_LOG" > "$NEEDS_LOG.tmp" 2>/dev/null && mv "$NEEDS_LOG.tmp" "$NEEDS_LOG" 2>/dev/null; }
+}
+
+# --- one-shot reconcile: `tmux-spinner.sh --needs-check` (issue #658) ---------
+# Runs exactly ONE reconcile pass over every live fleet and exits, without starting
+# the animation loop. Two callers: an operator who wants a stale red re-judged NOW
+# rather than at the daemon's next tick, and bin/needs-reconcile-selftest.sh, which
+# drives passes one at a time so the two-checks-agree rule can be pinned by COUNT
+# instead of by wall clock. Same code, same strike file, same verdicts — so this can
+# never drift from what the daemon does.
+#
+# FLEET_NEEDS_RECONCILE_SECS=0 disables the daemon's ERRAND, not this command: an
+# explicit invocation is the operator asking for it. The knob still sets the grace
+# window, so 0 falls back to the 20s default here rather than collapsing it to none.
+if [ "${1:-}" = "--needs-check" ]; then
+  [ "$NEEDS_SECS" -gt 0 ] || NEEDS_SECS=20
+  SOCKETS=$(fleet_sockets)
+  [ -n "$SOCKETS" ] || { echo "tmux-spinner: no live fleet" >&2; exit 1; }
+  needs_check
+  exit 0
+fi
+
 i=1
 LAST='|'
 LAST_NEEDS='|'   # per-session @attn_needs counts published last frame (change-detect)
@@ -161,6 +326,14 @@ while :; do
   if [ "$STUCK_SECS" -gt 0 ]; then
     sc=$((sc + 1))
     [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+  fi
+
+  # Throttled stale-`needs` reconcile (issue #658) — same shape as the sweep above:
+  # one integer compare per frame, and the reconcile itself only over windows already
+  # stamped `needs` (0-2 on a live fleet), at most every NEEDS_SECS.
+  if [ "$NEEDS_SECS" -gt 0 ]; then
+    nc=$((nc + 1))
+    [ "$nc" -ge "$NEEDS_EVERY" ] && { nc=0; needs_check; }
   fi
 
   # Throttled interval-daemon self-heal (issues #636, #639). This daemon is
