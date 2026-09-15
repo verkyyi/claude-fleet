@@ -205,6 +205,12 @@ assumes — this doc is only the install/uninstall procedure.
      go install github.com/verkyyi/ccquota/cmd/ccquota@latest   # needs Go 1.25+
      ```
 
+     Because there is no tagged release, the binary on each machine is whatever
+     `@latest` was the day you ran that — so the builds drift per machine. The
+     doctor's `quota` line prints the version it got from `ccquota version`
+     (issue #668), which is the first thing to compare when one machine's quota
+     line is red and another's is green.
+
      The product was renamed to TokenLedger on 2026-09-14 but **the identifiers
      were deliberately not**: the command, the Go module path above, the
      `CCQUOTA_*` variables and `~/.ccquota/` are all still spelled `ccquota`, and

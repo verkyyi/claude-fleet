@@ -301,6 +301,24 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       fresh) pass qwatch "quota cache ${qage}s old — the pre-emptive watch is ticking (\`fleet-quotawatch.sh --status\`)" ;;
     esac
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
+      # NAME the binary on the other side of this contract (issue #668). ccquota
+      # ships no tagged release (docs/INSTALL.md) — everyone installs it with
+      # `go install …@latest`, so the builds DO drift between machines, and the
+      # shape FAIL below is precisely the moment a human needs to know which one
+      # answered: its advice can only say *"that build is probably newer than this
+      # fleet"*, and until now there was no build named anywhere on the line.
+      # `ccquota version` is a local print (cmd/ccquota/main.go); a build old
+      # enough to predate the subcommand exits non-zero with usage on stderr, and
+      # one that printed usage on STDOUT would hand us a sentence — so take one
+      # whitespace-free token or nothing. Omitting the version is the graceful
+      # path: it must never turn a quota verdict into an error of its own.
+      # $qtag is the message subject everywhere below, so ALL FOUR verdicts
+      # (PASS / both WARNs / FAIL) carry it, and degrade to today's bare
+      # "ccquota" when the version can't be had.
+      qver=$("${FLEET_QUOTA_BIN:-ccquota}" version 2>/dev/null | head -1 | tr -d '\r')
+      qver=${qver#ccquota }                      # `ccquota <ver>` → <ver>
+      case "$qver" in ''|*[[:space:]]*) qver='' ;; esac
+      qtag="ccquota"; [ -n "$qver" ] && qtag="ccquota $qver"
       # Two calls on purpose (issue #628): the first FETCHES and is read for its
       # STDERR — quota_parse's only channel for "ccquota cannot read account X"
       # and "I do not understand this payload". Those accounts produce NO row, so
@@ -315,18 +333,18 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         # unreadable, and yet neither window is there. Silence used to turn that
         # into `0% used` — a confident wrong number that never benches and
         # attracts every migrate. RED, not a warn: nobody is rotating on this.
-        fail quota "ccquota payload shape not recognized for: ${qshape% } — neither five_hour nor seven_day in an account that is not flagged unavailable; those accounts get NO row (never benched, never a migrate target). ccquota is probably newer than this fleet — compare \`ccquota budget --account all --json\` with quota_parse in bin/fleet-account.sh"
+        fail quota "$qtag payload shape not recognized for: ${qshape% } — neither five_hour nor seven_day in an account that is not flagged unavailable; those accounts get NO row (never benched, never a migrate target). That build is probably newer than this fleet — compare \`ccquota budget --account all --json\` with quota_parse in bin/fleet-account.sh"
       elif [ "$qn" -gt 0 ] && [ "$qn" -eq "$n" ]; then
-        pass quota "ccquota hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
+        pass quota "$qtag → hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
       elif [ -n "$qnoread" ]; then
         # ccquota is explicit about this one (available:false) — expected while a
         # token is fresh or the hub has not seen the account yet. Fail-open, but
         # NAMED: it is invisible to the rotation for as long as it lasts.
-        warn quota "ccquota has NO reading for: ${qnoread% } ($qn/$n pool labels have one) — those get no row: never benched at ${FLEET_ACCOUNT_CEILING:-85}%, and never picked as a migrate landing spot. Check \`ccquota budget --account all --json\` (\`available:false\` + its reason)"
+        warn quota "$qtag has NO reading for: ${qnoread% } ($qn/$n pool labels have one) — those get no row: never benched at ${FLEET_ACCOUNT_CEILING:-85}%, and never picked as a migrate landing spot. Check \`ccquota budget --account all --json\` (\`available:false\` + its reason)"
       elif [ "$qn" -gt 0 ]; then
-        warn quota "ccquota maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"
+        warn quota "$qtag maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"
       else
-        warn quota "ccquota hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
+        warn quota "$qtag → hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
       fi
     else
       warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/ccquota/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, https://github.com/verkyyi/tokenledger, the binary is still \`ccquota\`)"
