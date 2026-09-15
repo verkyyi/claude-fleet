@@ -27,7 +27,10 @@
 #                             (issue #598; only with FLEET_ACCOUNT_PHASE_AUTO=1)
 #   quotawatch.heartbeat    — key=value: pid/caller/start/phase/end/dur/rows/
 #                             fetched, plus the per-phase breakdown t_modelcap/
-#                             t_fetch/t_policy (issue #582)
+#                             t_fetch/t_policy (issue #582) and budget/over/
+#                             skipped — the tick's own budget, what blew its
+#                             budget and was killed, and what the tick budget
+#                             deferred to the next tick (issue #698)
 #   quotawatch.lock/        — mkdir lock (pid + ts inside) — overlap guard,
 #                             released only by the tick that still holds it (#582)
 #   quotawatch.sweep.start  — fairness cursor: the fleet whose cap probe was cut
@@ -80,6 +83,42 @@
 # stall pends THIS unit too, which is why the kick also lives in the status bar
 # and in the KeepAlive spinner.
 #
+# FOURTH, the tick's OWN budget (issue #698). Everything above bounds a PIECE of
+# the tick — a probe, the sweep phase, a superseded predecessor. Nothing bounded
+# the tick itself. FLEET_QUOTAWATCH_DEADLINE (120 s) reads like a budget and is
+# not one: it appears only in the overlap guard, where it tells a SUCCESSOR that
+# the tick holding the lock is stuck and may be superseded. The successor is the
+# problem — launchd's StartInterval does not overlap a job, so while a slow tick
+# is running there IS no next tick to come and judge it, and #671 (correctly)
+# gates the collector's in-tick fallback off whenever this unit is running. The
+# one thing that could enforce the 120 s was structurally absent exactly when it
+# was needed. Live, on 2026-09-15 06:42 — with #688 already applied, so this was
+# not the #682 wedge — a tick ran 5m45s against that 120 s: not stuck, PROGRESSING,
+# and unbounded.
+#
+# So the tick now budgets itself, the way the collector does (#653's
+# FLEET_COLLECT_TICK_BUDGET): FLEET_QUOTAWATCH_TICK_BUDGET is checked before every
+# phase and before every ITERATION of the two loops, each phase's own budget is
+# CLAMPED to what the tick has left, and the individual calls a loop iteration
+# makes — every tmux round-trip in the policy loop, the ccquota fetch — carry a
+# budget of their own. Without that last part the per-iteration check is theatre:
+# one `tmux display-message` that never returns (57 s observed, #582) defeats any
+# number of checks between iterations.
+#
+# WIND DOWN, never self-kill. At the budget the tick stops STARTING work, writes
+# its heartbeat, releases the lock and exits 0; whatever it did not reach is left
+# for the next tick 60 s later, which is safe because the sweep has its fairness
+# cursor and the policy's once-per-window markers are written only for an account
+# that was actually handled. A `kill $$` at the deadline would be the #582
+# regression: this process holds the LOCK, and only its EXIT trap releases it.
+#
+# THE BUDGET MUST STAY BELOW THE DEADLINE, and that is pinned in code rather than
+# left to two defaults agreeing (issue #686's lesson). QW_WINDDOWN is the margin
+# the wind-down gets: a phase may overshoot its budget by fleet_timebox's poll
+# granularity plus the kill grace, and the tick must still be finished before a
+# successor would call it stuck and tree-kill it mid-wind-down. Set them
+# inconsistently and TICK_BUDGET is clamped down, loudly — never DEADLINE up.
+#
 # Fail-open, per job: the model sweep needs only an accounts pool (the cap ledger
 # is per-account), the ccquota policy needs a hub URL too. Neither configured →
 # exit 0 and nothing here runs (the collector self-heal above still does).
@@ -88,8 +127,11 @@
 #   fleet-quotawatch.sh [--caller <name>] [--dry-run]
 #   fleet-quotawatch.sh --status        # off | never | fresh | stale  <TAB> age-s
 #
-# Env: FLEET_QUOTAWATCH_DEADLINE (120) FLEET_QUOTAWATCH_PROBE_BUDGET (20)
-#      FLEET_QUOTAWATCH_SWEEP_BUDGET (40) FLEET_ACCOUNT_QUOTA_STALE (600)
+# Env: FLEET_QUOTAWATCH_TICK_BUDGET (100) FLEET_QUOTAWATCH_DEADLINE (120)
+#      FLEET_QUOTAWATCH_PROBE_BUDGET (20) FLEET_QUOTAWATCH_SWEEP_BUDGET (40)
+#      FLEET_QUOTAWATCH_FETCH_BUDGET (30) FLEET_QUOTAWATCH_POLICY_BUDGET (40)
+#      FLEET_QUOTAWATCH_KICK_BUDGET (15) FLEET_QUOTAWATCH_TMUX_BUDGET (10)
+#      FLEET_ACCOUNT_QUOTA_STALE (600)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -113,6 +155,13 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+# The tick's OWN clock starts HERE, before the collector self-heal, before the
+# lock, before anything that can block (issue #698) — a budget that starts after
+# the expensive part is not a budget. `SECONDS` is the bash builtin: same wall
+# clock as `date +%s`, no fork, which is what #682 found to be load-bearing when
+# the machine is starved enough for a budget to matter.
+TICK_T0=$SECONDS
 
 # --- scheduling heartbeat (issue #639) ---------------------------------------
 # ONLY the daemon's own tick stamps. The collector runs this watch first thing
@@ -155,6 +204,76 @@ DEADLINE="${FLEET_QUOTAWATCH_DEADLINE:-120}"   # a tick past this is stuck → s
 PROBE_BUDGET="${FLEET_QUOTAWATCH_PROBE_BUDGET:-20}"   # one fleet's cap probe
 SWEEP_BUDGET="${FLEET_QUOTAWATCH_SWEEP_BUDGET:-40}"   # the whole modelcap phase
 SWEEP_START="$G/quotawatch.sweep.start"               # fairness rotation cursor
+# The tick's SELF-budget and the per-phase budgets it clamps (issue #698 — see the
+# header). Every one of these is per-tick and best-effort: what a tick does not
+# reach, the next tick 60 s later does.
+TICK_BUDGET="${FLEET_QUOTAWATCH_TICK_BUDGET:-100}"    # the whole tick winds down here
+FETCH_BUDGET="${FLEET_QUOTAWATCH_FETCH_BUDGET:-30}"   # the ccquota read
+POLICY_BUDGET="${FLEET_QUOTAWATCH_POLICY_BUDGET:-40}" # the whole warn/bench/move loop
+KICK_BUDGET="${FLEET_QUOTAWATCH_KICK_BUDGET:-15}"     # the collector self-heal errand
+TMUX_BUDGET="${FLEET_QUOTAWATCH_TMUX_BUDGET:-10}"     # ONE tmux round-trip in the policy
+QW_WINDDOWN=20   # margin between TICK_BUDGET and DEADLINE, for the last phase's tail
+PHASE_MIN=5      # less headroom than this left ⇒ do not start the next phase/row at all
+for _v in TICK_BUDGET FETCH_BUDGET POLICY_BUDGET KICK_BUDGET TMUX_BUDGET DEADLINE; do
+  case "${!_v}" in ''|*[!0-9]*) printf 'fleet-quotawatch: %s is not a number (%s) — ignoring it\n' "$_v" "${!_v}" >&2
+    case "$_v" in
+      TICK_BUDGET) TICK_BUDGET=100 ;; FETCH_BUDGET) FETCH_BUDGET=30 ;; POLICY_BUDGET) POLICY_BUDGET=40 ;;
+      KICK_BUDGET) KICK_BUDGET=15 ;; TMUX_BUDGET) TMUX_BUDGET=10 ;; DEADLINE) DEADLINE=120 ;;
+    esac ;;
+  esac
+done
+# THE INVARIANT, enforced rather than assumed: the tick must be DONE before a
+# successor would call it stuck. Clamp the budget down; never raise the deadline.
+if [ $(( TICK_BUDGET + QW_WINDDOWN )) -gt "$DEADLINE" ]; then
+  _tb=$(( DEADLINE - QW_WINDDOWN )); [ "$_tb" -lt "$PHASE_MIN" ] && _tb="$PHASE_MIN"
+  printf 'fleet-quotawatch: FLEET_QUOTAWATCH_TICK_BUDGET (%ss) + the %ss wind-down margin exceeds FLEET_QUOTAWATCH_DEADLINE (%ss) — a tick would still be running when its successor superseded it; clamping the budget to %ss\n' \
+    "$TICK_BUDGET" "$QW_WINDDOWN" "$DEADLINE" "$_tb" >&2
+  TICK_BUDGET="$_tb"
+fi
+
+# THE SECOND INVARIANT — the sweep can never starve the ccquota fetch (#582, now
+# pinned instead of assumed). That was the whole point of giving the modelcap phase
+# a budget: the fetch is the cheap half (~1 s) and the one whose stamp every
+# staleness alarm reads, and the sweep runs FIRST because a walled worker is the
+# most urgent thing this daemon fixes (#569). With four independent knobs it held
+# only by arithmetic luck — 40 + 30 + 40 already sums past a 100 s tick — so the
+# sweep is clamped to leave the fetch its full budget plus the room to start it.
+_sweep_cap=$(( TICK_BUDGET - FETCH_BUDGET - PHASE_MIN ))
+if [ "$_sweep_cap" -lt "$PHASE_MIN" ]; then _sweep_cap="$PHASE_MIN"; fi
+case "$SWEEP_BUDGET" in ''|*[!0-9]*) SWEEP_BUDGET=40 ;; esac
+case "$PROBE_BUDGET" in ''|*[!0-9]*) PROBE_BUDGET=20 ;; esac
+if [ "$SWEEP_BUDGET" -gt "$_sweep_cap" ]; then
+  printf 'fleet-quotawatch: FLEET_QUOTAWATCH_SWEEP_BUDGET (%ss) leaves the ccquota fetch less than its %ss budget inside a %ss tick — the sweep would starve the liveness stamp (#582); clamping the sweep to %ss\n' \
+    "$SWEEP_BUDGET" "$FETCH_BUDGET" "$TICK_BUDGET" "$_sweep_cap" >&2
+  SWEEP_BUDGET="$_sweep_cap"
+fi
+
+# tick_left — seconds of the tick's own budget still unspent (never negative).
+tick_left() {
+  local spent=$(( SECONDS - TICK_T0 ))
+  [ "$spent" -ge "$TICK_BUDGET" ] && { printf '0'; return 0; }
+  printf '%s' $(( TICK_BUDGET - spent ))
+}
+# qw_left <phase-start-SECONDS> <phase-budget> — how long the next unit of work in
+# this phase may run: the SMALLER of what the phase's own budget has left and what
+# the whole tick has left. The clamp is the half that matters — without it a call
+# starting one second before the tick's budget could still add its full budget on
+# top, and the tick would overrun by exactly the amount the budget was meant to
+# prevent.
+qw_left() {
+  local p0="$1" b="$2" pleft left
+  pleft=$(( b - ( SECONDS - p0 ) )); [ "$pleft" -lt 0 ] && pleft=0
+  left=$(tick_left); [ "$pleft" -lt "$left" ] && left="$pleft"
+  printf '%s' "$left"
+}
+# tick_room — is there enough of the TICK's budget left to START another phase or
+# row at all? Kept separate from qw_left on purpose: PHASE_MIN is a floor on the
+# tick's remaining room (starting work with two seconds left buys nothing and
+# pushes the tail toward the deadline), NOT a floor on a phase's own budget — an
+# operator who sets a 2 s fetch budget means 2 s, not "too small, skip it".
+tick_room() { [ "$(tick_left)" -ge "$PHASE_MIN" ]; }
+QW_SKIP=""   # what the TICK budget deferred to the next tick
+QW_OVER=""   # what spent its OWN budget and was killed
 
 # --status: off (pool/hub not configured) | never (configured, no stamp yet) |
 # fresh | stale, then TAB + the stamp's age in seconds (0 for off/never).
@@ -179,8 +298,21 @@ fi
 # itself is the caller (it is mid-tick by definition, so it cannot be stale). The
 # pre-filter is two file reads; the rate limit, the log and the dash trace all
 # live in the kick script. Never fatal.
+# Budgeted like everything else (issue #698): the errand ends in `launchctl
+# kickstart`, and a launchd domain wedged badly enough to need a kick is exactly
+# the one that can leave that call hanging — this tick's job is the quota watch,
+# not waiting on someone else's daemon.
 if [ "$CALLER" != collect ] && [ "$DRY" = 0 ] && fleet_collect_kick_due; then
-  bash "$BIN/fleet-collect-kick.sh" || true
+  _kb=$(qw_left "$SECONDS" "$KICK_BUDGET")
+  if ! tick_room || [ "$_kb" -lt 1 ]; then
+    QW_SKIP="${QW_SKIP}${QW_SKIP:+ }collectkick"
+  else
+    fleet_timebox "$_kb" bash "$BIN/fleet-collect-kick.sh" || {
+      [ "$?" = 124 ] && { QW_OVER="${QW_OVER}${QW_OVER:+ }collectkick"
+        printf 'fleet-quotawatch: the collector self-heal kick hit its %ss budget (FLEET_QUOTAWATCH_KICK_BUDGET) — killed; this tick runs on\n' "$_kb" >&2; }
+      true
+    }
+  fi
 fi
 
 # Fail-open gates — one per job (#569). The MODEL sweep needs only an accounts
@@ -267,22 +399,28 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
     msweep=$(printf '%s\n' "$SOCKETS" | grep -xF "$mfirst"; printf '%s\n' "$SOCKETS" | grep -vxF "$mfirst")
   fi
   : > "$SWEEP_START"
+  ms0=$SECONDS
   for ms in $msweep; do
-    # Phase budget: stop probing once the sweep has spent SWEEP_BUDGET, so the
-    # ccquota fetch below always gets its turn within the 60 s period.
-    if [ $(( $(now) - m0 )) -ge "$SWEEP_BUDGET" ]; then
+    # Phase budget, now CLAMPED to the tick's own (issue #698): stop probing once
+    # the sweep has spent SWEEP_BUDGET *or* the tick has nothing left to give it.
+    # SWEEP_BUDGET < TICK_BUDGET is what reserves room for the ccquota fetch below
+    # — the cheap half, and the one whose stamp is the liveness signal (#582).
+    mleft=$(qw_left "$ms0" "$SWEEP_BUDGET")
+    if [ "$mleft" -lt 1 ] || ! tick_room; then
       DEFERRED="$DEFERRED $ms"; [ -s "$SWEEP_START" ] || printf '%s' "$ms" > "$SWEEP_START"
       continue
     fi
+    mpb="$PROBE_BUDGET"; [ "$mpb" -gt "$mleft" ] && mpb="$mleft"   # the phase/tick budget wins
     p0=$(now)
-    mout=$(fleet_timebox "$PROBE_BUDGET" "$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null); mrc=$?
+    mout=$(fleet_timebox "$mpb" "$BIN/fleet-model-switch.sh" --capped --dry-run --session "$ms" 2>/dev/null); mrc=$?
     if [ "$mrc" = 124 ]; then
       # Report it honestly rather than letting it eat the tick (issue #582): the
       # probe and every tmux client under it are dead, and this fleet goes first
       # on the next tick.
       MTIMES="$MTIMES $ms=timeout"
+      QW_OVER="${QW_OVER}${QW_OVER:+ }modelcap:$ms"
       [ -s "$SWEEP_START" ] || printf '%s' "$ms" > "$SWEEP_START"
-      printf 'fleet-quotawatch: modelcap probe on %s hit its %ss budget — killed, not swept this tick\n' "$ms" "$PROBE_BUDGET" >&2
+      printf 'fleet-quotawatch: modelcap probe on %s hit its %ss budget — killed, not swept this tick\n' "$ms" "$mpb" >&2
       continue
     fi
     MTIMES="$MTIMES $ms=$(( $(now) - p0 ))s"
@@ -297,14 +435,17 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
     fleet_bg -L "$ms" "bash '$BIN/fleet-model-switch.sh' --capped --session '$ms' --toast"
   done
   T_MODEL=$(( $(now) - m0 ))
-  [ -n "$DEFERRED" ] && printf 'fleet-quotawatch: modelcap phase spent its %ss budget (%ss) — deferred to the next tick:%s\n' "$SWEEP_BUDGET" "$T_MODEL" "$DEFERRED" >&2
+  if [ -n "$DEFERRED" ]; then
+    QW_SKIP="${QW_SKIP}${QW_SKIP:+ }modelcap"
+    printf 'fleet-quotawatch: modelcap phase spent its %ss budget (%ss) — deferred to the next tick:%s\n' "$SWEEP_BUDGET" "$T_MODEL" "$DEFERRED" >&2
+  fi
 fi
 
 if [ "$QUOTA_POLICY" != 1 ]; then
   END=$(now)
-  hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'"t_modelcap=$T_MODEL"$'\n'
-  printf 'fleet-quotawatch: tick done in %ss — modelcap %ss [%s ], no ccquota policy (no hub)\n' \
-    "$(( END - START ))" "$T_MODEL" "${MTIMES:- none}" >&2
+  hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'"t_modelcap=$T_MODEL"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
+  printf 'fleet-quotawatch: tick done in %ss — modelcap %ss [%s ], no ccquota policy (no hub)%s%s\n' \
+    "$(( END - START ))" "$T_MODEL" "${MTIMES:- none}" "${QW_OVER:+, over: $QW_OVER}" "${QW_SKIP:+, deferred: $QW_SKIP}" >&2
   exit 0
 fi
 
@@ -324,7 +465,24 @@ f0=$(now)
 # against the last tick's text so a persistent condition costs one line, not one
 # per 60 s, and a change (including back to clean) is always announced.
 qdiagf="$G/quota.diag.$$.new"    # NOT quota.diag.$$ — that is atomic_write's own temp
-qrows=$("$BIN/fleet-account.sh" quota 2>"$qdiagf")
+# Budgeted (issue #698). This is the tick's one NETWORK call: a hub that accepts
+# the connection and then never answers used to hang the tick with nothing at all
+# to stop it, and this is the phase whose stamp every staleness alarm reads. A
+# fetch that blows its budget leaves $qrows empty, which the policy below already
+# treats as "nothing known, do nothing" — the safe direction.
+fb=$(qw_left "$SECONDS" "$FETCH_BUDGET")
+if ! tick_room || [ "$fb" -lt 1 ]; then
+  QW_SKIP="${QW_SKIP}${QW_SKIP:+ }fetch"
+  printf 'fleet-quotawatch: no room left in the %ss tick budget for the ccquota fetch — skipped, the next tick refetches\n' "$TICK_BUDGET" >&2
+  qrows=""; : > "$qdiagf"
+else
+  qrows=$(fleet_timebox "$fb" "$BIN/fleet-account.sh" quota 2>"$qdiagf"); qrc=$?
+  if [ "$qrc" = 124 ]; then
+    QW_OVER="${QW_OVER}${QW_OVER:+ }fetch"
+    printf 'fleet-quotawatch: the ccquota fetch hit its %ss budget (FLEET_QUOTAWATCH_FETCH_BUDGET) — killed, no rows this tick\n' "$fb" >&2
+    qrows=""
+  fi
+fi
 if ! cmp -s "$qdiagf" "$QDIAG" 2>/dev/null; then
   if [ -s "$qdiagf" ]; then cat "$qdiagf" >&2
   elif [ -s "$QDIAG" ]; then printf 'fleet-quotawatch: ccquota reads every pool account again — the earlier no-reading/shape complaints are cleared\n' >&2; fi
@@ -404,9 +562,69 @@ quota_move_target() {
   done
   return 1
 }
+# The policy loop's tmux work, budgeted PER FLEET SOCKET (issue #698). Every branch
+# below talks to each fleet's tmux server — a toast per socket, a `list-windows` per
+# socket, a `display-message -p` per WINDOW — and on a loaded server a single one of
+# those has been measured blocking for 57 s (#582). Checking the clock between
+# accounts buys nothing while one account can sit inside a call that never returns,
+# so the clock has to reach inside the row.
+#
+# PER SOCKET, not per call, and that granularity is forced: fleet_timebox polls its
+# job once a second, so a job that finishes instantly still costs the caller a full
+# second. Wrapping each round-trip would put a 1 s floor on every WINDOW — 23 s of
+# pure floor on the monorepo fleet, i.e. the budget would have become the slowness.
+# One timebox per socket bounds the same blocking call while the floor scales with
+# the number of FLEETS (two here), not windows.
+#
+# A killed fan-out is a missed toast or a few unsent warnings, never a missed bench:
+# the ledger writes are local file writes and do not go through here.
+qw_socket_budget() { local b; b=$(qw_left "$POLICY_T0" "$POLICY_BUDGET")
+                     [ "$b" -gt "$TMUX_BUDGET" ] && b="$TMUX_BUDGET"
+                     printf '%s' "$b"; }
+
+# qw_ceiling_socket <socket> <label> <util> <which> <resett> <to> — one fleet's
+# share of a ceiling episode: start the migrate fan-out, then toast. <to> empty =
+# the #567 nowhere-to-move case, which toasts and moves nobody.
+qw_ceiling_socket() {
+  local qs="$1" ql="$2" qutil="$3" qwhich="$4" qresett="$5" qnew="$6"
+  if [ -n "$qnew" ]; then
+    fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
+    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to $qnew" 2>/dev/null
+  else
+    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+  fi
+  return 0
+}
+
+# qw_warn_socket <socket> <label> <msg> <util> <which> <ceiling> — one fleet's share
+# of a warn episode. Prints how many sessions it reached, because fleet_timebox runs
+# it in a subshell and a counter variable would not survive it.
+qw_warn_socket() {
+  local qs="$1" ql="$2" qmsg="$3" qutil="$4" qwhich="$5" qceil="$6" qw qa qp n=0
+  while read -r qw qa; do
+    [ "$qa" = "$ql" ] || continue
+    qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
+    [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && n=$((n+1))
+  done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
+  tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
+  printf '%s' "$n"
+}
+POLICY_T0=$SECONDS
+QPOL_SKIP=""
+# A here-string, NOT `printf | while` (issue #698): the loop must run in THIS shell
+# so that what it deferred survives it — a pipeline's subshell would take that with
+# it, and the wind-down line below would have nothing to report.
 # shellcheck disable=SC2034  # qroom: headroom column, read by `list`/pick_active, not here
-printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
+while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
   [ -n "$ql" ] || continue
+  # WIND DOWN at a row boundary, never mid-account. Deferring is safe precisely
+  # because the once-per-window marker is written by the branch that HANDLES the
+  # account: an account we never reached has no marker, so the next tick treats its
+  # episode as unhandled and does the whole thing then.
+  if [ "$(qw_left "$POLICY_T0" "$POLICY_BUDGET")" -lt 1 ] || ! tick_room; then
+    QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql"
+    continue
+  fi
   qutil=$q5; qwhich="5-hour"; qreset=$qr5
   if [ "${q7:-0}" -gt "$qutil" ]; then qutil=$q7; qwhich="7-day"; qreset=$qr7; fi
   qresett=$(date -r "$qreset" '+%H:%M' 2>/dev/null || date -d "@$qreset" '+%H:%M' 2>/dev/null || echo "?")
@@ -426,7 +644,8 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       # #567: the bench is recorded (a new spawn must know), the move is not made.
       printf 'fleet-quotawatch: %s at %s%% of its %s window — benched until %s; nowhere to move: no other account is both readable and under the ceiling, its sessions stay on %s until then\n' "$ql" "$qutil" "$qwhich" "$qresett" "$ql" >&2
       for qs in $SOCKETS; do
-        tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; nowhere to move: no other account is readable and under the ceiling — sessions stay on $ql until $qresett" 2>/dev/null
+        qsb=$(qw_socket_budget); [ "$qsb" -lt 1 ] && { QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql:$qs"; continue; }
+        fleet_timebox "$qsb" qw_ceiling_socket "$qs" "$ql" "$qutil" "$qwhich" "$qresett" "" || true
       done
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription at its limit — nowhere to move
@@ -435,8 +654,8 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
       continue
     fi
     for qs in $SOCKETS; do
-      fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
-      tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to ${qnew:-?}" 2>/dev/null
+      qsb=$(qw_socket_budget); [ "$qsb" -lt 1 ] && { QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql:$qs"; continue; }
+      fleet_timebox "$qsb" qw_ceiling_socket "$qs" "$ql" "$qutil" "$qwhich" "$qresett" "${qnew:-?}" || true
     done
     if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
       $FLEET_NOTIFY_CMD "# subscription near its limit — rotated early
@@ -453,22 +672,25 @@ printf '%s\n' "$qrows" | while IFS=$'\t' read -r ql q5 q7 qroom qr5 qr7 qpph; do
     # Chinese for forty turns — the notice itself needs no translation.
     qmsg="[fleet quota watch] Subscription account $ql — the one this session runs on — is at ${qutil}% of its $qwhich window${qeta}; it resets at $qresett. At ${qceil}% the fleet will send /exit to this session and resume it in a new window under another account (claude --resume, same transcript). Commit or stash any work in progress and leave a one-line note of where you are, so the resumed session picks up cleanly. No reply is needed.${FLEET_LANG_RULE_NOTICE:+ $FLEET_LANG_RULE_NOTICE}"
     qn=0
+    # qw_warn_socket does the per-window walk (space-separated: a window id has no
+    # spaces and a label is a file name — tmux ≤3.4 would print a control-byte
+    # separator as literal `\037`) under ONE budget for the whole fleet.
     for qs in $SOCKETS; do
-      # space-separated: a window id has no spaces and a label is a file name
-      # (tmux ≤3.4 would print a control-byte separator as literal `\037`)
-      while read -r qw qa; do
-        [ "$qa" = "$ql" ] || continue
-        qp=$(fleet_pane_claude_pid "$qw" "$qs" 2>/dev/null) || continue
-        [ -n "$qp" ] && fleet_peer_send "$qp" "$qmsg" fleet-quotawatch && qn=$((qn+1))
-      done < <(tmux -L "$qs" list-windows -a -F '#{window_id} #{@cc_account}' 2>/dev/null)
-      tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) — sessions warned; moves at ${qceil}%" 2>/dev/null
+      qsb=$(qw_socket_budget); [ "$qsb" -lt 1 ] && { QPOL_SKIP="${QPOL_SKIP}${QPOL_SKIP:+ }$ql:$qs"; continue; }
+      qsent=$(fleet_timebox "$qsb" qw_warn_socket "$qs" "$ql" "$qmsg" "$qutil" "$qwhich" "$qceil")
+      case "$qsent" in ''|*[!0-9]*) qsent=0 ;; esac
+      qn=$(( qn + qsent ))
     done
     [ -n "${FLEET_NOTIFY_CMD:-}" ] && $FLEET_NOTIFY_CMD "# subscription approaching its limit
 **$ql** is at ${qutil}% of its $qwhich window${qeta} (ccquota, exact) — $qn running session(s) warned to commit WIP; at ${qceil}% the fleet benches it and moves them" >/dev/null 2>&1
   else
     [ "$DRY" = 1 ] && printf 'ok: %s at %s%% of its %s window (warn %s%%, ceiling %s%%)\n' "$ql" "$qutil" "$qwhich" "$qwarn" "$qceil"
   fi
-done
+done <<< "$qrows"
+if [ -n "$QPOL_SKIP" ]; then
+  QW_SKIP="${QW_SKIP}${QW_SKIP:+ }policy"
+  printf 'fleet-quotawatch: policy phase spent its %ss budget — deferred to the next tick: %s\n' "$POLICY_BUDGET" "$QPOL_SKIP" >&2
+fi
 
 # --- THIRD job (OPT-IN): re-plan the 5h-window PHASE stagger (issue #598) ------
 # N subscriptions first used at around the same time keep their 5h windows in the
@@ -486,7 +708,12 @@ done
 # operator's call, after they have watched `fleet-account.sh phase --plan` agree
 # with the pool they can see. FLEET_ACCOUNT_PHASE_AUTO=1 arms it;
 # FLEET_ACCOUNT_PHASE=0 disables the holds themselves, wherever they came from.
-if [ "${FLEET_ACCOUNT_PHASE_AUTO:-0}" = 1 ] && [ "${nrows:-0}" -gt 1 ]; then
+# Under the tick budget like every other piece of work (issue #698): this is an
+# OPT-IN extra at the very tail, so it is the first thing a tick that is out of
+# time should drop — a stagger re-plan that waits 60 s costs nothing, a tick that
+# overruns its deadline costs the whole watch.
+if [ "${FLEET_ACCOUNT_PHASE_AUTO:-0}" = 1 ] && [ "${nrows:-0}" -gt 1 ] \
+   && { tick_room || { QW_SKIP="${QW_SKIP}${QW_SKIP:+ }phaseplan"; false; }; }; then
   qpmin=$(printf '%s\n' "$qrows" | awk -F'\t' 'BEGIN{m=0} ($5+0)>0 && (m==0 || ($5+0)<m){m=$5+0} END{print m+0}')
   qpmk="$G/quota.phase"
   if [ "$qpmin" -gt 0 ] && ! fleet_same_window "$qpmk" "$qpmin"; then
@@ -495,7 +722,7 @@ if [ "${FLEET_ACCOUNT_PHASE_AUTO:-0}" = 1 ] && [ "${nrows:-0}" -gt 1 ]; then
       "$BIN/fleet-account.sh" phase --plan 2>&1 | sed 's/^/  /'
     else
       printf '%s' "$qpmin" | atomic_write "$qpmk"
-      if qpout=$("$BIN/fleet-account.sh" phase --plan --apply 2>&1); then
+      if qpout=$(fleet_timebox "$(tick_left)" "$BIN/fleet-account.sh" phase --plan --apply 2>&1); then
         printf 'fleet-quotawatch: re-planned the 5h phase stagger (issue #598)\n%s\n' "$qpout" >&2
       else
         printf 'fleet-quotawatch: phase re-plan declined — %s\n' "$qpout" >&2
@@ -506,11 +733,17 @@ fi
 
 T_POLICY=$(( $(now) - y0 ))
 END=$(now)
-hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'
+hb "done" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'"end=$END"$'\n'"dur=$(( END - START ))"$'\n'"t_modelcap=$T_MODEL"$'\n'"t_fetch=$T_FETCH"$'\n'"t_policy=$T_POLICY"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
 # One line per tick, so the launchd log can answer "which HALF was slow?" without
 # instrumenting anything after the fact (issue #582). Before this, the heartbeat
 # held only the phase currently running and overwrote it, so a tick that took
 # 143 s left no record of where the 143 s went.
-printf 'fleet-quotawatch: tick done in %ss — modelcap %ss [%s ], fetch %ss, policy %ss, %s row(s)\n' \
-  "$(( END - START ))" "$T_MODEL" "${MTIMES:- none}" "$T_FETCH" "$T_POLICY" "$nrows" >&2
+#
+# `over=` and `deferred=` are the #698 half, and the same argument as #653's: a
+# tick that winds down on budget is a tick that did not do everything, and without
+# the two lists the next person to ask "why did the watch not act on account X"
+# has no record that it ran out of time rather than deciding not to.
+printf 'fleet-quotawatch: tick done in %ss/%ss — modelcap %ss [%s ], fetch %ss, policy %ss, %s row(s)%s%s\n' \
+  "$(( END - START ))" "$TICK_BUDGET" "$T_MODEL" "${MTIMES:- none}" "$T_FETCH" "$T_POLICY" "$nrows" \
+  "${QW_OVER:+, over: $QW_OVER}" "${QW_SKIP:+, deferred: $QW_SKIP}" >&2
 exit 0
