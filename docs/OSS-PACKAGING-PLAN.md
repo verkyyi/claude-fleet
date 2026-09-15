@@ -502,7 +502,8 @@ macmini 信任 TODO）。
 |---|---|
 | **这是打包前的真问题** | 一个 5 人团队有 5+ 台机器。按现在的机制，每台都要有人记得手工跑 `/fleet-sync-install`，而落后了**没有任何提示** |
 | **[#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）封掉了一半** ✅ | plugin 覆盖 commands / skills / hook 表这半边：marketplace 开 `autoUpdate` 后别的机器自己跟上，不用谁记得跑 `/fleet-sync-install`。**但只有这半边** —— `bin/`、`conf/`、daemon 住在稳定的 `~/.claude/fleet`（plugin 安装路径带版本号、每次更新都变，launchd 单元和 tmux bind 没法指进去），那半边仍然是 per-machine 手工的 |
-| **doctor 应该能看见别的机器** | 现在 `fleet-doctor.sh` 只体检本机。多机器场景下需要一个「这台机器落后主干 N 个提交」的检查项 |
+| **本机自知** ✅ 已上线（[#635](https://github.com/verkyyi/claude-fleet/issues/635)） | `fleet-doctor.sh` 新增 `install` 行：`bin/fleet-install-version.sh` fetch 一个分支后比 `HEAD…origin/<trunk>`，落后就 WARN 出提交数 + 修复命令（`pull --ff-only` → `/fleet-sync-install`），ahead/diverged/dirty 一并报。**fetch 失败报 `UNKNOWN` 而不是 0** —— 「安静」曾经就等于「绿」，这条就是那个 bug。只给人工调用；collector 的 60s tick 用 `--no-fetch`（免费，且自报 `fetched: no`） |
+| **跨机器可见** ⏳ 待办 | doctor 仍然只体检本机 —— 而落后的那台你今天根本没登。落点已经确定且**不需要新服务**：TokenLedger hub 的 `store.Endpoint` 行已经带 `Hostname` / `MachineID` / `CCVersion` / `AgentVersion` / `LastSeen`，紧挨着再加一个 fleet 版本字段即可（agent 侧执行 `fleet-install-version.sh --json` 取值，随已有心跳上报）。**改动在 `verkyyi/tokenledger`，不在本仓库** |
 
 > ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
 > tmux/fzf/gh/claude 全部 not found。远程体检要走 `zsh -lc`。

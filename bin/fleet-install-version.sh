@@ -1,0 +1,176 @@
+#!/bin/sh
+# fleet-install-version.sh [--json] [--no-fetch] [--dir <path>] [--timeout <s>] [-q]
+#   — how far is THIS machine's live install behind the trunk? (issue #635)
+#
+# `/fleet-sync-install` is per-machine AND manual, so the second machine goes
+# stale silently. Measured 2026-09-14: macmini's live install sat 28 commits
+# behind master — missing #603's base-branch fix, #617's quota ranking, #608's
+# capability matrix — while `fleet-doctor.sh` was green on BOTH machines. Nothing
+# anywhere said one of them was old. One person with two machines already hit it;
+# at N people × M machines "merged but that box never pulled" becomes the default
+# state, not the exception.
+#
+# PR #634 (issue #611) closed HALF of this: commands / skills / the hook table
+# ship as a Claude Code plugin, so `/plugin update` carries them. The other half —
+# `bin/`, `conf/` and the daemons — must live at the stable `~/.claude/fleet` (a
+# plugin's install path carries a version and changes on every update; launchd
+# units and tmux binds cannot point into it), so it stays a hand-run `git pull`.
+# This script is the missing signal for that half.
+#
+# It only ever REPORTS. Auto-pulling `bin/` under a machine running 19 workers is
+# far more risk than the staleness it would fix, so the fix command is printed,
+# never run (and see docs/INSTALL.md — a real sync also reloads the changed
+# launchd units, which no `git pull` does).
+#
+# Verdicts (the `verdict:` line, one token — exit code in brackets):
+#   CURRENT   [0]  live install == trunk
+#   BEHIND    [1]  trunk has commits this machine does not — run the fix
+#   AHEAD     [1]  local commits not on trunk (someone edited/tested in place)
+#   DIVERGED  [1]  both — `pull --ff-only` will refuse
+#   UNKNOWN   [2]  could not tell (offline, detached HEAD, no upstream, not a
+#                  checkout). NEVER reported as 0/CURRENT — a fetch that failed
+#                  is not evidence of being up to date; same fail-open honesty
+#                  the claim lease takes (#631). `behind` is JSON null, not 0.
+#
+# Network: one `git fetch` of ONE branch (~0.8s warm), bounded by --timeout via
+# git's own http low-speed abort so a black-holed network cannot hang a caller.
+# That cost is why this is for MANUAL / occasional callers — `fleet-doctor.sh`,
+# an operator, a cross-machine reporter. Do NOT put the fetching form on the 60s
+# collector tick; `--no-fetch` is the free form (it reads the remote-tracking ref
+# as it stands, and says `fetched: no` so a stale answer can't pass as fresh).
+#
+# `dirty` counts TRACKED modifications only: a live install normally carries
+# untracked litter (`fleet.conf.bak*`), which neither blocks a fast-forward nor
+# means anything drifted.
+#
+# --json is the cross-machine half's producer (issue #635 part 2): it emits
+# hostname + head sha + behind count as one object, so whatever ships the fact to
+# the TokenLedger hub (or anything else) reads ONE source of truth rather than
+# re-deriving it. Nothing is uploaded from here — this script makes no network
+# call beyond its own `git fetch`.
+#
+# Read-only: it fetches (a remote-tracking ref update) and reads. It never
+# checks out, merges, or writes the working tree.
+set -u
+
+LIVE_DEFAULT="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
+dir="$LIVE_DEFAULT"
+as_json=0 quiet=0 do_fetch=1 timeout=15
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --json)      as_json=1 ;;
+    --no-fetch)  do_fetch=0 ;;
+    --dir)       shift; dir="${1:-}" ;;
+    --timeout)   shift; timeout="${1:-15}" ;;
+    -q|--quiet)  quiet=1 ;;
+    -h|--help)   sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --*)         printf 'fleet-install-version: unknown flag %s\n' "$1" >&2; exit 2 ;;
+    *)           printf 'fleet-install-version: unexpected argument %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$timeout" in ''|*[!0-9]*) timeout=15 ;; esac
+[ "$timeout" -gt 0 ] || timeout=15
+
+host=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)
+branch='' upstream='' head='' behind='' ahead='' dirty='' err='' fetched=no cmp=''
+verdict=UNKNOWN rc=2
+
+# --- resolve the checkout ----------------------------------------------------
+# A pre-#520 install was a file COPY, not a checkout; so is a hand-made one. That
+# is not a failure to shout about — it is a different install shape that this
+# check simply cannot measure, so it says so and exits UNKNOWN.
+if [ ! -d "$dir" ]; then
+  err="no live install at $dir"
+elif ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  err="$dir is not a git checkout — this check needs one to compare (a file-copy install cannot be measured; re-home it per docs/INSTALL.md)"
+else
+  head=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
+  branch=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)
+  [ -n "$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null)" ] && dirty=yes || dirty=no
+
+  if [ -z "$branch" ]; then
+    err="detached HEAD at ${head:-?} — nothing to compare against; check out the trunk branch"
+  else
+    # Which ref IS the trunk here, best first:
+    #   1. the branch's own upstream — what `git pull` would use, so the counts
+    #      match what the fix command will actually do
+    #   2. origin/HEAD — a checkout whose branch was never tracked
+    #   3. origin/<branch> — no origin/HEAD either (never `remote set-head`)
+    upstream=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+    [ -n "$upstream" ] || upstream=$(git -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    [ -n "$upstream" ] || upstream="origin/$branch"
+    remote=${upstream%%/*}
+    rbranch=${upstream#*/}
+
+    if [ "$do_fetch" -eq 1 ]; then
+      # Fetch ONE branch, not the whole remote: this repo carries dozens of stale
+      # PR branches and we need exactly one ref. lowSpeed{Limit,Time} is git's own
+      # stall abort — POSIX has no portable `timeout(1)` (macOS ships none), and a
+      # black-holed network otherwise hangs the doctor run that called us.
+      if git -C "$dir" -c "http.lowSpeedLimit=1000" -c "http.lowSpeedTime=$timeout" \
+             fetch --quiet "$remote" "$rbranch" >/dev/null 2>&1; then
+        fetched=yes
+        cmp=FETCH_HEAD   # always written by fetch, whatever the refspec config
+      else
+        err="fetch of $upstream failed (offline / no credentials / no such branch) — behind count unknown, NOT assumed 0"
+      fi
+    else
+      # No-fetch: the remote-tracking ref as it stands. Free, and possibly stale —
+      # `fetched: no` is what keeps that from reading as a fresh verdict.
+      cmp="$upstream"
+      git -C "$dir" rev-parse --verify --quiet "$cmp" >/dev/null 2>&1 \
+        || err="no local ref for $upstream — nothing fetched yet on this machine; drop --no-fetch"
+    fi
+
+    if [ -z "$err" ]; then
+      counts=$(git -C "$dir" rev-list --left-right --count "HEAD...$cmp" 2>/dev/null)
+      ahead=$(printf '%s' "$counts" | awk '{print $1+0}')
+      behind=$(printf '%s' "$counts" | awk '{print $2+0}')
+      if [ -z "$counts" ]; then
+        ahead='' behind=''
+        err="could not compare HEAD with $upstream (unrelated histories?)"
+      elif [ "$behind" -gt 0 ] && [ "$ahead" -gt 0 ]; then
+        verdict=DIVERGED; rc=1
+      elif [ "$behind" -gt 0 ]; then
+        verdict=BEHIND; rc=1
+      elif [ "$ahead" -gt 0 ]; then
+        verdict=AHEAD; rc=1
+      else
+        verdict=CURRENT; rc=0
+      fi
+    fi
+  fi
+fi
+
+# --- the one-line fix, printed for every non-CURRENT verdict -----------------
+# `pull --ff-only` is deliberate: a live install must never grow a merge commit,
+# and on AHEAD/DIVERGED the refusal IS the signal. It is also only HALF a sync —
+# changed daemons still need their launchd units reloaded — so the hint names
+# /fleet-sync-install, which does both, rather than pretending git is enough.
+fix="git -C $dir pull --ff-only   (then /fleet-sync-install — it also reloads the changed daemons)"
+
+if [ "$as_json" -eq 1 ]; then
+  jnum() { [ -n "$1" ] && printf '%s' "$1" || printf 'null'; }
+  jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  printf '{"dir":"%s","host":"%s","head":"%s","branch":"%s","upstream":"%s","behind":%s,"ahead":%s,"dirty":%s,"fetched":%s,"verdict":"%s","error":"%s"}\n' \
+    "$(jstr "$dir")" "$(jstr "$host")" "$(jstr "$head")" "$(jstr "$branch")" "$(jstr "$upstream")" \
+    "$(jnum "$behind")" "$(jnum "$ahead")" \
+    "$( [ "$dirty" = yes ] && echo true || echo false )" \
+    "$( [ "$fetched" = yes ] && echo true || echo false )" \
+    "$verdict" "$(jstr "$err")"
+elif [ "$quiet" -eq 0 ]; then
+  printf 'install:  %s\n' "$dir"
+  printf 'host:     %s\n' "$host"
+  printf 'head:     %s%s\n' "${head:-?}" "$( [ -n "$branch" ] && printf ' (%s)' "$branch" )"
+  [ -n "$upstream" ] && printf 'trunk:    %s (fetched: %s)\n' "$upstream" "$fetched"
+  printf 'behind:   %s\n' "${behind:-unknown}"
+  printf 'ahead:    %s\n' "${ahead:-unknown}"
+  [ -n "$dirty" ] && printf 'dirty:    %s\n' "$dirty"
+  [ -n "$err" ] && printf 'note:     %s\n' "$err"
+  printf 'verdict:  %s\n' "$verdict"
+  case "$verdict" in BEHIND|AHEAD|DIVERGED) printf 'fix:      %s\n' "$fix" ;; esac
+fi
+
+exit "$rc"
