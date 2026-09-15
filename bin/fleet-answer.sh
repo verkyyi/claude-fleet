@@ -17,7 +17,8 @@
 # question was answered. Not lost, just late. Somebody has to answer first, and
 # before this script nothing in the fleet could.
 #
-# HOW the dialog is driven (all measured, same session):
+# HOW the dialog is driven (all measured — first on 2.1.270, re-measured on 2.1.272
+# for #656, unchanged):
 #   • single-select     a DIGIT selects AND submits — no Enter.
 #   • multi-question    a tab bar (`←  ☐ Fruit  ☐ Colors  ✔ Submit  →`); each tab's
 #                       digit auto-advances to the next tab.
@@ -25,6 +26,15 @@
 #                       ↓ to the `Submit` row and Enter.
 #   • multi-question    ends on a "Review your answers" screen → its own submit digit.
 #   • Esc               cancels the whole dialog.
+#
+# The footer HINT under the dialog is not the contract and must not be read as one.
+# #656 was filed partly because a pane showed `Enter to select · ↑/↓ to navigate · n
+# to add notes · Esc to cancel` and that was taken as "the digit no longer works" —
+# it does; the same footer (minus the notes affordance) was already on the 2.1.270
+# screens this script was written against. What the script does now is stop guessing
+# either way: after the digit it RE-READS the pane, and it adds an Enter only when
+# the dialog is still up with the cursor parked on the row it chose — the one state
+# in which a digit demonstrably only moved the selection. See SUBMIT SHAPE below.
 #
 # THE TWO RAILS, both of which make a mistake impossible rather than unlikely:
 #
@@ -41,6 +51,29 @@
 #      gives it. It never trusts its own arithmetic about row numbers. A TUI that
 #      renumbers, reorders or truncates its rows therefore degrades to "not answered"
 #      (exit 3, nothing sent) — never to "answered the wrong option".
+#
+#      WRAPPING IS NOT A MISMATCH (issue #656). Every screen comparison here is
+#      whitespace-INSENSITIVE: both sides are squashed to their non-whitespace
+#      characters before they are compared. A narrow pane wraps a long label or a
+#      long question onto follow-on lines — and it does so WITHOUT inserting a space
+#      when the text is CJK — so a literal `grep -F` for the question text misses,
+#      and the gate refuses to answer a dialog that is in fact right there. That is
+#      how #656's first real remote answer failed: the refusal was correct by its own
+#      rule, and the rule was wrong. Squashing keeps the gate exactly as strong (two
+#      dialogs that differ only in whitespace are not a hazard) while making a line
+#      break a non-event. A wrapped label's continuation lines are absorbed the same
+#      way, and only ever while the text so far is still a PREFIX of the label being
+#      looked for — which is what stops the description line underneath from being
+#      swallowed into the label.
+#
+# SUBMIT SHAPE. A single-select pick is followed by a re-read, and exactly three
+# outcomes are allowed: the question is GONE (the digit submitted — today's TUI, and
+# nothing further is sent); the question is still up with the cursor parked on the
+# row we chose, seen on two consecutive reads (the digit only MOVED the selection —
+# one Enter, and only then); or anything else, which is exit 4 with the dialog left
+# for a human. So a TUI that changes its mind about whether the digit submits costs
+# an extra keystroke, not a wrong answer — and Enter can never be pressed at a row
+# this script has not just read back as the chosen one.
 #
 # Every step re-reads the pane (`capture-pane`) instead of firing a pre-computed key
 # sequence blind, and the VERDICT comes from the transcript: success is the
@@ -277,25 +310,79 @@ grab() { TM capture-pane -p -t "$PANE" > "$CAP" 2>/dev/null || : > "$CAP"; }
 
 # digit_for <label> — the number the SCREEN gives that label's row, or exit 1.
 # Rows look like `❯ 1. Red` or `  2. [✔] Green`; the match must be unique.
+#
+# A long label WRAPS in a narrow pane (issue #656), onto follow-on lines that carry
+# the same indent as the description lines under the row — so they cannot be told
+# apart by shape. They are told apart by the LABEL WE ARE LOOKING FOR: a follow-on
+# line is absorbed only while everything accumulated so far is still a prefix of that
+# label, and absorption stops the instant the label is complete. Comparison is
+# whitespace-insensitive throughout, because a CJK wrap inserts no space and a Latin
+# one eats the space it broke at. An EXACT match outranks the `>= 3 chars` prefix
+# fallback, so a label that is a prefix of another option no longer refuses.
 digit_for() {
   FA_LAB="$1" python3 - "$CAP" <<'PY'
 import os, re, sys
-lab = os.environ["FA_LAB"]
-pat = re.compile(r"^[\s❯>]*(\d+)\.\s+(?:\[[^\]]*\]\s+)?(.*)$")
-hits = []
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    m = pat.match(line.rstrip("\n"))
+
+def squash(t):
+    return re.sub(r"\s+", "", t)
+
+want = squash(os.environ["FA_LAB"])
+OPT  = re.compile(r"^[\s❯>]*(\d+)\.\s+(?:\[[^\]]*\]\s+)?(.*)$")
+RULE = re.compile(r"^[\s\u2500-\u257f]+$")
+
+lines = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8", errors="replace")]
+exact, prefix = [], []
+for i, line in enumerate(lines):
+    m = OPT.match(line)
     if not m:
         continue
-    text = m.group(2).strip()
-    if text == lab or (text and lab.startswith(text) and len(text) >= 3):
-        hits.append(m.group(1))
+    acc, j = m.group(2).strip(), i + 1
+    while squash(acc) != want and j < len(lines):
+        nxt = lines[j]
+        if not nxt.strip() or OPT.match(nxt) or RULE.match(nxt):
+            break
+        if not want.startswith(squash(acc + nxt.strip())):
+            break
+        acc = acc + nxt.strip()
+        j += 1
+    text = squash(acc)
+    if not text:
+        continue
+    if text == want:
+        exact.append(m.group(1))
+    elif want.startswith(text) and len(text) >= 3:
+        prefix.append(m.group(1))
+hits = exact or prefix
 sys.exit(1) if len(set(hits)) != 1 else print(hits[0])
 PY
 }
-on_screen()      { grep -qF -- "$1" "$CAP"; }
+# screen_has <text> — is <text> on the captured screen, ignoring every line break and
+# run of spaces the pane's width introduced? This is the wrap-proof `grep -F` (#656).
+screen_has() {
+  FA_NEEDLE="$1" python3 - "$CAP" <<'PY'
+import os, re, sys
+squash = lambda t: re.sub(r"\s+", "", t)
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+    hay = squash(fh.read())
+sys.exit(0 if squash(os.environ["FA_NEEDLE"]) in hay else 1)
+PY
+}
+# cursor_digit — the number of the row the cursor (❯) is parked on, or nothing. The
+# `<digit>.` is required, so the pane's own `❯ ` input prompt can never match.
+cursor_digit() {
+  python3 - "$CAP" <<'PY'
+import re, sys
+CUR = re.compile(r"^\s*[❯>]\s*(\d+)\.\s")
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    m = CUR.match(line)
+    if m:
+        print(m.group(1))
+        break
+PY
+}
+on_screen()      { screen_has "$1"; }
 cursor_submit()  { grep -q '^[[:space:]]*❯.*Submit' "$CAP"; }
-review_screen()  { grep -qF 'Ready to submit your answers?' "$CAP"; }
+review_screen()  { screen_has 'Ready to submit your answers?'; }
 
 deadline=$(( $(date +%s) + TIMEOUT ))
 nap() { sleep "$POLL" 2>/dev/null || true; }
@@ -328,13 +415,51 @@ while [ "$qi" -lt "$NQ" ]; do
 
   # Toggle / select each pick by the digit the SCREEN gives its label.
   IFS=$'\t' read -r -a labs <<< "${WANT[$qi]}"
+  d='' lab1=''
   for lab in "${labs[@]}"; do
+    lab1="$lab"
     grab
     d=$(digit_for "$lab") \
       || bail "option \"$lab\" is not on the screen (or matches several rows) for question $((qi + 1))"
     send "$d"
     [ "$DRY" = 1 ] || nap
   done
+
+  # SUBMIT SHAPE, single-select (issue #656). On every TUI measured so far the digit
+  # both selects and submits, so the normal outcome is "the question is gone" and
+  # nothing more is sent. But the footer hint has read `Enter to select` the whole
+  # time, and #656 was filed on the belief that some variant only MOVES the cursor.
+  # Rather than trust either reading, look: a question still on screen with the
+  # cursor parked on the row we just chose — on two consecutive reads, so a redraw
+  # racing the submit cannot fake it — is that variant, and the single Enter that
+  # finishes it is safe precisely because the row was read back, not assumed. Neither
+  # shape within the budget means the dialog is half-driven: exit 4, hands off.
+  if [ "$multi" != 1 ] && [ "$DRY" != 1 ] && [ -n "$d" ]; then
+    submitted=0; parked=0
+    while :; do
+      grab
+      # "our row is still the one on offer" is the conjunction of all three: the
+      # question text on screen, the chosen LABEL still sitting on row $d, and the
+      # cursor on it. The label leg is what the question text alone cannot give —
+      # once answered, the pane echoes `· <question> → <label>` in the transcript
+      # area, and on a multi-question dialog the next tab is already up, so text
+      # alone would read "still open" forever and could send Enter at a DIFFERENT
+      # tab's row 1. No label on row $d ⇒ this dialog has moved on ⇒ submitted.
+      on_screen "$qtext" && [ "$(digit_for "$lab1" 2>/dev/null)" = "$d" ] || { submitted=1; break; }
+      if [ "$(cursor_digit)" = "$d" ]; then
+        parked=$((parked + 1)); [ "$parked" -ge 2 ] && break
+      else
+        parked=0
+      fi
+      expired && break
+      nap
+    done
+    if [ "$submitted" = 0 ]; then
+      [ "$parked" -ge 2 ] || bail "question $((qi + 1)) is still showing \"$lab1\" on row $d after that digit was pressed, but the cursor never settled there — stopping (dialog left open)"
+      send Enter
+      nap
+    fi
+  fi
 
   # multiSelect does not submit on a digit: walk ↓ until the cursor sits on the
   # `Submit` row (read off the screen, never counted), then Enter.

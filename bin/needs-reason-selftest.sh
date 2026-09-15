@@ -14,6 +14,15 @@
 #   STAMP — bin/set-claude-state.sh writes @claude_needs beside every @claude_state.
 #     * a permission Notification            → needs + `perm`
 #     * a PreToolUse AskUserQuestion         → needs + `ask`
+#     * a permission Notification whose TRANSCRIPT holds a pending AskUserQuestion
+#                                            → needs + `ask` (issue #656). Claude Code
+#       2.1.272 sends the identical `permission_prompt` Notification for a question
+#       and for a blocked Bash call, so the wording cannot tell them apart and the
+#       `perm` it produced buried #640's whole point: the dash said "go press it
+#       yourself" about a question ⌃k could have answered. The transcript is the
+#       arbiter — bin/fleet-pending-tool.sh, the same "tool_use with no tool_result"
+#       rule bin/fleet-answer.sh and bin/fleet-permission.sh gate on, so the stamp
+#       and the two tools that act on it can no longer disagree.
 #     * any other PreToolUse / PostToolUse   → working + CLEARED
 #     * a Stop                               → done    + CLEARED
 #     * the benign idle_prompt Notification  → writes NOTHING (the #330/#105 rule:
@@ -82,6 +91,62 @@ out=$(printf '%s' '{"hook_event_name":"Notification","message":"Claude needs you
 has "a permission Notification sets needs"          "$out" '@claude_state needs'
 has "a permission Notification stamps perm"         "$out" '@claude_needs perm'
 
+# --- #656: the SUBTYPE is settled by the TRANSCRIPT, never by the wording -----
+# Every leg below sends the EXACT payload 2.1.272 emits for an open dialog (measured
+# on an isolated socket): same message, same notification_type. Only the transcript
+# differs — so if any of these four ever agree with each other again, the wording has
+# crept back in as the discriminator.
+mk_pending() {  # mk_pending <out> <tool> [answered] — newest tool_use is <tool>
+  OUT="$1" TOOL="$2" ANS="${3:-}" python3 - <<'PY'
+import json, os
+rows = [{"type": "user", "message": {"role": "user", "content": "go"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_656", "name": os.environ["TOOL"], "input": {}}]}}]
+if os.environ.get("ANS"):
+    rows.append({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_656", "content": "done"}]}})
+with open(os.environ["OUT"], "w") as f:
+    for r in rows:
+        f.write(json.dumps(r) + "\n")
+PY
+}
+notif() {  # notif [transcript_path] — the 2.1.272 open-dialog Notification, verbatim
+  printf '{"session_id":"s","transcript_path":"%s","hook_event_name":"Notification","message":"Claude needs your permission","notification_type":"permission_prompt"}' "${1:-}"
+}
+T_ASK="$WORK/t-ask.jsonl";   mk_pending "$T_ASK"  AskUserQuestion
+T_BASH="$WORK/t-bash.jsonl"; mk_pending "$T_BASH" Bash
+T_DONE="$WORK/t-done.jsonl"; mk_pending "$T_DONE" AskUserQuestion answered
+
+# The helper itself — the ONE rule, so a drift in it is caught before the stamp.
+CHECKS=$((CHECKS+1))
+[ "$(sh "$BIN/fleet-pending-tool.sh" "$T_ASK")" = AskUserQuestion ] \
+  || fail "fleet-pending-tool.sh must name a pending AskUserQuestion" "$(sh "$BIN/fleet-pending-tool.sh" "$T_ASK")"
+CHECKS=$((CHECKS+1))
+[ "$(sh "$BIN/fleet-pending-tool.sh" "$T_BASH")" = Bash ] \
+  || fail "fleet-pending-tool.sh must name a pending Bash" "$(sh "$BIN/fleet-pending-tool.sh" "$T_BASH")"
+CHECKS=$((CHECKS+1))
+sh "$BIN/fleet-pending-tool.sh" "$T_DONE" >/dev/null 2>&1 \
+  && fail "fleet-pending-tool.sh must exit non-zero when the newest tool_use is answered"
+
+out=$(notif "$T_ASK" | hook needs bell)
+has "a question behind a permission_prompt still sets needs" "$out" '@claude_state needs'
+has "a question behind a permission_prompt stamps ask"       "$out" '@claude_needs ask'
+hasnt "…and must NOT stamp perm (that is the #656 regression)" "$out" '@claude_needs perm'
+
+out=$(notif "$T_BASH" | hook needs bell)
+has "a REAL permission prompt still stamps perm"             "$out" '@claude_needs perm'
+hasnt "a real permission prompt must not stamp ask"          "$out" '@claude_needs ask'
+
+# Fail-safe both ways: nothing pending, or no transcript at all, keeps the wording's
+# answer (`perm`) — the direction that sends the operator to the pane rather than
+# promising an answer channel that is not there.
+out=$(notif "$T_DONE" | hook needs bell)
+has "an already-answered transcript falls back to perm"      "$out" '@claude_needs perm'
+out=$(notif "$WORK/nope.jsonl" | hook needs bell)
+has "an unreadable transcript falls back to perm"            "$out" '@claude_needs perm'
+out=$(notif | hook needs bell)
+has "a payload with no transcript_path falls back to perm"   "$out" '@claude_needs perm'
+
 out=$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{}}' | hook busy)
 has "an AskUserQuestion PreToolUse sets needs"      "$out" '@claude_state needs'
 has "an AskUserQuestion PreToolUse stamps ask"      "$out" '@claude_needs ask'
@@ -104,7 +169,12 @@ has "a Stop CLEARS the reason"                      "$out" "$CLEARED"
 out=$(printf '%s' '{"hook_event_name":"Notification","message":"Claude is waiting for your input"}' | hook needs bell)
 [ "$out" = END ] || fail "the idle_prompt Notification must write nothing at all" "$out"
 CHECKS=$((CHECKS+1))
-printf 'selftest: STAMP legs PASS (perm/ask stamped · every other write clears · idle_prompt writes nothing)\n' >&2
+# 2.1.272 also labels it structurally; that spelling must stay just as silent, and it
+# must not be dragged into the transcript read either (#656).
+out=$(printf '%s' '{"hook_event_name":"Notification","message":"whatever it says now","notification_type":"idle_prompt","transcript_path":"'"$T_ASK"'"}' | hook needs bell)
+[ "$out" = END ] || fail "a structurally-typed idle_prompt must write nothing at all" "$out"
+CHECKS=$((CHECKS+1))
+printf 'selftest: STAMP legs PASS (perm/ask stamped · subtype read off the TRANSCRIPT, not the wording · every other write clears · idle_prompt writes nothing)\n' >&2
 
 # ============================ GLYPH =========================================
 # Replay a fixture window list for the producer's 0x1f-separated list-windows read.
