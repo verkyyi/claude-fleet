@@ -35,9 +35,26 @@ handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330
 #         Notification) — the historic, undifferentiated `needs`.
 #
 # #605 pushed this back as "you'd have to tail a transcript for every needs row".
-# You don't: both causes arrive here already discriminated — `ask` off the
-# PreToolUse tool_name, `perm` off the Notification message — so the subtype costs
-# ONE extra set-window-option beside the two this hook already writes, and no read.
+# Mostly you don't — `ask` still arrives free on the PreToolUse tool_name — but the
+# Notification leg DOES have to read one, and #656 is why. The wording was the
+# original discriminator, and it cannot work: measured on Claude Code 2.1.272, an open
+# AskUserQuestion fires the SAME Notification a blocked Bash call does —
+#
+#     {"hook_event_name":"Notification","message":"Claude needs your permission",
+#      "notification_type":"permission_prompt", …}
+#
+# — so the `*permission*` match below overwrote the `ask` that PreToolUse had just
+# stamped, and the dash showed `⊘` ("only a human can press this") on a question the
+# operator could have answered from the dash with ⌃k. That is #640's whole value
+# inverted, and it cost a real worker its turn on 2026-09-14.
+#
+# So the Notification leg asks the TRANSCRIPT what is pending — bin/fleet-pending-tool.sh,
+# the same "tool_use with no tool_result" rule bin/fleet-answer.sh and
+# bin/fleet-permission.sh already gate on. One python3 read, on the Notification path
+# only (never the per-tool hot path), and it is the judgement the two tools that ACT
+# on this stamp already use, so the dash can no longer disagree with them. Any
+# failure (no python3, no transcript_path, unreadable file) falls back to the wording,
+# i.e. exactly today's behaviour.
 #
 # FRESHNESS BY CONSTRUCTION: it is written on EVERY non-`leave` state write, so it
 # can never outlive the @claude_state it describes. The other two writers of
@@ -51,27 +68,47 @@ case "${1:-}" in
     # a benign idle_prompt Notification ("Claude is waiting for your input") ~60s
     # after ANY session goes idle. Left unfiltered it flips every finished session
     # to needs+bell and re-flips the classifier's verdict — cry-wolf. Discriminate
-    # on the payload (mirrors the AskUserQuestion stdin-inspection in 'busy'). The
-    # payload exposes no structured type field (only `message`), so we substring
-    # the wording; if Claude Code rephrases it we fall back to needs+bell — the
-    # safe direction (an idle session rings, not a real prompt silently missed).
+    # on the payload (mirrors the AskUserQuestion stdin-inspection in 'busy'). 2.1.272
+    # carries a structured `notification_type` beside `message` (#656) — matched here
+    # FIRST because it survives a rewording — with the historic substring kept as the
+    # fallback for older CLIs. Neither matching ⇒ needs+bell, the safe direction (an
+    # idle session rings, not a real prompt silently missed).
     # A benign idle prompt -> 'leave': DON'T write state, just drop the bell, so
     # whatever the Stop-hook classifier decided (done for finished, needs for a
     # real pending question) stays authoritative. A real permission/elicitation
     # prompt (and anything unrecognised) keeps needs+bell.
-    # The message also says WHICH of the two `needs` this is (issue #640): Claude
-    # Code phrases a permission request as "Claude needs your permission to use
-    # <Tool>". Matching it is what puts a distinct glyph on the dash row; a
-    # rephrasing on Claude Code's side costs the subtype (→ '' ⇒ today's plain
-    # `needs`), never the state — the same fail-safe direction as the idle filter.
+    # What the payload does NOT say is WHICH of the two `needs` this is — every
+    # dialog arrives as `permission_prompt`, an AskUserQuestion included — so the
+    # subtype is settled against the transcript below (#656). A payload we cannot
+    # place at all costs the subtype (→ '' ⇒ today's plain `needs`), never the
+    # state — the same fail-safe direction as the idle filter.
     sem="needs"
     if [ ! -t 0 ]; then
-      case "$(cat 2>/dev/null)" in
-        *'waiting for your input'*)
+      _payload=$(cat 2>/dev/null)
+      case "$_payload" in
+        *'waiting for your input'*|*'"notification_type":"idle_prompt"'*)
           sem="leave"; set -- "leave" ;;   # idle_prompt: leave state as-is, no bell
-        *permission*)
-          sub="perm" ;;                    # a permission prompt is open in the pane
+        *permission*|*'"notification_type":"permission_prompt"'*)
+          sub="perm" ;;                    # a dialog is open — WHICH one, the transcript says
       esac
+      # …and the transcript overrules the wording. `permission_prompt` is what Claude
+      # Code sends for an AskUserQuestion too (#656), so `perm` here is only ever a
+      # first guess: if the newest tool_use still waiting for a result IS an
+      # AskUserQuestion, this window is answerable from the dash and must say `ask`.
+      # Nothing else can flip the guess — a pending Bash/Edit/anything keeps `perm`,
+      # and an unresolvable transcript keeps it too (fail-safe: the wording's answer).
+      if [ "$sub" = perm ]; then
+        _tp=$(printf '%s' "$_payload" \
+          | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n 1p)
+        if [ -n "$_tp" ]; then
+          _bin0=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+          if [ -n "$_bin0" ] && [ -f "$_bin0/fleet-pending-tool.sh" ]; then
+            case "$(sh "$_bin0/fleet-pending-tool.sh" "$_tp" 2>/dev/null)" in
+              AskUserQuestion) sub="ask" ;;
+            esac
+          fi
+        fi
+      fi
     fi
     ;;
   done)
@@ -84,9 +121,11 @@ case "${1:-}" in
     ;;
   busy)
     # PreToolUse heartbeat = working, EXCEPT the AskUserQuestion tool: it opens a
-    # blocking multiple-choice popup mid-turn and NO Notification hook fires for it
-    # (AskUserQuestion isn't a Notification matcher), so without this the window
-    # would masquerade as 'working' the whole time it's really waiting on the user.
+    # blocking multiple-choice popup mid-turn, so without this the window would
+    # masquerade as 'working' the whole time it is really waiting on the user. A
+    # Notification DOES follow (~60s later, as `permission_prompt` — #656 measured it;
+    # the older note here said none fired), but this stamp is what makes the window
+    # red IMMEDIATELY, and the `needs` branch above is careful to keep its `ask`.
     # PreToolUse is the only caller that passes 'busy'; its stdin JSON carries the
     # tool_name. PostToolUse (arg 'working') fires when the user answers -> working.
     sem="working"

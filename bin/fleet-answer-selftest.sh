@@ -23,6 +23,16 @@
 #                      count comes from re-reading the SCREEN, never from arithmetic.
 #   • MULTIQUESTION    two questions: each answered as its own tab appears, then the
 #                      "Review your answers" screen's submit digit.
+#   • WRAPPED          a 38-column pane wraps the question AND two option labels, one
+#                      CJK (the break inserts no space) and one Latin (the break eats
+#                      one) — both still resolve to the digit their row shows. This is
+#                      #656: the screen gate used a literal grep, one line break made
+#                      it miss, and the answerer refused a dialog that was on the
+#                      screen and that --show had just parsed correctly.
+#   • ENTER-VARIANT    a TUI where the digit only MOVES the cursor gets exactly one
+#                      Enter, and only after the chosen row is read back off the
+#                      screen; a cursor that never settles there gets exit 4 and no
+#                      Enter at all — the footer hint is never the authority.
 #   • VERIFY           success is the tool_result landing in the TRANSCRIPT (the
 #                      recorded answer is echoed); a result that never lands → exit 4.
 #   • CANCEL           --cancel sends exactly one Escape.
@@ -308,6 +318,88 @@ printf '%s\n' "$inj" | tail -1 | grep -q ' 1' \
 case "$(cat "$WORK/out.txt")" in *Apple*) : ;; *) fail "both recorded answers must be echoed" "$(cat "$WORK/out.txt")" ;; esac
 printf 'selftest: MULTIQUESTION leg PASS (pick per tab in order · review screen submitted · answers echoed)\n' >&2
 
+# ============================ WRAPPED =======================================
+# A NARROW pane wraps both the question and the long option labels (issue #656).
+# The screens below are the real 38-column render of a live Claude Code 2.1.272
+# dialog, captured on an isolated socket — note that option 3's label continues on a
+# line indented EXACTLY like the description under it, and that the CJK break inserts
+# no space where the Latin one (option 4) eats the space it broke at. Before #656
+# this was an outright outage, not a degradation: `grep -F` for the question text
+# missed, so the gate refused with "the pane is not showing question 1" and the
+# operator was sent to press it by hand — on a dialog that was right there, and that
+# `--show` (which reads the transcript) had just printed correctly.
+Q_WRAP='[{"question":"后台采集的 tick 间隔应该设成多少？改动会影响缓存新鲜度和 runs 贴合度","header":"tick 间隔","multiSelect":false,
+ "options":[{"label":"120s：缓存最新鲜（推荐）","description":"设置 120 秒间隔"},
+            {"label":"50s：runs 严格贴住 interval","description":"设置 50 秒间隔"},
+            {"label":"120s + 后续单开 issue 压 tick 时长","description":"暂时采用 120 秒"},
+            {"label":"Keep the current behaviour unchanged for now","description":"不做任何改动"}]}]'
+
+# wrap_screen <cursor row> <step> — everything but the cursor is the live render.
+wrap_screen() {
+  { printf ' ☐ tick 间隔\n\n'
+    printf '后台采集的 tick 间隔应该设成多少？改动会影\n响缓存新鲜度和 runs 贴合度\n\n'
+    cur() { if [ "$1" = "$2" ]; then printf '❯ '; else printf '  '; fi; }
+    cur "$1" 1; printf '1. 120s：缓存最新鲜（推荐）\n     设置 120 秒间隔，缓存数据保持最新\n'
+    cur "$1" 2; printf '2. 50s：runs 严格贴住 interval\n     设置 50 秒间隔，runs\n     更严格地遵循间隔时间\n'
+    cur "$1" 3; printf '3. 120s + 后续单开 issue 压 tick\n     时长\n     暂时采用 120 秒，后续开 issue\n     优化 tick 时长\n'
+    cur "$1" 4; printf '4. Keep the current behaviour\n     unchanged for now\n     不做任何改动，维持现有配置\n'
+    printf '  5. Type something.\n'
+    printf '──────────────────────────────────────\n  6. Chat about this\n\n'
+    printf 'Enter to select · ↑/↓ to navigate · n\nto add notes · Esc to cancel\n'
+  } | screen "$2"
+}
+
+for pick in 3 4; do
+  TW="$WORK/t-wrap-$pick.jsonl"; mk_transcript "$TW" "$Q_WRAP"
+  clear_screens; wrap_screen 1 0; printf '%s\n' "$SCR_IDLE" | screen 1
+  FAKE_TRANSCRIPT="$TW" FAKE_RESULT_AT_STEP=1 \
+  FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
+    run --answer "$PANE" --transcript "$TW" "$pick" >"$WORK/out.txt" 2>&1 \
+    || fail "a wrapped dialog must still answer (pick $pick)" "$(cat "$WORK/out.txt")"
+  [ "$(inject_count)" = "1" ] || fail "pick $pick on a wrapped dialog must send exactly one digit" "$(injected)"
+  case "$(injected)" in *" $pick"*) : ;; *) fail "pick $pick must resolve to the digit its WRAPPED row shows" "$(injected)" ;; esac
+done
+
+# …and the gate still refuses when the label genuinely is not there: whitespace is
+# what stopped mattering, not the label.
+TWX="$WORK/t-wrap-x.jsonl"; mk_transcript "$TWX" "$Q_WRAP"
+clear_screens; printf '%s\n' 'Do you want to proceed?
+
+❯ 1. Yes
+  2. No' | screen 0
+run --answer "$PANE" --transcript "$TWX" 3 >/dev/null 2>&1
+[ $? = 3 ] || fail "a wrap-tolerant gate must still refuse a dialog that is not ours"
+nothing_sent || fail "the wrap-tolerant gate must still send nothing when it refuses" "$(injected)"
+printf 'selftest: WRAPPED legs PASS (CJK + Latin wrapped labels and a wrapped question resolve; a foreign dialog still refuses)\n' >&2
+
+# ============================ ENTER-VARIANT =================================
+# Today the digit selects AND submits, so nothing beyond it goes out (the SINGLE leg
+# pins that). #656 read the footer `Enter to select · ↑/↓ to navigate · n to add
+# notes` as proof that the digit no longer works. It does — but this leg is the TUI
+# where it would not: after the digit the dialog is still up with the cursor parked
+# on the chosen row. One Enter finishes it, reached only because the row was re-read.
+TEV="$WORK/t-entervariant.jsonl"; mk_transcript "$TEV" "$Q_WRAP"
+clear_screens; wrap_screen 1 0; wrap_screen 3 1; printf '%s\n' "$SCR_IDLE" | screen 2
+FAKE_TRANSCRIPT="$TEV" FAKE_RESULT_AT_STEP=2 \
+FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
+  run --answer "$PANE" --transcript "$TEV" 3 >"$WORK/out.txt" 2>&1 \
+  || fail "a digit-only-moves TUI must still answer" "$(cat "$WORK/out.txt")"
+inj=$(injected)
+[ "$(inject_count)" = "2" ] || fail "the Enter variant must send the digit and ONE Enter" "$inj"
+printf '%s\n' "$inj" | head -1 | grep -q ' 3' || fail "the digit must go first" "$inj"
+printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come last" "$inj"
+
+# A cursor that never settles on the chosen row is NOT an invitation to press Enter:
+# the dialog is left open and a human is told, because Enter at a row we did not read
+# back is precisely the "answered the wrong option" failure the gates exist to prevent.
+TEX="$WORK/t-enterstuck.jsonl"; mk_transcript "$TEX" "$Q_WRAP"
+clear_screens; wrap_screen 1 0; wrap_screen 1 1
+out=$(run --answer "$PANE" --transcript "$TEX" 3 2>&1); rc=$?
+[ "$rc" = 4 ] || fail "a dialog that neither closed nor moved the cursor must exit 4 (got $rc)" "$out"
+[ "$(inject_count)" = "1" ] || fail "that case must have sent the digit and NOTHING else" "$(injected)"
+case "$(injected)" in *Enter*) fail "Enter must never be sent at an unverified row" "$(injected)" ;; esac
+printf 'selftest: ENTER-VARIANT legs PASS (digit-only-moves → one verified Enter · cursor never settles → exit 4, no Enter)\n' >&2
+
 # ============================ VERIFY ========================================
 # The keystrokes land but the tool_result NEVER does → exit 4, and say so.
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0; printf '%s\n' "$SCR_IDLE" | screen 1
@@ -331,5 +423,5 @@ FAKE_PANE_DEAD=1 run --answer "$PANE" --transcript "$T" 2 >/dev/null 2>&1
 nothing_sent || fail "a gone pane must send nothing" "$(injected)"
 printf 'selftest: CANCEL/DRY-RUN/GONE-PANE legs PASS (one Escape · plan-only · dead pane refused)\n' >&2
 
-printf 'selftest PASS: fleet-answer — pending gate + label gate + single/multiSelect/multi-question key plans + transcript verify (#605)\n'
+printf 'selftest PASS: fleet-answer — pending gate + label gate + single/multiSelect/multi-question key plans + wrapped screens + transcript verify (#605, #656)\n'
 exit 0

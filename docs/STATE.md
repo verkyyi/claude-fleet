@@ -44,11 +44,28 @@ one glyph, so the operator had to attach to each red window to find out which:
 | `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |
 | *(empty)* | anything else (the classifier's `WAITING`/`ERROR`, an unrecognized `Notification`) | `!` | go look |
 
-Both causes arrive at `set-claude-state.sh` **already discriminated** — `ask` off
-the `PreToolUse` `tool_name`, `perm` off the `Notification` message — so the
-subtype costs one extra `set-window-option` and no transcript read. (#605 had
-declined this as "you'd have to tail a transcript for every `needs` row"; you
-don't.)
+`ask` arrives at `set-claude-state.sh` free, off the `PreToolUse` `tool_name`. The
+`Notification` leg costs one transcript read, and **#656 is why the wording could
+never have done it**. Measured on Claude Code 2.1.272, an open `AskUserQuestion`
+fires the *identical* `Notification` a blocked `Bash` call does:
+
+```json
+{"hook_event_name":"Notification","message":"Claude needs your permission",
+ "notification_type":"permission_prompt", …}
+```
+
+So the `*permission*` match overwrote the `ask` `PreToolUse` had just stamped, and
+the dash showed `⊘` — *"only a human can press this"* — on a question `⌃k` could
+have answered. The first real remote-answer attempt hit exactly that and gave up.
+The subtype is now settled against the **transcript**, via
+[`bin/fleet-pending-tool.sh`](../bin/fleet-pending-tool.sh): the newest `tool_use`
+with no `tool_result`. That is the same rule `fleet-answer.sh` and
+`fleet-permission.sh` already gate on, so **the dash glyph and the two tools that
+act on it can no longer disagree** — which was the actual defect, not the glyph.
+A pending `AskUserQuestion` ⇒ `ask`; anything else ⇒ the wording's `perm`; and any
+failure (no `python3`, no `transcript_path`, unreadable file) also falls back to
+`perm`, the direction that sends the operator to the pane rather than promising an
+answer channel that is not there.
 
 **Freshness is by construction, not by timestamp.** `@claude_needs` is written on
 *every* non-`leave` state write — a `working`/`done` write clears it — and the two
@@ -70,7 +87,7 @@ Claude Code fires shell **hooks** on turn edges. Each one runs
 | `PreToolUse` | `busy` | `working` (**except** the `AskUserQuestion` tool → `needs` + bell + `@claude_needs=ask`) |
 | `PostToolUse` | `working` | `working` |
 | `UserPromptSubmit` | `working` | `working` |
-| `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*); a permission request also stamps `@claude_needs=perm` |
+| `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*); the subtype (`perm` / `ask`) comes from the transcript, not the wording (#656) |
 | `Stop` | `done` | `done` (then hands off to `classify-hook.sh`) |
 
 Because Claude Code **re-reads `settings.json` hooks every turn**, a running
@@ -80,10 +97,13 @@ session picks up hook changes with no restart.
 discriminations so the fast signal does not cry wolf:
 
 - **`AskUserQuestion` → `needs`.** That tool opens a blocking multiple-choice
-  popup mid-turn, and **no `Notification` hook fires for it**. Left alone the
-  window would masquerade as `working` the whole time it is really waiting on you,
-  so the `busy` path inspects the hook's stdin JSON for
-  `"tool_name":"AskUserQuestion"` and flips to `needs` + bell.
+  popup mid-turn. Left alone the window would masquerade as `working` the whole
+  time it is really waiting on you, so the `busy` path inspects the hook's stdin
+  JSON for `"tool_name":"AskUserQuestion"` and flips to `needs` + bell immediately.
+  (A `Notification` *does* follow about a minute later — as `permission_prompt`,
+  indistinguishable from a real permission prompt; this doc used to say none fired
+  at all. #656 measured it, and the `Notification` leg now defends the `ask` this
+  path stamped rather than overwriting it.)
   **Answer it from the dash** (`⌃k` → `bin/dash-answer.sh` → `bin/fleet-answer.sh`,
   issue #605). A `SendMessage` structurally cannot: a peer message is delivered
   *between* turns, and a pending question **is** the turn — measured, the frame
@@ -94,9 +114,15 @@ discriminations so the fast signal does not cry wolf:
   no tool_result — which is why it can never mistake the OTHER thing `needs` means,
   a permission prompt, for a question. It also stamps `@claude_needs=ask`, which is
   what puts the `?` on the row.
-- **A permission prompt → `needs` + `@claude_needs=perm`.** Claude Code phrases the
-  `Notification` as *"Claude needs your permission to use &lt;Tool&gt;"*; matching it
-  is what puts `⊘` on the row. This is the half #605 left open, and on 2026-09-14 it
+  Every comparison it makes **against the screen** is whitespace-insensitive
+  (#656): a narrow pane wraps a long question or option label onto follow-on lines
+  — and a CJK break inserts no space where a Latin one eats the space it broke at
+  — so a literal `grep -F` missed and the answerer refused a dialog that was on the
+  screen and that `--show` had just parsed correctly. Squashing whitespace out of
+  both sides keeps the gate exactly as strong while making a line break a non-event.
+- **A permission prompt → `needs` + `@claude_needs=perm`.** The `Notification` says
+  only that *some* dialog is open, so what puts `⊘` on the row is the transcript's
+  pending `tool_use` being something other than an `AskUserQuestion` (#656). This is the half #605 left open, and on 2026-09-14 it
   cost a worker its session: the prompt is mid-turn for its whole life, so
   `SendMessage` queued underneath it, the issue bridge was dead, `fleet-answer.sh`
   correctly refused (not a question), and `tmux send-keys` is hook-blocked (#437) —
