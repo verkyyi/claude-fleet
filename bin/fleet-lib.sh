@@ -1837,20 +1837,86 @@ fleet_labels_allowed() {
   fleet_labels_canonical | cut -d'|' -f1
 }
 
-# issue title → short kebab window name (lowercase, ascii-alnum + single
-# hyphens, ≤32 chars, no leading/trailing hyphen). Used to name a session's
-# tmux window after the issue CONTENT instead of a bare "issue-<N>". Prints
-# empty when the title has no usable ascii-alnum content (non-latin titles,
-# symbols-only) — callers fall back to "issue-<N>". LC_ALL=C so tr classes
-# operate byte-wise (multibyte chars collapse to hyphens, not errors).
+# issue title → short kebab window name. Used to name a session's tmux window
+# after the issue CONTENT instead of a bare "issue-<N>". Prints empty when the
+# title carries no usable LETTER/DIGIT content (emoji-only, punctuation-only) —
+# every caller falls back to its own slug (issue-<N> / scratch-<N> / the branch).
+#
+# UTF-8 AWARE since issue #579. The old filter was `LC_ALL=C tr -c 'a-z0-9\n' '-'`,
+# which is BYTE-wise: every byte of a 3-byte CJK codepoint fails the a-z0-9 test,
+# so a fully-Chinese title collapsed to hyphens → squeezed → stripped → EMPTY, and
+# on a Chinese-language fleet EVERY worker window degraded to `issue-<N>` (the dash
+# then showed a column of numbers with no hint of what any worker was doing). The
+# rest of the CJK story is already told (#432 column widths, #429/#422 echo, #408
+# locale, #534 the dash window cell) — the window NAME was the last place still
+# throwing multibyte text away.
+#
+# The rule now: keep Unicode letters/digits (\p{Alnum}) plus combining marks
+# (\p{M}, so Indic/Thai graphemes survive intact); map every other run — spaces,
+# punctuation, symbols, EMOJI — to a single '-'. Emoji and punctuation are NOT
+# letters, so a `★★★` or 🎉-only title still washes out to empty and still takes
+# the caller's slug fallback, exactly as before.
+#
+# Three invariants this must not break:
+#   • DETERMINISTIC — same title in, byte-identical name out, forever and on any
+#     machine/locale (perl decodes UTF-8 explicitly; `lc` is Unicode-default, not
+#     locale-sensitive). bin/fleet-restore.sh reconciles a snapshot against the
+#     live window names with `grep -qxF`, so a name that drifts would make restore
+#     fail to recognise a LIVE window and open a SECOND Claude on the same
+#     worktree (the reason #455 rejected summary-derived names).
+#   • CLIPPED BY DISPLAY WIDTH, never by bytes or codepoints — a CJK glyph is one
+#     codepoint but TWO terminal columns, and `cut -c` under LC_ALL=C would slice a
+#     3-byte character in half and render tofu (#422's bug class). The budget stays
+#     32 but is now read as 32 COLUMNS: that is byte-identical to the old cap for
+#     ASCII (width == length), and gives ~16 CJK glyphs — comfortably more than the
+#     22-column window cell the dash and /fleet-history clip it to again anyway.
+#     The width table is NOT re-implemented here; fleet_clip_display (#432/#534) is
+#     the one copy.
+#   • NEVER a RESERVED PANEL NAME — fleet_session_count/_for and the dash treat a
+#     window named dash/plan/backlog as a panel, so a derived collision would make
+#     the window vanish from the dash AND leak out of the session cap. An issue
+#     titled exactly "Plan" could already do this in pure ASCII; now that the
+#     character set is open it is guarded explicitly, by falling back to the slug.
+#
+# Degradation: no perl ⇒ the non-ASCII branch yields empty and the caller takes its
+# slug — i.e. exactly the pre-#579 behaviour, never a crash or a mangled name.
 fleet_win_name() {
-  printf '%s' "$1" \
-    | LC_ALL=C tr '[:upper:]' '[:lower:]' \
-    | LC_ALL=C tr -c 'a-z0-9\n' '-' \
-    | LC_ALL=C tr -s '-' \
-    | sed -e 's/^-//' -e 's/-$//' \
-    | cut -c1-32 \
-    | sed -e 's/-$//'
+  # clip_out/clip_w are fleet_clip_display's OUTPUT globals; shadowing them with
+  # locals here (bash scopes dynamically, so the callee writes these) keeps a row
+  # producer that is mid-render from having its own clip result stolen.
+  local t="${1:-}" s cols=32 clip_out='' clip_w=0
+  case "$t" in
+    *[![:ascii:]]*)
+      # One perl fork, and only for a title that actually carries non-ASCII. The
+      # program is a pure function of $S: decode → Unicode-lowercase → keep
+      # letters/digits/marks → squeeze the rest to single hyphens → trim. `exit 1
+      # unless /\p{Alnum}/` is what keeps an emoji/punctuation-only title empty.
+      s=$(S="$t" perl -CO -MEncode -e '
+        my $s = decode_utf8($ENV{S});
+        $s = lc $s;
+        $s =~ s/[^\p{Alnum}\p{M}]+/-/g;
+        $s =~ s/^-+//; $s =~ s/-+$//;
+        exit 1 unless $s =~ /\p{Alnum}/;
+        print $s;' 2>/dev/null) || s=''
+      ;;
+    *)
+      # Pure ASCII keeps the original pipeline verbatim, so every name this fleet
+      # has ever derived from an ASCII title still comes out byte-for-byte the same.
+      s=$(printf '%s' "$t" \
+        | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+        | LC_ALL=C tr -c 'a-z0-9\n' '-' \
+        | LC_ALL=C tr -s '-' \
+        | sed -e 's/^-//' -e 's/-$//')
+      ;;
+  esac
+  [ -n "$s" ] || return 0
+  # Clip by display width (ASCII takes fleet_clip_display's fork-free path, so this
+  # is still the old `cut -c1-32` for ASCII), then drop a hyphen the cut exposed.
+  fleet_clip_display "$cols" "$s"; s="${clip_out:-}"; s="${s%-}"
+  # Reserved panel names — keep this set in lockstep with fleet_session_count /
+  # fleet_session_count_for / the dash's panel filter.
+  case "$s" in dash|plan|backlog) s='' ;; esac
+  printf '%s' "$s"
 }
 
 # timestamp → friendly relative span (issue #228). Sets $reltime_out to a short,
