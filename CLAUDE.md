@@ -74,6 +74,19 @@ Do not install from memory: read the doc and work from it.
   on a worktree or a pane — which is exactly why it is the only one that saw the
   leak. `bin/fleet-diskguard.sh --orphans` on demand; `fleet-doctor`'s `machine`
   line carries load-per-core + any live orphan.
+- **An array that can be empty is NEVER expanded bare** (issue #703). macOS ships
+  bash 3.2, where `"${a[@]}"` / `"${a[*]}"` on an EMPTY array is a fatal `unbound
+  variable` under `set -u`; bash 4+ expands it to nothing, so CI (bash 5) and every
+  `bash -n` see a clean script and the mine goes off only on the operator's machine,
+  only on the path where the array happens to be empty. Write `${a[@]+"${a[@]}"}`,
+  or `"${a[*]-}"` inside a string — both are exact no-ops when populated, and both
+  were already the idiom here. `bin/bash32-array-selftest.sh` enforces it across
+  `bin/`, with NO credit for a nearby `[ "${#a[@]}" -gt 0 ]` guard (a guard is a
+  non-local invariant the next edit can break without touching the expansion);
+  a deliberate exception marks its line `# bash32-ok: <why>`. Where a bash 3.x
+  exists it also `bash -n`s every script, which nets the SYNTAX half of the same
+  family — a `case` inside `$(…)` must write its pattern `(pat)`, or 3.2's
+  command-substitution scanner dies on the `;;`.
 - **The selftest gate isolates at the ROOT, not per test** (issue #660).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
   root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as

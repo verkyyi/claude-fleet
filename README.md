@@ -324,7 +324,8 @@ opens the usage + account modal, with the account pool as a selectable body
 under the usage detail. Enter sets the account new sessions start from; Esc
 cancels. There is no fixed account and so no footer account chip: each spawn
 re-picks on ccquota headroom (#513), and the per-window truth is
-`fleet-account.sh whoami <window-id>`.
+`fleet-account.sh whoami [<window-id>]` — bare, it answers for the pane you run it
+in.
 
 A **per-model cap** is a different wall: `You've hit your Fable 5 limit · resets
 Sep 6` leaves the account's 5h/7d headroom intact for every other model, so the

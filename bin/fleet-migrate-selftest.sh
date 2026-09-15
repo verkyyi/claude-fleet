@@ -205,6 +205,31 @@ TM set-window-option -t "$w1" @cc_account acctB
 ok; [ "$(bash "$SCRIPT" whoami --session "$SESS" "$w1")" = acctA ] || fail "whoami must read the token (acctA) not the stamp (acctB)"
 ok; [ "$(TM display-message -p -t "$w1" '#{@cc_account}')" = acctA ] || fail "whoami must heal the stale @cc_account stamp"
 
+# --- whoami with NO window id (issue #703)
+# The bug: WIDS stayed empty, and the bare "${WIDS[@]}" is a FATAL unbound variable
+# on macOS's bash 3.2 — so the one command an operator runs either side of a
+# rotation ("which account is this session on?") died, while the paths that always
+# had candidates looked fine. The contract now: default to the CALLER'S OWN pane;
+# with no caller pane to read, a usage error — never a silent empty, which is the
+# same bug with the crash filed off. bash32-array-selftest.sh guards the SHAPE
+# repo-wide; these guard the BEHAVIOUR.
+ok; out=$(bash "$SCRIPT" whoami --session "$SESS" 2>"$WORK/w.err"); rc=$?
+[ "$rc" = 2 ] || fail "whoami with no window and no pane context must exit 2, got $rc (out='$out' err='$(cat "$WORK/w.err")')"
+ok; [ -z "$out" ] || fail "whoami must print NOTHING on stdout when it cannot resolve a window, got '$out'"
+ok; grep -q 'no window to report on' "$WORK/w.err" || fail "whoami must say WHY it has no answer: $(cat "$WORK/w.err")"
+ok; ! grep -qi 'unbound variable' "$WORK/w.err" || fail "whoami walked an empty array again (#703): $(cat "$WORK/w.err")"
+
+# Inside a pane of THIS fleet ⇒ that pane's own window, in the same bare-label form.
+SP=$(TM display-message -p '#{socket_path}'); P1=$(TM display-message -p -t "$w1" '#{pane_id}')
+ok; [ "$(env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" whoami 2>/dev/null)" = acctA ] \
+  || fail "bare whoami inside a pane must report THAT window's account"
+
+# Never across servers: pane ids are per-SERVER, so honouring $TMUX_PANE against a
+# --session that is not the caller's own fleet would confidently name a window on
+# the wrong machine-local server. Refuse instead.
+ok; env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" whoami --session "not-$SESS" >/dev/null 2>&1 \
+  && fail "bare whoami must refuse when --session names a fleet other than the caller's"
+
 # --- dry-run moves nothing
 out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited)
 rig_diag() {  # on failure: what the walk saw (CI-only failures are otherwise blind)

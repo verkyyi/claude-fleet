@@ -158,7 +158,7 @@ sync_repo() { (
 # --- which fleets? argv wins; else every live fleet session on this server. -----
 SESSIONS=()
 if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
-  SESSIONS=("${ARGV_SESS[@]}")
+  SESSIONS=(${ARGV_SESS[@]+"${ARGV_SESS[@]}"})
 else
   while IFS= read -r s; do
     [ -n "$s" ] && SESSIONS+=("$s")
@@ -184,7 +184,7 @@ fi
 # One base-mover PER REPO: dedup on the RESOLVED base path so two fleets serving
 # the same repo (one shared base checkout) never double-move it in a tick.
 synced=$'\n'
-for sess in "${SESSIONS[@]}"; do
+for sess in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   IFS=$'\t' read -r off repo main base < <(fleet_ident "$sess")
   if [ "$off" = 0 ]; then
     log "$sess: base-sync off (FLEET_BASE_SYNC=0) — skip"

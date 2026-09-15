@@ -33,8 +33,9 @@
 #   fleet-migrate.sh [opts] --idle              done|needs windows NOT on the active account
 #   fleet-migrate.sh [opts] --all               every window NOT on the active account
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
-#   fleet-migrate.sh whoami <window>            print the account a window really runs
-#                                               (token truth; re-stamps a stale @cc_account)
+#   fleet-migrate.sh whoami [<window>]          print the account a window really runs
+#                                               (token truth; re-stamps a stale @cc_account).
+#                                               NO window ⇒ the CALLER'S OWN pane (#703)
 #   opts: --session <fleet>   target fleet when run outside tmux (default: the caller's)
 #         --model <alias>     relaunch on THIS model (issue #524: a per-model cap —
 #                             "hit your Fable 5 limit" — walled the session while the
@@ -326,12 +327,12 @@ migrate_main() {
       --dry-run) DRY=1; shift ;;
       --toast) TOAST=1; shift ;;
       whoami) MODE=whoami; shift ;;
-      -h|--help) sed -n '2,45p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,49p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '25,40p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,49p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
   MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
 
@@ -350,8 +351,8 @@ migrate_main() {
   # and the explicit walk alike) works on a real target; anything that is not a
   # handle passes through untouched, so `@382` / `3` / a name keep working.
   if [ "${#WIDS[@]}" -gt 0 ]; then
-    _norm=(); for _w in "${WIDS[@]}"; do _norm+=("$(fleet_wid_target "$_w" "$SOCK")"); done
-    WIDS=("${_norm[@]}")
+    _norm=(); for _w in ${WIDS[@]+"${WIDS[@]}"}; do _norm+=("$(fleet_wid_target "$_w" "$SOCK")"); done
+    WIDS=(${_norm[@]+"${_norm[@]}"})
   fi
   TM() { tmux -L "$SOCK" "$@"; }
   # Sanctioned keystrokes (issue #437): the ONLY keys ever typed are Escape + `/exit`
@@ -379,7 +380,29 @@ migrate_main() {
   moved=0; skipped=0; REPORT=""
   # --- whoami -----------------------------------------------------------------------
   if [ "$MODE" = whoami ]; then
-    for wid in "${WIDS[@]}"; do
+    # No window given ⇒ the CALLER'S OWN pane (issue #703). `whoami` answers exactly
+    # one question — "which account is THIS session on" — the one an operator asks
+    # either side of a rotation; the fleet-wide table is `fleet-account.sh quota`'s
+    # job, and the name would not survive meaning both. Only ever defaults to self
+    # when the resolved fleet IS the caller's own: pane ids are per-SERVER, so
+    # honouring $TMUX_PANE against another fleet's socket would answer confidently
+    # about the wrong window. With no "me" to report — a daemon, a plain shell, a
+    # --session pointing elsewhere — say so and exit 2. NEVER print nothing: the
+    # silent empty is what this issue was, once the crash is gone.
+    if [ "${#WIDS[@]}" -eq 0 ]; then
+      # $TMUX_PANE, not tmux's idea of "current": with TMUX set but TMUX_PANE
+      # empty, a bare `display-message` answers for whatever window the attached
+      # CLIENT is looking at — a confident answer about someone else's session.
+      _self=""
+      [ -n "${TMUX_PANE:-}" ] && [ "$(fleet_current_session)" = "$SESS" ] \
+        && _self=$(TM display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
+      [ -n "$_self" ] || {
+        echo "fleet-migrate: whoami has no window to report on — run it inside $SESS, or name one: whoami <window>" >&2
+        return 2
+      }
+      WIDS=("$_self")
+    fi
+    for wid in ${WIDS[@]+"${WIDS[@]}"}; do
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { echo "$wid: no Claude process" >&2; continue; }
       stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
       printf '%s\n' "$(window_account "$wid" "$cpid" "$stamp")"
@@ -391,7 +414,7 @@ migrate_main() {
   [ -n "$MODE" ] || MODE=explicit
   targets=()
   if [ "$MODE" = explicit ]; then
-    targets=("${WIDS[@]}")
+    targets=(${WIDS[@]+"${WIDS[@]}"})
   else
     # window ids only from list-windows (one per line, always printable); the
     # rest per field via wopt — see the escaping note in migrate_one.
@@ -413,7 +436,7 @@ migrate_main() {
     return 0
   fi
   say "fleet-migrate: $MODE → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
-  for wid in "${targets[@]}"; do
+  for wid in ${targets[@]+"${targets[@]}"}; do
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { say "  – $wid: no Claude process — skipped"; skipped=$((skipped+1)); continue; }
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
     label=$(window_account "$wid" "$cpid" "$stamp")

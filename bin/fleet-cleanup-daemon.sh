@@ -312,7 +312,7 @@ EOF
 # --- which fleets? argv wins; else every live fleet session on this server. -----
 SESSIONS=()
 if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
-  SESSIONS=("${ARGV_SESS[@]}")
+  SESSIONS=(${ARGV_SESS[@]+"${ARGV_SESS[@]}"})
 else
   while IFS= read -r s; do
     [ -n "$s" ] && SESSIONS+=("$s")
@@ -342,7 +342,7 @@ case "$SWEEP_BUDGET" in ''|*[!0-9]*) SWEEP_BUDGET=20 ;; esac
 if [ "$DRY" = 0 ] && [ "$SWEEP_BUDGET" -gt 0 ]; then
   sweep_deadline=$(( $(now) + SWEEP_BUDGET ))
   swept_mains=""
-  for s in "${SESSIONS[@]}"; do
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
     # A subshell read: fleet_load_conf in THIS shell would leak one fleet's conf
     # into the next one's cleanup.
     m=$(fleet_load_conf "$s" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}")
@@ -365,7 +365,7 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
   exit 0
 fi
 
-for s in "${SESSIONS[@]}"; do
+for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   cleanup_fleet "$s"
 done
 exit 0

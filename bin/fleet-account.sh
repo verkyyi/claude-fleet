@@ -73,8 +73,12 @@
 #                          a window already on the active account, or any window
 #                          while the active account is benched itself, is skipped
 #                          (#567) — only a --model relaunch is exempt
-#   whoami <window-id>   — the account a window really runs (token truth; heals a
-#                          stale @cc_account stamp) — fleet-migrate.sh whoami
+#   whoami [<window-id>] — the account a window really runs (token truth; heals a
+#                          stale @cc_account stamp) — fleet-migrate.sh whoami. With
+#                          NO window-id: the caller's own pane — "which account is
+#                          THIS session on", the question either side of a rotation.
+#                          Outside a pane of that fleet there is no "me" to report,
+#                          so it says so and exits 2 rather than printing nothing
 #   phase [--plan [--apply]] [--clear [label]] [--hold-until <label>]
 #                        — the 5h-window PHASE stagger (issue #598). Bare: the pool's
 #                          phase table (each account's live window + any pending slot).

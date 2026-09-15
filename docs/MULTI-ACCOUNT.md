@@ -118,7 +118,8 @@ the pick is a starting point, and every spawn re-picks on ccquota headroom
 (issue #513, below) and rotates past a limited account. The old green
 `◉ <account>` chip mirrored `global/account.active`, which is now re-written
 per spawn — a stale snapshot. Per-window truth lives in the window's
-`@cc_account` (the dash) and `fleet-account.sh whoami <window-id>`.
+`@cc_account` (the dash) and `fleet-account.sh whoami [<window-id>]` — with no
+window id it reports the pane you run it in.
 
 ## How it runs
 
@@ -167,7 +168,7 @@ collector (every ~60s) ── scrapes each window ┘
   `active`, `token [label]`, `env`, `list`, `use <label>`, `rotate`,
   `mark-limited <label>`, `clear [label]`, `limited-until <label>`, and the two
   that act on LIVE sessions (delegated to `bin/fleet-migrate.sh`): `migrate …`
-  and `whoami <window-id>` — see [Moving live sessions](#moving-live-sessions)
+  and `whoami [<window-id>]` — see [Moving live sessions](#moving-live-sessions)
   below.
 - **`bin/fleet-claude.sh`** is a transparent launcher: with a pool it exports the
   active token and tags the window; **with no pool it is just `exec claude`** —
@@ -532,6 +533,9 @@ fleet-account.sh migrate @12 @15            # these windows, whatever they run o
 fleet-account.sh migrate --dry-run --all    # print the plan only
 fleet-account.sh whoami @12                 # the account a window REALLY runs (token truth;
                                             # heals a stale @cc_account stamp)
+fleet-account.sh whoami                     # …and bare: the pane you ran it in ("which
+                                            # account is THIS session on"). Outside a pane
+                                            # of that fleet it exits 2, never silently empty
 ```
 
 Never touched: panels (`dash`/`plan`/`backlog`), the operator hub (`@hub`),

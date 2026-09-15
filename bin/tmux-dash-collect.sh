@@ -710,7 +710,7 @@ CTX_PATHS=()
 while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
   < <(lw_all '#{pane_current_path}' | sort -u)
 if [ "${#CTX_PATHS[@]}" -gt 0 ] && have_py3; then
-python3 - "$G" "$$" "${CTX_PATHS[@]}" <<'PY'
+python3 - "$G" "$$" ${CTX_PATHS[@]+"${CTX_PATHS[@]}"} <<'PY'
 import json, glob, os, sys, re
 C=sys.argv[1]; pid=sys.argv[2]   # C = the global/ cache bucket (ctx_<key> lives here)
 for path in sys.argv[3:]:
