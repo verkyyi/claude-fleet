@@ -39,6 +39,11 @@
 #     · a red whose session is unregistered          → untouched (unknown ⇒ never act)
 #     · a fresh stamp                                → untouched (the settling grace)
 #     · and NOTHING anywhere becomes `needs`: the reconcile only ever clears.
+#     …driven with FLEET_NEEDS_TRACE=1 (issue #675), so a red PART B arrives with the
+#     daemon's own pass-by-pass record instead of N x `got: state=needs` — which is a
+#     symptom shared by a daemon that never started, a pass starved out by
+#     NEEDS_BUDGET, and passes that ran but never got two readings to agree. See
+#     nrdiag below.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -77,7 +82,10 @@ export CLAUDE_PROJECTS_DIR="$WORK/projects";   mkdir -p "$CLAUDE_PROJECTS_DIR/pr
 export FLEET_CLAUDE_COMM='FLEETFAKECLAUDE'
 
 FAIL=0 CHECKS=0
-fail() { FAIL=1; printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
+# FAIL COUNTS, rather than latching at 1: PART B decides whether to print its
+# diagnostics by comparing the count before and after (issue #675), and a latch would
+# silence them on exactly the run where PART A had already failed too.
+fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
 tf() { "$REAL_TMUX" -L fleetR "$@"; }
 
 SPIN_PID=''
@@ -195,8 +203,53 @@ CHECKS=$((CHECKS+1)); [ "$rc" = 2 ] || fail "oracle: no argument must exit 2 (us
 # test: on a busy box the first strike ages out and nothing ever converges. Pinning it
 # at 120 keeps the "two consecutive checks must agree" rule exactly as strict — the
 # strikes still have to AGREE — while removing the machine-speed term.
+# FLEET_NEEDS_TRACE=1 makes every pass leave a line in needs.log even when it acts
+# on nothing (issue #675) — see nrdiag below for why a red run without it is not
+# diagnosable. The two log files are cleared first: this test is not the only one in
+# a shadow root that starts the spinner (attn-signal, fleet-collect-stale and
+# fleet-handoff-invariant all sort BEFORE it and share $BIN/../logs), so without the
+# rm both the trace and the strike table would open on someone else's leftovers.
+STRIKE_F="$BIN/../logs/.needs-strikes"
+TRACE_F="$BIN/../logs/needs.log"
+mkdir -p "$BIN/../logs" 2>/dev/null
+rm -f "$STRIKE_F" "$TRACE_F"
+
+# nrdiag <why> — the evidence #675 asked for, printed when PART B goes red.
+#
+# Every assertion below reads a tmux option, so EVERY failure here says `got:
+# state=needs` and nothing more. That one symptom covers at least three different
+# defects — a daemon that never started, a pass starved out by NEEDS_BUDGET, and a
+# pass that ran but could never get two readings to agree — and #675 was filed
+# precisely because the seven-red output could not distinguish them. (It was the
+# third: the 3s strike TTL #691 later made a knob.) So on a red PART B, print what
+# the daemon actually did rather than only what the windows look like afterwards.
+nrdiag() {
+  printf '\n--- reconcile diagnostics (issue #675): %s ---\n' "$1" >&2
+  if [ -n "$SPIN_PID" ] && kill -0 "$SPIN_PID" 2>/dev/null; then
+    printf 'spinner: alive (pid %s)\n' "$SPIN_PID" >&2
+  else
+    printf 'spinner: NOT RUNNING (pid %s) — it died before it could reconcile anything\n' "${SPIN_PID:-none}" >&2
+  fi
+  if [ -s "$STRIKE_F" ]; then
+    _s=$(cat "$STRIKE_F" 2>/dev/null); _st=${_s%% *}
+    case "$_st" in
+      (''|*[!0-9]*) printf 'strikes: %s   (unparsable timestamp)\n' "$_s" >&2 ;;
+      (*)           printf 'strikes: %s   (last completed pass %ss ago)\n' "$_s" "$(( $(date +%s) - _st ))" >&2 ;;
+    esac
+  else
+    printf 'strikes: NO TABLE — not one pass ran to completion\n' >&2
+  fi
+  _np=$(grep -c ' pass ' "$TRACE_F" 2>/dev/null); [ -n "$_np" ] || _np=0
+  printf 'trace:   %s pass line(s) in %s\n' "$_np" "$TRACE_F" >&2
+  tail -n 40 "$TRACE_F" 2>/dev/null | sed 's/^/  | /' >&2
+  printf 'windows:\n' >&2
+  tf list-windows -a -F '#{window_name} state=#{@claude_state} needs=#{@claude_needs} ts=#{@claude_state_ts}' \
+    2>/dev/null | sed 's/^/  | /' >&2
+  printf '(now=%s  OLD=%s  MID=%s)\n' "$(date +%s)" "$OLD" "$MID" >&2
+}
+
 env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 FLEET_NEEDS_PLAIN_SECS=300 \
-  FLEET_STUCK_WORKING_SECS=0 SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
+  FLEET_NEEDS_TRACE=1 FLEET_STUCK_WORKING_SECS=0 SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
 SPIN_PID=$!
 
 wo() { tf show-window-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{$1="";sub(/^ /,"");gsub(/^"|"$/,"");print}'; }
@@ -208,15 +261,29 @@ sb() { tf display-message -p -t "$1" '#{@claude_needs}' 2>/dev/null; }
 # candidate, so the writes inside a single pass are hundreds of milliseconds apart:
 # breaking as soon as the 3rd window settled read the 4th before its own write had
 # landed, and CI failed on it (the 1-in-2 flake this comment exists to prevent).
-for _ in $(seq 1 60); do
+B_TRIES=60                      # × 0.5s ⇒ ~30s of wall clock, an order of magnitude
+B_BUDGET=$(( B_TRIES / 2 ))     # over the ~2-3s two passes need even on a loaded box
+B_START=$(date +%s) CONV=''
+for _ in $(seq 1 "$B_TRIES"); do
   [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = "done" ] \
     && [ "$(st w-plainold)" = "done" ] \
-    && [ "$(sb w-askfix)" = ask ] && [ "$(sb w-permfix)" = perm ] && break
+    && [ "$(sb w-askfix)" = ask ] && [ "$(sb w-permfix)" = perm ] \
+    && { CONV=$(( $(date +%s) - B_START )); break; }
   sleep 0.5
 done
+# Print the margin on a GREEN run too, for the same reason run-selftests.sh prints
+# every test's duration (issue #681): a budget that is quietly being eaten shows up
+# on the run that ate it, not on the run that finally went red.
+if [ -n "$CONV" ]; then
+  printf 'reconcile: PART B converged in %ss (budget ~%ss)\n' "$CONV" "$B_BUDGET"
+else
+  printf 'reconcile: PART B did NOT converge within ~%ss\n' "$B_BUDGET" >&2
+fi
 # …then let a few more passes run before asserting what must NOT have moved. A rail
 # that the reconcile would wrongly touch gets several chances to prove it.
 sleep 3
+
+FAIL_BEFORE_B="$FAIL"
 
 # The clears.
 CHECKS=$((CHECKS+1)); [ -z "$(st w-dead)" ] \
@@ -263,6 +330,19 @@ newreds=$(tf list-windows -a -F '#{window_name} #{@claude_state}' 2>/dev/null \
 CHECKS=$((CHECKS+1)); [ -z "$newreds" ] \
   || fail "the reconcile must only ever CLEAR — these windows were not red and now are" "newly red: $newreds"
 
+# The trace itself is a rail, not a convenience (issue #675): it is what makes every
+# assertion above diagnosable, so a build that stopped emitting it must go red HERE —
+# not silently, one flake later, when the next reader is again handed nothing but
+# `state=needs`. Two passes is the floor: converging at all takes an arm and an act.
+npass=$(grep -c ' pass ' "$TRACE_F" 2>/dev/null); [ -n "$npass" ] || npass=0
+CHECKS=$((CHECKS+1)); [ "$npass" -ge 2 ] \
+  || fail "FLEET_NEEDS_TRACE=1 must leave one line per pass, acting or not — without it a stalled reconcile and an absent one are the same symptom (#675)" "pass lines: $npass"
+
+# Everything PART B can assert is now asserted; if any of it went red, say what the
+# daemon DID. The spinner is still alive at this point (PART C kills it), so the
+# strike table and the trace are both warm.
+[ "$FAIL" = "$FAIL_BEFORE_B" ] || nrdiag "PART B"
+
 # ---------------------------------------------------------------------------
 # PART C — the 2-strike grace, pinned by COUNT (not by wall clock)
 # ---------------------------------------------------------------------------
@@ -272,7 +352,7 @@ CHECKS=$((CHECKS+1)); [ -z "$newreds" ] \
 # fixture this size a single-strike build still takes >2s to converge, so it passes
 # for the wrong reason (which is the very mistake #658 was filed on).
 kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
-rm -f "$BIN/../logs/.needs-strikes"
+rm -f "$STRIKE_F"
 # PART B is done asserting on the two empty-subtype reds that must stay red, and a
 # pass walks its candidates in window order under NEEDS_BUDGET=8 — leaving them red
 # would let w-debounce, created last, be the one starved out of a pass. Retire them.
@@ -283,8 +363,11 @@ mkwin w-debounce yes needs perm "$OLD" Bash answered
 # Count, not wall clock — so the TTL is pinned well above the interval (issue #691).
 # Without it these two passes shared a 3-second budget for two forking scans, and a
 # machine busy with anything else turned the assertion below into a coin flip.
+# Traced like PART B's daemon (issue #675): a one-shot that reads a stale table and
+# can only re-arm looks exactly like one that never ran, and these three assertions
+# are about which of the two happened.
 one_pass() {
-  env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 \
+  env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 FLEET_NEEDS_TRACE=1 \
     sh "$SPINNER" --needs-check >/dev/null 2>&1
 }
 
@@ -304,7 +387,7 @@ tf set-window-option -t w-debounce @claude_state_ts "$OLD" 2>/dev/null
 # The aged table holds the EXACT strike this pass will produce, so the age check is
 # the only thing that can stop it from counting as agreement.
 DWID=$(tf display-message -p -t w-debounce '#{window_id}' 2>/dev/null)
-printf '%s |fleetR:%s:idle|\n' "$OLD" "$DWID" > "$BIN/../logs/.needs-strikes"
+printf '%s |fleetR:%s:idle|\n' "$OLD" "$DWID" > "$STRIKE_F"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
   || fail "a STALE strike table must not count as the previous check" "state=$(st w-debounce)"
@@ -318,7 +401,7 @@ tf set-window-option -t w-debounce @claude_state needs 2>/dev/null
 tf set-window-option -t w-debounce @claude_needs perm 2>/dev/null
 tf set-window-option -t w-debounce @claude_state_ts "$OLD" 2>/dev/null
 AGED=$(( $(date +%s) - 30 ))
-printf '%s |fleetR:%s:idle|\n' "$AGED" "$DWID" > "$BIN/../logs/.needs-strikes"
+printf '%s |fleetR:%s:idle|\n' "$AGED" "$DWID" > "$STRIKE_F"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
   || fail "FLEET_NEEDS_STRIKE_TTL must govern the age gate — a strike past 3x the interval but inside the TTL still counts" "state=$(st w-debounce)"

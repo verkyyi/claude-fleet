@@ -380,6 +380,27 @@ passes one at a time so the two-checks-agree rule is pinned by *count* rather th
 wall clock (a wall-clock assertion passes for the wrong reason, which is the mistake
 #658 itself was filed on).
 
+`FLEET_NEEDS_TRACE=1` makes every pass leave a line in `logs/needs.log`, acting or
+not (#675):
+
+```
+12:52:35  (reconcile)   pass  cand=8 acted=0 starved=2 armed=|fleetR:@1:dead|fleetR:@2:idle|
+```
+
+`needs.log` is otherwise a record of what the reconcile **did** — a pass that only
+arms a strike writes nothing, which is right for a daemon ticking every 20 s forever
+but leaves the one question a *stalled* reconcile raises unanswerable. #675 was filed
+on seven assertions that all read `got: state=needs` and nothing else, and that single
+symptom covers three different defects: a daemon that never started, a pass starved
+out by `NEEDS_BUDGET`, and passes that ran but could never get two readings to agree.
+The trace separates them at a glance — `cand=` says the pass saw the window, `acted=`
+says whether it wrote, `starved=` says the budget ran out first, and `armed=` is the
+strike table verbatim, so a stall shows as the *same* set armed over and over. (It was
+the third: #691's 3 s strike TTL.) Off by default;
+[`needs-reconcile-selftest.sh`](../bin/needs-reconcile-selftest.sh) drives its daemon
+with it **on** and dumps the trace, the strike table and every window's stamps when
+PART B goes red, so a flake there arrives with its own evidence.
+
 > The spinner carries this errand — as it carries the stuck-`working` sweep and the
 > interval-daemon self-heal — because it is **KeepAlive**: one process, up since
 > boot, while every other fleet daemon is a `StartInterval` unit,

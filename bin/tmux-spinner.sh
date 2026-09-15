@@ -288,6 +288,23 @@ nc=0
 # ever written. A non-integer falls back to the default rather than meaning that.
 NEEDS_STRIKE_F="$BIN/../logs/.needs-strikes"
 
+# FLEET_NEEDS_TRACE=1 — log EVERY pass, not just the ones that acted (issue #675).
+#
+# needs.log is a record of what the reconcile DID: a pass that only arms a strike
+# writes nothing at all. That is the right default — a daemon ticking every 20s
+# forever would otherwise bury the verdicts under 4300 lines a day of "looked,
+# changed nothing" — but it leaves the one question a stalled reconcile raises
+# unanswerable. When #675 was filed, seven assertions went red reading `got:
+# state=needs` and nothing else: a daemon that never started, a pass starved out
+# by NEEDS_BUDGET, and twenty passes that could never get two readings to agree
+# (which is what it turned out to be — the 3s strike TTL of #691) all present as
+# the identical "the state did not change", with no evidence on disk to tell them
+# apart. One line per pass — candidates seen, verdicts acted, candidates starved,
+# and the exact set armed for next time — separates all three. Off by default;
+# bin/needs-reconcile-selftest.sh drives its own daemon with it ON, so a red run
+# there arrives WITH the trace instead of sending the next reader back to guessing.
+NEEDS_TRACE="${FLEET_NEEDS_TRACE:-0}"
+
 # needs_check — one reconcile pass over the `needs` windows. Runs in the current
 # shell (here-doc, no pipe) so the budget and the strike accumulator persist.
 needs_check() {
@@ -311,6 +328,7 @@ needs_check() {
   fi
   left="$NEEDS_BUDGET"
   touched=0
+  ncand=0 nstarved=0   # trace counters (issue #675) — three ints, no forks
   for sock in $SOCKETS; do
     [ "$left" -gt 0 ] || break
     # Own scan, like stuck_check's: window_id (the write target, stable across
@@ -320,10 +338,10 @@ needs_check() {
     while read -r wid st nsub ts; do
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
-      [ "$left" -gt 0 ] || continue                       # budget spent; next check resumes
+      [ "$left" -gt 0 ] || { nstarved=$((nstarved + 1)); continue; }   # budget spent; next check resumes
       case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
       [ $(( nows - ts )) -ge "$NEEDS_SECS" ] || continue   # fresh stamp — still settling
-      left=$((left - 1))
+      left=$((left - 1)); ncand=$((ncand + 1))
       name=$("$BIN/fleet-pending-tool.sh" -L "$sock" "$wid" 2>/dev/null); prc=$?
       verdict=''; want=''
       case "$prc" in
@@ -361,13 +379,20 @@ needs_check() {
           msg="needs/${nsub:--} -> needs/$want  pending tool_use is $name" ;;
       esac
       printf '%s  %-24s %s\n' "$(date +%H:%M:%S)" "$sock:$wid" "$msg" >> "$NEEDS_LOG"
-      touched=1
+      touched=$((touched + 1))
     done <<EOF
 $wl
 EOF
   done
   printf '%s %s\n' "$nows" "$new" > "$NEEDS_STRIKE_F" 2>/dev/null
-  [ "$touched" = 1 ] && [ -f "$NEEDS_LOG" ] && \
+  # The pass line (issue #675). `armed=` is the verbatim table just written, so the
+  # trace and the strike file can never disagree about what this pass decided.
+  [ "$NEEDS_TRACE" = 1 ] && \
+    printf '%s  %-24s pass  cand=%s acted=%s starved=%s armed=%s\n' \
+      "$(date +%H:%M:%S)" "(reconcile)" "$ncand" "$touched" "$nstarved" "$new" >> "$NEEDS_LOG"
+  # Rotate whenever THIS pass appended — the trace writes on every pass, so gating
+  # the trim on `touched` alone would let a traced daemon grow needs.log unbounded.
+  { [ "$touched" -gt 0 ] || [ "$NEEDS_TRACE" = 1 ]; } && [ -f "$NEEDS_LOG" ] && \
     { tail -n 300 "$NEEDS_LOG" > "$NEEDS_LOG.tmp" 2>/dev/null && mv "$NEEDS_LOG.tmp" "$NEEDS_LOG" 2>/dev/null; }
 }
 
