@@ -97,9 +97,10 @@ Do not install from memory: read the doc and work from it.
   VARIANCE, not suite size — at 4 the same shard ran 2m36s and 4m2s on the same
   commit in sibling runs. In-runner concurrency was built, measured
   (196s vs 1428s of summed test time, 8-wide) and **rejected** — ~9 tests carry a
-  real-time budget that only holds on an idle box (needs-reconcile drives the
-  spinner at `FLEET_NEEDS_RECONCILE_SECS=1`, whose strike table goes stale after
-  3× that), and two went red under load while passing alone. Widening those
+  real-time budget that only holds on an idle box (needs-reconcile drove the
+  spinner at `FLEET_NEEDS_RECONCILE_SECS=1`, whose strike table went stale after
+  3× that — fixed in #691 by making the TTL its own knob, but the other ~8 keep
+  their window), and two went red under load while passing alone. Widening those
   windows would loosen the assertions worth having, to buy speed a second runner
   gives away.
 - **Every run prints each test's duration and the slowest few.** Same reasoning
