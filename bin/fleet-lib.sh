@@ -2583,6 +2583,75 @@ fleet_clip_display() {
 # overrides the registry location so selftests can point it at a scratch tree.
 FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
+# fleet_pane_claude_pids <pane-pid>… — the BATCH form of fleet_pane_claude_pid
+# (issue #706). Resolves MANY panes in THREE forks total — two `ps` snapshots and
+# one awk that walks every tree in-process — where the per-pane form costs one
+# `ps` plus two forked `awk`s for EVERY node it visits. Prints one
+# "<pane-pid> <claude-pid>" line per pane that has a Claude under it; a pane with
+# none prints nothing. Same matching grammar as the single form below, which is a
+# wrapper around this one, so there is exactly ONE walk to keep correct.
+#
+# WHY the fork count is the whole point (issue #706). fleet-model-switch.sh's
+# `--capped --dry-run` cap probe calls this once per window from inside
+# fleet-quotawatch's 60 s tick — and that daemon runs at macOS
+# ProcessType=Background, i.e. QoS BACKGROUND, where a fork costs ~10x what it
+# costs in the foreground (issue #588 measured the same multiplier on bulk I/O
+# and classified this unit as a "pure poller"; the poller had grown a fork-heavy
+# half). Measured on a 9-window fleet: 1.7 s foreground, 21–25 s at background
+# QoS, against a 20 s FLEET_QUOTAWATCH_PROBE_BUDGET — so the probe timed out on
+# 69% of all ticks and 100% of recent ones, and that fleet's model-cap detection
+# was blind for as long as the log goes back. Only 4.4 s of those 21 s was CPU:
+# the rest was fork/exec scheduling latency. Cutting ~12 forks per window to ~0
+# is therefore the fix, and unlike a bigger budget it also scales with fleet size.
+#
+# The two snapshots ride STDIN with a sentinel between them rather than `-v`:
+# awk processes escape sequences in a `-v` assignment, and a command line is
+# exactly the kind of string that carries backslashes. Pane pids are numeric, so
+# those are safe to pass as `-v`.
+fleet_pane_claude_pids() {
+  [ "$#" -gt 0 ] || return 0
+  { ps -axo pid=,ppid=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
+  | awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
+      /^---CMDS---$/ { sec = 2; next }
+      sec != 2 { if (NF >= 3) { comm[$1] = $3; kids[$2] = kids[$2] " " $1 } next }
+      { p = $1; $1 = ""; cmd[p] = " " substr($0, 2) " " }
+      function base(s,   k) { k = s; sub(/^.*\//, "", k); return k }
+      # BFS from the pane pid, in the same order the shell form used. `gen` stands
+      # in for `delete seen`: the whole-array delete is a gawk-ism this must not
+      # depend on, and a per-walk generation number is exact on every awk.
+      function walk(root, gen,   q, head, tail, p, b, k, nk, i) {
+        q[1] = root; head = 1; tail = 1
+        while (head <= tail) {
+          p = q[head++]
+          if (seen[p] == gen) continue
+          seen[p] = gen
+          b = base(comm[p])
+          if (b == "claude") return p
+          if (b == "bun" || b ~ /^node[0-9]*$/) {
+            if (index(cmd[p], "claude-code/cli.js") > 0 || index(cmd[p], "/claude ") > 0) return p
+          } else if (b == "bash" || b == "sh" || b == "zsh" || b == "dash") {
+            # a selftest fake `claude` is a script: its comm is the interpreter, so
+            # match ONLY the explicit FLEET_CLAUDE_COMM substring (never a bare
+            # heuristic — a worker s `zsh -c ...fleet-claude.sh...` runner must not
+            # count as Claude). No `next` here: the shell s children still get walked.
+            if (ccomm != "" && index(cmd[p], ccomm) > 0) return p
+          }
+          nk = split(kids[p], k, " ")
+          for (i = 1; i <= nk; i++) if (k[i] != "") q[++tail] = k[i]
+        }
+        return ""
+      }
+      END {
+        np = split(panes, pl, " ")
+        for (i = 1; i <= np; i++) {
+          if (pl[i] == "") continue
+          c = walk(pl[i], i)
+          if (c != "") print pl[i] " " c
+        }
+      }
+    '
+}
+
 # fleet_pane_claude_pid <tmux-target> [socket] — pid of the Claude process running
 # under the target's pane (any descendant of pane_pid whose command is `claude`, or
 # a node/bun running the npm-installed cli), or nothing (exit 1). THIS is the "is
@@ -2591,39 +2660,15 @@ FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
 # is alive. Portable: `ps -axo` on macOS + Linux. [socket] = -L label for headless
 # callers; bare tmux (the $TMUX socket) otherwise. FLEET_CLAUDE_COMM widens the
 # command-name match (a selftest's fake `claude` is a bash script, whose comm is
-# `bash` on macOS).
+# `bash` on macOS). The walk itself lives in fleet_pane_claude_pids above (#706).
 fleet_pane_claude_pid() {
-  local tgt="$1" sock="${2:-}" pp ps p c kids seen=" "
+  local tgt="$1" sock="${2:-}" pp out
   if [ -n "$sock" ]; then pp=$(tmux -L "$sock" display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null)
   else                    pp=$(tmux display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null); fi
   [ -n "$pp" ] || return 1
-  ps=$(ps -axo pid=,ppid=,comm=) || return 1
-  set -- "$pp"
-  while [ $# -gt 0 ]; do
-    p=$1; shift
-    case "$seen" in *" $p "*) continue;; esac; seen="$seen$p "
-    c=$(printf '%s\n' "$ps" | awk -v p="$p" '$1==p{print $3}')
-    case "${c##*/}" in
-      claude) printf '%s\n' "$p"; return 0;;
-      node|node[0-9]*|bun)
-        case " $(ps -o command= -p "$p" 2>/dev/null) " in
-          *"claude-code/cli.js"*|*"/claude "*) printf '%s\n' "$p"; return 0;;
-        esac;;
-      bash|sh|zsh|dash)
-        # a selftest's fake `claude` is a script: its comm is the interpreter, so
-        # match ONLY the explicit FLEET_CLAUDE_COMM substring (never a bare heuristic
-        # — a worker's `zsh -c '…fleet-claude.sh…'` runner must not count as Claude).
-        if [ -n "${FLEET_CLAUDE_COMM:-}" ]; then
-          case " $(ps -o command= -p "$p" 2>/dev/null) " in
-            *"$FLEET_CLAUDE_COMM"*) printf '%s\n' "$p"; return 0;;
-          esac
-        fi;;   # (no `continue` here — the shell's children still need walking)
-    esac
-    kids=$(printf '%s\n' "$ps" | awk -v p="$p" '$2==p{print $1}')
-    # shellcheck disable=SC2086  # deliberate word-split: one pid per word
-    set -- "$@" $kids
-  done
-  return 1
+  out=$(fleet_pane_claude_pids "$pp") || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "${out##* }"
 }
 
 # fleet_cc_session_json <pid> — path of the registry record for a Claude pid.

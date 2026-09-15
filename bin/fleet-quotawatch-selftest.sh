@@ -300,6 +300,11 @@ ok
 cat > "$WORK/bin/fleet-model-switch.sh" <<'FAKE'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_SWITCH_LOG"
+# The breadcrumb the real probe keeps (issue #706). Written BEFORE the sleep on
+# purpose: that is the whole point of the file — the probe is tree-killed at the
+# budget, so the only record of where it got to is what it had already written.
+[ -n "${FLEET_MODEL_SWITCH_TRACE:-}" ] && \
+  printf 'step=capture\nwin=3/9\nwid=@7\nelapsed=1\nsteps=t_meta=1 t_capture=1\nname=w3\n' > "$FLEET_MODEL_SWITCH_TRACE"
 if [ "${FAKE_SWITCH_SLEEP:-0}" -gt 0 ]; then
   sleep "$FAKE_SWITCH_SLEEP"
   printf 'completed\n' >> "$FAKE_SWITCH_DONE"     # only reached if the kill MISSED
@@ -335,6 +340,26 @@ grep -q "^t_policy="   "$G/quotawatch.heartbeat" || fail "9c: heartbeat must car
 grep -q 'sessA=timeout' "$WORK/stderr" || fail "9c: the breakdown must name the fleet that timed out"
 ok
 
+# 9c2. …and WHICH STEP ate the budget (issue #706). "timeout" alone was the entire
+# diagnosis available for 69% of this daemon's ticks on a live fleet, and it is
+# not enough to act on: a probe stuck in `capture` (a blocked tmux server) and one
+# stuck in `ledger` (a slow fleet-account fork) want opposite fixes, and neither
+# wants the bigger PROBE_BUDGET that a bare "timeout" invites. The probe cannot
+# report this itself — it is killed — so the killer reads its breadcrumb.
+grep -q 'sessA=timeout@capture' "$WORK/stderr" || fail "9c2: the breakdown must name the STEP, not just the fleet (stderr: $(cat "$WORK/stderr"))"
+grep -q 'budget in step capture' "$WORK/stderr" || fail "9c2: the kill line must name the step it died in"
+grep -q 'window 3/9' "$WORK/stderr" || fail "9c2: the kill line must say how far into the sweep it got"
+grep -q 't_meta=1 t_capture=1' "$WORK/stderr" || fail "9c2: the kill line must carry the per-step timings the probe had accrued"
+ok
+
+# 9c3. the per-fleet health ledger fleet-doctor reads. A single timeout is noise;
+# the STREAK is what says a fleet's cap detection has gone dark.
+qmf="$G/quotawatch.modelcap.sessA"
+[ -f "$qmf" ] || fail "9c3: a timed-out probe must record the fleet's cap-probe health"
+[ "$(sed -n 's/^streak=//p' "$qmf" | head -1)" -ge 1 ] || fail "9c3: a timeout must increment the streak (file: $(cat "$qmf"))"
+[ "$(sed -n 's/^step=//p' "$qmf" | head -1)" = capture ] || fail "9c3: the health file must remember the step it died in"
+ok
+
 # 9d. phase budget: 0s of budget → every fleet deferred, cursor armed, fetch runs.
 export FLEET_QUOTAWATCH_SWEEP_BUDGET=0
 before=$(ccq_calls)
@@ -356,6 +381,14 @@ wait "$WATCHER" 2>/dev/null
 [ "$(cat "$G/quotawatch.lock/pid")" = 999999 ] || fail "9e: the other tick's lock must be untouched"
 rm -rf "$G/quotawatch.lock"
 unset FAKE_SWITCH_SLEEP FLEET_QUOTAWATCH_PROBE_BUDGET
+ok
+
+# 9f. a probe that COMPLETES clears the streak and stamps lastok — otherwise the
+# doctor verdict would latch on the first bad tick and never let go.
+[ "$(sed -n 's/^streak=//p' "$G/quotawatch.modelcap.sessA" | head -1)" = 0 ] \
+  || fail "9f: a completed probe must reset the streak (file: $(cat "$G/quotawatch.modelcap.sessA"))"
+[ "$(sed -n 's/^lastok=//p' "$G/quotawatch.modelcap.sessA" | head -1)" -gt 0 ] \
+  || fail "9f: a completed probe must stamp lastok"
 ok
 
 # 9f. supersede must actually KILL a tick wedged in a command substitution.

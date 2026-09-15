@@ -90,6 +90,16 @@ fleet_usage_summary_plain() {
 fleet_limit_banner() {
   local text classic sticky
   text=$(cat)
+  # Fast reject, fork-free (issue #706). Every pattern below requires the literal
+  # word `limit` — including "Usage limit reached" — so a pane that does not
+  # contain it cannot match any of them. Without this the ABSENCE of a banner, by
+  # far the common case, was the most expensive answer this function could give:
+  # three `grep -aoE | tail` pipelines, ~8 forks, on every window of every
+  # fleet-model-switch sweep. That sweep runs inside fleet-quotawatch's 60 s tick
+  # at macOS QoS BACKGROUND, where a fork costs ~10x — it was 4 of the probe's
+  # 12 s. A `case` is exact here, not a heuristic: it can only skip work the
+  # greps were guaranteed to find nothing in.
+  case "$text" in *limit*) ;; *) return 0 ;; esac
   classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 .-]*limit[^│]*" | tail -1)
   if [ -n "$classic" ]; then printf '%s\n' "$classic"; return 0; fi
   # The per-MODEL wall's second shape (issue #524): "You've reached your Fable
