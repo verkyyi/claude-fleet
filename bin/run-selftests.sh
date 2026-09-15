@@ -104,10 +104,24 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
   # environment. Run the gate from a pane (which is where an operator runs it) and
   # they arrive without the file being read at all. Drop the whole FLEET_*/CCQUOTA_*
   # family so the suite sees the same environment in a pane, a bare login shell and
-  # CI — minus the two knobs that steer this runner.
+  # CI — minus the FLEET_SELFTEST_* knobs that steer this runner itself. Those are
+  # runner ARGUMENTS that happen to arrive as environment variables, not fleet
+  # config, so scrubbing them would mean the outer half honours a knob the inner
+  # half never sees. FLEET_SELFTEST_SLOWEST was exactly that bug: set to 0, it
+  # still printed the table, and only on Linux — because of the caveat below.
+  #
+  # ⚠️ CAVEAT (issue #689): the `\|` alternation here is a GNU sed extension. BSD
+  # sed (macOS) neither matches it nor complains, so on a Mac `$scrub` comes out
+  # EMPTY and this whole half is a silent no-op — the env route #660 meant to
+  # close is still open there, on the very machine an operator runs the gate from.
+  # Not fixed here: two `-e` expressions fix the sed, but they also make 121 tests
+  # face a stripped environment on macOS for the first time, which needs its own
+  # triage rather than a drive-by in a sharding change.
   scrub=''
   for v in $(env 2>/dev/null | sed -n 's/^\(FLEET_[A-Za-z0-9_]*\|CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do
-    case "$v" in FLEET_SELFTEST_ROOT|FLEET_SELFTEST_NO_SHADOW) continue ;; esac
+    case "$v" in
+      FLEET_SELFTEST_ROOT|FLEET_SELFTEST_NO_SHADOW|FLEET_SELFTEST_SLOWEST) continue ;;
+    esac
     scrub="$scrub -u $v"
   done
   # shellcheck disable=SC2086  # intentional: $scrub is a list of `-u NAME` arguments
