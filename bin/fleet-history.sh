@@ -579,9 +579,23 @@ cmd_rows() {
   # (field 6, by PR number) and the verdict from the deploy_<sha> file beside it —
   # both read once/fork-free, the same way the live producer does. Rows whose PR
   # fell out of the 100-row prmap window, or fleets without the feature, stay `·`.
-  local _pf prdir prmapn=''
+  # Narrowed ONCE, not scanned per row (issue #662). The lookup below is
+  # `${prmapn#*$'\t'"#<num>"$'\t'}` — a leading-`*` pattern match, which bash walks
+  # in time proportional to the string it is handed. Given the whole prmap that
+  # makes ONE landed frame O(prmap × rows), and this list is the LONG one: a
+  # ledger accumulates every session a fleet ever closed. So pull out just the
+  # lines whose PR number some row on this list actually carries — one awk pass,
+  # and the per-row logic below is untouched.
+  # The wanted set rides the ENVIRONMENT, not `-v`: awk processes escape sequences
+  # in a -v assignment.
+  local _pf prdir prmapn='' prwant=''
   _pf=$(fleet_cache prmap "${FLEET_SESSION:-}" 2>/dev/null); prdir=${_pf%/*}
-  [ -s "$_pf" ] && prmapn=$'\n'$(<"$_pf")
+  if [ -s "$_pf" ]; then
+    prwant=$(awk -F'\t' '{ p=$4; if (p != "" && p != "-") { sub(/^#/, "", p); print "#" p } }' <<< "$out" | LC_ALL=C sort -u)
+    [ -n "$prwant" ] && prmapn=$'\n'$(PRWANT="$prwant" awk -F'\t' '
+      BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+      ($2 in want)' "$_pf" 2>/dev/null)
+  fi
 
   # header row (fzf --header-lines=1 pins it) — identical column layout to the live
   # list's header so the two read as one table.
