@@ -432,6 +432,38 @@ EOF
   fi
 fi
 
+# --- session lifecycle emitter (optional: joins spend to outcome downstream) ---
+# OFF unless a fleet's conf sets FLEET_EMIT_URL (issue #625). It is fire-and-forget
+# over a bounded spool, which is exactly why it wants a doctor line: a dead endpoint
+# is SILENT by design, so the only visible symptom is a spool that stops draining.
+# A non-empty queue after the detached drain has had its chance means the endpoint
+# is refusing or unreachable — nothing is broken in the fleet, but nothing is
+# arriving downstream either, and that would otherwise go unnoticed for weeks.
+if [ -d "$conf_dir" ]; then
+  earmed=0
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    val=$(sed -n 's/^[[:space:]]*FLEET_EMIT_URL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
+    [ -n "$val" ] && earmed=$((earmed+1))
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  if [ "$earmed" -gt 0 ]; then
+    qd=$(bash "$(dirname "$0")/fleet-emit.sh" --queue-depth 2>/dev/null | tr -cd '0-9')
+    [ -n "$qd" ] || qd=0
+    if ! command -v curl >/dev/null 2>&1; then
+      warn emit "$earmed fleet(s) set FLEET_EMIT_URL but curl is missing — nothing can be delivered"
+    elif [ "$qd" -ge 50 ]; then
+      warn emit "$earmed fleet(s) emitting, but $qd events are stuck in the spool — the endpoint is refusing or unreachable"
+    elif [ "$qd" -gt 0 ]; then
+      pass emit "$earmed fleet(s) emitting session lifecycle facts ($qd in flight)"
+    else
+      pass emit "$earmed fleet(s) emitting session lifecycle facts (spool drained)"
+    fi
+    printf '        note: session.start/bind/pr/end only — no prompt content, paths, titles or hostname leave the machine. See docs/EMIT.md.\n'
+  fi
+fi
+
 # --- cleanup daemon (reaps worktrees + records the resume ledger after merges) ---
 # ON by default per fleet (opt out with FLEET_CLEANUP=0). THIS DAEMON NEVER MERGES:
 # the worker's /fleet-claim ship+land step merges its own PR (#441); this daemon reaps
