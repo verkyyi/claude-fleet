@@ -301,6 +301,9 @@ first and never on the second). Per red window:
 | What the oracle says | Verdict |
 |---|---|
 | subtype `ask`/`perm`, **nothing** pending | clear to `done` — the red is provably over |
+| **empty** subtype, **nothing** pending, stamp older than `FLEET_NEEDS_PLAIN_SECS` | clear to `done` — the screen verdict has served its dwell and the transcript still holds nothing |
+| **empty** subtype, **nothing** pending, stamp *inside* that dwell | **leave it** — a worker that stopped to ask a question in prose is really waiting, and must outlive the 20s grace |
+| **empty** subtype, something pending | **leave it** — the reconcile re-settles a *wrong* subtype; it never invents a missing one |
 | **no live Claude** in the pane (any subtype) | clear to *(empty)* — nothing can be waiting |
 | subtype `ask`/`perm`, something pending | re-settle the **subtype** only (`ask` ⇄ `perm`); the window stays red and `@claude_state_ts` is left alone — the session's activity did not move, only our reading of it |
 | anything unknown (no transcript, no `python3`, …) | **leave it alone** |
@@ -312,12 +315,24 @@ Three rails make this safe to run unattended:
   manufacture false alarms. It also does *not* kick the classifier afterwards (the
   stuck-`working` demote does): the classifier can return `needs` off a stale screen,
   which would re-redden what was just cleared, every tick.
-- **Only `ask`/`perm` are clearable.** Those two subtypes are *defined* by a pending
-  `tool_use` (#656 settles both off this very oracle), so "nothing pending" proves the
-  stamp stale. A **plain `needs`** (empty subtype) is a judgement about the *screen* —
-  the classifier's `WAITING`/`ERROR`, or a worker's own `set-claude-state.sh needs`
-  beside a `⛔ blocked` comment. Neither has a `tool_use` open, so clearing those
-  would silently delete the blocked signal.
+- **Strong evidence clears fast; weak evidence clears slowly** (#699). `ask`/`perm`
+  are *defined* by a pending `tool_use` (#656 settles both off this very oracle), so
+  "nothing pending" refutes the stamp outright — clear at the ordinary grace. A
+  **plain `needs`** (empty subtype) is a judgement about the *screen*, and #658 read
+  that as no evidence at all: it required `ask`/`perm`, so a plain `needs` produced
+  **no verdict** and nothing could ever clear it. That stranded an entire red path,
+  not a few legacy stamps — an empty subtype is what
+  [`classify-sessions.sh`](../bin/classify-sessions.sh) writes (it clears the subtype
+  by design, #640), and the classifier only ever runs at **Stop**, where a pending
+  `tool_use` cannot exist. Clearing it on the same 20s grace is no better, because
+  that red is a real **category**: a worker that ends its turn asking the operator a
+  question *in prose* is genuinely waiting on a human with nothing open. So the empty
+  subtype gets its own, far longer age, `FLEET_NEEDS_PLAIN_SECS` (default **900s**).
+  The number is a **trade** — lower and a real "I asked you something" red fades
+  before the operator looks; higher and a stale red survives longer. `0` collapses it
+  onto the ordinary grace; a very large value restores #658's "never clear an empty
+  subtype". The *no live Claude* verdict is deliberately **not** slowed by it: that is
+  proof nothing can be waiting, not weak evidence about what is.
 - **Grace on both axes.** A stamp younger than `FLEET_NEEDS_RECONCILE_SECS`
   (default **20s**, `0` disables) is still settling, and the same verdict must repeat
   across **two consecutive checks** before anything is written — the same 2-strike
