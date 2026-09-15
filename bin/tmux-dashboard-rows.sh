@@ -37,7 +37,7 @@ R="${E}0m"; US=$'\x1f'
 # last-name-takes-the-rest rule, so a field appended AFTER it would arrive glued to
 # the pin value. A new field goes BEFORE @pin, or pin_v's strict `1` test silently
 # reads every pinned window as unpinned.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@pin}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@claude_needs}${US}#{@pin}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -55,8 +55,21 @@ if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; f
 FRAME=${SPINF:$(( TICK % 10 )):1}
 
 # state → color/glyph/rank (set vars; no subshells)
+# $2 is the `needs` SUBTYPE (@claude_needs, issue #640) and splits the red glyph
+# into the two reflexes it really stands for — #605 shipped the answerer without
+# this and the operator was left guessing which red row it applied to:
+#
+#   ?  an open AskUserQuestion  → ⌃k answers it from here, no attach
+#   ⊘  an open permission prompt → only a human may approve one; ⌃k shows you WHAT
+#                                  is blocked (bin/fleet-permission.sh) so you can
+#                                  decide before walking over
+#   !  undifferentiated (the classifier's verdict, an unrecognised Notification)
+#
+# All three are ONE display cell, like every other state glyph: the row's leading
+# "${gc}${gl}${R} " slot is a fixed width the right-pinned act/PR/ctx block is
+# padded against, so a 2-cell emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
-  needs)   gc=$RD; gl='!';      rk=0;;
+  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; *) gl='!';; esac;;
   done)    gc=$GN; gl='✓';      rk=1;;
   working) gc=$CY; gl=$FRAME;   rk=2;;
   looping) gc=$IN; gl='↻';      rk=3;;
@@ -143,13 +156,13 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it, and it is last.
 KEYTAB=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ pin; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub pin; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
-  state_v "$state"; pin_v "$pin"
+  state_v "$state" "$nsub"; pin_v "$pin"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
 
@@ -202,7 +215,7 @@ while IFS=$'\t' read -r _ krk _ _ korig; do
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd pin; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub pin; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -214,7 +227,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   branch='-'
   [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
 
-  state_v "$state"; pin_v "$pin"
+  state_v "$state" "$nsub"; pin_v "$pin"
   nmcol=$TX; { [ "$state" = idle ] || [ -z "$state" ]; } && nmcol=$GY
 
   # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind

@@ -126,6 +126,7 @@ stuck_check() {
     case "$STUCK_STRIKES" in
       *"|$skey|"*)                                   # stale last check too -> 2nd strike -> demote
         tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+        tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null   # #640: no stale reason on a fresh state
         tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
         printf '%s  %-10s working -> done (idle %ss; stop-hook missed)\n' \
           "$(date +%H:%M:%S)" "$skey" "$age" >> "$STUCK_LOG"
@@ -198,16 +199,20 @@ while :; do
   # session:index token, so a repaint fires exactly once per real change estate-wide.
   for sock in $SOCKETS; do
     # Fields SPACE-separated; a '-' placeholder for an EMPTY @claude_state keeps the
-    # three fields parsing cleanly (issue #105) — else an empty middle field would
-    # collapse the double space and shift #{window_name} into the state slot.
-    wins=$(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{window_name}' 2>/dev/null) || continue
+    # fields parsing cleanly (issue #105) — else an empty middle field would
+    # collapse the double space and shift #{window_name} into the state slot. The
+    # same placeholder covers @claude_needs, the `needs` SUBTYPE (issue #640), which
+    # is empty for every window that is not red. #{window_name} stays LAST because a
+    # name may contain spaces and `read`'s final name swallows the rest; a new field
+    # goes BEFORE it, and the awk tally below counts columns from the same list.
+    wins=$(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{window_name}' 2>/dev/null) || continue
     cmdf="$CMDF.$sock"
     changed=0
     : > "$cmdf"
-    # wname reads the trailing #{window_name} so it never bleeds into $st (the case
-    # matches $st exactly); the name is used only by the awk tally below.
+    # wname reads the trailing #{window_name} so it never bleeds into $nsub (the
+    # case matches $nsub exactly); the name is used only by the awk tally below.
     # shellcheck disable=SC2034  # wname read only to keep $st clean
-    while IFS=' ' read -r win st wname; do
+    while IFS=' ' read -r win st nsub wname; do
       [ -z "$win" ] && continue
       # wst = window-status-style (the BACKGROUND). Only 'needs' gets bold red;
       # every other state is font-color-only (no bg) — this also clears any
@@ -216,7 +221,18 @@ while :; do
         working) glyph="$frame "; sfg="$cyan";      nfg="$NAME_WORKING"; wst="fg=#565f89" ;;
         looping) glyph="$frame "; sfg="$indigo";    nfg="#9d7cd8";       wst="fg=#565f89" ;;
         done)    glyph="✓ ";      sfg="$NAME_DONE"; nfg="$NAME_DONE";    wst="fg=#565f89" ;;
-        needs)   glyph="! ";      sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
+        # `needs` splits by its subtype (issue #640) so the TAB says which reflex it
+        # wants: `?` is an AskUserQuestion — answerable from the dash (⌃k) without
+        # leaving your seat — while `⊘` is a permission prompt, which by design only
+        # a human may approve, so that tab is telling you to go there yourself. `!`
+        # stays the undifferentiated case. Every glyph is ONE cell wide + a pad, like
+        # the states around it; a 2-cell emoji here would shift the whole tab strip.
+        needs)   case "$nsub" in
+                   ask)  glyph="? " ;;
+                   perm) glyph="⊘ " ;;
+                   *)    glyph="! " ;;
+                 esac
+                 sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
         *)       glyph="  ";      sfg="$NAME_IDLE"; nfg="$NAME_IDLE";    wst="fg=#565f89" ;;
       esac
       token="$win^$glyph^$sfg^$nfg^$wst"
@@ -247,8 +263,9 @@ EOF
       { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
         if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
         # plan(hub) + workers count into the badge; only dash/backlog (non-claude
-        # panels) are excluded (issue #368).
-        if ($2 == "needs" && $3 !~ /^(dash|backlog)$/) c[s]++ }
+        # panels) are excluded (issue #368). $4 is the window name: $3 is the
+        # @claude_needs subtype added by issue #640 — keep this in step with $WFMT.
+        if ($2 == "needs" && $4 !~ /^(dash|backlog)$/) c[s]++ }
       END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }
     ' <<EOF
 $wins

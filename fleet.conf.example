@@ -755,6 +755,26 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Escalate unattended after @group=notify @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ESCALATE_AFTER=300
 
+# --- Auto-refuse a blocked command (No only; OFF by default) -----------------
+# A `needs` window may be parked on a PERMISSION prompt, and a permission prompt is
+# mid-turn for its whole life: a SendMessage queues underneath it, the issue bridge
+# only relays a message, and a message cannot press a key (issue #640). So an
+# unattended worker can sit there until a human walks over.
+#
+# bin/fleet-permission.sh --show always works and needs no knob: it makes the
+# blocked command and the prompt's own reason readable WITHOUT attaching to the
+# pane (dash ⌃k falls through to it on a `⊘` row).
+#
+# This knob arms the other half — `--deny`, which presses **No, and only ever No**.
+# Refusing a blocked operation destroys nothing; it hands control back to the
+# worker, which can then rewrite the command safely. Nothing in the fleet may press
+# Yes, and no setting turns that on. The digit comes from the row the SCREEN labels
+# `No` and is re-asserted as a refusal before a key is sent; a missing, ambiguous or
+# Yes-only dialog refuses with nothing sent. Leave unset unless you actually want
+# unattended workers unstuck without you.
+# @label=Allow auto-refusing a permission prompt @group=notify @tier=advanced @scope=fleet @edit=bool
+#FLEET_ALLOW_AUTO_DENY=1        # unset/0 ⇒ --deny prints what it WOULD press, sends nothing
+
 # Disk-pressure guard (bin/fleet-diskguard.sh). The tmux server is shared by
 # every fleet, so a full volume ENOSPCs the collector and kills the server —
 # taking ALL fleets down at once. The guard measures the volume backing $TMPDIR
