@@ -479,7 +479,7 @@ if [ -f "$hb" ]; then
   if [ "$hb_end" -gt 0 ]; then
     hb_age=$((hb_now - hb_end))
     if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
-      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`?"
+      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-collect-kick.sh self-heals, see below)"
     else
       pass collect "last tick ${hb_age}s ago, took ${hb_dur:-?}s (slowest phase ${hb_slow:-?}; deadline ${FLEET_COLLECT_DEADLINE:-600}s)"
     fi
@@ -493,6 +493,23 @@ if [ -f "$hb" ]; then
   fi
 else
   printf '        note: no collector heartbeat yet (global/collect.heartbeat) — the collector has not completed a tick since #551; run bin/tmux-dash-collect.sh once or check com.claude-fleet.collect.\n'
+fi
+
+# --- collector self-heal trace (issue #636) -------------------------------------
+# launchd can PEND com.claude-fleet.collect for hours (`pended nondemand spawn =
+# interval`, `last exit code = 0`) — the dash then shows an old world rather than
+# an empty one. bin/fleet-collect-kick.sh kicks the unit when the heartbeat above
+# goes stale, at most once per FLEET_COLLECT_KICK_COOLDOWN. A kick is not a
+# problem solved: it is evidence the daemon stalled, so say so here for as long as
+# the stamp is worth reading, and point at the log that has the whole history.
+kick_ts_f="${TMPDIR:-/tmp}/.claude-dash/global/collect.kick.ts"
+if [ -f "$kick_ts_f" ]; then
+  kick_ts=$(cat "$kick_ts_f" 2>/dev/null); case "$kick_ts" in ''|*[!0-9]*) kick_ts=0;; esac
+  if [ "$kick_ts" -gt 0 ]; then
+    kick_age=$(( $(date +%s) - kick_ts ))
+    printf '        note: collector self-heal last kicked com.claude-fleet.collect %sm ago — the daemon had stopped ticking; history in logs/collect-kick.log.\n' \
+      "$(( kick_age / 60 ))"
+  fi
 fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---

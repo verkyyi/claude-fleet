@@ -13,6 +13,10 @@
 # `tmux source-file` -> the bar repaints once per frame. Static windows written
 # once. Run from launchd (com.claude-fleet.spinner, KeepAlive) or any daemon
 # supervisor. SPIN_INTERVAL = seconds per frame.
+#
+# Two throttled side errands ride this loop, because being KeepAlive makes it the
+# one fleet daemon that is always already running: the stuck-working sweep
+# (issue #101) and the dash collector's self-heal (issue #636).
 set -u  # POSIX sh: pipefail is bash-only (dash has none)
 INTERVAL="${SPIN_INTERVAL:-0.12}"
 NFRAMES=10
@@ -90,6 +94,14 @@ STUCK_CHECK_SECS=10   # evaluate at most ~every 10s, not every frame
 # frames between checks (~STUCK_CHECK_SECS / INTERVAL); computed once, min 1.
 STUCK_EVERY=$(awk -v c="$STUCK_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 sc=0            # frame counter for the throttle
+
+# --- collector self-heal throttle (issue #636) -------------------------------
+# See the call site in the frame loop for why the SPINNER is the daemon that
+# carries this. Same throttle idiom as the stuck sweep above: frames, computed
+# once from the frame interval, at least 1.
+KICK_CHECK_SECS=30
+KICK_EVERY=$(awk -v c="$KICK_CHECK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+kc=0
 STUCK_STRIKES='|'   # window_ids that were stale on the PREVIOUS check (2-strike debounce)
 
 # stuck_check — one throttled sweep: demote any working window whose pane has
@@ -148,6 +160,25 @@ while :; do
   if [ "$STUCK_SECS" -gt 0 ]; then
     sc=$((sc + 1))
     [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+  fi
+
+  # Throttled collector self-heal (issue #636). This daemon is KeepAlive — a
+  # single process that has been up since boot — while EVERY other fleet daemon
+  # is a StartInterval unit. On 2026-09-14 launchd stopped spawning the interval
+  # units in this user domain for 103 minutes (collect, quotawatch, cleanup,
+  # dispatch, base-sync, issue-bridge, ledger-watch: every log stopped inside the
+  # same two minutes, and `kickstart -k` revived them instantly); the spinner and
+  # the webhook, the two long-running ones, never missed a frame. So the spinner
+  # is the ONE daemon that can be relied on to notice, and a self-heal that lived
+  # only in another interval unit would have been pended right alongside its
+  # patient. The status bar kicks too, but only while somebody is attached.
+  # Cost: one integer compare per frame; the kick script itself (~30 ms, and it
+  # exits on a heartbeat read when the collector is healthy) at most every
+  # KICK_CHECK_SECS, and the rate limit + log + dash trace live inside it.
+  kc=$((kc + 1))
+  if [ "$kc" -ge "$KICK_EVERY" ]; then
+    kc=0
+    [ -x "$BIN/fleet-collect-kick.sh" ] && bash "$BIN/fleet-collect-kick.sh" >/dev/null 2>&1
   fi
 
   set -- '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏';                                eval "frame=\${$i}"

@@ -444,6 +444,40 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Collector tick deadline @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_DEADLINE=600
 
+# Collector STALENESS threshold (issue #636) — when the dash starts saying so.
+# The dash draws every number out of the collector's caches, so a collector that
+# stops does not blank the dash: it freezes it, with nothing to show the data is
+# old (2026-09-14: launchd PENDED com.claude-fleet.collect for 103 minutes,
+# `last exit code = 0`, and the dash showed a two-hour-old world). Once
+# global/collect.heartbeat has not advanced for this long the status bar shows
+# `⚠ dash stale 47m`. Defaults to FLEET_COLLECT_DEADLINE, which is by
+# construction above any legitimate tick (a tick past it is killed and
+# superseded) — lower it only if your ticks are reliably fast, or a slow-but-
+# working tick will trip the alarm. GLOBAL: one collector, one threshold.
+# @label=Dash staleness alarm @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_STALE=600
+
+# Collector SELF-HEAL (issue #636). `launchctl kickstart -k` unsticks a pended
+# collector instantly, so whoever notices the staleness above kicks the daemon:
+# the status bar (while attached) and the quotawatch daemon (headless). Set 0 to
+# keep the alarm but never kick.
+# @label=Dash self-heal @group=cache @tier=advanced @scope=global @edit=bool
+#FLEET_COLLECT_KICK=1
+
+# Minimum seconds between two self-heal kicks. This is the rail that keeps a
+# permanently broken daemon from being kicked once per status-bar render (every
+# 5s, per attached client): the kick claims the stamp atomically and one kick
+# costs the whole cooldown even if it fails. Every kick is logged to
+# logs/collect-kick.log. GLOBAL.
+# @label=Self-heal cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_KICK_COOLDOWN=600
+
+# How long the status bar keeps the self-heal TRACE up (`↻ dash kicked 4m`) after
+# the collector recovers. A silent recovery would hide the very outage this
+# exists to surface, so the trace outlives the alarm by design. GLOBAL.
+# @label=Self-heal trace window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_KICK_TRACE=1800
+
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
 # PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
 # OWN fast daemon, decoupled from the 60s collector, so "CI went green" / "PR

@@ -70,9 +70,19 @@
 # over is swept first next tick, and the ccquota fetch — the cheap half, ~1 s,
 # and the one whose stamp is the liveness signal — can no longer be starved by it.
 #
+# THIRD, a side errand — the COLLECTOR's self-heal (issue #636). launchd can
+# PEND com.claude-fleet.collect indefinitely (103 minutes, observed, `last exit
+# code = 0`), which freezes every number on the dash without emptying it. Every
+# tick therefore asks bin/fleet-collect-kick.sh whether the collector's heartbeat
+# has gone stale and, if so, kicks its unit — rate-limited, logged, and traced on
+# the status bar. Runs before the gates below: a fleet with no accounts pool
+# still has a dash. This is a backstop, not the primary path: the same launchd
+# stall pends THIS unit too, which is why the kick also lives in the status bar
+# and in the KeepAlive spinner.
+#
 # Fail-open, per job: the model sweep needs only an accounts pool (the cap ledger
 # is per-account), the ccquota policy needs a hub URL too. Neither configured →
-# exit 0 and nothing here runs.
+# exit 0 and nothing here runs (the collector self-heal above still does).
 #
 # Usage:
 #   fleet-quotawatch.sh [--caller <name>] [--dry-run]
@@ -132,6 +142,22 @@ if [ "$STATUS" = 1 ]; then
   age=$(( $(now) - ts ))
   if [ -n "$(fleet_quota_stale_age)" ]; then printf 'stale\t%s\n' "$age"; else printf 'fresh\t%s\n' "$age"; fi
   exit 0
+fi
+
+# --- side errand: the COLLECTOR's self-heal (issue #636) ----------------------
+# Runs BEFORE this script's own fail-open gates and before its heavy phases, and
+# is deliberately not gated on either job: an install with no accounts pool still
+# has a dash, and the dash still freezes when the collector stops. This is the
+# SECOND-best discoverer, not the primary one — on 2026-09-14 launchd pended
+# every StartInterval unit in the domain at once, this one included, so the
+# reliable pair is the status bar (while attached) and the KeepAlive spinner
+# (always). It still covers the case this daemon is alive and the collector alone
+# is wedged, which is cheap enough to be worth having. Skipped when the COLLECTOR
+# itself is the caller (it is mid-tick by definition, so it cannot be stale). The
+# pre-filter is two file reads; the rate limit, the log and the dash trace all
+# live in the kick script. Never fatal.
+if [ "$CALLER" != collect ] && [ "$DRY" = 0 ] && fleet_collect_kick_due; then
+  bash "$BIN/fleet-collect-kick.sh" || true
 fi
 
 # Fail-open gates — one per job (#569). The MODEL sweep needs only an accounts

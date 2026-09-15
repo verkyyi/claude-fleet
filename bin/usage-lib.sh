@@ -13,6 +13,10 @@
 #   $C/usage      — local 5h/7d token-consumption proxy line (any freshness)
 #   $C/ratelimit  — "epoch<TAB>line", written whenever a session prints
 #                   "N% of your weekly limit"; surfaced only while fresh.
+#   $C/collect.heartbeat — the dash collector's per-phase progress stamp; its age
+#                   is the collector's LIVENESS (issue #636).
+#   $C/collect.kick.ts   — epoch of the last self-heal kickstart of the collector
+#                   daemon (bin/fleet-collect-kick.sh) — rate limit + dash trace.
 #
 # Knobs (fleet.conf, read at call time so callers just need it sourced first):
 #   FLEET_USAGE_WARN_PCT  (default 75) — usage stat turns yellow at/above this %
@@ -155,4 +159,79 @@ fleet_usage_human_secs() {
   elif [ "$_s" -ge 3600 ];  then printf '%sh' $(( _s / 3600 ))
   elif [ "$_s" -ge 60 ];    then printf '%sm' $(( _s / 60 ))
   else                           printf '%ss' "$_s"; fi
+}
+
+# --- collector liveness (issue #636) ------------------------------------------
+# EVERY number on the dash — PR state, worker state, context %, quota — is read
+# out of the collector's caches. When the collector stops, the dash does NOT go
+# blank: it keeps rendering the last tick's world, with nothing to say it is old.
+# On 2026-09-14 launchd PENDED com.claude-fleet.collect for 103 minutes
+# (`pended nondemand spawn = interval`, state `not running`, last exit 0) and the
+# only signal anywhere was one WARN inside the manually-run fleet-doctor.
+#
+# `global/collect.heartbeat` already carries the answer: bin/tmux-dash-collect.sh
+# rewrites it at every phase boundary, so `phase_ts` is the last moment the
+# collector PROVABLY made progress — a finished tick stamps it together with
+# `end`, a running tick advances it once per phase. Age past FLEET_COLLECT_STALE
+# therefore covers both failure shapes with one number: no tick started (the #636
+# pend) and a tick wedged in one phase (the #551 deadline case). Surfaced as
+# `⚠ dash stale 47m` on the status bar, self-healed by bin/fleet-collect-kick.sh,
+# and reported by fleet-doctor. POSIX sh — fleet-doctor sources nothing bash-only.
+
+# fleet_collect_stale_secs — the staleness threshold. Defaults to the collector's
+# own supersede deadline (600s), which is by construction above any legitimate
+# tick: a tick that outlives it is killed and superseded, so it can never be the
+# reason the heartbeat is old. A healthy tick is 1–3 min (the git phase alone has
+# been seen at 551s on a big monorepo fleet), so a threshold BELOW the deadline
+# would alarm on slow-but-working ticks — set it lower only if your ticks are fast.
+fleet_collect_stale_secs() { printf '%s' "${FLEET_COLLECT_STALE:-${FLEET_COLLECT_DEADLINE:-600}}"; }
+
+# fleet_collect_hb_ts — epoch of the collector's last provable progress, or 0 when
+# there is no heartbeat at all. phase_ts first (always written, and it is the one
+# that advances mid-tick), then end, then start, for a partial/older file.
+fleet_collect_hb_ts() {
+  _chb="$(fleet_usage_cache_dir)/collect.heartbeat"
+  [ -f "$_chb" ] || { printf '0'; return 0; }
+  _cts=$(sed -n 's/^phase_ts=//p' "$_chb" | head -1)
+  case "$_cts" in ''|*[!0-9]*) _cts=$(sed -n 's/^end=//p' "$_chb" | head -1) ;; esac
+  case "$_cts" in ''|*[!0-9]*) _cts=$(sed -n 's/^start=//p' "$_chb" | head -1) ;; esac
+  case "$_cts" in ''|*[!0-9]*) _cts=0 ;; esac
+  printf '%s' "$_cts"
+}
+
+# fleet_collect_stale_age — the heartbeat's age in seconds IFF it is stale; prints
+# nothing when fresh. NO heartbeat prints nothing either (fail-open): a fresh
+# install has not completed its first tick yet, and an install that runs the
+# collector by hand has no daemon to be pended — fleet-doctor's note covers that
+# case, and a red bar on every new machine would only teach people to ignore it.
+fleet_collect_stale_age() {
+  _cts=$(fleet_collect_hb_ts)
+  [ "$_cts" -gt 0 ] || return 0
+  _cage=$(( $(date +%s) - _cts ))
+  [ "$_cage" -ge "$(fleet_collect_stale_secs)" ] && printf '%s' "$_cage"
+  return 0
+}
+
+# fleet_collect_kick_age — seconds since the last self-heal kickstart (the stamp
+# bin/fleet-collect-kick.sh writes), or nothing if it has never kicked. This is
+# the TRACE: the bar keeps showing it for FLEET_COLLECT_KICK_TRACE after the
+# collector recovers, so a self-heal is never a silent one.
+fleet_collect_kick_age() {
+  _kts=$(cat "$(fleet_usage_cache_dir)/collect.kick.ts" 2>/dev/null)
+  case "$_kts" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' $(( $(date +%s) - _kts ))
+  return 0
+}
+
+# fleet_collect_kick_due — 0 iff the collector is stale AND the last kick is older
+# than FLEET_COLLECT_KICK_COOLDOWN. Callers gate on this BEFORE spawning the kick
+# script, so the status bar (every 5s, per attached client) and the quota watch
+# (every 60s) cost two file reads in the common case and fork nothing. The kick
+# script re-checks and claims atomically — this is the cheap pre-filter, not the
+# rate limit itself.
+fleet_collect_kick_due() {
+  [ -n "$(fleet_collect_stale_age)" ] || return 1
+  _ka=$(fleet_collect_kick_age)
+  [ -n "$_ka" ] || return 0
+  [ "$_ka" -ge "${FLEET_COLLECT_KICK_COOLDOWN:-600}" ]
 }
