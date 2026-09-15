@@ -11,6 +11,13 @@
 # question has been answered. The dash row is where the operator already notices the
 # `needs` flag, so it is where the answer belongs.
 #
+# A `needs` row has TWO causes, and the dash glyph now says which (issue #640): `?`
+# is a question, `⊘` a permission prompt. One key covers both, because "deal with
+# this red row" is one reflex: no pending question ⇒ fall through to
+# bin/fleet-permission.sh and show WHAT is blocked and why, which used to mean
+# attaching to the pane and reading it by hand. Answering stops at the question; a
+# permission prompt is a human decision and this popup only ever READS it.
+#
 # The row's {1} is the dash target: a live row gives `<sess>:<idx>` — exactly the
 # grammar fleet-answer.sh takes. A landed/header row has nothing to answer and is a
 # quiet no-op, so the key is safe to bind unconditionally.
@@ -19,6 +26,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ANSWER="$BIN/fleet-answer.sh"
+PERM="$BIN/fleet-permission.sh"
 target="${1:-}"
 
 pause() { printf '\n按任意键关闭…' >&2; read -r -n 1 -s _ 2>/dev/null || read -r _ 2>/dev/null || true; }
@@ -33,10 +41,19 @@ esac
 command -v python3 >/dev/null 2>&1 || note "dash-answer: 需要 python3"
 command -v fzf >/dev/null 2>&1 || note "dash-answer: 需要 fzf"
 
-JSON=$("$ANSWER" --show "$target" --json 2>/dev/null) || note \
-  "这个窗口没有待回答的 AskUserQuestion。
-（needs 也可能是在等一个权限确认 —— 那个得进窗口自己按，
-  fleet-answer 只答 AskUserQuestion，绝不去碰别的弹窗。）"
+if ! JSON=$("$ANSWER" --show "$target" --json 2>/dev/null); then
+  # Not a question. The other reason a row goes red is a permission prompt — show
+  # it instead of dead-ending, so the operator can read the blocked command from
+  # here and decide whether it is even worth walking over to press a key.
+  if [ -x "$PERM" ] && out=$("$PERM" --show "$target" 2>&1); then
+    printf '这个窗口不是在提问，是在等一个**权限确认**。\n' >&2
+    printf '权限只能由人来批 —— 下面是它被拦在哪一步：\n\n' >&2
+    printf '%s\n' "$out" >&2
+    pause; exit 0
+  fi
+  note "这个窗口既没有待回答的 AskUserQuestion，也没有开着的权限弹窗。
+（红灯可能只是 classifier 判的 WAITING/ERROR —— 进窗口看一眼。）"
+fi
 
 NQ=$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["questions"]))' 2>/dev/null)
 case "$NQ" in ''|*[!0-9]*) note "dash-answer: 解析不出问题（--show --json 输出异常）" ;; esac

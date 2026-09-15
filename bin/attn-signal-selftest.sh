@@ -111,6 +111,12 @@ setst() { local f="${1%%:*}"; tf "$f" set-window-option -t "$1" @claude_state "$
 setst fleetA:plan   needs      # the hub now counts INTO the badge (issue #368)
 setst fleetA:issue-1 needs      # worker → badge
 setst fleetA:issue-2 needs      # worker → badge
+# …and issue #640's subtype on two of them: the tab GLYPH must say WHICH kind of
+# `needs` this is, without changing the tally or the red. @claude_needs is the last
+# field before the window name in the spinner's list-windows format, so this also
+# guards the column the badge's awk counts on.
+tf fleetA set-window-option -t fleetA:issue-1 @claude_needs ask
+tf fleetA set-window-option -t fleetA:issue-2 @claude_needs perm
 setst fleetA:issue-3 working    # not needy
 setst fleetB:plan   'done'     # quoted: 'done' is a shell keyword (SC1010)
 setst fleetB:issue-9 needs      # worker → badge
@@ -152,6 +158,25 @@ d_badge="$(opt fleetD @attn_needs)"
 [ "$b_badge" = 1 ] || fail "fleetB badge: expected 1 worker, got '${b_badge}' (a stateless window named 'needs' must NOT collapse into the tally)"
 [ "$c_badge" = 0 ] || fail "fleetC badge: expected 0 (needy dash+backlog panels are excluded), got '${c_badge}'"
 [ "$d_badge" = 0 ] || fail "fleetD badge: expected 0, got '${d_badge}'"
+
+# --- the `needs` SUBTYPE glyph (issue #640) ----------------------------------
+# One red `!` used to mean two things that want opposite reflexes: an
+# AskUserQuestion (answerable from the dash, ⌃k) and a permission prompt (only a
+# human may approve one). The tab now says which, in the same red — and a needy
+# window with NO subtype keeps the historic `!`.
+# Read the option through display-message, not show-window-options: @spin's value
+# is the glyph PLUS its pad (`? `), and a whitespace-split read eats the pad — the
+# pad is half of what keeps the tab strip aligned, so it is part of the assertion.
+spin() { tf "$1" display-message -p -t "$2" "#{$3}" 2>/dev/null; }
+[ "$(spin fleetA fleetA:issue-1 @spin)" = '? ' ]   || fail "issue-1 (@claude_needs=ask) must show '? ', got '$(spin fleetA fleetA:issue-1 @spin)'"
+[ "$(spin fleetA fleetA:issue-2 @spin)" = '⊘ ' ]   || fail "issue-2 (@claude_needs=perm) must show '⊘ ', got '$(spin fleetA fleetA:issue-2 @spin)'"
+[ "$(spin fleetA fleetA:plan @spin)" = '! ' ]   || fail "a needy window with no subtype must keep '! ', got '$(spin fleetA fleetA:plan @spin)'"
+# The subtype changes the glyph and NOTHING else: same red font, and all three still
+# counted in the badge above (fleetA = 3).
+for w in fleetA:issue-1 fleetA:issue-2 fleetA:plan; do
+  [ -n "$(spin fleetA "$w" @sfg)" ] || fail "$w lost its needs colour"
+  [ "$(spin fleetA "$w" @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ]     || fail "$w must keep the SAME red as an undifferentiated needs row"
+done
 
 # The pre-#368 red-⌂ beacon flag is RETIRED — the spinner must no longer publish it.
 # Its historical option name is spelled out here because that is what the assertion

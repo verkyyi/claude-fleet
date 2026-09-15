@@ -23,6 +23,28 @@ case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 
+# @claude_needs — WHY this window is red (issue #640). `needs` has two causes and
+# they want two different operator reflexes:
+#
+#   ask   an open AskUserQuestion  → answerable from outside the pane
+#                                    (bin/fleet-answer.sh / dash ⌃k)
+#   perm  an open permission prompt → a human decision by design; nothing in the
+#                                    fleet may press Yes for it (bin/fleet-permission.sh
+#                                    reads it out of band, and can only ever press No)
+#   ''    anything else (the classifier's WAITING/ERROR verdict, an unrecognised
+#         Notification) — the historic, undifferentiated `needs`.
+#
+# #605 pushed this back as "you'd have to tail a transcript for every needs row".
+# You don't: both causes arrive here already discriminated — `ask` off the
+# PreToolUse tool_name, `perm` off the Notification message — so the subtype costs
+# ONE extra set-window-option beside the two this hook already writes, and no read.
+#
+# FRESHNESS BY CONSTRUCTION: it is written on EVERY non-`leave` state write, so it
+# can never outlive the @claude_state it describes. The other two writers of
+# @claude_state (bin/classify-sessions.sh, the spinner's stale-working demote)
+# clear it for the same reason. Readers consult it only while the state is `needs`.
+sub=''
+
 case "${1:-}" in
   needs)
     # The Notification hook fires this path unconditionally, but Claude Code emits
@@ -37,11 +59,18 @@ case "${1:-}" in
     # whatever the Stop-hook classifier decided (done for finished, needs for a
     # real pending question) stays authoritative. A real permission/elicitation
     # prompt (and anything unrecognised) keeps needs+bell.
+    # The message also says WHICH of the two `needs` this is (issue #640): Claude
+    # Code phrases a permission request as "Claude needs your permission to use
+    # <Tool>". Matching it is what puts a distinct glyph on the dash row; a
+    # rephrasing on Claude Code's side costs the subtype (→ '' ⇒ today's plain
+    # `needs`), never the state — the same fail-safe direction as the idle filter.
     sem="needs"
     if [ ! -t 0 ]; then
       case "$(cat 2>/dev/null)" in
         *'waiting for your input'*)
           sem="leave"; set -- "leave" ;;   # idle_prompt: leave state as-is, no bell
+        *permission*)
+          sub="perm" ;;                    # a permission prompt is open in the pane
       esac
     fi
     ;;
@@ -64,7 +93,7 @@ case "${1:-}" in
     if [ ! -t 0 ]; then
       case "$(cat 2>/dev/null)" in
         *'"tool_name":"AskUserQuestion"'*|*'"tool_name": "AskUserQuestion"'*)
-          sem="needs"; set -- needs bell ;;
+          sem="needs"; sub="ask"; set -- needs bell ;;
       esac
     fi
     ;;
@@ -75,6 +104,10 @@ esac
 # existing @claude_state and its timestamp so the classifier stays authoritative.
 if [ "$sem" != "leave" ]; then
   tmux set-window-option -t "$TMUX_PANE" @claude_state "$sem" 2>/dev/null
+  # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
+  # a working/done write clears it, so no reader can ever pair a fresh state with a
+  # stale reason.
+  tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" 2>/dev/null
   # last-activity stamp (drives the dashboard's "Nm ago" column).
   tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
 fi

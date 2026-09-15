@@ -130,6 +130,11 @@ classify_one() {
 
   if [ -n "$new" ] && [ "$new" != "$st" ]; then
     TM set-window-option -t "$target" @claude_state "$new" 2>/dev/null
+    # This verdict comes from a screen read, not from the hook that knows WHY the
+    # window went red, so it can never justify a `needs` SUBTYPE (issue #640) —
+    # clear whatever bin/set-claude-state.sh left behind rather than let a stale
+    # `ask`/`perm` ride a brand-new state. '' ⇒ the dash's plain `!`.
+    TM set-window-option -t "$target" @claude_needs "" 2>/dev/null
     TM set-window-option -t "$target" @claude_state_ts "$(date +%s)" 2>/dev/null
     printf '%s  %-10s %-8s -> %s\n' "$(date +%H:%M:%S)" "$target" "$st" "$new" >> "$LOG"
   fi

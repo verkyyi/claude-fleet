@@ -22,7 +22,7 @@ State lives in one tmux **window option**, `@claude_state`, whose value is one o
 |---|---|---|---|
 | `working` | mid-turn — a tool is running or a prompt was just submitted | braille spinner (`⠋…`, animated) | cyan |
 | `done` | turn finished cleanly, nothing pending | `✓` | green |
-| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `!` | red (loud: bold + bell) |
+| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `?` / `⊘` / `!` (see below) | red (loud: bold + bell) |
 | `looping` | stopped, but really cycling between `/loop` iterations (not truly done) | `↻` | indigo |
 | *(unset / empty)* | never ran a turn — idle/ad-hoc pane | blank | dim |
 
@@ -33,6 +33,31 @@ quiet colored text — a fleet of seven spinning workers should not shout. See t
 A companion option, **`@claude_state_ts`**, is stamped with the epoch second on
 every state write; it drives the dashboard's *"Nm ago"* last-activity column.
 
+### `@claude_needs` — *why* a window is red (issue #640)
+
+`needs` has two causes that want **opposite reflexes**, and until #640 they shared
+one glyph, so the operator had to attach to each red window to find out which:
+
+| `@claude_needs` | What is open | Dash / tab glyph | What to do |
+|---|---|---|---|
+| `ask` | an `AskUserQuestion` | `?` | answer it from the dash — `⌃k`, no attach |
+| `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |
+| *(empty)* | anything else (the classifier's `WAITING`/`ERROR`, an unrecognized `Notification`) | `!` | go look |
+
+Both causes arrive at `set-claude-state.sh` **already discriminated** — `ask` off
+the `PreToolUse` `tool_name`, `perm` off the `Notification` message — so the
+subtype costs one extra `set-window-option` and no transcript read. (#605 had
+declined this as "you'd have to tail a transcript for every `needs` row"; you
+don't.)
+
+**Freshness is by construction, not by timestamp.** `@claude_needs` is written on
+*every* non-`leave` state write — a `working`/`done` write clears it — and the two
+other writers of `@claude_state`
+([`classify-sessions.sh`](../bin/classify-sessions.sh), the spinner's
+stale-`working` demote) clear it as well. So no reader can ever pair a fresh state
+with a stale reason, and readers consult it only while the state is `needs`.
+Pinned end to end by [`bin/needs-reason-selftest.sh`](../bin/needs-reason-selftest.sh).
+
 ## The fast path — Claude Code hooks (instant, semantic-blind)
 
 Claude Code fires shell **hooks** on turn edges. Each one runs
@@ -42,10 +67,10 @@ Claude Code fires shell **hooks** on turn edges. Each one runs
 
 | Claude Code hook | Arg passed | Resulting state |
 |---|---|---|
-| `PreToolUse` | `busy` | `working` (**except** the `AskUserQuestion` tool → `needs` + bell) |
+| `PreToolUse` | `busy` | `working` (**except** the `AskUserQuestion` tool → `needs` + bell + `@claude_needs=ask`) |
 | `PostToolUse` | `working` | `working` |
 | `UserPromptSubmit` | `working` | `working` |
-| `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*) |
+| `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*); a permission request also stamps `@claude_needs=perm` |
 | `Stop` | `done` | `done` (then hands off to `classify-hook.sh`) |
 
 Because Claude Code **re-reads `settings.json` hooks every turn**, a running
@@ -67,7 +92,31 @@ discriminations so the fast signal does not cry wolf:
   somebody has to answer first. `fleet-answer.sh` types the option's digit at the
   pane, but only while the **transcript** shows an `AskUserQuestion` tool_use with
   no tool_result — which is why it can never mistake the OTHER thing `needs` means,
-  a permission prompt, for a question (that one you still press yourself).
+  a permission prompt, for a question. It also stamps `@claude_needs=ask`, which is
+  what puts the `?` on the row.
+- **A permission prompt → `needs` + `@claude_needs=perm`.** Claude Code phrases the
+  `Notification` as *"Claude needs your permission to use &lt;Tool&gt;"*; matching it
+  is what puts `⊘` on the row. This is the half #605 left open, and on 2026-09-14 it
+  cost a worker its session: the prompt is mid-turn for its whole life, so
+  `SendMessage` queued underneath it, the issue bridge was dead, `fleet-answer.sh`
+  correctly refused (not a question), and `tmux send-keys` is hook-blocked (#437) —
+  and a relayed message could not have pressed the key anyway.
+  [`bin/fleet-permission.sh`](../bin/fleet-permission.sh) closes it, without ever
+  approving anything:
+  - `--show` makes the **blocked command and the prompt's own reason readable
+    without attaching** (the transcript gives the pending `tool_use`; the reason is
+    Claude Code's own text and exists only on the screen, so it is scraped with
+    `capture-pane`). This is what `⌃k` falls through to on a `⊘` row.
+  - `--deny` presses **`No`, and only `No`** — behind `FLEET_ALLOW_AUTO_DENY=1`,
+    **off by default**. Refusing a blocked operation destroys nothing; it hands
+    control back to the worker, which can then rewrite the command safely (in the
+    real case, `[ -n "$G" ] && rm -f "$G"/*.tick`). "May I auto-answer No?" and "may
+    I auto-answer Yes?" are different questions, and nothing in the fleet may answer
+    the second. The digit comes from the row the **screen** labels `No` and is
+    re-asserted against `/^No\b/` before a key is sent; a missing, ambiguous or
+    Yes-only dialog refuses with nothing sent. After the refusal lands (confirmed in
+    the transcript, not on the screen) the deadlock is gone, so the reason is handed
+    to the worker over the ordinary peer channel.
 - **Benign idle prompt → *leave*.** Claude Code emits an idle
   `Notification` (*"Claude is waiting for your input"*) ~60s after **any** session
   goes idle. Unfiltered, that would flip every finished window to `needs` + bell
@@ -173,15 +222,19 @@ Three writers, one option, exactly one source of truth per window:
 
 | Writer | When | Writes |
 |---|---|---|
-| `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` |
-| `classify-sessions.sh` (haiku) | on `Stop`, and after a stuck-demote — ~1–2s / change-gated | `done` / `needs` / `looping` |
-| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s | `done` (then kicks the classifier) |
+| `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
+| `classify-sessions.sh` (haiku) | on `Stop`, and after a stuck-demote — ~1–2s / change-gated | `done` / `needs` / `looping` (reason **cleared**) |
+| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s | `done` (reason **cleared**; then kicks the classifier) |
+
+Only the hook knows *why* a window went red, so only the hook sets
+`@claude_needs`; the other two clear it rather than let a stale `ask`/`perm` ride a
+state they just rewrote.
 
 ```
 Claude Code hooks (PreToolUse / PostToolUse / UserPromptSubmit / Stop / Notification)
       │  instant, semantic-blind
       ▼
-set-claude-state.sh  ──►  @claude_state  +  @claude_state_ts   (tmux window options)
+set-claude-state.sh  ─►  @claude_state + @claude_state_ts + @claude_needs  (window options)
       ▲                        │  state bus (one source of truth per window)
       │  slow, semantic        ├──────────────► fzf dashboard  (tmux-dashboard-rows.sh)
 LLM classifier (haiku)         │                 self-contained glyph renderer
