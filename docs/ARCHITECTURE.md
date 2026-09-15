@@ -130,6 +130,56 @@ The heartbeat already timed every phase, so *which* phase ate the tick was free
 information nobody printed; `over=` and `skipped=` now carry it and `fleet-doctor`
 reports it, so the next time the bottleneck moves it does not cost an investigation.
 
+### The quota watch budgets itself the same way (issue #698)
+
+`bin/fleet-quotawatch.sh` had budgets for its *pieces* — a cap probe
+(`FLEET_QUOTAWATCH_PROBE_BUDGET`), the sweep phase
+(`FLEET_QUOTAWATCH_SWEEP_BUDGET`) — and none for itself.
+`FLEET_QUOTAWATCH_DEADLINE` (120s) reads like a budget and is not one: it lives in
+the overlap guard, where it tells a **successor** that the lock holder is stuck and
+may be superseded. That successor is exactly what a slow tick prevents — launchd
+does not overlap a `StartInterval` job, and #671 gates the collector's in-tick
+fallback off while the unit is running — so the one thing that could have enforced
+the 120s was structurally absent whenever it was needed. Measured live on
+2026-09-15, on a host that already had #688: a **5m45s** tick against that 120s,
+not wedged, simply unbounded.
+
+So the tick now bounds itself, on the collector's model:
+
+- **`FLEET_QUOTAWATCH_TICK_BUDGET`** (100s) is checked before every phase *and*
+  before every iteration of the two loops (the per-fleet sweep, the per-account
+  policy), and each phase's budget is clamped to what the tick has left.
+- **The calls inside a loop iteration are budgeted too** — the ccquota fetch
+  (`FLEET_QUOTAWATCH_FETCH_BUDGET`), the collector self-heal errand
+  (`…_KICK_BUDGET`), and each fleet's share of a policy episode
+  (`…_TMUX_BUDGET`). Without this the per-iteration check is theatre: one
+  `tmux display-message` that never returns (57s observed, #582) defeats any
+  number of checks *between* iterations. The granularity is per **socket**, not
+  per call, because `fleet_timebox` polls once a second — wrapping every
+  round-trip would put a 1s floor on every *window*.
+- **Wind down, never self-kill.** At the budget the tick stops *starting* work,
+  writes its heartbeat, releases the lock and exits 0. A `kill $$` would be the
+  #582 regression: the process holds the lock and only its `EXIT` trap frees it.
+  Deferring is safe because the sweep has its fairness cursor and a policy episode's
+  once-per-window marker is written only for an account that was actually handled —
+  so a deferred account has no marker and the next tick does the whole episode.
+
+Two invariants are **enforced in code** rather than left to four defaults agreeing,
+which is #686's lesson: the budget plus a wind-down margin must stay under the
+deadline (otherwise a tick is tree-killed mid-wind-down), and the sweep must leave
+the ccquota fetch its budget (that is what #582 gave the sweep a budget *for* — the
+fetch is ~1s and its stamp is the liveness signal every staleness alarm reads).
+Either one violated clamps the offending knob **down**, loudly.
+
+`bin/fleet-timebox-kill-selftest.sh` §5 is the soak that goes with this: twenty
+rounds, most of them over budget, asserting zero residue at the end *and* that the
+live count never ratchets — the accumulation a single-shot check cannot see. It
+also fixed a marker that never worked: `bash -c "sleep 120 # $MARK"` is one
+command, so bash **execs** it and the comment leaves with the old argv, which made
+every `pgrep -f "$MARK"` answer 0 whether or not anything leaked. The marker now
+goes in `argv[0]` via `exec -a`, and the test self-checks that a marked process is
+visible before trusting any count.
+
 ### Repo-set source — how the shared collector knows which repos to fetch
 
 The collector needs the list of repos to fetch PRs/issues for. It's **emergent,

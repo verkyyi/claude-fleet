@@ -300,6 +300,24 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
       fresh) pass qwatch "quota cache ${qage}s old — the pre-emptive watch is ticking (\`fleet-quotawatch.sh --status\`)" ;;
     esac
+    # …and whether the ticks that ARE happening finish their work (issue #698).
+    # `--status` above answers "is it ticking", which a tick that winds down on
+    # budget passes: it restamps the cache and exits 0. What it drops on the way —
+    # a fleet not swept, an account not warned — lives in the heartbeat's over= and
+    # skipped=, and would otherwise only ever be visible in the launchd log. Same
+    # argument as the collector's line below, which #653 added for the same reason.
+    qhb="${TMPDIR:-/tmp}/.claude-dash/global/quotawatch.heartbeat"
+    if [ -f "$qhb" ]; then
+      qhb_get() { sed -n "s/^$1=//p" "$qhb" | head -1; }
+      qhb_dur=$(qhb_get dur); qhb_budget=$(qhb_get budget)
+      qhb_over=$(qhb_get over); qhb_skipped=$(qhb_get skipped)
+      if [ -n "$qhb_skipped" ] || [ -n "$qhb_over" ]; then
+        qhb_detail=''
+        [ -n "$qhb_over" ]    && qhb_detail="; over budget: $qhb_over"
+        [ -n "$qhb_skipped" ] && qhb_detail="$qhb_detail; deferred to the next tick: $qhb_skipped"
+        warn qwatch "last quotawatch tick took ${qhb_dur:-?}s against its ${qhb_budget:-?}s budget (FLEET_QUOTAWATCH_TICK_BUDGET)$qhb_detail — it wound down instead of overrunning, which is by design, but a tick that keeps deferring is one whose work no longer fits in 60s"
+      fi
+    fi
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
       # NAME the binary on the other side of this contract (issue #668). ccquota
       # ships no tagged release (docs/INSTALL.md) — everyone installs it with

@@ -37,6 +37,13 @@
 #                 spot a ceiling fan-out moves a's sessions onto; the tick LOGS the
 #                 reason, does not repeat it every 60 s, announces the recovery,
 #                 and is equally loud about a payload shape it cannot parse.
+#  11. selfbudget— (#698) the tick bounds ITSELF, not just its pieces. The two
+#                 invariants are enforced in code, not left to four defaults
+#                 agreeing (budget + wind-down ≤ deadline; the sweep cannot starve
+#                 the fetch); the ccquota fetch is budgeted and TREE-killed; and at
+#                 the budget the tick WINDS DOWN — it defers the rest, records what
+#                 it dropped, releases the lock and exits 0, and the NEXT tick does
+#                 the deferred work (deferral is not starvation).
 # Needs python3 (quota_parse). Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -48,7 +55,11 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/quotawatch-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"     # physical path: the scripts resolve $BIN via pwd, and macOS $TMPDIR is a symlink
 HOLDER=''
-trap '[ -n "$HOLDER" ] && kill "$HOLDER" 2>/dev/null; rm -rf "$WORK"' EXIT
+# Unique per run: a wedged fetch of OURS must never be confused with a peer test's.
+HANGMARK="quotawatch-selftest-hang-$$"
+trap '[ -n "$HOLDER" ] && kill "$HOLDER" 2>/dev/null
+      pkill -9 -f "$HANGMARK" >/dev/null 2>&1
+      rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
 for f in fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
@@ -62,6 +73,10 @@ G="$WORK/.claude-dash/global"
 cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
+# A hub that accepts the connection and never answers (issue #698). The sleep is a
+# CHILD, carrying the run's marker, so "the fetch was killed" can be checked as
+# `no marked process survives` rather than taken on the log's word (#682).
+if [ -n "${FAKE_CCQ_HANG:-}" ]; then bash -c "sleep $FAKE_CCQ_HANG # $FAKE_HANG_MARK"; fi
 p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>/dev/null || echo 20); r5=$(cat "$FAKE_RESET_FILE")
 # b's SHAPE is switchable (issue #628): `unavail` is TokenLedger saying out loud
 # that it cannot read the account (available:false + reason, both omitempty
@@ -117,7 +132,7 @@ run_watch() {
   FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
-  FAKE_B_SHAPE_FILE="$WORK/b-shape" \
+  FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -397,5 +412,97 @@ grep -q 'payload shape not recognized for b' "$WORK/stderr" || fail "10d: an unp
 echo '' > "$WORK/b-shape"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628)\n' "$CHECKS"
+# 11. the tick's OWN budget (#698) ---------------------------------------------
+# The bug: FLEET_QUOTAWATCH_DEADLINE (120s) is only a SUPERSEDE threshold — it tells
+# a successor that the lock holder is stuck. launchd does not overlap a
+# StartInterval job, so while a slow tick runs there is no successor to come and
+# judge it, and #671 gates the collector's fallback off for exactly that window. A
+# tick that was slow but PROGRESSING had nothing bounding it at all: 5m45s measured
+# live on 2026-09-15 against that 120s, on a host that already had #688.
+hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '; }
+echo 10 > "$WORK/pct"; echo 20 > "$WORK/pct-b"; echo '' > "$WORK/b-shape"
+
+# 11a. INVARIANT ONE, in code: the budget must leave room to wind down before the
+# deadline. Two knobs that disagree are clamped — the BUDGET down, never the
+# deadline up — because a tick still running when its successor supersedes it is
+# tree-killed mid-wind-down, and the lock release lives in its EXIT trap (#582).
+FLEET_QUOTAWATCH_TICK_BUDGET=200 run_watch || fail "11a: an over-large budget must not fail the tick"
+grep -q 'exceeds FLEET_QUOTAWATCH_DEADLINE (120s)' "$WORK/stderr" \
+  || fail "11a: a budget that would outlive the deadline must be clamped, loudly (stderr: $(cat "$WORK/stderr"))"
+grep -q 'clamping the budget to 100s' "$WORK/stderr" || fail "11a: the clamp must name the value it used"
+[ "$(hbget "$G/quotawatch.heartbeat" budget)" = 100 ] \
+  || fail "11a: the heartbeat must record the budget actually in force (got: $(hbget "$G/quotawatch.heartbeat" budget))"
+ok
+
+# 11b. INVARIANT TWO: the sweep can never starve the ccquota fetch. That is what
+# #582 gave the sweep a budget FOR — the fetch is ~1s and its stamp is the liveness
+# signal every staleness alarm reads — and with four independent knobs it held only
+# by arithmetic luck. Ask for a sweep bigger than the whole tick and it is cut back
+# to leave the fetch its budget; the proof is that the fetch still happened.
+before=$(ccq_calls)
+FLEET_QUOTAWATCH_SWEEP_BUDGET=999 run_watch || fail "11b: an over-large sweep budget must not fail the tick"
+grep -q 'would starve the liveness stamp' "$WORK/stderr" \
+  || fail "11b: a sweep budget that squeezes the fetch must be clamped, loudly (stderr: $(cat "$WORK/stderr"))"
+[ "$(ccq_calls)" = $((before+1)) ] || fail "11b: the fetch must still run after the sweep is clamped"
+ok
+
+# 11c. the ccquota fetch is BUDGETED and tree-killed. `fleet-account.sh quota` asks
+# ccquota with its own `--timeout 10s`, which binds ccquota and nothing else: a hub
+# that hangs before that timer arms, a build that ignores it, or the python parser
+# behind it in the pipeline are all unbounded from the fleet's side. The marker
+# child is the honest check — a `sleep` reparented to init would still be alive.
+export FAKE_CCQ_HANG=30
+t0=$(date +%s)
+FLEET_QUOTAWATCH_FETCH_BUDGET=2 run_watch || fail "11c: a tick whose fetch timed out must still exit 0"
+elapsed=$(( $(date +%s) - t0 ))
+unset FAKE_CCQ_HANG
+[ "$elapsed" -lt 25 ] || fail "11c: the tick waited out the hung fetch (${elapsed}s against a 2s budget)"
+grep -q 'ccquota fetch hit its 2s budget' "$WORK/stderr" \
+  || fail "11c: the killed fetch must say so on stderr (stderr: $(cat "$WORK/stderr"))"
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "11c: the tick must still reach phase=done"
+grep -q '^over=.*fetch' "$G/quotawatch.heartbeat" || fail "11c: the heartbeat's over= must name the fetch"
+n=$(hang_survivors)
+[ "$n" = 0 ] || fail "11c: $n hung fetch child(ren) outlived the budget — it bounded the ledger, not the processes (#682)"
+[ ! -d "$G/quotawatch.lock" ] || fail "11c: a tick that killed its own fetch must still release the lock"
+ok
+
+# 11d. WIND DOWN, don't self-kill: at the budget the tick stops STARTING work. A
+# zero policy budget defers every account — and the once-per-window marker is
+# written by the branch that HANDLES an account, so a deferred one has none and the
+# next tick does the whole episode. `kill $$` here would be the #582 regression:
+# this process holds the lock and only its EXIT trap releases it.
+iso "$RESET1" > "$WORK/reset"; echo 90 > "$WORK/pct"
+rm -f "$G/quota.ceiling.a" "$G/quota.warn.a"; : > "$G/account.limited"
+m=$(migrates)
+FLEET_QUOTAWATCH_POLICY_BUDGET=0 run_watch || fail "11d: a fully deferred policy must still exit 0"
+grep -q 'policy phase spent its 0s budget — deferred to the next tick: a' "$WORK/stderr" \
+  || fail "11d: the wind-down must name what it deferred (stderr: $(cat "$WORK/stderr"))"
+[ ! -f "$G/quota.ceiling.a" ] || fail "11d: a DEFERRED account must not get a once-per-window marker — the next tick would skip it forever"
+[ "$(migrates)" = "$m" ] || fail "11d: nothing may be acted on in a deferred row"
+case "$(hbget "$G/quotawatch.heartbeat" skipped)" in *policy*) : ;; *) fail "11d: the heartbeat's skipped= must name the deferred phase (got: $(hbget "$G/quotawatch.heartbeat" skipped))";; esac
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "11d: a wound-down tick must still reach phase=done"
+[ ! -d "$G/quotawatch.lock" ] || fail "11d: a wound-down tick must release its lock"
+ok
+
+# 11e. …and deferral is NOT starvation: the very next tick, with its normal budget,
+# does the episode the wound-down one dropped.
+run_watch || fail "11e: the resuming tick must exit 0"
+[ "$(cat "$G/quota.ceiling.a" 2>/dev/null)" = "$RESET1" ] || fail "11e: the next tick must handle the deferred account"
+[ "$(migrates)" -gt "$m" ] || fail "11e: the next tick must actually act on it (migrate fan-out)"
+ok
+
+# 11f. the whole-TICK budget is the backstop over all of them: with 1s there is no
+# room to start anything, and the tick still exits 0, still reaches done, still
+# releases the lock — and says what it dropped instead of dropping it silently.
+FLEET_QUOTAWATCH_TICK_BUDGET=1 run_watch || fail "11f: a tick with no room must still exit 0"
+grep -q 'no room left in the 1s tick budget for the ccquota fetch' "$WORK/stderr" \
+  || fail "11f: the tick budget must be able to stop the fetch too, and say so (stderr: $(cat "$WORK/stderr"))"
+[ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "11f: it must still reach phase=done"
+[ "$(hbget "$G/quotawatch.heartbeat" budget)" = 1 ] || fail "11f: the heartbeat must record the budget in force"
+case "$(hbget "$G/quotawatch.heartbeat" skipped)" in *fetch*) : ;; *) fail "11f: skipped= must name the fetch (got: $(hbget "$G/quotawatch.heartbeat" skipped))";; esac
+grep -q 'tick done in .*s/1s' "$WORK/stderr" || fail "11f: the tick line must print duration against its budget"
+[ ! -d "$G/quotawatch.lock" ] || fail "11f: it must release the lock"
+ok
+
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698)\n' "$CHECKS"
 exit 0

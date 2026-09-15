@@ -26,6 +26,15 @@
 #      cost 123s: the whole budget mechanism inverted into an unbounded wait.
 #      That is the shape of the 54-minute tick.
 #
+# §5 is the SOAK the operator asked for on #682, and it is a different question
+# from §1-§4: those kill ONE tree and look once. The incident was not one leak, it
+# was ACCUMULATION — tick after tick logging "killed" over trees that ran on, until
+# the box sat at load 170+ and every later kill was starved by the orphans of the
+# earlier ones. A single-shot check cannot see that, so §5 runs twenty rounds of
+# the real thing, most of them deliberately over budget, and asks the two questions
+# only repetition can answer: is the residue zero at the END, and did the live
+# count ever RATCHET upward on the way there.
+#
 # Which check catches which, honestly: §3 is the DISCRIMINATOR — against the
 # pre-fix library it fails outright, blocking 123s on a 3s budget. §1 and §2 pass
 # on both at desk priority, because the enumeration race needs the starvation to
@@ -49,9 +58,37 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v pgrep >/dev/null 2>&1 || { printf 'selftest: no pgrep(1) — SKIP\n' >&2; exit 0; }
 
 # A marker unique to this run, so we never count (or kill) a peer test's processes.
+#
+# The marker has to reach the child's OWN argv, and the obvious spelling does NOT
+# get it there: in `bash -c "sleep 120 # $MARK"` the comment is a single command, so
+# bash EXECS it and replaces itself — `ps` shows a bare `sleep 120` and the marker
+# leaves with the old argv. Every `pgrep -f "$MARK"` then answers 0 whether or not
+# anything leaked, which is how this file came to assert "0 orphans" three times
+# without ever being able to see one (found while adding the soak in §5: it passed
+# against a deliberately regressed fleet_kill_tree that killed only the root).
+#
+# So the leaf is a helper that puts the marker in argv[0] via `exec -a`, and it
+# lives at a path that itself contains the marker — which covers the wrapper shells
+# too, since the path appears in THEIR command lines. Now every process in an
+# adversary tree is matched, and so is every process a leak would leave behind.
 MARK="tbkill-selftest-$$-$(date +%s)"
+HELPER="${TMPDIR:-/tmp}/$MARK.sleeper"
+printf '#!/bin/bash\nexec -a "%s" sleep 120\n' "$MARK" > "$HELPER" && chmod +x "$HELPER" \
+  || { printf 'selftest: cannot write %s\n' "$HELPER" >&2; exit 2; }
 cleanup() { pkill -9 -f "$MARK" >/dev/null 2>&1; return 0; }
-trap 'cleanup' EXIT
+trap 'cleanup; rm -f "$HELPER"' EXIT
+
+# Self-check, because this whole file counts on it: a marked leaf must be visible
+# to `pgrep -f`. If it is not, every survivor count below is vacuous and the test
+# would pass by being blind — exactly the failure mode #682 was about.
+"$HELPER" & _probe=$!
+_seen=0; _i=0
+while [ "$_i" -lt 20 ]; do
+  [ "$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ] && { _seen=1; break; }
+  sleep 0.1; _i=$((_i+1))
+done
+kill -9 "$_probe" 2>/dev/null; wait "$_probe" 2>/dev/null
+[ "$_seen" = 1 ] || { printf 'selftest: a marked process is invisible to `pgrep -f` — every survivor count here would be vacuous\n' >&2; exit 2; }
 
 fails=0
 ok()   { printf '  ok   %s\n' "$1"; }
@@ -64,12 +101,16 @@ survivors() { sleep 2; pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' '; }
 BUDGET=3
 CEILING=20     # clear of BUDGET + kill grace, far below a leaked child's 120s
 
-# The two adversaries.
+# The two adversaries. Both bottom out in $HELPER, so every process they leave
+# behind carries the marker (see above).
 #   forker   — forks a fresh long child every 0.3s, so any enumerated set is
 #              already stale by the time it is signalled.
 #   stubborn — ignores SIGTERM at every level, so only the SIGKILL round ends it.
-forker()   { while :; do bash -c "sleep 120 # $MARK" & sleep 0.3; done; }
-stubborn() { bash -c "trap '' TERM; bash -c \"trap '' TERM; sleep 120 # $MARK\""; }
+#              The two shells must NOT exec into the sleep (they are what ignores
+#              TERM); each runs two commands, which is what keeps bash from
+#              optimising itself away.
+forker()   { while :; do "$HELPER" & sleep 0.3; done; }
+stubborn() { bash -c "trap '' TERM; bash -c \"trap '' TERM; '$HELPER'\""; }
 
 # --- 1. A tree that keeps forking is gone when the budget blows -------------------
 t0=$SECONDS; fleet_timebox "$BUDGET" forker >/dev/null 2>&1; rc=$?; el=$(( SECONDS - t0 ))
@@ -135,6 +176,67 @@ fleet_kill_tree "$gone" 1 && ok "an already-exited pid reads as gone (no false f
 # A pid that is not ours to signal must be refused outright, not walked.
 fleet_kill_tree 1 1 && ok "pid 1 is refused" || fail "4: pid 1 must be refused"
 fleet_kill_tree "" 1 && ok "an empty pid is refused" || fail "4: an empty pid must be refused"
+
+# --- 5. SOAK: twenty rounds, no accumulation ------------------------------------
+# The shape of the #682 incident, compressed: a daemon tick after tick, most of
+# them blowing a phase budget, each one starting fresh work on top of whatever the
+# last one left behind. Two assertions, both of which need the repetition:
+#
+#   ZERO AT THE END   — no process carrying this run's marker survives the soak.
+#                       That is the operator's wording on #682, and it is the one
+#                       that would have caught the incident: the ledger said
+#                       "killed" twenty times while `ps` grew.
+#   NO RATCHET        — the live count is sampled after every round and must never
+#                       climb round on round. A leak of one child per tick reads as
+#                       a clean single-shot test and a dead machine by tick fifty;
+#                       only the sequence shows it.
+#
+# Every THIRD round is allowed to finish inside its budget, so the soak is a MIX of
+# completing and over-budget phases rather than twenty copies of §1 — a tick that
+# alternates is what the daemons actually do, and residue from a clean round would
+# be invisible in an all-timeout soak. Cost: ~40s, the bulk of it fleet_timebox's
+# 1s poll granularity, which every round pays whether or not it times out.
+SOAK_ROUNDS=20
+SOAK_BUDGET=1
+SOAK_CEILING=$(( SOAK_ROUNDS * 5 ))   # 5s/round: far above the ~2s a bounded round
+                                      # costs, far below an unbounded one
+quick() { bash -c 'exec -a "$1" sleep 0.2' _ "$MARK"; }   # finishes inside the budget
+peak=0; ratchet=0; prev=0; timeouts=0; cleans=0; series=''
+t0=$SECONDS
+r=1
+while [ "$r" -le "$SOAK_ROUNDS" ]; do
+  if [ $(( r % 3 )) -eq 0 ]; then
+    fleet_timebox "$SOAK_BUDGET" quick >/dev/null 2>&1; rc=$?; cleans=$((cleans+1))
+  else
+    fleet_timebox "$SOAK_BUDGET" forker >/dev/null 2>&1; rc=$?; timeouts=$((timeouts+1))
+    [ "$rc" = 124 ] || fail "5: round $r blew its ${SOAK_BUDGET}s budget but returned $rc, not 124"
+  fi
+  # Sampled WITHOUT a settle delay, deliberately: fleet_kill_tree only returns 0
+  # once it has RE-READ the tree and found it gone (#682), so by the time
+  # fleet_timebox returns there is nothing left to wait for. A sample that needed a
+  # grace period would be measuring the grace period.
+  live=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
+  series="$series $live"
+  [ "$live" -gt "$peak" ] && peak="$live"
+  [ "$live" -gt "$prev" ] && [ "$prev" -gt 0 ] && ratchet=$((ratchet+1))
+  prev="$live"
+  r=$((r+1))
+done
+soak_el=$(( SECONDS - t0 ))
+left=$(survivors)
+
+if [ "$soak_el" -gt "$SOAK_CEILING" ]; then
+  fail "5: $SOAK_ROUNDS rounds took ${soak_el}s (ceiling ${SOAK_CEILING}s) — a round is no longer bounded by its budget"
+elif [ "$left" != 0 ]; then
+  fail "5: $left process(es) survived $SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) — the residue ACCUMULATES; per-round live counts:$series"
+elif [ "$ratchet" -gt 0 ]; then
+  fail "5: the live count climbed round-on-round $ratchet time(s) — a leak per tick, which is the #682 pile-up; per-round live counts:$series"
+elif [ "$peak" -gt 2 ]; then
+  fail "5: peak of $peak live process(es) between rounds — a round is leaving work behind for the next one; per-round live counts:$series"
+else
+  ok "$SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) leave 0 residue and never ratchet (${soak_el}s, peak $peak)"
+fi
+cleanup
 
 printf '\n'
 if [ "$fails" -gt 0 ]; then

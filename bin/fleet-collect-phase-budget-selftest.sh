@@ -85,9 +85,12 @@ path=''
 if [ "${1:-}" = "-C" ]; then path="$2"; shift 2; fi
 # The marker makes the wedged child findable in the process table, so a tick can
 # be asked whether it left ORPHANS behind rather than only whether it returned
-# (issue #682).
+# (issue #682). It goes in argv[0] via `exec -a`, NOT in a trailing comment: with
+# a single command `bash -c "sleep 120 # mark"` execs the sleep and the comment
+# leaves with the old argv, so `pgrep -f` matched nothing and hang_survivors()
+# answered 0 whether or not the tick leaked (issue #698).
 case "$path" in *"${FAKE_GIT_HANG:-__nomatch__}")
-  exec bash -c "sleep 120 # ${FAKE_HANG_MARK:-fleet-collect-hang}" ;;
+  exec -a "${FAKE_HANG_MARK:-fleet-collect-hang}" sleep 120 ;;
 esac
 case "${1:-} ${2:-}" in
   'rev-parse --git-dir')    printf '.git\n';   exit 0 ;;
