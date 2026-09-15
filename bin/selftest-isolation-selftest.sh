@@ -7,7 +7,7 @@
 # checkout never has a conf) and only goes red on an operator's live install, which
 # is the one place nobody re-runs it after a change.
 #
-# Four parts, each a different way the isolation can break:
+# Five parts, each a different way the isolation can break:
 #
 #   A. MECHANISM — a probe script using the canonical conf-load one-liner sees the
 #      fixture conf when run from the fake install root, and sees NOTHING when run
@@ -32,6 +32,18 @@
 #      populated fleet.conf, on the three tests #660 traced to three different conf
 #      keys (CCQUOTA_HUB_URL, FLEET_CTX_WINDOW, FLEET_REPO/FLEET_MAIN). Green is
 #      the acceptance criterion from the issue.
+#
+#   E. THE ENVIRONMENT ROUTE (issue #689) — A–D all cover the FILE route. The conf
+#      reaches the suite a SECOND way: a fleet conf `export`s its keys and
+#      fleet-claude.sh sources it before launching the agent, so every worker pane
+#      already HAS CCQUOTA_HUB_URL / FLEET_REPO in its environment — no file read
+#      involved. #660 wrote the scrub for that and left it untested, and the scrub
+#      turned out to be a GNU-sed-only expression that BSD sed silently matches
+#      nothing with — so on macOS the whole half was a no-op and no test on either
+#      platform could tell. Assert the BEHAVIOUR, not the expression: a poisoned
+#      environment must not reach the suite (E2), the assertion must be able to
+#      fail (E1, the NO_SHADOW control), and the scrub must not eat the runner's
+#      own FLEET_SELFTEST_* arguments (E3).
 #
 # Exit 0 = pass. Non-zero = fail.
 set -uo pipefail
@@ -204,4 +216,82 @@ printf 'ok   %s\n' "run-selftests.sh is green from an install root that HAS a fl
 eq "…and it really ran the three tests" "3 test(s): 3 passed, 0 failed" \
    "$(printf '%s\n' "$out" | grep -m1 'test(s):')"
 
-printf '\nselftest-isolation-selftest: %s checks passed (issue #660)\n' "$CHECKS"
+# ============================================================================
+# E. THE ENVIRONMENT ROUTE (issue #689) — the conf's second way in
+# ============================================================================
+# The probe: a fixture-only selftest that REPORTS rather than asserts, printing every
+# FLEET_*/CCQUOTA_* name it can see on one line. Reporting is what keeps it alive —
+# the runner sets FLEET_SKIP_GLOBAL_CONF / FLEET_CONF_DIR / FLEET_SELFTEST_ROOT of its
+# own accord, and a probe that asserted "none of this family is present" would have to
+# carry an exemption list that goes stale the next time the runner adds one. Part E
+# below names the exact variables it cares about instead.
+#
+# Pure shell — no sed, no grep, no awk. The bug this part exists to catch is a regex
+# that silently matched nothing; a probe written with the same tool could be blind in
+# the same way and report a clean environment either way.
+cat > "$FAKE/bin/zz-env-probe-selftest.sh" <<'PROBE'
+#!/bin/sh
+# Fixture-only (built by selftest-isolation-selftest.sh part E) — never in the repo.
+set -u
+# Printed straight out, never captured into a variable: bash 3.2 (macOS /bin/sh)
+# matches the parens of `$( … )` naively, so the `)` ending a case PATTERN inside one
+# closes the substitution early and the script dies on a syntax error.
+printf 'zzprobe: '
+env | { while IFS='=' read -r k _rest; do
+          case "$k" in ''|*[!A-Za-z0-9_]*) continue ;; esac   # a multi-line value's tail
+          case "$k" in FLEET_*|CCQUOTA_*) printf '%s\n' "$k" ;; esac
+        done; } | sort | tr '\n' ' '
+printf '\n'
+PROBE
+chmod +x "$FAKE/bin/zz-env-probe-selftest.sh"
+
+# The poison. Two that a live conf really does export into every worker pane, and two
+# synthetic ones — so a pass cannot come from some test happening to unset the real
+# pair, and the CCQUOTA_ prefix is covered as well as FLEET_ (the one-expression sed
+# dropped BOTH, but a half-fixed one would drop only the first).
+POISON='FLEET_REPO CCQUOTA_HUB_URL FLEET_ZZ_POISON CCQUOTA_ZZ_POISON'
+poison_env() {
+  clean_env env FLEET_REPO='poison/not-a-real-repo' CCQUOTA_HUB_URL='https://poison.invalid' \
+                FLEET_ZZ_POISON=1 CCQUOTA_ZZ_POISON=1 "$@"
+}
+probe_line() { printf '%s\n' "$1" | grep -m1 '^zzprobe:'; }
+
+# E1 CONTROL — running in place (no shadow, no scrub) the poison MUST arrive. Without
+# this E2 is vacuous: a probe that never sees anything passes for the wrong reason.
+ctl="$(poison_env env FLEET_SELFTEST_NO_SHADOW=1 sh "$FAKE/bin/run-selftests.sh" zz-env-probe </dev/null 2>&1)"
+ctl_line="$(probe_line "$ctl")"
+[ -n "$ctl_line" ] || fail "E1 the probe never ran in place" "$(printf '%s\n' "$ctl" | tail -20)"
+for v in $POISON; do
+  CHECKS=$((CHECKS + 1))
+  case " $ctl_line " in
+    *" $v "*) ;;
+    *) fail "E1 control: $v did not reach the suite even with the scrub disabled — the probe is blind, so E2 would prove nothing" "$ctl_line" ;;
+  esac
+done
+ok "without the shadow, a poisoned environment reaches the suite (control: E2 is not vacuous)"
+
+# E2 THE ASSERTION — through the real prelude, none of it may arrive. This is the
+# check that is red on macOS with the one-expression `\|` sed of #689, and green on
+# Linux with the same source: the platform divergence the whole issue is about.
+env_out="$(poison_env sh "$FAKE/bin/run-selftests.sh" zz-env-probe </dev/null 2>&1)"
+env_line="$(probe_line "$env_out")"
+[ -n "$env_line" ] || fail "E2 the probe never ran through the shadow" "$(printf '%s\n' "$env_out" | tail -20)"
+leaked=''
+for v in $POISON; do
+  case " $env_line " in *" $v "*) leaked="$leaked $v" ;; esac
+done
+eq "the FLEET_*/CCQUOTA_* environment is stripped on the way into the suite (#689)" "" "$leaked"
+
+# E3 THE OTHER HALF — FLEET_SELFTEST_* are runner ARGUMENTS that happen to travel as
+# environment variables. Scrub them and the outer half honours a knob the inner half
+# never sees, which is how FLEET_SELFTEST_SLOWEST=0 still printed the table.
+knob_out="$(clean_env env FLEET_SELFTEST_SLOWEST=3 sh "$FAKE/bin/run-selftests.sh" zz-env-probe </dev/null 2>&1)"
+knob_line="$(probe_line "$knob_out")"
+CHECKS=$((CHECKS + 1))
+case " $knob_line " in
+  *" FLEET_SELFTEST_SLOWEST "*) ;;
+  *) fail "E3 FLEET_SELFTEST_SLOWEST was scrubbed — the runner's own knobs must survive into the inner run" "$knob_line" ;;
+esac
+ok "FLEET_SELFTEST_* knobs survive the scrub (they steer the runner, they are not fleet config)"
+
+printf '\nselftest-isolation-selftest: %s checks passed (issues #660, #689)\n' "$CHECKS"

@@ -110,15 +110,19 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
   # half never sees. FLEET_SELFTEST_SLOWEST was exactly that bug: set to 0, it
   # still printed the table, and only on Linux — because of the caveat below.
   #
-  # ⚠️ CAVEAT (issue #689): the `\|` alternation here is a GNU sed extension. BSD
-  # sed (macOS) neither matches it nor complains, so on a Mac `$scrub` comes out
-  # EMPTY and this whole half is a silent no-op — the env route #660 meant to
-  # close is still open there, on the very machine an operator runs the gate from.
-  # Not fixed here: two `-e` expressions fix the sed, but they also make 121 tests
-  # face a stripped environment on macOS for the first time, which needs its own
-  # triage rather than a drive-by in a sharding change.
+  # TWO `-e`, never one `\|` (issue #689). `\|` alternation inside a BRE is a GNU
+  # sed extension: BSD sed (macOS) neither matches it nor complains, so the older
+  # one-expression form left `$scrub` EMPTY on a Mac and this whole half was a
+  # SILENT no-op there — the env route was wide open on the very machine an
+  # operator runs the gate from, while CI (GNU sed) scrubbed normally and showed
+  # nothing. Two expressions are equivalent and portable, so keep them split; the
+  # divergence is invisible until the two platforms disagree about a knob.
+  # Part E of selftest-isolation-selftest.sh pins the behaviour end to end: a
+  # poisoned FLEET_*/CCQUOTA_* environment must not reach the suite, and the
+  # FLEET_SELFTEST_* knobs must.
   scrub=''
-  for v in $(env 2>/dev/null | sed -n 's/^\(FLEET_[A-Za-z0-9_]*\|CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  for v in $(env 2>/dev/null | sed -n -e 's/^\(FLEET_[A-Za-z0-9_]*\)=.*/\1/p' \
+                                      -e 's/^\(CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do
     case "$v" in
       FLEET_SELFTEST_ROOT|FLEET_SELFTEST_NO_SHADOW|FLEET_SELFTEST_SLOWEST) continue ;;
     esac
