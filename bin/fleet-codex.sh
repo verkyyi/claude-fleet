@@ -154,15 +154,30 @@ if [ "$have_prompt" = 1 ]; then
 fi
 
 # --- hooks, inline (Codex reads `-c hooks.<Event>=[…]` as TOML) ----------------
-# Resolved against THIS install (not a hardcoded ~/.claude/fleet), so a selftest
-# or a re-homed install wires its own copies. Commands are TOML basic strings.
-toml_str() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$s"; }
-hk()       { printf '{type="command",command=%s}' "$(toml_str "$1")"; }
-STATE="$BIN/set-claude-state.sh"
-HOOKS="$ROOT/hooks"
-pre_hooks="[{hooks=[$(hk "sh '$STATE' busy")]},{matcher=\"Bash\",hooks=[$(hk "python3 '$HOOKS/bash-guard.py'")]},{matcher=\"apply_patch\",hooks=[$(hk "python3 '$HOOKS/base-readonly-guard.py'")]}]"
-working="[{hooks=[$(hk "sh '$STATE' working")]}]"
-stop_hooks="[{hooks=[$(hk "sh '$STATE' done")]}]"
+# DERIVED, not hand-written (issue #611). This block used to carry its own copy of
+# the fleet's hook table, transcoded to TOML by hand — a second source that could
+# (and did) drift from hooks/settings-hooks.json. Now bin/fleet-hooks-emit.sh
+# materializes the ONE table for the codex target, applying the declared Codex
+# delta (hooks/codex-map.json): which events Codex has, `Edit|Write|MultiEdit|
+# NotebookEdit` → `apply_patch`, no Artifact tool, no transcript-reading hooks.
+# Resolved against THIS install (--root defaults to it), so a selftest or a
+# re-homed install wires its own copies.
+#
+# Read as TAB-separated `<Event>\t<toml>` lines into the flag array below. A
+# failure here is NOT fatal: Codex still launches, just without the dash colours —
+# far better than refusing to spawn a worker over a hook table.
+hook_flags=()
+_hook_emit="$BIN/fleet-hooks-emit.sh"
+if [ -x "$_hook_emit" ]; then
+  while IFS=$'\t' read -r _ev _toml; do
+    [ -n "$_ev" ] && [ -n "$_toml" ] && hook_flags+=(-c "hooks.$_ev=$_toml")
+  done < <("$_hook_emit" --target codex --root "$ROOT" 2>/dev/null)
+fi
+if [ "${#hook_flags[@]}" -eq 0 ]; then
+  printf 'fleet-codex: could not materialise the hook table from %s — launching WITHOUT\n' "$ROOT/hooks/settings-hooks.json" >&2
+  printf 'fleet-codex: hooks: this window will not colour on the dash and the two bypass-permissions\n' >&2
+  printf 'fleet-codex: guards (bash-guard / base-readonly-guard) are NOT wired for it.\n' >&2
+fi
 # The base-checkout guard resolves FLEET_MAIN from the env first (free) and only
 # then via fleet-lib + $TMUX; export what the overlay resolved so the hook never
 # has to.
@@ -194,7 +209,7 @@ if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
   printf 'fleet-codex: persists it for the repo, and every issue-<N>/scratch-<N> worktree inherits it.\n\n' >&2
   # </dev/null: the stamper's `needs` path reads a hook payload off a non-tty
   # stdin; give it EOF so it can never sit on an inherited descriptor.
-  [ -n "${TMUX_PANE:-}" ] && sh "$STATE" needs </dev/null >/dev/null 2>&1
+  [ -n "${TMUX_PANE:-}" ] && sh "$BIN/set-claude-state.sh" needs </dev/null >/dev/null 2>&1
 fi
 unset _trust_root _codex_conf
 
@@ -202,10 +217,7 @@ flags=(
   --dangerously-bypass-approvals-and-sandbox
   --dangerously-bypass-hook-trust
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
-  -c "hooks.PreToolUse=$pre_hooks"
-  -c "hooks.PostToolUse=$working"
-  -c "hooks.UserPromptSubmit=$working"
-  -c "hooks.Stop=$stop_hooks"
+  ${hook_flags[@]+"${hook_flags[@]}"}
 )
 
 # --- model: FLEET_CODEX_MODEL → -m, unless the caller already chose one ---------

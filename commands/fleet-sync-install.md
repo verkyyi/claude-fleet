@@ -13,6 +13,12 @@ retired ones). Idempotent — safe to
 re-run; a no-op when the live install is already at master. Normally run from the
 hub pane, but it has no seat gate (issue #439) — the live install is machine-global.
 
+**On a plugin install those last three passes are Claude Code's job** (issue
+#611): commands, `skills/` and the hook table ship as the `fleet` plugin, and
+`/plugin update` replaces them. What stays here either way is the half no plugin
+can do — `bin/`, `conf/` and the daemons, which live at the stable
+`~/.claude/fleet` the daemons and tmux binds read. Step 3b decides which.
+
 The live install is **shared, machine-global tooling** every fleet uses, so this
 **runs from ANY fleet** — not only the one whose `$FLEET_REPO` is claude-fleet
 (issue #256). It operates on `~/.claude/fleet` (always a claude-fleet checkout)
@@ -160,6 +166,37 @@ pre-emptive account rotation's own 60s tick; it is a no-op on a machine without
 which unit you added, then confirm with `bin/fleet-doctor.sh`.
 
 If the diff touched none of these, say "no daemon reload needed" and move on.
+
+## 3b. Plugin install? Then steps 4, 5 and 5b collapse to `/plugin update`
+
+The Claude-Code-side surface — the fleet commands, the `skills/` tree and the
+hook table — also ships as a **Claude Code plugin** (issue #611). When it is
+installed, Claude Code owns updating all three and the three hand-rolled passes
+below are not just unnecessary, they would fight it. Check once:
+
+```sh
+# the cache path is <config>/plugins/cache/<marketplace>/<plugin>/<version>/ and
+# the version dir moves on every update, so glob it
+ls -d ~/.claude/plugins/cache/*/fleet/*/commands/fleet-claim.md 2>/dev/null | head -1
+```
+
+- **A path printed → plugin install.** Run `/plugin update fleet` (or
+  `claude plugin update fleet`) and **skip steps 4, 5 and 5b entirely**. Steps 2,
+  3 and 7+8 still apply: `bin/`, `conf/` and the daemons are machine-level and
+  live at the stable `~/.claude/fleet`, which no plugin can update. Say in the
+  report which passes the plugin covered.
+  - ⚠️ **The current session keeps the version it started with.** A plugin update
+    reaches the session *after* this one — so a command whose text changed in this
+    sync takes effect on the next session, not this turn.
+  - If the fleet's own marketplace is registered with `"autoUpdate": true` (see
+    `docs/INSTALL.md`), a later session picks the update up on its own; the
+    explicit `/plugin update` is how you get it NOW.
+- **Nothing printed → copy install** (the historic path, still fully supported).
+  Run steps 4, 5 and 5b as written below.
+
+Both install paths may be present at once; they coexist, and the bare
+`/fleet-claim` of the copy install wins. In that case run the passes below — the
+copy is what those sessions resolve — and `/plugin update` as well.
 
 ## 4. Re-merge the settings-hooks delta (only if it changed)
 

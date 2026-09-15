@@ -1,0 +1,26 @@
+{
+  "name": "fleet",
+  "description": "claude-fleet's Claude Code surface: the fleet slash commands, the base skills they delegate to, and the session-state + guard hooks.",
+  "commands": [
+    "./commands/fleet-claim.md",
+    "./commands/fleet-context.md",
+    "./commands/fleet-handoff.md",
+    "./commands/fleet-history.md",
+    "./commands/fleet-sync-install.md"
+  ],
+  "author": {
+    "name": "verkyyi",
+    "url": "https://github.com/verkyyi"
+  },
+  "homepage": "https://github.com/verkyyi/claude-fleet",
+  "repository": "https://github.com/verkyyi/claude-fleet",
+  "license": "MIT",
+  "keywords": [
+    "tmux",
+    "worktree",
+    "parallel-sessions",
+    "github-issues",
+    "orchestration"
+  ],
+  "hooks": "./hooks/settings-hooks.json"
+}

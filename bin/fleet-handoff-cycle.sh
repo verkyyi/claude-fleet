@@ -87,7 +87,11 @@ RETRY_AFTER="${FLEET_HANDOFF_RETRY_AFTER:-8}"       # re-type /clear once if no 
                                                     # dropped keystroke, #345).
 HARD_TIMEOUT="${FLEET_HANDOFF_HARD_TIMEOUT:-300}"    # overall self-kill (s) — ≤5min
 POLL="${FLEET_HANDOFF_POLL:-2}"                      # poll interval (s)
-PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-/fleet-handoff pickup}"
+# A plugin-installed fleet serves this namespaced (`/fleet:fleet-handoff`,
+# issue #611); fleet_cmd picks the form that resolves on THIS machine. The
+# literal stays the fallback for a lib-less install.
+PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-$(command -v fleet_cmd >/dev/null 2>&1 \
+  && fleet_cmd fleet-handoff pickup || printf '/fleet-handoff pickup')}"
 LOG_DIR="${FLEET_HANDOFF_LOG_DIR:-$HOME/.claude/fleet/logs}"
 DEFER_SECS="${FLEET_HANDOFF_DEFER_SECS:-30}"          # operator hold (issue #571): a keypress
 case "$DEFER_SECS" in ''|*[!0-9]*) DEFER_SECS=30 ;; esac   # at THIS window within this many s

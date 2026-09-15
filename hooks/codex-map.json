@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "The Codex delta (issue #611). hooks/settings-hooks.json is the ONE source of",
+    "the fleet's hook table; this file declares the only ways the Codex target",
+    "differs from it, so the Codex wiring stops being a hand-transcoded second",
+    "copy inside bin/fleet-codex.sh. bin/fleet-hooks-emit.sh applies this map and",
+    "emits the `-c hooks.<Event>=[…]` TOML the launcher passes to codex.",
+    "Verified against codex-cli 0.154: Codex's hook system IS Claude Code's schema",
+    "— same event names, same stdin JSON, exit 2 blocks, $TMUX_PANE inherited."
+  ],
+  "events": {
+    "PreToolUse": true,
+    "PostToolUse": true,
+    "UserPromptSubmit": true,
+    "Stop": true,
+    "Notification": "Codex has no Notification event.",
+    "SessionStart": "Claude-only: handoff-latch-reset-hook.sh resets a latch the Codex path never sets (no /fleet-handoff, no @ctx_pct).",
+    "SessionEnd": "Codex reports reason=other for EVERY end, so the prompt_input_exit|logout matcher that tells a manual /exit from a /clear cannot fire. The cleanup daemon + ledger-watch reap a Codex window instead."
+  },
+  "matchers": {
+    "Edit|Write|MultiEdit|NotebookEdit": "apply_patch",
+    "Artifact": null
+  },
+  "matcher_notes": {
+    "Edit|Write|MultiEdit|NotebookEdit": "Codex edits through ONE tool: apply_patch, with the patch text in tool_input.command.",
+    "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard."
+  },
+  "drop_commands": {
+    "classify-hook.sh": "Reads a Claude Code transcript (~/.claude/projects/**.jsonl) to correct the ambiguous `done`; Codex keeps its own rollout files."
+  }
+}
