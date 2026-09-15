@@ -141,10 +141,78 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 		days++
 	}
 
+	// One row per repo, same late-arrival rule as everything above: a snapshot
+	// that took the scenic route must never overwrite a fresher reading with
+	// an older one. Here that matters more than elsewhere -- these figures are
+	// the only thing on the page that says whether the verification behind
+	// every OTHER figure still works, so a silent rewind would restore
+	// confidence nobody measured.
+	if h := snap.VerifyHealth; h != nil {
+		readings, err := json.Marshal(h.Readings)
+		if err != nil {
+			return 0, 0, fmt.Errorf("encode verify_health for %s: %w", snap.Repo, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO repo_health (repo, observed_at, source, stale_after_seconds, readings_json)
+			VALUES (?,?,?,?,?)
+			ON CONFLICT(repo) DO UPDATE SET
+			  observed_at = excluded.observed_at, source = excluded.source,
+			  stale_after_seconds = excluded.stale_after_seconds,
+			  readings_json = excluded.readings_json
+			WHERE excluded.observed_at >= repo_health.observed_at`,
+			snap.Repo, observed, h.Source, nullFloat(h.StaleAfterSeconds), string(readings)); err != nil {
+			return 0, 0, fmt.Errorf("upsert repo health %s: %w", snap.Repo, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, 0, fmt.Errorf("commit: %w", err)
 	}
 	return issues, days, nil
+}
+
+// RepoHealthRow is repo_health as it is read back, with the observation time
+// the page needs to say how old these figures are.
+type RepoHealthRow struct {
+	Repo              string              `json:"repo"`
+	ObservedAt        time.Time           `json:"observed_at"`
+	Source            string              `json:"source,omitempty"`
+	StaleAfterSeconds *float64            `json:"stale_after_seconds,omitempty"`
+	Readings          []model.RepoReading `json:"readings"`
+}
+
+// RepoHealth returns the stored verification readings, or nil when no shipper
+// has ever sent any.
+//
+// Nil means NOBODY MEASURED, and every caller has to render it that way. The
+// tempting alternative -- an empty card, or no card at all -- reads as "there
+// is nothing wrong", which is the one conclusion absent data cannot support.
+func (s *Store) RepoHealth(repo string) (*RepoHealthRow, error) {
+	if err := model.ValidRepoName(repo); err != nil {
+		return nil, err
+	}
+	row := RepoHealthRow{Repo: repo}
+	var at, readings string
+	var stale sql.NullFloat64
+	err := s.read.QueryRow(`
+		SELECT observed_at, source, stale_after_seconds, readings_json
+		FROM repo_health WHERE repo = ?`, repo).
+		Scan(&at, &row.Source, &stale, &readings)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("repo health: %w", err)
+	}
+	row.ObservedAt, _ = time.Parse(rfc, at)
+	row.StaleAfterSeconds = floatPtr(stale)
+	// A row that will not decode is a bug in whatever wrote it, and reporting
+	// it is the point: swallowing the error would hand the page an empty
+	// reading list, which renders as the healthy-looking "no readings" state.
+	if err := json.Unmarshal([]byte(readings), &row.Readings); err != nil {
+		return nil, fmt.Errorf("repo health %s: stored readings will not decode: %w", repo, err)
+	}
+	return &row, nil
 }
 
 // Repos lists every repository the hub holds progress for, most recently
@@ -164,6 +232,8 @@ func (s *Store) Repos() ([]Repo, error) {
 		    SELECT repo, observed_at FROM repo_issues
 		    UNION ALL
 		    SELECT repo, observed_at FROM repo_days
+		    UNION ALL
+		    SELECT repo, observed_at FROM repo_health
 		  ) GROUP BY repo
 		) AS r
 		LEFT JOIN (

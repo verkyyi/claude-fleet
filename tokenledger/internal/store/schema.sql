@@ -428,3 +428,25 @@ CREATE TABLE IF NOT EXISTS repo_days (
 );
 
 CREATE INDEX IF NOT EXISTS idx_repo_days_day ON repo_days(repo, day DESC);
+
+-- One row per repository: the shipper's own reading of whether that repo's
+-- post-release verification can be trusted.
+--
+-- A single row, not a history, and that is deliberate. These readings are
+-- already windowed by the producer ("the last 30 days", "right now", "the last
+-- 7 days"), so keeping a series of them would be keeping overlapping answers
+-- to a question that already has one -- and the first thing anyone would do
+-- with such a series is chart it, which is re-deriving a trend from figures
+-- whose windows move underneath it.
+--
+-- readings_json is stored whole rather than shredded into columns because the
+-- hub must not interpret it: the honesty rules that decide whether a figure is
+-- printed at all live in the producer, and a column per figure would invite a
+-- query that reconstitutes them here (see model.RepoVerifyHealth).
+CREATE TABLE IF NOT EXISTS repo_health (
+  repo                TEXT    NOT NULL PRIMARY KEY,   -- 'owner/name'
+  observed_at         TEXT    NOT NULL,               -- when the shipper read, not when we stored
+  source              TEXT    NOT NULL DEFAULT '',    -- producer, shown so a doubter knows what to read
+  stale_after_seconds REAL,                           -- NULL = the shipper did not say how long these stay current
+  readings_json       TEXT    NOT NULL                -- []model.RepoReading, verbatim
+);

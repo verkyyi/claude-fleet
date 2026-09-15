@@ -18,7 +18,8 @@ import { t } from './lib/i18n.js';
 import { fmtInt } from './lib/format.js';
 import { rankedBars } from './charts.js';
 import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo,
-         labelFacets, filterStalled, sortStalled } from './lib/repo.js';
+         labelFacets, filterStalled, sortStalled,
+         healthRows, healthAge } from './lib/repo.js';
 
 /** renderRepo mounts the progress tier. It returns the {fetchers, apply} pair
  *  app.js's loader expects, or null when this hub holds no repo data at all —
@@ -61,7 +62,15 @@ function apply(root, results, repo, repos, state, app) {
     ? errCard(t('repo.backlog.title'), issuesR.reason)
     : ageCard(issues, scale);
   const below = issues === null ? [] : [stalledCard(issues, scale, state, app)];
-  root.replaceChildren(...(head ? [head] : []), el('div', { class: 'grid2' }, flow, age), ...below);
+  // Above the pair, not below the table. These three figures say whether the
+  // checks behind every other number on this page still work, and they landed
+  // here because the surface they used to live on was one nobody opened. Put
+  // them where the last one was buried and they are buried again.
+  const health = flowR.status === 'fulfilled'
+    ? healthCard(flowR.value.verify_health)
+    : null;
+  root.replaceChildren(...(head ? [head] : []), ...(health ? [health] : []),
+    el('div', { class: 'grid2' }, flow, age), ...below);
 }
 
 function errCard(title, reason) {
@@ -163,6 +172,66 @@ function flowChart(weeks) {
     viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, role: 'img',
     'aria-label': t('repo.flow.aria', { weeks: n, open: fmtInt(maxOpen) }),
   }, g);
+}
+
+/* ------------------------------------------------ verification health */
+
+/** HEALTH_LABEL translates the readings this page knows by name. A key it has
+ *  never seen falls back to the producer's own wording — a new figure that
+ *  renders as a blank row would be worse than an untranslated one. */
+const HEALTH_LABEL = {
+  touch: 'repo.health.k.touch',
+  rot: 'repo.health.k.rot',
+  inflow: 'repo.health.k.inflow',
+};
+
+/** healthCard shows what the repository says about its own checks.
+ *
+ *  Three states, and they are three different sentences on purpose:
+ *  nobody ships these (no card content — "nobody looked"), they were shipped
+ *  but are old (a warning, because a stale figure and a healthy one look
+ *  identical), and a single reading that could not be taken (marked in its own
+ *  row, never dropped, never shown as zero). */
+function healthCard(health) {
+  const card = el('div', { class: 'card', id: 'repo-health' },
+    el('h2', {}, t('repo.health.title')),
+    el('p', { class: 'hint' }, t('repo.health.hint')));
+  if (!health) {
+    card.appendChild(el('div', { class: 'empty' }, t('repo.health.none')));
+    return card;
+  }
+  const rows = healthRows(health);
+  if (!rows.length) {
+    card.appendChild(el('div', { class: 'empty' }, t('repo.health.empty')));
+    return card;
+  }
+  card.appendChild(el('div', { class: 'scroll' }, el('table', {},
+    el('tbody', {}, rows.map((r) => el('tr', { class: r.ok ? null : 'unread' },
+      el('th', { scope: 'row' }, r.key in HEALTH_LABEL ? t(HEALTH_LABEL[r.key]) : (r.label || r.key)),
+      el('td', { class: 'figure' },
+        r.ok ? r.value : el('span', { class: 'unread-tag' }, t('repo.health.unread')),
+        r.ok ? null : ' ' + r.value),
+      el('td', { class: 'note' }, r.note)))))));
+
+  const age = healthAge(health);
+  const foot = [];
+  if (age) {
+    foot.push(t('repo.health.observed', {
+      when: String(health.observed_at).slice(0, 10),
+      age: fmtAge(age.seconds, t),
+    }));
+  }
+  if (health.source) foot.push(t('repo.health.source', { source: health.source }));
+  if (foot.length) card.appendChild(el('p', { class: 'hint' }, foot.join(' ')));
+
+  if (age && age.stale === true) {
+    card.appendChild(el('p', { class: 'hint warn' }, t('repo.health.stale', {
+      age: fmtAge(age.seconds, t), after: fmtAge(age.after, t),
+    })));
+  } else if (age && age.stale === null) {
+    card.appendChild(el('p', { class: 'hint' }, t('repo.health.noCadence')));
+  }
+  return card;
 }
 
 /* ------------------------------------------------------------------- age */

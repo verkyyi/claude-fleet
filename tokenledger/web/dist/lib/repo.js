@@ -193,3 +193,59 @@ export function pickRepo(wanted, repos) {
   const names = (repos || []).map((r) => r.repo);
   return names.includes(wanted) ? wanted : names[0];
 }
+
+/* ------------------------------------------- verification health (shipped) */
+
+/** healthRows normalises the shipped readings into rows the card renders
+ *  verbatim.
+ *
+ *  It formats nothing and judges nothing. Every figure here was already
+ *  worded by the producer, under rules that withhold a percentile below a
+ *  sample floor, withhold a ratio below a denominator floor, and mark an
+ *  unfinished observation as a lower bound. Re-deriving any of that on this
+ *  side would put those rules in two places, and the whole reason these
+ *  readings exist is that two copies of a judgement drift in silence.
+ *
+ *  `ok` is read strictly: anything that is not exactly `true` means the
+ *  reading could not be taken. A producer that forgets the field, or a row
+ *  stored by an older shipper, must land on "not measured" rather than on a
+ *  silent claim of health. */
+export function healthRows(health) {
+  if (!health || !Array.isArray(health.readings)) return [];
+  return health.readings
+    .filter((r) => r && typeof r.key === 'string' && r.key !== '')
+    .map((r) => {
+      const value = typeof r.value === 'string' ? r.value.trim() : '';
+      return {
+        key: r.key,
+        label: typeof r.label === 'string' ? r.label : '',
+        value,
+        note: typeof r.note === 'string' ? r.note : '',
+        // A blank value cannot be an "ok" reading whatever the flag says: an
+        // empty cell reads as "nothing wrong", which is the one thing a
+        // missing figure never means.
+        ok: r.ok === true && value !== '',
+      };
+    });
+}
+
+/** healthAge answers how old these figures are, and whether that is too old.
+ *
+ *  The threshold comes from the shipper (`stale_after_seconds`), never from
+ *  this page — a daily shipper and a weekly one disagree about what "stale"
+ *  means, and a surface that picks its own number is quoting a scale nobody
+ *  measured. `stale: null` is the honest answer when the shipper did not say,
+ *  and the card prints that rather than guessing.
+ *
+ *  Returns null when there is nothing to age — no block, or an observation
+ *  time that will not parse. */
+export function healthAge(health, now = Date.now()) {
+  if (!health || !health.observed_at) return null;
+  const at = Date.parse(health.observed_at);
+  if (!Number.isFinite(at)) return null;
+  const seconds = Math.max(0, (now - at) / 1000);
+  const after = typeof health.stale_after_seconds === 'number' && health.stale_after_seconds > 0
+    ? health.stale_after_seconds
+    : null;
+  return { seconds, after, stale: after === null ? null : seconds > after };
+}

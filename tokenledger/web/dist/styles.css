@@ -531,3 +531,15 @@ th[aria-sort] { color: var(--ink); }
 /* An age reads "71.2 d" with a space in Chinese, and the age column is the
    narrowest one here — left to wrap, every row becomes two lines tall. */
 #repo-stalled td.num { white-space: nowrap; }
+
+/* Verification health. Three rows of pre-worded figures, and the one visual
+   job here is that a reading which could NOT be taken never looks like a
+   reading that came back clean: `.unread` mutes the row and tags the cell in
+   words, rather than leaving a blank that reads as "nothing wrong". */
+#repo-health table { table-layout: auto; }
+#repo-health th[scope="row"] { text-align: left; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+#repo-health td.figure { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#repo-health td.note { color: var(--ink-3); font-size: 12px; }
+#repo-health tr.unread td.figure { white-space: normal; }
+#repo-health .unread-tag { color: var(--serious); font-weight: 600; }
+#repo-health .hint.warn { color: var(--serious); }

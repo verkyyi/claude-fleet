@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -47,6 +48,78 @@ type RepoSnapshot struct {
 
 	Issues []RepoIssue `json:"issues,omitempty"`
 	Days   []RepoDay   `json:"days,omitempty"`
+
+	// VerifyHealth is the shipper's own reading of how trustworthy this
+	// repository's post-release verification is. Nil means the shipper does
+	// not measure it — NOT that it is healthy.
+	VerifyHealth *RepoVerifyHealth `json:"verify_health,omitempty"`
+}
+
+// RepoVerifyHealth carries readings the hub stores and shows but never
+// computes, re-derives, or second-guesses.
+//
+// That split is the whole point. These readings are honest only because of
+// rules that live in the producer: a percentile is withheld below a sample
+// floor, a ratio is withheld below a denominator floor, an unfinished
+// observation is reported as a lower bound with a leading marker, and a
+// reading that could not be taken says WHY instead of degrading to zero.
+// Re-deriving any of that here would put those rules in two places, and two
+// copies of a judgement drift without either side reporting a problem — which
+// is the exact failure these readings exist to measure.
+//
+// So the hub holds pre-formatted strings, the way it already holds issue
+// titles: data produced elsewhere, rendered verbatim. The page supplies only
+// the framing (a translated label per known key, the observation time, and
+// whether that time is stale).
+type RepoVerifyHealth struct {
+	// Source names the producer, so a reader who distrusts a figure knows
+	// what to go read. Free text; it is shown, never parsed.
+	Source string `json:"source,omitempty"`
+
+	// StaleAfterSeconds is how long these readings stay current, according to
+	// the shipper that takes them — a daily shipper says one thing, a weekly
+	// one another.
+	//
+	// It is shipped rather than assumed because a surface that invents its own
+	// staleness threshold is inventing a scale nobody measured, and because a
+	// silently stale card and a healthy one look identical. Nil means the
+	// shipper did not say; the page must then decline to judge freshness
+	// rather than pick a number.
+	StaleAfterSeconds *float64 `json:"stale_after_seconds,omitempty"`
+
+	Readings []RepoReading `json:"readings"`
+}
+
+// RepoReading is one figure, already worded by the producer.
+type RepoReading struct {
+	// Key identifies the reading across snapshots so the page can attach a
+	// translated label and keep row order stable. Lowercase, stable, and the
+	// producer's to choose.
+	Key string `json:"key"`
+
+	// Label is the producer's own wording, used when the page has no
+	// translation for Key. A reading the page has never heard of must still
+	// render — a new figure that appears as a blank row is worse than an
+	// untranslated one.
+	Label string `json:"label,omitempty"`
+
+	// Value is the figure as the producer chose to word it, INCLUDING any
+	// honesty markers it carries (a bound marker on an unfinished
+	// observation, "N cards" where a ratio was withheld, and so on).
+	//
+	// Required even when OK is false: a reading that could not be taken must
+	// say why. "Not measured" and "measured, nothing wrong" are opposite
+	// answers, and an empty cell reads as the second one.
+	Value string `json:"value"`
+
+	// Note is the caption a reader needs to not misread Value — the window it
+	// covers, the denominator, the floor that withheld a figure.
+	Note string `json:"note,omitempty"`
+
+	// OK is false when the reading could not be taken. It defaults to false on
+	// purpose: a producer that forgets to set it gets the fail-closed reading,
+	// not a silent claim of health.
+	OK bool `json:"ok"`
 }
 
 // RepoIssue is one issue as the shipper last saw it.
@@ -144,8 +217,8 @@ func (s RepoSnapshot) Validate(now time.Time) error {
 	if s.ObservedAt.After(now.Add(5 * time.Minute)) {
 		return fmt.Errorf("repo %s: observed_at %s is in the future", s.Repo, s.ObservedAt.Format(time.RFC3339))
 	}
-	if len(s.Issues) == 0 && len(s.Days) == 0 {
-		return fmt.Errorf("repo %s: snapshot carries neither issues nor days", s.Repo)
+	if len(s.Issues) == 0 && len(s.Days) == 0 && s.VerifyHealth == nil {
+		return fmt.Errorf("repo %s: snapshot carries neither issues, days nor verify_health", s.Repo)
 	}
 	for _, i := range s.Issues {
 		if err := i.validate(s.Repo); err != nil {
@@ -155,6 +228,67 @@ func (s RepoSnapshot) Validate(now time.Time) error {
 	for _, d := range s.Days {
 		if err := d.validate(s.Repo); err != nil {
 			return err
+		}
+	}
+	if s.VerifyHealth != nil {
+		if err := s.VerifyHealth.validate(s.Repo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maxReadings caps one health block. The producer this was built for ships
+// three; a shipper pushing dozens is looping, and a card nobody can read in
+// one glance is the surface this feature exists to replace.
+const maxReadings = 12
+
+// maxReadingText caps each string. Long enough for a sentence of context,
+// short enough that a runaway producer cannot turn a dashboard card into a
+// log file.
+const maxReadingText = 400
+
+// repoReadingKey is the key charset: lowercase, stable, no spelling variants.
+// `Touch` and `touch` arriving from two shipper versions would render as two
+// rows saying the same thing, and nothing would report a problem.
+var repoReadingKey = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+func (h RepoVerifyHealth) validate(repo string) error {
+	if len(h.Readings) == 0 {
+		return fmt.Errorf("repo %s: verify_health carries no readings", repo)
+	}
+	if len(h.Readings) > maxReadings {
+		return fmt.Errorf("repo %s: verify_health carries %d readings, max %d",
+			repo, len(h.Readings), maxReadings)
+	}
+	if h.StaleAfterSeconds != nil && *h.StaleAfterSeconds <= 0 {
+		return fmt.Errorf("repo %s: verify_health stale_after_seconds must be positive, got %v",
+			repo, *h.StaleAfterSeconds)
+	}
+	if len(h.Source) > maxReadingText {
+		return fmt.Errorf("repo %s: verify_health source is longer than %d bytes", repo, maxReadingText)
+	}
+	seen := make(map[string]bool, len(h.Readings))
+	for _, r := range h.Readings {
+		if !repoReadingKey.MatchString(r.Key) {
+			return fmt.Errorf("repo %s: verify_health key %q is not lowercase [a-z0-9_-]", repo, r.Key)
+		}
+		// Two rows under one key is not a duplicate row, it is one reading
+		// overwriting the other depending on map order.
+		if seen[r.Key] {
+			return fmt.Errorf("repo %s: verify_health key %q appears twice", repo, r.Key)
+		}
+		seen[r.Key] = true
+		// The fail-closed rule, enforced rather than documented: a reading
+		// that could not be taken still has to say so in words.
+		if strings.TrimSpace(r.Value) == "" {
+			return fmt.Errorf("repo %s: verify_health %q has no value — say why it could not be read, never leave it blank", repo, r.Key)
+		}
+		for name, v := range map[string]string{"label": r.Label, "value": r.Value, "note": r.Note} {
+			if len(v) > maxReadingText {
+				return fmt.Errorf("repo %s: verify_health %q %s is longer than %d bytes",
+					repo, r.Key, name, maxReadingText)
+			}
 		}
 	}
 	return nil

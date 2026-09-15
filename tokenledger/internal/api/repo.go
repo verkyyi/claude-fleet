@@ -127,6 +127,15 @@ func (s *Server) handleRepoFlow(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Served here rather than behind its own route because it answers about
+	// the repository as a whole, arrives from the same shipper, and is three
+	// short strings. A second route would cost the page a second round trip
+	// and buy a reader nothing.
+	health, err := s.Store.RepoHealth(repo)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"repo":  repo,
 		"since": start.UTC().Format(model.RepoDayLayout),
@@ -135,6 +144,9 @@ func (s *Server) handleRepoFlow(w http.ResponseWriter, r *http.Request) {
 		// Null when no shipper has ever computed percentiles. Readers must
 		// render that as "scale unknown" and must not substitute one.
 		"scale": scale,
+		// Null when no shipper measures verification health. That is "nobody
+		// looked", not "nothing is wrong", and the page says so.
+		"verify_health": health,
 	})
 }
 

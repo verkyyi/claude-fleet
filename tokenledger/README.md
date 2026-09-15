@@ -844,11 +844,55 @@ every row it writes. **Repo rows carry no account at all**, deliberately: one
 repository is worked by endpoints on several plans at once, so naming one of
 them would be a guess presented as a fact.
 
-Everything is upserted on `(repo, number)` and `(repo, day)`, so a retry is a
-no-op and a large backlog can be paged across several POSTs under one
+Everything is upserted on `(repo, number)`, `(repo, day)` and `(repo)`, so a
+retry is a no-op and a large backlog can be paged across several POSTs under one
 `observed_at`. An older snapshot never overwrites a newer one — after a retry
 they can arrive out of order, and a stale row would silently reopen a closed
 issue.
+
+### Saying whether the checks themselves still work
+
+A backlog card is only as good as the checks behind it, so a shipper can also
+send `verify_health`: a handful of figures about its own verification, which
+the hub stores and shows **verbatim**.
+
+```json
+{
+  "repo": "owner/name",
+  "observed_at": "2026-09-15T03:00:00Z",
+  "verify_health": {
+    "source": "tools/cd/measure-verify-health.js",
+    "stale_after_seconds": 172800,
+    "readings": [
+      {"key": "touch", "value": "p50 1.7d · p90 ≥ 8.8d",
+       "note": "30-day window, 561 cards that were actually red", "ok": true},
+      {"key": "rot", "value": "1 red now (denominator < 8, ratio withheld)",
+       "note": "stock right now, not a window", "ok": true},
+      {"key": "inflow", "value": "0% (0 / 252)",
+       "note": "7-day window", "ok": true}
+    ]
+  }
+}
+```
+
+A snapshot may carry this and nothing else. The rules:
+
+- **The hub never computes these.** They are honest because of floors that live
+  in the producer — a percentile withheld below a sample floor, a ratio withheld
+  below a denominator floor, a bound marker on an observation still running. Two
+  copies of a judgement drift without either side reporting a problem, which is
+  the very thing these figures are there to measure.
+- **`value` is required even when `ok` is false**, and then it says *why* it
+  could not be read. "Not measured" and "measured, nothing wrong" are opposite
+  answers; a blank cell reads as the second one. `ok` defaults to false, so a
+  producer that forgets it gets the fail-closed reading.
+- **`stale_after_seconds` is the shipper's own cadence.** Without it the page
+  declines to judge freshness rather than picking a threshold — the same rule
+  every age band here obeys. A stale figure and a fresh one look identical
+  otherwise.
+- **`key` is lowercase and stable**; it selects the page's translated label, and
+  an unknown key falls back to the shipped `label`. A figure the page has never
+  heard of still renders.
 
 ### Two lifetimes, on purpose
 
