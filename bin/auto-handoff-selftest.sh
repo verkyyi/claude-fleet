@@ -252,10 +252,17 @@ nudged "$out" && fail "just under the ceiling (69<70) an active operator must st
 out="$(GPCT=60 GDEFER=0 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-1)) @1\n" run_state 'done')"
 nudged "$out" || fail "FLEET_HANDOFF_DEFER_SECS=0 must disable the deferral, got: '$out'"
 deferred && fail "with the deferral off nothing must stamp @handoff_deferred_ts"
-out="$(GPCT=60 GDEFER=0 FDEFER=5 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-3)) @1\n" run_state 'done')"
-nudged "$out" && fail "per-fleet FLEET_HANDOFF_DEFER_SECS=5 with a 3s-old keypress must defer, got: '$out'"
-out="$(GPCT=60 GDEFER=0 FDEFER=5 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-8)) @1\n" run_state 'done')"
-nudged "$out" || fail "per-fleet FLEET_HANDOFF_DEFER_SECS=5 with an 8s-old keypress must nudge, got: '$out'"
+# PER-FLEET overlay wins, both directions — and each leg is shaped so the only
+# reading that passes is "the overlay's EXACT value was used": a fall back to the
+# global value OR to the built-in 30s default goes red in both. The keypress ages
+# also sit ~60s from their boundary instead of 2s (issue #715): `now` is taken ~10
+# run_state calls above — a subshell plus a script start each — and #693's lesson is
+# that a real-time window must never be a bet on the test's own process startup.
+out="$(GPCT=60 GDEFER=0 FDEFER=120 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-60)) @1\n" run_state 'done')"
+nudged "$out" && fail "per-fleet FLEET_HANDOFF_DEFER_SECS=120 with a 60s-old keypress must defer (global 0 or the 30s default would nudge), got: '$out'"
+deferred || fail "the per-fleet deferral must stamp @handoff_deferred_ts, log: $(cat "$SETOPT_LOG")"
+out="$(GPCT=60 GDEFER=120 FDEFER=5 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-8)) @1\n" run_state 'done')"
+nudged "$out" || fail "per-fleet FLEET_HANDOFF_DEFER_SECS=5 with an 8s-old keypress must nudge (global 120 or the 30s default would defer), got: '$out'"
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="$((now-3000)) @1\n$((now-2)) @1\n" run_state 'done')"
 nudged "$out" && fail "a live client beside a stale ghost (dropped Termius) must still defer, got: '$out'"
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_WID='@1' FAKE_CLIENTS="garbage\n" run_state 'done')"
