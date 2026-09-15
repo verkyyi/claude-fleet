@@ -13,13 +13,13 @@ func (s *Store) InsertQuota(q model.QuotaSnapshot) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`, q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
+	_, err = s.write.Exec(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`, q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
 	return err
 }
 
 func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 	var b string
-	err := s.db.QueryRow(`SELECT data_json FROM quota_snapshots WHERE account_uuid=? ORDER BY observed_at DESC, observation ASC LIMIT 1`, account).Scan(&b)
+	err := s.read.QueryRow(`SELECT data_json FROM quota_snapshots WHERE account_uuid=? ORDER BY observed_at DESC, observation ASC LIMIT 1`, account).Scan(&b)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -118,7 +118,7 @@ func (s *Store) QuotaHistory(account, source string, start, end time.Time) ([]mo
 		args = append(args, source)
 	}
 	query += ` ORDER BY account_uuid, observed_at`
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.read.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (s *Store) QuotaHistory(account, source string, start, end time.Time) ([]mo
 }
 
 func (s *Store) UpsertCollector(c model.CollectorStatus) error {
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func (s *Store) Collectors(account, source string) ([]model.CollectorStatus, err
 		args = append(args, source)
 	}
 	q += ` ORDER BY endpoint_id,source,profile_id`
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (s *Store) InsertAccountUsage(u model.AccountUsage) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`, u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
+	_, err = s.write.Exec(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`, u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
 	return err
 }
 
@@ -232,7 +232,7 @@ func (s *Store) AccountUsage(account, source string) ([]model.AccountUsage, erro
 		q += ` AND source=?`
 		args = append(args, source)
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

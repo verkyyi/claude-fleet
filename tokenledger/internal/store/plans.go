@@ -45,7 +45,7 @@ func (s *Store) SetPlanPrice(p model.SubscriptionPlan) error {
 		return fmt.Errorf("price for %q needs an effective_from: an undated price cannot be applied to a period", p.Plan)
 	}
 
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func (s *Store) PlanPriceAt(plan, source string, at time.Time) (*model.Subscript
 		return nil, nil
 	}
 	ts := fmtTime(at.UTC())
-	row := s.db.QueryRow(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
+	row := s.read.QueryRow(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
 		FROM subscription_plans
 		WHERE plan = ? AND source = ? AND effective_from <= ?
 		  AND (effective_to IS NULL OR effective_to > ?)
@@ -123,7 +123,7 @@ func (s *Store) PlanPriceAt(plan, source string, at time.Time) (*model.Subscript
 // history, not just the current row: an operator checking why last quarter's
 // figures changed needs to see the price that produced them.
 func (s *Store) ListPlanPrices() ([]model.SubscriptionPlan, error) {
-	rows, err := s.db.Query(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
+	rows, err := s.read.Query(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
 		FROM subscription_plans ORDER BY source, plan, effective_from DESC`)
 	if err != nil {
 		return nil, err
@@ -223,7 +223,7 @@ func (s *Store) SubscriptionSpendOver(account string, from, to time.Time) ([]Sub
 		where = " AND account_uuid = ?"
 		args = append(args, account)
 	}
-	rows, err := s.db.Query(`SELECT subscription_type, source, COUNT(*)
+	rows, err := s.read.Query(`SELECT subscription_type, source, COUNT(*)
 		FROM accounts
 		WHERE subscription_type <> '' AND first_seen < ? AND last_seen >= ?`+where+`
 		GROUP BY subscription_type, source
@@ -258,7 +258,7 @@ func (s *Store) SubscriptionSpendOver(account string, from, to time.Time) ([]Sub
 // overlaps the period, so a period spanning a price change is charged partly
 // at each price rather than wholly at one of them.
 func (s *Store) priceOver(sp *SubscriptionSpend, from, to time.Time) error {
-	rows, err := s.db.Query(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
+	rows, err := s.read.Query(`SELECT plan, source, monthly_cost, currency, effective_from, effective_to
 		FROM subscription_plans
 		WHERE plan = ? AND source = ? AND effective_from < ?
 		  AND (effective_to IS NULL OR effective_to > ?)

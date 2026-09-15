@@ -93,7 +93,7 @@ const repriceColumns = `id, source, model, provider, ts, input_tokens, output_to
 // guard below.
 func (s *Store) Reprice(p Pricer, since time.Time) (RepriceResult, error) {
 	var out RepriceResult
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return out, fmt.Errorf("begin: %w", err)
 	}

@@ -51,7 +51,7 @@ func (a Account) Inferred() bool { return strings.HasPrefix(a.AccountUUID, "win_
 
 // ListAccounts returns every subscription on this hub.
 func (s *Store) ListAccounts() ([]Account, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT a.account_uuid, a.email, a.org_uuid, a.org_name,
 		       a.subscription_type, a.rate_limit_tier, a.display_name,
 		       a.account_created_at, a.label_locked, a.first_seen, a.last_seen,
@@ -103,7 +103,7 @@ func (s *Store) ListEndpoints(account string, sources ...string) ([]Endpoint, er
 	}
 	q += ` ORDER BY last_seen DESC NULLS LAST, label`
 
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -126,7 +126,7 @@ func (s *Store) ListEndpoints(account string, sources ...string) ([]Endpoint, er
 // this account's limits. Callers must render that as "unavailable", never as
 // zero utilization.
 func (s *Store) LatestLimits(account string) (*model.LimitsSnapshot, error) {
-	row := s.db.QueryRow(`
+	row := s.read.QueryRow(`
 		SELECT account_uuid, endpoint_id, observed_at,
 		       five_hour_pct, five_hour_resets_at,
 		       seven_day_pct, seven_day_resets_at,
@@ -181,7 +181,7 @@ func (s *Store) EventsInRange(account string, start, end time.Time) ([]model.Usa
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?`, accountClause(account))
 
-	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end))...)
+	rows, err := s.read.Query(q, accountArgs(account, fmtTime(start), fmtTime(end))...)
 	if err != nil {
 		return nil, fmt.Errorf("events in range: %w", err)
 	}
@@ -385,7 +385,7 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		ORDER BY 3 DESC
 		LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel, accountClause(account))
 
-	rows, err := s.db.Query(q, accountArgs(account, fmtTime(start), fmtTime(end), limit)...)
+	rows, err := s.read.Query(q, accountArgs(account, fmtTime(start), fmtTime(end), limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by %s: %w", d, err)
 	}
@@ -529,7 +529,7 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 	// The strftime pattern is the first placeholder, so it leads the argument
 	// list ahead of the optional account scope.
 	args := append([]any{f}, accountArgs(account, fmtTime(start), fmtTime(end))...)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("history: %w", err)
 	}
@@ -584,7 +584,7 @@ func (s *Store) AccountSwitches(account string, limit int) ([]AccountSwitch, err
 	}
 	q += ` ORDER BY observed_at DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("account switches: %w", err)
 	}
@@ -660,7 +660,7 @@ func (s *Store) EndpointAccounts(account string, limit int, sources ...string) (
 	}
 	q += ` ORDER BY ea.last_seen DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint accounts: %w", err)
 	}
@@ -691,7 +691,7 @@ func (s *Store) EndpointAccounts(account string, limit int, sources ...string) (
 // The token expression matches UsageBy's exactly. Two "total tokens" on one
 // page that disagree by a cache-creation column would be worse than either.
 func (s *Store) LifetimeTotals() (turns, tokens int64, err error) {
-	err = s.db.QueryRow(fmt.Sprintf(`
+	err = s.read.QueryRow(fmt.Sprintf(`
 		SELECT COALESCE(SUM(events),0), COALESCE(%s, 0)
 		FROM usage_hourly`, tokenSumExpr)).Scan(&turns, &tokens)
 	if err != nil {
@@ -740,12 +740,12 @@ func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, 
 		FROM usage_events
 		WHERE os_user = ? AND ts >= ? AND ts < ?`, tokenSumExpr, eventCostSplit.sel)
 	dest := append([]any{&out.Turns, &out.Tokens, &out.Projects, &out.Machines}, cs.dest()...)
-	if err := s.db.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).Scan(dest...); err != nil {
+	if err := s.read.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).Scan(dest...); err != nil {
 		return nil, fmt.Errorf("user summary: %w", err)
 	}
 	out.Cost = cs.costs()
 
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT DISTINCT e.team
 		FROM usage_events u
 		JOIN endpoints e ON e.endpoint_id = u.endpoint_id
@@ -789,7 +789,7 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 		WHERE os_user = ? AND ts >= ? AND ts < ?
 		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel)
 
-	rows, err := s.db.Query(q, osUser, fmtTime(start), fmtTime(end), limit)
+	rows, err := s.read.Query(q, osUser, fmtTime(start), fmtTime(end), limit)
 	if err != nil {
 		return nil, fmt.Errorf("usage by user %s: %w", d, err)
 	}

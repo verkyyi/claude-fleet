@@ -111,7 +111,7 @@ func (e *unreconstructableRowsError) Error() string {
 // not a default. Pass force to proceed anyway, accepting that those older
 // hours will keep whatever shape they already have.
 func (s *Store) RebuildRollup(force bool) (int64, error) {
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("begin: %w", err)
 	}
@@ -190,7 +190,7 @@ func rebuildRollupTx(tx *sql.Tx, force bool) (int64, error) {
 // RollupRows counts usage_hourly.
 func (s *Store) RollupRows() (int64, error) {
 	var n int64
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_hourly`).Scan(&n)
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM usage_hourly`).Scan(&n)
 	return n, err
 }
 
@@ -214,7 +214,7 @@ func (s *Store) RollupRows() (int64, error) {
 // real problem is not.
 func ensureRollup(s *Store) (int64, error) {
 	var version string
-	err := s.db.QueryRow(`SELECT value FROM rollup_meta WHERE key = 'usage_hourly_version'`).Scan(&version)
+	err := s.read.QueryRow(`SELECT value FROM rollup_meta WHERE key = 'usage_hourly_version'`).Scan(&version)
 	if err != nil && err != sql.ErrNoRows {
 		return 0, fmt.Errorf("read rollup version: %w", err)
 	}
@@ -223,7 +223,7 @@ func ensureRollup(s *Store) (int64, error) {
 		return 0, err
 	}
 	var events int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
 		return 0, err
 	}
 	if version == rollupVersion && (rows > 0 || events == 0) {

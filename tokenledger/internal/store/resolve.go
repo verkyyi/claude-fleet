@@ -39,7 +39,7 @@ func (s *Store) ResolveFingerprint(key string) (string, error) {
 	if !sessions.IsFingerprint(key) {
 		return key, nil
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT a.account_uuid, a.first_seen, (
 		  SELECT seven_day_resets_at FROM limit_snapshots l
 		   WHERE l.account_uuid = a.account_uuid AND l.seven_day_resets_at IS NOT NULL
@@ -105,7 +105,7 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 	if src == dst || src == "" || dst == "" {
 		return 0, 0, errors.New("merge needs two different accounts")
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -234,7 +234,7 @@ func (s *Store) DuplicateAccountsBySchedule() (dupes map[string]string, skipped 
 		first string
 		reset time.Time
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT a.account_uuid, a.first_seen, (
 		  SELECT seven_day_resets_at FROM limit_snapshots l
 		   WHERE l.account_uuid = a.account_uuid AND l.seven_day_resets_at IS NOT NULL
@@ -300,11 +300,11 @@ func (s *Store) DuplicateAccountsBySchedule() (dupes map[string]string, skipped 
 // the retention window only the rollup survives, and an operator about to
 // delete an account row needs to see that the two numbers differ.
 func (s *Store) AccountFootprint(account string) (rawTurns, rollupTurns, tokens int64, err error) {
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events WHERE account_uuid = ?`, account).
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM usage_events WHERE account_uuid = ?`, account).
 		Scan(&rawTurns); err != nil {
 		return 0, 0, 0, err
 	}
-	err = s.db.QueryRow(fmt.Sprintf(`
+	err = s.read.QueryRow(fmt.Sprintf(`
 		SELECT COALESCE(SUM(events),0), COALESCE(%s,0) FROM usage_hourly WHERE account_uuid = ?`,
 		tokenSumExpr), account).Scan(&rollupTurns, &tokens)
 	if err != nil {
@@ -332,13 +332,13 @@ func (s *Store) BindSourcePool(source, account string) error {
 		return errors.New("binding needs a source and an account")
 	}
 	var known int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM accounts WHERE account_uuid = ?`, account).Scan(&known); err != nil {
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM accounts WHERE account_uuid = ?`, account).Scan(&known); err != nil {
 		return err
 	}
 	if known == 0 {
 		return fmt.Errorf("no account %q on this hub to bind %s usage to", account, source)
 	}
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		INSERT INTO source_pool_bindings(source, account_uuid, bound_at) VALUES(?,?,?)
 		ON CONFLICT(source) DO UPDATE SET account_uuid = excluded.account_uuid, bound_at = excluded.bound_at`,
 		source, account, fmtTime(time.Now().UTC()))
@@ -353,7 +353,7 @@ func (s *Store) ResolvePool(source, account string) (string, error) {
 		return account, nil
 	}
 	var bound string
-	err := s.db.QueryRow(`SELECT account_uuid FROM source_pool_bindings WHERE source = ?`, source).Scan(&bound)
+	err := s.read.QueryRow(`SELECT account_uuid FROM source_pool_bindings WHERE source = ?`, source).Scan(&bound)
 	if errors.Is(err, sql.ErrNoRows) {
 		return account, nil
 	}
@@ -366,7 +366,7 @@ func (s *Store) ResolvePool(source, account string) (string, error) {
 // SourcePoolBinding reports the account a source's pool is bound to, or "".
 func (s *Store) SourcePoolBinding(source string) (string, error) {
 	var bound string
-	err := s.db.QueryRow(`SELECT account_uuid FROM source_pool_bindings WHERE source = ?`, source).Scan(&bound)
+	err := s.read.QueryRow(`SELECT account_uuid FROM source_pool_bindings WHERE source = ?`, source).Scan(&bound)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

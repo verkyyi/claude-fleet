@@ -80,7 +80,7 @@ func TestReprice_PricesEventsStoredBeforeTheRateExisted(t *testing.T) {
 
 	var total float64
 	var unpriced int64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(cost_usd),0), SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
+	if err := s.write.QueryRow(`SELECT COALESCE(SUM(cost_usd),0), SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
 		FROM usage_events`).Scan(&total, &unpriced); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestReprice_PricesEventsStoredBeforeTheRateExisted(t *testing.T) {
 	// showing the stale money this feature exists to correct.
 	var hTotal float64
 	var hUnpriced int64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(unpriced_events),0)
+	if err := s.write.QueryRow(`SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(unpriced_events),0)
 		FROM usage_hourly`).Scan(&hTotal, &hUnpriced); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestReprice_RemovingARateReturnsTheEventToUnpriced(t *testing.T) {
 		t.Fatalf("result = %+v", got)
 	}
 	var cost *float64
-	if err := s.db.QueryRow(`SELECT cost_usd FROM usage_events`).Scan(&cost); err != nil {
+	if err := s.write.QueryRow(`SELECT cost_usd FROM usage_events`).Scan(&cost); err != nil {
 		t.Fatal(err)
 	}
 	if cost != nil {
@@ -151,7 +151,7 @@ func TestReprice_RefusesToOverwriteASuppliedCost(t *testing.T) {
 	}
 	// Refusing means the transaction rolled back: the invoice is untouched.
 	var cost float64
-	if err := s.db.QueryRow(`SELECT cost_usd FROM usage_events`).Scan(&cost); err != nil {
+	if err := s.write.QueryRow(`SELECT cost_usd FROM usage_events`).Scan(&cost); err != nil {
 		t.Fatal(err)
 	}
 	if cost != invoice {
@@ -189,7 +189,7 @@ func TestReprice_LeavesSuppliedCostsAlone(t *testing.T) {
 	if got.Changed != 0 {
 		t.Fatalf("changed %d supplied figures; want 0", got.Changed)
 	}
-	rows, err := s.db.Query(`SELECT cost_usd FROM usage_events ORDER BY id`)
+	rows, err := s.write.Query(`SELECT cost_usd FROM usage_events ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestReprice_SinceBoundsWhichEventsAreTouched(t *testing.T) {
 		t.Fatalf("result = %+v; want only the September event scanned", got)
 	}
 	var cost *float64
-	if err := s.db.QueryRow(`SELECT cost_usd FROM usage_events WHERE message_uuid = 'u-old'`).Scan(&cost); err != nil {
+	if err := s.write.QueryRow(`SELECT cost_usd FROM usage_events WHERE message_uuid = 'u-old'`).Scan(&cost); err != nil {
 		t.Fatal(err)
 	}
 	if cost != nil {
@@ -284,7 +284,7 @@ func TestReprice_RestampsThePriceBasis(t *testing.T) {
 		t.Fatal(err)
 	}
 	var raw string
-	if err := s.db.QueryRow(`SELECT details_json FROM usage_events`).Scan(&raw); err != nil {
+	if err := s.write.QueryRow(`SELECT details_json FROM usage_events`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	var d model.UsageDetails
@@ -317,7 +317,7 @@ func TestReprice_CrossesBatchBoundaries(t *testing.T) {
 		t.Fatalf("result = %+v; want %d scanned and changed", got, n)
 	}
 	var unpriced int64
-	if err := s.db.QueryRow(`SELECT SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) FROM usage_events`).Scan(&unpriced); err != nil {
+	if err := s.write.QueryRow(`SELECT SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) FROM usage_events`).Scan(&unpriced); err != nil {
 		t.Fatal(err)
 	}
 	if unpriced != 0 {
@@ -327,7 +327,7 @@ func TestReprice_CrossesBatchBoundaries(t *testing.T) {
 
 func snapshotCosts(t *testing.T, s *Store) string {
 	t.Helper()
-	rows, err := s.db.Query(`SELECT message_uuid, COALESCE(CAST(cost_usd AS TEXT), 'NULL'), details_json
+	rows, err := s.write.Query(`SELECT message_uuid, COALESCE(CAST(cost_usd AS TEXT), 'NULL'), details_json
 		FROM usage_events ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)

@@ -22,9 +22,27 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+// readPoolSize is how many dashboard reads may run at once.
+//
+// SQLite runs inside this process, so past a handful of connections extra
+// readers only compete for the same core instead of finishing sooner. Four is
+// enough to keep the page's fan-out (~17 requests, nearly all of them
+// sub-millisecond) from forming a queue of its own.
+const readPoolSize = 4
+
 // Store is a handle on the hub's database.
 type Store struct {
-	db *sql.DB
+	// SQLite in WAL mode serves any number of concurrent readers alongside the
+	// one writer, so the hub keeps two pools on the same file rather than one
+	// connection for everything. A dashboard read then never waits behind an
+	// agent's ingest — which is what used to make the page slow: every read
+	// endpoint is single-digit milliseconds on its own, but with one shared
+	// connection a 13s ingest burst held the whole page hostage.
+	//
+	// read is opened query_only, so a write that strays onto it fails loudly
+	// instead of quietly re-serialising the two paths again.
+	read  *sql.DB
+	write *sql.DB
 
 	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
 	// usage_events on this open, 0 when the rollup was already current. The
@@ -38,26 +56,35 @@ func Open(path string) (*Store, error) {
 	// the single-writer contention into a short wait instead of an immediate
 	// "database is locked" error under a fleet of agents.
 	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+	write, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
 	// modernc's driver is not safe to hammer with many concurrent writers;
 	// one connection plus WAL is both correct and fast enough here.
-	db.SetMaxOpenConns(1)
+	write.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(schemaSQL); err != nil {
-		db.Close()
+	if _, err := write.Exec(schemaSQL); err != nil {
+		write.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	if err := migrate(db); err != nil {
-		db.Close()
+	if err := migrate(write); err != nil {
+		write.Close()
 		return nil, err
 	}
 
-	st := &Store{db: db}
+	// The schema exists by now, so the read pool opens against a database that
+	// is already complete — query_only cannot create or alter anything.
+	read, err := sql.Open("sqlite", dsn+"&_pragma=query_only(1)")
+	if err != nil {
+		write.Close()
+		return nil, fmt.Errorf("open sqlite %s for reading: %w", path, err)
+	}
+	read.SetMaxOpenConns(readPoolSize)
+
+	st := &Store{read: read, write: write}
 	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
-		db.Close()
+		st.Close()
 		return nil, err
 	}
 	return st, nil
@@ -137,7 +164,7 @@ func (s *Store) RecordAttribution(endpointID string, a model.Attribution) error 
 	if a.EarliestDropped != nil {
 		earliest = fmtTime(*a.EarliestDropped)
 	}
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		UPDATE endpoints SET dropped_pre_account = ?, earliest_dropped = ?,
 		       dropped_beyond_backfill = ?, backfill_limit = ?
 		WHERE endpoint_id = ?`,
@@ -151,7 +178,7 @@ func (s *Store) RecordAttribution(endpointID string, a model.Attribution) error 
 // RecordLimitsUnavailable stores an endpoint's own explanation of why it could
 // not read its account's limits.
 func (s *Store) RecordLimitsUnavailable(endpointID, reason string) error {
-	_, err := s.db.Exec(
+	_, err := s.write.Exec(
 		`UPDATE endpoints SET limits_unavailable = ?, limits_checked_at = ? WHERE endpoint_id = ?`,
 		reason, fmtTime(time.Now()), endpointID)
 	if err != nil {
@@ -163,7 +190,7 @@ func (s *Store) RecordLimitsUnavailable(endpointID, reason string) error {
 // LimitsReason returns the most recent explanation from any endpoint on an
 // account, so the UI can say which machine to go fix.
 func (s *Store) LimitsReason(account string) (endpoint, reason string, err error) {
-	row := s.db.QueryRow(`
+	row := s.read.QueryRow(`
 		SELECT COALESCE(NULLIF(label,''), hostname, endpoint_id), limits_unavailable
 		FROM endpoints
 		WHERE account_uuid = ? AND limits_unavailable <> ''
@@ -178,10 +205,22 @@ func (s *Store) LimitsReason(account string) (endpoint, reason string, err error
 }
 
 // DB exposes the handle for packages that need custom queries.
-func (s *Store) DB() *sql.DB { return s.db }
+//
+// It hands back the writer on purpose: that is the handle which can do both, so
+// a caller reaching past the store's own methods cannot land a write on the
+// read-only pool and get an "attempt to write a readonly database" instead.
+func (s *Store) DB() *sql.DB { return s.write }
 
 // Close releases the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	// Close the readers first: they hold no locks, and closing the writer last
+	// means an in-flight write still has its connection to finish on.
+	err := s.read.Close()
+	if werr := s.write.Close(); err == nil {
+		err = werr
+	}
+	return err
+}
 
 const rfc = time.RFC3339Nano
 
@@ -205,7 +244,7 @@ func (s *Store) UpsertAccount(id model.Identity, subType, tier string) error {
 	if !id.AccountCreatedAt.IsZero() {
 		created = fmtTime(id.AccountCreatedAt)
 	}
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		INSERT INTO accounts (account_uuid, email, org_uuid, org_name,
 		                      subscription_type, rate_limit_tier, display_name,
 		                      account_created_at, first_seen, last_seen, source)
@@ -251,7 +290,7 @@ func (s *Store) SetAccountLabel(account, label string) error {
 	if label == "" {
 		locked = 0
 	}
-	res, err := s.db.Exec(
+	res, err := s.write.Exec(
 		`UPDATE accounts SET email = ?, label_locked = ? WHERE account_uuid = ?`,
 		label, locked, account)
 	if err != nil {
@@ -295,7 +334,7 @@ type Endpoint struct {
 
 // Enroll registers a new endpoint and stores only the hash of its token.
 func (s *Store) Enroll(endpointID, label, tokenHash string) error {
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at)
 		VALUES (?, NULL, ?, ?, ?)`,
 		endpointID, label, tokenHash, fmtTime(time.Now()))
@@ -307,7 +346,7 @@ func (s *Store) Enroll(endpointID, label, tokenHash string) error {
 
 // EndpointByTokenHash resolves an enrollment token to its endpoint.
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
-	row := s.db.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)
+	row := s.read.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)
 	return scanEndpoint(row)
 }
 
@@ -318,7 +357,7 @@ func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 // and making it conditional would mean reading the row first on a path whose
 // whole job is to be a sink.
 func (s *Store) MarkRepoShipper(endpointID string) error {
-	_, err := s.db.Exec(`UPDATE endpoints SET kind = 'repo_shipper' WHERE endpoint_id = ?`, endpointID)
+	_, err := s.write.Exec(`UPDATE endpoints SET kind = 'repo_shipper' WHERE endpoint_id = ?`, endpointID)
 	if err != nil {
 		return fmt.Errorf("mark repo shipper: %w", err)
 	}
@@ -375,7 +414,7 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 // provisional guess being corrected, which is not a seam in the history.
 func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion string, login bool) (prevAccount string, prevWasLogin bool, err error) {
 	var prev sql.NullString
-	if err := s.db.QueryRow(`SELECT account_uuid FROM endpoints WHERE endpoint_id = ?`,
+	if err := s.read.QueryRow(`SELECT account_uuid FROM endpoints WHERE endpoint_id = ?`,
 		endpointID).Scan(&prev); err != nil {
 		return "", false, fmt.Errorf("look up endpoint: %w", err)
 	}
@@ -383,7 +422,7 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 
 	if prevAccount != "" {
 		var origin string
-		switch err := s.db.QueryRow(`
+		switch err := s.read.QueryRow(`
 			SELECT origin FROM endpoint_accounts
 			WHERE endpoint_id = ? AND account_uuid = ?`, endpointID, prevAccount).Scan(&origin); {
 		case err == nil:
@@ -398,7 +437,7 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 	}
 
 	if login || prevAccount == "" {
-		_, err = s.db.Exec(`
+		_, err = s.write.Exec(`
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
@@ -409,7 +448,7 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 	} else {
 		// Everything except the account: the machine is still reporting, and
 		// its hardware facts are just as true on a secondary batch.
-		_, err = s.db.Exec(`
+		_, err = s.write.Exec(`
 			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
@@ -436,7 +475,7 @@ func (s *Store) RecordEndpointAccount(endpointID, account string, origin model.A
 	if origin == "" {
 		origin = model.OriginSession
 	}
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		INSERT INTO endpoint_accounts (endpoint_id, account_uuid, origin, first_seen, last_seen)
 		VALUES (?,?,?,?,?)
 		ON CONFLICT(endpoint_id, account_uuid) DO UPDATE SET
@@ -464,7 +503,7 @@ func (s *Store) RecordEndpointAccount(endpointID, account string, origin model.A
 // The row is not deleted. Sessions started under the old account keep running
 // and keep reporting, which is exactly what 'session' means.
 func (s *Store) DemoteEndpointLogin(endpointID, keepLogin string) error {
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		UPDATE endpoint_accounts SET origin = 'session'
 		WHERE endpoint_id = ? AND account_uuid <> ? AND origin = 'login'`,
 		endpointID, keepLogin)
@@ -477,7 +516,7 @@ func (s *Store) DemoteEndpointLogin(endpointID, keepLogin string) error {
 // RecordAccountSwitch notes that an endpoint changed the account it is logged
 // into. Call it only for a login-origin batch — see TouchEndpoint.
 func (s *Store) RecordAccountSwitch(endpointID, from, to string) error {
-	_, err := s.db.Exec(`
+	_, err := s.write.Exec(`
 		INSERT INTO account_switches (endpoint_id, from_account, to_account, observed_at)
 		VALUES (?,?,?,?)`, endpointID, from, to, fmtTime(time.Now()))
 	if err != nil {
@@ -494,7 +533,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 	if len(evs) == 0 {
 		return 0, 0, nil
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin: %w", err)
 	}
@@ -582,7 +621,7 @@ func (s *Store) InsertLimits(snap *model.LimitsSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode scoped windows: %w", err)
 	}
-	_, err = s.db.Exec(`
+	_, err = s.write.Exec(`
 		INSERT INTO limit_snapshots (
 		  account_uuid, endpoint_id, observed_at,
 		  five_hour_pct, five_hour_resets_at, seven_day_pct, seven_day_resets_at,
@@ -601,7 +640,7 @@ func (s *Store) InsertLimits(snap *model.LimitsSnapshot) error {
 // PruneEvents deletes raw events older than the retention window. Rollups and
 // limit snapshots are unaffected.
 func (s *Store) PruneEvents(olderThan time.Time) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM usage_events WHERE ts < ?`, fmtTime(olderThan))
+	res, err := s.write.Exec(`DELETE FROM usage_events WHERE ts < ?`, fmtTime(olderThan))
 	if err != nil {
 		return 0, fmt.Errorf("prune events: %w", err)
 	}
@@ -618,7 +657,7 @@ func (s *Store) SetEndpointTeam(endpointID, team string) error {
 	if endpointID == "" {
 		return fmt.Errorf("endpoint id is required")
 	}
-	res, err := s.db.Exec(`UPDATE endpoints SET team = ? WHERE endpoint_id = ?`, team, endpointID)
+	res, err := s.write.Exec(`UPDATE endpoints SET team = ? WHERE endpoint_id = ?`, team, endpointID)
 	if err != nil {
 		return fmt.Errorf("set endpoint team: %w", err)
 	}

@@ -25,7 +25,7 @@ func (s *Store) SourceSwitches(account, source string, limit int) ([]AccountSwit
 	}
 	q += ` ORDER BY observed_at DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -167,7 +167,7 @@ func TestMergeAccount_DropsDuplicateTurnsRatherThanOrphaningThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	var orphans int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events WHERE account_uuid = ?`, key).
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM usage_events WHERE account_uuid = ?`, key).
 		Scan(&orphans); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestMergeAccount_MovesRollupRowsWhoseRawEventsWerePruned(t *testing.T) {
 	}
 
 	var orphans int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_hourly WHERE account_uuid = ?`, "pool").
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM usage_hourly WHERE account_uuid = ?`, "pool").
 		Scan(&orphans); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestMergeAccount_MovesRollupRowsWhoseRawEventsWerePruned(t *testing.T) {
 			beforeTurns, beforeTokens, afterTurns, afterTokens)
 	}
 	var tokens int64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(output_tokens),0) FROM usage_hourly WHERE account_uuid = ?`, "real").
+	if err := s.write.QueryRow(`SELECT COALESCE(SUM(output_tokens),0) FROM usage_hourly WHERE account_uuid = ?`, "real").
 		Scan(&tokens); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestMergeAccount_FoldsCollidingHourRowsInsteadOfDroppingThem(t *testing.T) 
 		t.Fatal(err)
 	}
 	var rows, events, tokens int64
-	if err := s.db.QueryRow(
+	if err := s.write.QueryRow(
 		`SELECT COUNT(*), COALESCE(SUM(events),0), COALESCE(SUM(output_tokens),0)
 		   FROM usage_hourly WHERE account_uuid = ?`, "real").Scan(&rows, &events, &tokens); err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestMergeAccount_MovesTheOtherAccountKeyedTables(t *testing.T) {
 	}
 	exec := func(q string, args ...any) {
 		t.Helper()
-		if _, err := s.db.Exec(q, args...); err != nil {
+		if _, err := s.write.Exec(q, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -393,7 +393,7 @@ func TestMergeAccount_MovesTheOtherAccountKeyedTables(t *testing.T) {
 		`SELECT COUNT(*) FROM account_switches WHERE from_account = to_account`,
 	} {
 		var n int
-		if err := s.db.QueryRow(q).Scan(&n); err != nil {
+		if err := s.write.QueryRow(q).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		if n != 0 {

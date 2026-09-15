@@ -10,7 +10,7 @@ import (
 
 func (s *Store) SourceForAccount(account string) (string, error) {
 	var source string
-	err := s.db.QueryRow(`SELECT source FROM accounts WHERE account_uuid = ?`, account).Scan(&source)
+	err := s.read.QueryRow(`SELECT source FROM accounts WHERE account_uuid = ?`, account).Scan(&source)
 	if err == sql.ErrNoRows {
 		return model.SourceClaude, nil
 	}

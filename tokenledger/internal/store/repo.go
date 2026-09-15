@@ -75,7 +75,7 @@ type RepoIssueFilter struct {
 // a shipper page a large backlog across several POSTs with one ObservedAt, and
 // lets a flaky network retry without corrupting a single figure.
 func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, err error) {
-	tx, err := s.db.Begin()
+	tx, err := s.write.Begin()
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin: %w", err)
 	}
@@ -154,7 +154,7 @@ func (s *Store) Repos() ([]Repo, error) {
 	// directly would multiply issue rows by day rows, and a repo present in
 	// only one of them would vanish entirely — which is the normal state of a
 	// shipper that sends day rows but no per-issue detail.
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT r.repo,
 		       COALESCE(i.open, 0), COALESCE(i.total, 0),
 		       COALESCE(d.days, 0), COALESCE(d.first_day, ''), COALESCE(d.last_day, ''),
@@ -197,7 +197,7 @@ func (s *Store) RepoDays(repo string, start, end time.Time) ([]model.RepoDay, er
 	if err := model.ValidRepoName(repo); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT day, opened, closed, open_at_end, merged_prs,
 		       close_p50_seconds, close_p90_seconds, close_p95_seconds, closed_sample
 		FROM repo_days
@@ -241,7 +241,7 @@ func (s *Store) RepoCloseScale(repo string) (*RepoScale, error) {
 	var sc RepoScale
 	var p50, p90, p95 sql.NullFloat64
 	var sample sql.NullInt64
-	err := s.db.QueryRow(`
+	err := s.read.QueryRow(`
 		SELECT day, close_p50_seconds, close_p90_seconds, close_p95_seconds, closed_sample
 		FROM repo_days
 		WHERE repo = ? AND (close_p50_seconds IS NOT NULL
@@ -302,7 +302,7 @@ func (s *Store) RepoIssues(f RepoIssueFilter) ([]RepoIssueRow, error) {
 		args = append(args, f.Limit)
 	}
 
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("repo issues: %w", err)
 	}
@@ -349,7 +349,7 @@ func (s *Store) RepoIssues(f RepoIssueFilter) ([]RepoIssueRow, error) {
 // problem for what was previously just a token ledger.
 func (s *Store) PruneRepoIssues(olderThan time.Time) (int64, error) {
 	cut := fmtTime(olderThan)
-	res, err := s.db.Exec(`
+	res, err := s.write.Exec(`
 		DELETE FROM repo_issues
 		WHERE (state = 'closed' AND closed_at IS NOT NULL AND closed_at < ?)
 		   OR (state = 'open' AND observed_at < ?)`, cut, cut)

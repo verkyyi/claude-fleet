@@ -177,7 +177,7 @@ func TestSubscriptionSpendSplitsAcrossAPriceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The account must overlap the reporting period to count as a seat.
-	if _, err := s.db.Exec(`UPDATE accounts SET first_seen = ?, last_seen = ?`,
+	if _, err := s.write.Exec(`UPDATE accounts SET first_seen = ?, last_seen = ?`,
 		fmtTime(start), fmtTime(end)); err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func TestPricingCoverageExplainsPrunedRequestsAndRespectsScope(t *testing.T) {
 	if _, _, err := s.InsertEvents(events); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM usage_events WHERE message_uuid='pruned'`); err != nil {
+	if _, err := s.write.Exec(`DELETE FROM usage_events WHERE message_uuid='pruned'`); err != nil {
 		t.Fatal(err)
 	}
 	f := Filter{Account: "a", Source: "codex", Start: at, End: at.Add(time.Hour)}

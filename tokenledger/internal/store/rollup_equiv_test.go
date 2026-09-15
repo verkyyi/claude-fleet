@@ -106,7 +106,7 @@ func (s *Store) usageByEventsFiltered(f Filter, d Dimension) ([]Bucket, error) {
 		  + cache_create_1h_tokens + cache_read_tokens ELSE 0 END),0),
 		%s
 		FROM usage_events %s GROUP BY k ORDER BY 3 DESC, k LIMIT 100`, col, tokenSumExpr, eventCostSplit.sel, where)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.write.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -70,7 +70,7 @@ func (s *Store) CreateShareLink(label, tokenHash string, showCosts bool, expires
 	if showCosts {
 		costs = 1
 	}
-	if _, err := s.db.Exec(`
+	if _, err := s.write.Exec(`
 		INSERT INTO share_links (id, token_hash, label, show_costs, created_at, expires_at)
 		VALUES (?,?,?,?,?,?)`,
 		id, tokenHash, label, costs, fmtTime(now), fmtTimePtr(expiresAt)); err != nil {
@@ -85,7 +85,7 @@ func (s *Store) CreateShareLink(label, tokenHash string, showCosts bool, expires
 // expired — the caller cannot then distinguish "wrong token" from "revoked
 // token", which is the point: an ex-recipient probing the link learns nothing.
 func (s *Store) ShareLinkByToken(tokenHash string) (*ShareLink, error) {
-	l, err := s.scanShare(s.db.QueryRow(`
+	l, err := s.scanShare(s.read.QueryRow(`
 		SELECT id, label, show_costs, created_at, expires_at, revoked_at, last_used_at, uses
 		FROM share_links WHERE token_hash = ?`, tokenHash))
 	switch {
@@ -98,7 +98,7 @@ func (s *Store) ShareLinkByToken(tokenHash string) (*ShareLink, error) {
 		return nil, nil
 	}
 	// Best effort: a failure to record the use must not deny access.
-	_, _ = s.db.Exec(`UPDATE share_links SET uses = uses + 1, last_used_at = ? WHERE id = ?`,
+	_, _ = s.write.Exec(`UPDATE share_links SET uses = uses + 1, last_used_at = ? WHERE id = ?`,
 		fmtTime(time.Now().UTC()), l.ID)
 	return l, nil
 }
@@ -106,7 +106,7 @@ func (s *Store) ShareLinkByToken(tokenHash string) (*ShareLink, error) {
 // RevokeShareLink marks a link dead. Revoking an already-revoked or unknown id
 // reports whether anything changed, so the CLI can say so plainly.
 func (s *Store) RevokeShareLink(id string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE share_links SET revoked_at = ?
+	res, err := s.write.Exec(`UPDATE share_links SET revoked_at = ?
 		WHERE id = ? AND revoked_at IS NULL`, fmtTime(time.Now().UTC()), id)
 	if err != nil {
 		return false, fmt.Errorf("revoke share link: %w", err)
@@ -118,7 +118,7 @@ func (s *Store) RevokeShareLink(id string) (bool, error) {
 // ListShareLinks returns every link, newest first, including dead ones — an
 // operator auditing what was ever handed out needs the revoked ones too.
 func (s *Store) ListShareLinks() ([]ShareLink, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.read.Query(`
 		SELECT id, label, show_costs, created_at, expires_at, revoked_at, last_used_at, uses
 		FROM share_links ORDER BY created_at DESC`)
 	if err != nil {

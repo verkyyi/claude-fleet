@@ -42,7 +42,7 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 		       %s
 		FROM usage_hourly %s
 		GROUP BY k ORDER BY 3 DESC, k LIMIT ?`, col, hourlyTokens, hourlyTokens, hourlyCostSplit.sel, where)
-	rows, err := s.db.Query(q, append(args, limit)...)
+	rows, err := s.read.Query(q, append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by %s (rollup): %w", d, err)
 	}
@@ -92,7 +92,7 @@ func (s *Store) HourlyByModel(f Filter) ([]HourRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(fmt.Sprintf(`
+	rows, err := s.read.Query(fmt.Sprintf(`
 		SELECT hour, model, SUM(events), SUM%s,
 		       SUM(CASE WHEN is_sidechain = 1 THEN %s ELSE 0 END),
 		       %s
@@ -140,7 +140,7 @@ type Summary struct {
 	SidechainEvents   int64 `json:"sidechain_events"`
 }
 
-func (s *Store) Summary(f Filter) (*Summary, error) { return readSummary(s.db, f) }
+func (s *Store) Summary(f Filter) (*Summary, error) { return readSummary(s.read, f) }
 
 func readSummary(db interface{ QueryRow(string, ...any) *sql.Row }, f Filter) (*Summary, error) {
 	where, args, err := f.where("hour")
@@ -276,7 +276,7 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 		  FROM usage_hourly %s AND session_id != ''
 		  GROUP BY account_uuid, source, session_id
 		) ORDER BY %s LIMIT ? OFFSET ?`, sourceExpr, hourlyTokens, hourlyTokens, where, order)
-	rows, err := s.db.Query(q, append(args, limit, offset)...)
+	rows, err := s.read.Query(q, append(args, limit, offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: %w", err)
 	}
@@ -360,7 +360,7 @@ func (s *Store) SessionTokenMedian(f Filter) (int64, error) {
 		SELECT tokens FROM per_session ORDER BY tokens ASC
 		LIMIT 1 OFFSET (SELECT COUNT(*) / 2 FROM per_session)`, hourlyTokens, where)
 	var median int64
-	switch err := s.db.QueryRow(q, args...).Scan(&median); {
+	switch err := s.read.QueryRow(q, args...).Scan(&median); {
 	case err == sql.ErrNoRows:
 		return 0, nil
 	case err != nil:
@@ -395,7 +395,7 @@ func (s *Store) fillSessionModels(f Filter, rows []SessionRow, ids []string) err
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	res, err := s.db.Query(fmt.Sprintf(`SELECT account_uuid, session_id, model, SUM%s AS t FROM usage_hourly %s
+	res, err := s.read.Query(fmt.Sprintf(`SELECT account_uuid, session_id, model, SUM%s AS t FROM usage_hourly %s
 		GROUP BY account_uuid, session_id, model ORDER BY account_uuid, session_id, t DESC`, hourlyTokens, where), args...)
 	if err != nil {
 		return fmt.Errorf("session models: %w", err)
@@ -485,7 +485,7 @@ func (s *Store) SessionTurns(account, id string, sources ...string) ([]Turn, err
 		where += ` AND source=?`
 		args = append(args, sources[0])
 	}
-	rows, err := s.db.Query(`SELECT ts, model, effort, input_tokens, output_tokens, cache_read_tokens,
+	rows, err := s.read.Query(`SELECT ts, model, effort, input_tokens, output_tokens, cache_read_tokens,
 		cache_create_5m_tokens + cache_create_1h_tokens, thinking_tokens, cost_usd, is_sidechain,request_id,source,details_json
 		FROM usage_events `+where+` ORDER BY ts`, args...)
 	if err != nil {

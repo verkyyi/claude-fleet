@@ -21,7 +21,7 @@ func TestRollupFollowsInsertsAndIgnoresDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rows int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_hourly`).Scan(&rows); err != nil {
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM usage_hourly`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 2 {
@@ -30,7 +30,7 @@ func TestRollupFollowsInsertsAndIgnoresDedup(t *testing.T) {
 	var events, out, unpriced int64
 	var cost float64
 	var minTS, maxTS string
-	err := s.db.QueryRow(`SELECT events, output_tokens, unpriced_events, cost_usd, min_ts, max_ts
+	err := s.write.QueryRow(`SELECT events, output_tokens, unpriced_events, cost_usd, min_ts, max_ts
 		FROM usage_hourly WHERE hour = '2026-08-31T12:00:00Z'`).Scan(&events, &out, &unpriced, &cost, &minTS, &maxTS)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestRollupFollowsInsertsAndIgnoresDedup(t *testing.T) {
 	if events != 2 || out != 150 || unpriced != 0 || cost != 3.0 {
 		t.Fatalf("12:00 row = events %d out %d unpriced %d cost %v", events, out, unpriced, cost)
 	}
-	err = s.db.QueryRow(`SELECT events, unpriced_events, cost_usd FROM usage_hourly
+	err = s.write.QueryRow(`SELECT events, unpriced_events, cost_usd FROM usage_hourly
 		WHERE hour = '2026-08-31T13:00:00Z'`).Scan(&events, &unpriced, &cost)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestRebuildRollupRefusesToDestroyPrunedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var events int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
 	if events != 1 {
@@ -141,7 +141,7 @@ func TestRebuildRollupRefusesToDestroyPrunedHistory(t *testing.T) {
 		t.Fatalf("the pruned hour's rollup row must survive a forced rebuild: rows=%d err=%v", rows, err)
 	}
 	var oldEvents int64
-	if err := s.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
+	if err := s.write.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
 		t.Fatalf("the pruned hour's rollup row must still exist: %v", err)
 	}
 	if oldEvents != 1 {
@@ -160,7 +160,7 @@ func TestOpenBackfillsEmptyRollupAndHonoursVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate a database written by a hub that predates the rollup.
-	if _, err := s.db.Exec(`DELETE FROM usage_hourly; DELETE FROM rollup_meta`); err != nil {
+	if _, err := s.write.Exec(`DELETE FROM usage_hourly; DELETE FROM rollup_meta`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -173,7 +173,7 @@ func TestOpenBackfillsEmptyRollupAndHonoursVersion(t *testing.T) {
 		t.Fatalf("Open must backfill an empty rollup, rows=%d", n)
 	}
 	var v string
-	if err := s.db.QueryRow(`SELECT value FROM rollup_meta WHERE key='usage_hourly_version'`).Scan(&v); err != nil || v != rollupVersion {
+	if err := s.write.QueryRow(`SELECT value FROM rollup_meta WHERE key='usage_hourly_version'`).Scan(&v); err != nil || v != rollupVersion {
 		t.Fatalf("version stamp = %q err=%v", v, err)
 	}
 }
@@ -205,7 +205,7 @@ func TestForceRebuildWithEmptyEventsPreservesRollup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var events int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+	if err := s.write.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
 	if events != 0 {
@@ -270,7 +270,7 @@ func TestOpenDegradesRollupOnPrunedDBInsteadOfFailing(t *testing.T) {
 	// Simulate the design's own rollup-schema upgrade mechanism: a
 	// rollupVersion bump, recorded here by hand since the real constant is
 	// fixed at "1" in this build.
-	if _, err := s.db.Exec(
+	if _, err := s.write.Exec(
 		`UPDATE rollup_meta SET value = 'simulated-next-version' WHERE key = 'usage_hourly_version'`,
 	); err != nil {
 		t.Fatal(err)
@@ -284,13 +284,13 @@ func TestOpenDegradesRollupOnPrunedDBInsteadOfFailing(t *testing.T) {
 	defer s2.Close()
 
 	var v string
-	if err := s2.db.QueryRow(`SELECT value FROM rollup_meta WHERE key='usage_hourly_version'`).Scan(&v); err != nil || v != rollupVersion {
+	if err := s2.write.QueryRow(`SELECT value FROM rollup_meta WHERE key='usage_hourly_version'`).Scan(&v); err != nil || v != rollupVersion {
 		t.Fatalf("version stamp after the degraded rebuild = %q err=%v, want %q", v, err, rollupVersion)
 	}
 
 	// The pre-retention hour must survive, untouched.
 	var oldEvents int64
-	if err := s2.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
+	if err := s2.write.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(oldTS)).Scan(&oldEvents); err != nil {
 		t.Fatalf("the pruned hour's rollup row must survive Open's degraded rebuild: %v", err)
 	}
 	if oldEvents != 1 {
@@ -299,7 +299,7 @@ func TestOpenDegradesRollupOnPrunedDBInsteadOfFailing(t *testing.T) {
 
 	// The reconstructable hour must have been rebuilt under the new version.
 	var newEvents int64
-	if err := s2.db.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(newTS)).Scan(&newEvents); err != nil {
+	if err := s2.write.QueryRow(`SELECT events FROM usage_hourly WHERE hour = ?`, hourKey(newTS)).Scan(&newEvents); err != nil {
 		t.Fatalf("the reconstructable hour must be rebuilt: %v", err)
 	}
 	if newEvents != 1 {
@@ -309,7 +309,7 @@ func TestOpenDegradesRollupOnPrunedDBInsteadOfFailing(t *testing.T) {
 
 func dumpRollup(t *testing.T, s *Store) string {
 	t.Helper()
-	rows, err := s.db.Query(`SELECT hour, model, is_sidechain, events, output_tokens, cost_usd, unpriced_events, min_ts, max_ts
+	rows, err := s.write.Query(`SELECT hour, model, is_sidechain, events, output_tokens, cost_usd, unpriced_events, min_ts, max_ts
 		FROM usage_hourly ORDER BY hour, model, is_sidechain`)
 	if err != nil {
 		t.Fatal(err)

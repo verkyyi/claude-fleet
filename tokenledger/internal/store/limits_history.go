@@ -30,7 +30,7 @@ func (s *Store) LimitsHistory(account string, start, end time.Time, sources ...s
 	q := `SELECT account_uuid, observed_at, five_hour_pct, seven_day_pct FROM limit_snapshots
 	      WHERE ` + accountClause(account) + ` observed_at >= ? AND observed_at < ?
 	      ` + filter + ` ORDER BY account_uuid, observed_at`
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("limits history: %w", err)
 	}

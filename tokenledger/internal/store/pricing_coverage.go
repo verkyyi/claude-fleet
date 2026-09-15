@@ -28,7 +28,7 @@ type UnpricedReason struct {
 // snapshot. Pruned raw details remain in the denominator through the rollup.
 func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error) {
 	f = f.AlignHours()
-	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	tx, err := s.read.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, nil, err
 	}
