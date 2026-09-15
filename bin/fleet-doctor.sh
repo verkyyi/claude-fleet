@@ -750,6 +750,66 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 
+# --- the floor under auto-handoff: spinner alive + the timeout invariant (#677) ---
+# /fleet-handoff's auto-cycle waits for @claude_state to leave `working` and ABORTS
+# WITHOUT CLEARING if it never does. For the case that matters most — a turn that
+# emitted no Stop hook at all (a model cap #580, a crash) — the ONLY thing that can
+# ever open that gate is the spinner's stuck-working demotion (#101). So auto-handoff
+# rests on two things nobody was checking: that the demoter is RUNNING, and that it
+# lands before the cycle gives up (FLEET_STUCK_WORKING_SECS + 2 sweeps < the wait-idle
+# ceiling). Shipped, the margin was 40s across two files that had never heard of each
+# other. Both failures are SILENT — an overnight loop just fills its context and stops
+# — which is exactly the shape that belongs on this screen.
+hbf="$(dirname "$0")/../logs/spinner.heartbeat"
+inv="$(dirname "$0")/fleet-handoff-invariant.sh"
+hb_age=''
+if [ -f "$hbf" ]; then
+  hb=$(cat "$hbf" 2>/dev/null)
+  case "$hb" in ''|*[!0-9]*) ;; *) hb_age=$(( $(date +%s 2>/dev/null || echo 0) - hb )) ;; esac
+fi
+# Cadence is ~20-30s: HB_CHECK_SECS is converted to a FRAME count, so like every
+# other throttle in that loop it tracks what a frame actually costs (measured 27s on
+# a live fleet), and a busy machine stretches it further (#653). The spinner keeps
+# stamping while no fleet is up, so silence is never just "nothing to do". 180s is
+# therefore ~6 missed writes at nominal cadence — a stopped or wedged loop, not a
+# slow one — and deliberately loose: a false "your demoter is dead" on this screen
+# would send the operator chasing the wrong thing.
+if [ -z "$hb_age" ]; then
+  if sh "$(dirname "$0")/fleet-daemon-loaded.sh" com.claude-fleet.spinner 2>/dev/null; then
+    warn handoff "com.claude-fleet.spinner is loaded but stamps no heartbeat — an install predating #677; run /fleet-sync-install, then \`launchctl kickstart -k gui/\$UID/com.claude-fleet.spinner\`"
+  else
+    warn handoff "no spinner heartbeat and com.claude-fleet.spinner is not loaded — nothing demotes a window pinned at \`working\` by a turn that never emitted Stop (#580), so auto-handoff can only ever time out (#101/#677)"
+  fi
+elif [ "$hb_age" -gt 180 ]; then
+  warn handoff "spinner heartbeat is ${hb_age}s old (stamps every ~20-30s) — the stuck-working demoter is stopped or wedged, so auto-handoff has no floor under it (#677); check logs/spinner.launchd.log"
+else
+  pass handoff "stuck-working demoter alive (heartbeat ${hb_age}s ago)"
+fi
+# The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
+# overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
+if [ -x "$inv" ]; then
+  _inv_line() {
+    _s="$1"; _lbl="$2"
+    _out=$(sh "$inv" ${_s:+--session "$_s"} --oneline 2>&1); _rc=$?
+    case "$_rc" in
+      0) pass handoff "$_lbl$_out" ;;
+      1) warn handoff "$_lbl$_out" ;;
+      *) warn handoff "$_lbl could not evaluate the handoff timeout invariant — $_out (#677)" ;;
+    esac
+  }
+  _any=0
+  if [ -d "$conf_dir" ]; then
+    while IFS= read -r cf; do
+      [ -n "$cf" ] || continue
+      case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
+      _any=1; _inv_line "$sess" "$sess: "
+    done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+  fi
+  [ "$_any" = 0 ] && _inv_line '' ''
+fi
+
 # --- project trust: will a spawned worker stop at "trust this folder?" (issue #563) ---
 # Claude Code keys its per-directory trust on the resolved project root — a linked
 # worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
