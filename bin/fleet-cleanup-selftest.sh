@@ -9,7 +9,16 @@
 #   MERGED           → cleaned:<sha>  (+ ledger row BEFORE teardown captured the
 #                                       worktree path, teardown order window →
 #                                       worktree → branch, base pull happened)
-#   CLOSED-unmerged  → cleaned:closed (orphan reaped, NO ledger, NO base pull)
+#   CLOSED-unmerged  → cleaned:closed (orphan reaped, closed-unlanded ledger row,
+#                                       NO base pull) — but ONLY past the liveness
+#                                       gate (issue #544):
+#     window `working`                  → skip:live  (a session mid-turn)
+#     transcript moved AFTER closedAt   → skip:live  (working ON the close; #534,
+#                                         and the ⌃o-restore case — no timeout)
+#     transcript quiet < the grace      → skip:live
+#     no readable transcript + a window → skip:live  (cannot prove it idle)
+#     dirty worktree                    → skip:dirty (autoclean's KEEP rule)
+#     --dry-run over a live one         → skip:live, not dry:would-reap-closed
 #   OPEN             → skip:not-final (nothing torn down, nothing recorded)
 #   already-torn-down (MERGED, no worktree/window) → skip:nothing (idempotent,
 #                                       no duplicate ledger row, no teardown)
@@ -83,13 +92,15 @@ case "\$action" in
   view)
     case "\$*" in
       *"--json state,headRefOid"*)
+        # 4th field = closedAt (issue #544) — the clock the closed gate compares
+        # transcript activity against. Empty for a PR that never closed.
         case "\${GH_SCENARIO:-merged}" in
-          merged)        printf 'MERGED\tsha-%s\tissue-42\n' "\$num" ;;
-          closed)        printf 'CLOSED\tsha-%s\tissue-42\n' "\$num" ;;
-          open)          printf 'OPEN\tsha-%s\tissue-42\n' "\$num" ;;
-          scratch)       printf 'MERGED\tcafe1234\tscratch-99\n' ;;
-          scratchclosed) printf 'CLOSED\tcafe1234\tscratch-99\n' ;;
-          protected)     printf 'MERGED\tcafe1234\tmaster\n' ;;
+          merged)        printf 'MERGED\tsha-%s\tissue-42\t\n' "\$num" ;;
+          closed)        printf 'CLOSED\tsha-%s\tissue-42\t%s\n' "\$num" "\${FAKE_CLOSED_AT:-}" ;;
+          open)          printf 'OPEN\tsha-%s\tissue-42\t\n' "\$num" ;;
+          scratch)       printf 'MERGED\tcafe1234\tscratch-99\t\n' ;;
+          scratchclosed) printf 'CLOSED\tcafe1234\tscratch-99\t%s\n' "\${FAKE_CLOSED_AT:-}" ;;
+          protected)     printf 'MERGED\tcafe1234\tmaster\t\n' ;;
         esac ;;
       *"--json title"*) printf 'Fake PR %s\t2026-01-01T00:00:00Z\tsha-%s\n' "\$num" "\$num" ;;
     esac ;;
@@ -110,7 +121,10 @@ case "\${1:-}" in
     [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s/wt-scratch-99\n' "$WORK"; : ;;
   list-windows)
     case "\$*" in
-      *claude_state*) [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s\n' "\${SCRATCH_STATE:-done}"; : ;;
+      *claude_state*)
+        [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s\n' "\${SCRATCH_STATE:-done}"
+        [ "\${WIN_GONE:-0}" = 1 ] || printf '@7 %s\n' "\${WIN_STATE_FAKE:-done}"
+        : ;;
       *)              [ "\${WIN_GONE:-0}" = 1 ] || echo '@7 42' ;;   # window @7 → issue 42
     esac ;;
   display-message)
@@ -123,10 +137,34 @@ exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 
+# --- portable clock helpers (macOS BSD date first, GNU second) ----------------
+# GNU `date -r` means "reference FILE", so it fails on a bare epoch and falls
+# through to the -d form; BSD `date -d` is a DST flag and fails on "@<epoch>".
+stamp_of() { date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null; }
+iso_ago()  { local e=$(( $(date +%s) - $1 ))
+             date -u -r "$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; }
+
+# The closed gate reads the WORKER'S TRANSCRIPT, so the fixture needs a real file
+# with a controlled mtime under a CLAUDE_PROJECTS_DIR inside $WORK (never the
+# operator's own ~/.claude/projects — that would make the suite non-hermetic and
+# its verdict depend on whose machine it runs on). The dir name is
+# fleet_transcript_dir's encoding of the worktree path.
+PROJ="$WORK/projects"
+make_transcript() {  # $1 = seconds ago the session last spoke, or "none"
+  rm -rf "$PROJ"; mkdir -p "$PROJ"
+  [ "${1:-3600}" = none ] && return 0
+  local enc dir
+  enc=$(printf '%s' "$WORK/wt-issue-42" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+  dir="$PROJ/$enc"; mkdir -p "$dir"
+  printf '{"type":"user","message":{"role":"user","content":"hi"}}\n' > "$dir/sess-1.jsonl"
+  touch -t "$(stamp_of $(( $(date +%s) - $1 )))" "$dir/sess-1.jsonl" 2>/dev/null
+}
+
 # run fleet-cleanup against the fakes. $1=scenario; remaining args pass through.
 run_clean() {
   local scenario="$1"; shift
   : > "$ORDER_LOG"; : > "$PULL_LOG"
+  make_transcript "${FAKE_TX_AGE:-3600}"
   # A REAL worktree dir (issue #586): teardown no longer shells out to
   # `git worktree remove` — it RENAMES the tree into a sibling .fleet-trash/, so the
   # test needs actual bytes on disk to watch move, and a clean trash each run.
@@ -136,6 +174,9 @@ run_clean() {
   fi
   GH_SCENARIO="$scenario" FAKE_SELF_WIN="${FAKE_SELF_WIN:-@1}" \
   WT_GONE="${WT_GONE:-0}" WIN_GONE="${WIN_GONE:-0}" \
+  WIN_STATE_FAKE="${WIN_STATE_FAKE:-done}" \
+  FAKE_CLOSED_AT="${FAKE_CLOSED_AT:-$(iso_ago 1800)}" \
+  CLAUDE_PROJECTS_DIR="$PROJ" \
   SCRATCH_WT="${SCRATCH_WT:-0}" SCRATCH_WIN="${SCRATCH_WIN:-0}" \
   SCRATCH_STATE="${SCRATCH_STATE:-done}" FAKE_DIRTY="${FAKE_DIRTY:-0}" \
   FAKE_TIP="${FAKE_TIP:-deadbeef}" \
@@ -173,7 +214,12 @@ grep -q 'wt-issue-42' "$LEDGER" || fail "1 ledger row missing the worktree path 
 [ -s "$PULL_LOG" ] || fail "1 merged cleanup must fast-forward the base (git pull --ff-only)" "$err"
 ok "1 MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull"
 
-# --- 2. CLOSED-unmerged → cleaned:closed, orphan reaped, NO ledger, NO base pull
+# ======= CLOSED-unmerged: the liveness gate, issue #544 ========================
+# The default fixture is an ABANDONED session: the transcript went quiet an hour
+# ago, the PR closed 30 minutes ago (so the last word predates the close), and the
+# window is `done`. Each case below perturbs exactly one of those.
+
+# --- 2. CLOSED-unmerged, session demonstrably gone → reaped + recorded ---------
 : > "$LEDGER"
 tok="$(run_clean closed)"; err="$(cat "$WORK/err")"
 [ "$tok" = "cleaned:closed" ] || fail "2 expected cleaned:closed, got '$tok'" "$err"
@@ -181,8 +227,87 @@ tok="$(run_clean closed)"; err="$(cat "$WORK/err")"
 [ -n "$(find "$WORK/.fleet-trash" -mindepth 1 -maxdepth 1 -name 'wt-issue-42.*' 2>/dev/null)" ] \
   || fail "2 the orphan worktree was not dropped into .fleet-trash" "$err"
 [ -s "$PULL_LOG" ] && fail "2 closed-unmerged must NOT fast-forward the base (nothing merged)" "$err"
-[ -s "$LEDGER" ]   && fail "2 closed-unmerged must NOT record a landed-session ledger row" "$err"
-ok "2 CLOSED-unmerged → cleaned:closed, orphan reaped, no ledger, no base pull"
+# It IS recorded now (issue #544): a reaped closed-unmerged worker used to vanish
+# from /fleet-history entirely — no transcript pointer, no sha, no way back.
+[ -s "$LEDGER" ] || fail "2 closed-unmerged must record a closed-unlanded ledger row" "$err"
+grep -q 'wt-issue-42' "$LEDGER" || fail "2 the closed row must carry the worktree path (recorded before teardown?)" "$err"
+ok "2 CLOSED-unmerged + session gone → cleaned:closed, reaped, closed row recorded, no base pull"
+
+# --- 2b. the #534 case: the session spoke AFTER the PR closed → never reaped ---
+# A failed squash + a hand-deleted remote branch closes the PR while its worker is
+# still resolving the conflict. No grace can cover that — the rule is "activity
+# after closedAt", which has no timeout, so ⌃o restore works again too.
+: > "$LEDGER"
+tok="$(FAKE_TX_AGE=5 FAKE_CLOSED_AT="$(iso_ago 600)" run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2b a session that spoke after closedAt must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2b a live closed-unmerged session must not be torn down" "$err"
+[ -d "$WORK/wt-issue-42" ] || fail "2b the live worktree must survive the deferral" "$err"
+[ -s "$LEDGER" ] && fail "2b a deferred reap must not record the session as closed" "$err"
+ok "2b CLOSED-unmerged, transcript moved after closedAt → skip:live (the #534 regression)"
+
+# --- 2c. quiet, but not for long enough → grace -------------------------------
+: > "$LEDGER"
+tok="$(FAKE_TX_AGE=120 FAKE_CLOSED_AT="$(iso_ago 60)" run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2c a window idle under the grace must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2c a window inside the grace must not be torn down" "$err"
+ok "2c CLOSED-unmerged, idle < FLEET_CLEANUP_CLOSED_GRACE → skip:live"
+
+# --- 2d. the window says it is mid-turn → hands off, whatever the clock says ---
+: > "$LEDGER"
+tok="$(WIN_STATE_FAKE=working run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2d a 'working' window must defer with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2d a working window must not be torn down" "$err"
+ok "2d CLOSED-unmerged, window @claude_state=working → skip:live"
+
+# --- 2e. a live window we cannot read → fail CLOSED, do not guess -------------
+: > "$LEDGER"
+tok="$(FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2e an unreadable live window must fail closed with skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2e an unprovable window must not be torn down" "$err"
+ok "2e CLOSED-unmerged, live window with no transcript → skip:live (fails closed)"
+
+# --- 2f. dirty worktree → the SAME answer worktree-autoclean.sh gives ---------
+# This is the byte-for-byte regression: `worktree remove --force` deleted the
+# uncommitted conflict resolution. Both the verdict and the tree are asserted.
+: > "$LEDGER"
+tok="$(FAKE_DIRTY=1 run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:dirty" ] || fail "2f a dirty closed-unmerged worktree must refuse with skip:dirty, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2f a dirty worktree must not be torn down" "$err"
+[ "$(cat "$WORK/wt-issue-42/keep.txt" 2>/dev/null)" = payload ] \
+  || fail "2f the dirty worktree's content must survive untouched" "$err"
+ok "2f CLOSED-unmerged, dirty worktree → skip:dirty (never force-dropped)"
+
+# --- 2g. no live window at all → nothing to protect, reap the orphan ----------
+: > "$LEDGER"
+tok="$(WIN_GONE=1 FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "cleaned:closed" ] || fail "2g a windowless closed orphan must be reaped, got '$tok'" "$err"
+[ -e "$WORK/wt-issue-42" ] && fail "2g the windowless orphan worktree must be dropped" "$err"
+ok "2g CLOSED-unmerged, no live window → cleaned:closed (nothing to protect)"
+
+# --- 2g2. a live window whose worktree is already gone → reapable on `working` --
+# A prior tick dropped the tree but its kill-window failed. There is no file work
+# to lose and no transcript dir (it is keyed by the worktree path), so `working` is
+# the whole gate — anything stricter would leak that window, and a `gh pr view` per
+# tick, forever.
+: > "$LEDGER"
+tok="$(WT_GONE=1 FAKE_TX_AGE=none run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "cleaned:closed" ] || fail "2g2 a worktree-less closed window must be reapable, got '$tok'" "$err"
+grep -q 'kill-window @7' "$ORDER_LOG" || fail "2g2 the orphan window must be killed" "$err"
+tok="$(WT_GONE=1 FAKE_TX_AGE=none WIN_STATE_FAKE=working run_clean closed)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2g2 a worktree-less window that is 'working' must defer, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2g2 a working worktree-less window must not be torn down" "$err"
+ok "2g2 CLOSED-unmerged, worktree gone + live window → reaped unless 'working'"
+
+# --- 2h. --dry-run over a LIVE one classifies honestly, not "would reap" ------
+# Every gate check is a read, so it runs in --dry-run too; a dry-run that said
+# `dry:would-reap-closed` over a live session would be reporting a lie.
+: > "$LEDGER"
+tok="$(FAKE_TX_AGE=5 FAKE_CLOSED_AT="$(iso_ago 600)" run_clean closed --dry-run)"; err="$(cat "$WORK/err")"
+[ "$tok" = "skip:live" ] || fail "2h --dry-run over a live closed PR must report skip:live, got '$tok'" "$err"
+[ -s "$ORDER_LOG" ] && fail "2h --dry-run must not tear anything down" "$err"
+tok="$(run_clean closed --dry-run)"; err="$(cat "$WORK/err")"
+[ "$tok" = "dry:would-reap-closed" ] || fail "2h --dry-run over a gone session must report dry:would-reap-closed, got '$tok'" "$err"
+ok "2h --dry-run runs the gate: skip:live when live, dry:would-reap-closed when gone"
 
 # --- 3. OPEN → skip:not-final, nothing torn down, nothing recorded ------------
 : > "$LEDGER"
