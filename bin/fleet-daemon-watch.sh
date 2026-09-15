@@ -35,11 +35,23 @@
 #      than a pend, so it is verified and, if it failed, retried on the very next
 #      pass instead of waiting out the cooldown.
 #
-# A RUNNING UNIT IS NEVER KICKED. `launchctl kickstart -k` KILLS the current
+# A RUNNING UNIT IS NOT KICKED FOR BEING SLOW — but "running" is not a licence to
+# hang for ever (issue #682). `launchctl kickstart -k` KILLS the current
 # invocation, so kicking a unit that is merely slow would abort a working tick —
 # and a slow tick is the one thing a relative threshold can confuse with a pended
 # one. launchd/systemd answer that directly (`state = running`), so an overdue
-# unit is classified before anything is done to it:
+# unit is classified before anything is done to it.
+#
+# #639 made that guard absolute, and #682 is the bill: collect and quotawatch each
+# sat `state = running` and frozen for ~54 minutes, `--status` called both `stale`
+# — the alarm was right — and the self-heal stood down BY DESIGN while the dash
+# served 53-minute-old data. "Slow" and "wedged" are separated by DURATION, not by
+# whether something is running, and staleness is the duration that says so: a tick
+# that is slow but alive stamps `phase_ts` at every phase boundary, so its
+# staleness stays small however long it runs. Past fleet_daemon_wedged_secs (3x
+# the unit's own stale threshold; FLEET_DAEMON_WEDGED_MULT=0 restores the old
+# hands-off guard) it has stopped advancing its heartbeat at all, and takes the
+# ordinary ladder.
 #
 #   reload  pended, and kicking it repeatedly did not help → unload + reload
 #   never   no stamp at all      → silent (fresh install, or a unit this host
@@ -48,6 +60,8 @@
 #                                  the alarm.
 #   ok      fresh                → nothing to do
 #   slow    overdue, RUNNING     → reported, NOT kicked: it is alive, just behind
+#   wedged  RUNNING, but stale past fleet_daemon_wedged_secs → not behind, stopped
+#                                  → healed on the normal ladder (#682)
 #   pended  overdue, not running → the #639 fault → kick it
 #   bootstr overdue, not loaded, but its plist is on disk → bootstrapped back in
 #   no-unit overdue, not loaded, no plist → logged + stamped, never kicked; the
@@ -80,6 +94,9 @@
 #      FLEET_DAEMON_KICK_COOLDOWN (600)  FLEET_DAEMON_KICK_COOLDOWN_<UNIT>
 #      FLEET_DAEMON_KICK_TRACE (1800)
 #      FLEET_DAEMON_KICK (1 — set 0 to disable every self-heal and keep the alarm)
+#      FLEET_DAEMON_WEDGED_MULT (3 — x the unit's stale threshold before a RUNNING
+#        unit counts as wedged; 0 = never touch a running unit, the pre-#682 guard)
+#      FLEET_DAEMON_WEDGED_<UNIT> (that threshold in seconds, for one unit)
 #      FLEET_COLLECT_KICK (1 — same, for `collect` alone; #638's knob)
 #      FLEET_DAEMON_RELOAD_AFTER (3 — 0 disables the reload escalation)
 #      FLEET_DAEMON_RELOAD_COOLDOWN (1800)
@@ -255,6 +272,20 @@ EOF
     esac
   fi
 
+  # Is a RUNNING unit merely slow, or WEDGED? (issue #682) Decided here, beside
+  # do_reload, for the same reason: the dry-run verdict and the real one must not
+  # be able to disagree. `stale` is seconds since this unit last showed ANY
+  # evidence of life, and a tick that is slow but alive stamps `phase_ts` at every
+  # phase boundary — so staleness measures "stopped", not "long". Past
+  # fleet_daemon_wedged_secs the unit has not advanced its own heartbeat for
+  # several whole alarm windows and the running-guard below stands down.
+  wedged=0
+  wthr=$(fleet_daemon_wedged_secs "$u")
+  case "$wthr" in ''|*[!0-9]*) wthr=0 ;; esac
+  if [ "$running" = 1 ] && [ "$wthr" -gt 0 ] && [ -n "$stale" ] && [ "$stale" -ge "$wthr" ]; then
+    wedged=1
+  fi
+
   # The verdict, in one place — and the whole of --dry-run.
   if [ "$DRY" = 1 ]; then
     if [ -z "$mgr" ]; then
@@ -263,8 +294,10 @@ EOF
       else
         printf 'fleet-daemon-watch: %s stale %ss, no unit and no plist — would do nothing\n' "$u" "${stale:-0}" >&2
       fi
+    elif [ "$running" = 1 ] && [ "$wedged" = 1 ]; then
+      printf 'fleet-daemon-watch: %s is RUNNING but WEDGED (stale %ss >= %ss) — would heal it anyway\n' "$u" "${stale:-0}" "$wthr" >&2
     elif [ "$running" = 1 ] && ! { [ "$FORCE" = 1 ] && [ "$NOW_" = 1 ]; }; then
-      printf 'fleet-daemon-watch: %s stale %ss but a tick is RUNNING — would NOT touch it\n' "$u" "${stale:-0}" >&2
+      printf 'fleet-daemon-watch: %s stale %ss but a tick is RUNNING — would NOT touch it (wedged at %ss)\n' "$u" "${stale:-0}" "$wthr" >&2
     elif [ "$do_reload" = 1 ]; then
       printf 'fleet-daemon-watch: would RELOAD %s (%s) after %s ineffective kicks — %s stale %ss\n' "$target" "$mgr" "$fails" "$u" "${stale:-0}" >&2
     else
@@ -309,10 +342,17 @@ EOF
   # it and leave it alone; the alarm on the bar and in fleet-doctor still stands,
   # which is the whole point of separating "visible" from "healed". `--force
   # --now` is the deliberate override for a genuinely wedged tick.
-  if [ "$running" = 1 ] && ! { [ "$FORCE" = 1 ] && [ "$NOW_" = 1 ]; }; then
-    log "slow     unit=$u stale=${stale:-0}s mgr=$mgr unit-state=running — behind but alive; NOT kicked (kickstart -k would abort the tick)"
-    printf 'fleet-daemon-watch: %s stale %ss but a tick is RUNNING — not kicked (use --force --now to abort it)\n' \
-      "$u" "${stale:-0}" >&2
+  if [ "$running" = 1 ] && [ "$wedged" = 1 ]; then
+    # Running, and stale for several whole alarm windows: not behind, stopped.
+    # Falling through to the ladder is the point of #682 — before it, this was
+    # the branch that watched a frozen tick for 54 minutes and did nothing.
+    log "wedged   unit=$u stale=${stale:-0}s mgr=$mgr unit-state=running threshold=${wthr}s — RUNNING but not advancing its heartbeat; healing it (FLEET_DAEMON_WEDGED_MULT=0 restores the old hands-off guard)"
+    printf 'fleet-daemon-watch: %s is RUNNING but WEDGED (stale %ss >= %ss) — healing it\n' \
+      "$u" "${stale:-0}" "$wthr" >&2
+  elif [ "$running" = 1 ] && ! { [ "$FORCE" = 1 ] && [ "$NOW_" = 1 ]; }; then
+    log "slow     unit=$u stale=${stale:-0}s mgr=$mgr unit-state=running — behind but alive; NOT kicked (kickstart -k would abort the tick); wedged at ${wthr}s"
+    printf 'fleet-daemon-watch: %s stale %ss but a tick is RUNNING — not kicked (wedged at %ss; --force --now aborts it now)\n' \
+      "$u" "${stale:-0}" "$wthr" >&2
     rm -rf "$LOCK"; LOCK=''; continue
   fi
 

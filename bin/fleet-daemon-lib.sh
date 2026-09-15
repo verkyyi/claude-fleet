@@ -180,6 +180,45 @@ fleet_daemon_stale_secs() {
   printf '%s' "$_fd_t"
 }
 
+# fleet_daemon_wedged_secs <unit> — how long a RUNNING unit may show no progress
+# before it counts as WEDGED rather than slow (issue #682). 0 disables it, and a
+# unit is never wedged while it is still advancing its heartbeat.
+#
+# Why this exists. #639's self-heal has a deliberate guard: a unit whose state is
+# `running` is never kicked, because `launchctl kickstart -k` KILLS the current
+# invocation and aborting a merely-slow tick is worse than waiting for it. That
+# was right about the remedy and wrong about the question — it treated "slow" and
+# "stopped for ever" as one state. On 2026-09-15 collect and quotawatch each sat
+# `running` and frozen for ~54 minutes; `--status` reported both `stale`, the
+# alarm was accurate, and the self-heal stood down by design while the dash served
+# 53-minute-old data with nothing left that could recover it.
+#
+# DURATION is what separates the two, and staleness is the honest duration to
+# measure: a tick that is slow but alive stamps `phase_ts` at every phase boundary
+# (see _fleet_daemon_hb_ts), so however long that tick runs its staleness stays
+# small. A unit that has been stale for several whole alarm windows is not behind
+# — it has stopped advancing its own heartbeat, and only then does it go down the
+# normal ladder (kick → count → bootout/bootstrap).
+#
+# The threshold is a MULTIPLE of the unit's own staleness threshold, which is
+# already per-unit and interval-derived, so a host that legitimately runs long
+# ticks raises one knob and both numbers move together. Default MULT=3, i.e. 900s
+# for a 60s unit like collect (3 x max(5 x 60, 180)). Note this is ~7x collect's
+# 120s tick budget, not the 3x the issue first proposed: the budget is not visible
+# from here, and a generous first setting is the right bias when the remedy aborts
+# a live tick. FLEET_DAEMON_WEDGED_MULT retunes every unit;
+# FLEET_DAEMON_WEDGED_<UNIT> sets one outright; either set to 0 restores the
+# pre-#682 behaviour of never touching a running unit.
+fleet_daemon_wedged_secs() {
+  _fd_u="${1:-}"
+  _fd_wo=''   # the eval below sets it from the per-unit env override, if any
+  eval "_fd_wo=\${FLEET_DAEMON_WEDGED_$(_fleet_daemon_key "$_fd_u"):-}"
+  case "$_fd_wo" in ''|*[!0-9]*) : ;; *) printf '%s' "$_fd_wo"; return 0 ;; esac
+  _fd_wm="${FLEET_DAEMON_WEDGED_MULT:-3}"; case "$_fd_wm" in ''|*[!0-9]*) _fd_wm=3 ;; esac
+  [ "$_fd_wm" -gt 0 ] || { printf '0'; return 0; }
+  printf '%s' $(( _fd_wm * $(fleet_daemon_stale_secs "$_fd_u") ))
+}
+
 # _fleet_daemon_epoch <file> — the first line of <file> iff it is a positive
 # integer, else 0. Builtin `read`, no fork: the status bar calls this ~10× every
 # 5s per attached client.
