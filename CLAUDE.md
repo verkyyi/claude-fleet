@@ -69,10 +69,12 @@ Do not install from memory: read the doc and work from it.
   dies on a syntax error that has nothing to do with your change.
 - **CI SHARDS the gate; the tests themselves still run one at a time**
   (issue #681). `run-selftests.sh --shard K/N` takes every N-th test of the
-  sorted list, and `.github/workflows/selftests.yml` fans that over a 4-job
-  matrix — so ~9 minutes of suite fits a CI budget it was one minute from
-  outgrowing. Edit the `shard:` list to change the width and nothing else: the
-  split reads `strategy.job-total`. In-runner concurrency was built, measured
+  sorted list, and `.github/workflows/selftests.yml` fans that over a 6-job
+  matrix — ~1-2 min a shard, where the whole suite was 9 minutes against a
+  10-minute bound. Edit the `shard:` list to change the width and nothing else:
+  the split reads `strategy.job-total`. The width is set by measured runner
+  VARIANCE, not suite size — at 4 the same shard ran 2m36s and 4m2s on the same
+  commit in sibling runs. In-runner concurrency was built, measured
   (196s vs 1428s of summed test time, 8-wide) and **rejected** — ~9 tests carry a
   real-time budget that only holds on an idle box (needs-reconcile drives the
   spinner at `FLEET_NEEDS_RECONCILE_SECS=1`, whose strike table goes stale after

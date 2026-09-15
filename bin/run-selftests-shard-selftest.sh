@@ -90,7 +90,25 @@ ALL=$(cd "$WORK/bin" && ls ./*-selftest.sh | sed 's|^\./||' | sort)
 eq "the fixture is the 12 fakes and nothing else (the runner discovers by glob)" \
    12 "$(printf '%s\n' "$ALL" | wc -l | tr -d ' ')"
 
-for N in 1 2 3 4; do
+# 1..4 covers the classes (N=1, even, odd, divides / does not). The stride is a
+# partition for ANY N, but the one N that must never be broken is the width CI
+# actually runs, so read it off the shipped matrix and exercise that too — the
+# check then follows the workflow instead of needing an edit beside it.
+WIDTHS='1 2 3 4'
+if [ -f "$WF" ]; then
+  # NB `tr -d '[:space:]'` would eat the newlines too and collapse the entries onto
+  # one line, counting 6 shards as 1 — so split on commas and count the lines that
+  # carry a digit, stripping nothing.
+  wf_n=$(sed -n 's/^[[:space:]]*shard:[[:space:]]*\[\(.*\)\].*/\1/p' "$WF" \
+           | tr ',' '\n' | grep -c '[0-9]')
+  case "$wf_n" in
+    ''|*[!0-9]*|0) fail "could not read the shard: matrix width out of $WF" ;;
+  esac
+  case " $WIDTHS " in *" $wf_n "*) ;; *) WIDTHS="$WIDTHS $wf_n" ;; esac
+  ok "the shipped matrix width parses ($wf_n shards) and is covered below"
+fi
+
+for N in $WIDTHS; do
   union=''
   k=1
   while [ "$k" -le "$N" ]; do

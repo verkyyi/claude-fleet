@@ -83,7 +83,7 @@ jobs:
       # people re-run instead of read.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     # Backstop only. The real bound is on the run STEP below, deliberately: a
     # JOB-level timeout cancels the whole job, so the step that would tell you
     # WHICH test hung never runs. This one just keeps a wedged runner off
@@ -93,10 +93,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run this shard's selftests
-        # ~2 minutes of work. The bound stays well clear of it so it only ever
-        # catches a HUNG test; a test merely getting SLOWER is caught by the
-        # timings step below, long before it reaches here. And because the suite
-        # now grows sideways, adding a selftest never needs this number touched.
+        # Measured: ~1-2 min per shard at this width. The bound stays several
+        # times clear of that, so it only ever catches a HUNG test; a test merely
+        # getting SLOWER is caught by the timings step below, long before it
+        # reaches here. And because the suite now grows sideways, adding a
+        # selftest never needs this number touched.
+        #
+        # The width is 6, not 4, because of measured RUNNER VARIANCE rather than
+        # suite size: at 4 the same shard took 2m36s in one run and 4m2s in its
+        # sibling run on the identical commit, and 4m2s against this bound is only
+        # 50% margin — the floor this issue set, with nothing left for the growth
+        # that prompted it (8+ tests landed in a single day). At 6 the worst
+        # sample maps to ~2m45s, so the suite can roughly double before the margin
+        # comes back into question.
         timeout-minutes: 8
         run: |
           set -o pipefail
