@@ -482,12 +482,29 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # completes clears the cursor, so a healthy machine (a whole tick is ~10–20s)
 # never rotates and this is invisible.
 #
-# Why 2x the interval and not more: the dash's own staleness alarm fires when the
-# heartbeat has not advanced for FLEET_DAEMON_STALE_MULT x 60s (300s by default).
-# A tick bounded at 120s always advances the heartbeat well inside that, so the
-# collector cannot trip its own alarm — which is exactly what the 454s ticks in
-# #653 were doing. Raising this past ~250s gives that alarm back a false positive;
-# raise the offending phase's budget instead, or find out why it got slow. GLOBAL.
+# What this buys, measured (6 consecutive live ticks, #653): launchd restarts the
+# job a constant ~60s after the previous tick ENDS, so the collector's real cadence
+# is simply
+#
+#     cycle = tick duration + 60s
+#
+#   dur  67s -> 128s cycle      dur 143s -> 204s cycle
+#   dur  77s -> 138s cycle      dur 184s -> 245s cycle
+#
+# (fits every sample within 3s). So bounding the tick pays back LINEARLY — there is
+# no threshold to clear, and the 454s tick in #653 was costing a ~514s cycle, which
+# is exactly the "runs advanced once in 514s" that opened the issue.
+#
+# Why 2x the interval and not less: a smaller budget buys cadence by TRUNCATING, and
+# a truncated phase then waits a whole rotation. At 120s a tick runs every phase, so
+# every cache is at most one cycle old; at, say, 50s the cycle would be ~110s but
+# each cache would only refresh every 3-4 ticks — staler in absolute terms than the
+# 120s setting despite the better `runs` count. `runs` is a proxy for freshness, not
+# freshness itself, and below roughly one full tick's work the two pull apart.
+# Why not more: the dash's staleness alarm fires when the heartbeat has not advanced
+# for FLEET_DAEMON_STALE_MULT x 60s (300s by default), so past ~250s the collector
+# starts tripping its own alarm — which is what the 454s ticks were doing. Raise the
+# offending phase's budget instead, or find out why it got slow. GLOBAL.
 # @label=Collector tick budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_TICK_BUDGET=120
 
