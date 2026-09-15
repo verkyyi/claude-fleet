@@ -70,6 +70,9 @@ FAKE
 
 # fake git — logs "<path><TAB><argv>" per call so the test can assert WHICH
 # subcommands ran and in WHAT order. Optional per-path hang/slow, keyed by suffix.
+# ⚠️ The slow sleep fires on EVERY call, and the collector makes THREE per worktree
+# (rev-parse --git-dir, rev-parse --abbrev-ref, rev-list), so a worktree marked slow
+# costs 3 × FAKE_GIT_SLOW_SECS, not FAKE_GIT_SLOW_SECS. Section 5 budgets for that.
 cat > "$WORK/fakepath/git" <<'FAKE'
 #!/bin/bash
 path=''
@@ -161,7 +164,22 @@ FAKE_GIT_HANG=/wt1 BUDGET=2 run_collector || fail "4: the follow-up tick must ex
 ok "a permanently wedged worktree is retried once per rotation — it never starves the others"
 
 # 5. SLOW-LOG — a slow worktree is named on stderr -------------------------------
-FAKE_GIT_SLOW=/wt2 FAKE_GIT_SLOW_SECS=2 SLOW=1 BUDGET=30 run_collector || fail "5: the tick must exit 0"
+# The window is deliberately WIDE (issue #693). What this section tests is whether
+# slow and fast are told apart and whether the slow one is named — not how fast a
+# shared CI runner forks a shell. Two things make a narrow window flaky:
+#
+#   a. the collector times each worktree with bash `SECONDS` (integer, no `date`
+#      fork), so every measurement carries a ±1s quantization artifact: a 20ms
+#      worktree reads as 1s whenever its work straddles a second boundary. With the
+#      old SLOW=1 the fast assertion therefore meant "must measure EXACTLY 0" — zero
+#      margin by construction, and it went red on CI (run 34969471087, shard 1)
+#      while the same commit passed in a sibling run.
+#   b. a no-sleep path on a noisy shared VM is fast but not BOUNDED.
+#
+# So: slow = 3 × 3s = 9s (see the fake git's ×3 note above), threshold 5s. The fast
+# worktrees get ~4s of real headroom over the artifact, the slow one clears the
+# threshold by 4s, and neither side is pressed against runner jitter.
+FAKE_GIT_SLOW=/wt2 FAKE_GIT_SLOW_SECS=3 SLOW=5 BUDGET=30 run_collector || fail "5: the tick must exit 0"
 grep -q "git took .*s on $WT2" "$WORK/stderr" || fail "5: a worktree slower than FLEET_COLLECT_GIT_SLOW must be named on stderr"
 grep -q "git took .*s on $WT3" "$WORK/stderr" && fail "5: a FAST worktree must not be logged as slow"
 ok "a worktree over FLEET_COLLECT_GIT_SLOW is named on stderr; fast ones are not"
