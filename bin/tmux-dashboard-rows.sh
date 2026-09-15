@@ -124,12 +124,29 @@ model_v() {
 # all fleets equal, no privileged "primary" flat mirror). The row loop below
 # strictly filters to FLEET_SESSION, so one slug'd cache is exactly this fleet's
 # PR status and can never be another fleet's; fleet_cache's flat name is only a
-# cold-start fallback before the slug'd .ts marker lands. Loaded once (not
-# per-row) so the hot loop stays fork-free.
-PRMAP=""; _pf=$(fleet_cache prmap "${FLEET_SESSION:-}"); [ -s "$_pf" ] && PRMAP=$(<"$_pf")
-PRMAPN=$'\n'"$PRMAP"
+# cold-start fallback before the slug'd .ts marker lands.
+# Only the PATH is resolved here — the CONTENT is loaded after pass A, which is
+# what collects the branches this frame actually needs (issue #662).
+_pf=$(fleet_cache prmap "${FLEET_SESSION:-}")
 # deploy_<sha> files (issue #541) live beside the prmap they were derived from.
 PRDIR=${_pf%/*}
+
+# branch → the three spellings the PR cell looks a row up by, in the order it
+# tries them: the branch EXACTLY as the git cache has it, then with a trailing
+# `+<ahead>` stripped, then with a trailing `-<behind>` stripped. Exact comes
+# first because a real branch name can itself end in `-<digits>` (`issue-231`),
+# and the old sed-strip wrongly ate that.
+# ONE definition, used by BOTH the pass-A collector below and the render loop —
+# they must agree on what a row's candidates are, or the frame's haystack would
+# be missing the very line the loop then looks for.
+prcands_v() { b1="$1"
+  b2=$b1; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
+  b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
+}
+
+# window cwd → the collector's cache key. Keep byte-identical to cache_key() in
+# tmux-dash-collect.sh; pass A and the render loop both derive it.
+ckey_v() { ckey=${1//_/_u}; ckey=${ckey//\//_s}; ckey=${ckey// /_w}; }
 
 # List width, to right-align the PR/ctx block to the edge and give the flex
 # span the full remaining width. Prefer fzf's own viewport width — FZF_COLUMNS is
@@ -165,16 +182,43 @@ WLIST=$(tmux list-windows -a -F "$WFMT")
 # `scratch-<digits>` test could never match a @worktree-stamped scratch — the
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it, and it is last.
-KEYTAB=''
+KEYTAB=''; PRWANT=''
 while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
+  # Collect the branch spellings this frame will look up in the prmap (issue
+  # #662) — BEFORE the okey filter below, because a window with no addressable
+  # key still RENDERS in pass B and still gets a PR cell. Its only cost is the
+  # same one-line git_ cache read pass B already does.
+  ckey_v "$path"
+  prbr=''; [ -f "$G/git_$ckey" ] && { IFS=$'\t' read -r prbr _ < "$G/git_$ckey" || :; }
+  case "$prbr" in ''|-) ;; *) prcands_v "$prbr"; PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n' ;; esac
   okey_v "$iss" "$wt" "$path"
   [ -z "$okey" ] && continue
   state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$origin"$'\n'
 done <<< "$WLIST"
+
+# The PR haystack for THIS frame (issue #662). The render loop looks a branch up
+# with `${PRMAPN#*$'\n'"$bare"$'\t'}` — a leading-`*` pattern match, which bash
+# walks in time proportional to the string it is given, up to three times per row.
+# Handed the whole prmap that made ONE FRAME cost O(prmap × windows): on a
+# 6-window fleet with an 88-line prmap, 270ms of a 380ms frame, and it grew every
+# time the repo landed a PR (a 2000-line prmap took 21s — bin/dash-rows-prmap-
+# scale-selftest.sh). So the haystack is narrowed ONCE here, to just the lines
+# whose branch some window on screen can actually ask for: one awk pass over the
+# file, and the loop's own logic below is untouched — it simply scans a string
+# that is now a handful of lines instead of kilobytes.
+# PRWANT rides the ENVIRONMENT, not `-v`: awk processes escape sequences in a -v
+# assignment, so a branch containing a backslash would arrive mangled and its row
+# would silently lose its PR cell.
+PRMAPN=$'\n'
+if [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
+  PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+    ($1 in want)' "$_pf" 2>/dev/null)
+fi
 
 # chain walk (issues #503/#623/#624): resolve a parent KEY to the ultimate LIVE
 # root — ≤4 hops, so a grandchild both GROUPS under and COUNTS toward the same row.
@@ -234,8 +278,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
-  # collision-free cache key — keep byte-identical to cache_key() in tmux-dash-collect.sh
-  key=${path//_/_u}; key=${key//\//_s}; key=${key// /_w}
+  ckey_v "$path"; key=$ckey
 
   branch='-'
   [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
@@ -248,9 +291,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # issue-231 — the old sed-strip wrongly ate that), then decoration-stripped.
   ptxt='—'; pcol=$GY
   if [ "$branch" != '-' ] && [ -n "$branch" ]; then
-    b1=$branch
-    b2=$b1; case "$b2" in *-[0-9]|*-[0-9][0-9]|*-[0-9][0-9][0-9]|*-[0-9][0-9][0-9][0-9]) b2=${b2%-*};; esac
-    b3=$b2; case "$b3" in *+[0-9]|*+[0-9][0-9]|*+[0-9][0-9][0-9]|*+[0-9][0-9][0-9][0-9]) b3=${b3%+*};; esac
+    prcands_v "$branch"
     for bare in "$b1" "$b3" "$b2"; do
       tail=${PRMAPN#*$'\n'"$bare"$'\t'}
       if [ "$tail" != "$PRMAPN" ]; then
