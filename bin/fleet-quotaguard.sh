@@ -14,8 +14,9 @@
 # load through. Same exit codes, same fail-open rule, so the two guards can be
 # reasoned about identically.
 #
-# It does NOT measure anything itself. The measurement lives in ccquota
-# (https://github.com/verkyyi/ccquota), which reads Anthropic's own account-wide
+# It does NOT measure anything itself. The measurement lives in ccquota — the
+# binary from TokenLedger (https://github.com/verkyyi/tokenledger), still spelled
+# `ccquota` everywhere you type it — which reads Anthropic's own account-wide
 # utilization; this script is the fleet's policy on top of that answer. Keeping
 # the split means the fleet has no opinion about how quota is measured, and
 # ccquota has no opinion about what a fleet should do.

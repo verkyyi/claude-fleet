@@ -383,7 +383,7 @@ fleet_worker_charter() {
 # broken. Workers claim, branch, push, CI goes green, PRs merge — onto a branch
 # nobody ships from. The trunk just silently never moves.
 #   2026-09-12: fleet-ccquota was written with FLEET_BASE_BRANCH="dashboard-redesign"
-#   while verkyyi/ccquota's default branch was `main`. A full round of correct work
+#   while the ccquota repo's default branch was `main`. A full round of correct work
 #   landed five commits behind main, where no user would ever see it. ccquota's own
 #   PR #11 was the same mistake in a push trigger. Pointing at "the branch that
 #   happened to be checked out" instead of the repo's real trunk has now bitten twice.

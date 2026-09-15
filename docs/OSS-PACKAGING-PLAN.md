@@ -592,7 +592,7 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 | 仓库 | 涉及 issue | 起法 |
 |---|---|---|
 | `verkyyi/claude-fleet` | 大多数 | 已有 fleet |
-| `verkyyi/ccquota` | 18（归因）、M1 全部 | ✅ **`fleet-ccquota` 已存在**（M0 查证时发现），直接用 |
+| `verkyyi/tokenledger`（2026-09-14 从 `ccquota` 改名，二进制仍叫 `ccquota`） | 18（归因）、M1 全部 | ✅ **`fleet-ccquota` 已存在**（M0 查证时发现），直接用 |
 | 团队 config repo | M4 | 还不存在，M4 时新建 |
 
 ---
