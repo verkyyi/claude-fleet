@@ -226,6 +226,7 @@ $TMPDIR/.claude-dash/
   global/              # machine-wide — NOT per-fleet-collidable
     sessmap            #   session<TAB>slug<TAB>repo (collector)
     git_<key>          #   per worktree (globally-unique path key)
+    collect.git.cursor #   git-phase round-robin cursor (#552)
     ctx_<key>          #   per Claude session
     usage · ratelimit  #   account-global usage proxies
     account.* · collapsed · dash_view_* · …   # dash + account UI state

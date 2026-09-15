@@ -71,7 +71,7 @@ demo repo data.</sub>
   `Ctrl-N` files a **one-line issue** fast.
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
-  git status per worktree, the repo's PR/CI map, open issues, per-session
+  each worktree's branch, the repo's PR/CI map, open issues, per-session
   context tokens, and a local 5h/7d token-usage proxy. The dashboard only
   ever reads caches — zero inline git/gh/LLM calls.
 

@@ -27,7 +27,8 @@ nests three levels, and this is where the confusing vocabulary starts:
 
 - **Collector** — `bin/tmux-dash-collect.sh`. The background data-gatherer.
   Every ~60s it does all the slow/external work — calls the GitHub API (open
-  PRs + their CI state, open issues), runs `git status` on each worktree, counts
+  PRs + their CI state, open issues), reads each worktree's branch (under a
+  wall-clock budget, round-robin — #552), counts
   context tokens per Claude session, scrapes usage/rate-limit — and writes each
   result to a small **cache file**. It renders *nothing*. Everything you see is a
   cheap read of the files the collector produced, which is why the UI is
@@ -82,7 +83,9 @@ they repaint instantly:
     dash renders a MERGED PR as `merged` (no verdict) · `live` · `deploy…` ·
     `deploy✗`; the landed list's `dep` column as `·` · `live` · `…` · `✗` (#541).
   - **`issues`** — `milestone <TAB> #num <TAB> assignee <TAB> title` per open issue.
-  - **`git_<key>`** — per-worktree branch + dirty flag.
+  - **`git_<key>`** — per-worktree branch (+ahead/-behind). Field 2 was a dirty
+    flag no reader consumed; the `git status` that computed it was the collector's
+    single slowest call and is gone (#552).
   - **`ctx_<key>`** — per-Claude-session model + context-token count (feeds ctx%).
   - **`usage`** — token-consumption proxy (5h / 7d).
   - **`ratelimit`** — last-seen weekly-% line + timestamp.

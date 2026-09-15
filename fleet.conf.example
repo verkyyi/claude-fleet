@@ -438,11 +438,33 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # skips — unless the previous one is older than this, in which case it is
 # treated as wedged (an un-timeboxed `gh` on a bad network held a tick for
 # hours), its whole process tree is TERMed and the new tick takes over. A
-# healthy 20-window tick takes 1–3 min; keep this well above that. The
+# healthy 26-worktree tick takes ~20s since #552 budgeted the git phase (it
+# used to run 1–3 min); keep this well above whatever yours does. The
 # per-phase seconds of the last tick are in global/collect.heartbeat
 # (fleet-doctor prints the slowest phase). GLOBAL: one daemon, one deadline.
 # @label=Collector tick deadline @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_DEADLINE=600
+
+# Collector GIT-PHASE budget (issue #552). The git phase reads each live
+# worktree's branch (+ahead/-behind) into global/git_<key>. It used to also run
+# `git status --porcelain` per worktree — a full working-tree scan measured at
+# 4m42s on one 24haowan-monorepo worktree, feeding a dirty flag NO reader ever
+# consumed — which pushed the whole tick past its own 60s StartInterval. launchd
+# does not overlap a StartInterval job, so the collector's real cadence decayed
+# to "one tick's duration" (5.3 min observed) and every cache went stale. The
+# status call is gone; this is the rail that keeps the phase bounded anyway. On
+# expiry the phase's process tree is killed, the tick RUNS ON (the remaining
+# worktrees keep last tick's branch) and the blown budget is logged. A healthy
+# 26-worktree phase is ~2s, so the default is ~15x headroom. GLOBAL.
+# @label=Collector git budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_GIT_BUDGET=30
+
+# Name a SLOW worktree on stderr (logs/collect.launchd.log) when its git work
+# takes at least this long. The heartbeat only carries the phase total, so
+# without this a phase creeping toward the budget above says nothing about WHICH
+# worktree is dragging it. GLOBAL.
+# @label=Collector git slow-log @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_GIT_SLOW=10
 
 # Collector STALENESS threshold (issue #636) — when the dash starts saying so.
 # The dash draws every number out of the collector's caches, so a collector that
