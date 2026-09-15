@@ -77,13 +77,25 @@ chmod +x "$WORK/fakepath/sysctl" "$WORK/fakepath/nproc" "$WORK/fakepath/getconf"
 
 # The doctor's `machine` line, plus a marker proving the run got PAST it.
 run_doctor() {
+  : > "$WORK/stderr"
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   FLEET_CONF_DIR="$WORK/conf" \
-    sh "$WORK/bin/fleet-doctor.sh" 2>/dev/null
+    sh "$WORK/bin/fleet-doctor.sh" 2>"$WORK/stderr"
 }
 machine_line() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+machine([[:space:]]|$)' | head -1; }
 # `perl` is the doctor's LAST check — if it is present, nothing aborted the run.
 survived()     { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:space:]]+perl'; }
+# 4. A verdict is not the whole output (issue #709). The first 20 assertions here
+#    all read stdout, and all 20 stayed green while every healthy run also wrote
+#    `[: 0\n0: integer expression expected` to stderr — because `grep -c` prints
+#    `0` AND exits 1 on no match, so the `|| echo 0` written under it appended a
+#    SECOND 0. The verdict was still correct, by accident: `[ -gt ]` errored,
+#    returned 2, the `elif` read false, and the load branch below it was the right
+#    answer anyway. Nothing that looks at the decision can catch that class. So
+#    every case asserts the run was QUIET too — a tool whose job is to say whether
+#    a machine is healthy cannot print shell errors while saying "all good", or
+#    the operator learns to scroll past the real one.
+quiet()        { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
 # ============================================================================
 # 1. Quiet machine, no orphans → PASS naming load + cores.
@@ -95,6 +107,7 @@ has "1.20" "$l" "1: the PASS line must state the load it read"
 has "8 cores" "$l" "1: the PASS line must state the core count it divided by"
 has "0.15/core" "$l" "1: the PASS line must state load-per-core, which is the comparable number"
 survived "$out" || fail "1: the doctor did not reach its last check — the machine section aborted the run" "$l"
+quiet "1: a healthy box must print NOTHING on stderr — this is the assertion #709 was filed for"
 ok
 
 # ============================================================================
@@ -114,6 +127,7 @@ has "PPID=1"  "$l" "2: the WARN must say WHY nothing else reaped it"
 has "fleet-loadgen.sh --stop" "$l" "2: the WARN must name the command that ends a leaked experiment"
 has "--orphans" "$l" "2: the WARN must point at the full list"
 survived "$out" || fail "2: the doctor died rendering the orphan WARN (the \$mcmd… regression)" "$l"
+quiet "2: the orphan WARN must print NOTHING on stderr"
 ok
 
 # 2b. A live worker's busy shell is NOT an orphan: same fingerprint, same %CPU,
@@ -132,6 +146,7 @@ out="$(run_doctor)"; l="$(machine_line "$out")"
 has "WARN"     "$l" "3: load 108 on 8 cores must WARN"
 has "13.50/core" "$l" "3: the WARN must state load-per-core"
 survived "$out" || fail "3: the doctor did not survive the high-load WARN" "$l"
+quiet "3: the high-load WARN must print NOTHING on stderr"
 ok
 # The threshold is a knob, and raising it past the reading must silence the line.
 out="$(FLEET_LOAD_WARN_PER_CORE=99 run_doctor)"; l="$(machine_line "$out")"
@@ -148,5 +163,6 @@ has "WARN" "$l" "4: an unreadable load average must WARN, not PASS on a phantom 
 case "$l" in *0.00*) fail "4: it must not report a made-up 0.00 load" "$l";; esac
 ok
 survived "$out" || fail "4: the doctor did not survive the unreadable-load WARN" "$l"
+quiet "4: the unreadable-load WARN must print NOTHING on stderr"
 
-printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, render-survival)\n' "$CHECKS"
+printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, render-survival, stderr silence)\n' "$CHECKS"

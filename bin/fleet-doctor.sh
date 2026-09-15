@@ -749,7 +749,14 @@ mwarn="${FLEET_LOAD_WARN_PER_CORE:-4}"
 _dg="$(dirname "$0")/fleet-diskguard.sh"
 morph=''
 [ -f "$_dg" ] && morph="$(bash "$_dg" --orphans 2>/dev/null)"
-morphn=$(printf '%s' "$morph" | grep -c . 2>/dev/null || echo 0)
+# awk, not `grep -c` (issue #709): `grep -c` on no match prints `0` AND exits 1,
+# so the `|| echo 0` this was written with fired on top of grep's own output and
+# glued the two into `0\n0` — which `[ "$morphn" -gt 0 ]` below then rejected with
+# `integer expression expected` on stderr of every HEALTHY run. The verdict
+# survived by luck (the error made the `elif` false, and false was the right
+# answer when there are no orphans), so only stderr ever showed it. awk returns a
+# single `0` on empty input and exits 0, with no fallback clause to get wrong.
+morphn=$(printf '%s' "$morph" | awk 'NF{n++} END{print n+0}')
 
 if [ -z "$mload" ]; then
   # Not a measurement bug to shrug at — "the load average would not come back" is
