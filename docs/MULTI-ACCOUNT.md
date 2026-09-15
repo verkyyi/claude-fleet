@@ -314,8 +314,9 @@ ccquota knows every subscription's **exact, account-wide**
 5-hour and 7-day utilization and reset instants, across devices; set
 `export CCQUOTA_HUB_URL=…` in `fleet.conf` (ccquota reads the viewer token from
 `~/.ccquota/viewer-token`) and the **quota watch** — `bin/fleet-quotawatch.sh`,
-its own 60s daemon `com.claude-fleet.quotawatch` since issue #551, and also run
-first thing by every collector tick — does, per pool account, every tick:
+its own 60s daemon `com.claude-fleet.quotawatch` since issue #551, with the
+collector as a fallback first thing in its tick when that unit stops ticking
+(issue #671) — does, per pool account, every tick:
 
 | utilization (higher of 5h / 7d) | action |
 |---|---|
@@ -406,13 +407,27 @@ branch fired, and every session on the account rode the 5-hour window to 100%.
 Now:
 
 - **Own unit.** `com.claude-fleet.quotawatch` (`systemd/claude-fleet-quotawatch.timer`)
-  runs `bin/fleet-quotawatch.sh` every 60s, independent of the collector. The
-  collector still runs the same script **first** in its tick (before any `gh`),
-  so an install whose daemon set predates #551 keeps watching at the collector's
-  cadence. Both together are safe: the fetch is TTL-gated
-  (`FLEET_ACCOUNT_QUOTA_TTL`), a `mkdir` lock (`global/quotawatch.lock`) skips
-  an in-flight tick (a tick older than 120s is superseded), and the
-  once-per-reset-window markers dedup every action.
+  runs `bin/fleet-quotawatch.sh` every 60s, independent of the collector.
+- **Collector fallback, conditional (issue #671).** The collector runs the same
+  script **first** in its tick (before any `gh`) — but only when the unit is not
+  demonstrably ticking, so an install whose daemon set predates #551 keeps
+  watching at the collector's cadence while a healthy one pays ~0. The gate reads
+  `global/<root>/quotawatch.tick`, the #639 scheduling stamp, against
+  `FLEET_DAEMON_STALE_MULT × 60s` (floor 180s ⇒ 300s): absent (no unit, fresh
+  install) or stale (loaded but **pended**) ⇒ the collector runs it; fresh ⇒ it
+  skips. It cannot flap, because `--caller collect` is the one caller that does
+  **not** write that stamp (#639) — the fallback can never mistake itself for the
+  unit being healthy. `FLEET_COLLECT_QUOTAWATCH=always|never` forces the old
+  unconditional call or switches the fallback off.
+  Why conditional: the doubled call was documented as free — TTL-gated fetch,
+  `mkdir` lock (`global/quotawatch.lock`) skipping an in-flight tick (a tick older
+  than 120s is superseded), once-per-reset-window markers deduping every action —
+  and that was measurably wrong. The **modelcap sweep** is gated by none of those
+  (it carries its own 20s-per-fleet / 40s-per-sweep budgets), so the collector's
+  copy kept running the whole sweep and being killed at its 30s phase budget:
+  46 · 56 · 35 · 57 · 25 · 17 · 10 · 3 seconds sampled, `quotawatch` permanently in
+  the heartbeat's `over=` list, a quarter of a 120s tick spent redoing work the
+  unit had just done.
 - **Heartbeat.** `global/quotawatch.heartbeat` (key=value: `pid caller start
   phase phase_ts fetched rows end dur`) — and the collector's own
   `global/collect.heartbeat` with per-phase seconds, so "which phase was slow"
