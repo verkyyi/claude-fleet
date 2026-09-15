@@ -103,7 +103,7 @@ $hint · esc 放弃（什么都不发）" \
 done
 
 printf '正在回答 %s …\n' "$target" >&2
-if "$ANSWER" --answer "$target" "${PICKS[@]}" >&2 2>&1; then
+if "$ANSWER" --answer "$target" ${PICKS[@]+"${PICKS[@]}"} >&2 2>&1; then
   printf '\n✔ 已送达并在 transcript 里确认。\n' >&2
 else
   printf '\n⚠ 没有确认成功 —— 进窗口看一眼（上面有原因）。\n' >&2

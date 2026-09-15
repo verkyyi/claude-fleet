@@ -293,7 +293,7 @@ EOF
 # --- which fleets? argv wins; else every live fleet session on this server. -----
 SESSIONS=()
 if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
-  SESSIONS=("${ARGV_SESS[@]}")
+  SESSIONS=(${ARGV_SESS[@]+"${ARGV_SESS[@]}"})
 else
   # A fleet session is one that owns a 'plan' or 'dash' hub window (same rule the
   # global count uses). fleet_hub_sessions fans this out across every live fleet
@@ -333,7 +333,7 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-quotaguard.sh" ]; then
   }
 fi
 
-for s in "${SESSIONS[@]}"; do
+for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   dispatch_fleet "$s"
 done
 exit 0

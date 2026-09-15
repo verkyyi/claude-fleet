@@ -192,7 +192,7 @@ case "$mode" in
   cmd)
     trap 'stop_burners' EXIT INT TERM
     [ "${#args[@]}" -gt 0 ] || die "-- needs a command to run under the load"
-    "${args[@]}"; rc=$?
+    "${args[@]}"; rc=$?   # bash32-ok: the line above dies unless args is non-empty
     stop_burners
     trap - EXIT INT TERM
     exit "$rc" ;;

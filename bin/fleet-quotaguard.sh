@@ -68,7 +68,7 @@ ccq_args() {
 run_ccquota() {
   local args=()
   while IFS= read -r a; do args+=("$a"); done < <(ccq_args)
-  "$CCQUOTA" "${args[@]}" "$@"
+  "$CCQUOTA" ${args[@]+"${args[@]}"} "$@"
 }
 
 usage() { sed -n '2,40p' "$0"; }

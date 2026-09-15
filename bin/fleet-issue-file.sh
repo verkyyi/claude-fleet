@@ -114,11 +114,11 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >
 if [ "${#labels[@]}" -gt 0 ]; then
   allowed=$(fleet_labels_allowed)
   unknown=()
-  for _l in "${labels[@]}"; do
+  for _l in ${labels[@]+"${labels[@]}"}; do
     printf '%s\n' "$allowed" | grep -Fxq -- "$_l" || unknown+=("$_l")
   done
   if [ "${#unknown[@]}" -gt 0 ]; then
-    printf 'fleet-issue-file: off-taxonomy label(s): %s\n' "$(IFS=','; printf '%s' "${unknown[*]}")" >&2
+    printf 'fleet-issue-file: off-taxonomy label(s): %s\n' "$(IFS=','; printf '%s' "${unknown[*]-}")" >&2
     printf 'fleet-issue-file: allowed labels: %s\n' "$(printf '%s' "$allowed" | paste -sd ',' -)" >&2
     exit 3
   fi
@@ -169,7 +169,7 @@ fi
 create_args=(--repo "$repo" --title "$title" --body "$body")
 [ -n "$milestone" ] && create_args+=(--milestone "$milestone")
 if [ "${#labels[@]}" -gt 0 ]; then
-  for _l in "${labels[@]}"; do create_args+=(--label "$_l"); done
+  for _l in ${labels[@]+"${labels[@]}"}; do create_args+=(--label "$_l"); done
 fi
 url=$(gh issue create "${create_args[@]}" 2>/dev/null) \
   || { printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; exit 1; }

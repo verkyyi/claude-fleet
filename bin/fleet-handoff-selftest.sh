@@ -182,7 +182,7 @@ FAKE_STATE='done' FAKE_CAP='❯ \n  ? for shortcuts\n' run --pane "$PANE" --doc 
 #   1 Escape · 2 "-l -- /clear" · 3 Enter · 4 "-l -- <pickup> <doc>" · 5 Enter
 KEYS=()
 while IFS= read -r _ln; do KEYS+=("$_ln"); done < "$INJECT"
-[ "${#KEYS[@]}" -eq 5 ] || fail "expected exactly 5 send-keys, got ${#KEYS[@]}: ${KEYS[*]}"
+[ "${#KEYS[@]}" -eq 5 ] || fail "expected exactly 5 send-keys, got ${#KEYS[@]}: ${KEYS[*]-}"
 case "${KEYS[0]}" in *Escape*) : ;; *) fail "key1 must be Escape, got: ${KEYS[0]}";; esac
 case "${KEYS[1]}" in *'-l'*'/clear'*) : ;; *) fail "key2 must type /clear literally, got: ${KEYS[1]}";; esac
 case "${KEYS[2]}" in *Enter*) : ;; *) fail "key3 must be a SEPARATE Enter, got: ${KEYS[2]}";; esac
@@ -201,7 +201,7 @@ FAKE_STATE='done' FAKE_CAP='❯ \n  ? for shortcuts\n' FAKE_COMMENTS="$MARKED" \
   run --pane "$PANE" --issue 42 --repo o/r || fail "idle+marked comment cycle must exit 0"
 KEYS=()
 while IFS= read -r _ln; do KEYS+=("$_ln"); done < "$INJECT"
-[ "${#KEYS[@]}" -eq 5 ] || fail "comment mode: expected exactly 5 send-keys, got ${#KEYS[@]}: ${KEYS[*]}"
+[ "${#KEYS[@]}" -eq 5 ] || fail "comment mode: expected exactly 5 send-keys, got ${#KEYS[@]}: ${KEYS[*]-}"
 case "${KEYS[0]}" in *Escape*) : ;; *) fail "comment key1 must be Escape, got: ${KEYS[0]}";; esac
 case "${KEYS[1]}" in *'-l'*'/clear'*) : ;; *) fail "comment key2 must type /clear, got: ${KEYS[1]}";; esac
 case "${KEYS[2]}" in *Enter*) : ;; *) fail "comment key3 must be a SEPARATE Enter, got: ${KEYS[2]}";; esac

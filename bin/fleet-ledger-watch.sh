@@ -275,7 +275,7 @@ EOF
 # --- which fleets? argv wins; else every live fleet session on this server. -----
 SESSIONS=()
 if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
-  SESSIONS=("${ARGV_SESS[@]}")
+  SESSIONS=(${ARGV_SESS[@]+"${ARGV_SESS[@]}"})
 else
   while IFS= read -r s; do
     [ -n "$s" ] && SESSIONS+=("$s")
@@ -296,7 +296,7 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
   exit 0
 fi
 
-for s in "${SESSIONS[@]}"; do
+for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   watch_fleet "$s"
 done
 exit 0

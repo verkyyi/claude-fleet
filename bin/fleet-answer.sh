@@ -301,14 +301,14 @@ fi
 # Validate every pick BEFORE a single keystroke, and resolve it to labels.
 WANT=()   # per question: TAB-joined labels, in pick order
 qi=0
-for p in "${PICKS[@]}"; do
+for p in ${PICKS[@]+"${PICKS[@]}"}; do
   n=$(o_count "$qi"); multi=$(q_field "$qi" 3)
   labels=""
   IFS=',' read -r -a idxs <<< "$p"
   [ ${#idxs[@]} -gt 0 ] || { echo "fleet-answer: empty pick for question $((qi + 1))" >&2; exit 2; }
   [ ${#idxs[@]} -eq 1 ] || [ "$multi" = 1 ] || {
     echo "fleet-answer: question $((qi + 1)) is single-select — '$p' names several options" >&2; exit 2; }
-  for i in "${idxs[@]}"; do
+  for i in ${idxs[@]+"${idxs[@]}"}; do
     case "$i" in ''|*[!0-9]*) echo "fleet-answer: pick '$i' is not a number" >&2; exit 2 ;; esac
     [ "$i" -ge 1 ] && [ "$i" -le "$n" ] || {
       echo "fleet-answer: pick $i is out of range for question $((qi + 1)) (1..$n)" >&2; exit 2; }
@@ -502,7 +502,7 @@ while [ "$qi" -lt "$NQ" ]; do
 
   # Toggle / select each pick by the digit the SCREEN gives its label.
   d='' lab1=''
-  for lab in "${labs[@]}"; do
+  for lab in ${labs[@]+"${labs[@]}"}; do
     lab1="$lab"
     grab
     d=$(digit_for "$lab") \
@@ -575,7 +575,7 @@ done
 if [ "$DRY" = 1 ]; then
   [ "$NQ" -gt 1 ] && PLAN+=("the review screen's \"Submit answers\" digit")
   printf 'plan for pane %s (%s):\n' "$PANE" "$TUID"
-  for s in "${PLAN[@]}"; do printf '  · %s\n' "$s"; done
+  for s in ${PLAN[@]+"${PLAN[@]}"}; do printf '  · %s\n' "$s"; done
   echo "nothing sent (--dry-run)"
   exit 0
 fi
