@@ -207,6 +207,17 @@ override them):
        worktree are the cleanup daemon's to reap, and gh may decline or fail to
        delete the local one (you're standing on it) — harmless, which is why the
        confirming read above, not gh's exit code, is what tells you it landed.
+
+       ⚠️ **ONE command. Never chain a separate `push --delete` after the merge**
+       (issue #544). `--delete-branch` is conditional on the merge succeeding;
+       a hand-written `gh pr merge … | tail && git push origin --delete <branch>`
+       is not — and a pipeline's exit code is `tail`'s, not the merge's. #534's
+       worker ran exactly that, the squash lost a conflict race, the `&&` fired
+       anyway, and deleting the head branch made GitHub auto-CLOSE the PR. The
+       worker then spent four minutes resolving the conflict by hand and was
+       SIGKILLed mid-edit by the reaper. **A failed merge must not delete the
+       branch.** If the merge fails: fix it, push, re-read the verdict, merge
+       again — the branch stays until a merge actually lands.
      - **`PENDING`** → CI is still running. Wait and re-read (minutes between
        reads — don't busy-poll). If it never resolves, treat it as blocked below.
      - **`BEHIND`** → `gh pr update-branch <PR> --repo "$FLEET_REPO"`, then re-read.

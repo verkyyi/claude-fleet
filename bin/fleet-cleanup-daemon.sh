@@ -139,15 +139,17 @@ lease_release() { # $1 = lease path, $2 = my holder id
 # CLOSED stays issue-only on purpose: a closed-UNMERGED scratch PR abandoned work
 # that is still sitting in its worktree, and #543/#544 exists to keep exactly that.
 final_prs() { # $1 = prmap file, $2 = 1 when non-issue heads are armed
+  # `pr <TAB> branch <TAB> state` — the state rides along for the CLOSED pre-screen
+  # below (issue #544); it is already in the cached row, so it costs nothing.
   local prmf="$1" scratch="${2:-0}"
   [ -s "$prmf" ] || return 0
   awk -F'\t' -v scratch="$scratch" '
     $1 == "" { next }
     ($3=="MERGED" || $3=="CLOSED") && $1 ~ /^issue-[0-9]+$/ {
-      n=$2; sub(/^#/,"",n); print n "\t" $1; next
+      n=$2; sub(/^#/,"",n); print n "\t" $1 "\t" $3; next
     }
     scratch=="1" && $3=="MERGED" && $1 !~ /^issue-[0-9]+$/ {
-      n=$2; sub(/^#/,"",n); print n "\t" $1
+      n=$2; sub(/^#/,"",n); print n "\t" $1 "\t" $3
     }' "$prmf" 2>/dev/null
 }
 
@@ -215,8 +217,14 @@ cleanup_fleet() { (
       sed 's/[^0-9]//g' | sed -n 's/^[0-9][0-9]*$/issue-&/p'
   )
 
+  # And each live issue window's own verdict, `<issue> <@claude_state>` per line
+  # (issue #544 — the CLOSED pre-screen). One more format pass over the SAME window
+  # list, zero gh. Space-separated like every other format in the fleet: a literal
+  # TAB is a control byte, and tmux <=3.4 vis-escapes those in format output.
+  istate=$(ftmux list-windows -t "$sess" -F '#{@issue} #{@claude_state}' 2>/dev/null)
+
   cleaned=0; considered=0; timedout=0
-  while IFS=$'\t' read -r pr branch; do
+  while IFS=$'\t' read -r pr branch state; do
     [ -z "$pr" ] && continue
     # live worktree or window for this head branch?
     case "$live" in *$'\n'"$branch"$'\n'*) : ;; *) continue ;; esac
@@ -228,7 +236,23 @@ cleanup_fleet() { (
     # a worktree whose window says it is `done`. A worktree with NO live window in
     # it is not ours either — that one is worktree-autoclean.sh's.
     case "$branch" in
-      issue-[0-9]*) : ;;
+      issue-[0-9]*)
+        # A CLOSED issue head now meets an authoritative LIVENESS gate inside
+        # fleet-cleanup.sh (issue #544): it defers — correctly, and with no timeout —
+        # for as long as someone is working in that worktree, which for a restored
+        # session is hours. Reaching that gate costs a `gh pr view` EVERY tick. So
+        # screen the loudest case locally first, the same zero-gh shape the scratch
+        # arm below uses. Only `working` is screened here: it is unambiguous and
+        # cwd-independent. Every subtler signal (the transcript clock, closedAt,
+        # dirtiness) stays in the one authoritative gate — a pre-screen may only
+        # ever SAVE a call, never decide a reap.
+        if [ "$state" = CLOSED ]; then
+          ws=$(printf '%s\n' "$istate" | awk -v i="${branch#issue-}" '$1==i{print $2; exit}')
+          if [ "$ws" = working ]; then
+            log "$sess: PR #$pr ($branch) — CLOSED but its window is 'working'; leaving it alone"
+            continue
+          fi
+        fi ;;
       *) wt=$(fleet_worktree_head "$main" "$branch" | cut -f1)
          [ -n "$wt" ] || continue
          ws=$(fleet_wt_window "$sess" "$wt" | cut -f2)

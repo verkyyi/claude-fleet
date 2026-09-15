@@ -6,6 +6,9 @@
 # Drives the daemon against a FAKE fleet-cleanup.sh + FAKE diskguard + FAKE
 # gh/git/tmux (no network, no tmux server, no real teardown) and asserts its core
 # contract:
+#   • CLOSED PRE-SCREEN  a CLOSED issue-<N> head whose window is `working` is
+#                        dropped LOCALLY (zero gh) — fleet-cleanup.sh's liveness
+#                        gate would defer it anyway, every tick, forever (#544)
 #   • REAPS FINAL+LIVE  a MERGED/CLOSED PR whose issue-<N> still has a live
 #                        worktree or window is handed to fleet-cleanup.sh.
 #   • SKIPS OPEN         an OPEN (not-final) PR is never cleaned.
@@ -125,8 +128,12 @@ case "\${1:-}" in
   list-panes)    printf '@99 %s/wt/scratch-99\n@98 %s/wt/scratch-98\n@97 %s/wt/scratch-97\n' "$WORK" "$WORK" "$WORK" ;;
   list-windows)
     case "\$*" in
-      *claude_state*) printf '@99 done\n@98 working\n@97 done\n' ;;
-      *)              echo '11' ;;    # the @issue probe → issue-11 has a window
+      # The #544 CLOSED pre-screen asks for BOTH the issue and the state.
+      # Must be matched before the bare claude_state arm, which the scratch
+      # pre-screen (#589) uses and which is keyed by window id, not issue.
+      *"@issue"*claude_state*) printf '11 %s\n' "\${ISSUE11_STATE:-done}" ;;
+      *claude_state*)          printf '@99 done\n@98 working\n@97 done\n' ;;
+      *)                       echo '11' ;;    # the @issue probe → issue-11 has a window
     esac ;;
 esac
 exit 0
@@ -175,6 +182,16 @@ grep -q 'cleaned:fake101' "$WORK/log" || fail "should log the cleaned token for 
 for n in 103 104; do
   grep -qxF "$n" "$CLEAN_LOG" && fail "#$n must NOT be reaped (open / already-clean)"
 done
+
+# 1b) CLOSED PRE-SCREEN (#544): issue-11's window says `working` → never reaches
+# fleet-cleanup.sh, so the tick spends no `gh pr view` on a PR whose authoritative
+# liveness gate would defer it anyway. #101/#105 (MERGED) are untouched by it.
+reset
+conf
+ISSUE11_STATE=working run s1
+[ "$(reaped_list)" = "101 105" ] || fail "a CLOSED head with a 'working' window must be screened out, got [$(reaped_list)]"
+grep -q "issue-11) — CLOSED but its window is 'working'" "$WORK/log" \
+  || fail "the CLOSED pre-screen should log why it left #102 alone"
 
 # 2) RATE-LIMIT: cap 1 reaps only the first candidate (#101).
 reset

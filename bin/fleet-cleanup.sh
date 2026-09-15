@@ -38,14 +38,25 @@
 #
 # Result token on stdout (the ONLY thing on stdout; progress is on stderr):
 #   cleaned:<sha>    MERGED → ledger recorded + base fast-forwarded + teardown
-#   cleaned:closed   CLOSED-unmerged → orphan worktree/window reaped (no base pull)
+#   cleaned:closed   CLOSED-unmerged → ledger row + orphan reaped (no base pull)
 #   skip:not-final   PR still OPEN — not merged/closed, nothing to clean (rc 0)
 #   skip:nothing     final PR but no worktree AND no window to reap (already clean)
 #   skip:protected   scratch-head reap refused: the base checkout / a protected branch
 #   skip:unmerged    scratch-head reap refused: local commits past the merged head
-#   skip:dirty       scratch-head reap refused: the worktree has uncommitted work
+#   skip:dirty       reap refused: the worktree has uncommitted work
 #   skip:busy        scratch-head reap refused: its window is not `done`
+#   skip:live        closed-unmerged reap DEFERRED: a session is still using it
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
+#
+# A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
+# reap on the PR state alone. #534's worker deleted its own remote branch after a
+# failed squash — GitHub auto-closed the PR — and then spent four minutes
+# resolving the conflict by hand; the next 60s tick SIGKILLed it mid-edit and
+# force-dropped the uncommitted resolution with it. Restoring that session hit the
+# same tick 60s later, forever, so ⌃o restore was unusable for a closed-unmerged
+# worker. `closed_reap_gate` below now makes the reap prove the session is GONE
+# (see its comment), the drop no longer forces past a dirty tree, and the row is
+# recorded BEFORE teardown so a deferred-then-reaped session stays resumable.
 #
 # NON-issue-<N> HEADS (issue #589). Everything above is addressed by `issue-<N>`,
 # so a session that started as a scratch (`scratch-<N>`) and grew into a PR is
@@ -58,6 +69,8 @@
 # Env knobs (all optional):
 #   FLEET_CLEANUP_SCRATCH_HEADS  1 = also reap a MERGED PR whose head is not
 #                        issue-<N>, behind the strict gate      (default 0/off)
+#   FLEET_CLEANUP_CLOSED_GRACE   seconds a closed-unmerged window must have been
+#                        SILENT before it may be reaped (issue #544, default 900)
 #   LAND_LEASE_TTL       lease lifetime, seconds           (default 3600)
 #   LAND_QUEUE_TIMEOUT   max seconds to WAIT for the lease (default 300)
 #   LAND_POLL            seconds between lease-queue polls  (default 15)
@@ -79,6 +92,8 @@ POLL="${LAND_POLL:-15}"
 QUEUE_TIMEOUT="${LAND_QUEUE_TIMEOUT:-300}"
 LEASE_TTL="${LAND_LEASE_TTL:-3600}"
 LEASE_DIR="${LAND_LEASE_DIR:-${FLEET_LAND_LEASE_DIR:-$HOME/.claude/leases}}"
+CLOSED_GRACE="${FLEET_CLEANUP_CLOSED_GRACE:-900}"
+case "$CLOSED_GRACE" in ''|*[!0-9]*) CLOSED_GRACE=900 ;; esac   # tolerate a garbled conf
 
 # --- args ---------------------------------------------------------------------
 PR=""; DRY=0
@@ -118,16 +133,19 @@ ftmux() {
 }
 
 # --- PR state -----------------------------------------------------------------
-# TSV: state headOid headRef  (no mergeability/checks — we don't merge)
+# TSV: state headOid headRef closedAt  (no mergeability/checks — we don't merge).
+# closedAt is what the closed-unmerged gate compares transcript activity against
+# (issue #544): a session that spoke AFTER its PR closed is working ON the close,
+# not abandoned by it. Empty for a MERGED/OPEN PR, which no caller reads.
 pr_fields() {
   gh pr view "$1" --repo "$REPO" \
-    --json state,headRefOid,headRefName \
-    --jq '[.state, .headRefOid, .headRefName] | @tsv' 2>/dev/null
+    --json state,headRefOid,headRefName,closedAt \
+    --jq '[.state, .headRefOid, .headRefName, .closedAt] | @tsv' 2>/dev/null
 }
 
 fields=$(pr_fields "$PR")
 [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
-IFS=$'\t' read -r st oid href <<<"$fields"
+IFS=$'\t' read -r st oid href closed_at <<<"$fields"
 # BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the
 # @issue window binding, the ledger key, the branch name). They coincide for a
 # worker; for an opted-in non-issue head BRANCH is the PR's head and ISSUE empty.
@@ -163,6 +181,11 @@ if [ -n "$BRANCH" ]; then
   else
     WIN=$(ftmux list-windows -t "$FLEET_SESSION" -F '#{window_id} #{@issue}' 2>/dev/null | \
           awk -v i="$ISSUE" '$2==i{print $1}')
+    # Its @claude_state too — the closed-unmerged gate (issue #544) reads it, and
+    # it is a second format pass over the same window list, not a second lookup.
+    [ -n "$WIN" ] && WIN_STATE=$(ftmux list-windows -t "$FLEET_SESSION" \
+          -F '#{window_id} #{@claude_state}' 2>/dev/null | \
+          awk -v w="$WIN" '$1 == w { print $2; exit }')
   fi
 fi
 
@@ -222,8 +245,79 @@ scratch_head_gate() {
   note "  scratch-head reap armed: $BRANCH → wt=$WT win=${WIN:-none}/${WIN_STATE:--}"
   return 0
 }
+
+# --- the closed-unmerged gate (issue #544) ------------------------------------
+# "PR is CLOSED" is a statement about GitHub, not about the worker. It is TRUE the
+# instant a worker deletes its own remote branch after a failed merge — the exact
+# moment that worker starts fixing the problem. Reaping on that alone SIGKILLed
+# #534 mid-conflict-resolution and force-dropped the resolution with it.
+#
+# So the reap must prove the SESSION is gone, not just that the PR is. Every check
+# below is a READ, so it runs under --dry-run too and keeps that classification
+# honest, and every one of them fails CLOSED (defer) on the unknown: deferring
+# costs a stale worktree until the next tick, reaping costs work nobody can get
+# back. A deferral is not a leak — worktree-autoclean.sh reaps a clean, windowless
+# worktree on its own schedule.
+closed_reap_gate() {
+  # (1) Dirty ⇒ hands off, and that includes the WINDOW: uncommitted work is the
+  # whole thing we lost. worktree-autoclean.sh already answers this case with
+  # `KEEP (dirty — uncommitted changes)`; the two reapers disagreeing about a
+  # dirty tree is what turned one lost merge into lost work.
+  if [ -n "$WT" ] && [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+    note "  refusing $BRANCH: worktree $WT is dirty (uncommitted or untracked files) — worktree-autoclean.sh KEEPs it."
+    done_token "skip:dirty"; return 1
+  fi
+  # No window ⇒ no session to kill; the orphan worktree is all that is left.
+  [ -n "$WIN" ] || { note "  closed-unmerged reap armed: ${BRANCH:-none} → wt=${WT:-none}, no live window"; return 0; }
+
+  # (2) The window's own verdict. `working` is a session mid-turn — exactly the
+  # state #534 was in. Anything else still has to clear the transcript clock below.
+  if [ "$WIN_STATE" = working ]; then
+    note "  #$PR closed-unmerged but window $WIN is 'working' — still live, deferred."
+    done_token "skip:live"; return 1
+  fi
+
+  # (2b) A window whose WORKTREE is already gone (a prior tick dropped the tree but
+  # its kill-window failed) has no uncommitted work to lose — and no transcript dir
+  # to read, since that dir is keyed by the worktree path. `working` is therefore
+  # the whole gate for it; anything stricter would make such an orphan window
+  # unreapable FOREVER, leaking a window and a `gh pr view` every tick.
+  if [ -z "$WT" ]; then
+    note "  closed-unmerged reap armed: ${BRANCH:-none} → win=$WIN state=${WIN_STATE:--}, worktree already gone"
+    return 0
+  fi
+
+  # (3) The transcript clock. Two independent questions, both must say "gone":
+  #   * has it spoken SINCE the PR closed? Then it is working ON the close (the
+  #     #534 worker, or an operator who restored the session deliberately) — and
+  #     this one has no timeout, which is what makes ⌃o restore usable again.
+  #   * has it been silent long enough to call it finished? (CLOSED_GRACE)
+  # No readable transcript ⇒ we cannot answer either ⇒ defer.
+  local tdir last now age closed_epoch
+  tdir=$(fleet_transcript_dir "$WT")
+  last=$(fleet_newest_human_mtime "$tdir")
+  if [ -z "$last" ]; then
+    note "  #$PR closed-unmerged, window $WIN live with no readable transcript — cannot prove it idle; deferred."
+    done_token "skip:live"; return 1
+  fi
+  closed_epoch=$(fleet_epoch_from_iso "$closed_at")
+  if [ -n "$closed_epoch" ] && [ "$last" -ge "$closed_epoch" ]; then
+    note "  #$PR closed-unmerged but window $WIN spoke $((last - closed_epoch))s AFTER the PR closed — still live, deferred."
+    done_token "skip:live"; return 1
+  fi
+  now=$(date +%s 2>/dev/null || echo 0); age=$((now - last))
+  if [ "$age" -lt "$CLOSED_GRACE" ]; then
+    note "  #$PR closed-unmerged but window $WIN has been idle only ${age}s (< ${CLOSED_GRACE}s grace) — still live, deferred."
+    done_token "skip:live"; return 1
+  fi
+  note "  closed-unmerged reap armed: ${BRANCH:-none} → wt=${WT:-none} win=$WIN state=${WIN_STATE:--} idle=${age}s"
+  return 0
+}
+
 if [ "$SCRATCH_HEAD" = 1 ]; then
   scratch_head_gate || exit 0
+elif [ "$st" = CLOSED ] && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
+  closed_reap_gate || exit 0
 fi
 
 # --- dry-run: report what we WOULD do, take no lease, mutate nothing ----------
@@ -239,6 +333,14 @@ fi
 # --- teardown: kill window → drop worktree → delete branch --------------------
 # If the CALLER is inside the worktree (a worker cleaning up its own PR), detach
 # the teardown into the tmux server — you can't remove the ground you stand on.
+#
+# DROP_FORCE decides whether the drop may run over a dirty worktree. MERGED keeps
+# the historic `--force` (the work is IN the base; whatever is left is scratch).
+# CLOSED-unmerged clears it (issue #544): nothing was merged, so a dirty tree is
+# the only copy of that work. The gate above already refuses a dirty CLOSED reap —
+# this is the backstop for the seconds between the gate and the `mv`, and it makes
+# the DETACHED path (which re-runs minutes later, inside tmux) safe too.
+DROP_FORCE="--force"
 teardown() {
   [ -z "$BRANCH" ] && { note "  head $href is not a branch we may reap — nothing to do."; return 0; }
   local self_win cwd
@@ -257,7 +359,7 @@ teardown() {
     # cannot hold this teardown — nor the daemon tick driving it. run-shell runs the
     # string under /bin/sh, which cannot source fleet-lib.sh; hence the shim.
     local dropcmd=""
-    [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' --force; "
+    [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' $DROP_FORCE; "
     local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D '$BRANCH'; } >/dev/null 2>&1"
     note "  teardown (detached): $cmd"
     [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] && return 0
@@ -274,25 +376,37 @@ teardown() {
   if [ -n "$WT" ]; then
     # Drop, don't delete (issue #586) — a rename into .fleet-trash/ plus a prune,
     # so the bytes are swept later under a budget instead of holding this tick.
-    local drop; drop=$(fleet_worktree_drop "$MAIN" "$WT" --force)
+    local drop
+    # shellcheck disable=SC2086  # DROP_FORCE is one flag or nothing, deliberately unquoted
+    drop=$(fleet_worktree_drop "$MAIN" "$WT" $DROP_FORCE)
     case "$drop" in
       trashed:*|removed:*|gone) note "  worktree $drop" ;;
+      dirty) note "  worktree $WT went dirty under us — KEPT (issue #544); worktree-autoclean.sh owns it." ;;
       *) note "  worktree drop failed for $WT ($drop) — worktree-autoclean.sh will reap it." ;;
     esac
   fi
   git -C "$MAIN" branch -D "$BRANCH" >/dev/null 2>&1 || true
 }
 
-# --- closed-unmerged: reap the orphan worktree/window, no base pull, no ledger -
-# A closed-unmerged PR abandoned its work — there is nothing merged into the base
-# and it is not a "landed" session, so we skip both the base pull and the resume
-# ledger; we only reap the orphaned worktree + window so the estate stays clean.
+# --- closed-unmerged: record, then reap the orphan (no base pull, no --force) --
+# Nothing was merged into the base, so there is no fast-forward to do — but there
+# IS a session, and it must stay findable. This path used to write NO ledger row
+# at all ("not a landed session"), so a reaped closed-unmerged worker vanished from
+# /fleet-history and ⌃t with it: no transcript pointer, no worktree sha, no way
+# back. It goes through the SAME choke point the merged path uses (fleet_reap_record,
+# issue #384) with the `unmerged` outcome, which routes to `record-closed` — the row
+# the ledger-watch daemon would otherwise have to guess at, written while the
+# worktree path (→ transcript dir + session id) is still resolvable.
 if [ "$st" = CLOSED ]; then
   if [ -z "$WT" ] && [ -z "$WIN" ]; then
     note "  #$PR closed-unmerged, nothing left to reap (already clean)."
     done_token "skip:nothing"; exit 0
   fi
-  note "  #$PR closed-unmerged — reaping the orphaned worktree/window (no merge, no base pull)."
+  if [ -n "$BRANCH" ] && [ -n "$WT" ]; then
+    fleet_reap_record "unmerged" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "$BRANCH" || true
+  fi
+  note "  #$PR closed-unmerged — reaping the orphan (no merge, no base pull, no force-drop)."
+  DROP_FORCE=""
   teardown
   done_token "cleaned:closed"; exit 0
 fi

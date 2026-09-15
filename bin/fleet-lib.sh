@@ -689,6 +689,38 @@ EOF
   return 0
 }
 
+# WHEN did the human session in this transcript dir last speak? — mtime (epoch
+# seconds) of the newest NON-fleet-internal *.jsonl, or empty when the dir holds
+# no real session. This is the "is anybody still working here" clock the
+# closed-unmerged reap gate reads (issue #544): a PR going CLOSED says nothing
+# about whether its worker is still typing — #534's worker spent four minutes
+# resolving a conflict AFTER GitHub auto-closed its PR, and got SIGKILLed for it.
+#
+# Same two hazards as fleet_newest_human_session, handled the same way: skip the
+# fleet's OWN classifier transcripts (they land in the same dir and are usually
+# the newest file there), and no `| head` — an early-closing consumer under
+# pipefail makes `ls` die of SIGPIPE and reports 141 for the busiest dirs.
+fleet_newest_human_mtime() {
+  local dir="${1:-}" list f n=0 m
+  [ -d "$dir" ] || return 0
+  list=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+  [ -n "$list" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -gt 200 ] && break
+    fleet_internal_transcript "$f" && continue
+    # GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0
+    # with non-mtime output, so it must not win (fleet_inflight_count, same trap).
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo '')
+    case "$m" in ''|*[!0-9]*) return 0;; esac
+    printf '%s\n' "$m"
+    return 0
+  done <<EOF
+$list
+EOF
+  return 0
+}
+
 # CHEAP: which SEAT is the caller running in? (see commands/README.md — the
 # fleet-skill role-guard.) Prints:
 #   worker  — the current tmux window has @issue set AND cwd is inside the
