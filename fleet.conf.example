@@ -685,10 +685,32 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Daemon self-heal @group=cache @tier=advanced @scope=global @edit=bool
 #FLEET_DAEMON_KICK=1
 
-# Minimum seconds between two kicks OF THE SAME UNIT. Per unit, so a second
-# stalled daemon is still helped while the first is cooling down. Every kick, and
-# every refusal to kick, is logged to logs/daemon-kick.log. GLOBAL.
-# @label=Daemon self-heal cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+# Minimum seconds between two kicks OF THE SAME UNIT, as a MULTIPLE of that
+# unit's own StartInterval. Per unit, so a second stalled daemon is still helped
+# while the first is cooling down. Every kick, and every refusal to kick, is
+# logged to logs/daemon-kick.log.
+#
+# It scales, rather than being a flat number, because of what a kick becomes when
+# the whole launchd domain stops spawning (#711): `launchctl kickstart` is an
+# EXPLICIT command, so it still works when nothing is being scheduled — and the
+# cooldown then silently IS every daemon's period. The flat 600s this used to be
+# was sized for the 60s units, and on 2026-09-15 it turned issue-bridge and
+# pr-refresh (StartInterval=15) into ten-minute daemons: a `--to-worker` relay
+# that should land in 15s took up to ten minutes, and the 60s quota watch #551
+# built after an 85% window was missed entirely became one look per ten minutes.
+# 3 keeps the cooldown at or below every unit's staleness threshold, which hands
+# the rate-limiting back to that already-per-unit number. GLOBAL.
+# @label=Daemon self-heal cooldown multiplier @group=cache @tier=advanced @scope=global @edit=int
+#FLEET_DAEMON_KICK_COOLDOWN_MULT=3
+
+# Floor under that multiple, so the 15s units do not get kicked every few seconds
+# while the domain is down. GLOBAL.
+# @label=Daemon self-heal cooldown floor @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_KICK_COOLDOWN_FLOOR=60
+
+# ABSOLUTE cooldown, in place of the multiple — one number for every unit, which
+# is what this knob meant before #711. Unset by default. GLOBAL.
+# @label=Daemon self-heal cooldown (absolute) @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_KICK_COOLDOWN=600
 
 # How long the status bar keeps the aggregate trace up (`↻ daemon kicked 3m`)
@@ -712,6 +734,56 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # GLOBAL.
 # @label=Daemon reload cooldown @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_RELOAD_COOLDOWN=1800
+
+# --- the launchd DOMAIN probe (issue #711) -------------------------------------
+# Every knob above answers "is THIS unit being scheduled?". These answer the
+# question one level up, and they exist because on 2026-09-15 the honest per-unit
+# answer was wrong nine times over: the whole `gui/501` domain had stopped
+# spawning jobs, so fleet-doctor printed nine "nothing is scheduling
+# com.claude-fleet.<x>" lines and sent the operator to read plists that were
+# fine. bin/fleet-launchd-probe.sh settles it by bootstrapping a throwaway agent
+# that shares nothing with the fleet and counting how often launchd runs it; when
+# several units stall together, fleet-doctor asks it and collapses the nine lines
+# into one that says "machine, not fleet — log out or reboot".
+
+# Master switch for the probe. 0 keeps every per-unit line and never measures the
+# domain — which also means never ruling the machine out. GLOBAL.
+# @label=launchd domain probe @group=cache @tier=advanced @scope=global @edit=bool
+#FLEET_LAUNCHD_PROBE=1
+
+# How long the probe watches its throwaway agent. This is WALL CLOCK inside a
+# fleet-doctor run, so it is the one number here with a felt cost; it must stay
+# comfortably above two StartIntervals or a healthy domain can read as degraded.
+# GLOBAL.
+# @label=launchd probe window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_LAUNCHD_PROBE_WINDOW=40
+
+# The throwaway agent's own StartInterval. Floored at 10s in the script: launchd
+# throttles a job to one spawn per 10s, so anything smaller measures the throttle
+# instead of the domain. GLOBAL.
+# @label=launchd probe interval @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_LAUNCHD_PROBE_INTERVAL=15
+
+# How long a verdict is reused before it is measured again, so repeated doctor
+# runs during one incident pay the window once. GLOBAL.
+# @label=launchd probe verdict TTL @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_LAUNCHD_PROBE_TTL=900
+
+# How many interval units must be stalled AT ONCE before the stall counts as
+# domain-shaped and the probe is worth running (it must also be at least half of
+# the units that have ever ticked on this host). Below this, a stalled unit is
+# treated as its own problem — which it usually is. GLOBAL.
+# @label=Domain-stall unit threshold @group=cache @tier=advanced @scope=global @edit=int
+#FLEET_DAEMON_DOMAIN_MIN=3
+
+# …or that many units KICKED inside this window. The second signature, and the
+# one that matters once the self-heal works: a kick buys one execution, so a
+# kicked unit reads fresh again for a whole interval and "how many are overdue
+# right now" collapses to one or two while every daemon on the box is really
+# running at its cooldown. On a healthy machine this count is 0 — a kick only ever
+# happens because something stopped being scheduled. GLOBAL.
+# @label=Domain-stall kick window @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_DOMAIN_KICK_WINDOW=3600
 
 # PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
 # PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its

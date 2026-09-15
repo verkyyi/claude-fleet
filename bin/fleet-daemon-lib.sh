@@ -331,15 +331,48 @@ fleet_daemon_kick_age() {
   return 0
 }
 
-# fleet_daemon_kick_cooldown <unit> — seconds between two kicks of the same unit.
-# FLEET_COLLECT_KICK_COOLDOWN still governs `collect` (#638's knob).
+# fleet_daemon_kick_cooldown <unit> — seconds between two kicks of the same unit,
+# RELATIVE to the unit's own interval: max(MULT x interval, FLOOR). Same shape,
+# and the same reason, as fleet_daemon_stale_secs above.
+#
+# WHY IT STOPPED BEING A FLAT 600s (issue #711). The flat number was chosen when
+# the cooldown's only job was "do not let the kick itself become the load", and it
+# was sized for the 60s units. Then the domain-wide stall arrived: when launchd
+# spawns NOTHING, `launchctl kickstart` is an EXPLICIT command and therefore the
+# only execution path left — so the self-heal's cooldown silently becomes every
+# daemon's effective period. Measured on 2026-09-15: issue-bridge and pr-refresh,
+# both StartInterval=15, running once per 600s. A `fleet-comment.sh --to-worker`
+# relay that should land in 15s took up to ten minutes, and quotawatch — which
+# exists as its own 60s unit precisely because an 85% quota watch once missed a
+# whole 5-hour window (#551/#553) — was reduced to one look per ten minutes.
+#
+# One cooldown for units whose intervals differ by 240x cannot be right for both,
+# so it now scales like every other number here. MULT=3 keeps the cooldown at or
+# BELOW each unit's staleness threshold across the whole registry (3x15=45→60 vs
+# 180; 3x60=180 vs 300; 3x3600 vs 18000), which is the property worth having: the
+# staleness threshold — already per-unit and already tuned — goes back to being
+# the thing that rate-limits kicks, and the cooldown goes back to being what it
+# was for, a guard against two watch passes kicking the same unit twice in a row.
+#
+# FLEET_DAEMON_KICK_COOLDOWN still wins outright when set, now as an ABSOLUTE
+# override rather than the default, and FLEET_COLLECT_KICK_COOLDOWN still governs
+# `collect` (#638's knob). FLEET_DAEMON_KICK_COOLDOWN_<UNIT> sets one unit.
 fleet_daemon_kick_cooldown() {
+  _fd_u="${1:-}"
   _fd_c=''   # the eval below sets it from the per-unit env override, if any
-  eval "_fd_c=\${FLEET_DAEMON_KICK_COOLDOWN_$(_fleet_daemon_key "${1:-}"):-}"
-  [ -z "$_fd_c" ] && [ "${1:-}" = collect ] && _fd_c="${FLEET_COLLECT_KICK_COOLDOWN:-}"
-  [ -z "$_fd_c" ] && _fd_c="${FLEET_DAEMON_KICK_COOLDOWN:-${FLEET_COLLECT_KICK_COOLDOWN:-600}}"
-  case "$_fd_c" in ''|*[!0-9]*) _fd_c=600 ;; esac
-  printf '%s' "$_fd_c"
+  eval "_fd_c=\${FLEET_DAEMON_KICK_COOLDOWN_$(_fleet_daemon_key "$_fd_u"):-}"
+  [ -z "$_fd_c" ] && [ "$_fd_u" = collect ] && _fd_c="${FLEET_COLLECT_KICK_COOLDOWN:-}"
+  [ -z "$_fd_c" ] && _fd_c="${FLEET_DAEMON_KICK_COOLDOWN:-}"
+  case "$_fd_c" in ''|*[!0-9]*) : ;; *) printf '%s' "$_fd_c"; return 0 ;; esac
+  # MULT/FLOOR are read from their own names, never through the per-unit eval
+  # above: no registry unit is called `mult` or `floor`, and the check below keeps
+  # a garbage value from turning into a zero cooldown (i.e. no rate limit at all).
+  _fd_cm="${FLEET_DAEMON_KICK_COOLDOWN_MULT:-3}"; case "$_fd_cm" in ''|*[!0-9]*) _fd_cm=3 ;; esac
+  [ "$_fd_cm" -gt 0 ] || _fd_cm=3
+  _fd_cf="${FLEET_DAEMON_KICK_COOLDOWN_FLOOR:-60}"; case "$_fd_cf" in ''|*[!0-9]*) _fd_cf=60 ;; esac
+  _fd_ct=$(( _fd_cm * $(fleet_daemon_interval "$_fd_u") ))
+  [ "$_fd_ct" -ge "$_fd_cf" ] || _fd_ct="$_fd_cf"
+  printf '%s' "$_fd_ct"
 }
 
 # fleet_daemon_kick_fails <unit> [root] — how many kicks in a row have failed to
@@ -420,4 +453,100 @@ fleet_daemon_recent_kick() {
     { [ -z "$_fd_min" ] || [ "$_fd_ka" -lt "$_fd_min" ]; } && _fd_min="$_fd_ka"
   done
   printf '%s' "$_fd_min"
+}
+
+# --- the launchd DOMAIN verdict (issue #711) -----------------------------------
+# Everything above this line asks "is THIS unit being scheduled?". These three ask
+# the question one level up — "is this user's launchd domain scheduling ANYTHING?"
+# — and they are pure cache accessors, because the measurement that answers it
+# needs launchctl and 40 seconds of wall clock, and neither belongs in a lib the
+# status bar sources ten times every five seconds. bin/fleet-launchd-probe.sh does
+# the measuring and writes the line; fleet-doctor reads it.
+#
+# WHY THE ANSWER IS WORTH CACHING AT ALL. On 2026-09-15 the whole gui/501 domain
+# stopped spawning jobs on this host — nine of nine interval units at `Δruns = 0`,
+# and a brand-new throwaway agent bootstrapped alongside them never ran once, not
+# even its RunAtLoad. Every per-unit alarm above was telling the truth and the
+# nine of them together told a lie: that the FLEET's daemons were broken. They
+# were not; the same install on the same commit was ticking normally on the other
+# machine. One line that says "the domain stopped spawning, this is machine state,
+# log out or reboot" is worth more than nine accurate ones that send the operator
+# to read plists.
+#
+# Line format (TSV, one line): <epoch> <verdict> <ticks> <window> <interval> <runs>
+# Verdicts: ok · no-interval (RunAtLoad only) · no-spawn (nothing at all).
+# `unknown` is never written — an unmeasured run must not overwrite a real verdict.
+_fleet_daemon_probe_file() { printf '%s/launchd-probe.verdict' "$(fleet_daemon_state_dir "${1:-}")"; }
+
+# fleet_daemon_probe_write <verdict> <ticks> <window> <interval> <runs> [root]
+fleet_daemon_probe_write() {
+  _fd_pf=$(_fleet_daemon_probe_file "${6:-}")
+  mkdir -p "$(fleet_daemon_state_dir "${6:-}")" 2>/dev/null || return 0
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "${1:-unknown}" "${2:-0}" \
+    "${3:-0}" "${4:-0}" "${5:--}" > "$_fd_pf" 2>/dev/null || return 0
+  return 0
+}
+
+# fleet_daemon_probe_line [root] — the raw cached line, or nothing.
+fleet_daemon_probe_line() {
+  _fd_pf=$(_fleet_daemon_probe_file "${1:-}")
+  [ -f "$_fd_pf" ] || return 0
+  IFS= read -r _fd_pl < "$_fd_pf" 2>/dev/null || return 0
+  printf '%s' "${_fd_pl:-}"
+}
+
+# fleet_daemon_probe_age [root] — seconds since the verdict was measured, or
+# nothing if none was.
+fleet_daemon_probe_age() {
+  _fd_pt=''
+  _fd_pline=$(fleet_daemon_probe_line "${1:-}")
+  [ -n "$_fd_pline" ] || return 0
+  _fd_pt=${_fd_pline%%	*}
+  case "$_fd_pt" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' $(( $(date +%s) - _fd_pt ))
+}
+
+# fleet_daemon_probe_verdict [root] [ttl] — the cached verdict iff it is younger
+# than `ttl` (default FLEET_LAUNCHD_PROBE_TTL, 900s; 0 = any age). Empty means
+# "nobody has measured this recently", which is NOT the same as "fine" — every
+# caller must treat the two differently or it reintroduces the confident-but-
+# unmeasured answer this whole mechanism exists to avoid.
+fleet_daemon_probe_verdict() {
+  _fd_pline=$(fleet_daemon_probe_line "${1:-}")
+  [ -n "$_fd_pline" ] || return 0
+  _fd_pa=$(fleet_daemon_probe_age "${1:-}")
+  [ -n "$_fd_pa" ] || return 0
+  _fd_pttl="${2:-${FLEET_LAUNCHD_PROBE_TTL:-900}}"
+  case "$_fd_pttl" in ''|*[!0-9]*) _fd_pttl=900 ;; esac
+  [ "$_fd_pttl" -eq 0 ] || [ "$_fd_pa" -lt "$_fd_pttl" ] || return 0
+  # field 2 of the TSV line
+  _fd_pv=${_fd_pline#*	}; _fd_pv=${_fd_pv%%	*}
+  case "$_fd_pv" in ok|no-interval|no-spawn) printf '%s' "$_fd_pv" ;; esac
+  return 0
+}
+
+# fleet_daemon_kicked_recently [root] [window] — how many registry units the
+# self-heal has kicked inside `window` seconds (default 3600).
+#
+# THE SIGNAL THAT SURVIVES A WORKING SELF-HEAL (issue #711). "How many units are
+# overdue right now" is the obvious way to spot a domain-wide stall, and it is the
+# one that stops working the moment the self-heal is any good: each kick buys one
+# execution, so the unit reads FRESH again for a whole interval and the count of
+# simultaneously-overdue units collapses to one or two. Measured on the wedged
+# host with kicks running: 1 unit overdue, and 9 units each kicked ~110 seconds
+# earlier, every one of them logging the same `kick → stale again → kick` cycle.
+#
+# So the count of units under active self-heal is the honest measure of "this is
+# not one broken daemon". On a healthy machine it is 0 — a kick only ever happens
+# because something stopped being scheduled, which is why #636 made the trace
+# visible in the first place.
+fleet_daemon_kicked_recently() {
+  _fd_kw="${2:-3600}"; case "$_fd_kw" in ''|*[!0-9]*) _fd_kw=3600 ;; esac
+  _fd_kn=0
+  for _fd_ku in $(fleet_daemon_unit_names); do
+    _fd_ka=$(fleet_daemon_kick_age "$_fd_ku" "${1:-}")
+    [ -n "$_fd_ka" ] || continue
+    [ "$_fd_ka" -lt "$_fd_kw" ] && _fd_kn=$(( _fd_kn + 1 ))
+  done
+  printf '%s' "$_fd_kn"
 }
