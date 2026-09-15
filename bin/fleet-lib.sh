@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -945,6 +945,26 @@ fleet_kill_tree() {
 # accurate to about a second and a fast command still returns as soon as it is
 # done. Safe inside `$( )`: backgrounding does not change where stdout goes.
 #
+# The poll compares against a WALL-CLOCK DEADLINE, and this is load-bearing
+# (issue #653). It used to count iterations instead —
+#
+#     while [ "$waited" -lt "$budget" ]; do …; sleep 1; waited=$((waited+1)); done
+#
+# — on the assumption that one iteration costs one second. That assumption breaks
+# exactly when a budget matters. The collector runs under launchd
+# `ProcessType=Background` (lowest CPU + I/O tier); at load 40+ the `sleep`
+# fork/exec in each iteration cost SECONDS, so a 30s git budget spent 56s and then
+# 126s of wall clock — 1.9x and 4.2x — while `waited` counted dutifully to 30. The
+# budget inflated by the very factor that made the work slow, i.e. it was loosest
+# at the moment it was needed, and the tick it was meant to bound ran 454s against
+# a 60s interval. A deadline cannot drift that way: however long an iteration
+# takes, the loop stops at the first poll past it, so the overshoot is bounded by
+# ONE poll instead of multiplying with the load.
+#
+# The deadline costs one `date` fork per poll on top of the `sleep` that was
+# already there. That is the right trade: the fork is the same cost class as the
+# sleep, and an honest budget is worth more than halving the cost of measuring it.
+#
 #   $1   budget in seconds (0 or non-numeric ⇒ run unbudgeted)
 #   $2+  the command and its arguments (not a shell string — no eval)
 fleet_timebox() {
@@ -952,10 +972,15 @@ fleet_timebox() {
   case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
   [ "$budget" -gt 0 ] || { "$@"; return $?; }
   "$@" &
-  local job=$! waited=0
-  while [ "$waited" -lt "$budget" ]; do
+  local job=$! deadline
+  deadline=$(( $(date +%s) + budget ))
+  # Poll order is: is the job done? → is the clock up? → wait a second. So a job
+  # that finishes is always noticed before the deadline is declared blown, and the
+  # loop never sleeps past a deadline it has already reached.
+  while :; do
     kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
-    sleep 1; waited=$((waited+1))
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 1
   done
   kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
   fleet_kill_tree "$job" 1

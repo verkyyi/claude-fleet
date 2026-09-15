@@ -560,15 +560,30 @@ if [ -f "$hb" ]; then
   hb_now=$(date +%s)
   hb_get() { sed -n "s/^$1=//p" "$hb" | head -1; }
   hb_end=$(hb_get end); hb_start=$(hb_get start); hb_phase=$(hb_get phase); hb_dur=$(hb_get dur); hb_phases=$(hb_get phases)
+  # over= / skipped= (issue #653): which phases spent their own budget, and which
+  # the whole-tick budget truncated away. The heartbeat has always carried the
+  # per-phase seconds, so "which phase ate the tick" was free information nobody
+  # was printing — the last two times the bottleneck moved (git, then usage) it
+  # cost a hand investigation to find that out. Say it here instead.
+  hb_over=$(hb_get over); hb_skipped=$(hb_get skipped)
   case "$hb_start" in ''|*[!0-9]*) hb_start=0;; esac
   case "$hb_end"   in ''|*[!0-9]*) hb_end=0;;   esac
   hb_slow=$(printf '%s\n' "$hb_phases" | tr ' ' '\n' | sort -t= -k2 -nr | head -1)
+  [ -n "$hb_slow" ] && hb_slow="${hb_slow}s"     # "usage=226" reads better as "usage=226s"
+  hb_budget=''
+  [ -n "$hb_over" ]    && hb_budget="; over budget: $hb_over"
+  [ -n "$hb_skipped" ] && hb_budget="$hb_budget; deferred to the next tick: $hb_skipped"
   if [ "$hb_end" -gt 0 ]; then
     hb_age=$((hb_now - hb_end))
     if [ "$hb_age" -gt "${FLEET_COLLECT_DEADLINE:-600}" ]; then
-      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-daemon-watch.sh self-heals, see below)"
+      warn collect "last complete tick ended $((hb_age/60))m ago (took ${hb_dur:-?}s; slowest phase ${hb_slow:-?}$hb_budget) — dash caches are stale; is com.claude-fleet.collect loaded / a tick wedged in \`$hb_phase\`? (the status bar shows \`⚠ dash stale\`; bin/fleet-daemon-watch.sh self-heals, see below)"
+    elif [ -n "$hb_skipped" ]; then
+      # A truncated tick is working as designed (better a phase waits a round than
+      # the whole tick drifting off its interval) but it is the signal that the
+      # bottleneck has moved again — so name it rather than passing silently.
+      warn collect "last tick ${hb_age}s ago took ${hb_dur:-?}s and hit its ${FLEET_COLLECT_TICK_BUDGET:-120}s budget (FLEET_COLLECT_TICK_BUDGET) — slowest phase ${hb_slow:-?}$hb_budget. Those caches refresh on a later tick (global/collect.phase.cursor resumes there); raise that phase's budget, or find out why it got slow"
     else
-      pass collect "last tick ${hb_age}s ago, took ${hb_dur:-?}s (slowest phase ${hb_slow:-?}; deadline ${FLEET_COLLECT_DEADLINE:-600}s)"
+      pass collect "last tick ${hb_age}s ago, took ${hb_dur:-?}s (slowest phase ${hb_slow:-?}$hb_budget; tick budget ${FLEET_COLLECT_TICK_BUDGET:-120}s, deadline ${FLEET_COLLECT_DEADLINE:-600}s)"
     fi
   else
     hb_age=$((hb_now - hb_start))

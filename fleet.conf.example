@@ -502,6 +502,88 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Collector git slow-log @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_GIT_SLOW=10
 
+# Collector WHOLE-TICK budget (issue #653) — the backstop over every phase.
+# Budgeting phases one at a time is a losing game: whichever is currently the
+# most expensive drags the tick past its own 60s StartInterval, and since launchd
+# never overlaps a StartInterval job, "tick duration" IS the collector's real
+# cadence. #552 budgeted `git` (571s → 56s) and the very next tick measured
+# `dur=454 … git=126 usage=226` — the bottleneck had simply moved to a phase with
+# no budget, and `runs` advanced once in 514s against a 60s interval. So every
+# phase now has its own budget (the knobs below) and this one bounds their sum:
+# before each phase the remaining time is checked and that phase's budget is
+# CLAMPED to what is left, so the tick cannot overrun by more than its last
+# phase's tail. Truncation is not starvation — the phase the tick stopped at is
+# parked in global/collect.phase.cursor and the NEXT tick starts there, wrapping
+# round, so a truncated phase waits one round rather than forever. A tick that
+# completes clears the cursor, so a healthy machine (a whole tick is ~10–20s)
+# never rotates and this is invisible.
+#
+# What this buys, measured (6 consecutive live ticks, #653): launchd restarts the
+# job a constant ~60s after the previous tick ENDS, so the collector's real cadence
+# is simply
+#
+#     cycle = tick duration + 60s
+#
+#   dur  67s -> 128s cycle      dur 143s -> 204s cycle
+#   dur  77s -> 138s cycle      dur 184s -> 245s cycle
+#
+# (fits every sample within 3s). So bounding the tick pays back LINEARLY — there is
+# no threshold to clear, and the 454s tick in #653 was costing a ~514s cycle, which
+# is exactly the "runs advanced once in 514s" that opened the issue.
+#
+# Why 2x the interval and not less: a smaller budget buys cadence by TRUNCATING, and
+# a truncated phase then waits a whole rotation. At 120s a tick runs every phase, so
+# every cache is at most one cycle old; at, say, 50s the cycle would be ~110s but
+# each cache would only refresh every 3-4 ticks — staler in absolute terms than the
+# 120s setting despite the better `runs` count. `runs` is a proxy for freshness, not
+# freshness itself, and below roughly one full tick's work the two pull apart.
+# Why not more: the dash's staleness alarm fires when the heartbeat has not advanced
+# for FLEET_DAEMON_STALE_MULT x 60s (300s by default), so past ~250s the collector
+# starts tripping its own alarm — which is what the 454s ticks were doing. Raise the
+# offending phase's budget instead, or find out why it got slow. GLOBAL.
+# @label=Collector tick budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_TICK_BUDGET=120
+
+# Per-phase collector budgets (issue #653). One knob each, so a phase that is
+# legitimately slow on your machine can be given room without loosening the rest;
+# FLEET_COLLECT_TICK_BUDGET above is the backstop over all of them. On expiry the
+# phase's process tree is killed, the tick RUNS ON, and the blown budget is named
+# on stderr (logs/collect.launchd.log) — `fleet-doctor.sh` also reports it. The
+# git phase keeps its historical name, FLEET_COLLECT_GIT_BUDGET above.
+#   quotawatch  the ccquota pre-emptive rotation, run first (it has its own 60s
+#               daemon too, so this in-tick run is a backstop)
+#   sockets     enumerating the live fleet sockets — the tick's one precondition
+#   sessmap     session→repo resolution + the repo fetch queue
+#   issues      the per-repo `gh issue list` fetches (TTL-gated; network)
+#   ctx         per-worktree context tokens (python over the newest transcript)
+#   usage       the 5h/7d token proxy (python over ALL transcripts; TTL ≥300s).
+#               This was the tick's biggest unbudgeted block: 226s measured
+#               against 0.2s of the same work at foreground priority
+#   scrape      capture-pane sweep for the official rate-limit line
+#   banner      multi-account limit banner → mark-limited + rotate
+#   escalate    detached-attention notifications
+#   snapshot    the crash-recovery layout snapshot
+# @label=Collector quotawatch budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_QUOTAWATCH_BUDGET=30
+# @label=Collector sockets budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_SOCKETS_BUDGET=20
+# @label=Collector sessmap budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_SESSMAP_BUDGET=30
+# @label=Collector issues budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_ISSUES_BUDGET=45
+# @label=Collector ctx budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_CTX_BUDGET=45
+# @label=Collector usage budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_USAGE_BUDGET=60
+# @label=Collector scrape budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_SCRAPE_BUDGET=30
+# @label=Collector banner budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_BANNER_BUDGET=30
+# @label=Collector escalate budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_ESCALATE_BUDGET=30
+# @label=Collector snapshot budget @group=cache @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_SNAPSHOT_BUDGET=30
+
 # Collector STALENESS threshold (issue #636) — when the dash starts saying so.
 # The dash draws every number out of the collector's caches, so a collector that
 # stops does not blank the dash: it freezes it, with nothing to show the data is
