@@ -33,6 +33,28 @@
 #                      Enter, and only after the chosen row is read back off the
 #                      screen; a cursor that never settles there gets exit 4 and no
 #                      Enter at all — the footer hint is never the authority.
+#   • SCROLLED         the QUESTION TEXT has scrolled off the top while the option
+#                      rows are still on the screen → still answered, because the
+#                      anchor is the ROW, not the question (issue #702). And the pair
+#                      that keeps it a gate: with the CHOSEN ROW off the top too, it
+#                      still refuses with exit 3 and zero keystrokes.
+#   • PREVIEW-PANEL    options carrying `preview` text render a bordered panel in a
+#                      right-hand column, so a slice of that panel is appended to
+#                      every option row AND to every wrapped continuation of one
+#                      (issue #702, second cause). Each row is cut at its column
+#                      boundary, so all three labels resolve — including the one the
+#                      narrow left column wrapped, which is #656 and #702 having to
+#                      hold at the same time. A label that is genuinely absent still
+#                      refuses — and a preview whose own text says "Submit" no longer
+#                      fakes the multiSelect Submit row from an OPTION row, which used
+#                      to stop the ↓ walk three rows short and press Enter there.
+#   • WRONG-TAB        a two-question dialog whose two questions share their option
+#                      labels IN REVERSED ORDER, showing question 2's tab while
+#                      question 1's text is off-screen: the anchor label resolves to a
+#                      row, and pressing it would answer the OTHER question with the
+#                      opposite value. `right_tab` refuses — exit 3, nothing sent.
+#                      This is the one thing the old question-text gate was really
+#                      load-bearing for, and the leg that pins it as kept.
 #   • VERIFY           success is the tool_result landing in the TRANSCRIPT (the
 #                      recorded answer is echoed); a result that never lands → exit 4.
 #   • CANCEL           --cancel sends exactly one Escape.
@@ -400,6 +422,159 @@ out=$(run --answer "$PANE" --transcript "$TEX" 3 2>&1); rc=$?
 case "$(injected)" in *Enter*) fail "Enter must never be sent at an unverified row" "$(injected)" ;; esac
 printf 'selftest: ENTER-VARIANT legs PASS (digit-only-moves → one verified Enter · cursor never settles → exit 4, no Enter)\n' >&2
 
+# ============================ SCROLLED ======================================
+# Issue #702, first cause. The dialog is TALLER than the pane, so the question text
+# has scrolled off the top while every option row is still plainly on the screen.
+# Anchored on the question text the gate refused this with "the pane is not showing
+# question 1" — on a dialog the operator could read, and that `--show` had just
+# printed correctly. Anchored on the ROW it answers. The screen below is the capture
+# from the issue (pane %103, 2026-09-15 08:07), with option 1 scrolled off too so the
+# same shape pins BOTH acceptance criteria: the visible row answers, the row that is
+# off the top still refuses.
+Q_SCROLL='[{"question":"空 subtype 的红灯要清得多快？（classifier 的屏幕判定在 Stop 时必然无 pending tool_use，所以它是唯一受影响的一类）","header":"清灯时机","multiSelect":false,
+ "options":[{"label":"照 issue 原样：无 pending 即清","description":"守卫整条去掉"},
+            {"label":"清，但空 subtype 先多熬一会儿","description":"年龄门槛单独调大"},
+            {"label":"照旧：只有 ask/perm 才清","description":"不动"}]}]'
+
+# The question AND option 1 are above the top of the pane; rows 2 and 3 are not.
+scroll_screen() {  # $1 = step
+  { printf '     同样去掉「必须是 ask/perm」，但空 subtype 的年龄门槛单独调大…\n'
+    printf '❯ 2. 清，但空 subtype 先多熬一会儿\n'
+    printf '     同样去掉「必须是 ask/perm」，但空 subtype 的年龄门槛单独调大…\n'
+    printf '  3. 照旧：只有 ask/perm 才清\n'
+    printf '     不动，等下一次再看\n'
+    printf '  4. Type something.\n'
+    printf '──────────────────────────────────────\n  5. Chat about this\n\n'
+    printf 'Enter to select · ↑/↓ to navigate · Esc to cancel\n'
+  } | screen "$1"
+}
+
+TSC="$WORK/t-scroll.jsonl"; mk_transcript "$TSC" "$Q_SCROLL"
+clear_screens; scroll_screen 0; printf '%s\n' "$SCR_IDLE" | screen 1
+FAKE_TRANSCRIPT="$TSC" FAKE_RESULT_AT_STEP=1 \
+FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
+  run --answer "$PANE" --transcript "$TSC" 2 >"$WORK/out.txt" 2>&1 \
+  || fail "a question scrolled off the top must still answer (#702)" "$(cat "$WORK/out.txt")"
+[ "$(inject_count)" = "1" ] || fail "the scrolled dialog must send exactly one digit" "$(injected)"
+case "$(injected)" in *' 2'*) : ;; *) fail "the scrolled dialog must send the digit its ROW shows" "$(injected)" ;; esac
+
+# …and the gate is still a gate: the CHOSEN row is off the top as well → refuse.
+TSX="$WORK/t-scroll-x.jsonl"; mk_transcript "$TSX" "$Q_SCROLL"
+clear_screens; scroll_screen 0
+out=$(TMO=1 run --answer "$PANE" --transcript "$TSX" 1 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "a chosen row that is off the screen must exit 3 (got $rc)" "$out"
+nothing_sent || fail "an off-screen chosen row must send NOTHING" "$(injected)"
+case "$out" in *'照 issue 原样'*) : ;; *) fail "the refusal must name the ROW it could not find" "$out" ;; esac
+printf 'selftest: SCROLLED legs PASS (question off the top → answered by row · chosen row off the top → exit 3, ZERO keystrokes)\n' >&2
+
+# ============================ PREVIEW-PANEL =================================
+# Issue #702, second cause. With `preview` text on the options the dialog draws a
+# bordered panel in a RIGHT-HAND column, and capture-pane returns the whole terminal
+# row — so a slice of that panel is glued onto every option row, and onto every
+# wrapped continuation of one. "the row's text equals the label" was then false for
+# EVERY row at once, and squashing the whitespace made it worse by pulling the
+# panel's own words into the comparison. The screen below is the capture from the
+# issue's second report (pane %110, 2026-09-15 11:18): note that option 1's label is
+# ALSO wrapped by the narrow left column, so #656 and #702 have to hold together.
+Q_PANEL='[{"question":"`fleet-account.sh whoami` 不带 window id 时，应该返回什么？","header":"whoami 无参","multiSelect":false,
+ "options":[{"label":"打印整个 fleet 的账号表（推荐）","description":"全量"},
+            {"label":"只打印我自己这个窗口","description":"单窗口"},
+            {"label":"报用法错误 rc=2","description":"拒绝"}]}]'
+
+panel_screen() {  # $1 = step  $2 = cursor row
+  { printf ' ☐ whoami 无参\n'
+    printf '`fleet-account.sh whoami` 不带 window id 时，应该返回什么？\n'
+    cur() { if [ "$1" = "$2" ]; then printf '❯ '; else printf '  '; fi; }
+    cur "$2" 1; printf '1. 打印整个 fleet               ┌────────────────────────────────────────────┐\n'
+    printf '    的账号表（推荐）              │ $ fleet-account.sh whoami                  │\n'
+    cur "$2" 2; printf '2. 只打印我自己这个窗口         ├─── ✂ ─── 12 lines hidden ──────────────────┤\n'
+    cur "$2" 3; printf '3. 报用法错误 rc=2              └────────────────────────────────────────────┘\n'
+    printf '                                  Notes: press n to add notes\n'
+  } | screen "$1"
+}
+
+for pick in 1 2 3; do
+  TPP="$WORK/t-panel-$pick.jsonl"; mk_transcript "$TPP" "$Q_PANEL"
+  clear_screens; panel_screen 0 1; printf '%s\n' "$SCR_IDLE" | screen 1
+  FAKE_TRANSCRIPT="$TPP" FAKE_RESULT_AT_STEP=1 \
+  FAKE_RESULT_LINE="$(result_line 'Your questions have been answered.')" \
+    run --answer "$PANE" --transcript "$TPP" "$pick" >"$WORK/out.txt" 2>&1 \
+    || fail "a preview-panel dialog must answer (pick $pick)" "$(cat "$WORK/out.txt")"
+  [ "$(inject_count)" = "1" ] || fail "preview-panel pick $pick must send exactly one digit" "$(injected)"
+  case "$(injected)" in *" $pick"*) : ;; *) fail "preview-panel pick $pick must resolve to its own row" "$(injected)" ;; esac
+done
+
+# The column cut is not a licence to match loosely: a label that is not there refuses.
+TPX="$WORK/t-panel-x.jsonl"
+mk_transcript "$TPX" '[{"question":"`fleet-account.sh whoami` 不带 window id 时，应该返回什么？","header":"whoami 无参","multiSelect":false,
+ "options":[{"label":"打印整个 fleet 的账号表（推荐）","description":"全量"},
+            {"label":"改成读 ~/.claude.json 的 oauthAccount","description":"另一条路"}]}]'
+clear_screens; panel_screen 0 1
+out=$(TMO=1 run --answer "$PANE" --transcript "$TPX" 2 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "a label absent from a preview-panel screen must exit 3 (got $rc)" "$out"
+nothing_sent || fail "the panel-aware matcher must still send nothing when it refuses" "$(injected)"
+# The panel's text is the option's own `preview`, so it is ARBITRARY — and the
+# multiSelect walk stops when it reads the cursor on the `Submit` row. A preview that
+# merely CONTAINS the word "Submit" used to satisfy that from an OPTION row, so the
+# walk broke on its first read and pressed Enter three rows short of Submit. The
+# column cut is what makes the panel unable to answer for the left column.
+TPS="$WORK/t-panel-submit.jsonl"; mk_transcript "$TPS" "$Q_MULTI"
+clear_screens
+mp_screen() {  # $1=step  $2=cursor row (1..3 options, 4 = Submit)  $3=checked rows
+  { printf ' ☐ Colors\n\nWhich colors?\n\n'
+    for i in 1 2 3; do
+      lab=$([ "$i" = 1 ] && echo Red; [ "$i" = 2 ] && echo Green; [ "$i" = 3 ] && echo Blue)
+      chk=' '; case " $3 " in *" $i "*) chk='✔' ;; esac
+      cur='  '; [ "$2" = "$i" ] && cur='❯ '
+      # the Submit-bearing preview line sits on the row the CURSOR STARTS on — that
+      # is what made the old `❯.*Submit` grep match from an option row.
+      case "$i" in
+        1) pan='│ curl -X POST https://api/v1/Submit   │' ;;
+        2) pan='├─── ✂ ─── 8 lines hidden ─────────────┤' ;;
+        3) pan='└──────────────────────────────────────┘' ;;
+      esac
+      printf '%s%s. [%s] %-18s %s\n' "$cur" "$i" "$chk" "$lab" "$pan"
+    done
+    cur='     '; [ "$2" = 4 ] && cur='❯    '; printf '%sSubmit\n' "$cur"
+    printf '\nEnter to select · Esc to cancel\n'
+  } | screen "$1"
+}
+mp_screen 0 1 ''; mp_screen 1 1 '1'; mp_screen 2 1 '1 3'
+mp_screen 3 2 '1 3'; mp_screen 4 3 '1 3'; mp_screen 5 4 '1 3'
+printf '%s\n' "$SCR_IDLE" | screen 6
+FAKE_TRANSCRIPT="$TPS" FAKE_RESULT_AT_STEP=6 \
+FAKE_RESULT_LINE="$(result_line 'Your questions have been answered: "Which colors?"="Red, Blue".')" \
+  run --answer "$PANE" --transcript "$TPS" '1,3' >"$WORK/out.txt" 2>&1 \
+  || fail "a multiSelect behind a preview panel must answer" "$(cat "$WORK/out.txt")"
+inj=$(injected)
+[ "$(printf '%s\n' "$inj" | grep -c 'Down')" = "3" ] \
+  || fail "a preview saying 'Submit' must NOT stop the walk early (3 Downs expected)" "$inj"
+[ "$(printf '%s\n' "$inj" | grep -c 'Enter')" = "1" ] || fail "exactly one Enter, on the real Submit row" "$inj"
+printf '%s\n' "$inj" | tail -1 | grep -q 'Enter' || fail "Enter must come LAST" "$inj"
+printf 'selftest: PREVIEW-PANEL legs PASS (3 labels behind a right-hand panel resolve, one of them wrapped too · absent label → exit 3 · a preview saying "Submit" does not fake the Submit row)\n' >&2
+
+# ============================ WRONG-TAB =====================================
+# The one thing the question-text gate was load-bearing for, kept (#702). Two
+# questions that share their option labels in REVERSED order, with question 2's tab
+# on the screen and question 1's text scrolled off: the anchor label "Yes" does
+# resolve to a row — row 2 — and pressing it would answer "Delete the production
+# bucket?" with the opposite of what was picked. `right_tab` sees another question of
+# this dialog on the screen while ours is absent and refuses: exit 3, nothing sent.
+Q_SAME='[{"question":"Delete the staging bucket?","header":"Staging","multiSelect":false,
+ "options":[{"label":"Yes","description":"delete staging"},{"label":"No","description":"keep staging"}]},
+ {"question":"Delete the production bucket?","header":"Prod","multiSelect":false,
+ "options":[{"label":"No","description":"keep prod"},{"label":"Yes","description":"delete prod"}]}]'
+TWT="$WORK/t-wrongtab.jsonl"; mk_transcript "$TWT" "$Q_SAME"
+clear_screens
+{ printf '←  ✔ Staging  ☐ Prod  ✔ Submit  →\n\nDelete the production bucket?\n\n'
+  printf '❯ 1. No\n     keep prod\n  2. Yes\n     delete prod\n  3. Type something.\n\n'
+  printf 'Enter to select · ↑/↓ to navigate · Esc to cancel\n'; } | screen 0
+out=$(TMO=1 run --answer "$PANE" --transcript "$TWT" 1 1 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "another question's tab must refuse even when the label resolves (got $rc)" "$out"
+nothing_sent || fail "WRONG-TAB must send NOTHING — the digit would answer the other question" "$(injected)"
+case "$out" in *tab*) : ;; *) fail "the refusal must say it is the wrong tab" "$out" ;; esac
+printf 'selftest: WRONG-TAB leg PASS (label resolves on ANOTHER tab of the same dialog → exit 3, ZERO keystrokes)\n' >&2
+
 # ============================ VERIFY ========================================
 # The keystrokes land but the tool_result NEVER does → exit 4, and say so.
 clear_screens; printf '%s\n' "$SCR_SINGLE" | screen 0; printf '%s\n' "$SCR_IDLE" | screen 1
@@ -423,5 +598,5 @@ FAKE_PANE_DEAD=1 run --answer "$PANE" --transcript "$T" 2 >/dev/null 2>&1
 nothing_sent || fail "a gone pane must send nothing" "$(injected)"
 printf 'selftest: CANCEL/DRY-RUN/GONE-PANE legs PASS (one Escape · plan-only · dead pane refused)\n' >&2
 
-printf 'selftest PASS: fleet-answer — pending gate + label gate + single/multiSelect/multi-question key plans + wrapped screens + transcript verify (#605, #656)\n'
+printf 'selftest PASS: fleet-answer — pending gate + row-anchored screen gate + single/multiSelect/multi-question key plans + wrapped/scrolled/preview-panel screens + wrong-tab refusal + transcript verify (#605, #656, #702)\n'
 exit 0

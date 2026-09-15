@@ -125,6 +125,23 @@ discriminations so the fast signal does not cry wolf:
   — so a literal `grep -F` missed and the answerer refused a dialog that was on the
   screen and that `--show` had just parsed correctly. Squashing whitespace out of
   both sides keeps the gate exactly as strong while making a line break a non-event.
+  And every one of those comparisons is anchored on **the row it is about to press,
+  never on the question text** (#702). The question text is the weaker anchor — it
+  proves the dialog exists, not that the target row does — and it is the part that
+  goes first: options with per-option descriptions routinely run taller than the
+  pane, so the question scrolls off the top while every option row is still plainly
+  visible, and the gate refused four remote answers in one evening on dialogs the
+  operator could read. `right_tab` keeps the only thing that anchor was
+  load-bearing for: that a *multi-question* dialog is on OUR tab, which matters
+  because two tabs can share option labels in different orders. The same issue's
+  second cause is a **column** one: options carrying `preview` text render a
+  bordered panel to the RIGHT, and `capture-pane` returns whole terminal rows, so a
+  slice of that panel is glued onto every option row — "the row equals the label"
+  was false for every row at once, and squashing only pulled the panel's words into
+  the comparison. Each row is therefore cut at its column boundary (the first
+  whitespace-preceded box-drawing character) before anything looks at it. The three
+  screen shapes that broke it — wrapped label, scrolled question, preview panel —
+  have a selftest leg each, because the fourth shape will look like none of them.
 - **A permission prompt → `needs` + `@claude_needs=perm`.** The `Notification` says
   only that *some* dialog is open, so what puts `⊘` on the row is the transcript's
   pending `tool_use` being something other than an `AskUserQuestion` (#656). This is the half #605 left open, and on 2026-09-14 it
