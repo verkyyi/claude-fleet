@@ -302,3 +302,21 @@ pattern the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
 `shell/cw.zsh` refuses the common accidental forms from a worker shell (it's an
 accident rail, not a security boundary); set `FLEET_ALLOW_TMUX_DESTROY=1` for the
 rare legitimate destroy on the live server.
+
+**Putting the machine under load? Use `bin/fleet-loadgen.sh`, never your own
+`trap`.** Load experiments are legitimate — verifying an assertion on a busy box
+is real work. Hand-rolled ones are how the machine dies: on 2026-09-15 a worker's
+`(while :; do :; done) & … trap 'kill $BURN' EXIT` leaked 8 spinners that ran
+**3h20m at ~70% CPU each** as `PPID=1` orphans, took the box to load 108 until
+`ps` itself timed out, wedged both daemons and poisoned another issue's evidence
+(issue #697). The trap never fired — a trap lives in the parent, and the parent
+died. Every worker sharing the machine paid for it.
+
+    ~/.claude/fleet/bin/fleet-loadgen.sh 8 120 -- <your experiment>   # load only while it runs
+    ~/.claude/fleet/bin/fleet-loadgen.sh --status / --stop            # a detached batch
+
+Each burner carries its own kernel deadline, so SIGKILLing the parent or closing
+your pane cannot leak one, and the caps refuse an absurd `n`/duration. If you
+suspect something already leaked — yours or anyone's —
+`~/.claude/fleet/bin/fleet-diskguard.sh --orphans` lists the `PPID=1` runaways
+the worktree- and pane-keyed reapers structurally cannot see.

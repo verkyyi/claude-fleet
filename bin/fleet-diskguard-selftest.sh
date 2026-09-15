@@ -154,4 +154,114 @@ CPU_PCT=0 cpu_watch
 eq "cpu_watch: disabled writes no state" "absent" \
   "$([ -e "$FLEET_CONF_DIR/diskguard/cpu-seen" ] && echo present || echo absent)"
 
-printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog)\n' "$CHECKS"
+# ============================================================================
+# C. orphaned-runaway watchdog (issue #697)
+# ============================================================================
+# The class cpu_candidates structurally cannot cover. Its discriminator is "no
+# controlling terminal", which is also true of every healthy Claude Bash-tool
+# shell — so it ships OFF and stayed off, and on 2026-09-15 eight PPID=1 zsh
+# burners ran for 3h20m at ~70% CPU each with nothing in the fleet able to see
+# them. This filter discriminates on PPID=1 + a fleet argv fingerprint instead,
+# which is precise enough to be ON by default. Both halves of that claim are
+# asserted here: what it catches, and — more important for a default-on watchdog
+# — what it must not.
+ORPH="$WORK/orphbin"; mkdir -p "$ORPH"
+cat > "$ORPH/id" <<'EOF'
+#!/bin/sh
+echo tester
+EOF
+# Columns the real call emits: pid ppid user pcpu command. Row 222 is the load-
+# bearing negative: identical fingerprint, identical %CPU, but its parent is
+# alive — i.e. a worker's live Bash-tool shell running a legitimate build.
+cat > "$ORPH/ps" <<'EOF'
+#!/bin/sh
+cat <<ROWS
+111 1 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-1.sh; while :; do :; done
+222 4242 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8
+333 1 tester 10 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-3.sh; sleep 9
+444 1 other 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-4.sh; while :; do :; done
+555 1 tester 99 /usr/libexec/mdworker_shared -s mdworker -c MDSImporterWorker
+666 1 tester 99 tmux -L fleet-claude-fleet new-session -d -s fleet-claude-fleet
+777 1 tester 88 bash -c i=0; while [ "\$i" -lt 5000 ]; do i=\$((i+1)); done FLEET_LOADGEN_BURNER#t42
+888 1 tester 97 /opt/homebrew/bin/some-unrelated-hog --forever
+ROWS
+EOF
+chmod +x "$ORPH/id" "$ORPH/ps"
+ocands="$(PATH="$ORPH:$PATH" orphan_candidates 50)"
+eq "orphan: PPID=1 + snapshot fingerprint + hot → flagged" "111" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==111{print $1}')"
+eq "orphan: LIVE parent (a worker's own busy shell) NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==222{print $1}')"
+eq "orphan: below the %CPU floor NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==333{print $1}')"
+eq "orphan: another user's process NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==444{print $1}')"
+# 555/888 are the reason the fingerprint exists at all: plenty of legitimate
+# PPID=1 processes burn CPU (Spotlight's importer was measured at 63% during the
+# #697 incident) and none of them are the fleet's business.
+eq "orphan: a hot system daemon (no fingerprint) NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==555{print $1}')"
+eq "orphan: an unrelated hot process NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==888{print $1}')"
+# The tmux server matches `claude-fleet` in the fingerprint AND is legitimately
+# PPID=1. Killing it takes every window of that fleet down at once, so the infra
+# exclusion is load-bearing, not decorative.
+eq "orphan: the fleet's own tmux server NOT flagged" "" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==666{print $1}')"
+eq "orphan: a leaked fleet-loadgen burner IS flagged" "777" \
+   "$(printf '%s\n' "$ocands" | awk -F'|' '$1==777{print $1}')"
+
+# C2. FLEET_ORPHAN_EXTRA_RE widens the fingerprint without replacing it.
+ORPHAN_RE="$ORPHAN_RE_DEFAULT|some-unrelated-hog"
+ocands="$(PATH="$ORPH:$PATH" orphan_candidates 50)"
+eq "orphan: EXTRA_RE adds a shape"      "888" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==888{print $1}')"
+eq "orphan: EXTRA_RE keeps the defaults" "111" "$(printf '%s\n' "$ocands" | awk -F'|' '$1==111{print $1}')"
+# shellcheck disable=SC2034  # read by orphan_candidates(), sourced from the guard
+ORPHAN_RE="$ORPHAN_RE_DEFAULT"
+
+# C3. Unlike cpu_watch, this one is ON with no configuration — that is the whole
+#     point (the #151 watchdog was correct and had been off for months). Drive a
+#     full tick with a pre-seeded clock so the sustain filter fires immediately.
+ODIR="$FLEET_CONF_DIR/diskguard"
+printf '111\t1\t99\tseeded\n' > "$ODIR/orphan-seen"
+cat > "$WORK/notify.sh" <<EOF
+#!/bin/sh
+printf '%s' "\$1" > "$WORK/notified"
+EOF
+chmod +x "$WORK/notify.sh"
+rm -f "$WORK/notified" "$ODIR/orphan-current" "$ODIR"/incident-orphan-*.log
+# ACTION is pinned explicitly: the fake pids above are real pids on this host, so
+# a test must never take the kill branch.
+ORPHAN_ACTION=notify FLEET_NOTIFY_CMD="$WORK/notify.sh" \
+  PATH="$ORPH:$PATH" orphan_watch
+eq "orphan_watch: default knobs flag (watchdog is ON out of the box)" "111" \
+   "$(awk -F'\t' 'NR==1{print $1}' "$ODIR/orphan-current" 2>/dev/null)"
+oinc=0; for f in "$ODIR"/incident-orphan-*.log; do [ -f "$f" ] && oinc=$((oinc + 1)); done
+eq "orphan_watch: an incident was captured" "1" "$oinc"
+eq "orphan_watch: the operator was notified" "1" \
+   "$([ -s "$WORK/notified" ] && echo 1 || echo 0)"
+case "$(cat "$WORK/notified" 2>/dev/null)" in
+  *PPID=1*) CHECKS=$((CHECKS + 1)) ;;
+  *) fail "orphan_watch: the notification must say WHY it fired (PPID=1)" ;;
+esac
+eq "orphan_watch: default action is report-only" "notify" "$ORPHAN_ACTION"
+
+# C4. The marker the doctor reads is refreshed every tick, so a cleared runaway
+#     clears the warning too — a stale "runaway!" outlives the runaway and trains
+#     the operator to ignore the line.
+cat > "$ORPH/ps" <<'EOF'
+#!/bin/sh
+echo "222 4242 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8"
+EOF
+chmod +x "$ORPH/ps"
+ORPHAN_ACTION=notify PATH="$ORPH:$PATH" orphan_watch
+eq "orphan_watch: marker cleared once the orphan is gone" "absent" \
+   "$([ -e "$ODIR/orphan-current" ] && echo present || echo absent)"
+
+# C5. Explicitly OFF stays off — the knob has to be able to silence it.
+rm -f "$ODIR/orphan-seen"
+ORPHAN_PCT=0 orphan_watch
+eq "orphan_watch: PCT=0 disables it entirely" "absent" \
+  "$([ -e "$ODIR/orphan-seen" ] && echo present || echo absent)"
+
+printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog)\n' "$CHECKS"

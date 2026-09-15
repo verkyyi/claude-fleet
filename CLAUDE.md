@@ -53,6 +53,27 @@ Do not install from memory: read the doc and work from it.
   the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
   `shell/cw.zsh` refuses the common accidental forms; `FLEET_ALLOW_TMUX_DESTROY=1`
   passes a deliberate destroy through.
+- **Load experiments go through `bin/fleet-loadgen.sh` — never a hand-written
+  `trap`** (issue #697). Putting the box under CPU pressure is legitimate work
+  (#691/#693 exist to ask whether a real-time assertion survives a busy machine);
+  the hand-written `(while :; do :; done) & … trap 'kill $BURN' EXIT` form is
+  what is not. On 2026-09-15 that snippet leaked 8 spinning zsh processes — the
+  trap never fired, the trailing `kill` was never reached, and they lived 3h20m
+  at ~70% CPU each as `PPID=1` orphans, took the machine to load 108 until `ps`
+  itself timed out, wedged both daemons, and poisoned the evidence in an
+  unrelated issue (#682). A trap lives in the PARENT, so anything that kills the
+  parent outright takes the cleanup with it. `fleet-loadgen.sh` moves the
+  deadline into each BURNER instead — a kernel `alarm(2)` armed before the exec
+  (preserved across `execve`), with a `$SECONDS` bound under it — so a SIGKILLed
+  parent or a closed pane still cannot leak one. `fleet-loadgen.sh 8 120 -- <cmd>`
+  runs the experiment under the load and stops it when `<cmd>` exits;
+  `--status`/`--stop` manage a detached batch.
+  The backstop is the **orphaned-runaway watchdog** on the diskguard tick
+  (`--watch`, 60s): `PPID=1` + sustained CPU + a Claude/fleet argv fingerprint,
+  **ON by default and report-only**. It is the only defense here that is NOT keyed
+  on a worktree or a pane — which is exactly why it is the only one that saw the
+  leak. `bin/fleet-diskguard.sh --orphans` on demand; `fleet-doctor`'s `machine`
+  line carries load-per-core + any live orphan.
 - **The selftest gate isolates at the ROOT, not per test** (issue #660).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
   root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as

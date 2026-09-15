@@ -228,6 +228,14 @@ assumes — this doc is only the install/uninstall procedure.
      **runaway-CPU watchdog** (issue #151) — no extra unit; it's OFF until a fleet
      sets `FLEET_RUNAWAY_CPU_PCT>0`, then a detached orphan spinning a core is
      caught + (optionally) killed before it can overload its fleet's server.
+     That same tick also runs the **orphaned-runaway watchdog** (issue #697),
+     which unlike the one above is **ON by default and report-only** — it flags
+     `PPID=1` processes holding ≥`FLEET_ORPHAN_CPU_PCT` (50) for
+     ≥`FLEET_ORPHAN_CPU_SECS` (300) whose argv carries a Claude/fleet fingerprint.
+     Still no extra unit, so **installing diskguard is what arms it**; a machine
+     without that unit has no machine-level runaway defense at all. Check it any
+     time with `bin/fleet-diskguard.sh --orphans`, or on the `machine` line of
+     `bin/fleet-doctor.sh`.
      The **pr-refresh** daemon (`com.claude-fleet.pr-refresh`, 15s) is also
      recommended — it owns PR/CI status (`prmap` + window `@prci`/`@pfg`) on its
      own fast tick, decoupled from the 60s collector, so a PR going green or
