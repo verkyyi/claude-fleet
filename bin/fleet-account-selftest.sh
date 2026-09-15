@@ -14,6 +14,10 @@
 #                  duplicate rows → the furthest-future epoch wins).
 #   • pick_active — keep-current-if-eligible, rotate-past-limited round-robin
 #                  (incl. wraparound), and the all-limited best-effort fallback.
+#   • quota_parse — ccquota's `budget --json` → TSV rows, incl. the #628 rail:
+#                  an account ccquota says it cannot read (available:false) and one
+#                  whose payload carries neither window get NO row + a complaint on
+#                  stderr, instead of a confident `0% used, 0% headroom`.
 #   • pick_score / pick_best — the ranking (issue #598): the 5h window counts
 #                  double because it expires, the 7d window still gates, the
 #                  hysteresis keeps a near-equal current account, and
@@ -293,6 +297,36 @@ eq "quota_parse: garbage → no rows" "" "$(printf 'not json' | quota_parse)"
 eq "quota_field: 5h reset epoch of a" 1788357600 "$(quota_field "$rows" a 5)"
 eq "quota_field: missing label → empty" "" "$(quota_field "$rows" nope 4)"
 
+# --- #628: an account ccquota cannot READ must not become "0% used" -------------
+# TokenLedger is explicit about it (budget.go flatten: available=false + reason,
+# then an early return that leaves headroom_pct at 0 and drops both omitempty
+# windows). The old parser read neither `available` nor the missing windows and
+# published `d 0 0 0 0 0 0` — 0% used AND 0% headroom — so the account was never
+# benched and was the first landing spot a ceiling fan-out would pick. Three
+# labels, live only for this block, so the pick_active cases below keep their pool.
+printf 'tok-d\n' > "$ACCT_DIR/d"; printf 'tok-e\n' > "$ACCT_DIR/e"; printf 'tok-f\n' > "$ACCT_DIR/f"
+export FLEET_ACCOUNTS="a b c d e f"
+fix628='{"verdict":"go","accounts":[
+ {"account_uuid":"uuid-dddd","label":"d","available":false,"reason":"no reading","headroom_pct":0},
+ {"account_uuid":"uuid-eeee","label":"e","headroom_pct":50},
+ {"account_uuid":"uuid-ffff","label":"f","available":true,"five_hour":{"utilization":40,"resets_at":1788357600}}]}'
+rows628=$(printf '%s' "$fix628" | quota_parse 2>/dev/null)
+err628=$(printf '%s' "$fix628" | quota_parse 2>&1 >/dev/null)
+eq "quota_parse(#628): available:false → NO row (not 0% used)" "" "$(printf '%s\n' "$rows628" | grep '^d	' || true)"
+eq "quota_parse(#628): …and it says so on stderr, with the reason" 1 \
+   "$(printf '%s\n' "$err628" | grep -c 'has no reading for d (available=false, reason: no reading)')"
+eq "quota_parse(#628): neither window + not flagged → NO row" "" "$(printf '%s\n' "$rows628" | grep '^e	' || true)"
+eq "quota_parse(#628): …and that one is a SHAPE complaint (doctor turns red on it)" 1 \
+   "$(printf '%s\n' "$err628" | grep -c 'payload shape not recognized for e')"
+# One real window is a reading: the absent one stays 0 because every consumer
+# ranks on max(5h, 7d), where it can never win. The int resets_at is the stamp
+# API's shape (stamp.go) — it used to except into 0 and flatten fleet_same_window.
+eq "quota_parse(#628): one window present → row, headroom from it, unix resets_at kept" \
+   "f	40	0	60	1788357600	0	0" "$(printf '%s\n' "$rows628" | grep '^f	')"
+eq "quota_parse(#628): only the readable account gets a row" 1 "$(printf '%s\n' "$rows628" | grep -c .)"
+eq "quota_parse(#628): a clean payload complains about nothing" "" "$(printf '%s' "$fixture" | quota_parse 2>&1 >/dev/null)"
+rm -f "$ACCT_DIR/d" "$ACCT_DIR/e" "$ACCT_DIR/f"; export FLEET_ACCOUNTS="a b c"
+
 printf '%s' "$rows" > "$STATE_QUOTA"; NOW > "$STATE_QUOTA_TS" 2>/dev/null || date +%s > "$STATE_QUOTA_TS"
 eq "pick_active(quota): most headroom wins (a 24 → b 75)"          b "$(pick_active a)"
 eq "pick_active(quota): keep current within 10 points of best"      b "$(pick_active b)"
@@ -501,4 +535,4 @@ eq "model-limited: expired row dropped on write" 1 "$(wc -l < "$STATE_MODEL_LIMI
 cmd_model_clear b opus
 eq "model-clear: (b, opus) cleared" 0 "$(acct_model_limited_until b opus)"
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench, #598 ranking + phase stagger)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger)\n' "$CHECKS"

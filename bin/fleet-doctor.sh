@@ -221,10 +221,30 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
       fresh) pass qwatch "quota cache ${qage}s old — the pre-emptive watch is ticking (\`fleet-quotawatch.sh --status\`)" ;;
     esac
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
-      qrows=$(bash "$(dirname "$0")/fleet-account.sh" quota --refresh 2>/dev/null); qn=$(printf '%s' "$qrows" | grep -c .)
-      if [ "$qn" -gt 0 ]; then
-        if [ "$qn" -eq "$n" ]; then pass quota "ccquota hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
-        else warn quota "ccquota maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"; fi
+      # Two calls on purpose (issue #628): the first FETCHES and is read for its
+      # STDERR — quota_parse's only channel for "ccquota cannot read account X"
+      # and "I do not understand this payload". Those accounts produce NO row, so
+      # the rows alone cannot tell them apart from a label ccquota never knew, and
+      # the advice differs. The second is cache-only (no second network hit).
+      qdiag=$(bash "$(dirname "$0")/fleet-account.sh" quota --refresh 2>&1 >/dev/null)
+      qrows=$(bash "$(dirname "$0")/fleet-account.sh" quota --cached 2>/dev/null); qn=$(printf '%s' "$qrows" | grep -c .)
+      qshape=$(printf '%s\n' "$qdiag" | sed -n 's/^fleet-account: ccquota payload shape not recognized for \([^:]*\):.*/\1/p' | tr '\n' ' ')
+      qnoread=$(printf '%s\n' "$qdiag" | sed -n 's/^fleet-account: ccquota has no reading for \([^ ]*\) .*/\1/p' | tr '\n' ' ')
+      if [ -n "$qshape" ]; then
+        # The contract itself broke: ccquota answered, the account is not flagged
+        # unreadable, and yet neither window is there. Silence used to turn that
+        # into `0% used` — a confident wrong number that never benches and
+        # attracts every migrate. RED, not a warn: nobody is rotating on this.
+        fail quota "ccquota payload shape not recognized for: ${qshape% } — neither five_hour nor seven_day in an account that is not flagged unavailable; those accounts get NO row (never benched, never a migrate target). ccquota is probably newer than this fleet — compare \`ccquota budget --account all --json\` with quota_parse in bin/fleet-account.sh"
+      elif [ "$qn" -gt 0 ] && [ "$qn" -eq "$n" ]; then
+        pass quota "ccquota hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
+      elif [ -n "$qnoread" ]; then
+        # ccquota is explicit about this one (available:false) — expected while a
+        # token is fresh or the hub has not seen the account yet. Fail-open, but
+        # NAMED: it is invisible to the rotation for as long as it lasts.
+        warn quota "ccquota has NO reading for: ${qnoread% } ($qn/$n pool labels have one) — those get no row: never benched at ${FLEET_ACCOUNT_CEILING:-85}%, and never picked as a migrate landing spot. Check \`ccquota budget --account all --json\` (\`available:false\` + its reason)"
+      elif [ "$qn" -gt 0 ]; then
+        warn quota "ccquota maps only $qn/$n pool labels — unmapped ones rotate banner-only (\`ccquota name\` must equal the fleet label, or set CCQUOTA_ACCOUNT= in <label>.conf)"
       else
         warn quota "ccquota hub $CCQUOTA_HUB_URL unreachable or unknown — rotation is banner-driven only (fail-open)"
       fi
