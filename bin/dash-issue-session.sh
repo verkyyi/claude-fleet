@@ -238,7 +238,8 @@ wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
 # dash writes an optimistic row before spawning), then to a `gh issue view`
 # round-trip (which can lag/fail right after create). The git branch/worktree stay
 # "issue-<N>" (the PR map keys off the branch) — only the display name changes.
-# Empty/non-latin titles fall back to the slug.
+# CJK and other non-latin titles name the window in their own script (issue #579);
+# only a title with no LETTERS at all (emoji/punctuation-only) falls back to the slug.
 title="$WIN_TITLE"
 if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")

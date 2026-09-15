@@ -14,8 +14,10 @@
 #      from that title (the pre-#216 behavior still works).
 #   C. no --title, cache miss, gh returns an empty title → falls back to the bare
 #      issue-<N> slug (the last-resort behavior still works).
-#   D. a --title that slugifies to empty (symbol-only/non-latin) degrades to the
+#   D. a --title that slugifies to empty (symbol-only / emoji-only) degrades to the
 #      issue-<N> slug without a network call (graceful, predictable).
+#   E. a CJK --title names the window in CJK (issue #579) — the spawn path used to
+#      hand every Chinese-titled issue a bare issue-<N> window.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -124,11 +126,22 @@ GH_TITLE="" run_spawn 216
 ok "C unresolvable title falls back to the issue-<N> slug"
 
 # ===== D: --title that slugifies to empty → issue-<N> slug, no network =========
+# A symbol/emoji-only title carries no LETTERS, so it still washes out — the slug
+# fallback below is what every caller relies on and #579 deliberately kept it.
 GH_TITLE="latin fallback title" run_spawn 216 --title "★★★"
 [ "$(winname)" = "issue-216" ] \
   || fail "D a symbol-only --title should degrade to issue-216 (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
 [ -s "$GHVIEW_LOG" ] && fail "D a provided --title must not fall through to a gh network call" "$(cat "$GHVIEW_LOG")"
-ok "D a non-latin --title degrades to the issue-<N> slug, predictably + offline"
+ok "D a symbol-only --title degrades to the issue-<N> slug, predictably + offline"
+
+# ===== E: a CJK --title names the window in CJK (issue #579) ===================
+# Before #579 the derivation was byte-wise, so this spawned `issue-216` and the
+# operator could not tell from the dash what the worker was doing. The end-to-end
+# assertion lives here (fleet-win-name-selftest.sh pins the derivation itself).
+GH_TITLE="latin fallback title" run_spawn 216 --title "台账点文本跳录音"
+[ "$(winname)" = "台账点文本跳录音" ] \
+  || fail "E a CJK --title should name the window in CJK (got '$(winname)')" "$(cat "$NEWWIN_LOG")"
+ok "E a CJK --title names the window after the work, not issue-<N>"
 
 printf '\nselftest OK: %s assertions passed (issue-window naming / --title)\n' "$pass"
 exit 0
