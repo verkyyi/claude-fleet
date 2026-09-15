@@ -338,9 +338,10 @@ design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
 ### Stop autofill before the window closes (optional)
 
 The failover above is **reactive** — it rotates once a session has already been
-refused. If you run [ccquota](https://github.com/verkyyi/ccquota), the dispatcher
-can also stop *proactively*, before the last of a window goes to whatever
-happened to be labelled `autofill`:
+refused. If you run [TokenLedger](https://github.com/verkyyi/tokenledger) — the
+product is TokenLedger, the binary you install and type is still `ccquota` — the
+dispatcher can also stop *proactively*, before the last of a window goes to
+whatever happened to be labelled `autofill`:
 
 ```sh
 bin/fleet-quotaguard.sh --status     # what it would decide right now

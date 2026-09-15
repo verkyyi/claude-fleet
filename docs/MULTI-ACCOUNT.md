@@ -304,8 +304,13 @@ bin/fleet-account.sh migrate --model opus <window>    # relaunch one window on o
 
 The banner path is reactive: an account has to be walled — and a session stuck
 for up to five hours — before the fleet reacts. If you run
-[ccquota](https://github.com/verkyyi/ccquota) with a hub, the fleet can act
-first (issue #513). ccquota knows every subscription's **exact, account-wide**
+[TokenLedger](https://github.com/verkyyi/tokenledger) with a hub, the fleet can
+act first (issue #513). **The product is TokenLedger; the binary is `ccquota`**
+— the command, the `CCQUOTA_*` variables and the cache paths below all still
+read `ccquota`, so do not go looking for a `tokenledger` command. Install it per
+[INSTALL.md](INSTALL.md) (step 6).
+
+ccquota knows every subscription's **exact, account-wide**
 5-hour and 7-day utilization and reset instants, across devices; set
 `export CCQUOTA_HUB_URL=…` in `fleet.conf` (ccquota reads the viewer token from
 `~/.ccquota/viewer-token`) and the **quota watch** — `bin/fleet-quotawatch.sh`,
