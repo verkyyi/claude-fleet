@@ -337,8 +337,15 @@ Three rails make this safe to run unattended:
   (default **20s**, `0` disables) is still settling, and the same verdict must repeat
   across **two consecutive checks** before anything is written — the same 2-strike
   idiom as the stuck-`working` sweep, keyed on the *verdict* so a changed reading
-  restarts the count. The strike table is a file, aged out at 3× the interval, so a
-  restart cannot let one stale reading count as agreement.
+  restarts the count. The strike table is a file, aged out at `FLEET_NEEDS_STRIKE_TTL`
+  (default **3× the interval**), so a restart cannot let one stale reading count as
+  agreement. That age is a **separate knob** from the interval (#691) because the two
+  answer different questions — how *often* to look, and how long one reading stays
+  meaningful. Welded together, turning the interval down (as
+  `needs-reconcile-selftest.sh` does, to pin the 2-strike rule by **count**) silently
+  turned it back into a wall-clock rule: at an interval of 1s the test's arm-then-act
+  pair had 3 seconds to run two forking scans, and went red on a busy machine with
+  nothing wrong in the code under test. The daemon's own default is unchanged.
 
 Cost, measured on the machine that reported #658: **0.33 s for one pass over the
 whole estate** (4 fleet sockets, 22 windows, 2 of them red) — ~150 ms per *candidate*

@@ -187,8 +187,16 @@ CHECKS=$((CHECKS+1)); [ "$rc" = 2 ] || fail "oracle: no argument must exit 2 (us
 # OLD (-600s) is past it and MID (-60s) is inside it — the two directions #699 needs
 # pinned. It is deliberately NOT 1: a dwell equal to the ordinary grace is exactly the
 # behaviour this test exists to rule out.
-env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_PLAIN_SECS=300 FLEET_STUCK_WORKING_SECS=0 \
-  SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
+# FLEET_NEEDS_STRIKE_TTL is held HIGH while the interval is held LOW (issue #691).
+# The interval is what this test wants small — it sets how often a pass runs, and so
+# how fast the fixture converges. The strike TTL is a different number that merely
+# DEFAULTED to 3x it, which would give the daemon's arm-then-act pair 3 wall seconds
+# to complete a scan that forks per red window. That is a load test, not a reconcile
+# test: on a busy box the first strike ages out and nothing ever converges. Pinning it
+# at 120 keeps the "two consecutive checks must agree" rule exactly as strict — the
+# strikes still have to AGREE — while removing the machine-speed term.
+env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 FLEET_NEEDS_PLAIN_SECS=300 \
+  FLEET_STUCK_WORKING_SECS=0 SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
 SPIN_PID=$!
 
 wo() { tf show-window-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{$1="";sub(/^ /,"");gsub(/^"|"$/,"");print}'; }
@@ -272,7 +280,13 @@ tf set-window-option -t w-plainnew @claude_state 'done' 2>/dev/null
 tf set-window-option -t w-plainpnd @claude_state 'done' 2>/dev/null
 mkwin w-debounce yes needs perm "$OLD" Bash answered
 
-one_pass() { env FLEET_NEEDS_RECONCILE_SECS=1 sh "$SPINNER" --needs-check >/dev/null 2>&1; }
+# Count, not wall clock — so the TTL is pinned well above the interval (issue #691).
+# Without it these two passes shared a 3-second budget for two forking scans, and a
+# machine busy with anything else turned the assertion below into a coin flip.
+one_pass() {
+  env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 \
+    sh "$SPINNER" --needs-check >/dev/null 2>&1
+}
 
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
@@ -281,8 +295,9 @@ one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
   || fail "the SECOND pass agreeing with the first must act" "state=$(st w-debounce)"
 
-# A strike table older than 3x the interval is not "the previous check" — after a
-# restart (or a one-shot from an hour ago) the grace starts over.
+# A strike table older than the TTL is not "the previous check" — after a restart (or
+# a one-shot from an hour ago) the grace starts over. $OLD is 600s back, well past the
+# 120 the passes run with, so this still asserts the age gate and not the default.
 tf set-window-option -t w-debounce @claude_state needs 2>/dev/null
 tf set-window-option -t w-debounce @claude_needs perm 2>/dev/null
 tf set-window-option -t w-debounce @claude_state_ts "$OLD" 2>/dev/null
@@ -293,6 +308,20 @@ printf '%s |fleetR:%s:idle|\n' "$OLD" "$DWID" > "$BIN/../logs/.needs-strikes"
 one_pass
 CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = needs ] \
   || fail "a STALE strike table must not count as the previous check" "state=$(st w-debounce)"
+
+# …and the TTL is a KNOB, not a synonym for 3x the interval (issue #691). The same
+# table aged 30s is FAR past the old hardcoded 3s window yet inside the injected 120,
+# so it must count as agreement and the pass must act. Without this the fix above
+# would be invisible: every other assertion here passes just as well with the TTL
+# welded back to NEEDS_SECS*3, which is how the wall-clock dependency hid for so long.
+tf set-window-option -t w-debounce @claude_state needs 2>/dev/null
+tf set-window-option -t w-debounce @claude_needs perm 2>/dev/null
+tf set-window-option -t w-debounce @claude_state_ts "$OLD" 2>/dev/null
+AGED=$(( $(date +%s) - 30 ))
+printf '%s |fleetR:%s:idle|\n' "$AGED" "$DWID" > "$BIN/../logs/.needs-strikes"
+one_pass
+CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
+  || fail "FLEET_NEEDS_STRIKE_TTL must govern the age gate — a strike past 3x the interval but inside the TTL still counts" "state=$(st w-debounce)"
 
 # The knob must switch the whole errand off.
 kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''

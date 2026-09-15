@@ -27,15 +27,17 @@
 # built, measured and rejected. It works, 8-wide: 196s against 1428s of summed
 # test time. But two tests went red on the first full parallel run and passed
 # alone, and the cause was not shared state: several selftests carry a REAL-TIME
-# budget that only holds on an idle box. needs-reconcile-selftest.sh drives the
-# spinner with `FLEET_NEEDS_RECONCILE_SECS=1`, and the strike table it asserts on
-# goes stale after 3×that, so its arm-then-act pair must complete inside 3 wall
-# seconds; ~9 tests in the suite have a window of that shape. Widening them all
-# would mean loosening the exact assertions that make them worth having, to buy
-# speed a second runner gives away for free. Sharding needs no test to change:
-# every test still runs alone on its own box, under the conditions it was written
-# for, so the gate cannot become flakier — which is the one thing this whole issue
-# is about.
+# budget that only holds on an idle box. needs-reconcile-selftest.sh was the
+# exemplar — it drives the spinner with `FLEET_NEEDS_RECONCILE_SECS=1`, and the
+# strike table it asserts on went stale after 3×that, so its arm-then-act pair had
+# to complete inside 3 wall seconds. That one is FIXED (#691: the strike TTL became
+# its own knob, so the test pins the rule by count and not by clock) — but it was
+# one of ~9 tests with a window of that shape, and the rest still have theirs.
+# Widening them all would mean loosening the exact assertions that make them worth
+# having, to buy speed a second runner gives away for free. Sharding needs no test
+# to change: every test still runs alone on its own box, under the conditions it
+# was written for, so the gate cannot become flakier — which is the one thing this
+# whole issue is about.
 #
 # The server-spawning tests isolate onto a private `-S` socket and reap it via an
 # EXIT+signal trap, so a normal (even failing) run leaves no litter. A run KILLED

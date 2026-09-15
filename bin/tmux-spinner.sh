@@ -267,8 +267,25 @@ nc=0
 # --needs-check` runs one pass out of band (an operator forcing a reconcile without
 # waiting for the daemon; the selftest driving exactly N passes), and it must observe
 # the same two-checks-agree rule the daemon does. Its first field is the epoch of the
-# check that wrote it: strikes older than 3x the interval are DISCARDED, so a restart
+# check that wrote it: a table older than the strike TTL is DISCARDED, so a restart
 # — or a long-dead one-shot — never lets a single stale reading count as agreement.
+#
+# THAT TTL IS ITS OWN KNOB (issue #691), defaulting to 3x the interval. It used to BE
+# only that expression, which quietly turned the 2-strike rule back into a WALL-CLOCK
+# rule for anyone who turned the interval down. bin/needs-reconcile-selftest.sh drives
+# passes by COUNT at FLEET_NEEDS_RECONCILE_SECS=1 precisely so it does not depend on
+# wall time — and inherited a THREE-SECOND deadline for its arm-then-act pair, each
+# pass of which forks a candidate scan plus a fleet-pending-tool.sh per red window. On
+# a loaded machine the two passes drifted past 3s, the first strike aged out, the
+# second could only re-arm, and the assertion went red with nothing wrong in the code
+# under test. Pinning "two checks agree" by count therefore means holding NEEDS_SECS
+# low and FLEET_NEEDS_STRIKE_TTL high: the two numbers answer different questions —
+# how OFTEN to look, and how long one reading stays meaningful — and only stayed
+# welded together because the daemon never needs them apart. Its own default is
+# unchanged (20s ⇒ 60s), which is roomy against a ~1-pass-per-20s cadence. Unlike
+# FLEET_NEEDS_RECONCILE_SECS, 0 here is not "disabled" but its literal reading — no
+# previous table is ever recent enough — so every pass can only arm and nothing is
+# ever written. A non-integer falls back to the default rather than meaning that.
 NEEDS_STRIKE_F="$BIN/../logs/.needs-strikes"
 
 # needs_check — one reconcile pass over the `needs` windows. Runs in the current
@@ -278,12 +295,18 @@ needs_check() {
   new='|'
   prev='|'
   # Last check's readings, if they are recent enough to mean "the previous check".
+  # Resolved HERE rather than at parse time on purpose: the --needs-check one-shot
+  # below raises NEEDS_SECS off 0 after this function is defined, and the default
+  # must follow the value the pass actually runs with. A non-integer falls back the
+  # same way NEEDS_SECS itself does.
+  _ttl="${FLEET_NEEDS_STRIKE_TTL:-}"
+  case "$_ttl" in ''|*[!0-9]*) _ttl=$(( NEEDS_SECS * 3 )) ;; esac
   if [ -f "$NEEDS_STRIKE_F" ]; then
     _pl=$(cat "$NEEDS_STRIKE_F" 2>/dev/null)
     _pt=${_pl%% *}
     case "$_pt" in
       ''|*[!0-9]*) : ;;
-      *) [ $(( nows - _pt )) -le $(( NEEDS_SECS * 3 )) ] && prev="${_pl#* }" ;;
+      *) [ $(( nows - _pt )) -le "$_ttl" ] && prev="${_pl#* }" ;;
     esac
   fi
   left="$NEEDS_BUDGET"
