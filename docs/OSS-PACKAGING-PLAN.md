@@ -806,10 +806,106 @@ worker+PR），全局 cap 10。
 | **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
 | **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin ✅ 已完成） |
 | **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
-| **计划外（loop 发现并修复）** | [#603](https://github.com/verkyyi/claude-fleet/issues/603) fleet-up base branch · [#620](https://github.com/verkyyi/claude-fleet/issues/620) 语言保持 · [#623](https://github.com/verkyyi/claude-fleet/issues/623) dash pin · [#624](https://github.com/verkyyi/claude-fleet/issues/624) 父行聚合计数 | ✅ 全部已上线双机同步 |
-| **团队协作方向（已设计未建 issue）** | claim 租约（assignee → 带 TTL 的租约）· managed-settings.json 作团队策略基线 · 复用 ccquota hub 做跨设备 presence | ⬜ 见[第九之三章](#九之三团队协作跨-fleet--跨设备--多人) |
+| **计划外（用它 → 被它咬到 → 修它）** | 两轮共 **18 条已落地** —— 全清单见[下一节](#计划外产出清单两轮18-条) | ✅ 已上线双机同步 · 在途 [#660](https://github.com/verkyyi/claude-fleet/issues/660) |
+| **团队协作方向** | ✅ claim 租约已建 [#631](https://github.com/verkyyi/claude-fleet/issues/631)（2026-09-14，待派工）· ⬜ managed-settings.json 作团队策略基线（未建 issue）· ⬜ 复用 ccquota hub 做跨设备 presence（未建 issue） | 🔶 部分已建 · 见[第九之三章](#九之三团队协作跨-fleet--跨设备--多人) |
 | **待派工** | [#622](https://github.com/verkyyi/claude-fleet/issues/622) 常驻只读 triage worker（阶段 1） | ⬜ 要起常驻 session，需操作员点头 |
 | **已证伪作废** | 删 base-readonly-guard · 删 janitor · `.worktreeinclude` | ❌ 见第七章 |
 | **其他（低优先）** | Codex context%/handoff · 配额裁决接口中立化 · friction Stop hook · 双 anchor worktree 检测 | ⬜ 未建 issue |
 
 > 「相位错开」原本在两处重复（旧编号 14 与 19），已合并为 #598。
+
+---
+
+### 计划外产出清单（两轮，18 条）
+
+「计划外」在这里是**排他定义**：不来自 2026-09-13 建的那 13 条 backlog，而是
+**在用这套东西的过程中被它咬到、然后回头修掉**的。两轮合计 **18 条已落地**，
+全部双机同步上线。
+
+**第一轮 · 2026-09-13 → 09-14（4 条）**
+
+| issue | 落地 PR | 一句话 |
+|---|---|---|
+| [#603](https://github.com/verkyyi/claude-fleet/issues/603) | [#604](https://github.com/verkyyi/claude-fleet/pull/604) | fleet-up 的 base branch 取了当前 checkout 的分支 —— 应取仓库 default branch |
+| [#620](https://github.com/verkyyi/claude-fleet/issues/620) | [#621](https://github.com/verkyyi/claude-fleet/pull/621) | fleet 的自动化注入把中文会话带回英文 —— 改成「保持原语言」而不是翻译 |
+| [#623](https://github.com/verkyyi/claude-fleet/issues/623) | [#627](https://github.com/verkyyi/claude-fleet/pull/627) | dash 把指定 session PIN 在列表顶部，子窗口跟着走 |
+| [#624](https://github.com/verkyyi/claude-fleet/issues/624) | [#626](https://github.com/verkyyi/claude-fleet/pull/626) | dash 父行显示子 worker 的聚合进度（3/5 ✓），数据本来就在 |
+
+**第二轮 · 2026-09-14 → 09-15（14 条）**
+
+| issue | 落地 PR | 一句话 |
+|---|---|---|
+| [#628](https://github.com/verkyyi/claude-fleet/issues/628) | [#632](https://github.com/verkyyi/claude-fleet/pull/632) | 读不到限额的账号被当成 0% 已用 —— 永不 bench，还是 migrate 的首选落点 |
+| [#636](https://github.com/verkyyi/claude-fleet/issues/636) | [#638](https://github.com/verkyyi/claude-fleet/pull/638) | collector 停摆时 dash 静默显示两小时前的世界 —— 状态栏出声 + 限流自愈 |
+| [#552](https://github.com/verkyyi/claude-fleet/issues/552) | [#650](https://github.com/verkyyi/claude-fleet/pull/650) | git 阶段砍掉没人读的 `git status` + 全程限时轮转（26 个 worktree 7s→2s） |
+| [#639](https://github.com/verkyyi/claude-fleet/issues/639) | [#652](https://github.com/verkyyi/claude-fleet/pull/652) | 每个 interval 单元有调度心跳 + 阈值相对自身 interval + 自愈升级阶梯 |
+| [#653](https://github.com/verkyyi/claude-fleet/issues/653) | [#655](https://github.com/verkyyi/claude-fleet/pull/655) | `fleet_timebox` 改对墙钟 + 逐 phase 预算 + tick 总预算 + 截断处轮转 |
+| [#640](https://github.com/verkyyi/claude-fleet/issues/640) | [#645](https://github.com/verkyyi/claude-fleet/pull/645) | worker 卡在权限弹窗时四条通道全失效 —— 红灯分 `?`/`⊘`，不 attach 也能答 |
+| [#656](https://github.com/verkyyi/claude-fleet/issues/656) | [#657](https://github.com/verkyyi/claude-fleet/pull/657) | 远程答题链路：`perm` 误判改由 transcript 裁决，折行不再让 screen gate 拒发 |
+| [#658](https://github.com/verkyyi/claude-fleet/issues/658) | [#659](https://github.com/verkyyi/claude-fleet/pull/659) | 红灯会自己散 —— 事件写入的状态开始对照 transcript 校正 |
+| [#544](https://github.com/verkyyi/claude-fleet/issues/544) | [#661](https://github.com/verkyyi/claude-fleet/pull/661) | closed-unmerged 回收先证明「session 没了」，而不是「PR 关了」 |
+| [#635](https://github.com/verkyyi/claude-fleet/issues/635) | [#646](https://github.com/verkyyi/claude-fleet/pull/646) | doctor 报 live install 落后主干多少提交（mini 落后 28 个而两台全绿） |
+| [#629](https://github.com/verkyyi/claude-fleet/issues/629) | [#641](https://github.com/verkyyi/claude-fleet/pull/641) | 补 ccquota 的获取方式，外链改到改名后的 `verkyyi/tokenledger` |
+| [#642](https://github.com/verkyyi/claude-fleet/issues/642) | [#643](https://github.com/verkyyi/claude-fleet/pull/643) | 「不合并 TokenLedger」的评估结论进文档 |
+| [#625](https://github.com/verkyyi/claude-fleet/issues/625) | [#654](https://github.com/verkyyi/claude-fleet/pull/654) | 会话生命周期事实可选外发 —— 把「花了多少」和「做成了什么」接上 |
+| [#648](https://github.com/verkyyi/claude-fleet/issues/648) | [#649](https://github.com/verkyyi/claude-fleet/pull/649) | dash 子任务默认折叠，←/→ 展开收缩（live 和 landed 两个视图都嵌套） |
+
+**在途 1 条**：[#660](https://github.com/verkyyi/claude-fleet/issues/660) —— selftest 不隔离真实 `fleet.conf`，
+在 live install 上跑整套有 6 条假失败，干净检出全绿。
+
+### 一条有数据的结论:计划外产出压过计划内产出
+
+这一节不是记账。**它是这份方案自己跑出来的结论**，而且直接决定该向读者推荐什么工作方式。
+
+#### 数据（截至 2026-09-15，两轮独立样本）
+
+| | 计划内（2026-09-13 的 backlog） | 计划外（用它 → 被咬 → 修它） |
+|---|---|---|
+| 条目 | 13（M2 5 · M3 5 · M4 3） | 18 已落地（+1 在途） |
+| 同期已落地 | **3** —— [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin | **18** |
+| 仍 ⬜ | 10 | — |
+
+⚠️ 不要把它读成「落地率 23% vs 100%」—— 那个比较是假的：计划外这一列**按定义**
+只包含已经修掉的东西，被咬到但没修的不会出现在表里。真正站得住的信号是**绝对产出**：
+同一段时间、同一批 worker，计划内落 3 条，计划外落 18 条。
+
+#### 而且计划外这批的质量更高 —— 一条完整的根因链
+
+[#636](https://github.com/verkyyi/claude-fleet/issues/636)（dash 静默显示两小时前的世界）→ [#552](https://github.com/verkyyi/claude-fleet/issues/552)（git 阶段每个
+monorepo worktree 要跑几分钟，拖长整个 tick）→ [#653](https://github.com/verkyyi/claude-fleet/issues/653)（真正的根因：
+`fleet_timebox` 数的是 `sleep` 次数、不是墙钟 —— 负载越高，预算膨胀得越厉害，
+**预算在最需要收紧的时候最松**）。
+
+- **起点是一个症状，不是一个需求。** 没有任何 backlog 条目会指向
+  `bin/fleet-lib.sh` 里那个 `while` 循环 —— 你得先被它骗过一次。
+- **它一路证伪了两个更省事的假设**（D 状态阻塞、`fleet_kill_tree` 杀不干净），
+  这种排除只有在真机上跑着的时候才做得了。
+- **结果是可量的**：collect 从「dash 静默 103 分钟不更新」「一轮要 514 秒」，
+  压到 tick 硬上界 120s、实测周期 128–245s（节奏模型 `cycle = tick 时长 + 60s`，
+  6 个连续样本误差 ≤3s）。链条上还顺手改掉了一个**被误判的病因** —— #636 当时归咎于
+  launchd 把 collector pend 住了，#653 采到 6 个连续 tick 后证明不是：空档恒定 ~61s，
+  `runs` 少就是 tick 太长。**不跑它，连这个更正都不会发生。**
+
+同一轮里 [#640](https://github.com/verkyyi/claude-fleet/issues/640) / [#656](https://github.com/verkyyi/claude-fleet/issues/656) / [#658](https://github.com/verkyyi/claude-fleet/issues/658) 是**同一个死锁的三个切面**
+（worker 被弹窗拦住 → 四条通道都够不着它 → 红灯自己散不掉），也全是被咬出来的。
+
+#### 对读者的含义
+
+1. **先让它跑起来，让它咬你。** backlog 是对「什么重要」的猜测；一次 103 分钟的
+   静默停摆是证据。证据比猜测便宜，也比猜测准。
+2. **backlog 不是进度条。** M2/M3/M4 大部分仍 ⬜ 并不等于停滞 —— 同期落了 18 条，
+   而且改的是每天都在踩的东西。
+3. **但 backlog 不能删。** 计划外产出**清一色是修复**。方向性的东西
+   （跨 provider 溢出 [#599](https://github.com/verkyyi/claude-fleet/issues/599)、团队层 M4）不会被咬出来，只会被规划出来。
+   两条线是互补的，不是替代。
+4. **得有低摩擦的归档渠道，「被咬到」才会变成 issue。** 这批东西几乎都是在**别的活
+   干到一半**时冒出来的 —— 能当场 file 掉，它才会存在。fleet 里这是一条命令
+   （`bin/fleet-issue-file.sh`，可 `--parent` 挂成子任务、`--spawn` 直接起 worker），
+   而且**不只操作员能用**：[#552](https://github.com/verkyyi/claude-fleet/issues/552)
+   就是 worker 在做别的事时顺手 file 的，上表里至少 7 条带着 fleet filer 的来源标记。
+   如果 file 一条 issue 要切窗口、要想标题、要等操作员批，它们里的大多数只会变成
+   一句抱怨然后消失。
+
+第 4 条是给打包方案的直接结论：**「任何一个 session 都能当场 file issue（必要时直接 spawn）」
+不是便利功能，它是上面那条产出主线的前提** —— 打包时不能把它当可选件砍掉。
+
