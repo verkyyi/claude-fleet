@@ -2055,7 +2055,11 @@ fleet_reltime() {
 fleet_epoch_from_iso() {
   local iso="${1:-}"
   case "$iso" in ''|-) return 0;; esac
-  date -u -d "$iso" +%s 2>/dev/null && return 0                    # GNU date
+  # portability-selftest.sh (issue #696) exempts a both-ways fallback only when it
+  # is spelled on ONE logical line (`gnu … || bsd …`) — deliberately, so the
+  # exemption stays local instead of scanning a window a later edit could drift
+  # out of. This pair is spelled across two lines, so it carries the marker.
+  date -u -d "$iso" +%s 2>/dev/null && return 0   # portable-ok: BSD form is the next line
   TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null    # BSD/macOS date
 }
 

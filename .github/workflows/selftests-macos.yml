@@ -1,0 +1,170 @@
+name: selftests (macOS)
+
+# The BSD half of the gate (issue #696).
+#
+# WHY THIS EXISTS
+# ---------------
+# Until this file landed, every workflow in the repo was `runs-on: ubuntu-latest`,
+# so NO CI ran on a BSD toolchain — while every place the operator actually runs
+# the gate (a worker pane, the live install) is macOS. That gap is structural, not
+# incidental: a GNU-only idiom is green in CI and broken on the only machine that
+# matters, and nothing in the loop can see it.
+#
+# #689 is the worked example. `run-selftests.sh` scrubbed the environment with a
+# GNU-only `\|` alternation in a sed BRE; BSD sed matches it literally and says
+# nothing, so on a Mac the whole env-isolation half was a SILENT no-op while CI
+# scrubbed normally. It landed with #660 and survived to #681 — found only when a
+# new knob made the two platforms disagree out loud.
+#
+# `bin/portability-selftest.sh` (the other half of #696) lints the KNOWN GNU-only
+# idioms on the ubuntu shards for free. This workflow covers the half a lint
+# structurally cannot: BEHAVIOUR differences. #703 is that case — a bare `${a[@]}`
+# on an empty array is fatal on macOS's bash 3.2 and a no-op on bash 5, which is
+# not an enumerable idiom, only an observable outcome. A lint nets the next #689;
+# only a real BSD run nets the next #703.
+#
+# COST
+# ----
+# GitHub-hosted runners — macOS included — are FREE for public repositories, and
+# this repo is public. The 10x macOS multiplier that shaped the original plan in
+# #696 applies to private repos only, so the full 6-shard matrix runs here, not a
+# single smoke slice: every test gets BSD coverage every night rather than one
+# sixth of them. Free public repos allow 5 concurrent macOS jobs, so one of the
+# six queues briefly; wall clock is still only a few minutes.
+#
+# ⚠️ If this repo is ever made PRIVATE, this workflow starts billing at 10x —
+# ~150 minutes a night. Cut `shard:` back to a single entry (the runner reads N
+# from `strategy.job-total`, so the list is the only thing to edit) or drop the
+# schedule.
+#
+# SCHEDULE, NOT PUSH
+# ------------------
+# Six PRs landed here in a single day; a per-push trigger would multiply this job
+# by the day's merge rate for no extra signal — a BSD regression is found just as
+# well the same night. A nightly cron makes the cost and the noise a predictable
+# constant. `pull_request` is scoped to THIS FILE alone so a change to the
+# workflow itself is validated by running it, which is also how its first green
+# (and its deliberate first red) were demonstrated on the #696 PR.
+#
+# A scheduled workflow only runs from the DEFAULT branch, so the nightly starts
+# after this merges. `workflow_dispatch` is the manual handle from then on.
+
+on:
+  schedule:
+    # 18:17 UTC = 02:17 Asia/Shanghai — night for the operator, and off the top of
+    # the hour, which is when GitHub's scheduler is most congested.
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/selftests-macos.yml'
+
+# One nightly at a time. A run that overlaps its successor (a wedged test, a long
+# queue for a macOS runner) would double the concurrency draw for a stale answer.
+concurrency:
+  group: selftests-macos
+  cancel-in-progress: false
+
+jobs:
+  selftests-macos:
+    # The name carries the platform on purpose. A red here must be legible AS a
+    # BSD-only failure at a glance in the checks list — never mistakable for one
+    # of the ubuntu shards, which is the whole diagnostic value of this job.
+    name: macOS shard ${{ matrix.shard }}
+    runs-on: macos-latest
+    strategy:
+      # A red shard must not hide whether the other five were green: a partial
+      # picture is what makes people re-run instead of read.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert a BSD toolchain
+        # The premise of this entire workflow, checked rather than assumed. If a
+        # future runner image puts GNU coreutils/sed ahead of the BSD ones on
+        # PATH, every test here would pass for the wrong reason and the ubuntu
+        # matrix would silently be the only thing running — the exact blind spot
+        # #696 exists to close, restored by accident. Fail loudly instead.
+        #
+        # It also prints the toolchain up front, so a red log further down
+        # identifies itself as BSD-only without anyone having to infer it.
+        run: |
+          set -u
+          uname -a
+          for u in sh bash sed grep awk stat date base64 readlink mktemp tmux; do
+            printf '%-10s %s\n' "$u" "$(command -v "$u" 2>/dev/null || echo '(absent)')"
+          done
+          printf 'default bash  %s\n' "$(bash --version | head -1)"
+          printf '/bin/bash     %s\n' "$(/bin/bash --version | head -1)"
+          if sed --version 2>/dev/null | head -1 | grep -q GNU; then
+            echo "::error::sed on PATH is GNU, not BSD — this runner is not testing what this job exists to test (see the header of this workflow)"
+            exit 1
+          fi
+          echo "sed is BSD — this is a real BSD toolchain"
+
+      - name: Install tmux
+        # ~40 selftests drive tmux on their own isolated `-S` socket. The ubuntu
+        # image ships tmux; the macOS image does not guarantee it, and an absent
+        # tmux would turn those into failures that say nothing about portability.
+        # Homebrew is preinstalled on the runner.
+        run: |
+          command -v tmux >/dev/null 2>&1 || brew install tmux
+          tmux -V
+
+      - name: Run this shard's selftests
+        # Same command and the same sharding as the ubuntu matrix — K from the
+        # matrix entry, N from `strategy.job-total`, so the `shard:` list stays
+        # the single source of truth for the width on both platforms.
+        #
+        # The bound is looser than ubuntu's 8: several tests carry real-time
+        # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
+        # this job is nightly — a timeout red costs a whole night's signal, where
+        # a few extra idle minutes cost nothing on a free public runner.
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          bash bin/run-selftests.sh \
+            --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            2>&1 | tee selftests.log
+
+      - name: Per-test timings
+        if: always()
+        # Same as the ubuntu matrix, and for the same reason (#681): a test
+        # getting slower should surface on the run that made it slower, not on
+        # the run that went red. The macOS label matters here — these numbers are
+        # NOT comparable with the ubuntu shards', and a reader must not diff them.
+        run: |
+          {
+            echo "## selftests · macOS · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo
+            echo '```'
+            if grep -q '^-* slowest' selftests.log 2>/dev/null; then
+              sed -n '/^-* slowest/,$p' selftests.log
+            else
+              echo 'the shard was cut short — this test started and never finished:'
+              awk '/^=== /{h=$2} /^(PASS|FAIL)  /{h=""}
+                   END{print "  " (h ? h : "(none identified — read the log)")}' \
+                selftests.log 2>/dev/null
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the failures as macOS-only
+        if: failure()
+        # The one thing that must not happen on a red night is someone reading
+        # this as "the suite is broken" and re-running the ubuntu gate. Say what
+        # a failure here means, next to the names of what failed.
+        run: |
+          {
+            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo
+            echo "These tests are green on the ubuntu matrix. A failure HERE is a"
+            echo "BSD-toolchain or bash-3.2 difference (issue #696) — not a broken test."
+            echo
+            echo '```'
+            grep -E '^(FAIL|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
