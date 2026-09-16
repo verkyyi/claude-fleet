@@ -123,8 +123,11 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
   # poisoned FLEET_*/CCQUOTA_* environment must not reach the suite, and the
   # FLEET_SELFTEST_* knobs must.
   scrub=''
-  for v in $(env 2>/dev/null | sed -n -e 's/^\(FLEET_[A-Za-z0-9_]*\)=.*/\1/p' \
-                                      -e 's/^\(CCQUOTA_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  # TEMPORARY — #696 acceptance probe, reverted in the next commit. This is #689
+  # put back verbatim (one BRE with GNU-only \| alternation), and the marker on the
+  # line below deliberately SILENCES bin/portability-selftest.sh, so that whatever
+  # goes red is the macOS run and nothing else.
+  for v in $(env 2>/dev/null | sed -n 's/^\(FLEET_[A-Za-z0-9_]*\)=.*\|^\(CCQUOTA_[A-Za-z0-9_]*\)=.*/\1\2/p'); do  # portable-ok: #696 probe
     case "$v" in
       FLEET_SELFTEST_ROOT|FLEET_SELFTEST_NO_SHADOW|FLEET_SELFTEST_SLOWEST) continue ;;
     esac
