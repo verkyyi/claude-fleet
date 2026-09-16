@@ -37,6 +37,26 @@
 # tmux server, no repos). HOME is the scratch dir so the usage scan never touches
 # real transcripts. Needs python3 (collector hard dep) — SKIPs if absent.
 # Exit 0 = pass, non-zero = fail.
+#
+# The WHOLE-TICK case (4) pins WHERE the cursor parks, and that must be a function
+# of the construction, not of the clock (issue #725). It used to be the clock: the
+# wedged phase got whatever a 10s tick had left after four phases ahead of it, and
+# each of those costs ~1s even for millisecond work — fleet_timebox polls at 1s
+# granularity, and its first poll always beats the job's exit — so `git` started
+# with left=5 on a QUIET macOS box: exactly PHASE_MIN, zero margin. One rounding of
+# `date +%s`, or a noisy CI neighbour, and `git` could not start at all; the cursor
+# parked on `git` instead of `ctx`, and the gate went red on both platforms with the
+# tree unchanged. The rule was right; the pinned quantity was machine speed.
+#
+# So case 4 gives the wedge the WHOLE tick by construction: every phase ahead of it
+# runs UNBUDGETED (budget 0 ⇒ fleet_timebox runs the job inline — no poll, no 1s
+# floor — the same "0 = unbudgeted" every other budget knob here means), and the
+# in-tick quotawatch is gated off so its own internal timeboxes cannot spend the
+# tick either. The head then reads 0 0 0 0 in phases=, `git` starts with ~10s of
+# room and is clamped to it, and `ctx` is the first phase that cannot start —
+# whatever the machine is doing. The assertion is unchanged: it is exact, and now
+# it is exact about the mechanism instead of about the runner. Same shape as #691:
+# take machine speed OUT of the assertion, never widen the assertion around it.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -115,15 +135,23 @@ FAKE
 chmod +x "$WORK/fakepath/"*
 
 GH_LOG="$WORK/gh.log"
+# HEADFREE=1 — every phase AHEAD of the git wedge (quotawatch, sockets, sessmap,
+# issues) runs unbudgeted, and the in-tick quotawatch is gated off (issue #725; see
+# the header). The wedge then meets the tick with its budget intact instead of with
+# whatever four 1s poll floors left of it. Case 4 only; the others run the head
+# exactly as production does.
 run_collector() {
   : > "$GH_LOG"
-  PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
+  local head=''
+  [ "${HEADFREE:-0}" = 1 ] && head='FLEET_COLLECT_QUOTAWATCH=never FLEET_COLLECT_QUOTAWATCH_BUDGET=0 FLEET_COLLECT_SOCKETS_BUDGET=0 FLEET_COLLECT_SESSMAP_BUDGET=0 FLEET_COLLECT_ISSUES_BUDGET=0'
+  # shellcheck disable=SC2086  # $head is a deliberate word-split list of VAR=val
+  env PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   GH_TTL="${TTL:-0}" \
   FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="http://hub.test:8787" FLEET_ACCOUNT_QUOTA_TTL=999999 \
   FAKE_PANEPATHS="$WORK/panepaths" FAKE_GH_LOG="$GH_LOG" FAKE_GIT_HANG="${HANG:-}" \
   FAKE_HANG_MARK="$HANGMARK" \
-  FLEET_COLLECT_TICK_BUDGET="${TICK:-120}" FLEET_COLLECT_GIT_BUDGET="${GITB:-30}" \
+  FLEET_COLLECT_TICK_BUDGET="${TICK:-120}" FLEET_COLLECT_GIT_BUDGET="${GITB:-30}" $head \
     bash "$WORK/bin/tmux-dash-collect.sh" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2
@@ -182,17 +210,28 @@ ok "…and leaves NO residue: the wedged child is gone once the tick returns"
 # git wedges for longer than the whole tick has left, so the phases after it get no
 # room at all. That is the case the per-phase budgets alone could not cover: ten
 # phases each inside its own budget can still sum past the interval.
+#
+# HEADFREE=1 is what makes "where it stopped" a fact about the mechanism (issue
+# #725): the four phases ahead of the wedge spend nothing, so `git` meets the tick
+# with all 10s of it, is CLAMPED to that (its own budget is 20), and `ctx` is the
+# first phase the tick has no room for — on any machine, not just an idle one.
 rm -f "$G/collect.phase.cursor"
-HANG=/wt1 GITB=20 TICK=10 run_collector || fail "4: a truncated tick must still exit 0"
+HANG=/wt1 GITB=20 TICK=10 HEADFREE=1 run_collector || fail "4: a truncated tick must still exit 0"
 [ "$(hbget phase)" = "done" ] || fail "4: a truncated tick must still reach phase=done"
+# The clamp, read off stderr rather than inferred from where the cursor landed: the
+# wedge is killed at the TICK's remaining room (≤10s), not at its own 20s budget.
+has git "$(hbget over)" || fail "4: the wedged phase must be in over= — killed at its clamped budget (got: $(hbget over))"
+clamp="$(sed -n 's/^fleet-collect: phase git hit the \([0-9]*\)s budget (FLEET_COLLECT_GIT_BUDGET).*/\1/p' "$WORK/stderr" | head -1)"
+[ -n "$clamp" ] || fail "4: stderr must name the budget git was killed at"
+[ "$clamp" -le 10 ] || fail "4: git's budget must be CLAMPED to the tick's room (≤10s), not its own 20s (got: ${clamp}s)"
 skipped="$(hbget skipped)"
-for p in ctx usage scrape banner escalate snapshot; do
-  has "$p" "$skipped" || fail "4: skipped= must name the deferred phase '$p' (got: $skipped)"
-done
+[ "$skipped" = "ctx usage scrape banner escalate snapshot" ] \
+  || fail "4: skipped= must be exactly every phase after the wedge, in order (got: $skipped)"
 [ "$(pcur)" = "ctx" ] || fail "4: the cursor must park on the FIRST deferred phase (want ctx, got: $(pcur))"
 grep -q 'tick hit its 10s budget (FLEET_COLLECT_TICK_BUDGET)' "$WORK/stderr" \
   || fail "4: stderr must say the tick budget was hit and what it deferred"
 ok "the tick budget truncates the chain and parks the cursor on the first deferred phase"
+ok "…and the wedge was clamped to the tick's room (${clamp}s of its own 20s), not the head's leftovers (#725)"
 
 # 5. ROTATION — the next tick STARTS at the cursor and wraps round -----------------
 # This is what makes truncation cost a phase one round instead of starving it: the

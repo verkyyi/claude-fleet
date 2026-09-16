@@ -562,6 +562,10 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # phase's process tree is killed, the tick RUNS ON, and the blown budget is named
 # on stderr (logs/collect.launchd.log) — `fleet-doctor.sh` also reports it. The
 # git phase keeps its historical name, FLEET_COLLECT_GIT_BUDGET above.
+# 0 runs that phase UNBUDGETED (the convention every budget knob here shares): it
+# still needs room in the tick to start, but once started nothing cuts it short —
+# not even FLEET_COLLECT_TICK_BUDGET. That is for a fake-backed selftest or a
+# one-off diagnosis, not for a phase that is slow: raise its budget instead.
 #   quotawatch  the ccquota pre-emptive rotation, run first (it has its own 60s
 #               daemon too, so this in-tick run is a backstop)
 #   sockets     enumerating the live fleet sockets — the tick's one precondition
