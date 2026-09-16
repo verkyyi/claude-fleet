@@ -264,6 +264,10 @@ type growthView struct {
 
 	OKRTitle string
 	OKR      []growthStat
+	// OKRUnfiled / AIUnfiled 在那一块**从来没有人推过**时替换整组数字。
+	// 见 model.GrowthOKR.Filed：缺席的块与全零的块落在同一批列里。
+	OKRUnfiled string
+	AIUnfiled  string
 
 	BackLabel string
 }
@@ -306,6 +310,14 @@ func growthViewOf(row *store.GrowthRow, locale string, now time.Time) growthView
 	v.OKRTitle = gt("okr.title", locale, nil)
 	v.AITitle = gt("ai.title", locale, nil)
 	v.AIHint = gt("ai.hint", locale, nil)
+	// ★ 先问「填过没有」再问「旧不旧」。零值时刻是个**合法日期**，
+	//   DaysSinceUpdate 对它回一个五位数 —— 看板会照直印成「距上次更新 45914 天」。
+	if !row.AI.Filed() {
+		v.AIUnfiled = gt("ai.unfiled", locale, nil)
+		v.OKR = okrStats(row.OKR, locale, now)
+		v.OKRUnfiled = okrUnfiled(row.OKR, locale)
+		return v
+	}
 	days := row.AI.DaysSinceUpdate(now)
 	if row.AI.Stale(now) {
 		v.AIStale = true
@@ -319,7 +331,8 @@ func growthViewOf(row *store.GrowthRow, locale string, now time.Time) growthView
 			"leads":  badge.GroupDigits(int64(row.AI.QualifiedLeads)),
 			"arr":    cny(row.AI.ARRCNY),
 		})
-		v.OKR = okrStats(row.OKR, locale)
+		v.OKR = okrStats(row.OKR, locale, now)
+		v.OKRUnfiled = okrUnfiled(row.OKR, locale)
 		return v
 	}
 	v.AI = []growthStat{
@@ -330,19 +343,47 @@ func growthViewOf(row *store.GrowthRow, locale string, now time.Time) growthView
 	v.AIUpdatedLine = gt("ai.updated", locale, map[string]string{
 		"when": growthWhen(row.AI.UpdatedAt),
 	})
-	v.OKR = okrStats(row.OKR, locale)
+	v.OKR = okrStats(row.OKR, locale, now)
+	v.OKRUnfiled = okrUnfiled(row.OKR, locale)
 	return v
+}
+
+// okrUnfiled 是 okrStats 的另一半：没有人推过就给一句话，说明这里为什么是空的。
+func okrUnfiled(okr model.GrowthOKR, locale string) string {
+	if okr.Filed() {
+		return ""
+	}
+	return gt("okr.unfiled", locale, nil)
 }
 
 // okrStats is the target line, drawn the same whether or not the hand-filled
 // half went stale: the goal does not change because nobody updated a figure.
-func okrStats(okr model.GrowthOKR, locale string) []growthStat {
+func okrStats(okr model.GrowthOKR, locale string, now time.Time) []growthStat {
+	// 从来没有人推过这一块 ⇒ 一个数字都不画。见 model.GrowthOKR.Filed 的注释：
+	// 缺席的块与全零的块落在同一批列里，把零画成事实就是「目标 ¥0、今天就是大限」。
+	if !okr.Filed() {
+		return nil
+	}
 	return []growthStat{
 		{gt("okr.focus", locale, nil), okr.Focus},
 		{gt("okr.quarter", locale, nil), okr.Quarter},
 		{gt("okr.target", locale, nil), cny(okr.TargetAnnualized)},
-		{gt("okr.killSwitch", locale, nil), killSwitch(okr.DaysToKillSwitch, locale)},
+		{gt("okr.killSwitch", locale, nil), killSwitchOf(okr, locale, now)},
 	}
+}
+
+// killSwitchOf 优先用日期现算，退回推上来的天数。
+//
+// 天数是**推的那一刻**的答案：任何不是每天推的人，印出来的倒计时都比真相旧
+// 它上次推到现在那么多天。日期不会烂，所以有日期就用日期。
+func killSwitchOf(okr model.GrowthOKR, locale string, now time.Time) string {
+	if okr.KillSwitchDate != "" {
+		if d, err := time.Parse(model.GrowthDayLayout, okr.KillSwitchDate); err == nil {
+			today := now.UTC().Truncate(24 * time.Hour)
+			return killSwitch(int(d.Sub(today).Hours()/24), locale)
+		}
+	}
+	return killSwitch(okr.DaysToKillSwitch, locale)
 }
 
 // killSwitch words the countdown, including after it has run out. A board that
@@ -412,7 +453,9 @@ var growthTmpl = template.Must(template.New("growth").Parse(`<!doctype html>
   <div class="card" id="growth-ai">
     <h2>{{.AITitle}}</h2>
     <p class="hint">{{.AIHint}}</p>
-{{if .AIStale}}
+{{if .AIUnfiled}}
+    <div class="growth-stale"><div class="l">{{.AIUnfiled}}</div></div>
+{{else if .AIStale}}
     <div class="growth-stale">
       <div class="v">{{.AIStaleLine}}</div>
       <div class="l">{{.AIStaleWhy}}</div>
@@ -428,9 +471,13 @@ var growthTmpl = template.Must(template.New("growth").Parse(`<!doctype html>
 
   <div class="card" id="growth-okr">
     <h2>{{.OKRTitle}}</h2>
+{{if .OKRUnfiled}}
+    <div class="growth-stale"><div class="l">{{.OKRUnfiled}}</div></div>
+{{else}}
     <div class="kpis growth">
       {{range .OKR}}<div class="kpi"><div class="v">{{.Value}}</div><div class="l">{{.Label}}</div></div>{{end}}
     </div>
+{{end}}
   </div>
 {{end}}
   <footer><p class="hint"><a href="/">{{.BackLabel}}</a></p></footer>

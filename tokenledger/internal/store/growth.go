@@ -63,9 +63,9 @@ func (s *Store) UpsertGrowthFacts(push model.GrowthPush, receivedAt time.Time) e
 		   h5_arr_cny, h5_expiring_in_window_cny, h5_expiring_accounts,
 		   h5_churned_accounts, h5_active_accounts,
 		   ai_signed_deals, ai_qualified_leads, ai_arr_cny, ai_updated_at,
-		   okr_focus, okr_quarter, okr_target_annualized, okr_days_to_kill_switch,
+		   okr_focus, okr_quarter, okr_target_annualized, okr_days_to_kill_switch, okr_kill_switch_date,
 		   received_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(source, day) DO UPDATE SET
 		  h5_arr_cny                = CASE WHEN :h5 THEN excluded.h5_arr_cny                ELSE growth_facts.h5_arr_cny                END,
 		  h5_expiring_in_window_cny = CASE WHEN :h5 THEN excluded.h5_expiring_in_window_cny ELSE growth_facts.h5_expiring_in_window_cny END,
@@ -80,12 +80,13 @@ func (s *Store) UpsertGrowthFacts(push model.GrowthPush, receivedAt time.Time) e
 		  okr_quarter               = CASE WHEN :okr THEN excluded.okr_quarter               ELSE growth_facts.okr_quarter               END,
 		  okr_target_annualized     = CASE WHEN :okr THEN excluded.okr_target_annualized     ELSE growth_facts.okr_target_annualized     END,
 		  okr_days_to_kill_switch   = CASE WHEN :okr THEN excluded.okr_days_to_kill_switch   ELSE growth_facts.okr_days_to_kill_switch   END,
+		  okr_kill_switch_date      = CASE WHEN :okr THEN excluded.okr_kill_switch_date      ELSE growth_facts.okr_kill_switch_date      END,
 		  received_at = excluded.received_at`,
 		push.Source, push.Day,
 		h5.ARRCNY, h5.ExpiringInWindowCNY, h5.ExpiringAccounts,
 		h5.ChurnedAccounts, h5.ActiveAccounts,
 		ai.SignedDeals, ai.QualifiedLeads, ai.ARRCNY, fmtTime(ai.UpdatedAt),
-		okr.Focus, okr.Quarter, okr.TargetAnnualized, okr.DaysToKillSwitch,
+		okr.Focus, okr.Quarter, okr.TargetAnnualized, okr.DaysToKillSwitch, okr.KillSwitchDate,
 		fmtTime(receivedAt),
 		sql.Named("h5", b(push.H5 != nil)),
 		sql.Named("ai", b(push.AI != nil)),
@@ -117,7 +118,7 @@ func (s *Store) LatestGrowth() (*GrowthRow, error) {
 		       h5_arr_cny, h5_expiring_in_window_cny, h5_expiring_accounts,
 		       h5_churned_accounts, h5_active_accounts,
 		       ai_signed_deals, ai_qualified_leads, ai_arr_cny, ai_updated_at,
-		       okr_focus, okr_quarter, okr_target_annualized, okr_days_to_kill_switch,
+		       okr_focus, okr_quarter, okr_target_annualized, okr_days_to_kill_switch, okr_kill_switch_date,
 		       received_at
 		FROM growth_facts
 		ORDER BY day DESC, received_at DESC
@@ -126,7 +127,7 @@ func (s *Store) LatestGrowth() (*GrowthRow, error) {
 			&r.H5.ARRCNY, &r.H5.ExpiringInWindowCNY, &r.H5.ExpiringAccounts,
 			&r.H5.ChurnedAccounts, &r.H5.ActiveAccounts,
 			&r.AI.SignedDeals, &r.AI.QualifiedLeads, &r.AI.ARRCNY, &updated,
-			&r.OKR.Focus, &r.OKR.Quarter, &r.OKR.TargetAnnualized, &r.OKR.DaysToKillSwitch,
+			&r.OKR.Focus, &r.OKR.Quarter, &r.OKR.TargetAnnualized, &r.OKR.DaysToKillSwitch, &r.OKR.KillSwitchDate,
 			&recv)
 	if err == sql.ErrNoRows {
 		return nil, nil

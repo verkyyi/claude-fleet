@@ -97,6 +97,19 @@ var growthText = map[string]i18n.Text{
 		i18n.EN:   "{days} days past",
 		i18n.ZhCN: "已过 {days} 天",
 	},
+
+	// 「这一块从来没有人推过」。它**替换**整组数字，不是给它们加个脚注 ——
+	// 与 ai.stale 同一条规则：把没人填过的零渲染成事实，比什么都不画更会骗人。
+	"okr.unfiled": {
+		i18n.EN: "Nobody has pushed the target yet — nothing is shown here, " +
+			"because zeros would read as “target ¥0, kill switch today”.",
+		i18n.ZhCN: "还没有人推过目标这一块 —— 这里什么都不画，" +
+			"因为把零画出来会被读成「目标 ¥0、今天就是 kill switch」。",
+	},
+	"ai.unfiled": {
+		i18n.EN:   "Nobody has ever filed the hand-filled half. This is not zero — it is nothing.",
+		i18n.ZhCN: "人手填的那半从来没有人填过。这不是 0，是「还没有」。",
+	},
 }
 
 // gt reads one entry in a locale and fills its {placeholders}.

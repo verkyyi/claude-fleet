@@ -116,8 +116,37 @@ type GrowthOKR struct {
 	// DaysToKillSwitch may be negative: the date passes whether or not anyone
 	// re-decided, and a board that clamped it at zero would hide exactly the
 	// week somebody needs to see.
+	//
+	// ⚠️ It is a COUNT, so it rots by the day. Anything that pushes it less
+	// often than daily prints a countdown that is wrong by however long ago it
+	// pushed. Prefer KillSwitchDate: the board derives the count at render
+	// time and is right no matter when the last push was.
 	DaysToKillSwitch int `json:"days_to_kill_switch"`
+
+	// KillSwitchDate (YYYY-MM-DD) is the same fact as a DATE, which does not
+	// rot. Optional so an older shipper keeps working; when it is present the
+	// board computes the countdown from it and ignores DaysToKillSwitch.
+	KillSwitchDate string `json:"kill_switch_date,omitempty"`
 }
+
+// Filed reports whether anybody has ever pushed this block.
+//
+// The board needs it because an absent block and a block of zeros land in the
+// same columns: the first push of a day writes zeros for whatever it omitted.
+// Rendering those zeros as facts is how "nobody has pushed the target yet"
+// becomes "target ¥0, kill switch in 0 days" -- which reads as "the deadline
+// is today". Focus is the sentinel because validate REQUIRES it non-empty on
+// any block that really was pushed.
+func (o GrowthOKR) Filed() bool { return strings.TrimSpace(o.Focus) != "" }
+
+// Filed is the same question for the hand-filled half. UpdatedAt is the
+// sentinel for the same reason: validate requires it, so a zero value can only
+// mean this block has never been pushed.
+//
+// The year check is not belt-and-braces: Go's zero time is a VALID date, so
+// DaysSinceUpdate on it returns a five-figure number that a board will happily
+// print as "45914 days since the last update".
+func (a GrowthAI) Filed() bool { return !a.UpdatedAt.IsZero() && a.UpdatedAt.Year() >= 2000 }
 
 // DaysSinceUpdate is whole days since a person last confirmed the AI half.
 func (a GrowthAI) DaysSinceUpdate(now time.Time) int {
@@ -274,6 +303,12 @@ func (o GrowthOKR) validate(source string) error {
 	}
 	if strings.TrimSpace(o.Quarter) == "" {
 		return fmt.Errorf("growth %s: okr.quarter is required", source)
+	}
+	if o.KillSwitchDate != "" {
+		if _, err := time.Parse(GrowthDayLayout, o.KillSwitchDate); err != nil {
+			return fmt.Errorf("growth %s: okr.kill_switch_date %q is not %s",
+				source, o.KillSwitchDate, GrowthDayLayout)
+		}
 	}
 	if o.TargetAnnualized < 0 {
 		return fmt.Errorf("growth %s: okr.target_annualized cannot be negative, got %d",

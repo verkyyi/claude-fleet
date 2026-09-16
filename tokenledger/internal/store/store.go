@@ -112,6 +112,7 @@ func migrate(db *sql.DB) error {
 		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "kind", "TEXT NOT NULL DEFAULT 'agent'"},
+		{"growth_facts", "okr_kill_switch_date", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)

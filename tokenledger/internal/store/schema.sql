@@ -487,6 +487,9 @@ CREATE TABLE IF NOT EXISTS growth_facts (
   okr_target_annualized     INTEGER NOT NULL DEFAULT 0,
   -- Signed: the kill-switch date passes whether or not anyone re-decided.
   okr_days_to_kill_switch   INTEGER NOT NULL DEFAULT 0,
+  -- The same fact as a DATE. A count rots by the day; a date does not, so the
+  -- board derives the countdown at render time and is right whenever it is read.
+  okr_kill_switch_date      TEXT    NOT NULL DEFAULT '',
 
   -- The hub's own clock, for an operator asking "did tonight's job run?".
   -- Never used to order two pushes: the contract carries no observation time,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -591,5 +592,109 @@ func TestGrowthIngestRejectsAnEmptyPush(t *testing.T) {
 	buf.ReadFrom(resp.Body)
 	if !strings.Contains(buf.String(), "received_at") {
 		t.Errorf("400 没说清楚为什么，收到：%s", buf)
+	}
+}
+
+// ── 从来没有人推过的块，不许画成事实（#7217 的看板侧）────────────────────────
+//
+// 缺席的块与全零的块落在同一批列里：一天的第一次推送，会给它省略掉的东西写零。
+// 把那些零画出来，就是「目标 ¥0、kill switch 还有 0 天」——而「0 天」读起来是
+// 「今天就是大限」。线上实测过：搬运工只推 h5，看板上 okr 那一整行就是这样。
+
+func TestBoardDoesNotDrawAnUnfiledOKRAsFacts(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	// 搬运工真实的 body：只有 h5。
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, today())))
+	resp.Body.Close()
+
+	_, raw := h.get(t, "/growth")
+	body := string(raw)
+	assert := func(cond bool, msg string) {
+		t.Helper()
+		if !cond {
+			t.Error(msg)
+		}
+	}
+	assert(strings.Contains(body, "还没有人推过目标"), "没有说明这一块为什么是空的")
+	// ⚠️ 否定断言**不能拿整页判**：上面那句解释文案自己就含「¥0」和「kill switch」——
+	//    第一版写成 !Contains(body, "¥0") 当场被自己的文案骗成假红。
+	//    钉的是**标签**：它们只在真画那组数字时才出现。
+	assert(!strings.Contains(body, "目标年化"), "把没人推过的目标画成了一组数字")
+	assert(!strings.Contains(body, "距 kill switch"), "把没人推过的 kill switch 画成了倒计时")
+	// 地板断言：h5 那一块**确实**画出来了（契约夹具是 76），上面两条 !Contains 才不是恒真。
+	assert(strings.Contains(body, "活跃账号"), "h5 那一块没画出来")
+	assert(strings.Contains(body, "76"), "h5 的 active_accounts 没画出来")
+}
+
+func TestBoardDoesNotDrawAnUnfiledAIAsAFiveFigureAge(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, today())))
+	resp.Body.Close()
+
+	_, raw := h.get(t, "/growth")
+	body := string(raw)
+	// Go 的零值时刻是个合法日期：DaysSinceUpdate 对它回一个五位数。
+	if m := regexp.MustCompile(`距上次更新 (\d{4,}) 天`).FindStringSubmatch(body); m != nil {
+		t.Fatalf("看板印出了「距上次更新 %s 天」—— 那是零值时刻做减法的结果", m[1])
+	}
+	if !strings.Contains(body, "从来没有人填过") {
+		t.Error("没有说明人手填的那半是「还没有」而不是 0")
+	}
+}
+
+// kill switch 是个**日期**，不是一个推上来的天数。
+func TestBoardComputesKillSwitchFromTheDateNotThePushedCount(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	// 故意让推上来的天数是错的（999），而日期是 60 天后 —— 看板必须信日期。
+	in60 := time.Now().UTC().AddDate(0, 0, 60).Format(model.GrowthDayLayout)
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"wechat_agent","quarter":"2026Q4","target_annualized":420000,
+	         "days_to_kill_switch":999,"kill_switch_date":%q}}`, day, in60)
+	resp := h.pushGrowth(t, tok, []byte(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("推送被拒：%d %s", resp.StatusCode, buf)
+	}
+	_, rawp := h.get(t, "/growth")
+	page := string(rawp)
+	if !strings.Contains(page, "60 天") {
+		t.Errorf("看板没有按日期现算（期望「60 天」）")
+	}
+	if strings.Contains(page, "999") {
+		t.Error("看板信了推上来的那个天数 —— 它是推的那一刻的答案，会天天烂")
+	}
+}
+
+func TestBoardFallsBackToThePushedCountWhenThereIsNoDate(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"wechat_agent","quarter":"2026Q4","target_annualized":420000,
+	         "days_to_kill_switch":42}}`, today())
+	resp := h.pushGrowth(t, tok, []byte(body))
+	resp.Body.Close()
+	_, rawp := h.get(t, "/growth")
+	page := string(rawp)
+	if !strings.Contains(page, "42 天") {
+		t.Error("没有日期时应当退回推上来的天数（旧搬运工还在用它）")
+	}
+}
+
+func TestOKRKillSwitchDateMustBeADate(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	body := fmt.Sprintf(`{"source":"growth-facts","day":%q,
+	  "okr":{"focus":"f","quarter":"q","target_annualized":1,
+	         "days_to_kill_switch":1,"kill_switch_date":"2026/11/30"}}`, today())
+	resp := h.pushGrowth(t, tok, []byte(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("坏日期 status=%d，want 400", resp.StatusCode)
 	}
 }
