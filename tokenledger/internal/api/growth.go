@@ -49,7 +49,12 @@ func (s *Server) handleGrowthIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var snap model.GrowthSnapshot
+	// GrowthPush, not GrowthSnapshot: its blocks are pointers, so a body that
+	// omits `ai` is distinguishable from one that sends zeros. The shipper
+	// sends only `h5` (the hand-filled half has nothing to query), and before
+	// this distinction existed the hub answered it with a 400 -- the collector
+	// never landed a single day.
+	var snap model.GrowthPush
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGrowthBody))
 	if err := dec.Decode(&snap); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed snapshot: "+err.Error())

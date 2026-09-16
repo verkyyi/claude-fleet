@@ -143,6 +143,64 @@ func (a GrowthAI) Stale(now time.Time) bool {
 // day key that is merely odd becomes a second ledger nothing reconciles, and a
 // negative or missing figure that is stored anyway becomes a sentence somebody
 // says out loud.
+// GrowthPush is one push on the wire, and it is NOT GrowthSnapshot.
+//
+// The difference is the whole point: its three blocks are POINTERS, so "this
+// block was not in the body" is distinguishable from "this block was in the
+// body and every figure in it is zero". A value struct cannot tell those apart
+// after decoding, and getting them confused is the expensive direction --
+// a shipper that has nothing to say about the hand-filled half would silently
+// overwrite it with zeros, which reads as "somebody confirmed these are 0"
+// rather than "nobody has said anything lately".
+//
+// Contract (C2, as amended by the T3 caliber spike): a block that is absent
+// means "I have nothing to say about this one, leave it alone". The shipper
+// relies on it -- it sends only `h5`, because the AI half lives in
+// conversations and there is nothing to query.
+type GrowthPush struct {
+	Source string     `json:"source"`
+	Day    string     `json:"day"`
+	H5     *GrowthH5  `json:"h5"`
+	AI     *GrowthAI  `json:"ai"`
+	OKR    *GrowthOKR `json:"okr"`
+}
+
+// Validate checks the envelope and every block that is PRESENT.
+//
+// An absent block is not an error -- see GrowthPush. What is an error is a push
+// with no blocks at all: it carries no facts, and accepting it would move
+// received_at forward, making a ledger that nobody is updating look alive.
+func (p GrowthPush) Validate(now time.Time) error {
+	if err := ValidGrowthSource(p.Source); err != nil {
+		return err
+	}
+	day, err := time.Parse(GrowthDayLayout, p.Day)
+	if err != nil {
+		return fmt.Errorf("growth %s: day %q is not %s", p.Source, p.Day, GrowthDayLayout)
+	}
+	if day.After(now.UTC().AddDate(0, 0, 1)) {
+		return fmt.Errorf("growth %s: day %s is in the future", p.Source, p.Day)
+	}
+	if p.H5 == nil && p.AI == nil && p.OKR == nil {
+		return fmt.Errorf("growth %s: push carries no blocks "+
+			"(h5/ai/okr all absent) -- it would only move received_at forward", p.Source)
+	}
+	if p.H5 != nil {
+		if err := p.H5.validate(p.Source); err != nil {
+			return err
+		}
+	}
+	if p.AI != nil {
+		if err := p.AI.validate(p.Source, now); err != nil {
+			return err
+		}
+	}
+	if p.OKR != nil {
+		return p.OKR.validate(p.Source)
+	}
+	return nil
+}
+
 func (s GrowthSnapshot) Validate(now time.Time) error {
 	if err := ValidGrowthSource(s.Source); err != nil {
 		return err

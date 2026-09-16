@@ -493,3 +493,103 @@ func TestGrowthReadRejectsPost(t *testing.T) {
 		t.Fatalf("POST: status = %d, want 405", resp.StatusCode)
 	}
 }
+
+// ── 逐块合并：缺的块 = 「这一块我没话说，别动它」（C2 的澄清）──────────────────
+
+// h5Only is the body the real shipper sends, verbatim in shape: no `ai`, no
+// `okr`. Before the push type had pointer blocks the hub answered this with
+// 400 "ai.updated_at is required", and the collector never landed a day.
+const h5Only = `{"source":"growth-facts","day":%q,
+  "h5":{"arr_cny":303600,"expiring_in_window_cny":282000,
+        "expiring_accounts":52,"churned_accounts":6,"active_accounts":76}}`
+
+func TestGrowthIngestAcceptsTheShippersRealBody(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, day)))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("只带 h5 的推送被拒：status=%d %s", resp.StatusCode, buf)
+	}
+}
+
+// 两个作者、两只钟：查询出来的那半和人手填的那半各推各的，谁也不许把对方抹成 0。
+func TestGrowthIngestMergesBlocksAcrossPushes(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	rd := h.enrollKind(t, "reader", "growth_reader")
+
+	// ① 人手填的那半先到（完整 body，带 ai）。记下它写进去的那一刻，后面要**逐字**比。
+	aiAt := time.Now().UTC().Truncate(time.Second)
+	seedGrowth(t, h, c2(day, aiAt))
+	// ② 采集器随后只推 h5。
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(h5Only, day)))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("h5-only 推送 status=%d", resp.StatusCode)
+	}
+
+	g := decodeGrowthRead(t, h.readGrowth(t, rd))["growth"].(map[string]any)
+	ai := g["ai"].(map[string]any)
+	// ★ 这里必须**逐字**比，不能只判「非空」：块缺失时写进去的是 time.Time 的零值，
+	//   它格式化出来是 "0001-01-01T00:00:00Z" —— 既不是 nil 也不是空串。
+	//   第一版就是这么写的，拿「ai 块永远覆盖」去变异时它照样绿。
+	gotAt, err := time.Parse(time.RFC3339, fmt.Sprint(ai["updated_at"]))
+	if err != nil {
+		t.Fatalf("ai.updated_at 解析不了：%v", ai["updated_at"])
+	}
+	if !gotAt.UTC().Truncate(time.Second).Equal(aiAt) {
+		t.Fatalf("ai.updated_at = %s，want %s —— h5-only 的推送动了 ai 块："+
+			"「没人更新」被改写成了「有人确认是 0」", gotAt.UTC(), aiAt)
+	}
+	okr := g["okr"].(map[string]any)
+	if okr["focus"] != "wechat_agent" {
+		t.Errorf("okr 块也被抹了：focus = %v", okr["focus"])
+	}
+	if g["h5"].(map[string]any)["active_accounts"] != float64(76) {
+		t.Error("h5 那一块反而没写进去")
+	}
+}
+
+// 块**之内**仍然是整块替换：一个从查询里掉出去的字段必须落成 0，
+// 而不是留着上周的值让整行的时间戳往前走 —— 那是「陈旧的数字穿着新鲜的日期」。
+func TestGrowthIngestReplacesWithinABlock(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+	day := today()
+	rd := h.enrollKind(t, "reader", "growth_reader")
+
+	seedGrowth(t, h, c2(day, time.Now()))
+	zeroed := `{"source":"growth-facts","day":%q,
+	  "h5":{"arr_cny":303600,"expiring_in_window_cny":282000,
+	        "expiring_accounts":52,"churned_accounts":0,"active_accounts":76}}`
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(zeroed, day)))
+	resp.Body.Close()
+
+	g := decodeGrowthRead(t, h.readGrowth(t, rd))["growth"].(map[string]any)
+	if got := g["h5"].(map[string]any)["churned_accounts"]; got != float64(0) {
+		t.Errorf("churned_accounts = %v，want 0 —— 块内必须整块替换", got)
+	}
+}
+
+// 一份一个块都没有的推送只会把 received_at 往前推，让一个没人维护的台账看起来还活着。
+func TestGrowthIngestRejectsAnEmptyPush(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "growth")
+
+	resp := h.pushGrowth(t, tok, []byte(fmt.Sprintf(`{"source":"growth-facts","day":%q}`, today())))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("空推送 status=%d，want 400", resp.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "received_at") {
+		t.Errorf("400 没说清楚为什么，收到：%s", buf)
+	}
+}
