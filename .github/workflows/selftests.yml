@@ -37,6 +37,12 @@ on:
       - '.claude-plugin/**'
       - 'commands/**'
       - 'skills/**'
+      # portability-selftest.sh (issue #696) lints the SHIPPED SHELL for GNU-only
+      # idioms, and its scan is wider than bin/ — it covers every *.sh/*.zsh under
+      # bin/ hooks/ shell/ extras/. Without these two, a GNU-only `sed \|` added to
+      # shell/cw.zsh or extras/*.sh would never re-run the gate that catches it.
+      - 'shell/**'
+      - 'extras/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
   pull_request:
@@ -49,6 +55,8 @@ on:
       - '.claude-plugin/**'
       - 'commands/**'
       - 'skills/**'
+      - 'shell/**'
+      - 'extras/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
 

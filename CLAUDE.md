@@ -122,5 +122,36 @@ Do not install from memory: read the doc and work from it.
   (default 10). The matrix jobs each append theirs to the run's summary page, so
   a test getting slower surfaces on the run that made it slower — not on the run
   that went red.
+- **The gate has a BSD half now — CI is no longer ubuntu-only** (issue #696).
+  Every workflow used to be `runs-on: ubuntu-latest`, while every place the
+  operator actually runs the gate (a worker pane, the live install) is macOS, so
+  a GNU-only idiom was green in CI and broken on the only machine that matters.
+  #689 was that: a GNU-only `\|` alternation in a sed BRE, which BSD sed matches
+  LITERALLY and says nothing about — so `run-selftests.sh`'s env scrub was a
+  SILENT no-op on a Mac from #660 to #681. Two defenses, because they catch
+  different halves:
+  - `bin/portability-selftest.sh` — a lint, free on the existing ubuntu shards.
+    Flags `sed`'s GNU-only BRE metachars (`\|` `\+` `\?` `\d`), a `sed -i` with
+    no ATTACHED suffix, and `readlink -f` / `date -d` / `stat -c` / `base64 -w` /
+    `mktemp -p`. ⚠️ It is COMMAND-SCOPED, not line-scoped, and that is the whole
+    craft of it: BSD **grep** *does* support `\|`, and awk's `/^\|---\|/` and a
+    `\|` inside `grep -E` are escaped literal pipes — all 18 of this repo's `\|`
+    sites are correct, so a naive `grep -rn '\\|'` would red on every one and get
+    muted in a week. A GNU-only option is exempt inside a both-ways fallback
+    (`stat -f … || stat -c …`) — but only when spelled on ONE logical line, so the
+    exemption stays local; a fallback split across two lines marks itself
+    `# portable-ok: <why>` (see `fleet_epoch_from_iso`).
+  - `.github/workflows/selftests-macos.yml` — the full 6-shard suite on
+    `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`.
+    This is the half a lint structurally cannot do: **behaviour** differences.
+    #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on
+    bash 5) is not an enumerable idiom, only an observable outcome. The lint nets
+    the next #689; only a real BSD run nets the next #703. It asserts `sed` on
+    PATH is genuinely BSD before running anything — if a runner image ever puts
+    GNU coreutils first, the job fails loudly rather than testing nothing.
+    ⚠️ It runs on the FULL matrix because GitHub-hosted runners are **free for
+    public repos**; the 10× macOS multiplier applies to private ones. **Make this
+    repo private and this workflow starts billing ~150 min/night** — cut `shard:`
+    to one entry or drop the schedule.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick
   up hook changes without a restart.
