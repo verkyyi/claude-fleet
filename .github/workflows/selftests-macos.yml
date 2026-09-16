@@ -168,6 +168,3 @@ jobs:
             grep -E '^(FAIL|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-# TEMPORARY (#696 acceptance probe): touched so this workflow's self-scoped
-# pull_request path filter fires for the deliberate-red commit. Reverted next.
