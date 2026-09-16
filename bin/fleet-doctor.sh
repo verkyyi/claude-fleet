@@ -294,11 +294,16 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     # all. Stale = the 70%/85% pre-emptive rotation is BLIND — that silent
     # fail-open cost a whole 5-hour window on 2026-09-11, so it is a FAIL.
     qst=$(bash "$(dirname "$0")/fleet-quotawatch.sh" --status 2>/dev/null)
-    qstate=${qst%%	*}; qage=${qst#*	}
+    # state <TAB> how long it has held (s) <TAB> consecutive-empty-fetch streak.
+    qstate=${qst%%	*}; qrest=${qst#*	}; qage=${qrest%%	*}; qstreak=${qrest#*	}
+    case "$qage"    in ''|*[!0-9]*) qage=0 ;; esac
+    case "$qstreak" in ''|*[!0-9]*) qstreak=0 ;; esac
+    qdur="$((qage/60))m"; [ "$qage" -lt 60 ] && qdur="${qage}s"
     case "$qstate" in
       stale) fail qwatch "quota cache last refreshed $((qage/60))m ago (> FLEET_ACCOUNT_QUOTA_STALE ${FLEET_ACCOUNT_QUOTA_STALE:-600}s) — pre-emptive rotation is BLIND; is com.claude-fleet.quotawatch loaded? (\`launchctl list | grep quotawatch\`; the collector falls back to running the watch first thing each tick once this unit stops ticking, issue #671 — check its heartbeat below)" ;;
       never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
-      fresh) pass qwatch "quota cache ${qage}s old — the pre-emptive watch is ticking (\`fleet-quotawatch.sh --status\`)" ;;
+      blind) fail qwatch "quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
+      fresh) pass qwatch "quota cache ${qage}s old and non-empty — the pre-emptive watch is ticking AND getting readings (\`fleet-quotawatch.sh --status\`)" ;;
     esac
     # …and whether the ticks that ARE happening finish their work (issue #698).
     # `--status` above answers "is it ticking", which a tick that winds down on

@@ -121,6 +121,11 @@ QUOTA_TTL="${FLEET_ACCOUNT_QUOTA_TTL:-60}"
 CCQUOTA="${FLEET_QUOTA_BIN:-ccquota}"
 STATE_QUOTA="$STATE_DIR/account.quota"
 STATE_QUOTA_TS="$STATE_DIR/account.quota.ts"
+# Consecutive EMPTY fetches: "<streak>\t<epoch the streak started>" (issue #684).
+# The stamp above is the watch's LIVENESS — it says a tick RAN. This one says
+# whether the tick brought anything BACK. They are different failures, and until
+# #684 only the first had an alarm.
+STATE_QUOTA_EMPTY="$STATE_DIR/account.quota.empty"
 # --- which account a new spawn lands on (issue #598) ---------------------------
 # PICK_MODE decides how the ccquota rows are RANKED once the ceiling gate has
 # thrown out the accounts that are too hot to use at all:
@@ -417,6 +422,36 @@ for line in os.environ.get("QP_MAP", "").splitlines():
           ep(fh.get("resets_at")), ep(sd.get("resets_at")), round(num(fh.get("percent_per_hour")) or 0)))
 PY
 }
+# quota_empty_streak <rows> — maintain the consecutive-EMPTY-fetch counter, which
+# is the only reading anything has of the BLIND axis (issue #684). The stamp is
+# refreshed unconditionally by design (see quota_fetch), so a hub that answers
+# with nothing leaves a cache that is FRESH and EMPTY — a state every alarm keyed
+# on the stamp's age reads as healthy. Live on 2026-09-15 it held for at least six
+# minutes with `--status` printing `fresh 117`, fleet-doctor PASSing its qwatch
+# line, and the 70%/85% pre-emptive rotation quietly doing nothing, because zero
+# rows is also exactly what "no pool" looks like to every consumer downstream.
+#   rows      ⇒ 0 (and the stamp of the streak's start cleared with it)
+#   no rows   ⇒ +1, keeping the epoch the streak started so the alarm can say
+#               how LONG it has lasted, not just how many reads it took.
+# An EMPTY POOL is NOT blind: with no token files there is nothing for ccquota to
+# have a reading about, and the fleet says that elsewhere already (fleet-doctor's
+# `account` line). Counting it here would pin `⚠ quota blind` permanently on
+# every machine that sets a hub URL before it has any accounts — an alarm that is
+# on by default on a healthy install is one nobody reads by the second week.
+quota_empty_streak() {
+  local rows="$1" prev n since
+  mkdir -p "$STATE_DIR"
+  if printf '%s' "$rows" | grep -q . || [ -z "$(acct_labels)" ]; then
+    printf '0\t0\n' | atomic_write "$STATE_QUOTA_EMPTY"; return 0
+  fi
+  prev=$(cat "$STATE_QUOTA_EMPTY" 2>/dev/null || true)
+  n=${prev%%$'\t'*}; since=0
+  case "$prev" in *$'\t'*) since=${prev#*$'\t'} ;; esac
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  case "$since" in ''|*[!0-9]*) since=0 ;; esac
+  if [ "$n" -le 0 ] || [ "$since" -le 0 ]; then since=$(now); fi
+  printf '%s\t%s\n' "$(( n + 1 ))" "$since" | atomic_write "$STATE_QUOTA_EMPTY"
+}
 # quota_fetch — ask ccquota (10s cap) and rewrite the cache; silent no-op without
 # ccquota / a hub URL. Empty rows (unknown verdict, unreachable) still refresh the
 # stamp so a dead hub is retried at TTL cadence, not on every call. ccquota's own
@@ -424,6 +459,9 @@ PY
 # (issue #628) are the only place the chain speaks up, and the stamp below says
 # nothing about them — it is refreshed unconditionally, which is exactly why
 # #551's `⚠ quota stale` can never catch a cache full of confident zeroes.
+# quota_empty_streak is the axis that does (issue #684); it runs on EVERY fetch,
+# including the ones that succeed, because the clear-on-success half is what keeps
+# the alarm off a hub that merely blinked.
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
   [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
@@ -431,6 +469,7 @@ quota_fetch() {
   mkdir -p "$STATE_DIR"
   printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
   now | atomic_write "$STATE_QUOTA_TS"
+  quota_empty_streak "$rows"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
 quota_rows() {

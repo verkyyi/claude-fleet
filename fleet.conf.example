@@ -1013,6 +1013,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # FLEET_NOTIFY_CMD from the next tick that does run. Default 600 = 10× the TTL.
 # @label=Quota watch stale after @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_STALE=600
+# The OTHER way that watch goes blind (issue #684): the fetch restamps the cache
+# even when it came back with nothing, so a hub answering with zero rows leaves a
+# cache that is FRESH and EMPTY — stamp-age alarms read it as healthy while the
+# 70%/85% rotation has nothing to act on (2026-09-15: six minutes of it, with
+# `--status` saying `fresh 117` and fleet-doctor PASSing). One empty read is noise
+# — a hub blip, a fetch killed on its budget — so the STREAK is the verdict: this
+# many consecutive empty fetches with a pool + hub configured raises
+# `⚠ quota blind 6m` on the status bar, a FAIL on fleet-doctor's qwatch line, and
+# one FLEET_NOTIFY_CMD per episode. Default 3 ≈ 3 min at the 60s TTL. 0 = off.
+# @label=Quota watch blind after @group=accounts @tier=advanced @scope=global @edit=int @unit=reads
+#FLEET_ACCOUNT_QUOTA_BLIND_STREAK=3
 # How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
 # ones that are too hot to use at all (issue #598):
 #   5h      (default) score = 5h-headroom × 2 + 7d-headroom. The 5-hour window
