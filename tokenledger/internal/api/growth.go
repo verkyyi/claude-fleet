@@ -83,6 +83,91 @@ func (s *Server) handleGrowthIngest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"source": snap.Source, "day": snap.Day})
 }
 
+// growthReaderKinds are the enrollments allowed to READ the ledger.
+//
+// Not "any valid enrollment token". Every shipper on this hub holds one --
+// the gateway usage job, the billing job, the repo-progress job -- and each of
+// them is scoped to WRITE its own stream and nothing else. Letting any of them
+// read revenue would widen the most sensitive figures this binary holds to
+// every credential ever minted, silently, the day this route shipped.
+var growthReaderKinds = map[string]bool{
+	// The shipper reads what it writes: it is already trusted with the figures,
+	// and a separate credential for the same machine buys nothing.
+	"growth_shipper": true,
+	// A credential that only reads -- the Monday brief. Born this kind via
+	// `ccquota enroll --kind growth_reader`, because a reader never pushes and
+	// so never reaches the self-marking path the shippers use.
+	"growth_reader": true,
+}
+
+// handleGrowthRead serves the stored ledger to a MACHINE.
+//
+// /growth (the board) is the same figures for a human, behind viewerOnly -- an
+// SSO session a headless job on someone's Mac mini cannot hold. So this is its
+// sibling on enrollment-token auth, shaped like handleGrowthIngest down to the
+// vague 401, and mounted outside the viewer gate for the same reason ingest is.
+//
+// ── Why "nothing shipped yet" is a 200, not a 404 ────────────────────────────
+//
+// The caller has to tell three states apart, and only one of them means it
+// should carry on:
+//
+//	present:false  → the hub is fine, nobody has shipped a day yet
+//	404            → THIS HUB DOES NOT HAVE THIS ROUTE (an older binary)
+//	no answer/401  → unreachable, or the token is wrong
+//
+// Spending 404 on the first would make it indistinguishable from the second,
+// and the consumer's fallback for "no facts" is to write a brief with no
+// figures in it -- so an old hub would look exactly like a quiet month, and the
+// Monday brief would go out empty every week with nothing reporting a fault.
+// That failure already happened once on the writing side (see #7217 in the
+// monorepo: nothing wrote growth/facts/ and every watchdog stayed green), and
+// it is the reason this endpoint exists at all.
+func (s *Server) handleGrowthRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	tok := bearer(r)
+	if tok == "" {
+		httpError(w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
+	if err != nil {
+		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+		return
+	}
+	kind, err := s.Store.EndpointKind(ep.ID)
+	if err != nil {
+		log.Printf("growth read kind for %s: %v", ep.ID, err)
+		httpError(w, http.StatusInternalServerError, "could not resolve enrollment")
+		return
+	}
+	if !growthReaderKinds[kind] {
+		// Same answer as an unknown token, deliberately: telling a valid but
+		// unauthorised credential that it merely has the wrong KIND confirms
+		// both that the token is live and that a ledger is here to be read.
+		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+		return
+	}
+
+	row, err := s.Store.LatestGrowth()
+	if err != nil {
+		log.Printf("growth read: %v", err)
+		httpError(w, http.StatusInternalServerError, "could not read ledger")
+		return
+	}
+	if row == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"present": false})
+		return
+	}
+	// received_at rides along inside GrowthRow. The caller needs it: `day` is
+	// what the shipper filed, and a shipper that died three weeks ago keeps a
+	// perfectly plausible `day` on the last row it managed to send.
+	writeJSON(w, http.StatusOK, map[string]any{"present": true, "growth": row})
+}
+
 // serveGrowthPage renders the board at /growth.
 //
 // Server-rendered, which every other human surface on this hub is not, and for

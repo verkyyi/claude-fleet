@@ -333,15 +333,49 @@ type Endpoint struct {
 }
 
 // Enroll registers a new endpoint and stores only the hash of its token.
+//
+// The enrollment is born an agent. Every nightly job that is not one says so
+// later, on its first push (MarkRepoShipper, MarkGrowthShipper) -- which works
+// because a shipper pushes. A credential that only ever READS has no such
+// moment, so it has to be born with its kind: see EnrollKind.
 func (s *Store) Enroll(endpointID, label, tokenHash string) error {
+	return s.EnrollKind(endpointID, label, tokenHash, "agent")
+}
+
+// EnrollKind registers a new endpoint with its kind set from the start.
+//
+// Read-only credentials are the reason this exists. The self-marking path
+// cannot serve them: it runs after a successful push, and a reader never
+// pushes, so a reader enrolled as an agent would sit in the agent roster
+// forever being reported as a machine that stopped sending usage -- and any
+// gate that asks "is this token allowed to read the books?" would have to
+// answer before the token had ever said what it was.
+func (s *Store) EnrollKind(endpointID, label, tokenHash, kind string) error {
 	_, err := s.write.Exec(`
-		INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at)
-		VALUES (?, NULL, ?, ?, ?)`,
-		endpointID, label, tokenHash, fmtTime(time.Now()))
+		INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind)
+		VALUES (?, NULL, ?, ?, ?, ?)`,
+		endpointID, label, tokenHash, fmtTime(time.Now()), kind)
 	if err != nil {
 		return fmt.Errorf("enroll endpoint: %w", err)
 	}
 	return nil
+}
+
+// EndpointKind reports what an enrollment is: "agent", "repo_shipper",
+// "growth_shipper", "growth_reader".
+//
+// Deliberately its own query rather than a field on Endpoint: the kind gates
+// access to the revenue ledger, and a value that rides along inside a struct
+// used by a dozen read paths is one refactor away from being scanned into the
+// wrong column and silently widening that gate. A caller that wants to make an
+// authorisation decision has to ask for it by name.
+func (s *Store) EndpointKind(endpointID string) (string, error) {
+	var kind string
+	err := s.read.QueryRow(`SELECT kind FROM endpoints WHERE endpoint_id = ?`, endpointID).Scan(&kind)
+	if err != nil {
+		return "", fmt.Errorf("endpoint kind: %w", err)
+	}
+	return kind, nil
 }
 
 // EndpointByTokenHash resolves an enrollment token to its endpoint.

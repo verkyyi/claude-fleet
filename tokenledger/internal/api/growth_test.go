@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -330,5 +331,165 @@ func TestGrowthBoard_SpeaksEnglishWhenAsked(t *testing.T) {
 	_, en := h.get(t, "/growth?locale=en")
 	if !strings.Contains(string(en), "5 days since the last update") {
 		t.Errorf("?locale=en did not reach the English board:\n%s", en)
+	}
+}
+
+// ── GET /v1/growth/latest — the machine read (#7217) ─────────────────────────
+
+func (h *harness) readGrowth(t *testing.T, token string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/growth/latest", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// enrollKind is enroll() for a credential that must be born with its kind —
+// a reader never pushes, so it never reaches the self-marking path.
+func (h *harness) enrollKind(t *testing.T, label, kind string) string {
+	t.Helper()
+	tok, err := MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.EnrollKind("ep_"+label, label, HashToken(tok), kind); err != nil {
+		t.Fatal(err)
+	}
+	h.tokens[label] = tok
+	return tok
+}
+
+func decodeGrowthRead(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	return got
+}
+
+// The posture this hub states for every revenue surface: no credential, no
+// figures. The board says it with viewerOnly; this route has to say it itself.
+func TestGrowthReadRefusesWithoutToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	resp := h.readGrowth(t, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// The gate this route exists to hold. Every shipper on this hub holds a valid
+// enrollment token; only the growth ones may read revenue. Without the kind
+// check this test passes with a 200 — which is exactly the silent widening.
+func TestGrowthReadRefusesAnAgentToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	tok := h.enroll(t, "some-laptop") // a plain agent: valid token, wrong role
+	resp := h.readGrowth(t, tok)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token: status = %d, want 401", resp.StatusCode)
+	}
+	// And it must not leak that the token itself was fine.
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	if strings.Contains(body.String(), "kind") {
+		t.Errorf("401 body names the kind, telling a prober its token is live: %s", body)
+	}
+}
+
+func TestGrowthReadAllowsAReaderToken(t *testing.T) {
+	h := newHarness(t)
+	day := today()
+	seedGrowth(t, h, c2(day, time.Now()))
+
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+	resp := h.readGrowth(t, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader token: status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeGrowthRead(t, resp)
+	if got["present"] != true {
+		t.Fatalf("present = %v, want true", got["present"])
+	}
+	g, ok := got["growth"].(map[string]any)
+	if !ok {
+		t.Fatalf("growth block missing: %#v", got)
+	}
+	if g["day"] != day {
+		t.Errorf("day = %v, want %q", g["day"], day)
+	}
+	// received_at is the whole point of reading this back rather than trusting
+	// `day`: a shipper that died weeks ago still files a plausible day.
+	if g["received_at"] == nil || g["received_at"] == "" {
+		t.Error("received_at missing — the caller cannot tell a stale ledger from a fresh one")
+	}
+	h5, ok := g["h5"].(map[string]any)
+	if !ok {
+		t.Fatalf("h5 block missing: %#v", g)
+	}
+	if h5["active_accounts"] != float64(76) {
+		t.Errorf("h5.active_accounts = %v, want 76 (the C2 contract's own figure)", h5["active_accounts"])
+	}
+}
+
+// The shipper reads what it writes — no second credential for one machine.
+func TestGrowthReadAllowsTheShipperToken(t *testing.T) {
+	h := newHarness(t)
+	seedGrowth(t, h, c2(today(), time.Now()))
+
+	resp := h.readGrowth(t, h.tokens["growth"]) // marked growth_shipper by its push
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("shipper token: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// An empty ledger is a 200 with present:false, NOT a 404.
+//
+// The consumer's fallback for "no facts" is a brief with no figures in it. If
+// this answered 404, an older hub that simply lacks the route would be
+// indistinguishable from a quiet month, and that brief would go out empty every
+// week with nothing reporting a fault (#7217).
+func TestGrowthReadEmptyLedgerIsPresentFalseNot404(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+
+	resp := h.readGrowth(t, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("empty ledger: status = %d, want 200 (404 would collide with 'no such route')", resp.StatusCode)
+	}
+	got := decodeGrowthRead(t, resp)
+	if got["present"] != false {
+		t.Fatalf("present = %v, want false", got["present"])
+	}
+	if _, ok := got["growth"]; ok {
+		t.Error("empty ledger returned a growth block; a zeroed ledger reads like a business with no revenue")
+	}
+}
+
+func TestGrowthReadRejectsPost(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enrollKind(t, "monday-brief", "growth_reader")
+
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/growth/latest", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: status = %d, want 405", resp.StatusCode)
 	}
 }

@@ -106,6 +106,12 @@ func (s *Server) Handler() http.Handler {
 	// The business ledger ships the same way and for the same reasons: its own
 	// enrollment token, no identity in the body, one whole day per push.
 	mux.HandleFunc("/v1/ingest/growth", s.handleGrowthIngest)
+	// Reading the ledger back, for the Monday brief. Outside the viewer gate
+	// for the same reason ingest is -- a headless job holds an enrollment
+	// token, not an SSO session -- but gated a second time on the enrollment's
+	// kind, because every shipper on this hub holds a token and only the growth
+	// ones may read revenue. See handleGrowthRead.
+	mux.HandleFunc("/v1/growth/latest", s.handleGrowthRead)
 
 	// The way in. Outside the viewer-token gate on purpose, and mounted
 	// unconditionally: when SSO is not configured the handler answers 404, so

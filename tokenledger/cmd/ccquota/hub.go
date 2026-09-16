@@ -442,11 +442,21 @@ func runEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	label := fs.String("name", "", "a human name for this endpoint, e.g. web-01")
+	kind := fs.String("kind", "agent", "what this enrollment is: agent | growth_reader")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *label == "" {
 		return errors.New("--name is required")
+	}
+	// Only the kinds a human has a reason to mint. The *_shipper kinds are
+	// deliberately absent: a shipper marks itself on its first successful push,
+	// so offering them here would create a second way to say the same thing --
+	// and the typo'd one would be a token that looks enrolled and is in the
+	// wrong roster forever. A reader has no such moment, which is why it is the
+	// one kind that must be chosen up front.
+	if *kind != "agent" && *kind != "growth_reader" {
+		return fmt.Errorf("--kind %q: want agent or growth_reader", *kind)
 	}
 
 	// Refuses to create one: a token minted into a fresh database is printed
@@ -466,7 +476,7 @@ func runEnroll(args []string) error {
 		return err
 	}
 	id := fmt.Sprintf("ep_%d", time.Now().UnixNano())
-	if err := st.Enroll(id, *label, api.HashToken(tok)); err != nil {
+	if err := st.EnrollKind(id, *label, api.HashToken(tok), *kind); err != nil {
 		return err
 	}
 
@@ -479,6 +489,19 @@ Run this on that endpoint (the token is shown once and is not recoverable):
   ccquota agent
 
 `, *label, id, dbFile, tok)
+	if *kind == "growth_reader" {
+		// A reader never runs `ccquota agent`, so the block above is the wrong
+		// instruction for it. Say what it is actually for, here, where the
+		// token is on screen -- the one moment anybody is looking.
+		fmt.Printf(`This one is a READ-ONLY ledger credential (kind=%s). It does not run an
+agent; point the Monday brief at it instead:
+
+  export CCQUOTA_URL=https://your-hub.example.com
+  export CCQUOTA_TOKEN=%s
+  curl -sH "Authorization: Bearer $CCQUOTA_TOKEN" "$CCQUOTA_URL/v1/growth/latest"
+
+`, *kind, tok)
+	}
 	return nil
 }
 
