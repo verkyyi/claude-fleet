@@ -442,12 +442,31 @@ Now:
   line (plus a `collect` line with the last tick's age/duration/slowest phase),
   and the next tick that does run sends one `FLEET_NOTIFY_CMD` saying how long
   the watch was blind.
+- **Blindness alarm** (issue #684). The stamp says a tick *ran*; it says nothing
+  about whether the tick brought anything *back*, and the fetch restamps either
+  way on purpose. So a hub that answers with zero rows leaves a cache that is
+  **fresh and empty** — which every stamp-keyed alarm above reads as healthy
+  while the rotation has nothing to act on. On 2026-09-15 that state held for at
+  least six minutes with `--status` printing `fresh 117`, `fleet-doctor` PASSing
+  and `ccquota budget --account all --json` answering perfectly on the same box.
+  `fleet-account.sh` now counts the consecutive empty fetches
+  (`global/account.quota.empty`, cleared by the first fetch that returns rows),
+  and `FLEET_ACCOUNT_QUOTA_BLIND_STREAK` (default 3 ≈ 3 min at the 60s TTL, 0 =
+  off) is where that becomes an alarm: **`⚠ quota blind 6m`** on the status bar,
+  a **FAIL** on `fleet-doctor`'s `qwatch` line, `--status` answering `blind`
+  instead of `fresh`, and one `FLEET_NOTIFY_CMD` per episode. One empty read is
+  noise (a hub blip, a fetch killed on its budget) — the streak is the verdict.
+  A pool with **no token files** is not blind, just unconfigured, and never
+  raises it. Stale wins where both could fire: a stamp that has stopped moving
+  means no fetch is happening at all, so the streak is frozen history.
 - **Rehearsal.** `fleet-quotawatch.sh --dry-run` prints what each account
   would trigger without writing a marker, benching or moving anything;
-  `--status` prints `off|never|fresh|stale<TAB>age-seconds`.
+  `--status` prints `off|never|fresh|stale|blind<TAB>age-seconds<TAB>empty-streak`
+  (column 2 is the stamp's age for `fresh`/`stale`, the blind spell's length for
+  `blind` — in each case, how long column 1 has been true).
 
 ```
-fleet-quotawatch.sh --status      # off | never | fresh | stale  + the cache age (s)
+fleet-quotawatch.sh --status      # off|never|fresh|stale|blind + age (s) + empty streak
 fleet-quotawatch.sh --dry-run     # what this tick WOULD do per account, no side effects
 fleet-account.sh quota            # what the watch sees: label · 5h% · 7d% · headroom · resets · %/h
 fleet-account.sh quota --refresh  # bypass the FLEET_ACCOUNT_QUOTA_TTL (60s) cache

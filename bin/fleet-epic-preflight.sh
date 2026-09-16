@@ -259,7 +259,7 @@ if [ -z "${CCQUOTA_HUB_URL:-}" ]; then
   # there is room". Split them on the hub URL, the same gate fleet-doctor.sh uses.
   pass quota "no ccquota pool configured for this fleet — sessions run on whatever account they get; nothing to schedule a batch around"
 elif [ "$n_rows" -eq 0 ]; then
-  warn quota "a ccquota pool IS configured but its cached reading is empty — nothing here can say whether there is room to start a batch; \`bash $BIN/fleet-quotawatch.sh --status\` (a stale cache also means pre-emptive rotation is blind, #551)"
+  warn quota "a ccquota pool IS configured but its cached reading is empty — nothing here can say whether there is room to start a batch; \`bash $BIN/fleet-quotawatch.sh --status\` says which kind of blind it is (\`stale\` = no tick has run at all, #551; \`blind\` = every tick ran and came back with nothing, #684)"
 else
   under=$(printf '%s\n' "$qrows" | awk -F'\t' -v c="$ceiling" \
             '{u=($2+0>$3+0)?$2+0:$3+0; if(u<c) n++} END{print n+0}')

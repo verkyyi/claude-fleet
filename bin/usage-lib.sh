@@ -161,6 +161,45 @@ fleet_quota_stale_age() {
   return 0
 }
 
+# --- ccquota FRESH-BUT-EMPTY alarm (issue #684) --------------------------------
+# The second way the pre-emptive rotation goes blind, and the one no stamp can
+# see. `account.quota.ts` is restamped even when the fetch came back with nothing
+# (deliberately — a dead hub must be retried at TTL cadence, not on every call),
+# so a hub that answers with zero rows leaves a cache that is FRESH and EMPTY.
+# Every alarm above reads that as healthy: on 2026-09-15 `--status` said
+# `fresh 117`, fleet-doctor PASSed, and the 70%/85% rotation had nothing to act on
+# for at least six minutes with every dial green. bin/fleet-account.sh counts the
+# consecutive empty fetches (quota_empty_streak) — this is the read side.
+#
+# ONE empty fetch is noise: a hub blip, a fetch killed on its budget. The STREAK
+# is the verdict, exactly as the model-cap probe's is (#706).
+# FLEET_ACCOUNT_QUOTA_BLIND_STREAK: consecutive empty fetches before the alarm
+# (default 3 ≈ 3 min at the 60s TTL); 0 turns it off.
+
+# fleet_quota_blind — print "<streak><TAB><seconds-blind>" IFF the watch is
+# configured, is TICKING, and the last N fetches all came back empty. Nothing
+# otherwise. STALE WINS: a stamp that has stopped moving means no fetch is
+# happening at all, so the streak is frozen history rather than a live condition
+# — reporting both would put two red alarms on the bar for one broken daemon.
+fleet_quota_blind() {
+  fleet_quota_watch_configured || return 0
+  [ -z "$(fleet_quota_stale_age)" ] || return 0
+  _qbmin="${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}"
+  case "$_qbmin" in ''|*[!0-9]*) _qbmin=3 ;; esac
+  [ "$_qbmin" -eq 0 ] && return 0                      # 0 = alarm off
+  _qbe=$(cat "$(fleet_usage_cache_dir)/account.quota.empty" 2>/dev/null)
+  _qbn=${_qbe%%	*}; _qbs=0
+  case "$_qbe" in *'	'*) _qbs=${_qbe#*	} ;; esac
+  case "$_qbn" in ''|*[!0-9]*) return 0 ;; esac
+  case "$_qbs" in ''|*[!0-9]*) _qbs=0 ;; esac
+  [ "$_qbn" -ge "$_qbmin" ] || return 0
+  _qbage=0
+  [ "$_qbs" -gt 0 ] && _qbage=$(( $(date +%s) - _qbs ))
+  [ "$_qbage" -lt 0 ] && _qbage=0
+  printf '%s\t%s' "$_qbn" "$_qbage"
+  return 0
+}
+
 # fleet_usage_human_secs <secs> — 47s | 47m | 3h | 2d (coarsest unit, floor).
 fleet_usage_human_secs() {
   _s="${1:-0}"

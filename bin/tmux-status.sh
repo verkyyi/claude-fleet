@@ -1,7 +1,7 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
 # Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
-#        [│ ⚠ quota stale 47m] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
+#        [│ ⚠ quota stale 47m | ⚠ quota blind 6m] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
 #        [│ ⚠ daemon stale cleanup,dispatch+2 ↻3m | ↻ daemon kicked 3m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
@@ -145,10 +145,20 @@ fi
 # rotation is BLIND (2026-09-11: 2.5h blind ⇒ 21 sessions rode a window to 100%).
 # Silent fail-open is exactly what cost that window, so this is red and never
 # gated by freshness. Empty when fresh, or when the watch isn't configured.
+# Its twin (issue #684): the cache can also be FRESH and EMPTY. The stamp says a
+# tick RAN; it says nothing about whether the tick brought anything back, and the
+# fetch restamps either way by design — so a hub answering with zero rows leaves
+# this bar green while the rotation has nothing to act on (2026-09-15: at least
+# six minutes of it, `--status` reading `fresh 117`). One alarm at a time: stale
+# is the deeper failure (nothing is ticking at all) and fleet_quota_blind already
+# stands down while it holds.
 quota_seg=""
 qstale=$(fleet_quota_stale_age)
 if [ -n "$qstale" ]; then
     quota_seg="${DIM}│ ${RED}⚠ quota stale $(fleet_usage_human_secs "$qstale") "
+else
+    qblind=$(fleet_quota_blind)
+    [ -n "$qblind" ] && quota_seg="${DIM}│ ${RED}⚠ quota blind $(fleet_usage_human_secs "${qblind#*	}") "
 fi
 
 # --- collector staleness + self-heal trace (issue #636): the SECOND always-on

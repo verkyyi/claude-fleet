@@ -132,7 +132,7 @@
 #
 # Usage:
 #   fleet-quotawatch.sh [--caller <name>] [--dry-run]
-#   fleet-quotawatch.sh --status        # off | never | fresh | stale  <TAB> age-s
+#   fleet-quotawatch.sh --status        # off|never|fresh|stale|blind <TAB> age-s <TAB> empty-streak
 #
 # Env: FLEET_QUOTAWATCH_TICK_BUDGET (100) FLEET_QUOTAWATCH_DEADLINE (120)
 #      FLEET_QUOTAWATCH_PROBE_BUDGET (20) FLEET_QUOTAWATCH_SWEEP_BUDGET (40)
@@ -196,6 +196,7 @@ fi
 
 QTS="$G/account.quota.ts"
 QDIAG="$G/quota.diag"                                 # last tick's quota_parse complaints (#628)
+QBLIND="$G/quota.blind"                               # the fresh-but-empty EPISODE marker (#684)
 HB="$G/quotawatch.heartbeat"
 LOCK="$G/quotawatch.lock"
 STALE="${FLEET_ACCOUNT_QUOTA_STALE:-600}"
@@ -290,13 +291,24 @@ QW_SKIP=""   # what the TICK budget deferred to the next tick
 QW_OVER=""   # what spent its OWN budget and was killed
 
 # --status: off (pool/hub not configured) | never (configured, no stamp yet) |
-# fresh | stale, then TAB + the stamp's age in seconds (0 for off/never).
+# fresh | stale | blind, then TAB + how long that state has held in seconds, TAB
+# + the consecutive-empty-fetch streak (0 unless blind).
+# `blind` is the FRESH-BUT-EMPTY state (issue #684): the watch IS ticking, so
+# nothing reads stale, but the last N fetches brought back no rows and the
+# pre-emptive rotation has had nothing to act on. It gets its own word precisely
+# because the answer this query used to give in that state — `fresh 117` — is
+# what sent an operator looking everywhere else for six minutes. Column 2 is the
+# STAMP's age for fresh/stale and the BLIND SPELL's length for blind: in each
+# case, how long the state named in column 1 has been true.
 if [ "$STATUS" = 1 ]; then
-  if ! fleet_quota_watch_configured; then printf 'off\t0\n'; exit 0; fi
+  if ! fleet_quota_watch_configured; then printf 'off\t0\t0\n'; exit 0; fi
   ts=$(cat "$QTS" 2>/dev/null); case "$ts" in ''|*[!0-9]*) ts=0;; esac
-  if [ "$ts" -eq 0 ]; then printf 'never\t0\n'; exit 0; fi
+  if [ "$ts" -eq 0 ]; then printf 'never\t0\t0\n'; exit 0; fi
   age=$(( $(now) - ts ))
-  if [ -n "$(fleet_quota_stale_age)" ]; then printf 'stale\t%s\n' "$age"; else printf 'fresh\t%s\n' "$age"; fi
+  if [ -n "$(fleet_quota_stale_age)" ]; then printf 'stale\t%s\t0\n' "$age"; exit 0; fi
+  qb=$(fleet_quota_blind)
+  if [ -n "$qb" ]; then printf 'blind\t%s\t%s\n' "${qb#*	}" "${qb%%	*}"; exit 0; fi
+  printf 'fresh\t%s\t0\n' "$age"
   exit 0
 fi
 
@@ -544,6 +556,34 @@ if [ "$blind" -gt 0 ]; then
     $FLEET_NOTIFY_CMD "# quota watch was blind for ${bm}m
 the ccquota cache (\`account.quota.ts\`) had not been refreshed for ${bm}m — no pre-emptive rotation could fire in that window. It is ticking again now (caller: ${CALLER}). Check \`fleet-doctor.sh\` → quotawatch / collect, and that com.claude-fleet.quotawatch is loaded." >/dev/null 2>&1
   fi
+fi
+
+# --- the OTHER blindness: a cache that is fresh and EMPTY (issue #684). The
+# stamp above says a tick ran; it says nothing about whether the tick brought
+# anything back, and the fetch restamps either way on purpose. So a hub that
+# answers with zero rows leaves every stamp-keyed alarm green while the 70%/85%
+# rotation has nothing to act on — observed live on 2026-09-15 for at least six
+# minutes, with `--status` reading `fresh 117` the whole time. The streak is
+# counted in fleet-account.sh (quota_empty_streak) and read here AFTER the fetch,
+# so this tick's own result is what the verdict is made of.
+# ONE episode, ONE notification, and a line when it clears — the same shape as
+# the quota.diag dedup above, for the same reason: a per-tick alarm at 60s cadence
+# is an alarm the operator learns to scroll past.
+qblind=$(fleet_quota_blind)
+if [ -n "$qblind" ]; then
+  qb_n=${qblind%%	*}; qb_secs=${qblind#*	}
+  if [ "$DRY" = 0 ] && [ ! -f "$QBLIND" ]; then
+    printf 'fleet-quotawatch: the quota cache is FRESH BUT EMPTY — %s consecutive ccquota reads returned no rows (%sm); the watch is ticking, so nothing reads stale, but the pre-emptive rotation has nothing to act on (#684)\n' \
+      "$qb_n" "$(( qb_secs / 60 ))" >&2
+    printf '%s\n' "$qb_n" | atomic_write "$QBLIND"
+    if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
+      $FLEET_NOTIFY_CMD "# quota watch is BLIND — cache fresh but empty
+the last ${qb_n} ccquota reads came back with no rows ($(( qb_secs / 60 ))m). The watch IS ticking, so nothing shows up as stale — but the 70%/85% pre-emptive rotation has had nothing to act on for that long. Check \`ccquota budget --account all --json\`, the hub URL, and \`fleet-doctor.sh\` → qwatch / quota." >/dev/null 2>&1
+    fi
+  fi
+elif [ "$DRY" = 0 ] && [ -f "$QBLIND" ]; then
+  printf 'fleet-quotawatch: ccquota returns rows again — the fresh-but-empty (blind) spell is over\n' >&2
+  rm -f "$QBLIND"
 fi
 
 # --- the policy (issue #513, verbatim from the collector's former tail block):

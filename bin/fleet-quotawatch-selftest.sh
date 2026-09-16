@@ -18,6 +18,9 @@
 #   5. lock     — a live holder (command line matches) younger than the deadline
 #                 ⇒ skip (no fetch); past the deadline ⇒ TERMed + superseded; a
 #                 dead holder ⇒ taken over. Lock released at exit.
+#   6d. blind  — every tick RAN and every one came back with zero rows: the
+#                cache is fresh and empty, `--status` says `blind`, and the
+#                episode notifies once and clears out loud (issue #684).
 #   6. stale    — a stamp older than FLEET_ACCOUNT_QUOTA_STALE ⇒ `--status` says
 #                 stale, the status-bar helper prints the age, and the next tick
 #                 notifies once that the watch was blind.
@@ -77,6 +80,10 @@ echo "$*" >> "$FAKE_LOG"
 # CHILD, carrying the run's marker, so "the fetch was killed" can be checked as
 # `no marked process survives` rather than taken on the log's word (#682).
 if [ -n "${FAKE_CCQ_HANG:-}" ]; then bash -c "sleep $FAKE_CCQ_HANG # $FAKE_HANG_MARK"; fi
+# A hub that answers with NO reading at all (issue #684): `unknown` is ccquota's
+# own word for it, and quota_parse drops it to zero rows — the exact shape that
+# froze the cache fresh-but-empty on 2026-09-15.
+if [ -s "${FAKE_EMPTY_FILE:-/dev/null}" ]; then printf '{"verdict":"unknown","accounts":[]}\n'; exit 0; fi
 p=$(cat "$FAKE_PCT_FILE" 2>/dev/null || echo 10); pb=$(cat "$FAKE_PCT_B_FILE" 2>/dev/null || echo 20); r5=$(cat "$FAKE_RESET_FILE")
 # b's SHAPE is switchable (issue #628): `unavail` is TokenLedger saying out loud
 # that it cannot read the account (available:false + reason, both omitempty
@@ -126,13 +133,15 @@ RESET4=$(( RESET3 + 14400 ))                                    # a fourth, for 
 iso "$RESET1" > "$WORK/reset"
 HUB="http://hub.test:8787"
 ACCTS=""            # per-case override of the accounts pool (see case 1)
+BLIND=""            # per-case override of the empty-fetch streak threshold (see 6d)
 run_watch() {
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="${ACCTS:-$WORK/accounts}" CCQUOTA_HUB_URL="$HUB" \
   FLEET_ACCOUNT_QUOTA_TTL=0 FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
+  FLEET_ACCOUNT_QUOTA_BLIND_STREAK="${BLIND:-3}" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
-  FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" \
+  FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" FAKE_EMPTY_FILE="$WORK/ccq-empty" \
     bash "$WORK/bin/fleet-quotawatch.sh" "$@" >"$WORK/stdout" 2>"$WORK/stderr"
 }
 CHECKS=0
@@ -160,11 +169,11 @@ HUB="" run_watch || fail "1b: pool-only tick must exit 0"
 [ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ] || fail "1b: a pool-only tick must reach phase=done (got: $(hbget "$G/quotawatch.heartbeat" phase))"
 [ "$(hbget "$G/quotawatch.heartbeat" modelsweep)" = 1 ] || fail "1b: the heartbeat must mark the tick as model-sweep-only"
 rm -f "$G/quotawatch.heartbeat"
-HUB="" run_watch --status; [ "$(cat "$WORK/stdout")" = "$(printf 'off\t0')" ] || fail "1: --status must say off (got: $(cat "$WORK/stdout"))"
+HUB="" run_watch --status; [ "$(cat "$WORK/stdout")" = "$(printf 'off\t0\t0')" ] || fail "1: --status must say off (got: $(cat "$WORK/stdout"))"
 ok
 
 # 2. status never → fresh ----------------------------------------------------
-run_watch --status; [ "$(cat "$WORK/stdout")" = "$(printf 'never\t0')" ] || fail "2: --status before any tick must say never (got: $(cat "$WORK/stdout"))"
+run_watch --status; [ "$(cat "$WORK/stdout")" = "$(printf 'never\t0\t0')" ] || fail "2: --status before any tick must say never (got: $(cat "$WORK/stdout"))"
 run_watch || fail "2: 50% tick must exit 0"
 [ "$(ccq_calls)" = 1 ] || fail "2: one tick ⇒ one ccquota call (got $(ccq_calls))"
 [ "$(hbget "$G/quotawatch.heartbeat" phase)" = "done" ]   || fail "2: heartbeat phase=done after a tick"
@@ -256,6 +265,34 @@ grep -q '# quota watch was blind for 11m' "$WORK/notify.log" || fail "6b: one no
 run_watch || fail "6c: next tick must exit 0"
 [ "$(notifies)" = $((n+1)) ] || fail "6c: fresh again ⇒ no repeat blind-spell notify"
 run_watch --status; case "$(cat "$WORK/stdout")" in fresh*) : ;; *) fail "6c: --status fresh again";; esac
+ok
+
+# 6d. the OTHER blindness: fresh but EMPTY (issue #684) -----------------------
+# The stale spell above is "no tick ran". This one is "every tick ran and brought
+# back nothing" — the stamp is seconds old throughout, so case 6 can never reach
+# it, and until #684 neither could anything else: the live incident sat here for
+# six minutes with `--status` saying `fresh 117` and every dial green.
+# The alarm is one-per-EPISODE, like the stale one, and must clear out loud.
+: > "$WORK/ccq-empty"; printf 'x' > "$WORK/ccq-empty"      # hub answers `unknown`
+BLIND=2                                                    # 2, not the default 3: a
+n=$(notifies)                                              # tick here is a full sweep
+run_watch || fail "6d: a tick with an empty reading must still exit 0"
+[ "$(notifies)" = "$n" ] || fail "6d: ONE empty read is noise — it must not notify"
+run_watch || fail "6d: the second empty tick must exit 0"
+grep -q 'FRESH BUT EMPTY' "$WORK/stderr" || fail "6d: the blind state must be logged (stderr: $(cat "$WORK/stderr"))"
+grep -q '# quota watch is BLIND' "$WORK/notify.log" || fail "6d: one notify about the fresh-but-empty cache"
+[ "$(notifies)" = $((n+1)) ] || fail "6d: exactly one notify at the streak threshold (got $(notifies), was $n)"
+[ -f "$G/quota.blind" ] || fail "6d: the episode marker must be written"
+run_watch --status
+case "$(cat "$WORK/stdout")" in blind*) : ;; *) fail "6d: --status must say blind, not fresh (got: $(cat "$WORK/stdout"))";; esac
+run_watch || fail "6d: a fourth empty tick must exit 0"
+[ "$(notifies)" = $((n+1)) ] || fail "6d: an episode notifies ONCE, not once per 60s tick"
+rm -f "$WORK/ccq-empty"                                    # the hub comes back
+run_watch || fail "6d: the recovery tick must exit 0"
+grep -q 'rows again' "$WORK/stderr" || fail "6d: the clear must be announced (stderr: $(cat "$WORK/stderr"))"
+[ ! -f "$G/quota.blind" ] || fail "6d: the episode marker must be removed on recovery"
+run_watch --status; case "$(cat "$WORK/stdout")" in fresh*) : ;; *) fail "6d: --status fresh again after recovery";; esac
+BLIND=""
 ok
 
 # 7. human --------------------------------------------------------------------
@@ -537,5 +574,5 @@ grep -q 'tick done in .*s/1s' "$WORK/stderr" || fail "11f: the tick line must pr
 [ ! -d "$G/quotawatch.lock" ] || fail "11f: it must release the lock"
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698)\n' "$CHECKS"
+printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698)\n' "$CHECKS"
 exit 0
