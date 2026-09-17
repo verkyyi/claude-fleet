@@ -72,6 +72,8 @@ chmod +x "$WORK/bin/fleet-cleanup-daemon.sh"
 cat > "$WORK/bin/fleet-cleanup.sh" <<FAKE
 #!/bin/bash
 pr=''
+# Every daemon candidate must opt into merged grace; fail if wiring regresses.
+case " \$* " in *' --auto '*) ;; *) exit 2 ;; esac
 while [ "\$#" -gt 0 ]; do case "\$1" in --pr) shift; pr="\${1:-}";; -*) : ;; *) pr="\$1";; esac; shift; done
 # Wedge on demand (timeout test): park in a child, publish BOTH pids, never
 # record a reap. Mirrors the real hang — the script blocked inside a child.

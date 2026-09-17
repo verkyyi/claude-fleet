@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-cleanup.sh <PR> [--dry-run] — the SEAT-AGNOSTIC, no-LLM, no-merge janitor
+# fleet-cleanup.sh <PR> [--auto] [--dry-run] — the no-LLM, no-merge janitor
 # (issue #277). THIS script never merges: the worker that shipped the PR merges it
 # itself on a green gate (issue #441), or a human clicks Merge on the web, or a
 # collaborator does; this script is what runs AFTER a merge to clean up and keep the
@@ -46,6 +46,7 @@
 #   skip:dirty       reap refused: the worktree has uncommitted work
 #   skip:busy        scratch-head reap refused: its window is not `done`
 #   skip:live        closed-unmerged reap DEFERRED: a session is still using it
+#   skip:grace       automatic MERGED cleanup deferred until its grace expires
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
@@ -71,6 +72,8 @@
 #                        issue-<N>, behind the strict gate      (default 0/off)
 #   FLEET_CLEANUP_CLOSED_GRACE   seconds a closed-unmerged window must have been
 #                        SILENT before it may be reaped (issue #544, default 900)
+#   FLEET_CLEANUP_MERGED_GRACE   seconds after mergedAt before --auto cleanup
+#                        (default 600; 0 disables the delay, max 31536000)
 #   LAND_LEASE_TTL       lease lifetime, seconds           (default 3600)
 #   LAND_QUEUE_TIMEOUT   max seconds to WAIT for the lease (default 300)
 #   LAND_POLL            seconds between lease-queue polls  (default 15)
@@ -96,11 +99,12 @@ CLOSED_GRACE="${FLEET_CLEANUP_CLOSED_GRACE:-900}"
 case "$CLOSED_GRACE" in ''|*[!0-9]*) CLOSED_GRACE=900 ;; esac   # tolerate a garbled conf
 
 # --- args ---------------------------------------------------------------------
-PR=""; DRY=0
+PR=""; DRY=0; AUTO=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pr) shift; PR="${1:-}"; PR="${PR//[^0-9]/}" ;;
     --dry-run|-n) DRY=1 ;;
+    --auto) AUTO=1 ;;
     -h|--help) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) printf 'fleet-cleanup: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)  PR="${1//[^0-9]/}" ;;
@@ -117,6 +121,12 @@ done_token() { printf '%s\n' "$1"; }
 # --- resolve fleet identity (this fleet only — never a cwd default) ------------
 FLEET_SESSION="${FLEET_SESSION:-$(fleet_current_session)}"
 fleet_load_conf "$FLEET_SESSION"
+# Read AFTER the fleet overlay; these values are commonly not exported.
+MERGED_GRACE="${FLEET_CLEANUP_MERGED_GRACE:-600}"
+case "$MERGED_GRACE" in ''|*[!0-9]*) MERGED_GRACE=600 ;; esac
+if [ "${#MERGED_GRACE}" -gt 8 ]; then MERGED_GRACE=600; fi
+MERGED_GRACE=$((10#$MERGED_GRACE))
+[ "$MERGED_GRACE" -le 31536000 ] || MERGED_GRACE=600
 REPO="${FLEET_REPO:-}"
 _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
 MAIN="${FLEET_MAIN:-}"
@@ -133,19 +143,19 @@ ftmux() {
 }
 
 # --- PR state -----------------------------------------------------------------
-# TSV: state headOid headRef closedAt  (no mergeability/checks — we don't merge).
+# TSV: state headOid headRef closedAt mergedAt (we don't merge).
 # closedAt is what the closed-unmerged gate compares transcript activity against
 # (issue #544): a session that spoke AFTER its PR closed is working ON the close,
-# not abandoned by it. Empty for a MERGED/OPEN PR, which no caller reads.
+# not abandoned by it. Use sentinels: Bash read collapses empty TSV fields.
 pr_fields() {
   gh pr view "$1" --repo "$REPO" \
-    --json state,headRefOid,headRefName,closedAt \
-    --jq '[.state, .headRefOid, .headRefName, .closedAt] | @tsv' 2>/dev/null
+    --json state,headRefOid,headRefName,closedAt,mergedAt \
+    --jq '[.state, .headRefOid, .headRefName, (.closedAt // "-"), (.mergedAt // "-")] | @tsv' 2>/dev/null
 }
 
 fields=$(pr_fields "$PR")
 [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
-IFS=$'\t' read -r st oid href closed_at <<<"$fields"
+IFS=$'\t' read -r st oid href closed_at merged_at <<<"$fields"
 # BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the
 # @issue window binding, the ledger key, the branch name). They coincide for a
 # worker; for an opted-in non-issue head BRANCH is the PR's head and ISSUE empty.
@@ -186,6 +196,27 @@ if [ -n "$BRANCH" ]; then
     [ -n "$WIN" ] && WIN_STATE=$(ftmux list-windows -t "$FLEET_SESSION" \
           -F '#{window_id} #{@claude_state}' 2>/dev/null | \
           awk -v w="$WIN" '$1 == w { print $2; exit }')
+  fi
+fi
+
+# A daemon must give a newly merged worker time to finish its report (#565).
+# This only narrows automatic cleanup: all existing gates still apply, manual
+# cleanup is immediate, and an already-cleaned PR remains an idempotent no-op.
+# No ledger, lease, base pull or teardown occurs before this read-only gate.
+if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && [ "$MERGED_GRACE" -gt 0 ] \
+   && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
+  merged_epoch=0
+  if [[ "$merged_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    merged_epoch=$(fleet_epoch_from_iso "$merged_at") || merged_epoch=0
+    # BSD date can normalize impossible calendar dates instead of rejecting them.
+    merged_iso=$(date -u -r "$merged_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$merged_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    [ "$merged_iso" = "$merged_at" ] || merged_epoch=0
+  fi
+  case "$merged_epoch" in ''|*[!0-9]*) merged_epoch=0 ;; esac
+  merge_age=$(( $(date +%s) - merged_epoch ))
+  if [ "$merged_epoch" -eq 0 ] || [ "$merge_age" -lt "$MERGED_GRACE" ]; then
+    note "  #$PR automatic cleanup deferred: mergedAt=${merged_at:--}, age=${merge_age}s, grace=${MERGED_GRACE}s (unknown/future times also defer)."
+    done_token "skip:grace"; exit 0
   fi
 fi
 
