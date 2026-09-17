@@ -15,7 +15,7 @@
 #
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
-# done, one pane, a registered source session, and its own linked git worktree.
+# done, one worker pane, a registered source session, and its own linked git worktree.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
 # use --after-turn as the final tool call, then end the turn.
 #
@@ -35,7 +35,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 HELPER="$BIN/.fleet-transfer.py"
 
-die() { printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
+die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
@@ -83,9 +83,12 @@ opt() { TM display-message -p -t "$PANE" "$1" 2>/dev/null; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@"; }
 TARGET=$(fleet_wid_target "$TARGET" "$SOCK")
 WIN=$(TM display-message -p -t "$TARGET" '#{window_id}' 2>/dev/null) || die 'window not found'
-PANE=$(TM display-message -p -t "$WIN" '#{pane_id}' 2>/dev/null) || die 'pane not found'
+# A TASKS sidebar is an auxiliary pane, never a second worker. Resolve the sole
+# worker explicitly, including when a sidebar happens to be the active pane.
+PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
+  | awk -F'|' '$2 != "1" { pane=$1; n++ } END { if (n == 1) print pane; else exit 1 }') \
+  || die 'transfer requires exactly one worker pane (sidebars are allowed)'
 [ "$(opt '#{session_name}')" = "$SESS" ] || die 'window belongs to a different session'
-[ "$(opt '#{window_panes}')" = 1 ] || die 'transfer requires a single-pane window'
 case "$(opt '#{window_name}')" in dash|plan|backlog) die 'panel windows cannot be transferred' ;; esac
 [ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
 SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
@@ -220,7 +223,7 @@ REMAIN=$(opt '#{remain-on-exit}')
 cleanup() {
   local rc=$?
   if [ "$SUCCESS" != 1 ]; then
-    python3 "$HELPER" state "$BUNDLE" failed 'Inspect the pane; resume-source.sh is for manual recovery only after Codex is stopped.' >/dev/null 2>&1 || :
+    python3 "$HELPER" state "$BUNDLE" failed "${FAILURE:-Transfer interrupted; inspect the retained pane before recovery.}" >/dev/null 2>&1 || :
     printf 'fleet-transfer: transfer incomplete; handoff preserved at %s\n' "$BUNDLE" >&2
     printf 'After confirming no Codex is writing, source recovery: bash %q\n' "$BUNDLE/resume-source.sh" >&2
   fi
@@ -269,7 +272,14 @@ case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be 
 EXIT_SENT=1
 SK Escape || die 'cannot address source prompt'
 SK C-u || die 'cannot clear source prompt'
-SK -l '/exit' || die 'cannot type source exit'
+if [ "$SOURCE_AGENT" = codex ]; then
+  # Codex's unbracketed paste detector can absorb a fast following Enter as a
+  # newline, leaving /exit UNSUBMITTED in the composer. Explicit paste framing
+  # ends that burst before Enter; no timing guess or second submission needed.
+  SK -l $'\033[200~/exit\033[201~' || die 'cannot paste Codex source exit'
+else
+  SK -l '/exit' || die 'cannot type source exit'
+fi
 SK Enter || die 'cannot submit source exit'
 EXIT_CONFIRMED=0
 for ((i=0; i<EXIT_WAIT; i++)); do
@@ -289,7 +299,10 @@ for ((i=0; i<EXIT_WAIT; i++)); do
   fi
   sleep 1
 done
-kill -0 "$PID" 2>/dev/null && die 'source did not exit; no replacement Codex was launched'
+if kill -0 "$PID" 2>/dev/null; then
+  TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-exit-timeout.txt" 2>/dev/null || :
+  die "source did not exit; no replacement $TO was launched"
+fi
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
 fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'

@@ -35,13 +35,34 @@ def state(request, status, detail=""):
     save(request / "state.json", {"state": status, "detail": detail})
 
 
-def release(r, request):
+def same_codex_source(r):
+    if r.get('source_agent') != 'codex':
+        return False
+    try:
+        identity = json.loads(option(r, '@codex_identity') or '{}')
+        os.kill(r['pid'], 0)
+        return (option(r, 'window_id') == r['window']
+                and option(r, '@cc_agent') == 'codex'
+                and option(r, '@cc_launcher_pid') == str(r['pid'])
+                and isinstance(identity, dict)
+                and identity.get('session_id') == r['sid']
+                and identity.get('owner') == str(r['pid']))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def release(r, request, retry_source=False):
     # Never clear another controller's marker, even if this window was reused.
     try:
         if option(r, "@agent_transfer_request") == str(request):
+            # A failed cycle leaves the OLD context alive. Release its nudge
+            # latch so the next real Stop may try again. Never unlatch a new
+            # launcher/thread, even if it reused this window during the wait.
+            if retry_source and same_codex_source(r):
+                tm(r['session'], 'set-option', '-wu', '-t', r['window'], '@handoff_armed')
             for key in ("@agent_transfer_ready", "@agent_transfer_pending_until", "@agent_transfer_request"):
                 tm(r["session"], "set-option", "-wu", "-t", r["window"], key)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     lock = Path(r["lock"])
     if (lock / "request").exists() and (lock / "request").read_text() == str(request):
@@ -109,6 +130,7 @@ def arm(a):
 def wait(request):
     r = json.loads((request / "request.json").read_text())
     (Path(r["lock"]) / "pid").write_text(str(os.getpid()))
+    succeeded = False
     try:
         # Wall time is in the durable request; monotonic time also bounds the loop
         # if the wall clock moves backwards after launch.
@@ -121,10 +143,7 @@ def wait(request):
                 raise ValueError("source pane or worktree changed")
             os.kill(r["pid"], 0)
             if r.get('source_agent', 'claude') == 'codex':
-                identity = json.loads(option(r, '@codex_identity') or '{}')
-                if (option(r, '@cc_agent') != 'codex' or identity.get('session_id') != r['sid']
-                        or identity.get('owner') != str(r['pid'])
-                        or option(r, '@cc_launcher_pid') != str(r['pid'])):
+                if not same_codex_source(r):
                     raise ValueError('Codex source session changed after arming')
             elif json.loads(Path(r["registry"]).read_text()).get("sessionId") != r["sid"]:
                 raise ValueError("source session changed after arming")
@@ -164,6 +183,7 @@ def wait(request):
         subprocess.run(cmd, env=env, check=True, timeout=180)
         manifest = option(r, "@handoff_manifest")
         state(request, "started", manifest)
+        succeeded = True
         tm(r["session"], "display-message", "-t", r["pane"], "Codex handoff started: " + manifest)
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as error:
@@ -175,7 +195,7 @@ def wait(request):
             pass
         return 1
     finally:
-        release(r, request)
+        release(r, request, retry_source=not succeeded)
 
 
 def main():
