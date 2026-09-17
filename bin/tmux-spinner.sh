@@ -239,6 +239,14 @@ EOF
 # under the pane" is not weak evidence about what is open — it is proof that nothing
 # can be.
 #
+# A `blocked` subtype (issue #704) gets NO dwell at all — it is never `idle`. It is
+# the worker's own declaration (`set-claude-state.sh blocked`, the charter's
+# `⛔ blocked` rail), and "nothing pending in the transcript" is precisely what a
+# blocked worker looks like: it commented, stamped, reported and stopped. An empty
+# transcript refutes an `ask`, dates a classifier's guess, and says nothing about a
+# blocked. What clears it is the hook, on the next prompt — or `dead`, which is the
+# one verdict here that proves the declaration has no one left to make it.
+#
 # GRACE ON BOTH AXES. A stamp younger than one window is still settling (PreToolUse
 # stamps `ask` a beat before the transcript line lands), and the same verdict must
 # repeat across two consecutive checks before anything is written — the 2-strike
@@ -329,12 +337,13 @@ needs_check() {
   left="$NEEDS_BUDGET"
   touched=0
   ncand=0 nstarved=0   # trace counters (issue #675) — three ints, no forks
+  needs_fmt='#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0} #{?@cc_agent,#{@cc_agent},claude}'
   for sock in $SOCKETS; do
     [ "$left" -gt 0 ] || break
     # Own scan, like stuck_check's: window_id (the write target, stable across
     # re-slotting) plus the three stamps the verdict needs. '-'/'0' placeholders keep
     # the fields parsing when an option is empty (issue #105).
-    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0} #{?@cc_agent,#{@cc_agent},claude}' 2>/dev/null) || continue
+    wl=$(tmux -L "$sock" list-windows -a -F "$needs_fmt" 2>/dev/null) || continue
     while read -r wid st nsub ts agent; do
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
@@ -349,6 +358,7 @@ needs_check() {
         3) verdict=dead ;;                                # no Claude under the pane
         1) case "$nsub" in                                # read the transcript: nothing open
              ask|perm) verdict=idle ;;                    # transcript-defined ⇒ refuted outright
+             blocked) : ;;                                # worker-declared (#704): silence is its normal state
              *) if [ $(( nows - ts )) -ge "$NEEDS_PLAIN_SECS" ]; then verdict=idle; fi ;;
            esac ;;                                        # …a screen verdict serves its dwell first
         0) case "$nsub" in                                # something IS open — is it what we said?
@@ -364,6 +374,10 @@ needs_check() {
         *"|$skey|"*) : ;;                                 # same reading twice -> act
         *) new="$new$skey|"; continue ;;                  # 1st strike -> arm for next check
       esac
+      # The transcript probe is slow enough for a worker to stamp `blocked` (or a
+      # prompt to resume it) after our scan. A verdict about the OLD stamp cannot
+      # overwrite that event, even if it agrees with the previous pass (#704).
+      [ "$(tmux -L "$sock" display-message -p -t "$wid" "$needs_fmt" 2>/dev/null)" = "$wid $st $nsub $ts $agent" ] || continue
       case "$verdict" in
         dead)
           tmux -L "$sock" set-window-option -t "$wid" @claude_state '' 2>/dev/null
@@ -516,12 +530,14 @@ while :; do
         # wants: `?` is an AskUserQuestion — answerable from the dash (⌃k) without
         # leaving your seat — while `⊘` is a permission prompt, which by design only
         # a human may approve, so that tab is telling you to go there yourself. `!`
-        # stays the undifferentiated case. Every glyph is ONE cell wide + a pad, like
+        # stays the undifferentiated case; `blocked` is the worker's declaration.
+        # Every glyph is ONE cell wide + a pad, like
         # the states around it; a 2-cell emoji here would shift the whole tab strip.
         needs)   case "$nsub" in
-                   ask)  glyph="? " ;;
-                   perm) glyph="⊘ " ;;
-                   *)    glyph="! " ;;
+                   ask)     glyph="? " ;;
+                   perm)    glyph="⊘ " ;;
+                   blocked) glyph="⊠ " ;;   # the worker said `⛔ blocked` (#704): read the issue
+                   *)       glyph="! " ;;
                  esac
                  sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;  # urgent = red FONT (no block)
         *)       glyph="  ";      sfg="$NAME_IDLE"; nfg="$NAME_IDLE";    wst="fg=#565f89" ;;

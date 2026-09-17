@@ -424,6 +424,35 @@ sleep 4
 CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = needs ] \
   || fail "FLEET_NEEDS_RECONCILE_SECS=0 must disable the reconcile entirely" "state=$(st w-stale)"
 
+# ---------------------------------------------------------------------------
+# PART D — worker-declared blockers do not expire with the transcript (#704).
+# Separate from PART B's real-time assertion: drive two passes by count, after
+# retiring the old fixtures so the candidate budget cannot starve the new ones.
+# ---------------------------------------------------------------------------
+kill "$SPIN_PID" 2>/dev/null
+wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
+while read -r wid; do
+  tf set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+done < <(tf list-windows -F '#{window_id}')
+rm -f "$STRIKE_F"
+mkwin w-blocked     yes needs blocked "$OLD" Bash answered
+mkwin w-block-pnd   yes needs blocked "$OLD" Bash
+mkwin w-block-unreg yes needs blocked "$OLD"
+mkwin w-block-dead  no  needs blocked "$OLD"
+mkwin w-block-codex no  needs blocked "$OLD"
+tf set-window-option -t w-block-codex @cc_agent codex
+FLEET_NEEDS_PLAIN_SECS=1 one_pass
+CHECKS=$((CHECKS+1)); [ "$(st w-block-dead)" = needs ] \
+  || fail "dead blocked pane still gets the first-strike grace" "state=$(st w-block-dead)"
+FLEET_NEEDS_PLAIN_SECS=1 one_pass
+for w in w-blocked w-block-pnd w-block-unreg w-block-codex; do
+  got=$(tf display-message -p -t "$w" '#{@claude_state}/#{@claude_needs}/#{@claude_state_ts}')
+  CHECKS=$((CHECKS+1)); [ "$got" = "needs/blocked/$OLD" ] \
+    || fail "$w must preserve the declaration and its age beyond the plain-needs dwell" "$got"
+done
+CHECKS=$((CHECKS+1)); [ -z "$(st w-block-dead)" ] && [ -z "$(sb w-block-dead)" ] \
+  || fail "a dead Claude pane clears blocked after two agreeing checks" "state=$(st w-block-dead) needs=$(sb w-block-dead)"
+
 printf '%s checks\n' "$CHECKS"
 [ "$FAIL" = 0 ] || exit 1
 printf 'needs-reconcile-selftest: OK\n'

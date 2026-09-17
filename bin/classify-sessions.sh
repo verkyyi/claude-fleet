@@ -78,6 +78,12 @@ classify_one() {
     done|needs|looping) : ;;   # quiet/ambiguous -> candidate
     *) return 0 ;;             # working / empty -> skip (free)
   esac
+  # A worker-declared `blocked` (issue #704) is not ambiguous: the worker wrote it
+  # down, in so many words, and the screen it stops on is the ordinary post-turn
+  # recap this rubric reads as STOPPED — so classifying it would wipe the red at the
+  # very Stop the charter told the worker to make. Hook-declared outranks
+  # screen-inferred; only a new prompt (UserPromptSubmit) or a dead pane clears it.
+  [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
 
   # stable key for lock + hash: prefer the window id (survives re-slotting).
   wid=$(TM display-message -p -t "$target" '#{window_id}' 2>/dev/null)
@@ -114,6 +120,9 @@ classify_one() {
       "$(date +%H:%M:%S)" "$target" "$crc" >> "$LOG"
     return 0
   fi
+  # The helper may have started BEFORE the worker declared its blocker. Re-check
+  # after the slow call, before either the verdict or its change-hash is committed.
+  [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
   label=$(printf '%s' "$raw" | tr -d '[:space:].' | tr '[:lower:]' '[:upper:]')
   echo "$h" > "$hf"     # rc=0 but unparseable: still "seen" — the model answered, we
                         # just could not use it, and re-asking the SAME screen won't help

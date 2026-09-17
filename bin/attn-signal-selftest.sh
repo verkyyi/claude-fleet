@@ -120,6 +120,7 @@ tf fleetA set-window-option -t fleetA:issue-2 @claude_needs perm
 setst fleetA:issue-3 working    # not needy
 setst fleetB:plan   'done'     # quoted: 'done' is a shell keyword (SC1010)
 setst fleetB:issue-9 needs      # worker → badge
+tf fleetB set-window-option -t fleetB:issue-9 @claude_needs blocked
 setst fleetC:plan   idle
 setst fleetC:backlog needs      # panel → excluded, NOT the badge
 setst fleetC:dash   needs      # panel → excluded, NOT the badge
@@ -171,6 +172,8 @@ spin() { tf "$1" display-message -p -t "$2" "#{$3}" 2>/dev/null; }
 [ "$(spin fleetA fleetA:issue-1 @spin)" = '? ' ]   || fail "issue-1 (@claude_needs=ask) must show '? ', got '$(spin fleetA fleetA:issue-1 @spin)'"
 [ "$(spin fleetA fleetA:issue-2 @spin)" = '⊘ ' ]   || fail "issue-2 (@claude_needs=perm) must show '⊘ ', got '$(spin fleetA fleetA:issue-2 @spin)'"
 [ "$(spin fleetA fleetA:plan @spin)" = '! ' ]   || fail "a needy window with no subtype must keep '! ', got '$(spin fleetA fleetA:plan @spin)'"
+[ "$(spin fleetB fleetB:issue-9 @spin)" = '⊠ ' ] || fail "a worker-declared blocker must show '⊠ ', got '$(spin fleetB fleetB:issue-9 @spin)'"
+[ "$(spin fleetB fleetB:issue-9 @sfg)" = "$(spin fleetA fleetA:plan @sfg)" ] || fail "blocked must keep the ordinary needs colour"
 # The subtype changes the glyph and NOTHING else: same red font, and all three still
 # counted in the badge above (fleetA = 3).
 for w in fleetA:issue-1 fleetA:issue-2 fleetA:plan; do
