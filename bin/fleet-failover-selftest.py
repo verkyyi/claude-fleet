@@ -167,6 +167,14 @@ class Failover(unittest.TestCase):
         self.assertTrue(flow.quota_error(dict(status={'type':'idle'},turns=[dict(status='failed',error={'codexErrorInfo':'usageLimitExceeded'})])))
         self.assertFalse(flow.quota_error(dict(status={'type':'active','activeFlags':['waitingOnApproval']},turns=[dict(status='failed',error={'codexErrorInfo':'usageLimitExceeded'})])))
 
+    def test_recovered_inspection_clears_stale_unsupported_status(self):
+        path=flow.root()/'unsupported-test-2.json';flow.save(path,{'state':'unsupported'})
+        with patch.object(flow,'tm',return_value='@2|worker'), patch.object(flow,'inspect',return_value=self.source), patch.object(flow,'opt',return_value=''), patch.object(flow,'source_account',return_value=self.account), patch.dict(flow.ACCOUNT,inventory=lambda:self.data), patch.object(flow,'reconcile_one'):
+            flow.reconcile_windows('test',True)
+            self.assertTrue(path.exists())
+            flow.reconcile_windows('test',False)
+            self.assertFalse(path.exists())
+
 
 class Drafts(unittest.TestCase):
     def test_waiting_loop_and_unsent_draft_survive_another_handoff(self):
