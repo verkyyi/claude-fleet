@@ -1346,6 +1346,22 @@ fleet_rotate_lease_take() {   # $1=worktree dir  [$2=note]  [$3=ttl seconds]
   return 0
 }
 
+# Transition exclusion is distinct from the janitor's TTL lease. All movers use
+# transfer's atomic mkdir; a crashed owner is left for inspection, never guessed.
+fleet_transition_lock_take() {
+  local lock
+  lock="$(fleet_rotate_lease_file "$1").transfer-lock" || return 1
+  mkdir "$lock" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$lock/pid"
+}
+fleet_transition_lock_drop() {
+  local lock
+  lock="$(fleet_rotate_lease_file "$1").transfer-lock" || return 1
+  [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ] || return 0
+  [ ! -e "$lock/request" ] || return 0
+  rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || :
+}
+
 fleet_rotate_lease_drop() {   # $1=worktree dir
   local f; f="$(fleet_rotate_lease_file "${1:-}")" || return 1
   rm -f "$f" 2>/dev/null

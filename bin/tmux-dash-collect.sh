@@ -938,7 +938,9 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
     # fleet_bg, not a hand-rolled `run-shell -b` (#575): migrate's say() report is
     # stdout, which run-shell would overlay on the operator's window (Esc to
     # dismiss) — fleet_bg silences it; the status-line --toast is unchanged.
-    if [ "$rc" -eq 10 ]; then
+    if ( fleet_load_conf "$sock"; [ "${FLEET_FAILOVER:-0}" = 1 ] ); then
+      fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' reconcile --session '$sock'"
+    elif [ "$rc" -eq 10 ]; then
       fleet_bg -L "$sock" "bash '$BIN/fleet-account.sh' migrate --limited --session '$sock' --toast"
       if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
         $FLEET_NOTIFY_CMD "# subscription limit reached

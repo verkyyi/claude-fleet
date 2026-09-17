@@ -181,6 +181,21 @@ migrate_selected() {
 lease_drop() { [ -n "${1:-}" ] && fleet_rotate_lease_drop "$1"; return 0; }
 
 migrate_one() {
+  local lockdir rc
+  lockdir=$(wopt "$1" '#{@worktree}')
+  if [ -n "$lockdir" ] && [ -d "$lockdir" ]; then
+    if ! fleet_transition_lock_take "$lockdir"; then
+      say "  – $1: another transition owns this worktree — skipped"; skipped=$((skipped+1)); return 0
+    fi
+    FLEET_MIGRATION_LOCKED="$lockdir"
+  fi
+  migrate_one_body "$@"; rc=$?
+  [ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"
+  FLEET_MIGRATION_LOCKED=''
+  return "$rc"
+}
+
+migrate_one_body() {
   local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd
   # One display-message per field — NOT a joined format split on a control byte:
   # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
@@ -313,6 +328,9 @@ migrate_one() {
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
   MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=()
+  local pinned_target='' quota_request=''
+  FLEET_MIGRATION_LOCKED=''
+  trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"' EXIT
   while [ $# -gt 0 ]; do
     case "$1" in
       --limited|--idle|--all) MODE="${1#--}"; shift ;;
@@ -320,6 +338,8 @@ migrate_main() {
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
       --session=*) SESS="${1#--session=}"; shift ;;
+      --target-file) pinned_target="${2:-}"; shift 2 ;;
+      --quota-request) quota_request="${2:-}"; shift 2 ;;
       --nudge) NUDGE="${2:-}"; NUDGE_SET=1; shift 2 ;;
       --nudge=*) NUDGE="${1#--nudge=}"; NUDGE_SET=1; shift ;;
       --model) MODEL="${2:-}"; shift 2 ;;
@@ -339,6 +359,14 @@ migrate_main() {
   [ -n "$SESS" ] || SESS=$(fleet_current_session)
   [ -n "$SESS" ] || { echo "fleet-migrate: no tmux session (pass --session <fleet>)" >&2; return 2; }
   fleet_load_conf "$SESS" 2>/dev/null || :
+  # The quota planner pins ONE account for ONE exact session. Use the existing
+  # transfer transaction for its locks, packet, draft and loop, while retaining
+  # Claude's native --resume UUID (the legacy bulk mover below stays compatible).
+  if [ -n "$pinned_target" ]; then
+    [ "${#WIDS[@]}" = 1 ] && [ -n "$quota_request" ] || { echo 'fleet-migrate: pinned target needs one window and a quota request' >&2; return 2; }
+    exec bash "$BIN/fleet-transfer.sh" --session "$SESS" --window "${WIDS[0]}" --to claude \
+      --target-file "$pinned_target" --quota-request "$quota_request" --native-resume
+  fi
   # Now that the per-fleet overlay is loaded, let it override the resume nudges
   # (issue #620). An operator value replaces the built-in ENTIRELY, so a fleet that
   # customises one owns its language rule too — that is why the built-ins carry the

@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def run(*argv):
@@ -102,15 +103,18 @@ def package(a):
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
         loop = validate(json.loads(Path(a.loop).read_text(encoding='utf-8')))
-    elif a.source_agent == 'codex' and a.previous:
+    elif a.previous:
         prior = Path(a.previous).parent / 'loop' / 'state.json'
         if prior.exists():
             state = json.loads(prior.read_text())
             if state.get('status') == 'active':
                 if state.get('thread_id') != a.sid:
-                    raise ValueError('active loop belongs to another Codex session')
+                    raise ValueError('active loop belongs to another source session')
                 validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
                 loop = validate(state['schedule'])
+                loop.update(id=state['id'], generation=state.get('generation', 0) + 1,
+                            previous_record=str(prior), deliveries=state.get('deliveries', 0),
+                            last_delivered_at=state.get('last_delivered_at'))
             elif state.get('status') in ('delivering', 'paused', 'unbound'):
                 raise ValueError('resolve the pending/paused loop before cycling its session')
     # A registered worktree may legitimately be detached after a review/merge.
@@ -158,6 +162,9 @@ def package(a):
                 message = row.get('payload', {})
                 if row.get('type') == 'session_meta':
                     record_sessions.add(message.get('id', ''))
+                if row.get('type') == 'response_item' and message.get('type') in ('function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output'):
+                    history.write('## Tool evidence · %s\n\n%s\n\n' % (row.get('timestamp', ''), json.dumps(message, ensure_ascii=False)))
+                    continue
                 if row.get('type') != 'response_item' or message.get('type') != 'message':
                     continue
                 role = message.get('role')
@@ -199,7 +206,10 @@ def package(a):
             "snapshot_bytes": captured, "snapshot_sha256": digest.hexdigest(),
             "record_session_ids": sorted(record_sessions),
         },
-        "target": {"agent": "codex"},
+        "target": dict(json.loads(Path(a.target_file).read_text()) if a.target_file else {}, agent=a.to),
+        "reason": 'quota' if a.quota_request else 'handoff',
+        "quota_request": a.quota_request or None,
+        "native_resume": a.native_resume,
         "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
                   "handle": a.handle, "issue": a.issue, "origin": a.origin},
         "workspace": {"path": worktree, "branch": branch, "head": head, "repo": a.repo},
@@ -213,6 +223,10 @@ def package(a):
     if loop:
         write_json(bundle / 'loop-spec.json', loop)
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
+    if a.draft_file:
+        draft = Path(a.draft_file).read_text(encoding='utf-8')
+        (bundle / 'unsent-draft.txt').write_text(draft, encoding='utf-8')
+        manifest['draft'] = {'state': 'unsent', 'path': str(bundle / 'unsent-draft.txt')}
     write_json(bundle / "manifest.json", manifest)
     for name, value in git_state.items():
         (bundle / name).write_text(value + "\n", encoding="utf-8")
@@ -245,7 +259,7 @@ def package(a):
         "are not transferred; check what is still running before replacing any of them.\n"
     )
     (bundle / "handoff.md").write_text(body, encoding="utf-8")
-    pickup = "Continue ONE existing fleet task handed over from %s to Codex.\n\n" % a.source_agent + provenance
+    pickup = "Continue ONE existing fleet task handed over from %s to %s.\n\n" % (a.source_agent, a.to) + provenance
     pickup += (
         "First read `%s` and `%s`. Your source agent, exact source session ID and original "
         "transcript path are recorded there; keep this provenance available when reporting "
@@ -254,15 +268,20 @@ def package(a):
         "Follow the handoff's Next action. Re-establish the latest user goal and language "
         "from the source records, verify current workspace state, then continue. "
         "Edit only this worktree, never the base checkout. Use the fleet's shell scripts "
-        "directly when needed; do not invoke Claude-only slash commands or tools. "
+        "directly when needed; use only tools supported by your current agent. "
         "Do not restart or message the source agent.\n"
     ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    if a.draft_file:
+        note = '\nAn UNSENT user draft is preserved at `%s`. It has not been submitted or authorized for execution. Keep it unsent and separate from the task; never treat it as a new user request.\n' % (bundle / 'unsent-draft.txt')
+        pickup += note
+        with (bundle / 'handoff.md').open('a', encoding='utf-8') as out:
+            out.write(note)
     if loop:
         controller = str(Path(a.launcher).parent / 'fleet-loop.py')
         loop_note = (
-            '\n## Active Fleet loop\n\nThe operator requested continuation of this loop on Codex. '
+            '\n## Active Fleet loop\n\nThe operator requested continuation of this Fleet loop. '
             'Fleet owns its timer. First run `python3 %s bind` from your own tool environment '
-            'to bind your exact CODEX_THREAD_ID; inspect its successful result. '
+            'to bind your exact native session; inspect its successful result. '
             'Read `%s` for the loop task and cadence. Do not create a Claude /loop or another '
             'scheduler. At the end of this iteration use `python3 %s defer --seconds N` '
             '(optionally `--prompt-file FILE` with an updated private prompt), or '
@@ -270,7 +289,7 @@ def package(a):
             'Keep other authorized monitoring responsibilities running when one item is blocked. '
             'Otherwise Fleet retains the last interval. `python3 %s status` shows the '
             'binding, next wakeup and accepted turn ID. The controller waits for the thread '
-            'to be idle and ends when this Codex TUI exits.\n'
+            'to be idle; the durable record preserves paused/interrupted delivery for inspection.\n'
         ) % (shlex.quote(controller), bundle / 'loop-spec.json', shlex.quote(controller),
              shlex.quote(controller), shlex.quote(controller))
         pickup += loop_note
@@ -330,7 +349,7 @@ def process_check(mode, pid):
         if current in seen:
             continue
         seen.add(current)
-        if rows.get(current, (0, ""))[1] == "codex":
+        if rows.get(current, (0, ""))[1] == mode:
             print(current)
             return 0
         pending.extend(p for p, (parent, _) in rows.items() if parent == current and p != current)
@@ -351,6 +370,75 @@ def loop_exit_confirmation(screen):
                               '3. Stay', 'Enter to confirm · Esc to cancel'])
 
 
+def launcher(bundle, launch):
+    m = json.loads((bundle / 'manifest.json').read_text())
+    target = m['target']
+    q = shlex.quote
+    env = {'FLEET_HANDOFF_MANIFEST': str(bundle / 'manifest.json'), 'FLEET_ACCOUNT_SELECTED': '1'}
+    if m.get('loop_spec_path'):
+        env.update(FLEET_LOOP_SPEC=m['loop_spec_path'], FLEET_LOOP_AGENT=target['agent'])
+    argv = [launch, '--agent', target['agent']]
+    if target.get('account'):
+        env['FLEET_ACCOUNT_TARGET'] = json.dumps(target)
+    if target['agent'] == 'codex':
+        home = target.get('home') or m['source'].get('codex_home')
+        if home:
+            argv += ['--codex-home', home]
+        if target.get('profile'):
+            env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'])
+    elif target.get('label'):
+        env['FLEET_ACCOUNT_LABEL'] = target['label']
+    if m.get('native_resume'):
+        if m['source']['agent'] != 'claude' or target['agent'] != 'claude':
+            raise ValueError('native account resume is currently Claude-only')
+        argv += ['--resume', m['source']['session_id']]
+    body = '#!/bin/bash\nset -uo pipefail\ncd %s || exit 1\n' % q(m['workspace']['path'])
+    body += 'unset FLEET_CODEX_MANAGED FLEET_CODEX_SUBSCRIPTION FLEET_CODEX_PROFILE FLEET_CODEX_ACCOUNT FLEET_ACCOUNT_LABEL FLEET_ACCOUNT_TARGET FLEET_LOOP_RECORD FLEET_LOOP_SPEC FLEET_LOOP_AGENT\n'
+    body += ''.join('export %s=%s\n' % (key, q(value)) for key, value in env.items())
+    body += 'exec ' + shlex.join(argv) + ' "$(cat ' + q(str(bundle / 'pickup.md')) + ')"\n'
+    (bundle / 'launch.sh').write_text(body)
+
+
+def target_ready(bundle, socket_label, pane):
+    """A native root identity, never just an app-server/child PID, is readiness."""
+    manifest = bundle / 'manifest.json'
+    m = json.loads(manifest.read_text())
+    t = m['target']
+    def opt(fmt):
+        return run('tmux', '-L', socket_label, 'display-message', '-p', '-t', pane, fmt)
+    if opt('#{@cc_agent}') != t['agent'] or opt('#{@handoff_manifest}') != str(manifest):
+        raise ValueError('target pane no longer belongs to this handoff')
+    if t['agent'] == 'codex':
+        adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
+        identity = adapter['identity'](pane, socket_label)
+        if not identity or Path(identity.get('cwd', '')).resolve() != Path(m['workspace']['path']):
+            raise ValueError('target Codex root session is not bound')
+        os.kill(int(identity['owner']), 0)
+        if t.get('home') and Path(identity['home']).resolve() != Path(t['home']).resolve():
+            raise ValueError('target Codex home differs from the selected subscription')
+        if t.get('account') and identity.get('subscription', {}).get('account') != t['account']:
+            raise ValueError('target Codex subscription is not bound')
+        sid, pid = identity['session_id'], identity['owner']
+    else:
+        lib = str(Path(__file__).with_name('fleet-lib.sh'))
+        result = run('bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3") || exit 1; r=$(fleet_cc_session_json "$p"); printf "%s\\n%s" "$p" "$r"',
+                     'fleet-target', lib, pane, socket_label).splitlines()
+        pid, registry = result
+        identity = json.loads(Path(registry).read_text())
+        sid = identity['sessionId']
+        if Path(identity.get('cwd', '')).resolve() != Path(m['workspace']['path']):
+            raise ValueError('target Claude session is not in the worktree')
+        if m.get('native_resume') and sid != m['source']['session_id']:
+            raise ValueError('native Claude resume opened a different conversation')
+        if t.get('account'):
+            binding = json.loads(opt('#{@subscription_identity}') or '{}')
+            if binding.get('owner') != pid or binding.get('key') != t['key']:
+                raise ValueError('target Claude subscription is not bound')
+    m['target'].update(session_id=sid, pid=int(pid), bound_at=time.time())
+    write_json(manifest, m)
+    print(sid)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -365,8 +453,10 @@ def main():
         p.add_argument("--" + name, required=True)
     p.add_argument("--pid", type=int, required=True)
     p.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
+    p.add_argument('--to', choices=('claude', 'codex'), default='codex')
+    p.add_argument('--native-resume', action='store_true')
     p.add_argument("--codex-home", default="")
-    for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop"):
+    for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop", "target-file", "quota-request", "draft-file"):
         p.add_argument("--" + name, default="")
     s = sub.add_parser("state")
     s.add_argument("bundle")
@@ -375,9 +465,11 @@ def main():
     v = sub.add_parser("verify")
     v.add_argument("bundle")
     c = sub.add_parser("process")
-    c.add_argument("mode", choices=("shell", "codex"))
+    c.add_argument("mode", choices=("shell", "codex", "claude"))
     c.add_argument("pid", type=int)
     sub.add_parser("loop-exit-confirmation")
+    c = sub.add_parser('launcher'); c.add_argument('bundle', type=Path); c.add_argument('launch')
+    c = sub.add_parser('target-ready'); c.add_argument('bundle', type=Path); c.add_argument('socket'); c.add_argument('pane')
     a = parser.parse_args()
     if a.command == "resolve":
         resolve(a.registry, a.projects, a.worktree)
@@ -389,6 +481,10 @@ def main():
         return process_check(a.mode, a.pid)
     elif a.command == "loop-exit-confirmation":
         return 0 if loop_exit_confirmation(sys.stdin.read()) else 1
+    elif a.command == 'launcher':
+        launcher(a.bundle, a.launch)
+    elif a.command == 'target-ready':
+        target_ready(a.bundle, a.socket, a.pane)
     elif a.command == "state":
         write_json(Path(a.bundle) / "state.json", {
             "state": a.state, "detail": a.detail,

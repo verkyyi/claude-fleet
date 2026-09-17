@@ -55,6 +55,7 @@ CANNED="$WORK/comments.json"
 # ../fleet.conf is absent (env FLEET_REPO wins).
 cp "$SRC" "$WORK/bin/fleet-issue-bridge.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-input.py" "$WORK/bin/fleet-input.py"
 chmod +x "$WORK/bin/fleet-issue-bridge.sh"
 
 # Fake spawn: record revive attempts and expose the same stderr/exit contract.

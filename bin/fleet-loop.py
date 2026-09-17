@@ -10,7 +10,6 @@ or guessed rollout is involved. The controller ends when its TUI exits.
 """
 
 import argparse
-import base64
 from contextlib import contextmanager
 import datetime
 import fcntl
@@ -19,13 +18,12 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import signal
-import socket
-import struct
 import subprocess
 import sys
-import tempfile
 import time
+import uuid
 
 
 def save(path, value):
@@ -63,117 +61,27 @@ def pane(r, fmt):
 
 def current(r):
     f = r['fleet']
-    want = '|'.join([f['session'], f['window_id'], str(r['pane_pid']), 'codex',
+    want = '|'.join([f['session'], f['window_id'], str(r['pane_pid']), r.get('agent','codex'),
                      r['manifest'], r['worktree']])
     got = pane(r, '#{session_name}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|#{@worktree}')
     if got != want or pane(r, '#{pane_dead}') == '1':
         raise ValueError('pane, agent, worktree or handoff identity changed')
     if r.get('thread_id'):
-        identity = json.loads(pane(r, '#{@codex_identity}') or '{}')
-        if identity.get('session_id') != r['thread_id']:
+        sid = (claude_identity(r)['session_id'] if r.get('agent') == 'claude'
+               else json.loads(pane(r, '#{@codex_identity}') or '{}').get('session_id'))
+        if sid != r['thread_id']:
             raise ValueError('the TUI switched to another Codex thread')
+    if r.get('owner_record'):
+        owner = json.loads(Path(r['owner_record']).read_text())
+        if (owner.get('active_record') != r['record_path']
+                or owner.get('active_generation') != r.get('generation',0)):
+            raise ValueError('loop ownership moved to another session')
 
 
-class Rpc:
-    """Bounded WebSocket JSON-RPC over Codex's private Unix control socket.
-
-    Codex 0.154's `app-server proxy` copies raw bytes; it does NOT translate
-    JSONL to WebSocket frames. No network listener or third-party package needed.
-    """
-
+class Rpc(runpy.run_path(str(Path(__file__).with_name('fleet-codex-rpc.py')))['Client']):
+    """Use the same bounded native transport as Fleet's Codex session adapter."""
     def __init__(self, sock):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(10)
-        self.buf = b''
-        self.seq = 0
-        try:
-            self.sock.connect(sock)
-            key = base64.b64encode(os.urandom(16)).decode()
-            self.sock.sendall(('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
-                               'Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n'
-                               'Sec-WebSocket-Key: ' + key + '\r\n\r\n').encode())
-            while b'\r\n\r\n' not in self.buf:
-                chunk = self.sock.recv(4096)
-                if not chunk or len(self.buf) > 16384:
-                    raise RuntimeError('invalid Codex WebSocket handshake')
-                self.buf += chunk
-            header, self.buf = self.buf.split(b'\r\n\r\n', 1)
-            lines = header.decode().split('\r\n')
-            headers = dict(x.lower().split(':', 1) for x in lines[1:] if ':' in x)
-            accept = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
-            # Header names are case-insensitive; the accept value is NOT.
-            received = next((x.split(':', 1)[1].strip() for x in lines[1:]
-                             if x.lower().startswith('sec-websocket-accept:')), '')
-            if ' 101 ' not in lines[0] or received != accept or headers.get('upgrade', '').strip() != 'websocket':
-                raise RuntimeError('Codex WebSocket handshake rejected')
-            self.call('initialize', {'clientInfo': {'name': 'fleet-loop', 'version': '1'}})
-            self.send({'method': 'initialized'})
-        except BaseException:
-            self.close()
-            raise
-
-    def send(self, value):
-        self.frame(1, json.dumps(value).encode())
-
-    def frame(self, opcode, payload):
-        n = len(payload)
-        head = bytes([0x80 | opcode])
-        if n < 126:
-            head += bytes([0x80 | n])
-        elif n < 65536:
-            head += bytes([0x80 | 126]) + struct.pack('!H', n)
-        else:
-            head += bytes([0x80 | 127]) + struct.pack('!Q', n)
-        mask = os.urandom(4)
-        self.sock.sendall(head + mask + bytes(v ^ mask[i % 4] for i, v in enumerate(payload)))
-
-    def take(self, count, deadline):
-        while len(self.buf) < count:
-            self.sock.settimeout(max(0.001, deadline-time.monotonic()))
-            chunk = self.sock.recv(min(65536, count-len(self.buf)))
-            if not chunk:
-                raise RuntimeError('Codex control socket closed')
-            self.buf += chunk
-        out, self.buf = self.buf[:count], self.buf[count:]
-        return out
-
-    def receive(self, deadline):
-        message = b''
-        while time.monotonic() < deadline:
-            a, b = self.take(2, deadline)
-            op, size = a & 15, b & 127
-            if b & 128 or a & 0x70:
-                raise RuntimeError('unexpected Codex WebSocket frame')
-            if size == 126: size = struct.unpack('!H', self.take(2, deadline))[0]
-            elif size == 127: size = struct.unpack('!Q', self.take(8, deadline))[0]
-            if size + len(message) > 4 * 1024 * 1024:
-                raise RuntimeError('Codex control response too large')
-            payload = self.take(size, deadline)
-            if op == 8: raise RuntimeError('Codex closed the WebSocket')
-            if op == 9:
-                self.frame(10, payload)
-                continue
-            if op == 10: continue
-            if op not in (0, 1): raise RuntimeError('expected Codex JSON text frame')
-            message += payload
-            if a & 0x80: return json.loads(message)
-        raise TimeoutError('Codex control response timed out')
-
-    def call(self, method, params):
-        self.seq += 1
-        self.send({'id': self.seq, 'method': method, 'params': params})
-        end = time.monotonic() + 10
-        while time.monotonic() < end:
-            obj = self.receive(end)
-            if obj.get('id') != self.seq:
-                continue
-            if 'error' in obj:
-                raise RuntimeError(str(obj['error']))
-            return obj['result']
-        raise TimeoutError('Codex control request timed out: ' + method)
-
-    def close(self):
-        self.sock.close()
+        super().__init__('unix://' + str(sock), timeout=10)
 
     def __enter__(self):
         return self
@@ -191,6 +99,10 @@ def locked(path, nonblocking=False):
 
 def record_path():
     value = os.environ.get('FLEET_LOOP_RECORD', '')
+    if not value and os.environ.get('TMUX_PANE'):
+        manifest = subprocess.check_output(['tmux','display-message','-p','-t',os.environ['TMUX_PANE'], '#{@handoff_manifest}'],timeout=5,text=True).strip()
+        if manifest:
+            value = str(Path(manifest).parent / 'loop/state.json')
     if not value:
         raise ValueError('run this command inside the transferred loop session')
     return Path(value)
@@ -212,7 +124,7 @@ def command(a):
             print(json.dumps(r, ensure_ascii=False, indent=2))
             return
         current(r)
-        sid = os.environ.get('CODEX_THREAD_ID', '')
+        sid = claude_identity(r)['session_id'] if r.get('agent') == 'claude' else os.environ.get('CODEX_THREAD_ID', '')
         if not re.fullmatch(r'[0-9a-fA-F-]{36}', sid):
             raise ValueError('CODEX_THREAD_ID is required; never guess the latest rollout')
         if r.get('thread_id') and r['thread_id'] != sid:
@@ -221,14 +133,18 @@ def command(a):
             raise ValueError('bind the owning thread before changing its loop')
         if a.command == 'bind':
             r['thread_id'] = sid
-            with Rpc(r['socket']) as rpc:
-                thread(r, rpc)
+            if r.get('agent') != 'claude':
+                with Rpc(r['socket']) as rpc:
+                    thread(r, rpc)
             if r['status'] == 'unbound':
                 r['status'] = 'active'
             elif r['status'] != 'active':
                 raise ValueError('stopped/paused loop needs explicit operator recovery')
-            tm(r, 'set-option', '-w', '-t', r['fleet']['window_id'], '@codex_thread_id', sid)
+            if r.get('agent') != 'claude':
+                tm(r, 'set-option', '-w', '-t', r['fleet']['window_id'], '@codex_thread_id', sid)
         elif a.command == 'defer':
+            if r.get('agent') == 'claude' and r['status'] == 'delivering':
+                acknowledge_claude(r)
             if r['status'] != 'active':
                 raise ValueError('loop is not active; bind it first')
             update = dict(r['schedule'], interval_seconds=a.seconds,
@@ -249,6 +165,12 @@ def dispatch(path, now=None):
     now = time.time() if now is None else now
     try:
         with locked(path, nonblocking=True) as r:
+            if r.get('agent') == 'claude' and r['status'] == 'delivering':
+                current(r)
+                if not acknowledge_claude(r) and now-r.get('delivery_started_at',now) > 30:
+                    r.update(status='paused',detail='Claude inbox write has no transcript acknowledgement; not resending')
+                save(path,r)
+                return
             if r['status'] != 'active' or now < r['schedule']['next_run_at']:
                 return
             try:
@@ -256,12 +178,23 @@ def dispatch(path, now=None):
                 # Wait behind a real turn, an operator dialog, or recent typing.
                 if (pane(r, '#{@claude_state}') != 'done'
                         or pane(r, '#{@agent_transfer_request}')
+                        or pane(r, '#{@quota_failover}')
+                        or int(pane(r, '#{@agent_transfer_until}') or 0) > now
                         or pane(r, '#{@handoff_armed}') == '1'):
                     return
                 for line in tm(r, 'list-clients', '-F', '#{client_activity}|#{window_id}').splitlines():
                     activity, win = line.split('|', 1)
                     if win == r['fleet']['window_id'] and now - int(activity) <= 30:
                         return
+                # The same cursor/faint reader as issue relay; preserve unsent
+                # drafts even after its operator-activity deferral has expired.
+                if r.get('agent') or r.get('generation') is not None:
+                    view = runpy.run_path(str(Path(__file__).with_name('fleet-input.py')))['snapshot'](r['fleet']['session'],r['fleet']['pane_id'])
+                    if view['state'] != 'empty':
+                        return
+                if r.get('agent') == 'claude':
+                    deliver_claude(path,r,now)
+                    return
                 with Rpc(r['socket']) as rpc:
                     t = thread(r, rpc)
                     if t['status']['type'] == 'active':
@@ -298,6 +231,104 @@ def dispatch(path, now=None):
         pass
 
 
+def claude_identity(r):
+    pid = r.get('native_pid')
+    if not pid:
+        raise ValueError('Claude loop has no registered owner process')
+    os.kill(int(pid),0)
+    lib = str(Path(__file__).with_name('fleet-lib.sh'))
+    registry = subprocess.check_output(['bash','-c','. "$1"; fleet_cc_session_json "$2"',
+                                       'fleet-loop',lib,str(pid)],timeout=5,text=True).strip()
+    data = json.loads(Path(registry).read_text())
+    if Path(data.get('cwd','')).resolve() != Path(r['worktree']).resolve():
+        raise ValueError('Claude loop owner changed its worktree')
+    return {'session_id':data['sessionId'],'registry':registry}
+
+
+def claude_transcript(r):
+    sid = claude_identity(r)['session_id']
+    projects = Path(os.environ.get('FLEET_CC_PROJECTS_DIR',os.environ.get('CLAUDE_PROJECTS_DIR',str(Path.home()/'.claude/projects'))))
+    matches = list(projects.glob('*/'+sid+'.jsonl'))
+    if len(matches) != 1:
+        raise ValueError('exact Claude loop transcript is unavailable')
+    return matches[0]
+
+
+def acknowledge_claude(r):
+    path = claude_transcript(r)
+    with path.open('rb') as stream:
+        stream.seek(r['delivery_offset'])
+        for line in stream.read(1024*1024).splitlines():
+            try: row = json.loads(line)
+            except ValueError: continue
+            if (row.get('type') == 'user' and not row.get('isSidechain')
+                    and r['delivery_id'] in json.dumps(row.get('message',{}),ensure_ascii=False)):
+                r.update(status='active',last_turn_id=row.get('uuid'),last_delivered_at=r['delivery_started_at'],
+                         deliveries=r.get('deliveries',0)+1,detail='Claude inbox message acknowledged in its exact transcript')
+                r['schedule']['next_run_at']=r['delivery_started_at']+r['schedule']['interval_seconds']
+                return True
+    return False
+
+
+def deliver_claude(path,r,now):
+    transcript = claude_transcript(r)
+    r.update(status='delivering',delivery_id='fleet-loop:'+r['id']+':'+str(uuid.uuid4()),
+             delivery_started_at=now,delivery_offset=transcript.stat().st_size,
+             detail='Claude inbox delivery awaiting transcript acknowledgement')
+    save(path,r)  # Persist before the frame write; a timeout is never a retry.
+    script=str(Path(__file__).absolute())
+    prompt=(r['schedule']['prompt']+'\n\n['+r['delivery_id']+']\nContinue in the conversation language. '
+            'At the end use python3 '+script+' defer --seconds N, or stop when the task is complete/cancelled '
+            'or all remaining work needs a human decision. Fleet owns this timer; do not create another /loop. '
+            'Do not submit saved drafts, repeat completed actions or override pending approvals.')
+    subprocess.run(['bash',str(Path(__file__).with_name('fleet-peer-send.sh')),'-L',r['fleet']['session'],
+                    r['fleet']['pane_id'],'-'],input=prompt,text=True,stdout=subprocess.DEVNULL,
+                   stderr=subprocess.PIPE,timeout=10,check=True)
+
+
+def claim_owner(path,r,raw):
+    previous=raw.get('previous_record')
+    if previous:
+        old=json.loads(Path(previous).read_text())
+        owner=Path(old.get('owner_record',previous))
+        r.update(owner_record=str(owner),generation=raw['generation'],record_path=str(path))
+        with locked(owner) as record:
+            if (old['id']!=r['id'] or record.get('active_record',previous)!=previous
+                    or record.get('active_generation',old.get('generation',0))+1!=r['generation']):
+                raise ValueError('loop generation was already claimed')
+            record.update(active_record=str(path),active_generation=r['generation'])
+            save(owner,record)
+    else:
+        r.update(owner_record=str(path),record_path=str(path),generation=0,
+                 active_record=str(path),active_generation=0)
+
+
+def claude_bridge(args,path,r,env):
+    child=None
+    try:
+        child=subprocess.Popen(args,env=env)
+        with locked(path) as record:
+            record['native_pid']=child.pid
+            save(path,record)
+        # The token-selected launcher execs this supervisor. Bind its verified
+        # subscription stamp to the actual Claude child used by the registry.
+        if os.environ.get('FLEET_ACCOUNT_TARGET'):
+            binding=json.loads(os.environ['FLEET_ACCOUNT_TARGET']); binding['owner']=str(child.pid)
+            tm(r,'set-option','-w','-t',r['fleet']['window_id'],'@subscription_identity',json.dumps(binding))
+        while child.poll() is None:
+            dispatch(path)
+            time.sleep(1)
+        return child.returncode
+    finally:
+        with locked(path) as final:
+            final.update(status='stopped',detail='Claude TUI/controller ended')
+            save(path,final)
+        if child and child.poll() is None:
+            child.terminate()
+            try: child.wait(timeout=5)
+            except subprocess.TimeoutExpired: child.kill(); child.wait()
+
+
 def bridge(args):
     manifest = Path(os.environ['FLEET_HANDOFF_MANIFEST']).resolve()
     m = json.loads(manifest.read_text())
@@ -309,63 +340,49 @@ def bridge(args):
         pass
     else:
         raise ValueError('source process must have exited before enabling the Codex loop')
-    schedule = spec(json.loads(Path(os.environ['FLEET_LOOP_SPEC']).read_text()))
-    ident = hashlib.sha256(str(manifest).encode()).hexdigest()[:20]
+    raw = json.loads(Path(os.environ['FLEET_LOOP_SPEC']).read_text())
+    schedule = spec(raw)
+    ident = raw.get('id') or hashlib.sha256(str(manifest).encode()).hexdigest()[:20]
     directory = manifest.parent / 'loop'
     directory.mkdir(mode=0o700)  # No accidental restart/duplicate controller.
     path = directory / 'state.json'
-    runtime = Path(tempfile.mkdtemp(prefix='fleet-loop-', dir='/tmp'))
-    sock = runtime / 'api.sock'  # Well below macOS's Unix socket path limit.
+    agent = os.environ.get('FLEET_LOOP_AGENT',m.get('target',{}).get('agent','codex'))
     r = {'schema_version': 1, 'id': ident, 'status': 'unbound', 'manifest': str(manifest),
          'fleet': m['fleet'], 'source': m['source'], 'worktree': m['workspace']['path'],
-         'schedule': schedule, 'socket': str(sock), 'thread_id': None, 'deliveries': 0,
+         'agent': agent, 'schedule': schedule, 'socket': '', 'thread_id': None,
+         'deliveries': raw.get('deliveries',0), 'last_delivered_at':raw.get('last_delivered_at'),
          'controller_pid': os.getpid()}
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))
     current(r)
+    claim_owner(path,r,raw)
     save(path, r)
-    env = dict(os.environ, FLEET_LOOP_RECORD=str(path), FLEET_CODEX_REMOTE='unix://' + str(sock))
+    env = dict(os.environ, FLEET_LOOP_RECORD=str(path))
     env.pop('CODEX_THREAD_ID', None)
     env.pop('CODEX_SESSION_ID', None)
-    overrides = []
-    for i, arg in enumerate(args[:-1]):
-        if arg == '-c':
-            overrides.extend(['-c', args[i+1]])
-    # The app server owns all tools in THIS pane, so it inherits THIS fleet's
-    # TMUX/FLEET environment. It is private, never shared across fleet sockets.
-    server = client = None
-    try:
-        with (directory / 'server.log').open('ab') as log:
-            server = subprocess.Popen(['codex', 'app-server', '--listen', 'unix://' + str(sock), *overrides],
-                                      env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
-        end = time.monotonic() + 15
-        while not sock.exists() and server.poll() is None and time.monotonic() < end:
-            time.sleep(0.1)
-        if not sock.exists():
-            raise RuntimeError('Codex loop server did not start; inspect ' + str(directory / 'server.log'))
-        client = subprocess.Popen(['codex', '--remote', 'unix://' + str(sock), *args], env=env)
-        while client.poll() is None:
-            if server.poll() is not None:
-                raise RuntimeError('Codex loop server exited')
+    if agent == 'claude':
+        env.pop('FLEET_CODEX_REMOTE',None)
+        return claude_bridge(args,path,r,env)
+    # Reuse the existing guarded runtime: SIGKILL of this controller cannot
+    # leak its app-server, and all profile/config flags reach both processes.
+    def ready(remote):
+        with locked(path) as record:
+            record['socket']=remote[7:]
+            save(path,record)
+    last_tick=[0.0]
+    def tick():
+        if time.monotonic()-last_tick[0]>=1:
+            last_tick[0]=time.monotonic()
             dispatch(path)
-            time.sleep(1)
-        return client.returncode
+    os.environ['FLEET_LOOP_RECORD']=str(path)
+    os.environ.pop('CODEX_THREAD_ID',None)
+    os.environ.pop('CODEX_SESSION_ID',None)
+    try:
+        return runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))['run'](args,ready=ready,tick=tick)
     finally:
-        # These are children created here, never another pane/server. The TUI
-        # ending also ends its scheduler and provider runtime.
         with locked(path) as final:
-            final['status'] = 'stopped'
-            final['detail'] = 'Codex TUI/controller ended; no automatic restart'
-            save(path, final)
-        for child in (client, server):
-            if child and child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
-        sock.unlink(missing_ok=True)
-        runtime.rmdir()
+            final['status']='stopped'
+            final['detail']='Codex TUI/controller ended; no automatic replay'
+            save(path,final)
 
 
 def from_claude(a):

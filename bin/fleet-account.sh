@@ -465,11 +465,79 @@ quota_empty_streak() {
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
   [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
-  local rows; rows=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null | quota_parse)
+  local rows raw
+  raw=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null)
+  rows=$(printf '%s' "$raw" | quota_parse)
   mkdir -p "$STATE_DIR"
+  printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
   printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
   now | atomic_write "$STATE_QUOTA_TS"
   quota_empty_streak "$rows"
+}
+
+# Metadata-only adapter for the provider-aware selector. Keep Claude's scores,
+# phase preference, model fallback and benches in their existing policy owner.
+cmd_claude_inventory() {
+  local rows ts fresh=0 l conf uuid used score u5 u7 r5 r7 reset token model_ok until fallback
+  rows=$(quota_rows "$([ "${1:-}" = --refresh ] && printf refresh || :)")
+  ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0)
+  case "$ts" in ''|*[!0-9]*) ts=0;; esac
+  [ "$ts" -le "$(now)" ] && [ $(( $(now) - ts )) -lt "$QUOTA_TTL" ] && fresh=1
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    conf="$ACCT_DIR/$l.conf"; uuid=""
+    [ -f "$conf" ] && uuid=$(sed -n 's/^[[:space:]]*CCQUOTA_ACCOUNT[[:space:]]*=[[:space:]]*//p' "$conf" | head -1 | tr -d '[:space:]"')
+    if [ -z "$uuid" ] && [ -f "$STATE_DIR/account.quota.json" ]; then
+      uuid=$(python3 - "$STATE_DIR/account.quota.json" "$l" <<'PY'
+import json, sys
+try:
+    rows = json.load(open(sys.argv[1])).get('accounts', [])
+    match = [a.get('account_uuid', '') for a in rows if a.get('label') == sys.argv[2]]
+    if len(match) == 1: print(match[0])
+except (OSError, ValueError, AttributeError): pass
+PY
+)
+    fi
+    u5=$(quota_field "$rows" "$l" 2); u7=$(quota_field "$rows" "$l" 3); used=""; reset=0
+    if [ -n "$u5" ]; then
+      used=$u5; [ "${u7:-0}" -gt "$used" ] && used=$u7
+      r5=$(quota_field "$rows" "$l" 5); r7=$(quota_field "$rows" "$l" 6)
+      [ "$u5" -ge "$CEILING" ] && [ "${r5:-0}" -gt "$reset" ] && reset=$r5
+      [ "${u7:-0}" -ge "$CEILING" ] && [ "${r7:-0}" -gt "$reset" ] && reset=$r7
+    fi
+    score=$(pick_score "$rows" "$l"); token=0
+    [ -n "$(acct_token "$l")" ] && token=1
+    model_ok=1; until=$(acct_model_limited_until "$l" "${FLEET_MODEL:-opus}")
+    if [ "$until" -gt "$(now)" ]; then
+      fallback="${FLEET_MODEL_FALLBACK-opus}"
+      if [ -z "$fallback" ] || [ "$fallback" = "${FLEET_MODEL:-opus}" ] \
+        || [ "$(acct_model_limited_until "$l" "$fallback")" -gt "$(now)" ]; then model_ok=0; fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$l" "$uuid" "$used" "$score" \
+      "$(acct_limited_until "$l")" "$(acct_phase_hold "$l")" "$reset" "$fresh" "$token" "$model_ok"
+  done <<EOF
+$(acct_labels)
+EOF
+}
+
+account_adapter() {
+  export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
+  export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
+  export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_ACCOUNT_QUOTA_TTL
+  exec python3 "$BIN/.fleet-account.py" "$@"
+}
+
+account_reconcile() {
+  local previous='' arg sess=''
+  for arg in "$@"; do
+    [ "$previous" != --session ] || sess="$arg"
+    previous="$arg"
+  done
+  [ -z "$sess" ] || fleet_load_conf "$sess" || return 1
+  export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
+  export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
+  export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_CODEX_SERVER
+  exec python3 "$BIN/.fleet-failover.py" "$@"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
 quota_rows() {
@@ -1002,6 +1070,10 @@ EOF
 # so the tests can exercise dur_secs/acct_ttl/pick_active/… in isolation.
 if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-active}" in
+  inventory|choose|profile|check-target|bench-codex|launch) account_adapter "$@" ;;
+  reconcile) account_reconcile "$@" ;;
+  failover-status) account_reconcile status ;;
+  _claude-inventory) shift; cmd_claude_inventory "$@" ;;
   active)        cmd_active ;;
   token)         cmd_token "${2:-}" ;;
   env)           cmd_env ;;

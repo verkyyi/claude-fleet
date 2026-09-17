@@ -529,6 +529,17 @@ main() {
       switched=$((switched+1)); continue
     fi
 
+    local transition_wt
+    transition_wt=$(TM display-message -p -t "$wid" '#{@worktree}' 2>/dev/null)
+    if [ -n "$transition_wt" ] && [ -d "$transition_wt" ]; then
+      if ! fleet_transition_lock_take "$transition_wt"; then
+        printf '  – %s: another transition owns this worktree — skipped\n' "$wid"
+        skipped=$((skipped+1)); continue
+      fi
+      trap '[ -z "${transition_wt:-}" ] || fleet_transition_lock_drop "$transition_wt"' EXIT
+    else
+      transition_wt=''
+    fi
     # Record the cap so the SPAWN path agrees with us: fleet-claude.sh launches
     # new sessions on FLEET_MODEL_FALLBACK while the (account, model) row holds.
     if [ "$LEDGER" = 1 ] && [ -n "$acct" ] && [ -n "$banner" ]; then
@@ -587,11 +598,15 @@ main() {
       printf '  ✗ %s (%s): still on %s after %ss\n' "$wid" "$name" "${nowm:-?}" "$VERIFY_WAIT"
       failed=$((failed+1))
       if [ "$FALLBACK" = 1 ]; then
+        [ -z "$transition_wt" ] || fleet_transition_lock_drop "$transition_wt"
+        transition_wt=''
         printf '    → handing %s to fleet-migrate.sh --model %s (close + --resume)\n' "$wid" "$TARGET"
         "$BIN/fleet-migrate.sh" --model "$TARGET" --session "$SESS" "$wid" 2>&1 | sed 's/^/    /'
         handed=$((handed+1))
       fi
     fi
+    [ -z "$transition_wt" ] || fleet_transition_lock_drop "$transition_wt"
+    transition_wt=''
   done
 
   trace 'done'

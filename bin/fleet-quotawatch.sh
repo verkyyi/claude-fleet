@@ -494,6 +494,20 @@ if [ "$MODEL_SWEEP" = 1 ] && [ -x "$BIN/fleet-model-switch.sh" ]; then
   fi
 fi
 
+# Revisit per-session requests independently of quota.ceiling's alert markers.
+# One bounded job per fleet; its file lock makes duplicate ticks/banner events
+# cheap no-ops. Existing named-socket fan-out and daemon remain the only timer.
+qw_failover_enabled() { ( fleet_load_conf "$1"; [ "${FLEET_FAILOVER:-0}" = 1 ]; ); }
+for qs in $SOCKETS; do
+  if qw_failover_enabled "$qs" || [ -f "$FLEET_CONF_DIR/handoffs/quota-requests/$qs.cursor.json" ]; then
+    if [ "$DRY" = 1 ]; then
+      printf 'would: reconcile subscription failover on %s\n' "$qs"
+    else
+      fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' reconcile --session '$qs'"
+    fi
+  fi
+done
+
 if [ "$QUOTA_POLICY" != 1 ]; then
   END=$(now)
   hb "done" "end=$END"$'\n'"dur=$(( END - START ))"$'\n'"modelsweep=1"$'\n'"t_modelcap=$T_MODEL"$'\n'"budget=$TICK_BUDGET"$'\n'"over=$QW_OVER"$'\n'"skipped=$QW_SKIP"$'\n'
@@ -668,6 +682,10 @@ qw_socket_budget() { local b; b=$(qw_left "$POLICY_T0" "$POLICY_BUDGET")
 # the #567 nowhere-to-move case, which toasts and moves nobody.
 qw_ceiling_socket() {
   local qs="$1" ql="$2" qutil="$3" qwhich="$4" qresett="$5" qnew="$6"
+  if qw_failover_enabled "$qs"; then
+    tmux -L "$qs" display-message "fleet: $ql at ${qutil}% — subscription planner will resume eligible sessions; unreadable/busy targets wait" 2>/dev/null
+    return 0
+  fi
   if [ -n "$qnew" ]; then
     fleet_bg -L "$qs" "bash '$BIN/fleet-account.sh' migrate --account '$ql' --session '$qs' --toast"
     tmux -L "$qs" display-message "fleet: $ql at ${qutil}% of its $qwhich window (ccquota) → benched until $qresett; moving its sessions to $qnew" 2>/dev/null

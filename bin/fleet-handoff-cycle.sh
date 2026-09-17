@@ -222,13 +222,21 @@ if [ -e "$LOCK" ]; then
   fi
   log "reclaiming stale lock (pid ${oldpid:-?} dead)"
 fi
+TRANSITION_WT=$(TM display-message -p -t "$PANE" '#{@worktree}' 2>/dev/null)
+if [ -n "$TRANSITION_WT" ] && [ -d "$TRANSITION_WT" ]; then
+  fleet_transition_lock_take "$TRANSITION_WT" || refuse 'another transition owns this worktree'
+else
+  TRANSITION_WT=''
+fi
+
 printf '%s\n' "$$" > "$LOCK" 2>/dev/null || true
 
 # ---- hard self-timeout: never an immortal orphan (crash-#3). A watchdog TERMs
 # ---- this whole process even if a phase wedges; killed on normal exit.
 ( sleep "$HARD_TIMEOUT" 2>/dev/null; kill -TERM "$$" 2>/dev/null ) &
 WATCHDOG=$!
-cleanup() { rm -f "$LOCK" 2>/dev/null || true; kill "$WATCHDOG" 2>/dev/null || true; }
+cleanup() { rm -f "$LOCK" 2>/dev/null || true; kill "$WATCHDOG" 2>/dev/null || true
+  [ -z "$TRANSITION_WT" ] || fleet_transition_lock_drop "$TRANSITION_WT"; }
 trap cleanup EXIT
 trap 'log "TERM (hard timeout ${HARD_TIMEOUT}s or signal) — exiting; doc left intact"; exit 0' TERM
 

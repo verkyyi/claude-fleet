@@ -8,6 +8,7 @@ alone cannot provide that guarantee. No shared daemon or TCP port is used.
 import json
 import os
 from pathlib import Path
+import runpy
 import select
 import shutil
 import signal
@@ -111,7 +112,7 @@ that layer as overrides, then apply -c flags above it in their original order.
     return layers + flags
 
 
-def run(argv):
+def run(argv, ready=None, tick=None):
     if '--no-daemon' in argv:
         return subprocess.call(['codex', *argv])
     flags = server_flags(argv)
@@ -145,8 +146,14 @@ def run(argv):
             return 128 + ended[0]
         if guardian.poll() is not None:
             raise RuntimeError('private Codex server exited before creating its socket')
+        if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
+            runpy.run_path(str(Path(__file__).with_name('.fleet-account.py')))['verify_codex_runtime'](remote)
+        if ready:
+            ready(remote)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         while client.poll() is None and guardian.poll() is None and not ended:
+            if tick:
+                tick()
             time.sleep(0.1)
         if ended:
             return 128 + ended[0]

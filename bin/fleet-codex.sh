@@ -120,6 +120,9 @@ fi
 normal=(); resume_id=''; fork_session=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --codex-profile)
+      [ "$#" -ge 2 ] || { echo 'fleet-codex: --codex-profile requires a ccquota profile' >&2; exit 2; }
+      export FLEET_CODEX_PROFILE="$2"; shift 2 ;;
     --codex-home)
       [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
       export CODEX_HOME="$2"; shift 2 ;;
@@ -136,6 +139,18 @@ if [ -n "$resume_id" ]; then
 else
   [ "$fork_session" = 0 ] || { echo 'fleet-codex: --fork-session requires --resume' >&2; exit 2; }
   set -- ${normal[@]+"${normal[@]}"}
+fi
+
+# Use ccquota's shared run lock and official isolated credential environment for
+# the entire launcher/app-server/TUI lifetime. Do not change its global default.
+if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
+  if [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
+    export FLEET_CODEX_MANAGED=1
+    exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
+  fi
+  FLEET_CODEX_SUBSCRIPTION=$(bash "$BIN/fleet-account.sh" profile --name "$FLEET_CODEX_PROFILE" \
+    --home "${CODEX_HOME:-$HOME/.codex}" --account "${FLEET_CODEX_ACCOUNT:-}") || exit 1
+  export FLEET_CODEX_SUBSCRIPTION
 fi
 
 # --- argv: the LAST argument is the seed prompt unless it looks like a flag ----
