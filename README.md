@@ -574,15 +574,15 @@ degrading to a pane-content heuristic.
 | transferred recurring loop | native `/loop` | Fleet adapter | `fleet-transfer.sh --loop spec.json` preserves the task/cadence, binds the exact Codex thread, and wakes it through a private per-pane app server. Idle-only delivery; owner can defer/stop. TUI exit stops the timer; calendar cron is not converted. |
 | slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`. |
 | per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently. |
-| red `needs` + bell when a session is blocked on you | ✅ | ❌ | **Codex has no `Notification` event.** 0.154's hook set is PreToolUse · PermissionRequest · PostToolUse · Pre/PostCompact · SessionStart · SessionEnd · UserPromptSubmit · SubagentStart/Stop · Stop · Interrupt — and its nearest analogue, `PermissionRequest`, cannot fire under the fleet's bypass posture. A Codex worker that stops to ask you something reads green `done`, like any finished turn. |
-| `AskUserQuestion` + the dash's ⌃k answer key | ✅ | ❌ | A Claude-only tool; `bin/fleet-answer.sh` answers it by driving that dialog's keystrokes. Codex has no equivalent dialog to drive. |
-| permission prompts readable + refusable from the dash | ✅ | ❌ | A red row now says WHICH kind of blocked it is (`?` question · `⊘` permission, issue #640), and ⌃k on a `⊘` row shows the blocked command plus the prompt's own reason without attaching; `bin/fleet-permission.sh --deny` can press **No**, and only No (off by default). Both halves ride hooks Codex does not have here — no `Notification`, and its `PermissionRequest` cannot fire under the fleet's bypass posture, so a Codex worker never raises one of these dialogs at all. |
+| red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive. |
+| `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion. |
+| permission prompts readable + refusable from the dash | ✅ | ✅ | Native command/file/additional-permission and MCP requests are readable. fleet-permission.sh --deny sends only the native refusal, requires the displayed request token and the existing opt-in. Default bypass posture normally suppresses command/file prompts; no approval is automated. |
 | close the window when the operator exits the agent | ✅ | ✅ | The Codex launcher waits for a successful CLI exit, then calls the shared close-on-exit policy. Dirty/unmerged work survives, hubs/panels are excluded, and the global `FLEET_CLOSE_ON_EXIT=0` opt-out applies. Failed launches stay visible; thread `SessionEnd(reason=other)` never closes a window. |
 | session lifecycle events | ✅ | ✅ | Both agents emit `session.start` and `session.end` through the shared hook table. Codex thread lifecycle events are separate from process-exit window cleanup. |
 | `/fleet-handoff` + the auto-handoff nudge | ✅ | ✅ | Codex runs `fleet-transfer.sh --to codex --handoff NOTES --after-turn` directly. The same clean-Stop, typing hold, lease and source-identity checks preserve notes, exact rollout, account home and worktree before a fresh conversation. `FLEET_AUTO_HANDOFF_PCT` nudges this native path. |
 | `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused. |
 | peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery. |
-| Stop classifier (haiku) | ✅ | ❌ | Captures terminal text and invokes a Claude helper with a Claude-specific rubric. The normal Codex Stop hook does not invoke it yet; this is a screen-classification adapter gap. |
+| Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state. |
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved. |
 | multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins. |
 | per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch. |
@@ -595,18 +595,12 @@ That table is **generated** from the `MATRIX` block in
 next to the code it grades. `bin/codex-matrix.sh --check` fails on any drift and
 runs in CI, so a row cannot be edited in one file and forgotten in the other.
 
-**The two gaps that matter**, said plainly rather than left to be inferred from
-the rows:
-
-1. **Automatic context cycling is not wired for Codex.** `/fleet-handoff`,
-   `/fleet-context` and every `--resume` path are shaped around Claude Code's
-   transcript. `fleet-transfer.sh` seeds a new Codex session from one Claude
-   session's history; it does not add Codex-to-Codex automatic handoff or restore.
-2. **Quota governance does not exist on Codex.** Account rotation and the usage
-   collector read Claude subscription state; Codex's limits are a different
-   model with no per-launch token seam. Across providers only the *verdict*
-   interface is neutral ("is there headroom?" → yes/no); the data layer stays
-   per-agent.
+Codex context tracking, recovery/history, handoff, messaging, startup policy,
+warm pools, native account quotas and dashboard answers are implemented in
+[the Codex runtime adapter](docs/CODEX-RUNTIME.md). Account homes must be
+registered separately; quota gating and automatic idle migration are opt-in.
+The shared optional screen classifier still uses a Claude helper. Native
+attention and replies require the private worker server, enabled by default.
 
 Codex needs one manual setup step: it asks "Do you trust the contents of this
 directory?" once per project and no flag or `-c` override satisfies it, so answer

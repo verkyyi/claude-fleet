@@ -40,6 +40,10 @@ esac
 [ -x "$ANSWER" ] || note "dash-answer: 找不到 $ANSWER"
 command -v python3 >/dev/null 2>&1 || note "dash-answer: 需要 python3"
 command -v fzf >/dev/null 2>&1 || note "dash-answer: 需要 fzf"
+if [ "$(tmux display-message -p -t "$target" '#{@cc_agent}' 2>/dev/null)" = codex ]; then
+  python3 "$BIN/fleet-codex-attention.py" popup --pane "$target" || pause
+  exit 0
+fi
 
 if ! JSON=$("$ANSWER" --show "$target" --json 2>/dev/null); then
   # Not a question. The other reason a row goes red is a permission prompt — show

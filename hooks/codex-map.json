@@ -4,9 +4,9 @@
     "the fleet's hook table; this file declares the only ways the Codex target",
     "differs from it, so the Codex wiring stops being a hand-transcoded second",
     "copy inside bin/fleet-codex.sh. bin/fleet-hooks-emit.sh applies this map and",
-    "emits the `-c hooks.<Event>=[…]` TOML the launcher passes to codex.",
+    "emits the `-c hooks.<Event>=[\u2026]` TOML the launcher passes to codex.",
     "Verified against codex-cli 0.154: Codex's hook system IS Claude Code's schema",
-    "— same event names, same stdin JSON, exit 2 blocks, $TMUX_PANE inherited."
+    "\u2014 same event names, same stdin JSON, exit 2 blocks, $TMUX_PANE inherited."
   ],
   "events": {
     "PreToolUse": true,
@@ -26,8 +26,7 @@
     "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard."
   },
   "drop_commands": {
-    "classify-hook.sh": "The screen classifier uses a Claude-specific rubric and helper; Codex Stop integration is not adapted yet.",
-    "handoff-latch-reset-hook.sh": "Claude-only handoff latch; Codex has no fleet handoff cycle yet.",
+    "handoff-latch-reset-hook.sh": "Claude-only reset hook; the Codex launcher owns the fresh-conversation latch.",
     "session-end-hook.sh": "Codex reason=other is not proof of CLI exit. fleet-codex.sh invokes cleanup after its foreground CLI exits successfully; SessionEnd only emits the lifecycle event."
   }
 }

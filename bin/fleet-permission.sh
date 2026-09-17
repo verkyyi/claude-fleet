@@ -61,6 +61,7 @@
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
 #         --transcript <path> use this transcript instead of resolving it
 #         --json              --show: emit the blocked tool call as JSON
+#         --request-token T   Codex denial: fingerprint from --show --json
 #         --no-tell           --deny: do NOT peer-send the reason afterwards
 #         --dry-run           print the plan, send nothing
 #
@@ -86,7 +87,7 @@ TIMEOUT="${FLEET_ANSWER_TIMEOUT:-45}"
 case "$POLL"    in ''|*[!0-9.]*) POLL=1 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*)  TIMEOUT=45 ;; esac
 
-VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0 TELL=1
+VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0 TELL=1 REQUEST_TOKEN=''
 usage() { sed -n '/^#   fleet-permission.sh \[opts\] --show/,/^#       transcript/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
@@ -99,6 +100,7 @@ while [ $# -gt 0 ]; do
     --session) SESS="${2:-}"; shift 2 ;;
     --transcript) TPATH="${2:-}"; shift 2 ;;
     --json) AS_JSON=1; shift ;;
+    --request-token) REQUEST_TOKEN="${2:-}"; shift 2 ;;
     --no-tell) TELL=0; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage ;;
@@ -124,6 +126,13 @@ SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
 # --- the pane must exist (a dead pane has nothing open) -----------------------
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
 [ -n "$PANE" ] || { echo "fleet-permission: no live pane for '$TARGET'" >&2; exit 1; }
+if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then
+  NATIVE=("$VERB" --pane "$PANE" --socket "$SOCK" --category perm --request-token "$REQUEST_TOKEN")
+  [ "$AS_JSON" = 0 ] || NATIVE+=(--json)
+  [ "$DRY" = 0 ] || NATIVE+=(--dry-run)
+  export FLEET_ALLOW_AUTO_DENY="$ARMED"
+  exec python3 "$BIN/fleet-codex-attention.py" "${NATIVE[@]}"
+fi
 
 # --- resolve the transcript (identical path to fleet-answer.sh) ---------------
 # pane → Claude pid → the registry's sessionId → ~/.claude/projects/*/<sid>.jsonl.
