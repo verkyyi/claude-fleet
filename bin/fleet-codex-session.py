@@ -30,17 +30,24 @@ def valid_id(value):
         return False
 
 
+def saved_identity(raw, owner):
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or data.get("owner") != owner
+            or not owner.isdigit() or not valid_id(data.get("session_id"))
+            or not isinstance(data.get("home"), str) or not os.path.isabs(data["home"])):
+        return {}
+    return data
+
+
 def identity(pane, socket=""):
     if not pane or (not socket and not os.environ.get("TMUX")):
         return {}
     raw = tmux(["display-message", "-p", "-t", pane,
                 "#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}"], socket)
     agent, owner, record = raw.split("|", 2)
-    data = json.loads(record)
-    if (agent != "codex" or not owner.isdigit() or not isinstance(data, dict)
-            or data.get("owner") != owner or not valid_id(data.get("session_id"))):
+    if agent != "codex":
         return {}
-    return data
+    return saved_identity(record, owner)
 
 
 def meta(path, sid):
@@ -175,8 +182,18 @@ def context(args):
                 "transcript": args.transcript or ""}
     stats = telemetry(data)
     pct = stats["pct"]
-    stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= 80 else "WATCH" if pct >= 50 else "OK",
-                 warn_pct=50, handoff_pct=80, auto_handoff_pct=0, armed=False)
+    threshold, armed = 0, False
+    if args.pane:
+        try:
+            armed = tmux(['display-message', '-p', '-t', args.pane, '#{@handoff_armed}'], args.socket) == '1'
+            if os.environ.get('TMUX') and not args.socket:
+                value = subprocess.run(['bash', str(Path(__file__).with_name('fleet-hook-conf.sh')),
+                                        'FLEET_AUTO_HANDOFF_PCT'], capture_output=True, text=True, timeout=3)
+                threshold = int(value.stdout.strip() or '0') if value.returncode == 0 else 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= (threshold or 80) else "WATCH" if pct >= 50 else "OK",
+                 warn_pct=50, handoff_pct=threshold or 80, auto_handoff_pct=threshold, armed=armed)
     if args.json:
         print(json.dumps(stats, separators=(",", ":")))
     elif args.quiet:
@@ -184,7 +201,7 @@ def context(args):
     else:
         print("context   unknown" if pct < 0 else "context   %s%% (%s / %s tokens) src=codex-rollout" % (pct, stats["live_tokens"], stats["limit"]))
         print("session   " + (stats["session_id"] or "unknown") + " · " + (stats["model"] or "unknown model"))
-        print("handoff   automatic cycling is not enabled for Codex; preserve progress before compaction")
+        print("handoff   fleet-transfer.sh --window PANE --to codex --handoff NOTES --after-turn")
         print("verdict:  " + stats["verdict"])
     return 0 if stats["verdict"] == "OK" else 1
 
@@ -238,13 +255,15 @@ def collect(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("hook", "context", "send", "identity", "collect"))
+    parser.add_argument("command", choices=("hook", "context", "send", "identity", "collect", "saved", "locate"))
     parser.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
     parser.add_argument("--socket", default="")
     parser.add_argument("--session", default="")
     parser.add_argument("--home", default="")
     parser.add_argument("--transcript", default="")
     parser.add_argument("--cache", default="")
+    parser.add_argument("--identity", default="{}")
+    parser.add_argument("--owner", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
@@ -257,6 +276,20 @@ def main():
             return 0
         if args.command == "collect":
             return collect(args)
+        if args.command == "saved":
+            data = saved_identity(args.identity, args.owner)
+            path, _ = rollout(data)
+            values = (data.get("session_id", ""), data.get("home", ""), os.path.dirname(path), path)
+            if any(not isinstance(v, str) or any(c in v for c in "\t\n\r") for v in values):
+                raise ValueError("invalid session metadata fields")
+            print("\t".join(v or "-" for v in values))
+            return 0
+        if args.command == "locate":
+            path, _ = rollout({"session_id": args.session, "home": args.home, "transcript": args.transcript})
+            if not path:
+                return 1
+            print(path)
+            return 0
         return context(args) if args.command == "context" else send(args)
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         if args.command == "hook":

@@ -34,6 +34,8 @@ class LoopTests(unittest.TestCase):
         self.fail_send = False
         self.state = 'done'
         self.clients = ''
+        self.transfer = ''
+        self.handoff = ''
         self.real_current = loop.current
         owner = self
 
@@ -54,7 +56,7 @@ class LoopTests(unittest.TestCase):
 
         self.patches = [patch.object(loop, 'Rpc', FakeRpc),
                         patch.object(loop, 'current'),
-                        patch.object(loop, 'pane', side_effect=lambda *_: self.state),
+                        patch.object(loop, 'pane', side_effect=lambda _, fmt: self.state if fmt == '#{@claude_state}' else self.transfer if fmt == '#{@agent_transfer_request}' else self.handoff),
                         patch.object(loop, 'tm', side_effect=lambda *_: self.clients)]
         for p in self.patches: p.start()
         self.addCleanup(lambda: [p.stop() for p in reversed(self.patches)])
@@ -76,6 +78,14 @@ class LoopTests(unittest.TestCase):
         self.state = 'working'
         loop.dispatch(self.path, now=10000)
         self.state = 'done'; self.runtime_state = 'active'
+        loop.dispatch(self.path, now=10000)
+        self.assertEqual(self.messages, [])
+        self.assertEqual(self.read()['status'], 'active')
+
+    def test_context_cycle_and_transfer_defer_wakeup(self):
+        self.transfer = '/private/request'
+        loop.dispatch(self.path, now=10000)
+        self.transfer = ''; self.handoff = '1'
         loop.dispatch(self.path, now=10000)
         self.assertEqual(self.messages, [])
         self.assertEqual(self.read()['status'], 'active')
@@ -225,6 +235,7 @@ if a[2:3]==['display-message']:
  if f=='#{pane_pid}':print('42')
  elif f=='#{pane_dead}':print('0')
  elif f=='#{@claude_state}':print('done')
+ elif f in ('#{@agent_transfer_request}','#{@handoff_armed}'):print('')
  elif f=='#{@codex_identity}':print(json.dumps({'session_id':'12345678-1234-1234-1234-123456789abc'}))
  else:print('isolated|@2|42|codex|'+r+'/manifest.json|'+r)
 ''')

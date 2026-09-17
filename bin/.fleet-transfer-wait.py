@@ -117,9 +117,15 @@ def wait(request):
                     or Path(option(r, "@worktree")).resolve() != Path(r["worktree"])):
                 raise ValueError("source pane or worktree changed")
             os.kill(r["pid"], 0)
-            if json.loads(Path(r["registry"]).read_text()).get("sessionId") != r["sid"]:
+            if r.get('source_agent', 'claude') == 'codex':
+                identity = json.loads(option(r, '@codex_identity') or '{}')
+                if (option(r, '@cc_agent') != 'codex' or identity.get('session_id') != r['sid']
+                        or identity.get('owner') != str(r['pid'])
+                        or option(r, '@cc_launcher_pid') != str(r['pid'])):
+                    raise ValueError('Codex source session changed after arming')
+            elif json.loads(Path(r["registry"]).read_text()).get("sessionId") != r["sid"]:
                 raise ValueError("source session changed after arming")
-            if option(r, "@handoff_armed") == "1":
+            if r.get("source_agent", "claude") != "codex" and option(r, "@handoff_armed") == "1":
                 raise ValueError("a Claude context cycle became pending")
             ready = (option(r, "@agent_transfer_ready") == str(request)
                      and option(r, "@claude_state") == "done")
@@ -150,7 +156,7 @@ def wait(request):
         subprocess.run(cmd, env=env, check=True, timeout=180)
         manifest = option(r, "@handoff_manifest")
         state(request, "started", manifest)
-        tm(r["session"], "display-message", "-t", r["pane"], "Claude → Codex started; handoff: " + manifest)
+        tm(r["session"], "display-message", "-t", r["pane"], "Codex handoff started: " + manifest)
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         state(request, "failed", str(error))
@@ -171,6 +177,7 @@ def main():
     a = sub.add_parser("arm")
     for key in ("session", "window", "pane", "sid", "worktree", "main", "registry", "transcript", "notes", "conf-dir", "lock"):
         a.add_argument("--" + key, required=True)
+    a.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
     a.add_argument("--pid", type=int, required=True)
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)

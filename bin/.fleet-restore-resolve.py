@@ -26,7 +26,7 @@
 # rows exclude — so its transcript would never be captured. For it we emit a
 # "HUB<TAB>path<TAB>id" row instead of a WIN row, so restore() rebuilds the
 # hub via hub-session.sh (`claude --resume`) rather than as a work window.
-import sys, glob, os, re
+import sys, glob, os, re, json, uuid
 
 PANELS = {"plan", "dash", "backlog"}
 HUB = "__HUB__"
@@ -58,7 +58,7 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
-    parts = line.split(SEP)
+    parts = line.split(SEP, 10)
     name = parts[0] if len(parts) > 0 else ""
     path = parts[1] if len(parts) > 1 else ""
     issue = parts[2] if len(parts) > 2 and parts[2] else "-"
@@ -82,4 +82,22 @@ for line in sys.stdin:
     # and never restored; a crash simply drops it.
     if raw == "1":
         continue
-    print(f"WIN\t{name}\t{path}\t{newest_sid(path)}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}")
+    agent = parts[8] if len(parts) > 8 else ""
+    suffix = ""
+    sid = "-"
+    if agent == "codex":
+        home, transcript = "-", "-"
+        try:
+            data = json.loads(parts[10])
+            candidate = data["session_id"]
+            if (str(uuid.UUID(candidate)) == candidate.lower() and data["owner"] == parts[9]
+                    and parts[9].isdigit() and os.path.isabs(data["home"])):
+                fields = (candidate, data["home"], data.get("transcript", ""))
+                if not any(any(c in field for c in "\t\n\r") for field in fields):
+                    sid, home, transcript = fields
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            pass
+        suffix = f"\tcodex\t{home}\t{transcript or '-'}"
+    else:
+        sid = newest_sid(path)
+    print(f"WIN\t{name}\t{path}\t{sid}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}{suffix}")

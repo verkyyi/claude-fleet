@@ -247,9 +247,7 @@ if [ "$sem" = "done" ]; then
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
-  # Codex has context telemetry now, but the Claude /fleet-handoff cycle still
-  # consumes Claude transcripts. Never send its directive to a Codex worker.
-  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = codex ] && _hp=0
+  _agent=$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)
   case "$_ds" in ''|*[!0-9]*) _ds=30 ;; esac         # unset / non-numeric → the 30s default
   # Explicit cross-agent handoff: only this Stop may release the detached waiter.
   # A stale `done` stamp or spinner demotion is NOT proof the arming turn ended.
@@ -286,6 +284,12 @@ if [ "$sem" = "done" ]; then
     # onto @ctx_pct each render — the Stop-hook stdin doesn't carry it, but the
     # statusline does. Unstamped / non-numeric ⇒ -1 ⇒ never crosses a positive PCT.
     _ctx=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_pct}' 2>/dev/null)
+    if [ "$_agent" = codex ]; then
+      # Stop hooks may run concurrently: read current telemetry directly rather
+      # than depending on the identity hook having refreshed @ctx_pct already.
+      _ctx=$(python3 "$_bin/fleet-codex-session.py" context --pane "$TMUX_PANE" --json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["pct"])' 2>/dev/null)
+    fi
     case "$_ctx" in ''|*[!0-9]*) _ctx=-1 ;; esac
     if [ "$_armed" != "1" ] && [ "$handoff_prev" != "needs" ] \
        && { [ -n "$_issue" ] || [ "$_raw" = "1" ]; } \
@@ -317,7 +321,22 @@ if [ "$sem" = "done" ]; then
         # LAST instruction of a turn, so without it a session held in Chinese
         # writes its handoff doc — and every turn after the pickup — in English.
         # It carries no quotes or backslashes, so it is safe inside this JSON.
+        if [ "$_agent" = codex ]; then
+          python3 - "$_bin/fleet-transfer.sh" "$TMUX_PANE" "$_ctx" "$_hp" "${FLEET_LANG_RULE_RESUME:-}" <<'PYCODEX'
+import json, shlex, sys
+script, pane, pct, threshold, language = sys.argv[1:]
+command = shlex.join(['bash', script, '--window', pane, '--to', 'codex', '--handoff', 'NOTES_PATH', '--after-turn'])
+reason = (f'Context is at {pct}% (>= {threshold}% auto-handoff threshold). Write durable handoff notes '
+          'to a private file outside the worktree: latest user goal, decisions, changes, tests, running jobs '
+          'and the next action. Replace NOTES_PATH in this command and run it as the final tool call: '
+          + command + '. Check that it armed successfully, then end this turn. Fleet waits for this Stop, '
+          'preserves the exact Codex transcript and account home, and starts a fresh context in this pane. '
+          'Do not invoke Claude slash commands or exit the process yourself. ' + language)
+print(json.dumps({'decision': 'block', 'reason': reason}, separators=(',', ':')))
+PYCODEX
+        else
         printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% auto-handoff threshold). Run /fleet-handoff now (cycle mode, no arguments): store a durable handoff, then this pane auto-clears and resumes clean. Do this instead of continuing — a structured handoff preserves task state better than near-limit auto-compaction.%s"}\n' "$_ctx" "$_hp" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+        fi
       fi
     fi
   fi

@@ -47,7 +47,7 @@
 #           Idempotent: a no-op if a row already exists for this session-id /
 #           transcript-dir (so the daemon can call it every tick, and it never
 #           shadows a landed row). A window with no resolvable transcript (a Codex
-#           worker, #547; a Claude one that never took a turn) is recorded with
+#           worker that never took a turn; a Claude one without a transcript) is recorded with
 #           '-' for transcript/session — review-only, deduped on key + worktree/sha.
 #           Resolves transcript-dir + session-id + summary the
 #           same way `record` does.
@@ -64,7 +64,7 @@
 #           none, so the expanded set is one per-fleet file the dash clears at every
 #           (re)launch.
 #   resume  --repo R --main M <key|#pr>     Reconstruct the worktree off the SHA and
-#           print how to resume (RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
+#           print how to resume (RESUME/CODEX-RESUME/FROM-PR/REVIEW-ONLY); --exec recreates the worktree.
 #           Reuses an already-present worktree (skips the slow `git worktree add`, #319) —
 #           which is also how a closed-unlanded row (no SHA) resumes: its worktree
 #           is usually still on disk (worktree-autoclean keeps unmerged), #320.
@@ -224,8 +224,43 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
 # ============================================================================
 # record — append one ledger row (run BEFORE worktree removal)
 # ============================================================================
+history_source() {
+  # Output HIST_* fields; a captured daemon identity takes precedence over a
+  # live window lookup because that window may already be gone or replaced.
+  HIST_AGENT="${1:-}"; HIST_HOME=''; HIST_TDIR=''; HIST_SID=''; HIST_TRANSCRIPT=''
+  local win="$2" sess="$3" wt="$4" record="$5" owner="$6" raw sock
+  if [ -z "$HIST_AGENT" ] && [ -n "$win" ]; then
+    if [ -n "$sess" ]; then
+      sock=$(fleet_socket "$sess")
+      raw=$(tmux -L "$sock" display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null)
+    elif [ -n "${TMUX:-}" ]; then
+      raw=$(tmux display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null)
+    else raw=''; fi
+    IFS='|' read -r HIST_AGENT owner record <<< "$raw"
+  fi
+  [ -n "$HIST_AGENT" ] || HIST_AGENT="${FLEET_AGENT:-claude}"
+  if [ "$HIST_AGENT" = codex ]; then
+    [ -n "$record" ] || record='{}'
+    raw=$(python3 "$BIN/fleet-codex-session.py" saved --identity "$record" --owner "$owner" 2>/dev/null) || raw=''
+    IFS=$'\t' read -r HIST_SID HIST_HOME HIST_TDIR HIST_TRANSCRIPT <<< "$raw"
+  elif [ -n "$wt" ]; then
+    HIST_TDIR=$(transcript_dir_for "$wt")
+    HIST_SID=$(newest_session_in "$HIST_TDIR")
+    [ -n "$HIST_SID" ] || HIST_TDIR=''
+  fi
+}
+
+history_source_suffix() {
+  # Keep old Claude rows byte-compatible. Only Codex needs the extra provider,
+  # account-home and full-rollout fields (12–14); no credentials are stored.
+  if [ "$HIST_AGENT" = codex ]; then
+    printf '\tcodex\t%s\t%s' "$(oneline "${HIST_HOME:--}")" "$(oneline "${HIST_TRANSCRIPT:--}")"
+  fi
+  printf '\n'
+}
+
 cmd_record() {
-  local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin=""
+  local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin="" win="" agent="" identity="" owner=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
@@ -236,7 +271,10 @@ cmd_record() {
       # (older caller + newer script, or the reverse) never silently drops a row.
       --key|--issue) key="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
-      --win) shift 2;;   # accepted for callers; unused since the dash summary cache retired (#535)
+      --win) win="${2:-}"; shift 2;;
+      --agent) agent="${2:-}"; shift 2;;
+      --agent-identity) identity="${2:-}"; shift 2;;
+      --launcher-pid) owner="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
       # FALLBACK title only (e.g. the window name the SessionEnd hook passes): the
@@ -275,16 +313,8 @@ cmd_record() {
 
   # transcript dir + session id from the (still-present) worktree path.
   local tdir="" sid=""
-  if [ -n "$wt" ]; then
-    tdir=$(transcript_dir_for "$wt")
-    sid=$(newest_session_in "$tdir")
-    # transcript_dir_for only ENCODES a path — it does not check that anything is
-    # there. Storing that speculative path when no session resolved made the row
-    # claim a transcript it doesn't have, and worse: the dir key is a dedup key, so
-    # a later REAL session at the same worktree matched it and was skipped as
-    # "already in ledger" (issue #492). No session ⇒ no transcript dir.
-    [ -z "$sid" ] && tdir=""
-  fi
+  history_source "$agent" "$win" "$sess" "$wt" "$identity" "$owner"
+  tdir="$HIST_TDIR"; sid="$HIST_SID"
 
   # summary (col 9): only an explicit --summary lands here — the dash summary
   # cache it used to fall back to retired with the summary column (issue #535).
@@ -307,7 +337,7 @@ cmd_record() {
   # is the merge time for a landed row / the close time for a closed-unlanded one.
   # Col 11 (issue #503) is the spawn provenance ('-' ≡ hub); pre-#503 rows have 10
   # columns and every reader tolerates the missing field as empty.
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' \
     "$(oneline "$mergedat")" \
     "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
@@ -318,8 +348,7 @@ cmd_record() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "landed" \
-    "$(oneline "${origin:--}")" \
-    >> "$ledger"
+    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger"
   printf 'landed %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "${sid:-none}"
 }
 
@@ -338,14 +367,17 @@ cmd_record() {
 # session (landed OR a prior tick), and a skip when there is no resolvable
 # transcript (nothing to index).
 cmd_record_closed() {
-  local repo="" key="" wt="" sess="" title="" summary="" closedat="" sha="" origin=""
+  local repo="" key="" wt="" sess="" title="" summary="" closedat="" sha="" origin="" win="" agent="" identity="" owner=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2;;
       --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466)
       --sha) sha="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
-      --win) shift 2;;   # accepted for callers; unused since the dash summary cache retired (#535)
+      --win) win="${2:-}"; shift 2;;
+      --agent) agent="${2:-}"; shift 2;;
+      --agent-identity) identity="${2:-}"; shift 2;;
+      --launcher-pid) owner="${2:-}"; shift 2;;
       --session) sess="${2:-}"; shift 2;;
       --title) title="${2:-}"; shift 2;;
       --summary) summary="${2:-}"; shift 2;;
@@ -368,11 +400,8 @@ cmd_record_closed() {
   # so the reapers that all reach here stay idempotent. No session ⇒ no transcript
   # dir (the dir key is a dedup key — never store a speculative path, #492).
   local tdir="" sid=""
-  if [ -n "$wt" ]; then
-    tdir=$(transcript_dir_for "$wt")
-    sid=$(newest_session_in "$tdir")
-    [ -z "$sid" ] && tdir=""
-  fi
+  history_source "$agent" "$win" "$sess" "$wt" "$identity" "$owner"
+  tdir="$HIST_TDIR"; sid="$HIST_SID"
 
   local ledger; ledger=$(ledger_path "$repo")
   if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
@@ -397,7 +426,7 @@ cmd_record_closed() {
   fi
 
   # 11 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state·origin (#503)
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' \
     "$(oneline "$closedat")" \
     "$(oneline "$key")" \
     "$(oneline "${title:--}")" \
@@ -408,8 +437,7 @@ cmd_record_closed() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "closed-unlanded" \
-    "$(oneline "${origin:--}")" \
-    >> "$ledger"
+    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger"
   printf 'closed-unlanded %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "$sid"
 }
 
@@ -469,7 +497,7 @@ cmd_list() {
   # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
   # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
   local now; now=$(date +%s 2>/dev/null)
-  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin _; do
     [ -z "$iss" ] && continue
     local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
     local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
@@ -619,7 +647,7 @@ cmd_rows() {
   # pipe for the same reason: a piped `while` is a subshell and $lbuf would not
   # survive it.
   local lbuf='' lrow=0 ldepth lgrp lroot lrootseq
-  while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin; do
+  while IFS=$'\t' read -r when iss title pr sha _ _ sid smry state origin _; do
     [ -z "$iss" ] && continue
     lrow=$((lrow + 1))
     local target fzfkey okey
@@ -805,8 +833,16 @@ cmd_resume() {
   [ -z "$key" ] && { echo "fleet-history resume: need a <key|#pr> (issue number, scratch-<N>, or #PR)" >&2; return 2; }
   local row; row=$(find_row "$repo" "$key")
   [ -z "$row" ] && { printf 'REVIEW-ONLY\tno ledger row for %s\n' "$key"; return 0; }
-  local iss pr sha wt tdir sid
-  IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ <<<"$row"
+  local iss pr sha wt tdir sid agent chome ctrans
+  IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ _ _ agent chome ctrans <<<"$row"
+  if [ "$agent" = codex ]; then
+    ctrans=$(python3 "$BIN/fleet-codex-session.py" locate --session "$sid" --home "$chome" --transcript "$ctrans" 2>/dev/null) || ctrans=''
+    if [ ! -d "${chome:-/nonexistent}" ] || [ -z "$ctrans" ]; then
+      printf 'REVIEW-ONLY\tCodex session home or exact rollout is unavailable for %s\n' "$(key_label "$iss")"
+      return 0
+    fi
+    tdir=${ctrans%/*}
+  fi
 
   # Resume-by-session needs BOTH a surviving transcript AND a worktree to run in.
   # The land cleanup removed the worktree, so establish one: REUSE it if it's still
@@ -841,14 +877,21 @@ cmd_resume() {
       fi
     fi
     if [ -n "$have_wt" ]; then
-      printf 'RESUME\t%s\t%s\tclaude --resume %s %s\n' "$wt" "$sid" "$sid" "$fork"
+      if [ "$agent" = codex ]; then
+        local mode=resume home_q sid_q
+        [ -n "$fork" ] && mode=fork
+        printf -v home_q '%q' "$chome"; printf -v sid_q '%q' "$sid"
+        printf 'CODEX-RESUME\t%s\t%s\t%s\t%s\tCODEX_HOME=%s codex %s %s\n' "$wt" "$sid" "$chome" "$mode" "$home_q" "$mode" "$sid_q"
+      else
+        printf 'RESUME\t%s\t%s\tclaude --resume %s %s\n' "$wt" "$sid" "$sid" "$fork"
+      fi
       return 0
     fi
     # transcript survives but the worktree can't be re-established — fall through.
   fi
 
   # No resumable worktree — fall back to --from-pr if we have a PR.
-  if [ -n "$pr" ] && [ "$pr" != "-" ]; then
+  if [ "$agent" != codex ] && [ -n "$pr" ] && [ "$pr" != "-" ]; then
     printf 'FROM-PR\t%s\tclaude --from-pr %s %s\n' "${pr#\#}" "${pr#\#}" "$fork"
     return 0
   fi

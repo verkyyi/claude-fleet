@@ -19,7 +19,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
@@ -77,7 +77,7 @@ cat > "$WORK/codex.pl" <<'PL'
 use JSON::PP;
 alarm 120;
 open(my $f, '>', "$ENV{TRANSFER_TEST_ROOT}/target-argv.json") or die;
-print $f encode_json({argv=>\@ARGV, manifest=>$ENV{FLEET_HANDOFF_MANIFEST}}); close $f;
+print $f encode_json({argv=>\@ARGV, manifest=>$ENV{FLEET_HANDOFF_MANIFEST}, home=>$ENV{CODEX_HOME}}); close $f;
 $| = 1; print "Codex ready\n";
 while (<STDIN>) { }
 PL
@@ -375,5 +375,89 @@ rm "$WORK/typing-client"
 TM set-option -w -t "$WIN" @claude_state "done"
 wait_request failed; ok
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] || fail 'old Stop must not release a request after new activity'
+
+# Codex source fixture: the launcher owns the pane and exits through the real
+# --codex-exit cleanup path. The transfer lease must retain that same window.
+cat > "$WORK/codex-source.pl" <<'PL'
+use JSON::PP; use Cwd;
+my ($sid, $home, $transcript, $mode) = @ARGV;
+alarm 120;
+my $pane = $ENV{TMUX_PANE};
+system('tmux', 'set-option', '-w', '-t', $pane, '@cc_agent', 'codex');
+system('tmux', 'set-option', '-w', '-t', $pane, '@cc_launcher_pid', "$$");
+system('tmux', 'set-option', '-w', '-t', $pane, '@codex_identity', encode_json({session_id=>$sid, owner=>"$$", home=>$home, transcript=>$transcript, cwd=>getcwd()}));
+$|=1; print "Codex source ready\n";
+while (my $line = <STDIN>) {
+    next unless $line =~ m{/exit};
+    next if $mode eq 'stuck';
+    system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh", '--codex-exit', "$$");
+    exit 0;
+}
+PL
+spawn_codex() {
+  local n=$1 cmd
+  WT="$WORK/codex wt '$n"; git -C "$MAIN" worktree add -qb "issue-$n" "$WT" || fail 'Codex worktree'
+  SID="11111111-1111-4111-8111-1111111111$n"
+  CHOME="$WORK/codex home's account"; mkdir -p "$CHOME/sessions/2026/09/17"
+  TRANSCRIPT="$CHOME/sessions/2026/09/17/rollout-$SID.jsonl"
+  python3 - "$TRANSCRIPT" "$SID" "$WT" <<'PYSOURCE'
+import json, pathlib, sys
+path, sid, wt = sys.argv[1:]
+rows=[{'type':'session_meta','payload':{'id':sid,'cwd':wt}}]
+for role, text in [('user','继续修复原任务'),('assistant','已验证，下一步提交修改')]:
+    rows.append({'type':'response_item','payload':{'type':'message','role':role,'content':[{'type':'input_text' if role=='user' else 'output_text','text':text}]}})
+pathlib.Path(path).write_text(''.join(json.dumps(r)+'\n' for r in rows))
+PYSOURCE
+  printf -v cmd 'exec %q %q %q %q %q %q' "$FB/codex" "$WORK/codex-source.pl" "$SID" "$CHOME" "$TRANSCRIPT" "${2:-normal}"
+  WIN=$(TM new-window -d -t "$LBL:" -n "codex-$n" -c "$WT" -P -F '#{window_id}' "$cmd") || fail 'Codex pane'
+  PANE=$(TM display-message -p -t "$WIN" '#{pane_id}')
+  TM set-option -w -t "$WIN" @worktree "$WT"
+  TM set-option -w -t "$WIN" @issue "$n"
+  TM set-option -w -t "$WIN" @claude_state "done"
+  for ((attempt=0; attempt<30; attempt++)); do
+    [ -n "$(field codex_identity)" ] && break
+    sleep 0.1
+  done
+  PID=$(field cc_launcher_pid); [ -n "$PID" ] || fail 'Codex launcher identity'
+}
+spawn_codex 61
+transfer --prepare-only --handoff "$WORK/notes.md" || fail 'prepare Codex native handoff'
+BUNDLE=$(packet)
+python3 - "$BUNDLE" "$SID" "$CHOME" <<'PYCODEX' || fail 'Codex provenance or text rendering'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]);m=json.loads((p/'manifest.json').read_text())
+assert m['source']['agent']=='codex' and m['source']['session_id']==sys.argv[2]
+assert m['source']['codex_home']==sys.argv[3] and m['source']['registry_path'] is None
+assert m['source_resume_argv'][1:]==['--agent','codex','--codex-home',sys.argv[3],'resume',sys.argv[2]]
+assert '继续修复原任务' in (p/'history.md').read_text()
+assert '已验证' in (p/'history.md').read_text()
+PYCODEX
+ok
+TM set-option -w -t "$WIN" @cc_launcher_pid 99999999
+transfer --prepare-only && fail 'stale Codex launcher must refuse'
+TM set-option -w -t "$WIN" @cc_launcher_pid "$PID"; ok
+TM set-option -w -t "$WIN" @claude_state working
+transfer && fail 'busy Codex source must refuse'; ok
+TM set-option -w -t "$WIN" @handoff_armed 1
+FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm Codex context cycle'
+REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
+kill -0 "$PID" || fail 'Codex exited before fresh Stop'
+stop_turn; wait_request started; ok
+kill -0 "$PID" 2>/dev/null && fail 'Codex source survived cutover'
+[ "$(field source_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] || fail 'Codex cycle provenance lost'
+python3 - "$WORK/target-argv.json" "$CHOME" <<'PYHOME' || fail 'Codex cycle changed account home'
+import json, sys
+assert json.load(open(sys.argv[1]))['home']==sys.argv[2]
+PYHOME
+ok
+spawn_codex 62
+FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm Codex stale-source case'
+REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
+TM set-option -w -t "$WIN" @codex_identity '{}'
+stop_turn; wait_request failed
+kill -0 "$PID" || fail 'changed Codex identity must preserve source'; ok
+spawn_codex 63 stuck
+transfer && fail 'stuck Codex source must refuse replacement'
+kill -0 "$PID" || fail 'stuck Codex source must not be killed'; ok
 
 printf 'fleet-transfer selftest: OK (%s checks)\n' "$checks"

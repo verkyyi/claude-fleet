@@ -161,6 +161,18 @@ announce() {  # $1 = window-id, $2 = message
 }
 
 case "$kind" in
+  CODEX-RESUME)
+    IFS=$'\t' read -r _ wt sid chome mode _ <<<"$verdict"
+    [ -d "$wt" ] && [ -d "$chome" ] || { refuse "restore: Codex worktree or account home is missing for $key"; exit 1; }
+    case "$mode" in resume|fork) ;; *) refuse 'restore: invalid Codex resume mode'; exit 1 ;; esac
+    printf -v codex_cmd '%q --agent codex --codex-home %q %q %q' "$BIN/fleet-claude.sh" "$chome" "$mode" "$sid"
+    name="$rname"; [ -n "$name" ] || name="resume-${key#\#}"
+    win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
+      "$codex_cmd; exec \$SHELL") || { refuse "restore: Codex new-window failed for $key"; exit 1; }
+    bind_marks "$win" "$wt"
+    TM set-window-option -t "$win" @restored 1 2>/dev/null
+    announce "$win" "restored $key → $name (Codex)"
+    ;;
   RESUME)
     # verdict = RESUME\t<worktree>\t<session-id>\t<claude-cmd>; the session id is
     # already embedded in <claude-cmd>, so we only need the worktree + the command.

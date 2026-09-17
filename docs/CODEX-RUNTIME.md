@@ -21,8 +21,10 @@ window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
 interface; fixture tests pin the supported 0.154 shape.
 
-Context measurement does not activate Claude's auto-handoff directive on Codex.
-The native Codex context cycle is a separate adapter.
+`FLEET_AUTO_HANDOFF_PCT` requests a native Codex context cycle at a clean Stop.
+Write durable notes and run `fleet-transfer.sh --window PANE --to codex
+--handoff NOTES --after-turn`. The existing transfer controller retains the
+account home, transcript provenance and worktree. See [session transfer](SESSION-TRANSFER.md).
 
 ## Messaging
 
@@ -55,3 +57,18 @@ The optional `fleet-codex-rpc.py` helper makes bounded local JSON-RPC reads thro
 the Unix WebSocket endpoint. `codex app-server proxy` is a raw byte relay and
 does not turn newline JSON into WebSocket frames. Runtime tests cover the real
 wire framing, including masking, fragmentation, ping/pong and RPC failures.
+
+## Recovery and history
+
+Crash snapshots and the closed-session ledger preserve the provider, exact root
+UUID, CODEX_HOME and rollout path. The ledger watcher captures these before a
+window disappears. A missing identity stays an unknown Codex session; it never
+selects a Claude transcript from the same worktree. Old Claude rows and maps
+remain readable without conversion.
+
+`fleet-restore.sh` resumes Codex with its saved account home. `fleet-history.sh
+resume KEY` and the dashboard restore action use native `codex fork UUID` by
+default; `--no-fork` selects `codex resume UUID`. The shared launcher accepts
+`--agent codex --codex-home PATH --resume UUID [--fork-session]` as well. If the
+account home or exact rollout has been removed, history is review-only. Recovery
+does not copy credentials or silently substitute another account.

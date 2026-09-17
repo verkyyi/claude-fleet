@@ -9,10 +9,13 @@ Follow it as written, with these translations (they are the only differences):
 - **Slash commands are Claude Code skills; you cannot invoke them.** `/fleet-claim`
   IS the text below — begin at its step 0 by running the shell command it names.
   Run `bash ~/.claude/fleet/bin/fleet-context.sh` for your exact session's
-  context meter. `/fleet-handoff` and `/fleet-history` are not yet adapted:
-  there is no automatic context cycle. If you are running out of
-  context, commit and push what you have and post a progress comment on the
-  issue (the `fleet-comment.sh … --note` wrapper) so a successor can pick up.
+  context meter. Use `fleet-history.sh` to list and reopen saved sessions with
+  their recorded provider and account home. For a context handoff, write private
+  notes outside the worktree (goal, decisions, changes, tests, running jobs and
+  next action), then run `bash ~/.claude/fleet/bin/fleet-transfer.sh --window
+  "$TMUX_PANE" --to codex --handoff /absolute/path/to/notes.md --after-turn` as
+  your last tool call. Check that it armed, then end the turn; Fleet starts a
+  fresh Codex context in this same pane and worktree after the Stop hook.
 - **Claude-only tools you do not have:** `AskUserQuestion`, `SendMessage`,
   `ListAgents`, the `Explore`/`Task` subagents, the `Artifact` tool. Never wait on
   the operator — make the call yourself. Reach another worker with

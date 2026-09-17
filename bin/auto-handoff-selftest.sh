@@ -168,6 +168,18 @@ out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && fail "Codex telemetry must not trigger the Claude handoff directive"
 latched && fail "Codex telemetry must not arm the Claude handoff latch"
 
+# A native measurement emits a Codex handoff command through the same threshold.
+cat > "$WORK/inst/bin/fleet-codex-session.py" <<'PYCODEX'
+import json, os
+print(json.dumps({'pct': int(os.environ['FAKE_CTX'])}))
+PYCODEX
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && latched || fail 'Codex context must arm its native cycle'
+case "$out" in *'fleet-transfer.sh'*'--after-turn'*) ;; *) fail 'Codex cycle command missing';; esac
+case "$out" in *'/fleet-handoff'*) fail 'Codex must never invoke the Claude slash cycle';; esac
+out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_ARMED=1 run_state 'done')"
+nudged "$out" && fail 'Codex native cycle must debounce'
+
 # ---- OFF ≠ BROKEN: no conf layer sets it → no nudge even at 95% ---------------
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
 nudged "$out" && fail "no conf sets the threshold (OFF) must NOT nudge, got: '$out'"

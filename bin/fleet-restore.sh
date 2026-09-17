@@ -159,7 +159,7 @@ snapshot() {
     # worktree/PR) and its transcript can't be reliably resolved from the shared
     # base checkout — the resolver drops @raw=1 rows so they are never snapshotted
     # or restored. Older maps (pre-#214, no @raw field) default it to '' → kept.
-    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -301,8 +301,8 @@ restore() {
     # map for completeness but restore does not replay them (see the re-stamp
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
-    local wname wpath wid wissue wstate reopened=0
-    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin; do
+    local wname wpath wid wissue wstate wagent whome reopened=0
+    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # reconcile path: a window with this name is already live — don't duplicate.
@@ -343,15 +343,25 @@ restore() {
       # an exhausted account. Transparent `exec claude` when no accounts registered.
       local launch="'$BIN/fleet-claude.sh'"
       local cmd
+      local agent_label=claude resume_flag=--resume home_arg
+      if [ "$wagent" = codex ]; then
+        launch="$launch --agent codex"
+        if [ -n "$whome" ] && [ "$whome" != '-' ]; then
+          printf -v home_arg '%q' "$whome"
+          launch="$launch --codex-home $home_arg"
+        fi
+        agent_label=codex; resume_flag=resume
+        nudge=${nudge/claude --resume/codex resume}
+      fi
       if [ -n "$wid" ] && [ "$wid" != "-" ]; then
         # `|| fleet-claude.sh` fallback (mirrors hub-session.sh): a stale/pruned
         # id makes `--resume` exit non-zero — fall back to a FRESH (parked, un-nudged)
         # session instead of stranding the pane at a bare shell.
-        cmd="$launch --resume '$wid'${nudge:+ '$nudge'} || $launch; exec \$SHELL"
-        say "    ↻ $wname → claude --resume ${wid%%-*}…${nudge:+ (auto-continue)}"
+        cmd="$launch $resume_flag '$wid'${nudge:+ '$nudge'} || $launch; exec \$SHELL"
+        say "    ↻ $wname → $agent_label $resume_flag ${wid%%-*}…${nudge:+ (auto-continue)}"
       else
         cmd="$launch; exec \$SHELL"
-        say "    + $wname → fresh claude (no transcript found)"
+        say "    + $wname → fresh $agent_label (no transcript found)"
       fi
       if [ -z "$dry" ]; then
         # Capture the new window-id and target every follow-up option-set through

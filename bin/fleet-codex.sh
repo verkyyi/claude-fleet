@@ -85,11 +85,11 @@
 # permission prompts readable + refusable from the dash | ✅ | ❌ | A red row now says WHICH kind of blocked it is (`?` question · `⊘` permission, issue #640), and ⌃k on a `⊘` row shows the blocked command plus the prompt's own reason without attaching; `bin/fleet-permission.sh --deny` can press **No**, and only No (off by default). Both halves ride hooks Codex does not have here — no `Notification`, and its `PermissionRequest` cannot fire under the fleet's bypass posture, so a Codex worker never raises one of these dialogs at all.
 # close the window when the operator exits the agent | ✅ | ✅ | The Codex launcher waits for a successful CLI exit, then calls the shared close-on-exit policy. Dirty/unmerged work survives, hubs/panels are excluded, and the global `FLEET_CLOSE_ON_EXIT=0` opt-out applies. Failed launches stay visible; thread `SessionEnd(reason=other)` never closes a window.
 # session lifecycle events | ✅ | ✅ | Both agents emit `session.start` and `session.end` through the shared hook table. Codex thread lifecycle events are separate from process-exit window cleanup.
-# `/fleet-handoff` + the auto-handoff nudge | ✅ | ❌ | Reads Claude Code's `~/.claude/projects/**.jsonl` transcript and re-seeds the pane. Codex keeps its own rollout files — the mechanism is not missing on Codex, the adapter is.
+# `/fleet-handoff` + the auto-handoff nudge | ✅ | ✅ | Codex runs `fleet-transfer.sh --to codex --handoff NOTES --after-turn` directly. The same clean-Stop, typing hold, lease and source-identity checks preserve notes, exact rollout, account home and worktree before a fresh conversation. `FLEET_AUTO_HANDOFF_PCT` nudges this native path.
 # `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused.
 # peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery.
 # Stop classifier (haiku) | ✅ | ❌ | Captures terminal text and invokes a Claude helper with a Claude-specific rubric. The normal Codex Stop hook does not invoke it yet; this is a screen-classification adapter gap.
-# `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ❌ | `bin/fleet-claude.sh` routes every `--resume` / `--continue` / `--from-pr` / `--fork-session` launch to Claude — those resume Claude transcripts. Codex has `codex resume`; the fleet does not wire it.
+# `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | partial | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout; reopening uses native resume/fork. Legacy Claude rows remain readable. Account migration is a separate adapter; no Codex history falls back to a Claude cwd transcript.
 # multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over.
 # per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch.
 # MCP servers + subagent model | ✅ | ❌ | Deliberately skipped, **not** a Codex limit: Codex has both (`codex mcp`, its own subagents). `FLEET_MCP_CONFIG` / `FLEET_SUBAGENT_MODEL` are Claude-shaped and are not materialised into Codex config.
@@ -112,6 +112,30 @@ fi
 if ! command -v codex >/dev/null 2>&1; then
   printf 'fleet-codex: FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.\n' >&2
   exit 127
+fi
+
+# Fleet recovery callers carry the provider and account home explicitly. Convert
+# the shared resume spelling before parsing the final seed; native resume/fork
+# positional forms still pass through unchanged.
+normal=(); resume_id=''; fork_session=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --codex-home)
+      [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
+      export CODEX_HOME="$2"; shift 2 ;;
+    --resume)
+      [ "$#" -ge 2 ] || { echo 'fleet-codex: --resume requires a session id' >&2; exit 2; }
+      resume_id="$2"; shift 2 ;;
+    --fork-session) fork_session=1; shift ;;
+    *) normal+=("$1"); shift ;;
+  esac
+done
+if [ -n "$resume_id" ]; then
+  verb=resume; [ "$fork_session" = 1 ] && verb=fork
+  set -- "$verb" "$resume_id" ${normal[@]+"${normal[@]}"}
+else
+  [ "$fork_session" = 0 ] || { echo 'fleet-codex: --fork-session requires --resume' >&2; exit 2; }
+  set -- ${normal[@]+"${normal[@]}"}
 fi
 
 # --- argv: the LAST argument is the seed prompt unless it looks like a flag ----
@@ -247,7 +271,7 @@ if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.
-  for _opt in @codex_identity @codex_session_id @ctx_pct @ctx_limit @cc_model; do
+  for _opt in @codex_identity @codex_session_id @ctx_pct @ctx_limit @cc_model @handoff_armed; do
     tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
   done
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true

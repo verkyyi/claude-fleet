@@ -52,6 +52,7 @@ chmod +x "$WORK/bin/fleet-ledger-watch.sh"
 # --issue is accepted as the pre-#466 alias, exactly as the real script does.
 cat > "$WORK/bin/fleet-history.sh" <<FAKE
 #!/bin/bash
+printf '%s\n' "\$@" > "$WORK/record-args"
 sub="\${1:-}"; shift 2>/dev/null || true
 key=''
 while [ "\$#" -gt 0 ]; do case "\$1" in --key|--issue) shift; key="\${1:-}";; esac; shift; done
@@ -217,6 +218,21 @@ run s1
 rm -f "$WORK/disk_closed"
 [ -f "$SNAP" ] && fail "a closed disk gate must not snapshot"
 grep -q 'disk gate closed' "$WORK/log" || fail "a closed disk gate should log 'disk gate closed'"
+
+# Captured Codex identity must survive a vanished pane, with empty summary/origin.
+reset_all
+identity='{"session_id":"11111111-1111-4111-8111-111111111111","owner":"1234","home":"/codex home"}'
+windows "@1|10|0||/wk/issue-10|fix-ten||codex|1234|$identity" '@5|||||dash'
+run s1
+windows '@5|||||dash'
+run s1
+python3 - "$WORK/record-args" "$identity" <<'PYTEST' || fail 'Codex identity shifted or lost after pane vanished'
+import pathlib, sys
+args=pathlib.Path(sys.argv[1]).read_text().splitlines()
+assert args[args.index('--agent')+1]=='codex', args
+assert args[args.index('--launcher-pid')+1]=='1234', args
+assert args[args.index('--agent-identity')+1]==sys.argv[2], args
+PYTEST
 
 printf 'selftest PASS: seed · vanished→record · still-live · scratch recorded · @raw-no-worktree/panel excluded · dedup-token · transient-empty · dry-run · off-switch · single-writer · disk-gate\n'
 exit 0
