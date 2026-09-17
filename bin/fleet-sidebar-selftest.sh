@@ -116,8 +116,10 @@ try:
        '-n', 'worker-one', 'sleep 600')
     env['TMUX'] = sock + ',1,0'
     tm('set-option', '-g', 'default-shell', '/bin/sh')
-    tm('set-option', '-g', 'window-size', 'manual')
     w1 = tm('display-message', '-p', '#{window_id}')
+    # tmux 3.4 crashes creating a detached window when the GLOBAL size is manual.
+    # Only this fixture needs a fixed size; leave new windows on tmux's default.
+    tm('set-option', '-w', '-t', w1, 'window-size', 'manual')
     p1 = tm('display-message', '-p', '#{pane_id}')
     tm('set-option', '-w', '-t', w1, '@issue', '1')
     tm('set-option', '-w', '-t', w1, '@wid', 'a1')
