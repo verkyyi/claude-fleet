@@ -201,7 +201,9 @@ newest_session_in() {
 ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=worktree $6=pr $7=sha]
   local ledger="$1" sid="$2" tdir="$3" key="${4:-}" wt="${5:-}" pr="${6:-}" sha="${7:-}"
   [ -f "$ledger" ] || return 1
-  # Primary key: session-id, else transcript-dir.
+  # Primary key: session-id, else transcript-dir. A reused scratch slot keeps
+  # the SAME directory across DIFFERENT sessions (#543); a known id must never
+  # fall through to the directory match and disappear behind an older row.
   #
   # FALLBACK for a TRANSCRIPT-LESS record (both of those land as '-'): the primary
   # key can then never match, so every retry appended ANOTHER row for the same
@@ -214,7 +216,7 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
   awk -F'\t' -v s="$sid" -v t="$tdir" -v k="$key" -v w="$wt" -v p="$pr" -v h="$sha" '
     function blank(v) { return (v == "" || v == "-") }
     { if (!blank(s) && $8 == s) { found = 1; exit }
-      if (!blank(t) && $7 == t) { found = 1; exit }
+      if (blank(s) && !blank(t) && $7 == t) { found = 1; exit }
       if (blank(s) && blank(t) && !blank(k) && $2 == k && blank($8) && blank($7) &&
           ((!blank(p) && $4 == p) || (!blank(h) && $5 == h) || (!blank(w) && $6 == w))) {
         found = 1; exit } }

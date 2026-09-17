@@ -10,6 +10,9 @@
 #   A2. record-closed (#320) — a landed-less closed-unlanded row: idempotent (no
 #      duplicate), never shadows a landed row for the same session, skips a window
 #      with no transcript (recorded transcript-less since #547, deduped).
+#   A3. reused scratch slots (#543) — different session ids in the SAME transcript
+#      directory both survive record/record-closed; retries and a later issue bind
+#      still dedup the same session.
 #   B. list / find_row — newest-first ordering and lookup by issue# and by #PR.
 #   C. resume — verdict routing: RESUME when a transcript exists, FROM-PR when
 #      only a PR is recorded, REVIEW-ONLY when neither (and for an unknown key);
@@ -182,6 +185,35 @@ eq "record-closed: transcript-less row has '-' for dir + session" "-	-" "$(cut -
 outn2=$(run record-closed --repo o/r --issue 77 --worktree "$WTN")
 contains "record-closed: transcript-less repeat is deduped" "$outn2" "already in ledger"
 eq "record-closed: transcript-less repeat writes no 2nd row" "1" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+
+# ============================================================================
+# A3. A reused scratch cwd is not a session identity (#543)
+# ============================================================================
+WTR="$WORK/main-scratch-9"; mkdir -p "$WTR"
+ENCR=$(printf '%s' "$WTR" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
+TDIRR="$CLAUDE_PROJECTS_DIR/$ENCR"; mkdir -p "$TDIRR"
+: > "$TDIRR/slot-session-1.jsonl"
+touch -t 200001010000 "$TDIRR/slot-session-1.jsonl"
+for mode in record-closed record; do
+  : > "$FLEET_HISTORY_LEDGER"
+  rm -f "$TDIRR/slot-session-2.jsonl"
+  run "$mode" --key scratch-9 --worktree "$WTR" >/dev/null
+  # The same scratch slot is opened again. Keep the old transcript on disk,
+  # exactly as Claude does, and make the new session unambiguously newer.
+  : > "$TDIRR/slot-session-2.jsonl"
+  touch -t 203001010000 "$TDIRR/slot-session-2.jsonl"
+  run "$mode" --key scratch-9 --worktree "$WTR" >/dev/null
+  eq "$mode: reused scratch slot keeps both session ids" \
+    $'slot-session-1\nslot-session-2' "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
+  eq "$mode: both sessions share the same transcript directory" \
+    "$TDIRR" "$(cut -f7 "$FLEET_HISTORY_LEDGER" | sort -u)"
+  repeated=$(run "$mode" --key scratch-9 --worktree "$WTR")
+  contains "$mode: retry of the new session is skipped" "$repeated" "already in ledger"
+  # Binding that same session to an issue must not create a third history row.
+  run record-closed --issue 543 --worktree "$WTR" >/dev/null
+  eq "$mode: retry and issue bind keep exactly two rows" \
+    "2" "$(wc -l < "$FLEET_HISTORY_LEDGER" | tr -d ' ')"
+done
 
 # ============================================================================
 # B. list / find_row — newest-first + lookup by issue and by #PR
