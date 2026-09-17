@@ -68,13 +68,49 @@ the earlier history row/base update can remain but teardown is refused. These
 checks narrow the race; they are not an atomic lock against new activity. Automatic
 cleanup refuses callers inside the target window/worktree and never queues a
 detached teardown. Manual cleanup retains its existing self-cleanup behavior.
-This does not add idle-raw reaping or a dashboard countdown marker.
+Automatic MERGED cleanup also requires a readable clean worktree whose current
+HEAD is exactly the PR's merged head. Dirty work or commits made after the merge
+are retained. The dashboard activity cell displays an amber `rNm` countdown before
+reaping. The notice is tied to the done-state timestamp and PR head: resumed work
+invalidates it. A newly eligible or stale candidate gets at least 60 seconds of
+visible notice, even when its merge grace has already elapsed. Notices expire from
+the dash after 180 seconds without a confirming cleanup tick.
+
+### Idle raw windows
+
+The same daemon checks raw/scratch windows even when no PR cache exists.
+`FLEET_REAP_IDLE_DONE_MIN` defaults to **30 minutes** after the window's `done`
+timestamp; `0` disables this policy. `FLEET_CLEANUP=0` disables both policies.
+Only explicitly done, clean, unpinned scratch worktrees registered to this repo
+qualify. Active states, young agents, transfer leases, active Fleet loops (including
+quota waits), missing metadata and the base checkout are retained. An unmerged PR
+requires clean **strict ancestry** to the remote base; `tip == base` is not enough.
+Merged PRs remain under the separate merged-head policy and its scratch opt-in.
+
+Before closing a raw window, the cleaner writes history and verifies that it
+resolves to a Claude or Codex resume command. Missing transcripts or failed ledger
+writes keep the window open. It then rechecks identity, state, liveness and HEAD.
+Only the window is closed: the worktree, branch and transcript remain available to
+`dash-restore-session.sh`. Claude and Codex round-trip tests exercise the real
+history and restore scripts on a private tmux socket with bounded fake launchers.
+
+The raw pass shares the daemon's lease, timeout and per-tick reap cap. It reads PR
+state through GitHub before declaring a branch PR-free; failed reads retain the
+window. An actual GitHub rate-limit response stops that tick without retrying.
+
+### Parent reports
+
+Spawned workers retain their existing `@origin` address and history provenance.
+Ship/land and blocked flows report to that parent; the RED path includes the PR.
+A Stop transition to `done` sends a one-time `STOPPED (no ship report)` fallback
+when no report has been delivered. Active loops and handoffs suppress that fallback.
+The reporting selftest uses two local windows and the actual inbox transport.
 
 | Piece | What |
 |---|---|
 | `/fleet-claim` ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force — it says so on the issue and stops. (Issue #283 folded the retired `/fleet-ship` into `/fleet-claim`'s standing contract.) |
 | `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
-| `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch (the worktree is **dropped**, not deleted — see below). Idempotent; an already-reaped PR is a no-op. A **CLOSED**-unmerged PR goes through the [liveness gate](#closed-unmerged-is-not-proof-of-abandonment-issue-544) first. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `skip:grace` · `skip:live` · `skip:dirty` · `error:<reason>`. |
+| `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch (the worktree is **dropped**, not deleted — see below). Idempotent; an already-reaped PR is a no-op. A **CLOSED**-unmerged PR goes through the [liveness gate](#closed-unmerged-is-not-proof-of-abandonment-issue-544) first. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `skip:grace` · `skip:notice` · `skip:live` · `skip:dirty` · `error:<reason>`. |
 | `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | *reap now* from the hub | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>` from the hub pane. Same mechanical core. |
 | `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green; the old dash `⌃l` arming affordance (`dash-arm-merge.sh`) was pruned in #289. Either way the cleanup daemon reaps afterwards. |

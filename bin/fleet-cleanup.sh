@@ -47,6 +47,7 @@
 #   skip:busy        scratch-head reap refused: its window is not `done`
 #   skip:live        automatic MERGED or CLOSED-unmerged reap deferred: live/unknown
 #   skip:grace       automatic MERGED cleanup deferred until its grace expires
+#   skip:notice      automatic cleanup waiting for the visible dashboard notice
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
@@ -202,8 +203,9 @@ fi
 # A daemon must give a newly merged worker time to finish its report (#565).
 # This only narrows automatic cleanup: all existing gates still apply, manual
 # cleanup is immediate, and an already-cleaned PR remains an idempotent no-op.
-# No ledger, lease, base pull or teardown occurs before this read-only gate.
-if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && [ "$MERGED_GRACE" -gt 0 ] \
+# No ledger, lease, base pull or teardown occurs before this gate. Window-local
+# notice metadata is the only write while waiting (and never in dry-run).
+if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] \
    && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
   merged_epoch=0
   if [[ "$merged_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
@@ -214,9 +216,24 @@ if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && [ "$MERGED_GRACE" -gt 0 ] \
   fi
   case "$merged_epoch" in ''|*[!0-9]*) merged_epoch=0 ;; esac
   merge_age=$(( $(date +%s) - merged_epoch ))
-  if [ "$merged_epoch" -eq 0 ] || [ "$merge_age" -lt "$MERGED_GRACE" ]; then
+  if { { [ "$merged_epoch" -gt 0 ] && [ "$merge_age" -ge 0 ]; } || [ "$MERGED_GRACE" = 0 ]; } \
+     && [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+    notice_args=()
+    [ -n "${TMUX:-}" ] || notice_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+    [ "$DRY" = 1 ] && notice_args+=(--dry-run)
+    notice_deadline=0
+    [ "$MERGED_GRACE" -gt 0 ] && notice_deadline=$(( merged_epoch + MERGED_GRACE ))
+    notice_due=$(python3 "$BIN/fleet_reap_notice.py" "$WIN" "merged:$PR:$oid" \
+      "$notice_deadline" ${notice_args[@]+"${notice_args[@]}"} 2>/dev/null) || notice_due=''
+  else notice_due=''; fi
+  if [ "$MERGED_GRACE" -gt 0 ] && { [ "$merged_epoch" -eq 0 ] || [ "$merge_age" -lt "$MERGED_GRACE" ]; }; then
     note "  #$PR automatic cleanup deferred: mergedAt=${merged_at:--}, age=${merge_age}s, grace=${MERGED_GRACE}s (unknown/future times also defer)."
     done_token "skip:grace"; exit 0
+  fi
+  case "$notice_due" in ''|*[!0-9]*) done_token "skip:live"; exit 0 ;; esac
+  if [ "$notice_due" -gt "$(date +%s)" ]; then
+    note "  #$PR automatic cleanup notice displayed; waiting until $notice_due."
+    done_token "skip:notice"; exit 0
   fi
 fi
 
@@ -375,7 +392,7 @@ fi
 auto_merged_gate() {
   [ "$AUTO" = 1 ] && [ "$st" = MERGED ] || return 0
   [ -n "$WT" ] || [ -n "$WIN" ] || return 0
-  local why="" state self_win cwd lease
+  local why="" state self_win cwd lease git_state current_head token="skip:live"
   local socket_args=()
   if ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then
     why="missing or ambiguous window; leaving windowless work to worktree-autoclean"
@@ -393,6 +410,17 @@ auto_merged_gate() {
       if [ -z "$self_win" ] || [ "$self_win" = "$WIN" ]; then why="caller window is target or unknown"; fi
     fi
     if [ -z "$why" ]; then
+      if [ -z "$WT" ] || [ ! -d "$WT" ] \
+         || ! git_state=$(git -C "$WT" status --porcelain 2>/dev/null); then
+        why="worktree metadata unavailable"
+      elif [ -n "$git_state" ]; then
+        why="uncommitted work after the merge"; token="skip:dirty"
+      elif ! current_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) \
+           || [ -z "$oid" ] || [ "$current_head" != "$oid" ]; then
+        why="local tip differs from the merged PR head"; token="skip:unmerged"
+      fi
+    fi
+    if [ -z "$why" ]; then
       if ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
         why="cannot read window state"
       elif [ "$state" != "done" ]; then
@@ -408,7 +436,7 @@ auto_merged_gate() {
   fi
   if [ -n "$why" ]; then
     note "  #$PR automatic cleanup deferred: $why"
-    done_token "skip:live"; return 1
+    done_token "$token"; return 1
   fi
   return 0
 }

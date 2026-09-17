@@ -392,6 +392,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Values outside 0..31536000 fall back to 600. This is not an idle-time policy.
 # @label=Cleanup merged grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_MERGED_GRACE=600
+# Reclaim clean raw/scratch windows that remain explicitly done this many minutes.
+# The daemon records and verifies a resumable history entry first, and keeps the
+# worktree, branch and transcript. 0 disables done-raw reaping. Default 30.
+# Working/looping/pinned/active Fleet-loop sessions and unknown probes are kept.
+# An unmerged PR requires strict ancestry; dirty worktrees are kept untouched.
+# @label=Cleanup idle done raw sessions @group=bridge @tier=advanced @scope=fleet @edit=int @unit=min
+#FLEET_REAP_IDLE_DONE_MIN=30
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
 # cooldown). Default 4.
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick

@@ -344,4 +344,16 @@ fi
 
 [ "${2:-}" = "bell" ] && printf '\a' > /dev/tty 2>/dev/null
 
+# A child that stopped before ship must still wake its parent once (#565).
+# Keep this off the per-tool path and bound the complete report process tree;
+# stdout belongs to Stop's JSON response, so reports never print into it.
+if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ]; then
+  _origin=$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)
+  case "$_origin" in issue-*|scratch-*)
+    _bin=$(cd "$(dirname "$0")" && pwd)
+    bash -c '. "$1/fleet-lib.sh"; fleet_timebox 10 bash "$1/fleet-report-parent.sh" --state stopped --only-once --win "$2"' \
+      report-stop "$_bin" "$TMUX_PANE" >/dev/null 2>&1 || : ;;
+  esac
+fi
+
 exit 0

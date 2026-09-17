@@ -326,6 +326,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   command -v gh >/dev/null 2>&1 && SMERGED="$(gh -R "${FLEET_REPO:-}" pr list \
     --state merged --head "$sbranch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
   sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED")"
+  [ "$sreason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 
   scratch_remove() {   # remove worktree + branch (reap anchored procs first, #151)
     fleet_reap_worktree_procs "$swt" >/dev/null 2>&1
@@ -464,6 +465,7 @@ command -v gh >/dev/null 2>&1 && MERGED_PRS="$(gh -R "$REPO" pr list \
   --state merged --head "$branch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
 
 reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")"
+[ "$reason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 describe_target "$reason" "$wtdir"
 
 # --- ⌃x (issue #289): clean+merged reaps straight away; anything else confirms -

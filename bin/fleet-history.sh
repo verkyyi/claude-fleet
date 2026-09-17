@@ -350,7 +350,7 @@ cmd_record() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "landed" \
-    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger"
+    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger" || return 1
   printf 'landed %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "${sid:-none}"
 }
 
@@ -439,7 +439,7 @@ cmd_record_closed() {
     "$(oneline "${sid:--}")" \
     "$(oneline "${summary:--}")" \
     "closed-unlanded" \
-    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger"
+    "$(oneline "${origin:--}")" "$(history_source_suffix)" >> "$ledger" || return 1
   printf 'closed-unlanded %s → ledger %s (session %s)\n' "$(key_label "$key")" "$ledger" "$sid"
 }
 

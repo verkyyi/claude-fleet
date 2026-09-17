@@ -2,7 +2,7 @@
 # fleet-report-parent.sh — a finished child worker PUSHES its outcome to the
 # session that SPAWNED it (issue #574), instead of leaving that session to poll.
 #
-#   fleet-report-parent.sh --state merged|blocked|failed|reaped [options]
+#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped [options]
 #
 # The parent/child link has existed since #503: every spawn stamps `@origin` on
 # the new window (`issue-<N>` / `scratch-<N>`, empty ≡ the hub), canonicalised by
@@ -17,8 +17,8 @@
 # fleet_peer_send (#513) — the SendMessage tool's local inbox socket. Queued while
 # the parent is mid-turn, delivered as its next turn. NEVER tmux send-keys (#437).
 #
-#   --state <s>     merged | blocked | failed | reaped        (required)
-#   --pr <N>        the PR number, for a merged report
+#   --state <s>     merged | blocked | failed | reaped | stopped (required)
+#   --pr <N>        the PR number, for a merged or failed report
 #   --verdict <v>   the reap verdict, for a `reaped` report (unmerged, dirty, …)
 #   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
 #   --win <target>  the CHILD window; default: the window $TMUX_PANE sits in.
@@ -76,9 +76,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$STATE" in
-  merged|blocked|failed|reaped) ;;
-  '') printf 'fleet-report-parent: --state is required (merged|blocked|failed|reaped)\n' >&2; exit 2 ;;
-  *)  printf 'fleet-report-parent: unknown --state %s (merged|blocked|failed|reaped)\n' "$STATE" >&2; exit 2 ;;
+  merged|blocked|failed|reaped|stopped) ;;
+  '') printf 'fleet-report-parent: --state is required (merged|blocked|failed|reaped|stopped)\n' >&2; exit 2 ;;
+  *)  printf 'fleet-report-parent: unknown --state %s (merged|blocked|failed|reaped|stopped)\n' "$STATE" >&2; exit 2 ;;
 esac
 
 # quiet <msg> — the "nothing to do, and that is fine" exit. Silent in production so
@@ -114,6 +114,24 @@ wname=$(printf '%s' "$wname" | tr -d '"<>')
 # reap-time line is a BACKSTOP for the sessions that never got there (a crash, a
 # never-shipped worker, a hand ⌃x) rather than a second report for every child.
 [ "$ONCE" = 1 ] && [ "$wreported" = 1 ] && quiet "already reported (@reported 1)"
+
+# The Stop fallback reports a stopped TURN, never a claim that an unfinished PR
+# landed. Transfer/loop pauses are not completion and must not wake the parent.
+if [ "$STATE" = stopped ]; then
+  [ "$(TM display-message -p -t "$target" '#{@claude_state}')" = "done" ] || quiet 'not done'
+  [ "$(TM display-message -p -t "$target" '#{@handoff_armed}')" != 1 ] || quiet 'handoff pending'
+  manifest=$(TM display-message -p -t "$target" '#{@handoff_manifest}')
+  if [ -n "$manifest" ] && ! python3 - "$manifest" <<'PYLOOP'
+import json, pathlib, sys
+try:
+    p = pathlib.Path(sys.argv[1]).parent / 'loop/state.json'
+    active = p.exists() and json.loads(p.read_text()).get('status') not in ('stopped', 'complete', 'cancelled')
+except (OSError, ValueError):
+    active = True
+sys.exit(1 if active else 0)
+PYLOOP
+  then quiet 'active loop'; fi
+fi
 
 # --- the switch: per-fleet conf, default ON ------------------------------------
 # Read through fleet_load_conf, never off the environment: nothing exports FLEET_*
@@ -179,7 +197,8 @@ fi
 case "$STATE" in
   merged)  st="MERGED${PR:+ (PR #${PR//[^0-9]/})}" ;;
   blocked) st="BLOCKED" ;;
-  failed)  st="FAILED" ;;
+  failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
+  stopped) st="STOPPED (no ship report)" ;;
   reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;
 esac
 msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"

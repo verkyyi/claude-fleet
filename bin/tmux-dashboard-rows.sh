@@ -43,7 +43,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -280,7 +280,7 @@ while IFS=$'\t' read -r _ krk _ _ _ korig; do
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -380,6 +380,16 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # No timestamp yet (a window that never took a turn) → a muted dot.
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
+  # A fresh daemon notice is tied to this exact done turn. Activity invalidates
+  # it immediately; a stopped daemon cannot leave a misleading permanent marker.
+  if [ "$state" = "done" ] && [ "$reap_stamp" = "$state_ts" ]; then
+    case "$reap_due:$reap_seen" in *[!0-9:]*|:*|*:) : ;;
+      *) if [ "$reap_seen" -le "$NOW" ] && [ "$((NOW - reap_seen))" -le 180 ]; then
+           remain=$(( (reap_due - NOW + 59) / 60 )); [ "$remain" -ge 0 ] || remain=0
+           act="r${remain}m"; acol=$AM
+         fi ;;
+    esac
+  fi
 
   # --- internal window handle (issue #566) -----------------------------------
   # Keep @wid for CLI targeting (`reap a1` / `migrate b3`); the list identifies
