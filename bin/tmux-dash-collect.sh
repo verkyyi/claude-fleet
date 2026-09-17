@@ -708,9 +708,8 @@ ph_ctx() {
 local p
 if have_py3 && [ -f "$BIN/fleet-codex-session.py" ]; then
   # Exact Codex session identity; Claude's cwd cache below is never consumed by
-  # a Codex row. Unit separators preserve empty fields and spaces in paths.
-  local us=$'\x1f'
-  lw_all "#{session_name}${us}#{window_id}${us}#{@cc_agent}${us}#{@cc_launcher_pid}${us}#{@codex_identity}" \
+  # a Codex row. JSON is last, so pipes/spaces inside paths remain untouched.
+  lw_all '#{session_name}|#{window_id}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' \
     | python3 "$BIN/fleet-codex-session.py" collect --cache "$G"
 fi
 CTX_PATHS=()

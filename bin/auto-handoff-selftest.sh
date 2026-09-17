@@ -164,7 +164,7 @@ case "$out" in *'Continue replying in the language this session was using'*) : ;
 latched || fail "nudge must set the @handoff_armed latch"
 
 # A real Codex context stamp must not activate the Claude transcript cycle.
-out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_AGENT=codex run_state done)"
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && fail "Codex telemetry must not trigger the Claude handoff directive"
 latched && fail "Codex telemetry must not arm the Claude handoff latch"
 

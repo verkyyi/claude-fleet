@@ -110,7 +110,7 @@ class SessionTests(unittest.TestCase):
             hook(OTHER, event='Stop')
             self.assertEqual(json.loads(call('show-options', '-wv', '-t', pane, '@codex_identity'))['session_id'], SID)
             cache = self.root / '.claude-dash/global'; cache.mkdir(parents=True)
-            row = '\x1f'.join(['fixture', win, 'codex', '1234', json.dumps(data)]) + '\n'
+            row = '|'.join(['fixture', win, 'codex', '1234', json.dumps(data)]) + '\n'
             p = subprocess.run([sys.executable, str(BIN / 'fleet-codex-session.py'), 'collect', '--cache', str(cache)], input=row, text=True)
             self.assertEqual(p.returncode, 0)
             self.assertEqual(next(cache.glob('ctx_*')).read_text().strip(), 'gpt-fixture\t120000\t300000')

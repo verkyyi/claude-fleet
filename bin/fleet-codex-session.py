@@ -213,7 +213,7 @@ def send(args):
 def collect(args):
     for line in sys.stdin:
         try:
-            session, window, agent, owner, raw = line.rstrip("\n").split("\x1f", 4)
+            session, window, agent, owner, raw = line.rstrip("\n").split("|", 4)
             if agent != "codex":
                 continue
             data = json.loads(raw)
