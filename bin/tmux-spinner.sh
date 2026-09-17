@@ -334,10 +334,11 @@ needs_check() {
     # Own scan, like stuck_check's: window_id (the write target, stable across
     # re-slotting) plus the three stamps the verdict needs. '-'/'0' placeholders keep
     # the fields parsing when an option is empty (issue #105).
-    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0}' 2>/dev/null) || continue
-    while read -r wid st nsub ts; do
+    wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0} #{?@cc_agent,#{@cc_agent},claude}' 2>/dev/null) || continue
+    while read -r wid st nsub ts agent; do
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
+      case "$agent" in ''|claude) : ;; *) continue ;; esac # Claude transcript oracle only (#730)
       [ "$left" -gt 0 ] || { nstarved=$((nstarved + 1)); continue; }   # budget spent; next check resumes
       case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
       [ $(( nows - ts )) -ge "$NEEDS_SECS" ] || continue   # fresh stamp — still settling

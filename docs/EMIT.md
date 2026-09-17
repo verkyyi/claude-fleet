@@ -110,6 +110,9 @@ spend belong to the issue — so `source=clear` is a fact worth having, not nois
 A headless `claude -p` helper inherits the pane's hooks but is not the pane's
 session (issue #571) and emits nothing.
 
+Codex also emits this event through the shared hook table. Its Claude-only
+handoff-latch handler is excluded by `hooks/codex-map.json`.
+
 ### `session.bind` — `bin/fleet-bind.sh`
 
 ```json
@@ -147,9 +150,12 @@ report up to 100 PRs as if they had just happened.
  "verdict":"merged-pr"}
 ```
 
-- **`via=hook`** — a *Claude* session ended (SessionEnd hook). It carries the
+- **`via=hook`** — an agent session ended (SessionEnd hook). It carries the
   ledger's session id and the CLI's own `reason`. `reason=clear` is a handoff
-  cycle, not the end of the work.
+  cycle on Claude. Codex currently reports `reason=other` for thread lifecycle
+  ends; this event does not close its tmux window. The Codex launcher requests
+  the shared close-on-exit cleanup only after its foreground CLI exits
+  successfully, with the same global opt-out and worktree preservation rules.
 - **`via=reap`** — the *fleet* session ended: the worktree was reaped, so the
   outcome is known. This rides `fleet_reap_record` in `bin/fleet-lib.sh`, the one
   choke point every reaper funnels through (the SessionEnd hook's detached

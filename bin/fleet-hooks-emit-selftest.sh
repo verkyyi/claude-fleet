@@ -12,7 +12,7 @@
 #      unchanged. The Claude side must never be silently transformed.
 #   2. CODEX TARGET IS THE SOURCE MINUS THE DECLARED DELTA — the wired events are
 #      exactly those marked `true`, the edit matcher becomes apply_patch, the
-#      Artifact group is gone, transcript-reading hooks are dropped — and every
+#      Artifact group is gone, Claude-specific hooks are dropped — and every
 #      surviving command still traces back to the source (nothing invented).
 #   3. FAIL-CLOSED — a NEW event in the source that codex-map.json does not mark
 #      `true` stays OUT of the Codex table. A new Claude hook can never silently
@@ -66,9 +66,9 @@ cdx="$("$EMIT" --target codex --root "$SHIPPED")" || fail "codex target exited n
 printf '%s' "$cdx" > "$WORK/codex.tsv"
 
 events="$(cut -f1 "$WORK/codex.tsv" | sort | paste -sd, -)"
-[ "$events" = "PostToolUse,PreToolUse,Stop,UserPromptSubmit" ] \
+[ "$events" = "PostToolUse,PreToolUse,SessionEnd,SessionStart,Stop,UserPromptSubmit" ] \
   || fail "codex wired the wrong event set: $events" "$cdx"
-ok "codex target wires exactly the four events codex-map.json marks true"
+ok "codex target wires state and lifecycle events declared in codex-map.json"
 
 grep -q 'matcher="apply_patch"' "$WORK/codex.tsv" \
   || fail "the edit matcher was not translated to apply_patch" "$cdx"
@@ -77,12 +77,18 @@ grep -q 'Edit|Write' "$WORK/codex.tsv" \
 grep -q 'artifact-guard' "$WORK/codex.tsv" \
   && fail "artifact-guard.py reached codex, which has no Artifact tool" "$cdx"
 grep -q 'classify-hook' "$WORK/codex.tsv" \
-  && fail "classify-hook.sh reached codex — it reads a CLAUDE transcript" "$cdx"
+  && fail "classify-hook.sh reached codex before its rubric was adapted" "$cdx"
+grep -q 'handoff-latch-reset-hook\|session-end-hook' "$WORK/codex.tsv" \
+  && fail "Claude handoff or reason-based cleanup reached a Codex thread lifecycle hook" "$cdx"
+grep '^SessionStart' "$WORK/codex.tsv" | grep -q 'fleet-emit.sh session.start' \
+  || fail "Codex SessionStart must emit the lifecycle event" "$cdx"
+grep '^SessionEnd' "$WORK/codex.tsv" | grep -q 'fleet-emit.sh session.end --via hook' \
+  || fail "Codex SessionEnd must emit the lifecycle event without window cleanup" "$cdx"
 grep -q 'base-readonly-guard.py' "$WORK/codex.tsv" \
   || fail "the base-checkout guard is missing from the codex table" "$cdx"
 grep -q 'bash-guard.py' "$WORK/codex.tsv" \
   || fail "the bash deny-list guard is missing from the codex table" "$cdx"
-ok "codex delta applied: apply_patch in, Artifact + transcript hooks out, both guards in"
+ok "codex delta applied: guards and lifecycle events in, Claude-only cleanup/handoff out"
 
 # Nothing invented: every emitted command must exist in the source table.
 SRC="$SRC" TSV="$WORK/codex.tsv" python3 - <<'PY' || fail "the codex table contains a command that is not in hooks/settings-hooks.json"

@@ -15,7 +15,7 @@
 # different product's job, and it only needs the fleet to emit).
 #
 # THE FOUR FACTS
-#   session.start  a Claude session began in a fleet pane — the event that maps the
+#   session.start  an agent session began in a fleet pane — the event that maps the
 #                  ledger's session id to an issue. Emitted on EVERY SessionStart,
 #                  `source` included: a /fleet-handoff cycle ends one session id and
 #                  starts another on the SAME issue, and both halves of that spend
@@ -26,7 +26,7 @@
 #   session.pr     a PR for a session's branch was opened / merged / closed —
 #                  diffed off the prmap the PR refresher already maintains.
 #   session.end    how it ended. Two `via` values because two different things end:
-#                    via=hook  a Claude session ended (SessionEnd) — carries the
+#                    via=hook  an agent session ended (SessionEnd) — carries the
 #                              ledger's session id + the CLI's `reason`. `clear` is
 #                              a handoff cycle, not the end of the work.
 #                    via=reap  the FLEET session ended — the worktree was reaped, so

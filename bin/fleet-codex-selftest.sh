@@ -82,10 +82,19 @@ printf '%s\n' "$agent" > "$WORK/ran"
 : > "$WORK/argv"; for a in "\$@"; do printf '%s\036' "\$a" >> "$WORK/argv"; done
 pwd -P > "$WORK/cwd"
 printf '%s\n' "\${CLAUDE_CODE_SUBAGENT_MODEL:-}" > "$WORK/subm"
-exit 0
+touch "$WORK/agent-exited"
+exit "\${FAKE_AGENT_RC:-0}"
 EOS
   chmod +x "$WORK/fakebin/$agent"
 done
+
+# The launcher's close request is separate from the reap policy (covered by
+# session-end-hook-selftest). It must happen AFTER the CLI exits and only on 0.
+cat > "$IBIN/session-end-hook.sh" <<EOS
+#!/bin/sh
+[ -f "$WORK/agent-exited" ] || exit 99
+printf '%s\n' "\$*" >> "$WORK/close"
+EOS
 
 # fake tmux: display-message names the session ($SESS_FILE); set-option is logged.
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
@@ -113,7 +122,7 @@ FAKE_MAIN="$(cd "$WORK/wt/repo" && pwd -P)"
 printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "trusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
 
 run() {   # run the launcher from the fake worktree with a fresh env; args pass through
-  rm -f "$WORK/ran" "$WORK/argv" "$WORK/cwd" "$WORK/subm" "$WORK/tmuxlog"
+  rm -f "$WORK/ran" "$WORK/argv" "$WORK/cwd" "$WORK/subm" "$WORK/tmuxlog" "$WORK/close" "$WORK/agent-exited"
   ( unset FLEET_AGENT FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_MCP_CONFIG CLAUDE_CODE_SUBAGENT_MODEL \
           FLEET_MODEL_FALLBACK FLEET_CODEX_MODEL FLEET_MAIN
     export FLEET_MAIN="$FAKE_MAIN"
@@ -281,10 +290,28 @@ ok "F prose and unknown-skill prompts pass through verbatim"
 # no prompt → no positional; a trailing flag is a flag, not a prompt
 run
 [ "$(nargs)" -gt 0 ] || fail "F codex still gets its flags with no prompt" "$(argv1l)"
-case "$(last)" in hooks.Stop=*) : ;; *) fail "F with no prompt the last arg must be the last flag value, not a positional" "$(last)" ;; esac
+case "$(last)" in hooks.SessionEnd=*) : ;; *) fail "F with no prompt the last arg must be the last flag value, not a positional" "$(last)" ;; esac
 run --search
 [ "$(last)" = '--search' ] || fail "F a trailing flag must stay a flag" "$(last)"
 ok "F no prompt → no positional; a trailing flag is a flag"
+
+# F2: only the owning launcher's successful process exit requests cleanup.
+run
+owner=$(awk '/@cc_launcher_pid/{print $NF}' "$WORK/tmuxlog")
+case "$owner" in ''|*[!0-9]*) fail "F2 launcher ownership must be stamped" ;; esac
+[ "$(cat "$WORK/close")" = "--codex-exit $owner" ] \
+  || fail "F2 successful CLI exit must request cleanup with the stamped owner" "$(cat "$WORK/close" 2>/dev/null)"
+ok "F2 normal Codex exit requests cleanup after the process ends, with its owner PID"
+
+FAKE_AGENT_RC=42 run
+[ "$(cat "$WORK/rc")" = 42 ] || fail "F2 failed CLI status must propagate"
+[ ! -e "$WORK/close" ] || fail "F2 failed launch must stay visible, not close"
+FAKE_AGENT_RC=130 run
+[ "$(cat "$WORK/rc")" = 130 ] || fail "F2 interrupted CLI status must propagate"
+[ ! -e "$WORK/close" ] || fail "F2 interrupted process must not request normal-exit cleanup"
+( unset TMUX; run )
+[ ! -e "$WORK/close" ] || fail "F2 a non-tmux launch must not request window cleanup"
+ok "F2 failures, interruption, and non-tmux launches never request window cleanup"
 
 # ============================================================================
 # G. codex missing from PATH → loud failure, claude is NOT substituted

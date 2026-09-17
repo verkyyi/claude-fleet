@@ -213,6 +213,14 @@ dispatch_fleet() { (
     exit 0
   fi
 
+  # The subscription gate measures Claude, while the disk/session caps apply to
+  # every agent. Read the fleet's agent AFTER its overlay, and never let a Claude
+  # quota hold stop Codex autofill (#730). The measurement is shared once per tick.
+  if [ "${FLEET_AGENT:-claude}" != codex ] && [ "$quota_closed" = 1 ]; then
+    log "$sess: Claude quota gate closed — skip: ${quota_why}"
+    exit 0
+  fi
+
   # An autofill fleet is by definition unattended — report a parked spawn before
   # counting slots (it stays counted; see trust_sweep).
   [ "$DRY" = 1 ] || trust_sweep "$sess"
@@ -317,8 +325,9 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-diskguard.sh" ] \
   exit 0
 fi
 
-# Quota gate: also machine-wide (the subscription is an account, not a fleet),
-# so it is answered ONCE per tick alongside the disk gate. Autofill spends the
+# Quota measurement is shared by Claude fleets, so read it ONCE per tick.
+# The verdict is applied inside dispatch_fleet after resolving its agent; it is
+# not a machine-wide hold (Codex uses a different subscription). Autofill spends the
 # subscription its spawned sessions run on; without this the dispatcher happily
 # burns the last of a weekly window on whatever happened to be labelled
 # `autofill`, and the operator discovers it when their own session is refused.
@@ -326,10 +335,10 @@ fi
 # OFF unless the fleet sets FLEET_QUOTA_GATE=1 and ccquota is installed with a
 # hub configured — the guard is a no-op otherwise, so a fleet that has never
 # heard of ccquota is unaffected. It fails OPEN, like the disk gate.
+quota_closed=0; quota_why=''
 if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-quotaguard.sh" ]; then
   quota_why=$("$BIN/fleet-quotaguard.sh" --gate 2>&1 >/dev/null) || {
-    log "quota gate closed — skipping all fleets this tick: ${quota_why}"
-    exit 0
+    quota_closed=1
   }
 fi
 

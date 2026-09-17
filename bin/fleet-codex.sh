@@ -5,7 +5,8 @@
 # through; with FLEET_AGENT=codex (or a caller's `--agent codex`) it hands the
 # whole launch to THIS script instead of `exec claude`. Same contract: run in the
 # pane the spawner created (cwd = the issue-<N> / scratch-<N> worktree, $TMUX_PANE
-# set), take the seed prompt as the LAST positional, exec the agent.
+# set), take the seed prompt as the LAST positional, and run the agent. The
+# launcher waits for normal CLI exit to apply the shared close-on-exit policy.
 #
 # What Codex needs translated — everything else in the worker path is agent-
 # agnostic (the worktree, the @issue binding, claim-at-spawn, the PR map, the
@@ -26,12 +27,11 @@
 #     THIS install's paths: PreToolUse → `busy` + bash-guard.py (Bash) +
 #     base-readonly-guard.py (apply_patch); PostToolUse / UserPromptSubmit →
 #     `working`; Stop → `done`. That is what colours a Codex window on the dash
-#     and keeps the two bypass-permissions rails (issue #355). NOT wired: the
-#     Claude-only SessionStart handoff latch, the Stop classifier (reads a Claude
-#     transcript), and SessionEnd close-on-exit — Codex reports `reason=other` for
-#     EVERY end, so the matcher that tells a manual /exit from a /clear cannot
-#     fire; the cleanup daemon + ledger-watch (poll path) reap a Codex window
-#     instead. Hooks need persisted trust in Codex; the fleet vets its own, so
+#     and keeps the two bypass-permissions rails (issue #355). SessionStart and
+#     SessionEnd emit lifecycle facts. The Claude handoff latch and screen
+#     classifier remain excluded. Codex reports `reason=other` for thread ends,
+#     so window cleanup follows a successful CLI process exit instead (#730).
+#     Hooks need persisted trust in Codex; the fleet vets its own, so
 #     --dangerously-bypass-hook-trust.
 #   * Posture: --dangerously-bypass-approvals-and-sandbox — the same footing as a
 #     bypassPermissions Claude worker (nobody is watching a fleet pane to approve;
@@ -82,10 +82,11 @@
 # red `needs` + bell when a session is blocked on you | ✅ | ❌ | **Codex has no `Notification` event.** 0.154's hook set is PreToolUse · PermissionRequest · PostToolUse · Pre/PostCompact · SessionStart · SessionEnd · UserPromptSubmit · SubagentStart/Stop · Stop · Interrupt — and its nearest analogue, `PermissionRequest`, cannot fire under the fleet's bypass posture. A Codex worker that stops to ask you something reads green `done`, like any finished turn.
 # `AskUserQuestion` + the dash's ⌃k answer key | ✅ | ❌ | A Claude-only tool; `bin/fleet-answer.sh` answers it by driving that dialog's keystrokes. Codex has no equivalent dialog to drive.
 # permission prompts readable + refusable from the dash | ✅ | ❌ | A red row now says WHICH kind of blocked it is (`?` question · `⊘` permission, issue #640), and ⌃k on a `⊘` row shows the blocked command plus the prompt's own reason without attaching; `bin/fleet-permission.sh --deny` can press **No**, and only No (off by default). Both halves ride hooks Codex does not have here — no `Notification`, and its `PermissionRequest` cannot fire under the fleet's bypass posture, so a Codex worker never raises one of these dialogs at all.
-# close the window when the operator exits the agent | ✅ | ❌ | Codex does fire `SessionEnd`, but reports `reason=other` for every end — it never emits Claude's `prompt_input_exit` / `logout` — so the matcher that tells a manual `/exit` from a `/clear` cannot fire. The cleanup daemon's poll reaps a Codex window instead: a minute later, not instantly.
+# close the window when the operator exits the agent | ✅ | ✅ | The Codex launcher waits for a successful CLI exit, then calls the shared close-on-exit policy. Dirty/unmerged work survives, hubs/panels are excluded, and the global `FLEET_CLOSE_ON_EXIT=0` opt-out applies. Failed launches stay visible; thread `SessionEnd(reason=other)` never closes a window.
+# session lifecycle events | ✅ | ✅ | Both agents emit `session.start` and `session.end` through the shared hook table. Codex thread lifecycle events are separate from process-exit window cleanup.
 # `/fleet-handoff` + the auto-handoff nudge | ✅ | ❌ | Reads Claude Code's `~/.claude/projects/**.jsonl` transcript and re-seeds the pane. Codex keeps its own rollout files — the mechanism is not missing on Codex, the adapter is.
 # `/fleet-context` + the dash's ctx % | ✅ | ❌ | Same transcript, plus `conf/statusline.sh` stamping `@ctx_pct` on every render. Codex's status line is a built-in TUI toggle, not a user command that could stamp that bus.
-# Stop classifier (haiku) | ✅ | ❌ | Reads the Claude transcript to correct a state the semantic-blind hooks got wrong. Same adapter gap.
+# Stop classifier (haiku) | ✅ | ❌ | Captures terminal text and invokes a Claude helper with a Claude-specific rubric. The normal Codex Stop hook does not invoke it yet; this is a screen-classification adapter gap.
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ❌ | `bin/fleet-claude.sh` routes every `--resume` / `--continue` / `--from-pr` / `--fork-session` launch to Claude — those resume Claude transcripts. Codex has `codex resume`; the fleet does not wire it.
 # multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over.
 # per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch.
@@ -160,7 +161,7 @@ fi
 # (and did) drift from hooks/settings-hooks.json. Now bin/fleet-hooks-emit.sh
 # materializes the ONE table for the codex target, applying the declared Codex
 # delta (hooks/codex-map.json): which events Codex has, `Edit|Write|MultiEdit|
-# NotebookEdit` → `apply_patch`, no Artifact tool, no transcript-reading hooks.
+# NotebookEdit` → `apply_patch`, no Artifact tool, no Claude handoff/exit hooks.
 # Resolved against THIS install (--root defaults to it), so a selftest or a
 # re-homed install wires its own copies.
 #
@@ -233,11 +234,23 @@ fi
 # --- stamp THIS pane's window (issue #511: -t "$TMUX_PANE", never the current window)
 if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
+  tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
 fi
 
+# Codex's SessionEnd reason is always `other`, including thread lifecycle ends
+# that do NOT mean the operator quit this TUI. Wait for the CLI itself instead
+# (issue #730). Only a successful exit closes the window; a failed launch/crash
+# stays visible. The shared hook owns the opt-out, panel/hub guards, and reap
+# policy. Its owner check prevents an old launcher closing a replacement session.
 if [ "$have_prompt" = 1 ]; then
-  exec codex "${flags[@]}" ${pass[@]+"${pass[@]}"} "$prompt"
+  codex "${flags[@]}" ${pass[@]+"${pass[@]}"} "$prompt"
 else
-  exec codex "${flags[@]}" ${pass[@]+"${pass[@]}"}
+  codex "${flags[@]}" ${pass[@]+"${pass[@]}"}
 fi
+rc=$?
+if [ "$rc" = 0 ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
+   && [ -f "$BIN/session-end-hook.sh" ]; then
+  bash "$BIN/session-end-hook.sh" --codex-exit "$$" </dev/null
+fi
+exit "$rc"

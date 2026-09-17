@@ -195,5 +195,33 @@ PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR
 grep -q 'PARKED' "$WORK/log3" && fail2 "#563 --dry-run must not sweep"
 [ -s "$TMUX_LOG" ] && fail2 "#563 --dry-run must not stamp windows"
 
+# #730: one Claude quota measurement, applied only to Claude fleets. Check both
+# iteration orders so a held first fleet cannot abort dispatch for the second.
+cat > "$WORK/bin/fleet-quotaguard.sh" <<FAKE
+#!/bin/sh
+printf 'gate\n' >> "$WORK/quota-calls"
+echo 'Claude quota hold' >&2
+exit 3
+FAKE
+chmod +x "$WORK/bin/fleet-quotaguard.sh"
+cp "$WORK/conf/s1.conf" "$WORK/conf/s2.conf"
+printf 'FLEET_AGENT=codex\n' >> "$WORK/conf/s2.conf"
+cat > "$WORK/bin/dash-issue-session.sh" <<FAKE
+#!/bin/sh
+printf '%s %s\n' "\$1" "\$2" >> "$SPAWN_LOG"
+FAKE
+for order in 's1 s2' 's2 s1'; do
+  : > "$SPAWN_LOG"; : > "$WORK/quota-calls"
+  # shellcheck disable=SC2086  # deliberate: two fleet names
+  PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+    bash "$WORK/bin/fleet-dispatch.sh" $order >/dev/null 2>"$LOG2" || fail2 "mixed-agent dispatch failed"
+  [ "$(cat "$SPAWN_LOG")" = "$(printf '20 s2\n50 s2')" ] \
+    || fail2 "Claude quota must hold s1 while Codex s2 still spawns (order: $order)"
+  [ "$(wc -l < "$WORK/quota-calls" | tr -d ' ')" = 1 ] \
+    || fail2 "the shared quota measurement must run only once per tick"
+  grep -q 's1: Claude quota gate closed' "$LOG2" || fail2 "quota log must name the held Claude fleet"
+done
+printf 'ok   Claude quota holds only Claude fleets, independent of dispatch order\n'
+
 printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563)\n' "$got"
 exit 0
