@@ -77,6 +77,7 @@
 # session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-claim-brief.sh` ends every worker's preamble with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
+# transferred recurring loop | native `/loop` | Fleet adapter | `fleet-transfer.sh --loop spec.json` preserves the task/cadence, binds the exact Codex thread, and wakes it through a private per-pane app server. Idle-only delivery; owner can defer/stop. TUI exit stops the timer; calendar cron is not converted.
 # slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`.
 # per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently.
 # red `needs` + bell when a session is blocked on you | ✅ | ❌ | **Codex has no `Notification` event.** 0.154's hook set is PreToolUse · PermissionRequest · PostToolUse · Pre/PostCompact · SessionStart · SessionEnd · UserPromptSubmit · SubagentStart/Stop · Stop · Interrupt — and its nearest analogue, `PermissionRequest`, cannot fire under the fleet's bypass posture. A Codex worker that stops to ask you something reads green `done`, like any finished turn.
@@ -256,10 +257,16 @@ fi
 # (issue #730). Only a successful exit closes the window; a failed launch/crash
 # stays visible. The shared hook owns the opt-out, panel/hub guards, and reap
 # policy. Its owner check prevents an old launcher closing a replacement session.
+runner=(codex)
+if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
+  # A private app server gives the loop controller an addressed, native turn API
+  # for THIS TUI. Plain CLI sessions keep their existing launch path.
+  runner=(python3 "$BIN/fleet-loop.py" bridge --)
+fi
 if [ "$have_prompt" = 1 ]; then
-  codex "${flags[@]}" ${pass[@]+"${pass[@]}"} "$prompt"
+  "${runner[@]}" "${flags[@]}" ${pass[@]+"${pass[@]}"} "$prompt" # bash32-ok: runner and flags are always populated
 else
-  codex "${flags[@]}" ${pass[@]+"${pass[@]}"}
+  "${runner[@]}" "${flags[@]}" ${pass[@]+"${pass[@]}"} # bash32-ok: runner and flags are always populated
 fi
 rc=$?
 if [ "$rc" = 0 ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \

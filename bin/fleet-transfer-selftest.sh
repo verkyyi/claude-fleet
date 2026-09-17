@@ -19,7 +19,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
@@ -151,6 +151,7 @@ wait_request() {
 }
 
 spawn 41 issue normal
+TM set-option -wu -t "$WIN" @worktree
 printf 'staged\n' > "$WT/file"; git -C "$WT" add file
 printf 'unstaged\n' >> "$WT/file"; printf 'untracked\n' > "$WT/untracked"
 BEFORE=$(git -C "$WT" diff --binary HEAD)
@@ -159,6 +160,7 @@ printf '{"type":"user","sessionId":"helper","message":{"content":"helper noise"}
 transfer --dry-run || fail 'dry-run'
 ok; [ ! -e "$FLEET_CONF_DIR/handoffs" ] && [ ! -e "$FLEET_CONF_DIR/rotating" ] || fail 'dry-run must not write packages or leases'
 ok; kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'dry-run changed the source'
+ok; [ -z "$(field worktree)" ] || fail 'dry-run must not stamp a missing worktree'
 printf '# 人工交接\n下一步：验证 file 的改动。\n' > "$WORK/notes.md"
 transfer --prepare-only --handoff "$WORK/notes.md" || fail 'prepare-only'
 BUNDLE=$(packet)
@@ -203,6 +205,7 @@ BUNDLE=$(packet)
 ok; ! kill -0 "$PID" 2>/dev/null || fail 'source process must exit'
 ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ "$(field origin)" = scratch-99 ] || fail 'window bindings changed'
 ok; [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'target provenance stamps missing'
+ok; [ "$(field worktree)" = "$WT" ] || fail 'issue-worker cutover must record verified worktree'
 ok; [ "$(git -C "$WT" diff --binary HEAD)" = "$BEFORE" ] && [ -f "$WT/untracked" ] || fail 'cutover modified the source work'
 python3 - "$BUNDLE" "$WORK/target-argv.json" <<'PY' || fail 'target must receive the exact pickup prompt and manifest'
 import json, pathlib, sys
@@ -219,8 +222,14 @@ OUT=$(bash "$BUNDLE/resume-source.sh" 2>&1) && fail 'manual recovery must refuse
 SENTINEL="$WIN"
 
 spawn 42 raw normal
+git -C "$WT" checkout --detach -q || fail 'detached scratch fixture'
 # Clean scratch at the base commit: SessionEnd/cleanup must keep it for Codex.
 transfer || fail 'clean scratch cutover'; ok
+python3 - "$(packet)/manifest.json" <<'PY' || fail 'detached HEAD provenance'
+import json, sys
+assert json.load(open(sys.argv[1]))['workspace']['branch'] is None
+PY
+ok; [ -z "$(git -C "$WT" branch --show-current)" ] || fail 'transfer must preserve detached HEAD'
 ok; [ "$(field raw)" = 1 ] && [ -f "$WT/file" ] || fail 'clean scratch worktree lost'
 ok; [ "$(TM display-message -p -t "$SENTINEL" '#{@source_session_id}')" = source-41 ] || fail 'unrelated session changed'
 
@@ -271,15 +280,17 @@ ok; kill -0 "$PID" || fail 'snapshot verification failure must leave source aliv
 # detached worker. A stale done stamp cannot replace that signal, and the final
 # source message must be in the actual snapshot delivered to Codex.
 spawn 47 issue normal
+printf '{"prompt":"继续轮询测试任务","interval_seconds":3600}\n' > "$WORK/loop.json"
 TM set-option -w -t "$WIN" @claude_state working
 transfer --after-turn && fail 'after-turn must require source-written notes'; ok
 SP=$(TM display-message -p -t "$PANE" '#{socket_path}')
 OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" FLEET_TRANSFER_IDLE_WAIT=30 FLEET_HANDOFF_DEFER_SECS=0 \
   bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to codex \
-  --after-turn --handoff "$WORK/notes.md" 2>&1) || fail 'arm inside source tool turn'
+  --after-turn --handoff "$WORK/notes.md" --loop "$WORK/loop.json" 2>&1) || fail 'arm inside source tool turn'
 REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
 ok; [ -s "$REQUEST/request.json" ] && [ -s "$REQUEST/notes.md" ] || fail 'arming must preserve notes and identity'
 printf 'CHANGED AFTER ARM\n' > "$WORK/notes.md"
+printf '{"prompt":"CHANGED AFTER ARM","interval_seconds":60}\n' > "$WORK/loop.json"
 TM set-option -w -t "$WIN" @claude_state "done"
 sleep 1
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] || fail 'stale done must not release the after-turn waiter'
@@ -296,6 +307,10 @@ assert 'FINAL HANDOFF TURN' in (b/'source.jsonl').read_text()
 assert json.loads((b/'manifest.json').read_text())['source']['session_id'] == 'source-47'
 assert json.loads((r/'state.json').read_text())['detail'] == str(b/'manifest.json')
 assert '人工交接' in (b/'handoff.md').read_text() and 'CHANGED AFTER ARM' not in (b/'handoff.md').read_text()
+assert json.loads((b/'loop-spec.json').read_text())['interval_seconds'] == 3600
+assert '继续轮询测试任务' in (b/'loop-spec.json').read_text()
+assert 'CODEX_THREAD_ID' in (b/'pickup.md').read_text()
+assert 'FLEET_LOOP_SPEC=' in (b/'launch.sh').read_text()
 assert stat.S_IMODE(r.stat().st_mode) == 0o700
 assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in r.iterdir())
 PY
