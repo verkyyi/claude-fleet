@@ -1,0 +1,2 @@
+{"type": "user", "timestamp": "2026-01-04T00:00:00Z", "message": {"content": "/fleet:fleet-claim"}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:10Z", "message": {"id": "u1", "content": [{"type": "tool_use", "id": "u1", "name": "Read", "input": {"file_path": "README.md"}}], "usage": {"output_tokens": 10, "cache_read_input_tokens": 90000, "cache_creation_input_tokens": 1000}}, "requestId": "u1"}
