@@ -2,7 +2,7 @@
 # fleet-transfer.sh — hand ONE idle Claude/Codex session to a fresh Codex in its existing pane.
 #
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to codex
-#                         [--handoff <notes.md>] [--loop <spec.json>]
+#                         [--handoff <notes.md>] [--loop <spec.json>] [--codex-home DIR]
 #                         [--dry-run | --prepare-only | --after-turn]
 #
 # --dry-run       Resolve exact provenance and print the plan; write nothing.
@@ -37,22 +37,24 @@ HELPER="$BIN/.fleet-transfer.py"
 
 die() { printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
-SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST=''
+SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--codex-home)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
         --window) [ -z "$TARGET" ] || die 'only one --window is allowed'; TARGET=$2 ;;
         --to) TO=$2 ;; --handoff) NOTES=$2 ;;
         --loop) LOOP=$2 ;;
+        --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
+    --require-codex-idle) REQUIRE_IDLE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
@@ -60,6 +62,9 @@ done
 [ -n "$TARGET" ] && [ "$TO" = codex ] || { usage >&2; exit 2; }
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
 [ "$AFTER" != 1 ] || [ -n "$NOTES" ] || die '--after-turn requires --handoff notes written by the source agent'
+if [ -n "$CODEX_TARGET_HOME" ]; then
+  CODEX_TARGET_HOME=$(cd "$CODEX_TARGET_HOME" && pwd -P) || die 'target CODEX_HOME is missing'
+fi
 for dep in python3 git tmux; do command -v "$dep" >/dev/null 2>&1 || die "$dep is required"; done
 [ -n "$SESS" ] || SESS=$(fleet_current_session)
 case "$SESS" in ''|*[!A-Za-z0-9_-]*) die 'pass --session with a valid fleet name' ;; esac
@@ -107,6 +112,7 @@ PROJECTS="${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects
 RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT") || exit 1
 SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
 fi
+[ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
@@ -157,14 +163,14 @@ if [ "$AFTER" = 1 ]; then
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
-    --loop "$LOOP" \
+    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
 
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
-  --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" \
+  --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" --target-home "$CODEX_TARGET_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
   --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH") || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
@@ -216,6 +222,11 @@ else
     && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
 fi
 [ "$(opt '#{@claude_state}')" = "done" ] || die 'source started another turn while preparing the transfer'
+if [ "$REQUIRE_IDLE" = 1 ]; then
+  [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
+  FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
+    || die 'Codex source is not natively idle; leaving it alone'
+fi
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'
@@ -267,9 +278,10 @@ fi
   printf '#!/bin/bash\nset -uo pipefail\ncd %q || exit 1\n' "$WT"
   printf 'export FLEET_HANDOFF_MANIFEST=%q\n' "$BUNDLE/manifest.json"
   if [ -s "$BUNDLE/loop-spec.json" ]; then printf 'export FLEET_LOOP_SPEC=%q\n' "$BUNDLE/loop-spec.json"; fi
-  [ -z "$CODEX_SOURCE_HOME" ] || printf 'export CODEX_HOME=%q\n' "$CODEX_SOURCE_HOME"
+  printf 'exec %q --agent codex ' "$LAUNCH"
+  [ -z "$CODEX_TARGET_HOME" ] || printf -- '--codex-home %q ' "$CODEX_TARGET_HOME"
   # shellcheck disable=SC2016 # Expanded by launch.sh, never by this controller.
-  printf 'exec %q --agent codex "$(cat %q)"\n' "$LAUNCH" "$BUNDLE/pickup.md"
+  printf '"$(cat %q)"\n' "$BUNDLE/pickup.md"
 } > "$BUNDLE/launch.sh" || die 'cannot write target launcher'
 for key in @cc_account @cc_model @ctx_pct @ctx_limit @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :

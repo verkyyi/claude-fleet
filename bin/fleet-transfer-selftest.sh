@@ -92,6 +92,7 @@ cat > "$IBIN/fleet-claude.sh" <<'SH'
 [ "$1" = --agent ] && [ "$2" = claude ] && exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$4" normal
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
 [ ! -f "$TRANSFER_TEST_ROOT/fail-target" ] || exit 37
+if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
 exec "$TRANSFER_TEST_ROOT/fakebin/codex" "$TRANSFER_TEST_ROOT/codex.pl" "$@"
 SH
 printf '#!/bin/sh\nexit 0\n' > "$IBIN/fleet-codex.sh"
@@ -449,6 +450,22 @@ python3 - "$WORK/target-argv.json" "$CHOME" <<'PYHOME' || fail 'Codex cycle chan
 import json, sys
 assert json.load(open(sys.argv[1]))['home']==sys.argv[2]
 PYHOME
+ok
+spawn_codex 64
+printf '#!/bin/sh\nexit 1\n' > "$IBIN/fleet-codex-account.sh"; chmod +x "$IBIN/fleet-codex-account.sh"
+transfer --require-codex-idle && fail 'unverified native idle must refuse account cutover'
+kill -0 "$PID" || fail 'failed native idle check must preserve source'; ok
+NEXT_HOME="$WORK/next Codex account"; mkdir -p "$NEXT_HOME"
+transfer --codex-home "$NEXT_HOME" || fail 'Codex account cutover'
+BUNDLE=$(packet)
+python3 - "$WORK/target-argv.json" "$BUNDLE" "$CHOME" "$NEXT_HOME" <<'PYROTATE' || fail 'account cutover lost source or target home'
+import json,pathlib,sys
+launch=json.load(open(sys.argv[1]));m=json.loads((pathlib.Path(sys.argv[2])/'manifest.json').read_text())
+assert launch['home']==sys.argv[4]
+assert m['target']['codex_home']==sys.argv[4]
+assert m['source']['codex_home']==sys.argv[3]
+assert m['source_resume_argv'][4]==sys.argv[3]
+PYROTATE
 ok
 spawn_codex 62
 FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm Codex stale-source case'

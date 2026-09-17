@@ -87,7 +87,13 @@ NOW() { date +%s; }
 # warmed under a rotated-away account must not be handed out.
 acct_now() {
   if [ "$AGENT" = codex ]; then
-    printf 'codex:%s\n' "${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}"
+    if [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
+      local chome
+      chome=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" select --session "$SESS") || return 1
+      printf 'codex:%s\n' "$chome"
+    else
+      printf 'codex:%s\n' "${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}"
+    fi
   else
     "$BIN/fleet-account.sh" active 2>/dev/null
   fi
@@ -247,12 +253,16 @@ spawn_one() {
   # Never warm the fleet past its own ceiling, and always leave one slot of
   # headroom so a warm entry can't be the reason a real spawn is refused.
   fleet_session_cap_ok "$SESS" >/dev/null || return 1
+  acct=$(acct_now) || return 1
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || return 1
   slug=${alloc%%	*}; wt=${alloc#*	}
   read -r _w _h <<EOF
 $(fleet_dims)
 EOF
   printf -v launch 'env FLEET_LAUNCH_SESSION=%q %q --agent %q' "$SESS" "$BIN/fleet-claude.sh" "$AGENT"
+  if [ "$AGENT" = codex ]; then
+    printf -v launch '%s --codex-home %q' "$launch" "${acct#codex:}"
+  fi
   if TM has-session -t "$POOL" 2>/dev/null; then
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     TM resize-window -t "$POOL" -x "$_w" -y "$_h" >/dev/null 2>&1
@@ -265,7 +275,6 @@ EOF
     win=$(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null | head -1)
   fi
   [ -n "$win" ] || { fleet_scratch_free "$MAIN" "$slug" "$wt"; return 1; }
-  acct=$(acct_now)
   TM set-window-option -t "$win" @raw 1 2>/dev/null
   TM set-window-option -t "$win" @pool 1 2>/dev/null
   TM set-window-option -t "$win" @pool_slug "$slug" 2>/dev/null

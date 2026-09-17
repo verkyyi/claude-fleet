@@ -218,6 +218,21 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex account home @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_CODEX_HOME=""
 
+# Space-separated labels registered with fleet-codex-account.sh register LABEL HOME.
+# Fresh launches pick the most headroom; explicit/pinned/recovery homes win.
+# @label=Codex account pool @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_ACCOUNTS=""
+# Hold fresh launches/autofill only when every configured home is known low.
+# @label=Codex quota gate @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_QUOTA_GATE=0
+# @label=Codex quota floor percent @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_CODEX_QUOTA_FLOOR=5
+# @label=Codex quota cache seconds @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_CODEX_QUOTA_TTL=300
+# Opt-in idle-only quota recovery through the durable handoff controller.
+# @label=Codex quota migration @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_QUOTA_MIGRATE=0
+
 # Codex MCP policy: unset inherits FLEET_MCP_CONFIG; explicitly empty preserves
 # Codex defaults. `none` disables all configured MCP servers and apps/connectors.
 # Otherwise use a JSON file/inline object with mcpServers (stdio/HTTP translation)

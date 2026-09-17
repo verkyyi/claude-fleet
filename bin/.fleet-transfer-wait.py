@@ -148,6 +148,8 @@ def wait(request):
                "--expected-source", "%s:%s:%s" % (r["pane"], r["pid"], r["sid"])]
         if r.get('loop'):
             cmd.extend(['--loop', str(request / 'loop-spec.json')])
+        if r.get('codex_home'):
+            cmd.extend(['--codex-home', r['codex_home']])
         env = dict(os.environ)
         env.pop("TMUX_PANE", None)
         env.pop("TMUX", None)  # All calls use the explicit fleet socket.
@@ -182,6 +184,7 @@ def main():
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
     a.add_argument("--loop", default='')
+    a.add_argument("--codex-home", default='')
     w = sub.add_parser("wait")
     w.add_argument("request", type=Path)
     args = parser.parse_args()
