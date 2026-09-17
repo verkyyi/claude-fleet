@@ -57,6 +57,7 @@
 #                        reaped:full         0  wt + branch + issue + window disposed
 #                        reaped:keep         0  window + issue closed, wt KEPT (dirty)
 #                        skip:needs-confirm  3  needs a y/n the caller did not grant
+#                        skip:live           3  active/young agent or unknown liveness
 #                        refused:<slug>      4  nothing to reap here (no-target /
 #                                               no-git / no-issue / no-repo)
 #                      The token names the ACTION taken, not which artifacts existed:
@@ -85,6 +86,22 @@ refuse() { local slug="$1"; shift; emit "refused:$slug"; tmux display-message "r
 # popup is drawn into the void — nobody can answer it, so the reap would hang on a
 # `y` that can never arrive while the caller walked away thinking it was done.
 have_client() { [ -n "$(tmux list-clients -F '#{client_name}' 2>/dev/null)" ]; }
+
+# Git ancestry cannot distinguish a finished session from a new, clean worker
+# (#565). Recheck at each disposal entry, INCLUDING the delayed --exec tail,
+# before reports/history/issue writes or killing anything. Explicit --yes and
+# popup confirmation authorize disposal, not killing an active agent. Wait for
+# done (or an empty state) and FLEET_REAP_MIN_AGE seconds (default 1800).
+guard_live() {
+  local why
+  if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+    python3 "$BIN/fleet-reap-live.py" "$target" 2>/dev/null); then
+    emit skip:live
+    printf 'reap: %s is live or could not be checked (%s) — leaving window and worktree alone\n' \
+      "$target" "${why:-probe unavailable}" >&2
+    exit 3
+  fi
+}
 
 # close the bound issue (idempotent — a merge/janitor may have closed it already)
 close_issue() {
@@ -131,6 +148,7 @@ reap_record() {
 
 # full reap: remove worktree + delete branch, close issue, kill window
 reap_full() {
+  guard_live
   # Kill the window FIRST (issue #313): the dash row is driven live by
   # `tmux list-windows`, so dropping the window here makes the reaped row vanish
   # on the very next repaint instead of lingering behind the slow tail below (the
@@ -156,6 +174,7 @@ reap_full() {
 
 # dirty force reap: KEEP the worktree, close issue + kill window only
 reap_keep() {
+  guard_live
   tmux kill-window -t "$target" 2>/dev/null || true   # drop the row first (#313)
   reap_record                                          # the KEPT worktree is resumable (#471)
   close_issue
@@ -167,6 +186,7 @@ reap_keep() {
 # WINDOW STILL STANDS (reap_* kills it), pushes the child-report backstop, then acts
 # by verdict. $1 = the ACTION (full|keep); $reason = the gate verdict for the row.
 reap_dispatch() {
+  guard_live
   # Window id + NAME for the ledger row — read BEFORE reap_* kills the window
   # (the summary cache FILE the id keys survives; neither would be resolvable
   # afterwards). Empty is tolerated: the row just records no summary / no title.
@@ -197,6 +217,12 @@ target="${1:-}"
 # same window; a non-handle passes through untouched. Bare tmux: ⌃x runs in the
 # dash pane and the --exec tail under run-shell, both on THIS fleet's socket.
 target="$(fleet_wid_target "$target")"
+# Pin identity before a popup or background job: an index can move while either
+# waits (#565). Every subsequent read and the disposal target use this exact id.
+target=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) \
+  || refuse no-target "target window disappeared"
+case "$target" in @*) ;; *) refuse no-target "cannot resolve target window" ;; esac
+case "${target#@}" in ''|*[!0-9]*) refuse no-target "invalid window id" ;; esac
 shift || true
 for a in "$@"; do case "$a" in
   confirm)      confirm=1 ;;
@@ -222,6 +248,7 @@ if [ "${1:-}" = "--exec" ]; then
   [ -z "$iss" ] && exit 0
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
   fleet_load_conf "$FLEET_SESSION"
+  guard_live
   REPO="${FLEET_REPO:-}"
   _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
   MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
@@ -250,6 +277,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # window-close, so a stray cwd can never make ⌃x delete unrelated work.
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
   fleet_load_conf "$FLEET_SESSION"
+  guard_live
   MAIN="${FLEET_MAIN:-}"; [ -n "$MAIN" ] && [ ! -d "$MAIN/.git" ] && MAIN=""
   swt="$(tmux display-message -t "$target" -p '#{@worktree}' 2>/dev/null)"
   [ -z "$swt" ] && swt="$(tmux display-message -t "$target" -p '#{pane_current_path}' 2>/dev/null)"
@@ -265,6 +293,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # No confirm was ever involved here, so --yes changes nothing; closing the window
   # IS this row's full disposal, hence `reaped:full` (#596).
   if [ -z "$sbranch" ]; then
+    guard_live
     tmux kill-window -t "$target" 2>/dev/null || true
     tmux display-message "closed scratch ✓" 2>/dev/null || true
     emit reaped:full
@@ -320,7 +349,9 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # non-interactive --yes (issue #596) so all three stay one behavior: record first
   # (#466), KEEP a dirty worktree, close the window last. Echoes its result token.
   scratch_dispose() {
+    guard_live
     scratch_record
+    guard_live
     [ "$sreason" = dirty ] || scratch_remove
     tmux kill-window -t "$target" 2>/dev/null || true
     if [ "$sreason" = dirty ]; then
@@ -383,6 +414,7 @@ FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
 # target the reaped row's fleet, not the global default (a secondary fleet has its
 # own checkout) — same as dash-issue-session.sh / dash-new-session.sh.
 fleet_load_conf "$FLEET_SESSION"
+guard_live
 REPO="${FLEET_REPO:-}"
 _r="$(fleet_repo_cached "$FLEET_SESSION")"; [ -n "$_r" ] && REPO="$_r"
 [ -z "$REPO" ] && refuse no-repo "no repo resolved — cannot reap #$iss"
