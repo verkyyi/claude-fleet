@@ -68,7 +68,9 @@ sheet_prefix_keys="$(printf '%s\n' "$SHEET" \
 # cleanly when the fleet stops overriding those keys (a bare unbind would leave
 # them dead) — they are not fleet shortcuts, so the cheatsheet deliberately omits
 # them and this guard must not demand a sheet row for them.
-conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $3!="next-window" && $3!="refresh-client") print $2 }' "$CONF" | sort -u)"
+# Explicit -T bindings belong to an inner key table (sidebar navigation), not
+# the prefix table; the sidebar selftest exercises that table through a PTY.
+conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $2!="-T" && $3!="next-window" && $3!="refresh-client") print $2 }' "$CONF" | sort -u)"
 [ -n "$conf_prefix_keys" ] || fail "no prefix binds parsed from the conf"
 
 # --- 1. every 'prefix X' row in the sheet is bound in the conf -----------------

@@ -129,6 +129,7 @@ hb_stamp   # once at startup, so a freshly (re)started spinner is never read as 
            # every restart, and "no heartbeat at all" is the doctor's loudest verdict.
 
 STUCK_STRIKES='|'   # window_ids that were stale on the PREVIOUS check (2-strike debounce)
+STUCK_SCREENS=''    # sidebar workers: socket:window:pane|screen checksum|last change
 
 # stuck_check — one throttled sweep: demote any working window whose pane has
 # been frozen (window_activity stale >= STUCK_SECS) across two consecutive checks.
@@ -136,15 +137,30 @@ STUCK_STRIKES='|'   # window_ids that were stale on the PREVIOUS check (2-strike
 stuck_check() {
   nows=$(date +%s)
   new='|'
+  new_screens=''
   demoted=0
   # Fan out over every live fleet socket. window_id (@N) is unique only WITHIN a
   # server, so the strike key + demote target are namespaced by "<sock>:<wid>" and
   # the demote/classify run against that socket's -L.
   for sock in $SOCKETS; do
-  wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@claude_state} #{window_activity}' 2>/dev/null) || continue
-  while read -r wid st act; do
+  wl=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@claude_state} #{window_activity} #{@sidebar_worker}' 2>/dev/null) || continue
+  while read -r wid st act worker; do
     [ -n "$wid" ] || continue
     [ "$st" = working ] || continue
+    # A sidebar's output is window activity too. While it is present, measure
+    # changes to the AGENT screen instead, so a busy fleet list cannot keep a
+    # frozen worker alive forever. Missing captures fail open; a new sample
+    # starts a fresh grace period, and the table is pruned on every sweep.
+    if [ -n "$worker" ]; then
+      screen=$(tmux -L "$sock" capture-pane -p -t "$worker" 2>/dev/null) || continue
+      digest=$(printf '%s' "$screen" | cksum)
+      screenkey="$sock:$wid:$worker"
+      old=${STUCK_SCREENS#*"$NL$screenkey|"}
+      old=${old%%"$NL"*}
+      act=$nows
+      if [ "${old%|*}" = "$digest" ]; then act=${old##*|}; fi
+      new_screens="$new_screens$NL$screenkey|$digest|$act"
+    fi
     case "$act" in ''|*[!0-9]*) continue ;; esac   # need a numeric activity stamp
     age=$(( nows - act ))
     [ "$age" -ge "$STUCK_SECS" ] || continue        # still fresh -> not stuck, no strike
@@ -165,6 +181,7 @@ $wl
 EOF
   done
   STUCK_STRIKES="$new"
+  STUCK_SCREENS="$new_screens"
   [ "$demoted" = 1 ] && [ -f "$STUCK_LOG" ] && \
     { tail -n 300 "$STUCK_LOG" > "$STUCK_LOG.tmp" 2>/dev/null && mv "$STUCK_LOG.tmp" "$STUCK_LOG" 2>/dev/null; }
 }
