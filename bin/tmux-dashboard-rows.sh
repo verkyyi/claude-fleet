@@ -39,7 +39,9 @@ R="${E}0m"; US=$'\x1f'
 # reads every pinned window as unpinned. @claude_needs (#640) and @expand (the
 # fold bit) are the two newest such fields and sit exactly there, ahead of @pin,
 # for that reason.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@cc_agent}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}"
+# Keep the column count stable. Codex's agent cell carries an exact cache suffix;
+# the display loop separates it before drawing the ordinary `codex` tag.
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -170,6 +172,9 @@ LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 # lookup table the grouping needs (a child can appear BEFORE its parent in window
 # order); pass B renders. Herestring iteration, no extra forks.
 WLIST=$(tmux list-windows -a -F "$WFMT")
+# tmux 3.4 escapes a control separator as the literal four bytes `\037`;
+# newer versions return the byte. Accept both at the serialization boundary.
+WLIST=${WLIST//\\037/$US}
 
 # pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<origin>` line per
 # addressable window, the parent-resolution table for the spawn-provenance grouping
@@ -280,6 +285,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac   # panels, not Claude sessions
   ckey_v "$path"; key=$ckey
+  ctxkey="$key"
+  case "$agent" in
+    codex:*) ctxkey="codex_${sess}_${wid}_${agent#codex:}"; agent=codex ;;
+    codex) ctxkey="codex_unknown" ;; # older launcher: unknown, never Claude data
+  esac
 
   branch='-'
   [ -f "$G/git_$key" ] && { IFS=$'\t' read -r branch _ < "$G/git_$key" || :; }
@@ -347,9 +357,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   fi
 
   # model + ctx%
-  cmodel=''; ctok=''
-  [ -f "$G/ctx_$key" ] && { IFS=$'\t' read -r cmodel ctok < "$G/ctx_$key" || :; }
+  cmodel=''; ctok=''; climit=''
+  [ -f "$G/ctx_$ctxkey" ] && { IFS=$'\t' read -r cmodel ctok climit < "$G/ctx_$ctxkey" || :; }
   model_v "$cmodel"
+  if [ "$agent" = codex ]; then
+    case "$climit" in ''|*[!0-9]*|0) ctok='' ;; *) cwin="$climit" ;; esac
+  fi
   pct='·'; pcolr=$GY
   case "$ctok" in
     ''|*[!0-9]*) : ;;

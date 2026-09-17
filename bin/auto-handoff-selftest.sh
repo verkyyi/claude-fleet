@@ -86,6 +86,7 @@ case "$verb" in
       *@agent_transfer_pending_until*) printf '%s\n' "${FAKE_TRANSFER_UNTIL:-}" ;;
       *@agent_transfer_request*) printf '%s\n' "${FAKE_TRANSFER_REQUEST:-}" ;;
       *@ctx_pct*)       printf '%s\n' "${FAKE_CTX:-}" ;;
+      *@cc_agent*)      printf '%s\n' "${FAKE_AGENT:-}" ;;
       *@issue*)         printf '%s\n' "${FAKE_ISSUE:-}" ;;
       *@raw*)           printf '%s\n' "${FAKE_RAW:-}" ;;
       *@claude_state*)  printf '%s\n' "${FAKE_PREV:-done}" ;;
@@ -134,6 +135,7 @@ run_state() {
   env -i PATH="$HOOK_PATH" HOME="$WORK/home" TMPDIR="$WORK/tmp" \
       TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" \
       SETOPT_LOG="$SETOPT_LOG" FAKE_SESSION="$SESS" \
+      FAKE_AGENT="${FAKE_AGENT:-}" \
       FAKE_PREV="${FAKE_PREV:-done}" FAKE_ARMED="${FAKE_ARMED:-}" \
       FAKE_ISSUE="${FAKE_ISSUE:-}" FAKE_RAW="${FAKE_RAW:-}" FAKE_CTX="${FAKE_CTX:-}" \
       FAKE_WID="${FAKE_WID:-}" FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
@@ -160,6 +162,11 @@ case "$out" in *'/fleet-handoff'*) : ;; *) fail "nudge reason must direct the mo
 case "$out" in *'Continue replying in the language this session was using'*) : ;;
   *) fail "nudge reason must end with the language rule (issue #620), got: '$out'";; esac
 latched || fail "nudge must set the @handoff_armed latch"
+
+# A real Codex context stamp must not activate the Claude transcript cycle.
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail "Codex telemetry must not trigger the Claude handoff directive"
+latched && fail "Codex telemetry must not arm the Claude handoff latch"
 
 # ---- OFF ≠ BROKEN: no conf layer sets it → no nudge even at 95% ---------------
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"

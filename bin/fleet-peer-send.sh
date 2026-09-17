@@ -38,6 +38,16 @@ shift
 if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 [ -n "$text" ] || { echo "fleet-peer-send: empty message" >&2; exit 2; }
 
+case "$tgt" in
+  @*|%*|*:*)
+    tm=(tmux); [ -n "$SOCK" ] && tm+=(-L "$SOCK")
+    agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)
+    if [ "$agent" = codex ]; then
+      printf '%s' "$text" | python3 "$BIN/fleet-codex-session.py" send --pane "$tgt" --socket "$SOCK"
+      exit $?
+    fi ;;
+esac
+
 # fleet_peer_resolve_pid <target> [socket] — target grammar above → Claude pid.
 pid=""
 case "$tgt" in

@@ -74,7 +74,7 @@ fi
 
 PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
-as_json=0 quiet=0 sid="" tpath="" pane="${TMUX_PANE:-}"
+as_json=0 quiet=0 sid="" tpath="" pane="${TMUX_PANE:-}" agent=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --json)       as_json=1 ;;
@@ -82,12 +82,27 @@ while [ "$#" -gt 0 ]; do
     --session)    shift; sid="${1:-}" ;;
     --transcript) shift; tpath="${1:-}" ;;
     --pane)       shift; pane="${1:-}" ;;
+    --agent)      shift; agent="${1:-}" ;;
     -h|--help)    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)          printf 'fleet-context: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)            printf 'fleet-context: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# Resolve the runtime provider before touching any Claude transcript or stamps.
+# An explicit session can be inspected outside tmux with --agent codex.
+if [ -z "$agent" ] && [ -n "${TMUX:-}" ] && [ -n "$pane" ]; then
+  agent=$(tmux display-message -p -t "$pane" '#{@cc_agent}' 2>/dev/null)
+fi
+if [ "$agent" = codex ]; then
+  cx=(context --pane "$pane")
+  [ "$as_json" = 1 ] && cx+=(--json)
+  [ "$quiet" = 1 ] && cx+=(-q)
+  [ -n "$sid" ] && cx+=(--session "$sid")
+  [ -n "$tpath" ] && cx+=(--transcript "$tpath")
+  exec python3 "$BIN/fleet-codex-session.py" "${cx[@]}"
+fi
 
 # --- the context window denominator (resolved below, after the stamps are read) -
 # Only ever used for the DERIVED percentage (the @ctx_pct stamp needs none). The
