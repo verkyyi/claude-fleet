@@ -83,19 +83,50 @@ def live_reason(target, minimum, socket_name=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("target")
+    parser.add_argument("target", nargs="?")
     parser.add_argument("--socket-name", help="fleet socket label for callers outside tmux")
+    parser.add_argument("--worktree", help="check bound windows/pane paths across registered fleets")
+    parser.add_argument("--socket-names", default="", help="newline-separated registered socket labels")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", "1800")
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else 1800
     try:
-        reason = live_reason(args.target, minimum, args.socket_name)
-    except (OSError, subprocess.SubprocessError):
+        if args.worktree:
+            reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines())
+        elif args.target:
+            reason = live_reason(args.target, minimum, args.socket_name)
+        else:
+            reason = "unknown:missing-target"
+    except (OSError, ValueError, subprocess.SubprocessError):
         reason = "unknown:liveness-probe"
     if reason:
         print(reason)
         return 1
     return 0
+
+
+def worktree_reason(worktree, minimum, sockets):
+    target = Path(worktree).resolve()
+    for socket in sockets:
+        prefix = ("tmux", "-L", socket)
+        windows = read(*prefix, "list-windows", "-a", "-F", "#{window_id}").split()
+        for window in windows:
+            if not re.fullmatch(r"@\d+", window):
+                return "unknown:window-list"
+            bound = read(*prefix, "display-message", "-p", "-t", window, "#{@worktree}").strip()
+            paths = read(*prefix, "list-panes", "-t", window, "-F", "#{pane_current_path}").splitlines()
+            if bound:
+                paths.append(bound)
+            for path in paths:
+                if not path:
+                    continue
+                resolved = Path(path).resolve()
+                if target == resolved or target in resolved.parents:
+                    reason = live_reason(window, minimum, socket)
+                    if reason:
+                        return reason
+                    break
+    return None
 
 
 if __name__ == "__main__":

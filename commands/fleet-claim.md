@@ -222,7 +222,9 @@ override them):
        reads — don't busy-poll). If it never resolves, treat it as blocked below.
      - **`BEHIND`** → `gh pr update-branch <PR> --repo "$FLEET_REPO"`, then re-read.
      - **`FAILING` / `CONFLICT`** → yours to fix: fix, push, re-read. Never merge
-       red, never `--admin`, never force-push the base.
+       red, never `--admin`, never force-push the base. Notify the spawning session
+       once of the red gate before fixing it:
+       `~/.claude/fleet/bin/fleet-report-parent.sh --state failed --pr <PR> --summary 'RED: CI failure or merge conflict; fixing it'`.
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.
@@ -240,8 +242,9 @@ override them):
      has already been reaped — it exits 0 silently, so this is one unconditional
      line on every ship path, never a decision. It cannot fail your merge.
   6. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
-     and records the resume ledger, so expect this window to vanish a minute or
-     so after the merge — that's the reap, not a crash. Don't start new work in a
+     and records the resume ledger after the merged grace (default 10 minutes)
+     and liveness checks; the dash marks pending cleanup with `rNm`.
+     Don't start new work in a
      landed worktree; a follow-up gets its own issue (and, if it's worth one now,
      its own worker via `--spawn` above).
 - **Host for the operator with doc-preview, never an Artifact.** A report, plan,
@@ -268,6 +271,7 @@ override them):
   yourself, you should. Blocked is an OUTCOME too, so report it the same way a
   merge is reported:
   `~/.claude/fleet/bin/fleet-report-parent.sh --state blocked --summary '<why>'`
+  Add `--pr <PR>` when a PR exists.
   — a session that spawned you and is waiting on the result should not learn it
   by watching the dash go red.
 - **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** A

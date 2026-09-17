@@ -301,5 +301,43 @@ grep -qxF 108 "$CLEAN_LOG" && fail "#108 must be excluded — a CLOSED non-issue
 grep -qxF 109 "$CLEAN_LOG" && fail "#109 must be excluded — its head has no worktree"
 grep -qxF 110 "$CLEAN_LOG" && fail "#110 must be excluded — no live window sits in its worktree (fail closed)"
 
+# Idle raw policy runs before PR-cache detection and shares the tick cap.
+cat > "$WORK/bin/fleet-cleanup-idle.sh" <<FAKE
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/idle-calls"
+[ -f "$WORK/idle-rate" ] && exit 75
+case " \$* " in *' --dry-run '*) exit 0 ;; esac
+printf 'reaped-idle:@77\n'
+FAKE
+reset
+conf 'FLEET_CLEANUP_MAX_PER_TICK=2'
+run s1
+[ "$(reaped_list)" = 101 ] || fail 'idle close must consume one of the two slots'
+grep -q 's1 --limit 2' "$WORK/idle-calls" || fail 'idle pass receives session and cap'
+reset
+conf
+run s1 --dry-run
+grep -q -- '--dry-run' "$WORK/idle-calls" || fail 'dry-run must reach idle policy'
+[ ! -s "$CLEAN_LOG" ] || fail 'dry-run must not call PR cleaner'
+: > "$WORK/idle-calls"
+reset
+conf 'FLEET_CLEANUP=0'
+run s1
+[ ! -s "$WORK/idle-calls" ] || fail 'cleanup off must suppress idle pass'
+reset
+conf
+mv "$C/fleets/fake-repo/prmap" "$WORK/saved-prmap"
+run s1
+[ -s "$WORK/idle-calls" ] || fail 'missing PR cache must not suppress raw cleanup'
+mv "$WORK/saved-prmap" "$C/fleets/fake-repo/prmap"
+reset
+touch "$WORK/idle-rate"
+: > "$WORK/idle-calls"
+cp "$WORK/conf/s1.conf" "$WORK/conf/s2.conf"
+run s1 s2
+[ ! -s "$CLEAN_LOG" ] || fail 'rate limit must stop remaining PR cleanup'
+grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
+[ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
+
 printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed\n'
 exit 0

@@ -79,7 +79,9 @@ case "\${1:-}" in
            [ "\${FAKE_RESUME_ON_PULL:-0}" = 1 ] && touch "$WORK/resumed"
            : ;;          # git pull --ff-only
   status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
-  rev-parse) printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
+  rev-parse)
+    case "\$*" in *origin/*) printf '%s\n' "\${FAKE_BASE_TIP:-deadbeef}"; exit 0 ;; esac
+    printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
   *) : ;;                                             # fetch → succeed silently
 esac
 exit 0
@@ -97,7 +99,7 @@ case "\$action" in
         # 4th field = closedAt (issue #544) — the clock the closed gate compares
         # transcript activity against. Empty for a PR that never closed.
         case "\${GH_SCENARIO:-merged}" in
-          merged)        printf 'MERGED\tsha-%s\tissue-42\t-\t%s\n' "\$num" "\${FAKE_MERGED_AT-}" ;;
+          merged)        printf 'MERGED\tdeadbeef\tissue-42\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
           closed)        printf 'CLOSED\tsha-%s\tissue-42\t%s\n' "\$num" "\${FAKE_CLOSED_AT:-}" ;;
           open)          printf 'OPEN\tsha-%s\tissue-42\t\n' "\$num" ;;
           scratch)       printf 'MERGED\tcafe1234\tscratch-99\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
@@ -136,6 +138,14 @@ case "\${1:-}" in
                       : ;;   # window @7 → issue 42
     esac ;;
   display-message)
+    case "\$*" in
+      *reap_state_ts*|*claude_state_ts*) echo 1; exit 0 ;;
+      *reap_seen*) echo \$(( \$(date -u +%s) - 2 )); exit 0 ;;
+      *reap_due*) echo 1; exit 0 ;;
+      *reap_key*)
+        case "\${GH_SCENARIO:-merged}" in scratch) echo 'merged:42:cafe1234' ;; *) echo 'merged:42:deadbeef' ;; esac
+        exit 0 ;;
+    esac
     case "\$*" in *claude_state*)
       [ "\${FAKE_STATE_FAIL:-0}" = 1 ] && exit 1
       [ -f "$WORK/resumed" ] && { echo working; exit 0; }
@@ -263,7 +273,7 @@ ok 'expired automatic grace proceeds through normal cleanup'
 tok="$(FAKE_NOW=1767226199 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
 [ "$tok" = skip:grace ] || fail '599 seconds must still defer'
 tok="$(FAKE_NOW=1767226200 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
-[ "$tok" = dry:would-clean-merged ] || fail 'exactly 600 seconds must pass the grace'
+[ "$tok" = dry:would-clean-merged ] || fail "exactly 600 seconds must pass the grace, got $tok" "$(cat "$WORK/err")"
 ok 'automatic grace boundary is exact (599/600 seconds)'
 tok="$(WT_GONE=1 WIN_GONE=1 FAKE_MERGED_AT='' run_clean merged --auto)"
 [ "$tok" = skip:nothing ] || fail 'already-reaped automatic cleanup must remain idempotent'
@@ -282,14 +292,24 @@ tok="$(run_clean merged --auto)"
 printf 'FLEET_CLEANUP_MERGED_GRACE=0\n' > "$WORK/conf/testsess.conf"
 tok="$(FAKE_MERGED_AT='' run_clean merged --auto)"
 case "$tok" in cleaned:*) ;; *) fail "explicit zero must disable the delay, got '$tok'" ;; esac
+tok="$(FAKE_MERGED_AT="$(iso_ago -3600)" run_clean merged --auto --dry-run)"
+[ "$tok" = dry:would-clean-merged ] || fail 'zero grace ignores even a future merge clock after the notice'
 rm "$WORK/conf/testsess.conf"
 ok 'per-fleet grace, invalid fallback, decimal input and explicit zero'
 tok="$(FAKE_MERGED_AT='' run_clean merged)"
 case "$tok" in cleaned:*) ;; *) fail 'manual cleanup must not acquire the automatic delay' ;; esac
 ok 'manual cleanup stays immediate without a merge clock'
 tok="$(run_clean closed --auto)"
-[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED-unmerged cleanup must keep its separate policy'
-ok 'automatic CLOSED-unmerged keeps its existing policy'
+[ "$tok" = skip:unmerged ] || fail 'automatic CLOSED tip==base must be retained'
+tok="$(FAKE_BASE_TIP=baseahead run_clean closed --auto)"
+[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED strict ancestor can be reaped'
+for active_state in working looping busy; do
+  tok="$(FAKE_BASE_TIP=baseahead WIN_STATE_FAKE="$active_state" run_clean closed --auto)"
+  [ "$tok" = skip:live ] || fail "automatic CLOSED $active_state must be retained"
+done
+tok="$(FAKE_BASE_TIP=baseahead FAKE_AGENT_AGE=00:10 run_clean closed --auto)"
+[ "$tok" = skip:live ] || fail 'automatic CLOSED young agent must be retained'
+ok 'automatic CLOSED requires strict ancestry and shared liveness'
 
 # A merged PR plus expired grace must still leave a live or unverified worker.
 for active_state in working looping busy waiting ''; do
@@ -342,6 +362,13 @@ tok="$(FAKE_TMUX=fake FAKE_PANE=%1 FAKE_SELF_WIN=@1 run_clean merged --auto)"
 case "$tok" in cleaned:*) ;; *) fail 'automatic caller in another pane should use inherited socket' ;; esac
 grep -qx 'kill-window @7' "$ORDER_LOG" || fail 'inherited-socket cleanup did not complete'
 ok 'automatic caller outside target inherits socket (empty socket-argument array)'
+tok="$(FAKE_DIRTY=1 run_clean merged --auto)"
+[ "$tok" = skip:dirty ] || fail 'automatic merged issue must preserve post-merge uncommitted work'
+[ ! -s "$ORDER_LOG" ] || fail 'dirty merged issue was disposed'
+tok="$(FAKE_TIP=new-work run_clean merged --auto)"
+[ "$tok" = skip:unmerged ] || fail 'automatic merged issue must preserve post-merge commits'
+[ ! -s "$ORDER_LOG" ] || fail 'new commits after merge were disposed'
+ok 'automatic merged issue requires clean worktree and exact merged head'
 
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"

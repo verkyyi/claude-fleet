@@ -47,6 +47,7 @@
 #   skip:busy        scratch-head reap refused: its window is not `done`
 #   skip:live        automatic MERGED or CLOSED-unmerged reap deferred: live/unknown
 #   skip:grace       automatic MERGED cleanup deferred until its grace expires
+#   skip:notice      automatic cleanup waiting for the visible dashboard notice
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
@@ -202,8 +203,9 @@ fi
 # A daemon must give a newly merged worker time to finish its report (#565).
 # This only narrows automatic cleanup: all existing gates still apply, manual
 # cleanup is immediate, and an already-cleaned PR remains an idempotent no-op.
-# No ledger, lease, base pull or teardown occurs before this read-only gate.
-if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && [ "$MERGED_GRACE" -gt 0 ] \
+# No ledger, lease, base pull or teardown occurs before this gate. Window-local
+# notice metadata is the only write while waiting (and never in dry-run).
+if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] \
    && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
   merged_epoch=0
   if [[ "$merged_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
@@ -214,9 +216,24 @@ if [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && [ "$MERGED_GRACE" -gt 0 ] \
   fi
   case "$merged_epoch" in ''|*[!0-9]*) merged_epoch=0 ;; esac
   merge_age=$(( $(date +%s) - merged_epoch ))
-  if [ "$merged_epoch" -eq 0 ] || [ "$merge_age" -lt "$MERGED_GRACE" ]; then
+  if { { [ "$merged_epoch" -gt 0 ] && [ "$merge_age" -ge 0 ]; } || [ "$MERGED_GRACE" = 0 ]; } \
+     && [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+    notice_args=()
+    [ -n "${TMUX:-}" ] || notice_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+    [ "$DRY" = 1 ] && notice_args+=(--dry-run)
+    notice_deadline=0
+    [ "$MERGED_GRACE" -gt 0 ] && notice_deadline=$(( merged_epoch + MERGED_GRACE ))
+    notice_due=$(python3 "$BIN/fleet_reap_notice.py" "$WIN" "merged:$PR:$oid" \
+      "$notice_deadline" ${notice_args[@]+"${notice_args[@]}"} 2>/dev/null) || notice_due=''
+  else notice_due=''; fi
+  if [ "$MERGED_GRACE" -gt 0 ] && { [ "$merged_epoch" -eq 0 ] || [ "$merge_age" -lt "$MERGED_GRACE" ]; }; then
     note "  #$PR automatic cleanup deferred: mergedAt=${merged_at:--}, age=${merge_age}s, grace=${MERGED_GRACE}s (unknown/future times also defer)."
     done_token "skip:grace"; exit 0
+  fi
+  case "$notice_due" in ''|*[!0-9]*) done_token "skip:live"; exit 0 ;; esac
+  if [ "$notice_due" -gt "$(date +%s)" ]; then
+    note "  #$PR automatic cleanup notice displayed; waiting until $notice_due."
+    done_token "skip:notice"; exit 0
   fi
 fi
 
@@ -367,15 +384,15 @@ elif [ "$st" = CLOSED ] && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
   closed_reap_gate || exit 0
 fi
 
-# Automatic MERGED cleanup must not turn a GitHub verdict into permission to
+# Automatic cleanup must not turn a GitHub verdict into permission to
 # kill a working session (#565). Pin one window, require an explicit done state,
 # then share the dash's all-pane process-age/unknown-metadata guard. A missing
 # window is NOT proof of inactivity; the windowless janitor owns that case.
 # Run before history/pull and again after the lease/pull wait, just before kill.
-auto_merged_gate() {
-  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] || return 0
+auto_cleanup_gate() {
+  [ "$AUTO" = 1 ] || return 0
   [ -n "$WT" ] || [ -n "$WIN" ] || return 0
-  local why="" state self_win cwd lease
+  local why="" state self_win cwd lease git_state current_head base_head token="skip:live"
   local socket_args=()
   if ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then
     why="missing or ambiguous window; leaving windowless work to worktree-autoclean"
@@ -393,6 +410,24 @@ auto_merged_gate() {
       if [ -z "$self_win" ] || [ "$self_win" = "$WIN" ]; then why="caller window is target or unknown"; fi
     fi
     if [ -z "$why" ]; then
+      if [ -z "$WT" ] || [ ! -d "$WT" ] \
+         || ! git_state=$(git -C "$WT" status --porcelain 2>/dev/null); then
+        why="worktree metadata unavailable"
+      elif [ -n "$git_state" ]; then
+        why="uncommitted work after the merge"; token="skip:dirty"
+      elif ! current_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null); then
+        why="local tip unavailable"
+      elif [ "$st" = MERGED ]; then
+        if [ -z "$oid" ] || [ "$current_head" != "$oid" ]; then
+          why="local tip differs from the merged PR head"; token="skip:unmerged"
+        fi
+      elif ! base_head=$(git -C "$WT" rev-parse --verify "origin/${FLEET_BASE_BRANCH:-master}^{commit}" 2>/dev/null) \
+           || [ "$current_head" = "$base_head" ] \
+           || ! git -C "$WT" merge-base --is-ancestor "$current_head" "$base_head" 2>/dev/null; then
+        why="closed-unmerged tip is not a strict ancestor of the remote base"; token="skip:unmerged"
+      fi
+    fi
+    if [ -z "$why" ]; then
       if ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
         why="cannot read window state"
       elif [ "$state" != "done" ]; then
@@ -408,11 +443,11 @@ auto_merged_gate() {
   fi
   if [ -n "$why" ]; then
     note "  #$PR automatic cleanup deferred: $why"
-    done_token "skip:live"; return 1
+    done_token "$token"; return 1
   fi
   return 0
 }
-auto_merged_gate || exit 0
+auto_cleanup_gate || exit 0
 
 # --- dry-run: report what we WOULD do, take no lease, mutate nothing ----------
 if [ "$DRY" = 1 ]; then
@@ -446,7 +481,7 @@ teardown() {
   if [ -n "$WT" ]; then case "$cwd" in "$WT"|"$WT"/*) detach=1 ;; esac; fi
   # The automatic gate above refused actual self-calls. A daemon's untargeted
   # display-message can report the active window; that is not a caller to detach.
-  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && detach=0
+  [ "$AUTO" = 1 ] && detach=0
 
   if [ "$detach" = 1 ]; then
     # Silence the git steps (issue #192): run-shell surfaces non-empty output as a
@@ -465,7 +500,7 @@ teardown() {
     return 0
   fi
 
-  auto_merged_gate || return 1
+  auto_cleanup_gate || return 1
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
@@ -505,7 +540,7 @@ if [ "$st" = CLOSED ]; then
   fi
   note "  #$PR closed-unmerged — reaping the orphan (no merge, no base pull, no force-drop)."
   DROP_FORCE=""
-  teardown
+  teardown || exit 0
   done_token "cleaned:closed"; exit 0
 fi
 

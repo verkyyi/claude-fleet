@@ -2,8 +2,10 @@
 
 `dash-reap.sh` checks both Git eligibility and whether the target can still be
 working. A clean worktree, even one with a merged PR, does not authorize killing
-an active session. This is the dash-specific liveness part of #565; the janitor
-keeps its existing, separate worktree/pane/process/rotation guards.
+an active session. The shared `fleet_reap_ok` gate checks registered fleet windows by their bound
+worktree and all pane paths before considering Git eligibility. An active or
+unreadable binding returns `live` (rc 1); dash and janitor refuse disposal. The
+janitor also keeps its existing issue-identity, process and rotation guards.
 
 The script accepts stable `@window_id`, `%pane_id`, registered fleet handles
 (such as `a1`), `issue-N` / quoted `#N`, and `scratch-N`. Issue/scratch/handle
@@ -68,12 +70,14 @@ creation point; after base advances, a branch created at the previous base can
 become a strict ancestor. The separate liveness guards remain necessary.
 
 The cleanup daemon separately enforces a [merged grace](CLEANUP.md#the-pieces)
-of 600 seconds by default. Idle-scratch auto-reaping and dashboard grace markers
-remain separate work in #565. Its automatic MERGED path also requires explicit
+of 600 seconds by default. The same daemon implements idle-scratch window cleanup and the dashboard `rNm`
+notice; see [cleanup policy](CLEANUP.md#idle-raw-windows). Its automatic MERGED path also requires explicit
 `done` and uses this same process-age guard on its named fleet socket, before
 history/pull and again before synchronous teardown. Missing/ambiguous windows
-defer; automatic self-cleanup is refused rather than detached. Manual cleanup
-and CLOSED-unmerged retain their separate policies.
+defer; automatic self-cleanup is refused rather than detached. Automatic CLOSED-unmerged cleanup also requires explicit `done`, shared
+liveness and clean strict ancestry, in addition to its transcript checks.
+Manual cleanup retains its existing policy.
 
-A SessionEnd hook is also a different path: the user has already ended that
-agent, so it is not routed through the dash's active-agent policy.
+The SessionEnd hook handles an explicit agent exit. It closes the exited window
+and uses the shared gate before disposing of worktree data; a `live` verdict
+retains that data and records closed-unlanded history.

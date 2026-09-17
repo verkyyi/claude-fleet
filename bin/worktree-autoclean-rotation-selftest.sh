@@ -62,6 +62,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
 
 # --- a real base checkout + three CLEAN worktrees at HEAD ---------------------
 # All three read `ancestor` from the reap gate, and no fake pane binds @issue or

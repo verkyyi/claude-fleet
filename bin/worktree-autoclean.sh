@@ -203,6 +203,8 @@ process() {
   case "$branch" in scratch-*) is_scratch=1 ;; esac   # issue #290
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
   case "$merged" in
+    live)
+      say "KEEP  $branch  (shared reap gate: live or unknown)"; kept=$((kept+1)); return ;;
     dirty)
       # The worktree stays, its orphaned processes do not (#469).
       reap_detached "$dir" "$branch"

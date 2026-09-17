@@ -41,6 +41,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
 ISSUES_FILE="$WORK/issues"; PATHS_FILE="$WORK/paths"; NOTIFY_LOG="$WORK/notify"
 SERVER_CWD_FILE="$WORK/server_cwd"
 : > "$ISSUES_FILE"; : > "$PATHS_FILE"; : > "$NOTIFY_LOG"; : > "$SERVER_CWD_FILE"

@@ -195,6 +195,25 @@ cleanup_fleet() { (
   fi
 
   # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
+  # Done raw sessions do not necessarily HAVE a PR/cache row. Use the same
+  # daemon/lease/timebox, and account for their window closes in this tick's cap.
+  idle_cleaned=0
+  if [ -f "$BIN/fleet-cleanup-idle.sh" ]; then
+    idle_args=(); [ "$DRY" = 1 ] && idle_args=(--dry-run)
+    idle_out=$(fleet_timebox "$cto" bash "$BIN/fleet-cleanup-idle.sh" "$sess" \
+      --limit "$k" ${idle_args[@]+"${idle_args[@]}"})
+    idle_rc=$?
+    [ -z "$idle_out" ] || log "$sess: $idle_out"
+    # A timed-out batch spends the tick budget; never start more destructive
+    # work after a partial observation. The next daemon tick can retry safely.
+    case "$idle_rc" in
+      124) log "$sess: idle cleanup deferred (rc=124)"; exit 0 ;;
+      75) log "$sess: idle cleanup deferred (rc=75); rate limit stops all fleets"; exit 75 ;;
+    esac
+    idle_cleaned=$(printf '%s\n' "$idle_out" | awk '/^reaped-idle:/{n++} END{print n+0}')
+    k=$(( k - idle_cleaned ))
+    [ "$k" -gt 0 ] || exit 0
+  fi
   prmf=$(fleet_cache prmap "$sess")
   if [ ! -s "$prmf" ]; then
     log "$sess: no prmap cache yet (pr-refresh hasn't run for $slug?) — skip"
@@ -367,5 +386,6 @@ fi
 
 for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
   cleanup_fleet "$s"
+  [ "$?" = 75 ] && break
 done
 exit 0

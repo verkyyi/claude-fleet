@@ -256,6 +256,36 @@ PY
 ok
 
 # --- the switch: FLEET_CHILD_REPORT=0 turns the whole thing off ------------------
+# The real Stop hook must push one fallback without poll-driven reaping. All
+# addresses and the inbox belong to this private tmux server.
+TM set-window-option -u -t "$CHILD" @reported
+TM set-window-option -t "$CHILD" @claude_state working
+cpane=$(TM display-message -p -t "$CHILD" '#{pane_id}')
+csocket=$(TM display-message -p -t "$CHILD" '#{socket_path}')
+b=$(frames)
+TMUX="$csocket,1,0" TMUX_PANE="$cpane" FLEET_AUTO_HANDOFF_PCT=0 \
+  sh "$BIN/set-claude-state.sh" "done" </dev/null >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(frames)" -gt "$b" ] && break; sleep 0.3; done
+eq "Stop without ship reports once to the live parent" $((b + 1)) "$(frames)"
+grep -q 'STOPPED (no ship report)' "$INBOX_LOG" || fail 'Stop fallback verdict missing'
+TMUX="$csocket,1,0" TMUX_PANE="$cpane" FLEET_AUTO_HANDOFF_PCT=0 \
+  sh "$BIN/set-claude-state.sh" "done" </dev/null >/dev/null
+eq "repeated Stop does not duplicate the report" $((b + 1)) "$(frames)"
+
+# A deferred Fleet loop/handoff is not a stopped child task.
+b=$(frames)
+TM set-window-option -t "$CHILD" @reported 0
+TM set-window-option -t "$CHILD" @handoff_armed 1
+RUN --win "$CHILD" --state stopped --only-once >/dev/null
+eq 'pending handoff suppresses stopped report' "$b" "$(frames)"
+TM set-window-option -u -t "$CHILD" @handoff_armed
+mkdir -p "$WORK/loop"
+printf '{"status":"waiting-quota"}\n' > "$WORK/loop/state.json"
+TM set-window-option -t "$CHILD" @handoff_manifest "$WORK/manifest.json"
+RUN --win "$CHILD" --state stopped --only-once >/dev/null
+eq 'quota-wait loop suppresses stopped report' "$b" "$(frames)"
+TM set-window-option -u -t "$CHILD" @handoff_manifest
+
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"
 printf 'FLEET_CHILD_REPORT=0\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 b=$(frames)

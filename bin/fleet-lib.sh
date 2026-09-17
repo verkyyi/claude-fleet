@@ -855,6 +855,7 @@ fleet_dash_pane() {
 # and the dash reaper (dash-reap.sh) — ONE source for identical guarantees. Given a
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on
 # stdout and sets the return code:
+#   live        (rc 1) — active bound window or unreadable liveness/Git metadata
 #   merged-pr   (rc 0) — clean AND a MERGED PR exists for the branch
 #   ancestor    (rc 0) — clean AND the tip is a STRICT ancestor of the base ref
 #   dirty       (rc 1) — has uncommitted/untracked changes (untracked counts)
@@ -865,9 +866,27 @@ fleet_dash_pane() {
 # safe outcomes can just test the return code. Safe under a `set -u` caller.
 fleet_reap_ok() {
   local wtdir="${1:-}" root="${2:-}" branch="${3:-}" head="${4:-}" base="${5:-}" merged="${6:-}"
-  if [ -n "$wtdir" ] && [ -e "$wtdir" ] \
-     && [ -n "$(git -C "$wtdir" status --porcelain 2>/dev/null)" ]; then
-    printf 'dirty'; return 1
+  # Liveness precedes Git eligibility (#565). Scan the registered fleet sockets
+  # using bound worktrees and every pane cwd; a failed probe is never permission
+  # to remove data. Callers retain their additional identity/rotation guards.
+  local _reap_sockets _reap_bin
+  if [ -n "$wtdir" ]; then
+    _reap_sockets=$(fleet_sockets)
+    if [ -n "$_reap_sockets" ]; then
+      _reap_bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+      if ! FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+        python3 "$_reap_bin/fleet-reap-live.py" --worktree "$wtdir" \
+          --socket-names "$_reap_sockets" >/dev/null 2>&1; then
+        printf 'live'; return 1
+      fi
+    fi
+  fi
+  local _reap_status
+  if [ -n "$wtdir" ] && [ -e "$wtdir" ]; then
+    if ! _reap_status=$(git -C "$wtdir" status --porcelain 2>/dev/null); then
+      printf 'live'; return 1
+    fi
+    if [ -n "$_reap_status" ]; then printf 'dirty'; return 1; fi
   fi
   if [ -n "$branch" ] && printf '%s\n' "$merged" | grep -qxF "$branch"; then
     printf 'merged-pr'; return 0
@@ -1894,7 +1913,7 @@ fleet_reap_record() {
   local _oc=''
   case "$outcome" in
     merged-pr|merged-PR|merged)             _oc=landed ;;
-    ancestor|ancestor-of-*|unmerged|dirty)  _oc=closed-unlanded ;;
+    ancestor|ancestor-of-*|unmerged|dirty|live)  _oc=closed-unlanded ;;
   esac
   if [ -n "$_oc" ] && [ -n "$_bin" ] && [ -f "$_bin/fleet-emit.sh" ]; then
     bash "$_bin/fleet-emit.sh" session.end --via reap \
@@ -1911,7 +1930,7 @@ fleet_reap_record() {
         --pr "$pr" --key "$key" --worktree "$wt" --win "$win" \
         --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
       ;;
-    ancestor|ancestor-of-*|unmerged|dirty)
+    ancestor|ancestor-of-*|unmerged|dirty|live)
       # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
       # worktree the SessionEnd hook indexes on hand-exit, #403) → record it as
       # closed-unlanded so it stays browsable/resumable. record-closed skips a
