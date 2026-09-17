@@ -60,6 +60,7 @@ case "\$verb" in
       *pane_id*)             [ -n "\${FAKE_PANE_DEAD:-}" ] && exit 1; printf '%s\n' "$PANE" ;;
       *@claude_state*)       printf '%s\n' "\${FAKE_STATE:-done}" ;;
       *@handoff_cleared_at*) printf '%s\n' "\${FAKE_CLEARED_AT:-}" ;;
+      *@agent_transfer_pending_until*) printf '%s\n' "\${FAKE_TRANSFER_UNTIL:-}" ;;
       *window_id*)           printf '%s\n' '@7' ;;
       *) : ;;   # a plain notify display-message (no -p) — no-op
     esac ;;
@@ -106,6 +107,7 @@ run() {  # usage: run [FAKE_STATE=..] [FAKE_CAP=..] [DEFER=..] -- <helper args..
   FAKE_PANE_DEAD="${FAKE_PANE_DEAD:-}" \
   FAKE_COMMENTS="${FAKE_COMMENTS:-}" \
   FAKE_CLEARED_AT="${FAKE_CLEARED_AT:-}" \
+  FAKE_TRANSFER_UNTIL="${FAKE_TRANSFER_UNTIL:-}" \
   FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
   FAKE_CLIENTS_FILE="${FAKE_CLIENTS_FILE:-}" \
   TMUX="${TMUX_OVERRIDE-fake,1,0}" \
@@ -134,6 +136,11 @@ cleared && fail "outside-tmux refusal must not clear"
 # ---- REFUSE-GONE-PANE ---------------------------------------------------------
 if FAKE_PANE_DEAD=1 run --pane "$PANE" --doc "$DOC"; then fail "must refuse a dead pane"; fi
 cleared && fail "dead-pane refusal must not clear"
+
+# A context cycle must not clear a source whose explicit agent switch is armed.
+if FAKE_TRANSFER_UNTIL=9999999999 run --pane "$PANE" --doc "$DOC"; then
+  fail 'must refuse a context cycle while an agent transfer is pending'; fi
+cleared && fail 'pending agent transfer must not receive /clear'
 
 # ---- REFUSE-DOUBLE-ARM (a live lock is already held) --------------------------
 pane_san="${PANE//[^A-Za-z0-9]/_}"

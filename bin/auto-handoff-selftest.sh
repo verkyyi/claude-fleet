@@ -83,6 +83,8 @@ case "$verb" in
   display-message)
     case "$args" in
       *@handoff_armed*) printf '%s\n' "${FAKE_ARMED:-}" ;;
+      *@agent_transfer_pending_until*) printf '%s\n' "${FAKE_TRANSFER_UNTIL:-}" ;;
+      *@agent_transfer_request*) printf '%s\n' "${FAKE_TRANSFER_REQUEST:-}" ;;
       *@ctx_pct*)       printf '%s\n' "${FAKE_CTX:-}" ;;
       *@issue*)         printf '%s\n' "${FAKE_ISSUE:-}" ;;
       *@raw*)           printf '%s\n' "${FAKE_RAW:-}" ;;
@@ -135,6 +137,7 @@ run_state() {
       FAKE_PREV="${FAKE_PREV:-done}" FAKE_ARMED="${FAKE_ARMED:-}" \
       FAKE_ISSUE="${FAKE_ISSUE:-}" FAKE_RAW="${FAKE_RAW:-}" FAKE_CTX="${FAKE_CTX:-}" \
       FAKE_WID="${FAKE_WID:-}" FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
+      FAKE_TRANSFER_UNTIL="${FAKE_TRANSFER_UNTIL:-}" FAKE_TRANSFER_REQUEST="${FAKE_TRANSFER_REQUEST:-}" \
       ${HOOK_ENTRY:+CLAUDE_CODE_ENTRYPOINT=$HOOK_ENTRY} \
     sh "$STATE" "$@" < /dev/null   # empty stdin → deterministic (no stop_hook_active)
 }
@@ -207,6 +210,28 @@ latched || fail "scratch nudge must set the latch"
 out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_ARMED=1 run_state 'done')"
 nudged "$out" && fail "an already-armed pane (@handoff_armed=1) must NOT re-nudge (debounce)"
 latched && fail "the 2nd fire must not re-write the latch"
+
+# A cross-agent handoff consumes the clean Stop without starting a competing
+# /clear. Expired/incomplete requests must not disable ordinary auto-handoff.
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_REQUEST=/private/request run_state 'done')"
+nudged "$out" && fail 'pending agent transfer must suppress the context-cycle nudge'
+grep -q '@agent_transfer_ready /private/request' "$SETOPT_LOG" || fail 'clean Stop must release the exact pending request'
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_TRANSFER_UNTIL=1 FAKE_TRANSFER_REQUEST=/private/request run_state 'done')"
+nudged "$out" || fail 'expired agent-transfer marker must not suppress auto-handoff'
+grep -q '@agent_transfer_ready' "$SETOPT_LOG" && fail 'expired request must not be released'
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_TRANSFER_UNTIL=9999999999 run_state 'done')"
+nudged "$out" || fail 'deadline without a request must not suppress auto-handoff'
+out="$(GPCT=60 FAKE_CTX=95 FAKE_ISSUE=561 FAKE_PREV=needs FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_REQUEST=/private/request run_state 'done')"
+grep -q '@agent_transfer_ready' "$SETOPT_LOG" && fail 'needs-attention Stop must not release an agent transfer'
+out="$(GPCT=0 FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_REQUEST=/private/request run_state 'done')"
+grep -q '@agent_transfer_ready /private/request' "$SETOPT_LOG" || fail 'explicit transfer must work with auto-handoff disabled'
+out="$(HOOK_ENTRY=sdk-cli GPCT=60 FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_REQUEST=/private/request run_state 'done')"
+[ -s "$SETOPT_LOG" ] && fail 'a headless child must not release a pending transfer'
+for ev in working busy needs; do
+  run_state "$ev" >/dev/null
+  grep -q -- '-u .*@agent_transfer_ready' "$SETOPT_LOG" || fail 'new activity must invalidate the previous transfer Stop'
+done
+printf 'selftest: AGENT-TRANSFER legs PASS (clean Stop / expired / incomplete / needs / disabled auto-cycle / headless)\n' >&2
 
 # ---- UNSTAMPED @ctx_pct (statusline hasn't rendered yet) → no nudge -----------
 out="$(GPCT=60 FAKE_CTX='' FAKE_ISSUE=561 run_state 'done')"

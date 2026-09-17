@@ -189,6 +189,13 @@ if [ -n "$BRANCH" ]; then
   fi
 fi
 
+# Transfers protect MERGED as well as CLOSED-unmerged work. A PR webhook can
+# race the short source-exit/target-start gap, even while the window is retained.
+if [ -n "$WT" ] && _transfer_lease="$(fleet_rotate_lease_held "$WT")"; then
+  note "  refusing $BRANCH: migration/transfer in flight — lease $_transfer_lease"
+  done_token "skip:live"; exit 0
+fi
+
 # --- the scratch-head gate (issue #589) ---------------------------------------
 # Reaping on head branch alone would kill live work — a `scratch-<N>` window is
 # routinely the operator's own workbench, which is exactly why #543/#544 protects

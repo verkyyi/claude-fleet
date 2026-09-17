@@ -146,6 +146,11 @@ esac
 # 'leave' (benign idle_prompt) intentionally writes nothing — it preserves the
 # existing @claude_state and its timestamp so the classifier stays authoritative.
 if [ "$sem" != "leave" ]; then
+  # A tool, new prompt, or needs-attention event invalidates the previous Stop.
+  # In particular, a typing hold must not let a later stale `done` stamp reuse it.
+  if [ "$sem" != "done" ]; then
+    tmux set-window-option -u -t "$TMUX_PANE" @agent_transfer_ready 2>/dev/null
+  fi
   tmux set-window-option -t "$TMUX_PANE" @claude_state "$sem" 2>/dev/null
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
@@ -194,6 +199,18 @@ if [ "$sem" = "done" ]; then
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
   case "$_ds" in ''|*[!0-9]*) _ds=30 ;; esac         # unset / non-numeric → the 30s default
+  # Explicit cross-agent handoff: only this Stop may release the detached waiter.
+  # A stale `done` stamp or spinner demotion is NOT proof the arming turn ended.
+  # Suppress the context-cycle nudge while the bounded request owns this Stop.
+  _transfer_until=$(tmux display-message -p -t "$TMUX_PANE" '#{@agent_transfer_pending_until}' 2>/dev/null)
+  case "$_transfer_until" in ''|*[!0-9]*) _transfer_until=0 ;; esac
+  if [ "$_transfer_until" -gt "$(date +%s)" ]; then
+    _transfer_request=$(tmux display-message -p -t "$TMUX_PANE" '#{@agent_transfer_request}' 2>/dev/null)
+    if [ -n "$_transfer_request" ]; then
+      _hp=0
+      [ "$handoff_prev" = needs ] || tmux set-window-option -t "$TMUX_PANE" @agent_transfer_ready "$_transfer_request" 2>/dev/null
+    fi
+  fi
   # Loop-guard: the Stop-hook stdin carries stop_hook_active=true when the model is
   # ALREADY continuing because of a prior Stop-hook block — never re-block that
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with

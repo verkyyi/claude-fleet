@@ -190,6 +190,18 @@ run_clean() {
 }
 
 # --- 1. MERGED → cleaned + ledger-before-teardown + ordered teardown + base pull
+# A transfer lease must protect even a clean MERGED worker, not just the
+# existing CLOSED-unmerged gate. No teardown or GitHub mutation may occur.
+mkdir -p "$WORK/conf/rotating" "$WORK/wt-issue-42"
+TRANSFER_WT=$(cd "$WORK/wt-issue-42" && pwd -P)
+TRANSFER_LEASE="$WORK/conf/rotating/$(printf '%s' "$TRANSFER_WT" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$TRANSFER_LEASE"
+tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
+[ "$tok" = 'skip:live' ] || fail "transfer lease must protect a merged worker, got '$tok'" "$err"
+[ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'transfer lease allowed teardown' "$err"
+ok 'MERGED worker with transfer lease → skip:live, no teardown'
+rm "$TRANSFER_LEASE"
+
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
 case "$tok" in cleaned:*) ;; *) fail "1 expected cleaned:*, got '$tok'" "$err" ;; esac

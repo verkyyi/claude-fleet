@@ -76,6 +76,19 @@ _close_on_exit="${FLEET_CLOSE_ON_EXIT:-1}"       # default ON; global fleet.conf
 TAB=$(printf '\t')
 strip_num() { printf '%s' "${1:-}" | tr -cd '0-9'; }
 
+# A single-session agent transfer retains this window/worktree. Both the marker
+# and a live rotation lease are required; an abandoned marker alone cannot turn
+# off manual-exit cleanup indefinitely. Check the detached path as well, in case
+# it was queued immediately before the transfer acquired its lease.
+transfer_holds_window() {
+  local until wt
+  until=$(tmux display-message -p -t "$1" '#{@agent_transfer_until}' 2>/dev/null)
+  case "$until" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$until" -gt "$(date +%s)" ] || return 1
+  wt=$(tmux display-message -p -t "$1" '#{@worktree}' 2>/dev/null)
+  [ -n "$wt" ] && fleet_rotate_lease_held "$wt" >/dev/null
+}
+
 # ============================================================================
 # --exec MODE — the DETACHED, server-side reap the in-pane gate dispatches via
 # `tmux run-shell -b`. It runs in the tmux server (not the dying pane), so it
@@ -92,6 +105,7 @@ if [ "${1:-}" = "--exec" ]; then
   # $5 is kind-dependent: the issue number for a worker, the scratch-<N> key for a
   # raw one (#466) — so it is read raw here and interpreted per branch below.
   kind="${2:-}"; sess="${3:-}"; win="${4:-}"; iss=$(strip_num "${5:-}")
+  transfer_holds_window "$win" && exit 0
 
   # raw scratch → RECORD it into the /fleet-history ledger, then close the window
   # (issue #466). A scratch has no issue, so the ledger keys it by the `scratch-<N>`
@@ -282,6 +296,7 @@ fleet_load_conf "$sess"                          # still needed for FLEET_MAIN/R
 #    panel (dash/plan/backlog) carries none.
 win=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
 [ -n "$win" ] || exit 0
+transfer_holds_window "$win" && exit 0
 issue=$(strip_num "$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)")
 raw=$(tmux display-message -p -t "$TMUX_PANE" '#{@raw}' 2>/dev/null)
 hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)

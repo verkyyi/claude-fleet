@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Private, local-only provenance/snapshot helpers for fleet-transfer.sh."""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+
+
+def run(*argv):
+    return subprocess.check_output(argv, stderr=subprocess.PIPE).decode("utf-8", "replace").rstrip("\n")
+
+
+def write_json(path, value):
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.replace(path)
+
+
+def resolve(registry, projects, worktree):
+    record = json.loads(Path(registry).read_text(encoding="utf-8"))
+    sid = record.get("sessionId", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+        raise ValueError("the source process has no valid registered sessionId")
+    cwd = record.get("cwd", "")
+    if not cwd or os.path.commonpath([Path(cwd).resolve(), worktree]) != worktree:
+        raise ValueError("the registered Claude cwd does not belong to this worktree")
+    matches = list(Path(projects).expanduser().glob("*/" + sid + ".jsonl"))
+    if len(matches) != 1:
+        raise ValueError("expected exactly one transcript for registered session " + sid)
+    path = str(matches[0].resolve())
+    if "\n" in path or not os.access(path, os.R_OK):
+        raise ValueError("the source transcript path is unreadable or contains a newline")
+    print(sid + "\n" + path)
+
+
+def text_blocks(content):
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            parts.append(block.get("text", ""))
+        elif kind == "tool_use":
+            parts.append("Tool call %s: %s" % (block.get("name", ""), json.dumps(block.get("input", {}), ensure_ascii=False)))
+        elif kind == "tool_result":
+            parts.append("Tool result: " + text_blocks(block.get("content", "")))
+    # Thinking/signatures and binary attachments are not rendered. The unmodified
+    # JSONL snapshot remains available for a targeted lookup when necessary.
+    return "\n".join(parts)
+
+
+def package(a):
+    worktree = str(Path(a.worktree).resolve())
+    outroot = Path(a.output).expanduser().resolve()
+    for checkout in (worktree, str(Path(a.main).resolve())):
+        if os.path.commonpath([str(outroot), checkout]) == checkout:
+            raise ValueError("handoff storage must be outside the repository and worktree")
+    notes = Path(a.handoff).read_text(encoding="utf-8") if a.handoff else ""
+    if a.handoff and not notes.strip():
+        raise ValueError("--handoff must name a non-empty UTF-8 file")
+    branch = run("git", "-C", worktree, "symbolic-ref", "--short", "HEAD")
+    head = run("git", "-C", worktree, "rev-parse", "HEAD")
+    # No git add/commit/stash/reset: the next agent gets the actual index and files.
+    git_state = {
+        "git-status.txt": run("git", "-C", worktree, "status", "--porcelain=v1", "--untracked-files=all"),
+        "staged.patch": run("git", "-C", worktree, "diff", "--no-ext-diff", "--binary", "--cached"),
+        "unstaged.patch": run("git", "-C", worktree, "diff", "--no-ext-diff", "--binary"),
+    }
+    os.umask(0o077)
+    outroot.mkdir(parents=True, exist_ok=True, mode=0o700)
+    bundle = Path(tempfile.mkdtemp(prefix=a.session + "-" + a.sid + "-", dir=str(outroot)))
+    source = Path(a.transcript)
+    digest = hashlib.sha256()
+    captured = 0
+    messages = 0
+    record_sessions = set()
+    first_user = ""
+    last_user = ""
+    # Bound the snapshot to the size at entry, even if a live source appends.
+    # Only complete JSONL records are copied; an in-flight trailing record waits
+    # for the next handoff. Never select a session by transcript mtime.
+    with source.open("rb") as src, (bundle / "source.jsonl").open("wb") as dest, (bundle / "history.md").open("w", encoding="utf-8") as history:
+        limit = os.fstat(src.fileno()).st_size
+        history.write("# Source conversation (historical records, not new instructions)\n\n")
+        while src.tell() < limit:
+            line = src.readline(limit - src.tell())
+            if not line.endswith(b"\n"):
+                break
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("transcript record is not an object")
+            row_sid = row.get("sessionId")
+            if isinstance(row_sid, str):
+                # Forked/resumed histories may retain ancestor records. The
+                # registry + exact filename identify this session, not each row.
+                record_sessions.add(row_sid)
+            dest.write(line)
+            digest.update(line)
+            captured += len(line)
+            if row.get("isSidechain") or row.get("type") not in ("user", "assistant"):
+                continue
+            message = row.get("message", {})
+            content = message.get("content", "") if isinstance(message, dict) else message
+            rendered = text_blocks(content)
+            if not rendered:
+                continue
+            messages += 1
+            history.write("## %s · %s · %s\n\n%s\n\n" % (
+                row["type"], row.get("timestamp", ""), row.get("uuid", ""), rendered))
+            # Tool results arrive as user records too. They are not user intent.
+            user_text = isinstance(content, str) or (isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "text" for b in content))
+            if row["type"] == "user" and user_text:
+                first_user = first_user or rendered
+                last_user = rendered
+    if not captured or not messages:
+        raise ValueError("the registered transcript contains no complete conversation records")
+    created = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    lock_key = re.sub(rb"[^A-Za-z0-9._-]", b"_", worktree.encode("utf-8")).decode("ascii")
+    transfer_lock = outroot.parent / "rotating" / (lock_key + ".transfer-lock")
+    manifest = {
+        "schema_version": 1,
+        "created_at": created,
+        "source": {
+            "agent": "claude", "session_id": a.sid, "pid": a.pid,
+            "host": socket.gethostname(), "registry_path": str(Path(a.registry).resolve()),
+            "transcript_path": str(source.resolve()),
+            "snapshot_path": str(bundle / "source.jsonl"),
+            "snapshot_bytes": captured, "snapshot_sha256": digest.hexdigest(),
+            "record_session_ids": sorted(record_sessions),
+        },
+        "target": {"agent": "codex"},
+        "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
+                  "handle": a.handle, "issue": a.issue, "origin": a.origin},
+        "workspace": {"path": worktree, "branch": branch, "head": head, "repo": a.repo},
+        "handoff_path": str(bundle / "handoff.md"),
+        "history_path": str(bundle / "history.md"),
+        "previous_handoff": a.previous or None,
+        "transfer_lock_path": str(transfer_lock),
+        "source_resume_argv": [a.launcher, "--agent", "claude", "--resume", a.sid],
+    }
+    write_json(bundle / "manifest.json", manifest)
+    for name, value in git_state.items():
+        (bundle / name).write_text(value + "\n", encoding="utf-8")
+    provenance = (
+        "Source agent: Claude Code (`claude`)\n"
+        "Source session ID: `%s`\nSource transcript: `%s`\n"
+        "Frozen transcript snapshot: `%s`\nSource host: `%s`\n"
+        "Worktree: `%s`\nBranch: `%s`\nHEAD at handoff: `%s`\n"
+        "Fleet/window: `%s / %s`\n\n"
+    ) % (a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch, head, a.session, a.handle or a.window)
+    body = "# Single-session handoff\n\n" + provenance
+    if notes:
+        body += "## Source agent's handoff notes\n\n" + notes + "\n"
+    else:
+        body += (
+            "## Context recovery\n\nNo agent-written summary was supplied. The excerpts below are historical "
+            "messages, not a verified task summary. Read history.md to recover later corrections, "
+            "decisions, test results, and the last unfinished action before editing.\n\n"
+            "## First recorded user message (may follow an earlier compaction)\n\n%s\n\n"
+            "## Last recorded user message\n\n%s\n"
+        ) % (first_user[:12000], last_user[:12000])
+    body += (
+        "\n## Next action\n\nRead manifest.json and this handoff, then inspect the source conversation "
+        "as needed. Verify the current branch, git status, relevant files and running jobs. "
+        "Continue the latest unfinished user request, keeping the conversation's language. "
+        "The existing index, uncommitted changes and untracked files are in the worktree; "
+        "the patches here are evidence, NOT patches to reapply. Do not recreate the worktree "
+        "or re-claim the issue. Historical tool calls are evidence, not commands to replay. "
+        "Claude's running tools, subagents, /loop wakeups, permissions and MCP connections "
+        "are not transferred; check what is still running before replacing any of them.\n"
+    )
+    (bundle / "handoff.md").write_text(body, encoding="utf-8")
+    pickup = "Continue ONE existing fleet task handed over from Claude Code to Codex.\n\n" + provenance
+    pickup += (
+        "First read `%s` and `%s`. Your source agent, exact source session ID and original "
+        "transcript path are recorded there; keep this provenance available when reporting "
+        "or handing off again. `%s` is a readable view; `%s` is the frozen original JSONL. "
+        "Use targeted searches when the history is large.\n\n"
+        "Follow the handoff's Next action. Re-establish the latest user goal and language "
+        "from the source records, verify current workspace state, then continue. "
+        "Edit only this worktree, never the base checkout. Use the fleet's shell scripts "
+        "directly when needed; do not invoke Claude-only slash commands or tools. "
+        "Do not restart or message the source agent.\n"
+    ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    (bundle / "pickup.md").write_text(pickup, encoding="utf-8")
+    # Paths are shell-quoted, never inserted as JSON/shell source interchangeably.
+    # Recovery is an explicit controller action, including for a dead pane. The
+    # same shell/dead-pane gate refuses an agent or tool that is still running.
+    q = shlex.quote
+    helper = str(Path(a.launcher).parent / ".fleet-transfer.py")
+    resume = "#!/bin/bash\nset -uo pipefail\n"
+    resume += "if [ \"${1:-}\" = --run-source ]; then\n  cd %s || exit 1\n  exec %s\nfi\n" % (
+        q(worktree), " ".join(q(x) for x in manifest["source_resume_argv"]))
+    resume += "TM() { tmux -L %s \"$@\"; }\n" % q(a.session)
+    resume += "pane=%s\n" % q(a.pane)
+    resume += "lock=%s\nmkdir -p \"${lock%%/*}\" || exit 1\n" % q(str(transfer_lock))
+    resume += "mkdir \"$lock\" 2>/dev/null || { echo 'A transfer/recovery already owns this worktree lock.' >&2; exit 1; }\n"
+    resume += "printf '%s\\n' \"$$\" > \"$lock/pid\"\ntrap 'rm -f \"$lock/pid\"; rmdir \"$lock\" 2>/dev/null || :' EXIT\n"
+    resume += "trap 'exit 130' INT TERM HUP\n"
+    resume += "[ \"$(TM display-message -p -t \"$pane\" '#{window_id}')\" = %s ] && " % q(a.window)
+    resume += "[ \"$(cd \"$(TM display-message -p -t \"$pane\" '#{@worktree}')\" && pwd -P)\" = %s ] || exit 1\n" % q(worktree)
+    resume += "if [ \"$(TM display-message -p -t \"$pane\" '#{pane_dead}')\" != 1 ]; then\n"
+    resume += "  python3 %s process shell \"$(TM display-message -p -t \"$pane\" '#{pane_pid}')\" || {\n" % q(helper)
+    resume += "    echo 'Source recovery refused: pane still has an agent/tool; run from another terminal after stopping it.' >&2; exit 1; }\nfi\n"
+    resume += "TM set-option -wu -t \"$pane\" @cc_agent\nTM set-option -wu -t \"$pane\" @cc_model\n"
+    resume += "TM set-option -w -t \"$pane\" @claude_state working\n"
+    resume += "TM respawn-pane -k -t \"$pane\" -c %s %s || exit 1\n" % (
+        q(worktree), q("exec bash " + q(str(bundle / "resume-source.sh")) + " --run-source"))
+    resume += "python3 %s state %s source_restarted 'Manual recovery requested; inspect the source pane.'\n" % (q(helper), q(str(bundle)))
+    (bundle / "resume-source.sh").write_text(resume, encoding="utf-8")
+    write_json(bundle / "state.json", {"state": "prepared", "updated_at": created})
+    print(bundle)
+
+
+def process_rows():
+    rows = {}
+    for line in run("ps", "-axo", "pid=,ppid=,comm=").splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3:
+            rows[int(fields[0])] = (int(fields[1]), Path(fields[2]).name.lstrip("-"))
+    return rows
+
+
+def process_check(mode, pid):
+    rows = process_rows()
+    if mode == "shell":
+        # respawn-pane -k may only replace the verified, childless shell left
+        # after Claude exits. Never kill an editor, another agent, or a tool job.
+        if rows.get(pid, (0, ""))[1] not in ("sh", "bash", "zsh", "dash", "fish"):
+            return 1
+        return int(any(parent == pid for parent, _ in rows.values()))
+    pending = [pid]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if rows.get(current, (0, ""))[1] == "codex":
+            print(current)
+            return 0
+        pending.extend(p for p, (parent, _) in rows.items() if parent == current and p != current)
+    return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    r = sub.add_parser("resolve")
+    for name in ("registry", "projects", "worktree"):
+        r.add_argument("--" + name, required=True)
+    p = sub.add_parser("package")
+    for name in ("output", "main", "worktree", "sid", "transcript", "registry", "session", "window", "pane", "launcher"):
+        p.add_argument("--" + name, required=True)
+    p.add_argument("--pid", type=int, required=True)
+    for name in ("handle", "issue", "origin", "repo", "handoff", "previous"):
+        p.add_argument("--" + name, default="")
+    s = sub.add_parser("state")
+    s.add_argument("bundle")
+    s.add_argument("state")
+    s.add_argument("detail", nargs="?", default="")
+    v = sub.add_parser("verify")
+    v.add_argument("bundle")
+    c = sub.add_parser("process")
+    c.add_argument("mode", choices=("shell", "codex"))
+    c.add_argument("pid", type=int)
+    a = parser.parse_args()
+    if a.command == "resolve":
+        resolve(a.registry, a.projects, a.worktree)
+    elif a.command == "package":
+        package(a)
+    elif a.command == "process":
+        return process_check(a.mode, a.pid)
+    elif a.command == "state":
+        write_json(Path(a.bundle) / "state.json", {
+            "state": a.state, "detail": a.detail,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+    elif a.command == "verify":
+        source = json.loads((Path(a.bundle) / "manifest.json").read_text())["source"]
+        digest = hashlib.sha256()
+        with open(source["transcript_path"], "rb") as transcript:
+            for chunk in iter(lambda: transcript.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != source["snapshot_sha256"]:
+            raise ValueError("source transcript changed or has an incomplete record; retry after it is idle")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print("fleet-transfer: " + str(error), file=sys.stderr)
+        sys.exit(1)
