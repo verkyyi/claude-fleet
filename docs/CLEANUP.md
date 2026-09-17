@@ -343,7 +343,11 @@ next tick; reaping costs work nobody can get back. A deferral is not a leak:
 | …and has been quiet for `FLEET_CLEANUP_CLOSED_GRACE` seconds | `skip:live` |
 | a live window with **no readable transcript** — idleness unprovable | `skip:live` |
 
-No live window at all ⇒ nothing to protect, and the orphan worktree is reaped.
+Manual cleanup can reap an orphan with no live window. With `--auto`, a missing
+window is retained for `worktree-autoclean.sh`; a present window must also be
+explicitly `done`, pass the shared process-age check, and have a clean tip that is
+a strict ancestor of the remote base. These additional automatic gates run again
+immediately before teardown.
 
 Three consequences worth stating outright:
 
