@@ -505,6 +505,17 @@ instead (`FLEET_AGENT=codex`, or `⌃v` on the dash to flip it for that fleet).
 Two agents, not thirty — which is what makes it honest to print the grading in
 full, gaps included.
 
+To hand **one existing Claude session** to Codex, run `/fleet-handoff --to codex`
+in that Claude conversation (`/fleet:fleet-handoff --to codex` for plugin installs).
+The skill writes task notes and arms a switch after its turn ends. From another
+pane or terminal, use
+`bin/fleet-transfer.sh --session <fleet> --window b3 --to codex --dry-run`, then
+repeat without `--dry-run`. The same window and worktree continue with a local
+handoff packet that tells Codex the source agent, session ID and original
+transcript path, plus a frozen copy for later lookup. Optional `--handoff` notes
+carry the exact next action. See [single-session transfer](docs/SESSION-TRANSFER.md)
+for prerequisites, export-only mode and failure recovery.
+
 **Why the gaps are published.** A feature table that lists only ticks tells you
 nothing about whether the second agent is usable for *your* work. Every ❌ below
 says which kind of gap it is — **Codex has no such mechanism**, or **the
@@ -549,9 +560,10 @@ runs in CI, so a row cannot be edited in one file and forgotten in the other.
 **The two gaps that matter**, said plainly rather than left to be inferred from
 the rows:
 
-1. **Cross-context continuity does not exist on Codex.** `/fleet-handoff`,
+1. **Automatic context cycling is not wired for Codex.** `/fleet-handoff`,
    `/fleet-context` and every `--resume` path are shaped around Claude Code's
-   transcript. A Codex worker that fills its window has no bridge to a fresh one.
+   transcript. `fleet-transfer.sh` seeds a new Codex session from one Claude
+   session's history; it does not add Codex-to-Codex automatic handoff or restore.
 2. **Quota governance does not exist on Codex.** Account rotation and the usage
    collector read Claude subscription state; Codex's limits are a different
    model with no per-launch token seam. Across providers only the *verdict*

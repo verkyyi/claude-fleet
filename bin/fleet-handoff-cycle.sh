@@ -203,6 +203,13 @@ TM display-message -p -t "$PANE" '#{pane_id}' >/dev/null 2>&1 \
 # This pane's window — the operator hold (issue #571) matches it against the window
 # each attached client is currently looking at.
 WID="$(TM display-message -p -t "$PANE" '#{window_id}' 2>/dev/null)"
+transfer_pending() {
+  local until
+  until=$(TM display-message -p -t "$PANE" '#{@agent_transfer_pending_until}' 2>/dev/null)
+  case "$until" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$until" -gt "$(date +%s)" ]
+}
+transfer_pending && refuse 'an agent transfer is pending — not arming a context clear'
 
 # Per-pane lock — a second arm while one cycle is pending must REFUSE (never race
 # two clears at one pane). A stale lock (dead pid) is reclaimed.
@@ -315,6 +322,7 @@ if [ "$idle" != 1 ]; then
 fi
 
 # ============================ 3. CLEAR =========================================
+transfer_pending && refuse 'an agent transfer became pending — not clearing its source'
 # Escape first (dismiss any open TUI menu/palette), then type `/clear`, then a
 # SEPARATE Enter — text and Enter as distinct send-keys calls so the string is
 # typed into the input line and Enter is what executes the slash command (a

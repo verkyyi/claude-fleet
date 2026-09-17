@@ -107,6 +107,7 @@ if [ "${1:-}" = "run-shell" ]; then
   exit 0
 fi
 case "$*" in
+  *@agent_transfer_until*) printf '%s\n' "${TRANSFER_UNTIL:-}" ;;
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;
   *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
@@ -152,6 +153,7 @@ chmod +x "$WORK/fakepath/gh"
 run_hook() {
   ISS="${ISS:-}" RAW="${RAW:-}" HUB="${HUB:-}" WID="${WID:-@9}" \
   WT="${WT:-}" PCWD="${PCWD:-}" \
+  TRANSFER_UNTIL="${TRANSFER_UNTIL:-}" \
   TMLOG="$TMLOG" GHLOG="$GHLOG" \
   GH_MERGED_HEAD="${GH_MERGED_HEAD:-}" GH_MERGED_PR="${GH_MERGED_PR:-}" GH_ISSUE_STATE="${GH_ISSUE_STATE:-OPEN}" \
   FLEET_SESSION_END_REASON="${REASON:-}" \
@@ -168,6 +170,26 @@ rows() { awk -F'\t' -v i="$1" -v s="$2" '$2==i && $10==s' "$LEDGER" | wc -l | tr
 clr()  { : > "$TMLOG"; : > "$GHLOG"; }
 
 # ============================ NO-OP GATES ====================================
+# A transfer needs BOTH its live marker and its worktree lease. An expired or
+# orphaned marker must not disable normal cleanup. The raw fixture survives an
+# ordinary exit, so these negative cases can also exercise the real --exec path.
+CONFDIR="$WORK/transfer-conf"
+mkdir -p "$CONFDIR/rotating"
+LEASE_FILE="$CONFDIR/rotating/$(printf '%s' "$SWT" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$LEASE_FILE"
+clr; TRANSFER_UNTIL=$(( $(date +%s) + 120 )) REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail 'active transfer must retain the window and skip ledger/reap'
+ok 'active transfer marker + lease → no SessionEnd cleanup'
+clr; TRANSFER_UNTIL=1 REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
+grep -q 'KILL' "$TMLOG" || fail 'expired transfer marker must not suppress cleanup'
+ok 'expired transfer marker → ordinary exit cleanup'
+rm "$LEASE_FILE"
+clr; TRANSFER_UNTIL=$(( $(date +%s) + 120 )) REASON=prompt_input_exit RAW=1 WT="$SWT" run_hook
+grep -q 'KILL' "$TMLOG" || fail 'marker without a lease must not suppress cleanup'
+ok 'transfer marker without lease → ordinary exit cleanup'
+unset CONFDIR
+: > "$LEDGER"
+
 # T1: reason=clear → the in-pane gate returns BEFORE dispatch (no RUNSHELL/KILL, no row).
 clr; REASON=clear ISS=2 WID='@2' run_hook
 grep -q 'RUNSHELL' "$TMLOG" && fail "clear must not dispatch a reap" "$(cat "$TMLOG")"

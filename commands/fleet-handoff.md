@@ -1,4 +1,4 @@
-# /fleet-handoff — hand off across a context boundary, then auto-clear + resume
+# /fleet-handoff — continue the same task in a fresh context or another coding agent
 
 <!-- fleet skill · owner: either -->
 
@@ -15,8 +15,16 @@ it from the pane's `@issue`; a raw/no-issue pane falls back to a local file
 the bound issue (one comment) and local files, and never touches branches, PRs, or
 another fleet.
 
+Explicit **`--to codex`** switches this one Claude session to Codex CLI instead
+of clearing Claude. The same base skill composes the notes; `fleet-transfer.sh`
+captures exact source provenance and performs the cutover after the turn ends.
+Transfer notes and conversation evidence stay in private local files (§T).
+
 **Argument** (`$ARGUMENTS`):
 - **empty** → **cycle mode** (default): store the handoff, then arm the clear+resume.
+- **`--to codex`** → **transfer mode**: hand THIS task to Codex in this pane and
+  worktree, carrying the source agent, session ID and original transcript path.
+  v1 supports Claude → Codex CLI for an issue worker or raw scratch, not the hub.
 - **`pickup [<source>]`** → **pickup mode**: resume from an existing handoff. The
   `<source>` is OPTIONAL (a file path, comment URL, or issue number) — omitted, it
   self-resolves from the pane's `@issue` (§P). This is what the detached helper
@@ -41,7 +49,10 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   run it. Only the **doc path** differs by seat (below): a `worker` seat stores
   against its bound issue, anything else stores to a local file.
 
-Branch on the argument: `pickup <path>` → **§P**; anything else → **§C**.
+Route exactly: empty → **§C**; `pickup [<source>]` → **§P**; `--to codex` → **§T**.
+For unknown arguments or unsupported targets, report the supported forms and
+stop. Never turn a misspelled transfer option into a context clear. A request to
+change coding agent must name the target; don't infer it from context pressure.
 
 ---
 
@@ -207,6 +218,56 @@ keep `@claude_state` at `working` and stall the helper's wait-idle):
 
 ---
 
+## §T. Transfer mode (`--to codex`) — same task, a new coding agent
+
+This mode runs from the **source Claude** in its issue/scratch worktree. The hub
+may use the operator CLI described in `~/.claude/fleet/docs/SESSION-TRANSFER.md`
+to select a different window, but this skill never guesses another source pane.
+Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mode.
+
+1. **Resolve the exact source before writing notes.** Run
+   `~/.claude/fleet/bin/fleet-transfer.sh --session <S from §0> --window "$TMUX_PANE" --to codex --dry-run`.
+   It must find this pane's live Claude process, registered session, original
+   transcript and linked worktree. On refusal, report it and stop. Never guess a
+   session from the newest transcript. A `working` state is expected during this
+   skill; the after-turn helper below waits for the real Stop hook.
+2. **Compose with the base handoff skill's ground-truth checks and document
+   skeleton** (`~/.claude/skills/handoff/SKILL.md`, HAND-OFF steps 1–2). Include
+   the latest user corrections, objective, completed and uncompleted work,
+   decisions/dead ends, tests, NEXT ACTION, language and any active jobs/loops.
+   The base skill's repo path, commit step and resume line do **not** apply here.
+   Write a unique, non-empty UTF-8 note under `~/.claude/handoff/`, outside the
+   repo (`umask 077`; `mktemp "$HOME/.claude/handoff/agent-transfer.XXXXXX"` after
+   creating the directory). Use the resolved source facts if including them;
+   the script independently records them in the manifest and pickup prompt.
+   **Never commit or post these notes.** Record Claude-specific loops, subagents
+   and MCP dependencies as things to assess on pickup, not transferred tools.
+3. **Arm as the LAST tool call**, with the verified note path as `DOC` and the
+   literal fleet name resolved in §0 as `S`:
+
+   ```sh
+   ~/.claude/fleet/bin/fleet-transfer.sh --session "$S" \
+     --window "$TMUX_PANE" --to codex --handoff "$DOC" --after-turn
+   ```
+
+   The command returns a request directory containing `state.json` and `wait.log`.
+   It pins this pane/process/session, saves a private copy of the notes, and
+   arms a detached waiter. A clean Stop releases it; stale idle stamps do not.
+   It defers while the operator is typing and aborts on timeout or identity
+   change. Only after Stop does it capture the final conversation and switch.
+   A failure is not success: report the refusal and keep the notes.
+4. **End the turn with one line in the conversation's language, then no tools**:
+   “交接说明已保存；本回合结束后将切换到 Codex。状态记录：`<request>/state.json`。”
+   Say the switch is armed, not already completed. The waiter reports its result
+   in the pane's status line and request files. Do not schedule another wakeup.
+
+Codex receives the source agent, session ID, original transcript path, frozen
+snapshot and handoff in its initial prompt. It continues the same worktree and
+task after checking current facts; no Codex-native skill invocation is required
+to receive it. Reverse transfers and Codex context cycling are not yet supported.
+
+---
+
 ## §P. Pickup mode (`pickup [<source>]`) — resume from the handoff
 
 The argument is **optional** (the auto-cycle injects it bare). Resolve the
@@ -257,6 +318,7 @@ plain `claude` session, and this pickup arrives as its first user turn.
 - **Cycle:** the one line from C3 (doc path + auto-clear notice). Nothing else.
 - **Pickup:** the 3–5 line restatement, plus one line if you re-armed a `/loop`, then
   get to work.
+- **Transfer:** the one line from T4 with the request's status path, then end the turn.
 
 ---
 
