@@ -29,9 +29,10 @@
 # Decision table (the crux: committed ≠ merged) — verdict from the shared gate:
 #   merged-pr  reap: record landed         → remove wt+branch → close issue → close window
 #   ancestor   reap: record closed-unlanded→ remove wt+branch →               close window
+#   tip==base  keep: no merged PR → unmerged; keep wt + issue,                close window
 #   unmerged   keep: record closed-unlanded, keep wt + issue,                 close window
 #   dirty      keep: record closed-unlanded, keep wt (git refuses --forceless),close window
-# Only a merged PR / ancestor-of-base is reaped; committed-but-unmerged and dirty
+# Only a merged PR / strict ancestor-of-base is reaped; committed-but-unmerged and dirty
 # work is KEPT for resume. Equivalent to auto-firing the dash ⌃x one-key rule on exit.
 # NB (matches #403's table, not the other reapers): only a MERGED PR closes the issue;
 # a bare ancestor-of-base has no landed work, so its issue is kept OPEN for re-pickup.
@@ -239,7 +240,7 @@ if [ "${1:-}" = "--exec" ]; then
         git -C "$MAIN" worktree prune 2>/dev/null || true
       fi
       # Close the issue ONLY on a merged PR (a bare ancestor-of-base has no merged
-      # work — an empty/abandoned branch — so keep its issue OPEN for re-pickup, per
+      # PR evidence — so keep its issue OPEN for re-pickup, per
       # the #403 decision table). Idempotent: a merge may have closed it already.
       if [ "$verdict" = merged-pr ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
         st=$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)

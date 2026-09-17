@@ -20,7 +20,7 @@
 #     one last time by fleet_worktree_drop, which refuses a dirty worktree the same
 #     way plain `git worktree remove` (no -f) does
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
-#     tip is an ancestor of origin/<base>
+#     tip is a strict ancestor of origin/<base> (equal tips need a merged PR)
 # On prune of a merged `issue-<N>` worktree, the bound issue #N is AUTO-CLOSED
 # (if still open) with a pointer to the merge — the net for a PR that landed
 # without a `Closes #N` keyword.
@@ -214,7 +214,7 @@ process() {
       if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "unmerged work"; return; fi
       say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
     ancestor)
-      # A clean scratch whose tip never moved off base is NOT disposable when a
+      # Even a clean scratch at a strict ancestor is NOT disposable when a
       # REAL session ran in it: "no file writes" describes most Q&A / research
       # scratches, and the conversation IS the work. The git-state gate alone
       # can't tell that apart from a never-used worktree, so consult the

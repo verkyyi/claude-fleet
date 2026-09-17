@@ -67,16 +67,24 @@ BASE_BR="$(git -C "$BASE" branch --show-current)"
 WT500="$WORK/wt-500"
 git -C "$BASE" worktree add -q -b issue-500 "$WT500" >/dev/null 2>&1
 printf 'work\n' > "$WT500/g"; git -C "$WT500" add g; git -C "$WT500" commit -qm 'issue-500 work'
-# issue-600: clean, sits at base HEAD → ancestor, NOT in the merged list → reaped
+# issue-600: clean, base advances below → strict ancestor, no merged PR → reaped
 # via the ANCESTOR path → a `closed-unlanded` row.
 WT600="$WORK/wt-600"
 git -C "$BASE" worktree add -q -b issue-600 "$WT600" >/dev/null 2>&1
 
-# scratch-900 (issue #466): a SCRATCH worktree, clean and sitting at base HEAD →
+# scratch-900 (issue #466): a clean SCRATCH at a strict ancestor after base advances →
 # the janitor prunes it silently by the scratch rules. It has NO issue, so the row
 # it must leave behind is keyed by its `scratch-<N>` slug.
 SWT900="$WORK/base-scratch-900"
 git -C "$BASE" worktree add -q -b scratch-900 "$SWT900" >/dev/null 2>&1
+
+# Advance base to keep all existing ancestor/history assertions meaningful.
+git -C "$BASE" commit --allow-empty -qm base-advance
+# Fresh issue + scratch at the current base must survive even with no pane,
+# no rotation lease and no transcript. They must not acquire a disposal row.
+WT601="$WORK/wt-601"; SWT902="$WORK/base-scratch-902"
+git -C "$BASE" worktree add -q -b issue-601 "$WT601" >/dev/null 2>&1
+git -C "$BASE" worktree add -q -b scratch-902 "$SWT902" >/dev/null 2>&1
 
 # Surviving transcripts (outside the worktree, under CLAUDE_PROJECTS_DIR) so every
 # record path resolves a session id (a branch with no transcript would be recorded
@@ -107,7 +115,7 @@ case "$*" in
   *"pr list"*"--head"*) printf '5500\n' ;;   # fleet_reap_record resolves the branch's merged PR
   *"pr list"*)          printf 'issue-500\n' ;;   # clean_fleet MERGED_PRS (merged head-refs)
   *"issue view"*)       printf 'OPEN\n' ;;
-  *"issue close"*)      : ;;
+  *"issue close"*)      printf '%s\n' "$*" >> "$WAC_GH_LOG" ;;
   *) : ;;
 esac
 exit 0
@@ -124,7 +132,7 @@ EOF
 
 run_wac() {   # run worktree-autoclean.sh with the fakes + scoped ledger/projects
   PATH="$WORK/fakebin:$PATH" FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK" \
-    FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
+    FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" WAC_GH_LOG="$WORK/ghlog" \
     bash "$WORK/bin/worktree-autoclean.sh" "$@" 2>"$WORK/err"
 }
 
@@ -132,7 +140,9 @@ run_wac() {   # run worktree-autoclean.sh with the fakes + scoped ledger/project
 # The record step sits PAST the DRY gate, so a --dry-run must preview decisions
 # without writing a history row or removing anything (a row on a dry sweep would
 # be a phantom landed session).
-run_wac --dry-run >/dev/null
+out=$(run_wac --dry-run)
+printf '%s\n' "$out" | grep -Eq 'KEEP +issue-601 ' || fail "zero-commit issue should KEEP in dry run" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-902 ' || fail "zero-commit scratch should KEEP in dry run" "$out"
 [ -s "$LEDGER" ] && fail "dry-run must not write any history row" "$(cat "$LEDGER")"
 [ -d "$WT500" ] || fail "dry-run must not remove the issue-500 worktree"
 [ -d "$WT600" ] || fail "dry-run must not remove the issue-600 worktree"
@@ -141,6 +151,14 @@ ok "dry-run previews only — no history row written, no worktree removed"
 
 # ================= PART 1: real reap writes the row, THEN removes ==============
 run_wac >/dev/null
+
+[ -d "$WT601" ] && [ -d "$SWT902" ] || fail "zero-commit worktrees must survive janitor"
+git -C "$BASE" show-ref --verify -q refs/heads/issue-601 || fail "zero-commit issue branch must survive"
+git -C "$BASE" show-ref --verify -q refs/heads/scratch-902 || fail "zero-commit scratch branch must survive"
+grep -q 'issue close 601' "$WORK/ghlog" && fail "janitor must not close zero-commit issue"
+awk -F'\t' '$2==601 || $2=="scratch-902" {found=1} END{exit !found}' "$LEDGER" \
+  && fail "kept zero-commit worktrees must not get disposal history rows"
+ok "zero-commit issue/scratch kept, no issue close or disposal history"
 
 # merged-PR reap → a landed row for #500 carrying the resolved PR (5500) + session id.
 land_row=$(awk -F'\t' '$2==500 && $10=="landed"' "$LEDGER")

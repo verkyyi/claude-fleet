@@ -83,9 +83,13 @@ printf 'seed\n' > "$BASEDIR/f"; git -C "$BASEDIR" add f; git -C "$BASEDIR" commi
 BASE_BR="$(git -C "$BASEDIR" branch --show-current)"
 MASTER="$(git -C "$BASEDIR" rev-parse HEAD)"
 
-# issue-1: clean, tip == base ⇒ ancestor-of-base
+# issue-1: its commit is merged into base; base advances below ⇒ strict ancestor
 git -C "$BASEDIR" worktree add -q -b issue-1 "$WORK/wt1" >/dev/null 2>&1
+git -C "$WORK/wt1" commit --allow-empty -qm landed-work
 H1="$(git -C "$WORK/wt1" rev-parse HEAD)"
+git -C "$BASEDIR" merge --ff-only -q issue-1
+git -C "$BASEDIR" commit --allow-empty -qm base-advance
+MASTER="$(git -C "$BASEDIR" rev-parse HEAD)"
 # issue-2: clean, one extra commit NOT on base ⇒ not merged
 git -C "$BASEDIR" worktree add -q -b issue-2 "$WORK/wt2" >/dev/null 2>&1
 printf 'x\n' > "$WORK/wt2/g"; git -C "$WORK/wt2" add g; git -C "$WORK/wt2" commit -qm work
@@ -99,9 +103,12 @@ H3="$(git -C "$WORK/wt3" rev-parse HEAD)"
 # branch ⇒ merged-pr — the only verdict that records a `landed` row (#471).
 git -C "$BASEDIR" worktree add -q -b issue-7 "$WORK/wt7" >/dev/null 2>&1
 printf 'z\n' > "$WORK/wt7/i"; git -C "$WORK/wt7" add i; git -C "$WORK/wt7" commit -qm work7
-# issue-8: clean, tip == base ⇒ ancestor. Used only to prove that a dispatch with
+# issue-8: clean, strict ancestor. Used only to prove that a dispatch with
 # NO verdict (an in-flight pre-#471 bg string) records nothing.
-git -C "$BASEDIR" worktree add -q -b issue-8 "$WORK/wt8" >/dev/null 2>&1
+git -C "$BASEDIR" worktree add -q -b issue-8 "$WORK/wt8" "$H1" >/dev/null 2>&1
+
+# Fresh issue-17 has no commits beyond the current base and no merged PR.
+git -C "$BASEDIR" worktree add -q -b issue-17 "$WORK/wt17" >/dev/null 2>&1
 
 # --- A. fleet_reap_ok direct assertions ---------------------------------------
 . "$BIN/fleet-lib.sh"
@@ -114,6 +121,12 @@ chk() { # <label> <expect-token> <expect-rc> ... args to fleet_reap_ok
   [ "$rc" = "$wantrc" ] || fail "fleet_reap_ok $label: rc $rc want $wantrc"
 }
 
+chk "zero-commit-sha" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" "$MASTER" ""
+chk "zero-commit-ref" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" "$BASE_BR" ""
+chk "zero-commit-head-ref" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 issue-17 "$BASE_BR" ""
+chk "zero-commit-merged-PR" merged-pr 0 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" "$BASE_BR" issue-17
+chk "missing-base" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" missing-ref ""
+chk "missing-head" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 missing-ref "$BASE_BR" ""
 chk "clean+ancestor" ancestor 0 "$WORK/wt1" "$BASEDIR" issue-1 "$H1" "$MASTER" ""
 chk "clean+merged-PR" merged-pr 0 "$WORK/wt2" "$BASEDIR" issue-2 "$H2" "$MASTER" "issue-2"
 chk "clean+unmerged" unmerged 1 "$WORK/wt2" "$BASEDIR" issue-2 "$H2" "$MASTER" ""
@@ -393,10 +406,26 @@ grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed 
 [ "$(wc -l < "$LEDGER" | tr -d ' ')" = "$rows_before" ] \
   || fail "raw ⌃x with no worktree has nothing to index — no NEW ledger row" "$(cat "$LEDGER")"
 
+# Zero-commit issue and scratch: no automatic disposal, even with state=done.
+# No client means a clear refusal instead of an unanswered popup.
+: > "$TMLOG"; : > "$GHLOG"
+CLIENTS="" run_reap_tok 17 s1:17
+[ "$RC" = 3 ] && [ "$TOK" = skip:needs-confirm ] || fail "zero-commit worker must need confirmation"
+[ -d "$WORK/wt17" ] || fail "zero-commit worker worktree must survive"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-17 || fail "zero-commit branch must survive"
+grep -q KILL "$TMLOG" && fail "zero-commit worker window must survive"
+grep -q CLOSE "$GHLOG" && fail "zero-commit worker issue must stay open"
+git -C "$BASEDIR" worktree add -q -b scratch-17 "$WORK/scr17" >/dev/null 2>&1
+: > "$TMLOG"; : > "$GHLOG"
+CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr17" run_reap_tok '' s1:9
+[ "$RC" = 3 ] && [ "$TOK" = skip:needs-confirm ] || fail "zero-commit scratch must need confirmation"
+[ -d "$WORK/scr17" ] || fail "zero-commit scratch must survive"
+grep -q KILL "$TMLOG" && fail "zero-commit scratch window must survive"
+
 # B8b: ⌃x on a scratch row WITH a clean+ancestor worktree (issue #290) → close the
 # window AND remove the scratch worktree + branch. No issue/gh close (scratch has
-# no issue). Build a real `scratch-9` worktree, clean, tip == base ⇒ ancestor.
-git -C "$BASEDIR" worktree add -q -b scratch-9 "$WORK/scr9" >/dev/null 2>&1
+# no issue). Build a clean scratch at the already-merged strict ancestor.
+git -C "$BASEDIR" worktree add -q -b scratch-9 "$WORK/scr9" "$H1" >/dev/null 2>&1
 transcript_for "$WORK/scr9" 9
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr9" run_reap "" "s1:9"
@@ -467,7 +496,7 @@ printf 'c\n' > "$WORK/wt12/j"; git -C "$WORK/wt12" add j; git -C "$WORK/wt12" co
 printf 'dirt\n' > "$WORK/wt12/untracked"                       # dirty
 git -C "$BASEDIR" worktree add -q -b issue-13 "$WORK/wt13" >/dev/null 2>&1
 printf 'c\n' > "$WORK/wt13/j"; git -C "$WORK/wt13" add j; git -C "$WORK/wt13" commit -qm w13
-git -C "$BASEDIR" worktree add -q -b issue-14 "$WORK/wt14" >/dev/null 2>&1   # tip == base ⇒ ancestor
+git -C "$BASEDIR" worktree add -q -b issue-14 "$WORK/wt14" "$H1" >/dev/null 2>&1   # strict ancestor
 git -C "$BASEDIR" worktree add -q -b issue-15 "$WORK/wt15" >/dev/null 2>&1
 printf 'dirt\n' > "$WORK/wt15/untracked"                       # dirty, never reaped below
 git -C "$BASEDIR" worktree add -q -b issue-16 "$WORK/wt16" >/dev/null 2>&1

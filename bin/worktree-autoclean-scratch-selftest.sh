@@ -3,7 +3,7 @@
 # reap rules (issue #290). A `scratch-<N>` worktree (dash-raw-session.sh) has no
 # issue/PR, so worktree-autoclean must:
 #   * clean + no unmerged work + NO human transcript          → PRUNE silently
-#     (a never-used spawn / warm-pool slot — helper-only transcripts count as none)
+#     (strict ancestor only; tip == base is kept — helper-only transcripts count as none)
 #   * clean + no unmerged work + a REAL session ran in it     → KEEP + surface ONCE
 #     (a Q&A/research conversation writes no files; the conversation IS the work)
 #   * escalated + merged (branch in the merged-PR list)       → PRUNE (like a worker)
@@ -49,7 +49,7 @@ printf 'seed\n' > "$BASE/f"; git -C "$BASE" add f; git -C "$BASE" commit -qm see
 BASE_BR="$(git -C "$BASE" branch --show-current)"
 
 build_trees() {   # (re)create the five scratch worktrees + one issue worktree
-  # scratch-1: clean, tip == base ⇒ ancestor ⇒ PRUNE silently
+  # scratch-1: clean, base advances below ⇒ strict ancestor ⇒ PRUNE silently
   git -C "$BASE" worktree add -q -b scratch-1 "$WORK/base-scratch-1" >/dev/null 2>&1
   # scratch-2: clean, one extra commit ⇒ unmerged ⇒ KEEP + surface
   git -C "$BASE" worktree add -q -b scratch-2 "$WORK/base-scratch-2" >/dev/null 2>&1
@@ -62,7 +62,7 @@ build_trees() {   # (re)create the five scratch worktrees + one issue worktree
   printf 'y\n' > "$WORK/base-scratch-4/h"; git -C "$WORK/base-scratch-4" add h; git -C "$WORK/base-scratch-4" commit -qm landed
   # scratch-5: live pane inside it ⇒ KEEP (attached)
   git -C "$BASE" worktree add -q -b scratch-5 "$WORK/base-scratch-5" >/dev/null 2>&1
-  # scratch-6: clean, tip == base, but a REAL session ran in it ⇒ KEEP + surface
+  # scratch-6: clean strict ancestor, but a REAL session ran in it ⇒ KEEP + surface
   # (the conversation-only scratch — no file writes, still not disposable)
   git -C "$BASE" worktree add -q -b scratch-6 "$WORK/base-scratch-6" >/dev/null 2>&1
   # issue-7: dirty ⇒ KEEP, but with the ISSUE wording (not the scratch surface)
@@ -71,6 +71,8 @@ build_trees() {   # (re)create the five scratch worktrees + one issue worktree
   printf '%s\n' "$WORK/base-scratch-5" > "$LIVE_FILE"   # scratch-5 is the only "live" pane
 }
 build_trees
+# Exercise strict-ancestor handling, independently of the zero-commit guard.
+git -C "$BASE" commit --allow-empty -qm base-advance
 
 # --- fake transcript tree (CLAUDE_PROJECTS_DIR) --------------------------------
 # scratch-6 gets a HUMAN transcript → the ancestor arm must KEEP it. scratch-1 gets

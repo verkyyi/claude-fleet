@@ -52,13 +52,16 @@ git -C "$BASE" config user.email t@t; git -C "$BASE" config user.name t
 printf 'seed\n' > "$BASE/f"; git -C "$BASE" add f; git -C "$BASE" commit -qm seed
 BASE_BR="$(git -C "$BASE" branch --show-current)"
 
-# All four worktrees are clean and sit at HEAD==base → the reap gate returns
+# All five worktrees are clean; base advances below → the reap gate returns
 # `ancestor` for every one of them. Only the LIVENESS guard decides KEEP vs PRUNE.
 git -C "$BASE" worktree add -q -b issue-100  "$WORK/base-issue-100"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b issue-200  "$WORK/base-issue-200"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-9  "$WORK/base-scratch-9"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-8  "$WORK/base-scratch-8"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-7  "$WORK/base-scratch-7"  >/dev/null 2>&1
+# Keep the ancestry path independently eligible, so the liveness/lease
+# assertions cannot pass merely because tip == base now refuses automatic reap.
+git -C "$BASE" commit --allow-empty -qm base-advance
 mkdir -p "$WORK/base-issue-100/subdir" "$WORK/base-scratch-9/deep/sub" "$WORK/base-scratch-7/live-here"
 
 # LIVE facts the fake tmux serves:
