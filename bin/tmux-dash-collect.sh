@@ -29,6 +29,8 @@
 #                           phase now runs inside fleet_timebox's subshell and the
 #                           phase rotation can reach `issues` in a tick that skipped
 #                           `sessmap` (issue #653)
+#   global/collect.issues.cursor — repo CLAIMED before its GitHub fetch; after a
+#                           timeout the next issues phase resumes after that repo
 #   global/collect.phase.cursor — the phase the last tick was TRUNCATED at (whole-tick
 #                           budget); the next tick starts there and wraps round, so a
 #                           truncated phase waits one round instead of starving. Absent
@@ -596,14 +598,39 @@ fi
 # state; the collector only touches issues/git/usage. See issue #81.
 # Reads the (repo,slug) queue `sessmap` published (global/collect.repoqueue) —
 # see there for why it travels on disk rather than in an array (issue #653).
+ISSUES_CURSOR="$G/collect.issues.cursor"
 ph_issues() {
-  local rp sg
+  local rp sg cur n i pos=0 idx
+  local repos=() slugs=()
   command -v gh >/dev/null 2>&1 || return 0
   [ -f "$G/collect.repoqueue" ] || return 0
   while IFS=$'\t' read -r rp sg; do
     [ -n "$rp" ] && [ -n "$sg" ] || continue
-    fetch_issues_for "$rp" "$sg" 0   # TTL-gated (see fetch_issues_for above)
+    repos+=("$rp"); slugs+=("$sg")
   done < "$G/collect.repoqueue"
+  n=${#repos[@]}; [ "$n" -gt 0 ] || return 0
+  # Phase rotation alone (#653) cannot help when the FIRST repo wedges every
+  # time this phase runs (#651). Resume after the last attempted repo, just as
+  # the git phase resumes after a wedged worktree. Store identity rather than an
+  # index so queue insertion/removal/reordering is harmless.
+  cur=$(cat "$ISSUES_CURSOR" 2>/dev/null)
+  for ((i = 0; i < n; i++)); do
+    [ "${repos[$i]}" = "$cur" ] && { pos=$(( (i + 1) % n )); break; }
+  done
+  for ((i = 0; i < n; i++)); do
+    idx=$(( (pos + i) % n ))
+    rp="${repos[$idx]}"; sg="${slugs[$idx]}"
+    # Persist BEFORE either gh call: a killed phase cannot write its cursor
+    # afterwards. TTL and targeted --issues refresh semantics remain unchanged.
+    printf '%s' "$rp" | atomic_write "$ISSUES_CURSOR"
+    fetch_issues_for "$rp" "$sg" 0
+  done
+  rm -f "$ISSUES_CURSOR"   # complete round: healthy ticks keep historical order
+}
+# shellcheck disable=SC2329  # invoked as run_phase's "ph_${name}_over"
+ph_issues_over() {
+  printf 'fleet-collect: issues kept unfinished caches; next tick resumes after %s\n' \
+    "$(cat "$ISSUES_CURSOR" 2>/dev/null)" >&2
 }
 
 # No flat issues mirror is written (issue #180 — all fleets equal, no primary):
