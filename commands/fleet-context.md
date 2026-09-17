@@ -38,10 +38,11 @@ stamp on its own, so pass nothing:
 ~/.claude/fleet/bin/fleet-context.sh
 ```
 
-It prints four lines — `context` (the percentage, the token count, which source
+It prints five lines — `context` (the percentage, the token count, which source
 it came from and **which denominator** it used), `session` (turns, output tokens
 spent, and the pre-compact peak when the window has already been cleared),
-`handoff` (the thresholds in force), and `verdict:` — plus a `cross` line when the
+`handoff` (the thresholds in force), `account` (the pool label verified from this
+pane’s Claude process token, or `unknown`), and `verdict:` — plus a `cross` line when the
 two sources disagree and a `bus` line when this pane's measurement bus is dead
 (see below). Add `--json` when you want to branch on a field, or `-q`
 for the bare verdict token. Exit code mirrors
@@ -91,6 +92,11 @@ Sidechain records are excluded — a fanned-out `Explore` subagent's context is 
 yours. A `/clear` or an autocompact just moves the last record, so the live
 figure follows it down; when the peak is well above it the `session` line says
 so, since a freshly-compacted number looks roomy while the work behind it is not.
+
+The Claude `account` line reads the running process, so a rotated pool pointer or
+stale `@cc_account` stamp cannot report a different subscription as yours. It never
+prints tokens or repairs stamps. JSON adds `account` (a label or `null`); `-q`
+remains the bare context verdict. Codex keeps its existing provider-specific output.
 
 ## 2. Act on the verdict
 

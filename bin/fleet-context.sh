@@ -230,8 +230,16 @@ _k() { awk -v n="${1:-0}" 'BEGIN {
   else                       printf "%.1fk", n/1000
 }'; }
 
+# Account identity is a read-only process-token probe, never the active pool
+# pointer or a potentially stale @cc_account stamp. Quiet mode has already exited.
+account=""
+if [ -n "${TMUX:-}" ] && [ -n "$pane" ]; then
+  account=$(bash "$BIN/fleet-account-truth.sh" --pane "$pane" 2>/dev/null | cut -f3)
+fi
+
 if [ "$as_json" = "1" ]; then
-  printf '{"verdict":"%s","pct":%s,"source":"%s","live_tokens":%s,"limit":%s,"limit_source":"%s","bus":"%s",' \
+  printf '{"account":%s,' "$(printf '%s' "$account" | jq -Rs 'if . == "" then null else . end')"
+  printf '"verdict":"%s","pct":%s,"source":"%s","live_tokens":%s,"limit":%s,"limit_source":"%s","bus":"%s",' \
     "$verdict" "$pct" "$src" "$live" "$LIMIT" "$limit_src" "$bus"
   printf '"derived_pct":%s,"stamp_pct":%s,"turns":%s,"output_tokens":%s,"peak_tokens":%s,' \
     "$derived" "${stamp:--1}" "$turns" "$out_total" "$peak"
@@ -287,6 +295,11 @@ if [ "$thr" -gt 0 ]; then
     "$thr" "$([ -n "$armed" ] && echo ' (already armed)')" "$warn"
 else
   printf 'handoff   auto-handoff OFF (FLEET_AUTO_HANDOFF_PCT=0) · bands %s%%/%s%%\n' "$warn" "$hand"
+fi
+if [ -n "$account" ]; then
+  printf 'account   %s (verified process token)\n' "$account"
+else
+  printf 'account   unknown (no verified pool token for this pane)\n'
 fi
 printf 'verdict:  %s — %s\n' "$verdict" "$why"
 

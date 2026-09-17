@@ -923,16 +923,21 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/rate
 # --- multi-account auto-switch (every run) ---
 # When a window running under a registered account shows the "You've hit your …
 # limit · resets …" banner, mark THAT account limited and rotate the active
-# pointer so NEW sessions spawn on a fresh subscription. The window carries its
-# account label in @cc_account (stamped by bin/fleet-claude.sh at launch).
+# pointer so NEW sessions spawn on a fresh subscription. Verify the process token
+# against the pool and heal @cc_account before attributing a banner (#511). A stale
+# stamp, an unreadable token, or a non-Claude pane cannot bench another account.
 # No-op unless accounts are registered — so single-account installs skip it.
 ph_banner() {
-local sock win wid acct banner kind lm fb muntil mig msw mk muntilt newact rc
+local sock win wid acct repair banner kind lm fb muntil mig msw mk muntilt newact rc
 if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   for sock in $SOCKETS; do
-  tmux -L "$sock" list-windows -a -F "#{session_name}:#{window_index}${US}#{window_id}${US}#{@cc_account}" 2>/dev/null | \
-  while IFS="$US" read -r win wid acct; do
+  bash "$BIN/fleet-account-truth.sh" --socket "$sock" | \
+  while IFS=$'\t' read -r wid win acct repair; do
     [ -n "$acct" ] || continue
+    # Target the exact pane whose process was checked, on this fleet's socket.
+    if [ "$repair" = 1 ]; then
+      tmux -L "$sock" set-window-option -t "$win" @cc_account "$acct" 2>/dev/null || continue
+    fi
     # fleet_limit_banner (usage-lib.sh, issue #511) prefers the classic "hit your
     # <session|weekly|Opus> limit · resets …" line — its tail is what mark-limited
     # benches to (issue #490), so the whole banner is passed, not just the head —
