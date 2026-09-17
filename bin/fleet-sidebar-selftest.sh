@@ -10,6 +10,7 @@ import fcntl
 import os
 from pathlib import Path
 import pty
+import re
 import shlex
 import shutil
 import signal
@@ -72,7 +73,9 @@ def wait_for(predicate, message):
         if predicate():
             return
         time.sleep(.05)
-    snapshots = [tm('capture-pane', '-p', '-t', p[0]) for p in views()]
+    snapshots = [tm('display-message', '-p', '-t', p[0],
+                    '#{pane_id} top=#{pane_top} height=#{pane_height} window=#{window_height} client=#{client_height}') +
+                 '\n' + tm('capture-pane', '-p', '-t', p[0]) for p in views()]
     raise AssertionError(message + '\n' + '\n'.join(snapshots))
 
 def views():
@@ -86,6 +89,18 @@ def call(verb='sync', *args):
 
 def view_on(window):
     return [p[0] for p in views() if p[1] == window]
+
+def click(pane, row=0, column=2, repeat=False):
+    # Separate ordinary single clicks from tmux's delayed double-click zoom.
+    # The repeat-click regression below deliberately stays inside that interval.
+    if not repeat:
+        time.sleep(.6)
+    x = int(tm('display-message', '-p', '-t', pane, '#{pane_left}')) + column + 1
+    y = int(tm('display-message', '-p', '-t', pane, '#{pane_top}')) + row + 1
+    os.write(terminal, ('\x1b[<0;%d;%dM\x1b[<0;%d;%dm' % (x, y, x, y)).encode())
+
+def navigation():
+    return 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}')
 
 def row_data(current='', compact=True):
     row_env = dict(env, FLEET_SESSION='fleet-test', FLEET_SIDEBAR_CURRENT=current)
@@ -139,7 +154,7 @@ try:
     shipped = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
     selected = [line for line in shipped.splitlines() if not line.startswith('#') and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
-                 'MouseDown1Pane' in line or 'DoubleClick1Pane' in line or
+                 'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
                  line == 'set -g mouse on')]
     fixture = work / 'sidebar.conf'
@@ -164,6 +179,10 @@ try:
             pass
     threading.Thread(target=drain, daemon=True).start()
     wait_for(lambda: bool(view_on(w1)), 'attach hook did not create sidebar')
+    # Keep resize fixtures within the attached terminal minus its status bar.
+    # A manual height of 30 would put the last pane row under the client's bar.
+    window_height = '29'
+    tm('resize-window', '-t', w1, '-y', window_height)
     side = view_on(w1)[0]
     side_pid = tm('display-message', '-p', '-t', side, '#{pane_pid}')
     check(Path(tm('display-message', '-p', '-t', side, '#{pane_current_path}')).resolve() == bin_dir.parent.resolve(),
@@ -174,8 +193,11 @@ try:
     call()
     check(len(views()) == 1, 'sync must be idempotent')
     wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'sidebar did not render tasks')
-    check('Focus: WORKER' in tm('capture-pane', '-p', '-t', side), 'worker focus cue missing')
-    check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side), 'worker focus cue missing')
+    check('worker-one' in tm('capture-pane', '-p', '-t', side).splitlines()[0] or
+          '修复侧栏' in tm('capture-pane', '-p', '-t', side).splitlines()[0],
+          'sidebar should start with a task, not an internal title row')
+    check('WORKER · INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'active worker border must identify input focus')
     tm('select-pane', '-t', side)
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
@@ -184,6 +206,11 @@ try:
 
     full = row_data(compact=False)
     compact = row_data()
+    check(all('a1' not in r[3] and 'b1' not in r[3] for r in compact),
+          'sidebar displays internal worker handles instead of task descriptions')
+    check(all('a1' not in r[2] and 'b1' not in r[2] for r in full if r[0] != 'hdr'),
+          'full hub list displays internal worker handles')
+    check(tm('show-options', '-wqv', '-t', w1, '@wid') == 'a1', 'rendering changed the internal worker handle')
     check([r[1] for r in full if r[0] != 'hdr'] == [r[0] for r in compact],
           'sidebar order diverges from hub')
     check(compact[0][0] == w2 and compact[0][2] == '?', 'needs/question cue was lost')
@@ -206,7 +233,7 @@ try:
     wait_for(lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side), 'fold update did not reach view')
     os.write(terminal, b'\x02E')  # actual prefix E, then terminal arrow + Enter
     wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
-    wait_for(lambda: 'TASKS · FOCUS' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
              'keyboard navigation needs a persistent focus cue')
     check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'worker header claims input focus while keys go to sidebar')
@@ -219,15 +246,14 @@ try:
           'source window retained sidebar worker metadata after the move')
     check(tm('show-options', '-wqv', '-t', w2, '@sidebar_ready_on_select') == p2,
           'destination was selected before its sidebar layout was ready')
-    wait_for(lambda: 'Focus: WORKER' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
              'Enter did not restore the worker focus cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'jump did not focus worker input')
     # A terminal mouse event exercises the shipped root-table forwarding bind.
     side2 = view_on(w2)[0]
     wait_for(lambda: 'worker-one' in tm('capture-pane', '-p', '-t', side2), 'new view not ready')
     tm('move-window', '-d', '-s', w1, '-t', 'fleet-test:9')
-    y = int(tm('display-message', '-p', '-t', side2, '#{pane_top}')) + 2
-    os.write(terminal, ('\x1b[<0;3;%dM\x1b[<0;3;%dm' % (y, y)).encode())
+    click(side2)
     wait_for(lambda: bool(view_on(w1)), 'single-click did not jump to first row')
     check(view_on(w1) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
           'mouse navigation recreated the sidebar')
@@ -235,27 +261,92 @@ try:
           'mouse move left stale worker metadata')
     check(tm('show-options', '-wqv', '-t', w1, '@sidebar_ready_on_select') == p1,
           'mouse navigation showed a destination without its sidebar')
-    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'click stole worker input')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'click changed worker pane identity')
+    wait_for(navigation, 'mouse press/release did not leave arrow keys with the sidebar')
+    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
+             'click did not visibly focus the sidebar')
+    check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+          'worker still advertises input focus after a sidebar click')
+    check('TASKS · INPUT' in tm('display-message', '-p', '-t', side, '#{E:pane-border-format}'),
+          'sidebar border did not advertise keyboard focus')
+    worker_before = tm('capture-pane', '-p', '-t', p1)
+    os.write(terminal, b'\x1b[B')
+    wait_for(lambda: any('›' in line and '修复侧栏' in line for line in
+                        tm('capture-pane', '-p', '-t', side).splitlines()),
+             'Down after a click did not move the sidebar selection')
+    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'sidebar arrow leaked into worker input')
+    click(side)
+    wait_for(lambda: not any('›' in line and '修复侧栏' in line for line in
+                            tm('capture-pane', '-p', '-t', side).splitlines()),
+             'clicking the current worker did not reset the keyboard selection')
+    os.write(terminal, b'\x1b[B')
+    wait_for(lambda: any('›' in line and '修复侧栏' in line for line in
+                        tm('capture-pane', '-p', '-t', side).splitlines()),
+             'Down after reselecting the current worker did not move the selection')
+    os.write(terminal, b'\x1b[A')
+    wait_for(lambda: not any('›' in line and '修复侧栏' in line for line in
+                            tm('capture-pane', '-p', '-t', side).splitlines()),
+             'Up after a click did not return the sidebar selection')
+
+    # The right pane was already tmux-active: clicking it must still leave the
+    # navigation table. Actual typing then reaches that pane, not the sidebar.
+    click(p1, row=3)
+    wait_for(lambda: not navigation(), 'clicking the already-active worker did not leave navigation')
+    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
+             'worker click left the sidebar highlighted')
+    check('WORKER · INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+          'worker click did not restore its input badge')
+    os.write(terminal, b'worker-input-check')
+    wait_for(lambda: 'worker-input-check' in tm('capture-pane', '-p', '-t', p1),
+             'typing after a worker click did not reach the worker')
+
+    # Blank space and rapid repeat clicks are focus targets too. The
+    # release/double-click events must not silently reset the custom key table.
+    click(side, row=8)
+    wait_for(navigation, 'clicking sidebar blank space did not enter navigation')
+    click(side, row=8, repeat=True)
+    click(side, row=8, repeat=True)
+    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
+             'repeat/blank sidebar click lost the focus cue')
+    wait_for(navigation, 'repeat/blank sidebar click lost keyboard navigation')
+    os.write(terminal, b'\x1b[B\r')
+    wait_for(lambda: bool(view_on(w2)), 'click then Down/Enter did not open the selected worker')
+    wait_for(lambda: not navigation(), 'Enter after mouse navigation did not return input to worker')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'sidebar did not follow return to first worker')
 
     os.write(terminal, b'\x02E')
-    wait_for(lambda: 'TASKS · FOCUS' in tm('capture-pane', '-p', '-t', side), 'second navigation entry lost focus cue')
+    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side), 'second navigation entry lost focus cue')
     os.write(terminal, b'\x1b')
-    wait_for(lambda: 'Focus: WORKER' in tm('capture-pane', '-p', '-t', side), 'Escape did not restore input focus')
+    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side), 'Escape did not restore input focus')
     check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'Escape left the worker border dimmed')
 
-    tm('resize-window', '-t', w1, '-x', '100', '-y', '30')
+    # tmux <=3.5 discards top pane-status clicks before key lookup (its mouse
+    # hit test recognizes only right/bottom borders). 3.6+ exposes the top border.
+    version = re.search(r'(\d+)\.(\d+)', tm('-V'))
+    if version and tuple(map(int, version.groups())) >= (3, 6):
+        click(side, row=-1)
+        wait_for(navigation, 'clicking the top border did not enter sidebar navigation')
+    else:
+        click(side, row=8)
+        wait_for(navigation, 'clicking the sidebar did not enter navigation before resize')
+    tm('resize-window', '-t', w1, '-x', '100', '-y', window_height)
     wait_for(lambda: not views(), 'narrow screen did not hide sidebar')
+    check(not navigation(), 'auto-hidden sidebar retained keyboard focus')
     check('FLEET_SIDEBAR=1' in conf.read_text(), 'auto-hide changed saved preference')
-    tm('resize-window', '-t', w1, '-x', '160', '-y', '30')
+    tm('resize-window', '-t', w1, '-x', '160', '-y', window_height)
     wait_for(lambda: bool(view_on(w1)), 'wide screen did not restore sidebar')
     legacy = view_on(w1)[0]
-    tm('set-option', '-p', '-t', legacy, '@sidebar_version', '1')
+    tm('set-option', '-p', '-t', legacy, '@sidebar_version', '2')
     call()
     check(view_on(w1) != [legacy] and len(view_on(w1)) == 1,
           'sync must replace a pre-upgrade renderer once before reusing panes')
-    call('toggle')
-    check(not views(), 'explicit collapse left a view')
+    side = view_on(w1)[0]
+    wait_for(lambda: '‹ Hide' in tm('capture-pane', '-p', '-t', side), 'upgraded view not ready')
+    click(side, row=int(tm('display-message', '-p', '-t', side, '#{pane_height}')) - 1)
+    wait_for(lambda: not views(), 'clicking Hide left a view')
+    check(not navigation(), 'clicking Hide retained sidebar keyboard focus')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')
     tm('select-window', '-t', w2)
     call()

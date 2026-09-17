@@ -7,13 +7,12 @@
 #   will ever have, and it keeps the #529 two-colour grammar:
 #     * an issue-bound worker → `#<N>` in GREEN  (38;2;158;206;106)
 #     * a scratch session     → `~<N>` in INDIGO (38;2;187;154;247)
-#   LIVE — #566 gave every window a HANDLE of its own in a new leftmost `id`
-#   column, so the `issue` column stopped carrying two meanings behind a sigil:
+#   LIVE — internal window handles are hidden; the issue column contains:
 #     * an issue-bound worker → `#<N>` in GREEN
-#     * a scratch session     → BLANK (its identity is the handle; its slot number
+#     * a scratch session     → BLANK (its description identifies it; its slot number
 #       still names the worktree and still shows in the `↳~76` provenance tag)
 #     * anything else         → a blank cell
-# (The handle column itself is pinned by bin/dash-wid-selftest.sh.)
+# (Internal handle allocation and hiding are pinned by bin/dash-wid-selftest.sh.)
 # `~<N>` is the fleet's existing scratch grammar (fleet-history.sh key_label, the
 # `↳~12` provenance tag, `/fleet-history list`); indigo is the colour that tag is
 # already drawn in. The COLOUR is the load-bearing half: #499/#502 put a GREEN
@@ -98,9 +97,8 @@ w 1 fix-the-thing         /w/repo-issue-123       idle   @1  123 ''  /w/repo-iss
 w 2 scratch-9             /w/repo-scratch-9       idle   @2  ''  ''  /w/repo-scratch-9
 w 3 tencent-workbuddy     /w/repo-scratch-5/docs  idle   @3  ''  ''  /w/repo-scratch-5
 w 4 hub                   /w/repo                 idle   @4  ''  ''  ''
-#   #534: CJK window names — the window cell must be 22 display COLUMNS, not 22
-#   code points (a CJK glyph is 2 cols): a short one pads to 22 cols, a long one
-#   clips at 22 cols (11 glyphs), so the right-pinned act/PR/ctx block stays put.
+#   CJK names use 26 display columns, including the four reclaimed from the old
+#   handle column. Padding/clipping must keep the right-hand metadata aligned.
 w 5 修复仪表盘             /w/repo-scratch-7       idle   @5  ''  ''  /w/repo-scratch-7
 w 6 修复仪表盘粘贴问题的名字很长 /w/repo-scratch-8     idle   @6  ''  ''  /w/repo-scratch-8
 
@@ -114,8 +112,7 @@ r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4)
 # 1. an issue worker keeps the green `#<N>` it always had.
 has "live: worker id cell is GREEN #123" "$r1" "$GN#123"
 
-# 2. a scratch leaves the issue column BLANK (#566) — it is not an issue, and its
-#    own identity is the handle in the `id` column to the left. Never `#9` either
+# 2. a scratch leaves the issue column BLANK (#566). Never `#9` either
 #    (which would read as an issue that does not exist).
 hasnt "live: scratch draws no ~N sigil in the issue column" "$r2" "~9"
 hasnt "live: scratch must not render as #9"                 "$r2" "#9"
@@ -128,8 +125,8 @@ hasnt "live: renamed scratch's window column no longer carries the id" "$r3" "sc
 
 # 4. a window that is neither → blank cell (5 spaces), not a stray `~`/`#`.
 hasnt "live: a non-scratch, non-worker window prints no id" "$r4" "~"
-# 5a. the leftmost column is now the #566 handle, and it precedes `issue`.
-has "live: the header names an 'id' column before 'issue'" \
+# 5a. descriptions reclaim the old handle column.
+hasnt "live: the header has no worker id column" \
     "$(printf '%s\n' "$out" | grep -F "hdr${US}hdr")" "id  issue"
 
 # 5. alignment: the id cell stays 5 wide in every shape, so every column after it
@@ -147,17 +144,17 @@ cellis "live: scratch issue cell is 5 blanks"               "$r2" "     " "$GN"
 cellis "live: wandered scratch issue cell is 5 blanks"      "$r3" "     " "$GN"
 cellis "live: unkeyed window issue cell is 5 blanks"        "$r4" "     " "$GN"
 
-# 6. #534 — the window cell is 22 display COLUMNS for a CJK name too. fld() padded
+# 6. #534 — the window cell is 26 display COLUMNS for a CJK name too. fld() padded
 #    by ${#} (code points), so `修复仪表盘` (5 glyphs, 10 cols) got 17 pad spaces
 #    = 27 cols and shoved every column after it 5 to the right; a 14-glyph name
 #    (28 cols) was not clipped at all. Anchored on the reset escape that closes the
 #    cell, like the id cell above (locale-proof).
 r5=$(row_of 5); r6=$(row_of 6)
 [ -n "$r5" ] && [ -n "$r6" ] || fail "live rows: expected the CJK-named fixtures" "$out"
-has   "live: a 10-col CJK name pads to 22 cols (12 spaces), not 17" "$r5" "修复仪表盘            "$'\033[0m'
-hasnt "live: a 10-col CJK name must not get a 17-space (code-point) pad" "$r5" "修复仪表盘                 "
-has   "live: a 28-col CJK name clips at 22 cols = 11 glyphs" "$r6" "修复仪表盘粘贴问题的名"$'\033[0m'
-hasnt "live: a 28-col CJK name must not leak past 22 cols" "$r6" "的名字"
+has   "live: a 10-col CJK name pads to 26 cols (16 spaces)" "$r5" "修复仪表盘                "$'\033[0m'
+hasnt "live: a 10-col CJK name must not get a 21-space (code-point) pad" "$r5" "修复仪表盘                     "
+has   "live: a 28-col CJK name clips at 26 cols = 13 glyphs" "$r6" "修复仪表盘粘贴问题的名字很"$'\033[0m'
+hasnt "live: a 28-col CJK name must not leak past 26 cols" "$r6" "名字很长"
 
 # --- the landed view (⌃t) keeps the #529 two-colour grammar -------------------
 # A landed row has no live window and therefore no #566 handle, so `~<N>` is the
