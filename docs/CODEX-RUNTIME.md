@@ -151,3 +151,41 @@ ticks: at most one idle depleted worker per fleet per tick, with a five-minute
 retry delay per launcher. Busy workers, pending questions, typing holds and
 unknown destination quotas prevent cutover. Attempt logs live under
 `$FLEET_CONF_DIR/codex/migrations/`. Both quota automation knobs default off.
+
+## Operator attention and answers
+
+The private runtime polls the exact live thread's native status every two
+seconds. Waiting for user input or approval sets the dashboard's `needs` state,
+question/permission subtype and bell. Resolving that wait clears only native
+attention; a worker's explicit `blocked` state is preserved. Embedded mode
+(`FLEET_CODEX_SERVER=0`) has no native status/reply channel.
+
+The dashboard answer key opens a Codex-specific popup. It rejoins the already
+loaded thread with a metadata-only `thread/resume`, which replays pending server
+requests. It never starts a new conversation or turn. Questions support choices,
+free text and masked secret input where requested. Escape cancels the popup
+without replying. Permission/MCP prompts show their native details for review.
+
+The shell interface uses the same native path:
+
+```sh
+bin/fleet-answer.sh --session myfleet --show @12 --json
+bin/fleet-answer.sh --session myfleet --answer @12 --request-token TOKEN 1 'text:some answer'
+bin/fleet-permission.sh --session myfleet --show @12 --json
+FLEET_ALLOW_AUTO_DENY=1 bin/fleet-permission.sh --session myfleet --deny @12 --request-token TOKEN
+```
+
+`TOKEN` is the `request_token` from the displayed request. It covers the launcher,
+thread, request ID and contents. Replies recheck the worker identity and refuse
+already-resolved requests; success requires `serverRequest/resolved`. Supported
+refusals are command execution, file changes, additional permissions and MCP
+elicitations. Refusal is opt-in; no native approval or permission grant is sent.
+The fleet's default bypass posture normally produces no command/file approval
+prompt, but a stricter caller configuration can.
+
+The optional Stop classifier still uses the shared Claude helper. Its rubric is
+now agent-aware, including Codex's idle placeholder. Native pending requests and
+explicit blockers take precedence, and a slow classification is discarded when
+the launcher, thread or hook state changes. This allows plain-text questions at
+Stop to be distinguished from completed work without inventing a Codex
+Notification hook.

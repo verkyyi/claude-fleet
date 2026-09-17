@@ -77,7 +77,7 @@ grep -q 'Edit|Write' "$WORK/codex.tsv" \
 grep -q 'artifact-guard' "$WORK/codex.tsv" \
   && fail "artifact-guard.py reached codex, which has no Artifact tool" "$cdx"
 grep -q 'classify-hook' "$WORK/codex.tsv" \
-  && fail "classify-hook.sh reached codex before its rubric was adapted" "$cdx"
+  || fail "Codex Stop must invoke the agent-aware screen classifier" "$cdx"
 grep -q 'handoff-latch-reset-hook\|session-end-hook' "$WORK/codex.tsv" \
   && fail "Claude handoff or reason-based cleanup reached a Codex thread lifecycle hook" "$cdx"
 grep '^SessionStart' "$WORK/codex.tsv" | grep -q 'fleet-emit.sh session.start' \

@@ -19,6 +19,7 @@ class Client:
         self.timeout = timeout
         self.deadline = time.monotonic() + timeout
         self.sequence = 0
+        self.events = []
         try:
             self.socket.settimeout(timeout)
             self.socket.connect(remote[7:])
@@ -110,6 +111,10 @@ class Client:
         while True:
             data = self.receive()
             if data.get('id') != sequence or 'method' in data:
+                # Rejoining a loaded thread replays pending server requests.
+                # Preserve them for native question/approval clients.
+                if len(self.events) < 1024:
+                    self.events.append(data)
                 continue
             if 'error' in data:
                 raise ValueError(data['error'].get('message', 'Codex RPC error'))

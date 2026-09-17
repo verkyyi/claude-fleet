@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import select
 import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -126,7 +127,7 @@ def run(argv, prepare=None, tick=None):
     env.pop('CODEX_THREAD_ID', None)
     env.pop('CODEX_SESSION_ID', None)
     read_fd, write_fd = os.pipe()
-    guardian = client = None
+    guardian = client = monitor = None
     ended = []
     old_handlers = {}
     try:
@@ -152,11 +153,15 @@ def run(argv, prepare=None, tick=None):
             return 128 + ended[0]
         if guardian.poll() is not None:
             raise RuntimeError('private Codex server exited before creating its socket')
+        attention = Path(__file__).with_name('fleet-codex-attention.py')
+        if attention.is_file():
+            monitor = runpy.run_path(str(attention))['Monitor'](remote, env)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:
-            if tick and time.monotonic() >= next_tick:
-                tick()
+            if time.monotonic() >= next_tick:
+                if monitor: monitor.tick()
+                if tick: tick()
                 next_tick = time.monotonic() + 1
             time.sleep(0.1)
         if ended:
