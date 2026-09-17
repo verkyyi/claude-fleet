@@ -70,6 +70,15 @@ class Providers(unittest.TestCase):
                             dict(id='b',minutes=10080,utilization=95,resets_at=3000)]
         self.assertEqual(accounts.normalize_codex(self.profile,reading,now=1000)['reset_at'],3000)
 
+    def test_missing_duration_retains_known_percentage_without_five_hour_guess(self):
+        reading=dict(available=True,windows=[dict(id='codex:primary',utilization=58),
+                                            dict(id='special:primary',minutes=300,utilization=100)])
+        row=accounts.normalize_codex(self.profile,reading,scope='codex')
+        self.assertTrue(row['available']); self.assertEqual(row['utilization'],58)
+        self.assertIsNone(row['windows'][0]['minutes'])
+        self.assertEqual(row['score'],84)
+        self.assertEqual(accounts.normalize_codex(self.profile,reading,scope='special')['utilization'],100)
+
     def test_profiles_share_account_exclusion_and_bench(self):
         a=candidate('codex','seat',home='/one',profile='one')
         b=dict(a,home='/two',profile='two')
@@ -87,7 +96,7 @@ class Providers(unittest.TestCase):
 
     def test_local_profile_intersection_and_uuid(self):
         raw=dict(source='codex',accounts=[dict(account_uuid=self.profile['account'],available=True,
-            windows=[dict(id='p',minutes=300,utilization=10)]),
+            windows=[dict(id='codex:primary',minutes=300,utilization=10)]),
             dict(account_uuid='remote-only',available=True,windows=[dict(id='p',minutes=300,utilization=0)])])
         with patch.object(accounts,'profiles',return_value=[self.profile]), patch.object(accounts,'ccquota',return_value=raw), patch.object(accounts,'run',return_value=''):
             result=accounts.inventory(True)

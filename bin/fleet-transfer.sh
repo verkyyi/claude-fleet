@@ -137,7 +137,7 @@ source_ready() {
   if [ -n "$QUOTA_REQUEST" ]; then
     python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"
   else
-    [ "$(opt '#{@claude_state}')" = done ]
+    [ "$(opt '#{@claude_state}')" = "done" ]
   fi
 }
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'

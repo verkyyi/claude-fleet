@@ -76,7 +76,7 @@ fi
 if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \
   && [ -z "${FLEET_HANDOFF_MANIFEST:-}" ]; then
   case " $* " in
-    *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*) : ;;
+    *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*|*" --codex-home "*|*" --codex-profile "*) : ;;
     *) export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL
        exec bash "$BIN/fleet-account.sh" launch --agent "${_fc_agent:-claude}" -- "$@" ;;
   esac
@@ -206,6 +206,10 @@ fi
 if [ -n "$label" ]; then                                 # (resolved above, with the model)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
+    if [ -n "${FLEET_ACCOUNT_TARGET:-}" ]; then
+      unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+      unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+    fi
     export CLAUDE_CODE_OAUTH_TOKEN="$tok"
     # Stamp THIS pane's window (issue #511). An untargeted `set-option -w` resolves
     # to the session's CURRENT window, and every spawn is `new-window -d` (the hub

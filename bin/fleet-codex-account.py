@@ -188,6 +188,20 @@ def model_limits():
 
 
 def status(home, model='', now=None, limit_id=None):
+    if os.environ.get('FLEET_FAILOVER') == '1':
+        shared = runpy.run_path(str(BIN/'.fleet-account.py'))
+        result = {'home':home,'remaining':None,'state':'unknown','windows':[]}
+        try:
+            profile = shared['profile'](home=home)
+            reading = next((r for r in shared['codex_reading']()['accounts'] if r.get('account_uuid') == profile['account']),None)
+            scope = limit_id if limit_id is not None else model_limits().get(model,'codex')
+            row = shared['normalize_codex'](profile,reading,now,scope=scope)
+            if row['available']:
+                remaining=100-row['utilization']
+                result.update(remaining=remaining,windows=row['windows'],
+                    state='available' if remaining > int(os.environ.get('FLEET_CODEX_QUOTA_FLOOR','5')) else 'low')
+        except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError): pass
+        return result
     now = time.time() if now is None else now
     data = read(cache_path(home))
     ttl = max(1, min(3600, int(os.environ.get('FLEET_CODEX_QUOTA_TTL', '300'))))

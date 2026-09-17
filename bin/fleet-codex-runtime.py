@@ -118,6 +118,8 @@ that layer as overrides, then apply -c flags above it in their original order.
 
 def run(argv, prepare=None, tick=None):
     if '--no-daemon' in argv:
+        if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
+            raise ValueError('a pinned subscription requires the verified private runtime')
         return subprocess.call(['codex', *argv])
     flags = server_flags(argv)
     # macOS AF_UNIX paths are limited to 104 bytes. TMPDIR may itself exceed

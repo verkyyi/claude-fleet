@@ -140,6 +140,52 @@ class LoopTests(unittest.TestCase):
         with patch.dict(os.environ, FLEET_LOOP_RECORD=str(self.path), CODEX_THREAD_ID='f'*36):
             with self.assertRaises(ValueError): loop.command(argparse.Namespace(command='stop'))
 
+    def test_claude_delivery_requires_exact_transcript_ack_and_never_replays(self):
+        history=self.root/'source.jsonl';history.write_text('')
+        r=self.read();r.update(agent='claude');loop.save(self.path,r)
+        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
+            loop.dispatch(self.path,now=10000)
+            self.assertEqual(self.read()['status'],'delivering')
+            self.assertEqual(self.read()['deliveries'],0)
+            nonce=self.read()['delivery_id']
+            history.write_text(json.dumps({'type':'user','uuid':'inbox-accepted','message':{'content':nonce}})+'\n')
+            loop.dispatch(self.path,now=10001)
+            self.assertEqual(self.read()['deliveries'],1)
+            self.assertEqual(self.read()['last_turn_id'],'inbox-accepted')
+            loop.dispatch(self.path,now=10002)
+            self.assertEqual(send.call_count,1)
+
+    def test_claude_unacknowledged_frame_pauses_without_resending(self):
+        history=self.root/'source.jsonl';history.write_text('')
+        r=self.read();r.update(agent='claude');loop.save(self.path,r)
+        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
+            loop.dispatch(self.path,now=10000);loop.dispatch(self.path,now=10031);loop.dispatch(self.path,now=20000)
+            self.assertEqual(self.read()['status'],'paused');self.assertEqual(send.call_count,1)
+
+    def test_loop_generation_can_be_claimed_only_once(self):
+        r=self.read();loop.claim_owner(self.path,r,{});loop.save(self.path,r)
+        target=self.root/'next.json';target2=self.root/'other.json'
+        raw=dict(previous_record=str(self.path),generation=1)
+        next_record=dict(r)
+        loop.claim_owner(target,next_record,raw)
+        self.assertEqual(self.read()['active_record'],str(target))
+        with self.assertRaises(ValueError):loop.claim_owner(target2,dict(r),raw)
+
+    def test_crash_recovery_uses_exact_uuid_and_does_not_revive_stops(self):
+        record=self.root/'handoffs/packet/loop/state.json';record.parent.mkdir(parents=True)
+        r=self.read();r.update(agent='codex',controller_pid=99999999,home=str(self.root/'home'))
+        loop.save(record,r)
+        adapter={'tmux':lambda *_:'@9|%9|99|'+str(self.root)+'|codex|'+r['manifest']+'|',
+                 'identity':lambda *_:dict(session_id=SID,remote='unix:///tmp/restored.sock',home=r['home'])}
+        with patch.dict(os.environ,FLEET_CONF_DIR=str(self.root)), patch.object(loop.runpy,'run_path',return_value=adapter), patch.object(loop,'dispatch') as dispatch:
+            loop.recover('isolated')
+            saved=json.loads(record.read_text());self.assertEqual(saved['fleet']['pane_id'],'%9')
+            self.assertEqual(saved['driver'],'quotawatch');self.assertEqual(dispatch.call_count,1)
+            saved['status']='stopped';loop.save(record,saved);loop.recover('isolated')
+            self.assertEqual(dispatch.call_count,1)
+            saved['status']='active';saved['thread_id']='other-session';loop.save(record,saved);loop.recover('isolated')
+            self.assertEqual(dispatch.call_count,1)
+
     def test_bad_spec_and_wrong_thread_are_rejected(self):
         for value in [{}, {'prompt': 'x', 'interval_seconds': 0},
                       {'prompt': 'x', 'interval_seconds': True},

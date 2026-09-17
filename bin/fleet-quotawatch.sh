@@ -499,7 +499,7 @@ fi
 # cheap no-ops. Existing named-socket fan-out and daemon remain the only timer.
 qw_failover_enabled() { ( fleet_load_conf "$1"; [ "${FLEET_FAILOVER:-0}" = 1 ]; ); }
 for qs in $SOCKETS; do
-  if qw_failover_enabled "$qs" || [ -f "$FLEET_CONF_DIR/handoffs/quota-requests/$qs.cursor.json" ]; then
+  if qw_failover_enabled "$qs" || [ -d "$FLEET_CONF_DIR/handoffs" ]; then
     if [ "$DRY" = 1 ]; then
       printf 'would: reconcile subscription failover on %s\n' "$qs"
     else

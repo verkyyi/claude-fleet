@@ -99,6 +99,15 @@ class Failover(unittest.TestCase):
             flow.reconcile_one(self.source,self.account,self.data)
         self.assertEqual(send.call_count,1);self.assertEqual(self.request()['state'],'ambiguous')
 
+    def test_model_only_limit_does_not_bench_or_move_subscription(self):
+        self.account.update(utilization=58,score=84)
+        self.data['accounts'].append(self.other)
+        with patch.object(flow,'move') as move:
+            flow.reconcile_one(self.source,self.account,self.data)
+        self.assertFalse(move.called)
+        self.assertEqual(self.request()['state'],'waiting-evidence')
+        self.assertNotIn('benched_until',self.request())
+
     def test_only_subscription_quota_error_is_migration_evidence(self):
         for name in ('rateLimitExceeded','sessionBudgetExceeded','internalServerError'):
             self.assertFalse(flow.quota_error(dict(status={'type':'idle'},turns=[dict(status='failed',error={'codexErrorInfo':name})])))

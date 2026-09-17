@@ -146,7 +146,7 @@ def codex_reading(refresh=False):
     return cache
 
 
-def normalize_codex(p, reading, now=None):
+def normalize_codex(p, reading, now=None, scope=None):
     now = time.time() if now is None else now
     row = dict(p, key='codex/' + p['account'], available=False, utilization=None,
                score=None, reset_at=0, hold_until=0, limited_until=0, windows=[])
@@ -161,22 +161,24 @@ def normalize_codex(p, reading, now=None):
         if not isinstance(w, dict):
             row['reason'] = 'unreadable-window'
             return row
+        if scope is not None and not str(w.get('id','')).startswith(scope + ':'):
+            continue
         used = number(w.get('utilization'))
         until = epoch(w.get('resets_at'))
         if until and until <= now:
             continue
         minutes = number(w.get('minutes'))
-        if used is None or not 0 <= used <= 100 or minutes is None or minutes <= 0:
+        if used is None or not 0 <= used <= 100 or (minutes is not None and minutes < 0):
             row['reason'] = 'unreadable-window'
             return row
-        windows.append(dict(id=w.get('id', ''), minutes=minutes, utilization=used, resets_at=until))
+        windows.append(dict(id=w.get('id', ''), minutes=minutes or None, utilization=used, resets_at=until))
     blocked = reading.get('blocked') is True
     if not windows and not blocked:
         row['reason'] = 'unreadable'
         return row
     used = 100 if blocked else max(w['utilization'] for w in windows)
-    ordered = sorted(windows, key=lambda w: w['minutes'])
-    if os.environ.get('FLEET_ACCOUNT_PICK') == 'minmax' or len(ordered) < 2:
+    ordered = sorted(windows, key=lambda w: w['minutes'] or float('inf'))
+    if os.environ.get('FLEET_ACCOUNT_PICK') == 'minmax' or len(ordered) < 2 or any(w['minutes'] is None for w in windows):
         score = (100 - used) * 2
     else:
         score = (100 - ordered[0]['utilization']) * 2 + (100 - max(w['utilization'] for w in ordered[1:]))
@@ -213,7 +215,21 @@ def inventory(refresh=False):
         readings = {a.get('account_uuid'): a for a in data['accounts'] if isinstance(a, dict)}
         benches = read(state_dir() / 'account.codex-limited.json', {})
         for p in local:
-            row = normalize_codex(p, readings.get(p['account']))
+            reading = readings.get(p['account'])
+            row = normalize_codex(p, reading, scope='codex')
+            row['model_ok'] = True
+            mapping = json.loads(os.environ.get('FLEET_CODEX_MODEL_LIMIT_IDS') or '{}')
+            if not isinstance(mapping,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v for k,v in mapping.items()):
+                raise ValueError('invalid Codex model limit mapping')
+            model = os.environ.get('FLEET_CODEX_MODEL','')
+            if model and mapping.get(model):
+                model_row = normalize_codex(p,reading,scope=mapping[model])
+                row['model_ok'] = model_row['available'] and model_row['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING','85'))
+                fallback = os.environ.get('FLEET_CODEX_MODEL_FALLBACK','')
+                if not row['model_ok'] and fallback and mapping.get(fallback):
+                    alt = normalize_codex(p,reading,scope=mapping[fallback])
+                    row['model_ok'] = alt['available'] and alt['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING','85'))
+                    if row['model_ok']: row['model'] = fallback
             row['capable'] = os.environ.get('FLEET_CODEX_SERVER', '1') != '0'
             row['limited_until'] = benches.get(row['key'], {}).get('until', 0)
             if not Path(p['home']).is_dir():
@@ -342,6 +358,8 @@ def launch(agent, argv):
     if target['agent'] == 'codex':
         env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'],
                    CODEX_HOME=target['home'])
+        if target.get('model') and not any(a in ('-m','--model') or a.startswith('--model=') for a in argv):
+            argv = ['-m',target['model'],*argv]
     else:
         env['FLEET_ACCOUNT_LABEL'] = target['label']
     os.execve(str(BIN / 'fleet-claude.sh'), [str(BIN / 'fleet-claude.sh'), '--agent', target['agent'], *argv], env)

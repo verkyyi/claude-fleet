@@ -525,10 +525,17 @@ EOF
 }
 
 account_adapter() {
+  local adapter_session
+  adapter_session=$(fleet_current_session 2>/dev/null)
+  if [ -n "${FLEET_LAUNCH_SESSION:-}" ] && [ "$adapter_session" = "${FLEET_LAUNCH_SESSION}-pool" ]; then
+    adapter_session="$FLEET_LAUNCH_SESSION"
+  fi
+  [ -z "$adapter_session" ] || fleet_load_conf "$adapter_session" || return 1
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_ACCOUNT_QUOTA_TTL
   export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL FLEET_CODEX_SERVER
+  export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
   exec python3 "$BIN/.fleet-account.py" "$@"
 }
 
@@ -543,6 +550,7 @@ account_reconcile() {
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_CODEX_SERVER
   export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL
+  export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
   exec python3 "$BIN/.fleet-failover.py" "$@"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.

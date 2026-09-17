@@ -2,6 +2,7 @@
 """Private, local-only provenance/snapshot helpers for fleet-transfer.sh."""
 
 import argparse
+from contextlib import contextmanager
 import datetime
 import hashlib
 import json
@@ -25,6 +26,22 @@ def write_json(path, value):
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
+
+
+@contextmanager
+def transition_lock(worktree):
+    """Python adapter to the SAME atomic transition lock used by shell callers."""
+    lib=str(Path(__file__).with_name('fleet-lib.sh'))
+    lease=run('bash','-c','. "$1"; fleet_rotate_lease_file "$2"','fleet-transition',lib,worktree)
+    path=Path(lease+'.transfer-lock')
+    path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    try: path.mkdir(mode=0o700)
+    except FileExistsError: raise ValueError('another transition owns this worktree') from None
+    owner=path/'pid'; owner.write_text(str(os.getpid()))
+    try: yield
+    finally:
+        if owner.exists() and owner.read_text().strip()==str(os.getpid()):
+            owner.unlink(); path.rmdir()
 
 
 def resolve(registry, projects, worktree):
@@ -386,6 +403,8 @@ def launcher(bundle, launch):
             argv += ['--codex-home', home]
         if target.get('profile'):
             env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'])
+        if target.get('model'):
+            argv += ['-m',target['model']]
     elif target.get('label'):
         env['FLEET_ACCOUNT_LABEL'] = target['label']
     if m.get('native_resume'):

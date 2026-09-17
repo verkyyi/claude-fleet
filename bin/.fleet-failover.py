@@ -92,6 +92,12 @@ def source_account(source, data):
             # Existing sessions predate subscription stamps: verify native auth
             # against ccquota's metadata, without reassigning historical usage.
             expected = matches[0]
+            elapsed = run(['ps','-p',str(source['pid']),'-o','etime='])
+            days, clock = elapsed.split('-',1) if '-' in elapsed else ('0',elapsed)
+            parts=[int(x) for x in clock.split(':')]
+            age=int(days)*86400 + sum(n*60**i for i,n in enumerate(reversed(parts)))
+            if (Path(expected['home'])/'auth.json').stat().st_mtime > time.time()-age+2:
+                raise ValueError('unbound source login changed after launch; retain it until an exact account binding is available')
             with_env = json.dumps({k: expected[k] for k in ('account','profile','home')})
             old = os.environ.get('FLEET_CODEX_SUBSCRIPTION')
             os.environ['FLEET_CODEX_SUBSCRIPTION'] = with_env
@@ -244,6 +250,8 @@ def move(path, r, target):
         manifest = opt(source,'@handoff_manifest')
         m = read(manifest,{}) if manifest else {}
         state = read(Path(manifest).parent/'state.json',{}) if manifest else {}
+        if m.get('quota_request') == str(path):
+            r['manifest'] = manifest
         if (result.returncode == 0 and m.get('quota_request') == str(path)
                 and m.get('target',{}).get('session_id') and state.get('state') == 'started'):
             r['manifest'] = manifest
@@ -351,6 +359,10 @@ def reconcile_one(source, account, data, dry=False):
         r = dict(source=source,source_key=account['key'],created_at=time.time(),state='waiting',
                  hard=hard,episode=episode,attempts=0,failed_targets={})
         path.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if (source['agent'] == 'codex' and hard and not over and not blocked
+            and not r.get('benched_until')):
+        outcome(path,r,'waiting-evidence','native limit has no account-wide quota confirmation; check model limits or refresh ccquota')
+        return
     if r and not hard and ACCOUNT['eligible'](account):
         outcome(path,r,'cancelled','source subscription recovered; existing conversation retained')
         return
@@ -384,6 +396,7 @@ def reconcile(session, dry=False):
     enabled = os.environ.get('FLEET_FAILOVER','0') == '1'
     if not enabled:
         if root().is_dir() and not dry: cancel_obsolete(session,False)
+        if not dry: runpy.run_path(str(BIN/'fleet-loop.py'))['recover'](session)
         return
     # No queue files, status stamps or locks are created by a dry run.
     if dry:
@@ -392,6 +405,9 @@ def reconcile(session, dry=False):
         root().mkdir(parents=True,exist_ok=True,mode=0o700)
         with locked(root()/(session+'.lock'),nonblocking=True):
             cancel_obsolete(session,True)
+            if os.environ.get('FLEET_CODEX_MODEL_FALLBACK'):
+                if runpy.run_path(str(BIN/'fleet-codex-model.py'))['watch'](session):
+                    return
             reconcile_windows(session,False)
             runpy.run_path(str(BIN/'fleet-loop.py'))['recover'](session)
 
@@ -432,7 +448,8 @@ def main():
     if a.command=='reconcile': reconcile(a.session,a.dry_run)
     elif a.command=='validate': validate(a.request,a.session,a.pane,a.sid)
     else:
-        print(json.dumps([read(f,{}) for f in root().glob('*/request.json')],ensure_ascii=False))
+        paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))
+        print(json.dumps([read(f,{}) for f in paths],ensure_ascii=False))
 
 
 if __name__=='__main__':
