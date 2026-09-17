@@ -13,7 +13,7 @@
 # or the operator's per-fleet implementation directive at all.
 #
 # This is that whole preamble as ONE call: one shell, one `gh` round-trip, one
-# atomic block of output. The charter + directive stop being skippable because
+# atomic block of output (zero gh calls with a fresh spawn snapshot, #459). The charter + directive stop being skippable because
 # there is no separate step left to skip.
 #
 # It prints, in order:
@@ -21,7 +21,7 @@
 #               and (issue #574) the window's `@origin`: WHO spawned this worker,
 #               so the child knows from turn one that it owes someone a report
 #   issue     — number, title, state, labels, ASSIGNEES (the claim), url, body and
-#               every comment, from ONE `gh issue view --json …` read
+#               every comment, from a fresh spawn snapshot or ONE gh read
 #   claim     — already claimed (pre-claim at spawn) vs UNCLAIMED + the exact
 #               `gh issue edit … --add-assignee @me` to run on the (rare) miss
 #   charter   — fleet_worker_charter: the repo/overlay layers + tap-first block
@@ -139,13 +139,18 @@ case "$at_origin" in
   *)         printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin" ;;
 esac
 
-# --------------------------------------------------------------- the ONE gh read
+# --------------------------------------------------------- snapshot or ONE gh read
+# A fresh machine-local spawn snapshot costs zero gh calls (#459). On a miss,
 # ONE `gh issue view --json …` serves what used to be three separate reads: the
 # issue thread (old step 1), the assignee/claim check (old step 2), and the
 # re-fetch every session then did anyway because `--comments` dumps unstructured
 # text. `--jq` is gh's BUILT-IN jq — no external dependency.
 printf '\n===== issue #%s · %s =====\n' "$issue" "$repo"
-if ! command -v gh >/dev/null 2>&1; then
+cached_body=$(python3 "$BIN/fleet-issue-cache.py" read "$cwd" "$repo" "$issue" "$want_comments" 2>/dev/null) || cached_body=''
+if [ -n "$cached_body" ]; then
+  printf '%s\n' "$cached_body"
+  rc=0
+elif ! command -v gh >/dev/null 2>&1; then
   printf 'gh: NOT ON PATH — the issue could not be read (fleet + charter above are still valid)\n'
   rc=5
 else
