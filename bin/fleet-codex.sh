@@ -44,7 +44,7 @@
 #   * Model: FLEET_CODEX_MODEL → `-m` (Codex names ≠ Claude aliases, so FLEET_MODEL
 #     never applies); empty defers to ~/.codex/config.toml. Stamped as @cc_model.
 #   * Skipped on purpose: --model / FLEET_MODEL + the per-model cap fallback,
-#     --mcp-config / FLEET_MCP_CONFIG, CLAUDE_CODE_SUBAGENT_MODEL, and the
+#     Claude --mcp-config flags, CLAUDE_CODE_SUBAGENT_MODEL, and the
 #     CLAUDE_CODE_OAUTH_TOKEN account rotation (Codex auth is `codex login`).
 #   * Project trust: Codex prompts once per project; a worktree inherits its main
 #     repo's trust, so the fleet needs $FLEET_MAIN trusted in ~/.codex/config.toml
@@ -92,7 +92,8 @@
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | partial | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout; reopening uses native resume/fork. Legacy Claude rows remain readable. Account migration is a separate adapter; no Codex history falls back to a Claude cwd transcript.
 # multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over.
 # per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch.
-# MCP servers + subagent model | ✅ | ❌ | Deliberately skipped, **not** a Codex limit: Codex has both (`codex mcp`, its own subagents). `FLEET_MCP_CONFIG` / `FLEET_SUBAGENT_MODEL` are Claude-shaped and are not materialised into Codex config.
+# MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists; `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
+# warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path.
 # MATRIX-END
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -105,6 +106,10 @@ ROOT="$(cd "$BIN/.." && pwd)"
 # not inherit the spawner's env, so read the fleet's conf from $TMUX_PANE's session.
 if command -v fleet_load_conf >/dev/null 2>&1; then
   _fx_sess="$(fleet_current_session 2>/dev/null)"
+  # A holding session uses the owning fleet's overlay before it is claimed.
+  if [ -n "${FLEET_LAUNCH_SESSION:-}" ] && [ "$_fx_sess" = "${FLEET_LAUNCH_SESSION}-pool" ]; then
+    _fx_sess="$FLEET_LAUNCH_SESSION"
+  fi
   [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
   unset _fx_sess
 fi
@@ -117,12 +122,12 @@ fi
 # Fleet recovery callers carry the provider and account home explicitly. Convert
 # the shared resume spelling before parsing the final seed; native resume/fork
 # positional forms still pass through unchanged.
-normal=(); resume_id=''; fork_session=0
+normal=(); resume_id=''; fork_session=0; _codex_home_explicit=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --codex-home)
       [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
-      export CODEX_HOME="$2"; shift 2 ;;
+      export CODEX_HOME="$2"; _codex_home_explicit=1; shift 2 ;;
     --resume)
       [ "$#" -ge 2 ] || { echo 'fleet-codex: --resume requires a session id' >&2; exit 2; }
       resume_id="$2"; shift 2 ;;
@@ -130,6 +135,10 @@ while [ "$#" -gt 0 ]; do
     *) normal+=("$1"); shift ;;
   esac
 done
+if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
+  [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
+  export CODEX_HOME="$FLEET_CODEX_HOME"
+fi
 if [ -n "$resume_id" ]; then
   verb=resume; [ "$fork_session" = 1 ] && verb=fork
   set -- "$verb" "$resume_id" ${normal[@]+"${normal[@]}"}
@@ -257,6 +266,20 @@ if [ -n "${FLEET_CODEX_MODEL:-}" ]; then
     *) launch_model="$FLEET_CODEX_MODEL"; flags+=(-m "$launch_model") ;;
   esac
 fi
+
+# Native Codex policy. Fleet defaults precede the caller's -c overrides; the
+# runtime sends the same effective flags to the app-server and the TUI.
+_codex_mcp="${FLEET_CODEX_MCP_CONFIG-${FLEET_MCP_CONFIG:-}}"
+_codex_subagent="${FLEET_CODEX_SUBAGENT_MODEL-${launch_model:-}}"
+if [ -n "$_codex_mcp$_codex_subagent${FLEET_CODEX_SUBAGENT_EFFORT:-}" ] && [ -f "$BIN/fleet-codex-policy.py" ]; then
+  _policy=$(FLEET_CODEX_MCP_CONFIG="$_codex_mcp" FLEET_CODEX_SUBAGENT_MODEL="$_codex_subagent" \
+    FLEET_CODEX_SUBAGENT_EFFORT="${FLEET_CODEX_SUBAGENT_EFFORT:-}" \
+    python3 "$BIN/fleet-codex-policy.py" -- "$@") || exit 2
+  while IFS= read -r _value; do
+    [ -z "$_value" ] || flags+=(-c "$_value")
+  done <<< "$_policy"
+fi
+unset _codex_mcp _codex_subagent _policy _value
 
 # --- stamp THIS pane's window (issue #511: -t "$TMUX_PANE", never the current window)
 export FLEET_CODEX_LAUNCHER_PID="$$"

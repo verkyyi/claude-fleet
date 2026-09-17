@@ -72,3 +72,27 @@ default; `--no-fork` selects `codex resume UUID`. The shared launcher accepts
 `--agent codex --codex-home PATH --resume UUID [--fork-session]` as well. If the
 account home or exact rollout has been removed, history is review-only. Recovery
 does not copy credentials or silently substitute another account.
+
+## Startup and warm scratch panes
+
+`FLEET_MCP_CONFIG` also applies to Codex. `none` disables configured MCP servers,
+apps/connectors and automatic skill-driven MCP installation. A shared
+`mcpServers` JSON allowlist translates stdio/HTTP definitions, including headers.
+`FLEET_CODEX_MCP_CONFIG` overrides that policy and accepts native `mcp_servers`
+JSON or a TOML file (Python 3.11+). An explicitly empty override keeps native
+Codex defaults. Unsupported shared transports/fields and failed enumeration
+stop the launch instead of silently loading the full MCP set.
+
+`FLEET_CODEX_SUBAGENT_MODEL` defaults to a fleet-pinned Codex worker model;
+`inherit` or empty preserves native selection. `FLEET_CODEX_SUBAGENT_EFFORT`
+sets native reasoning effort. Explicit caller `-c` values win. Policies reach
+both the private app-server and TUI without editing account configuration.
+`FLEET_CODEX_HOME` optionally pins a pre-existing account home for new workers.
+
+`FLEET_SCRATCH_POOL` now warms either provider. Pool launches load the owning
+fleet's config even before their window moves into that fleet. The Codex probe
+waits for a stable empty input, verifies launcher ownership, types one character,
+and verifies that Ctrl-U clears it. It never presses Enter or sends a model
+request. Trust dialogs, stale owners and shell remnants cannot become ready.
+Claims check provider, account home, window size and age; an unavailable warm
+entry falls back to the normal cold launch.

@@ -74,12 +74,8 @@ TM() { tmux -L "$SOCK" "$@"; }
 POOL=$(fleet_pool_session "$SESS")
 
 WANT="${FLEET_SCRATCH_POOL:-0}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
-# The pool is Claude-only (issue #547): its readiness probe waits for a `claude`
-# process under the pane and its warm-up keystroke is tuned to Claude Code's TUI
-# mount, so a fleet whose FLEET_AGENT is codex would warm windows the probe never
-# calls ready — a cold codex boot per ensure tick, for nothing. Off for that fleet;
-# a `--agent codex` scratch always took the cold path anyway (dash-raw-session.sh).
-case "${FLEET_AGENT:-}" in codex) WANT=0 ;; esac
+AGENT="${FLEET_AGENT:-claude}"
+case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
 MAXAGE="${FLEET_POOL_MAX_AGE:-1800}"; case "$MAXAGE" in ''|*[!0-9]*) MAXAGE=1800;; esac
 PTIMEOUT="${FLEET_POOL_PROBE_TIMEOUT:-120}"; case "$PTIMEOUT" in ''|*[!0-9]*) PTIMEOUT=120;; esac
 MAIN="${FLEET_MAIN:-}"
@@ -89,7 +85,13 @@ NOW() { date +%s; }
 # The account a warm entry was launched under is baked into its claude process
 # (fleet-claude.sh exports CLAUDE_CODE_OAUTH_TOKEN at exec time), so an entry
 # warmed under a rotated-away account must not be handed out.
-acct_now() { "$BIN/fleet-account.sh" active 2>/dev/null; }
+acct_now() {
+  if [ "$AGENT" = codex ]; then
+    printf 'codex:%s\n' "${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}"
+  else
+    "$BIN/fleet-account.sh" active 2>/dev/null
+  fi
+}
 
 # The holding session MUST be the same size as the fleet session. A warm window
 # born at 80x24 and moved into a 145x34 fleet gets resized on arrival, and Claude
@@ -239,7 +241,7 @@ warm_input() {
 
 # ------------------------------------------------------------------- ensure ----
 spawn_one() {
-  local alloc slug wt win acct
+  local alloc slug wt win acct launch
   [ -n "$MAIN" ] || return 1
   [ -d "$MAIN/.git" ] || return 1
   # Never warm the fleet past its own ceiling, and always leave one slot of
@@ -250,14 +252,15 @@ spawn_one() {
   read -r _w _h <<EOF
 $(fleet_dims)
 EOF
+  printf -v launch 'env FLEET_LAUNCH_SESSION=%q %q --agent %q' "$SESS" "$BIN/fleet-claude.sh" "$AGENT"
   if TM has-session -t "$POOL" 2>/dev/null; then
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     TM resize-window -t "$POOL" -x "$_w" -y "$_h" >/dev/null 2>&1
     win=$(TM new-window -d -P -F '#{window_id}' -t "$POOL:" -n "warm-${slug#scratch-}" -c "$wt" \
-            "'$BIN/fleet-claude.sh'; exec \$SHELL" 2>/dev/null)
+            "$launch; exec \$SHELL" 2>/dev/null)
   else
     TM new-session -d -s "$POOL" -x "$_w" -y "$_h" -n "warm-${slug#scratch-}" -c "$wt" \
-      "'$BIN/fleet-claude.sh'; exec \$SHELL" >/dev/null 2>&1
+      "$launch; exec \$SHELL" >/dev/null 2>&1
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     win=$(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null | head -1)
   fi
@@ -268,14 +271,22 @@ EOF
   TM set-window-option -t "$win" @pool_slug "$slug" 2>/dev/null
   TM set-window-option -t "$win" @pool_born "$(NOW)" 2>/dev/null
   TM set-window-option -t "$win" @pool_account "$acct" 2>/dev/null
+  TM set-window-option -t "$win" @pool_agent "$AGENT" 2>/dev/null
   TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
-  if wait_settled "$win" && warm_input "$win"; then return 0; fi
+  if [ "$AGENT" = codex ]; then
+    if python3 "$BIN/fleet-codex-warm.py" --socket "$SOCK" --pane "$win" --timeout "$PTIMEOUT" \
+        --settle "$POOL_SETTLE_MIN" --stable-hits "$POOL_STABLE_HITS"; then
+      TM set-window-option -t "$win" @pool_ready 1 2>/dev/null
+      return 0
+    fi
+  elif wait_settled "$win" && warm_input "$win"; then return 0; fi
   retire "$win"; return 1                     # never came up — don't leave a husk
 }
 
 usable() {                                    # usable <wid> — ready, fresh, right account
-  local wid="$1" born age
+  local wid="$1" born age agent
   [ "$(wopt "$wid" @pool_ready)" = 1 ] || return 1
+  agent=$(wopt "$wid" @pool_agent); [ "${agent:-claude}" = "$AGENT" ] || return 1
   [ "$(wopt "$wid" pane_dead)" = 1 ] && return 1
   born=$(wopt "$wid" @pool_born); case "$born" in ''|*[!0-9]*) return 1;; esac
   age=$(( $(NOW) - born )); [ "$age" -le "$MAXAGE" ] || return 1
@@ -336,6 +347,7 @@ cmd_claim() {
     TM set-window-option -t "$wid" -u @pool_ready 2>/dev/null
     TM set-window-option -t "$wid" -u @pool_born 2>/dev/null
     TM set-window-option -t "$wid" -u @pool_account 2>/dev/null
+    TM set-window-option -t "$wid" -u @pool_agent 2>/dev/null
     TM set-window-option -t "$wid" -u @pool_slug 2>/dev/null
     printf '%s\t%s\t%s\n' "$wid" "$slug" "$wt"
     return 0
