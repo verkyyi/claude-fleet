@@ -92,7 +92,7 @@ for line in sys.stdin:
     if manifest:
         try:
             loop_record = json.loads((Path(manifest).parent/'loop/state.json').read_text())
-            if (loop_record.get('status') != 'active' or not loop_record.get('thread_id')
+            if (loop_record.get('status') not in ('active', 'waiting-quota') or not loop_record.get('thread_id')
                     or Path(loop_record['worktree']).resolve() != Path(path).resolve()):
                 loop_record = {}
         except (OSError,ValueError,KeyError,TypeError): pass

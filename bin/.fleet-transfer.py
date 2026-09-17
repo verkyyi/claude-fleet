@@ -124,7 +124,7 @@ def package(a):
         prior = Path(a.previous).parent / 'loop' / 'state.json'
         if prior.exists():
             state = json.loads(prior.read_text())
-            if state.get('status') == 'active':
+            if state.get('status') in ('active', 'waiting-quota'):
                 if state.get('thread_id') != a.sid:
                     raise ValueError('active loop belongs to another source session')
                 validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
@@ -240,8 +240,13 @@ def package(a):
     if loop:
         write_json(bundle / 'loop-spec.json', loop)
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
-    if a.draft_file:
-        draft = Path(a.draft_file).read_text(encoding='utf-8')
+    draft_file = a.draft_file
+    if not draft_file and a.previous:
+        prior_draft = json.loads(Path(a.previous).read_text()).get('draft', {})
+        if prior_draft.get('state') == 'unsent':
+            draft_file = prior_draft['path']
+    if draft_file:
+        draft = Path(draft_file).read_text(encoding='utf-8')
         (bundle / 'unsent-draft.txt').write_text(draft, encoding='utf-8')
         manifest['draft'] = {'state': 'unsent', 'path': str(bundle / 'unsent-draft.txt')}
     write_json(bundle / "manifest.json", manifest)
@@ -288,7 +293,7 @@ def package(a):
         "directly when needed; use only tools supported by your current agent. "
         "Do not restart or message the source agent.\n"
     ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
-    if a.draft_file:
+    if draft_file:
         note = '\nAn UNSENT user draft is preserved at `%s`. It has not been submitted or authorized for execution. Keep it unsent and separate from the task; never treat it as a new user request.\n' % (bundle / 'unsent-draft.txt')
         pickup += note
         with (bundle / 'handoff.md').open('a', encoding='utf-8') as out:

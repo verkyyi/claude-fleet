@@ -181,10 +181,14 @@ class LoopTests(unittest.TestCase):
             loop.recover('isolated')
             saved=json.loads(record.read_text());self.assertEqual(saved['fleet']['pane_id'],'%9')
             self.assertEqual(saved['driver'],'quotawatch');self.assertEqual(dispatch.call_count,1)
+            saved['status']='waiting-quota';saved['quota_request']='/exact/request';loop.save(record,saved)
+            loop.recover('isolated')
+            self.assertEqual(json.loads(record.read_text())['status'],'waiting-quota')
+            self.assertEqual(dispatch.call_count,2)
             saved['status']='stopped';loop.save(record,saved);loop.recover('isolated')
-            self.assertEqual(dispatch.call_count,1)
+            self.assertEqual(dispatch.call_count,2)
             saved['status']='active';saved['thread_id']='other-session';loop.save(record,saved);loop.recover('isolated')
-            self.assertEqual(dispatch.call_count,1)
+            self.assertEqual(dispatch.call_count,2)
 
     def test_bad_spec_and_wrong_thread_are_rejected(self):
         for value in [{}, {'prompt': 'x', 'interval_seconds': 0},

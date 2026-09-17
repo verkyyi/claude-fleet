@@ -47,6 +47,9 @@ class RecoveryTests(unittest.TestCase):
         line='|'.join(['scratch',str(self.wt),'','done','','','1','','codex','1234',str(manifest),json.dumps(self.data)])+'\n'
         fields=self.run_cli('.fleet-restore-resolve.py',input=line).split('\t')
         self.assertEqual(fields[3],SID);self.assertEqual(fields[-1],str(manifest))
+        r['status']='waiting-quota';record.write_text(json.dumps(r))
+        fields=self.run_cli('.fleet-restore-resolve.py',input=line).split('\t')
+        self.assertEqual(fields[3],SID);self.assertEqual(fields[-1],str(manifest))
         r['status']='stopped';record.write_text(json.dumps(r))
         self.assertEqual(self.run_cli('.fleet-restore-resolve.py',input=line),'')
 

@@ -262,7 +262,7 @@ def recover(session):
     for path in root.glob('*/loop/state.json'):
         try:
             with locked(path,nonblocking=True) as r:
-                if r.get('status') != 'active' or r['fleet']['session'] != session or not r.get('thread_id'):
+                if r.get('status') not in ('active', 'waiting-quota') or r['fleet']['session'] != session or not r.get('thread_id'):
                     continue
                 pid = r.get('controller_pid',0)
                 if pid:

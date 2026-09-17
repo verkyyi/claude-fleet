@@ -22,6 +22,7 @@ INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 ATTENTION = runpy.run_path(str(BIN / 'fleet-codex-attention.py'))
+LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
 save, read, locked = (ACCOUNT[n] for n in ('save', 'read', 'locked'))
 
 
@@ -213,6 +214,51 @@ def request_path(source):
     return root() / hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
 
 
+def quota_loop(path, source, state, restored=False):
+    """Pause the durable record, including controllers loaded before this release.
+
+    Existing controllers already respect status != active. The tmux flag alone
+    cannot pause an older, living Python controller. Never change an ambiguous
+    delivery, explicit stop, replacement thread or retired ownership generation.
+    """
+    manifest = source.get('previous')
+    if not manifest or state == 'bound':
+        return
+    record = Path(manifest).parent / 'loop/state.json'
+    if not record.is_file():
+        return
+    with LOOP['locked'](record, nonblocking=True) as loop:
+        if (loop.get('status') not in ('active', 'waiting-quota')
+                or loop.get('thread_id') != source['session_id']
+                or loop.get('agent', 'codex') != source['agent']
+                or loop.get('manifest') != manifest
+                or Path(loop['worktree']).resolve() != Path(source['worktree']).resolve()):
+            return
+        if state in ('cancelled', 'recovered') and loop['status'] != 'waiting-quota':
+            return
+        LOOP['current'](loop)
+        current = inspect(source['session'], source['window'])
+        if not same_source(current, source) or opt(current, '@reported') == '1':
+            return
+        if state in ('cancelled', 'recovered'):
+            if loop.get('quota_request') != str(path):
+                prior = read(Path(loop.get('quota_request', '')) / 'request.json', {})
+                previous = prior.get('source', {})
+                if (not restored or prior.get('state') != 'cancelled'
+                        or any(previous.get(k) != source.get(k) for k in
+                               ('session_id', 'agent', 'worktree', 'previous'))):
+                    return
+            loop.update(status='active', detail='Quota wait released for the exact loop owner')
+            loop.pop('quota_request', None)
+            # A reset continuation or new operator turn already resumes the task;
+            # do not race it with a second wakeup for an overdue interval.
+            loop['schedule']['next_run_at'] = time.time() + loop['schedule']['interval_seconds']
+        else:
+            loop.update(status='waiting-quota', quota_request=str(path),
+                        detail='Waiting for the existing subscription failover request')
+        LOOP['save'](record, loop)
+
+
 def outcome(path, r, state, detail=''):
     r.update(state=state, detail=detail, updated_at=time.time())
     save(path / 'request.json', r)
@@ -227,6 +273,8 @@ def outcome(path, r, state, detail=''):
         except (OSError,ValueError,subprocess.SubprocessError): pass
     try: stamp(r['source'], '' if state in ('bound','cancelled','recovered') else state + ': ' + detail[:160])
     except (OSError, ValueError, subprocess.SubprocessError): pass
+    try: quota_loop(path, r['source'], state)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError): pass
 
 
 def move(path, r, target):
@@ -315,7 +363,14 @@ def cancel_obsolete(session, enabled):
     for filename in root().glob('*/request.json'):
         r = read(filename,{})
         source = r.get('source',{})
-        if source.get('session') != session or r.get('state') in ('bound','cancelled','recovered','ambiguous'):
+        if source.get('session') != session:
+            continue
+        if r.get('state') in ('bound','cancelled','recovered','ambiguous'):
+            if r.get('state') in ('cancelled','recovered'):
+                # An older controller may have held its record lock when the
+                # terminal outcome arrived. Retry that release on later ticks.
+                try: quota_loop(filename.parent, source, r['state'])
+                except (OSError,ValueError,KeyError,subprocess.SubprocessError): pass
             continue
         try:
             current = inspect(session,source['window'])
@@ -348,6 +403,11 @@ def reconcile_one(source, account, data, dry=False):
     over = (account.get('available') is True and account.get('utilization',0) >= float(os.environ.get('FLEET_ACCOUNT_CEILING','85')))
     blocked = account.get('limited_until',0) > time.time()
     if not hard and not over and not blocked and not r:
+        if not dry and ACCOUNT['eligible'](account):
+            # Exact crash restoration may have rebound a waiting loop after its
+            # old PID-bound request was cancelled. Only fresh healthy quota can
+            # release it; the loop recovery scanner itself never assumes reset.
+            quota_loop(path, source, 'cancelled', restored=True)
         return
     allowed = os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
     failed = [key for key,until in r.get('failed_targets',{}).items() if until > time.time()]

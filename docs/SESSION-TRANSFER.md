@@ -277,7 +277,12 @@ Active Fleet loops retain their ID, cadence, due time and delivery count, and
 advance an ownership generation on each transfer. Codex uses its private native
 RPC; Claude uses the existing inbox and requires the nonce to appear in the
 exact session transcript before counting the wakeup. An ambiguous delivery is
-never repeated. The existing crash restore map retains active loop provenance;
+never repeated. Waiting for quota pauses the durable loop record, so controllers
+already running before the update also stop waking the source. Subsequent
+handoffs carry that waiting loop and any still-unsent saved draft. A verified
+quota reset releases only the exact owner and schedules its next interval after
+the recovery continuation. The existing crash restore map retains active and
+quota-waiting loop provenance;
 quotawatch can reattach a dead controller only to the same restored native UUID
 and worktree. Explicitly stopped/paused loops and replacement threads stay off.
 A restored loop runs at the existing tick cadence; missed intervals coalesce.
