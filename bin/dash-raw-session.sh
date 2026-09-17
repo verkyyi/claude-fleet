@@ -58,9 +58,9 @@
 #                        force-reap covers manual disposal.
 #   * reapers     — SKIP @raw windows (no issue/PR/land → nothing to act on),
 #                   and it holds a slot so headroom checks see one fewer free slot.
-#   * fleet-restore — the WINDOW is NOT snapshotted or restored (@raw is excluded):
-#                     scratch windows are ephemeral. Its WORKTREE, however, survives
-#                     a crash on disk and is reapable by the janitor's scratch rules.
+#   * fleet-restore — snapshots and restores worktree-backed scratch windows with
+#                     @raw/@worktree intact (#680); legacy shared-base windows are
+#                     excluded. Idle/done sessions resume parked, without a nudge.
 #   * /fleet-history — INDEXED on close and resumable (#466): keyed `scratch-<N>`,
 #                     listed as `~<N>`, restored with ⌃o into a fresh @raw window.
 #

@@ -4,8 +4,8 @@
 #   1. bin/dash-raw-session.sh spawns a plain claude window — marked @raw=1, NO
 #      @issue, carrying @worktree, named `scratch-N`/custom — in its OWN
 #      `scratch-<N>` git worktree off the base branch (issue #290), and cap-checked.
-#   2. bin/.fleet-restore-resolve.py DROPS @raw=1 rows (raw WINDOWS are ephemeral,
-#      never snapshotted/restored) while keeping normal WIN rows + old maps.
+#   2. bin/.fleet-restore-resolve.py keeps independent raw scratch paths (#680),
+#      excluding shared-base rows while keeping normal WIN rows + old maps.
 #
 # No network: a REAL local git repo stands in for $FLEET_MAIN (git worktree add
 # runs for real, creating sibling `main-scratch-N` worktrees under the temp dir),
@@ -368,13 +368,15 @@ grep -qF -- '$(cat' "$NEWWIN_LOG"          && fail "N a blank --prompt is a PLAI
 rm -f "$WORK/bin/scratch-pool.sh"
 ok "N --prompt seeds the scratch via a task file (never inline), skips the pool, --bg stages it"
 
-# ============================ D: restore drops @raw ==========================
-out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\n' \
-        "$WORK/main-scratch-1" "$WORK/main-issue-7" "$WORK/main" | python3 "$RESOLVE")
+# ============================ D: restore includes scratch @raw ==============
+out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\nlegacy-raw|%s|-|done|-|-|1\n' \
+        "$WORK/main-scratch-1" "$WORK/main-issue-7" "$WORK/main" "$WORK/main" | python3 "$RESOLVE" "$WORK/main")
 printf '%s\n' "$out" | grep -q $'^WIN\tissue-7\t'  || fail "D a normal WIN row must survive" "$out"
 printf '%s\n' "$out" | grep -q $'^HUB\t'           || fail "D the HUB row must survive" "$out"
-printf '%s\n' "$out" | grep -q 'scratch'           && fail "D a @raw=1 row must be DROPPED (never restored)" "$out"
-ok "D the restore resolver drops @raw=1 rows, keeps normal + hub rows"
+printf '%s\n' "$out" | awk -F'\t' '$2=="scratch" && $14=="1"{found=1} END{exit !found}' \
+  || fail "D independent scratch must survive with the raw marker" "$out"
+printf '%s\n' "$out" | grep -q 'legacy-raw' && fail "D shared-base raw must stay excluded" "$out"
+ok "D the restore resolver keeps independent raw scratch, normal + hub rows"
 
 # ============================ E: old-map back-compat ========================
 # a pre-#214 WIN row has only 6 fields (no @raw) — raw defaults to '' → kept.
