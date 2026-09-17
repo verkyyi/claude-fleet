@@ -535,4 +535,40 @@ eq "model-limited: expired row dropped on write" 1 "$(wc -l < "$STATE_MODEL_LIMI
 cmd_model_clear b opus
 eq "model-clear: (b, opus) cleared" 0 "$(acct_model_limited_until b opus)"
 
+# #674: the shared builtin reader must keep the account CLI's matching grammar.
+# Multiple aliases/full ids can match; the latest FUTURE reset wins regardless of
+# row order. Account names and model metacharacters are literal, not shell globs.
+printf '%s\n' \
+  $'a\tfable\t2100\tfirst' \
+  $'b\tfable\t9000\tother account' \
+  $'a\tclaude-fable-5-1\t2300\tfull id\twith a tab in its banner' \
+  $'a\tfable\t2200\tlater row, earlier reset' \
+  $'a\topus\t1000\texactly expired' \
+  $'a\tsonnet\t999\texpired' \
+  $'a\tstar*model\t2400\tliteral star' \
+  $'a\tquery?model\t2500\tliteral question mark' > "$STATE_MODEL_LIMITED"
+eq "model reader: latest matching reset" 2300 "$(NOW_FIXED=1000 acct_model_limited_until a FABLE)"
+eq "model reader: alias against stored full id" 2300 "$(NOW_FIXED=1000 acct_model_limited_until a claude-fable)"
+eq "model reader: query full id against stored alias" 2200 "$(NOW_FIXED=1000 acct_model_limited_until a claude-fable-6)"
+eq "model reader: another account stays isolated" 9000 "$(NOW_FIXED=1000 acct_model_limited_until b fable)"
+eq "model reader: account is literal" 0 "$(NOW_FIXED=1000 acct_model_limited_until '*' fable)"
+eq "model reader: exact expiry is uncapped" 0 "$(NOW_FIXED=1000 acct_model_limited_until a opus)"
+eq "model reader: expired is uncapped" 0 "$(NOW_FIXED=1000 acct_model_limited_until a sonnet)"
+eq "model reader: empty query is uncapped" 0 "$(NOW_FIXED=1000 acct_model_limited_until a '')"
+eq "model reader: model star is literal" 0 "$(NOW_FIXED=1000 acct_model_limited_until a starXmodel)"
+eq "model reader: literal star matches itself" 2400 "$(NOW_FIXED=1000 acct_model_limited_until a 'star*model')"
+eq "model reader: model question mark is literal" 0 "$(NOW_FIXED=1000 acct_model_limited_until a queryXmodel)"
+eq "model reader: literal question mark matches itself" 2500 "$(NOW_FIXED=1000 acct_model_limited_until a 'query?model')"
+# A read-only lookup neither rewrites rows nor drops a final unterminated row.
+printf 'a\tfable\t2600\tno newline' >> "$STATE_MODEL_LIMITED"
+before=$(cat "$STATE_MODEL_LIMITED")
+eq "model reader: unterminated final row" 2600 "$(NOW_FIXED=1000 acct_model_limited_until a fable)"
+eq "model reader: read leaves ledger unchanged" "$before" "$(cat "$STATE_MODEL_LIMITED")"
+printf '%s\n' $'a\tfable\t\t9000' $'a\tfable\tnot-an-epoch\t9000' 'incomplete' > "$STATE_MODEL_LIMITED"
+eq "model reader: malformed rows are uncapped" 0 "$(NOW_FIXED=1000 acct_model_limited_until a fable)"
+: > "$STATE_MODEL_LIMITED"
+eq "model reader: empty ledger" 0 "$(acct_model_limited_until a fable)"
+rm -f "$STATE_MODEL_LIMITED"
+eq "model reader: missing ledger" 0 "$(acct_model_limited_until a fable)"
+
 printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger)\n' "$CHECKS"

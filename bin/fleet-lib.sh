@@ -175,6 +175,34 @@ fleet_cache_global() {
   printf '%s' "$d"
 }
 
+# fleet_model_limited_until <ledger-file> <account> <lowercase-model> <now>
+# → fleet_model_until (0 = not capped). Shared by the account CLI and the modelcap
+# sweep so alias/full-id matching, account isolation and latest-reset selection
+# cannot drift. The writer stores lowercase models and integer epoch seconds.
+# Builtins only: modelcap calls this in its parent shell, once per distinct pair,
+# instead of starting fleet-account.sh (and its libraries) for every window (#674).
+# The caller supplies its clock and lowercases the query before calling.
+fleet_model_limited_until() {
+  local file="${1:-}" account="${2:-}" model="${3:-}" now="${4:-0}"
+  local row rest label stored until
+  fleet_model_until=0
+  [ -n "$model" ] && [ -r "$file" ] || return 0
+  while IFS= read -r row || [ -n "$row" ]; do
+    # Split explicitly: tab is IFS whitespace, so `read a m u` would collapse an
+    # empty field and mistake the banner for a timestamp. Ignore incomplete rows.
+    case "$row" in *$'\t'*$'\t'*) ;; *) continue ;; esac
+    label=${row%%$'\t'*}; rest=${row#*$'\t'}
+    [ "$label" = "$account" ] || continue
+    stored=${rest%%$'\t'*}; rest=${rest#*$'\t'}; until=${rest%%$'\t'*}
+    case "$until" in ''|*[!0-9]*) continue ;; esac
+    [ "$until" -gt "$now" ] 2>/dev/null && [ "$until" -gt "$fleet_model_until" ] 2>/dev/null || continue
+    if [[ "$model" == *"$stored"* || "$stored" == *"$model"* ]]; then
+      fleet_model_until="$until"
+    fi
+  done < "$file"
+  return 0
+}
+
 # --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
 # The screen-classifier helper (bin/classify-sessions.sh — the dash summarizer that
 # shared this wire retired in issue #535) shells out to `claude -p`. Left bare, that call authenticates from the machine's
