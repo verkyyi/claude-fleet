@@ -108,6 +108,8 @@ if [ "${1:-}" = "run-shell" ]; then
 fi
 case "$*" in
   *@agent_transfer_until*) printf '%s\n' "${TRANSFER_UNTIL:-}" ;;
+   *@cc_agent*)    printf '%s\n' "${AGENT:-}" ;;
+   *@cc_launcher_pid*) printf '%s\n' "${LAUNCH_PID:-}" ;;
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;
   *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
@@ -154,6 +156,7 @@ run_hook() {
   ISS="${ISS:-}" RAW="${RAW:-}" HUB="${HUB:-}" WID="${WID:-@9}" \
   WT="${WT:-}" PCWD="${PCWD:-}" \
   TRANSFER_UNTIL="${TRANSFER_UNTIL:-}" \
+  AGENT="${AGENT:-}" LAUNCH_PID="${LAUNCH_PID:-}" \
   TMLOG="$TMLOG" GHLOG="$GHLOG" \
   GH_MERGED_HEAD="${GH_MERGED_HEAD:-}" GH_MERGED_PR="${GH_MERGED_PR:-}" GH_ISSUE_STATE="${GH_ISSUE_STATE:-OPEN}" \
   FLEET_SESSION_END_REASON="${REASON:-}" \
@@ -163,7 +166,7 @@ run_hook() {
   FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
   TMUX="fake-sock" TMUX_PANE="%1" \
   PATH="$WORK/fakepath:$PATH" \
-    bash "$SRC"
+    bash "$SRC" "$@"
 }
 
 rows() { awk -F'\t' -v i="$1" -v s="$2" '$2==i && $10==s' "$LEDGER" | wc -l | tr -d ' '; }
@@ -355,6 +358,42 @@ printf '{"reason":"clear"}' | \
       bash "$SRC"
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "stdin reason=clear must be a no-op" "$(cat "$TMLOG")"
 ok "stdin JSON reason=clear → no-op"
+
+# Codex uses the foreground process exit, never SessionEnd(reason=other).
+clr; AGENT=codex LAUNCH_PID=123 REASON=other ISS=2 run_hook
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex thread SessionEnd(other) must not close a window"
+clr; AGENT=codex LAUNCH_PID=123 REASON=process_exit ISS=2 run_hook
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a hook reason cannot impersonate launcher process exit"
+clr; AGENT=codex LAUNCH_PID=456 ISS=2 run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "a replaced Codex launcher must not close the new session"
+clr; AGENT=claude LAUNCH_PID=123 ISS=2 run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex cleanup must not close a Claude pane"
+ok "Codex thread ends and stale/mismatched launchers never close a window"
+
+clr; AGENT=codex LAUNCH_PID=123 ISS=2 run_hook --codex-exit 123
+grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close an issue worker"
+[ -d "$WT2" ] || fail "Codex exit must preserve unmerged work"
+[ ! -s "$GHLOG" ] || fail "Codex unmerged exit must keep the issue open"
+clr; AGENT=codex LAUNCH_PID=123 ISS=3 run_hook --codex-exit 123
+grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close a dirty worker's window"
+[ -f "$WT3/untracked" ] || fail "Codex exit must preserve dirty work"
+clr; AGENT=codex LAUNCH_PID=123 ISS='' RAW=1 WT="$SWT" run_hook --codex-exit 123
+grep -q 'KILL' "$TMLOG" || fail "Codex normal exit must close a scratch window"
+[ -d "$SWT" ] || fail "Codex exit must preserve the scratch worktree"
+ok "Codex process exit shares close-on-exit policy: close windows, keep dirty/unmerged/scratch work"
+
+clr; AGENT=codex LAUNCH_PID=123 CLOSE=0 ISS=2 run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor the global opt-out"
+clr; AGENT=codex LAUNCH_PID=123 HUB=1 ISS=2 run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must never close the hub"
+clr; AGENT=codex LAUNCH_PID=123 ISS='' RAW='' HUB='' run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must never close a panel"
+printf '%s %s 900 transfer-test\n' "$$" "$(date +%s)" > "$LEASE_FILE"
+clr; AGENT=codex LAUNCH_PID=123 TRANSFER_UNTIL=$(( $(date +%s) + 120 )) \
+  CONFDIR="$WORK/transfer-conf" ISS='' RAW=1 WT="$SWT" run_hook --codex-exit 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor an in-progress agent transfer"
+rm "$LEASE_FILE"
+ok "Codex close-on-exit honors the global switch, hub/panel scope, and transfer protection"
 
 printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw record+window-close, stdin parse) [#403, #409, #466]\n' "$pass"
 exit 0

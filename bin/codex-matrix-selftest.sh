@@ -96,14 +96,14 @@ for tok in 'dangerously-bypass-approvals-and-sandbox' 'dangerously-bypass-hook-t
   has "$tok" || fail "matrix claims a ✅ the launcher no longer implements: $tok is gone from $SRC"
 done
 
-# The four hook events are no longer literals in the launcher (issue #611): it
+# The hook events are no longer literals in the launcher (issue #611): it
 # reads them from bin/fleet-hooks-emit.sh, which materialises hooks/settings-hooks.json
 # through the declared Codex delta. So check what is actually EMITTED — a stronger
 # assertion than the old grep, and one that survives the indirection.
 has 'fleet-hooks-emit.sh' || fail "the launcher no longer calls fleet-hooks-emit.sh — where do its hooks come from?"
 emitted="$("$BIN/fleet-hooks-emit.sh" --target codex 2>/dev/null)" \
   || fail "fleet-hooks-emit.sh --target codex failed — a codex worker would launch with NO hooks"
-for ev in PreToolUse PostToolUse UserPromptSubmit Stop; do
+for ev in PreToolUse PostToolUse UserPromptSubmit Stop SessionStart SessionEnd; do
   printf '%s\n' "$emitted" | grep -q "^$ev	" \
     || fail "matrix claims a ✅ that is not emitted: hooks.$ev is missing from the codex target" "$emitted"
 done
@@ -111,17 +111,18 @@ for tok in 'bash-guard.py' 'base-readonly-guard.py'; do
   printf '%s\n' "$emitted" | grep -q -- "$tok" \
     || fail "matrix claims the bypass-permissions guards ride along, but $tok is not in the emitted table" "$emitted"
 done
-ok "✅ rows: guardrails, project doc and the four hook events are really wired"
+has 'session-end-hook.sh.*--codex-exit' || fail "matrix claims close-on-exit but the launcher has no process-exit cleanup"
+printf '%s\n' "$emitted" | grep -q 'session-end-hook.sh' \
+  && fail "Codex thread SessionEnd must not run window cleanup"
+ok "✅ rows: guardrails, project doc, state/lifecycle hooks and process-exit cleanup are wired"
 
 # ❌ rows: the Claude-only knobs must not have quietly appeared.
 for tok in 'CLAUDE_CODE_OAUTH_TOKEN' 'CLAUDE_CODE_SUBAGENT_MODEL' 'mcp-config' 'FLEET_MODEL'; do
   has "$tok" && fail "matrix says Codex skips $tok, but $SRC now uses it — regrade the row"
 done
-# The three events the matrix grades ❌ are wired for Claude (hooks/settings-hooks.json)
-# and must stay unwired here, or their rows are lying.
-for ev in 'hooks.Notification' 'hooks.SessionEnd' 'hooks.SessionStart'; do
-  has "$ev" && fail "matrix grades $ev ❌ on Codex, but the launcher now wires it"
-done
+# Notification remains Claude-only; lifecycle emission is shared now (#730).
+printf '%s\n' "$emitted" | grep -q '^Notification' \
+  && fail "matrix grades Notification ❌ on Codex, but the hook emitter now wires it"
 ok "❌ rows: no Claude-only knob or ungraded hook event leaked in"
 
 # --- 7. every named gap still has a row (a deletion is drift too) --------------

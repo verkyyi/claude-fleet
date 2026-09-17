@@ -163,11 +163,15 @@ mkwin w-real     yes needs perm "$OLD" Bash                     # a genuine perm
 mkwin w-unreg    yes needs perm "$OLD"                          # alive but unregistered
 mkwin w-fresh    yes needs perm "$((NOW + 60))" Bash   answered # stamp younger than the grace
 mkwin w-working  no  working ""  "$OLD"                         # never a reconcile candidate
+mkwin w-codex    no  needs   ""  "$OLD"                         # no Claude PID is expected
+tf set-window-option -t w-codex @cc_agent codex
 
 # ---------------------------------------------------------------------------
 # PART A — the oracle's target form
 # ---------------------------------------------------------------------------
 orc() { sh "$ORACLE" -L fleetR "$1" >/dev/null 2>&1; printf '%s' "$?"; }
+CHECKS=$((CHECKS+1)); [ "$(orc w-codex)" = 4 ] \
+  || fail "oracle: Codex is unknown to the Claude transcript oracle, never dead" "$(orc w-codex)"
 CHECKS=$((CHECKS+1)); [ "$(orc w-askfix)" = 0 ] || fail "oracle: a pending AskUserQuestion must exit 0" "$(orc w-askfix)"
 CHECKS=$((CHECKS+1)); [ "$(sh "$ORACLE" -L fleetR w-askfix 2>/dev/null)" = AskUserQuestion ] \
   || fail "oracle: …and must NAME it" "$(sh "$ORACLE" -L fleetR w-askfix 2>/dev/null)"
@@ -310,6 +314,8 @@ CHECKS=$((CHECKS+1)); [ "$(st w-permfix)" = needs ] && [ "$(sb w-permfix)" = per
   || fail "a stale 'ask' over a pending Bash must re-settle to 'perm'" "state=$(st w-permfix) needs=$(sb w-permfix)"
 
 # The rails: what must NOT be touched.
+CHECKS=$((CHECKS+1)); [ "$(st w-codex)" = needs ] && [ -z "$(sb w-codex)" ] \
+  || fail "a Codex blocker must stay red even though no Claude process exists" "state=$(st w-codex) needs=$(sb w-codex)"
 CHECKS=$((CHECKS+1)); [ "$(st w-plainnew)" = needs ] && [ -z "$(sb w-plainnew)" ] \
   || fail "an EMPTY-subtype red inside its dwell must STAY red — it is the classifier's screen verdict, and a worker that stopped to ask a prose question waits with no tool_use open" "state=$(st w-plainnew) needs=$(sb w-plainnew)"
 CHECKS=$((CHECKS+1)); [ "$(st w-plainpnd)" = needs ] && [ -z "$(sb w-plainpnd)" ] \

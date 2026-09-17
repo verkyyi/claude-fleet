@@ -14,8 +14,8 @@
     "UserPromptSubmit": true,
     "Stop": true,
     "Notification": "Codex has no Notification event.",
-    "SessionStart": "Claude-only: handoff-latch-reset-hook.sh resets a latch the Codex path never sets (no /fleet-handoff, no @ctx_pct).",
-    "SessionEnd": "Codex reports reason=other for EVERY end, so the prompt_input_exit|logout matcher that tells a manual /exit from a /clear cannot fire. The cleanup daemon + ledger-watch reap a Codex window instead."
+    "SessionStart": true,
+    "SessionEnd": true
   },
   "matchers": {
     "Edit|Write|MultiEdit|NotebookEdit": "apply_patch",
@@ -26,6 +26,8 @@
     "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard."
   },
   "drop_commands": {
-    "classify-hook.sh": "Reads a Claude Code transcript (~/.claude/projects/**.jsonl) to correct the ambiguous `done`; Codex keeps its own rollout files."
+    "classify-hook.sh": "The screen classifier uses a Claude-specific rubric and helper; Codex Stop integration is not adapted yet.",
+    "handoff-latch-reset-hook.sh": "Claude-only handoff latch; Codex has no fleet handoff cycle yet.",
+    "session-end-hook.sh": "Codex reason=other is not proof of CLI exit. fleet-codex.sh invokes cleanup after its foreground CLI exits successfully; SessionEnd only emits the lifecycle event."
   }
 }

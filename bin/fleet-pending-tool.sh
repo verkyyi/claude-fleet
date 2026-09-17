@@ -47,8 +47,8 @@
 #                                   historic fail-safe every hook caller relies on)
 #   2  usage
 #   3  no live Claude under that pane — nothing CAN be pending (target form only)
-#   4  unknown — a live Claude whose transcript could not be resolved or read, no
-#      python3, no tmux, no fleet-lib (target form only). Callers must treat 4 as
+#   4  unknown — a non-Claude agent, a live Claude whose transcript could not be
+#      resolved or read, no python3, no tmux, no fleet-lib (target form only). Treat 4 as
 #      "leave it alone".
 #
 # `sh`-wired on purpose: its first caller is a `sh` hook on the Notification path.
@@ -85,6 +85,14 @@ unknown() { [ "$MODE" = target ] && exit 4; exit 1; }
 
 if [ "$MODE" = target ]; then
   command -v tmux  >/dev/null 2>&1 || unknown
+  # This oracle understands Claude's process registry and transcript only.
+  # A Codex pane without a Claude PID is UNKNOWN, never a dead worker (#730).
+  if [ -n "$SOCK" ]; then
+    _agent=$(tmux -L "$SOCK" display-message -p -t "$T" '#{@cc_agent}' 2>/dev/null)
+  else
+    _agent=$(tmux display-message -p -t "$T" '#{@cc_agent}' 2>/dev/null)
+  fi
+  case "$_agent" in ''|claude) : ;; *) unknown ;; esac
   command -v bash  >/dev/null 2>&1 || unknown
   BIN0=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || unknown
   [ -n "${BIN0:-}" ] && [ -f "$BIN0/fleet-lib.sh" ] || unknown

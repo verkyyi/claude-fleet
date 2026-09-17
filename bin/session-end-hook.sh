@@ -1,5 +1,10 @@
 #!/bin/bash
-# session-end-hook.sh — the SessionEnd Claude Code hook (issue #403).
+# session-end-hook.sh — close-on-exit for Claude hooks and the Codex launcher.
+#
+# --codex-exit <launcher-pid> is called ONLY after fleet-codex.sh's foreground
+# CLI exits successfully (#730). Codex SessionEnd(reason=other) also fires for
+# thread lifecycle changes, so it must never trigger window cleanup. The launcher
+# must still own this pane; the shared scope, opt-out, and reap gates below apply.
 #
 # Runs under BASH (wired `bash …` in settings-hooks.json, NOT `sh`): it sources
 # fleet-lib.sh, which uses process substitution `< <(…)` that bash-as-/bin/sh
@@ -263,7 +268,14 @@ fi
 #    stdin JSON ({"...","reason":"prompt_input_exit",...}). Guard against a tty so a
 #    manual invocation without a piped payload never hangs on cat (mirrors the
 #    SessionStart hook handoff-latch-reset).
-if [ -n "${FLEET_SESSION_END_REASON:-}" ]; then
+codex_exit=0
+if [ "${1:-}" = --codex-exit ]; then
+  case "${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = codex ] || exit 0
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_launcher_pid}' 2>/dev/null)" = "$2" ] || exit 0
+  codex_exit=1
+  reason=process_exit
+elif [ -n "${FLEET_SESSION_END_REASON:-}" ]; then
   reason="$FLEET_SESSION_END_REASON"
 elif [ ! -t 0 ]; then
   reason=$(cat 2>/dev/null \
@@ -277,6 +289,7 @@ fi
 #    matcher already pre-filters to prompt_input_exit|logout; this is defense-in-depth.
 case "$reason" in
   prompt_input_exit|logout) : ;;
+  process_exit) [ "$codex_exit" = 1 ] || exit 0 ;;
   *) exit 0 ;;
 esac
 
