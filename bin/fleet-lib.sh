@@ -1102,7 +1102,7 @@ fleet_kill_tree() {
 # OBSERVE its own deadline often enough to enforce it, and #653's honest budget
 # went unread. `SECONDS` is a bash builtin counting wall clock since the shell
 # started: same clock, no fork. The FIFO removes the remaining `sleep` fork from
-# the normal poll path. Setup uses mktemp/mkfifo/rm once per call, never per poll;
+# the normal poll path. Setup uses mkfifo/rm once per call, never per poll;
 # if that setup fails, retain the old bounded sleep loop rather than run unbounded.
 #
 #   $1   budget in seconds (0 or non-numeric ⇒ run unbudgeted)
@@ -1116,24 +1116,22 @@ fleet_timebox() {
     _fleet_timebox_run '' "$budget" "$@"
     return $?
   fi
-  local wake=''
-  wake=$(mktemp -d "${TMPDIR:-/tmp}/fleet-timebox.XXXXXX" 2>/dev/null) || wake=''
-  if [ -n "$wake" ]; then
-    if mkfifo "$wake/done" 2>/dev/null; then
-      # Function-scoped redirection restores the caller's fd 9 on return. Open
-      # read/write so there is no FIFO-open rendezvous and no EOF spin. The job
-      # itself gets fd 9 closed; only its wrapper's EXIT trap may wake the reader.
-      _fleet_timebox_run "$wake" "$budget" "$@" 9<> "$wake/done"
-      return $?
-    fi
-    rm -rf "$wake"
+  # mkfifo creates exclusively: a collision/symlink fails without touching the
+  # existing path. Mode 600 keeps this private without a separate temp directory.
+  local wake="${TMPDIR:-/tmp}/fleet-timebox.$$.$RANDOM.$RANDOM" opened=0 rc=0
+  if mkfifo -m 600 "$wake" 2>/dev/null; then
+    # Scoped redirection restores fd 9. Read/write avoids an open rendezvous or
+    # EOF spin. Only the wrapper's EXIT trap writes; the job gets fd 9 closed.
+    { opened=1; _fleet_timebox_run "$wake" "$budget" "$@"; } 9<> "$wake"; rc=$?
+    [ "$opened" = 1 ] || rm -f "$wake"   # also clean up if opening fd 9 failed
+    return "$rc"
   fi
   _fleet_timebox_run '' "$budget" "$@"
 }
 
 _fleet_timebox_run() {
   local wake="$1" budget="$2"; shift 2
-  [ -z "$wake" ] || rm -rf "$wake"
+  [ -z "$wake" ] || rm -f "$wake"
 
   # Launch the job as its own PROCESS-GROUP LEADER (issue #682), so the kill below
   # is a group signal and not a race against a tree that keeps forking. `set -m`

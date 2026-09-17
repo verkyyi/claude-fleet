@@ -128,7 +128,7 @@ phases holding an elastic budget would have been ten copies of one bug.
 
 Normal completion now wakes the waiting shell through a private FIFO (#701),
 removing the one-second return floor. The FIFO is opened and immediately unlinked;
-its setup costs a fixed mktemp/mkfifo/rm sequence per call. Waiting uses builtin
+its setup costs a fixed mkfifo/rm pair per call. Waiting uses builtin
 `read -t 1` and `SECONDS`, so it adds no fork per poll and also works on bash 3.2.
 The existing process-group kill and status-preserving `wait` still enforce the
 deadline. A job that replaces its EXIT trap or execs is noticed by the one-second
