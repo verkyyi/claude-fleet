@@ -479,15 +479,19 @@ bridge_relay() {
 
   # No live window. Revive (opt-in) if the issue is OPEN and a fleet serves it.
   if [ "$REVIVE" = 1 ]; then
-    local state target
+    local state target why
     state=$(gh issue view "$issue" --repo "$repo" --json state -q .state 2>/dev/null)
     if [ "$state" = OPEN ]; then
       target=$(bridge_fleet_for_repo "$repo")
       if [ -n "$target" ]; then
-        if "$BIN/dash-issue-session.sh" "$issue" "$target" --origin bridge >/dev/null 2>&1; then
+        # Keep the spawn's stderr (issue #683): a refusal prints its reason there
+        # — the tmux toast lands on no screen this daemon owns — so the outcome
+        # line says WHY (cap / claimed / infra), not just that it failed.
+        if why=$("$BIN/dash-issue-session.sh" "$issue" "$target" --origin bridge 2>&1 >/dev/null); then
           echo "revived(#${issue}->${target})"; return 0
         fi
-        echo "revive-failed(#$issue)"; return 0
+        why=${why#dash-issue-session: }; why=${why//$'\n'/ | }
+        echo "revive-failed(#$issue${why:+: $why})"; return 0
       fi
       echo "gone(#$issue: no fleet for repo)"; return 0
     fi

@@ -138,13 +138,19 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
-[ -z "$SESS" ] && { tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; tmux display-message "raw: no target tmux session" 2>/dev/null; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
 # #159). Route EVERY tmux call through TM() so it names the target fleet's socket
 # explicitly — correct in-session ($TMUX set) and headless alike.
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
+# A refusal is a stderr line AND a toast (issue #683): a scratch is spawned
+# headless too — a cross-fleet seeded scratch from another pane, dash-enter's
+# guarded --name-file path — and a toast is on no screen that caller can read.
+# stderr is the record; the status line is the glance. Exit 2 = at capacity
+# (retry later), 1 = infrastructure, matching dash-issue-session.sh.
+refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; TM display-message "$1" 2>/dev/null; }
 # Spawn provenance (issue #503): detect BEFORE the --bg re-exec below — the
 # backgrounded pass runs under run-shell -b with no caller pane, so this
 # foreground detect is the only chance; the value rides --origin through.
@@ -164,10 +170,10 @@ unset _det _src
 # Session cap (issues #28, #70): a raw session is a real Claude session, so it is
 # subject to the SAME global + per-fleet ceilings as an issue spawn. Refuse (with a
 # human-readable reason) once a cap is reached, rather than quietly overspend.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg" 2>/dev/null; exit 1; fi
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
 MAIN="${FLEET_MAIN:-}"
-[ -d "$MAIN/.git" ] || { TM display-message "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf" 2>/dev/null; exit 1; }
+[ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 BASE="${FLEET_BASE_BRANCH:-master}"
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
@@ -189,16 +195,18 @@ BASE="${FLEET_BASE_BRANCH:-master}"
 if [ "$BG" = 1 ]; then
   nfarg=""; pfarg=""
   if [ -n "$NAME" ]; then
-    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch name" 2>/dev/null; exit 1; }
+    nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { refuse "raw: cannot stage the scratch name"; exit 1; }
     printf '%s' "$NAME" > "$nf"
     nfarg=" --name-file='$nf'"
   fi
   if [ -n "$PROMPT" ]; then
-    pf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { TM display-message "raw: cannot stage the scratch prompt" 2>/dev/null; exit 1; }
+    pf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { refuse "raw: cannot stage the scratch prompt"; exit 1; }
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
   fi
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg${ORIGIN:+ --origin='$ORIGIN'}${AGENT:+ --agent=$AGENT}${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+    || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
+         refuse "raw: background dispatch failed"; exit 1; }
   exit 0
 fi
 
@@ -272,7 +280,7 @@ fi
 if [ "$warm" = 0 ]; then
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
-  [ -n "$slug" ] || { TM display-message "raw: could not create a scratch worktree" 2>/dev/null; exit 1; }
+  [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
 fi
 
 # Distinct, stable-ish window name. Default is the worktree slug `scratch-<N>` so a
@@ -313,7 +321,7 @@ else
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$launch; exec \$SHELL") \
     || { fleet_scratch_free "$MAIN" "$slug" "$wt"
-         TM display-message "raw: new-window failed in $SESS" 2>/dev/null; exit 1; }
+         refuse "raw: new-window failed in $SESS"; exit 1; }
   TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
   TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
 fi

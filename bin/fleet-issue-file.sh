@@ -193,11 +193,15 @@ if [ -n "$parent" ] && [ -n "$num" ]; then
 fi
 
 # --- 5. --spawn: hand to the unchanged spawn choke point -----------------------
-# dash-issue-session.sh owns the caps + cross-machine pre-spawn dedup and toasts
-# its own outcome; a cap/dedup refusal leaves the issue FILED (files-without-
-# spawning), so its non-zero exit must not fail the create.
+# dash-issue-session.sh owns the caps + cross-machine pre-spawn dedup and reports
+# its own refusal (toast + a stderr reason, issue #683 — that line passes through
+# to our caller untouched); a cap/dedup refusal leaves the issue FILED (files-
+# without-spawning), so its non-zero exit must not fail the create. Like --bind
+# below, say on stderr that the number is on the backlog, so a headless caller
+# that only reads the URL on stdout still learns no worker took it.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" || true
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" \
+    || printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
 fi
 
 # --- 5b. --bind: promote the CALLING scratch into this issue's worker ----------

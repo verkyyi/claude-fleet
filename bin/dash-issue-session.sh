@@ -13,6 +13,15 @@
 # fleet you are not attached to — a headless spawn; in that mode we do NOT
 # select-window, so a user attached to that session is never yanked to the new
 # window.
+#
+# Exit status is the REASON, not just a verdict (issue #683) — a headless caller
+# gets no toast, so the code + stderr are its only read of WHY nothing spawned:
+#   0  spawned (or focused the window that already exists)
+#   1  infrastructure — bad conf / worktree add / new-window / dispatch failed
+#   2  at capacity — the global or per-fleet session cap (retry later)
+#   3  already claimed — assignee / not OPEN / open PR (pick another, or --force)
+# Every refusal ALSO prints its one-line reason on stderr, `dash-issue-session: …`,
+# beside the sticky tmux toast a human at the client sees.
 set -uo pipefail
 # Parse: <issue-number> [<target-session>] [--title <t>] [--force].
 # The two positionals keep their historic order (num, target-session). --title <t>
@@ -84,7 +93,7 @@ SELF="$BIN/$(basename "$0")"                   # absolute path for the --async r
 # detached helper never leans on a "current client" that a run-shell context lacks.
 TAIL_ONLY=0; [ -n "${FLEET_SPAWN_TAIL:-}" ] && TAIL_ONLY=1
 SESS="${TARGET_SESS:-${FLEET_SPAWN_TAIL:-$(fleet_current_session)}}"
-[ -z "$SESS" ] && { tmux display-message "issues: no target tmux session"; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-issue-session: no target tmux session\n' >&2; tmux display-message "issues: no target tmux session" 2>/dev/null; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
 # #159). This spawn path runs BOTH interactively (in the target fleet, $TMUX set)
@@ -119,9 +128,22 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # it STICKY: red + bold + a longer display-time than the default ~750ms status
 # line, so the operator actually sees WHY nothing spawned. Additive — keeps the
 # display-message idiom, just styled + held longer (FLEET_REFUSE_MS overrides).
+# The toast is for a human at the tmux client; it is NOT a record (issue #683). A
+# headless caller — the autofill dispatcher, the bridge's revive, an agent
+# spawning from another pane — never sees it: the toast lands on SOMEONE ELSE's
+# screen, and all the caller gets back is `1`, which cannot tell "retry later"
+# (cap) from "pick another issue / --remove-assignee first" (claimed) from
+# "something is broken" (infra). So every refusal ALSO prints its reason on
+# stderr — the one channel a pipe / log / `$( )` capture can read — and the exit
+# code names the class (header: 1 infra · 2 cap · 3 claimed). stderr is the
+# record; the status line is the glance (the same split as fleet-bind.sh's die).
+RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
-refuse() { TM display-message -d "$REFUSE_MS" "#[fg=red,bold] $1 " 2>/dev/null; }
+refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with the class code
+  printf 'dash-issue-session: %s\n' "$1" >&2
+  TM display-message -d "$REFUSE_MS" "#[fg=red,bold] $1 " 2>/dev/null
+}
 
 slug="issue-$num"
 
@@ -166,15 +188,16 @@ fi
 # the shared choke point for every spawn path — the new-session box, the backlog
 # Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>) — so both caps
 # are true ceilings regardless of who spawns.
-# Passing $SESS enables the per-fleet check for THIS fleet. Exit non-zero on
-# refusal so a headless caller records an honest FAIL, not a false spawn.
+# Passing $SESS enables the per-fleet check for THIS fleet. Exit RC_CAP (2) on
+# refusal so a headless caller records an honest FAIL, not a false spawn — and
+# can tell "retry later" from a claim or a broken spawn (issue #683).
 # Sync-only: the --async tail re-entry (TAIL_ONLY) already passed this gate in the
 # foreground — re-checking in the background could FALSE-refuse after we already
 # acked "spawning" + claimed, if a sibling raced to the cap in between.
-if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 1; fi
+if [ "$TAIL_ONLY" != 1 ] && ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit "$RC_CAP"; fi
 
 MAIN="${FLEET_MAIN:-}"
-[ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit 1; }
+[ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit "$RC_INFRA"; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
@@ -216,12 +239,19 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   n_assignee="${n_assignee//[^0-9]/}"
   n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null)
   n_open_pr="${n_open_pr//[^0-9]/}"
-  if [ "${n_assignee:-0}" -gt 0 ] \
-     || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
-    # Refuse and DO NOT spawn. Exit non-zero so a headless caller records an honest
-    # FAIL, not a false spawn — mirroring the cap check. Sticky (issue #331).
-    refuse "#$num already claimed elsewhere — not spawning"
-    exit 1
+  why=''
+  if [ "${n_assignee:-0}" -gt 0 ]; then why='assigned'
+  elif [ -n "$st" ] && [ "$st" != OPEN ]; then why="state $st"
+  elif [ "${n_open_pr:-0}" -gt 0 ]; then why="open PR on $slug"
+  fi
+  if [ -n "$why" ]; then
+    # Refuse and DO NOT spawn. Exit RC_CLAIMED (3) so a headless caller records an
+    # honest FAIL, not a false spawn — mirroring the cap check — and can tell
+    # "taken" from "at capacity". The reason names WHICH ledger read tripped: a
+    # dangling assignee left by a killed worker (#631) needs `--remove-assignee`
+    # or --force, a state/PR hit needs a different issue (issue #683). Sticky (#331).
+    refuse "#$num already claimed elsewhere ($why) — not spawning; --force overrides a stale claim"
+    exit "$RC_CLAIMED"
   fi
   # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
   # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
@@ -273,10 +303,12 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # ANY stray tail stdout (the worktree add's "HEAD is now at …", a future addition)
   # would surface as a popup. Redirect the whole tail so nothing can. The tail's own
   # error reporting is unaffected — refuse() surfaces via `tmux display-message`, a
-  # separate client call independent of this process's fds.
+  # separate client call independent of this process's fds (its stderr copy is what
+  # this redirect drops, and the tail has no caller left to read it — the
+  # interactive --async path is toast-only by construction).
   _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
-    || refuse "spawn failed for #$num: dispatch"
+    || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
 fi
 
@@ -315,7 +347,7 @@ if [ ! -d "$wt" ]; then
   # Esc-to-dismiss view (issue #401). Silence both so the spawn stays silent.
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" >/dev/null 2>&1 \
     || git -C "$MAIN" worktree add "$wt" "$slug" >/dev/null 2>&1 \
-    || { refuse "spawn failed for #$num: worktree add"; exit 1; }
+    || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
@@ -342,7 +374,7 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # launcher consumes it and picks the agent. Validated to claude|codex above, so it
 # is safe to embed bare. Absent (the default) the command string is unchanged.
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { refuse "spawn failed for #$num: new-window"; exit 1; }
+  || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
 TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
 # Window handle (issue #566): the fleet's own short, typeable name for this window
 # (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
