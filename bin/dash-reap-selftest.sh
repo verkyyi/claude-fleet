@@ -135,10 +135,13 @@ cat > "$WORK/fakepath/tmux" <<'FAKE'
 if [ "${1:-}" = "run-shell" ]; then
   shift; [ "${1:-}" = "-b" ] && shift
   printf 'RUNSHELL %s\n' "$1" >> "$TMLOG"
+  [ -n "${REAP_BG_STATE:-}" ] && export REAP_STATE="$REAP_BG_STATE"
   sh -c "$1"
   exit 0
 fi
 case "$*" in
+  *'#{@claude_state}'*) printf '%s\n' "${REAP_STATE:-}" ;;
+  *'#{pane_pid}'*) printf '%s\n' "$PPID" ;;  # this test's Python probe, not a live pane
   # attached-client probe (#596): CLIENTS unset ⇒ one fake client (the interactive
   # ⌃x cases); CLIENTS="" ⇒ a headless fleet, where a popup must never be drawn.
   *list-clients*) [ -n "${CLIENTS-}" ] && printf '%s\n' "$CLIENTS" ;;
@@ -223,6 +226,57 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
 
 # run_reap, capturing the #596 result token (stdout) and the exit status.
 run_reap_tok() { TOK="$(run_reap "$@")"; RC=$?; }
+
+# #565: the Git gate says merged, but an active window is NEVER disposable.
+# This must also hold for --yes, confirm and an already-queued --exec tail.
+for st in working looping busy; do
+  : > "$TMLOG"; : > "$GHLOG"
+  REAP_STATE="$st" run_reap_tok 7 s1:7 --yes
+  [ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "active --yes must return skip:live"
+  grep -q KILL "$TMLOG" && fail "active --yes killed a window"
+  [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
+    || fail "active --yes changed worktree/history/issue"
+done
+: > "$TMLOG"; : > "$GHLOG"
+REAP_STATE=working run_reap_tok 7 s1:7 --exec full merged-pr
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "--exec must recheck live state"
+[ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
+  || fail "active --exec changed worktree/history/issue"
+: > "$TMLOG"; : > "$GHLOG"
+REAP_BG_STATE=working run_reap 7 s1:7 >/dev/null
+grep -q 'RUNSHELL .*@9.*--exec' "$TMLOG" || fail "deferred reap must pin the window id"
+grep -q KILL "$TMLOG" && fail "queued reap killed a worker that resumed working"
+[ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
+  || fail "queued reap changed worktree/history/issue"
+: > "$TMLOG"; : > "$GHLOG"
+RAW=1 REAP_STATE=looping run_reap_tok '' s1:raw --yes
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "even a raw window with no worktree must protect live state"
+grep -q KILL "$TMLOG" && fail "active ephemeral scratch was killed"
+: > "$TMLOG"; : > "$GHLOG"
+git -C "$BASEDIR" worktree add -q -b scratch-98 "$WORK/scratch-live" >/dev/null 2>&1
+RAW=1 WT="$WORK/scratch-live" REAP_STATE=working run_reap_tok '' s1:raw --yes
+[ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "active clean scratch must return skip:live"
+[ -d "$WORK/scratch-live" ] || fail "active clean scratch worktree was removed"
+grep -q KILL "$TMLOG" && fail "active clean scratch window was killed"
+: > "$TMLOG"; : > "$GHLOG"
+printf y | REAP_STATE=working run_reap 7 s1:7 confirm >/dev/null
+[ "$?" = 3 ] || fail "popup confirmation must not override live state"
+grep -q KILL "$TMLOG" && fail "popup confirmation killed an active worker"
+
+# A conf assignment need not be exported; the Python probe must still receive it.
+REAL_REAP_PYTHON=$(command -v python3)
+cat > "$WORK/fakepath/python3" <<'PYFAKE'
+#!/bin/bash
+case "${1:-}" in *fleet-reap-live.py) printf '%s' "${FLEET_REAP_MIN_AGE:-missing}" > "$REAP_ENV_LOG" ;; esac
+exec "$REAL_REAP_PYTHON" "$@"
+PYFAKE
+chmod +x "$WORK/fakepath/python3"
+mkdir -p "$WORK/noconf/fleets/s1"
+printf 'FLEET_REAP_MIN_AGE=1234\n' > "$WORK/noconf/fleets/s1/conf"
+REAP_ENV_LOG="$WORK/probe-age" REAL_REAP_PYTHON="$REAL_REAP_PYTHON" REAP_STATE=working \
+  run_reap_tok 7 s1:7 --yes
+[ "$(cat "$WORK/probe-age")" = 1234 ] || fail "non-exported per-fleet age was lost at Python boundary"
+rm "$WORK/fakepath/python3" "$WORK/noconf/fleets/s1/conf"
 
 # B1: no @issue (hub/panel) → refuse, no kill, no close
 : > "$TMLOG"; : > "$GHLOG"
