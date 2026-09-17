@@ -285,6 +285,20 @@ def process_check(mode, pid):
     return 1
 
 
+def loop_exit_confirmation(screen):
+    """Recognize only Claude's selected exit choice for ONE self-paced timer.
+
+    Other background jobs, multiple timers, a different selection, truncated
+    dialogs and ordinary transcript text must never receive a blind Enter.
+    """
+    lines = [line.strip() for line in screen.splitlines() if line.strip()]
+    return (len(lines) >= 7
+            and lines[-7:-5] == ['Background work is running', 'The following will stop when you exit:']
+            and re.fullmatch(r'scheduled task · Runs once in .+ · /loop(?: .*)?', lines[-5]) is not None
+            and lines[-4:] == ['❯ 1. Exit and stop tasks', '2. Move to background and exit',
+                              '3. Stay', 'Enter to confirm · Esc to cancel'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -306,6 +320,7 @@ def main():
     c = sub.add_parser("process")
     c.add_argument("mode", choices=("shell", "codex"))
     c.add_argument("pid", type=int)
+    sub.add_parser("loop-exit-confirmation")
     a = parser.parse_args()
     if a.command == "resolve":
         resolve(a.registry, a.projects, a.worktree)
@@ -313,6 +328,8 @@ def main():
         package(a)
     elif a.command == "process":
         return process_check(a.mode, a.pid)
+    elif a.command == "loop-exit-confirmation":
+        return 0 if loop_exit_confirmation(sys.stdin.read()) else 1
     elif a.command == "state":
         write_json(Path(a.bundle) / "state.json", {
             "state": a.state, "detail": a.detail,

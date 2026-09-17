@@ -60,6 +60,14 @@ $| = 1; print "Claude ready $sid\n";
 while (my $line = <STDIN>) {
     next unless $line =~ m{/exit};
     next if $mode eq 'stuck';
+    if ($mode eq 'loop-dialog') {
+        print "Background work is running\nThe following will stop when you exit:\n\n";
+        print "scheduled task · Runs once in 5m · /loop continue task\n\n";
+        print "❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\n\n";
+        print "Enter to confirm · Esc to cancel\n";
+        my $confirm = <STDIN>;
+        next unless defined($confirm) && $confirm =~ /^\s*$/;
+    }
     $ENV{FLEET_SESSION_END_REASON} = 'prompt_input_exit';
     system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh");
     exit 0;
@@ -97,7 +105,7 @@ chmod +x "$FB/source-runner" "$FB/gh" "$IBIN"/*.sh
 TM new-session -d -s "$LBL" -n plan -c "$MAIN" || fail 'isolated tmux server'
 TM set-option -g default-shell /bin/bash
 
-spawn() { # n, issue|raw, normal|stuck|tool
+spawn() { # n, issue|raw, normal|stuck|tool|loop-dialog
   local n=$1 kind=$2 mode=$3 branch cmd
   case "$kind" in issue) branch="issue-$n" ;; *) branch="scratch-$n" ;; esac
   WT="$WORK/wt '$n percent%"
@@ -238,6 +246,24 @@ transfer && fail 'unresponsive source must fail'; ok
 ok; kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'unresponsive source was killed or replaced'
 BUNDLE=$(packet)
 ok; [ -s "$BUNDLE/manifest.json" ] && [ -s "$BUNDLE/resume-source.sh" ] || fail 'failure must preserve handoff and recovery recipe'
+
+spawn 51 raw loop-dialog
+printf '{"prompt":"continue task","interval_seconds":3600}\n' > "$WORK/loop.json"
+FLEET_TRANSFER_EXIT_WAIT=5 transfer --loop "$WORK/loop.json" || fail 'source loop exit confirmation'; ok
+ok; ! kill -0 "$PID" 2>/dev/null && [ "$(field cc_agent)" = codex ] || fail 'source timer must exit before Codex starts'
+ok; [ -s "$(packet)/loop-exit-confirmation.txt" ] || fail 'exit confirmation evidence missing'
+python3 - "$IBIN/.fleet-transfer.py" "$(packet)/loop-exit-confirmation.txt" <<'PY' || fail 'unknown or unrelated dialogs must not be confirmed'
+import pathlib, runpy, sys
+confirm = runpy.run_path(sys.argv[1])['loop_exit_confirmation']
+screen = pathlib.Path(sys.argv[2]).read_text()
+assert confirm(screen)
+assert not confirm(screen.replace('❯ 1.', '  1.').replace('2. Move', '❯ 2. Move'))
+assert not confirm(screen.replace('scheduled task · Runs once in 5m · /loop continue task', 'background task · build'))
+assert not confirm(screen.replace('scheduled task ·', 'scheduled task · Runs once in 3m · /loop extra\nscheduled task ·'))
+assert not confirm(screen + '\nNormal Claude prompt\n')
+assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
+PY
+ok
 
 spawn 44 issue normal
 touch "$WORK/fail-target"

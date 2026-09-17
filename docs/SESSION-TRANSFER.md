@@ -188,6 +188,9 @@ add `--prompt-file /private/path/updated-task.md` to update the task, or use `st
 when finished/cancelled. Without a change, the last interval repeats. This is
 Fleet scheduling, not restoration of Claude's in-memory `ScheduleWakeup` object.
 The source must exit before the target timer can start.
+When Claude shows its native exit confirmation for a single self-paced `/loop`,
+an explicit `--loop` transfer confirms the selected **Exit and stop tasks** once.
+Different dialogs, other background jobs and multiple timers are left for inspection.
 
 Runtime state and the app-server log live under `<handoff packet>/loop/`. A
 replaced pane/thread, unloaded thread, or ambiguous delivery failure pauses the
