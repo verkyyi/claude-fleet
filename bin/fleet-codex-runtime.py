@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import runpy
 import select
+import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -108,11 +110,13 @@ that layer as overrides, then apply -c flags above it in their original order.
         config = tomllib.load(stream)
     layers = []
     for key, value in config.items():
-        layers.extend(['-c', json.dumps(key) + '=' + toml_value(value)])
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', key):
+            raise ValueError('unsupported top-level Codex profile key')
+        layers.extend(['-c', key + '=' + toml_value(value)])
     return layers + flags
 
 
-def run(argv, ready=None, tick=None):
+def run(argv, prepare=None, tick=None):
     if '--no-daemon' in argv:
         return subprocess.call(['codex', *argv])
     flags = server_flags(argv)
@@ -121,11 +125,15 @@ def run(argv, ready=None, tick=None):
     directory = tempfile.mkdtemp(prefix='fleet-codex-', dir='/tmp')
     remote = 'unix://' + directory + '/worker.sock'
     env = dict(os.environ, FLEET_CODEX_REMOTE=remote)
+    env.pop('CODEX_THREAD_ID', None)
+    env.pop('CODEX_SESSION_ID', None)
     read_fd, write_fd = os.pipe()
-    guardian = client = None
+    guardian = client = monitor = None
     ended = []
     old_handlers = {}
     try:
+        if prepare:
+            prepare(remote, env)
         for sig in (signal.SIGHUP, signal.SIGTERM):
             old_handlers[sig] = signal.signal(sig, lambda signum, frame: ended.append(signum))
         # Ctrl-C belongs to the TUI (interrupt a turn), not this supervisor.
@@ -146,14 +154,18 @@ def run(argv, ready=None, tick=None):
             return 128 + ended[0]
         if guardian.poll() is not None:
             raise RuntimeError('private Codex server exited before creating its socket')
-        if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
-            runpy.run_path(str(Path(__file__).with_name('.fleet-account.py')))['verify_codex_runtime'](remote)
-        if ready:
-            ready(remote)
+        if os.environ.get("FLEET_CODEX_SUBSCRIPTION"):
+            runpy.run_path(str(Path(__file__).with_name(".fleet-account.py")))["verify_codex_runtime"](remote)
+        attention = Path(__file__).with_name("fleet-codex-attention.py")
+        if attention.is_file():
+            monitor = runpy.run_path(str(attention))["Monitor"](remote, env)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
+        next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:
-            if tick:
-                tick()
+            if time.monotonic() >= next_tick:
+                if monitor: monitor.tick()
+                if tick: tick()
+                next_tick = time.monotonic() + 1
             time.sleep(0.1)
         if ended:
             return 128 + ended[0]

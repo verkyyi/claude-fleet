@@ -175,8 +175,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 #            fleet's Stop / PostToolUse / PreToolUse hooks ride inline as `-c hooks.*`
 #            (dash state + the bash-guard and base-checkout guard — Codex's hook
 #            schema is Claude Code's); CLAUDE.md is read as the project doc; and
-#            the Claude-only knobs — FLEET_MODEL, FLEET_MCP_CONFIG, subagent model,
-#            account rotation — are skipped. Codex auth is `codex login`, not the
+#            Claude model aliases and OAuth tokens stay Claude-only; MCP policy
+#            is translated and Codex has native subagent knobs. Codex auth is `codex login`, not the
 #            fleet's account files. Runs full-access (`--dangerously-bypass-
 #            approvals-and-sandbox`), the same posture as a bypassPermissions Claude
 #            worker: the hooks are the rails.
@@ -189,8 +189,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # scratch NAMED "codex: fix parser" on the fleet's default agent. Per-spawn
 # override for scripts: `--agent codex|claude` on dash-issue-session.sh /
 # dash-raw-session.sh. A `--resume` /
-# `--continue` / `--from-pr` launch (restore, migrate, /fleet-history) is ALWAYS
-# Claude — those resume Claude transcripts. What a Codex worker does and does NOT
+# `--continue` / `--from-pr` launch without an explicit agent resumes Claude
+# history. Saved Codex sessions pass their provider and home explicitly. What a Codex worker does and does NOT
 # get is graded row by row in README.md's "Agents: Claude Code and Codex" matrix
 # (generated from bin/fleet-codex.sh's header — the single source of truth), so it
 # is not restated here and cannot drift from it.
@@ -212,6 +212,42 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Set 0 only to troubleshoot the legacy embedded launch (no live queue delivery).
 # @label=Codex private worker server @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CODEX_SERVER=1
+
+# Optional account home for this Codex fleet. It must already exist and contain
+# that account's native login/config; saved-session recovery retains its own home.
+# @label=Codex account home @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_HOME=""
+
+# Space-separated labels registered with fleet-codex-account.sh register LABEL HOME.
+# Fresh launches pick the most headroom; explicit/pinned/recovery homes win.
+# @label=Codex account pool @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_ACCOUNTS=""
+# Hold fresh launches/autofill only when every configured home is known low.
+# @label=Codex quota gate @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_QUOTA_GATE=0
+# @label=Codex quota floor percent @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_CODEX_QUOTA_FLOOR=5
+# @label=Codex quota cache seconds @group=spawn @tier=advanced @scope=fleet @edit=int
+#FLEET_CODEX_QUOTA_TTL=300
+# Opt-in idle-only quota recovery through the durable handoff controller.
+# @label=Codex quota migration @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_QUOTA_MIGRATE=0
+
+# Codex MCP policy: unset inherits FLEET_MCP_CONFIG; explicitly empty preserves
+# Codex defaults. `none` disables all configured MCP servers and apps/connectors.
+# Otherwise use a JSON file/inline object with mcpServers (stdio/HTTP translation)
+# or native mcp_servers; a native .toml file requires Python 3.11+. Strict policies
+# disable unlisted servers, apps and automatic skill-driven MCP installation.
+# Explicit caller -c overrides take precedence. No account config is rewritten.
+# @label=Codex MCP policy @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_MCP_CONFIG=""
+
+# Defaults to a fleet-pinned Codex worker model; `inherit` or empty leaves native
+# subagent selection alone. Claude aliases never cross over to Codex.
+# @label=Codex subagent model @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_SUBAGENT_MODEL=""
+# @label=Codex subagent effort @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_SUBAGENT_EFFORT=""
 
 # Pre-answer Claude Code's "trust this folder?" dialog for THIS fleet's checkout at
 # every spawn (issue #563). Claude Code keys trust on the resolved project root — a
@@ -850,6 +886,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # demoter, which disables auto-handoff along with it — fleet-doctor.sh says so.
 # @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_STUCK_WORKING_SECS=120
+
+# Show a compact live hub list on the left of worker/scratch windows. prefix+e
+# toggles and saves this preference for the fleet; prefix+E browses by keyboard.
+# Automatically hidden below sidebar width + 81 columns, reserving 80 for work.
+# Only the visible window owns a view; background windows do not repaint it.
+# @label=Worker task sidebar @group=status @tier=common @scope=fleet @edit=bool
+#FLEET_SIDEBAR=1
+
+# Sidebar width in terminal cells (clamped to 24–60). Narrow screens hide the
+# sidebar without changing the saved on/off preference.
+# @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
+#FLEET_SIDEBAR_WIDTH=30
 
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only

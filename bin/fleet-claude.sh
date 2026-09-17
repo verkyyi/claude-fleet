@@ -30,6 +30,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # the spawned pane. No tmux / no conf / no lib → clean no-op, as before.
 if command -v fleet_load_conf >/dev/null 2>&1; then
   _fc_sess="$(fleet_current_session 2>/dev/null)"
+  # A holding session uses the owning fleet's overlay before it is claimed.
+  if [ -n "${FLEET_LAUNCH_SESSION:-}" ] && [ "$_fc_sess" = "${FLEET_LAUNCH_SESSION}-pool" ]; then
+    _fc_sess="$FLEET_LAUNCH_SESSION"
+  fi
   [ -n "$_fc_sess" ] && fleet_load_conf "$_fc_sess"
   unset _fc_sess
 fi

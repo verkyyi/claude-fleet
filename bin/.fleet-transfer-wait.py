@@ -154,6 +154,8 @@ def wait(request):
         for field, flag, filename in (('target_file', '--target-file', 'target.json'), ('draft_file', '--draft-file', 'unsent-draft.txt')):
             if r.get(field):
                 cmd.extend([flag, str(request / filename)])
+        if r.get('codex_home'):
+            cmd.extend(['--codex-home', r['codex_home']])
         env = dict(os.environ)
         env.pop("TMUX_PANE", None)
         env.pop("TMUX", None)  # All calls use the explicit fleet socket.
@@ -190,6 +192,7 @@ def main():
     a.add_argument("--loop", default='')
     a.add_argument('--to', choices=('claude', 'codex'), default='codex')
     a.add_argument('--target-file', default=''); a.add_argument('--draft-file', default='')
+    a.add_argument("--codex-home", default='')
     w = sub.add_parser("wait")
     w.add_argument("request", type=Path)
     args = parser.parse_args()

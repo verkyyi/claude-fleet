@@ -106,7 +106,7 @@ class RuntimeTests(unittest.TestCase):
         result=self.run_cli('-p','work','-c','model="override-model"','hello',CODEX_HOME=str(self.root))
         self.assertEqual(result.returncode,0,result.stderr)
         args=self.metadata('server')['argv']
-        self.assertLess(args.index('"model"="profile-model"'),args.index('model="override-model"'))
+        self.assertLess(args.index('model="profile-model"'),args.index('model="override-model"'))
         self.assertTrue(any('fixture-command' in a for a in args))
 
     def test_rpc_unix_websocket_frames_and_errors(self):

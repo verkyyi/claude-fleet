@@ -59,11 +59,11 @@ TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else 
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
 fleet_helper_claude_auth 2>/dev/null || :
 
-RUBRIC='You are a status classifier for a Claude Code terminal session. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
-WORKING - Claude is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
-WAITING - Claude EXPLICITLY posed a question, requested specific input, or is blocked on a permission/confirmation prompt that stops progress until the user answers (e.g. "Do you want to proceed?", "Please provide the target path.", a numbered choice list awaiting a selection, "Allow this tool to run?"). This takes precedence: if the screen shows a real pending question OR permission prompt, it is WAITING even if a caret or chips are also visible. A bare idle prompt with only a recap and suggested commands is NOT waiting.
+RUBRIC='You are a status classifier for a coding-agent terminal session. The agent can be Claude Code or Codex. Based ONLY on the terminal screen below, reply with EXACTLY ONE word and nothing else:
+WORKING - The agent is actively generating or a tool is running (e.g. shows "esc to interrupt", a live spinner, streaming output).
+WAITING - The agent EXPLICITLY posed a question, requested specific input, or is blocked on a permission/confirmation prompt that stops progress until the user answers (e.g. "Do you want to proceed?", "Please provide the target path.", a numbered choice list awaiting a selection, "Allow this tool to run?"). This takes precedence: if the screen shows a real pending question OR permission prompt, it is WAITING even if a caret or chips are also visible. A bare idle prompt with only a recap and suggested commands is NOT waiting. The Codex hint "Ask Codex to do anything" is a placeholder, not a pending question.
 LOOPING - idle right now but a scheduled wakeup or next loop iteration is pending (mentions waiting N seconds, scheduled, will continue, /loop).
-STOPPED - finished; idle with nothing pending. This INCLUDES the normal post-turn idle screen: a recap/summary of the work Claude just COMPLETED, optionally followed by suggested-command chips (lines beginning "❯ ..."). Those chips are passive hints shown after a finished turn, not a question awaiting an answer — still STOPPED.
+STOPPED - finished; idle with nothing pending. This INCLUDES the normal post-turn idle screen: a recap/summary of the work the agent just COMPLETED, optionally followed by suggested-command chips (lines beginning "❯ ..." or "› ..."). Those chips are passive hints shown after a finished turn, not a question awaiting an answer — still STOPPED.
 ERROR - a crash or error state.
 Screen:
 -----'
@@ -84,6 +84,8 @@ classify_one() {
   # very Stop the charter told the worker to make. Hook-declared outranks
   # screen-inferred; only a new prompt (UserPromptSubmit) or a dead pane clears it.
   [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
+  [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
+  observed=$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)
 
   # stable key for lock + hash: prefer the window id (survives re-slotting).
   wid=$(TM display-message -p -t "$target" '#{window_id}' 2>/dev/null)
@@ -123,6 +125,8 @@ classify_one() {
   # The helper may have started BEFORE the worker declared its blocker. Re-check
   # after the slow call, before either the verdict or its change-hash is committed.
   [ "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ] && return 0
+  [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
+  [ "$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)" = "$observed" ] || return 0
   label=$(printf '%s' "$raw" | tr -d '[:space:].' | tr '[:lower:]' '[:upper:]')
   echo "$h" > "$hf"     # rc=0 but unparseable: still "seen" — the model answered, we
                         # just could not use it, and re-asking the SAME screen won't help

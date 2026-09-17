@@ -86,7 +86,7 @@ nclose=$(code_only | grep -c '@popup_open 0')
   || fail "clear mismatch: set-0 count=$nclose (want $((npop + 1)) — one per popup + the client-detached hook)"
 
 # --- PRODUCER (static): the client-detached self-heal hook is present ----------
-grep -Eq "^set-hook -g client-detached 'set -g @popup_open 0'" "$CONF" \
+grep -Eq "^set-hook -g client-detached\[0\] 'set -g @popup_open 0'" "$CONF" \
   || fail "conf lost the client-detached hook that clears @popup_open on detach (issue #431) — the dash would re-freeze on a fleet-switch/disconnect"
 
 # --- isolated tmux server + PATH shim (never the user's live server) ----------

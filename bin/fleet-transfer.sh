@@ -2,7 +2,7 @@
 # fleet-transfer.sh — hand ONE Claude/Codex session to either agent in its existing pane.
 #
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to claude|codex
-#                         [--handoff <notes.md>] [--loop <spec.json>]
+#                         [--handoff <notes.md>] [--loop <spec.json>] [--codex-home DIR]
 #                         [--dry-run | --prepare-only | --after-turn]
 #
 # --dry-run       Resolve exact provenance and print the plan; write nothing.
@@ -37,11 +37,11 @@ HELPER="$BIN/.fleet-transfer.py"
 
 die() { printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
-SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST=''
+SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -49,6 +49,7 @@ while [ "$#" -gt 0 ]; do
         --to) TO=$2 ;; --handoff) NOTES=$2 ;;
         --loop) LOOP=$2 ;;
         --target-file) TARGET_FILE=$2 ;; --quota-request) QUOTA_REQUEST=$2 ;; --draft-file) DRAFT=$2 ;;
+        --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
       esac
       shift 2 ;;
@@ -57,6 +58,7 @@ while [ "$#" -gt 0 ]; do
     --after-turn) AFTER=1; shift ;;
     --inspect) INSPECT=1; DRY=1; shift ;;
     --native-resume) NATIVE=1; shift ;;
+    --require-codex-idle) REQUIRE_IDLE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
@@ -65,6 +67,9 @@ done
 case "$TO" in claude|codex) ;; *) usage >&2; exit 2;; esac
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
 [ "$AFTER" != 1 ] || [ -n "$NOTES" ] || die '--after-turn requires --handoff notes written by the source agent'
+if [ -n "$CODEX_TARGET_HOME" ]; then
+  CODEX_TARGET_HOME=$(cd "$CODEX_TARGET_HOME" && pwd -P) || die 'target CODEX_HOME is missing'
+fi
 for dep in python3 git tmux; do command -v "$dep" >/dev/null 2>&1 || die "$dep is required"; done
 [ -n "$SESS" ] || SESS=$(fleet_current_session)
 case "$SESS" in ''|*[!A-Za-z0-9_-]*) die 'pass --session with a valid fleet name' ;; esac
@@ -112,6 +117,7 @@ PROJECTS="${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects
 RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT") || exit 1
 SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
 fi
+[ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
@@ -182,7 +188,7 @@ if [ "$AFTER" = 1 ]; then
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
     --to "$TO" --target-file "$TARGET_FILE" --draft-file "$DRAFT" \
-    --loop "$LOOP" \
+    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
@@ -192,7 +198,7 @@ package_flags=(); [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
 
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
-  --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" \
+  --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" --target-home "$CODEX_TARGET_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
   --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH" \
   --to "$TO" --target-file "$TARGET_FILE" --quota-request "$QUOTA_REQUEST" --draft-file "$DRAFT" ${package_flags[@]+"${package_flags[@]}"}) || exit 1
@@ -246,6 +252,11 @@ else
 fi
 source_ready || die 'source started another turn while preparing the transfer'
 [ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target changed before source exit'
+if [ "$REQUIRE_IDLE" = 1 ]; then
+  [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
+  FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
+    || die 'Codex source is not natively idle; leaving it alone'
+fi
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'

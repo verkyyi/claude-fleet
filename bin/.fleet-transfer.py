@@ -206,7 +206,7 @@ def package(a):
             "snapshot_bytes": captured, "snapshot_sha256": digest.hexdigest(),
             "record_session_ids": sorted(record_sessions),
         },
-        "target": dict(json.loads(Path(a.target_file).read_text()) if a.target_file else {}, agent=a.to),
+        "target": dict(json.loads(Path(a.target_file).read_text()) if a.target_file else {}, agent=a.to, codex_home=a.target_home or None),
         "reason": 'quota' if a.quota_request else 'handoff',
         "quota_request": a.quota_request or None,
         "native_resume": a.native_resume,
@@ -456,6 +456,7 @@ def main():
     p.add_argument('--to', choices=('claude', 'codex'), default='codex')
     p.add_argument('--native-resume', action='store_true')
     p.add_argument("--codex-home", default="")
+    p.add_argument("--target-home", default="")
     for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop", "target-file", "quota-request", "draft-file"):
         p.add_argument("--" + name, default="")
     s = sub.add_parser("state")

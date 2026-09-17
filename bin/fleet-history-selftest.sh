@@ -499,9 +499,11 @@ ENCH=$(printf '%s' "$WTH" | LC_ALL=C tr -c 'A-Za-z0-9' '-')
 TDIRH="$CLAUDE_PROJECTS_DIR/$ENCH"; mkdir -p "$TDIRH"
 # the strings below are the fleet's own rubrics — pinned against their source files
 # at the end of this block so a reworded prompt can't silently unteach the filter.
-CLS='You are a status classifier for a Claude Code terminal session.'
+CLS='You are a status classifier for a coding-agent terminal session.'
+CLS_OLD='You are a status classifier for a Claude Code terminal session.'
 SUM='You are labeling a Claude Code session for a dashboard row.'
 printf '{"type":"user","message":{"content":"%s reply with one word"}}\n' "$CLS" > "$TDIRH/helper-new.jsonl"
+printf '{"type":"user","message":{"content":"%s"}}\n' "$CLS_OLD" > "$TDIRH/helper-old-rubric.jsonl"
 printf '{"type":"user","message":{"content":"%s"}}\n' "$SUM" > "$TDIRH/helper-mid.jsonl"
 printf '{"type":"user","message":{"content":"real work here"}}\n'        > "$TDIRH/real-session.jsonl"
 touch -t 200001010000 "$TDIRH/real-session.jsonl"     # OLDEST — the helpers are newer
@@ -533,9 +535,9 @@ grep -qF -- "$CLS" "$BIN/classify-sessions.sh" || \
   fail "the transcript filter's marker is no longer in classify-sessions.sh — reword it in both places"
 # (the filter matches on a PREFIX of each rubric — assert the prefix is still a
 # prefix of the string the test seeds, then that the lib still carries it.)
-for _pfx in 'You are a status classifier for a Claude Code' 'You are labeling a Claude Code session for a dashboard'; do
+for _pfx in 'You are a status classifier for a coding-agent' 'You are a status classifier for a Claude Code' 'You are labeling a Claude Code session for a dashboard'; do
   CHECKS=$((CHECKS + 1))
-  case "$CLS$SUM" in *"$_pfx"*) ;; *) fail "rubric prefix [$_pfx] no longer matches the seeded transcript text" ;; esac
+  case "$CLS$CLS_OLD$SUM" in *"$_pfx"*) ;; *) fail "rubric prefix [$_pfx] no longer matches the seeded transcript text" ;; esac
   grep -qF -- "$_pfx" "$BIN/fleet-lib.sh" || \
     fail "fleet_newest_human_session no longer filters the rubric prefix [$_pfx]"
 done

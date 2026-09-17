@@ -85,6 +85,35 @@ repo-specific pieces are **per-fleet**.
 
 *Collector shared, hub not* is the right split — remember it that way.
 
+### Worker task sidebar
+
+`fleet-sidebar.sh` loads the fleet's preference; `fleet-sidebar.py` manages a
+compact pane on the left of the visible worker. Indexed tmux hooks reconcile it
+on attach, window changes, resize and exit. A kernel-held per-fleet lock serializes
+those hooks. Only a session with a durable fleet conf on its own named socket is
+eligible. Inactive windows lose their sidebar, so worker count does not multiply
+the refresh loops. Narrow screens hide it without changing the saved preference.
+Navigation moves the same populated pane before selecting the destination, in
+one tmux command queue. The curses process, scroll position and rendered list
+survive; the destination never first appears at full width and then splits. The
+renderer runs from the install root so it cannot pin a departed worker's worktree.
+tmux still controls terminal redraws when switching windows. A renderer version
+marker replaces older live views once on upgrade.
+
+The pane carries `@sidebar=1`, never `@dash`, and reads
+`tmux-dashboard-rows.sh --sidebar`: the hub's live ordering, pinning, needs cues
+and folds, with the current worker also exempt from folding. Rows target stable
+window IDs. Mouse forwarding and the `fleet-sidebar` keyboard table keep the
+agent pane active, so window-targeted messaging, capture and process discovery
+still resolve the worker. `@sidebar_worker` records that pane while the view is
+present and is cleared from the source window when the view moves. The UI follows
+this binding after each move. Focus cues use the client's key table, not just
+`pane_active`: **TASKS · FOCUS** means sidebar navigation, **INPUT** means worker
+input, while the cyan `▶` row always identifies the current task. The spinner
+samples its screen for stuck-working detection instead of
+using window activity, which includes sidebar repaints. The view exits if its
+worker disappears, including tmux versions where a manual kill emits no exit hook.
+
 ### Why the collector is shared (not one-per-session)
 
 A per-session collector would run the account-global work (usage, rate-limit,
@@ -126,6 +155,15 @@ clock**: it used to count `sleep 1` iterations, which under this daemon's
 load 40+ — the budget loosening by exactly the factor that made the work slow. Ten
 phases holding an elastic budget would have been ten copies of one bug.
 
+Normal completion now wakes the waiting shell through a private FIFO (#701),
+removing the one-second return floor. The FIFO is opened and immediately unlinked;
+its setup costs a fixed mkfifo/rm pair per call. Waiting uses builtin
+`read -t 1` and `SECONDS`, so it adds no fork per poll and also works on bash 3.2.
+The existing process-group kill and status-preserving `wait` still enforce the
+deadline. A job that replaces its EXIT trap or execs is noticed by the one-second
+liveness check. Failed FIFO setup or an fd 9 already in use by the caller falls
+back to the old bounded sleep loop, preserving the caller's file descriptors.
+
 The heartbeat already timed every phase, so *which* phase ate the tick was free
 information nobody printed; `over=` and `skipped=` now carry it and `fleet-doctor`
 reports it, so the next time the bottleneck moves it does not cost an investigation.
@@ -155,8 +193,7 @@ So the tick now bounds itself, on the collector's model:
   (`…_TMUX_BUDGET`). Without this the per-iteration check is theatre: one
   `tmux display-message` that never returns (57s observed, #582) defeats any
   number of checks *between* iterations. The granularity is per **socket**, not
-  per call, because `fleet_timebox` polls once a second — wrapping every
-  round-trip would put a 1s floor on every *window*.
+  per call, to avoid repeating timebox setup and job creation for every window.
 - **Wind down, never self-kill.** At the budget the tick stops *starting* work,
   writes its heartbeat, releases the lock and exits 0. A `kill $$` would be the
   #582 regression: the process holds the lock and only its `EXIT` trap frees it.

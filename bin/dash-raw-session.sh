@@ -266,7 +266,7 @@ fi
 # argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
 claimed=""
-[ -z "$PROMPT" ] && [ -z "$AGENT" ] && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
+[ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}

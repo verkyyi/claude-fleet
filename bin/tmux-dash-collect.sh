@@ -705,7 +705,15 @@ ph_git_over() {
 # where "${arr[@]}" on an empty array trips `set -u`. $$ lets Python suffix its
 # temp files so the EXIT trap can sweep any it orphans.
 ph_ctx() {
-local p
+local p codex_socket
+if have_py3 && [ -f "$BIN/fleet-codex-account.py" ] && [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+  # Registered homes only, oldest attempt first, bounded before transcript work.
+  # No model call; offline pool accounts can recover quota without a live pane.
+  FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" refresh --budget 15
+  for codex_socket in $SOCKETS; do
+    FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" watch --session "$codex_socket"
+  done
+fi
 if have_py3 && [ -f "$BIN/fleet-codex-session.py" ]; then
   # Exact Codex session identity; Claude's cwd cache below is never consumed by
   # a Codex row. JSON is last, so pipes/spaces inside paths remain untouched.

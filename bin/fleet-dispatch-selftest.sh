@@ -266,6 +266,21 @@ for order in 's1 s2' 's2 s1'; do
   grep -q 's1: Claude quota gate closed' "$LOG2" || fail2 "quota log must name the held Claude fleet"
 done
 printf 'ok   Claude quota holds only Claude fleets, independent of dispatch order\n'
+# The native Codex gate is separately opt-in and receives this fleet overlay.
+cat > "$WORK/bin/fleet-codex-account.sh" <<FAKE
+#!/bin/sh
+[ "\$*" = 'gate --session s2' ] || exit 9
+printf 'Codex native quota hold\n'
+exit 1
+FAKE
+chmod +x "$WORK/bin/fleet-codex-account.sh"
+printf 'FLEET_CODEX_QUOTA_GATE=1\n' >> "$WORK/conf/s2.conf"
+: > "$SPAWN_LOG"
+PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+  bash "$WORK/bin/fleet-dispatch.sh" s2 >/dev/null 2>"$LOG2" || fail2 'Codex gate run failed'
+[ ! -s "$SPAWN_LOG" ] || fail2 'native Codex hold must block Codex autofill'
+grep -q 's2: Codex quota gate closed.*Codex native quota hold' "$LOG2" || fail2 'native quota reason missing'
+
 
 printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563); a refusal logs its stderr reason and exit 3 skips / exit 2 stops (#683)\n' "$got"
 exit 0

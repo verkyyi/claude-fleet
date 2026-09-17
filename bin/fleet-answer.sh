@@ -109,6 +109,7 @@
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
 #         --transcript <path> use this transcript instead of resolving it
 #         --json              --show: emit the parsed questions as JSON
+#         --request-token T   Codex reply: fingerprint from --show --json
 #         --dry-run           print the plan, send nothing
 #
 # Exit: 0 answered (and confirmed) · 1 no pending question / target unusable ·
@@ -129,7 +130,7 @@ TIMEOUT="${FLEET_ANSWER_TIMEOUT:-45}"
 case "$POLL" in ''|*[!0-9.]*) POLL=1 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*) TIMEOUT=45 ;; esac
 
-VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0
+VERB="" TARGET="" SOCK="" SESS="" TPATH="" AS_JSON=0 DRY=0 REQUEST_TOKEN=''
 PICKS=()
 usage() { sed -n '/^#   fleet-answer.sh \[opts\]/,/^#       4 keystrokes/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
@@ -143,6 +144,7 @@ while [ $# -gt 0 ]; do
     --session) SESS="${2:-}"; shift 2 ;;
     --transcript) TPATH="${2:-}"; shift 2 ;;
     --json) AS_JSON=1; shift ;;
+    --request-token) REQUEST_TOKEN="${2:-}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage ;;
     -*) echo "fleet-answer: unknown option $1" >&2; usage ;;
@@ -163,6 +165,12 @@ SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
 # --- the pane must exist (a dead pane is nothing to answer) -------------------
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
 [ -n "$PANE" ] || { echo "fleet-answer: no live pane for '$TARGET'" >&2; exit 1; }
+if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then
+  NATIVE=("$VERB" --pane "$PANE" --socket "$SOCK" --request-token "$REQUEST_TOKEN")
+  [ "$AS_JSON" = 0 ] || NATIVE+=(--json)
+  [ "$DRY" = 0 ] || NATIVE+=(--dry-run)
+  exec python3 "$BIN/fleet-codex-attention.py" "${NATIVE[@]}" ${PICKS[@]+"${PICKS[@]}"}
+fi
 
 # --- resolve the transcript ---------------------------------------------------
 # pane → Claude pid → the registry's sessionId → ~/.claude/projects/*/<sid>.jsonl.

@@ -4,7 +4,8 @@
 # Line format:  <sess:idx>US<window-id>US<colored display>
 #   field1 = jump target · field2 = stable summary key (window-id) · field3 = display
 # Data: @claude_state (no LLM), everything slow from collector caches.
-# (DASH_COMPACT mode retired with the 2026-07 fork-free rewrite.)
+# --sidebar emits wid US state US glyph US label, without a header. It shares
+# the live hub's ordering/folds, but never follows its landed-history toggle.
 #
 # HOT PATH (2026-07-07): this runs on every dash repaint (4×/s) — the loop is
 # exec-fork-free (bash builtins only: read/expansion instead of cat/cut/sed/awk).
@@ -18,13 +19,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
 C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
+SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
 # LANDED mode this producer hands off to the history ledger's row emitter, so
 # finished (merged + cleaned-up) sessions are one keystroke away with the same row
 # ergonomics (#130). Keyed by FLEET_SESSION so one fleet's toggle can't flip
 # another's dash (they share $C); FLEET_SESSION is exported by tmux-dashboard.sh.
-if [ "$(cat "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
+if [ "$SIDEBAR" = 0 ] && [ "$(cat "$G/dash_view_${FLEET_SESSION:-default}" 2>/dev/null)" = landed ]; then
   exec bash "$BIN/fleet-history.sh" rows
 fi
 
@@ -486,7 +488,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # Hiding is a RENDER filter only: KIDTAB was counted in pass A2 over every window,
   # so a collapsed parent's `3/5 ✓ · 1!` badge still describes the whole subtree —
   # which is exactly what makes the fold safe to have on by default.
-  if [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$rk" != 0 ] && [ "$crootexp" != 1 ]; then
+  if [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$rk" != 0 ] && [ "$crootexp" != 1 ] &&
+     { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT:-}" ]; }; then
     continue
   fi
   # --- the ↳ tag, once the nesting is known ------------------------------------
@@ -539,6 +542,15 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       # above can hide.
       if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
     fi
+  fi
+  if [ "$SIDEBAR" = 1 ]; then
+    # The view clips by terminal cells (including CJK), after preserving the
+    # full name here. Stable window IDs survive renumbering between draw/click.
+    label="${hnd:+$hnd }${carg:+$carg }$dname"
+    [ "$pin" = 1 ] && label="* $label"
+    [ -n "$kidd" ] && label="$label · $kidd"
+    buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label"$'\n'
+    continue
   fi
   # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
   # window sits right after the issue; act/PR/ctx right-align to the edge, the
@@ -601,6 +613,7 @@ done <<< "$WLIST"
 # column header — pinned at top of the list by fzf --header-lines=1. Same
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
 # the flex span is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
+if [ "$SIDEBAR" = 0 ]; then
 fld 3  "id";     h_w=$fld_out
 fld 5  "issue";  h_i=$fld_out
 fld 22 "window"; h_n=$fld_out
@@ -610,6 +623,7 @@ fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+fi
 
 # emit pinned-first (issue #623), then grouped by spawn provenance (issue #503):
 # pinned windows (and the subtrees that float with them) take the whole top of the

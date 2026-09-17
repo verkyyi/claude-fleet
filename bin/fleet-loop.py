@@ -15,6 +15,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import runpy
 import os
 from pathlib import Path
 import re
@@ -364,7 +365,8 @@ def bridge(args):
         return claude_bridge(args,path,r,env)
     # Reuse the existing guarded runtime: SIGKILL of this controller cannot
     # leak its app-server, and all profile/config flags reach both processes.
-    def ready(remote):
+    def prepare(remote, runtime_env):
+        runtime_env['FLEET_LOOP_RECORD'] = str(path)
         with locked(path) as record:
             record['socket']=remote[7:]
             save(path,record)
@@ -377,7 +379,7 @@ def bridge(args):
     os.environ.pop('CODEX_THREAD_ID',None)
     os.environ.pop('CODEX_SESSION_ID',None)
     try:
-        return runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))['run'](args,ready=ready,tick=tick)
+        return runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))['run'](args,prepare=prepare,tick=tick)
     finally:
         with locked(path) as final:
             final['status']='stopped'

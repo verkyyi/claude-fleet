@@ -685,6 +685,7 @@ fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a re
   local head_bytes; head_bytes=$(head -c 16384 "${1:-}" 2>/dev/null)
   case "$head_bytes" in
     *"You are a status classifier for a Claude Code"*)          return 0 ;;
+    *"You are a status classifier for a coding-agent"*)         return 0 ;;
     *"You are labeling a Claude Code session for a dashboard"*) return 0 ;;
   esac
   return 1
@@ -1069,9 +1070,14 @@ fleet_kill_tree() {
 # `gtimeout` unless someone installed them. This machine has neither, and the
 # daemons that most need a budget are exactly the ones running unattended there.
 #
-# The command is backgrounded and polled at 1 s granularity, so a budget is
-# accurate to about a second and a fast command still returns as soon as it is
-# done. Safe inside `$( )`: backgrounding does not change where stdout goes.
+# A private FIFO wakes the caller when the background job exits (issue #701).
+# Waiting uses bash's builtin `read -t 1`: no fork per poll, and normal completion
+# wakes it immediately instead of paying a mandatory `sleep 1`. Integer timeouts
+# work on macOS bash 3.2 too; fractional `read -t` and `{fd}<>` do not. The FIFO is
+# unlinked as soon as it is open, and never carries the job's stdout/stderr.
+# If a job replaces its EXIT trap or execs, the one-second liveness check still
+# catches its exit. An already-open fd 9 is left to the caller and its children;
+# that case uses the old bounded loop. Safe inside `$( )`: stdout is unchanged.
 #
 # The poll compares against a WALL-CLOCK DEADLINE, and this is load-bearing
 # (issue #653). It used to count iterations instead —
@@ -1096,8 +1102,9 @@ fleet_kill_tree() {
 # seconds, while the same script at normal priority took 6. So the loop could not
 # OBSERVE its own deadline often enough to enforce it, and #653's honest budget
 # went unread. `SECONDS` is a bash builtin counting wall clock since the shell
-# started: same clock, no fork. The one remaining fork per poll is the `sleep`
-# itself, and a starved one now costs a single overshoot instead of compounding.
+# started: same clock, no fork. The FIFO removes the remaining `sleep` fork from
+# the normal poll path. Setup uses mkfifo/rm once per call, never per poll;
+# if that setup fails, retain the old bounded sleep loop rather than run unbounded.
 #
 #   $1   budget in seconds (0 or non-numeric ⇒ run unbudgeted)
 #   $2+  the command and its arguments (not a shell string — no eval)
@@ -1105,6 +1112,27 @@ fleet_timebox() {
   local budget="${1:-0}"; shift
   case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
   [ "$budget" -gt 0 ] || { "$@"; return $?; }
+
+  if { : >&9; } 2>/dev/null; then
+    _fleet_timebox_run '' "$budget" "$@"
+    return $?
+  fi
+  # mkfifo creates exclusively: a collision/symlink fails without touching the
+  # existing path. Mode 600 keeps this private without a separate temp directory.
+  local wake="${TMPDIR:-/tmp}/fleet-timebox.$$.$RANDOM.$RANDOM" opened=0 rc=0
+  if mkfifo -m 600 "$wake" 2>/dev/null; then
+    # Scoped redirection restores fd 9. Read/write avoids an open rendezvous or
+    # EOF spin. Only the wrapper's EXIT trap writes; the job gets fd 9 closed.
+    { opened=1; _fleet_timebox_run "$wake" "$budget" "$@"; } 9<> "$wake"; rc=$?
+    [ "$opened" = 1 ] || rm -f "$wake"   # also clean up if opening fd 9 failed
+    return "$rc"
+  fi
+  _fleet_timebox_run '' "$budget" "$@"
+}
+
+_fleet_timebox_run() {
+  local wake="$1" budget="$2"; shift 2
+  [ -z "$wake" ] || rm -f "$wake"
 
   # Launch the job as its own PROCESS-GROUP LEADER (issue #682), so the kill below
   # is a group signal and not a race against a tree that keeps forking. `set -m`
@@ -1117,18 +1145,30 @@ fleet_timebox() {
   # behaviour the job always effectively had.
   local mflag=0; case "$-" in *m*) mflag=1 ;; esac
   set -m
-  "$@" </dev/null &
+  if [ -n "$wake" ]; then
+    ( trap 'printf "\n" 2>/dev/null >&9' EXIT; "$@" 9>&- ) </dev/null &
+  else
+    "$@" </dev/null &
+  fi
   local job=$!
   [ "$mflag" = 1 ] || set +m
 
-  local start=$SECONDS name="${1:-job}"
-  # Poll order is: is the job done? → is the clock up? → wait a second. So a job
+  local start=$SECONDS name="${1:-job}" notice=''
+  # Poll order is: is the job done? → is the clock up? → wait for completion. A job
   # that finishes is always noticed before the deadline is declared blown, and the
   # loop never sleeps past a deadline it has already reached.
   while :; do
     kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
     [ $(( SECONDS - start )) -lt "$budget" ] || break
-    sleep 1
+    if [ -n "$wake" ]; then
+      if IFS= read -r -t 1 -u 9 notice && [ -z "$notice" ]; then
+        # Only the wrapper's EXIT trap sends this: the job is already exiting, so
+        # wait returns its actual status, including failures and explicit exit.
+        wait "$job"; return $?
+      fi
+    else
+      sleep 1
+    fi
   done
   kill -0 "$job" 2>/dev/null || { wait "$job"; return $?; }
 

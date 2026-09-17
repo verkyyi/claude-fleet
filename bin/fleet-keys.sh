@@ -106,6 +106,8 @@ print_sheet() {
   group "tmux prefix" "— global, from any window"
   key "prefix a" "jump to the next window that needs you (red first, then green)"
   key "prefix g" "focus the dash — jump to the hub's dash pane; press again to zoom it"
+  key "prefix e" "show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)"
+  key "prefix E" "browse sidebar — ↑↓ choose, enter jump, ←→ fold, q hide, esc return; click a row to jump directly"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
