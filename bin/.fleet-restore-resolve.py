@@ -32,6 +32,14 @@ import sys, glob, os, re, json, uuid
 PANELS = {"plan", "dash", "backlog"}
 HUB = "__HUB__"
 SEP = "|"  # input field delimiter — printable so it survives tmux (see header)
+MAIN = os.path.realpath(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else ""
+
+
+def separate_raw_path(path):
+    """Fail closed without the fleet's base; canonicalize aliases/subdirectories."""
+    resolved = os.path.realpath(path)
+    return (bool(MAIN) and os.path.isabs(path) and os.path.isdir(path)
+            and os.path.commonpath((MAIN, resolved)) != MAIN)
 
 
 def newest_sid(path):
@@ -82,12 +90,9 @@ for line in sys.stdin:
         continue
     if name in PANELS:
         continue
-    # A RAW scratch window (@raw=1, issue #214) is deliberately ephemeral: no
-    # issue, no worktree, no PR. Its cwd is the SHARED base checkout, so
-    # newest_sid() can't tell its transcript from the hub's or another raw
-    # session's (same project dir) — resuming would risk loading the WRONG
-    # conversation (the documented newest_sid caveat). So it is never snapshotted
-    # and never restored; a crash simply drops it.
+    # Raw windows have their own scratch worktrees since #290. Only legacy raw
+    # windows in the shared base (or an unknown base) remain unsafe to infer by
+    # cwd. A live loop supplies exact provenance and keeps its existing exception.
     loop_record = {}
     if manifest:
         try:
@@ -96,7 +101,7 @@ for line in sys.stdin:
                     or Path(loop_record['worktree']).resolve() != Path(path).resolve()):
                 loop_record = {}
         except (OSError,ValueError,KeyError,TypeError): pass
-    if raw == "1" and not loop_record:
+    if raw == "1" and not loop_record and not separate_raw_path(path):
         continue
     agent = parts[8] if len(parts) > 8 else ""
     suffix = ""
@@ -118,4 +123,9 @@ for line in sys.stdin:
         sid = loop_record.get('thread_id') or newest_sid(path)
     if manifest and loop_record and loop_record.get('thread_id') == sid:
         suffix = (suffix or '\tclaude\t-\t-') + '\t' + manifest
-    print(f"WIN\t{name}\t{path}\t{sid}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}{suffix}")
+    row = f"WIN\t{name}\t{path}\t{sid}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}{suffix}"
+    if raw == "1":
+        # Columns 10–12 remain provider/home/transcript, 13 is handoff_manifest.
+        # Pad absent metadata so the new raw marker is always column 14 (#680).
+        row += "\t-" * (13 - len(row.split("\t"))) + "\t1"
+    print(row)

@@ -159,10 +159,30 @@ tmux new-window -t snap: -n plan -c "$WORK/whatever"
 sp=$(tmux split-window -P -F '#{pane_id}' -t snap:plan -c "$STEW_PATH")
 tmux set-option -p -t "$sp" @hub 1
 
+# #680: renamed raw windows keep their own transcript even when cwd wandered
+# into the shared checkout. A legacy raw pane truly rooted in that base is unsafe.
+for state in working idle 'done'; do
+  rawpath="$WORK/main-scratch-$state"; mkdir -p "$rawpath"
+  seed_transcript "$rawpath" "raw-$state"
+  tmux new-window -t snap: -n "renamed-$state" -c "$STEW_PATH"
+  tmux set-window-option -t "snap:renamed-$state" @raw 1
+  tmux set-window-option -t "snap:renamed-$state" @worktree "$rawpath"
+  tmux set-window-option -t "snap:renamed-$state" @claude_state "$state"
+done
+tmux new-window -t snap: -n legacy-raw -c "$STEW_PATH"
+tmux set-window-option -t snap:legacy-raw @raw 1
+
 bash "$RESTORE" --snapshot 2>/dev/null || fail "fleet-restore.sh --snapshot exited non-zero"
 # One directory per fleet (issue #181): the snapshot writes fleets/<sess>/restore.map.
 MAP="$FLEET_CONF_DIR/fleets/snap/restore.map"
 [ -f "$MAP" ] || fail "snapshot wrote no map at $MAP"
+RAW_ROWS=$(awk -F'\t' '$1=="WIN" && $14=="1"' "$MAP")
+for state in working idle 'done'; do
+  awk -F'\t' -v name="renamed-$state" -v path="$WORK/main-scratch-$state" -v sid="raw-$state" \
+    '$2==name && $3==path && $4==sid && $13=="-" && $14=="1" {found=1} END {exit !found}' "$MAP" \
+    || fail "snapshot: raw $state must retain its stamped worktree, transcript and column-14 marker"
+done
+grep -q 'legacy-raw' "$MAP" && fail "snapshot: shared-base raw must stay excluded"
 
 grep -qxF "HUB	$STEW_PATH	stew-abc123" "$MAP" \
   || fail "snapshot: the @hub pane should be captured as a HUB row (map: $(cat "$MAP"))"
@@ -195,6 +215,12 @@ printf '%s\n' "$dry" | grep 'issue-9 ' | grep -q '(auto-continue)' \
   || fail "restore --dry-run should mark the 'working' issue-9 window for auto-continue (got: $dry)"
 printf '%s\n' "$dry" | grep 'issue-10 ' | grep -q '(auto-continue)' \
   && fail "restore --dry-run must NOT auto-continue the parked 'done' issue-10 window (got: $dry)"
+printf '%s\n' "$dry" | grep 'renamed-working ' | grep -q '(auto-continue)' \
+  || fail "restore: a resumed working raw window should auto-continue"
+for state in idle 'done'; do
+  printf '%s\n' "$dry" | grep "renamed-$state " | grep -q '(auto-continue)' \
+    && fail "restore: raw $state must stay parked"
+done
 
 # --- legacy map (pre-#153, 5-field WIN rows) + a no-transcript 'working' window --
 # A map left on disk from before #153 has NO state trio; restore must parse it
@@ -302,6 +328,7 @@ mkdir -p "$FLEET_CONF_DIR/restore"
   printf 'WIN\tissue-9\t%s\twrk-def456\t9\n'  "$WORK_PATH"
   printf 'WIN\tissue-11\t%s\twrk-xyz789\t11\n' "$W11"
   printf 'HUB\t%s\tstew-abc123\n' "$STEW_PATH"
+  printf '%s\n' "$RAW_ROWS"
 } > "$HMAP"
 
 # A LIVE hub-only session: just the 'plan' panel with a @hub pane, no work
@@ -439,6 +466,23 @@ bash "$RESTORE" >/dev/null 2>&1
 dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF issue-9)
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
+for state in working idle 'done'; do
+  target="hubonly:renamed-$state"
+  [ "$(tmux show-window-options -v -t "$target" @raw)" = 1 ] \
+    || fail "restore: raw $state marker missing"
+  [ "$(tmux show-window-options -v -t "$target" @worktree)" = "$WORK/main-scratch-$state" ] \
+    || fail "restore: raw $state worktree missing"
+  [ "$(tmux show-window-options -v -t "$target" @claude_state)" = "$state" ] \
+    || fail "restore: raw $state runtime state missing"
+  [ "$(tmux list-windows -t hubonly -F '#{window_name}' | grep -cxF "renamed-$state")" = 1 ] \
+    || fail "restore: raw $state duplicated"
+  launch=$(tmux display-message -p -t "$target" '#{pane_start_command}')
+  case "$state:$launch" in
+    working:*'First re-check'*) : ;;
+    working:*) fail "restore: working raw resume lacks nudge" ;;
+    *'First re-check'*) fail "restore: parked raw must not receive a nudge" ;;
+  esac
+done
 
 printf 'selftest PASS: hub snapshot+resume + per-window state trio (#153) + hub-only recovery (#160) + shrink-guard staleness escapes & reject alarm (#504) — HUB row captured but NEVER resumed (dash-only hub), working-window auto-continue wired, snapshot keeps a richer map (dead-row/age escapes unfreeze it, rejects counted+alarmed), restore reconciles missing windows idempotently\n'
 exit 0
