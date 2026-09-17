@@ -67,6 +67,7 @@ no GitHub merged-PR evidence is also kept. It does not reconstruct the branch's
 creation point; after base advances, a branch created at the previous base can
 become a strict ancestor. The separate liveness guards remain necessary.
 
-This guard does not add idle-scratch auto-reaping or cleanup grace markers. Those
-parts of #565 remain separate work. A SessionEnd hook is also a different path: the user has already ended that
+The cleanup daemon separately enforces a [merged grace](CLEANUP.md#the-pieces)
+of 600 seconds by default. Idle-scratch auto-reaping and dashboard grace markers
+remain separate work in #565. A SessionEnd hook is also a different path: the user has already ended that
 agent, so it is not routed through the dash's active-agent policy.

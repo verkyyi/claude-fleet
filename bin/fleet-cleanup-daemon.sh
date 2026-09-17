@@ -274,7 +274,7 @@ cleanup_fleet() { (
     # its progress notes go to stderr → this daemon's log. Pass FLEET_SESSION so it
     # resolves THIS fleet's repo/main/socket (it has no $TMUX) — via `env`, because
     # fleet_timebox runs its argv directly (no eval, so no VAR=val prefix).
-    tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" "$pr")
+    tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" "$pr" --auto)
     rc=$?
     if [ "$rc" = 124 ]; then
       # fleet_timebox TERMs the whole TREE, then KILLs the survivors a second later:

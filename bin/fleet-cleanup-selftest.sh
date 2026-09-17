@@ -95,10 +95,10 @@ case "\$action" in
         # 4th field = closedAt (issue #544) — the clock the closed gate compares
         # transcript activity against. Empty for a PR that never closed.
         case "\${GH_SCENARIO:-merged}" in
-          merged)        printf 'MERGED\tsha-%s\tissue-42\t\n' "\$num" ;;
+          merged)        printf 'MERGED\tsha-%s\tissue-42\t-\t%s\n' "\$num" "\${FAKE_MERGED_AT-}" ;;
           closed)        printf 'CLOSED\tsha-%s\tissue-42\t%s\n' "\$num" "\${FAKE_CLOSED_AT:-}" ;;
           open)          printf 'OPEN\tsha-%s\tissue-42\t\n' "\$num" ;;
-          scratch)       printf 'MERGED\tcafe1234\tscratch-99\t\n' ;;
+          scratch)       printf 'MERGED\tcafe1234\tscratch-99\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
           scratchclosed) printf 'CLOSED\tcafe1234\tscratch-99\t%s\n' "\${FAKE_CLOSED_AT:-}" ;;
           protected)     printf 'MERGED\tcafe1234\tmaster\t\n' ;;
         esac ;;
@@ -136,6 +136,19 @@ esac
 exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
+
+# Freeze only the cleanup clock when requested, to test the exact boundary
+# without sleeps. Timestamp parsing/formatting still uses the host BSD/GNU date.
+REAL_DATE=$(command -v date)
+cat > "$WORK/fakebin/date" <<DATEFAKE
+#!/bin/bash
+if [ "\$*" = '+%s' ] && [ -n "\${FAKE_NOW:-}" ]; then
+  printf '%s\n' "\$FAKE_NOW"
+else
+  exec "$REAL_DATE" "\$@"
+fi
+DATEFAKE
+chmod +x "$WORK/fakebin/date"
 
 # --- portable clock helpers (macOS BSD date first, GNU second) ----------------
 # GNU `date -r` means "reference FILE", so it fails on a bare epoch and falls
@@ -176,6 +189,7 @@ run_clean() {
   WT_GONE="${WT_GONE:-0}" WIN_GONE="${WIN_GONE:-0}" \
   WIN_STATE_FAKE="${WIN_STATE_FAKE:-done}" \
   FAKE_CLOSED_AT="${FAKE_CLOSED_AT:-$(iso_ago 1800)}" \
+  FAKE_MERGED_AT="${FAKE_MERGED_AT-$(iso_ago 1800)}" \
   CLAUDE_PROJECTS_DIR="$PROJ" \
   SCRATCH_WT="${SCRATCH_WT:-0}" SCRATCH_WIN="${SCRATCH_WIN:-0}" \
   SCRATCH_STATE="${SCRATCH_STATE:-done}" FAKE_DIRTY="${FAKE_DIRTY:-0}" \
@@ -201,6 +215,53 @@ tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
 [ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'transfer lease allowed teardown' "$err"
 ok 'MERGED worker with transfer lease → skip:live, no teardown'
 rm "$TRANSFER_LEASE"
+
+# Automatic cleanup waits for GitHub mergedAt, before ANY mutation. Old/missing
+# closedAt must not become a substitute clock for a recent/missing mergedAt.
+for merged_time in "$(iso_ago 60)" "$(iso_ago -3600)" '' '-' 'garbled' 'yesterday' '2026-02-30T00:00:00Z'; do
+  : > "$LEDGER"
+  tok="$(FAKE_MERGED_AT="$merged_time" run_clean merged --auto)"
+  [ "$tok" = skip:grace ] || fail "automatic grace should retain mergedAt='$merged_time', got '$tok'" "$(cat "$WORK/err")"
+  [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'grace mutated the worktree/base/ledger'
+done
+ok 'automatic recent/future/missing/invalid mergedAt defers before mutations'
+tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto --dry-run)"
+[ "$tok" = skip:grace ] || fail 'automatic dry-run must report the grace'
+ok 'automatic dry-run observes merged grace'
+tok="$(run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "expired automatic grace should clean, got '$tok'" ;; esac
+ok 'expired automatic grace proceeds through normal cleanup'
+tok="$(FAKE_NOW=1767226199 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
+[ "$tok" = skip:grace ] || fail '599 seconds must still defer'
+tok="$(FAKE_NOW=1767226200 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
+[ "$tok" = dry:would-clean-merged ] || fail 'exactly 600 seconds must pass the grace'
+ok 'automatic grace boundary is exact (599/600 seconds)'
+tok="$(WT_GONE=1 WIN_GONE=1 FAKE_MERGED_AT='' run_clean merged --auto)"
+[ "$tok" = skip:nothing ] || fail 'already-reaped automatic cleanup must remain idempotent'
+ok 'no debris needs no merge clock'
+
+# A non-exported fleet overlay wins over defaults/environment. Invalid knobs
+# fall back to 600; leading zeroes are decimal, not Bash octal arithmetic.
+for grace in 3600 invalid -1 999999999999999999999999 31536001 00003600; do
+  printf 'FLEET_CLEANUP_MERGED_GRACE=%s\n' "$grace" > "$WORK/conf/testsess.conf"
+  tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto)"
+  [ "$tok" = skip:grace ] || fail "grace config '$grace' should retain recent merge, got '$tok'"
+done
+printf 'FLEET_CLEANUP_MERGED_GRACE=3600\n' > "$WORK/conf/testsess.conf"
+tok="$(run_clean merged --auto)"
+[ "$tok" = skip:grace ] || fail 'per-fleet non-exported grace was ignored'
+printf 'FLEET_CLEANUP_MERGED_GRACE=0\n' > "$WORK/conf/testsess.conf"
+tok="$(FAKE_MERGED_AT='' run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "explicit zero must disable the delay, got '$tok'" ;; esac
+rm "$WORK/conf/testsess.conf"
+ok 'per-fleet grace, invalid fallback, decimal input and explicit zero'
+tok="$(FAKE_MERGED_AT='' run_clean merged)"
+case "$tok" in cleaned:*) ;; *) fail 'manual cleanup must not acquire the automatic delay' ;; esac
+ok 'manual cleanup stays immediate without a merge clock'
+tok="$(run_clean closed --auto)"
+[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED-unmerged cleanup must keep its separate policy'
+ok 'automatic CLOSED-unmerged keeps its existing policy'
 
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
@@ -379,6 +440,12 @@ tok="$(FLEET_CLEANUP_SCRATCH_HEADS=0 scratch scratch)"; err="$(cat "$WORK/err")"
 ok "7 non-issue head, knob OFF → skip:nothing (default behavior unchanged)"
 
 # --- 8. knob ON + clean + tip==merged head + window done → reaped --------------
+: > "$LEDGER"
+tok="$(FAKE_MERGED_AT="$(iso_ago 60)" scratch scratch --auto)"
+[ "$tok" = skip:grace ] || fail 'automatic scratch cleanup needs merged grace too'
+[ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+  && [ -f "$WORK/wt-scratch-99/keep.txt" ] || fail 'scratch grace allowed mutation'
+ok 'automatic opted-in scratch head also waits for grace'
 : > "$LEDGER"
 tok="$(scratch scratch)"; err="$(cat "$WORK/err")"
 case "$tok" in cleaned:*) ;; *) fail "8 expected cleaned:* for an armed scratch head, got '$tok'" "$err" ;; esac

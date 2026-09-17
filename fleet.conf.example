@@ -385,6 +385,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # (the worktree-autoclean janitor still backstops merged worktrees). See docs/CLEANUP.md.
 # @label=Cleanup daemon (reap after merges) @group=bridge @tier=common @scope=fleet @edit=bool
 #FLEET_CLEANUP=1
+# Wait after GitHub mergedAt before automatic cleanup (issue #565). Default 600s;
+# 0 disables only this delay, not the existing cleanup gates. Missing/invalid or
+# future merge timestamps defer when enabled. Manual fleet-cleanup.sh stays
+# immediate; --auto --dry-run evaluates this gate without changing anything.
+# Values outside 0..31536000 fall back to 600. This is not an idle-time policy.
+# @label=Cleanup merged grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_CLEANUP_MERGED_GRACE=600
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
 # cooldown). Default 4.
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick
