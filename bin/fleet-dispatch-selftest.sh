@@ -195,6 +195,50 @@ PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR
 grep -q 'PARKED' "$WORK/log3" && fail2 "#563 --dry-run must not sweep"
 [ -s "$TMUX_LOG" ] && fail2 "#563 --dry-run must not stamp windows"
 
+# --- #683: a refusal's REASON reaches the log, and its CLASS decides skip-vs-stop ---
+# The real spawn prints its reason on stderr and exits 2 (at capacity) / 3
+# (claimed elsewhere) / 1 (infra). The fake now does the same per issue number:
+# #20 is claimed (a peer won the race) → the dispatcher must SKIP it and go on to
+# #50, which spawns; the log names the reason, not a generic "cap/dup race".
+cat > "$WORK/bin/dash-issue-session.sh" <<FAKE
+#!/bin/bash
+case "\$1" in
+  20) printf 'dash-issue-session: #20 already claimed elsewhere (assigned) — not spawning; --force overrides a stale claim\n' >&2; exit 3 ;;
+esac
+printf '%s\n' "\$1" >> "$SPAWN_LOG"
+exit 0
+FAKE
+: > "$SPAWN_LOG"; : > "$TMUX_LOG"; LOG4="$WORK/log4"
+PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+  bash "$WORK/bin/fleet-dispatch.sh" s1 >/dev/null 2>"$LOG4" || { printf 'selftest: dispatcher (claimed run) exited non-zero\n' >&2; cat "$LOG4" >&2; exit 1; }
+fail4() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- log ---\n' >&2; cat "$LOG4" >&2; printf -- '--- spawns ---\n' >&2; cat "$SPAWN_LOG" >&2; exit 1; }
+grep -qxF 20 "$SPAWN_LOG" && fail4 "#683 the claimed issue must not count as spawned"
+grep -qxF 50 "$SPAWN_LOG" || fail4 "#683 a CLAIMED refusal (exit 3) takes the issue, not the slot — the tick must go on to #50"
+grep -q 'skip #20 (p1) — #20 already claimed elsewhere (assigned)' "$LOG4" || fail4 "#683 the log must carry the spawn's stderr reason for the skip"
+grep -q 'cap/dup race' "$LOG4" && fail4 "#683 the generic 'cap/dup race' guess must be gone — the reason is known now"
+
+# Capacity and infrastructure failures stop the tick. Log every attempt so the
+# test catches trying #50 even if that second failure produces no useful output.
+cat > "$WORK/bin/dash-issue-session.sh" <<FAKE
+#!/bin/bash
+printf '%s\n' "\$1" >> "$SPAWN_LOG"
+printf 'stdout-must-not-enter-the-log\n'
+printf 'dash-issue-session: %s\n' "\$SPAWN_REASON" >&2
+exit "\$SPAWN_RC"
+FAKE
+for spawn_rc in 2 1; do
+  reason='fleet at capacity (2/2 sessions) — not spawning'
+  [ "$spawn_rc" = 1 ] && reason='spawn failed for #20: new-window'
+  : > "$SPAWN_LOG"; LOG5="$WORK/log5"
+  PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+  SPAWN_RC="$spawn_rc" SPAWN_REASON="$reason" \
+    bash "$WORK/bin/fleet-dispatch.sh" s1 >/dev/null 2>"$LOG5" || { cat "$LOG5" >&2; fail "dispatcher refusal run exited non-zero"; }
+  [ "$(cat "$SPAWN_LOG")" = 20 ] || fail "#683 rc=$spawn_rc must stop after the first attempt"
+  grep -qF "spawn of #20 refused (rc=$spawn_rc: $reason) — stop this tick" "$LOG5" \
+    || { cat "$LOG5" >&2; fail "#683 log must retain both class and stderr reason"; }
+  grep -q 'stdout-must-not-enter-the-log' "$LOG5" && fail "#683 capture stderr only"
+done
+
 # #730: one Claude quota measurement, applied only to Claude fleets. Check both
 # iteration orders so a held first fleet cannot abort dispatch for the second.
 cat > "$WORK/bin/fleet-quotaguard.sh" <<FAKE
@@ -223,5 +267,5 @@ for order in 's1 s2' 's2 s1'; do
 done
 printf 'ok   Claude quota holds only Claude fleets, independent of dispatch order\n'
 
-printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563)\n' "$got"
+printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563); a refusal logs its stderr reason and exit 3 skips / exit 2 stops (#683)\n' "$got"
 exit 0

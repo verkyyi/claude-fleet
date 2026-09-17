@@ -275,13 +275,25 @@ dispatch_fleet() { (
       [ "$spawned" -ge "$slots" ] && break
       continue
     fi
-    if "$BIN/dash-issue-session.sh" "$num" "$sess" --origin autofill >/dev/null 2>&1; then
+    # Keep the spawn's stderr (issue #683): a refusal prints its reason there —
+    # the tmux toast lands on no screen this daemon owns — and the exit code says
+    # WHICH refusal: 2 at capacity, 3 claimed elsewhere, 1 infrastructure.
+    why=$("$BIN/dash-issue-session.sh" "$num" "$sess" --origin autofill 2>&1 >/dev/null); rc=$?
+    why=${why#dash-issue-session: }; why=${why//$'\n'/ | }
+    if [ "$rc" = 0 ]; then
       log "$sess: spawned #$num (p$tier)  [slot $((spawned + 1))/$slots]"
       spawned=$((spawned + 1))
+    elif [ "$rc" = 3 ]; then
+      # Claimed between our eligibility read and the spawn (a peer machine's
+      # dedup won the race): this ISSUE is taken, the SLOT is still free — move
+      # on to the next candidate rather than ending the tick on it.
+      log "$sess: skip #$num (p$tier) — ${why:-claimed elsewhere}"
+      continue
     else
-      # dash-issue-session re-checks the caps + dedup; a refusal here is expected
-      # backpressure (a slot filled between our count and the spawn), not an error.
-      log "$sess: spawn of #$num refused (cap/dup race) — stop this tick"
+      # At capacity (a slot filled between our count and the spawn — expected
+      # backpressure, not an error) or an infrastructure failure: neither gets
+      # better by trying the next issue, so stop this tick — and say why.
+      log "$sess: spawn of #$num refused (rc=$rc: ${why:-no reason given}) — stop this tick"
       break
     fi
     [ "$spawned" -ge "$slots" ] && break

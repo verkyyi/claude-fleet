@@ -71,6 +71,7 @@ case "$cmd" in
   run-shell)
     [ "${1:-}" = "-b" ] && shift
     printf '%s\n' "$1" >> "$RS_LOG"          # prove the reconstruct was backgrounded
+    [ "${TMUX_DISPATCH_FAIL:-0}" = 1 ] && exit 1
     sh -c "$1" ;;                            # mirror real run-shell: actually run it
   display-message)
     case "$*" in
@@ -169,6 +170,9 @@ VERDICT="REVIEW-ONLY\tno resumable worktree and no PR" \
   FLEET_MAX_SESSIONS=0 run_restore 'landed:issue:9'
 [ -s "$NEWWIN_LOG" ] && fail "E REVIEW-ONLY must NOT create a window" "$(cat "$NEWWIN_LOG")"
 grep -qi 'nothing resumable' "$DISPLAY_LOG"  || fail "E REVIEW-ONLY should surface a 'nothing resumable' message" "$(cat "$DISPLAY_LOG")"
+VERDICT="REVIEW-ONLY\tno resumable worktree and no PR" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:issue:9' testsess
+grep -q 'dash-restore-session: nothing resumable for 9' "$WORK/err" || fail "E headless REVIEW-ONLY must explain why on stderr" "$(cat "$WORK/err")"
 ok "E REVIEW-ONLY → no window, an explanatory message"
 
 # ============================ F: non-landed target =========================
@@ -181,10 +185,18 @@ ok "F a live-row target is a no-op with a hint"
 # ============================ G: cap refusal ===============================
 # per-fleet cap of 1 with one live non-panel worker ⇒ refuse before spawning.
 VERDICT="RESUME\t$WORK/wt\tsid\tclaude --resume sid --fork-session" \
-  WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_restore 'landed:issue:9'
+  WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_restore 'landed:issue:9'; rc_g=$?
 [ -s "$NEWWIN_LOG" ] && fail "G a cap refusal must NOT create a window" "$(cat "$NEWWIN_LOG")"
 grep -qi 'capacity' "$DISPLAY_LOG"           || fail "G cap refusal should surface a capacity message" "$(cat "$DISPLAY_LOG")"
+grep -qi 'capacity' "$WORK/err"              || fail "G the cap reason must reach STDERR, not only the toast (issue #683)" "$(cat "$WORK/err")"
+[ "$rc_g" = 2 ]                              || fail "G a cap refusal exits 2 (retry-later class), matching dash-issue-session.sh (issue #683)" "rc=$rc_g"
 ok "G restore honours the session cap (refuses, no window)"
+
+TMUX_DISPATCH_FAIL=1 FLEET_MAX_SESSIONS=0 run_restore 'landed:issue:9'; rc_dispatch=$?
+[ "$rc_dispatch" = 1 ] || fail "G failed background dispatch must exit 1 (#683)" "rc=$rc_dispatch"
+grep -q 'dash-restore-session: background dispatch failed for 9' "$WORK/err" || fail "G dispatch failure must reach stderr" "$(cat "$WORK/err")"
+[ -s "$NEWWIN_LOG" ] && fail "G dispatch failure must not create a window"
+ok "G failed background dispatch reports rc1 + stderr (#683)"
 
 # ===================== I: RESUME (scratch key), issue #466 =================
 # A scratch row has NO issue: the restored window must be marked the way a fresh

@@ -55,6 +55,7 @@ chmod +x "$WORK/bin/fleet-issue-file.sh"
 cat > "$WORK/bin/dash-issue-session.sh" <<'SPAWNSTUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SPAWN_LOG"
+[ "${SPAWN_RC:-0}" != 0 ] && printf 'dash-issue-session: test capacity refusal\n' >&2
 exit "${SPAWN_RC:-0}"
 SPAWNSTUB
 chmod +x "$WORK/bin/dash-issue-session.sh"
@@ -190,6 +191,9 @@ ok "G --spawn hands the new number + title to the spawn choke point"
 SPAWN_RC=1 run_fif --title "Ship it" --spawn
 [ "$RC" -eq 0 ]                       || fail "G2 a spawn refusal must still exit 0 (issue filed)" "$(cat "$WORK/err")"
 grep -q 'issues/777' "$WORK/out"      || fail "G2 the issue must still be FILED (URL echoed) on a spawn refusal" "$(cat "$WORK/out")"
+grep -q 'filed #777 but the spawn was refused' "$WORK/err" \
+                                      || fail "G2 a spawn refusal must be reported on stderr — the caller reading only the URL must learn no worker took it (issue #683)" "$(cat "$WORK/err")"
+grep -q 'dash-issue-session: test capacity refusal' "$WORK/err" || fail "G2 the spawn reason must pass through unchanged" "$(cat "$WORK/err")"
 ok "G2 a spawn refusal files-without-spawning (issue not lost)"
 
 # ============================ H: --from role ===============================

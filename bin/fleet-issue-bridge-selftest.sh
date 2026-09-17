@@ -57,10 +57,13 @@ cp "$SRC" "$WORK/bin/fleet-issue-bridge.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
 chmod +x "$WORK/bin/fleet-issue-bridge.sh"
 
-# fake dash-issue-session.sh — never really spawns (revive is off in this test).
+# Fake spawn: record revive attempts and expose the same stderr/exit contract.
 cat > "$WORK/bin/dash-issue-session.sh" <<'FAKE'
 #!/bin/bash
-exit 0
+printf '%s\n' "$*" >> "$SPAWN_LOG"
+printf 'stdout-must-not-enter-the-log\n'
+[ -n "${SPAWN_REASON:-}" ] && printf 'dash-issue-session: %s\n' "$SPAWN_REASON" >&2
+exit "${SPAWN_RC:-0}"
 FAKE
 chmod +x "$WORK/bin/dash-issue-session.sh"
 
@@ -149,12 +152,13 @@ printf '2026-07-09T00:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
 runbridge() {
   # Forward SECRET/SIG from this call's prefix-assignment env into the child bash
   # (a prefix assignment to a shell FUNCTION isn't exported to its grandchildren).
-  PATH="$WORK/fakepath:$PATH" \
+  PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" \
   FLEET_ISSUE_BRIDGE=1 FLEET_REPO="fake/repo" \
   FLEET_CONF_DIR="$WORK/conf" \
   FLEET_ISSUE_BRIDGE_STATE_DIR="$WORK/state" \
   FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
-  FLEET_ISSUE_BRIDGE_REVIVE=0 \
+  FLEET_ISSUE_BRIDGE_REVIVE="${FLEET_ISSUE_BRIDGE_REVIVE:-0}" \
+  SPAWN_LOG="$WORK/spawn.log" SPAWN_RC="${SPAWN_RC:-0}" SPAWN_REASON="${SPAWN_REASON:-}" \
   FAKE_TMUX_DOWN="${FAKE_TMUX_DOWN:-}" \
   FAKE_INPUT_TEXT="${FAKE_INPUT_TEXT:-}" \
   FAKE_INPUT_ROW="${FAKE_INPUT_ROW:-}" \
@@ -401,6 +405,35 @@ JSON
     || fail "fail-safe: an un-persistable counter must deliver anyway, not defer forever"
 fi
 printf 'selftest: max-typing-defer leg PASS (bounded defer: force-deliver+warn after N, reset on clear, gone-reap, fail-safe)\n' >&2
+
+# Revive #12, which has no live window. Its spawn refusal must survive the
+# daemon's capture, including multi-line stderr; successful output stays quiet.
+mkdir -p "$WORK/.claude-dash"
+printf 's1\tfake-repo\tfake/repo\n' > "$WORK/.claude-dash/sessmap"
+cat > "$CANNED" <<'JSON'
+[
+ {"id":500,"author_association":"OWNER","user":{"login":"boss"},"issue_url":"https://api.github.com/repos/fake/repo/issues/12","updated_at":"2026-07-09T04:00:01Z","body":"revive this worker"}
+]
+JSON
+for spawn_rc in 2 3 1 0; do
+  case "$spawn_rc" in
+    2) reason='fleet at capacity' ;;
+    3) reason='#12 already claimed elsewhere (assigned)' ;;
+    1) reason=$'spawn failed for #12: new-window\nserver unavailable' ;;
+    0) reason='' ;;
+  esac
+  rm -f "$WORK/state/bridge_fake-repo.seen"
+  printf '2026-07-09T04:00:00Z\n' > "$WORK/state/bridge_fake-repo.since"
+  : > "$WORK/log"; : > "$WORK/spawn.log"
+  FLEET_ISSUE_BRIDGE_REVIVE=1 SPAWN_RC="$spawn_rc" SPAWN_REASON="$reason" runbridge --poll \
+    || fail "revive poll failed for spawn rc=$spawn_rc"
+  grep -qxF '12 s1 --origin bridge' "$WORK/spawn.log" || fail "revive must attempt the missing worker"
+  expected="revive-failed(#12: ${reason//$'\n'/ | })"
+  [ "$spawn_rc" = 0 ] && expected='revived(#12->s1)'
+  grep -qF "$expected" "$WORK/log" || fail "revive log lost the spawn outcome: $expected"
+  grep -q 'stdout-must-not-enter-the-log' "$WORK/log" && fail "revive must capture stderr only"
+done
+printf 'selftest: revive leg PASS (capacity/claim/infra reasons preserved, stdout discarded — #683)\n' >&2
 
 # ============================== --deliver HMAC leg =============================
 if ! command -v python3 >/dev/null 2>&1; then

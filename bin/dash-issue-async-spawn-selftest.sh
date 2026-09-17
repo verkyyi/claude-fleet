@@ -93,7 +93,7 @@ case "\${1:-}" in
               *@issue*)       echo "\${ORIGIN_PROBE:-}" ;;   # fleet_origin_key's caller-pane probe (ORIGIN)
               *) echo '' ;;
             esac ;;
-      *) shift; printf '%s\n' "\$*" >> "$DISPLAY_LOG" ;;
+      *) shift; printf '%s\n' "\$*" >> "$DISPLAY_LOG"; [ "\${TMUX_TOAST_FAIL:-0}" = 1 ] && exit 1 ;;
     esac ;;
   has-session)  exit 0 ;;                                   # any configured fleet is "live"
   list-windows)
@@ -102,9 +102,12 @@ case "\${1:-}" in
       *) : ;;                                               # local dedup: no existing window
     esac ;;
   show-options)      echo '' ;;
-  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"; echo "\${TMUX_WIN:-@9}" ;;
+  new-window)        printf 'new-window %s\n' "\$*" >> "$TMUX_LOG"
+                     [ "\${TMUX_WINDOW_FAIL:-0}" = 1 ] && exit 1
+                     echo "\${TMUX_WIN:-@9}" ;;
   set-window-option) printf 'set-window-option %s\n' "\$*" >> "$TMUX_LOG" ;;
-  run-shell)         printf 'run-shell %s\n' "\$*" >> "$RUNSHELL_LOG" ;;
+  run-shell)         printf 'run-shell %s\n' "\$*" >> "$RUNSHELL_LOG"
+                     [ "\${TMUX_DISPATCH_FAIL:-0}" = 1 ] && exit 1 ;;
   kill-window)       printf 'kill-window %s\n' "\$*" >> "$TMUX_LOG" ;;
   *) : ;;
 esac
@@ -122,6 +125,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   echo $? > "$WORK/spawn.rc"
 }
 rc()          { cat "$WORK/spawn.rc"; }
+err_has()     { grep -qF -- "$1" "$WORK/spawn.err"; }
 gh_has()      { grep -qF -- "$1" "$GH_LOG"; }
 tmux_has()    { grep -qF -- "$1" "$TMUX_LOG"; }
 git_has()     { grep -qF -- "$1" "$GIT_LOG"; }
@@ -153,6 +157,8 @@ git_has 'worktree add'                  && fail "CAP must NOT create a worktree 
 tmux_has 'new-window'                   && fail "CAP must NOT spawn a window when at capacity"
 display_has 'at capacity'               || fail "CAP should announce the capacity refusal"
 display_has 'fg=red'                    || fail "CAP refusal toast must be STICKY (red) (issue #331)"
+grep -qi 'at capacity' "$WORK/spawn.err" || fail "CAP the refusal reason must reach STDERR — a headless caller never sees the toast (issue #683)" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 2 ]                         || fail "CAP a cap refusal exits 2 — the 'retry later' class, distinct from claimed (3) / infra (1) (issue #683)" "rc=$(rc)"
 rm -f "$WORK/conf/testsess.conf"
 ok "CAP --async + cap reached → immediate refuse, no run-shell / worktree / window, sticky red toast"
 
@@ -172,6 +178,15 @@ git_has 'worktree add'                  && fail "DISPATCH must NOT run the workt
 tmux_has 'new-window'                   && fail "DISPATCH must NOT run new-window in the FOREGROUND"
 ok "DISPATCH --async + free → fast rc0, claim sync, run-shell -b re-invokes the tail (FLEET_SPAWN_TAIL + --title), no foreground checkout"
 
+# A failed run-shell submission must not acknowledge a spawn that never started.
+TMUX_DISPATCH_FAIL=1 TMUX_TOAST_FAIL=1 run_spawn 303 --async
+[ "$(rc)" = 1 ]                        || fail "DISPATCHFAIL must exit 1 even when the toast also fails" "rc=$(rc)"
+err_has 'dash-issue-session: spawn failed for #303: dispatch' || fail "DISPATCHFAIL must reach stderr" "$(cat "$WORK/spawn.err")"
+git_has 'worktree add'                  && fail "DISPATCHFAIL must not create a worktree"
+tmux_has 'new-window'                   && fail "DISPATCHFAIL must not spawn a window"
+[ -s "$WORK/spawn.out" ]               && fail "DISPATCHFAIL must leave stdout empty"
+ok "DISPATCHFAIL reports rc1 + stderr even with no working tmux toast (#683)"
+
 # ===== TAIL: the tail-only re-entry materializes the worktree + named window ========
 # FLEET_SPAWN_TAIL both selects tail-only mode and names the fleet; --title flows to
 # the window name. The gate (cap/dedup/claim) is SKIPPED — this ran in the foreground.
@@ -188,11 +203,25 @@ ok "TAIL re-entry → worktree add + new-window named from --title + @issue boun
 
 # ===== TAILFAIL: a backgrounded worktree-add failure reports the failure ============
 FLEET_SPAWN_TAIL=testsess GIT_WT_FAIL=1 run_spawn 303 --title 'Boom'
-[ "$(rc)" != 0 ]                        || fail "TAILFAIL a failed worktree add must exit non-zero"
+[ "$(rc)" = 1 ]                         || fail "TAILFAIL a failed worktree add must exit 1" "rc=$(rc)"
+err_has 'dash-issue-session: spawn failed for #303: worktree add' || fail "TAILFAIL must reach stderr" "$(cat "$WORK/spawn.err")"
 display_has 'spawn failed for #303: worktree add' || fail "TAILFAIL must report 'spawn failed for #303: worktree add'"
 display_has 'fg=red'                    || fail "TAILFAIL failure toast must be STICKY (red) (issue #331)"
 tmux_has 'new-window'                   && fail "TAILFAIL must NOT spawn a window after the worktree add failed"
 ok "TAILFAIL backgrounded worktree-add failure → 'spawn failed for #303: worktree add', no window"
+
+# The synchronous headless path exposes the same failures without a tmux client.
+GIT_WT_FAIL=1 run_spawn 303 testsess
+[ "$(rc)" = 1 ]                         || fail "SYNCFAIL worktree failure must exit 1"
+err_has 'spawn failed for #303: worktree add' || fail "SYNCFAIL worktree failure must reach stderr"
+tmux_has 'new-window'                   && fail "SYNCFAIL must stop before creating a window"
+[ -s "$WORK/spawn.out" ]               && fail "SYNCFAIL must leave stdout empty"
+TMUX_WINDOW_FAIL=1 TMUX_TOAST_FAIL=1 run_spawn 303 testsess
+[ "$(rc)" = 1 ]                         || fail "WINDOWFAIL must exit 1" "rc=$(rc)"
+err_has 'dash-issue-session: spawn failed for #303: new-window' || fail "WINDOWFAIL must reach stderr without a toast" "$(cat "$WORK/spawn.err")"
+tmux_has 'set-window-option'            && fail "WINDOWFAIL must not bind a nonexistent window"
+[ -s "$WORK/spawn.out" ]               && fail "WINDOWFAIL must leave stdout empty"
+ok "headless worktree/window failures report rc1 + stderr and stop spawning (#683)"
 
 # ===== SYNC: NO --async ⇒ today's synchronous behavior is unchanged =================
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 FLEET_PRESPAWN_DEDUP=1 run_spawn 303

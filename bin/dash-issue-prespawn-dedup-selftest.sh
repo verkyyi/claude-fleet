@@ -21,6 +21,10 @@
 #   E    flag on + FREE issue                   → claims (assignee ONLY) THEN spawns,
 #                                                 and posts NO ▶ claiming comment.
 #   G    flag on + --force despite an assignee  → spawns, skipping the check + claim.
+#   Every refusal (DEF/A/C/D) must ALSO reach a headless caller (issue #683): the
+#   reason on stderr — the toast lands on someone else's screen — and exit 3, the
+#   "claimed" class, distinct from 2 (cap) and 1 (infra); a clean spawn (E) is
+#   silent on stderr.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured logs).
 set -uo pipefail
@@ -108,6 +112,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   echo $? > "$WORK/spawn.rc"
 }
 rc()          { cat "$WORK/spawn.rc"; }
+err_has()     { grep -qiF -- "$1" "$WORK/spawn.err"; }
 gh_has()      { grep -qF -- "$1" "$GH_LOG"; }
 tmux_has()    { grep -qF -- "$1" "$TMUX_LOG"; }
 git_has()     { grep -qF -- "$1" "$GIT_LOG"; }
@@ -123,6 +128,9 @@ CLAIM_STATE=$'1\tOPEN' run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "DEF (unset) must dedup by default — an assigned issue refuses"
 tmux_has 'new-window'                            && fail "DEF (unset) must NOT spawn a claimed issue"
 display_has 'already claimed elsewhere'          || fail "DEF should announce 'already claimed elsewhere'"
+err_has 'already claimed elsewhere'              || fail "DEF the refusal reason must reach STDERR, not only the toast (issue #683)" "$(cat "$WORK/spawn.err")"
+err_has '(assigned)'                             || fail "DEF stderr must name WHICH ledger read tripped (assigned) (issue #683)" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 3 ]                                  || fail "DEF a claimed refusal exits 3 — the 'claimed' class, not a bare 1 (issue #683)" "rc=$(rc)"
 ok "DEF (flag unset) runs the dedup — ON by default"
 
 # ===== OPT: FLEET_PRESPAWN_DEDUP=0 ⇒ opt-out fast path: no claim calls, still spawns =
@@ -139,18 +147,24 @@ CLAIM_STATE=$'1\tOPEN' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 tmux_has 'new-window'                            && fail "A must NOT spawn a window for a claimed issue"
 gh_has '--add-assignee'                          && fail "A must NOT claim an already-claimed issue"
 display_has 'already claimed elsewhere'          || fail "A should announce 'already claimed elsewhere'"
+err_has 'already claimed elsewhere'              || fail "A the refusal reason must reach stderr (issue #683)" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 3 ]                                  || fail "A a claimed refusal exits 3 (issue #683)" "rc=$(rc)"
 ok "A assignee present → refuse + no spawn (the assignee is the claim)"
 
 # ===== C: issue CLOSED ⇒ refuse ===================================================
 CLAIM_STATE=$'0\tCLOSED' FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "C a CLOSED issue must refuse"
 tmux_has 'new-window'                            && fail "C must NOT spawn for a closed/merged issue"
+err_has 'state CLOSED'                           || fail "C stderr must say the issue is CLOSED — a different fix from a dangling assignee (issue #683)" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 3 ]                                  || fail "C a closed-issue refusal exits 3 (claimed class) (issue #683)" "rc=$(rc)"
 ok "C closed/merged issue → refuse + no spawn"
 
 # ===== D: an open PR on issue-<N> ⇒ refuse ========================================
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=1 FLEET_PRESPAWN_DEDUP=1 run_spawn 258
 [ "$(rc)" != 0 ]                                 || fail "D an open PR (in flight) must refuse"
 tmux_has 'new-window'                            && fail "D must NOT spawn when a PR is already open elsewhere"
+err_has 'open PR on issue-258'                   || fail "D stderr must name the in-flight PR branch (issue #683)" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 3 ]                                  || fail "D an open-PR refusal exits 3 (claimed class) (issue #683)" "rc=$(rc)"
 ok "D open PR on issue-<N> → refuse + no spawn"
 
 # ===== E: FREE issue ⇒ claim (assignee ONLY, NO comment) THEN spawn ================
@@ -161,6 +175,7 @@ gh_has 'issue comment'                           && fail "E the retired ▶ clai
 tmux_has 'new-window'                            || fail "E a free issue must spawn the window after claiming"
 tmux_has 'kill-window'                           && fail "E there is no tie-break rollback anymore — must NOT self-reap"
 git_has 'worktree remove'                        && fail "E there is no tie-break rollback anymore — must NOT remove the worktree"
+[ -s "$WORK/spawn.err" ]                         && fail "E a clean spawn must print NOTHING on stderr — stderr is the refusal record (issue #683)" "$(cat "$WORK/spawn.err")"
 ok "E free issue → claims (assignee only, no ▶ comment) THEN spawns, no tie-break rollback"
 
 # ===== G: --force spawns despite an assignee, skipping check + claim ===============

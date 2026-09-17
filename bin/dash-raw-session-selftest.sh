@@ -102,6 +102,7 @@ case "$cmd" in
   run-shell)
     [ "${1:-}" = "-b" ] && shift
     printf '%s\n' "$1" >> "$RS_LOG"          # prove the spawn was backgrounded
+    [ "${TMUX_DISPATCH_FAIL:-0}" = 1 ] && exit 1
     sh -c "$1" ;;                            # mirror real run-shell: actually run it
   display-message)
     case "$*" in
@@ -163,10 +164,12 @@ ok "A raw spawn creates a @raw scratch-1 WORKTREE off base, @worktree set, no @i
 # ============================ B: cap refusal ================================
 # per-fleet cap of 1 with one live non-panel worker window ⇒ refuse before spawning.
 reset_scratch
-WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw
+WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw; rc_b=$?
 [ -s "$NEWWIN_LOG" ] && fail "B a cap refusal must NOT create a window" "$(cat "$NEWWIN_LOG")"
 [ -e "$WORK/main-scratch-1" ] && fail "B a cap refusal must NOT create a worktree" "$(git -C "$MAIN" worktree list)"
 grep -qi 'capacity' "$DISPLAY_LOG"       || fail "B cap refusal should surface a capacity message" "$(cat "$DISPLAY_LOG")"
+grep -qi 'capacity' "$WORK/err"          || fail "B the cap reason must reach STDERR — a headless (cross-fleet) caller never sees the toast (issue #683)" "$(cat "$WORK/err")"
+[ "$rc_b" = 2 ]                          || fail "B a cap refusal exits 2 (retry-later class), matching dash-issue-session.sh (issue #683)" "rc=$rc_b"
 ok "B raw spawn honours the session cap (refuses, no window, no worktree)"
 
 # ============================ C: N allocation ===============================
@@ -308,6 +311,16 @@ WINS=$'plan\nworker-1' FLEET_MAX_SESSIONS=1 run_raw --bg
 [ -s "$NEWWIN_LOG" ]  && fail "M a cap refusal must NOT create a window" "$(cat "$NEWWIN_LOG")"
 grep -qi 'capacity' "$DISPLAY_LOG" || fail "M a --bg cap refusal should still surface a message" "$(cat "$DISPLAY_LOG")"
 ok "M dash ⌃s (--bg) spawns instantly — backgrounded, no prompt, refusals stay sync"
+
+TMUX_DISPATCH_FAIL=1 WINS=plan FLEET_MAX_SESSIONS=0 run_raw --bg --name failed --prompt 'must not start'; rc_m=$?
+[ "$rc_m" = 1 ] || fail "M failed background dispatch must exit 1 (#683)" "rc=$rc_m"
+grep -q 'dash-raw-session: background dispatch failed' "$WORK/err" || fail "M dispatch failure must reach stderr" "$(cat "$WORK/err")"
+[ -s "$NEWWIN_LOG" ] && fail "M dispatch failure must not create a window"
+[ -e "$WORK/main-scratch-1" ] && fail "M dispatch failure must not create a worktree"
+for staged in "$WORK/tmp"/dash-raw.*; do
+  [ -e "$staged" ] && fail "M failed dispatch must clean up staged name/prompt files"
+done
+ok "M failed background dispatch reports rc1 + stderr and cleans up staged inputs (#683)"
 
 # ==================== N: --prompt seeds the scratch (CLI / handoff) ============
 # A CLI or cross-fleet-handoff caller hands its text over as --prompt (the dash

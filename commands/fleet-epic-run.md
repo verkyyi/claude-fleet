@@ -104,13 +104,17 @@ bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<the issue's own tit
 ```
 
 Always the **live install** path (`~/.claude/fleet/bin/…`), never the base
-checkout — the checkout's copy defaults the global cap to 8 and refuses in
-silence. Pass `--title` so the window says what the work is.
+checkout — the checkout's copy defaults the global cap to 8 instead of reading
+the installed cap. Pass `--title` so the window says what the work is.
 
-Then verify the spawn actually happened: a refusal reaches the caller as a bare
-exit code and a tmux popup nobody is watching (issue #683). A tick that "spawned"
-three workers and shows three fewer windows than it thinks has hit exactly that.
-Re-count windows after spawning; on a mismatch, say so on the parent and stop
+Then READ the outcome, don't assume it: a refusal used to reach the caller as a
+bare exit code and a tmux popup nobody was watching (issue #683). Since #683 the
+reason is on **stderr** and the exit code names the class — `2` at capacity
+(retry next tick), `3` already claimed (a peer holds it — pick the next member,
+never `--force` a live claim), `1` infrastructure (stop and say so). Keep the
+stderr line beside the number in your tally. Then re-count windows anyway: a
+tick that "spawned" three workers and shows three fewer windows than it thinks
+has hit a refusal it never read. On a mismatch, say so on the parent and stop
 refilling rather than looping on a silent refusal.
 
 Core empty and quota remaining? Promote from the charter's reserve list. Reserve

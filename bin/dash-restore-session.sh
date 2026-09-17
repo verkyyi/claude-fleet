@@ -62,6 +62,7 @@ case "${2:-}" in
   *)         TARGET_SESS="$2" ;;
 esac
 key=$(restore_key_for "$TARGET") || {
+  printf 'dash-restore-session: not a landed session — nothing to restore for %s\n' "$TARGET" >&2
   tmux display-message "restore: not a landed session — ⌃t for the landed view, then ⌃o" 2>/dev/null
   exit 0
 }
@@ -71,16 +72,21 @@ key=$(restore_key_for "$TARGET") || {
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 SESS="${TARGET_SESS:-${FLEET_RESTORE_SESS:-$(fleet_current_session)}}"
-[ -z "$SESS" ] && { tmux display-message "restore: no target tmux session" 2>/dev/null; exit 1; }
+[ -z "$SESS" ] && { printf 'dash-restore-session: no target tmux session\n' >&2; tmux display-message "restore: no target tmux session" 2>/dev/null; exit 1; }
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
+# A refusal is a stderr line AND a toast (issue #683): dash-enter runs this with
+# both streams to /dev/null today, but a headless restore (a script, an agent in
+# another pane) gets only the exit code otherwise. stderr is the record; the
+# status line is the glance. Exit 2 = at capacity, 1 = infrastructure.
+refuse() { printf 'dash-restore-session: %s\n' "${1#restore: }" >&2; TM display-message "$1" 2>/dev/null; }
 
 # Session cap (issues #28/#70): a restored session holds a slot like any spawn.
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then TM display-message "$cap_msg" 2>/dev/null; exit 1; fi
+if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
 MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
-[ -d "$MAIN/.git" ] || { TM display-message "restore: FLEET_MAIN is not a git checkout" 2>/dev/null; exit 1; }
+[ -d "$MAIN/.git" ] || { refuse "restore: FLEET_MAIN is not a git checkout"; exit 1; }
 
 # All the CHEAP/authoritative checks (valid landed target, session cap, MAIN) have
 # passed synchronously, so a refusal was immediate. Now hand the SLOW tail — the
@@ -91,7 +97,8 @@ MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
 # The bind runs in the dash pane so bare fleet_bg lands on THIS fleet's server; the
 # headless cross-session path (TARGET_SESS set) stays synchronous.
 if [ "$BG_EXEC" != 1 ] && [ -z "$TARGET_SESS" ]; then
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' FLEET_RESTORE_SESS='$SESS' bash '$0' '$TARGET' --exec-bg"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' FLEET_RESTORE_SESS='$SESS' bash '$0' '$TARGET' --exec-bg" \
+    || { refuse "restore: background dispatch failed for $key"; exit 1; }
   exit 0
 fi
 
@@ -158,7 +165,7 @@ case "$kind" in
     # verdict = RESUME\t<worktree>\t<session-id>\t<claude-cmd>; the session id is
     # already embedded in <claude-cmd>, so we only need the worktree + the command.
     IFS=$'\t' read -r _ wt _ cmd <<<"$verdict"
-    [ -d "$wt" ] || { TM display-message "restore: worktree not reconstructed for $key" 2>/dev/null; exit 1; }
+    [ -d "$wt" ] || { refuse "restore: worktree not reconstructed for $key"; exit 1; }
     # cmd = "claude --resume <sid> --fork-session"; route the args through
     # fleet-claude.sh (account rotation + fleet model), dropping the leading "claude".
     # --resume is cwd-scoped, so the window MUST run in the reconstructed worktree
@@ -170,7 +177,7 @@ case "$kind" in
     name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
-      || { TM display-message "restore: new-window failed for $key" 2>/dev/null; exit 1; }
+      || { refuse "restore: new-window failed for $key"; exit 1; }
     # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
     # which resolve to their key via the ledger (issue #319) — so the row reads like
     # the original session (dash/backlog/PR-map recognise a worker; a scratch is
@@ -189,14 +196,14 @@ case "$kind" in
     name="$rname"; [ -z "$name" ] && name="resume-pr${pr}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$MAIN" \
       "'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
-      || { TM display-message "restore: new-window failed for PR $pr" 2>/dev/null; exit 1; }
+      || { refuse "restore: new-window failed for PR $pr"; exit 1; }
     bind_marks "$win" ""
     TM set-window-option -t "$win" @restored 1 2>/dev/null
     announce "$win" "restored PR $pr (from-pr) → $name"
     ;;
   *)
     reason=${verdict#*$'\t'}; [ "$reason" = "$verdict" ] && reason=""
-    TM display-message "restore: nothing resumable for $key — ${reason:-review via /fleet-history}" 2>/dev/null
+    refuse "restore: nothing resumable for $key — ${reason:-review via /fleet-history}"
     exit 0
     ;;
 esac
