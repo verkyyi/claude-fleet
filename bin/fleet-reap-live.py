@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only last-moment liveness gate for dash reaping (#565).
+"""Read-only last-moment liveness gate for dash/automatic reaping (#565).
 
 0 = idle enough to continue the separate Git/confirmation gates; 1 = live or
-unknown, never permission to reap. All tmux calls inherit this fleet's socket.
+unknown, never permission to reap. Tmux inherits the pane's socket unless an
+outside caller selects an explicit fleet socket label.
 """
 
+import argparse
 import os
 from pathlib import Path
 import re
@@ -36,13 +38,14 @@ def agent_name(comm, command):
     return None
 
 
-def live_reason(target, minimum):
+def live_reason(target, minimum, socket_name=None):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
-    state = read("tmux", "display-message", "-p", "-t", target, "#{@claude_state}").strip()
+    tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
+    state = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_state}").strip()
     if state not in ("", "done"):
         return "state:"+state
-    roots = read("tmux", "list-panes", "-t", target, "-F", "#{pane_pid}").split()
+    roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
     if not roots or not all(p.isdigit() for p in roots):
         return "unknown:pane-pids"
     processes = {}
@@ -79,10 +82,14 @@ def live_reason(target, minimum):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("target")
+    parser.add_argument("--socket-name", help="fleet socket label for callers outside tmux")
+    args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", "1800")
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else 1800
     try:
-        reason = live_reason(sys.argv[1], minimum)
+        reason = live_reason(args.target, minimum, args.socket_name)
     except (OSError, subprocess.SubprocessError):
         reason = "unknown:liveness-probe"
     if reason:

@@ -55,8 +55,20 @@ Manual `fleet-cleanup.sh <PR>` keeps its immediate behavior. Use `--auto --dry-r
 to inspect the automatic grace without mutations. The daemon's own `--dry-run`
 still lists cache candidates without fetching their merge times. CLOSED-unmerged
 cleanup keeps its separate liveness policy. This delay does not prove that a
-worker is idle; it preserves all existing cleanup gates and does not add idle-raw
-reaping or a dashboard countdown marker.
+worker is idle. Automatic MERGED cleanup also requires exactly one resolved
+window in explicit `done` state and passes the shared dash process gate: a
+Claude/Codex descendant in any pane younger than `FLEET_REAP_MIN_AGE` (default
+1800 seconds), unreadable metadata, or an active transfer defers with `skip:live`.
+Missing/ambiguous windows are retained; windowless work belongs to
+`worktree-autoclean.sh`. The daemon explicitly selects its fleet's named socket.
+
+The automatic gate runs before history/base updates and again just before
+teardown, after any base lease/pull wait. If the worker resumes during that wait,
+the earlier history row/base update can remain but teardown is refused. These
+checks narrow the race; they are not an atomic lock against new activity. Automatic
+cleanup refuses callers inside the target window/worktree and never queues a
+detached teardown. Manual cleanup retains its existing self-cleanup behavior.
+This does not add idle-raw reaping or a dashboard countdown marker.
 
 | Piece | What |
 |---|---|

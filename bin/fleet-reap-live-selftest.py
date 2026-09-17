@@ -62,6 +62,14 @@ class LiveTests(unittest.TestCase):
         with patch.object(sys, "argv", ["probe", "@1"]), patch.object(live, "read", side_effect=subprocess.TimeoutExpired("tmux", 5)):
             self.assertEqual(live.main(), 1)
 
+    def test_explicit_socket_applies_to_every_tmux_probe(self):
+        replies = iter(["done", "100", "100 1 01:00:00 zsh", "100 zsh"])
+        with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read:
+            self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
+        calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))
+
     @unittest.skipUnless(shutil.which("tmux") and shutil.which("perl"), "tmux/perl absent")
     def test_real_pane_descendant_on_isolated_socket(self):
         tmux = shutil.which("tmux")
@@ -86,6 +94,16 @@ class LiveTests(unittest.TestCase):
                     if "young-agent:codex" in result.stdout or time.monotonic() >= deadline:
                         break
                     time.sleep(0.05)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("young-agent:codex", result.stdout)
+                # The daemon has no TMUX or PATH shim; its explicit socket label
+                # must find this same isolated window/process, never default.
+                outside = dict(os.environ)
+                outside.pop("TMUX", None)
+                outside.pop("TMUX_PANE", None)
+                result = subprocess.run([sys.executable, str(BIN / "fleet-reap-live.py"),
+                                         wid, "--socket-name", label], env=outside,
+                                        text=True, capture_output=True)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn("young-agent:codex", result.stdout)
                 env["FLEET_REAP_MIN_AGE"] = "0"
