@@ -5,11 +5,24 @@ working. A clean worktree, even one with a merged PR, does not authorize killing
 an active session. This is the dash-specific liveness part of #565; the janitor
 keeps its existing, separate worktree/pane/process/rotation guards.
 
-The script resolves its argument to a stable `@window_id` before displaying a
-confirmation popup or dispatching a background tail. Prefer a window ID or fleet
-handle when scripting. Index arguments are still accepted for the existing dash
-row format, so a *sequence of separate calls* using shifting indexes is not safe;
-normalization only pins the target within each call.
+The script accepts stable `@window_id`, `%pane_id`, registered fleet handles
+(such as `a1`), `issue-N` / quoted `#N`, and `scratch-N`. Issue/scratch/handle
+lookup must match exactly one window on this fleet's socket. Missing or duplicate
+matches are refused; an unknown handle never falls back to a window name.
+Scratch lookup uses the bound `@worktree`, falling back to pane cwd only when the
+binding is absent. Handles and issue/scratch keys describe current windows and
+can be reused after a window closes; use a captured `@id` for delayed actions.
+
+Bare numbers, `session:index`, relative targets and arbitrary names are refused
+with `refused:target` (exit 4). The diagnostic shows the current resolution but
+never acts on it. Use `issue-123` for an issue number, not bare `123`. A second
+target or unknown argument returns `refused:bad-args`; batch callers must loop
+over captured IDs. Each resolved target is pinned to `@id` before popup or
+background dispatch. The dashboard reap binding uses its existing second row
+field (`@id`), so renumbering since the row was drawn cannot redirect a reap.
+
+Before dispatch/disposal, stderr describes the pinned window, name, issue, state,
+worktree and reason. Stdout retains its existing single result-token contract.
 
 The read-only `fleet-reap-live.py` gate blocks disposal when:
 
