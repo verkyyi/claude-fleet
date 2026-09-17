@@ -149,7 +149,14 @@ case "$*" in
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
-  *display-popup*) printf 'POPUP %s\n' "$*" >> "$TMLOG" ;;
+  *display-popup*)
+    printf 'POPUP %s\n' "$*" >> "$TMLOG"
+    # Normal popup: execute on a separate terminal (discard UI here), cancel.
+    # Refusal: tmux returns success without ever running the command (#454).
+    if [ "${REFUSE_POPUP:-0}" != 1 ]; then
+      for popup_cmd in "$@"; do :; done
+      printf n | bash -c "$popup_cmd" >/dev/null
+    fi ;;
   *)              printf 'MSG %s\n' "$*" >> "$TMLOG" ;;
 esac
 exit 0
@@ -361,6 +368,13 @@ grep -q 'POPUP' "$TMLOG" || fail "dirty scratch ⌃x should open a confirm popup
 grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window before confirm"
 [ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
 
+# A refused scratch popup must also fall back without disposing on cancel.
+: > "$TMLOG"; : > "$GHLOG"
+TOK=$(printf n | REFUSE_POPUP=1 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9")
+case "$TOK" in *'[y] reap'*) ;; *) fail "refused scratch popup never reached the inline prompt" ;; esac
+grep -q KILL "$TMLOG" && fail "declining scratch fallback killed the window"
+[ -d "$WORK/scr10" ] || fail "declining scratch fallback removed the worktree"
+
 # B8d: confirm y on the DIRTY scratch → still KEEP the worktree, close the window
 # only (git refuses a dirty remove; a confirmed reap never destroys uncommitted work).
 : > "$TMLOG"; : > "$GHLOG"
@@ -451,6 +465,15 @@ grep -q 'KILL' "$TMLOG" && fail "the popup pass must not kill the window itself"
 [ "$TOK" = "skip:needs-confirm" ] || fail "the popup pass must report skip:needs-confirm (got [$TOK]) (#596)"
 [ "$RC" = 3 ] || fail "the popup pass must exit 3 — it reaped nothing (got $RC) (#596)"
 
+# Refused popup must expose the actual confirm inline; declining it stays safe.
+: > "$TMLOG"; : > "$GHLOG"
+TOK=$(printf n | REFUSE_POPUP=1 run_reap "15" "s1:15"); RC=$?
+case "$TOK" in *'[y] reap'*) ;; *) fail "refused issue popup never reached the inline prompt" ;; esac
+[ "$RC" = 3 ] || fail "refused issue popup lost its dispatch result"
+grep -q KILL "$TMLOG" && fail "declining inline confirm killed the issue window"
+[ -s "$GHLOG" ] && fail "declining inline confirm closed an issue"
+[ -d "$WORK/wt15" ] || fail "declining inline confirm removed the worktree"
+
 # D5: --yes on a clean+merged row → reaped SYNCHRONOUSLY. The ⌃x path backgrounds
 # this (issue #304) so the bind returns instantly, but a script's `reaped:full`
 # must mean DONE, not "dispatched" — hence no run-shell re-exec here.
@@ -488,25 +511,12 @@ grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the windo
 [ "$TOK" = "reaped:keep" ] || fail "--yes on a dirty scratch must print reaped:keep (got [$TOK]) (#596)"
 [ "$(srows scratch-12)" = 1 ] || fail "a --yes scratch disposal must index the session (#466+#596)" "$(cat "$LEDGER")"
 
-# --- C. the dash ⌃x bind must be NON-BLOCKING (issue #313) --------------------
-# The blank-dash bug: `ctrl-x:execute(...)` makes fzf SUSPEND + clear the whole
-# display while dash-reap.sh runs — and dash-reap prints nothing to stdout (its
-# messages go to the tmux status line), so the pane sits BLANK for the reap.
-# `execute-silent` does not suspend fzf, so the dash stays visible. Assert the
-# bind on the launcher itself (a static wiring check, no tmux server needed).
-# Pairs with B4 above, which asserts the slow teardown is dispatched via
-# `run-shell -b` (backgrounded) rather than run inline on the bind.
+# --- C. interactive terminal handoff (#451), asynchronous cleanup (#304) ------
+# execute() yields fzf's terminal for the inline confirm. B4 above still asserts
+# that the slow teardown is dispatched via run-shell -b after authorization.
 DASH="$BIN/tmux-dashboard.sh"
-[ -f "$DASH" ] || fail "tmux-dashboard.sh missing next to dash-reap.sh (#313)"
-# The key is `$DASH_KEY_REAP` (ctrl-x by default) — resolved against the tmux
-# prefix by dash-keymap.sh (#556), never a literal chord in the dash source.
-cx="$(grep -n '\$DASH_KEY_REAP:' "$DASH" | head -1)"
-[ -n "$cx" ] || fail "no ⌃x (\$DASH_KEY_REAP) bind found in tmux-dashboard.sh (#313)"
-case "$cx" in
-  *'$DASH_KEY_REAP:execute-silent('*) : ;;                                  # non-blocking — correct
-  *'$DASH_KEY_REAP:execute('*)  fail "ctrl-x uses blocking execute() — blanks the dash; must be execute-silent (#313): $cx" ;;
-  *)                    fail "ctrl-x bind is neither execute-silent nor execute — unexpected (#313): $cx" ;;
-esac
+grep -Fq '$DASH_KEY_REAP:execute(' "$DASH" \
+  || fail "reap bind must hand the terminal to its inline confirm (#451)"
 
-printf 'selftest PASS: fleet_reap_ok gate + dash-reap reap/confirm/cancel + worker & scratch rows recorded before disposal + non-blocking ⌃x bind + non-interactive --yes/no-client/result tokens (#289+#290+#313+#466+#471+#596)\n'
+printf 'selftest PASS: reap gates, confirmation/cancel, ledger, async cleanup, CLI results, refused-popup fallback\n'
 exit 0

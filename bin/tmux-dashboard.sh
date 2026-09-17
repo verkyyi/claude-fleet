@@ -142,27 +142,11 @@ run_dash() {
   # landed peek therefore always opens folded, which is the same default the live
   # list has.
   rm -f "$C/global/dash_fold_landed_${FLEET_SESSION:-default}"
-  # Interactive binds use execute-SILENT so fzf never suspends + clears the whole
-  # display while the bind runs — a bare `execute` blanks the entire dash for the
-  # bind's duration (⌃x reap, issue #313: its output goes to the tmux status line,
-  # so an `execute` reap left the pane BLANK the whole time). The slow tail of each
-  # action is backgrounded (dash-reap.sh → fleet_bg / `run-shell -b`, issue #304) so
-  # the bind also returns instantly. Binds that hand the terminal to an interactive
-  # popup (⌃n/?) keep `execute` on purpose. ⌃s is no longer one of them (issue #444):
-  # a scratch now spawns ON THE KEYSTROKE — no name popup, no confirm (that prompt was
-  # an empty line to dismiss; `--name` still exists off the dash) — so it takes the same
-  # silent + backgrounded (`--bg`) form as the other instant actions.
-  # The two popup binds (⌃n/?) do NOT call `tmux display-popup` directly — they go
-  # through bin/dash-popup.sh (issue #448). A popup needs a CLIENT to draw on, and a
-  # command run from a pane process (which is what an fzf `execute()` bind is) reaches
-  # tmux with no client of its own, so tmux has to guess one; when it can't it exits 1
-  # with "no current client" and draws NOTHING. Inside `execute()` that error is
-  # invisible — our stdout/stderr are /dev/null — so the keystroke just looked dead,
-  # intermittently, exactly across a Termius drop / reconnect / detached hub. The helper
-  # resolves the live client itself, raises @popup_open for the popup's lifetime (the
-  # #308/#431 rail the prefix binds always had and these two skipped), and falls back to
-  # running the command INLINE in the pane when there is no client — so a dash popup
-  # bind can never silently do nothing again.
+  # Instant actions use execute-silent; interactive actions (new/help/reap/PR)
+  # use execute so a refused popup can draw and read inline (#451). Reap's slow
+  # disposal tail still runs through fleet_bg (#304); only the confirm owns the
+  # terminal. dash-popup.sh resolves the client, brackets @popup_open, and checks
+  # whether the popup actually ran before choosing the inline fallback (#448/#454).
   # `?` is the dash's one PRINTABLE bind, and a bound printable key fires its action
   # instead of typing (fzf 0.74.3) — so with the input always visible it is a
   # transform: an EMPTY query → the cheatsheet popup (the key as documented); a
@@ -211,8 +195,8 @@ run_dash() {
     --bind "$DASH_KEY_SCRATCH:execute-silent(bash $BIN/dash-raw-session.sh --bg)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_VIEW:execute-silent(sh $BIN/dash-view-toggle.sh)+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RESTORE:execute-silent(bash $BIN/dash-restore-session.sh {1})+reload(bash $ROWS)" \
-    --bind "$DASH_KEY_PR:execute-silent(bash $BIN/dash-open-pr.sh {1})" \
-    --bind "$DASH_KEY_REAP:execute-silent(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
+    --bind "$DASH_KEY_PR:execute(bash $BIN/dash-open-pr.sh {1})" \
+    --bind "$DASH_KEY_REAP:execute(bash $BIN/dash-reap.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_PIN:execute-silent(bash $BIN/dash-pin-toggle.sh {1})+reload(bash $ROWS)" \
     --bind "$DASH_KEY_RENAME:transform(bash $BIN/dash-rename.sh {1})" \
     --bind "$DASH_KEY_ANSWER:execute(bash $BIN/dash-popup.sh -w 84% -h 70% -- bash $BIN/dash-answer.sh {1})+reload(bash $ROWS)" \

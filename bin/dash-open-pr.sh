@@ -21,5 +21,5 @@ case "$pr" in ''|*[!0-9]*) exit 0 ;; esac    # not a numeric PR
 . "$BIN/fleet-lib.sh" 2>/dev/null || true
 repo=$(fleet_repo_cached "${FLEET_SESSION:-}" 2>/dev/null)
 [ -z "$repo" ] && { fleet_load_conf "${FLEET_SESSION:-}" 2>/dev/null; repo="${FLEET_REPO:-}"; }
-[ -n "$repo" ] && (sh "$BIN/open-url.sh" "https://github.com/$repo/pull/$pr" >/dev/null 2>&1 &)
+[ -n "$repo" ] && sh "$BIN/open-url.sh" "https://github.com/$repo/pull/$pr"
 exit 0
