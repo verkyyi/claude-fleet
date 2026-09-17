@@ -62,7 +62,15 @@ case "${1:-}" in
   has-session)   exit 0 ;;
   list-sessions) [ -n "$label" ] && printf '%s\n' "$label"; exit 0 ;;
   list-windows)
-    for a in "$@"; do [ "$a" = '#{pane_current_path}' ] && { cat "$FAKE_PANEPATHS"; exit 0; }; done
+    for a in "$@"; do
+      [ "$a" = '#{pane_current_path}' ] || continue
+      case "${FAKE_TMUX_EMPTY_SESS:-}" in all|"$label") exit 0 ;; esac
+      if [ "$label" = "${FAKE_TMUX_FAIL_SESS:-}" ]; then
+        cat "$FAKE_PANEPATHS"; exit 1   # partial output is not a complete view
+      fi
+      if [ "$label" = sessB ]; then cat "$FAKE_OTHER_PATHS"; else cat "$FAKE_PANEPATHS"; fi
+      exit 0
+    done
     exit 0 ;;
   *) exit 0 ;;
 esac
@@ -107,6 +115,8 @@ run_collector() {
   FLEET_REPO="" FLEET_REPOS="" FLEET_NOTIFY_CMD="" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_ACCOUNTS_DIR="$WORK/accounts" CCQUOTA_HUB_URL="http://hub.test:8787" FLEET_ACCOUNT_QUOTA_TTL=999999 \
   FAKE_PANEPATHS="$WORK/panepaths" FAKE_GIT_LOG="$GIT_LOG" \
+  FAKE_OTHER_PATHS="$WORK/otherpaths" FAKE_TMUX_FAIL_SESS="${FAKE_TMUX_FAIL_SESS:-}" \
+  FAKE_TMUX_EMPTY_SESS="${FAKE_TMUX_EMPTY_SESS:-}" \
   FAKE_GIT_HANG="${FAKE_GIT_HANG:-}" FAKE_GIT_SLOW="${FAKE_GIT_SLOW:-}" FAKE_GIT_SLOW_SECS="$FAKE_GIT_SLOW_SECS" \
   FLEET_COLLECT_GIT_BUDGET="${BUDGET:-30}" FLEET_COLLECT_GIT_SLOW="${SLOW:-10}" \
     bash "$WORK/bin/tmux-dash-collect.sh" >"$WORK/stdout" 2>"$WORK/stderr"
@@ -184,4 +194,68 @@ grep -q "git took .*s on $WT2" "$WORK/stderr" || fail "5: a worktree slower than
 grep -q "git took .*s on $WT3" "$WORK/stderr" && fail "5: a FAST worktree must not be logged as slow"
 ok "a worktree over FLEET_COLLECT_GIT_SLOW is named on stderr; fast ones are not"
 
-printf 'selftest PASS: collect git phase — no status · branch+ahead-behind · budget · round-robin · slow-log (#552)\n'
+# 6. CACHE SWEEP — complete cross-fleet inventory, distinct escaped path keys ---
+WT4="$WORK/other space_under_score"
+DEAD="$WORK/other/space_under_score"
+mkdir -p "$WORK/conf/fleets/sessB" "$DEAD"
+printf 'FLEET_REPO="acme/other"\n' > "$WORK/conf/fleets/sessB/conf"
+printf '%s\n' "$WT4" > "$WORK/otherpaths"
+seed_dead() {
+  printf 'stale-git' > "$G/git_$(gk "$DEAD")"
+  printf 'stale-ctx' > "$G/ctx_$(gk "$DEAD")"
+}
+dead_kept() { [ -f "$G/git_$(gk "$DEAD")" ] && [ -f "$G/ctx_$(gk "$DEAD")" ]; }
+dead_gone() { [ ! -e "$G/git_$(gk "$DEAD")" ] && [ ! -e "$G/ctx_$(gk "$DEAD")" ]; }
+for wt in "$WT1" "$WT2" "$WT3" "$WT4"; do printf 'live-ctx' > "$G/ctx_$(gk "$wt")"; done
+printf 'native-ctx' > "$G/ctx_codex_sessB_1_2_session"
+printf 'unrelated' > "$G/git_unrelated"
+printf 'outside' > "$WORK/outside"
+ln -s "$WORK/outside" "$G/ctx_$(gk "$WORK/symlink")"
+mkdir "$G/git_$(gk "$WORK/directory")"
+printf 'pending' > "$G/git_$(gk "$WT4").123"
+seed_dead
+run_collector || fail '6: sweep tick must succeed'
+dead_gone || fail '6: inactive worktree caches survived a complete inventory'
+for wt in "$WT1" "$WT2" "$WT3" "$WT4"; do
+  [ "$(cat "$G/ctx_$(gk "$wt")")" = live-ctx ] || fail '6: live context cache was evicted'
+  [ -s "$G/git_$(gk "$wt")" ] || fail '6: live git cache was lost'
+done
+[ "$(cat "$G/ctx_codex_sessB_1_2_session")" = native-ctx ] || fail '6: swept native session cache'
+[ "$(cat "$G/git_unrelated")" = unrelated ] || fail '6: swept an unrelated key'
+[ -L "$G/ctx_$(gk "$WORK/symlink")" ] && [ "$(cat "$WORK/outside")" = outside ] || fail '6: followed or removed a symlink'
+[ -d "$G/git_$(gk "$WORK/directory")" ] || fail '6: removed a directory'
+[ "$(cat "$G/git_$(gk "$WT4").123")" = pending ] || fail '6: removed a live atomic-write temporary'
+ok 'complete cross-fleet sweep removes stale path caches and preserves live/other namespaces'
+
+# An earlier socket fails, then a later socket succeeds: the final exit status
+# alone would authorize an unsafe sweep. Also cover a successful but empty view.
+seed_dead
+for mode in failed empty all_empty malformed; do
+  case "$mode" in
+    failed) FAKE_TMUX_FAIL_SESS=sessA run_collector ;;
+    empty) FAKE_TMUX_EMPTY_SESS=sessA run_collector ;;
+    all_empty) FAKE_TMUX_EMPTY_SESS=all run_collector ;;
+    malformed)
+      printf 'not-an-absolute-path\n' >> "$WORK/panepaths"
+      run_collector
+      printf '%s\n%s\n%s\n' "$WT3" "$WT1" "$WT2" > "$WORK/panepaths"
+      ;;
+  esac
+  dead_kept || fail "7: $mode inventory pruned caches"
+  [ "$(cat "$G/ctx_$(gk "$WT1")")" = live-ctx ] || fail "7: $mode inventory lost the missing fleet's cache"
+done
+ok 'failed, partial, empty and malformed inventories preserve caches'
+
+# Pruning must use the full inventory even when the very first git call wedges.
+for wt in "$WT1" "$WT2" "$WT3" "$WT4"; do printf 'prior-branch\t' > "$G/git_$(gk "$wt")"; done
+printf '%s' "$WT4" > "$G/collect.git.cursor"   # sorted WT4 precedes wt1
+FAKE_GIT_HANG=/wt1 BUDGET=5 run_collector || fail '8: a truncated git phase must still finish the tick'
+[ "$(cursor)" = "$WT1" ] || fail '8: expected the first git worktree to wedge'
+dead_gone || fail '8: sweep must happen before budgeted git work'
+for wt in "$WT1" "$WT2" "$WT3" "$WT4"; do
+  [ "$(cache "$wt")" = $'prior-branch\t' ] || fail '8: evicted an unvisited live git cache'
+  [ "$(cat "$G/ctx_$(gk "$wt")")" = live-ctx ] || fail '8: evicted an unvisited live context cache'
+done
+ok 'a budget-truncated scan retains every live worktree, including those never visited'
+
+printf 'selftest PASS: collect git phase — budget · round-robin · cache sweep (#552/#647)\n'
