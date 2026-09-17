@@ -59,7 +59,7 @@ grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh.*--spawn' "$DASH" \
 ok
 # the ghost text carries the ↵ hint (the hint line used to say `↵ jump`). Since
 # #554 it is DERIVED — bin/dash-agent-prompt.sh; since #559 it is one line naming
-# what ↵ does + the RESOLVED agent-toggle key (`↵ 新开空 scratch · 切换 agent: ⌃v`),
+# what ↵ does + the RESOLVED agent-toggle key (`↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v`),
 # no `<agent>:` prefix hint — so pin (a) that the dash takes it from the helper,
 # not a literal, and (b) the helper's wording, run from a sandboxed bin (no
 # ../fleet.conf, no conf estate, tmux prefix pinned to C-b so the key is ⌃v).
@@ -69,8 +69,8 @@ GW="$(mktemp -d "${TMPDIR:-/tmp}/chip-ghost.XXXXXX")" || fail "mktemp failed"
 mkdir -p "$GW/bin"; for f in dash-agent-prompt.sh dash-keymap.sh fleet-lib.sh; do ln -s "$BIN/$f" "$GW/bin/"; done
 ghost="$(FLEET_SESSION=chipsess FLEET_CONF_DIR="$GW/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$GW" FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$GW/bin/dash-agent-prompt.sh" ghost)"
 rm -rf "$GW"
-[ "$ghost" = '↵ 新开空 scratch · 切换 agent: ⌃v' ] \
-  || fail "dash: the prompt-line ghost text must read '↵ 新开空 scratch · 切换 agent: ⌃v' (#536 ↵ hint; #559 resolved toggle key, no prefix) — got: $ghost"
+[ "$ghost" = '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v' ] \
+  || fail "dash: the prompt-line ghost text must describe unsent prefill and the resolved toggle key — got: $ghost"
 case "$ghost" in *'codex:'*|*'claude:'*) fail "dash: the ghost must not advertise a codex:/claude: prefix (#559)" ;; esac
 ok
 
