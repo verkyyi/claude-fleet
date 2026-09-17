@@ -6,6 +6,8 @@
 
 claude-fleet 把 **tmux、Claude Code、Git worktree 和 GitHub Issues** 串成一套开发工作流：一个任务对应一个窗口、一份独立工作目录；你在看板里分派任务、查看进度，把注意力放在需要你判断的地方。
 
+还可以管理多个 Claude 订阅账号，结合 5 小时／7 天额度安排新会话、提前轮换和恢复任务。
+
 例如，让一个会话修复登录问题，另一个补充导出功能的测试，再让一个完善文档。它们各自在自己的分支和工作目录里推进，通过 PR 交付；团队继续用 GitHub Issues 和 PR 留下需求、讨论和变更记录。
 
 这个项目源于在一台常开的 Mac mini 上，同时运行约 7 个 Claude Code 会话的实践。
@@ -15,7 +17,7 @@ claude-fleet 把 **tmux、Claude Code、Git worktree 和 GitHub Issues** 串成�
 
 <sub>截图来自真实 tmux 界面，使用演示仓库数据。界面中的部分标签和提示仍为英文。</sub>
 
-[快速上手](#快速上手) · [中文团队工作流](#中文团队工作流) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [更多文档](#更多文档)
+[快速上手](#快速上手) · [中文团队工作流](#中文团队工作流) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [订阅与额度](#订阅账号池与额度管理) · [更多文档](#更多文档)
 
 ## 它能帮你做什么
 
@@ -24,6 +26,7 @@ claude-fleet 把 **tmux、Claude Code、Git worktree 和 GitHub Issues** 串成�
 - **从 Issue 直接开工。** 在 backlog（待办面板）选中 GitHub Issue，按回车即可创建 `issue-<编号>` 工作目录并启动 worker。面板支持预览、筛选和优先级调整。
 - **集中查看进度。** dashboard（任务看板）展示会话状态、关联 Issue、模型、PR/CI 状态和可用的上下文用量信息。后台采集器维护缓存，看板读取缓存展示。
 - **随时开一个探索会话。** 不确定需求时，先用 scratch（临时会话）讨论、实验；明确后可将同一会话绑定到 Issue，保留已有上下文继续实现。
+- **把订阅额度纳入调度。** 注册多个 Claude 账号后，可在账号限额时迁移会话；接入 TokenLedger（`ccquota`）后，还能按账号余量分配新任务、提前预警和轮换、安排窗口错峰，并按需暂停自动补任务。详见[订阅与额度管理](#订阅账号池与额度管理)。
 - **管理收尾和长期运行。** worker 通过 PR 交付；后台清理符合条件的已结束任务。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
 
 ![GitHub 待办面板：按里程碑组织 Issue，并显示正在处理的任务](docs/img/backlog.svg)
@@ -217,6 +220,99 @@ FLEET_AGENT="claude"                 # 新会话默认使用的 agent
 tmux -L fleet-infra attach -t fleet-infra
 ```
 
+## 订阅账号池与额度管理
+
+多个任务并行时，除了代码进度，还需要知道：**哪个账号有余量、何时重置、正在运行的任务如何接着做。** Fleet 的账号池在本机所有 fleet 之间共用；没有注册账号时保持单账号用法。这些能力目前面向 **Claude Code**，Codex 的账号轮换和配额尚未接入。
+
+账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/INSTALL.md)。
+
+| 能力 | 实际行为 | 启用条件 |
+|---|---|---|
+| 多订阅账号池 | 每个会话在启动时选择账号；识别订阅限额后暂时停用该账号，优先按提示中的真实重置时间恢复资格 | 注册账号 token |
+| 运行中会话迁移 | 关闭原进程，在同一 worktree 中恢复原会话记录，保留 Issue 等任务绑定 | 注册账号 token |
+| 按余量安排新会话 | 在未到阈值的账号中，按「5 小时剩余额度 × 2 + 7 天剩余额度」评分；余量相近时减少来回切换 | 账号池 + ccquota 读数 |
+| 提前预警与轮换 | 默认用量达到 70% 时提醒会话，达到 85% 时暂时停用该账号并迁移任务；取 5 小时和 7 天用量中较高者 | 账号池 + ccquota 读数 |
+| 5 小时窗口错峰 | 安排空闲账号何时开始使用下一轮窗口，减少多个账号同时耗尽、同时重置的情况 | 账号池 + ccquota；手动应用计划，自动重规划默认关闭 |
+| 模型限额降级 | 区分「某个模型限额」与「账号总额度耗尽」，优先原地切到可用的备用模型 | 账号池 + 可用备用模型 |
+| 自动补任务的额度闸门 | 达到阈值时暂停 dispatcher 自动启动任务；默认阈值为 90%，闸门默认关闭 | ccquota + `FLEET_QUOTA_GATE=1` |
+| 额度数据失效告警 | 区分「读数过期」与「一直刷新却没有数据」，在状态栏和诊断中明确提示 | 已配置账号池与 ccquota hub |
+
+### 先注册账号，再查看会话归属
+
+在每个订阅账号的登录环境中运行 `claude setup-token`，将**返回的 OAuth token 本身**保存为 `~/.config/claude-fleet/accounts/<账号标签>`。每个账号一个文件，例如 `work`、`personal`；目录不存在时先创建。然后将每个文件设为仅本人可读写：
+
+```sh
+chmod 600 ~/.config/claude-fleet/accounts/work
+~/.claude/fleet/bin/fleet-account.sh list
+```
+
+token 保存在仓库外。详细步骤、指定账号子集和重置时间的兜底配置见[账号池设置](docs/MULTI-ACCOUNT.md#setup)。账号在启动时通过环境变量选择，Claude 的设置、hooks 和会话记录仍共用一份配置。
+
+点击底部用量数字，打开「用量 + 账号」面板。手动选账号会调整启动时的初始选择，并迁移当前 fleet 的空闲 Claude 会话；正在执行任务或等待 `/loop` 下一轮的会话不受这条手动路径影响。后续启动仍可能按额度策略重新选账号，并非永久锁定。
+
+在 fleet 的会话内运行以下命令，查看它实际使用的账号：
+
+```sh
+~/.claude/fleet/bin/fleet-account.sh whoami
+```
+
+**切换账号通过「重启 + 恢复」完成。** Claude 进程不能直接热换 token；迁移保留会话记录、工作目录和任务绑定，但不会保留原进程及其中的后台 agent。自动轮换找不到合适的接收账号时，会让会话留在原处，避免反复重启到另一个同样耗尽的账号。
+
+### 接入额度读数，提前预警与轮换
+
+按[安装手册](docs/INSTALL.md)配置 `ccquota`、hub 和查看凭据，在 `fleet.conf` 中导出 hub 地址，让后台服务也能读取。下面其余几项为默认策略，可按需调整：
+
+```sh
+export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
+FLEET_ACCOUNT_WARN_PCT=70
+FLEET_ACCOUNT_CEILING=85
+FLEET_ACCOUNT_PICK=5h
+FLEET_ACCOUNT_PHASE_AUTO=0
+```
+
+查看凭据可保存在 `~/.ccquota/viewer-token`。ccquota 中的账号名称应与 Fleet 的账号标签一致；也可在对应的 `<标签>.conf` 中设置 `CCQUOTA_ACCOUNT=<uuid>` 显式关联。没有读数的账号会显示为缺失，不会被当成「使用了 0%」，也不会作为额度触发迁移的接收目标。
+
+独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
+
+### 可选：窗口错峰和自动补任务闸门
+
+先预览各账号的窗口错峰计划，再决定应用：
+
+```sh
+~/.claude/fleet/bin/fleet-account.sh phase --plan
+~/.claude/fleet/bin/fleet-account.sh phase --plan --apply
+```
+
+计划控制空闲账号的首次使用时机，不修改服务端的重置时间，也不会暂停已经进入窗口的账号。需要时会放宽等待安排，让新会话仍有账号可用。设置 `FLEET_ACCOUNT_PHASE_AUTO=1` 可自动重规划；`FLEET_ACCOUNT_PHASE=0` 则忽略已写入的计划。
+
+**自动补任务闸门与账号轮换是两项独立功能。** 想在额度接近阈值时暂停自动派发，可在 `fleet.conf` 中设置：
+
+```sh
+FLEET_QUOTA_GATE=1
+FLEET_QUOTA_CEILING=90
+# FLEET_QUOTA_ACCOUNT="<订阅uuid>"  # 也可填 "all"；未设置时采用 ccquota 的默认账号
+```
+
+它只限制 dispatcher 自动启动的新任务，不影响你手动启动的任务，也不停止运行中的会话。未安装 ccquota、hub 不可达或额度不可读时，这道闸门会放行，因此不能作为严格的消费上限。
+
+### 模型降级与运行检查
+
+单个模型达到上限时，其他模型可能仍有额度。Fleet 按「账号 + 模型」记录限制，优先通过 `/model` 原地切换到 `FLEET_MODEL_FALLBACK`（默认 `opus`），保留进程和上下文；无法验证切换结果时，才退回到重启并恢复。在限制有效期间，新会话也使用备用模型；重置后新会话回到 `FLEET_MODEL`，已经运行的会话不会自动切回。该路径需要可用的备用模型。
+
+常用检查命令：
+
+```sh
+~/.claude/fleet/bin/fleet-account.sh quota --refresh
+~/.claude/fleet/bin/fleet-quotawatch.sh --status
+~/.claude/fleet/bin/fleet-quotawatch.sh --dry-run
+~/.claude/fleet/bin/fleet-quotaguard.sh --status
+sh ~/.claude/fleet/bin/fleet-doctor.sh
+```
+
+`--status` 区分 `off`、`never`、`fresh`、`stale` 和 `blind`。默认超过 600 秒未更新会提示 `quota stale`；连续 3 次读取为空，即使时间戳很新，也会提示 `quota blind`。状态栏和 doctor 都会暴露这些问题。
+
+本地会话记录统计的 token 用量是**跨账号汇总的估算值**；ccquota 提供的账号级额度读数是另一类数据。二者都应与账单区分。完整机制、手动迁移和排错见[多账号文档](docs/MULTI-ACCOUNT.md)。
+
 ## 进阶功能
 
 ### Claude Code 插件与更新
@@ -248,7 +344,6 @@ claude plugin install fleet@claude-fleet --scope user --yes
 
 ### 可选能力
 
-- **多账号与配额管理。** 支持为新启动的 Claude Code 会话选择账号、在触及额度后切换后续会话使用的账号。已经运行的会话不能直接热切换账号；用量统计中有本地估算值，不能当作官方账单。配置和边界见 [多账号说明](docs/MULTI-ACCOUNT.md)。
 - **SSH 远程使用。** 可以从笔记本连接常开的开发机。项目的 URL 打开工具支持通过 SSH 隧道在本地浏览器打开链接，也有弹窗和剪贴板回退方式，见 [SSH 链接设置](README.md#opening-links-over-ssh)。
 - **Codex worker。** 可通过看板 `Ctrl-V` 或 `FLEET_AGENT=codex` 选择 Codex。工作目录隔离、Issue 绑定和 PR/CI 管理共用，但 Claude Code 的上下文交接、会话恢复和配额管理尚未适配到 Codex。完整能力表由代码生成并检查，见 [Claude Code 与 Codex 对照](README.md#agents-claude-code-and-codex)。
 
@@ -269,6 +364,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 | [术语表](docs/TERMS.md) | fleet、hub、worker、collector 等概念 |
 | [架构说明](docs/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
 | [状态机制](docs/STATE.md) | 会话状态如何产生、展示和纠正 |
+| [多账号与额度](docs/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
 | [任务清理](docs/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |
 | [Issue 消息桥](docs/ISSUE-BRIDGE.md) | Issue 评论与运行中 worker 的消息传递 |
 | [事件输出](docs/EMIT.md) | 可选的会话生命周期事件输出及数据范围 |

@@ -4,7 +4,9 @@
 
 Run a **fleet of parallel Claude Code sessions** in one tmux session — one
 window per task, each in its own git worktree, with **GitHub issues as the
-backlog** and the tmux status bar as a live attention monitor.
+backlog** and the tmux status bar as a live attention monitor. Optional
+**subscription account pools and quota-aware routing** help keep that work
+moving across Claude accounts and their 5-hour / 7-day limits.
 
 Born from driving ~7 concurrent Claude sessions (including long-running
 `/loop`s) against a production monorepo from a single always-on Mac mini.
@@ -76,6 +78,13 @@ demo repo data.</sub>
   each worktree's branch, the repo's PR/CI map, open issues, per-session
   context tokens, and a local 5h/7d token-usage proxy. The dashboard only
   ever reads caches — zero inline git/gh/LLM calls.
+
+- **Subscription-aware scheduling.** Pool Claude subscription accounts, choose
+  where new sessions start, and move existing sessions with their transcripts
+  when an account needs a break. With [TokenLedger](https://github.com/verkyyi/tokenledger)
+  (`ccquota`), use account-wide 5h/7d readings to warn before a limit, rotate
+  early, stagger window starts, and optionally pause autofill. See
+  [subscription and quota management](#subscription-accounts-and-quota-management).
 
 - **Worktree lifecycle**: `cw <branch>` spawns a worktree + Claude window;
   an hourly janitor removes worktrees that are merged + clean + not attached
@@ -303,67 +312,143 @@ so the hub can drive the fleet without ever committing to it.
 Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
 `bin/fleet-migrate-layout.sh` once (idempotent; readers dual-read both layouts).
 
-## Multiple subscription accounts (auto-failover)
+<a id="multiple-subscription-accounts-auto-failover"></a>
 
-A busy fleet drains one subscription's rolling 5-hour window quickly. Register
-**several Claude subscriptions** and the fleet **fails over to a fresh one** the
-moment a session hits its limit — new work keeps flowing instead of parking.
+## Subscription accounts and quota management
 
-Each account is a `claude setup-token` OAuth token dropped in a file (name =
-label, `chmod 600`); the launcher exports `CLAUDE_CODE_OAUTH_TOKEN` per session,
-and the collector rotates the active account when it spots a
-`You've hit your … limit` banner. Off by default — no token files, no change.
+The fleet manages **which Claude subscription each session uses**, as well as
+its task. The account pool is machine-wide, shared across fleets; it is optional
+and off when no token files are registered. Without a pool, your existing login
+continues to work. These capabilities apply to **Claude Code**; the Codex adapter
+has no equivalent quota or account-migration integration yet.
+
+There are two layers: a token pool handles limit banners and session recovery;
+adding [TokenLedger](https://github.com/verkyyi/tokenledger) supplies account-wide
+quota readings for decisions **before** a subscription is exhausted. TokenLedger
+is the product name; its executable and settings are still `ccquota` and
+`CCQUOTA_*`. Its CLI and hub are separate dependencies, covered in
+[the install playbook](docs/INSTALL.md).
+
+| Capability | What happens | Requires |
+|---|---|---|
+| Account pool and reactive failover | A subscription-limit banner benches that account until its parsed reset time, with a configured duration as fallback. New sessions choose an eligible account; affected live sessions can follow via restart + resume. | Account token pool |
+| Live-session migration | Reopen the same worktree and Claude transcript on another account, preserving task bindings. The manual account picker moves idle windows; automatic limit handling moves affected windows. | Account token pool |
+| Per-model fallback | Distinguish one model's cap from the account's overall limit. Switch affected sessions to `FLEET_MODEL_FALLBACK` in place when possible; otherwise restart + resume. | Account token pool; available fallback model |
+| Quota-aware account selection | Rank eligible accounts using `5h headroom × 2 + 7d headroom`, with hysteresis to avoid needless switching. Both windows must be below the account ceiling. | Pool + ccquota hub readings |
+| Early warning and rotation | At 70% utilization, warn sessions; at 85%, bench the account and migrate its sessions to a readable account below the ceiling. Thresholds use the higher of 5h and 7d usage and are configurable. | Pool + ccquota hub readings |
+| 5-hour window staggering | Plan when idle accounts first open their next window, so windows need not all reset together. Automatic replanning is opt-in. | Pool + ccquota hub readings |
+| Autofill quota gate | Optionally stop automatic task dispatch near the selected subscription's ceiling (90% by default). Manual spawns and running sessions are unaffected by this gate. | ccquota hub; `FLEET_QUOTA_GATE=1` |
+| Quota-watch health | Surface stale readings and repeated empty fetches in the status bar and doctor, so missing data is visible. | Configured pool + ccquota hub |
+
+### Register accounts and see which one a session uses
+
+Run `claude setup-token` under each subscription's login. Create the accounts
+directory if needed, then save **only the returned OAuth token** in
+`~/.config/claude-fleet/accounts/<label>`, one file per account
+(for example `work` and `personal`), and restrict each file to mode `600`:
 
 ```sh
-mkdir -p ~/.config/claude-fleet/accounts
-printf '%s\n' "$(claude setup-token)" > ~/.config/claude-fleet/accounts/work   # per account
-chmod 600 ~/.config/claude-fleet/accounts/*
-bin/fleet-account.sh list          # pool · ● active · limited state
+chmod 600 ~/.config/claude-fleet/accounts/work
+~/.claude/fleet/bin/fleet-account.sh list
 ```
 
-Switch by hand by **clicking the usage stat** in the status-bar footer — it
-opens the usage + account modal, with the account pool as a selectable body
-under the usage detail. Enter sets the account new sessions start from; Esc
-cancels. There is no fixed account and so no footer account chip: each spawn
-re-picks on ccquota headroom (#513), and the per-window truth is
-`fleet-account.sh whoami [<window-id>]` — bare, it answers for the pane you run it
-in.
+Full setup, optional account subsets and per-account fallback reset durations
+are in [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#setup). Tokens stay outside
+the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
+settings, hooks and transcripts continue to use the shared Claude configuration.
 
-A **per-model cap** is a different wall: `You've hit your Fable 5 limit · resets
-Sep 6` leaves the account's 5h/7d headroom intact for every other model, so the
-fleet does not bench the account for it (#524). It records the (account, model)
-cap until the banner's reset, switches the walled sessions to
-`FLEET_MODEL_FALLBACK` (default `opus`) **in place** — `/model` typed at their
-own prompt, so the process, its background agents and its context all survive,
-~5s per window, detected on the 60s quotawatch tick (#569; a flip it cannot
-verify falls back to `claude --resume --model`) — and every new session on that
-account launches on the fallback until the cap resets, then goes back to
-`FLEET_MODEL` on its own.
-
-Works on macOS and Linux (a token env var, not `CLAUDE_CONFIG_DIR` — which the
-macOS Keychain ignores). One caveat: an **already-running** session can't
-hot-swap accounts; only newly-spawned ones pick the fresh subscription. Full
-design, setup, and limits: **[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md)**.
-
-### Stop autofill before the window closes (optional)
-
-The failover above is **reactive** — it rotates once a session has already been
-refused. If you run [TokenLedger](https://github.com/verkyyi/tokenledger) — the
-product is TokenLedger, the binary you install and type is still `ccquota` — the
-dispatcher can also stop *proactively*, before the last of a window goes to
-whatever happened to be labelled `autofill`:
+Click the footer usage stat to open the **usage + account modal**. Selecting an
+account changes the starting choice and migrates this fleet's idle Claude
+windows; working and looping windows are left alone by this manual path. A new
+spawn can reselect an account using the quota policy, so the selection is not a
+permanent pin. From inside a fleet pane, check that session's actual account:
 
 ```sh
-bin/fleet-quotaguard.sh --status     # what it would decide right now
-# then, in fleet.conf:
-FLEET_QUOTA_GATE=1                   # off by default
+~/.claude/fleet/bin/fleet-account.sh whoami
+```
+
+**Account changes require a restart.** A live Claude process cannot hot-swap its
+token; the fleet closes it and resumes the same transcript in the same worktree
+under the new account. That preserves conversation history, not the original
+process or its background agents. When no suitable migration destination exists,
+the fleet leaves the sessions in place instead of repeatedly restarting them
+onto another exhausted account.
+
+### Add account-wide quota readings and early rotation
+
+Configure the `ccquota` CLI, its hub and viewer credential as described in the
+[install playbook](docs/INSTALL.md), then set the hub URL in `fleet.conf` so the
+background services inherit it. The remaining values below are the defaults:
+
+```sh
+export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
+FLEET_ACCOUNT_WARN_PCT=70
+FLEET_ACCOUNT_CEILING=85
+FLEET_ACCOUNT_PICK=5h
+FLEET_ACCOUNT_PHASE_AUTO=0
+```
+
+The viewer credential can live in `~/.ccquota/viewer-token`. Match each ccquota
+account name to its fleet label, or set `CCQUOTA_ACCOUNT=<uuid>` in the label's
+companion `<label>.conf` file. Unreadable or unmapped accounts have **no quota
+reading**, rather than a misleading 0%; they are not destinations for a
+quota-triggered migration.
+
+The quota watch has its own roughly 60-second daemon, with a collector fallback.
+It reads each account's 5h/7d utilization and reset times across devices, sends a
+warning at the configured threshold, then rotates and migrates at the ceiling.
+Warnings and ceiling actions are deduplicated per account/reset window. With
+no usable quota data, the proactive policy falls back to banner-based handling;
+work is not blocked just because the optional hub is unavailable.
+
+For optional window staggering, inspect a plan before applying it:
+
+```sh
+~/.claude/fleet/bin/fleet-account.sh phase --plan
+~/.claude/fleet/bin/fleet-account.sh phase --plan --apply
+```
+
+This schedules the first use of idle accounts; it does not change the provider's
+reset clock or hold an account already mid-window. A phase hold is relaxed when
+needed to keep an account available for a spawn. Set `FLEET_ACCOUNT_PHASE_AUTO=1`
+to replan automatically, or `FLEET_ACCOUNT_PHASE=0` to ignore a written plan.
+
+The **autofill gate is separate from account rotation** and off by default:
+
+```sh
+# In fleet.conf; choose the subscription the gate should judge.
+FLEET_QUOTA_GATE=1
 FLEET_QUOTA_CEILING=90
+# FLEET_QUOTA_ACCOUNT="<subscription-uuid>"  # or "all"; unset uses ccquota's default
 ```
 
-`fleet-dispatch.sh` consults it once per tick, exactly like the disk guard, and
-it fails **open**: no ccquota, no hub, an unreachable hub or an unreadable limit
-all proceed and say why. This only gates **autofill** — your own spawns, and
-every already-running session, are untouched.
+It gates only the dispatcher's automatic spawns. Missing ccquota, an unreachable
+hub or an unreadable limit leaves the gate open; it is not a hard spending cap.
+
+### Model caps and operational checks
+
+A cap on one model need not exhaust the account's other models. The fleet tracks
+caps per `(account, model)` and, where a usable fallback exists, keeps the account
+in service. It tries an in-place `/model` switch, preserving the process and
+context; an unverifiable switch falls back to restart + resume. New sessions use
+`FLEET_MODEL_FALLBACK` (default `opus`) while the cap holds and return to
+`FLEET_MODEL` after reset. Existing sessions stay on their fallback model.
+
+Use these commands to inspect the policy and data:
+
+```sh
+~/.claude/fleet/bin/fleet-account.sh quota --refresh
+~/.claude/fleet/bin/fleet-quotawatch.sh --status
+~/.claude/fleet/bin/fleet-quotawatch.sh --dry-run
+~/.claude/fleet/bin/fleet-quotaguard.sh --status
+sh ~/.claude/fleet/bin/fleet-doctor.sh
+```
+
+`--status` distinguishes `off`, `never`, `fresh`, `stale` and `blind`. By default,
+readings older than 600 seconds raise `quota stale`; three consecutive empty
+fetches raise `quota blind` even if the fetch timestamp is recent. The status
+bar and doctor expose both failures. Full policies and recovery commands:
+[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md).
 
 ## Fleet commands (`/skill`s)
 
@@ -491,14 +576,12 @@ watching.
   so navigate by name — not a memorized index.
 - The `Notification` hook (red/bell) can lag a question by up to ~1 min
   (Claude Code's idle threshold); the classifier corrects stragglers.
-- The token-usage figures are a **local proxy** — the official rate-limit %
-  isn't exposed by any API. Weights: output×1 + input×0.25 + cache-write×0.25
-  + cache-read×0.02 over rolling 5h/7d windows. When a session happens to print
-  the official "N% of your weekly limit" line, the collector scrapes it and uses
-  it to **color the footer usage stat** (indigo → yellow ≥`FLEET_USAGE_WARN_PCT`
-  → red ≥`FLEET_USAGE_CRIT_PCT`) rather than adding another always-on footer
-  segment; the full detail (which limit, reset time, account) is in the usage +
-  account modal — click the usage stat.
+- Local transcript token counters are a **usage proxy**, aggregated across
+  accounts, not a subscription quota or bill. Weights: output×1 + input×0.25 +
+  cache-write×0.25 + cache-read×0.02 over rolling 5h/7d windows. With TokenLedger
+  configured, the account pool additionally uses **account-wide quota readings**
+  from ccquota; these are separate from that local estimate. Click the footer
+  usage stat for usage/limit details and the account pool.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
