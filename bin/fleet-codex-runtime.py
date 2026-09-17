@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import select
+import re
 import shutil
 import signal
 import subprocess
@@ -107,11 +108,13 @@ that layer as overrides, then apply -c flags above it in their original order.
         config = tomllib.load(stream)
     layers = []
     for key, value in config.items():
-        layers.extend(['-c', json.dumps(key) + '=' + toml_value(value)])
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', key):
+            raise ValueError('unsupported top-level Codex profile key')
+        layers.extend(['-c', key + '=' + toml_value(value)])
     return layers + flags
 
 
-def run(argv):
+def run(argv, prepare=None, tick=None):
     if '--no-daemon' in argv:
         return subprocess.call(['codex', *argv])
     flags = server_flags(argv)
@@ -120,11 +123,15 @@ def run(argv):
     directory = tempfile.mkdtemp(prefix='fleet-codex-', dir='/tmp')
     remote = 'unix://' + directory + '/worker.sock'
     env = dict(os.environ, FLEET_CODEX_REMOTE=remote)
+    env.pop('CODEX_THREAD_ID', None)
+    env.pop('CODEX_SESSION_ID', None)
     read_fd, write_fd = os.pipe()
     guardian = client = None
     ended = []
     old_handlers = {}
     try:
+        if prepare:
+            prepare(remote, env)
         for sig in (signal.SIGHUP, signal.SIGTERM):
             old_handlers[sig] = signal.signal(sig, lambda signum, frame: ended.append(signum))
         # Ctrl-C belongs to the TUI (interrupt a turn), not this supervisor.
@@ -146,7 +153,11 @@ def run(argv):
         if guardian.poll() is not None:
             raise RuntimeError('private Codex server exited before creating its socket')
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
+        next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:
+            if tick and time.monotonic() >= next_tick:
+                tick()
+                next_tick = time.monotonic() + 1
             time.sleep(0.1)
         if ended:
             return 128 + ended[0]

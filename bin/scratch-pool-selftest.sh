@@ -197,5 +197,19 @@ fleet_scratch_free "$MAIN" "$slug" "$wt"
 git -C "$MAIN" show-ref --verify --quiet "refs/heads/$slug" && fail "I fleet_scratch_free left the branch behind"
 ok "I fleet_scratch_alloc/free round-trips on a real repo"
 
+# Provider and account-home ownership gate a warm Codex claim.
+reset_state; mkfleet; mkconf 1
+printf 'FLEET_AGENT=codex\nFLEET_CODEX_HOME=%q\n' "$WORK/codex-home" >> "$FLEET_CONF_DIR/fleets/tf/conf"
+addwin '@9' 'tf-pool' 'warm-codex' 100 30
+setopt_ '@9' pool 1; setopt_ '@9' pool_ready 1; setopt_ '@9' pool_slug scratch-1
+setopt_ '@9' worktree "$WORK/wt1"; setopt_ '@9' pool_born "$(date +%s)"
+setopt_ '@9' pool_account "codex:$WORK/codex-home"
+out=$(bash "$POOL" claim tf); [ -z "$out" ] || fail 'Codex fleet claimed a Claude entry'
+setopt_ '@9' pool_agent codex; setopt_ '@9' pool_account 'codex:another-home'
+out=$(bash "$POOL" claim tf); [ -z "$out" ] || fail 'Codex fleet claimed another account home'
+setopt_ '@9' pool_account "codex:$WORK/codex-home"
+out=$(bash "$POOL" claim tf); [ -n "$out" ] || fail 'matching warm Codex entry was not claimed'
+ok 'J Codex pool matches provider and account home before moving the window'
+
 printf '\n%s tests passed\n' "$pass"
 exit 0

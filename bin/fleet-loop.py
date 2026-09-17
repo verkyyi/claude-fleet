@@ -16,6 +16,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import runpy
 import os
 from pathlib import Path
 import re
@@ -24,7 +25,6 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 
 
@@ -314,58 +314,28 @@ def bridge(args):
     directory = manifest.parent / 'loop'
     directory.mkdir(mode=0o700)  # No accidental restart/duplicate controller.
     path = directory / 'state.json'
-    runtime = Path(tempfile.mkdtemp(prefix='fleet-loop-', dir='/tmp'))
-    sock = runtime / 'api.sock'  # Well below macOS's Unix socket path limit.
     r = {'schema_version': 1, 'id': ident, 'status': 'unbound', 'manifest': str(manifest),
          'fleet': m['fleet'], 'source': m['source'], 'worktree': m['workspace']['path'],
-         'schedule': schedule, 'socket': str(sock), 'thread_id': None, 'deliveries': 0,
+         'schedule': schedule, 'socket': None, 'thread_id': None, 'deliveries': 0,
          'controller_pid': os.getpid()}
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))
     current(r)
     save(path, r)
-    env = dict(os.environ, FLEET_LOOP_RECORD=str(path), FLEET_CODEX_REMOTE='unix://' + str(sock))
-    env.pop('CODEX_THREAD_ID', None)
-    env.pop('CODEX_SESSION_ID', None)
-    overrides = []
-    for i, arg in enumerate(args[:-1]):
-        if arg == '-c':
-            overrides.extend(['-c', args[i+1]])
-    # The app server owns all tools in THIS pane, so it inherits THIS fleet's
-    # TMUX/FLEET environment. It is private, never shared across fleet sockets.
-    server = client = None
+
+    def prepare(remote, env):
+        r['socket'] = remote[7:]
+        save(path, r)
+        env['FLEET_LOOP_RECORD'] = str(path)
+
+    runtime = runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))
     try:
-        with (directory / 'server.log').open('ab') as log:
-            server = subprocess.Popen(['codex', 'app-server', '--listen', 'unix://' + str(sock), *overrides],
-                                      env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
-        end = time.monotonic() + 15
-        while not sock.exists() and server.poll() is None and time.monotonic() < end:
-            time.sleep(0.1)
-        if not sock.exists():
-            raise RuntimeError('Codex loop server did not start; inspect ' + str(directory / 'server.log'))
-        client = subprocess.Popen(['codex', '--remote', 'unix://' + str(sock), *args], env=env)
-        while client.poll() is None:
-            if server.poll() is not None:
-                raise RuntimeError('Codex loop server exited')
-            dispatch(path)
-            time.sleep(1)
-        return client.returncode
+        return runtime['run'](args, prepare=prepare, tick=lambda: dispatch(path))
     finally:
-        # These are children created here, never another pane/server. The TUI
-        # ending also ends its scheduler and provider runtime.
+        # The common guardian owns server shutdown, including a killed scheduler.
         with locked(path) as final:
             final['status'] = 'stopped'
             final['detail'] = 'Codex TUI/controller ended; no automatic restart'
             save(path, final)
-        for child in (client, server):
-            if child and child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
-        sock.unlink(missing_ok=True)
-        runtime.rmdir()
 
 
 def from_claude(a):

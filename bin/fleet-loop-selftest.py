@@ -180,7 +180,7 @@ class BridgeTest(unittest.TestCase):
             codex.write_text('''#!/usr/bin/env python3
 import base64,hashlib,json,os,pathlib,socket,struct,subprocess,sys,threading,time
 root=pathlib.Path(os.environ['LOOP_TEST_ROOT']);args=sys.argv[1:]
-if args[:1]==['app-server']:
+if 'app-server' in args:
  assert os.environ['FLEET_CODEX_REMOTE']==args[args.index('--listen')+1]
  (root/'server-argv.json').write_text(json.dumps(args));(root/'server-pid').write_text(str(os.getpid()))
  sock=socket.socket(socket.AF_UNIX);sock.bind(args[args.index('--listen')+1].removeprefix('unix://'));sock.listen()

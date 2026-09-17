@@ -583,7 +583,8 @@ degrading to a pane-content heuristic.
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | partial | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout; reopening uses native resume/fork. Legacy Claude rows remain readable. Account migration is a separate adapter; no Codex history falls back to a Claude cwd transcript. |
 | multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over. |
 | per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch. |
-| MCP servers + subagent model | ✅ | ❌ | Deliberately skipped, **not** a Codex limit: Codex has both (`codex mcp`, its own subagents). `FLEET_MCP_CONFIG` / `FLEET_SUBAGENT_MODEL` are Claude-shaped and are not materialised into Codex config. |
+| MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists; `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy. |
+| warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path. |
 <!-- codex-matrix:end -->
 
 That table is **generated** from the `MATRIX` block in
