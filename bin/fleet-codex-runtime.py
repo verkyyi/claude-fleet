@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Run a Codex TUI and its own local app-server with one bounded lifetime.
+
+The guardian owns the server and reads a pipe held ONLY by the supervisor.
+EOF, including a SIGKILLed supervisor, tears down the server. A shell EXIT trap
+alone cannot provide that guarantee. No shared daemon or TCP port is used.
+"""
+import json
+import os
+from pathlib import Path
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def stop(process):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=5)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def guard(fd, directory, argv):
+    process = None
+    ended = []
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(sig, lambda signum, frame: ended.append(signum))
+    try:
+        with open(Path(directory) / 'server.log', 'ab', buffering=0) as log:
+            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log,
+                                       stderr=log, start_new_session=True)
+        while process.poll() is None and not ended:
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if ready and not os.read(fd, 1):
+                break
+        return 0
+    finally:
+        stop(process)
+        os.close(fd)
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def toml_value(value):
+    if isinstance(value, dict):
+        return '{' + ','.join(json.dumps(k) + '=' + toml_value(v) for k, v in value.items()) + '}'
+    if isinstance(value, list):
+        return '[' + ','.join(toml_value(v) for v in value) + ']'
+    if isinstance(value, (str, bool, int, float)):
+        return json.dumps(value, ensure_ascii=False)
+    raise ValueError('unsupported profile value: ' + type(value).__name__)
+
+
+def server_flags(argv):
+    """Forward config to the server: remote TUI forwards only selected keys.
+
+CLI profiles are user-home layers; app-server has no profile flag. Materialise
+that layer as overrides, then apply -c flags above it in their original order.
+"""
+    flags, profile = [], ''
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == '--':
+            break
+        if arg in ('-c', '--config', '--enable', '--disable', '-p', '--profile'):
+            if i + 1 >= len(argv):
+                raise ValueError('missing value for ' + arg)
+            value = argv[i + 1]
+            if arg in ('-p', '--profile'):
+                profile = value
+            else:
+                flags.extend([arg, value])
+            i += 2
+            continue
+        if arg.startswith(('--config=', '--enable=', '--disable=')):
+            flags.append(arg)
+        elif arg.startswith('--profile='):
+            profile = arg.split('=', 1)[1]
+        elif arg.startswith('-p') and arg != '-p':
+            profile = arg[2:]
+        elif arg.startswith('-c') and arg != '-c':
+            flags.extend(['-c', arg[2:]])
+        elif arg == '--strict-config':
+            flags.append(arg)
+        i += 1
+    if not profile:
+        return flags
+    if '/' in profile or profile in ('.', '..'):
+        raise ValueError('invalid Codex profile name')
+    try:
+        import tomllib
+    except ImportError:
+        raise ValueError('Codex profiles with fleet private servers require Python 3.11+') from None
+    home = Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser()
+    with (home / (profile + '.config.toml')).open('rb') as stream:
+        config = tomllib.load(stream)
+    layers = []
+    for key, value in config.items():
+        layers.extend(['-c', json.dumps(key) + '=' + toml_value(value)])
+    return layers + flags
+
+
+def run(argv):
+    if '--no-daemon' in argv:
+        return subprocess.call(['codex', *argv])
+    flags = server_flags(argv)
+    # macOS AF_UNIX paths are limited to 104 bytes. TMPDIR may itself exceed
+    # that; /tmp + a random 0700 directory is short and private on both OSes.
+    directory = tempfile.mkdtemp(prefix='fleet-codex-', dir='/tmp')
+    remote = 'unix://' + directory + '/worker.sock'
+    env = dict(os.environ, FLEET_CODEX_REMOTE=remote)
+    read_fd, write_fd = os.pipe()
+    guardian = client = None
+    ended = []
+    old_handlers = {}
+    try:
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            old_handlers[sig] = signal.signal(sig, lambda signum, frame: ended.append(signum))
+        # Ctrl-C belongs to the TUI (interrupt a turn), not this supervisor.
+        old_handlers[signal.SIGINT] = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        guardian = subprocess.Popen([sys.executable, __file__, '--guard', str(read_fd), directory,
+                                     'codex', *flags, 'app-server', '--listen', remote],
+                                    env=env, pass_fds=(read_fd,), stdin=subprocess.DEVNULL,
+                                    start_new_session=True)
+        os.close(read_fd)
+        read_fd = -1
+        deadline = time.monotonic() + 15
+        sock = Path(directory) / 'worker.sock'
+        while not sock.exists() and guardian.poll() is None and not ended:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('private Codex server did not become ready within 15s')
+            time.sleep(0.05)
+        if ended:
+            return 128 + ended[0]
+        if guardian.poll() is not None:
+            raise RuntimeError('private Codex server exited before creating its socket')
+        client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
+        while client.poll() is None and guardian.poll() is None and not ended:
+            time.sleep(0.1)
+        if ended:
+            return 128 + ended[0]
+        if client.poll() is None:
+            raise RuntimeError('private Codex server exited while the TUI was running')
+        return client.returncode if client.returncode >= 0 else 128 - client.returncode
+    finally:
+        # The TUI shares our process group; signal only its exact child PID.
+        if client is not None and client.poll() is None:
+            client.terminate()
+            try:
+                client.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                client.kill(); client.wait()
+        os.close(write_fd)  # guardian owns server shutdown, even on parent death
+        if read_fd >= 0:
+            os.close(read_fd)
+        if guardian is not None:
+            guardian.wait(timeout=8)
+        else:
+            shutil.rmtree(directory, ignore_errors=True)
+        for sig, handler in old_handlers.items():
+            signal.signal(sig, handler)
+
+
+if __name__ == '__main__':
+    try:
+        if sys.argv[1:2] == ['--guard']:
+            sys.exit(guard(int(sys.argv[2]), sys.argv[3], sys.argv[4:]))
+        args = sys.argv[1:]
+        if args[:1] == ['--']:
+            args = args[1:]
+        sys.exit(run(args))
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        print('fleet-codex-runtime: ' + str(exc), file=sys.stderr)
+        sys.exit(1)
