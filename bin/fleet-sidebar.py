@@ -18,6 +18,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
+VIEW_VERSION = "3"
 
 
 def run(args, **kwargs):
@@ -72,6 +73,15 @@ def move_view(pane, worker, width, select=False):
     return not commands or run(["tmux", *commands]).returncode == 0
 
 
+def leave_navigation(session):
+    # A hidden sidebar must not keep intercepting a client's arrow keys.
+    for line in tmux("list-clients", "-t", session, "-F",
+                     US.join(("#{client_name}", "#{client_key_table}"))).splitlines():
+        client, _, table = line.partition(US)
+        if table == "fleet-sidebar":
+            tmux("switch-client", "-c", client, "-T", "root")
+
+
 def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
@@ -85,13 +95,15 @@ def sync(session, enabled, width, lock):
               name not in ("plan", "dash", "backlog") and
               bool(issue or raw == "1" or worktree) and bool(workers) and
               int(cols) >= width + 1 + 80)
+    if not wanted or zoomed == "1":
+        leave_navigation(session)
     current, reusable = [], []
     for pane in all_panes:
         if pane[2] != "1":
             continue
-        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == "2" and not current:
+        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == VIEW_VERSION and not current:
             current.append(pane)
-        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == "2" and not reusable:
+        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == VIEW_VERSION and not reusable:
             reusable.append(pane)
         else:
             remove_view(pane[0])
@@ -114,7 +126,7 @@ def sync(session, enabled, width, lock):
     if not pane.startswith("%"):
         return
     tmux("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
-         "set-option", "-p", "-t", pane, "@sidebar_version", "2", ";",
+         "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_VERSION, ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
 
@@ -181,6 +193,7 @@ def ui(screen, session, worker, lock):
                                      curses.COLOR_GREEN, curses.COLOR_MAGENTA), 1):
         curses.init_pair(number, color, -1)
     curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_YELLOW)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
@@ -223,34 +236,35 @@ def ui(screen, session, worker, lock):
         if selected not in ids:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
-        page = max(1, height - 3)
+        page = max(1, height - 2)
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index < offset:
             offset = index
         elif index >= offset + page:
             offset = index - page + 1
 
-        def put(y, text, attr=0):
+        def put(y, text, attr=0, fill=False):
             if 0 <= y < height:
                 try:
+                    if fill:
+                        screen.hline(y, 0, " ", max(0, width - 1), attr)
                     screen.addstr(y, 0, clip(text, max(0, width - 1)), attr)
                 except curses.error:
                     pass  # a resize may race this paint
 
         screen.erase()
-        put(0, " TASKS · FOCUS" if navigation else " TASKS", curses.A_BOLD |
-            (curses.color_pair(5) if navigation else curses.A_DIM))
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label) in enumerate(rows[offset:offset + page], 1):
+        for y, (wid, state, glyph, label) in enumerate(rows[offset:offset + page]):
             attr = curses.color_pair(colors.get(state, 0))
-            if navigation and wid == selected and wid != window:
-                attr |= curses.A_REVERSE
             if wid == window:
                 attr = curses.color_pair(5) | curses.A_BOLD
+            if navigation and wid == selected:
+                attr = curses.color_pair(6) | curses.A_BOLD
             marker = "▶" if wid == window else "›" if navigation and wid == selected else " "
-            put(y, marker + " " + glyph + " " + label, attr)
-        put(height - 2, " ↑↓ ↵ ←→ · Esc: worker" if navigation else
-            " Focus: WORKER · prefix E", curses.A_DIM)
+            put(y, marker + " " + glyph + " " + label, attr,
+                fill=wid == window or (navigation and wid == selected))
+        put(height - 2, " ↑↓ choose · ↵/Esc: worker" if navigation else
+            " Keyboard: WORKER →", curses.A_DIM)
         put(height - 1, " ‹ Hide · prefix e", curses.A_DIM)
         screen.refresh()
         key = screen.getch()
@@ -281,8 +295,10 @@ def ui(screen, session, worker, lock):
             except curses.error:
                 continue
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
-                if 1 <= y <= page and offset + y - 1 < len(rows):
-                    jump(session, rows[offset + y - 1][0], pane, lock)
+                refresh_at = 0
+                if 0 <= y < page and offset + y < len(rows):
+                    selected = rows[offset + y][0]
+                    jump(session, selected, pane, lock)
                     refresh_at = 0
                 elif y == height - 1:
                     run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])

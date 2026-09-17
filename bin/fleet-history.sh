@@ -627,10 +627,9 @@ cmd_rows() {
 
   # header row (fzf --header-lines=1 pins it) — identical column layout to the live
   # list's header so the two read as one table.
-  local h_w h_i h_n h_a h_p h_c h_pad h_gap
-  fld 3  "id";     h_w=$fld_out    # the live list's @wid column (#566) — see below
+  local h_i h_n h_a h_p h_c h_pad h_gap
   fld 5  "issue";  h_i=$fld_out
-  fld 22 "window"; h_n=$fld_out
+  fld 26 "window"; h_n=$fld_out
   fld "$ACTW" "act"; h_a=$fld_out
   fld 7  "PR";     h_p=$fld_out
   fld 4  "dep";    h_c=$fld_out   # a landed row has no ctx; the cell carries its deploy state (#541)
@@ -638,7 +637,7 @@ cmd_rows() {
   # the live list's flex span is blank since the summary column retired (#535).
   h_pad=$(( USABLE - LEFTW - 5 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 5 = len("title")
   printf -v h_gap '%*s' "$h_pad" ''
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   # Rows are BUFFERED, not printed straight out (they used to be): nesting has to
@@ -717,22 +716,15 @@ cmd_rows() {
     # (issue #529). #502 blanked this cell and left a scratch with no id at all;
     # the tell is the COLOUR — green=issue, indigo=scratch — since a GREEN `~<N>`
     # was "indistinguishable from `#<N>` at a glance".
-    # #566 dropped the `~<N>` branch from the LIVE list, where a scratch now has a
-    # window HANDLE in the `id` column to be addressed by. A landed row has no
-    # live window and therefore no handle, so `~<N>` is the only id it will ever
-    # have — it stays here, and dropping it would re-create #502 exactly.
+    # Live scratches use their task descriptions. A landed row has no live
+    # window, so keep its historical key for CLI lookup and restoration.
     local issd icol=$GN
     issd=$(key_label "$iss")
     is_scratch_key "$iss" && icol=$IN
-    # id cell (#566): @wid is a LIVE-window handle and a landed row has no window,
-    # so the cell carries the muted dot this skeleton already uses for "no live
-    # meaning" (the ctx column's own convention). It is not dead space: it holds
-    # the live list's `id` column open so ⌃t keeps both lists on one grid.
     # `└ ` marks a nested row, the live list's own indent (#503) — only when the
     # parent really is the line above, which after the fold filter it always is.
     [ "$ldepth" -gt 0 ] && wname="└ $wname"
-    local f_hnd f_iss f_name f_act f_pr f_ctx
-    fld 3  "·";       f_hnd=$fld_out
+    local f_iss f_name f_act f_pr f_ctx
     fld 5  "$issd";   f_iss=$fld_out
     # window cell: pad/clip by DISPLAY width, not code points — the same #534 fix
     # the live dash carries. Since issue #579 fleet_win_name derives CJK names, so a
@@ -740,9 +732,9 @@ cmd_rows() {
     # right-pinned act/PR/dep block over, exactly as it did on the live rows. ASCII
     # stays on fld()'s fork-free path; only a non-ASCII name pays the wcwidth fork.
     case "$wname" in
-      *[![:ascii:]]*) fleet_clip_display 22 "$wname"
-                      printf -v f_name '%s%*s' "${clip_out:-}" $(( 22 - ${clip_w:-0} )) '' ;;
-      *)              fld 22 "$wname"; f_name=$fld_out ;;
+      *[![:ascii:]]*) fleet_clip_display 26 "$wname"
+                      printf -v f_name '%s%*s' "${clip_out:-}" $(( 26 - ${clip_w:-0} )) '' ;;
+      *)              fld 26 "$wname"; f_name=$fld_out ;;
     esac
     fld "$ACTW" "$act"; f_act=$fld_out
     fld 7  "$prcell"; f_pr=$fld_out
@@ -799,7 +791,7 @@ cmd_rows() {
     local pad=$(( USABLE - LEFTW - dw - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
     lbuf+="$lgrp"$'\t'"$ldepth"$'\t'"$lrow"$'\t'
-    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
+    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
   done <<< "$out"
 
   # Emit newest-first, nested: the group slot first (a root's own position, which a

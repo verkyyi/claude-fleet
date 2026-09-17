@@ -18,8 +18,8 @@
 #      than two windows answering to `b3`. A /fleet-handoff cycle reuses the same
 #      PANE, so the handle must survive `respawn-pane` untouched — asserted here
 #      so a future change cannot silently break it.
-#   E. THE ROW — the rendered dash row puts the handle in the leftmost `id`
-#      column, and the `issue` column is issue-ONLY: `#<N>` for a worker, BLANK
+#   E. THE ROW — the rendered dash row hides the internal handle, and the
+#      `issue` column is issue-ONLY: `#<N>` for a worker, BLANK
 #      for a scratch (the `~<N>` sigil moved out in #566; the landed view keeps
 #      it, which dash-rows-scratch-id-selftest.sh pins).
 #
@@ -208,7 +208,7 @@ eq "migrate: … and the incumbent keeps its own"        "$taken" "$(wid_of "$w2
 printf 'dash-wid-selftest: part D ok (%d checks)\n' "$CHECKS"
 
 # ============================================================================
-# E. the rendered row — handle in column 1, issue column is issue-ONLY
+# E. the rendered row — internal handle hidden, issue column is issue-ONLY
 # ============================================================================
 if [ "$US_OK" != 1 ]; then
   printf 'dash-wid-selftest: this tmux octal-escapes US in -F — part E SKIPPED\n'
@@ -228,7 +228,7 @@ CHECKS=$((CHECKS+1))
 [ -z "$(wid_of "$rw_w")" ] && [ -z "$(wid_of "$rs_w")" ] \
   || fail "fixture: the two new rows must start with NO handle (to prove the backfill)"
 
-GN=$'\033[38;2;158;206;106m'; GY=$'\033[38;2;86;95;137m'; IN=$'\033[38;2;187;154;247m'; R=$'\033[0m'
+GN=$'\033[38;2;158;206;106m'; IN=$'\033[38;2;187;154;247m'; R=$'\033[0m'
 rows=$(FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" 2>&1) \
   || fail "rows producer exited non-zero" "$rows"
 
@@ -247,16 +247,14 @@ row_w=$(printf '%s\n' "$rows2" | grep -F "$US$rw_w$US")
 row_s=$(printf '%s\n' "$rows2" | grep -F "$US$rs_w$US")
 { [ -n "$row_w" ] && [ -n "$row_s" ]; } || fail "rows: expected a row per fixture window" "$rows2"
 
-# the id cell: muted grey, 3 wide (2-char handle + 1 pad), leftmost data column.
-# Anchored on the colour escape + the exact cell, never a byte offset — the row's
-# leading state glyph is multi-byte UTF-8 and a positional read miscounts under C.
-has "row: the worker's handle is in a 3-wide muted id cell"  "$row_w" "${GY}${h_w} ${R}"
-has "row: the scratch's handle is in a 3-wide muted id cell" "$row_s" "${GY}${h_s} ${R}"
-# it sits FIRST: glyph, space, then the id cell.
-has "row: the id cell is the leftmost data column" "$row_w" " ${GY}${h_w} ${R} "
-# the header names it, before `issue`.
+# Handles remain addressable but no longer take space from task descriptions.
+hasnt "row: worker handle stays internal"  "$row_w" "$h_w"
+hasnt "row: scratch handle stays internal" "$row_s" "$h_s"
+has "row: the worker description remains visible" "$row_w" "worker-row"
+has "row: the scratch description remains visible" "$row_s" "scratch-row"
 hdr=$(printf '%s\n' "$rows2" | grep -F "hdr${US}hdr")
-has "header: an 'id' column precedes 'issue'" "$hdr" "id  issue"
+hasnt "header: no worker id column" "$hdr" "id  issue"
+has "header: issue and window columns remain" "$hdr" "issue window"
 
 # the issue column is ISSUE-ONLY now (#566): `#77` for the worker, BLANK for the
 # scratch — the `~4` sigil moved out, its slot number still names the worktree.

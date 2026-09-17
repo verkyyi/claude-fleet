@@ -160,7 +160,7 @@ ckey_v() { ckey=${1//_/_u}; ckey=${ckey//\//_s}; ckey=${ckey// /_w}; }
 # the pane), so it's only a fallback for the very first pre-fzf render before
 # FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
 # margin so fzf never clips the ctx% digits. Layout column widths:
-#   LEFTW  = glyph1+sp + id3+sp + issue5+sp + window22+sp = 35   (id = @wid, issue #566)
+#   LEFTW  = glyph1+sp + issue5+sp + window26+sp = 35
 #   RIGHTW = act8+sp + PR7+sp + ctx4 = 21   (act = last-activity, issue #228)
 # NB: LEFTW/ACTW/RIGHTW MUST stay in step with fleet-history.sh cmd_rows so the
 # live list and the landed history list render the SAME aligned columns (#228).
@@ -381,11 +381,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   fleet_reltime "$state_ts" "$NOW"; act=${reltime_out:-}
   acol=$GY; [ -z "$act" ] && act='·'
 
-  # --- the `id` cell: this window's handle (issue #566) -----------------------
-  # @wid is the fleet's own short, TYPEABLE name for a window (`a1`…`z9`) — the
-  # thing the operator says when they mean "reap a1" / "migrate b3". Muted grey:
-  # it is a handle, not status, and must not compete with the state glyph beside
-  # it. Backfilled here (the render is the one place that sees every window on
+  # --- internal window handle (issue #566) -----------------------------------
+  # Keep @wid for CLI targeting (`reap a1` / `migrate b3`); the list identifies
+  # tasks by their user-supplied names. Backfilled here (the render sees every window on
   # every tick) for anything that has none — a window that predates #566, or a
   # spawn whose allocator failed open. fleet_wid_stamp is idempotent + lock-held,
   # so this costs its handful of forks ONCE per window's life, never per tick,
@@ -394,10 +392,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
 
   # --- the issue cell (issues #529/#566) --------------------------------------
   # ISSUE-ONLY since #566: `#<N>` in GREEN for an issue-bound worker, BLANK for a
-  # scratch. The cell used to carry both meanings behind a sigil (`#5613` vs
-  # `~76`), which is what #566 unpicked — a scratch's per-window identity is now
-  # the `id` handle to its left, so the `~<N>` branch has nothing left to say
-  # here. (#502's finding still holds and is still honoured in the LANDED view,
+  # scratch. Live scratches are identified by their task descriptions.
+  # (#502's finding still holds and is still honoured in the LANDED view,
   # where a closed row has no live window and `~<N>` IS its only id — see
   # fleet-history.sh cmd_rows.) The scratch slot number stays findable: it names
   # the worktree dir and still renders in the `↳~76` provenance tag.
@@ -546,20 +542,19 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   if [ "$SIDEBAR" = 1 ]; then
     # The view clips by terminal cells (including CJK), after preserving the
     # full name here. Stable window IDs survive renumbering between draw/click.
-    label="${hnd:+$hnd }${carg:+$carg }$dname"
+    label="${carg:+$carg }$dname"
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
     buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label"$'\n'
     continue
   fi
-  # full row: glyph1·id3·issue5·window22·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
+  # full row: glyph1·issue5·window26·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
   # window sits right after the issue; act/PR/ctx right-align to the edge, the
   # flex gap between them absorbing the width so the metadata block stays pinned
   # right. The flex span used to carry the LLM one-liner (summary column, retired
   # in issue #535 — it was the dash's only token-spending column); the ↳
   # provenance tag, the #623 pin mark and the #624 subtree-progress badge live
   # there now.
-  fld 3  "$hnd";  f_hnd=$fld_out
   fld 5  "$issd"; f_iss=$fld_out
   # window column (issue #534): pad/clip by DISPLAY width, not code points. A CJK
   # name is the everyday case now that the prompt line NAMES a scratch, and a CJK
@@ -567,9 +562,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # shoved the right-pinned act/PR/ctx block over. ASCII stays on fld()'s
   # fork-free path; only a non-ASCII name pays the one perl/wcwidth fork.
   case "$dname" in
-    *[![:ascii:]]*) fleet_clip_display 22 "$dname"
-                    printf -v f_name '%s%*s' "${clip_out:-}" $(( 22 - ${clip_w:-0} )) '' ;;
-    *)              fld 22 "$dname"; f_name=$fld_out ;;
+    *[![:ascii:]]*) fleet_clip_display 26 "$dname"
+                    printf -v f_name '%s%*s' "${clip_out:-}" $(( 26 - ${clip_w:-0} )) '' ;;
+    *)              fld 26 "$dname"; f_name=$fld_out ;;
   esac
   fld "$ACTW" "$act"; f_act=$fld_out
   fld 7  "$ptxt"; f_pr=$fld_out
@@ -605,7 +600,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$pin" = 1 ] && { pinpfx='📌 '; dwidth=$(( dwidth + 3 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${GY}${f_hnd}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
@@ -614,15 +609,14 @@ done <<< "$WLIST"
 # right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
 # the flex span is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
 if [ "$SIDEBAR" = 0 ]; then
-fld 3  "id";     h_w=$fld_out
 fld 5  "issue";  h_i=$fld_out
-fld 22 "window"; h_n=$fld_out
+fld 26 "window"; h_n=$fld_out
 fld "$ACTW" "act"; h_a=$fld_out
 fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_w} ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
 # emit pinned-first (issue #623), then grouped by spawn provenance (issue #503):

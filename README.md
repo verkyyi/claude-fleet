@@ -221,7 +221,7 @@ line, which exits silently without it.)
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix g` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen. If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
-| `prefix E` | browse the sidebar: ↑↓ choose, Enter jump, ←→ fold, Esc return, q hide; a single click on a row jumps directly |
+| `prefix E` | focus the sidebar (or click it): ↑↓ choose, Enter jump and focus worker, ←→ fold, Esc return, q hide |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
@@ -239,15 +239,20 @@ in a header; `prefix ?` is the one place that shows **all** of them together.
 Worker and scratch windows show a **30-column task list on the left** on wide
 screens. It shares the hub's live statuses, pins and parent/child grouping,
 highlights the current worker, and keeps that worker visible even in a folded
-group. The current task has a cyan highlight and `▶` marker. The worker's top
-border shows **INPUT** when typing goes to the worker; `prefix E` highlights
-**TASKS · FOCUS** while the arrow keys browse tasks, and Esc returns input to
-the worker. Clicking a task goes straight to its input pane. `prefix e` saves the
-on/off preference as `FLEET_SIDEBAR`; `FLEET_SIDEBAR_WIDTH` sets the width (24–60).
+group. Rows use your task descriptions, without internal worker IDs or a second
+title row inside the sidebar. The current task has a `▶` marker. Click the
+sidebar (or press `prefix E`) to give it the arrow keys: an amber
+**TASKS · INPUT** pane border and selection show keyboard focus. Clicking a task
+switches workers while keeping the sidebar focused, so ↑↓ still browse tasks.
+Click the worker, or press Enter/Esc, to return keyboard input to the worker;
+its top border then shows a blue **WORKER · INPUT** badge before the task name.
+`prefix e` saves the on/off preference as `FLEET_SIDEBAR`;
+`FLEET_SIDEBAR_WIDTH` sets the width (24–60).
 Below sidebar width + 81 columns (111 by default), the list hides automatically
 to leave 80 columns for the worker, then returns when space permits. `prefix z`
 still zooms the worker for focused work. Only the visible worker owns a sidebar;
 background windows and detached fleets do not run sidebar refresh loops.
+The full hub list also hides worker IDs and gives that space to task descriptions.
 
 Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
 clickable too: the **`⌂` hub icon** (leftmost) is a consistent **home** tap — it
