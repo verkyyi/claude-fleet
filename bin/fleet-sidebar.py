@@ -35,10 +35,11 @@ def fields(target, fmt):
 
 def panes(session):
     fmt = US.join(("#{pane_id}", "#{window_id}", "#{@sidebar}",
-                   "#{pane_active}", "#{pane_dead}", "#{@sidebar_worker}"))
+                   "#{pane_active}", "#{pane_dead}", "#{@sidebar_worker}",
+                   "#{@sidebar_version}"))
     return [line.split(US) for line in tmux(
         "list-panes", "-s", "-t", session, "-F", fmt).splitlines()
-        if len(line.split(US)) == 6]
+        if len(line.split(US)) == 7]
 
 
 def remove_view(pane):
@@ -48,7 +49,30 @@ def remove_view(pane):
         tmux("kill-pane", "-t", pane)
 
 
-def sync(session, enabled, width):
+def move_view(pane, worker, width, select=False):
+    """Move the populated grid before selecting its new window, in one queue."""
+    source = fields(pane, US.join(("#{window_id}", "#{@sidebar}")))
+    target = fields(worker, US.join(("#{window_id}", "#{window_width}",
+                                    "#{window_zoomed_flag}")))
+    if len(source) != 2 or source[1] != "1" or len(target) != 3:
+        return False
+    window, cols, zoomed = target
+    if not cols.isdigit() or int(cols) < width + 81 or zoomed == "1":
+        return False
+    commands = []
+    if source[0] != window:
+        commands = ["set-option", "-uw", "-t", source[0], "@sidebar_worker", ";",
+                    "set-option", "-w", "-t", window, "@sidebar_worker", worker, ";",
+                    "join-pane", "-d", "-h", "-b", "-f", "-l", str(width),
+                    "-s", pane, "-t", worker]
+    if select:
+        if commands:
+            commands.append(";")
+        commands += ["select-window", "-t", window, ";", "select-pane", "-t", worker]
+    return not commands or run(["tmux", *commands]).returncode == 0
+
+
+def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
                   "#{@raw}", "#{@worktree}", "#{window_zoomed_flag}")))
@@ -61,25 +85,35 @@ def sync(session, enabled, width):
               name not in ("plan", "dash", "backlog") and
               bool(issue or raw == "1" or worktree) and bool(workers) and
               int(cols) >= width + 1 + 80)
-    current = []
+    current, reusable = [], []
     for pane in all_panes:
         if pane[2] != "1":
             continue
-        if wanted and pane[1] == window and pane[4] != "1" and not current:
+        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == "2" and not current:
             current.append(pane)
+        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == "2" and not reusable:
+            reusable.append(pane)
         else:
+            remove_view(pane[0])
+    if current:
+        for pane in reusable:
             remove_view(pane[0])
     if not wanted or current or zoomed == "1":
         return
     worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
+    if reusable:
+        if move_view(reusable[0][0], worker, width):
+            return
+        remove_view(reusable[0][0])
     cwd = fields(worker, "#{pane_current_path}")[0]
     cmd = " ".join(shlex.quote(arg) for arg in (
-        "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker))
+        "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
     pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
                 "-t", worker, "-c", cwd, "-P", "-F", "#{pane_id}", cmd)
     if not pane.startswith("%"):
         return
     tmux("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
+         "set-option", "-p", "-t", pane, "@sidebar_version", "2", ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
 
@@ -95,14 +129,19 @@ def send_key(session, key):
             return
 
 
-def jump(session, window):
+def jump(session, window, pane, lock):
     # Never resolve a stale row through a recycled index, or another fleet.
     if not window.startswith("@") or fields(window, "#{session_name}") != [session]:
         return
-    workers = [p for p in panes(session) if p[1] == window and p[2] != "1" and p[4] != "1"]
-    if workers:
-        worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
-        tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
+    with open(lock, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        workers = [p for p in panes(session) if p[1] == window and p[2] != "1" and p[4] != "1"]
+        if workers:
+            worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
+            width = fields(pane, "#{pane_width}")[0]
+            if width.isdigit() and move_view(pane, worker, int(width), select=True):
+                return
+            tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
 
 
 def clip(text, width):
@@ -131,7 +170,7 @@ def visible(info, now):
     return active == "1" and zoomed != "1" and attached != "0" and not modal
 
 
-def ui(screen, session, worker):
+def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window = fields(worker, "#{window_id}")[0]
     env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window)
@@ -140,23 +179,36 @@ def ui(screen, session, worker):
     for number, color in enumerate((curses.COLOR_CYAN, curses.COLOR_RED,
                                      curses.COLOR_GREEN, curses.COLOR_MAGENTA), 1):
         curses.init_pair(number, color, -1)
+    curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
     screen.timeout(1000)
     rows, selected, offset, refresh_at = [], window, 0, 0.0
-    shown = False
+    shown, navigation = False, False
     while True:
         now = time.monotonic()
         if now >= refresh_at:
             refresh_at = now + 1
+            info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
+                                         "#{session_attached}", "#{@popup_open}",
+                                         "#{window_id}", "#{@sidebar_worker}",
+                                         "#{client_key_table}")))
+            if len(info) != 7:
+                return
+            # The pane (and curses grid) survives navigation. Follow its new
+            # worker before testing liveness or building current-row exemptions.
+            if info[4] != window:
+                window = info[4]
+                selected = window
+                env["FLEET_SIDEBAR_CURRENT"] = window
+            worker = info[5] or worker
+            navigation = info[6] == "fleet-sidebar"
             # kill-pane does not emit pane-exited on every supported tmux.
             # Never let this view keep an otherwise closed worker window alive.
             if fields(worker, "#{pane_dead}") != ["0"]:
                 return
-            info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
-                                         "#{session_attached}", "#{@popup_open}")))
-            shown = visible(info, time.time())
+            shown = visible(info[:4], time.time())
             if shown:
                 result = run(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"], env=env)
                 if result.returncode == 0:
@@ -185,16 +237,19 @@ def ui(screen, session, worker):
                     pass  # a resize may race this paint
 
         screen.erase()
-        put(0, " Tasks · " + session, curses.A_BOLD)
+        put(0, " TASKS · FOCUS" if navigation else " TASKS", curses.A_BOLD |
+            (curses.color_pair(5) if navigation else curses.A_DIM))
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
         for y, (wid, state, glyph, label) in enumerate(rows[offset:offset + page], 1):
             attr = curses.color_pair(colors.get(state, 0))
-            if wid == selected:
+            if navigation and wid == selected and wid != window:
                 attr |= curses.A_REVERSE
             if wid == window:
-                attr |= curses.A_BOLD
-            put(y, ("›" if wid == window else " ") + " " + glyph + " " + label, attr)
-        put(height - 2, " prefix E: ↑↓ ↵ ←→", curses.A_DIM)
+                attr = curses.color_pair(5) | curses.A_BOLD
+            marker = "▶" if wid == window else "›" if navigation and wid == selected else " "
+            put(y, marker + " " + glyph + " " + label, attr)
+        put(height - 2, " ↑↓ ↵ ←→ · Esc: worker" if navigation else
+            " Focus: WORKER · prefix E", curses.A_DIM)
         put(height - 1, " ‹ Hide · prefix e", curses.A_DIM)
         screen.refresh()
         key = screen.getch()
@@ -207,7 +262,8 @@ def ui(screen, session, worker):
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
         elif key in (10, 13, curses.KEY_ENTER):
-            jump(session, selected)
+            jump(session, selected, pane, lock)
+            refresh_at = 0
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and selected:
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
             run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, selected], env=env)
@@ -217,6 +273,7 @@ def ui(screen, session, worker):
             return
         elif key == 27:
             selected = window
+            refresh_at = 0
         elif key == curses.KEY_MOUSE:
             try:
                 _, _, y, _, buttons = curses.getmouse()
@@ -224,7 +281,8 @@ def ui(screen, session, worker):
                 continue
             if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 if 1 <= y <= page and offset + y - 1 < len(rows):
-                    jump(session, rows[offset + y - 1][0])
+                    jump(session, rows[offset + y - 1][0], pane, lock)
+                    refresh_at = 0
                 elif y == height - 1:
                     run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])
                     return
@@ -236,7 +294,7 @@ def ui(screen, session, worker):
 
 def main():
     if sys.argv[1] == "ui":
-        curses.wrapper(ui, sys.argv[2], sys.argv[3])
+        curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
         return
     verb, session, lock, enabled, width, key = sys.argv[1:]
     if verb == "key":
@@ -250,7 +308,7 @@ def main():
     # active window, so rapid switching cannot create duplicate/stale views.
     with open(lock, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        sync(session, enabled, width)
+        sync(session, enabled, width, lock)
 
 
 if __name__ == "__main__":
