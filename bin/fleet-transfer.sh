@@ -215,8 +215,22 @@ SK Escape || die 'cannot address source prompt'
 SK C-u || die 'cannot clear source prompt'
 SK -l '/exit' || die 'cannot type source exit'
 SK Enter || die 'cannot submit source exit'
+EXIT_CONFIRMED=0
 for ((i=0; i<EXIT_WAIT; i++)); do
   kill -0 "$PID" 2>/dev/null || break
+  # A live ScheduleWakeup adds a native exit dialog. --loop authorizes moving
+  # that one timer, so stop it at the source before starting the replacement.
+  # Only the exact selected one-timer dialog may get ONE additional Enter.
+  if [ -n "$LOOP" ] && [ "$EXIT_CONFIRMED" = 0 ] \
+    && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation; then
+    [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] \
+      && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
+      && [ "$(opt '#{@claude_state}')" = done ] || die 'source changed at the loop exit confirmation'
+    python3 "$HELPER" verify "$BUNDLE" || die 'source transcript changed at the loop exit confirmation'
+    TM capture-pane -p -t "$PANE" > "$BUNDLE/loop-exit-confirmation.txt" || die 'cannot preserve loop exit confirmation'
+    SK Enter || die 'cannot confirm stopping the source loop'
+    EXIT_CONFIRMED=1
+  fi
   sleep 1
 done
 kill -0 "$PID" 2>/dev/null && die 'Claude did not exit; no Codex was launched'
