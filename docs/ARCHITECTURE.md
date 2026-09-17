@@ -87,6 +87,14 @@ repo-specific pieces are **per-fleet**.
 
 *Collector shared, hub not* is the right split — remember it that way.
 
+The git phase also reclaims path-keyed `git_<key>` / `ctx_<key>` files whose
+worktrees have left the live inventory (#647). It requires successful, nonempty
+window listings from every discovered fleet and at least one absolute path;
+failed, empty or malformed inventories preserve existing caches. Cleanup uses
+the entire inventory before git work starts, so a budget that stops the rotation
+early cannot evict an unvisited live worktree. Native `ctx_codex_*` session keys,
+per-fleet caches, directories and symlinks are outside this sweep.
+
 ### Worker task sidebar
 
 `fleet-sidebar.sh` loads the fleet's preference; `fleet-sidebar.py` manages a
