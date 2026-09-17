@@ -1,5 +1,7 @@
 # claude-fleet
 
+**English** | [简体中文](README.zh-CN.md)
+
 Run a **fleet of parallel Claude Code sessions** in one tmux session — one
 window per task, each in its own git worktree, with **GitHub issues as the
 backlog** and the tmux status bar as a live attention monitor.
