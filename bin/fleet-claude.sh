@@ -71,6 +71,16 @@ if [ "$_fc_explicit" != 1 ]; then
     *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" --model "*|*" --model="*) _fc_agent=claude ;;
   esac
 fi
+# Opted-in fresh launches use the same strict subscription planner as recovery.
+# Native resume/model-specific calls retain their explicit provider contract.
+if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \
+  && [ -z "${FLEET_HANDOFF_MANIFEST:-}" ]; then
+  case " $* " in
+    *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*|*" --codex-home "*|*" --codex-profile "*) : ;;
+    *) export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL
+       exec bash "$BIN/fleet-account.sh" launch --agent "${_fc_agent:-claude}" -- "$@" ;;
+  esac
+fi
 case "$_fc_agent" in
   codex)     exec "$BIN/fleet-codex.sh" "$@" ;;
   ''|claude) : ;;
@@ -123,7 +133,8 @@ fi
 # explicit caller --model wins, an empty knob disables it, and a fallback equal
 # to FLEET_MODEL is a no-op (the cap IS the fallback — nothing to swap to). The
 # active account is resolved here (the token export below reuses it).
-label=$("$BIN/fleet-account.sh" active 2>/dev/null)
+label="${FLEET_ACCOUNT_LABEL:-}"
+[ -n "$label" ] || label=$("$BIN/fleet-account.sh" active 2>/dev/null)
 model_flag=()
 launch_model=""
 if [ -z "${FLEET_MODEL+x}" ]; then FLEET_MODEL="opus"; fi
@@ -195,6 +206,10 @@ fi
 if [ -n "$label" ]; then                                 # (resolved above, with the model)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
+    if [ -n "${FLEET_ACCOUNT_TARGET:-}" ]; then
+      unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+      unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+    fi
     export CLAUDE_CODE_OAUTH_TOKEN="$tok"
     # Stamp THIS pane's window (issue #511). An untargeted `set-option -w` resolves
     # to the session's CURRENT window, and every spawn is `new-window -d` (the hub
@@ -203,8 +218,24 @@ if [ -n "$label" ]; then                                 # (resolved above, with
     # No $TMUX_PANE (launched outside tmux) → nothing to stamp.
     if [ -n "${TMUX_PANE:-}" ]; then
       tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+      if [ -n "${FLEET_ACCOUNT_TARGET:-}" ]; then
+        _fc_binding=$(FLEET_BIND_OWNER="$$" python3 - <<'PY'
+import json, os
+p = json.loads(os.environ['FLEET_ACCOUNT_TARGET'])
+p['owner'] = os.environ['FLEET_BIND_OWNER']
+print(json.dumps(p))
+PY
+)
+        tmux set-option -w -t "$TMUX_PANE" @subscription_identity "$_fc_binding" 2>/dev/null || true
+      fi
     fi
+  elif [ -n "${FLEET_ACCOUNT_LABEL:-}" ]; then
+    echo 'fleet-claude: pinned subscription is unavailable; refusing an ambient login fallback' >&2
+    exit 1
   fi
 fi
 
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
+  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} "$@"
+fi
 exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} "$@"

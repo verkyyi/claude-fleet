@@ -39,6 +39,20 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(fields[3],'-');self.assertEqual(fields[9],'codex')
         self.assertNotIn('wrong-claude-session',fields)
 
+    def test_active_raw_loop_keeps_exact_provenance_in_crash_map(self):
+        manifest=self.root/'packet/manifest.json';record=manifest.parent/'loop/state.json'
+        record.parent.mkdir(parents=True);manifest.write_text('{}')
+        r=dict(status='active',thread_id=SID,worktree=str(self.wt))
+        record.write_text(json.dumps(r))
+        line='|'.join(['scratch',str(self.wt),'','done','','','1','','codex','1234',str(manifest),json.dumps(self.data)])+'\n'
+        fields=self.run_cli('.fleet-restore-resolve.py',input=line).split('\t')
+        self.assertEqual(fields[3],SID);self.assertEqual(fields[-1],str(manifest))
+        r['status']='waiting-quota';record.write_text(json.dumps(r))
+        fields=self.run_cli('.fleet-restore-resolve.py',input=line).split('\t')
+        self.assertEqual(fields[3],SID);self.assertEqual(fields[-1],str(manifest))
+        r['status']='stopped';record.write_text(json.dumps(r))
+        self.assertEqual(self.run_cli('.fleet-restore-resolve.py',input=line),'')
+
     def record(self,identity=None,owner='1234'):
         return self.run_cli('fleet-history.sh','record-closed','--repo','fixture/repo','--key','42','--worktree',str(self.wt),
              '--agent','codex','--launcher-pid',owner,'--agent-identity',json.dumps(identity or self.data),'--sha','abcdef','--origin','issue-7')

@@ -249,6 +249,20 @@ else
 fi
 
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
+if [ -d "$FLEET_CONF_DIR/handoffs/quota-requests" ]; then
+  _failover=$(python3 - "$FLEET_CONF_DIR/handoffs/quota-requests" <<'PY'
+import json,pathlib,sys
+for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
+    try: r=json.loads(p.read_text())
+    except (OSError,ValueError): continue
+    if r.get('state') not in ('bound','cancelled','recovered'):
+        s=r.get('source',{})
+        print('%s/%s: %s — %s' % (s.get('session','?'),s.get('window','?'),r.get('state','?'),r.get('detail','')))
+PY
+)
+  if [ -n "$_failover" ]; then warn failover "$_failover (fleet-account.sh failover-status)";
+  else pass failover 'no pending subscription cutovers'; fi
+fi
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.
 acct_dir="${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}"

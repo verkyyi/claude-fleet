@@ -188,6 +188,20 @@ def model_limits():
 
 
 def status(home, model='', now=None, limit_id=None):
+    if os.environ.get('FLEET_FAILOVER') == '1':
+        shared = runpy.run_path(str(BIN/'.fleet-account.py'))
+        result = {'home':home,'remaining':None,'state':'unknown','windows':[]}
+        try:
+            profile = shared['profile'](home=home)
+            reading = next((r for r in shared['codex_reading']()['accounts'] if r.get('account_uuid') == profile['account']),None)
+            scope = limit_id if limit_id is not None else model_limits().get(model,'codex')
+            row = shared['normalize_codex'](profile,reading,now,scope=scope)
+            if row['available']:
+                remaining=100-row['utilization']
+                result.update(remaining=remaining,windows=row['windows'],
+                    state='available' if remaining > int(os.environ.get('FLEET_CODEX_QUOTA_FLOOR','5')) else 'low')
+        except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError): pass
+        return result
     now = time.time() if now is None else now
     data = read(cache_path(home))
     ttl = max(1, min(3600, int(os.environ.get('FLEET_CODEX_QUOTA_TTL', '300'))))
@@ -276,6 +290,10 @@ def idle(data):
 
 
 def watch(session):
+    if os.environ.get('FLEET_FAILOVER') == '1':
+        # One per-session controller owns both same-agent and cross-agent moves.
+        subprocess.run(['bash', str(BIN/'fleet-account.sh'), 'reconcile', '--session', session], timeout=240)
+        return
     if session and os.environ.get('FLEET_CODEX_MODEL_FALLBACK'):
         if runpy.run_path(str(BIN / 'fleet-codex-model.py'))['watch'](session): return
     if os.environ.get('FLEET_CODEX_QUOTA_MIGRATE') != '1' or not session: return
@@ -318,6 +336,8 @@ def main():
     p.add_argument('--window', default='')
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args()
+    if os.environ.get('FLEET_FAILOVER') == '1' and a.command in ('register','list','refresh','select','gate','label'):
+        return managed(a)
     if a.command == 'watch': watch(a.session); return 0
     if a.command == 'idle':
         adapter = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
@@ -365,6 +385,36 @@ def main():
                '--expected-source', pane + ':' + data['owner'] + ':' + data['session_id']]
         if a.dry_run: cmd.append('--dry-run')
         return subprocess.call(cmd)
+    return 0
+
+
+def managed(a):
+    """Existing CLI, ccquota backend when unified failover is enabled.
+
+    Legacy standalone mode keeps its native reader. Never run both readers or
+    maintain a second credential registry for a fleet using the shared policy.
+    """
+    account = runpy.run_path(str(BIN/'.fleet-account.py'))
+    if a.command == 'register':
+        raise ValueError('register the login with ccquota codex add NAME --codex-home DIR')
+    if a.command == 'refresh':
+        account['codex_reading'](True)
+        return 0
+    if a.command == 'label':
+        print(next((p['profile'] for p in account['profiles']() if p['home'] == home_path(a.label)), ''))
+        return 0
+    data = account['inventory']()
+    rows = [r for r in data['accounts'] if r['agent'] == 'codex']
+    if a.command == 'list':
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if os.environ.get('FLEET_CODEX_HOME'):
+        home = home_path(os.environ['FLEET_CODEX_HOME'])
+        data = dict(data, accounts=[r for r in rows if r['home'] == home])
+    decision = account['choose_spawn'](data, 'codex', allowed=['codex'])
+    if not decision['target']:
+        raise ValueError(decision['reason'])
+    if a.command == 'select': print(decision['target']['home'])
     return 0
 
 

@@ -154,6 +154,17 @@ retry delay per launcher. Busy workers, pending questions, typing holds and
 unknown destination quotas prevent cutover. Attempt logs live under
 `$FLEET_CONF_DIR/codex/migrations/`. Both quota automation knobs default off.
 
+## Unified subscription failover
+
+With `FLEET_FAILOVER=1`, the existing account commands use ccquota profiles and
+provider-aware budget readings; their standalone native quota collector and
+independent home migration give way to `fleet-account` reconciliation. This
+avoids two controllers moving the same session. `ccquota codex run` holds the
+profile's shared login lock for the complete launcher/server/TUI lifetime.
+Before a pickup starts, Fleet verifies the native ChatGPT login and provider
+against the pinned profile metadata. See [Session transfer](SESSION-TRANSFER.md#subscription-failover)
+for same-agent preference, cross-agent fallback, drafts and loop recovery.
+
 ## Operator attention and answers
 
 The private runtime polls the exact live thread's native status every two

@@ -1,7 +1,7 @@
 #!/bin/bash
-# fleet-transfer.sh — hand ONE idle Claude/Codex session to a fresh Codex in its existing pane.
+# fleet-transfer.sh — hand ONE Claude/Codex session to either agent in its existing pane.
 #
-# Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to codex
+# Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to claude|codex
 #                         [--handoff <notes.md>] [--loop <spec.json>] [--codex-home DIR]
 #                         [--dry-run | --prepare-only | --after-turn]
 #
@@ -38,15 +38,17 @@ HELPER="$BIN/.fleet-transfer.py"
 die() { printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
+TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--codex-home)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
         --window) [ -z "$TARGET" ] || die 'only one --window is allowed'; TARGET=$2 ;;
         --to) TO=$2 ;; --handoff) NOTES=$2 ;;
         --loop) LOOP=$2 ;;
+        --target-file) TARGET_FILE=$2 ;; --quota-request) QUOTA_REQUEST=$2 ;; --draft-file) DRAFT=$2 ;;
         --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
       esac
@@ -54,14 +56,18 @@ while [ "$#" -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
+    --inspect) INSPECT=1; DRY=1; shift ;;
+    --native-resume) NATIVE=1; shift ;;
     --require-codex-idle) REQUIRE_IDLE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
 done
-[ -n "$TARGET" ] && [ "$TO" = codex ] || { usage >&2; exit 2; }
+[ -n "$TARGET" ] || { usage >&2; exit 2; }
+case "$TO" in claude|codex) ;; *) usage >&2; exit 2;; esac
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
 [ "$AFTER" != 1 ] || [ -n "$NOTES" ] || die '--after-turn requires --handoff notes written by the source agent'
+[ "$NATIVE:$AFTER" != 1:1 ] || die '--native-resume is a controller-only immediate operation'
 if [ -n "$CODEX_TARGET_HOME" ]; then
   CODEX_TARGET_HOME=$(cd "$CODEX_TARGET_HOME" && pwd -P) || die 'target CODEX_HOME is missing'
 fi
@@ -116,6 +122,24 @@ fi
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
+if [ "$INSPECT" = 1 ]; then
+  python3 - "$SOURCE_AGENT" "$SID" "$PID" "$TRANSCRIPT" "$CODEX_SOURCE_HOME" "$REGISTRY" "$SESS" "$WIN" "$PANE" "$WT" "$STATE" "$PREVIOUS" "$(opt '#{@cc_account}')" "$(opt '#{@subscription_identity}')" "$(opt '#{@codex_identity}')" <<'PY'
+import json, sys
+keys = ('agent','session_id','pid','transcript','home','registry','session','window','pane','worktree','state','previous','label','subscription','codex_identity')
+r = dict(zip(keys,sys.argv[1:])); r['pid'] = int(r['pid'])
+for key in ('subscription','codex_identity'):
+    r[key] = json.loads(r[key] or '{}')
+print(json.dumps(r))
+PY
+  exit $?
+fi
+source_ready() {
+  if [ -n "$QUOTA_REQUEST" ]; then
+    python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"
+  else
+    [ "$(opt '#{@claude_state}')" = "done" ]
+  fi
+}
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
 [ -z "$LOOP" ] || [ -s "$LOOP" ] || die '--loop file is missing or empty'
 if [ -n "$LOOP" ]; then
@@ -124,10 +148,10 @@ import json, runpy, sys
 runpy.run_path(sys.argv[1])['spec'](json.load(open(sys.argv[2])))
 PY
 fi
-printf 'fleet-transfer: %s/%s · %s → codex\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
-  "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$SID" "$TRANSCRIPT" "$WT"
+printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
+  "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
-  printf 'dry-run: save a provenance package, /exit the source, then launch Codex in %s (state=%s).\n' "$PANE" "${STATE:-unknown}"
+  printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
   [ "$STATE" = "done" ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
 fi
@@ -136,12 +160,12 @@ umask 077
 LAUNCH="$BIN/fleet-claude.sh"
 if [ "$PREPARE" != 1 ]; then
   if [ "$AFTER" != 1 ]; then
-    [ "$STATE" = "done" ] || die 'source is not idle (done); finish/pause its turn before transferring'
+    source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
     CALLER_TMUX="${TMUX:-}"
     [ "${TMUX_PANE:-}" != "$PANE" ] || [ "${CALLER_TMUX%%,*}" != "$(opt '#{socket_path}')" ] \
       || die 'run cutover from another pane/terminal; use --after-turn inside the source'
   fi
-  command -v codex >/dev/null 2>&1 || die 'codex is not on PATH'
+  command -v "$TO" >/dev/null 2>&1 || die "$TO is not on PATH"
   [ -x "$LAUNCH" ] && [ -x "$BIN/fleet-codex.sh" ] || die 'fleet Codex launcher is missing'
   [ "$SOURCE_AGENT" = codex ] || [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
   PENDING=$(opt '#{@agent_transfer_request}')
@@ -153,9 +177,10 @@ if [ "$PREPARE" != 1 ]; then
   fi
   # This install must include the exit-hook exemption before it can cut over.
   grep -q '@agent_transfer_until' "$BIN/session-end-hook.sh" || die 'SessionEnd transfer support is missing'
-  HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target codex --root "$BIN/..") || die 'cannot materialize Codex guard hooks'
+  HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
   TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
+  [ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target is unavailable'
 fi
 
 if [ "$AFTER" = 1 ]; then
@@ -163,16 +188,21 @@ if [ "$AFTER" = 1 ]; then
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
+    --to "$TO" --target-file "$TARGET_FILE" --draft-file "$DRAFT" \
     --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
 
+[ -z "$QUOTA_REQUEST" ] || [ ! -s "$QUOTA_REQUEST/unsent-draft.txt" ] || DRAFT="$QUOTA_REQUEST/unsent-draft.txt"
+package_flags=(); [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
+
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
   --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" --target-home "$CODEX_TARGET_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
-  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH") || exit 1
+  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH" \
+  --to "$TO" --target-file "$TARGET_FILE" --quota-request "$QUOTA_REQUEST" --draft-file "$DRAFT" ${package_flags[@]+"${package_flags[@]}"}) || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
 [ "$PREPARE" != 1 ] || exit 0
 
@@ -208,7 +238,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 fleet_rotate_lease_held "$WT" >/dev/null && die 'worktree already has a migration lease'
-fleet_rotate_lease_take "$WT" "transfer $SESS/$WIN $SOURCE_AGENT to codex" 900 || die 'cannot protect worktree from cleanup'
+fleet_rotate_lease_take "$WT" "transfer $SESS/$WIN $SOURCE_AGENT to $TO" 900 || die 'cannot protect worktree from cleanup'
 LEASE=1
 TM set-option -w -t "$WIN" @agent_transfer_until "$(( $(date +%s) + 120 ))" || die 'cannot mark transfer'
 TM set-option -p -t "$PANE" remain-on-exit on || die 'cannot retain source pane on exit'
@@ -221,7 +251,8 @@ else
   [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
     && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
 fi
-[ "$(opt '#{@claude_state}')" = "done" ] || die 'source started another turn while preparing the transfer'
+source_ready || die 'source started another turn while preparing the transfer'
+[ -z "$TARGET_FILE" ] || bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" >/dev/null || die 'pinned target changed before source exit'
 if [ "$REQUIRE_IDLE" = 1 ]; then
   [ "$SOURCE_AGENT" = codex ] || die 'native idle check requires a Codex source'
   FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" idle --session "$SESS" --window "$PANE" \
@@ -250,7 +281,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
     && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation; then
     [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] \
       && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
-      && [ "$(opt '#{@claude_state}')" = "done" ] || die 'source changed at the loop exit confirmation'
+      || die 'source changed at the loop exit confirmation'
     python3 "$HELPER" verify "$BUNDLE" || die 'source transcript changed at the loop exit confirmation'
     TM capture-pane -p -t "$PANE" > "$BUNDLE/loop-exit-confirmation.txt" || die 'cannot preserve loop exit confirmation'
     SK Enter || die 'cannot confirm stopping the source loop'
@@ -272,21 +303,12 @@ if [ "$(opt '#{pane_dead}')" != 1 ]; then
   [ "$SHELL_OK" = 1 ] || die 'source pane is not a childless shell; refusing to replace it'
 fi
 
-# A file, not an interpolated shell command containing the transcript. No source
-# JSON or handoff text is ever evaluated by a shell.
-{
-  printf '#!/bin/bash\nset -uo pipefail\ncd %q || exit 1\n' "$WT"
-  printf 'export FLEET_HANDOFF_MANIFEST=%q\n' "$BUNDLE/manifest.json"
-  if [ -s "$BUNDLE/loop-spec.json" ]; then printf 'export FLEET_LOOP_SPEC=%q\n' "$BUNDLE/loop-spec.json"; fi
-  printf 'exec %q --agent codex ' "$LAUNCH"
-  [ -z "$CODEX_TARGET_HOME" ] || printf -- '--codex-home %q ' "$CODEX_TARGET_HOME"
-  # shellcheck disable=SC2016 # Expanded by launch.sh, never by this controller.
-  printf '"$(cat %q)"\n' "$BUNDLE/pickup.md"
-} > "$BUNDLE/launch.sh" || die 'cannot write target launcher'
-for key in @cc_account @cc_model @ctx_pct @ctx_limit @handoff_armed @handoff_cleared_at; do
+# The helper quotes metadata as argv; conversation text is only ever data.
+python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || die 'cannot write target launcher'
+for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
-TM set-option -w -t "$WIN" @cc_agent codex || die 'cannot stamp target agent'
+TM set-option -w -t "$WIN" @cc_agent "$TO" || die 'cannot stamp target agent'
 TM set-option -w -t "$WIN" @handoff_manifest "$BUNDLE/manifest.json" || die 'cannot stamp provenance'
 TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp source agent'
 TM set-option -w -t "$WIN" @source_session_id "$SID" || die 'cannot stamp source session'
@@ -298,11 +320,15 @@ python3 "$HELPER" state "$BUNDLE" starting || die 'cannot record target launch'
 TM respawn-pane -k -t "$PANE" -c "$WT" "$CMD" || die 'could not launch Codex in the retained pane'
 CPID=''
 for ((i=0; i<BOOT_WAIT; i++)); do
-  CPID=$(python3 "$HELPER" process codex "$(opt '#{pane_pid}')" 2>/dev/null) && [ -n "$CPID" ] && break
+  if [ -n "$TARGET_FILE" ] || [ "$TO" = claude ]; then
+    CPID=$(python3 "$HELPER" target-ready "$BUNDLE" "$SOCK" "$PANE" 2>/dev/null) && [ -n "$CPID" ] && break
+  else
+    CPID=$(python3 "$HELPER" process codex "$(opt '#{pane_pid}')" 2>/dev/null) && [ -n "$CPID" ] && break
+  fi
   [ "$(opt '#{pane_dead}')" != 1 ] || break
   sleep 1
 done
-[ -n "$CPID" ] || die 'no Codex process appeared; inspect the retained pane and handoff package'
-python3 "$HELPER" state "$BUNDLE" started "Codex pid $CPID; process started, task completion is not implied." || die 'cannot record target startup'
+[ -n "$CPID" ] || die 'target session did not bind; inspect the retained pane and handoff package'
+python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
-printf 'Codex started in %s/%s (pid %s). Source provenance: %s\n' "$SESS" "${HANDLE:-$WIN}" "$CPID" "$BUNDLE/manifest.json"
+printf '%s started in %s/%s (identity %s). Source provenance: %s\n' "$TO" "$SESS" "${HANDLE:-$WIN}" "$CPID" "$BUNDLE/manifest.json"

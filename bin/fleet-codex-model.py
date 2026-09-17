@@ -58,6 +58,14 @@ def capped_turn(client, data):
 
 
 def switch(data, pane, socket, model, automatic=False, dry=False):
+    if data.get('cwd') and not dry:
+        helper=runpy.run_path(str(BIN/'.fleet-transfer.py'))
+        with helper['transition_lock'](data['cwd']):
+            return switch_locked(data,pane,socket,model,automatic,dry)
+    return switch_locked(data,pane,socket,model,automatic,dry)
+
+
+def switch_locked(data, pane, socket, model, automatic=False, dry=False):
     if not model or any(ord(c) < 32 for c in model): raise ValueError('a native model name is required')
     current(data, pane, socket)
     client = Client(data.get('remote', ''), timeout=3)

@@ -117,6 +117,8 @@ that layer as overrides, then apply -c flags above it in their original order.
 
 def run(argv, prepare=None, tick=None):
     if '--no-daemon' in argv:
+        if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
+            raise ValueError('a pinned subscription requires the verified private runtime')
         return subprocess.call(['codex', *argv])
     flags = server_flags(argv)
     # macOS AF_UNIX paths are limited to 104 bytes. TMPDIR may itself exceed
@@ -153,9 +155,11 @@ def run(argv, prepare=None, tick=None):
             return 128 + ended[0]
         if guardian.poll() is not None:
             raise RuntimeError('private Codex server exited before creating its socket')
-        attention = Path(__file__).with_name('fleet-codex-attention.py')
+        if os.environ.get("FLEET_CODEX_SUBSCRIPTION"):
+            runpy.run_path(str(Path(__file__).with_name(".fleet-account.py")))["verify_codex_runtime"](remote)
+        attention = Path(__file__).with_name("fleet-codex-attention.py")
         if attention.is_file():
-            monitor = runpy.run_path(str(attention))['Monitor'](remote, env)
+            monitor = runpy.run_path(str(attention))["Monitor"](remote, env)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:

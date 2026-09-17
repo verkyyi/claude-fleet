@@ -264,9 +264,13 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 
 #### ③ 跨 provider 溢出 —— 双 agent 的真正商业价值
 
+2026-09-17 源码复核与实施边界见[订阅额度续接方案](SUBSCRIPTION-FAILOVER-PLAN.md)：
+复用 ccquota、fleet-account、quotawatch、migrate、transfer 和 loop，扩展到运行中
+会话及 Claude ⇄ Codex 两个方向。以下是目标行为，跨类自动切换尚未完成。
+
 ```
 现在：Claude 账号 A 满 → 换账号 B → 池空 → bench
-加后：Claude 账号 A 满 → 换账号 B → 池空 → 换 Codex 池 → 都空 → bench
+目标：当前 Agent 的账号 A 满 → 同类账号 B → 跨 Agent 可用账号 → 都不可用则等待
 ```
 
 配额治理最接近的 [clauth](https://github.com/uwuclxdy/clauth)（149★）只在 Claude
@@ -275,10 +279,10 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 这才是「不仅支持 Claude，还支持 Codex」的商业价值：
 **双 agent 不是为了兼容性好看,是为了让两家的订阅额度互为溢出池。**
 
-⚠️ 技术前置：Codex 侧无账号轮转（认证是 `codex login`，无 token env 等价物，
-见[适配器能力矩阵](#适配器能力矩阵公开声明不许藏)），所以这一级是「换 agent」，
-不是「换 Codex 的第 N 个账号」。要做 Codex 侧池化，得先解决多 `~/.codex` home
-的切换。
+技术前置已缩小：ccquota 已提供 Codex 多 profile 登录、独立 home 和额度查询；
+Fleet PR #747 已记录准确的 Codex UUID/home/rollout 并支持恢复及上下文续接。
+剩余工作是接入 Fleet 账号策略、固定迁移目标、补 Codex 换订阅和反向交接，以及
+额度受阻状态下的循环续接。不能仅设置新 home 后假定旧会话可以原生 resume。
 
 #### ④ 争用策略:按工作优先级,不按出资
 
@@ -726,8 +730,8 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 | ~~[#598](https://github.com/verkyyi/claude-fleet/issues/598)~~ | ~~相位错开 `5h / N`~~ | ✅ **已完成并上线**（PR #617）—— 顺带挖出并修掉更根本的 bug，见下 |
 | [#600](https://github.com/verkyyi/claude-fleet/issues/600) | 池内 token 打标签 + 接 ccquota team 归因 | #598 要读它的窗口起点 |
 | [#601](https://github.com/verkyyi/claude-fleet/issues/601) | 争用策略：issue 优先级 + 人均熔断 | 独立 |
-| [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出 → Codex（头条）** | 可先上「换 agent」版 |
-| [#602](https://github.com/verkyyi/claude-fleet/issues/602) | Codex 侧多 home 池化 | #599 完整版前置，可延后 |
+| [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出；方案扩展为运行中会话双向续接** | 复用现有 transfer/loop，见[审查方案](SUBSCRIPTION-FAILOVER-PLAN.md) |
+| [#602](https://github.com/verkyyi/claude-fleet/issues/602) | Codex 侧多 home 池化：接入已有 ccquota profile/额度能力 | 完整双向“同类优先”策略的前置；认证与采集已有基础 |
 
 > 顺序调整：原定 18 先做（「其余都要读这个标签」），但查证发现 `@cc_account`
 > 窗口 option 与 `fleet-account.sh list` 的 per-account 5h/7d% **已经存在**，

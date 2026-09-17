@@ -78,7 +78,7 @@
 # session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-claim-brief.sh` ends every worker's preamble with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
-# transferred recurring loop | native `/loop` | Fleet adapter | `fleet-transfer.sh --loop spec.json` preserves the task/cadence, binds the exact Codex thread, and wakes it through a private per-pane app server. Idle-only delivery; owner can defer/stop. TUI exit stops the timer; calendar cron is not converted.
+# transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Calendar cron is not converted.
 # slash-command seed (`/fleet-claim`) | native | translated | Codex has no slash commands — it takes a positional prompt, so the launcher expands `conf/codex-preamble.md` + `commands/<name>.md` into prose. The lifecycle text stays single-sourced in `commands/`.
 # per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently.
 # red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive.
@@ -92,6 +92,7 @@
 # Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state.
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved.
 # multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins.
+# subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` reuses fleet-account, ccquota, quotawatch and transfer: eligible same-agent subscription first, then the allowed other agent, otherwise durable waiting. Exact source paths, target authentication, unsent drafts and Fleet loops follow the task.
 # per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation.
 # MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists; `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
 # warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path.
@@ -126,6 +127,9 @@ fi
 normal=(); resume_id=''; fork_session=0; _codex_home_explicit=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --codex-profile)
+      [ "$#" -ge 2 ] || { echo 'fleet-codex: --codex-profile requires a ccquota profile' >&2; exit 2; }
+      export FLEET_CODEX_PROFILE="$2"; shift 2 ;;
     --codex-home)
       [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
       export CODEX_HOME="$2"; _codex_home_explicit=1; shift 2 ;;
@@ -140,7 +144,7 @@ _codex_resuming="$resume_id"
 for _arg in ${normal[@]+"${normal[@]}"}; do
   case "$_arg" in resume|fork) _codex_resuming=1; break ;; esac
 done
-if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
+if [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
   export CODEX_HOME="$FLEET_CODEX_HOME"
   if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
@@ -149,7 +153,7 @@ if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
       FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" \
       FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
   fi
-elif [ "$_codex_home_explicit" = 0 ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
+elif [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
   # Recovery identity is authoritative. Only fresh launches choose a pool home.
   # Pass the already-resolved overlay; a pool session has no overlay of its own.
   CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
@@ -165,6 +169,25 @@ if [ -n "$resume_id" ]; then
 else
   [ "$fork_session" = 0 ] || { echo 'fleet-codex: --fork-session requires --resume' >&2; exit 2; }
   set -- ${normal[@]+"${normal[@]}"}
+fi
+
+# Use ccquota's shared run lock and official isolated credential environment for
+# the entire launcher/app-server/TUI lifetime. Do not change its global default.
+if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
+  _profile=$(bash "$BIN/fleet-account.sh" profile --home "${CODEX_HOME:-$HOME/.codex}") || exit 1
+  FLEET_CODEX_PROFILE=$(printf '%s' "$_profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profile"])') || exit 1
+  export FLEET_CODEX_PROFILE
+fi
+if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
+  if [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
+    export FLEET_CODEX_MANAGED=1
+    # ccquota's default profile is machine-local, not the invoking pane's home.
+    unset CODEX_HOME
+    exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
+  fi
+  FLEET_CODEX_SUBSCRIPTION=$(bash "$BIN/fleet-account.sh" profile --name "$FLEET_CODEX_PROFILE" \
+    --home "${CODEX_HOME:-$HOME/.codex}" --account "${FLEET_CODEX_ACCOUNT:-}") || exit 1
+  export FLEET_CODEX_SUBSCRIPTION
 fi
 
 # --- argv: the LAST argument is the seed prompt unless it looks like a flag ----

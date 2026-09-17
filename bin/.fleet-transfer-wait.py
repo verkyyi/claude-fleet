@@ -74,6 +74,9 @@ def arm(a):
         if a.loop:
             # Freeze the source's chosen cadence/prompt before it ends its turn.
             (request / 'loop-spec.json').write_text(Path(a.loop).read_text(), encoding='utf-8')
+        for field, filename in (('target_file', 'target.json'), ('draft_file', 'unsent-draft.txt')):
+            if getattr(a, field):
+                (request / filename).write_text(Path(getattr(a, field)).read_text(), encoding='utf-8')
         # Create before the tmux shell redirects output: its inherited umask may
         # be 022, while conversation-adjacent files here must remain 0600.
         (request / "wait.log").touch(mode=0o600)
@@ -143,11 +146,14 @@ def wait(request):
             raise ValueError("source did not reach a clean Stop without operator activity before the deadline")
         state(request, "transferring")
         cmd = ["bash", str(Path(__file__).parent / "fleet-transfer.sh"),
-               "--session", r["session"], "--window", r["window"], "--to", "codex",
+               "--session", r["session"], "--window", r["window"], "--to", r.get('to', 'codex'),
                "--handoff", str(request / "notes.md"), "--armed-request", str(request),
                "--expected-source", "%s:%s:%s" % (r["pane"], r["pid"], r["sid"])]
         if r.get('loop'):
             cmd.extend(['--loop', str(request / 'loop-spec.json')])
+        for field, flag, filename in (('target_file', '--target-file', 'target.json'), ('draft_file', '--draft-file', 'unsent-draft.txt')):
+            if r.get(field):
+                cmd.extend([flag, str(request / filename)])
         if r.get('codex_home'):
             cmd.extend(['--codex-home', r['codex_home']])
         env = dict(os.environ)
@@ -184,6 +190,8 @@ def main():
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
     a.add_argument("--loop", default='')
+    a.add_argument('--to', choices=('claude', 'codex'), default='codex')
+    a.add_argument('--target-file', default=''); a.add_argument('--draft-file', default='')
     a.add_argument("--codex-home", default='')
     w = sub.add_parser("wait")
     w.add_argument("request", type=Path)

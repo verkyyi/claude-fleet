@@ -216,11 +216,18 @@ dispatch_fleet() { (
   # The subscription gate measures Claude, while the disk/session caps apply to
   # every agent. Read the fleet's agent AFTER its overlay, and never let a Claude
   # quota hold stop Codex autofill (#730). The measurement is shared once per tick.
-  if [ "${FLEET_AGENT:-claude}" != codex ] && [ "$quota_closed" = 1 ]; then
+  if [ "${FLEET_FAILOVER:-0}" = 1 ]; then
+    export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL FLEET_CODEX_SERVER
+    if ! "$BIN/fleet-account.sh" choose --agent "${FLEET_AGENT:-claude}" --spawn \
+      | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("target") else 3)'; then
+      log "$sess: subscription pools unavailable — autofill waits"
+      exit 0
+    fi
+  elif [ "${FLEET_AGENT:-claude}" != codex ] && [ "$quota_closed" = 1 ]; then
     log "$sess: Claude quota gate closed — skip: ${quota_why}"
     exit 0
   fi
-  if [ "${FLEET_AGENT:-claude}" = codex ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
+  if [ "${FLEET_FAILOVER:-0}" != 1 ] && [ "${FLEET_AGENT:-claude}" = codex ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
     if ! codex_quota=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" gate --session "$sess" 2>&1); then
       log "$sess: Codex quota gate closed — skip: $codex_quota"
       exit 0

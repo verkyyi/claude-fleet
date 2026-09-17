@@ -19,7 +19,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
@@ -89,7 +89,11 @@ exec /bin/bash --noprofile --norc -i
 SH
 cat > "$IBIN/fleet-claude.sh" <<'SH'
 #!/bin/bash
-[ "$1" = --agent ] && [ "$2" = claude ] && exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$4" normal
+if [ "$1" = --agent ] && [ "$2" = claude ]; then
+  sid=target-claude
+  [ "${3:-}" != --resume ] || sid=$4
+  exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" normal
+fi
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
 [ ! -f "$TRANSFER_TEST_ROOT/fail-target" ] || exit 37
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
@@ -476,5 +480,32 @@ kill -0 "$PID" || fail 'changed Codex identity must preserve source'; ok
 spawn_codex 63 stuck
 transfer && fail 'stuck Codex source must refuse replacement'
 kill -0 "$PID" || fail 'stuck Codex source must not be killed'; ok
+
+# Reverse handoff uses exact Claude registry readiness in the retained pane.
+spawn_codex 65
+OUT=$(bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to claude 2>&1) || fail 'Codex to Claude cutover'
+BUNDLE=$(packet)
+python3 - "$BUNDLE" "$SID" <<'PYREVERSE' || fail 'reverse handoff lost native target binding or source path'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]);m=json.loads((p/'manifest.json').read_text())
+assert m['source']['agent']=='codex' and m['source']['session_id']==sys.argv[2]
+assert m['target']['agent']=='claude' and m['target']['session_id']=='target-claude'
+assert m['source']['transcript_path'] and m['target']['bound_at']
+PYREVERSE
+ok
+# Same-agent Claude continuation preserves its native UUID and saved draft.
+spawn 66 issue normal
+printf '1、做。2、' > "$WORK/unsent.txt"
+OUT=$(bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to claude --native-resume --draft-file "$WORK/unsent.txt" 2>&1) || fail 'native Claude continuation'
+BUNDLE=$(packet)
+python3 - "$BUNDLE" <<'PYNATIVE' || fail 'native UUID or unsent draft contract'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]);m=json.loads((p/'manifest.json').read_text())
+assert m['source']['session_id']==m['target']['session_id']=='source-66'
+assert m['native_resume'] is True and m['draft']['state']=='unsent'
+assert pathlib.Path(m['draft']['path']).read_text()=='1、做。2、'
+assert '1、做。2、' not in (p/'pickup.md').read_text()
+PYNATIVE
+ok
 
 printf 'fleet-transfer selftest: OK (%s checks)\n' "$checks"

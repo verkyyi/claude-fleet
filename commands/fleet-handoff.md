@@ -15,16 +15,16 @@ it from the pane's `@issue`; a raw/no-issue pane falls back to a local file
 the bound issue (one comment) and local files, and never touches branches, PRs, or
 another fleet.
 
-Explicit **`--to codex`** switches this one Claude session to Codex CLI instead
-of clearing Claude. The same base skill composes the notes; `fleet-transfer.sh`
+Explicit **`--to claude` or `--to codex`** transfers this one session to the named
+Coding Agent in the same worktree. The same base skill composes the notes; `fleet-transfer.sh`
 captures exact source provenance and performs the cutover after the turn ends.
 Transfer notes and conversation evidence stay in private local files (§T).
 
 **Argument** (`$ARGUMENTS`):
 - **empty** → **cycle mode** (default): store the handoff, then arm the clear+resume.
-- **`--to codex`** → **transfer mode**: hand THIS task to Codex in this pane and
+- **`--to claude|codex`** → **transfer mode**: hand THIS task to the named agent in this pane and
   worktree, carrying the source agent, session ID and original transcript path.
-  v1 supports Claude → Codex CLI for an issue worker or raw scratch, not the hub.
+  Both directions and Codex context cycling support an issue worker or linked raw scratch; the hub remains outside this controller.
 - **`pickup [<source>]`** → **pickup mode**: resume from an existing handoff. The
   `<source>` is OPTIONAL (a file path, comment URL, or issue number) — omitted, it
   self-resolves from the pane's `@issue` (§P). This is what the detached helper
@@ -49,7 +49,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   run it. Only the **doc path** differs by seat (below): a `worker` seat stores
   against its bound issue, anything else stores to a local file.
 
-Route exactly: empty → **§C**; `pickup [<source>]` → **§P**; `--to codex` → **§T**.
+Route exactly: empty → **§C**; `pickup [<source>]` → **§P**; `--to claude|codex` → **§T**.
 For unknown arguments or unsupported targets, report the supported forms and
 stop. Never turn a misspelled transfer option into a context clear. A request to
 change coding agent must name the target; don't infer it from context pressure.
@@ -218,16 +218,17 @@ keep `@claude_state` at `working` and stall the helper's wait-idle):
 
 ---
 
-## §T. Transfer mode (`--to codex`) — same task, a new coding agent
+## §T. Transfer mode (`--to claude|codex`) — same task, a named coding agent
 
-This mode runs from the **source Claude** in its issue/scratch worktree. The hub
+This mode runs from the **source Claude or Codex** in its issue/scratch worktree.
+Use the operator-selected target as `TARGET` below (`claude` or `codex`). The hub
 may use the operator CLI described in `~/.claude/fleet/docs/SESSION-TRANSFER.md`
 to select a different window, but this skill never guesses another source pane.
 Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mode.
 
 1. **Resolve the exact source before writing notes.** Run
-   `~/.claude/fleet/bin/fleet-transfer.sh --session <S from §0> --window "$TMUX_PANE" --to codex --dry-run`.
-   It must find this pane's live Claude process, registered session, original
+   `~/.claude/fleet/bin/fleet-transfer.sh --session <S from §0> --window "$TMUX_PANE" --to "$TARGET" --dry-run`.
+   It must find this pane's live process, exact native session, original
    transcript and linked worktree. On refusal, report it and stop. Never guess a
    session from the newest transcript. A `working` state is expected during this
    skill; the after-turn helper below waits for the real Stop hook.
@@ -250,18 +251,18 @@ Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mo
    `python3 ~/.claude/fleet/bin/fleet-loop.py from-claude --transcript <exact source path> --output <private JSON>`;
    verify it is still intended (an old transcript cannot prove a timer is live).
    Pass that path as `--loop <private JSON>` in step 3. Fleet will bind the new
-   Codex thread and own its timer. Calendar-based `CronCreate` jobs and external
+   target session and own its timer. Existing active Fleet loops transfer automatically, including their identity, cadence and ownership generation. Calendar-based `CronCreate` jobs and external
    schedulers are not automatically converted to interval loops.
 3. **Arm as the LAST tool call**, with the verified note path as `DOC` and the
    literal fleet name resolved in §0 as `S`:
 
    ```sh
    ~/.claude/fleet/bin/fleet-transfer.sh --session "$S" \
-     --window "$TMUX_PANE" --to codex --handoff "$DOC" --after-turn
+     --window "$TMUX_PANE" --to "$TARGET" --handoff "$DOC" --after-turn
    ```
 
-   Add `--loop <private JSON>` only when preserving the loop above. On Codex,
-   the pickup binds the exact thread ID; the owner can `defer --seconds N` or
+   Add `--loop <private JSON>` only when importing the native loop above. The
+   controller binds the exact target session; the owner can `defer --seconds N` or
    `stop` through `fleet-loop.py`. Do not re-arm Claude's timer during cutover.
 
    The command returns a request directory containing `state.json` and `wait.log`.
@@ -271,14 +272,19 @@ Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mo
    change. Only after Stop does it capture the final conversation and switch.
    A failure is not success: report the refusal and keep the notes.
 4. **End the turn with one line in the conversation's language, then no tools**:
-   “交接说明已保存；本回合结束后将切换到 Codex。状态记录：`<request>/state.json`。”
+   “交接说明已保存；本回合结束后将切换到 <目标 Agent>。状态记录：`<request>/state.json`。”
    Say the switch is armed, not already completed. The waiter reports its result
    in the pane's status line and request files. Do not schedule another wakeup.
 
-Codex receives the source agent, session ID, original transcript path, frozen
+The target receives the source agent, session ID, original transcript path, frozen
 snapshot and handoff in its initial prompt. It continues the same worktree and
-task after checking current facts; no Codex-native skill invocation is required
-to receive it. Reverse transfers and Codex context cycling are not yet supported.
+task after checking current facts; no target-native skill invocation is required.
+Unsent input belongs in `--draft-file <private file>` and remains explicitly
+unsent; never append its contents to the pickup instruction. Automatic quota
+switches use the same controller, selected by `fleet-account`, without asking an
+exhausted source model to compose another summary. Inspect `fleet-account.sh
+failover-status` for waiting/ambiguous requests; never work around a refused
+identity, active tool, unreadable draft or unconfirmed target.
 
 ---
 

@@ -155,6 +155,9 @@ def hook():
                 "transcript": payload.get("transcript_path", ""),
                 "cwd": payload.get("cwd", ""), "model": payload.get("model", ""),
                 "remote": os.environ.get("FLEET_CODEX_REMOTE", "")}
+        if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
+            subscription = json.loads(os.environ['FLEET_CODEX_SUBSCRIPTION'])
+            data['subscription'] = {key: subscription[key] for key in ('account', 'profile', 'home')}
     else:
         data = identity(pane)
         if data.get("session_id") != payload["session_id"]:
