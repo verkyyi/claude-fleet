@@ -145,6 +145,8 @@ try:
     fixture = work / 'sidebar.conf'
     fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent)) + '\n')
     tm('source-file', str(fixture))
+    tm('set-hook', '-g', 'session-window-changed[72]',
+       "set-option -wF -t fleet-test: @sidebar_ready_on_select '#{@sidebar_worker}'")
 
     call()
     check(not views(), 'detached fleets must not create sidebar processes')
@@ -163,12 +165,18 @@ try:
     threading.Thread(target=drain, daemon=True).start()
     wait_for(lambda: bool(view_on(w1)), 'attach hook did not create sidebar')
     side = view_on(w1)[0]
+    side_pid = tm('display-message', '-p', '-t', side, '#{pane_pid}')
+    check(Path(tm('display-message', '-p', '-t', side, '#{pane_current_path}')).resolve() == bin_dir.parent.resolve(),
+          'a reusable sidebar must not anchor the departed worker worktree')
     check(tm('display-message', '-p', '-t', side, '#{pane_left}:#{pane_width}') == '0:30',
           'sidebar should occupy 30 cells at the left edge')
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'split stole worker focus')
     call()
     check(len(views()) == 1, 'sync must be idempotent')
     wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'sidebar did not render tasks')
+    check('Focus: WORKER' in tm('capture-pane', '-p', '-t', side), 'worker focus cue missing')
+    check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+          'active worker border must identify input focus')
     tm('select-pane', '-t', side)
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
           'sidebar must not become the agent identity for window-targeted tools')
@@ -198,9 +206,21 @@ try:
     wait_for(lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side), 'fold update did not reach view')
     os.write(terminal, b'\x02E')  # actual prefix E, then terminal arrow + Enter
     wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
+    wait_for(lambda: 'TASKS · FOCUS' in tm('capture-pane', '-p', '-t', side),
+             'keyboard navigation needs a persistent focus cue')
+    check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+          'worker header claims input focus while keys go to sidebar')
     os.write(terminal, b'\x1b[B\r')
     wait_for(lambda: bool(view_on(w2)), 'keyboard jump did not move to second worker')
     check(len(views()) == 1, 'background worker retained a sidebar process')
+    check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
+          'keyboard navigation recreated the sidebar instead of moving its populated grid')
+    check(tm('show-options', '-wqv', '-t', w1, '@sidebar_worker') == '',
+          'source window retained sidebar worker metadata after the move')
+    check(tm('show-options', '-wqv', '-t', w2, '@sidebar_ready_on_select') == p2,
+          'destination was selected before its sidebar layout was ready')
+    wait_for(lambda: 'Focus: WORKER' in tm('capture-pane', '-p', '-t', side),
+             'Enter did not restore the worker focus cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'jump did not focus worker input')
     # A terminal mouse event exercises the shipped root-table forwarding bind.
     side2 = view_on(w2)[0]
@@ -209,13 +229,31 @@ try:
     y = int(tm('display-message', '-p', '-t', side2, '#{pane_top}')) + 2
     os.write(terminal, ('\x1b[<0;3;%dM\x1b[<0;3;%dm' % (y, y)).encode())
     wait_for(lambda: bool(view_on(w1)), 'single-click did not jump to first row')
+    check(view_on(w1) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
+          'mouse navigation recreated the sidebar')
+    check(tm('show-options', '-wqv', '-t', w2, '@sidebar_worker') == '',
+          'mouse move left stale worker metadata')
+    check(tm('show-options', '-wqv', '-t', w1, '@sidebar_ready_on_select') == p1,
+          'mouse navigation showed a destination without its sidebar')
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'click stole worker input')
+
+    os.write(terminal, b'\x02E')
+    wait_for(lambda: 'TASKS · FOCUS' in tm('capture-pane', '-p', '-t', side), 'second navigation entry lost focus cue')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: 'Focus: WORKER' in tm('capture-pane', '-p', '-t', side), 'Escape did not restore input focus')
+    check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
+          'Escape left the worker border dimmed')
 
     tm('resize-window', '-t', w1, '-x', '100', '-y', '30')
     wait_for(lambda: not views(), 'narrow screen did not hide sidebar')
     check('FLEET_SIDEBAR=1' in conf.read_text(), 'auto-hide changed saved preference')
     tm('resize-window', '-t', w1, '-x', '160', '-y', '30')
     wait_for(lambda: bool(view_on(w1)), 'wide screen did not restore sidebar')
+    legacy = view_on(w1)[0]
+    tm('set-option', '-p', '-t', legacy, '@sidebar_version', '1')
+    call()
+    check(view_on(w1) != [legacy] and len(view_on(w1)) == 1,
+          'sync must replace a pre-upgrade renderer once before reusing panes')
     call('toggle')
     check(not views(), 'explicit collapse left a view')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')

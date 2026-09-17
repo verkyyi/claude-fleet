@@ -239,7 +239,10 @@ in a header; `prefix ?` is the one place that shows **all** of them together.
 Worker and scratch windows show a **30-column task list on the left** on wide
 screens. It shares the hub's live statuses, pins and parent/child grouping,
 highlights the current worker, and keeps that worker visible even in a folded
-group. Clicking a task goes straight to its input pane. `prefix e` saves the
+group. The current task has a cyan highlight and `▶` marker. The worker's top
+border shows **INPUT** when typing goes to the worker; `prefix E` highlights
+**TASKS · FOCUS** while the arrow keys browse tasks, and Esc returns input to
+the worker. Clicking a task goes straight to its input pane. `prefix e` saves the
 on/off preference as `FLEET_SIDEBAR`; `FLEET_SIDEBAR_WIDTH` sets the width (24–60).
 Below sidebar width + 81 columns (111 by default), the list hides automatically
 to leave 80 columns for the worker, then returns when space permits. `prefix z`

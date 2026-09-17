@@ -93,6 +93,12 @@ on attach, window changes, resize and exit. A kernel-held per-fleet lock seriali
 those hooks. Only a session with a durable fleet conf on its own named socket is
 eligible. Inactive windows lose their sidebar, so worker count does not multiply
 the refresh loops. Narrow screens hide it without changing the saved preference.
+Navigation moves the same populated pane before selecting the destination, in
+one tmux command queue. The curses process, scroll position and rendered list
+survive; the destination never first appears at full width and then splits. The
+renderer runs from the install root so it cannot pin a departed worker's worktree.
+tmux still controls terminal redraws when switching windows. A renderer version
+marker replaces older live views once on upgrade.
 
 The pane carries `@sidebar=1`, never `@dash`, and reads
 `tmux-dashboard-rows.sh --sidebar`: the hub's live ordering, pinning, needs cues
@@ -100,7 +106,11 @@ and folds, with the current worker also exempt from folding. Rows target stable
 window IDs. Mouse forwarding and the `fleet-sidebar` keyboard table keep the
 agent pane active, so window-targeted messaging, capture and process discovery
 still resolve the worker. `@sidebar_worker` records that pane while the view is
-present. The spinner samples its screen for stuck-working detection instead of
+present and is cleared from the source window when the view moves. The UI follows
+this binding after each move. Focus cues use the client's key table, not just
+`pane_active`: **TASKS · FOCUS** means sidebar navigation, **INPUT** means worker
+input, while the cyan `▶` row always identifies the current task. The spinner
+samples its screen for stuck-working detection instead of
 using window activity, which includes sidebar repaints. The view exits if its
 worker disappears, including tmux versions where a manual kill emits no exit hook.
 
