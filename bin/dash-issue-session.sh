@@ -223,6 +223,7 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # synchronous + authoritative; only the slow worktree/window tail goes async). On
 # the tail re-entry this already ran, and re-reading would see OUR OWN assignee and
 # false-refuse.
+issue_json=''; issue_fetched_at=0
 if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   # One issue read (assignee count · state) + one cheap open-PR probe. THE ASSIGNEE
@@ -233,8 +234,14 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   # else" — assigned AT ALL ⇒ taken. An empty read (gh down / missing issue) leaves
   # the counter 0 and state blank → NOT taken, so a gh outage degrades to today's
   # spawn-anyway behaviour, never a false refusal.
-  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state \
-        --jq '"\(.assignees|length)\t\(.state)"' 2>/dev/null)
+  # Keep the same gate header, followed by compact JSON from the SAME read (#459).
+  # A failed pre-claim must never cache the pre-edit empty assignee as authoritative.
+  issue_fetched_at=$(date +%s)
+  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+        --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
+  case "$cs" in
+    *$'\n'*) issue_json=${cs#*$'\n'}; cs=${cs%%$'\n'*} ;;
+  esac
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
   n_assignee="${n_assignee//[^0-9]/}"
   n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null)
@@ -255,7 +262,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   fi
   # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
   # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
-  gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
+  gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1 || issue_json=''
 fi
 
 wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
@@ -264,13 +271,17 @@ wt="$(dirname "$MAIN")/$(basename "$MAIN")-$slug"
 # order (issue #216): an explicit --title wins — the create-then-spawn caller just
 # wrote the issue and KNOWS its title, so it needs no network and can't miss the
 # way a brand-new issue does in the not-yet-refreshed collector cache. Else fall
-# back to THIS fleet's cached issues (a backlog pick is already collected; the
+# back to the issue JSON just read by the gate (#459), then THIS fleet's cached
+# issues (a backlog pick is already collected; the
 # dash writes an optimistic row before spawning), then to a `gh issue view`
 # round-trip (which can lag/fail right after create). The git branch/worktree stay
 # "issue-<N>" (the PR map keys off the branch) — only the display name changes.
 # CJK and other non-latin titles name the window in their own script (issue #579);
 # only a title with no LETTERS at all (emoji/punctuation-only) falls back to the slug.
 title="$WIN_TITLE"
+if [ -z "$title" ] && [ -n "$issue_json" ]; then
+  title=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])' 2>/dev/null) || title=''
+fi
 if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
@@ -348,6 +359,14 @@ if [ ! -d "$wt" ]; then
   git -C "$MAIN" worktree add -b "$slug" "$wt" "origin/$BASE" >/dev/null 2>&1 \
     || git -C "$MAIN" worktree add "$wt" "$slug" >/dev/null 2>&1 \
     || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
+fi
+# Machine-local, per-worktree Git metadata, never repo/charter content (#459).
+# Clear on EVERY spawn (including force/opt-out/tail-only) so an old snapshot
+# cannot survive a reuse. Async tails deliberately fall back to a fresh gh read.
+python3 "$BIN/fleet-issue-cache.py" clear "$wt" 2>/dev/null || :
+if [ -n "$issue_json" ]; then
+  printf '%s\n' "$issue_json" | python3 "$BIN/fleet-issue-cache.py" write \
+    "$wt" "$REPO" "$num" "$issue_fetched_at" 2>/dev/null || :
 fi
 # Capture the new window-id and drive every follow-up op through it — the window
 # name is now the issue-title slug (not a unique handle), so targeting by
