@@ -126,6 +126,15 @@ clock**: it used to count `sleep 1` iterations, which under this daemon's
 load 40+ — the budget loosening by exactly the factor that made the work slow. Ten
 phases holding an elastic budget would have been ten copies of one bug.
 
+Normal completion now wakes the waiting shell through a private FIFO (#701),
+removing the one-second return floor. The FIFO is opened and immediately unlinked;
+its setup costs a fixed mktemp/mkfifo/rm sequence per call. Waiting uses builtin
+`read -t 1` and `SECONDS`, so it adds no fork per poll and also works on bash 3.2.
+The existing process-group kill and status-preserving `wait` still enforce the
+deadline. A job that replaces its EXIT trap or execs is noticed by the one-second
+liveness check. Failed FIFO setup or an fd 9 already in use by the caller falls
+back to the old bounded sleep loop, preserving the caller's file descriptors.
+
 The heartbeat already timed every phase, so *which* phase ate the tick was free
 information nobody printed; `over=` and `skipped=` now carry it and `fleet-doctor`
 reports it, so the next time the bottleneck moves it does not cost an investigation.
@@ -155,8 +164,7 @@ So the tick now bounds itself, on the collector's model:
   (`…_TMUX_BUDGET`). Without this the per-iteration check is theatre: one
   `tmux display-message` that never returns (57s observed, #582) defeats any
   number of checks *between* iterations. The granularity is per **socket**, not
-  per call, because `fleet_timebox` polls once a second — wrapping every
-  round-trip would put a 1s floor on every *window*.
+  per call, to avoid repeating timebox setup and job creation for every window.
 - **Wind down, never self-kill.** At the budget the tick stops *starting* work,
   writes its heartbeat, releases the lock and exits 0. A `kill $$` would be the
   #582 regression: the process holds the lock and only its `EXIT` trap frees it.
