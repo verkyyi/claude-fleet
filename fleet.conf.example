@@ -207,6 +207,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex worker model @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_CODEX_MODEL=""
 
+# Optional native same-thread fallback for a model-specific quota cap. The
+# account home must be registered for quota collection. No model-name guessing:
+# explicitly map BOTH models to limit IDs reported by fleet-codex-model.sh limits.
+# @label=Codex fallback model @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_MODEL_FALLBACK=""
+# @label=Codex model quota limit IDs @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_CODEX_MODEL_LIMIT_IDS='{}'
+
 # Each Codex fleet pane gets a private local app-server for exact-session queue
 # delivery. Its guardian shuts it down with the TUI, including a killed launcher.
 # Set 0 only to troubleshoot the legacy embedded launch (no live queue delivery).
