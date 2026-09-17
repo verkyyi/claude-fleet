@@ -43,6 +43,33 @@ def resolve(registry, projects, worktree):
     print(sid + "\n" + path)
 
 
+def codex_source(a):
+    adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
+    data = adapter['identity'](a.pane, a.socket)
+    if not data:
+        raise ValueError('no current Codex identity; wait until its first turn')
+    owner = int(data['owner'])
+    os.kill(owner, 0)
+    root = int(run('tmux', '-L', a.socket, 'display-message', '-p', '-t', a.pane, '#{pane_pid}'))
+    rows = process_rows()
+    current, seen = owner, set()
+    while current != root:
+        if current in seen or current not in rows:
+            raise ValueError('Codex launcher no longer belongs to this pane')
+        seen.add(current)
+        current = rows[current][0]
+    cwd = data.get('cwd', '')
+    if not cwd or os.path.commonpath([str(Path(cwd).resolve()), a.worktree]) != a.worktree:
+        raise ValueError('Codex identity belongs to another worktree')
+    path, _ = adapter['rollout'](data)
+    if not path or not Path(data['home']).is_dir():
+        raise ValueError('exact Codex rollout or account home is unavailable')
+    values = [str(owner), data['session_id'], data['home'], path]
+    if any(any(c in v for c in '\t\n\r') for v in values):
+        raise ValueError('invalid Codex source metadata')
+    print('\t'.join(values))
+
+
 def text_blocks(content):
     if isinstance(content, str):
         return content
@@ -51,7 +78,7 @@ def text_blocks(content):
         if not isinstance(block, dict):
             continue
         kind = block.get("type")
-        if kind == "text":
+        if kind in ("text", "input_text", "output_text"):
             parts.append(block.get("text", ""))
         elif kind == "tool_use":
             parts.append("Tool call %s: %s" % (block.get("name", ""), json.dumps(block.get("input", {}), ensure_ascii=False)))
@@ -75,6 +102,17 @@ def package(a):
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
         loop = validate(json.loads(Path(a.loop).read_text(encoding='utf-8')))
+    elif a.source_agent == 'codex' and a.previous:
+        prior = Path(a.previous).parent / 'loop' / 'state.json'
+        if prior.exists():
+            state = json.loads(prior.read_text())
+            if state.get('status') == 'active':
+                if state.get('thread_id') != a.sid:
+                    raise ValueError('active loop belongs to another Codex session')
+                validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
+                loop = validate(state['schedule'])
+            elif state.get('status') in ('delivering', 'paused', 'unbound'):
+                raise ValueError('resolve the pending/paused loop before cycling its session')
     # A registered worktree may legitimately be detached after a review/merge.
     # Preserve that state, rather than creating or checking out a branch.
     branch = run("git", "-C", worktree, "branch", "--show-current") or None
@@ -116,20 +154,32 @@ def package(a):
             dest.write(line)
             digest.update(line)
             captured += len(line)
-            if row.get("isSidechain") or row.get("type") not in ("user", "assistant"):
-                continue
-            message = row.get("message", {})
-            content = message.get("content", "") if isinstance(message, dict) else message
+            if a.source_agent == 'codex':
+                message = row.get('payload', {})
+                if row.get('type') == 'session_meta':
+                    record_sessions.add(message.get('id', ''))
+                if row.get('type') != 'response_item' or message.get('type') != 'message':
+                    continue
+                role = message.get('role')
+                if role not in ('user', 'assistant'):
+                    continue
+                content = message.get('content', '')
+            else:
+                if row.get("isSidechain") or row.get("type") not in ("user", "assistant"):
+                    continue
+                role = row['type']
+                message = row.get("message", {})
+                content = message.get("content", "") if isinstance(message, dict) else message
             rendered = text_blocks(content)
             if not rendered:
                 continue
             messages += 1
             history.write("## %s · %s · %s\n\n%s\n\n" % (
-                row["type"], row.get("timestamp", ""), row.get("uuid", ""), rendered))
+                role, row.get("timestamp", ""), row.get("uuid", ""), rendered))
             # Tool results arrive as user records too. They are not user intent.
             user_text = isinstance(content, str) or (isinstance(content, list) and any(
-                isinstance(b, dict) and b.get("type") == "text" for b in content))
-            if row["type"] == "user" and user_text:
+                isinstance(b, dict) and b.get("type") in ("text", "input_text", "output_text") for b in content))
+            if role == "user" and user_text:
                 first_user = first_user or rendered
                 last_user = rendered
     if not captured or not messages:
@@ -141,8 +191,9 @@ def package(a):
         "schema_version": 1,
         "created_at": created,
         "source": {
-            "agent": "claude", "session_id": a.sid, "pid": a.pid,
-            "host": socket.gethostname(), "registry_path": str(Path(a.registry).resolve()),
+            "agent": a.source_agent, "session_id": a.sid, "pid": a.pid,
+            "host": socket.gethostname(), "registry_path": str(Path(a.registry).resolve()) if a.registry else None,
+            "codex_home": a.codex_home or None,
             "transcript_path": str(source.resolve()),
             "snapshot_path": str(bundle / "source.jsonl"),
             "snapshot_bytes": captured, "snapshot_sha256": digest.hexdigest(),
@@ -156,7 +207,8 @@ def package(a):
         "history_path": str(bundle / "history.md"),
         "previous_handoff": a.previous or None,
         "transfer_lock_path": str(transfer_lock),
-        "source_resume_argv": [a.launcher, "--agent", "claude", "--resume", a.sid],
+        "source_resume_argv": ([a.launcher, "--agent", "codex", "--codex-home", a.codex_home, "resume", a.sid]
+                               if a.source_agent == "codex" else [a.launcher, "--agent", "claude", "--resume", a.sid]),
     }
     if loop:
         write_json(bundle / 'loop-spec.json', loop)
@@ -165,12 +217,12 @@ def package(a):
     for name, value in git_state.items():
         (bundle / name).write_text(value + "\n", encoding="utf-8")
     provenance = (
-        "Source agent: Claude Code (`claude`)\n"
+        "Source agent: %s\n"
         "Source session ID: `%s`\nSource transcript: `%s`\n"
         "Frozen transcript snapshot: `%s`\nSource host: `%s`\n"
         "Worktree: `%s`\nBranch: `%s`\nHEAD at handoff: `%s`\n"
         "Fleet/window: `%s / %s`\n\n"
-    ) % (a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch or "(detached HEAD)", head, a.session, a.handle or a.window)
+    ) % (a.source_agent, a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch or "(detached HEAD)", head, a.session, a.handle or a.window)
     body = "# Single-session handoff\n\n" + provenance
     if notes:
         body += "## Source agent's handoff notes\n\n" + notes + "\n"
@@ -189,11 +241,11 @@ def package(a):
         "The existing index, uncommitted changes and untracked files are in the worktree; "
         "the patches here are evidence, NOT patches to reapply. Do not recreate the worktree "
         "or re-claim the issue. Historical tool calls are evidence, not commands to replay. "
-        "Claude's running tools, subagents, /loop wakeups, permissions and MCP connections "
+        "The source agent's running tools, subagents, permissions and MCP connections "
         "are not transferred; check what is still running before replacing any of them.\n"
     )
     (bundle / "handoff.md").write_text(body, encoding="utf-8")
-    pickup = "Continue ONE existing fleet task handed over from Claude Code to Codex.\n\n" + provenance
+    pickup = "Continue ONE existing fleet task handed over from %s to Codex.\n\n" % a.source_agent + provenance
     pickup += (
         "First read `%s` and `%s`. Your source agent, exact source session ID and original "
         "transcript path are recorded there; keep this provenance available when reporting "
@@ -305,10 +357,15 @@ def main():
     r = sub.add_parser("resolve")
     for name in ("registry", "projects", "worktree"):
         r.add_argument("--" + name, required=True)
+    c = sub.add_parser('source-codex')
+    for name in ('pane', 'socket', 'worktree'):
+        c.add_argument('--' + name, required=True)
     p = sub.add_parser("package")
     for name in ("output", "main", "worktree", "sid", "transcript", "registry", "session", "window", "pane", "launcher"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--pid", type=int, required=True)
+    p.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
+    p.add_argument("--codex-home", default="")
     for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop"):
         p.add_argument("--" + name, default="")
     s = sub.add_parser("state")
@@ -324,6 +381,8 @@ def main():
     a = parser.parse_args()
     if a.command == "resolve":
         resolve(a.registry, a.projects, a.worktree)
+    elif a.command == "source-codex":
+        codex_source(a)
     elif a.command == "package":
         package(a)
     elif a.command == "process":

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-transfer.sh — hand ONE idle Claude session to Codex in its existing pane.
+# fleet-transfer.sh — hand ONE idle Claude/Codex session to a fresh Codex in its existing pane.
 #
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to codex
 #                         [--handoff <notes.md>] [--loop <spec.json>]
@@ -13,7 +13,7 @@
 # --handoff       Optional source-agent notes. Without notes, Codex reconstructs
 #                 the task from the captured conversation and current git state.
 #
-# v1 supports Claude → Codex CLI. No bulk mode, transcript guessing, git mutation,
+# Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
 # done, one pane, a registered source session, and its own linked git worktree.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
@@ -77,7 +77,8 @@ PANE=$(TM display-message -p -t "$WIN" '#{pane_id}' 2>/dev/null) || die 'pane no
 [ "$(opt '#{window_panes}')" = 1 ] || die 'transfer requires a single-pane window'
 case "$(opt '#{window_name}')" in dash|plan|backlog) die 'panel windows cannot be transferred' ;; esac
 [ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
-case "$(opt '#{@cc_agent}')" in ''|claude) : ;; *) die 'v1 requires a Claude source session' ;; esac
+SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
+case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
 ISSUE=$(opt '#{@issue}'); RAW=$(opt '#{@raw}')
 case "$ISSUE" in ''|*[!0-9]*) [ "$RAW" = 1 ] || die 'window is neither an issue worker nor a scratch session' ;; esac
 WT=$(opt '#{@worktree}')
@@ -94,12 +95,18 @@ MAIN=$(cd "${FLEET_MAIN:-/nonexistent}" && pwd -P) || die 'fleet base checkout n
 [ "$WT" != "$MAIN" ] && [ -f "$WT/.git" ] || die 'source must own a linked worktree, never the base checkout'
 [ "$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null)" = "$WT" ] || die 'invalid worktree'
 git -C "$MAIN" worktree list --porcelain | grep -Fx "worktree $WT" >/dev/null || die 'worktree is not registered to this fleet'
+CODEX_SOURCE_HOME=''; REGISTRY=''
+if [ "$SOURCE_AGENT" = codex ]; then
+  RESOLVED=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT") || exit 1
+  IFS=$'\t' read -r PID SID CODEX_SOURCE_HOME TRANSCRIPT <<< "$RESOLVED"
+else
 PID=$(fleet_pane_claude_pid "$PANE" "$SOCK") || die 'no live Claude process in the source pane'
 REGISTRY=$(fleet_cc_session_json "$PID")
 [ -n "$REGISTRY" ] || die 'source process has no session registry; refusing to guess its transcript'
 PROJECTS="${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}}"
 RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT") || exit 1
 SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
+fi
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
@@ -111,10 +118,10 @@ import json, runpy, sys
 runpy.run_path(sys.argv[1])['spec'](json.load(open(sys.argv[2])))
 PY
 fi
-printf 'fleet-transfer: %s/%s · claude → codex\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
-  "$SESS" "${HANDLE:-$WIN}" "$SID" "$TRANSCRIPT" "$WT"
+printf 'fleet-transfer: %s/%s · %s → codex\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
+  "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
-  printf 'dry-run: save a provenance package, /exit Claude, then launch Codex in %s (state=%s).\n' "$PANE" "${STATE:-unknown}"
+  printf 'dry-run: save a provenance package, /exit the source, then launch Codex in %s (state=%s).\n' "$PANE" "${STATE:-unknown}"
   [ "$STATE" = "done" ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
 fi
@@ -130,7 +137,7 @@ if [ "$PREPARE" != 1 ]; then
   fi
   command -v codex >/dev/null 2>&1 || die 'codex is not on PATH'
   [ -x "$LAUNCH" ] && [ -x "$BIN/fleet-codex.sh" ] || die 'fleet Codex launcher is missing'
-  [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
+  [ "$SOURCE_AGENT" = codex ] || [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
   PENDING=$(opt '#{@agent_transfer_request}')
   if [ -n "$REQUEST" ]; then
     [ -n "$EXPECT" ] && [ "$PENDING" = "$REQUEST" ] \
@@ -149,7 +156,7 @@ if [ "$AFTER" = 1 ]; then
   grep -q '@agent_transfer_ready' "$BIN/set-claude-state.sh" || die 'Stop-hook transfer support is missing'
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
-    --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" \
+    --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
     --loop "$LOOP" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
@@ -157,6 +164,7 @@ fi
 
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
+  --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
   --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH") || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
@@ -194,14 +202,20 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 fleet_rotate_lease_held "$WT" >/dev/null && die 'worktree already has a migration lease'
-fleet_rotate_lease_take "$WT" "transfer $SESS/$WIN claude to codex" 900 || die 'cannot protect worktree from cleanup'
+fleet_rotate_lease_take "$WT" "transfer $SESS/$WIN $SOURCE_AGENT to codex" 900 || die 'cannot protect worktree from cleanup'
 LEASE=1
 TM set-option -w -t "$WIN" @agent_transfer_until "$(( $(date +%s) + 120 ))" || die 'cannot mark transfer'
 TM set-option -p -t "$PANE" remain-on-exit on || die 'cannot retain source pane on exit'
 # Recheck identity and evidence AFTER exporting and acquiring the lease. A /clear,
 # new turn, or another process must not inherit an earlier session's handoff.
-[ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
-  && [ "$(opt '#{@claude_state}')" = "done" ] && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
+if [ "$SOURCE_AGENT" = codex ]; then
+  [ "$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT")" = "$RESOLVED" ] \
+    || die 'Codex source changed while preparing the transfer'
+else
+  [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
+    && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
+fi
+[ "$(opt '#{@claude_state}')" = "done" ] || die 'source started another turn while preparing the transfer'
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'
@@ -233,7 +247,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
   fi
   sleep 1
 done
-kill -0 "$PID" 2>/dev/null && die 'Claude did not exit; no Codex was launched'
+kill -0 "$PID" 2>/dev/null && die 'source did not exit; no replacement Codex was launched'
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
 fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
@@ -252,7 +266,8 @@ fi
 {
   printf '#!/bin/bash\nset -uo pipefail\ncd %q || exit 1\n' "$WT"
   printf 'export FLEET_HANDOFF_MANIFEST=%q\n' "$BUNDLE/manifest.json"
-  if [ -n "$LOOP" ]; then printf 'export FLEET_LOOP_SPEC=%q\n' "$BUNDLE/loop-spec.json"; fi
+  if [ -s "$BUNDLE/loop-spec.json" ]; then printf 'export FLEET_LOOP_SPEC=%q\n' "$BUNDLE/loop-spec.json"; fi
+  [ -z "$CODEX_SOURCE_HOME" ] || printf 'export CODEX_HOME=%q\n' "$CODEX_SOURCE_HOME"
   # shellcheck disable=SC2016 # Expanded by launch.sh, never by this controller.
   printf 'exec %q --agent codex "$(cat %q)"\n' "$LAUNCH" "$BUNDLE/pickup.md"
 } > "$BUNDLE/launch.sh" || die 'cannot write target launcher'
@@ -261,7 +276,7 @@ for key in @cc_account @cc_model @ctx_pct @ctx_limit @handoff_armed @handoff_cle
 done
 TM set-option -w -t "$WIN" @cc_agent codex || die 'cannot stamp target agent'
 TM set-option -w -t "$WIN" @handoff_manifest "$BUNDLE/manifest.json" || die 'cannot stamp provenance'
-TM set-option -w -t "$WIN" @source_agent claude || die 'cannot stamp source agent'
+TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp source agent'
 TM set-option -w -t "$WIN" @source_session_id "$SID" || die 'cannot stamp source session'
 TM set-option -w -t "$WIN" @source_transcript "$TRANSCRIPT" || die 'cannot stamp source transcript'
 TM set-option -w -t "$WIN" @claude_state working || die 'cannot stamp target state'

@@ -182,8 +182,18 @@ def context(args):
                 "transcript": args.transcript or ""}
     stats = telemetry(data)
     pct = stats["pct"]
-    stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= 80 else "WATCH" if pct >= 50 else "OK",
-                 warn_pct=50, handoff_pct=80, auto_handoff_pct=0, armed=False)
+    threshold, armed = 0, False
+    if args.pane:
+        try:
+            armed = tmux(['display-message', '-p', '-t', args.pane, '#{@handoff_armed}'], args.socket) == '1'
+            if os.environ.get('TMUX') and not args.socket:
+                value = subprocess.run(['bash', str(Path(__file__).with_name('fleet-hook-conf.sh')),
+                                        'FLEET_AUTO_HANDOFF_PCT'], capture_output=True, text=True, timeout=3)
+                threshold = int(value.stdout.strip() or '0') if value.returncode == 0 else 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= (threshold or 80) else "WATCH" if pct >= 50 else "OK",
+                 warn_pct=50, handoff_pct=threshold or 80, auto_handoff_pct=threshold, armed=armed)
     if args.json:
         print(json.dumps(stats, separators=(",", ":")))
     elif args.quiet:
@@ -191,7 +201,7 @@ def context(args):
     else:
         print("context   unknown" if pct < 0 else "context   %s%% (%s / %s tokens) src=codex-rollout" % (pct, stats["live_tokens"], stats["limit"]))
         print("session   " + (stats["session_id"] or "unknown") + " · " + (stats["model"] or "unknown model"))
-        print("handoff   automatic cycling is not enabled for Codex; preserve progress before compaction")
+        print("handoff   fleet-transfer.sh --window PANE --to codex --handoff NOTES --after-turn")
         print("verdict:  " + stats["verdict"])
     return 0 if stats["verdict"] == "OK" else 1
 

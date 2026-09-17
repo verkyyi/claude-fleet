@@ -1,12 +1,12 @@
-# Transfer one Claude session to Codex
+# Transfer or refresh one session with Codex
 
-`bin/fleet-transfer.sh` hands one existing Claude Code task to Codex CLI in the
+`bin/fleet-transfer.sh` hands one existing Claude Code or Codex task to a fresh Codex CLI conversation in the
 same fleet window and git worktree. The incoming agent is explicitly told the
 source agent, source session ID, original transcript path and snapshot path.
 It can search the source conversation whenever the handoff notes need detail.
 
 This is a new Codex conversation with provenance, not `codex resume` of a Claude
-session. v1 supports **Claude → Codex CLI**, one issue worker or scratch session
+session. It supports **Claude → Codex CLI** and **Codex → fresh Codex**, one issue worker or scratch session
 at a time. Desktop-app transfer and the reverse direction are not implemented.
 
 ## Use the existing fleet-handoff skill
@@ -39,6 +39,29 @@ hold (default 30 seconds). Inspect these files if the pane has not switched.
 
 Only the source needs the skill. Codex receives a normal initial pickup prompt
 containing the handoff and source paths and continues in the same worktree.
+
+## Native Codex context cycling
+
+Inside a Codex worker, write private handoff notes outside the repository, then
+run this as the last tool call and end the turn after it confirms arming:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-transfer.sh --window "$TMUX_PANE" --to codex \
+  --handoff /absolute/path/to/notes.md --after-turn
+```
+
+The same waiter, typing hold, transfer lock and worktree lease apply. The source
+is the exact SessionStart UUID and its launcher process, checked against the
+pane's process tree. The packet renders Codex message records and retains its
+CODEX_HOME; the fresh conversation and manual recovery recipe use that home.
+The rollout, index and uncommitted files remain available. A missing or stale
+identity never selects a Claude transcript or another Codex session.
+
+`FLEET_AUTO_HANDOFF_PCT` also applies to Codex. At a clean Stop above the configured
+threshold, the hook requests notes and this native command; the new launch clears
+the nudge latch. It never sends Claude's slash command to Codex. An active Fleet
+loop keeps its recorded schedule across the cycle; a paused or ambiguous loop
+must be resolved first. Loop dispatch waits while a handoff is pending.
 
 ## Preview and transfer
 

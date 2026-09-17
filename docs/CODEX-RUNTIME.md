@@ -21,8 +21,10 @@ window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
 interface; fixture tests pin the supported 0.154 shape.
 
-Context measurement does not activate Claude's auto-handoff directive on Codex.
-The native Codex context cycle is a separate adapter.
+`FLEET_AUTO_HANDOFF_PCT` requests a native Codex context cycle at a clean Stop.
+Write durable notes and run `fleet-transfer.sh --window PANE --to codex
+--handoff NOTES --after-turn`. The existing transfer controller retains the
+account home, transcript provenance and worktree. See [session transfer](SESSION-TRANSFER.md).
 
 ## Messaging
 

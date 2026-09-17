@@ -254,7 +254,9 @@ def dispatch(path, now=None):
             try:
                 current(r)
                 # Wait behind a real turn, an operator dialog, or recent typing.
-                if pane(r, '#{@claude_state}') != 'done':
+                if (pane(r, '#{@claude_state}') != 'done'
+                        or pane(r, '#{@agent_transfer_request}')
+                        or pane(r, '#{@handoff_armed}') == '1'):
                     return
                 for line in tm(r, 'list-clients', '-F', '#{client_activity}|#{window_id}').splitlines():
                     activity, win = line.split('|', 1)
