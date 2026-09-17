@@ -4,11 +4,10 @@
 # the tmux side-effect. Modes:
 #   bind mode    (bind flag, set by ctrl-g): bind/unbind <target> to issue query
 #   rename mode  (rename flag, set by ctrl-e): rename <stored target> to query
-#   typed name   (no flag, query non-empty): spawn an EMPTY scratch session NAMED
+#   typed name   (no flag, query non-empty): spawn a scratch session NAMED
 #                with the query (dash-raw-session.sh --name-file, #534) — the dash's
-#                always-visible prompt line is the quick-scratch box. No seed prompt:
-#                the session opens at `❯` for the operator to drive (it seeded the
-#                text as claude's first prompt from #493 until #534). The text is
+#                always-visible prompt line is the quick-scratch box. The full
+#                text prefills the first input as an editable, UNSENT draft. It is
 #                the name VERBATIM — no prefix syntax: the `codex:` / `claude:`
 #                one-off override from #547 was removed in #559 (two ways to pick
 #                the agent was one too many; the toggle key / prefix+c / conf is
@@ -32,7 +31,7 @@ ROWS="$BIN/tmux-dashboard-rows.sh"
 # never a literal here, or a rename's Enter would drop the agent off the line.
 PROMPT=$(bash "$BIN/dash-agent-prompt.sh" prompt 2>/dev/null); [ -n "$PROMPT" ] || PROMPT='▸ '
 
-# Typed name → an empty scratch named after it (#534). Checked FIRST, before any view logic: the prompt line
+# Typed name → a named scratch with an unsent input draft. Checked FIRST: the prompt line
 # means the same thing in the live and the landed view, and it is mode-free — a
 # rename/bind in progress owns the query line instead (those branches below).
 #

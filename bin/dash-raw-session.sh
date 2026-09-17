@@ -35,8 +35,9 @@
 #   * is marked @raw=1, carries @worktree=<path>, and has NO @issue, so the
 #     issue machinery leaves it alone.
 #   * is named `scratch-<N>` (matching its worktree suffix) by default, OR an
-#     optional display-only name via --name (issue #225). The name is
-#     cosmetic/navigational only — everything downstream keys off @raw=1 / absence
+#     optional name via --name (issue #225). The full name also prefills the first
+#     input as an UNSENT draft (unless --prompt supplies a seed). Everything
+#     downstream keys off @raw=1 / absence
 #     of @issue, NOT the window name — but it must not collide with a panel name
 #     (plan/dash/backlog), which the dash hides; such a name (or one that empties
 #     out after sanitizing) falls back to the auto `scratch-<N>` name.
@@ -76,10 +77,8 @@
 #
 # --prompt <text>: a SEEDED scratch — a CLI / headless caller's path (the cross-fleet
 # handoff pattern: `--prompt '/fleet-handoff pickup <file>' <target-fleet>`). The
-# dash prompt line routed here from #493 until #534; it now hands its text over as
-# --name-file — an operator typing into the dash wants an EMPTY session named after
-# the text, sitting at `❯`, not one already working (and a Chinese name at that,
-# hence the display-width cap below). The text is handed to `claude` as its initial prompt,
+# dash prompt line hands its text over as --name-file: a window name plus an
+# editable, unsent draft. Only --prompt is handed to `claude` as its initial prompt,
 # exactly how dash-issue-session.sh seeds a worker, so the session starts WORKING on
 # it instead of sitting at an empty `❯`. Everything else — worktree, @raw, cap,
 # naming, reaping — is the plain scratch. A seeded scratch always takes the COLD
@@ -90,8 +89,8 @@
 # channel that is deterministic is the launch argument.
 set -uo pipefail
 
-# Args (order-independent): --name <n> / --name=<n> is the optional display-only
-# window name (issue #225); --prompt <t> / --prompt=<t> is the optional seed prompt;
+# Args (order-independent): --name <n> / --name=<n> is the optional window name
+# and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <target-session>.
 NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; ORIGIN=""; AGENT=""
@@ -325,6 +324,22 @@ fi
 # in the holding session with no handle, and only becomes a fleet window here at
 # claim time. Best-effort — the dash backfills a window that ends up without one.
 fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
+
+# Keep the full name separate from the clipped/deduplicated window title. The
+# helper waits for the agent's input to settle, then pastes WITHOUT Enter. Pin a
+# pane id now so a later split/focus change cannot redirect the draft elsewhere.
+# Explicit --prompt keeps its existing seeded behavior and takes precedence.
+if [ -n "${NAME//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
+  df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
+  pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
+  if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$NAME" > "$df"; then
+    TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' '$warm' >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
+      || { rm -f "$df"; TM display-message 'raw: could not prefill the scratch name' 2>/dev/null; }
+  else
+    [ -n "$df" ] && rm -f "$df"
+    TM display-message 'raw: could not stage the scratch input' 2>/dev/null
+  fi
+fi
 
 # Refill the pool in the background, so the NEXT ⌃s is instant too — but NOT right
 # now. Warming costs a whole cold claude boot (node + the fleet's MCP set), and

@@ -7,8 +7,8 @@
 #   COLLAPSED BY DEFAULT — the parent's `3/5 ✓ · 1!` badge speaks for the block;
 #   a child in `needs` stays visible anyway; on a non-empty prompt line ←/→ are
 #   the query line's cursor keys, as always) ·
-#   Enter jump to that window · type a name + Enter → an EMPTY scratch
-#   session named after it, no prompt sent (#534; the prompt line at the bottom is
+#   Enter jump to that window · type a name + Enter → a scratch
+#   session named after it, with an unsent input draft (the bottom prompt line is
 #   always visible; dash-enter.sh hands the text to dash-raw-session.sh --name-file) ·
 #   ⌃n file an issue + spawn its worker ·
 #   ⌃s raw scratch session (instant — no prompt) · ⌃e rename the highlighted
@@ -104,17 +104,16 @@ ENTER_TAIL=""; [ -n "$POPUP" ] && ENTER_TAIL="+abort"
 # bind), and the `? keys` token was never tappable. The operator chose to drop the
 # row outright rather than relocate its content, so:
 #   • the ghost text carried BOTH ↵ meanings (typed → named scratch, empty → jump)
-#     until #554 gave its second half to the agent hint — since #559 `↵ 新开空
-#     scratch · 切换 agent: ⌃v` (the resolved toggle key, never a literal);
+#     until #554 gave its second half to the agent hint; it now says
+#     `↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v` (the resolved key);
 #     empty-↵ = jump is the cheatsheet's;
 #   • the ＋new chip is gone with the row — ⌃n is the dash's only new-issue+worker
 #     path (the backlog popup, prefix b, keeps its own chip);
 #   • `?` stays bound (empty line → the cheatsheet, fleet-keys.sh --context dash).
 # The prompt line at the bottom is ALWAYS visible (no --no-input): it is the
-# quick-scratch box — type a name, ↵ → an EMPTY scratch session named after it
-# (dash-enter.sh → dash-raw-session.sh --name-file; it seeded a prompt until #534 —
-# an operator typing here wants a session to drive, not one already working). The
-# hint lives in the input's ghost text, so it vanishes the moment you start typing.
+# quick-scratch box — type a name, ↵ → a scratch session named after it, with the
+# full text prefilled as an unsent draft (dash-enter.sh → dash-raw-session.sh
+# --name-file). The hint lives in the input's ghost text, so it vanishes when you type.
 # Typing never filters (--disabled); ↵ on an EMPTY line is still plain jump.
 # --no-separator + --info=hidden: the input costs ONE row, not two (iPad-height
 # panes), and the list runs straight into it.
@@ -197,7 +196,7 @@ run_dash() {
   # change-ghost, all children of this fzf — says the key the bind above holds.
   export DASH_GLYPH_AGENT
   PROMPT_NOW=$(bash "$AGENT_PROMPT" prompt 2>/dev/null); [ -n "$PROMPT_NOW" ] || PROMPT_NOW='▸ '
-  GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ 新开空 scratch'
+  GHOST_NOW=$(bash "$AGENT_PROMPT" ghost 2>/dev/null);   [ -n "$GHOST_NOW" ]  || GHOST_NOW='↵ 新开 scratch（预填不发送）'
   bash "$ROWS" | fzf --ansi --delimiter=$'\x1f' --with-nth=3 \
     --header-lines=1 \
     --disabled --no-sort \

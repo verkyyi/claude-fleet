@@ -3,7 +3,7 @@
 # paste-storm guard (issue #531).
 #
 # The bug: the dash's always-visible prompt line ("type a task, ↵ → scratch" then;
-# "type a name, ↵ → empty scratch" since #534 — the guard is the same either way)
+# now "type a name, ↵ → scratch with an unsent draft" — the guard is the same)
 # is an fzf input. A terminal delivers a MULTI-LINE PASTE as one Enter PER LINE
 # (fzf has no bracketed-paste awareness on the input line — measured on 0.74.3),
 # so pasting a ~250-line stack trace fired `dash-enter.sh → dash-raw-session.sh
@@ -118,7 +118,7 @@ wait_bg 0.6
 [ "$(grep -c '^SPAWN' "$SPAWN_LOG")" = 1 ] || fail "A a lone task must spawn exactly once after the defer" "$(cat "$SPAWN_LOG")"
 grep -qF 'SPAWN refactor the login flow' "$SPAWN_LOG" || fail "A the spawn must carry the typed text verbatim as the window NAME (--name-file)" "$(cat "$SPAWN_LOG")"
 grep -q -- '--prompt' "$SPAWN_LOG" && fail "A the typed text must NOT be handed over as a seed prompt (--prompt*, #534)" "$(cat "$SPAWN_LOG")"
-ok "A a lone typed name defers, then spawns exactly one EMPTY scratch named after it (#534)"
+ok "A a lone typed name defers, then spawns exactly one scratch with an unsent draft named after it (#534)"
 
 # ===================== B: a multi-line paste spawns nothing ==================
 # 6 Enters fired back-to-back (a paste's per-line Enters) — guard window wide

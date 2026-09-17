@@ -12,7 +12,7 @@
 # and an UNKNOWN value renders as-is in red (the launcher warns + falls back to
 # claude for it; the dash must not crash on it). The ghost text is ONE short line
 # (iPad height, #534/#536) saying what ↵ does and which key flips the agent:
-# `↵ 新开空 scratch · 切换 agent: ⌃v` (issue #559 — the `<agent>:` one-off prefix
+# `↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v` (issue #559 — the `<agent>:` one-off prefix
 # hint it carried from #554 is gone with the prefix itself; the toggle key is the
 # one way to pick the agent from the dash).
 #
@@ -71,7 +71,7 @@ glyph="${DASH_GLYPH_AGENT:-}"
 [ -n "$glyph" ] || glyph=$(bash "$BIN/dash-keymap.sh" glyph agent 2>/dev/null)
 [ -n "$glyph" ] || glyph='⌃v'
 glyph=${glyph//[()]/}; glyph=${glyph//[$'\n\r']/}   # goes inside change-ghost(…) too
-ghost="↵ 新开空 scratch · 切换 agent: ${glyph}"
+ghost="↵ 新开 scratch（预填不发送） · 切换 agent: ${glyph}"
 
 case "$mode" in
   agent)  printf '%s\n' "$agent" ;;
