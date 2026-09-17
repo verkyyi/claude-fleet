@@ -85,6 +85,25 @@ repo-specific pieces are **per-fleet**.
 
 *Collector shared, hub not* is the right split — remember it that way.
 
+### Worker task sidebar
+
+`fleet-sidebar.sh` loads the fleet's preference; `fleet-sidebar.py` manages a
+compact pane on the left of the visible worker. Indexed tmux hooks reconcile it
+on attach, window changes, resize and exit. A kernel-held per-fleet lock serializes
+those hooks. Only a session with a durable fleet conf on its own named socket is
+eligible. Inactive windows lose their sidebar, so worker count does not multiply
+the refresh loops. Narrow screens hide it without changing the saved preference.
+
+The pane carries `@sidebar=1`, never `@dash`, and reads
+`tmux-dashboard-rows.sh --sidebar`: the hub's live ordering, pinning, needs cues
+and folds, with the current worker also exempt from folding. Rows target stable
+window IDs. Mouse forwarding and the `fleet-sidebar` keyboard table keep the
+agent pane active, so window-targeted messaging, capture and process discovery
+still resolve the worker. `@sidebar_worker` records that pane while the view is
+present. The spinner samples its screen for stuck-working detection instead of
+using window activity, which includes sidebar repaints. The view exits if its
+worker disappears, including tmux versions where a manual kill emits no exit hook.
+
 ### Why the collector is shared (not one-per-session)
 
 A per-session collector would run the account-global work (usage, rate-limit,

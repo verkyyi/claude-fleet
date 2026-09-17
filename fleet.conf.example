@@ -851,6 +851,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_STUCK_WORKING_SECS=120
 
+# Show a compact live hub list on the left of worker/scratch windows. prefix+e
+# toggles and saves this preference for the fleet; prefix+E browses by keyboard.
+# Automatically hidden below sidebar width + 81 columns, reserving 80 for work.
+# Only the visible window owns a view; background windows do not repaint it.
+# @label=Worker task sidebar @group=status @tier=common @scope=fleet @edit=bool
+#FLEET_SIDEBAR=1
+
+# Sidebar width in terminal cells (clamped to 24–60). Narrow screens hide the
+# sidebar without changing the saved on/off preference.
+# @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
+#FLEET_SIDEBAR_WIDTH=30
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
 # — a per-fleet override would be a silent no-op — so it is machine-wide (like the
