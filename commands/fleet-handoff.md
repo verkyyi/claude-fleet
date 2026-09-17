@@ -240,8 +240,18 @@ Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mo
    repo (`umask 077`; `mktemp "$HOME/.claude/handoff/agent-transfer.XXXXXX"` after
    creating the directory). Use the resolved source facts if including them;
    the script independently records them in the manifest and pickup prompt.
-   **Never commit or post these notes.** Record Claude-specific loops, subagents
-   and MCP dependencies as things to assess on pickup, not transferred tools.
+   **Never commit or post these notes.** Record subagents and MCP dependencies as
+   things to assess on pickup, not transferred tools. For an active self-paced
+   `/loop` that the operator wants continued, also write a private JSON file:
+   `{"prompt":"<current recurring task, including stopping conditions>","interval_seconds":3600}`.
+   Use the loop's current delay (30..604800 seconds), not an invented cadence.
+   `next_run_at` may preserve its due time as a Unix timestamp; omit it to wait
+   one interval after transfer. A `ScheduleWakeup` record can be exported with
+   `python3 ~/.claude/fleet/bin/fleet-loop.py from-claude --transcript <exact source path> --output <private JSON>`;
+   verify it is still intended (an old transcript cannot prove a timer is live).
+   Pass that path as `--loop <private JSON>` in step 3. Fleet will bind the new
+   Codex thread and own its timer. Calendar-based `CronCreate` jobs and external
+   schedulers are not automatically converted to interval loops.
 3. **Arm as the LAST tool call**, with the verified note path as `DOC` and the
    literal fleet name resolved in §0 as `S`:
 
@@ -249,6 +259,10 @@ Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mo
    ~/.claude/fleet/bin/fleet-transfer.sh --session "$S" \
      --window "$TMUX_PANE" --to codex --handoff "$DOC" --after-turn
    ```
+
+   Add `--loop <private JSON>` only when preserving the loop above. On Codex,
+   the pickup binds the exact thread ID; the owner can `defer --seconds N` or
+   `stop` through `fleet-loop.py`. Do not re-arm Claude's timer during cutover.
 
    The command returns a request directory containing `state.json` and `wait.log`.
    It pins this pane/process/session, saves a private copy of the notes, and

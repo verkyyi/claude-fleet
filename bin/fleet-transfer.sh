@@ -2,12 +2,14 @@
 # fleet-transfer.sh — hand ONE idle Claude session to Codex in its existing pane.
 #
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to codex
-#                         [--handoff <notes.md>] [--dry-run | --prepare-only | --after-turn]
+#                         [--handoff <notes.md>] [--loop <spec.json>]
+#                         [--dry-run | --prepare-only | --after-turn]
 #
 # --dry-run       Resolve exact provenance and print the plan; write nothing.
 # --prepare-only  Save the handoff package; leave Claude and tmux unchanged.
 # --after-turn    Arm from /fleet-handoff; wait for this turn's Stop before switching.
 #                 Requires --handoff. Returns after arming, without exiting Claude.
+# --loop          Explicit recurring prompt + interval to continue on Codex.
 # --handoff       Optional source-agent notes. Without notes, Codex reconstructs
 #                 the task from the captured conversation and current git state.
 #
@@ -35,15 +37,16 @@ HELPER="$BIN/.fleet-transfer.py"
 
 die() { printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
-SESS='' TARGET='' TO='' NOTES='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST=''
+SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--expected-source|--armed-request)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
         --window) [ -z "$TARGET" ] || die 'only one --window is allowed'; TARGET=$2 ;;
         --to) TO=$2 ;; --handoff) NOTES=$2 ;;
+        --loop) LOOP=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
       esac
       shift 2 ;;
@@ -78,6 +81,13 @@ case "$(opt '#{@cc_agent}')" in ''|claude) : ;; *) die 'v1 requires a Claude sou
 ISSUE=$(opt '#{@issue}'); RAW=$(opt '#{@raw}')
 case "$ISSUE" in ''|*[!0-9]*) [ "$RAW" = 1 ] || die 'window is neither an issue worker nor a scratch session' ;; esac
 WT=$(opt '#{@worktree}')
+if [ -z "$WT" ]; then
+  # Issue workers predate the scratch-only @worktree stamp. Resolve their real
+  # pane cwd, then apply every linked-worktree and source-registry check below.
+  CWD=$(opt '#{pane_current_path}')
+  [ -n "$CWD" ] && [ -d "$CWD" ] || die 'window has no existing working directory'
+  WT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || die 'pane is not in a worktree'
+fi
 [ -n "$WT" ] && [ -d "$WT" ] || die 'window has no existing @worktree'
 WT=$(cd "$WT" && pwd -P) || die 'cannot resolve worktree'
 MAIN=$(cd "${FLEET_MAIN:-/nonexistent}" && pwd -P) || die 'fleet base checkout not found'
@@ -94,6 +104,13 @@ SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
 STATE=$(opt '#{@claude_state}')
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
+[ -z "$LOOP" ] || [ -s "$LOOP" ] || die '--loop file is missing or empty'
+if [ -n "$LOOP" ]; then
+  python3 - "$BIN/fleet-loop.py" "$LOOP" <<'PY' || die 'invalid loop spec'
+import json, runpy, sys
+runpy.run_path(sys.argv[1])['spec'](json.load(open(sys.argv[2])))
+PY
+fi
 printf 'fleet-transfer: %s/%s · claude → codex\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
   "$SESS" "${HANDLE:-$WIN}" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
@@ -125,6 +142,7 @@ if [ "$PREPARE" != 1 ]; then
   grep -q '@agent_transfer_until' "$BIN/session-end-hook.sh" || die 'SessionEnd transfer support is missing'
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target codex --root "$BIN/..") || die 'cannot materialize Codex guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
+  TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
 fi
 
 if [ "$AFTER" = 1 ]; then
@@ -132,6 +150,7 @@ if [ "$AFTER" = 1 ]; then
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" \
+    --loop "$LOOP" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
@@ -139,7 +158,7 @@ fi
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
-  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --launcher "$LAUNCH") || exit 1
+  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH") || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
 [ "$PREPARE" != 1 ] || exit 0
 
@@ -207,7 +226,7 @@ fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude app
 if [ "$(opt '#{pane_dead}')" != 1 ]; then
   # The fleet runner execs the shell after the agent. Allow that brief transition.
   SHELL_OK=0
-  for ((i=0; i<5; i++)); do
+  for ((i=0; i<30; i++)); do
     if python3 "$HELPER" process shell "$(opt '#{pane_pid}')"; then SHELL_OK=1; break; fi
     sleep 1
   done
@@ -219,6 +238,7 @@ fi
 {
   printf '#!/bin/bash\nset -uo pipefail\ncd %q || exit 1\n' "$WT"
   printf 'export FLEET_HANDOFF_MANIFEST=%q\n' "$BUNDLE/manifest.json"
+  if [ -n "$LOOP" ]; then printf 'export FLEET_LOOP_SPEC=%q\n' "$BUNDLE/loop-spec.json"; fi
   # shellcheck disable=SC2016 # Expanded by launch.sh, never by this controller.
   printf 'exec %q --agent codex "$(cat %q)"\n' "$LAUNCH" "$BUNDLE/pickup.md"
 } > "$BUNDLE/launch.sh" || die 'cannot write target launcher'

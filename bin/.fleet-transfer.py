@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import socket
 import subprocess
@@ -70,7 +71,13 @@ def package(a):
     notes = Path(a.handoff).read_text(encoding="utf-8") if a.handoff else ""
     if a.handoff and not notes.strip():
         raise ValueError("--handoff must name a non-empty UTF-8 file")
-    branch = run("git", "-C", worktree, "symbolic-ref", "--short", "HEAD")
+    loop = None
+    if a.loop:
+        validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
+        loop = validate(json.loads(Path(a.loop).read_text(encoding='utf-8')))
+    # A registered worktree may legitimately be detached after a review/merge.
+    # Preserve that state, rather than creating or checking out a branch.
+    branch = run("git", "-C", worktree, "branch", "--show-current") or None
     head = run("git", "-C", worktree, "rev-parse", "HEAD")
     # No git add/commit/stash/reset: the next agent gets the actual index and files.
     git_state = {
@@ -151,6 +158,9 @@ def package(a):
         "transfer_lock_path": str(transfer_lock),
         "source_resume_argv": [a.launcher, "--agent", "claude", "--resume", a.sid],
     }
+    if loop:
+        write_json(bundle / 'loop-spec.json', loop)
+        manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
     write_json(bundle / "manifest.json", manifest)
     for name, value in git_state.items():
         (bundle / name).write_text(value + "\n", encoding="utf-8")
@@ -160,7 +170,7 @@ def package(a):
         "Frozen transcript snapshot: `%s`\nSource host: `%s`\n"
         "Worktree: `%s`\nBranch: `%s`\nHEAD at handoff: `%s`\n"
         "Fleet/window: `%s / %s`\n\n"
-    ) % (a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch, head, a.session, a.handle or a.window)
+    ) % (a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch or "(detached HEAD)", head, a.session, a.handle or a.window)
     body = "# Single-session handoff\n\n" + provenance
     if notes:
         body += "## Source agent's handoff notes\n\n" + notes + "\n"
@@ -195,6 +205,25 @@ def package(a):
         "directly when needed; do not invoke Claude-only slash commands or tools. "
         "Do not restart or message the source agent.\n"
     ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    if loop:
+        controller = str(Path(a.launcher).parent / 'fleet-loop.py')
+        loop_note = (
+            '\n## Active Fleet loop\n\nThe operator requested continuation of this loop on Codex. '
+            'Fleet owns its timer. First run `python3 %s bind` from your own tool environment '
+            'to bind your exact CODEX_THREAD_ID; inspect its successful result. '
+            'Read `%s` for the loop task and cadence. Do not create a Claude /loop or another '
+            'scheduler. At the end of this iteration use `python3 %s defer --seconds N` '
+            '(optionally `--prompt-file FILE` with an updated private prompt), or '
+            '`python3 %s stop` if complete/cancelled or ALL remaining work requires a human decision. '
+            'Keep other authorized monitoring responsibilities running when one item is blocked. '
+            'Otherwise Fleet retains the last interval. `python3 %s status` shows the '
+            'binding, next wakeup and accepted turn ID. The controller waits for the thread '
+            'to be idle and ends when this Codex TUI exits.\n'
+        ) % (shlex.quote(controller), bundle / 'loop-spec.json', shlex.quote(controller),
+             shlex.quote(controller), shlex.quote(controller))
+        pickup += loop_note
+        with (bundle / 'handoff.md').open('a', encoding='utf-8') as out:
+            out.write(loop_note)
     (bundle / "pickup.md").write_text(pickup, encoding="utf-8")
     # Paths are shell-quoted, never inserted as JSON/shell source interchangeably.
     # Recovery is an explicit controller action, including for a dead pane. The
@@ -266,7 +295,7 @@ def main():
     for name in ("output", "main", "worktree", "sid", "transcript", "registry", "session", "window", "pane", "launcher"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--pid", type=int, required=True)
-    for name in ("handle", "issue", "origin", "repo", "handoff", "previous"):
+    for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop"):
         p.add_argument("--" + name, default="")
     s = sub.add_parser("state")
     s.add_argument("bundle")

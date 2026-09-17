@@ -71,6 +71,9 @@ def arm(a):
         request = Path(tempfile.mkdtemp(prefix=a.session + "-pending-", dir=root))
         (lock / "request").write_text(str(request))
         (request / "notes.md").write_text(notes, encoding="utf-8")
+        if a.loop:
+            # Freeze the source's chosen cadence/prompt before it ends its turn.
+            (request / 'loop-spec.json').write_text(Path(a.loop).read_text(), encoding='utf-8')
         # Create before the tmux shell redirects output: its inherited umask may
         # be 022, while conversation-adjacent files here must remain 0600.
         (request / "wait.log").touch(mode=0o600)
@@ -137,6 +140,8 @@ def wait(request):
                "--session", r["session"], "--window", r["window"], "--to", "codex",
                "--handoff", str(request / "notes.md"), "--armed-request", str(request),
                "--expected-source", "%s:%s:%s" % (r["pane"], r["pid"], r["sid"])]
+        if r.get('loop'):
+            cmd.extend(['--loop', str(request / 'loop-spec.json')])
         env = dict(os.environ)
         env.pop("TMUX_PANE", None)
         env.pop("TMUX", None)  # All calls use the explicit fleet socket.
@@ -169,6 +174,7 @@ def main():
     a.add_argument("--pid", type=int, required=True)
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
+    a.add_argument("--loop", default='')
     w = sub.add_parser("wait")
     w.add_argument("request", type=Path)
     args = parser.parse_args()

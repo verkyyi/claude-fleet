@@ -127,11 +127,15 @@ replaces a dead pane or the verified childless shell left behind; an editor,
 tool process or another Claude is refused. It then uses `fleet-claude.sh --agent
 codex` so the existing Codex hooks and worktree guardrails apply.
 
-No git add, commit, stash, reset, branch switch or worktree removal occurs. Index,
+No git add, commit, stash, reset, branch switch or worktree removal occurs. Detached
+HEAD worktrees stay detached (the manifest's branch is `null`). Issue workers
+without a legacy `@worktree` stamp resolve their actual pane cwd and still pass
+the linked-worktree, owning-repository and source-registry checks. Index,
 uncommitted and untracked files stay in place. A started Codex process is reported
 as **started**, not as proof that login, a trust prompt or the task has completed.
-Running tools, subagents, scheduled loops and provider-specific credentials/MCP
-configuration are not migrated; the pickup instructions require checking them.
+Running tools, subagents and provider-specific credentials/MCP configuration are
+not migrated; the pickup instructions require checking them. Interval loops may
+be explicitly continued through the Fleet adapter below.
 
 On failure the packet remains. An immediate cutover returns nonzero with its
 location; an after-turn request records the failure in `state.json` / `wait.log`.
@@ -144,10 +148,58 @@ command never automatically starts a second writer as a rollback.
 A controller killed outright can leave a `.transfer-lock`; inspect the recorded
 PID and pane before removing that lock. The cleanup protections expire.
 
+## Continue a loop on Codex
+
+Add `--loop /private/path/loop.json` to the immediate or after-turn transfer:
+
+```json
+{"prompt":"Check the existing task and continue unfinished work; stop when complete.","interval_seconds":3600}
+```
+
+The optional `next_run_at` is a Unix timestamp. Without it the first wakeup is one
+interval after the transfer. Delays are 30 seconds to seven days. The source
+agent should record its current task, cadence and stopping conditions; an operator
+can export the last **successful** self-paced `ScheduleWakeup` with:
+
+```sh
+python3 ~/.claude/fleet/bin/fleet-loop.py from-claude \
+  --transcript /exact/source/session.jsonl --output /private/path/loop.json
+```
+
+This export is historical evidence, not proof that a timer remains active. Check
+the source's latest intent before opting in. Calendar cron jobs, external jobs,
+and cancelled loops are not automatically converted. `--prepare-only` never
+starts a timer; after-turn transfers freeze the supplied spec before waiting.
+
+The Codex TUI gets a private app server on a mode-0600 Unix socket in a mode-0700
+directory. Fleet uses its native `thread/read` and `turn/start` API, so wakeups
+target the **same** loaded thread without typing into its terminal or starting a
+second Codex writer. The original launcher configuration and guard hooks still
+apply. Plain transfers without `--loop` retain the ordinary Codex launch path.
+
+On pickup, Codex runs `python3 ~/.claude/fleet/bin/fleet-loop.py bind` in its own
+tool environment. Its exact `CODEX_THREAD_ID`, worktree, pane process, source
+manifest and private socket become the binding. `status` shows the binding,
+next wakeup and last accepted turn ID. The timer waits while Codex works or the
+operator is typing. It never catches up missed intervals with a burst.
+
+The owning Codex session can use `defer --seconds 3600` to choose its next delay,
+add `--prompt-file /private/path/updated-task.md` to update the task, or use `stop`
+when finished/cancelled. Without a change, the last interval repeats. This is
+Fleet scheduling, not restoration of Claude's in-memory `ScheduleWakeup` object.
+The source must exit before the target timer can start.
+
+Runtime state and the app-server log live under `<handoff packet>/loop/`. A
+replaced pane/thread, unloaded thread, or ambiguous delivery failure pauses the
+timer for inspection; a send that may have succeeded is never blindly retried.
+Exiting the Codex TUI stops its controller and private server. This version does
+not automatically restart loops after a TUI exit or machine reboot. Read the
+record and source provenance before arranging a new explicit continuation.
+
 ## Verification
 
 ```sh
-bin/run-selftests.sh fleet-transfer fleet-handoff auto-handoff session-end-hook fleet-cleanup
+bin/run-selftests.sh fleet-loop fleet-transfer fleet-codex fleet-handoff auto-handoff session-end-hook fleet-cleanup
 ```
 
 The transfer test uses its own named tmux socket, fake agents and real temporary
