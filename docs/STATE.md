@@ -22,7 +22,7 @@ State lives in one tmux **window option**, `@claude_state`, whose value is one o
 |---|---|---|---|
 | `working` | mid-turn — a tool is running or a prompt was just submitted | braille spinner (`⠋…`, animated) | cyan |
 | `done` | turn finished cleanly, nothing pending | `✓` | green |
-| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `?` / `⊘` / `!` (see below) | red (loud: bold + bell) |
+| `needs` | waiting on **you** — a question, a permission/elicitation prompt, or a `⛔ blocked` | `?` / `⊘` / `⊠` / `!` (see below) | red (loud: bold + bell) |
 | `looping` | stopped, but really cycling between `/loop` iterations (not truly done) | `↻` | indigo |
 | *(unset / empty)* | never ran a turn — idle/ad-hoc pane | blank | dim |
 
@@ -35,13 +35,13 @@ every state write; it drives the dashboard's *"Nm ago"* last-activity column.
 
 ### `@claude_needs` — *why* a window is red (issue #640)
 
-`needs` has two causes that want **opposite reflexes**, and until #640 they shared
-one glyph, so the operator had to attach to each red window to find out which:
+The subtype tells the operator how to respond to a red window:
 
 | `@claude_needs` | What is open | Dash / tab glyph | What to do |
 |---|---|---|---|
 | `ask` | an `AskUserQuestion` | `?` | answer it from the dash — `⌃k`, no attach |
 | `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |
+| `blocked` | a worker-declared blocker (#704) | `⊠` | read the issue's `⛔ blocked` comment and send a new prompt when resolved |
 | *(empty)* | anything else (the classifier's `WAITING`/`ERROR`, an unrecognized `Notification`) | `!` | go look |
 
 `ask` arrives at `set-claude-state.sh` free, off the `PreToolUse` `tool_name`. The
@@ -75,6 +75,24 @@ stale-`working` demote) clear it as well. So no reader can ever pair a fresh sta
 with a stale reason, and readers consult it only while the state is `needs`.
 Pinned end to end by [`bin/needs-reason-selftest.sh`](../bin/needs-reason-selftest.sh).
 
+**Worker-declared blockers persist across the rest of the turn (#704).** The
+charter uses `sh ~/.claude/fleet/bin/set-claude-state.sh blocked`, which stamps
+`needs/blocked` and rings. Ordinary `PreToolUse`, `PostToolUse`, `Stop` and benign
+idle notifications preserve both the red and its timestamp. A classifier skips
+it, including when the declaration arrives during its model call. An idle
+transcript cannot expire it: a blocked worker has stopped with no tool pending.
+The reconcile also re-checks the stamp after its probe before applying a verdict.
+
+A new `UserPromptSubmit` clears the declaration and resumes `working`. Its root
+`hook_event_name` is parsed only on the blocked path, since prompts and tool
+results share the installed `working` hook argument. Invalid input preserves red.
+If that prompt did not resolve the blocker, the worker re-stamps `blocked` before
+stopping. A live question or permission notification supersedes the declaration
+with `ask`/`perm`; those dialogs then follow their ordinary lifecycle. Two checks
+confirming no live Claude also clear it; Codex remains outside the Claude
+transcript reconcile. The lifecycle and in-flight-reader cases are pinned by
+[`bin/blocked-state-selftest.sh`](../bin/blocked-state-selftest.sh).
+
 Construction keeps the reason *consistent with its state*; it cannot keep either
 consistent with **reality**, because both are written on events and a blocked session
 produces no further event. That is what the [stale-`needs`
@@ -94,6 +112,9 @@ Claude Code fires shell **hooks** on turn edges. Each one runs
 | `UserPromptSubmit` | `working` | `working` |
 | `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*); the subtype (`perm` / `ask`) comes from the transcript, not the wording (#656) |
 | `Stop` | `done` | `done` (then hands off to `classify-hook.sh`) |
+
+The `working`/`done` results above preserve an existing `needs/blocked`, except
+for `UserPromptSubmit`, which clears it. `AskUserQuestion` still takes precedence.
 
 Because Claude Code **re-reads `settings.json` hooks every turn**, a running
 session picks up hook changes with no restart.
@@ -321,6 +342,7 @@ first and never on the second). Per red window:
 | **empty** subtype, **nothing** pending, stamp older than `FLEET_NEEDS_PLAIN_SECS` | clear to `done` — the screen verdict has served its dwell and the transcript still holds nothing |
 | **empty** subtype, **nothing** pending, stamp *inside* that dwell | **leave it** — a worker that stopped to ask a question in prose is really waiting, and must outlive the 20s grace |
 | **empty** subtype, something pending | **leave it** — the reconcile re-settles a *wrong* subtype; it never invents a missing one |
+| subtype `blocked`, live Claude, any transcript result | **leave it** — the worker's declaration is cleared by a new prompt, not a dwell timer (#704) |
 | **no live Claude** in the pane (any subtype) | clear to *(empty)* — nothing can be waiting |
 | subtype `ask`/`perm`, something pending | re-settle the **subtype** only (`ask` ⇄ `perm`); the window stays red and `@claude_state_ts` is left alone — the session's activity did not move, only our reading of it |
 | anything unknown (no transcript, no `python3`, …) | **leave it alone** |

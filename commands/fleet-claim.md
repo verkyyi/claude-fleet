@@ -259,7 +259,11 @@ override them):
   the operator can make — not "I'd like a second opinion". Post a
   `⛔ blocked: <why>` comment on the issue (same `fleet-comment.sh --note`
   wrapper) and set the window red so it's visible on the dash:
-  `sh ~/.claude/fleet/bin/set-claude-state.sh needs`. Then stop — don't spin.
+  `sh ~/.claude/fleet/bin/set-claude-state.sh blocked`. This stamps `needs/blocked`
+  (red `⊠`): tool hooks, Stop, the classifier and an idle transcript preserve it.
+  A new `UserPromptSubmit` clears it so you can resume. If that input does not
+  resolve the blocker (for example, a `[child-report]`), re-stamp `blocked` before
+  stopping again. Then stop — don't spin.
   This is visibility, not permission-seeking: everything you *can* unblock
   yourself, you should. Blocked is an OUTCOME too, so report it the same way a
   merge is reported:

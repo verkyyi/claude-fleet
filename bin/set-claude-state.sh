@@ -1,6 +1,8 @@
 #!/bin/sh
 # set-claude-state.sh <state> [bell]
 # Stamps the current tmux window's @claude_state (semantic: working|done|needs).
+# <state> is a hook verb (busy|working|done|needs) or the worker's own `blocked`
+# (issue #704) — a red that the hook edges of the same turn do not erase; see below.
 # The tmux-spinner.sh daemon reads @claude_state and renders ALL the visuals
 # (spinner glyph + its pulsing font color + name color) via @spin, so this hook
 # only sets the semantic state and (for needs) rings the bell.
@@ -23,14 +25,14 @@ case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 
-# @claude_needs — WHY this window is red (issue #640). `needs` has two causes and
-# they want two different operator reflexes:
+# @claude_needs — WHY this window is red (issues #640, #704):
 #
 #   ask   an open AskUserQuestion  → answerable from outside the pane
 #                                    (bin/fleet-answer.sh / dash ⌃k)
 #   perm  an open permission prompt → a human decision by design; nothing in the
 #                                    fleet may press Yes for it (bin/fleet-permission.sh
 #                                    reads it out of band, and can only ever press No)
+#   blocked  the worker declared a blocker → read the issue and send a new prompt
 #   ''    anything else (the classifier's WAITING/ERROR verdict, an unrecognised
 #         Notification) — the historic, undifferentiated `needs`.
 #
@@ -115,6 +117,17 @@ case "${1:-}" in
       fi
     fi
     ;;
+  blocked)
+    # The worker's OWN red (issue #704): `/fleet-claim`'s blocked rail — "post a
+    # `⛔ blocked:` comment, then set the window red". Not a hook verb: the worker
+    # runs it from its Bash tool, and that is exactly why it needs its own subtype.
+    # A plain `needs` here lived for ONE hook edge (measured on an isolated socket):
+    # the same Bash call's PostToolUse wrote `working` over it, Stop wrote `done`,
+    # and whether the dash ever showed red again was up to the screen classifier.
+    # `blocked` is the subtype the sticky rule below keys on. It rings, like every
+    # other `needs` the operator has to act on.
+    sem="needs"; sub="blocked"; set -- blocked bell
+    ;;
   done)
     sem="done"
     # Auto-handoff (issue #330): capture the PRIOR state BEFORE the write below
@@ -143,8 +156,44 @@ case "${1:-}" in
   *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
 
-# 'leave' (benign idle_prompt) intentionally writes nothing — it preserves the
-# existing @claude_state and its timestamp so the classifier stays authoritative.
+# ── `blocked` is STICKY (issue #704) ─────────────────────────────────────────
+# Every write that is the ordinary traffic of ONE turn — PreToolUse → working,
+# PostToolUse → working, Stop → done — leaves a `blocked` pane exactly as it is.
+# The charter tells a blocked worker to comment, stamp, report to its parent and
+# stop; each of those is a tool call with a `working` on either side of it and a
+# `done` at the end, so without this rule the red was gone before the worker had
+# finished saying why. What DOES clear it is a new prompt (UserPromptSubmit): the
+# operator's answer relayed by the issue bridge, a message typed at the pane — the
+# one event that means someone engaged. (A message that was NOT the answer, a
+# `[child-report]` say, clears it too; the charter tells a still-blocked worker to
+# re-stamp before it stops.) The other `needs` writers are NOT held back: a live
+# dialog (a Notification's `perm`, an AskUserQuestion's `ask`) outranks a declaration
+# made earlier, and both of those re-settle against the transcript.
+#
+# PostToolUse and UserPromptSubmit arrive with the same argument (`working` — the
+# hook table is installed, and an older install must keep clearing), so the prompt
+# is told apart on the hook's own stdin (`hook_event_name`), parsed ONLY once the pane
+# is known to be blocked. The ordinary per-tool path pays one tmux read, no JSON parse.
+# @claude_state_ts is left alone with the state, so the dash's "Nm ago" is how long
+# the worker has been blocked. bin/classify-sessions.sh and the spinner's reconcile
+# honour the subtype the same way (they skip it; only `dead` clears it).
+case "$sem" in
+  working|done)
+    if [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ]; then
+      _ev=''
+      # `busy` (PreToolUse) already drained its stdin above and is never a prompt.
+      if [ "$sem" = working ] && [ "${1:-}" != busy ] && [ ! -t 0 ]; then
+        # Parse the root field: JSON whitespace and a nested tool result mentioning
+        # UserPromptSubmit must not change the meaning. Unreadable input stays red.
+        _ev=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("hook_event_name", ""))' 2>/dev/null)
+      fi
+      [ "$_ev" = UserPromptSubmit ] || sem="leave"
+    fi ;;
+esac
+
+# 'leave' (benign idle_prompt, or a `blocked` pane mid-turn) intentionally writes
+# nothing — it preserves the existing @claude_state and its timestamp so the
+# classifier (or the worker's own declaration) stays authoritative.
 if [ "$sem" != "leave" ]; then
   # A tool, new prompt, or needs-attention event invalidates the previous Stop.
   # In particular, a typing hold must not let a later stale `done` stamp reuse it.

@@ -66,12 +66,13 @@ FRAME=${SPINF:$(( TICK % 10 )):1}
 #                                  is blocked (bin/fleet-permission.sh) so you can
 #                                  decide before walking over
 #   !  undifferentiated (the classifier's verdict, an unrecognised Notification)
+#   ⊠  the worker declared a blocker → read the issue and send a new prompt
 #
-# All three are ONE display cell, like every other state glyph: the row's leading
+# All four are ONE display cell, like every other state glyph: the row's leading
 # "${gc}${gl}${R} " slot is a fixed width the right-pinned act/PR/ctx block is
 # padded against, so a 2-cell emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
-  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; *) gl='!';; esac;;
+  needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; blocked) gl='⊠';; *) gl='!';; esac;;
   done)    gc=$GN; gl='✓';      rk=1;;
   working) gc=$CY; gl=$FRAME;   rk=2;;
   looping) gc=$IN; gl='↻';      rk=3;;

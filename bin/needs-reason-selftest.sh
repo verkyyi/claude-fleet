@@ -33,8 +33,9 @@
 #   GLYPH — bin/tmux-dashboard-rows.sh renders the subtype:
 #     * needs + ask   → `?`   answerable from here
 #     * needs + perm  → `⊘`   go press it yourself
+#     * needs + blocked → `⊠` read the worker's issue (#704)
 #     * needs + ''    → `!`   the historic undifferentiated red
-#     …all three in the SAME red as before, all ONE display cell (the row's leading
+#     …all four in the SAME red as before, all ONE display cell (the row's leading
 #     glyph slot is a fixed width the right-pinned act/PR/ctx block is padded
 #     against — a 2-cell emoji here would shear every red row), and the subtype must
 #     never leak into a window that is not red.
@@ -205,18 +206,21 @@ w 1 asking           /w/repo-issue-11   needs  @1  11  /w/repo-issue-11   ask
 w 2 walled           /w/repo-issue-12   needs  @2  12  /w/repo-issue-12   perm
 w 3 just-red         /w/repo-issue-13   needs  @3  13  /w/repo-issue-13   ''
 w 4 busy-but-stamped /w/repo-issue-14   working @4 14  /w/repo-issue-14   perm
+w 5 blocked          /w/repo-issue-15   needs  @5  15  /w/repo-issue-15   blocked
+w 6 done-but-stamped /w/repo-issue-16   'done' @6  16  /w/repo-issue-16   blocked
 
 out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS" 2>&1) \
   || fail "rows producer exited non-zero" "$out"
 row_of() { printf '%s\n' "$out" | grep -F "$SESS:$1$US"; }
-r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4)
-[ -n "$r1" ] && [ -n "$r2" ] && [ -n "$r3" ] && [ -n "$r4" ] \
+r1=$(row_of 1); r2=$(row_of 2); r3=$(row_of 3); r4=$(row_of 4); r5=$(row_of 5); r6=$(row_of 6)
+[ -n "$r1" ] && [ -n "$r2" ] && [ -n "$r3" ] && [ -n "$r4" ] && [ -n "$r5" ] && [ -n "$r6" ] \
   || fail "expected a row per fixture window" "$out"
 
 # The glyph is asserted together with its colour escape, so a change that keeps the
 # character but drops the red (or vice versa) fails here rather than silently.
 has "ask  → a red ?"  "$r1" "${RD}?"
 has "perm → a red ⊘"  "$r2" "${RD}⊘"
+has "blocked → a red ⊠" "$r5" "${RD}⊠"
 has "bare → the red ! it always had" "$r3" "${RD}!"
 hasnt "ask must not render as !"  "$r1" "${RD}!"
 hasnt "perm must not render as !" "$r2" "${RD}!"
@@ -225,15 +229,16 @@ hasnt "ask must not render as ⊘"  "$r1" "${RD}⊘"
 # A stale-looking subtype on a window that is NOT red changes nothing: the reason is
 # only ever consulted under `needs`, so a `working` row keeps its spinner.
 hasnt "a working row must not take the perm glyph" "$r4" "⊘"
+hasnt "a done row must not take the blocked glyph" "$r6" "⊠"
 
-# Width: all three glyphs are ONE display cell, so the columns after them line up.
+# Width: all four glyphs are ONE display cell, so the columns after them line up.
 # Asserted by the `<glyph> <space> <grey handle cell>` shape every row shares.
-for pair in "1:?" "2:⊘" "3:!"; do
+for pair in "1:?" "2:⊘" "3:!" "5:⊠"; do
   idx=${pair%%:*}; g=${pair#*:}
   r=$(row_of "$idx")
   has "row $idx keeps the glyph slot's trailing space" "$r" "$g"$'\033'"[0m "
 done
-printf 'selftest: GLYPH legs PASS (? / ⊘ / ! · same red · one cell · never on a non-needs row)\n' >&2
+printf 'selftest: GLYPH legs PASS (? / ⊘ / ⊠ / ! · same red · one cell · never on a non-needs row)\n' >&2
 
 printf 'selftest PASS: needs-reason — @claude_needs stamped+cleared by the hook, rendered by the dash (%s checks, #640)\n' "$CHECKS"
 exit 0
