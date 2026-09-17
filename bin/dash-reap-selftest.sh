@@ -164,6 +164,7 @@ case "$*" in
   *pane_current_path*) printf '%s\n' "${WT:-}" ;;
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
+  *window_name*) printf 'worker name\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
   *display-popup*)
     printf 'POPUP %s\n' "$*" >> "$TMLOG"
@@ -240,39 +241,55 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
 # run_reap, capturing the #596 result token (stdout) and the exit status.
 run_reap_tok() { TOK="$(run_reap "$@")"; RC=$?; }
 
+# #565: even a merged/idle row must reject shifting indexes and extra targets.
+for bad in 5 :6 s1:8 worker-name; do
+  : > "$TMLOG"; : > "$GHLOG"
+  run_reap_tok 7 "$bad" --yes 2>"$WORK/target-err"
+  [ "$RC" = 4 ] && [ "$TOK" = refused:target ] || fail "unstable target was accepted: $bad"
+  grep -q 'currently resolves to.*@9' "$WORK/target-err" || fail "refusal must show diagnostic resolution"
+  grep -q KILL "$TMLOG" && fail "unstable target killed a window"
+  [ -d "$WORK/wt7" ] || fail "unstable target removed worktree"
+  [ ! -s "$GHLOG" ] || fail "unstable target wrote GitHub"
+done
+: > "$TMLOG"; : > "$GHLOG"
+run_reap_tok 7 @9 @10 --yes
+[ "$RC" = 4 ] && [ "$TOK" = refused:bad-args ] || fail "second target was ignored"
+grep -q KILL "$TMLOG" && fail "multi-target call killed window"
+grep -Fq 'dash-reap.sh {2}' "$BIN/tmux-dashboard.sh" || fail "dashboard must pass stable row field 2"
+
 # #565: the Git gate says merged, but an active window is NEVER disposable.
 # This must also hold for --yes, confirm and an already-queued --exec tail.
 for st in working looping busy; do
   : > "$TMLOG"; : > "$GHLOG"
-  REAP_STATE="$st" run_reap_tok 7 s1:7 --yes
+  REAP_STATE="$st" run_reap_tok 7 @9 --yes
   [ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "active --yes must return skip:live"
   grep -q KILL "$TMLOG" && fail "active --yes killed a window"
   [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
     || fail "active --yes changed worktree/history/issue"
 done
 : > "$TMLOG"; : > "$GHLOG"
-REAP_STATE=working run_reap_tok 7 s1:7 --exec full merged-pr
+REAP_STATE=working run_reap_tok 7 @9 --exec full merged-pr
 [ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "--exec must recheck live state"
 [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
   || fail "active --exec changed worktree/history/issue"
 : > "$TMLOG"; : > "$GHLOG"
-REAP_BG_STATE=working run_reap 7 s1:7 >/dev/null
+REAP_BG_STATE=working run_reap 7 @9 >/dev/null
 grep -q 'RUNSHELL .*@9.*--exec' "$TMLOG" || fail "deferred reap must pin the window id"
 grep -q KILL "$TMLOG" && fail "queued reap killed a worker that resumed working"
 [ -d "$WORK/wt7" ] && [ "$(srows 7)" = 0 ] && [ ! -s "$GHLOG" ] \
   || fail "queued reap changed worktree/history/issue"
 : > "$TMLOG"; : > "$GHLOG"
-RAW=1 REAP_STATE=looping run_reap_tok '' s1:raw --yes
+RAW=1 REAP_STATE=looping run_reap_tok '' @9 --yes
 [ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "even a raw window with no worktree must protect live state"
 grep -q KILL "$TMLOG" && fail "active ephemeral scratch was killed"
 : > "$TMLOG"; : > "$GHLOG"
 git -C "$BASEDIR" worktree add -q -b scratch-98 "$WORK/scratch-live" >/dev/null 2>&1
-RAW=1 WT="$WORK/scratch-live" REAP_STATE=working run_reap_tok '' s1:raw --yes
+RAW=1 WT="$WORK/scratch-live" REAP_STATE=working run_reap_tok '' @9 --yes
 [ "$TOK" = skip:live ] && [ "$RC" = 3 ] || fail "active clean scratch must return skip:live"
 [ -d "$WORK/scratch-live" ] || fail "active clean scratch worktree was removed"
 grep -q KILL "$TMLOG" && fail "active clean scratch window was killed"
 : > "$TMLOG"; : > "$GHLOG"
-printf y | REAP_STATE=working run_reap 7 s1:7 confirm >/dev/null
+printf y | REAP_STATE=working run_reap 7 @9 confirm >/dev/null
 [ "$?" = 3 ] || fail "popup confirmation must not override live state"
 grep -q KILL "$TMLOG" && fail "popup confirmation killed an active worker"
 
@@ -287,13 +304,13 @@ chmod +x "$WORK/fakepath/python3"
 mkdir -p "$WORK/noconf/fleets/s1"
 printf 'FLEET_REAP_MIN_AGE=1234\n' > "$WORK/noconf/fleets/s1/conf"
 REAP_ENV_LOG="$WORK/probe-age" REAL_REAP_PYTHON="$REAL_REAP_PYTHON" REAP_STATE=working \
-  run_reap_tok 7 s1:7 --yes
+  run_reap_tok 7 @9 --yes
 [ "$(cat "$WORK/probe-age")" = 1234 ] || fail "non-exported per-fleet age was lost at Python boundary"
 rm "$WORK/fakepath/python3" "$WORK/noconf/fleets/s1/conf"
 
 # B1: no @issue (hub/panel) → refuse, no kill, no close
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "" "s1:9"
+run_reap_tok "" "@9"
 grep -q 'MSG.*no issue' "$TMLOG" || fail "no-issue row should refuse with 'no issue'"
 [ "$TOK" = "refused:no-issue" ] || fail "a refusal must print refused:no-issue (got [$TOK]) (#596)"
 [ "$RC" = 4 ] || fail "a refusal must exit 4, not a blanket 0 (got $RC) (#596)"
@@ -302,7 +319,7 @@ grep -q 'KILL' "$TMLOG" && fail "no-issue row must not kill a window"
 
 # B2: ⌃x on dirty (issue-3) → open a confirm popup, worktree kept, no kill (#289)
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "3" "s1:3"
+run_reap "3" "@9"
 grep -q 'POPUP' "$TMLOG" || fail "dirty ⌃x should open a confirm popup"
 grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window before confirm"
 [ -s "$GHLOG" ] && fail "dirty ⌃x must not touch gh before confirm"
@@ -310,7 +327,7 @@ grep -q 'KILL' "$TMLOG" && fail "dirty ⌃x must not kill the window before conf
 
 # B3: ⌃x on clean+unmerged (issue-2) → open a confirm popup, worktree kept (#289)
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "2" "s1:2"
+run_reap "2" "@9"
 grep -q 'POPUP' "$TMLOG" || fail "unmerged ⌃x should open a confirm popup"
 grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before confirm"
 [ -d "$WORK/wt2" ] || fail "unmerged worktree must be kept"
@@ -320,7 +337,7 @@ grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before c
 # bind returns instantly; the fake tmux runs the dispatched command so we still see
 # the effects.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "1" "s1:1"
+run_reap "1" "@9"
 grep -q 'RUNSHELL .*--exec full' "$TMLOG" || fail "merged reap must be dispatched via run-shell -b (--exec full)"
 [ -d "$WORK/wt1" ] && fail "merged worktree should be removed"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-1 && fail "issue-1 branch should be deleted"
@@ -339,7 +356,7 @@ case "$(scol 1 5)" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
 # a LANDED row with the PR resolved from the branch (7700), recorded before the
 # worktree is removed. This is the path that must not be re-derived in the bg pass.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap "7" "s1:7"
+run_reap "7" "@9"
 grep -qE "RUNSHELL .*--exec full '?merged-pr'?" "$TMLOG" || fail "a merged-PR reap must thread the merged-pr verdict" "$(cat "$TMLOG")"
 [ -d "$WORK/wt7" ] && fail "merged-PR worktree should be removed"
 [ "$(srows 7)" = 1 ] || fail "a merged-PR ⌃x must record ONE row" "$(cat "$LEDGER")"
@@ -355,13 +372,13 @@ FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
 FLEET_CONF_DIR="$WORK/noconf" TMPDIR="$WORK/rt" \
 FLEET_HISTORY_LEDGER="$LEDGER" CLAUDE_PROJECTS_DIR="$PROJECTS" \
 PATH="$WORK/fakepath:$PATH" \
-  bash "$BIN/dash-reap.sh" "s1:8" --exec full
+  bash "$BIN/dash-reap.sh" "@9" --exec full
 [ -d "$WORK/wt8" ] && fail "a verdict-less --exec must still reap the worktree"
 [ "$(srows 8)" = 0 ] || fail "a verdict-less --exec must record NO row (no invented state)" "$(cat "$LEDGER")"
 
 # B5: confirm y on dirty (issue-3) → KEEP worktree, close + kill only
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | run_reap "3" "s1:3" confirm
+printf 'y' | run_reap "3" "@9" confirm
 [ -d "$WORK/wt3" ] || fail "confirmed reap on dirty must KEEP the worktree"
 grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap on dirty should close the issue"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on dirty should kill the window"
@@ -373,7 +390,7 @@ grep -qE "RUNSHELL .*--exec keep '?dirty'?" "$TMLOG" || fail "the confirm path m
 
 # B6: confirm y on clean+unmerged (issue-2) → full reap (relaxes merged)
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | run_reap "2" "s1:2" confirm
+printf 'y' | run_reap "2" "@9" confirm
 [ -d "$WORK/wt2" ] && fail "confirmed reap on clean+unmerged should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-2 && fail "issue-2 branch should be deleted"
 grep -q 'CLOSE' "$GHLOG" || fail "confirmed reap should close the issue"
@@ -387,7 +404,7 @@ case "$(scol 2 5)" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
 # B7: confirm 'n' (cancel) → no side effects
 git -C "$BASEDIR" worktree add -q -b issue-4 "$WORK/wt4" >/dev/null 2>&1
 : > "$TMLOG"; : > "$GHLOG"
-printf 'n' | run_reap "4" "s1:4" confirm
+printf 'n' | run_reap "4" "@9" confirm
 [ -d "$WORK/wt4" ] || fail "cancelled reap must keep the worktree"
 grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
 [ -s "$GHLOG" ] && fail "cancelled reap must not touch gh"
@@ -398,7 +415,7 @@ grep -q 'KILL' "$TMLOG" && fail "cancelled reap must not kill the window"
 # touched (no gh).
 : > "$TMLOG"; : > "$GHLOG"
 rows_before="$(wc -l < "$LEDGER" | tr -d ' ')"   # the worker cases above populated it (#471)
-RAW=1 WID='@9' WT='' run_reap "" "s1:9"
+RAW=1 WID='@9' WT='' run_reap "" "@9"
 grep -q 'KILL' "$TMLOG" || fail "raw ⌃x (no worktree) should kill the scratch window"
 grep -qi 'nothing to reap' "$TMLOG" && fail "raw ⌃x must not refuse (no 'nothing to reap')"
 grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed scratch'"
@@ -409,7 +426,7 @@ grep -qi 'MSG.*closed scratch' "$TMLOG" || fail "raw ⌃x should report 'closed 
 # Zero-commit issue and scratch: no automatic disposal, even with state=done.
 # No client means a clear refusal instead of an unanswered popup.
 : > "$TMLOG"; : > "$GHLOG"
-CLIENTS="" run_reap_tok 17 s1:17
+CLIENTS="" run_reap_tok 17 @9
 [ "$RC" = 3 ] && [ "$TOK" = skip:needs-confirm ] || fail "zero-commit worker must need confirmation"
 [ -d "$WORK/wt17" ] || fail "zero-commit worker worktree must survive"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-17 || fail "zero-commit branch must survive"
@@ -417,7 +434,7 @@ grep -q KILL "$TMLOG" && fail "zero-commit worker window must survive"
 grep -q CLOSE "$GHLOG" && fail "zero-commit worker issue must stay open"
 git -C "$BASEDIR" worktree add -q -b scratch-17 "$WORK/scr17" >/dev/null 2>&1
 : > "$TMLOG"; : > "$GHLOG"
-CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr17" run_reap_tok '' s1:9
+CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr17" run_reap_tok '' @9
 [ "$RC" = 3 ] && [ "$TOK" = skip:needs-confirm ] || fail "zero-commit scratch must need confirmation"
 [ -d "$WORK/scr17" ] || fail "zero-commit scratch must survive"
 grep -q KILL "$TMLOG" && fail "zero-commit scratch window must survive"
@@ -428,7 +445,7 @@ grep -q KILL "$TMLOG" && fail "zero-commit scratch window must survive"
 git -C "$BASEDIR" worktree add -q -b scratch-9 "$WORK/scr9" "$H1" >/dev/null 2>&1
 transcript_for "$WORK/scr9" 9
 : > "$TMLOG"; : > "$GHLOG"
-RAW=1 WID='@9' WT="$WORK/scr9" run_reap "" "s1:9"
+RAW=1 WID='@9' WT="$WORK/scr9" run_reap "" "@9"
 grep -q 'KILL' "$TMLOG" || fail "scratch ⌃x should kill the window"
 grep -qi 'MSG.*worktree reaped' "$TMLOG" || fail "scratch ⌃x (clean) should report 'worktree reaped'"
 [ -d "$WORK/scr9" ] && fail "clean scratch ⌃x should remove the worktree"
@@ -446,14 +463,14 @@ awk -F'\t' '$2=="scratch-9"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
 git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
 printf 'exp\n' > "$WORK/scr10/untracked"
 : > "$TMLOG"; : > "$GHLOG"
-RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9"
+RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9"
 grep -q 'POPUP' "$TMLOG" || fail "dirty scratch ⌃x should open a confirm popup"
 grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window before confirm"
 [ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
 
 # A refused scratch popup must also fall back without disposing on cancel.
 : > "$TMLOG"; : > "$GHLOG"
-TOK=$(printf n | REFUSE_POPUP=1 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9")
+TOK=$(printf n | REFUSE_POPUP=1 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9")
 case "$TOK" in *'[y] reap'*) ;; *) fail "refused scratch popup never reached the inline prompt" ;; esac
 grep -q KILL "$TMLOG" && fail "declining scratch fallback killed the window"
 [ -d "$WORK/scr10" ] || fail "declining scratch fallback removed the worktree"
@@ -462,7 +479,7 @@ grep -q KILL "$TMLOG" && fail "declining scratch fallback killed the window"
 # only (git refuses a dirty remove; a confirmed reap never destroys uncommitted work).
 : > "$TMLOG"; : > "$GHLOG"
 transcript_for "$WORK/scr10" 10
-printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "s1:9" confirm
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9" confirm
 [ -d "$WORK/scr10" ] || fail "confirmed reap on a dirty scratch must KEEP the worktree"
 grep -q 'KILL' "$TMLOG" || fail "confirmed reap on a dirty scratch should close the window"
 [ "$(srows scratch-10)" = 1 ] || fail "a confirmed dirty-scratch reap must still index the session" "$(cat "$LEDGER")"
@@ -472,7 +489,7 @@ git -C "$BASEDIR" worktree add -q -b scratch-11 "$WORK/scr11" >/dev/null 2>&1
 printf 'x\n' > "$WORK/scr11/g"; git -C "$WORK/scr11" add g; git -C "$WORK/scr11" commit -qm work
 transcript_for "$WORK/scr11" 11
 : > "$TMLOG"; : > "$GHLOG"
-printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "s1:9" confirm
+printf 'y' | RAW=1 WID='@9' WT="$WORK/scr11" run_reap "" "@9" confirm
 [ -d "$WORK/scr11" ] && fail "confirmed reap on a clean+unmerged scratch should remove the worktree"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "confirmed reap should delete the scratch branch"
 [ "$(srows scratch-11)" = 1 ] || fail "a confirmed scratch reap must index the session before disposing of it" "$(cat "$LEDGER")"
@@ -480,7 +497,7 @@ git -C "$BASEDIR" show-ref --verify -q refs/heads/scratch-11 && fail "confirmed 
 # B9: hub/panel row with @raw explicitly 0 (not a scratch) still refuses — the
 # raw early-return keys on @raw=1 exactly, not merely "@raw set".
 : > "$TMLOG"; : > "$GHLOG"
-RAW=0 run_reap "" "s1:1"
+RAW=0 run_reap "" "@9"
 grep -qi 'MSG.*no issue' "$TMLOG" || fail "@raw=0 hub row should still refuse ('no issue')"
 grep -q 'KILL' "$TMLOG" && fail "@raw=0 hub row must not kill a window"
 
@@ -507,7 +524,7 @@ for n in 12 13 14 15 16; do transcript_for "$WORK/wt$n" "$n"; done
 # issue closed, NO popup. Same semantics as a confirmed ⌃x — --yes skips the
 # question, never the dirty-worktree protection.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "12" "s1:12" --yes
+run_reap_tok "12" "@9" --yes
 grep -q 'POPUP' "$TMLOG" && fail "--yes on dirty must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt12" ] || fail "--yes on dirty must KEEP the worktree (#596)"
 grep -q 'KILL' "$TMLOG" || fail "--yes on dirty should kill the window (#596)"
@@ -519,7 +536,8 @@ grep -q 'CLOSE' "$GHLOG" || fail "--yes on dirty should close the issue (#596)"
 
 # D2: --yes on a clean+unmerged row → full reap (worktree + branch + issue), no popup.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "13" "s1:13" --yes
+run_reap_tok "13" "@9" --yes 2>"$WORK/description"
+grep -q 'reap target: window=@9 .*issue=13 .*state=.*worktree=.*reason=unmerged' "$WORK/description" || fail "missing disposal target description"
 grep -q 'POPUP' "$TMLOG" && fail "--yes on unmerged must NOT open a confirm popup (#596)"
 [ -d "$WORK/wt13" ] && fail "--yes on clean+unmerged should remove the worktree (#596)"
 git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-13 && fail "--yes should delete the issue-13 branch (#596)"
@@ -530,7 +548,7 @@ grep -q 'CLOSE' "$GHLOG" || fail "--yes on unmerged should close the issue (#596
 # D3: no --yes and NO attached client → never draw a popup nobody can press, and
 # say so instead of returning a blanket success. Nothing is touched.
 : > "$TMLOG"; : > "$GHLOG"
-CLIENTS="" run_reap_tok "15" "s1:15"
+CLIENTS="" run_reap_tok "15" "@9"
 grep -q 'POPUP' "$TMLOG" && fail "a headless fleet must NOT get a confirm popup (#596)"
 grep -q 'KILL' "$TMLOG" && fail "a refused confirm must not kill the window (#596)"
 [ -s "$GHLOG" ] && fail "a refused confirm must not touch gh (#596)"
@@ -542,7 +560,7 @@ grep -q 'KILL' "$TMLOG" && fail "a refused confirm must not kill the window (#59
 # D4: no --yes but a client IS attached → the historic confirm popup still opens
 # (⌃x is unchanged), yet the CALLER now learns it reaped nothing.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "15" "s1:15"
+run_reap_tok "15" "@9"
 grep -q 'POPUP' "$TMLOG" || fail "an attached client should still get the ⌃x confirm popup (#289)"
 grep -q 'KILL' "$TMLOG" && fail "the popup pass must not kill the window itself"
 [ "$TOK" = "skip:needs-confirm" ] || fail "the popup pass must report skip:needs-confirm (got [$TOK]) (#596)"
@@ -550,7 +568,7 @@ grep -q 'KILL' "$TMLOG" && fail "the popup pass must not kill the window itself"
 
 # Refused popup must expose the actual confirm inline; declining it stays safe.
 : > "$TMLOG"; : > "$GHLOG"
-TOK=$(printf n | REFUSE_POPUP=1 run_reap "15" "s1:15"); RC=$?
+TOK=$(printf n | REFUSE_POPUP=1 run_reap "15" "@9"); RC=$?
 case "$TOK" in *'[y] reap'*) ;; *) fail "refused issue popup never reached the inline prompt" ;; esac
 [ "$RC" = 3 ] || fail "refused issue popup lost its dispatch result"
 grep -q KILL "$TMLOG" && fail "declining inline confirm killed the issue window"
@@ -561,7 +579,7 @@ grep -q KILL "$TMLOG" && fail "declining inline confirm killed the issue window"
 # this (issue #304) so the bind returns instantly, but a script's `reaped:full`
 # must mean DONE, not "dispatched" — hence no run-shell re-exec here.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "14" "s1:14" --yes
+run_reap_tok "14" "@9" --yes
 grep -q 'RUNSHELL' "$TMLOG" && fail "--yes must reap in the foreground, not via run-shell (#596)"
 [ -d "$WORK/wt14" ] && fail "--yes on a merged row should remove the worktree (#596)"
 grep -q 'CLOSE' "$GHLOG" || fail "--yes on a merged row should close the issue (#596)"
@@ -570,7 +588,7 @@ grep -q 'CLOSE' "$GHLOG" || fail "--yes on a merged row should close the issue (
 
 # D6: --force is an alias for --yes.
 : > "$TMLOG"; : > "$GHLOG"
-run_reap_tok "16" "s1:16" --force
+run_reap_tok "16" "@9" --force
 grep -q 'POPUP' "$TMLOG" && fail "--force must behave like --yes (no popup) (#596)"
 [ -d "$WORK/wt16" ] || fail "--force on dirty must KEEP the worktree (#596)"
 [ "$TOK" = "reaped:keep" ] || fail "--force must print reaped:keep (got [$TOK]) (#596)"
@@ -581,13 +599,13 @@ git -C "$BASEDIR" worktree add -q -b scratch-12 "$WORK/scr12" >/dev/null 2>&1
 printf 'exp\n' > "$WORK/scr12/untracked"
 transcript_for "$WORK/scr12" 112   # a session id of its own: record-closed dedups on it
 : > "$TMLOG"; : > "$GHLOG"
-CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "s1:9"
+CLIENTS="" RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "@9"
 grep -q 'POPUP' "$TMLOG" && fail "a headless dirty scratch must NOT get a popup (#596)"
 grep -q 'KILL' "$TMLOG" && fail "a refused scratch confirm must not close the window (#596)"
 [ "$TOK" = "skip:needs-confirm" ] || fail "a headless dirty scratch must print skip:needs-confirm (got [$TOK]) (#596)"
 [ "$RC" = 3 ] || fail "a headless dirty scratch must exit 3 (got $RC) (#596)"
 : > "$TMLOG"; : > "$GHLOG"
-RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "s1:9" --yes
+RAW=1 WID='@9' WT="$WORK/scr12" run_reap_tok "" "@9" --yes
 grep -q 'POPUP' "$TMLOG" && fail "--yes on a dirty scratch must NOT open a popup (#596)"
 grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the window (#596)"
 [ -d "$WORK/scr12" ] || fail "--yes on a dirty scratch must KEEP the worktree (#596)"

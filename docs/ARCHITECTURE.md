@@ -49,7 +49,9 @@ that one". `@wid` is a **letter + digit** (234 of them, lowercase, digits 1-up s
 nothing reads as `0`/`O` or `1`/`l` on a soft keyboard), accepted
 **wherever a window target is** —
 `fleet-migrate.sh b3`, `dash-reap.sh a1` — via `fleet_wid_target`, which passes
-any non-handle (`@382`, an index, a name) straight through.
+any non-handle (`@382`, an index, a name) straight through. The destructive
+`dash-reap.sh` entry instead requires an explicit identity and refuses indexes
+and names; see [reap safety](REAP-SAFETY.md).
 The sidebar and full hub list identify tasks by their user-supplied descriptions
 and hide these handles. The full list gives the reclaimed four columns to names.
 

@@ -34,8 +34,8 @@
 # already); a kept dirty worktree stays on disk for later.
 #
 # NON-INTERACTIVE CALLERS (issue #596). `dash-reap.sh <target>` is a PUBLIC script
-# interface — fleet-keys.sh documents `dash-reap.sh a1`, and it accepts any window
-# handle/target — not merely the ⌃x bind, so it must never assume a human is
+# interface — accepts @window-id, %pane-id, registered handle, issue-N/#N or
+# scratch-N. Indexes and arbitrary names are refused (#565). Never assume a human is
 # watching the fleet:
 #
 #   --yes | --force    skip the confirm popup and take the branch that popup would
@@ -101,6 +101,17 @@ guard_live() {
       "$target" "${why:-probe unavailable}" >&2
     exit 3
   fi
+}
+
+# stderr keeps the public one-token stdout protocol intact. Quote free text so
+# spaces/newlines in a name or path cannot fabricate another diagnostic line.
+describe_target() {
+  local state name issue
+  state=$(tmux display-message -p -t "$target" '#{@claude_state}' 2>/dev/null)
+  name=$(tmux display-message -p -t "$target" '#{window_name}' 2>/dev/null)
+  issue=$(tmux display-message -p -t "$target" '#{@issue}' 2>/dev/null)
+  printf 'reap target: window=%s name=%q issue=%q state=%q worktree=%q reason=%s\n' \
+    "$target" "$name" "${issue:--}" "${state:--}" "${2:--}" "$1" >&2
 }
 
 # close the bound issue (idempotent — a merge/janitor may have closed it already)
@@ -187,6 +198,7 @@ reap_keep() {
 # by verdict. $1 = the ACTION (full|keep); $reason = the gate verdict for the row.
 reap_dispatch() {
   guard_live
+  describe_target "${reason:-unknown}" "${wtdir:-}"
   # Window id + NAME for the ledger row — read BEFORE reap_* kills the window
   # (the summary cache FILE the id keys survives; neither would be resolvable
   # afterwards). Empty is tolerated: the row just records no summary / no title.
@@ -211,23 +223,27 @@ target="${1:-}"
 # caller with a token rather than a bare success, but stay silent on the status
 # line: a ⌃x on an empty dash should not nag.
 [ -z "$target" ] && { emit "refused:no-target"; exit 4; }
-# A target may be the fleet's short window HANDLE (`a1`, issue #566) as well as the
-# `sess:idx` the dash row hands over. Normalise ONCE here, before the --exec
-# re-dispatch carries $target into the background pass, so both passes address the
-# same window; a non-handle passes through untouched. Bare tmux: ⌃x runs in the
-# dash pane and the --exec tail under run-shell, both on THIS fleet's socket.
-target="$(fleet_wid_target "$target")"
-# Pin identity before a popup or background job: an index can move while either
-# waits (#565). Every subsequent read and the disposal target use this exact id.
-target=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) \
-  || refuse no-target "target window disappeared"
-case "$target" in @*) ;; *) refuse no-target "cannot resolve target window" ;; esac
-case "${target#@}" in ''|*[!0-9]*) refuse no-target "invalid window id" ;; esac
+# Validate the complete invocation before resolving anything: a second target
+# must never be silently ignored. --exec is the existing private background tail.
 shift || true
-for a in "$@"; do case "$a" in
-  confirm)      confirm=1 ;;
-  --yes|--force) yes=1 ;;    # non-interactive: take the confirm branch unasked (#596)
-esac; done
+if [ "${1:-}" = --exec ]; then
+  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || refuse bad-args "--exec needs one action and optional verdict"
+  case "$2" in full|keep) ;; *) refuse bad-args "invalid reap action" ;; esac
+  case "${3:-}" in ''|merged-pr|ancestor|unmerged|dirty) ;; *) refuse bad-args "invalid reap verdict" ;; esac
+else
+  for a in "$@"; do case "$a" in
+    confirm) confirm=1 ;;
+    --yes|--force) yes=1 ;;
+    *) refuse bad-args "one target only; unexpected argument: $a" ;;
+  esac; done
+fi
+# Unlike the general fleet_wid_target helper, this destructive entry never falls
+# back from an unresolved handle to a window name. Pin a unique identity now;
+# popup and delayed tail invocations carry only the resolved @id.
+target=$(python3 "$BIN/fleet-reap-target.py" "$target") \
+  || refuse target "target rejected; use a stable @id or explicit issue/scratch key"
+case "$target" in @*) ;; *) refuse target "invalid window id" ;; esac
+case "${target#@}" in ''|*[!0-9]*) refuse target "invalid window id" ;; esac
 
 command -v git >/dev/null 2>&1 || refuse no-git "git not found"
 
@@ -294,6 +310,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # IS this row's full disposal, hence `reaped:full` (#596).
   if [ -z "$sbranch" ]; then
     guard_live
+    describe_target ephemeral "$swt"
     tmux kill-window -t "$target" 2>/dev/null || true
     tmux display-message "closed scratch ✓" 2>/dev/null || true
     emit reaped:full
@@ -350,6 +367,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # (#466), KEEP a dirty worktree, close the window last. Echoes its result token.
   scratch_dispose() {
     guard_live
+    describe_target "$sreason" "$swt"
     scratch_record
     guard_live
     [ "$sreason" = dirty ] || scratch_remove
@@ -362,6 +380,8 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
       emit reaped:full
     fi
   }
+
+  describe_target "$sreason" "$swt"
 
   # ⌃x (issue #289): a clean+merged scratch disposes straight away; a
   # dirty/unmerged one opens a y/n confirm popup FIRST (a dirty worktree stays
@@ -444,6 +464,7 @@ command -v gh >/dev/null 2>&1 && MERGED_PRS="$(gh -R "$REPO" pr list \
   --state merged --head "$branch" --json headRefName -q '.[].headRefName' 2>/dev/null)"
 
 reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")"
+describe_target "$reason" "$wtdir"
 
 # --- ⌃x (issue #289): clean+merged reaps straight away; anything else confirms -
 # first, then force-reaps. The initial keypress (no `confirm` arg) decides which:
