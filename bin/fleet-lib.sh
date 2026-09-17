@@ -685,6 +685,7 @@ fleet_internal_transcript() {   # $1=jsonl path → 0 = fleet-internal, 1 = a re
   local head_bytes; head_bytes=$(head -c 16384 "${1:-}" 2>/dev/null)
   case "$head_bytes" in
     *"You are a status classifier for a Claude Code"*)          return 0 ;;
+    *"You are a status classifier for a coding-agent"*)         return 0 ;;
     *"You are labeling a Claude Code session for a dashboard"*) return 0 ;;
   esac
   return 1
