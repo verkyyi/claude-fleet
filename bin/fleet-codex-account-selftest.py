@@ -95,14 +95,16 @@ for line in sys.stdin:
         self.quota();(Path(self.homes[0])/'auth.json').write_text('do not read tokens')
         self.assertEqual(a.status(self.homes[0])['state'],'unknown')
 
-    def test_model_bucket_only_applies_to_exact_native_model_slug(self):
+    def test_model_bucket_requires_explicit_limit_id_binding(self):
         self.quota()
         data=a.read(a.cache_path(self.homes[0]))
         data['rateLimitsByLimitId']={'special':{'normalModelSlug':'fixture-model','primary':{'usedPercent':100}}}
         a.save(a.cache_path(self.homes[0]),data)
-        self.assertEqual(a.status(self.homes[0])['state'],'available')
-        self.assertEqual(a.status(self.homes[0],'fixture-model')['state'],'low')
-        self.assertEqual(a.status(self.homes[0],'other-model')['state'],'available')
+        self.assertEqual(a.status(self.homes[0],'fixture-model')['state'],'available')
+        with patch.dict(os.environ,FLEET_CODEX_MODEL_LIMIT_IDS='{"fixture-model":"special"}'):
+            self.assertEqual(a.status(self.homes[0],'fixture-model')['state'],'low')
+            self.assertEqual(a.status(self.homes[0],'other-model')['state'],'available')
+        self.assertEqual(a.status(self.homes[0],limit_id='absent')['state'],'unknown')
 
     def test_native_stdio_accounts_stay_isolated_and_credentials_not_cached(self):
         for i, home in enumerate(self.homes):

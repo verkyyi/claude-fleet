@@ -41,20 +41,22 @@ bridge and the migrator all agree on:
 | `@claude_state`, `@claude_state_ts` | the state glyph + when it last changed |
 | `@cc_account`, `@cc_agent` | which subscription account / which agent it runs |
 
-**`@wid` is the one an operator says out loud.** A window's tmux `window_id`
+**`@wid` is an internal handle and optional CLI target.** A window's tmux `window_id`
 (`@382`) is re-minted every time the window is re-created, and that happens
 constantly — `fleet-migrate.sh` re-created 21 windows in one night, and every
 `dash-restore-session.sh` mints another — so it can never be the name for "reap
 that one". `@wid` is a **letter + digit** (234 of them, lowercase, digits 1-up so
-nothing reads as `0`/`O` or `1`/`l` on a soft keyboard), rendered in the dash's
-leftmost `id` column and accepted **wherever a window target is** —
+nothing reads as `0`/`O` or `1`/`l` on a soft keyboard), accepted
+**wherever a window target is** —
 `fleet-migrate.sh b3`, `dash-reap.sh a1` — via `fleet_wid_target`, which passes
 any non-handle (`@382`, an index, a name) straight through.
+The sidebar and full hub list identify tasks by their user-supplied descriptions
+and hide these handles. The full list gives the reclaimed four columns to names.
 
 - **Scope: this fleet's live windows.** A handle is **reused** once its window is
   gone, which is what keeps it two characters forever. Durable identity for
-  history/the ledger stays the session/transcript id; `@wid` never appears there,
-  and the landed (`⌃t`) view shows `·` in that column.
+  history/the ledger stays the session/transcript id; `@wid` never appears there.
+  The landed (`⌃t`) view shares the live list's layout without an `id` column.
 - **Allocation is stateless** — no counter file. `fleet_wid_stamp` reads `@wid`
   off every window on the fleet's socket and takes the lowest unused one, under a
   short mkdir-lock in `fleets/<session>/wid.lock`. Nothing to corrupt, self-healing
@@ -85,6 +87,14 @@ repo-specific pieces are **per-fleet**.
 
 *Collector shared, hub not* is the right split — remember it that way.
 
+The git phase also reclaims path-keyed `git_<key>` / `ctx_<key>` files whose
+worktrees have left the live inventory (#647). It requires successful, nonempty
+window listings from every discovered fleet and at least one absolute path;
+failed, empty or malformed inventories preserve existing caches. Cleanup uses
+the entire inventory before git work starts, so a budget that stops the rotation
+early cannot evict an unvisited live worktree. Native `ctx_codex_*` session keys,
+per-fleet caches, directories and symlinks are outside this sweep.
+
 ### Worker task sidebar
 
 `fleet-sidebar.sh` loads the fleet's preference; `fleet-sidebar.py` manages a
@@ -107,10 +117,16 @@ window IDs. Mouse forwarding and the `fleet-sidebar` keyboard table keep the
 agent pane active, so window-targeted messaging, capture and process discovery
 still resolve the worker. `@sidebar_worker` records that pane while the view is
 present and is cleared from the source window when the view moves. The UI follows
-this binding after each move. Focus cues use the client's key table, not just
-`pane_active`: **TASKS · FOCUS** means sidebar navigation, **INPUT** means worker
-input, while the cyan `▶` row always identifies the current task. The spinner
-samples its screen for stuck-working detection instead of
+this binding after each move. Clicking the sidebar enters its key table, including
+clicks on blank space; tmux 3.6+ also reports clicks on the top pane border.
+Release/repeat events preserve navigation.
+A row click switches workers but retains sidebar navigation. Clicking the worker,
+Enter or Escape returns input; auto-hiding the sidebar also clears its key table.
+Focus cues use the client's key table, not just `pane_active`: an amber
+**TASKS · INPUT** pane border means sidebar navigation, a blue **WORKER · INPUT**
+badge means worker input, while the `▶` row always identifies the current task.
+There is no title row inside the sidebar; task descriptions start at row zero.
+The spinner samples the worker screen for stuck-working detection instead of
 using window activity, which includes sidebar repaints. The view exits if its
 worker disappears, including tmux versions where a manual kill emits no exit hook.
 

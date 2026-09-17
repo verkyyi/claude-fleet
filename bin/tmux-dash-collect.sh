@@ -34,6 +34,8 @@
 #                           truncated phase waits one round instead of starving. Absent
 #                           ⇒ the last tick completed and this one starts at the top
 #   global/ctx_<key>      — model<TAB>context-tokens per worktree (every run)
+#                           Path-keyed git/ctx entries are pruned from a complete,
+#                           nonempty live-worktree inventory in the git phase (#647).
 #   global/usage          — token-consumption proxy 5h/7d       (≥300s)
 #   global/usage.filecache— per-file raw token sums keyed by (mtime,size) — memoizes
 #                           the usage scan so unchanged transcripts aren't re-read
@@ -647,11 +649,53 @@ GIT_DONE="$G/collect.git.done.$$"   # how far the scan got; read back after the 
                                     # suffix puts it in the EXIT trap's sweep.
 # shellcheck disable=SC2329  # invoked as run_phase's "ph_$name", not by name
 ph_git() {
-  local p n i pos=0 cur key branch ab behind ahead s0 d
+  local p n i pos=0 cur key branch ab behind ahead s0 d sock snapshot
+  local inventory='' complete=1
   local -a paths; paths=()
-  while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done \
-    < <(lw_all '#{pane_current_path}' | sort -u)
+  # Keep every socket's result: lw_all's last exit status cannot prove that an
+  # earlier fleet answered. A failed/empty view may still refresh known paths,
+  # but it must never authorize deleting another fleet's caches (#647).
+  for sock in $SOCKETS; do
+    if snapshot=$(tmux -L "$sock" list-windows -a -F '#{pane_current_path}' 2>/dev/null); then
+      [ -n "$snapshot" ] || complete=0
+      inventory="${inventory}${snapshot}"$'\n'
+    else
+      complete=0
+    fi
+  done
+  inventory=$(printf '%s' "$inventory" | LC_ALL=C sort -u) || return 0
+  while IFS= read -r p; do
+    case "$p" in /*) paths+=("$p") ;; *) complete=0 ;; esac
+  done <<< "$inventory"
   n=${#paths[@]}; [ "$n" -gt 0 ] || return 0
+  # Prune BEFORE the budgeted git work: this is the full live list, not just the
+  # worktrees the rotation manages to visit. One Python pass avoids a fork per
+  # cache. Missing Python or any uncertainty keeps the previous caches intact.
+  if [ "$complete" = 1 ] && [ "$sock_rc" = 0 ] && have_py3; then
+    python3 - "$G" ${paths[@]+"${paths[@]}"} <<'PY'
+import os, sys
+root = sys.argv[1]
+keys = {p.replace('_', '_u').replace('/', '_s').replace(' ', '_w') for p in sys.argv[2:]}
+with os.scandir(root) as entries:
+    for entry in entries:
+        # Absolute path keys start with _s. In particular, ctx_codex_* belongs
+        # to native session identities, not this worktree inventory.
+        if not entry.name.startswith(('git__s', 'ctx__s')):
+            continue
+        key = entry.name[4:]
+        if key in keys:
+            continue
+        # Preserve live entries' atomic-write temporaries as well as their data.
+        stem, dot, suffix = key.rpartition('.')
+        if dot and stem in keys and suffix.isdigit():
+            continue
+        try:
+            if entry.is_file(follow_symlinks=False):
+                os.unlink(entry.path)
+        except OSError:
+            pass  # A cache disappearing or being unreadable cannot stop refresh.
+PY
+  fi
   # Resume just AFTER the worktree the last tick was working on (the cursor names
   # the one it CLAIMED, which is the one that wedged if the budget blew).
   cur=$(cat "$GIT_CURSOR" 2>/dev/null)

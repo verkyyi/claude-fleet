@@ -123,7 +123,9 @@ reset times come from Codex; the primary window can be weekly. Stale, failed,
 reset-expired, or replaced-auth readings are unknown. A transient read failure
 preserves a still-fresh successful reading. Known available accounts outrank
 unknown ones; unknown never means exhausted. Extra model buckets only affect a
-selection when Codex provides an exact `normalModelSlug` match.
+selection when `FLEET_CODEX_MODEL_LIMIT_IDS` explicitly binds the requested model
+to a native bucket. `normalModelSlug` describes alias presentation and is not
+proof that a bucket meters all uses of that normal model.
 
 `FLEET_CODEX_QUOTA_FLOOR` defaults to 5 percent remaining.
 `FLEET_CODEX_QUOTA_GATE=1` holds fresh launches/autofill when every configured
@@ -200,3 +202,39 @@ explicit blockers take precedence, and a slow classification is discarded when
 the launcher, thread or hook state changes. This allows plain-text questions at
 Stop to be distinguished from completed work without inventing a Codex
 Notification hook.
+
+
+## Model changes and per-model fallback
+
+Use the native settings API to change an idle worker without restarting it:
+
+```sh
+bin/fleet-codex-model.sh switch --session myfleet --window @12 --to MODEL --dry-run
+bin/fleet-codex-model.sh switch --session myfleet --window @12 --to MODEL
+bin/fleet-codex-model.sh limits --session myfleet --window @12
+```
+
+The switch binds the exact launcher/thread and refuses active work or pending
+handoffs. It changes only the native model setting, reads it back, and leaves
+account, permissions and conversation intact. Native settings notifications also
+update the attached Codex TUI. This requires the private worker server.
+
+Automatic fallback is opt-in: set `FLEET_CODEX_MODEL_FALLBACK` and an explicit
+`FLEET_CODEX_MODEL_LIMIT_IDS` JSON object, such as
+`{"primary-model":"primary-limit-id","fallback-model":"other-limit-id"}`.
+Use verified IDs from native `limits` output; Fleet never guesses a model from
+an opaque bucket ID, display name or alias metadata. Register the account home
+so its quotas are collected even while it has no live worker.
+
+The collector switches at most one worker per fleet per tick, only when the
+native thread is idle, its current model is known low, its fallback has fresh
+available quota, and the account-wide quota is healthy. A stale `working` hook
+stamp cannot hide a natively idle quota-failed turn. The selected model is read
+from the server before changing it. Missing mappings, unknown/stale/reset-expired
+quotas, a shared bucket, explicit blockers or active handoffs leave it alone.
+
+Only when the latest native turn actually failed with a quota/rate-limit error
+does Fleet queue a continuation after the verified switch. Completed tasks get
+no nudge. The controller rechecks the exact failed turn and source identity;
+queue failures are reported instead of claimed as success. Account-wide limits
+continue through the separate home-migration policy.
