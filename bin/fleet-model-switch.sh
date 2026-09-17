@@ -234,28 +234,27 @@ _lc() {
   done
 }
 
-# ledger_until <account> <model> — `fleet-account.sh model-limited-until`, memoized
-# for the life of this run. NOT pure (it forks), so it lives out here rather than
-# with the helpers above. The memo is the whole point: every window on a fleet
-# normally shares one account and one model, so the banner-less ledger probe and the
-# is-my-fallback-also-capped check would otherwise fork fleet-account.sh (which
-# sources fleet-lib + usage-lib each time) once per window — measured at roughly
-# doubling the sweep's dry-run probe on a 14-window fleet, and that probe runs
-# SYNCHRONOUSLY inside the 60 s quotawatch tick. One fork per distinct pair instead.
-# A cap cannot meaningfully expire inside a single sweep, so a run-scoped cache is
-# exact. bash 3.2 (macOS) has no associative arrays — hence the delimited string.
+# ledger_until <account> <model> <now> → LEDGER_UNTIL, memoized for this probe.
+# Call DIRECTLY: `v=$(ledger_until ...)` discards the memo with its subshell and
+# used to start fleet-account.sh once per window despite the cache (#674). The
+# shared reader now uses builtins only, with one file read per distinct pair and
+# no child processes, even on the first lookup. Cache misses (0) as well as caps.
+# The probe uses one clock; reset the memo when this run records a new cap so a
+# later banner-less window sees it. bash 3.2 has no associative arrays.
 _LEDGER_MEMO="|"
+LEDGER_UNTIL=0
 ledger_until() {
-  local a="${1:-}" m="${2:-}" key hit v
-  [ -n "$a" ] && [ -n "$m" ] || { printf '0'; return 0; }
+  local a="${1:-}" m="${2:-}" key hit fleet_model_until=0
+  LEDGER_UNTIL=0
+  [ -n "$a" ] && [ -n "$m" ] || return 0
+  _lc "$m"; m="$_LC"
   key="$a/$m"
   case "$_LEDGER_MEMO" in
-    *"|$key="*) hit=${_LEDGER_MEMO#*"|$key="}; printf '%s' "${hit%%|*}"; return 0 ;;
+    *"|$key="*) hit=${_LEDGER_MEMO#*"|$key="}; LEDGER_UNTIL=${hit%%|*}; return 0 ;;
   esac
-  v=$("$BIN/fleet-account.sh" model-limited-until "$a" "$m" 2>/dev/null)
-  case "$v" in ''|*[!0-9]*) v=0 ;; esac
-  _LEDGER_MEMO="${_LEDGER_MEMO}$key=$v|"
-  printf '%s' "$v"
+  fleet_model_limited_until "$FLEET_C/global/account.model-limited" "$a" "$m" "${3:-0}"
+  LEDGER_UNTIL="$fleet_model_until"
+  _LEDGER_MEMO="${_LEDGER_MEMO}$key=$LEDGER_UNTIL|"
 }
 
 # ------------------------------------------------------------------ main ----
@@ -418,6 +417,7 @@ main() {
   # probe lasts seconds, so a single stamp is both cheaper and more self-consistent
   # than five that disagree by a second.
   local NOW_S; NOW_S=$(date +%s)
+  _LEDGER_MEMO="|"
 
   for wid in ${targets[@]+"${targets[@]}"}; do
     local name state acct cpid text pmodel banner kind capped tuntil
@@ -484,12 +484,10 @@ main() {
           # the whole answer.
           lcap=""
           if [ -n "$acct" ] && [ -n "$pmodel" ]; then
-            # `${pmodel%% *}` first, so the one surviving fork lowercases a WORD
-            # rather than a line (issue #706 — this branch is the COMMON path of a
-            # --capped sweep: most windows carry no banner at all).
+            # Only the model's alias word is needed, not its display version.
             trace ledger
             _lc "${pmodel%% *}"; lcap="$_LC"
-            lu=$(ledger_until "$acct" "$lcap")
+            ledger_until "$acct" "$lcap" "$NOW_S"; lu="$LEDGER_UNTIL"
             [ "$lu" -gt "$NOW_S" ] || lcap=""
             trace banner
           fi
@@ -518,7 +516,7 @@ main() {
     # window to the subscription path rather than flip it onto a second wall.
     if [ -n "$acct" ]; then
       trace ledger
-      tuntil=$(ledger_until "$acct" "$TARGET")
+      ledger_until "$acct" "$TARGET" "$NOW_S"; tuntil="$LEDGER_UNTIL"
       trace select
       if [ "$tuntil" -gt "$NOW_S" ]; then
         printf '  – %s (%s): %s is ALSO capped on %s — skipped (subscription path)\n' "$wid" "$name" "$TARGET" "$acct"
@@ -534,7 +532,9 @@ main() {
     # Record the cap so the SPAWN path agrees with us: fleet-claude.sh launches
     # new sessions on FLEET_MODEL_FALLBACK while the (account, model) row holds.
     if [ "$LEDGER" = 1 ] && [ -n "$acct" ] && [ -n "$banner" ]; then
-      "$BIN/fleet-account.sh" model-limited "$acct" "$capped" "$banner" >/dev/null 2>&1 || :
+      if "$BIN/fleet-account.sh" model-limited "$acct" "$capped" "$banner" >/dev/null 2>&1; then
+        _LEDGER_MEMO="|"
+      fi
     fi
     # Shared with the collector's #524 branch, so the two callers cannot both
     # act on the same window inside its 180 s guard window.

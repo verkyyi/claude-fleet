@@ -85,6 +85,33 @@ _lc "";        eq "_lc: empty in, empty out" ""          "$_LC"
 _lc "a*b?c";   eq "_lc: glob chars stay literal" "a*b?c" "$_LC"
 _lc "5.1";     eq "_lc: nothing to fold"     "5.1"       "$_LC"
 
+# #674: the ledger hot path needs neither external commands nor a subshell, and
+# both hits and misses persist in the parent shell. Changing the file between
+# calls makes an ineffective `$(ledger_until ...)` cache observable without a
+# wall-clock assertion that flakes when the machine is busy.
+mkdir -p "${CAPLEDGER%/*}"
+printf 'acctA\tfable\t2300\tcap\n' > "$CAPLEDGER"
+PATH=/nonexistent ledger_until acctA Fable 1000
+eq "ledger: builtin-only first read" 2300 "$LEDGER_UNTIL"
+PATH=/nonexistent ledger_until acctA opus 1000
+eq "ledger: uncapped result" 0 "$LEDGER_UNTIL"
+printf 'acctA\tfable\t2400\tnew cap\nacctA\topus\t2500\tnew cap\n' > "$CAPLEDGER"
+PATH=/nonexistent ledger_until acctA fable 1000
+eq "ledger: hit is memoized across calls and query case" 2300 "$LEDGER_UNTIL"
+PATH=/nonexistent ledger_until acctA opus 1000
+eq "ledger: miss is memoized too" 0 "$LEDGER_UNTIL"
+PATH=/nonexistent ledger_until acctB fable 1000
+eq "ledger: account is part of the cache key" 0 "$LEDGER_UNTIL"
+_LEDGER_MEMO="|"
+PATH=/nonexistent ledger_until acctA fable 1000
+eq "ledger: a new probe sees the updated cap" 2400 "$LEDGER_UNTIL"
+PATH=/nonexistent ledger_until '' fable 1000
+eq "ledger: empty account resets the output" 0 "$LEDGER_UNTIL"
+PATH=/nonexistent ledger_until acctA '' 1000
+eq "ledger: empty model resets the output" 0 "$LEDGER_UNTIL"
+rm -f "$CAPLEDGER"
+_LEDGER_MEMO="|"
+
 ok; model_matches opus  "Opus 5"    || fail "model_matches: opus ↔ Opus 5"
 ok; model_matches fable "Fable 5.1" || fail "model_matches: fable ↔ Fable 5.1"
 ok; model_matches FABLE "fable 5.1" || fail "model_matches: case-insensitive both ways"
@@ -321,6 +348,20 @@ out=$(RUN --capped --model opus --dry-run)
 ok; has 'via ledger' "$out" || fail "a ledger detection should say so in the plan" "$out"
 ok; has "$W_LED" "$out" || fail "the banner-less window on a ledger-capped model should be planned" "$out"
 
+# Repeat a real candidate in dry-run mode: each pair is read ONCE even with many
+# windows, and the call sites must not quietly reintroduce the subshell that lost
+# the old memo. Count operations, not elapsed seconds (#674).
+FLEET_MODEL_SWITCH_VERIFY=12 bash -x "$SCRIPT" --session "$LBL" --no-fallback \
+  --model opus --dry-run "$W_LED" "$W_LED" "$W_LED" "$W_LED" \
+  > "$WORK/ledger.plan" 2> "$WORK/ledger.xtrace"
+eq "ledger: every repeated candidate is visited" 4 "$(grep -c 'would:' "$WORK/ledger.plan")"
+eq "ledger: repeated fallback pair reads the file once" 1 "$(grep -c '^+ fleet_model_limited_until ' "$WORK/ledger.xtrace")"
+FLEET_MODEL_SWITCH_VERIFY=12 bash -x "$SCRIPT" --session "$LBL" --no-fallback \
+  --model opus --capped --dry-run > "$WORK/ledger.plan" 2> "$WORK/ledger.xtrace"
+eq "ledger: only two distinct pairs read the file" 2 "$(grep -c '^+ fleet_model_limited_until ' "$WORK/ledger.xtrace")"
+eq "ledger: calls never run in command substitutions" 0 "$(grep -c '^++*+ ledger_until ' "$WORK/ledger.xtrace")"
+eq "ledger: probe never starts the account CLI for reads" 0 "$(grep -c 'fleet-account.sh model-limited-until' "$WORK/ledger.xtrace")"
+
 out=$(RUN --capped --model opus)
 ok; has '1 switched' "$out" || fail "expected exactly the ledger-only window to switch" "$out"
 ok; has '/model opus' "$(cat "$WORK/typed.ledgeronly")" || fail "the ledger-only pane should have been handed /model opus" "$(cat "$WORK/typed.ledgeronly")"
@@ -387,6 +428,25 @@ rm -f "$TRACEF"
 RUN --capped --model opus --dry-run >/dev/null
 [ ! -f "$TRACEF" ] || fail "the breadcrumb must be opt-in (no FLEET_MODEL_SWITCH_TRACE, no file)"
 ok
+
+# A cap recorded during this sweep must invalidate an earlier cached miss. Put a
+# banner-less window before AND after the window that discovers the cap, with an
+# empty ledger. Only the earlier one waits for the next sweep; the later one must
+# switch silently in this sweep even though its pair was previously uncapped.
+"$BIN/fleet-account.sh" model-clear >/dev/null 2>&1
+spawn_worker beforecap '' "Fable 5.1"; W_BEFORE="$WID"
+spawn_worker newcap Fable "Fable 5.1"; W_NEW="$WID"
+spawn_worker aftercap '' "Fable 5.1"; W_AFTER="$WID"
+tmux -L "$LBL" set-window-option -t "$W_BUSY" @claude_state_ts "$(date +%s)" 2>/dev/null
+sleep 1
+out=$(RUN --capped --model opus)
+ok; has '2 switched' "$out" || fail "a newly recorded cap must reach the later ledger-only candidate" "$out"
+ok; has "$W_NEW" "$out" && has "$W_AFTER" "$out" || fail "both new-cap and later ledger-only windows must switch" "$out"
+eq "a window visited before the new cap waits until next sweep" "" "$(cat "$WORK/typed.beforecap")"
+ok; has '/model opus' "$(cat "$WORK/typed.aftercap")" || fail "cached miss hid a cap written by this sweep"
+ok; grep -q 'tok-aftercap' "$INBOX_LOG" && fail "the newly detected ledger-only window must not be nudged"
+out=$(RUN --capped --model opus --dry-run)
+ok; has "$W_BEFORE" "$out" || fail "the next sweep must pick up the earlier window" "$out"
 
 # --- panels and the hub are never touched ------------------------------------
 eq "the dash panel was never typed into" "" "$(cat "$WORK/typed.dash" 2>/dev/null)"

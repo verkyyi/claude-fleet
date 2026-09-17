@@ -710,10 +710,10 @@ cmd_model_limited() {   # <label> <model> [banner] → prints the until-epoch
   printf '%s' "$until"
 }
 acct_model_limited_until() {   # <label> <model|model-id> → epoch, 0 = not capped
-  local m; m=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+  local m fleet_model_until=0; m=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
   [ -f "$STATE_MODEL_LIMITED" ] && [ -n "$m" ] || { echo 0; return; }
-  awk -F'\t' -v l="$1" -v m="$m" -v now="$(now)" 'BEGIN{u=0}
-    $1==l && ($3+0)>now && ($3+0)>u && (index(m,$2)>0 || index($2,m)>0) { u=$3+0 } END { print u+0 }' "$STATE_MODEL_LIMITED"
+  fleet_model_limited_until "$STATE_MODEL_LIMITED" "${1:-}" "$m" "$(now)"
+  printf '%s\n' "$fleet_model_until"
 }
 cmd_model_clear() {   # [label [model]] — no args clears everything
   [ -f "$STATE_MODEL_LIMITED" ] || return 0
