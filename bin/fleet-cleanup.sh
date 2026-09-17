@@ -45,7 +45,7 @@
 #   skip:unmerged    scratch-head reap refused: local commits past the merged head
 #   skip:dirty       reap refused: the worktree has uncommitted work
 #   skip:busy        scratch-head reap refused: its window is not `done`
-#   skip:live        closed-unmerged reap DEFERRED: a session is still using it
+#   skip:live        automatic MERGED or CLOSED-unmerged reap deferred: live/unknown
 #   skip:grace       automatic MERGED cleanup deferred until its grace expires
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
@@ -367,6 +367,53 @@ elif [ "$st" = CLOSED ] && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
   closed_reap_gate || exit 0
 fi
 
+# Automatic MERGED cleanup must not turn a GitHub verdict into permission to
+# kill a working session (#565). Pin one window, require an explicit done state,
+# then share the dash's all-pane process-age/unknown-metadata guard. A missing
+# window is NOT proof of inactivity; the windowless janitor owns that case.
+# Run before history/pull and again after the lease/pull wait, just before kill.
+auto_merged_gate() {
+  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] || return 0
+  [ -n "$WT" ] || [ -n "$WIN" ] || return 0
+  local why="" state self_win cwd lease
+  local socket_args=()
+  if ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+    why="missing or ambiguous window; leaving windowless work to worktree-autoclean"
+  elif [ -n "$WT" ] && lease=$(fleet_rotate_lease_held "$WT"); then
+    why="migration/transfer in flight: $lease"
+  else
+    # --auto is an external janitor, never a delayed self-destruct command. A
+    # detached shell would outlive this final guard and could kill a resumed turn.
+    cwd=$(pwd -P 2>/dev/null)
+    if [ -n "$WT" ]; then
+      case "$cwd" in "$WT"|"$WT"/*) why="caller is inside target worktree" ;; esac
+    fi
+    if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+      self_win=$(ftmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
+      if [ -z "$self_win" ] || [ "$self_win" = "$WIN" ]; then why="caller window is target or unknown"; fi
+    fi
+    if [ -z "$why" ]; then
+      if ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
+        why="cannot read window state"
+      elif [ "$state" != "done" ]; then
+        why="window state is '${state:-unset}', not done"
+      else
+        [ -n "${TMUX:-}" ] || socket_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+        if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+          python3 "$BIN/fleet-reap-live.py" "$WIN" ${socket_args[@]+"${socket_args[@]}"} 2>/dev/null); then
+          why="${why:-liveness probe unavailable}"
+        fi
+      fi
+    fi
+  fi
+  if [ -n "$why" ]; then
+    note "  #$PR automatic cleanup deferred: $why"
+    done_token "skip:live"; return 1
+  fi
+  return 0
+}
+auto_merged_gate || exit 0
+
 # --- dry-run: report what we WOULD do, take no lease, mutate nothing ----------
 if [ "$DRY" = 1 ]; then
   if [ -z "$WT" ] && [ -z "$WIN" ]; then done_token "dry:would-reap-nothing"; exit 0; fi
@@ -397,6 +444,9 @@ teardown() {
   local detach=0
   [ -n "$WIN" ] && [ -n "$self_win" ] && [ "$WIN" = "$self_win" ] && detach=1
   if [ -n "$WT" ]; then case "$cwd" in "$WT"|"$WT"/*) detach=1 ;; esac; fi
+  # The automatic gate above refused actual self-calls. A daemon's untargeted
+  # display-message can report the active window; that is not a caller to detach.
+  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && detach=0
 
   if [ "$detach" = 1 ]; then
     # Silence the git steps (issue #192): run-shell surfaces non-empty output as a
@@ -415,6 +465,7 @@ teardown() {
     return 0
   fi
 
+  auto_merged_gate || return 1
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
@@ -504,6 +555,6 @@ if ! git -C "$MAIN" pull --ff-only >/dev/null 2>&1; then
 fi
 land_lease_release "$LEASE"
 
-teardown
+teardown || exit 0
 done_token "cleaned:${oid:-merged}"
 exit 0

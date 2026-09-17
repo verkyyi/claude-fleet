@@ -69,5 +69,11 @@ become a strict ancestor. The separate liveness guards remain necessary.
 
 The cleanup daemon separately enforces a [merged grace](CLEANUP.md#the-pieces)
 of 600 seconds by default. Idle-scratch auto-reaping and dashboard grace markers
-remain separate work in #565. A SessionEnd hook is also a different path: the user has already ended that
+remain separate work in #565. Its automatic MERGED path also requires explicit
+`done` and uses this same process-age guard on its named fleet socket, before
+history/pull and again before synchronous teardown. Missing/ambiguous windows
+defer; automatic self-cleanup is refused rather than detached. Manual cleanup
+and CLOSED-unmerged retain their separate policies.
+
+A SessionEnd hook is also a different path: the user has already ended that
 agent, so it is not routed through the dash's active-agent policy.

@@ -75,7 +75,9 @@ case "\${1:-}" in
       *)      : ;;
     esac ;;
   branch)  printf 'branch-D %s\n' "\${3:-}" >> "$ORDER_LOG" ;;   # git branch -D <b>
-  pull)    printf 'pull\n' >> "$PULL_LOG" ;;          # git pull --ff-only
+  pull)    printf 'pull\n' >> "$PULL_LOG"
+           [ "\${FAKE_RESUME_ON_PULL:-0}" = 1 ] && touch "$WORK/resumed"
+           : ;;          # git pull --ff-only
   status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
   rev-parse) printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
   *) : ;;                                             # fetch → succeed silently
@@ -114,9 +116,13 @@ GHFAKE
 # WIN_GONE=1 drops the worker window (already-torn-down scenario).
 cat > "$WORK/fakebin/tmux" <<TMUXFAKE
 #!/bin/bash
-if [ "\${1:-}" = "-L" ]; then shift 2; fi
+if [ "\${1:-}" = "-L" ]; then
+  [ "\${2:-}" = testsess ] || exit 1
+  shift 2
+fi
 case "\${1:-}" in
   list-panes)
+    case "\$*" in *pane_pid*) printf '500\n'; exit 0 ;; esac
     # fleet_wt_window's cwd probe: window @9 sits in the scratch-99 worktree.
     [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s/wt-scratch-99\n' "$WORK"; : ;;
   list-windows)
@@ -125,9 +131,17 @@ case "\${1:-}" in
         [ "\${SCRATCH_WIN:-0}" = 1 ] && printf '@9 %s\n' "\${SCRATCH_STATE:-done}"
         [ "\${WIN_GONE:-0}" = 1 ] || printf '@7 %s\n' "\${WIN_STATE_FAKE:-done}"
         : ;;
-      *)              [ "\${WIN_GONE:-0}" = 1 ] || echo '@7 42' ;;   # window @7 → issue 42
+      *)              [ "\${WIN_GONE:-0}" = 1 ] || echo '@7 42'
+                      [ "\${FAKE_DUPLICATE:-0}" = 1 ] && echo '@8 42'
+                      : ;;   # window @7 → issue 42
     esac ;;
   display-message)
+    case "\$*" in *claude_state*)
+      [ "\${FAKE_STATE_FAIL:-0}" = 1 ] && exit 1
+      [ -f "$WORK/resumed" ] && { echo working; exit 0; }
+      case "\$*" in *'@9'*) printf '%s\n' "\${SCRATCH_STATE:-done}" ;;
+        *) printf '%s\n' "\${WIN_STATE_FAKE-done}" ;; esac
+      exit 0 ;; esac
     case "\$*" in *window_id*) echo "\${FAKE_SELF_WIN:-@1}" ;; *session_name*) echo 'testsess' ;; *) echo '' ;; esac ;;
   kill-window)   printf 'kill-window %s\n' "\${!#}" >> "$ORDER_LOG" ;;
   run-shell)     printf 'run-shell\n' >> "$ORDER_LOG" ;;
@@ -136,6 +150,19 @@ esac
 exit 0
 TMUXFAKE
 chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
+
+# Deterministic process tree for the REAL shared liveness helper. No host ps or
+# live tmux server participates in these destructive-path regression fixtures.
+cat > "$WORK/fakebin/ps" <<'PSFAKE'
+#!/bin/bash
+[ "${FAKE_PS_FAIL:-0}" = 1 ] && exit 1
+[ "${FAKE_PS_MISSING:-0}" = 1 ] && exit 0
+case "$*" in
+  *etime*) printf '500 1 02:00:00 zsh\n501 500 %s codex\n' "${FAKE_AGENT_AGE:-01:00:00}" ;;
+  *) printf '500 zsh\n501 codex\n' ;;
+esac
+PSFAKE
+chmod +x "$WORK/fakebin/ps"
 
 # Freeze only the cleanup clock when requested, to test the exact boundary
 # without sleeps. Timestamp parsing/formatting still uses the host BSD/GNU date.
@@ -177,6 +204,7 @@ make_transcript() {  # $1 = seconds ago the session last spoke, or "none"
 run_clean() {
   local scenario="$1"; shift
   : > "$ORDER_LOG"; : > "$PULL_LOG"
+  rm -f "$WORK/resumed"
   make_transcript "${FAKE_TX_AGE:-3600}"
   # A REAL worktree dir (issue #586): teardown no longer shells out to
   # `git worktree remove` — it RENAMES the tree into a sibling .fleet-trash/, so the
@@ -187,7 +215,7 @@ run_clean() {
   fi
   GH_SCENARIO="$scenario" FAKE_SELF_WIN="${FAKE_SELF_WIN:-@1}" \
   WT_GONE="${WT_GONE:-0}" WIN_GONE="${WIN_GONE:-0}" \
-  WIN_STATE_FAKE="${WIN_STATE_FAKE:-done}" \
+  WIN_STATE_FAKE="${WIN_STATE_FAKE-done}" \
   FAKE_CLOSED_AT="${FAKE_CLOSED_AT:-$(iso_ago 1800)}" \
   FAKE_MERGED_AT="${FAKE_MERGED_AT-$(iso_ago 1800)}" \
   CLAUDE_PROJECTS_DIR="$PROJ" \
@@ -195,7 +223,7 @@ run_clean() {
   SCRATCH_STATE="${SCRATCH_STATE:-done}" FAKE_DIRTY="${FAKE_DIRTY:-0}" \
   FAKE_TIP="${FAKE_TIP:-deadbeef}" \
   FLEET_CLEANUP_SCRATCH_HEADS="${FLEET_CLEANUP_SCRATCH_HEADS:-0}" \
-  TMUX='' PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" \
+  TMUX="${FAKE_TMUX:-}" TMUX_PANE="${FAKE_PANE:-}" PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" \
   FLEET_CONF_DIR="$WORK/conf" FLEET_SESSION="testsess" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
   FLEET_HISTORY_LEDGER="$LEDGER" \
@@ -262,6 +290,58 @@ ok 'manual cleanup stays immediate without a merge clock'
 tok="$(run_clean closed --auto)"
 [ "$tok" = cleaned:closed ] || fail 'automatic CLOSED-unmerged cleanup must keep its separate policy'
 ok 'automatic CLOSED-unmerged keeps its existing policy'
+
+# A merged PR plus expired grace must still leave a live or unverified worker.
+for active_state in working looping busy waiting ''; do
+  : > "$LEDGER"
+  tok="$(WIN_STATE_FAKE="$active_state" run_clean merged --auto)"
+  [ "$tok" = skip:live ] || fail "automatic state '$active_state' should defer, got '$tok'"
+  [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'active worker was mutated'
+done
+ok 'automatic MERGED working/looping/busy/waiting/unset state is retained'
+for scenario in young ps-failure missing-pid state-failure missing-window duplicate-window self-call; do
+  : > "$LEDGER"
+  case "$scenario" in
+    young) tok="$(FAKE_AGENT_AGE=00:10 run_clean merged --auto)" ;;
+    ps-failure) tok="$(FAKE_PS_FAIL=1 run_clean merged --auto)" ;;
+    missing-pid) tok="$(FAKE_PS_MISSING=1 run_clean merged --auto)" ;;
+    state-failure) tok="$(FAKE_STATE_FAIL=1 run_clean merged --auto)" ;;
+    missing-window) tok="$(WIN_GONE=1 run_clean merged --auto)" ;;
+    duplicate-window) tok="$(FAKE_DUPLICATE=1 run_clean merged --auto)" ;;
+    self-call) tok="$(FAKE_TMUX=fake FAKE_PANE=%7 FAKE_SELF_WIN=@7 run_clean merged --auto)" ;;
+  esac
+  [ "$tok" = skip:live ] || fail "automatic $scenario should defer, got '$tok'" "$(cat "$WORK/err")"
+  [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "automatic $scenario mutated the worker"
+done
+ok 'young agent, failed probes and missing window/pid all fail closed'
+tok="$(WIN_STATE_FAKE=working run_clean merged --auto --dry-run)"
+[ "$tok" = skip:live ] || fail 'dry-run must apply automatic liveness'
+printf 'FLEET_REAP_MIN_AGE=7200\n' > "$WORK/conf/testsess.conf"
+tok="$(run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail 'automatic process age must read non-exported fleet config'
+printf 'FLEET_REAP_MIN_AGE=0\n' > "$WORK/conf/testsess.conf"
+tok="$(FAKE_AGENT_AGE=00:10 run_clean merged --auto --dry-run)"
+[ "$tok" = dry:would-clean-merged ] || fail 'age zero must disable just the age check'
+tok="$(WIN_STATE_FAKE=working run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail 'age zero must never override active state'
+rm "$WORK/conf/testsess.conf"
+ok 'automatic dry-run, fleet process-age override and zero-age state protection'
+tok="$(FAKE_RESUME_ON_PULL=1 run_clean merged --auto)"
+[ "$tok" = skip:live ] || fail "worker resumed during pull should defer, got '$tok'"
+[ -s "$PULL_LOG" ] && [ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] \
+  || fail 'post-pull liveness recheck did not prevent teardown'
+ok 'automatic post-pull recheck protects a resumed worker (earlier ledger may remain)'
+tok="$(FAKE_SELF_WIN=@7 run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail 'daemon active-window lookup must not masquerade as self' ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || fail 'automatic cleanup must stay synchronous'
+grep -qx run-shell "$ORDER_LOG" && fail 'automatic cleanup must never queue unguarded teardown'
+ok 'automatic daemon remains synchronous even when target is the active window'
+tok="$(FAKE_TMUX=fake FAKE_PANE=%1 FAKE_SELF_WIN=@1 run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail 'automatic caller in another pane should use inherited socket' ;; esac
+grep -qx 'kill-window @7' "$ORDER_LOG" || fail 'inherited-socket cleanup did not complete'
+ok 'automatic caller outside target inherits socket (empty socket-argument array)'
 
 : > "$LEDGER"
 tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
@@ -446,6 +526,11 @@ tok="$(FAKE_MERGED_AT="$(iso_ago 60)" scratch scratch --auto)"
 [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
   && [ -f "$WORK/wt-scratch-99/keep.txt" ] || fail 'scratch grace allowed mutation'
 ok 'automatic opted-in scratch head also waits for grace'
+: > "$LEDGER"
+tok="$(FAKE_AGENT_AGE=00:10 scratch scratch --auto)"
+[ "$tok" = skip:live ] || fail 'automatic scratch head must pass process-age gate'
+[ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] || fail 'young scratch agent was mutated'
+ok 'automatic scratch head also passes shared process liveness'
 : > "$LEDGER"
 tok="$(scratch scratch)"; err="$(cat "$WORK/err")"
 case "$tok" in cleaned:*) ;; *) fail "8 expected cleaned:* for an armed scratch head, got '$tok'" "$err" ;; esac
