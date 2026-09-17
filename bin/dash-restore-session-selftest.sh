@@ -221,5 +221,15 @@ grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"         || fail "I a title-less scratch re
 grep -q 'SETOPT .*@issue' "$OPTS_LOG"         && fail "I a title-less scratch resume must NOT bind @issue" "$(cat "$OPTS_LOG")"
 ok "I title-less scratch → resume-scratch-<n> fallback, still @raw"
 
+# Codex verdicts preserve the provider/home and do not invoke Claude resume.
+mkdir -p "$WORK/codex home's account"
+VERDICT="CODEX-RESUME\t$WORK/wt\t11111111-1111-4111-8111-111111111111\t$WORK/codex home's account\tfork\tunused" \
+  META="9\tCodex recovery" FLEET_MAX_SESSIONS=0 run_restore 'landed:issue:9'
+grep -q -- '--agent codex --codex-home' "$NEWWIN_LOG" || fail 'Codex provider/home missing from restore command'
+grep -q -- 'fork 11111111-1111-4111-8111-111111111111' "$NEWWIN_LOG" || fail 'Codex fork UUID changed'
+grep -q -- '--resume' "$NEWWIN_LOG" && fail 'Codex restore used Claude resume'
+grep -q 'SETOPT .*@issue 9' "$OPTS_LOG" || fail 'Codex restore lost issue binding'
+ok 'J Codex history restores with native fork, exact home and issue'
+
 printf '\nselftest OK: %s assertions passed (restore landed session → new window, #228 + scratch #466)\n' "$pass"
 exit 0

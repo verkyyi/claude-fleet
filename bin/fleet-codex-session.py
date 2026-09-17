@@ -30,17 +30,24 @@ def valid_id(value):
         return False
 
 
+def saved_identity(raw, owner):
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or data.get("owner") != owner
+            or not owner.isdigit() or not valid_id(data.get("session_id"))
+            or not isinstance(data.get("home"), str) or not os.path.isabs(data["home"])):
+        return {}
+    return data
+
+
 def identity(pane, socket=""):
     if not pane or (not socket and not os.environ.get("TMUX")):
         return {}
     raw = tmux(["display-message", "-p", "-t", pane,
                 "#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}"], socket)
     agent, owner, record = raw.split("|", 2)
-    data = json.loads(record)
-    if (agent != "codex" or not owner.isdigit() or not isinstance(data, dict)
-            or data.get("owner") != owner or not valid_id(data.get("session_id"))):
+    if agent != "codex":
         return {}
-    return data
+    return saved_identity(record, owner)
 
 
 def meta(path, sid):
@@ -238,13 +245,15 @@ def collect(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("hook", "context", "send", "identity", "collect"))
+    parser.add_argument("command", choices=("hook", "context", "send", "identity", "collect", "saved", "locate"))
     parser.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
     parser.add_argument("--socket", default="")
     parser.add_argument("--session", default="")
     parser.add_argument("--home", default="")
     parser.add_argument("--transcript", default="")
     parser.add_argument("--cache", default="")
+    parser.add_argument("--identity", default="{}")
+    parser.add_argument("--owner", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
@@ -257,6 +266,20 @@ def main():
             return 0
         if args.command == "collect":
             return collect(args)
+        if args.command == "saved":
+            data = saved_identity(args.identity, args.owner)
+            path, _ = rollout(data)
+            values = (data.get("session_id", ""), data.get("home", ""), os.path.dirname(path), path)
+            if any(not isinstance(v, str) or any(c in v for c in "\t\n\r") for v in values):
+                raise ValueError("invalid session metadata fields")
+            print("\t".join(v or "-" for v in values))
+            return 0
+        if args.command == "locate":
+            path, _ = rollout({"session_id": args.session, "home": args.home, "transcript": args.transcript})
+            if not path:
+                return 1
+            print(path)
+            return 0
         return context(args) if args.command == "context" else send(args)
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         if args.command == "hook":

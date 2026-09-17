@@ -9,7 +9,8 @@ Follow it as written, with these translations (they are the only differences):
 - **Slash commands are Claude Code skills; you cannot invoke them.** `/fleet-claim`
   IS the text below — begin at its step 0 by running the shell command it names.
   Run `bash ~/.claude/fleet/bin/fleet-context.sh` for your exact session's
-  context meter. `/fleet-handoff` and `/fleet-history` are not yet adapted:
+  context meter. Use `fleet-history.sh` to list and reopen saved sessions with
+  their recorded provider and account home. `/fleet-handoff` is not yet adapted:
   there is no automatic context cycle. If you are running out of
   context, commit and push what you have and post a progress comment on the
   issue (the `fleet-comment.sh … --note` wrapper) so a successor can pick up.

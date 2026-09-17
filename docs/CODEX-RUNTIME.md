@@ -55,3 +55,18 @@ The optional `fleet-codex-rpc.py` helper makes bounded local JSON-RPC reads thro
 the Unix WebSocket endpoint. `codex app-server proxy` is a raw byte relay and
 does not turn newline JSON into WebSocket frames. Runtime tests cover the real
 wire framing, including masking, fragmentation, ping/pong and RPC failures.
+
+## Recovery and history
+
+Crash snapshots and the closed-session ledger preserve the provider, exact root
+UUID, CODEX_HOME and rollout path. The ledger watcher captures these before a
+window disappears. A missing identity stays an unknown Codex session; it never
+selects a Claude transcript from the same worktree. Old Claude rows and maps
+remain readable without conversion.
+
+`fleet-restore.sh` resumes Codex with its saved account home. `fleet-history.sh
+resume KEY` and the dashboard restore action use native `codex fork UUID` by
+default; `--no-fork` selects `codex resume UUID`. The shared launcher accepts
+`--agent codex --codex-home PATH --resume UUID [--fork-session]` as well. If the
+account home or exact rollout has been removed, history is review-only. Recovery
+does not copy credentials or silently substitute another account.
