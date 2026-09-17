@@ -34,6 +34,7 @@ class LoopTests(unittest.TestCase):
         self.fail_send = False
         self.state = 'done'
         self.clients = ''
+        self.real_current = loop.current
         owner = self
 
         class FakeRpc:
@@ -89,6 +90,12 @@ class LoopTests(unittest.TestCase):
         loop.dispatch(self.path, now=10000)
         self.assertEqual(self.read()['status'], 'paused')
         self.assertEqual(self.messages, [])
+
+    def test_new_tui_thread_invalidates_old_loaded_thread(self):
+        expected = '|'.join(['isolated', '@2', '42', 'codex', self.r['manifest'], str(self.root)])
+        with patch.object(loop, 'pane', side_effect=[expected, '0', json.dumps({'session_id': 'new-thread'})]):
+            with self.assertRaisesRegex(ValueError, 'TUI switched'):
+                self.real_current(self.r)
 
     def test_unloaded_thread_never_resumed(self):
         self.runtime_state = 'notLoaded'
@@ -164,6 +171,7 @@ class BridgeTest(unittest.TestCase):
 import base64,hashlib,json,os,pathlib,socket,struct,subprocess,sys,threading,time
 root=pathlib.Path(os.environ['LOOP_TEST_ROOT']);args=sys.argv[1:]
 if args[:1]==['app-server']:
+ assert os.environ['FLEET_CODEX_REMOTE']==args[args.index('--listen')+1]
  (root/'server-argv.json').write_text(json.dumps(args));(root/'server-pid').write_text(str(os.getpid()))
  sock=socket.socket(socket.AF_UNIX);sock.bind(args[args.index('--listen')+1].removeprefix('unix://'));sock.listen()
  def connection(c):
@@ -201,6 +209,7 @@ if args[:1]==['app-server']:
   c,_=sock.accept();threading.Thread(target=connection,args=(c,),daemon=True).start()
 else:
  assert args[:1]==['--remote']
+ assert args[1]==os.environ['FLEET_CODEX_REMOTE']
  os.environ['CODEX_THREAD_ID']='12345678-1234-1234-1234-123456789abc'
  subprocess.run([sys.executable,os.environ['LOOP_TEST_SCRIPT'],'bind'],check=True)
  end=time.monotonic()+10
@@ -209,13 +218,14 @@ else:
 ''')
             tmux = fake / 'tmux'
             tmux.write_text('''#!/usr/bin/env python3
-import os,sys
+import json,os,sys
 a=sys.argv[1:];r=os.environ['LOOP_TEST_ROOT']
 if a[2:3]==['display-message']:
  f=a[-1]
  if f=='#{pane_pid}':print('42')
  elif f=='#{pane_dead}':print('0')
  elif f=='#{@claude_state}':print('done')
+ elif f=='#{@codex_identity}':print(json.dumps({'session_id':'12345678-1234-1234-1234-123456789abc'}))
  else:print('isolated|@2|42|codex|'+r+'/manifest.json|'+r)
 ''')
             for f in (codex, tmux): f.chmod(0o755)

@@ -68,6 +68,10 @@ def current(r):
     got = pane(r, '#{session_name}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|#{@worktree}')
     if got != want or pane(r, '#{pane_dead}') == '1':
         raise ValueError('pane, agent, worktree or handoff identity changed')
+    if r.get('thread_id'):
+        identity = json.loads(pane(r, '#{@codex_identity}') or '{}')
+        if identity.get('session_id') != r['thread_id']:
+            raise ValueError('the TUI switched to another Codex thread')
 
 
 class Rpc:
@@ -317,7 +321,7 @@ def bridge(args):
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))
     current(r)
     save(path, r)
-    env = dict(os.environ, FLEET_LOOP_RECORD=str(path))
+    env = dict(os.environ, FLEET_LOOP_RECORD=str(path), FLEET_CODEX_REMOTE='unix://' + str(sock))
     env.pop('CODEX_THREAD_ID', None)
     env.pop('CODEX_SESSION_ID', None)
     overrides = []
