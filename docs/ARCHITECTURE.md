@@ -95,7 +95,8 @@ eligible. Inactive windows lose their sidebar, so worker count does not multiply
 the refresh loops. Narrow screens hide it without changing the saved preference.
 Navigation moves the same populated pane before selecting the destination, in
 one tmux command queue. The curses process, scroll position and rendered list
-survive; the destination never first appears at full width and then splits.
+survive; the destination never first appears at full width and then splits. The
+renderer runs from the install root so it cannot pin a departed worker's worktree.
 tmux still controls terminal redraws when switching windows. A renderer version
 marker replaces older live views once on upgrade.
 

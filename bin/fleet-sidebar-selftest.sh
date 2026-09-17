@@ -166,6 +166,8 @@ try:
     wait_for(lambda: bool(view_on(w1)), 'attach hook did not create sidebar')
     side = view_on(w1)[0]
     side_pid = tm('display-message', '-p', '-t', side, '#{pane_pid}')
+    check(Path(tm('display-message', '-p', '-t', side, '#{pane_current_path}')).resolve() == bin_dir.parent.resolve(),
+          'a reusable sidebar must not anchor the departed worker worktree')
     check(tm('display-message', '-p', '-t', side, '#{pane_left}:#{pane_width}') == '0:30',
           'sidebar should occupy 30 cells at the left edge')
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'split stole worker focus')

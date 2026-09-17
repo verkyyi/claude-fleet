@@ -105,7 +105,8 @@ def sync(session, enabled, width, lock):
         if move_view(reusable[0][0], worker, width):
             return
         remove_view(reusable[0][0])
-    cwd = fields(worker, "#{pane_current_path}")[0]
+    # A reused view must not keep its first worker's worktree alive after moving.
+    cwd = str(BIN.parent)
     cmd = " ".join(shlex.quote(arg) for arg in (
         "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
     pane = tmux("split-window", "-d", "-h", "-b", "-f", "-l", str(width),
