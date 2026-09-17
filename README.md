@@ -36,13 +36,14 @@ demo repo data.</sub>
   embedded pane in the `plan` hub, which holds the dash and nothing else;
   `prefix+g` focuses it and, pressed again, zooms it fullscreen — as does
  `F9`. `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
-  **type a name and press Enter** — it spawns an empty scratch session (own
-  writable `scratch-N` worktree, no issue) **named after that text**, sitting at
-  `❯` for you to drive; no prompt is sent. Chinese and spaces are fine (the name
-  is capped at 24 columns — 12 CJK glyphs). The prompt label is the fleet's
+  **type a name and press Enter** — it spawns a scratch session (own
+  writable `scratch-N` worktree, no issue) **named after that text**, with the
+  full text prefilled in the first input as an **unsent, editable draft**.
+  Chinese and spaces are fine (the window title is capped at 24 columns — 12 CJK
+  glyphs; the draft is not clipped). The prompt label is the fleet's
   default agent for a new session (`claude ▸` / `codex ▸`); `Ctrl-V` flips it,
   persisted to the fleet's conf — that key (or `prefix+c`) is how you pick the
-  agent; typed text is only ever the name. `Ctrl-N` is the issue-bound path: it files a
+  agent; typed text supplies the name and draft. `Ctrl-N` is the issue-bound path: it files a
   GitHub issue and spawns a worker session bound to it. (Every dash `Ctrl-` key
   is checked against your tmux prefix at launch and moved to its `Alt-` twin
   when it collides — tmux would eat it otherwise; `?` shows the real key.)

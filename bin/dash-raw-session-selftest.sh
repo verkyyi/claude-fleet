@@ -20,7 +20,7 @@
 #   D. restore excludes    → resolver drops a @raw=1 row, keeps a normal WIN row
 #   E. old-map back-compat → a 6-field WIN row (pre-#214, no @raw) is still kept
 #
-# Optional --name at creation (issue #225) — the name is display-only; the @raw=1
+# Optional --name at creation — the name also prefills an unsent draft; the @raw=1
 # / no-@issue / @worktree invariants hold regardless:
 #   F. --name foo          → window named `foo`, still @raw=1 + @worktree + no @issue
 #   G. empty --name        → auto `scratch-N`
@@ -56,9 +56,22 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/tmp/.claude-dash"
 NEWWIN_LOG="$WORK/newwin"; OPTS_LOG="$WORK/opts"; DISPLAY_LOG="$WORK/display"; SELECT_LOG="$WORK/select"; RS_LOG="$WORK/runshell"
+PREFILL_LOG="$WORK/prefill"
 
 ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+# Record the async prefill handoff; scratch-prefill-selftest.sh tests delivery.
+cat > "$WORK/bin/scratch-prefill.py" <<'PY'
+import json, os, sys
+from pathlib import Path
+socket, pane, filename, warm = sys.argv[1:]
+path = Path(filename)
+Path(os.environ['PREFILL_LOG']).write_text(json.dumps({
+    'socket': socket, 'pane': pane, 'warm': warm, 'draft': path.read_text(),
+    'file': filename,
+}, ensure_ascii=False))
+path.unlink()
+PY
 
 # --- a real base checkout stands in for $FLEET_MAIN (issue #290) ---------------
 MAIN="$WORK/main"
@@ -94,6 +107,7 @@ case "$cmd" in
     case "$*" in
       *-p*) case "$*" in
               *session_name*) echo "${SESS_NAME:-testsess}";;
+              *pane_id*)      echo '%9';;
               *@issue*)       echo "${ORIGIN_PROBE:-}";;   # fleet_origin_key's caller-pane probe (case N)
               *) echo "";; esac ;;
       *)    printf '%s\n' "$*" >> "$DISPLAY_LOG" ;;
@@ -114,11 +128,11 @@ chmod +x "$WORK/fakebin/tmux"
 # args passed to run_raw are forwarded to the script (--name / --bg / positional
 # <target-session>).
 run_raw() {
-  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"
+  : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"; : > "$PREFILL_LOG"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-0}" \
-  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" RS_LOG="$RS_LOG" \
+  DISPLAY_LOG="$DISPLAY_LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" SELECT_LOG="$SELECT_LOG" RS_LOG="$RS_LOG" PREFILL_LOG="$PREFILL_LOG" \
     bash "$WORK/bin/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"
 }
 
@@ -143,6 +157,7 @@ git -C "$MAIN" show-ref --verify -q refs/heads/scratch-1 || fail "A a scratch-1 
 # the invoking pane — i.e. one stray line (`git worktree add`'s "HEAD is now at …")
 # covers the dash until the user presses Esc.
 [ -s "$WORK/out" ] && fail "A the spawn must be silent on stdout (run-shell would overlay it on the dash)" "$(cat "$WORK/out")"
+[ -s "$PREFILL_LOG" ] && fail "A an unnamed scratch must keep an empty input"
 ok "A raw spawn creates a @raw scratch-1 WORKTREE off base, @worktree set, no @issue"
 
 # ============================ B: cap refusal ================================
@@ -399,6 +414,41 @@ reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
 grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O a default spawn must carry NO --agent (byte-for-byte unchanged)" "$(cat "$NEWWIN_LOG")"
 ok "O --agent codex reaches the launcher (cold path, survives --bg); unknown/default carry none (#547)"
+
+# ==================== P: names prefill an unsent draft =======================
+check_draft() {
+  python3 - "$PREFILL_LOG" "$1" "$2" <<'PY' || fail "P wrong draft handoff" "$(cat "$PREFILL_LOG")"
+import json, sys
+from pathlib import Path
+row = json.loads(Path(sys.argv[1]).read_text())
+assert row['draft'] == sys.argv[2], row
+assert row['warm'] == sys.argv[3], row
+assert row['socket'] == 'testsess' and row['pane'] == '%9', row
+assert not Path(row['file']).exists(), row
+PY
+}
+reset_scratch
+draft='修复 Scratch 首行预填：保留完整名称 #tag "$(injection)"'
+WINS=plan FLEET_MAX_SESSIONS=0 run_raw --bg --agent codex --name "$draft"
+check_draft "$draft" 0
+grep -qF 'injection' "$RS_LOG" && fail "P a draft must never be interpolated into run-shell"
+grep -qF '$(cat' "$NEWWIN_LOG" && fail "P a name must never become a submitted launch prompt"
+grep -qF ' --agent codex;' "$NEWWIN_LOG" || fail "P a named Codex scratch must launch without a seed"
+
+reset_scratch
+WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name label --prompt 'explicit seed'
+[ -s "$PREFILL_LOG" ] && fail "P an explicit --prompt takes precedence over the name draft"
+
+cat > "$WORK/bin/scratch-pool.sh" <<'SH'
+#!/bin/bash
+[ "${1:-}" = claim ] && printf '@9\tscratch-1\t%s/main-scratch-1\n' "$FLEET_MAIN"
+exit 0
+SH
+reset_scratch
+WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name 'warm draft'
+[ -s "$NEWWIN_LOG" ] && fail "P a named warm scratch must reuse its ready window"
+check_draft 'warm draft' 1
+ok "P cold/--bg/Codex and warm names prefill the full draft; unnamed and seeded spawns do not"
 
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

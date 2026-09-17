@@ -37,10 +37,10 @@
 #   L. SHELLCHECK   dash-rename.sh is shellcheck-clean (skipped if absent)
 #
 # The query line is ALWAYS visible — it doubles as the quick-scratch box (type a
-# name, ↵ → an empty scratch session named after it, #534). Rename borrows it; the two must
-# not bleed into each other:
-#   P. TYPED NAME   Enter with a non-empty query and NO mode armed spawns an EMPTY
-#                   scratch named <q> (dash-raw-session.sh --name-file <f>, #534), clears the
+# name, ↵ → a named scratch with an unsent draft). Rename borrows it; the two
+# must not bleed into each other:
+#   P. TYPED NAME   Enter with a non-empty query and NO mode armed spawns a
+#                   scratch named <q> (dash-raw-session.sh --name-file <f>), clears the
 #                   query, never jumps/renames
 #   P2. BLANK TASK  a whitespace-only query is a plain jump (no spawn)
 #   Q. ESC CLEARS   Esc with a half-typed task clears it (no abort); an empty line
@@ -234,7 +234,7 @@ bash "$ENT" "$T" '-dashy' >/dev/null
 [ -f "$FLAG" ] && fail "M: the rename_target flag must be dropped"
 ok "M a window name starting with '-' renames instead of tripping tmux flag parsing"
 
-# --- P. TYPED NAME → empty scratch (DEFERRED past the paste guard, #531) --------
+# --- P. TYPED NAME → scratch with an unsent draft (DEFERRED past the paste guard, #531) --------
 # The typed-text spawn is DEBOUNCED (issue #531): a lone Enter defers, then spawns
 # via `dash-raw-session.sh --name-file <f>` (#534; the query in a file, never on
 # the argv). Drive it with a tiny guard so the deferred spawn lands fast, and give
@@ -252,7 +252,7 @@ case "$argv" in *--prompt*) fail "P: the typed text must NOT ride as a seed prom
 pf="${argv#*--name-file=}"; pf="${pf%% *}"
 [ "$(cat "$pf" 2>/dev/null)" = 'fix the flaky dash selftest' ] || fail "P: the name-file must hold the typed text verbatim" "$argv"
 [ "$(wname "$T")" = '-dashy' ] || fail "P: a typed task must not rename the highlighted window"
-ok "P Enter with typed text defers, then spawns an EMPTY scratch named after it (--name-file), clears the line"
+ok "P Enter with typed text defers, then spawns a named scratch with an unsent draft (--name-file), clears the line"
 
 # --- P2. BLANK TASK is a plain jump -------------------------------------------
 rm -f "$RAW_LOG"
