@@ -96,3 +96,58 @@ and verifies that Ctrl-U clears it. It never presses Enter or sends a model
 request. Trust dialogs, stale owners and shell remnants cannot become ready.
 Claims check provider, account home, window size and age; an unavailable warm
 entry falls back to the normal cold launch.
+
+## Account homes and quota recovery
+
+Register separately logged-in homes; Fleet stores their paths, never copies or
+reads their credentials:
+
+```sh
+bin/fleet-codex-account.sh register personal "$HOME/.codex-personal"
+bin/fleet-codex-account.sh register work "$HOME/.codex-work"
+bin/fleet-codex-account.sh refresh
+bin/fleet-codex-account.sh list
+```
+
+Set `FLEET_CODEX_ACCOUNTS="personal work"` in the fleet configuration to select
+new workers by available quota. `FLEET_CODEX_HOME` pins a home instead; an explicit
+`--codex-home` and recorded recovery identity take precedence. Concurrent workers
+keep separate native homes. Each home needs its own login and repository trust.
+An account label names a home, not an assertion that two logins have different
+subscriptions; register separate accounts to gain separate quota.
+
+The collector reads `account/rateLimits/read` from bounded, short-lived native
+app servers, including homes with no live worker. It submits no turns. Cached
+readings expire after `FLEET_CODEX_QUOTA_TTL` (300 seconds). Window lengths and
+reset times come from Codex; the primary window can be weekly. Stale, failed,
+reset-expired, or replaced-auth readings are unknown. A transient read failure
+preserves a still-fresh successful reading. Known available accounts outrank
+unknown ones; unknown never means exhausted. Extra model buckets only affect a
+selection when Codex provides an exact `normalModelSlug` match.
+
+`FLEET_CODEX_QUOTA_FLOOR` defaults to 5 percent remaining.
+`FLEET_CODEX_QUOTA_GATE=1` holds fresh launches/autofill when every configured
+account is below that floor; without the gate, a fully depleted pool still lets
+an operator launch. This gate is independent of Claude's ccquota gate. Warm
+claims use the same selected home. Quotas are included-usage headroom; Fleet
+does not redeem reset credits or change billing settings.
+
+To recover an idle worker into a healthy account:
+
+```sh
+bin/fleet-codex-account.sh migrate work --session myfleet --window @12 --dry-run
+bin/fleet-codex-account.sh migrate work --session myfleet --window @12
+```
+
+Omit the label to choose a different home with freshly known available quota.
+The native thread must be idle, and the transfer controller rechecks that before
+exiting it. `fleet-transfer.sh --to codex --codex-home DIR` is also available for
+explicit transfers. The target starts a fresh conversation from the durable
+packet; the source rollout and its manual recovery recipe retain the original
+home. No transcript database or credentials move between accounts.
+
+`FLEET_CODEX_QUOTA_MIGRATE=1` opts into the same protected recovery on collector
+ticks: at most one idle depleted worker per fleet per tick, with a five-minute
+retry delay per launcher. Busy workers, pending questions, typing holds and
+unknown destination quotas prevent cutover. Attempt logs live under
+`$FLEET_CONF_DIR/codex/migrations/`. Both quota automation knobs default off.

@@ -45,7 +45,7 @@
 #     never applies); empty defers to ~/.codex/config.toml. Stamped as @cc_model.
 #   * Skipped on purpose: --model / FLEET_MODEL + the per-model cap fallback,
 #     Claude --mcp-config flags, CLAUDE_CODE_SUBAGENT_MODEL, and the
-#     CLAUDE_CODE_OAUTH_TOKEN account rotation (Codex auth is `codex login`).
+#     CLAUDE_CODE_OAUTH_TOKEN token rotation. Codex uses its own home-based pool.
 #   * Project trust: Codex prompts once per project; a worktree inherits its main
 #     repo's trust, so the fleet needs $FLEET_MAIN trusted in ~/.codex/config.toml
 #     (one-time). The launcher pre-reads it and flags an untrusted base on the dash
@@ -89,8 +89,8 @@
 # `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused.
 # peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery.
 # Stop classifier (haiku) | ✅ | ❌ | Captures terminal text and invokes a Claude helper with a Claude-specific rubric. The normal Codex Stop hook does not invoke it yet; this is a screen-classification adapter gap.
-# `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | partial | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout; reopening uses native resume/fork. Legacy Claude rows remain readable. Account migration is a separate adapter; no Codex history falls back to a Claude cwd transcript.
-# multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over.
+# `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved.
+# multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins.
 # per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch.
 # MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists; `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
 # warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path.
@@ -135,9 +135,26 @@ while [ "$#" -gt 0 ]; do
     *) normal+=("$1"); shift ;;
   esac
 done
+_codex_resuming="$resume_id"
+for _arg in ${normal[@]+"${normal[@]}"}; do
+  case "$_arg" in resume|fork) _codex_resuming=1; break ;; esac
+done
 if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
   export CODEX_HOME="$FLEET_CODEX_HOME"
+  if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
+    FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_HOME="$CODEX_HOME" FLEET_CODEX_QUOTA_GATE=1 \
+      FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" \
+      FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
+  fi
+elif [ "$_codex_home_explicit" = 0 ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
+  # Recovery identity is authoritative. Only fresh launches choose a pool home.
+  # Pass the already-resolved overlay; a pool session has no overlay of its own.
+  CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
+    FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_GATE="${FLEET_CODEX_QUOTA_GATE:-0}" \
+    FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" \
+    python3 "$BIN/fleet-codex-account.py" select) || exit 2
+  export CODEX_HOME
 fi
 if [ -n "$resume_id" ]; then
   verb=resume; [ "$fork_session" = 1 ] && verb=fork
@@ -291,6 +308,9 @@ for a in ${pass[@]+"${pass[@]}"}; do
 done
 if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
+  tmux set-option -w -t "$TMUX_PANE" @codex_home "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null || true
+  _acct=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" label "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null) || _acct=''
+  tmux set-option -w -t "$TMUX_PANE" @cc_account "${_acct:+codex:$_acct}" 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.

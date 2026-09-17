@@ -199,7 +199,7 @@ def package(a):
             "snapshot_bytes": captured, "snapshot_sha256": digest.hexdigest(),
             "record_session_ids": sorted(record_sessions),
         },
-        "target": {"agent": "codex"},
+        "target": {"agent": "codex", "codex_home": a.target_home or None},
         "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
                   "handle": a.handle, "issue": a.issue, "origin": a.origin},
         "workspace": {"path": worktree, "branch": branch, "head": head, "repo": a.repo},
@@ -366,6 +366,7 @@ def main():
     p.add_argument("--pid", type=int, required=True)
     p.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
     p.add_argument("--codex-home", default="")
+    p.add_argument("--target-home", default="")
     for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop"):
         p.add_argument("--" + name, default="")
     s = sub.add_parser("state")
