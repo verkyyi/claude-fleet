@@ -856,9 +856,9 @@ fleet_dash_pane() {
 # worktree, decides whether it is safe to auto-remove. Prints a reason token on
 # stdout and sets the return code:
 #   merged-pr   (rc 0) — clean AND a MERGED PR exists for the branch
-#   ancestor    (rc 0) — clean AND the tip is an ancestor of the base ref
+#   ancestor    (rc 0) — clean AND the tip is a STRICT ancestor of the base ref
 #   dirty       (rc 1) — has uncommitted/untracked changes (untracked counts)
-#   unmerged    (rc 1) — clean but neither a merged PR nor an ancestor of base
+#   unmerged    (rc 1) — clean but no merged PR or strict ancestry (includes tip == base)
 # Args: <worktree-dir> <repo-root> <branch> <head-sha> <base-ref> <merged-branches>
 # <merged-branches> is a newline-separated list of merged PR head-ref names (the
 # caller's `gh pr list --state merged` output). A caller that only wants the two
@@ -872,8 +872,16 @@ fleet_reap_ok() {
   if [ -n "$branch" ] && printf '%s\n' "$merged" | grep -qxF "$branch"; then
     printf 'merged-pr'; return 0
   fi
+  # Equality also satisfies --is-ancestor, but a just-created branch has exactly
+  # that shape (#565). Resolve refs to commits before comparing: base may be a
+  # branch/ref rather than a SHA. Missing refs fail closed through unmerged.
+  # A merged PR above remains independent evidence, even when tip == base.
+  local head_commit base_commit
   if [ -n "$head" ] && [ -n "$base" ] \
-     && git -C "$root" merge-base --is-ancestor "$head" "$base" 2>/dev/null; then
+     && head_commit=$(git -C "$root" rev-parse --verify "$head^{commit}" 2>/dev/null) \
+     && base_commit=$(git -C "$root" rev-parse --verify "$base^{commit}" 2>/dev/null) \
+     && [ "$head_commit" != "$base_commit" ] \
+     && git -C "$root" merge-base --is-ancestor "$head_commit" "$base_commit" 2>/dev/null; then
     printf 'ancestor'; return 0
   fi
   printf 'unmerged'; return 1

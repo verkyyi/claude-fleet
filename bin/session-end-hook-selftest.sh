@@ -64,14 +64,18 @@ printf 'seed\n' > "$BASEDIR/f"; git -C "$BASEDIR" add f; git -C "$BASEDIR" commi
 BASE_BR="$(git -C "$BASEDIR" branch --show-current)"
 
 # helper: add an issue-<N> worktree, optionally with a divergent commit / dirt.
-add_wt() {  # <n> <mode: ancestor|commit|dirty>
+add_wt() {  # <n> <mode: ancestor|zero|commit|dirty>
   local n="$1" mode="$2"; local wt="$WORK/wt-$n"
   git -C "$BASEDIR" worktree add -q -b "issue-$n" "$wt" >/dev/null 2>&1
   case "$mode" in
     commit) printf 'x\n' > "$wt/g"; git -C "$wt" add g; git -C "$wt" commit -qm "work $n" ;;
     dirty)  printf 'x\n' > "$wt/g"; git -C "$wt" add g; git -C "$wt" commit -qm "work $n"
             printf 'dirt\n' > "$wt/untracked" ;;
-    ancestor) : ;;   # clean, tip == base
+    ancestor)
+      git -C "$wt" commit --allow-empty -qm landed-work
+      git -C "$BASEDIR" merge --ff-only -q "issue-$n"
+      git -C "$BASEDIR" commit --allow-empty -qm base-advance ;;
+    zero) : ;;   # tip == current base; must be kept
   esac
   # a surviving transcript so record / record-closed resolve a session id.
   mkdir -p "$PROJECTS/$(enc "$wt")"; : > "$PROJECTS/$(enc "$wt")/sess-$n.jsonl"
@@ -81,8 +85,9 @@ add_wt() {  # <n> <mode: ancestor|commit|dirty>
 WT1="$(add_wt 1 commit)"    # merged (via fake gh) → merged-pr  → reap + close issue
 WT2="$(add_wt 2 commit)"    # not merged            → unmerged  → KEEP
 WT3="$(add_wt 3 dirty)"     # dirty                 → dirty     → KEEP
-WT4="$(add_wt 4 ancestor)"  # tip == base           → ancestor  → reap, issue kept open
+WT4="$(add_wt 4 ancestor)"  # strict ancestor       → ancestor  → reap, issue kept open
 WT5="$(add_wt 5 commit)"    # not merged (stdin test)→ unmerged  → KEEP
+WT7="$(add_wt 7 zero)"      # no merged PR, tip == base → KEEP
 WT6="$(add_wt 6 commit)"    # not merged (default-on) → unmerged  → KEEP
 
 # A scratch worktree (issue #466): same shape dash-raw-session.sh creates — branch
@@ -297,6 +302,16 @@ git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-4 && fail "ancestor bran
 [ "$(rows 4 closed-unlanded)" = 1 ] || fail "ancestor exit must write ONE closed-unlanded row for #4" "$(cat "$LEDGER")"
 grep -q 'CLOSE' "$GHLOG" && fail "ancestor (no merged PR) must KEEP the issue open (no gh close)"
 ok "prompt_input_exit on ANCESTOR → wt+branch reaped, closed-unlanded row, issue KEPT OPEN"
+
+# A manually-ended zero-commit session still closes its window, but never
+# discards its worktree/branch or closes the issue just because tip == base.
+clr; REASON=prompt_input_exit ISS=7 WID='@7' run_hook
+grep -q KILL "$TMLOG" || fail "manual zero-commit exit must close the window"
+[ -d "$WT7" ] || fail "zero-commit worktree must be KEPT"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-7 || fail "zero-commit branch must be KEPT"
+[ "$(rows 7 closed-unlanded)" = 1 ] || fail "zero-commit exit must remain indexed"
+grep -q CLOSE "$GHLOG" && fail "zero-commit exit must KEEP issue open"
+ok "zero-commit manual exit → window closed, worktree/branch/issue kept, history recorded"
 
 # T10: IDEMPOTENT — a SECOND fire on the still-kept unmerged #2 records NO extra row
 # (record-closed dedups on session-id, so racing the cleanup daemon / ledger-watch is safe).

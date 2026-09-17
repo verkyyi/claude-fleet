@@ -41,7 +41,19 @@ disposed on that path. Finish the session or wait for the age threshold before
 trying again. If a recheck blocks after a prior history/report step, that earlier
 record can remain; liveness refusal prevents the destructive step itself.
 
-This guard does not change zero-commit ancestor eligibility, add idle-scratch
-auto-reaping, or add cleanup grace markers. Those parts of #565 remain separate
-work. A SessionEnd hook is also a different path: the user has already ended that
+The shared Git gate (`fleet_reap_ok`) also requires **strict** ancestry: a clean
+branch at exactly the current base commit, with no merged PR, returns `unmerged`
+(rc 1). SHA/ref spellings are resolved before comparing. The dash requires its
+existing explicit confirmation; the janitor keeps the worktree; manual SessionEnd
+still closes the exited window but keeps its worktree, branch and issue. A merged
+PR remains independent evidence and can authorize disposal even at the base tip.
+Dirty worktrees remain protected before either condition is considered.
+
+This equality check is conservative: a fast-forwarded branch at the base tip with
+no GitHub merged-PR evidence is also kept. It does not reconstruct the branch's
+creation point; after base advances, a branch created at the previous base can
+become a strict ancestor. The separate liveness guards remain necessary.
+
+This guard does not add idle-scratch auto-reaping or cleanup grace markers. Those
+parts of #565 remain separate work. A SessionEnd hook is also a different path: the user has already ended that
 agent, so it is not routed through the dash's active-agent policy.

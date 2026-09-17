@@ -74,6 +74,9 @@ BASE_BR="$(git -C "$BASE" branch --show-current)"
 for b in 100 200 300; do
   git -C "$BASE" worktree add -q -b "issue-$b" "$WORK/base-issue-$b" >/dev/null 2>&1
 done
+# Keep the ancestry path independently eligible, so the liveness/lease
+# assertions cannot pass merely because tip == base now refuses automatic reap.
+git -C "$BASE" commit --allow-empty -qm base-advance
 WT100="$WORK/base-issue-100"   # leased (rotation in flight)
 WT200="$WORK/base-issue-200"   # a live pane is running in it
 WT300="$WORK/base-issue-300"   # neither — must still be pruned
