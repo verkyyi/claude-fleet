@@ -2,14 +2,27 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Run a **fleet of parallel Claude Code sessions** in one tmux session — one
-window per task, each in its own git worktree, with **GitHub issues as the
-backlog** and the tmux status bar as a live attention monitor. Optional
-**subscription account pools and quota-aware routing** help keep that work
-moving across Claude accounts and their 5-hour / 7-day limits.
+**Use your AI subscriptions to move a small team's development tasks forward
+in parallel.**
 
-Born from driving ~7 concurrent Claude sessions (including long-running
-`/loop`s) against a production monorepo from a single always-on Mac mini.
+claude-fleet organizes **Claude Code and Codex CLI sessions** in tmux: one
+window and one isolated git worktree per task, **GitHub Issues as the backlog**,
+and PRs as the delivery path. Run features, fixes, tests and documentation
+alongside each other; use one dashboard to follow progress and handle blockers.
+
+The core workflow uses the CLIs' **subscription sign-in**, with no separate model
+API key required. Optional **Claude subscription account pools and quota-aware
+routing** assign new work by available 5-hour / 7-day headroom and resume tasks
+on another account when needed. Codex shares the task workflow; its account
+rotation and quota management are not wired yet. See the
+[agent capability table](#agents-claude-code-and-codex).
+
+Built from daily use on an always-on Mac mini. A local transcript audit found a
+**historical peak of 25 Claude main sessions processing tasks in parallel,
+across 25 independent worktrees**, on September 1, 2026. A separate interval
+held at least **15 concurrent task directories for 14.46 minutes**. These count
+overlapping CLI processing turns, not simultaneous server-side token generation
+or a throughput multiplier. [Evidence and counting method](docs/USAGE-EVIDENCE.md).
 
 ![dashboard](docs/img/dashboard.svg)
 ![status bar](docs/img/statusbar.svg)
@@ -18,6 +31,11 @@ Born from driving ~7 concurrent Claude sessions (including long-running
 demo repo data.</sub>
 
 ## What you get
+
+- **Subscription-driven parallel work for small teams.** Give independent tasks
+  their own sessions and worktrees, follow them from a shared dashboard, and
+  bring the results together through PRs. Worktrees separate uncommitted changes;
+  related tasks still need an agreed merge order and may have conflicts.
 
 - **Attention signals in the window list.** Claude Code hooks stamp each
   window's state the instant it changes: a **cyan braille spinner** pulses
