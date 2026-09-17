@@ -225,7 +225,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
     && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation; then
     [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] \
       && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
-      && [ "$(opt '#{@claude_state}')" = done ] || die 'source changed at the loop exit confirmation'
+      && [ "$(opt '#{@claude_state}')" = "done" ] || die 'source changed at the loop exit confirmation'
     python3 "$HELPER" verify "$BUNDLE" || die 'source transcript changed at the loop exit confirmation'
     TM capture-pane -p -t "$PANE" > "$BUNDLE/loop-exit-confirmation.txt" || die 'cannot preserve loop exit confirmation'
     SK Enter || die 'cannot confirm stopping the source loop'
