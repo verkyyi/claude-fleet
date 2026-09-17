@@ -35,8 +35,8 @@ def kind(thread):
     return ''
 
 
-def thread_read(client, data):
-    thread = client.call('thread/read', {'threadId': data['session_id'], 'includeTurns': False})['thread']
+def thread_read(client, data, include_turns=False):
+    thread = client.call('thread/read', {'threadId': data['session_id'], 'includeTurns': include_turns})['thread']
     if thread.get('id') != data['session_id']: raise ValueError('native thread identity changed')
     return thread
 

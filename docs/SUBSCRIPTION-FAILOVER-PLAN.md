@@ -1,8 +1,8 @@
 # 订阅额度耗尽后的会话续接：基于现有机制的方案审查
 
-状态：方案审查，尚未实现或启用新的自动切换行为。2026-09-17 核对 Fleet
-`c32df6c`（含 PR #747）；本机 live install 核对时为 `ff733a8`。以下“已有”
-指相应源码能力，不能直接推断本机、MINI 或每个 fleet 已安装并配置完成。
+状态：#599 实现与验收中。已整合 #753 的 Codex home 入口和 #754 的原生状态
+读取；启用统一策略时，账号及额度后端使用 ccquota，旧的独立 Codex pool 模式
+保持兼容。发布/机器启用结果以 PR 和逐机器验证记录为准。
 
 目标：一个任务会话触及订阅限额时，优先换同类 Coding Agent 的可用订阅；
 没有合格同类目标时再跨 Agent 交接；都不可用则保留任务等待。继续携带原始
@@ -202,8 +202,9 @@ PR #747 已支持 Codex context cycle 携带 active loop；Claude → Codex 的�
 | 3 | #599 | quotawatch/banner/Codex 错误汇合、每会话待处理状态与有界重试；复用 loop 状态补双向连续性 |
 | 4 | #599 | `/fleet-handoff`、能力矩阵、dashboard/doctor 的等待原因与目标显示；完整 gate 后同步本机及 MINI |
 
-当前表内是实施计划，未新增可用 CLI 参数或配置项。自动跨类迁移需有明确开关和
-允许目标列表；启用前完成对应组合的能力验证。发布沿用现有同步流程，逐机器确认
+配置入口为 `FLEET_FAILOVER=1` 和 `FLEET_FAILOVER_AGENTS=claude,codex`，默认关闭。
+`fleet-account.sh inventory/choose/reconcile/failover-status` 提供观测、预演与状态。
+启用前完成对应组合的能力验证。发布沿用现有同步流程，逐机器确认
 版本、ccquota 接口、本地账号/home 与 fleet 配置；全机共用 daemon 按命名 socket
 工作，不为每个 fleet 再安装一套额度监控。回滚关闭新决策入口并保留恢复 packet。
 
@@ -224,4 +225,4 @@ PR #747 已支持 Codex context cycle 携带 active loop；Claude → Codex 的�
 
 tmux 测试只用隔离 socket；通过 `run-selftests.sh` 的 shadow root 运行。代码修改的
 发布 gate 保留 Bash 3.2、BSD portability 与 macOS/Linux 检查，运行期间不编辑 bin。
-本次只修改方案文档，验证范围为 source 对照、文档链接和 `git diff --check`。
+实施后运行账号、交接、循环及恢复的行为测试，再运行完整发布 gate。

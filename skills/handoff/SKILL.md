@@ -1,6 +1,11 @@
 ---
 name: handoff
-description: Bridge a long task across sessions. Invoke when the context window is filling up and you want to continue the SAME work in a fresh session — it writes a complete, self-sufficient handoff document ("hand off", "save state / context", "running low on context", "continue this later / in a new session"). Also invoke at the START of a new session to pick up from one ("resume", "pick up <topic>", "continue the handoff"). Two modes: HAND-OFF (write the doc) and PICK-UP (read it and continue).
+description: >-
+  Preserve a task across sessions or Coding Agents. Use when asked to hand off,
+  save context, continue in a fresh session, switch a Fleet conversation between
+  Claude and Codex, or pick up an existing handoff. Write a self-contained handoff
+  or read it and continue; Fleet agent switching uses the existing fleet-handoff
+  command and transfer controller.
 ---
 
 # Session handoff
@@ -8,6 +13,18 @@ description: Bridge a long task across sessions. Invoke when the context window 
 <!-- fleet skill -->
 
 Carries long-running work across a context-window boundary so a fresh session continues seamlessly. Two modes — **HAND-OFF** (write a doc) and **PICK-UP** (resume one).
+
+### Fleet agent switches
+
+Inside Fleet, an explicit request to switch Coding Agent uses the existing
+`/fleet-handoff --to claude|codex` procedure in `commands/fleet-handoff.md` (or
+`~/.claude/fleet/commands/fleet-handoff.md`). This skill supplies the notes; the
+transfer controller owns exact source identity, transcript paths, target
+binding, drafts and loop ownership. Keep the notes private and outside the repo
+for that mode. On pickup, read the manifest and follow `previous_handoff` when
+original provenance is needed. A draft marked `unsent` is not an instruction to
+execute. An active Fleet loop already has a controller: use `fleet-loop.py
+status/defer/stop`, and do not create a second native `/loop` or timer.
 
 ### Decide the mode
 Explicit words always win: "hand off / save state / running low on context" → HAND-OFF; "pick up / resume / continue" → PICK-UP. Otherwise infer from the session, and **default to PICK-UP in a fresh session**:

@@ -43,7 +43,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -191,7 +191,7 @@ WLIST=${WLIST//\\037/$US}
 # #529 blind spot, reopened in pass A only (pass B reads every field by name).
 # $pin (#623) is named for the same reason: this pass needs it, and it is last.
 KEYTAB=''; PRWANT=''
-while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin; do
+while IFS=$US read -r sess idx name path state _ _ iss origin wt _ _ nsub exp pin _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   case "$name" in dash|plan|backlog) continue;; esac
@@ -280,7 +280,7 @@ while IFS=$'\t' read -r _ krk _ _ _ korig; do
 done <<< "$KEYTAB"
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -509,6 +509,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
   tagd="$provd"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
+  [ -z "$qwait" ] || tagd="${tagd:+$tagd }quota:${qwait%%:*}"
 
   # --- subtree progress (issue #624) ------------------------------------------
   # A row that SPAWNED work reports the state of the group rendered beneath it:

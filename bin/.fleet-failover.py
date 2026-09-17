@@ -21,6 +21,7 @@ ACCOUNT = runpy.run_path(str(BIN / '.fleet-account.py'))
 INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
+ATTENTION = runpy.run_path(str(BIN / 'fleet-codex-attention.py'))
 save, read, locked = (ACCOUNT[n] for n in ('save', 'read', 'locked'))
 
 
@@ -38,6 +39,10 @@ def opt(source, key):
 
 
 def stamp(source, status):
+    # A late failed controller must not mark a replacement conversation.
+    current = inspect(source['session'], source['window'])
+    if any(current.get(k) != source.get(k) for k in ('pid','session_id','agent')):
+        return
     tm(source['session'], 'set-option', '-w', '-t', source['window'], '@quota_failover', status)
 
 
@@ -50,7 +55,7 @@ def native_thread(source):
     data = source['codex_identity']
     rpc = RPC(data.get('remote', ''), timeout=5)
     try:
-        t = rpc.call('thread/read', {'threadId': source['session_id'], 'includeTurns': True})['thread']
+        t = ATTENTION['thread_read'](rpc, dict(data, session_id=source['session_id']), include_turns=True)
     finally:
         rpc.close()
     if (t['id'] != source['session_id'] or t.get('modelProvider') != 'openai'
@@ -96,7 +101,7 @@ def source_account(source, data):
                 if old is None: os.environ.pop('FLEET_CODEX_SUBSCRIPTION', None)
                 else: os.environ['FLEET_CODEX_SUBSCRIPTION'] = old
         return matches[0]
-    actual = run(['bash', BIN / 'fleet-account.sh', 'whoami', '--session', source['session'], source['window']])
+    actual = run(['bash', BIN / 'fleet-account.sh', 'whoami', '--verified', '--session', source['session'], source['window']])
     # whoami reports an account label, never credentials. Refuse stale stamps.
     matches = [r for r in data['accounts'] if r['agent'] == 'claude' and r['label'] == actual]
     if len(matches) != 1:
@@ -120,8 +125,11 @@ def quiet_processes(source):
     else:
         # A Fleet Codex root owns its runtime supervisor, guardian, server and
         # TUI. Anything else (including a tool shell) is unfinished work.
-        allowed = {'python3', 'python', 'codex', 'ccquota'}
-        if any(comm not in allowed and not re.fullmatch(r'python3\.\d+', comm) for _, comm in descendants):
+        for pid, comm in descendants:
+            argv = run(['ps','-p',str(pid),'-o','command='],timeout=3).split(None,2)
+            if comm == 'codex': continue
+            if len(argv) > 1 and Path(argv[1]).name in ('fleet-codex-runtime.py','fleet-loop.py'):
+                continue
             raise ValueError('Codex still owns a tool/background process')
         if sum(comm == 'codex' for _, comm in descendants) > 2:
             raise ValueError('Codex still owns additional agent processes')
@@ -153,6 +161,8 @@ def validate(request, session, pane, sid):
             raise ValueError('source identity changed after quota observation')
     if opt(source, '@reported') == '1' or opt(source, '@handoff_armed') == '1':
         raise ValueError('task completed or a context handoff is pending')
+    if r.get('episode') and evidence(source)[1] != r['episode']:
+        raise ValueError('source turn changed after the quota observation')
     if source['agent'] == 'codex':
         thread = native_thread(source)
         hard = quota_error(thread)
@@ -193,14 +203,23 @@ def root():
 
 
 def request_path(source):
-    identity = [source[k] for k in ('session','window','session_id')]
+    identity = [source[k] for k in ('session','window','session_id','pid','agent')]
     return root() / hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
 
 
 def outcome(path, r, state, detail=''):
     r.update(state=state, detail=detail, updated_at=time.time())
     save(path / 'request.json', r)
-    try: stamp(r['source'], '' if state in ('bound','cancelled') else state + ': ' + detail[:160])
+    if state == 'bound' and r.get('manifest'):
+        source = r['source']
+        m = read(r['manifest'], {})
+        try:
+            current = inspect(source['session'], source['window'])
+            if (current.get('session_id') == m.get('target',{}).get('session_id')
+                    and opt(current,'@handoff_manifest') == r['manifest']):
+                stamp(current,'')
+        except (OSError,ValueError,subprocess.SubprocessError): pass
+    try: stamp(r['source'], '' if state in ('bound','cancelled','recovered') else state + ': ' + detail[:160])
     except (OSError, ValueError, subprocess.SubprocessError): pass
 
 
@@ -239,65 +258,166 @@ def move(path, r, target):
         except (OSError, ValueError, subprocess.SubprocessError): same=False
         if same:
             r['retry_at']=time.time()+60
+            r.setdefault('failed_targets',{})[target['key']]=time.time()+120
             outcome(path,r,'waiting', str(error) if isinstance(error,ValueError) else type(error).__name__)
         else:
             outcome(path,r,'ambiguous','source exited/changed; inspect the retained pane and packet before recovery')
 
 
-def reconcile(session, dry=False):
-    if os.environ.get('FLEET_FAILOVER','0') != '1':
+def same_source(left, right):
+    return all(left.get(k) == right.get(k) for k in ('pid','session_id','agent','window','session'))
+
+
+def evidence(source):
+    if source['agent'] == 'codex':
+        thread = native_thread(source)
+        last = (thread.get('turns') or [{}])[-1]
+        return quota_error(thread), 'codex:' + str(last.get('id', ''))
+    hard = claude_banner(source)
+    with Path(source['transcript']).open('rb') as stream:
+        stream.seek(max(0, Path(source['transcript']).stat().st_size - 65536))
+        tail = stream.read()
+    return hard, 'claude:' + hashlib.sha256(tail).hexdigest()
+
+
+def recover(path, r):
+    """One wakeup after a verified reset; ambiguous writes are never repeated."""
+    source = r['source']
+    try:
+        for name in ('input.json','unsent-draft.txt'):
+            (path/name).unlink(missing_ok=True)
+        validate(path, source['session'], source['pane'], source['session_id'])
+        if read(path/'input.json', {}).get('state') != 'empty':
+            raise ValueError('quota recovered; waiting for the unsent draft to be handled')
+        # The existing inbox/queue transport has exact pane/session guards. A
+        # failed write may already have arrived, so persist before submitting.
+        outcome(path, r, 'recovery-sending', 'resuming the original conversation after quota reset')
+        subprocess.run(['bash',str(BIN/'fleet-peer-send.sh'),'-L',source['session'],source['pane'],'-'],
+            input='[Fleet subscription recovered] Continue the authorized unfinished task in the existing conversation language. Check actual results before repeating any interrupted action. Preserve unsent drafts and pending approvals.',
+            text=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15, check=True)
+        outcome(path, r, 'recovered', 'reset observed; continuation delivered through the existing peer transport')
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if r.get('state') == 'recovery-sending':
+            outcome(path,r,'ambiguous','reset continuation acknowledgement is uncertain; not resending')
+        else:
+            outcome(path,r,'waiting',str(error) if isinstance(error,ValueError) else type(error).__name__)
+
+
+def cancel_obsolete(session, enabled):
+    for filename in root().glob('*/request.json'):
+        r = read(filename,{})
+        source = r.get('source',{})
+        if source.get('session') != session or r.get('state') in ('bound','cancelled','recovered','ambiguous'):
+            continue
+        try:
+            current = inspect(session,source['window'])
+            obsolete = not same_source(current,source) or opt(current,'@reported') == '1'
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            # An unavailable identity may be a temporary hook/startup condition.
+            # Only a missing window or explicit disable is a cancellation fact.
+            obsolete = source.get('window') not in tm(session,'list-windows','-t',session,'-F','#{window_id}').splitlines()
+        if not enabled or obsolete:
+            outcome(filename.parent,r,'cancelled','feature disabled' if not enabled else 'source closed, replaced or task completed')
+
+
+def reconcile_one(source, account, data, dry=False):
+    hard, episode = evidence(source)
+    path = request_path(source)
+    r = read(path/'request.json',{})
+    if r and not same_source(source,r.get('source',{})):
+        raise ValueError('request source identity collision')
+    if r.get('state') in ('ambiguous','preparing','recovery-sending'):
+        if not dry:
+            outcome(path,r,'ambiguous','interrupted cutover/delivery; inspect retained packet before recovery')
         return
+    if r.get('state') in ('bound','cancelled','recovered'):
+        if episode == r.get('episode'):
+            return
+        r = {}
+    elif r and r.get('episode') != episode:
+        if not dry: outcome(path,r,'cancelled','source advanced to a different turn')
+        r = {}
+    over = (account.get('available') is True and account.get('utilization',0) >= float(os.environ.get('FLEET_ACCOUNT_CEILING','85')))
+    blocked = account.get('limited_until',0) > time.time()
+    if not hard and not over and not blocked and not r:
+        return
+    allowed = os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
+    failed = [key for key,until in r.get('failed_targets',{}).items() if until > time.time()]
+    decision = ACCOUNT['choose'](data,source['agent'],[account['key'],*failed],allowed=allowed)
+    if dry:
+        print(json.dumps(dict(source=source['session_id'],decision=decision)))
+        return
+    if not r:
+        r = dict(source=source,source_key=account['key'],created_at=time.time(),state='waiting',
+                 hard=hard,episode=episode,attempts=0,failed_targets={})
+        path.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if r and not hard and ACCOUNT['eligible'](account):
+        outcome(path,r,'cancelled','source subscription recovered; existing conversation retained')
+        return
+    # A stale terminal error is not a new quota episode. Only fresh readings
+    # after its reset/cooldown can authorize one continuation on the same agent.
+    if (r.get('benched_until') and time.time() >= r['benched_until']
+            and ACCOUNT['eligible'](dict(account,limited_until=0))):
+        recover(path,r)
+        return
+    if (hard or over) and not r.get('benched_until'):
+        until = int(account.get('reset_at') or time.time()+300)
+        until = max(until, int(time.time())+30)
+        r['benched_until'] = until
+        if account['agent'] == 'codex':
+            ACCOUNT['bench'](account['key'],until,'native quota error' if hard else 'ccquota ceiling')
+        else:
+            subprocess.run(['bash',str(BIN/'fleet-account.sh'),'bench',account['label'],str(until),'subscription failover'],
+                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+    if time.time() < r.get('retry_at',0):
+        return
+    if not decision['target']:
+        outcome(path,r,'waiting-quota',decision['reason'])
+        return
+    r['attempts'] += 1
+    move(path,r,decision['target'])
+
+
+def reconcile(session, dry=False):
     if not re.fullmatch(r'[A-Za-z0-9_-]+',session):
         raise ValueError('invalid fleet socket')
-    root().mkdir(parents=True,exist_ok=True,mode=0o700)
-    with locked(root()/(session+'.lock'),nonblocking=True):
-        data = ACCOUNT['inventory']()
-        windows = tm(session,'list-windows','-t',session,'-F','#{window_id}').splitlines()
-        cursor = read(root()/(session+'.cursor.json'),{}).get('next',0)
-        if windows: windows=windows[cursor%len(windows):]+windows[:cursor%len(windows)]
-        deadline=time.monotonic()+60
-        considered=0
-        for window in windows:
-            if time.monotonic() >= deadline: break
-            considered += 1
-            try:
-                source=inspect(session,window)
-                if opt(source,'@reported') == '1': continue
-                account=source_account(source,data)
-                hard=quota_error(native_thread(source)) if source['agent']=='codex' else claude_banner(source)
-                path=request_path(source)
-                r=read(path/'request.json',{})
-                if r.get('state') in ('bound','cancelled','ambiguous'): continue
-                over=(account.get('available') and account.get('utilization',0)>=float(os.environ.get('FLEET_ACCOUNT_CEILING','85')))
-                blocked=account.get('limited_until',0)>time.time()
-                if not hard and not over and not blocked and not r: continue
-                if r and not hard and ACCOUNT['eligible'](account):
-                    outcome(path,r,'cancelled','source subscription recovered; existing conversation retained')
-                    continue
-                if not r:
-                    r=dict(source=source,source_key=account['key'],created_at=time.time(),state='waiting',hard=hard,attempts=0)
-                    path.mkdir(parents=True,exist_ok=True,mode=0o700)
-                if dry:
-                    print(json.dumps(dict(source=source['session_id'],decision=ACCOUNT['choose'](data,source['agent'],[account['key']]))))
-                    continue
-                if hard or over:
-                    until=int(account.get('reset_at') or time.time()+300)
-                    if account['agent']=='codex': ACCOUNT['bench'](account['key'],until,'native quota error' if hard else 'ccquota ceiling')
-                    else:
-                        subprocess.run(['bash',str(BIN/'fleet-account.sh'),'bench',account['label'],str(until),'subscription failover'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
-                if time.time()<r.get('retry_at',0): continue
-                allowed=os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
-                decision=ACCOUNT['choose'](data,source['agent'],[account['key']],allowed=allowed)
-                if not decision['target']:
-                    outcome(path,r,'waiting-quota',decision['reason'])
-                    continue
-                r['attempts']+=1
-                move(path,r,decision['target'])
-            except (OSError,ValueError,KeyError,subprocess.SubprocessError) as error:
-                # Unsupported panels/old identities are left intact. Diagnostics
-                # contain exception classes, never credentials or conversation text.
-                print('fleet failover %s/%s: %s' % (session,window,str(error) if isinstance(error,ValueError) else type(error).__name__),file=sys.stderr)
-        save(root()/(session+'.cursor.json'),{'next':cursor+considered})
+    enabled = os.environ.get('FLEET_FAILOVER','0') == '1'
+    if not enabled:
+        if root().is_dir() and not dry: cancel_obsolete(session,False)
+        return
+    # No queue files, status stamps or locks are created by a dry run.
+    if dry:
+        reconcile_windows(session,True)
+    else:
+        root().mkdir(parents=True,exist_ok=True,mode=0o700)
+        with locked(root()/(session+'.lock'),nonblocking=True):
+            cancel_obsolete(session,True)
+            reconcile_windows(session,False)
+            runpy.run_path(str(BIN/'fleet-loop.py'))['recover'](session)
+
+
+def reconcile_windows(session, dry):
+    data = ACCOUNT['inventory']()
+    windows = tm(session,'list-windows','-t',session,'-F','#{window_id}|#{window_name}').splitlines()
+    windows = [line.split('|',1)[0] for line in windows if line.split('|',1)[-1] not in ('dash','plan','backlog','hub')]
+    cursor = read(root()/(session+'.cursor.json'),{}).get('next',0)
+    if windows: windows=windows[cursor%len(windows):]+windows[:cursor%len(windows)]
+    deadline=time.monotonic()+60
+    considered=0
+    for window in windows:
+        if time.monotonic() >= deadline: break
+        considered += 1
+        try:
+            source=inspect(session,window)
+            if opt(source,'@reported') == '1': continue
+            account=source_account(source,data)
+            reconcile_one(source,account,data,dry)
+        except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError) as error:
+            reason = str(error) if isinstance(error,ValueError) else type(error).__name__
+            if not dry:
+                save(root()/('unsupported-'+session+'-'+window.replace('@','')+'.json'),
+                     dict(session=session,window=window,state='unsupported',reason=reason,updated_at=time.time()))
+    if not dry: save(root()/(session+'.cursor.json'),{'next':cursor+considered})
 
 
 def main():
@@ -318,6 +438,6 @@ def main():
 if __name__=='__main__':
     try: main()
     except BlockingIOError: pass  # Existing bounded reconciliation owns this fleet.
-    except (OSError,ValueError,KeyError,subprocess.SubprocessError) as error:
+    except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError) as error:
         print('fleet-failover: '+(str(error) if isinstance(error,ValueError) else type(error).__name__),file=sys.stderr)
         sys.exit(1)

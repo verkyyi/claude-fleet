@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Quota episodes, recovery, exact owners, drafts and transfer launch contracts."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+def module(name, file):
+    spec=importlib.util.spec_from_file_location(name,Path(__file__).with_name(file))
+    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+
+flow=module('flow','.fleet-failover.py')
+inputs=module('inputs','fleet-input.py')
+transfer=module('transfer','.fleet-transfer.py')
+
+def account(agent,name,used):
+    return dict(agent=agent,key=agent+'/'+name,account=name,label=name,profile=name,
+                available=True,utilization=used,score=200-2*used,login='valid')
+
+
+class Failover(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.source=dict(session='test',window='@2',pane='%2',pid=42,session_id='source',agent='codex')
+        self.account=account('codex','original',100)
+        self.other=account('claude','other',10)
+        self.data={'accounts':[self.account]}
+        self.path=self.root/'attempt'
+        self.patches=[patch.object(flow,'request_path',return_value=self.path),
+                      patch.object(flow,'evidence',return_value=(True,'turn:1')),
+                      patch.object(flow,'stamp'),
+                      patch.dict(flow.ACCOUNT,bench=lambda *_:None),
+                      patch.dict(os.environ,FLEET_ACCOUNT_CEILING='85',FLEET_CONF_DIR=str(self.root))]
+        for p in self.patches:p.start()
+        self.addCleanup(lambda:[p.stop() for p in reversed(self.patches)])
+
+    def request(self):return flow.read(self.path/'request.json',{})
+
+    def test_wait_retries_after_alert_dedup_and_prefers_same_agent(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        self.assertEqual(self.request()['state'],'waiting-quota')
+        until=self.request()['benched_until']
+        flow.reconcile_one(self.source,self.account,self.data)
+        self.assertEqual(self.request()['benched_until'],until)
+        self.data['accounts'] += [self.other,account('codex','second',60)]
+        with patch.object(flow,'move') as move:
+            flow.reconcile_one(self.source,self.account,self.data)
+            self.assertEqual(move.call_args.args[2]['account'],'second')
+
+    def test_failed_target_cooldown_uses_another_available_subscription(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        r=self.request();r['failed_targets']={'codex/second':time.time()+120};flow.save(self.path/'request.json',r)
+        self.data['accounts'] += [self.other,account('codex','second',60)]
+        with patch.object(flow,'move') as move:
+            flow.reconcile_one(self.source,self.account,self.data)
+            self.assertEqual(move.call_args.args[2]['agent'],'claude')
+
+    def test_stale_quota_error_recovers_once_after_fresh_reading(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        r=self.request();r['benched_until']=1;flow.save(self.path/'request.json',r)
+        self.account.update(utilization=10,score=180)
+        with patch.object(flow,'validate'), patch.object(flow,'read',side_effect=lambda p,d=None: {'state':'empty'} if Path(p).name=='input.json' else json.loads(Path(p).read_text()) if Path(p).exists() else d), patch.object(flow.subprocess,'run') as send:
+            flow.reconcile_one(self.source,self.account,self.data)
+            flow.reconcile_one(self.source,self.account,self.data)
+        self.assertEqual(send.call_count,1)
+        self.assertEqual(self.request()['state'],'recovered')
+
+    def test_interrupted_prepare_never_starts_a_second_writer(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        r=self.request();r['state']='preparing';flow.save(self.path/'request.json',r)
+        self.data['accounts'].append(self.other)
+        with patch.object(flow,'move') as move:flow.reconcile_one(self.source,self.account,self.data)
+        self.assertFalse(move.called);self.assertEqual(self.request()['state'],'ambiguous')
+
+    def test_a_new_quota_episode_in_same_native_session_can_retry(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        r=self.request();r['state']='recovered';flow.save(self.path/'request.json',r)
+        flow.evidence.return_value=(True,'turn:2')
+        self.data['accounts'].append(self.other)
+        with patch.object(flow,'move') as move:flow.reconcile_one(self.source,self.account,self.data)
+        self.assertTrue(move.called)
+
+    def test_dry_run_creates_no_request_or_pane_mutation(self):
+        flow.reconcile_one(self.source,self.account,self.data,dry=True)
+        self.assertFalse(self.path.exists());self.assertFalse(flow.stamp.called)
+
+    def test_ambiguous_reset_write_is_not_repeated(self):
+        flow.reconcile_one(self.source,self.account,self.data)
+        r=self.request();r['benched_until']=1;flow.save(self.path/'request.json',r)
+        self.account.update(utilization=10,score=180)
+        with patch.object(flow,'validate'), patch.object(flow,'read',side_effect=lambda p,d=None: {'state':'empty'} if Path(p).name=='input.json' else json.loads(Path(p).read_text()) if Path(p).exists() else d), patch.object(flow.subprocess,'run',side_effect=subprocess.TimeoutExpired('send',15)) as send:
+            flow.reconcile_one(self.source,self.account,self.data)
+            flow.reconcile_one(self.source,self.account,self.data)
+        self.assertEqual(send.call_count,1);self.assertEqual(self.request()['state'],'ambiguous')
+
+    def test_only_subscription_quota_error_is_migration_evidence(self):
+        for name in ('rateLimitExceeded','sessionBudgetExceeded','internalServerError'):
+            self.assertFalse(flow.quota_error(dict(status={'type':'idle'},turns=[dict(status='failed',error={'codexErrorInfo':name})])))
+        self.assertTrue(flow.quota_error(dict(status={'type':'idle'},turns=[dict(status='failed',error={'codexErrorInfo':'usageLimitExceeded'})])))
+        self.assertFalse(flow.quota_error(dict(status={'type':'active','activeFlags':['waitingOnApproval']},turns=[dict(status='failed',error={'codexErrorInfo':'usageLimitExceeded'})])))
+
+
+class Drafts(unittest.TestCase):
+    def test_ghost_text_in_rgb_color_is_empty(self):
+        screen='\x1b[38;2;255;2;66m›\x1b[0m \x1b[2mAsk Codex anything\x1b[0m\n'
+        self.assertEqual(inputs.analyze(screen,2,0,80)['state'],'empty')
+
+    def test_cjk_draft_preserved_verbatim_and_unfinished_buffers_wait(self):
+        text='1、做。2、'
+        screen='› '+text+'\n\n'
+        result=inputs.analyze(screen,2+inputs.width(text),0,80)
+        self.assertEqual(result['state'],'draft');self.assertEqual(result['text'],text)
+        self.assertEqual(inputs.analyze(screen,2,0,80)['state'],'unknown')
+        self.assertEqual(inputs.analyze('› abc\ncontinued',5,0,80)['state'],'unknown')
+        self.assertEqual(inputs.analyze('› [Pasted text #1]',18,0,80)['state'],'unknown')
+
+    def test_pinned_launcher_keeps_target_home_and_draft_out_of_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            data=dict(target={'agent':'codex','codex_home':'/specific home'},source={'codex_home':'/old home'},workspace={'path':tmp})
+            (p/'manifest.json').write_text(json.dumps(data))
+            transfer.launcher(p,'/fleet/launcher')
+            script=(p/'launch.sh').read_text()
+            self.assertIn("--codex-home '/specific home'",script)
+            self.assertNotIn('/old home',script)
+            data['target']={'agent':'claude','label':'work'};data['native_resume']=True
+            data['source'].update(agent='claude',session_id='exact-uuid')
+            (p/'manifest.json').write_text(json.dumps(data));transfer.launcher(p,'/fleet/launcher')
+            script=(p/'launch.sh').read_text()
+            self.assertIn('--agent claude --resume exact-uuid',script)
+            self.assertIn('FLEET_ACCOUNT_LABEL=work',script)
+
+
+if __name__=='__main__':unittest.main()

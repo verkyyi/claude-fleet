@@ -1033,6 +1033,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # every token file, sorted by name.
 # @label=Subscription accounts @group=accounts @tier=advanced @scope=global @edit=str
 #FLEET_ACCOUNTS="work personal spare"
+# Unified per-session subscription failover. Existing account/quota, transfer and
+# quotawatch components remain the owners. Prefer another eligible subscription
+# of the current agent, then the allowed other agent; all unavailable => wait.
+# Codex logins/readings come from ccquota codex list + budget --source codex.
+# Existing FLEET_CODEX_ACCOUNTS labels/homes restrict the local Codex candidates.
+# Native resume and manual provider-specific CLI flags keep their agent.
+# @label=Subscription failover @group=accounts @tier=advanced @scope=fleet @edit=bool
+#FLEET_FAILOVER=0
+# Comma-separated allowed agents; quota targets must be fresh, authenticated and
+# below FLEET_ACCOUNT_CEILING. No switch to unknown quota or pay-as-you-go credits.
+# @label=Failover allowed agents @group=accounts @tier=advanced @scope=fleet @edit=str
+#FLEET_FAILOVER_AGENTS=claude,codex
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
 # @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec

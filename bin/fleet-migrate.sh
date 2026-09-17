@@ -328,7 +328,7 @@ migrate_one_body() {
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
   MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=()
-  local pinned_target='' quota_request=''
+  local pinned_target='' quota_request='' verified=0
   FLEET_MIGRATION_LOCKED=''
   trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"' EXIT
   while [ $# -gt 0 ]; do
@@ -347,6 +347,7 @@ migrate_main() {
       --dry-run) DRY=1; shift ;;
       --toast) TOAST=1; shift ;;
       whoami) MODE=whoami; shift ;;
+      --verified) verified=1; shift ;;
       -h|--help) sed -n '2,49p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
@@ -433,7 +434,13 @@ migrate_main() {
     for wid in ${WIDS[@]+"${WIDS[@]}"}; do
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { echo "$wid: no Claude process" >&2; continue; }
       stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
-      printf '%s\n' "$(window_account "$wid" "$cpid" "$stamp")"
+      if [ "$verified" = 1 ]; then
+        truth=$(acct_of_pid "$cpid")
+        [ -n "$truth" ] || return 1
+        printf '%s\n' "$truth"
+      else
+        printf '%s\n' "$(window_account "$wid" "$cpid" "$stamp")"
+      fi
     done
     return 0
   fi

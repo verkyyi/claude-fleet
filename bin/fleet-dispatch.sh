@@ -227,7 +227,7 @@ dispatch_fleet() { (
     log "$sess: Claude quota gate closed — skip: ${quota_why}"
     exit 0
   fi
-  if [ "${FLEET_AGENT:-claude}" = codex ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
+  if [ "${FLEET_FAILOVER:-0}" != 1 ] && [ "${FLEET_AGENT:-claude}" = codex ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
     if ! codex_quota=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" gate --session "$sess" 2>&1); then
       log "$sess: Codex quota gate closed — skip: $codex_quota"
       exit 0

@@ -1,20 +1,22 @@
-# Transfer or refresh one session with Codex
+# Transfer one session between Claude and Codex
 
-`bin/fleet-transfer.sh` hands one existing Claude Code or Codex task to a fresh Codex CLI conversation in the
+`bin/fleet-transfer.sh` hands one existing Claude Code or Codex task to the selected Coding Agent in the
 same fleet window and git worktree. The incoming agent is explicitly told the
 source agent, source session ID, original transcript path and snapshot path.
 It can search the source conversation whenever the handoff notes need detail.
 
-This is a new Codex conversation with provenance, not `codex resume` of a Claude
-session. It supports **Claude → Codex CLI** and **Codex → fresh Codex**, one issue worker or scratch session
-at a time. Desktop-app transfer and the reverse direction are not implemented.
+Cross-agent transfers start a new conversation with provenance. Both
+**Claude → Codex** and **Codex → Claude** work in one registered issue/scratch
+worktree at a time. Claude account migration uses native `--resume`; Codex home
+migration uses the packet. Desktop-app sessions are outside this controller.
 
 ## Use the existing fleet-handoff skill
 
-In the source Claude conversation, invoke:
+In the source conversation, select the target:
 
 ```text
 /fleet-handoff --to codex
+/fleet-handoff --to claude
 ```
 
 A plugin-only install spells this `/fleet:fleet-handoff --to codex`. The existing
@@ -230,3 +232,52 @@ bin/run-selftests.sh fleet-loop fleet-transfer fleet-codex fleet-handoff auto-ha
 
 The transfer test uses its own named tmux socket, fake agents and real temporary
 worktrees. Never test the cutover against a live fleet.
+
+
+## Subscription failover
+
+Enable `FLEET_FAILOVER=1` globally or in a fleet overlay, with
+`FLEET_FAILOVER_AGENTS=claude,codex` (or a single allowed agent). Register Codex
+logins through `ccquota codex add NAME --codex-home DIR`; Fleet does not copy
+credentials or change the default login. The existing `FLEET_CODEX_ACCOUNTS`
+allowlist accepts ccquota profile names and previously registered home labels.
+Claude retains its existing account registry, phase and model fallback policy.
+
+The existing quotawatch/banner paths prefer an eligible subscription of the
+current agent, then the other allowed agent. Targets require current quota,
+local verified authentication, and headroom below `FLEET_ACCOUNT_CEILING`.
+Same-account aliases share an exclusion/bench key. Unknown readings are never
+migration destinations. All unavailable leaves the original session waiting;
+later ticks retry independently of alert deduplication. A confirmed reset can
+continue the original session once; an uncertain send is retained for inspection.
+
+```sh
+bin/fleet-account.sh inventory --refresh
+bin/fleet-account.sh choose --agent codex
+bin/fleet-account.sh reconcile --session my-fleet --dry-run
+bin/fleet-account.sh failover-status
+```
+
+Per-session attempts live under `$FLEET_CONF_DIR/handoffs/quota-requests/` and
+link to their transfer packet. `waiting-quota` means no eligible destination;
+`waiting` includes busy tools, recent typing and unreadable drafts;
+`ambiguous` requires inspection of the retained pane/packet and never starts a
+second writer. The dashboard shows the quota state; doctor shows its reason.
+Disable `FLEET_FAILOVER` to cancel pending requests on the next tick. Packets and
+source recovery recipes remain available. Existing sessions without a verified
+native identity stay `unsupported`; never infer a session from the newest file.
+
+A fully visible single-line draft is saved as `unsent-draft.txt`, marked `unsent`
+and referenced by path. Its text is never submitted as the pickup prompt. An
+unrecoverable multiline, wrapped or partially hidden draft prevents automatic
+cutover. For a manual transfer, `--draft-file FILE` supplies an explicitly saved
+private draft.
+
+Active Fleet loops retain their ID, cadence, due time and delivery count, and
+advance an ownership generation on each transfer. Codex uses its private native
+RPC; Claude uses the existing inbox and requires the nonce to appear in the
+exact session transcript before counting the wakeup. An ambiguous delivery is
+never repeated. The existing crash restore map retains active loop provenance;
+quotawatch can reattach a dead controller only to the same restored native UUID
+and worktree. Explicitly stopped/paused loops and replacement threads stay off.
+A restored loop runs at the existing tick cadence; missed intervals coalesce.

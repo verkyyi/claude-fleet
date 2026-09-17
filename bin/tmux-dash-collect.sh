@@ -706,12 +706,18 @@ ph_git_over() {
 # temp files so the EXIT trap can sweep any it orphans.
 ph_ctx() {
 local p codex_socket
-if have_py3 && [ -f "$BIN/fleet-codex-account.py" ] && [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+if have_py3 && [ -f "$BIN/fleet-codex-account.py" ]; then
   # Registered homes only, oldest attempt first, bounded before transcript work.
   # No model call; offline pool accounts can recover quota without a live pane.
-  FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" refresh --budget 15
+  if [ "${FLEET_FAILOVER:-0}" != 1 ] && [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+    FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" refresh --budget 15
+  fi
   for codex_socket in $SOCKETS; do
-    FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" watch --session "$codex_socket"
+    if ( fleet_load_conf "$codex_socket"; [ "${FLEET_FAILOVER:-0}" = 1 ]; ); then
+      fleet_bg -L "$codex_socket" "bash '$BIN/fleet-account.sh' reconcile --session '$codex_socket'"
+    elif [ -f "$FLEET_CONF_DIR/codex/accounts.json" ]; then
+      FLEET_CONF_DIR="$FLEET_CONF_DIR" "$BIN/fleet-codex-account.sh" watch --session "$codex_socket"
+    fi
   done
 fi
 if have_py3 && [ -f "$BIN/fleet-codex-session.py" ]; then

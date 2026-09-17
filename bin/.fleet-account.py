@@ -226,9 +226,19 @@ def inventory(refresh=False):
     return {'accounts': accounts, 'errors': errors, 'observed_at': time.time()}
 
 
+def allowed_codex(row):
+    """Honor the existing home/label pool; ccquota remains the login registry."""
+    labels = os.environ.get('FLEET_CODEX_ACCOUNTS', '').split()
+    if not labels:
+        return True
+    legacy = read(Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet'))) / 'codex/accounts.json', {})
+    return row.get('profile') in labels or row.get('home') in [legacy.get(label) for label in labels]
+
+
 def eligible(row, now=None):
     now = time.time() if now is None else now
     return (row.get('available') is True and row.get('login') in ('valid', 'refresh_due')
+            and (row.get('agent') != 'codex' or allowed_codex(row))
             and row.get('model_ok', True) and row.get('capable', True) and number(row.get('utilization')) is not None
             and row['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING', '85'))
             and row.get('limited_until', 0) <= now and row.get('score') is not None)
@@ -266,6 +276,8 @@ def choose_spawn(data, agent, allowed=('claude', 'codex')):
         if (row['agent'] == agent and row.get('login') in ('valid','refresh_due')
                 and row.get('limited_until',0) <= time.time() and row.get('model_ok',True)
                 and row.get('capable',True)):
+            if row['agent'] == 'codex' and not allowed_codex(row):
+                continue
             return {'state':'ready','target':row,'reason':'quota-unknown-spawn'}
     return result
 
@@ -328,7 +340,8 @@ def launch(agent, argv):
     target = result['target']
     env = dict(os.environ, FLEET_ACCOUNT_TARGET=json.dumps(target), FLEET_ACCOUNT_SELECTED='1')
     if target['agent'] == 'codex':
-        env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'])
+        env.update(FLEET_CODEX_PROFILE=target['profile'], FLEET_CODEX_ACCOUNT=target['account'],
+                   CODEX_HOME=target['home'])
     else:
         env['FLEET_ACCOUNT_LABEL'] = target['label']
     os.execve(str(BIN / 'fleet-claude.sh'), [str(BIN / 'fleet-claude.sh'), '--agent', target['agent'], *argv], env)

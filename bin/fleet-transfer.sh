@@ -67,6 +67,7 @@ done
 case "$TO" in claude|codex) ;; *) usage >&2; exit 2;; esac
 [ "$((DRY + PREPARE + AFTER))" -le 1 ] || die '--dry-run, --prepare-only and --after-turn are mutually exclusive'
 [ "$AFTER" != 1 ] || [ -n "$NOTES" ] || die '--after-turn requires --handoff notes written by the source agent'
+[ "$NATIVE:$AFTER" != 1:1 ] || die '--native-resume is a controller-only immediate operation'
 if [ -n "$CODEX_TARGET_HOME" ]; then
   CODEX_TARGET_HOME=$(cd "$CODEX_TARGET_HOME" && pwd -P) || die 'target CODEX_HOME is missing'
 fi
@@ -150,7 +151,7 @@ fi
 printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
   "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
-  printf 'dry-run: save a provenance package, /exit the source, then launch Codex in %s (state=%s).\n' "$PANE" "${STATE:-unknown}"
+  printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
   [ "$STATE" = "done" ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
 fi

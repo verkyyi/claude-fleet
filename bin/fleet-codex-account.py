@@ -263,6 +263,10 @@ def idle(data):
 
 
 def watch(session):
+    if os.environ.get('FLEET_FAILOVER') == '1':
+        # One per-session controller owns both same-agent and cross-agent moves.
+        subprocess.run(['bash', str(BIN/'fleet-account.sh'), 'reconcile', '--session', session], timeout=240)
+        return
     if os.environ.get('FLEET_CODEX_QUOTA_MIGRATE') != '1' or not session: return
     adapter = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
     rows = adapter['tmux'](['list-windows', '-t', session, '-F',
@@ -303,6 +307,8 @@ def main():
     p.add_argument('--window', default='')
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args()
+    if os.environ.get('FLEET_FAILOVER') == '1' and a.command in ('register','list','refresh','select','gate','label'):
+        return managed(a)
     if a.command == 'watch': watch(a.session); return 0
     if a.command == 'idle':
         adapter = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
@@ -350,6 +356,36 @@ def main():
                '--expected-source', pane + ':' + data['owner'] + ':' + data['session_id']]
         if a.dry_run: cmd.append('--dry-run')
         return subprocess.call(cmd)
+    return 0
+
+
+def managed(a):
+    """Existing CLI, ccquota backend when unified failover is enabled.
+
+    Legacy standalone mode keeps its native reader. Never run both readers or
+    maintain a second credential registry for a fleet using the shared policy.
+    """
+    account = runpy.run_path(str(BIN/'.fleet-account.py'))
+    if a.command == 'register':
+        raise ValueError('register the login with ccquota codex add NAME --codex-home DIR')
+    if a.command == 'refresh':
+        account['codex_reading'](True)
+        return 0
+    if a.command == 'label':
+        print(next((p['profile'] for p in account['profiles']() if p['home'] == home_path(a.label)), ''))
+        return 0
+    data = account['inventory']()
+    rows = [r for r in data['accounts'] if r['agent'] == 'codex']
+    if a.command == 'list':
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if os.environ.get('FLEET_CODEX_HOME'):
+        home = home_path(os.environ['FLEET_CODEX_HOME'])
+        data = dict(data, accounts=[r for r in rows if r['home'] == home])
+    decision = account['choose_spawn'](data, 'codex', allowed=['codex'])
+    if not decision['target']:
+        raise ValueError(decision['reason'])
+    if a.command == 'select': print(decision['target']['home'])
     return 0
 
 

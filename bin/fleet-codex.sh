@@ -143,7 +143,7 @@ _codex_resuming="$resume_id"
 for _arg in ${normal[@]+"${normal[@]}"}; do
   case "$_arg" in resume|fork) _codex_resuming=1; break ;; esac
 done
-if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
+if [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   [ -d "$FLEET_CODEX_HOME" ] || { echo 'fleet-codex: FLEET_CODEX_HOME is missing' >&2; exit 2; }
   export CODEX_HOME="$FLEET_CODEX_HOME"
   if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
@@ -151,7 +151,7 @@ if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
       FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" \
       FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
   fi
-elif [ "$_codex_home_explicit" = 0 ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
+elif [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
   # Recovery identity is authoritative. Only fresh launches choose a pool home.
   # Pass the already-resolved overlay; a pool session has no overlay of its own.
   CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
@@ -170,9 +170,16 @@ fi
 
 # Use ccquota's shared run lock and official isolated credential environment for
 # the entire launcher/app-server/TUI lifetime. Do not change its global default.
+if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
+  _profile=$(bash "$BIN/fleet-account.sh" profile --home "${CODEX_HOME:-$HOME/.codex}") || exit 1
+  FLEET_CODEX_PROFILE=$(printf '%s' "$_profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profile"])') || exit 1
+  export FLEET_CODEX_PROFILE
+fi
 if [ -n "${FLEET_CODEX_PROFILE:-}" ]; then
   if [ "${FLEET_CODEX_MANAGED:-0}" != 1 ]; then
     export FLEET_CODEX_MANAGED=1
+    # ccquota's default profile is machine-local, not the invoking pane's home.
+    unset CODEX_HOME
     exec "${FLEET_QUOTA_BIN:-ccquota}" codex --codex-bin "$BIN/fleet-codex.sh" run "$FLEET_CODEX_PROFILE" -- "$@"
   fi
   FLEET_CODEX_SUBSCRIPTION=$(bash "$BIN/fleet-account.sh" profile --name "$FLEET_CODEX_PROFILE" \

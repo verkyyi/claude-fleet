@@ -159,7 +159,7 @@ snapshot() {
     # worktree/PR) and its transcript can't be reliably resolved from the shared
     # base checkout — the resolver drops @raw=1 rows so they are never snapshotted
     # or restored. Older maps (pre-#214, no @raw field) default it to '' → kept.
-    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{pane_current_path}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -301,8 +301,8 @@ restore() {
     # map for completeness but restore does not replay them (see the re-stamp
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
-    local wname wpath wid wissue wstate wagent whome reopened=0
-    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _; do
+    local wname wpath wid wissue wstate wagent whome wmanifest reopened=0
+    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # reconcile path: a window with this name is already live — don't duplicate.
@@ -378,6 +378,11 @@ restore() {
         # leave $worigin empty → nothing stamped, exactly as before.
         [ -n "${worigin:-}" ] && [ "$worigin" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @origin "$worigin" 2>/dev/null
+        if [ -n "$wmanifest" ] && [ "$wmanifest" != '-' ] && [ -f "$wmanifest" ]; then
+          tmux -L "$sock" set-option -w -t "$nw" @handoff_manifest "$wmanifest" 2>/dev/null
+          tmux -L "$sock" set-option -w -t "$nw" @worktree "$wpath" 2>/dev/null
+          tmux -L "$sock" set-option -w -t "$nw" @cc_agent "${wagent:-claude}" 2>/dev/null
+        fi
         # Re-stamp @claude_state so the dash reflects reality instead of a blank row
         # (issue #153) — the bug this fixes is a restored worker coming back with an
         # empty state that the attention layer reads as "stuck idle". Stamp a fresh

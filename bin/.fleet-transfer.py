@@ -18,7 +18,7 @@ import time
 
 
 def run(*argv):
-    return subprocess.check_output(argv, stderr=subprocess.PIPE).decode("utf-8", "replace").rstrip("\n")
+    return subprocess.check_output(argv, stderr=subprocess.PIPE, timeout=20).decode("utf-8", "replace").rstrip("\n")
 
 
 def write_json(path, value):
@@ -281,7 +281,7 @@ def package(a):
         loop_note = (
             '\n## Active Fleet loop\n\nThe operator requested continuation of this Fleet loop. '
             'Fleet owns its timer. First run `python3 %s bind` from your own tool environment '
-            'to bind your exact native session; inspect its successful result. '
+            'to bind your exact native session (CODEX_THREAD_ID on Codex); inspect its successful result. '
             'Read `%s` for the loop task and cadence. Do not create a Claude /loop or another '
             'scheduler. At the end of this iteration use `python3 %s defer --seconds N` '
             '(optionally `--prompt-file FILE` with an updated private prompt), or '
@@ -381,7 +381,7 @@ def launcher(bundle, launch):
     if target.get('account'):
         env['FLEET_ACCOUNT_TARGET'] = json.dumps(target)
     if target['agent'] == 'codex':
-        home = target.get('home') or m['source'].get('codex_home')
+        home = target.get('home') or target.get('codex_home') or m['source'].get('codex_home')
         if home:
             argv += ['--codex-home', home]
         if target.get('profile'):
@@ -435,6 +435,10 @@ def target_ready(bundle, socket_label, pane):
             if binding.get('owner') != pid or binding.get('key') != t['key']:
                 raise ValueError('target Claude subscription is not bound')
     m['target'].update(session_id=sid, pid=int(pid), bound_at=time.time())
+    if m.get('loop_spec_path'):
+        record = json.loads((bundle/'loop/state.json').read_text())
+        if record.get('thread_id') != sid or record.get('status') != 'active':
+            raise ValueError('target loop is not bound to its native owner')
     write_json(manifest, m)
     print(sid)
 

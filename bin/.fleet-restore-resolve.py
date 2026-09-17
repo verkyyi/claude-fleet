@@ -26,6 +26,7 @@
 # rows exclude — so its transcript would never be captured. For it we emit a
 # "HUB<TAB>path<TAB>id" row instead of a WIN row, so restore() rebuilds the
 # hub via hub-session.sh (`claude --resume`) rather than as a work window.
+from pathlib import Path
 import sys, glob, os, re, json, uuid
 
 PANELS = {"plan", "dash", "backlog"}
@@ -58,7 +59,14 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
-    parts = line.split(SEP, 10)
+    parts = line.split(SEP, 11)
+    manifest = ''
+    # The final JSON stays opaque (it may itself contain a pipe). New snapshots
+    # place the optional handoff path before it; old rows remain readable.
+    if len(parts) > 10 and parts[10].lstrip().startswith('{'):
+        parts = parts[:10] + [SEP.join(parts[10:])]
+    elif len(parts) > 11:
+        manifest = parts.pop(10)
     name = parts[0] if len(parts) > 0 else ""
     path = parts[1] if len(parts) > 1 else ""
     issue = parts[2] if len(parts) > 2 and parts[2] else "-"
@@ -80,7 +88,15 @@ for line in sys.stdin:
     # session's (same project dir) — resuming would risk loading the WRONG
     # conversation (the documented newest_sid caveat). So it is never snapshotted
     # and never restored; a crash simply drops it.
-    if raw == "1":
+    loop_record = {}
+    if manifest:
+        try:
+            loop_record = json.loads((Path(manifest).parent/'loop/state.json').read_text())
+            if (loop_record.get('status') != 'active' or not loop_record.get('thread_id')
+                    or Path(loop_record['worktree']).resolve() != Path(path).resolve()):
+                loop_record = {}
+        except (OSError,ValueError,KeyError,TypeError): pass
+    if raw == "1" and not loop_record:
         continue
     agent = parts[8] if len(parts) > 8 else ""
     suffix = ""
@@ -99,5 +115,7 @@ for line in sys.stdin:
             pass
         suffix = f"\tcodex\t{home}\t{transcript or '-'}"
     else:
-        sid = newest_sid(path)
+        sid = loop_record.get('thread_id') or newest_sid(path)
+    if manifest and loop_record and loop_record.get('thread_id') == sid:
+        suffix = (suffix or '\tclaude\t-\t-') + '\t' + manifest
     print(f"WIN\t{name}\t{path}\t{sid}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}{suffix}")

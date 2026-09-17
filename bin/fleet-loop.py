@@ -19,7 +19,6 @@ import runpy
 import os
 from pathlib import Path
 import re
-import runpy
 import signal
 import subprocess
 import sys
@@ -166,6 +165,22 @@ def dispatch(path, now=None):
     now = time.time() if now is None else now
     try:
         with locked(path, nonblocking=True) as r:
+            if r['status'] == 'unbound':
+                try:
+                    current(r)
+                    if r.get('agent') == 'claude':
+                        sid = claude_identity(r)['session_id']
+                    else:
+                        adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
+                        identity = adapter['identity'](r['fleet']['pane_id'],r['fleet']['session'])
+                        if identity.get('remote') != 'unix://' + r['socket']:
+                            return
+                        sid = identity['session_id']
+                        r['home'] = identity['home']
+                    r.update(thread_id=sid,status='active')
+                    save(path,r)
+                except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError):
+                    return  # Native SessionStart has not bound the root yet.
             if r.get('agent') == 'claude' and r['status'] == 'delivering':
                 current(r)
                 if not acknowledge_claude(r) and now-r.get('delivery_started_at',now) > 30:
@@ -224,12 +239,64 @@ def dispatch(path, now=None):
                 r['deliveries'] += 1
                 r['schedule']['next_run_at'] = now + r['schedule']['interval_seconds']
                 r['detail'] = 'Wakeup accepted by the bound Codex thread'
-            except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+            except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, subprocess.SubprocessError) as error:
                 r['status'] = 'paused'
                 r['detail'] = str(error)
             save(path, r)
     except BlockingIOError:
         pass
+
+
+def recover(session):
+    """Reattach only exact crash-restored owners on the existing quota tick.
+
+    A living bridge still owns its timer. Explicit stops, interrupted deliveries,
+    paused records, replacement threads and old ownership generations never run.
+    No extra daemon or background scheduler is started here.
+    """
+    root = Path(os.environ.get('FLEET_CONF_DIR',str(Path.home()/'.config/claude-fleet'))) / 'handoffs'
+    adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
+    rows = adapter['tmux'](['list-windows','-t',session,'-F',
+        '#{window_id}|#{pane_id}|#{pane_pid}|#{pane_current_path}|#{@cc_agent}|#{@handoff_manifest}|#{@reported}'],session)
+    windows = [line.split('|',6) for line in rows.splitlines()]
+    for path in root.glob('*/loop/state.json'):
+        try:
+            with locked(path,nonblocking=True) as r:
+                if r.get('status') != 'active' or r['fleet']['session'] != session or not r.get('thread_id'):
+                    continue
+                pid = r.get('controller_pid',0)
+                if pid:
+                    try: os.kill(pid,0)
+                    except ProcessLookupError: pass
+                    else: continue
+                if r.get('owner_record'):
+                    owner = json.loads(Path(r['owner_record']).read_text())
+                    if owner.get('active_record') != str(path): continue
+                matches=[]
+                for win,pane_id,pane_pid,cwd,agent,manifest,reported in windows:
+                    if (reported == '1' or manifest != r['manifest'] or agent != r.get('agent','codex')
+                            or Path(cwd).resolve() != Path(r['worktree']).resolve()): continue
+                    candidate=dict(r,fleet=dict(r['fleet'],window_id=win,pane_id=pane_id),pane_pid=int(pane_pid))
+                    if agent == 'codex':
+                        identity=adapter['identity'](pane_id,session)
+                        if identity.get('session_id') != r['thread_id'] or not identity.get('remote'): continue
+                        if r.get('home') and identity.get('home') != r['home']: continue
+                        candidate['socket']=identity['remote'][7:]
+                    else:
+                        lib=str(Path(__file__).with_name('fleet-lib.sh'))
+                        native=subprocess.check_output(['bash','-c','. "$1"; fleet_pane_claude_pid "$2" "$3"',
+                            'fleet-loop',lib,pane_id,session],text=True,timeout=5).strip()
+                        candidate['native_pid']=int(native)
+                        if claude_identity(candidate)['session_id'] != r['thread_id']: continue
+                    matches.append(candidate)
+                if len(matches) != 1: continue
+                restored=matches[0]
+                restored.update(controller_pid=0,driver='quotawatch',detail='Exact restored session reattached by the existing quota tick')
+                current(restored)
+                save(path,restored)
+            dispatch(path)
+        except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError):
+            continue
 
 
 def claude_identity(r):
@@ -306,6 +373,7 @@ def claim_owner(path,r,raw):
 
 def claude_bridge(args,path,r,env):
     child=None
+    code=None
     try:
         child=subprocess.Popen(args,env=env)
         with locked(path) as record:
@@ -319,10 +387,13 @@ def claude_bridge(args,path,r,env):
         while child.poll() is None:
             dispatch(path)
             time.sleep(1)
-        return child.returncode
+        code=child.returncode
+        return code
     finally:
         with locked(path) as final:
-            final.update(status='stopped',detail='Claude TUI/controller ended')
+            if code == 0:
+                final['status']='stopped'
+            final['detail']='Claude TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)
         if child and child.poll() is None:
             child.terminate()
@@ -378,12 +449,15 @@ def bridge(args):
     os.environ['FLEET_LOOP_RECORD']=str(path)
     os.environ.pop('CODEX_THREAD_ID',None)
     os.environ.pop('CODEX_SESSION_ID',None)
+    code=None
     try:
-        return runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))['run'](args,prepare=prepare,tick=tick)
+        code=runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))['run'](args,prepare=prepare,tick=tick)
+        return code
     finally:
         with locked(path) as final:
-            final['status']='stopped'
-            final['detail']='Codex TUI/controller ended; no automatic replay'
+            if code == 0:
+                final['status']='stopped'
+            final['detail']='Codex TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)
 
 
@@ -424,6 +498,7 @@ def main():
     sub = p.add_subparsers(dest='command', required=True)
     for name in ('bind', 'status', 'stop'):
         sub.add_parser(name)
+    c = sub.add_parser('recover'); c.add_argument('--session',required=True)
     d = sub.add_parser('defer')
     d.add_argument('--seconds', type=int, required=True)
     d.add_argument('--prompt-file')
@@ -433,6 +508,8 @@ def main():
     a = p.parse_args()
     if a.command == 'from-claude':
         from_claude(a)
+    elif a.command == 'recover':
+        recover(a.session)
     else:
         command(a)
     return 0

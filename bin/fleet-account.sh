@@ -41,6 +41,10 @@
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
 #   list                 — aligned table: label · active(●) · rotation window · state
 #                          (state = ok | limited · back in ~Nm | NO TOKEN)
+#   inventory [--refresh] — provider-aware local subscriptions + ccquota readings
+#   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
+#   reconcile --session S [--dry-run] — bounded per-session quota continuation
+#   failover-status      — durable waiting/cutover/recovery requests (JSON)
 #   use <label>          — pin <label> active
 #   rotate               — advance active to the next eligible account
 #   mark-limited <label> [banner]
@@ -524,6 +528,7 @@ account_adapter() {
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_ACCOUNT_QUOTA_TTL
+  export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL FLEET_CODEX_SERVER
   exec python3 "$BIN/.fleet-account.py" "$@"
 }
 
@@ -537,6 +542,7 @@ account_reconcile() {
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_CODEX_SERVER
+  export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL
   exec python3 "$BIN/.fleet-failover.py" "$@"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
