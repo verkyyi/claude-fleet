@@ -272,6 +272,7 @@ esac
 
 command -v fzf >/dev/null 2>&1 || { echo "fzf required for the prefix+c config modal"; sleep 3; exit 1; }
 [ -f "$(fcfg_example)" ] || { echo "fleet.conf.example not found — cannot build the config modal"; sleep 3; exit 1; }
+eval "$(bash "$BIN/dash-keymap.sh" --panel config env)"
 
 # ⌃s toggles write scope; to re-render the border-label with the new scope we
 # drop a restart sentinel and abort fzf — the outer loop relaunches. esc leaves
@@ -301,13 +302,13 @@ run_fzf() {
     --query="$savedq" \
     --border-label=" fleet config · per-fleet edits write to the $scope layer " --border-label-pos=3 \
     --prompt='filter ▸ ' \
-    --header='enter=edit/expand · tab=expand section · space=detail · ⌃s=write-scope (global⇄per-fleet) · ?=raw keys · ⌃r=refresh · esc · [✕ close]' \
+    --header="enter=edit/expand · tab=expand section · space=detail · $DASH_GLYPH_SCOPE=write-scope (global⇄per-fleet) · ?=raw keys · $DASH_GLYPH_RELOAD=refresh · esc · [✕ close]" \
     --preview "bash $SELF preview {1}" \
     --preview-window='right,54%,wrap,border-left,hidden' \
-    --bind "ctrl-r:reload(bash $SELF rows)" \
+    --bind "$DASH_KEY_RELOAD:reload(bash $SELF rows)" \
     --bind "space:toggle-preview" \
-    --bind "ctrl-p:toggle-preview" \
-    --bind "ctrl-s:execute-silent(bash $SELF toggle-scope; : > '$RESTART')+abort" \
+    --bind "$DASH_KEY_PREVIEW:toggle-preview" \
+    --bind "$DASH_KEY_SCOPE:execute-silent(bash $SELF toggle-scope; : > '$RESTART')+abort" \
     --bind "?:execute-silent(bash $SELF toggle-raw)+reload(bash $SELF rows)" \
     --bind "tab:execute-silent(bash $SELF toggle-bucket {1})+reload(bash $SELF rows)" \
     --bind "enter:transform(bash $SELF enter-action {1} '$EDITKEY' '$QUERYF' {q})" \

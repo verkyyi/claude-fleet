@@ -217,35 +217,37 @@ else
   warn config "fleet.conf.example missing — prefix+c config modal has no key list/help source"
 fi
 
-# --- dash keys vs the tmux prefix (issue #556) ---
-# tmux never delivers its prefix (or prefix2) to a pane, so a dash ⌃-key equal
+# --- panel keys vs the tmux prefix (issues #556/#558) ---
+# tmux never delivers its prefix (or prefix2) to a pane, so a panel ⌃-key equal
 # to it is dead on the keyboard (⌃a was: the operator's prefix is C-a).
-# bin/dash-keymap.sh resolves the dash's bind table against the prefix (the live
+# bin/dash-keymap.sh resolves each panel's bind table against the prefix (the live
 # server, else the tmux conf) and remaps a colliding default to its ⌥ twin — the
-# `?` sheet shows the real key. Say so here anyway (the docs name the defaults),
+# fleet-keys.sh shows the real key. Say so here anyway (docs name the defaults),
 # and shout when even the fallback is a prefix: that key is unreachable.
 km="$(dirname "$0")/dash-keymap.sh"
 if [ -f "$km" ]; then
   pfx=$(bash "$km" prefixes 2>/dev/null); pfx="${pfx:-C-b -}"
   p1="${pfx%% *}"; p2="${pfx#* }"
   if [ "$p2" = "-" ]; then p2=""; else p2=" + prefix2 $p2"; fi
-  coll=$(bash "$km" collisions 2>/dev/null)
+  for panel in dash backlog config; do
+  coll=$(bash "$km" --panel "$panel" collisions 2>/dev/null)
   if [ -z "$coll" ]; then
-    pass keys "no dash key collides with the tmux prefix ($p1$p2)"
+    pass keys "no $panel key collides with the tmux prefix ($p1$p2)"
   else
     while read -r act def pname fb; do
       [ -n "$act" ] || continue
       if [ "$fb" = UNREACHABLE ]; then
-        warn keys "dash $def ($act) is your tmux prefix $pname and its ⌥ twin is one too — unreachable from the dash; change prefix2 or the key"
+        warn keys "$panel $def ($act) is your tmux prefix $pname and its ⌥ twin is one too — unreachable from $panel; change prefix2 or the key"
       else
-        warn keys "dash $def ($act) is your tmux prefix $pname — the dash binds $fb instead (\`?\` in the dash shows it)"
+        warn keys "$panel $def ($act) is your tmux prefix $pname — the $panel binds $fb instead (fleet-keys.sh shows it)"
       fi
     done <<EOF
 $coll
 EOF
   fi
+  done
 else
-  warn keys "bin/dash-keymap.sh missing — dash keys are not checked against the tmux prefix"
+  warn keys "bin/dash-keymap.sh missing — panel keys are not checked against the tmux prefix"
 fi
 
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---

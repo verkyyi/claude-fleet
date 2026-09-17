@@ -1,5 +1,5 @@
 #!/bin/bash
-# dash-keymap.sh — the ONE resolver for the dash's fzf keys (issue #556).
+# dash-keymap.sh — the resolver for fleet panels' fzf keys (#556/#558).
 #
 # Every ⌃-chord the dash binds is a key the TERMINAL has to deliver to fzf, and
 # there is exactly one ctrl chord tmux never delivers to a pane as a plain key:
@@ -20,6 +20,8 @@
 #      the help never names a key the terminal cannot deliver.
 #
 # Usage:
+#   dash-keymap.sh --panel dash|backlog|config <command>  # default panel: dash
+#                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
 #                                   #   DASH_KEY_<ACTION>=<fzf key>  DASH_GLYPH_<ACTION>=⌃x|⌥x
 #                                   #   DASH_REMAP_<ACTION>=<prefix dodged, or empty>
@@ -58,7 +60,12 @@
 # what an operator uses to fix a mistyped name.
 set -uo pipefail
 
-TABLE='agent ctrl-v alt-v
+PANEL=dash
+if [ "${1:-}" = --panel ]; then
+  PANEL="${2:-}"; shift; [ "$#" -gt 0 ] && shift
+fi
+case "$PANEL" in
+dash) TABLE='agent ctrl-v alt-v
 reload ctrl-r alt-r
 new ctrl-n alt-n
 scratch ctrl-s alt-s
@@ -68,7 +75,17 @@ pr ctrl-p alt-p
 reap ctrl-x alt-x
 rename ctrl-e alt-e
 answer ctrl-k alt-k
-pin ctrl-y alt-y'
+pin ctrl-y alt-y' ;;
+backlog) TABLE='new ctrl-n alt-n
+close ctrl-x alt-x
+priority ctrl-y alt-y
+open ctrl-o alt-o
+reload ctrl-r alt-r' ;;
+config) TABLE='scope ctrl-s alt-s
+reload ctrl-r alt-r
+preview ctrl-p alt-p' ;;
+*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config)" >&2; exit 2 ;;
+esac
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered
 # ctrl then alt: C-a → ctrl-a · M-a → alt-a · C-M-x / M-C-x → ctrl-alt-x ·
@@ -195,5 +212,5 @@ case "$cmd" in
       esac
     done
     ;;
-  *) echo "usage: dash-keymap.sh env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
+  *) echo "usage: dash-keymap.sh [--panel dash|backlog|config] env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
 esac

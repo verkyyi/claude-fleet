@@ -48,12 +48,13 @@ else
   B=""; DIM=""; CYAN=""; YEL=""; R=""
 fi
 
-# --- dash keys: the RESOLVED table, never the defaults (issue #556) -----------
+# --- panel keys: resolved tables, never the defaults (#556/#558) ------------
 # tmux never delivers its prefix (or prefix2) to a pane, so the dash resolves
 # every ⌃-key through bin/dash-keymap.sh at launch — the default, else its ⌥
 # fallback. This sheet reads the SAME resolution: `dg <action>` is the glyph
 # actually bound, `dn <action>` a trailing note when the default was dodged —
 # so the sheet can never name a key the terminal will not deliver.
+# Start with the dash table; backlog/config load their own before rendering.
 eval "$(bash "$BIN/dash-keymap.sh" env 2>/dev/null)"
 dg() {
   local v; v="DASH_GLYPH_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
@@ -140,26 +141,29 @@ print_sheet() {
   fi
 
   if want backlog; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env 2>/dev/null)"
   group "backlog" "— inside prefix b"
   key "space" "toggle the preview pane (body/labels/comments) — off by default"
   key "/" "filter issues (type to narrow; off by default)"
   key "enter" "work the issue — spawn its session"
-  key "⌃n" "file a new issue"
-  key "⌃x" "close the highlighted issue (y/n confirm)"
-  key "⌃y" "cycle the issue's priority label (none→p2→p1→p0→none)"
-  key "⌃o" "open the issue on the web"
-  key "⌃r" "refresh now"
+  key "$(dg new)" "file a new issue$(dn new)"
+  key "$(dg close)" "close the highlighted issue (y/n confirm)$(dn close)"
+  key "$(dg priority)" "cycle the issue's priority label (none→p2→p1→p0→none)$(dn priority)"
+  key "$(dg open)" "open the issue on the web$(dn open)"
+  key "$(dg reload)" "refresh now$(dn reload)"
   key "?" "this cheatsheet"
   key "esc" "close"
   fi
 
   if want config; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel config env 2>/dev/null)"
   group "config modal" "— inside prefix c"
   key "enter" "edit the highlighted key / expand the section"
   key "tab" "expand/collapse a section"
-  key "⌃s" "toggle the write scope (global ⇄ per-fleet)"
+  key "$(dg scope)" "toggle the write scope (global ⇄ per-fleet)$(dn scope)"
+  key "space / $(dg preview)" "toggle the detail preview$(dn preview)"
   key "?" "reveal the raw FLEET_* keys inline"
-  key "⌃r" "refresh now"
+  key "$(dg reload)" "refresh now$(dn reload)"
   key "esc" "close"
   fi
 }

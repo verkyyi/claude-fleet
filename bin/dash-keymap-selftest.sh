@@ -62,6 +62,16 @@ env_out=$(km C-b '' env) || fail "A: env exited non-zero" "$env_out"
 km C-b '' key nosuch >/dev/null 2>&1 && fail "A: an unknown action must exit non-zero"
 ok "A stock C-b: 11 actions at their defaults, agent = ctrl-v/⌃v, clean, env evals"
 
+# #558: each panel resolves its own action names, including the secondary
+# preview shortcut in config. The dash's default table remains unchanged.
+[ "$(km C-n '' --panel backlog key new)" = alt-n ] || fail "panels: backlog new must dodge C-n"
+[ "$(km C-b C-o --panel backlog key open)" = alt-o ] || fail "panels: backlog open must dodge prefix2 C-o"
+[ "$(km C-s '' --panel config key scope)" = alt-s ] || fail "panels: config scope must dodge C-s"
+[ "$(km C-p '' --panel config key preview)" = alt-p ] || fail "panels: config preview must dodge C-p"
+[ "$(km C-r M-r --panel config collisions)" = 'reload ⌃r C-r UNREACHABLE' ] || fail "panels: both prefixes must be reported"
+km C-b '' --panel typo list >/dev/null 2>&1 && fail "panels: unknown panel must fail"
+ok "panels: separate backlog/config tables honour prefix and prefix2"
+
 # --- B. the fallbacks stay off fzf's own alt keys ------------------------------------
 # fzf 0.74 binds alt-b/alt-f (word motion), alt-d (kill-word), alt-bs, alt-/ by
 # default; a fallback landing on one would fight the input line.
@@ -161,10 +171,17 @@ doc() { FLEET_TMUX_PREFIX="$1" FLEET_TMUX_PREFIX2="$2" HOME="$WORK/home" PATH="$
 out=$(doc C-s '')
 printf '%s\n' "$out" | grep -q 'WARN  keys  *dash ⌃s (scratch) is your tmux prefix C-s — the dash binds ⌥s instead' \
   || fail "I: doctor must WARN on the C-s collision, naming the ⌥ key it bound" "$out"
-[ "$(printf '%s\n' "$out" | grep -c 'WARN  keys')" -eq 1 ] || fail "I: exactly one keys WARN for one collision" "$out"
+[ "$(printf '%s\n' "$out" | grep -c 'WARN  keys')" -eq 2 ] || fail "I: C-s must warn for dash scratch and config scope" "$out"
+printf '%s\n' "$out" | grep -q 'WARN  keys  *config ⌃s (scope).*binds ⌥s instead' \
+  || fail "I: doctor must report the config scope remap" "$out"
 out=$(doc C-s M-s)
 printf '%s\n' "$out" | grep -q 'WARN  keys  *dash ⌃s (scratch) is your tmux prefix C-s and its ⌥ twin is one too — unreachable' \
   || fail "I: doctor must shout when even the fallback is a prefix" "$out"
+printf '%s\n' "$out" | grep -q 'WARN  keys  *config ⌃s (scope).*unreachable' \
+  || fail "I: config must also report an unreachable fallback" "$out"
+out=$(doc C-b C-o)
+printf '%s\n' "$out" | grep -q 'WARN  keys  *backlog ⌃o (open).*prefix C-o.*binds ⌥o instead' \
+  || fail "I: doctor must report backlog prefix2 collisions" "$out"
 out=$(doc C-a '')
 printf '%s\n' "$out" | grep -q 'PASS  keys  *no dash key collides with the tmux prefix (C-a)' || fail "I: clean → PASS naming the prefix" "$out"
 printf '%s\n' "$out" | grep -q 'WARN  keys' && fail "I: clean → no keys WARN" "$out"

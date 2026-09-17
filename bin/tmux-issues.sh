@@ -61,7 +61,8 @@ case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' un
 # render); recomputed each time the panel (re)opens, so it is current at the
 # moment you go to spawn. fzf colorizes it via --ansi.
 SLOTS=$(fleet_slots_chip)
-HDR="$SLOTS · ↵ work · ⌃n new · ? keys"
+eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env)"
+HDR="$SLOTS · ↵ work · $DASH_GLYPH_NEW new · ? keys"
 ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
@@ -75,16 +76,16 @@ if [ -n "${POPUP:-}" ]; then
   # close-only + inert there — no matching header word).
   HDR="$SLOTS · ↵ work · [＋ new] · ? keys · esc · [✕ close]"
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
-  N_BIND="ctrl-n:execute-silent(printf 'new' > '$ACT')+abort"
-  X_BIND="ctrl-x:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
+  N_BIND="$DASH_KEY_NEW:execute-silent(printf 'new' > '$ACT')+abort"
+  X_BIND="$DASH_KEY_CLOSE:execute-silent(printf 'close %s' {1} > '$ACT')+abort"
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
   # The clicked header word is a single whitespace token, so a bracketed multi-word
   # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
   CH_BIND="click-header:transform:case \"\$FZF_CLICK_HEADER_WORD\" in *＋*|*new*) printf 'new' > '$ACT'; echo abort ;; *✕*|*close*) echo abort ;; esac"
 else
   ENTER_TAIL=''
-  N_BIND="ctrl-n:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
-  X_BIND="ctrl-x:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
+  N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
+  X_BIND="$DASH_KEY_CLOSE:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
   K_BIND="?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
   CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
@@ -102,7 +103,7 @@ fi
 # it needs no popup and uses ONE bind in both windowed + popup modes (execute-silent
 # blocks fzf until the label edit + optimistic cache write finish, so the reload
 # repaints with the fresh tag). {1} is the row's issue number.
-P_BIND="ctrl-y:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload(bash $ROWS $MODE)"
+P_BIND="$DASH_KEY_PRIORITY:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle)+reload(bash $ROWS $MODE)"
 
 # The panel is list-only by default (search off, issue #156). `--no-input` also
 # DROPS the query/prompt input row entirely (issue #361) — one less line of
@@ -131,11 +132,11 @@ run_fzf() {
     --preview "bash $BIN/tmux-issue-preview.sh {1}" \
     --preview-window='right,46%,wrap,border-left,hidden' \
     --bind "load:reload-sync(sleep $REFRESH; bash $ROWS $MODE)" \
-    --bind "ctrl-r:reload(bash $ROWS $MODE)" \
+    --bind "$DASH_KEY_RELOAD:reload(bash $ROWS $MODE)" \
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
     --bind "/:show-input+enable-search+change-prompt(filter ▸ )" \
-    --bind "ctrl-o:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
+    --bind "$DASH_KEY_OPEN:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
     --bind "$X_BIND" \
     --bind "$P_BIND" \
