@@ -79,7 +79,9 @@ case "\${1:-}" in
            [ "\${FAKE_RESUME_ON_PULL:-0}" = 1 ] && touch "$WORK/resumed"
            : ;;          # git pull --ff-only
   status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
-  rev-parse) printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
+  rev-parse)
+    case "\$*" in *origin/*) printf '%s\n' "\${FAKE_BASE_TIP:-deadbeef}"; exit 0 ;; esac
+    printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
   *) : ;;                                             # fetch → succeed silently
 esac
 exit 0
@@ -298,8 +300,16 @@ tok="$(FAKE_MERGED_AT='' run_clean merged)"
 case "$tok" in cleaned:*) ;; *) fail 'manual cleanup must not acquire the automatic delay' ;; esac
 ok 'manual cleanup stays immediate without a merge clock'
 tok="$(run_clean closed --auto)"
-[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED-unmerged cleanup must keep its separate policy'
-ok 'automatic CLOSED-unmerged keeps its existing policy'
+[ "$tok" = skip:unmerged ] || fail 'automatic CLOSED tip==base must be retained'
+tok="$(FAKE_BASE_TIP=baseahead run_clean closed --auto)"
+[ "$tok" = cleaned:closed ] || fail 'automatic CLOSED strict ancestor can be reaped'
+for active_state in working looping busy; do
+  tok="$(FAKE_BASE_TIP=baseahead WIN_STATE_FAKE="$active_state" run_clean closed --auto)"
+  [ "$tok" = skip:live ] || fail "automatic CLOSED $active_state must be retained"
+done
+tok="$(FAKE_BASE_TIP=baseahead FAKE_AGENT_AGE=00:10 run_clean closed --auto)"
+[ "$tok" = skip:live ] || fail 'automatic CLOSED young agent must be retained'
+ok 'automatic CLOSED requires strict ancestry and shared liveness'
 
 # A merged PR plus expired grace must still leave a live or unverified worker.
 for active_state in working looping busy waiting ''; do

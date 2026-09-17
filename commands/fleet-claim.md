@@ -271,6 +271,7 @@ override them):
   yourself, you should. Blocked is an OUTCOME too, so report it the same way a
   merge is reported:
   `~/.claude/fleet/bin/fleet-report-parent.sh --state blocked --summary '<why>'`
+  Add `--pr <PR>` when a PR exists.
   — a session that spawned you and is waiting on the result should not learn it
   by watching the dash go red.
 - **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** A

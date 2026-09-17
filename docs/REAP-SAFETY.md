@@ -74,8 +74,9 @@ of 600 seconds by default. The same daemon implements idle-scratch window cleanu
 notice; see [cleanup policy](CLEANUP.md#idle-raw-windows). Its automatic MERGED path also requires explicit
 `done` and uses this same process-age guard on its named fleet socket, before
 history/pull and again before synchronous teardown. Missing/ambiguous windows
-defer; automatic self-cleanup is refused rather than detached. Manual cleanup
-and CLOSED-unmerged retain their separate policies.
+defer; automatic self-cleanup is refused rather than detached. Automatic CLOSED-unmerged cleanup also requires explicit `done`, shared
+liveness and clean strict ancestry, in addition to its transcript checks.
+Manual cleanup retains its existing policy.
 
 The SessionEnd hook handles an explicit agent exit. It closes the exited window
 and uses the shared gate before disposing of worktree data; a `live` verdict

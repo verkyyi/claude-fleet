@@ -196,7 +196,7 @@ fi
 # five interrupts, and a parent near its handoff can least afford them.
 case "$STATE" in
   merged)  st="MERGED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-  blocked) st="BLOCKED" ;;
+  blocked) st="BLOCKED${PR:+ (PR #${PR//[^0-9]/})}" ;;
   failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
   stopped) st="STOPPED (no ship report)" ;;
   reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;

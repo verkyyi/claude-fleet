@@ -384,15 +384,15 @@ elif [ "$st" = CLOSED ] && { [ -n "$WT" ] || [ -n "$WIN" ]; }; then
   closed_reap_gate || exit 0
 fi
 
-# Automatic MERGED cleanup must not turn a GitHub verdict into permission to
+# Automatic cleanup must not turn a GitHub verdict into permission to
 # kill a working session (#565). Pin one window, require an explicit done state,
 # then share the dash's all-pane process-age/unknown-metadata guard. A missing
 # window is NOT proof of inactivity; the windowless janitor owns that case.
 # Run before history/pull and again after the lease/pull wait, just before kill.
-auto_merged_gate() {
-  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] || return 0
+auto_cleanup_gate() {
+  [ "$AUTO" = 1 ] || return 0
   [ -n "$WT" ] || [ -n "$WIN" ] || return 0
-  local why="" state self_win cwd lease git_state current_head token="skip:live"
+  local why="" state self_win cwd lease git_state current_head base_head token="skip:live"
   local socket_args=()
   if ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then
     why="missing or ambiguous window; leaving windowless work to worktree-autoclean"
@@ -415,9 +415,16 @@ auto_merged_gate() {
         why="worktree metadata unavailable"
       elif [ -n "$git_state" ]; then
         why="uncommitted work after the merge"; token="skip:dirty"
-      elif ! current_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) \
-           || [ -z "$oid" ] || [ "$current_head" != "$oid" ]; then
-        why="local tip differs from the merged PR head"; token="skip:unmerged"
+      elif ! current_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null); then
+        why="local tip unavailable"
+      elif [ "$st" = MERGED ]; then
+        if [ -z "$oid" ] || [ "$current_head" != "$oid" ]; then
+          why="local tip differs from the merged PR head"; token="skip:unmerged"
+        fi
+      elif ! base_head=$(git -C "$WT" rev-parse --verify "origin/${FLEET_BASE_BRANCH:-master}^{commit}" 2>/dev/null) \
+           || [ "$current_head" = "$base_head" ] \
+           || ! git -C "$WT" merge-base --is-ancestor "$current_head" "$base_head" 2>/dev/null; then
+        why="closed-unmerged tip is not a strict ancestor of the remote base"; token="skip:unmerged"
       fi
     fi
     if [ -z "$why" ]; then
@@ -440,7 +447,7 @@ auto_merged_gate() {
   fi
   return 0
 }
-auto_merged_gate || exit 0
+auto_cleanup_gate || exit 0
 
 # --- dry-run: report what we WOULD do, take no lease, mutate nothing ----------
 if [ "$DRY" = 1 ]; then
@@ -474,7 +481,7 @@ teardown() {
   if [ -n "$WT" ]; then case "$cwd" in "$WT"|"$WT"/*) detach=1 ;; esac; fi
   # The automatic gate above refused actual self-calls. A daemon's untargeted
   # display-message can report the active window; that is not a caller to detach.
-  [ "$AUTO" = 1 ] && [ "$st" = MERGED ] && detach=0
+  [ "$AUTO" = 1 ] && detach=0
 
   if [ "$detach" = 1 ]; then
     # Silence the git steps (issue #192): run-shell surfaces non-empty output as a
@@ -493,7 +500,7 @@ teardown() {
     return 0
   fi
 
-  auto_merged_gate || return 1
+  auto_cleanup_gate || return 1
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and
@@ -533,7 +540,7 @@ if [ "$st" = CLOSED ]; then
   fi
   note "  #$PR closed-unmerged — reaping the orphan (no merge, no base pull, no force-drop)."
   DROP_FORCE=""
-  teardown
+  teardown || exit 0
   done_token "cleaned:closed"; exit 0
 fi
 

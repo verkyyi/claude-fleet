@@ -162,14 +162,14 @@ notice_row() {
   printf '%s\n' "$SESS${US}1${US}reap-candidate${US}/w/repo-scratch-9${US}$1${US}$now${US}@91${US}${US}${US}/w/repo-scratch-9${US}claude${US}a1${US}${US}${US}${US}${US}$((now + 300))${US}$2${US}$3" > "$WLIST_FILE"
   out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS")
 }
-notice_row done "$now" "$now"
+notice_row "done" "$now" "$now"
 has 'fresh notice shows countdown' "$out" 'r5m'
 has 'countdown retains stable row id' "$out" "$SESS:1${US}@91${US}"
 notice_row working "$now" "$now"
 hasnt 'working state hides old countdown' "$out" 'r5m'
-notice_row done "$((now - 181))" "$now"
+notice_row "done" "$((now - 181))" "$now"
 hasnt 'stale daemon notice disappears' "$out" 'r5m'
-notice_row done "$now" "$((now - 1))"
+notice_row "done" "$now" "$((now - 1))"
 hasnt 'new done turn cannot inherit prior countdown' "$out" 'r5m'
 
 # --- the landed view (⌃t) keeps the #529 two-colour grammar -------------------

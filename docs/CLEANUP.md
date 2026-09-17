@@ -53,8 +53,9 @@ from the existing PR read, so it adds no GitHub call.
 
 Manual `fleet-cleanup.sh <PR>` keeps its immediate behavior. Use `--auto --dry-run`
 to inspect the automatic grace without mutations. The daemon's own `--dry-run`
-still lists cache candidates without fetching their merge times. CLOSED-unmerged
-cleanup keeps its separate liveness policy. This delay does not prove that a
+still lists cache candidates without fetching their merge times. Automatic CLOSED-unmerged cleanup retains its transcript checks and now also
+requires explicit `done`, shared process liveness, and a clean strict ancestor
+of the remote base. Manual CLOSED cleanup retains its existing policy. This delay does not prove that a
 worker is idle. Automatic MERGED cleanup also requires exactly one resolved
 window in explicit `done` state and passes the shared dash process gate: a
 Claude/Codex descendant in any pane younger than `FLEET_REAP_MIN_AGE` (default
