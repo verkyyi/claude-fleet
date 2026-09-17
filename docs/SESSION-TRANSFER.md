@@ -61,7 +61,10 @@ identity never selects a Claude transcript or another Codex session.
 
 `FLEET_AUTO_HANDOFF_PCT` also applies to Codex. At a clean Stop above the configured
 threshold, the hook requests notes and this native command; the new launch clears
-the nudge latch. It never sends Claude's slash command to Codex. An active Fleet
+the nudge latch. A failed after-turn transfer also releases that latch when the
+same Codex launcher and session are still alive, allowing the next clean Stop to
+retry. A replacement session's latch is never cleared. It never sends Claude's
+slash command to Codex. An active Fleet
 loop keeps its recorded schedule across the cycle; a paused or ambiguous loop
 must be resolved first. Loop dispatch waits while a handoff is pending.
 
@@ -72,6 +75,8 @@ Run from the hub, another pane or an external terminal. The source must be idle
 worktree. The base checkout and panel windows are refused. A source agent may
 use `--prepare-only` itself, or `--after-turn --handoff <notes>` as the final tool
 call of a handoff turn. An immediate cutover cannot run inside its own source.
+There must be exactly one worker pane. A marked TASKS sidebar is allowed and
+stays in the window; another ordinary pane still prevents transfer.
 
 ```sh
 bin/fleet-transfer.sh --session my-fleet --window b3 --to codex --dry-run
@@ -127,6 +132,7 @@ project's instructions. Keep them as long as the successor needs the history.
 | `git-status.txt`, `staged.patch`, `unstaged.patch` | Evidence of the index and local changes; never reapplied automatically |
 | `state.json` | Prepared, source-exited, starting, started or failed transfer state |
 | `pane-before-exit.txt` | Source screen captured before clearing the prompt for `/exit` |
+| `pane-exit-timeout.txt` | Source screen retained if the exit request times out |
 | `resume-source.sh` | Explicit recovery recipe for the original Claude session |
 
 The source is resolved from the Claude process **under the selected pane** and
@@ -145,7 +151,9 @@ private conversation content; they stay local.
 ## Cutover and failure handling
 
 The controller acquires a per-worktree lock and a bounded rotation lease before
-requesting Claude's `/exit`. A matching `@agent_transfer_until` marker makes the
+requesting the source's `/exit`. On Codex the command uses bracketed paste, so a
+fast Enter cannot be absorbed as a pasted newline and leave `/exit` unsubmitted.
+A matching `@agent_transfer_until` marker makes the
 SessionEnd hook retain the window and worktree, and cleanup respects the lease
 even for merged PRs. The controller waits for the source PID to exit. It only
 replaces a dead pane or the verified childless shell left behind; an editor,

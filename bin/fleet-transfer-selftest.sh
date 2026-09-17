@@ -107,7 +107,9 @@ printf 'unexpected gh invocation\n' >> "$TRANSFER_TEST_ROOT/gh-called"
 exit 1
 SH
 chmod +x "$FB/source-runner" "$FB/gh" "$IBIN"/*.sh
-TM new-session -d -s "$LBL" -n plan -c "$MAIN" || fail 'isolated tmux server'
+# Personal tmux hooks can move/remove a marked sidebar even on a private
+# socket. This fixture owns its config as well as its server and worktrees.
+TM -f /dev/null new-session -d -s "$LBL" -n plan -c "$MAIN" || fail 'isolated tmux server'
 TM set-option -g default-shell /bin/bash
 
 spawn() { # n, issue|raw, normal|stuck|tool|loop-dialog
@@ -384,7 +386,7 @@ ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] || fail 'old Stop must not rele
 # Codex source fixture: the launcher owns the pane and exits through the real
 # --codex-exit cleanup path. The transfer lease must retain that same window.
 cat > "$WORK/codex-source.pl" <<'PL'
-use JSON::PP; use Cwd;
+use JSON::PP; use Cwd; use Time::HiRes qw(time); use IO::Select;
 my ($sid, $home, $transcript, $mode) = @ARGV;
 alarm 120;
 my $pane = $ENV{TMUX_PANE};
@@ -392,11 +394,31 @@ system('tmux', 'set-option', '-w', '-t', $pane, '@cc_agent', 'codex');
 system('tmux', 'set-option', '-w', '-t', $pane, '@cc_launcher_pid', "$$");
 system('tmux', 'set-option', '-w', '-t', $pane, '@codex_identity', encode_json({session_id=>$sid, owner=>"$$", home=>$home, transcript=>$transcript, cwd=>getcwd()}));
 $|=1; print "Codex source ready\n";
-while (my $line = <STDIN>) {
-    next unless $line =~ m{/exit};
-    next if $mode eq 'stuck';
-    system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh", '--codex-exit', "$$");
-    exit 0;
+# A real TUI receives bytes without canonical line buffering. Like Codex, an
+# unbracketed typing burst absorbs Enter as a pasted newline. The old readline
+# fixture falsely passed /exit + immediate Enter even when the TUI never quit.
+system('stty', '-icanon', '-echo', 'min', '1', 'time', '0') == 0 or die;
+my ($pending, $draft, $last, $paste) = ('', '', 0, 0);
+my $input = IO::Select->new(\*STDIN);
+while ($input->can_read(30)) {
+    sysread(STDIN, my $chunk, 4096) or last;
+    $pending .= $chunk;
+    while (length $pending) {
+        if ($pending =~ s/^\e\[200~//) { $paste=1; next; }
+        if ($pending =~ s/^\e\[201~//) { $paste=0; $last=0; next; }
+        last if $pending =~ /^\e(?:\[(?:2(?:0(?:[01])?)?)?)?$/;
+        my $key=substr($pending, 0, 1, '');
+        if ($key eq "\x15") { $draft=''; $last=0; next; }
+        next if $key eq "\e";
+        if (!$paste && $key =~ /[\r\n]/ && time-$last >= 0.03) {
+            my $line=$draft; $draft=''; $line =~ s/\s+$//;
+            next unless $line eq '/exit' && $mode ne 'stuck';
+            system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh", '--codex-exit', "$$");
+            exit 0;
+        }
+        $draft .= $key;
+        $last=time unless $paste;
+    }
 }
 PL
 spawn_codex() {
@@ -426,6 +448,11 @@ PYSOURCE
   PID=$(field cc_launcher_pid); [ -n "$PID" ] || fail 'Codex launcher identity'
 }
 spawn_codex 61
+# A visible sidebar must neither block handoff nor become its source pane.
+SIDEBAR=$(TM split-window -hd -t "$PANE" -P -F '#{pane_id}' 'sleep 120')
+transfer --prepare-only && fail 'a second ordinary pane must still refuse'; ok
+TM set-option -p -t "$SIDEBAR" @sidebar 1
+TM select-pane -t "$SIDEBAR"
 transfer --prepare-only --handoff "$WORK/notes.md" || fail 'prepare Codex native handoff'
 BUNDLE=$(packet)
 python3 - "$BUNDLE" "$SID" "$CHOME" <<'PYCODEX' || fail 'Codex provenance or text rendering'
@@ -438,6 +465,7 @@ assert '继续修复原任务' in (p/'history.md').read_text()
 assert '已验证' in (p/'history.md').read_text()
 PYCODEX
 ok
+TM select-pane -t "$PANE"
 TM set-option -w -t "$WIN" @cc_launcher_pid 99999999
 transfer --prepare-only && fail 'stale Codex launcher must refuse'
 TM set-option -w -t "$WIN" @cc_launcher_pid "$PID"; ok
@@ -450,6 +478,8 @@ kill -0 "$PID" || fail 'Codex exited before fresh Stop'
 stop_turn; wait_request started; ok
 kill -0 "$PID" 2>/dev/null && fail 'Codex source survived cutover'
 [ "$(field source_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] || fail 'Codex cycle provenance lost'
+[ "$(TM display-message -p -t "$SIDEBAR" '#{window_id}')" = "$WIN" ] || fail 'handoff removed the sidebar'; ok
+TM kill-pane -t "$SIDEBAR"
 python3 - "$WORK/target-argv.json" "$CHOME" <<'PYHOME' || fail 'Codex cycle changed account home'
 import json, sys
 assert json.load(open(sys.argv[1]))['home']==sys.argv[2]
@@ -472,14 +502,30 @@ assert m['source_resume_argv'][4]==sys.argv[3]
 PYROTATE
 ok
 spawn_codex 62
+TM set-option -w -t "$WIN" @handoff_armed 1
 FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm Codex stale-source case'
 REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
 TM set-option -w -t "$WIN" @codex_identity '{}'
 stop_turn; wait_request failed
 kill -0 "$PID" || fail 'changed Codex identity must preserve source'; ok
+[ "$(field handoff_armed)" = 1 ] || fail 'failed waiter must not unlatch a changed Codex identity'; ok
 spawn_codex 63 stuck
 transfer && fail 'stuck Codex source must refuse replacement'
 kill -0 "$PID" || fail 'stuck Codex source must not be killed'; ok
+BUNDLE=$(packet)
+python3 - "$BUNDLE" <<'PYTIMEOUT' || fail 'exit timeout must retain the actual failure and screen'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+assert 'source did not exit' in json.loads((p/'state.json').read_text())['detail']
+assert (p/'pane-exit-timeout.txt').is_file()
+PYTIMEOUT
+ok
+TM set-option -w -t "$WIN" @handoff_armed 1
+FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm failed Codex cycle'
+REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
+stop_turn; wait_request failed
+kill -0 "$PID" || fail 'failed cycle killed the original source'
+[ -z "$(field handoff_armed)" ] || fail 'failed cycle must release the old context latch for retry'; ok
 
 # Reverse handoff uses exact Claude registry readiness in the retained pane.
 spawn_codex 65
