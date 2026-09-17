@@ -222,6 +222,86 @@ printf '%s\n' "$dash_block" | grep -q '^  ⌃v .*flip this fleet' \
 printf '%s\n' "$dash_block" | grep -q '^  ⌃a ' \
   && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
+
+# #558: panel tables, source bindings, rendered help and actual fzf argv agree.
+# Only test subprocesses run: fake tmux/gh cannot contact a fleet or GitHub, and
+# fake fzf records argv instead of accepting actions. The windowed backlog loops
+# by design; terminate that test shell after the first completed render. The
+# rows producer has finished (fzf consumes stdin), and the stub immediately exits.
+python3 - "$BIN" <<'PYTEST' || exit 1
+import json, os, pathlib, re, subprocess, sys, tempfile, time
+root=pathlib.Path(sys.argv[1])
+keymap=root/'dash-keymap.sh'
+base_env=dict(os.environ,FLEET_TMUX_PREFIX='C-b',FLEET_TMUX_PREFIX2='',NO_COLOR='1')
+
+def table(panel,env):
+    rows=subprocess.check_output(['bash',str(keymap),'--panel',panel,'list'],env=env,text=True)
+    return {r.split()[0]:r.split() for r in rows.splitlines()}
+
+sources={'backlog':'tmux-issues.sh','config':'tmux-config.sh'}
+key_source=(root/'fleet-keys.sh').read_text()
+for panel,filename in sources.items():
+    actions=set(table(panel,base_env))
+    source=(root/filename).read_text()
+    bound={a.lower() for a in re.findall(r'\$DASH_KEY_([A-Z]+):',source)}
+    assert actions==bound, (panel,'table/binds drift',actions,bound)
+    assert not re.search(r'(?:--bind |\w+_BIND=)"(?:ctrl|alt)-',source), (panel,'literal chord')
+    sheet_source=key_source.split('if want '+panel+'; then',1)[1].split('\n  fi',1)[0]
+    assert actions==set(re.findall(r'\$\(dg ([a-z]+)\)',sheet_source)), (panel,'table/help drift')
+    assert actions==set(re.findall(r'\$\(dn ([a-z]+)\)',sheet_source)), (panel,'missing remap explanation')
+
+with tempfile.TemporaryDirectory(prefix='panel-keymap-') as tmp:
+    tmp=pathlib.Path(tmp);fake=tmp/'bin';fake.mkdir()
+    for name in ('tmux','gh'):
+        tool=fake/name;tool.write_text('#!/bin/sh\nexit 1\n');tool.chmod(0o755)
+    fzf=fake/'fzf'
+    fzf.write_text('#!/usr/bin/env python3\nimport json,os,sys\nsys.stdin.read()\n'+
+                   'with open(os.environ["PANEL_ARGV"],"w") as f: json.dump(sys.argv[1:],f)\nsys.exit(1)\n')
+    fzf.chmod(0o755)
+    cases=[('C-b',''),('C-n','C-x'),('C-o','C-r'),('C-y','M-y')]
+    for panel,filename in sources.items():
+        for prefix,prefix2 in (cases if panel=='backlog' else [('C-b',''),('C-s','C-r'),('C-p',''),('C-s','M-s')]):
+            env=dict(base_env,HOME=str(tmp),PATH=str(fake)+os.pathsep+os.environ['PATH'],
+                     FLEET_C=str(tmp/'cache'),FLEET_CONF_DIR=str(tmp/'conf'),
+                     FCFG_GLOBAL_CONF=str(tmp/'global.conf'),FCFG_FLEET_CONF=str(tmp/'fleet.conf'),
+                     FLEET_TMUX_PREFIX=prefix,FLEET_TMUX_PREFIX2=prefix2,PANEL_ARGV=str(tmp/'argv.json'))
+            resolved=table(panel,env)
+            sheet=subprocess.check_output(['bash',str(root/'fleet-keys.sh'),'--plain'],env=env,text=True)
+            title='backlog' if panel=='backlog' else 'config modal'
+            section=sheet.split('\n'+title+' ',1)[1].split('\n\n',1)[0]
+            for row in resolved.values():
+                assert row[2] in section,(panel,'missing glyph',row,section)
+                if row[5]=='remapped': assert 'tmux prefix '+row[4] in section,(panel,'missing reason')
+                if row[5]=='unreachable': assert 'UNREACHABLE' in section,(panel,'missing warning')
+            for popup in (('', '1') if panel=='backlog' else ('1',)):
+                env['POPUP']=popup;log=tmp/'argv.json';log.unlink(missing_ok=True)
+                proc=subprocess.Popen(['bash',str(root/filename)],env=env,stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL,start_new_session=True)
+                try:
+                    deadline=time.monotonic()+10
+                    while not log.exists() and proc.poll() is None and time.monotonic()<deadline: time.sleep(.05)
+                    assert log.exists(),(panel,prefix,popup,'no fzf render',proc.poll())
+                    # The stub may still be completing its single small write.
+                    args=None
+                    while args is None and time.monotonic()<deadline:
+                        try: args=json.loads(log.read_text())
+                        except json.JSONDecodeError: time.sleep(.01)
+                    assert args is not None,(panel,'incomplete fzf capture')
+                    binds=[args[i+1] for i,arg in enumerate(args[:-1]) if arg=='--bind']
+                    keys={bind.split(':',1)[0] for bind in binds}
+                    for row in resolved.values():
+                        assert row[1] in keys,(panel,prefix,popup,'missing bind',row,keys)
+                        if row[5]=='remapped': assert row[3] not in keys,(panel,'old default still bound',row)
+                    header=next(arg for arg in args if arg.startswith('--header='))
+                    hints=['new'] if panel=='backlog' and not popup else (['scope','reload'] if panel=='config' else [])
+                    for action in hints: assert resolved[action][2] in header,(panel,'stale header',header)
+                finally:
+                    if proc.poll() is None:
+                        proc.terminate()
+                    proc.wait(timeout=5)
+print('panel keys: table/binds/help lockstep; popup/windowed fzf argv, headers, prefix2 and unreachable cases passed')
+PYTEST
+
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \
   "$(printf '%s\n' "$sheet_dash_keys" | grep -c .)"

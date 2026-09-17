@@ -83,9 +83,9 @@ ok
 grep -- 'click-header:transform' "$BACKLOG" | grep -qF -- "*＋*|*new*) printf 'new'" \
   || fail "backlog: the ＋/new case must drop the 'new' sentinel (mirror the popup ⌃n)"
 ok
-# ⌃n stays bound (additive).
-grep -Eq -- 'ctrl-n:.*dash-issue-new\.sh' "$BACKLOG" \
-  || fail "backlog: ⌃n bind lost — the chip must be additive to ⌃n"
+# The resolved new key stays bound (ctrl-n normally, alt-n if prefix=C-n).
+grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh' "$BACKLOG" \
+  || fail "backlog: new bind lost — the chip must be additive to the resolved key"
 ok
 
 # --- behaviour: a tap on ANY word of `[＋ new]` (or a bare ＋/new) must match, and
