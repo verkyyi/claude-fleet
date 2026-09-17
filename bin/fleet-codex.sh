@@ -92,7 +92,7 @@
 # Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state.
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved.
 # multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins.
-# per-model cap fallback (in-pane `/model` switch) | ✅ | ❌ | Keyed to Claude's per-model subscription caps and typed into a Claude dialog. `FLEET_CODEX_MODEL → -m` is fixed at launch.
+# per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation.
 # MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists; `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
 # warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path.
 # MATRIX-END
@@ -145,6 +145,7 @@ if [ "$_codex_home_explicit" = 0 ] && [ -n "${FLEET_CODEX_HOME:-}" ]; then
   export CODEX_HOME="$FLEET_CODEX_HOME"
   if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
     FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_HOME="$CODEX_HOME" FLEET_CODEX_QUOTA_GATE=1 \
+      FLEET_CODEX_MODEL_LIMIT_IDS="${FLEET_CODEX_MODEL_LIMIT_IDS:-}" \
       FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" \
       FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
   fi
@@ -152,6 +153,7 @@ elif [ "$_codex_home_explicit" = 0 ] && [ -z "$_codex_resuming" ] && [ -n "${FLE
   # Recovery identity is authoritative. Only fresh launches choose a pool home.
   # Pass the already-resolved overlay; a pool session has no overlay of its own.
   CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
+    FLEET_CODEX_MODEL_LIMIT_IDS="${FLEET_CODEX_MODEL_LIMIT_IDS:-}" \
     FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_GATE="${FLEET_CODEX_QUOTA_GATE:-0}" \
     FLEET_CODEX_QUOTA_FLOOR="${FLEET_CODEX_QUOTA_FLOOR:-5}" FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" \
     python3 "$BIN/fleet-codex-account.py" select) || exit 2

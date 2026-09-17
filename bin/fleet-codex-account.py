@@ -180,7 +180,14 @@ def refresh(home, force=False, timeout=8):
     return data
 
 
-def status(home, model='', now=None):
+def model_limits():
+    mapping = json.loads(os.environ.get('FLEET_CODEX_MODEL_LIMIT_IDS') or '{}')
+    if not isinstance(mapping, dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or not v for k, v in mapping.items()):
+        raise ValueError('FLEET_CODEX_MODEL_LIMIT_IDS must map model names to native limit IDs')
+    return mapping
+
+
+def status(home, model='', now=None, limit_id=None):
     now = time.time() if now is None else now
     data = read(cache_path(home))
     ttl = max(1, min(3600, int(os.environ.get('FLEET_CODEX_QUOTA_TTL', '300'))))
@@ -189,8 +196,14 @@ def status(home, model='', now=None):
             or not 0 <= now - data.get('at', 0) <= ttl): return result
     bucket = data.get('rateLimits', {})
     buckets = [bucket]
-    if model:
-        buckets += [b for b in data.get('rateLimitsByLimitId', {}).values() if b.get('normalModelSlug') == model]
+    by_id = data.get('rateLimitsByLimitId', {})
+    if limit_id is not None:
+        buckets = [by_id.get(limit_id, {})]
+    elif model:
+        # normalModelSlug describes a quota alias's presentation; it does not
+        # prove that this bucket meters every use of the normal model.
+        key = model_limits().get(model)
+        if key: buckets.append(by_id.get(key, {}))
     remaining = []
     expired = False
     for b in buckets:
@@ -263,6 +276,8 @@ def idle(data):
 
 
 def watch(session):
+    if session and os.environ.get('FLEET_CODEX_MODEL_FALLBACK'):
+        if runpy.run_path(str(BIN / 'fleet-codex-model.py'))['watch'](session): return
     if os.environ.get('FLEET_CODEX_QUOTA_MIGRATE') != '1' or not session: return
     adapter = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
     rows = adapter['tmux'](['list-windows', '-t', session, '-F',
@@ -272,7 +287,7 @@ def watch(session):
             pane, state, agent, owner, raw = line.split('|', 4)
             if agent != 'codex' or state != 'done': continue
             data = adapter['saved_identity'](raw, owner)
-            if not data or status(data['home'], data.get('model', ''))['state'] != 'low': continue
+            if not data or status(data['home'])['state'] != 'low': continue
             target = choose(data['home'], require_known=True)
             if not target or not idle(data): continue
             key = hashlib.sha256((session + pane + owner).encode()).hexdigest()
