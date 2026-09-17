@@ -77,8 +77,10 @@ command -v fzf >/dev/null 2>&1 || { tmux display-message "fzf not found — cann
 # phase 1: pop the input dialog that re-invokes us in `confirm` mode. Carry
 # --spawn through so quick-dispatch (prefix+n) reaches phase 2 as a spawn.
 if [ "$mode" != confirm ]; then
-  spawn_arg=""; [ "$spawn" = 1 ] && spawn_arg=" --spawn"
-  tmux display-popup -w 90% -h 12 -E "CF_REPO='$REPO' bash '$BIN/dash-issue-new.sh' confirm$spawn_arg"
+  popup_args=(confirm)
+  [ "$spawn" = 1 ] && popup_args+=(--spawn)
+  bash "$BIN/dash-popup.sh" -w 90% -h 12 -- \
+    env CF_REPO="$REPO" bash "$BIN/dash-issue-new.sh" ${popup_args[@]+"${popup_args[@]}"}
   exit 0
 fi
 

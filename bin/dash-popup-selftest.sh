@@ -202,5 +202,68 @@ grep -q 'dash-popup\.sh -w 72% -h 80% -- bash \$BIN/fleet-keys\.sh --context bac
 grep -q 'K_BIND="?:execute(tmux display-popup' "$ISSUES" \
   && fail "static guard: the backlog '?' bind still calls 'tmux display-popup' directly"
 
+# Exercise the remaining real action scripts with no client AND rc=0 refusal.
+# All input cancels, and gh is a tripwire: no test can send a real issue mutation.
+ACTIONS="$WORK/actions"; mkdir -p "$ACTIONS"
+cat > "$ACTIONS/gh" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "$ACTION_LOG"
+exit 1
+FAKE
+cat > "$ACTIONS/nc" <<'FAKE'
+#!/bin/sh
+cat >/dev/null
+exit 1
+FAKE
+cat > "$ACTIONS/fzf" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$@" >> "$INPUT_LOG"
+exit 130
+FAKE
+chmod +x "$ACTIONS/gh" "$ACTIONS/nc" "$ACTIONS/fzf"
+export ACTION_LOG="$WORK/action-log" INPUT_LOG="$WORK/input-log"
+for popup_path in "$WORK/bin" "$REFUSE"; do
+  for action in close comment; do
+    answer=n; [ "$action" = comment ] && answer=""
+    out=$(printf '%s\n' "$answer" | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
+      CF_REPO='fake/repo' bash "$BIN/dash-issue-$action.sh" 42)
+    case "$out" in *'#42'*'fake/repo'*) ;; *) fail "$action fallback did not show the issue/repo" ;; esac
+    [ ! -s "$ACTION_LOG" ] || fail "$action cancellation invoked gh"
+  done
+  : > "$INPUT_LOG"
+  PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" CF_REPO='fake/repo' \
+    bash "$BIN/dash-issue-new.sh" --spawn
+  grep -q 'New issue + worker in fake/repo' "$INPUT_LOG" \
+    || fail "new issue fallback lost its repo or --spawn argument"
+  url='https://example.invalid/a?q=two words&literal=$(false)'
+  out=$(printf '\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
+    sh "$BIN/open-url.sh" "$url")
+  case "$out" in *"$url"*'Enter to close.'*) ;; *) fail "URL fallback lost its UI or literal argument" ;; esac
+  out=$(printf '\n' | PATH="$ACTIONS:$popup_path:$PATH" TMPDIR="$RTMP" \
+    FLEET_REPO='fake/repo' bash "$BIN/dash-open-pr.sh" landed:42)
+  case "$out" in *'https://github.com/fake/repo/pull/42'*'Enter to close.'*) ;; *)
+    fail "PR URL action lost its foreground fallback" ;; esac
+  [ ! -s "$ACTION_LOG" ] || fail "cancelled input invoked gh"
+done
+
+# Remaining pane helpers must share client resolution and the refused-popup fallback.
+for script in dash-reap dash-issue-new dash-issue-close dash-issue-comment open-url; do
+  if grep -Eq '^[[:space:]]*tmux display-popup' "$BIN/$script.sh"; then
+    fail "$script still opens a popup without resolving its client (#451)"
+  fi
+  grep -q 'dash-popup.sh' "$BIN/$script.sh" || fail "$script bypasses dash-popup.sh"
+done
+# Interactive fallback requires execute(), including the indirect PR URL opener.
+for spec in 'tmux-dashboard.sh REAP' 'tmux-dashboard.sh PR' 'tmux-issues.sh OPEN'; do
+  read -r script action <<< "$spec"
+  grep -Fq "\$DASH_KEY_$action:execute(" "$BIN/$script" \
+    || fail "$script $action does not hand the terminal to the fallback"
+done
+grep -Fq '$DASH_KEY_CLOSE:execute(' "$ISSUES" \
+  || fail "windowed backlog close does not hand the terminal to the confirm"
+if grep 'open-url.sh' "$BIN/dash-open-pr.sh" | grep -Eq '(&[[:space:]]*\)?[[:space:]]*$|/dev/null)'; then
+  fail "PR opener backgrounds or redirects the interactive URL fallback"
+fi
+
 printf 'dash-popup-selftest: OK\n'
 exit 0

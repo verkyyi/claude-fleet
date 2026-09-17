@@ -70,8 +70,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 # --- script-facing result (issue #596) ----------------------------------------
 # Print ONE token on stdout for the caller. The INTERACTIVE passes print UI, not
-# tokens: the ⌃x bind is `execute-silent` (stdout discarded, #313) and the confirm
-# popup's stdout IS the prompt the operator reads — so emit is a no-op there.
+# tokens: the confirm invocation's stdout IS the prompt the operator reads,
+# whether in a popup or the execute() inline fallback — emit is a no-op there.
 emit() { [ "${confirm:-0}" = 1 ] || printf '%s\n' "$1"; }
 
 # refuse <slug> <human message> — the slug is what scripts match (`refused:no-issue`),
@@ -345,8 +345,8 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
         if [ "$yes" = 1 ]; then
           scratch_dispose
         elif have_client; then
-          tmux display-popup -w 90% -h 9 -E \
-            "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
+          bash "$BIN/dash-popup.sh" -w 90% -h 9 -- \
+            bash "$BIN/dash-reap.sh" "$target" confirm || true
           emit skip:needs-confirm
           exit 3
         else
@@ -437,8 +437,8 @@ if [ "$confirm" = 0 ]; then
           "$iss" "$reason" >&2
         exit 3
       fi
-      tmux display-popup -w 90% -h 9 -E \
-        "bash '$BIN/dash-reap.sh' '$target' confirm" 2>/dev/null || true
+      bash "$BIN/dash-popup.sh" -w 90% -h 9 -- \
+        bash "$BIN/dash-reap.sh" "$target" confirm || true
       # The popup is a SEPARATE invocation; this pass reaped nothing (#596).
       emit skip:needs-confirm
       exit 3 ;;

@@ -85,7 +85,7 @@ if [ -n "${POPUP:-}" ]; then
 else
   ENTER_TAIL=''
   N_BIND="$DASH_KEY_NEW:execute(bash $BIN/dash-issue-new.sh)+reload(sleep 2; bash $ROWS $MODE)"
-  X_BIND="$DASH_KEY_CLOSE:execute-silent(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
+  X_BIND="$DASH_KEY_CLOSE:execute(bash $BIN/dash-issue-close.sh {1})+reload(sleep 2; bash $ROWS $MODE)"
   K_BIND="?:execute(bash $BIN/dash-popup.sh -w 72% -h 80% -- bash $BIN/fleet-keys.sh --context backlog)"
   # Windowed carries no tap chips; keep the close-only click-header (inert here).
   CH_BIND='click-header:transform:case "$FZF_CLICK_HEADER_WORD" in *✕*|*close*) echo abort ;; esac'
@@ -136,7 +136,7 @@ run_fzf() {
     --bind "$K_BIND" \
     --bind "space:toggle-preview" \
     --bind "/:show-input+enable-search+change-prompt(filter ▸ )" \
-    --bind "$DASH_KEY_OPEN:execute-silent(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
+    --bind "$DASH_KEY_OPEN:execute(bash $BIN/open-url.sh https://github.com/$REPO/issues/{1})" \
     --bind "$N_BIND" \
     --bind "$X_BIND" \
     --bind "$P_BIND" \
