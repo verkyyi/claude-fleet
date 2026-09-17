@@ -31,12 +31,27 @@ recognise Codex targets. They use the recorded UUID and CODEX_HOME and propagate
 queue failures. Child reports are marked delivered only after a successful
 queue operation.
 
-Delivery currently requires that the worker was launched with an explicit
-local `--remote unix://PATH` endpoint. The ordinary embedded CLI server has no
-external queue endpoint. The adapter refuses that case rather than starting
-another server and claiming the live worker received the message. It never
-types message text into the terminal. TCP/remote-auth endpoints and Codex UUID
-or PID targets outside a fleet pane are not yet supported.
+Fleet pane launches now create one private local app-server and connect the TUI
+to its `unix://PATH` endpoint. Hook commands inherit that pane's environment;
+configuration overrides reach both processes, and hook support is explicitly
+enabled. The queue sender reaches this same server. It never types message text
+into the terminal. TCP/remote-auth endpoints and Codex UUID or PID targets
+outside a fleet pane are not yet supported.
 
-No daemon is started and no account files are changed by these telemetry and
-messaging adapters. The remaining runtime work is tracked in issue #734.
+`fleet-codex-runtime.py` supervises the TUI. A separate guardian owns the server
+and watches a pipe held only by the supervisor: EOF shuts the server down even
+if the supervisor is SIGKILLed. The private socket directory is mode 0700 under
+`/tmp` to stay within macOS's Unix-path limit. Normal TUI exit keeps the shared
+close-on-exit policy; crashes and signal exits remain visible. No shared daemon
+or network listener is started, and no account config is rewritten.
+
+`FLEET_CODEX_SERVER=0` preserves the embedded launch for troubleshooting; live
+queue delivery then reports that no endpoint is available. An explicitly supplied
+`--remote` endpoint retains its existing lifecycle. Profiles require Python 3.11+
+so their TOML layer can also be applied to the server; ordinary launches work on
+the existing Python baseline. The remaining parity work is tracked in #734.
+
+The optional `fleet-codex-rpc.py` helper makes bounded local JSON-RPC reads through
+the Unix WebSocket endpoint. `codex app-server proxy` is a raw byte relay and
+does not turn newline JSON into WebSocket frames. Runtime tests cover the real
+wire framing, including masking, fragmentation, ping/pong and RPC failures.

@@ -207,6 +207,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Codex worker model @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_CODEX_MODEL=""
 
+# Each Codex fleet pane gets a private local app-server for exact-session queue
+# delivery. Its guardian shuts it down with the TUI, including a killed launcher.
+# Set 0 only to troubleshoot the legacy embedded launch (no live queue delivery).
+# @label=Codex private worker server @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_SERVER=1
+
 # Pre-answer Claude Code's "trust this folder?" dialog for THIS fleet's checkout at
 # every spawn (issue #563). Claude Code keys trust on the resolved project root — a
 # worktree resolves to its MAIN checkout — so when FLEET_MAIN is not trusted in

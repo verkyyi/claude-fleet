@@ -253,6 +253,7 @@ hasarg o3 || fail "E the caller's -m value must pass through" "$(argv1l)"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
 run '/fleet-claim'
 hasarg -m && fail "E no FLEET_CODEX_MODEL → no -m (codex's own default)" "$(argv1l)"
+hasarg 'features.hooks=true' || fail "E fleet guard hooks must be enabled even in a fresh CODEX_HOME"
 grep -q 'set-option -w -t %0 @cc_model ' "$WORK/tmuxlog" && fail "E no model → no invented @cc_model stamp" "$(cat "$WORK/tmuxlog")"
 grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch must clear the predecessor's model"
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
@@ -313,6 +314,24 @@ FAKE_AGENT_RC=130 run
 ( unset TMUX; run )
 [ ! -e "$WORK/close" ] || fail "F2 a non-tmux launch must not request window cleanup"
 ok "F2 failures, interruption, and non-tmux launches never request window cleanup"
+
+# The launcher's runtime selection is independent of the runtime's own process
+# lifecycle tests. Stub just this hop, preserving the exact downstream argv.
+cat > "$IBIN/fleet-codex-runtime.py" <<PY
+import os,sys
+open('$WORK/runtime-used','w').write('yes')
+os.execvp('codex',['codex']+sys.argv[2:])
+PY
+run 'runtime fixture'
+[ -f "$WORK/runtime-used" ] || fail "F3 pane launch must use its private runtime by default"
+[ "$(last)" = 'runtime fixture' ] || fail "F3 runtime must preserve the final prompt"
+rm -f "$WORK/runtime-used"
+FLEET_CODEX_SERVER=0 run 'embedded fixture'
+[ ! -f "$WORK/runtime-used" ] || fail "F3 explicit embedded opt-out must skip the runtime"
+run --remote unix:///explicit.sock 'remote fixture'
+[ ! -f "$WORK/runtime-used" ] || fail "F3 a caller endpoint must retain its own lifecycle"
+rm -f "$IBIN/fleet-codex-runtime.py"
+ok "F3 private runtime is default inside a pane; embedded opt-out and explicit remote are preserved"
 
 # ============================================================================
 # G. codex missing from PATH → loud failure, claude is NOT substituted
