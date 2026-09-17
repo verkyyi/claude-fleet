@@ -50,6 +50,7 @@
       {
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh done" },
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-codex-session.py hook" },
           { "type": "command", "command": "sh ~/.claude/fleet/bin/classify-hook.sh" }
         ]
       }
@@ -58,6 +59,7 @@
       {
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/handoff-latch-reset-hook.sh" },
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-codex-session.py hook" },
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.start --stdin-json" }
         ]
       }

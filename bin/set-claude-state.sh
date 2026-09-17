@@ -198,6 +198,9 @@ if [ "$sem" = "done" ]; then
   _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
   _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
   case "$_hp" in ''|*[!0-9]*) _hp=0 ;; esac          # unset / non-numeric → off
+  # Codex has context telemetry now, but the Claude /fleet-handoff cycle still
+  # consumes Claude transcripts. Never send its directive to a Codex worker.
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = codex ] && _hp=0
   case "$_ds" in ''|*[!0-9]*) _ds=30 ;; esac         # unset / non-numeric → the 30s default
   # Explicit cross-agent handoff: only this Stop may release the detached waiter.
   # A stale `done` stamp or spinner demotion is NOT proof the arming turn ended.

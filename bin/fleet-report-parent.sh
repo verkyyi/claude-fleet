@@ -162,9 +162,13 @@ pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
 # pane and wake the child that is about to stop.
 [ "$pwin" = "$selfwin" ] && quiet "@origin $worigin resolves to this very window"
 
-ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
-  || quiet "parent $worigin ($pwin) has no live Claude under it"
-[ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
+parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
+ppid=''
+if [ "$parent_agent" != codex ]; then
+  ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
+    || quiet "parent $worigin ($pwin) has no live Claude under it"
+  [ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
+fi
 
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
 # Fixed because it is read by two audiences with opposite needs: the parent model,
@@ -201,7 +205,14 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-if fleet_peer_send "$ppid" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"; then
+send_report() {
+  if [ "$parent_agent" = codex ]; then
+    printf '%s' "$msg" | python3 "$BIN/fleet-codex-session.py" send --pane "$pwin" --socket "$SOCK"
+  else
+    fleet_peer_send "$ppid" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"
+  fi
+}
+if send_report; then
   # The stamp is what keeps the reaper fallback from sending a second, blunter
   # report for the same session ~a minute later.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null

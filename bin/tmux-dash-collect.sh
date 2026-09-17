@@ -706,6 +706,13 @@ ph_git_over() {
 # temp files so the EXIT trap can sweep any it orphans.
 ph_ctx() {
 local p
+if have_py3 && [ -f "$BIN/fleet-codex-session.py" ]; then
+  # Exact Codex session identity; Claude's cwd cache below is never consumed by
+  # a Codex row. Unit separators preserve empty fields and spaces in paths.
+  local us=$'\x1f'
+  lw_all "#{session_name}${us}#{window_id}${us}#{@cc_agent}${us}#{@cc_launcher_pid}${us}#{@codex_identity}" \
+    | python3 "$BIN/fleet-codex-session.py" collect --cache "$G"
+fi
 CTX_PATHS=()
 while IFS= read -r p; do [ -n "$p" ] && CTX_PATHS+=("$p"); done \
   < <(lw_all '#{pane_current_path}' | sort -u)

@@ -51,7 +51,7 @@
 #     (one-time). The launcher pre-reads it and flags an untrusted base on the dash
 #     (`needs`) rather than letting the first pane stall silently — see below.
 #   * Stamps @cc_agent=codex on the window so the dash can tag it and the Claude-
-#     only tooling (migrate, ctx, peer-send) can tell it apart; a Claude window
+#     only tooling (migrate) can tell it apart; a Claude window
 #     carries no @cc_agent, so the default fleet is unchanged.
 #
 # --- CAPABILITY MATRIX · SOURCE OF TRUTH (issue #608) -------------------------
@@ -85,7 +85,8 @@
 # close the window when the operator exits the agent | ✅ | ✅ | The Codex launcher waits for a successful CLI exit, then calls the shared close-on-exit policy. Dirty/unmerged work survives, hubs/panels are excluded, and the global `FLEET_CLOSE_ON_EXIT=0` opt-out applies. Failed launches stay visible; thread `SessionEnd(reason=other)` never closes a window.
 # session lifecycle events | ✅ | ✅ | Both agents emit `session.start` and `session.end` through the shared hook table. Codex thread lifecycle events are separate from process-exit window cleanup.
 # `/fleet-handoff` + the auto-handoff nudge | ✅ | ❌ | Reads Claude Code's `~/.claude/projects/**.jsonl` transcript and re-seeds the pane. Codex keeps its own rollout files — the mechanism is not missing on Codex, the adapter is.
-# `/fleet-context` + the dash's ctx % | ✅ | ❌ | Same transcript, plus `conf/statusline.sh` stamping `@ctx_pct` on every render. Codex's status line is a built-in TUI toggle, not a user command that could stamp that bus.
+# `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused.
+# peer messages + child reports | ✅ | partial | Exact-session `codex queue --remote unix://PATH` delivery is wired for workers launched with an explicit local app-server endpoint. The embedded CLI server is not externally addressable; it fails clearly instead of reporting false delivery.
 # Stop classifier (haiku) | ✅ | ❌ | Captures terminal text and invokes a Claude helper with a Claude-specific rubric. The normal Codex Stop hook does not invoke it yet; this is a screen-classification adapter gap.
 # `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ❌ | `bin/fleet-claude.sh` routes every `--resume` / `--continue` / `--from-pr` / `--fork-session` launch to Claude — those resume Claude transcripts. Codex has `codex resume`; the fleet does not wire it.
 # multi-account rotation + the 5h/7d quota collector | ✅ | ❌ | The fleet swaps accounts by exporting `CLAUDE_CODE_OAUTH_TOKEN` per launch. Codex auth is `codex login` — persisted credentials with no per-launch token seam, so there is nothing for the rotator to hand over.
@@ -232,9 +233,21 @@ if [ -n "${FLEET_CODEX_MODEL:-}" ]; then
 fi
 
 # --- stamp THIS pane's window (issue #511: -t "$TMUX_PANE", never the current window)
+export FLEET_CODEX_LAUNCHER_PID="$$"
+export FLEET_CODEX_REMOTE=''
+_remote_next=0
+for a in ${pass[@]+"${pass[@]}"}; do
+  if [ "$_remote_next" = 1 ]; then FLEET_CODEX_REMOTE="$a"; _remote_next=0; fi
+  case "$a" in --remote) _remote_next=1 ;; --remote=*) FLEET_CODEX_REMOTE="${a#--remote=}" ;; esac
+done
 if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
+  # New ownership invalidates the old JSON even if the process died before its
+  # SessionEnd. Clear visible context too; the first root hook supplies truth.
+  for _opt in @codex_identity @codex_session_id @ctx_pct @ctx_limit @cc_model; do
+    tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
+  done
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
 fi
 

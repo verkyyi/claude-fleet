@@ -8,8 +8,9 @@ Follow it as written, with these translations (they are the only differences):
 
 - **Slash commands are Claude Code skills; you cannot invoke them.** `/fleet-claim`
   IS the text below — begin at its step 0 by running the shell command it names.
-  `/fleet-handoff`, `/fleet-context` and `/fleet-history` do not exist for you:
-  there is no auto-handoff and no context meter. If you are running out of
+  Run `bash ~/.claude/fleet/bin/fleet-context.sh` for your exact session's
+  context meter. `/fleet-handoff` and `/fleet-history` are not yet adapted:
+  there is no automatic context cycle. If you are running out of
   context, commit and push what you have and post a progress comment on the
   issue (the `fleet-comment.sh … --note` wrapper) so a successor can pick up.
 - **Claude-only tools you do not have:** `AskUserQuestion`, `SendMessage`,

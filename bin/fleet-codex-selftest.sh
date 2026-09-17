@@ -253,7 +253,8 @@ hasarg o3 || fail "E the caller's -m value must pass through" "$(argv1l)"
 printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
 run '/fleet-claim'
 hasarg -m && fail "E no FLEET_CODEX_MODEL → no -m (codex's own default)" "$(argv1l)"
-grep -q '@cc_model' "$WORK/tmuxlog" && fail "E no model → no @cc_model stamp" "$(cat "$WORK/tmuxlog")"
+grep -q 'set-option -w -t %0 @cc_model ' "$WORK/tmuxlog" && fail "E no model → no invented @cc_model stamp" "$(cat "$WORK/tmuxlog")"
+grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch must clear the predecessor's model"
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
 
 # ============================================================================
