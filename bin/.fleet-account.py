@@ -310,7 +310,7 @@ def check_target(target, quota=True):
     return matches[0]
 
 
-def verify_codex_runtime(remote):
+def verify_codex_runtime(remote, source=None):
     """Verify the locked profile and native auth/config before sending a task."""
     expected = read_subscription()
     if not expected:
@@ -321,9 +321,20 @@ def verify_codex_runtime(remote):
     try:
         auth = rpc.call('account/read', {'refreshToken': False})
         account = auth.get('account') or {}
-        config = rpc.call('config/read', {'includeLayers': False}).get('config', {})
+        if source:
+            # An existing thread's effective provider is native runtime state.
+            # Old servers can lose transient feature-override files, making a
+            # fresh config/read fail even while the bound thread keeps working.
+            thread = rpc.call('thread/read', {'threadId': source['session_id'], 'includeTurns': False})['thread']
+            if (thread.get('id') != source['session_id'] or thread.get('modelProvider') != 'openai'
+                    or Path(thread['cwd']).resolve() != Path(source['worktree']).resolve()):
+                raise ValueError('existing Codex thread did not confirm the source identity/provider')
+            provider = thread['modelProvider']
+        else:
+            config = rpc.call('config/read', {'includeLayers': False}).get('config', {})
+            provider = config.get('model_provider', 'openai')
         if (account.get('type') != 'chatgpt' or not auth.get('requiresOpenaiAuth')
-                or config.get('model_provider', 'openai') not in (None, 'openai')
+                or provider not in (None, 'openai')
                 or not actual.get('email') or (account.get('email') or '').lower() != actual['email'].lower()):
             raise ValueError('private Codex server did not confirm the pinned ChatGPT subscription')
     finally:

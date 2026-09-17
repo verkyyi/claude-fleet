@@ -103,7 +103,7 @@ def source_account(source, data):
             old = os.environ.get('FLEET_CODEX_SUBSCRIPTION')
             os.environ['FLEET_CODEX_SUBSCRIPTION'] = with_env
             try:
-                ACCOUNT['verify_codex_runtime'](source['codex_identity'].get('remote', ''))
+                ACCOUNT['verify_codex_runtime'](source['codex_identity'].get('remote', ''), source=source)
             finally:
                 if old is None: os.environ.pop('FLEET_CODEX_SUBSCRIPTION', None)
                 else: os.environ['FLEET_CODEX_SUBSCRIPTION'] = old
@@ -488,6 +488,8 @@ def reconcile_windows(session, dry):
             if opt(source,'@reported') == '1': continue
             account=source_account(source,data)
             reconcile_one(source,account,data,dry)
+            if not dry:
+                (root()/('unsupported-'+session+'-'+window.replace('@','')+'.json')).unlink(missing_ok=True)
         except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError) as error:
             reason = str(error) if isinstance(error,ValueError) else type(error).__name__
             if not dry:

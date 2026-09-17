@@ -117,6 +117,32 @@ class Providers(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'no longer eligible'):
                 accounts.check_target(target)
 
+    def test_existing_source_verifies_native_provider_without_rereading_startup_config(self):
+        source=dict(session_id='exact-thread',worktree=str(self.root))
+        native=dict(id='exact-thread',cwd=str(self.root),modelProvider='openai')
+        auth=dict(account={'type':'chatgpt','email':'fixture@example.com'},requiresOpenaiAuth=True)
+        calls=[]
+        class Client:
+            def __init__(self,*_,**__):pass
+            def close(self):pass
+            def call(self,method,params):
+                calls.append(method)
+                if method=='account/read':return auth
+                if method=='thread/read':return {'thread':native}
+                raise ValueError('startup feature override file no longer exists')
+        expected=dict(self.profile,email='fixture@example.com')
+        with patch.object(accounts,'read_subscription',return_value=expected), patch.object(accounts,'profile',return_value=expected), patch.object(accounts.runpy,'run_path',return_value={'Client':Client}):
+            accounts.verify_codex_runtime('unix:///exact.sock',source=source)
+            self.assertEqual(calls,['account/read','thread/read'])
+            for key,value in (('id','replacement'),('cwd','/wrong'),('modelProvider','custom')):
+                with patch.dict(native,{key:value}):
+                    with self.assertRaises(ValueError):accounts.verify_codex_runtime('unix:///exact.sock',source=source)
+            with patch.dict(auth['account'],email='other@example.com'):
+                with self.assertRaises(ValueError):accounts.verify_codex_runtime('unix:///exact.sock',source=source)
+            # A new destination still requires pre-TUI config verification.
+            with self.assertRaisesRegex(ValueError,'startup feature'):
+                accounts.verify_codex_runtime('unix:///exact.sock')
+
 
 if __name__ == '__main__':
     unittest.main()
