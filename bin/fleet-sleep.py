@@ -149,6 +149,18 @@ class Worker:
     def source_key(self, source):
         return tuple(source[k] for k in ('agent','session_id','pid','worktree','home'))
 
+    def holds_exit(self,data):
+        # Some Claude versions unregister their session before SessionEnd. The
+        # already-validated process fingerprint remains authoritative until exit.
+        if (data['state']!='preparing' or not 0<=time.time()-data['updated']<90
+                or self.opt('@worker_lifecycle')!='preparing' or not source_alive(data)):
+            return False
+        root_pid=int(self.opt('pane_pid'));pid=int(data['source']['pid'])
+        rows=TRANSFER['process_rows']();seen=set()
+        while pid!=root_pid and pid not in seen and pid in rows:
+            seen.add(pid);pid=rows[pid][0]
+        return pid==root_pid
+
     def eligible(self, manual=False):
         if self.opt('@worker_lifecycle'): raise ValueError('already sleeping or transitioning')
         if self.opt('@sleep_keep_awake') == '1': raise ValueError('keep awake enabled')
@@ -627,9 +639,7 @@ def main():
     if a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
     elif a.action=='holds-exit':
         _,data=w.record()
-        return 0 if (data['state']=='preparing' and 0<=time.time()-data['updated']<90
-                     and w.opt('@worker_lifecycle')=='preparing'
-                     and w.source_key(w.inspect())==w.source_key(data['source'])) else 1
+        return 0 if w.holds_exit(data) else 1
     elif a.action=='wake': w.wake()
     elif a.action=='deliver': w.deliver(sys.stdin.read())
     elif a.action=='restore':

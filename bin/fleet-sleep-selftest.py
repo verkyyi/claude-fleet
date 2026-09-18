@@ -247,6 +247,17 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(parse(['codex','--remote','unix:///old','--dangerously-bypass-approvals-and-sandbox','--dangerously-bypass-hook-trust','-c','x="a b"','resume','uuid','prompt'],'codex'),['--dangerously-bypass-approvals-and-sandbox','--dangerously-bypass-hook-trust','-c','x="a b"'])
         with self.assertRaises(ValueError):parse(['claude','--unknown-option','x'],'claude')
 
+    def test_retained_exit_survives_native_registry_removal(self):
+        worker=LIB['Worker'](self.socket,self.pane)
+        data={'state':'preparing','updated':time.time(),'source':{'pid':self.pid},
+              'source_start':LIB['process_start'](self.pid)}
+        self.stamp('@worker_lifecycle','preparing')
+        with patch.object(worker,'inspect',side_effect=ValueError('registry already removed')):
+            self.assertTrue(worker.holds_exit(data))
+            data['updated']-=91;self.assertFalse(worker.holds_exit(data))
+            data['updated']=time.time();data['source_start']='reused PID'
+            self.assertFalse(worker.holds_exit(data))
+
     def test_remote_resume_binding_requires_exact_loaded_history(self):
         worker=LIB['Worker'](self.socket,self.pane)
         source={'session_id':self.sid,'home':str(self.root),'worktree':str(self.wt),'transcript':str(self.transcript),

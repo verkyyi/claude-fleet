@@ -361,7 +361,7 @@ fi
 
 # A separate native proof, never populated by screen classifiers or stale-working
 # reconciliation. Reusing this installed hook also reaches already-running CLIs.
-if [ "$sem" = done ] && [ -n "${_stop_payload:-}" ]; then
+if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then
   _bin=$(cd "$(dirname "$0")" && pwd)
   [ ! -f "$_bin/fleet-sleep.py" ] || printf '%s' "$_stop_payload" \
     | python3 "$_bin/fleet-sleep.py" hook >/dev/null 2>&1 || :
