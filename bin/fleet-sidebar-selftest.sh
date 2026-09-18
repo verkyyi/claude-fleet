@@ -322,13 +322,17 @@ try:
     check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'Escape left the worker border dimmed')
 
-    # tmux <=3.5 discards top pane-status clicks before key lookup (its mouse
-    # hit test recognizes only right/bottom borders). 3.6+ exposes the top border.
-    version = re.search(r'(\d+)\.(\d+)', tm('-V'))
-    if version and tuple(map(int, version.groups())) >= (3, 6):
+    # tmux <=3.6a discards top pane-status clicks before key lookup (its mouse
+    # hit test recognizes only right/bottom borders). 3.7+ exposes the top border.
+    # Use the server version: it is the server that dispatches mouse events.
+    version_text = tm('display-message', '-p', '#{version}')
+    version = re.search(r'(\d+)\.(\d+)', version_text)
+    if version and tuple(map(int, version.groups())) >= (3, 7):
         click(side, row=-1)
         wait_for(navigation, 'clicking the top border did not enter sidebar navigation')
     else:
+        print('selftest NOTE: tmux %s — top-border click unavailable; checking sidebar content click' %
+              version_text, flush=True)
         click(side, row=8)
         wait_for(navigation, 'clicking the sidebar did not enter navigation before resize')
     tm('resize-window', '-t', w1, '-x', '100', '-y', window_height)
