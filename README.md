@@ -246,6 +246,8 @@ sidebar (or press `prefix E`) to give it the arrow keys: an amber
 switches workers while keeping the sidebar focused, so ↑↓ still browse tasks.
 Click the worker, or press Enter/Esc, to return keyboard input to the worker;
 its top border then shows a blue **WORKER · INPUT** badge before the task name.
+Clicking the top border itself requires tmux 3.7 or newer; on older versions,
+click inside the sidebar or use `prefix E` to focus it.
 `prefix e` saves the on/off preference as `FLEET_SIDEBAR`;
 `FLEET_SIDEBAR_WIDTH` sets the width (24–60).
 Below sidebar width + 81 columns (111 by default), the list hides automatically
