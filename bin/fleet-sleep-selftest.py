@@ -247,6 +247,28 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(parse(['codex','--remote','unix:///old','--dangerously-bypass-approvals-and-sandbox','--dangerously-bypass-hook-trust','-c','x="a b"','resume','uuid','prompt'],'codex'),['--dangerously-bypass-approvals-and-sandbox','--dangerously-bypass-hook-trust','-c','x="a b"'])
         with self.assertRaises(ValueError):parse(['claude','--unknown-option','x'],'claude')
 
+    def test_current_model_survives_an_earlier_launch_override(self):
+        self.cli('sleep',self.pane)
+        path=Path(self.opt('@sleep_record'));data=json.loads(path.read_text())
+        data['model']='current-model';data['options']=['--model','original-model']
+        path.write_text(json.dumps(data));self.cli('wake',self.pane)
+        args=(self.root/'launch.args').read_text().splitlines()
+        self.assertNotIn('original-model',args)
+        self.assertEqual(args[args.index('--model')+1],'current-model')
+
+    def test_npm_wrappers_require_the_workers_exact_endpoint(self):
+        quiet=LIB['quiet_processes']
+        script=self.root/'node_modules/@openai/codex/bin/codex.js';script.parent.mkdir(parents=True,exist_ok=True);script.touch()
+        source={'pid':self.pid,'agent':'codex','codex_identity':{'remote':'unix:///owned'}}
+        rows={self.pid+1:(self.pid,'node'),self.pid+2:(self.pid+1,'codex')}
+        args={self.pid+1:['node',str(script),'--remote','unix:///owned'],self.pid+2:['codex','--remote','unix:///owned']}
+        with patch.dict(LIB['TRANSFER'],process_rows=lambda: rows),patch.dict(LIB['ARGV'],process_argv=lambda pid:args[pid]):
+            quiet(source)
+            args[self.pid+2][-1]='unix:///unrelated'
+            with self.assertRaisesRegex(ValueError,'different endpoint'):quiet(source)
+            args[self.pid+2][-1]='unix:///owned';rows[self.pid+3]=(self.pid+2,'bash');args[self.pid+3]=['bash','background-job']
+            with self.assertRaisesRegex(ValueError,'background/tool'):quiet(source)
+
     def test_retained_exit_survives_native_registry_removal(self):
         worker=LIB['Worker'](self.socket,self.pane)
         data={'state':'preparing','updated':time.time(),'source':{'pid':self.pid},

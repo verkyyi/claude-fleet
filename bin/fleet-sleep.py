@@ -468,8 +468,18 @@ def quiet_processes(source):
             if pp!=parent or pid==parent: continue
             pending.append(pid)
             if source['agent']=='claude': raise ValueError('Claude owns background/tool processes')
-            argv=run(['ps','-p',str(pid),'-o','command=']).split(None,2)
-            if comm in ('codex','codex-real'): continue
+            argv=ARGV['process_argv'](pid)
+            remote=source['codex_identity'].get('remote','')
+            native=comm in ('codex','codex-real')
+            npm=(comm=='node' and len(argv)>1 and
+                 str(Path(argv[1]).resolve()).endswith('/@openai/codex/bin/codex.js'))
+            if native or npm:
+                # Only this worker's TUI/server are infrastructure. A separately
+                # spawned Codex command is background work, regardless of name.
+                for flag in ('--remote','--listen'):
+                    if flag in argv and argv[argv.index(flag)+1:argv.index(flag)+2]==[remote]:break
+                else:raise ValueError('another Codex process owns a different endpoint')
+                continue
             if len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py': continue
             raise ValueError('Codex owns background/tool processes')
 
@@ -545,6 +555,15 @@ def launch(w):
         env['FLEET_ACCOUNTS_DIR']=data['evidence']['accounts_dir']
     argv=['bash',str(BIN/'fleet-claude.sh'),'--agent',source['agent'],'--resume',source['session_id']]
     options=data.get('options',[])
+    if data['model']:
+        # /model can change after launch; the live native model outranks argv.
+        clean=[];skip=False
+        for arg in options:
+            if skip:skip=False;continue
+            if arg in ('-m','--model'):skip=True;continue
+            if arg.startswith('--model='):continue
+            clean.append(arg)
+        options=clean
     if source['agent']=='codex':
         # Remote resume restores its recorded native permission profile. Codex
         # rejects permission CLI overrides, even when identical to that profile.
@@ -585,6 +604,8 @@ def launch(w):
         # review; never write hooks.state into the user's durable configuration.
         toml=runpy.run_path(str(BIN/'fleet-codex-runtime.py'))['toml_value']
         argv+=['-c','hooks.state='+toml(source['hook_trust'])]
+    if source['agent']=='codex':
+        argv+=['-c','check_for_update_on_startup=false']
     print('Fleet: restoring saved conversation…',flush=True)
     os.chdir(source['worktree'])
     os.execvpe('bash',argv,env)
@@ -608,7 +629,7 @@ def main():
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
-    a=p.parse_args()
+    a=p.parse_intermixed_args()
     if a.action=='hook':
         try: hook()
         except (ValueError,KeyError,OSError,subprocess.SubprocessError): pass
@@ -639,7 +660,7 @@ def main():
                 else: result=w.sleep(dry=a.dry_run or mode!='on')
             except (ValueError,OSError,subprocess.SubprocessError) as exc:
                 result={'skip':str(exc)}
-            print(json.dumps(dict(window=window,**result),ensure_ascii=False),flush=True)
+            print(json.dumps(dict(session=a.session,window=window,**result),ensure_ascii=False),flush=True)
         return 0
     w=Worker(a.session,a.window or '')
     if a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
