@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -111,6 +112,7 @@ class Worker:
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
         self.lockfile = self.directory / ('window-' + self.window[1:] + '.lock')
+        self.quota_directory = self.directory.parents[2] / 'handoffs' / 'quota-requests'
 
     def tm(self, *args):
         return run(['tmux', '-L', self.session, *args], timeout=5)
@@ -166,28 +168,26 @@ class Worker:
         if self.opt('@sleep_keep_awake') == '1': raise ValueError('keep awake enabled')
         if self.visible(): raise ValueError('a client is viewing this worker')
         if self.opt('@claude_state') != 'done': raise ValueError('worker is not done')
-        for option in ('@handoff_armed','@agent_transfer_request','@quota_failover'):
+        for option in ('@handoff_armed','@agent_transfer_request'):
             if self.opt(option): raise ValueError('handoff/failover is pending')
         until = self.opt('@agent_transfer_until')
         if until and (not until.isdigit() or int(until) > time.time()): raise ValueError('transfer is active')
         source = self.inspect()
         source['restart_options']=source_options(source)
+        self.check_quota_wait(source)
         previous = self.opt('@handoff_manifest')
         if previous:
             loop = Path(previous).parent/'loop/state.json'
             if loop.exists() and json.loads(loop.read_text()).get('status') not in ('stopped','complete','cancelled'):
                 raise ValueError('Fleet loop is active')
         evidence = json.loads(self.opt('@sleep_evidence') or '{}')
-        if (evidence.get('session_id') != source['session_id'] or evidence.get('pane') != self.pane
-                or evidence.get('pid') != source['pid']):
-            raise ValueError('no native Stop evidence for this process/session')
+        matching_stop = (evidence.get('session_id') == source['session_id']
+                         and evidence.get('pane') == self.pane and evidence.get('pid') == source['pid'])
         now = time.time()
         after = int(os.environ.get('FLEET_SLEEP_AFTER','1800'))
         if after < 1: raise ValueError('invalid sleep threshold')
-        if not 0 < evidence.get('at',0) <= now: raise ValueError('invalid Stop time')
-        if not manual and now-max(evidence['at'],float(self.opt('@sleep_woke_at') or 0)) < after:
-            raise ValueError('idle grace has not elapsed')
         if source['agent'] == 'claude':
+            if not matching_stop: raise ValueError('no native Stop evidence for this process/session')
             if evidence.get('background_tasks') != [] or evidence.get('session_crons') != []:
                 raise ValueError('background work/timers present or unknown')
             if evidence.get('stop_hook_active'): raise ValueError('Stop continuation is active')
@@ -216,11 +216,33 @@ class Worker:
             finally: client.close()
             if thread.get('id') != source['session_id'] or thread.get('status',{}).get('type') != 'idle':
                 raise ValueError('Codex is not natively idle')
+            if (not thread.get('cwd') or not thread.get('path')
+                    or Path(thread['cwd']).resolve()!=Path(source['worktree']).resolve()
+                    or Path(thread['path']).resolve()!=Path(source['transcript']).resolve()):
+                raise ValueError('Codex native worktree/history does not match this worker')
             turns = thread.get('turns') or []
             if not turns or turns[-1].get('status') != 'completed': raise ValueError('no completed Codex turn')
+            last = turns[-1]
+            if any(item.get('status') not in (None,'completed','failed','declined','interrupted')
+                   for item in last.get('items', [])):
+                raise ValueError('Codex tool is still active or unknown')
+            completed = last.get('completedAt')
+            if (last.get('id') and type(completed) in (int,float)
+                    and math.isfinite(completed) and 0 < completed <= now):
+                # Native completion is available for workers predating the Stop
+                # hook and for resumed conversations. Never use screen age/mtime.
+                evidence = dict(session_id=source['session_id'], pid=source['pid'], pane=self.pane,
+                                at=completed, turn_id=last['id'], proof='native-completed-turn')
+            elif completed is not None or not matching_stop:
+                raise ValueError('no native completion time or matching Stop evidence')
+        at = evidence.get('at')
+        if type(at) not in (int,float) or not math.isfinite(at) or not 0 < at <= now:
+            raise ValueError('invalid native idle time')
+        if not manual and now-max(at,float(self.opt('@sleep_woke_at') or 0)) < after:
+            raise ValueError('idle grace has not elapsed')
         # A native idle turn can still own commands. Unknown descendants veto.
         quiet_processes(source)
-        draft = INPUT['snapshot'](self.session,self.pane)
+        draft = INPUT['snapshot'](self.session,self.pane,agent=source['agent'])
         if draft.get('state') != 'empty': raise ValueError('input contains a draft or cannot be proven empty')
         transcript = Path(source['transcript'])
         if not transcript.is_file() or not transcript.stat().st_size: raise ValueError('history is missing')
@@ -230,8 +252,28 @@ class Worker:
         if any(self.inbox().glob('*.json')): raise ValueError('messages await delivery')
         return source,evidence
 
+    def check_quota_wait(self, source):
+        if not self.opt('@quota_failover'): return
+        identity = [source[k] for k in ('session','window','session_id','pid','agent')]
+        key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
+        path = self.quota_directory / key / 'request.json'
+        if not path.is_file(): raise ValueError('unverified quota failover marker')
+        request = json.loads(path.read_text())
+        if any(request.get('source',{}).get(k) != source[k]
+               for k in ('session','window','session_id','pid','agent')):
+            raise ValueError('quota request belongs to another source')
+        state = request.get('state')
+        if state in ('cancelled','recovered'): return
+        # Only an unstarted, proactive account switch can wait until wake.
+        # Hard quota failures, uncertain deliveries and cutovers remain vetoes.
+        if state in ('waiting','waiting-quota','waiting-evidence') and request.get('hard') is False:
+            return
+        raise ValueError('quota failover is active or requires recovery')
+
     def sleep(self, manual=False, dry=False):
-        with lock(self.lockfile):
+        # Match the quota reconciler's fleet lock: its waiting request cannot
+        # turn into a migration between our native probe and graceful exit.
+        with lock(self.quota_directory / (self.session+'.lock')), lock(self.lockfile):
             source,evidence = self.eligible(manual)
             if dry: return {'eligible':True,'session_id':source['session_id']}
             with TRANSFER['transition_lock'](source['worktree']):
@@ -481,6 +523,18 @@ def quiet_processes(source):
                 else:raise ValueError('another Codex process owns a different endpoint')
                 continue
             if len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py': continue
+            if len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge': continue
+            if comm=='codex-code-mode-host':
+                parent_args=ARGV['process_argv'](parent)
+                remote=source['codex_identity'].get('remote','')
+                # The bundled persistent JS host is infrastructure only when
+                # directly owned by this exact app-server and from its release.
+                # Its descendants are still visited and may veto sleep.
+                if ('app-server' in parent_args and '--listen' in parent_args
+                        and parent_args[parent_args.index('--listen')+1:parent_args.index('--listen')+2]==[remote]
+                        and ARGV['process_executable'](pid)==
+                            ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
+                    continue
             raise ValueError('Codex owns background/tool processes')
 
 

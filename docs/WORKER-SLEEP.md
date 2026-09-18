@@ -11,8 +11,10 @@ separate from the process lifecycle.
 `FLEET_SLEEP=observe` is the initial default: scan and report reasons without
 exiting agents. Set `FLEET_SLEEP=on` in the global or per-fleet configuration to
 enable automatic sleep. `off` disables scans. `FLEET_SLEEP_AFTER=1800` sets the
-continuous idle interval in seconds. A resumed worker needs a new completed turn before it becomes eligible again;
-resume itself never manufactures a Stop event.
+continuous idle interval in seconds. Codex uses its native completed-turn time,
+including for workers already idle at installation. After resume, the interval
+starts no earlier than the wake time; no extra conversation turn is required.
+Claude still requires a matching Stop event. Resume never manufactures one.
 While enabled, sleep supersedes the older idle scratch-window disposal policy.
 
 From another window or terminal:
@@ -41,8 +43,11 @@ supported.
 ## Evidence and exclusions
 
 A real Stop hook binds idle evidence to the native session, owning process and
-pane. Tool use and submitted prompts invalidate it. Display classification and
-stale-working demotion cannot create this evidence.
+pane. Tool use and submitted prompts invalidate it. Codex can also supply idle
+evidence through its exact private endpoint: matching UUID, worktree and history,
+an idle thread, a completed turn with a valid completion timestamp and no active
+tool items. Display classification and stale-working demotion cannot create this
+evidence.
 
 Claude requires empty `background_tasks` and `session_crons` arrays and a known
 permission mode. Missing arrays mean unknown and prevent sleep. Codex additionally
@@ -51,6 +56,19 @@ Owned tool processes, pending interactions, Fleet loops, transfers, failover,
 an unsubmitted draft or an unrecognized input layout prevent sleep. Unknown
 probes always keep the worker running. Worktree modifications are preserved and
 are not a reason to delete or commit anything.
+
+A verified proactive quota-switch request that is only waiting does not prevent
+sleep. The sleep operation holds the quota reconciler's lock through exit; quota
+reconciliation skips retained workers and rechecks their identity after wake.
+Hard quota failures, cutovers in progress and ambiguous deliveries still prevent
+sleep. A text status flag alone cannot authorize this exception.
+
+Codex's persistent `codex-code-mode-host` is allowed only as a direct child of
+this worker's exact app-server, with its kernel executable path matching the
+server's bundled release. Children of that host still undergo tool-process checks.
+The empty Codex composer can be recognized beneath its colored dot animation
+only with the native faint placeholder and cursor at the start. Real drafts,
+attachments and unrecognized layouts still prevent sleep.
 
 ## Retained state and recovery
 
@@ -109,8 +127,7 @@ older mini Claude 2.1.269 test also exposed registry removal before SessionEnd;
 the retained-exit guard now checks the saved live process fingerprint and pane
 ancestry instead of requiring that registry entry to survive shutdown.
 
-Workers already idle when this feature is installed need a subsequent real Stop
-event before they can sleep. Unknown descendant processes (including unverified
-MCP/tool infrastructure) keep a worker awake. This deliberately limits reclamation
-to sessions whose inactivity can be established; a quiet screen alone is never
-sufficient.
+Claude workers already idle when this feature is installed need a subsequent real
+Stop event before they can sleep; Codex can use native completion evidence.
+Unknown descendant processes (including unverified MCP/tool infrastructure) keep
+a worker awake. A quiet screen alone is never sufficient.

@@ -169,11 +169,27 @@ class Failover(unittest.TestCase):
 
     def test_recovered_inspection_clears_stale_unsupported_status(self):
         path=flow.root()/'unsupported-test-2.json';flow.save(path,{'state':'unsupported'})
-        with patch.object(flow,'tm',return_value='@2|worker'), patch.object(flow,'inspect',return_value=self.source), patch.object(flow,'opt',return_value=''), patch.object(flow,'source_account',return_value=self.account), patch.dict(flow.ACCOUNT,inventory=lambda:self.data), patch.object(flow,'reconcile_one'):
+        with patch.object(flow,'tm',side_effect=lambda *a: '@2|worker' if a[1]=='list-windows' else ''), patch.object(flow,'inspect',return_value=self.source), patch.object(flow,'opt',return_value=''), patch.object(flow,'source_account',return_value=self.account), patch.dict(flow.ACCOUNT,inventory=lambda:self.data), patch.object(flow,'reconcile_one'):
             flow.reconcile_windows('test',True)
             self.assertTrue(path.exists())
             flow.reconcile_windows('test',False)
             self.assertFalse(path.exists())
+
+    def test_retained_workers_are_not_inspected_or_migrated(self):
+        with patch.object(flow,'tm',side_effect=lambda *a: '@2|worker' if a[1]=='list-windows' else 'sleeping'), \
+             patch.object(flow,'inspect') as inspect, patch.dict(flow.ACCOUNT,inventory=lambda:self.data), \
+             patch.object(flow,'reconcile_one') as reconcile:
+            flow.reconcile_windows('test',True)
+        inspect.assert_not_called();reconcile.assert_not_called()
+
+    def test_sleep_preserves_pending_request_until_wake(self):
+        path=flow.root()/'retained';path.mkdir(parents=True)
+        request=dict(source=self.source,state='waiting',hard=False)
+        flow.save(path/'request.json',request)
+        with patch.object(flow,'opt',return_value='sleeping'),patch.object(flow,'inspect') as inspect:
+            flow.cancel_obsolete('test',True)
+        inspect.assert_not_called()
+        self.assertEqual(flow.read(path/'request.json')['state'],'waiting')
 
 
 class Drafts(unittest.TestCase):

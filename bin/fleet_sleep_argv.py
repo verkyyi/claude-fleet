@@ -10,6 +10,17 @@ import struct
 import sys
 
 
+def process_executable(pid):
+    """Kernel executable path, independent of a process's chosen argv[0]."""
+    if sys.platform == 'darwin':
+        libproc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+        buf = ctypes.create_string_buffer(4096)
+        if libproc.proc_pidpath(int(pid), buf, len(buf)) <= 0:
+            raise OSError(ctypes.get_errno(), 'cannot read process executable')
+        return Path(os.fsdecode(buf.value)).resolve()
+    return Path('/proc/%s/exe' % pid).resolve(strict=True)
+
+
 def process_argv(pid):
     if sys.platform=='darwin':
         libc=ctypes.CDLL(None,use_errno=True)
