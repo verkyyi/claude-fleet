@@ -32,10 +32,11 @@ class SleepTest(unittest.TestCase):
         cls.agent=cls.root/'agent.py'
         cls.agent.write_text('''import os,sys,tty,json
 tty.setraw(0)
+trace=open(os.path.join(os.path.dirname(__file__),'input-'+str(os.getpid())+'.log'),'ab',buffering=0)
 print('\\033[2J\\033[H❯ ',end='',flush=True)
 text=''
 while True:
-    c=os.read(0,1).decode()
+    raw=os.read(0,1);trace.write(raw);c=raw.decode()
     if c in ('\\r','\\n'):
         if text=='/exit': break
         text=''; print('\\033[2J\\033[H❯ ',end='',flush=True)
@@ -60,7 +61,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         # Minimal transition lock helper in the sandbox, never the user's leases.
         (cls.bin/'fleet-lib.sh').write_text('fleet_rotate_lease_file() { printf "%s" '+str(cls.root/'lease')+'; }\n'
             +'fleet_peer_send() { printf "%s\\n" "$2" >> '+str(cls.root/'messages')+'; }\n')
-        cls.tm('new-session','-d','-s',cls.socket,'-x','100','-y','30','sleep 300')
+        cls.tm('-f','/dev/null','new-session','-d','-s',cls.socket,'-x','100','-y','30','sleep 300')
         cls.tm('set-option','-g','remain-on-exit','on')
 
     @classmethod
@@ -74,7 +75,9 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
 
     def cli(self,*args,ok=True):
         p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),args[0],'--session',self.socket,*args[1:]],env=self.env,text=True,capture_output=True,timeout=55)
-        if ok:self.assertEqual(p.returncode,0,p.stderr)
+        if ok:
+            trace=self.root/('input-'+str(self.pid)+'.log')
+            self.assertEqual(p.returncode,0,p.stderr+' fake input='+repr(trace.read_bytes() if trace.exists() else b''))
         else:self.assertNotEqual(p.returncode,0,p.stdout)
         return p
 
