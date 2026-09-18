@@ -33,7 +33,10 @@ highlighting a dashboard row does not. During resume, wait for the native input
 prompt before typing. No wake action authorizes an additional model turn. Codex resumes its saved native
 permission profile. Its existing hook authorization is carried as exact native
 hashes in temporary launch arguments; user trust configuration is not modified.
-Changed hooks may still require review.
+Changed hooks may still require review. Startup update checks are suppressed for
+the resume invocation so a version notification cannot block entry; fresh launches
+keep their normal update policy. Both standalone and npm-installed Codex are
+supported.
 
 ## Evidence and exclusions
 
@@ -86,3 +89,28 @@ test manual sleep/wake with both native agents, and then enable automatic sleep
 on each fleet. Check the actual native session ID, window identity, account,
 process exit and worktree after recovery. `wake_seconds` in the durable record
 measures successful resume latency; repeated trials are needed for percentiles.
+
+### Native rollout evidence (2026-09-18)
+
+Isolated sockets on both deployment machines were exercised with real native
+agents: normal exit, retained window, exact UUID/account/worktree, navigation
+wake and no extra model turn. Local Codex also passed the automatic scanner with
+a short test-only threshold. Production uses 1,800 seconds.
+
+| Host / agent | Resume sample | Agent tree RSS before → settled placeholder |
+| --- | ---: | ---: |
+| Local Codex 0.155.0 | 4.3 s | 392 MiB → 31 MiB |
+| mini Claude 2.1.276 | 0.6 s | 313 MiB → 30 MiB |
+| mini Codex 0.154.0 (npm) | 1.0 s | 575 MiB → 30 MiB |
+
+These are individual samples, not percentile guarantees. A placeholder readiness
+marker precedes the RSS sample so it does not measure the transient shell. The
+older mini Claude 2.1.269 test also exposed registry removal before SessionEnd;
+the retained-exit guard now checks the saved live process fingerprint and pane
+ancestry instead of requiring that registry entry to survive shutdown.
+
+Workers already idle when this feature is installed need a subsequent real Stop
+event before they can sleep. Unknown descendant processes (including unverified
+MCP/tool infrastructure) keep a worker awake. This deliberately limits reclamation
+to sessions whose inactivity can be established; a quiet screen alone is never
+sufficient.
