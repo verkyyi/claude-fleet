@@ -294,12 +294,14 @@ fi
 unset _trust_root _codex_conf
 
 flags=(
-  --dangerously-bypass-approvals-and-sandbox
   --dangerously-bypass-hook-trust
   -c 'features.hooks=true'
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
   ${hook_flags[@]+"${hook_flags[@]}"}
 )
+# Remote resume retains the native thread's permission policy and rejects CLI
+# permission overrides. Only a fresh thread needs Fleet's initial full access.
+[ -n "$_codex_resuming" ] || flags=(--dangerously-bypass-approvals-and-sandbox ${flags[@]+"${flags[@]}"})
 
 # --- model: FLEET_CODEX_MODEL → -m, unless the caller already chose one ---------
 launch_model=''

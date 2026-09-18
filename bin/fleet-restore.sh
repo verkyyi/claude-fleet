@@ -159,7 +159,7 @@ snapshot() {
     # stamped @worktree over a wandered cwd; give the resolver THIS fleet's base
     # so legacy shared-base raw windows stay excluded. The map appends @raw at
     # column 14, after provider/home/transcript and handoff_manifest (column 13).
-    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{@codex_identity}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
@@ -301,8 +301,8 @@ restore() {
     # map for completeness but restore does not replay them (see the re-stamp
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
-    local wname wpath wid wissue wstate wagent whome wmanifest wraw reopened=0
-    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw; do
+    local wname wpath wid wissue wstate wagent whome wmanifest wraw wsleep reopened=0
+    while IFS=$'\t' read -r _ wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw wsleep; do
       [ -z "$wname" ] && continue
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # reconcile path: a window with this name is already live — don't duplicate.
@@ -363,6 +363,10 @@ restore() {
         cmd="$launch; exec \$SHELL"
         say "    + $wname → fresh $agent_label (no transcript found)"
       fi
+      if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
+        cmd='exec "$SHELL"'
+        say "    z $wname → retained sleeping worker"
+      fi
       if [ -z "$dry" ]; then
         # Capture the new window-id and target every follow-up option-set through
         # it: window names aren't unique handles (title-slug collisions), so a
@@ -371,6 +375,17 @@ restore() {
         local nw
         nw=$(tmux -L "$sock" new-window -t "$sess:" -n "$wname" -c "$wpath" -P -F '#{window_id}' "$cmd" 2>/dev/null)
         [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
+        if [ -n "$wsleep" ] && [ "$wsleep" != - ]; then
+          tmux -L "$sock" set-option -w -t "$nw" @worktree "$wpath"
+          tmux -L "$sock" set-option -w -t "$nw" @cc_agent "${wagent:-claude}"
+          if [ "$wraw" = 1 ]; then tmux -L "$sock" set-option -w -t "$nw" @raw 1
+          else tmux -L "$sock" set-option -w -t "$nw" @issue "$wissue"; fi
+          python3 "$BIN/fleet-sleep.py" restore --session "$sess" "$nw" --record "$wsleep" || {
+            tmux -L "$sock" set-option -w -t "$nw" @worker_lifecycle failed
+            say "    ⚠ sleep restore failed; record retained: $wsleep"
+          }
+        fi
+
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored

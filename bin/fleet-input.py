@@ -42,7 +42,7 @@ def analyze(screen, cursor_x=None, cursor_y=None, columns=0):
     prompts = []
     for y, row in enumerate(rows):
         plain = ''.join(c for c, _ in row)
-        match = re.match(r'^\s*(?:│\s*)?[❯›>] ?', plain)
+        match = re.match(r'^\s*(?:│\s*)?[❯›>][ \u00a0]?', plain)
         if match:
             prompts.append((y, row, match.end()))
     if not prompts:
@@ -52,12 +52,20 @@ def analyze(screen, cursor_x=None, cursor_y=None, columns=0):
     plain = re.sub(r'│\s*$', '', ''.join(c for c, _ in body)).rstrip()
     real = re.sub(r'│\s*$', '', ''.join(c for c, faint in body if not faint)).rstrip()
     start_col = width(''.join(c for c, _ in row[:start]))
+    # capture-pane trims trailing blanks, including the space after an empty
+    # prompt glyph. The cursor proves that one missing separator cell.
+    if not body and cursor_y == y and cursor_x == start_col + 1:
+        start_col += 1
     left = (cursor_x or 0) - start_col if cursor_y == y else 0
     busy = bool(real.strip() or (left > 0 and plain.strip()))
     result = {'state': 'unknown', 'busy': busy, 'reason': 'cursor/input boundary is not proven'}
     if cursor_y != y or cursor_x is None or columns <= 0:
         return result
     if not busy and cursor_x == start_col:
+        if y+1 < len(rows):
+            following = ''.join(c for c, _ in rows[y+1]).strip()
+            if following and not re.fullmatch(r'[─━╰╯└┘│\s]+', following):
+                return result  # multiline draft/attachment below the first row
         return {'state': 'empty', 'busy': False, 'text': ''}
     if (busy and real == plain and cursor_x == start_col + width(plain)
             and cursor_x < columns - 2 and not any(c in plain for c in ('…', '\x1b', '\u200d'))

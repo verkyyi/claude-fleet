@@ -343,6 +343,13 @@ bridge_input_busy() {
 # tmux server (issue #159), so every op names that fleet's -L socket.
 bridge_inject() {
   local sock="$1" win="$2" text="$3" buf="fleet-relay-$$"
+  local lifecycle evidence
+  lifecycle=$(tmux -L "$sock" display-message -p -t "$win" '#{@worker_lifecycle}' 2>/dev/null)
+  evidence=$(tmux -L "$sock" display-message -p -t "$win" '#{@sleep_evidence}' 2>/dev/null)
+  if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
+    printf '%s' "$text" | python3 "$BIN/fleet-sleep.py" deliver --session "$sock" "$win"
+    return $?
+  fi
   tmux -L "$sock" set-buffer -b "$buf" -- "$text" 2>/dev/null || return 1
   tmux -L "$sock" paste-buffer -t "$win" -b "$buf" -d -p 2>/dev/null || { tmux -L "$sock" delete-buffer -b "$buf" 2>/dev/null; return 1; }
   # FLEET_ALLOW_SENDKEYS=1: this IS the sanctioned issue-bridge, exempt from the

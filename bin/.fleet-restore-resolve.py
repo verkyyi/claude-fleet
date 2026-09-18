@@ -67,6 +67,12 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
+    sleep_record = ''
+    extended = line.split(SEP, 12)
+    if (len(extended) == 13 and not extended[10].lstrip().startswith('{')
+            and not extended[11].lstrip().startswith('{')):
+        sleep_record = extended.pop(11)
+        line = SEP.join(extended)
     parts = line.split(SEP, 11)
     manifest = ''
     # The final JSON stays opaque (it may itself contain a pipe). New snapshots
@@ -121,6 +127,20 @@ for line in sys.stdin:
         suffix = f"\tcodex\t{home}\t{transcript or '-'}"
     else:
         sid = loop_record.get('thread_id') or newest_sid(path)
+    retained = {}
+    if sleep_record:
+        try:
+            retained = json.loads(Path(sleep_record).read_text())
+            if (retained.get('state') not in ('preparing','sleeping','waking','failed')
+                    or Path(retained['source']['worktree']).resolve() != Path(path).resolve()):
+                retained = {}
+            else:
+                source = retained['source']
+                sid = source['session_id']
+                suffix = '\t' + source['agent'] + '\t' + (source.get('home') or '-') + '\t' + source['transcript']
+                state = 'done'
+        except (OSError,ValueError,KeyError,TypeError):
+            retained = {}
     if manifest and loop_record and loop_record.get('thread_id') == sid:
         suffix = (suffix or '\tclaude\t-\t-') + '\t' + manifest
     row = f"WIN\t{name}\t{path}\t{sid}\t{issue}\t{state}\t{prci}\t{pfg}\t{origin}{suffix}"
@@ -128,4 +148,8 @@ for line in sys.stdin:
         # Columns 10–12 remain provider/home/transcript, 13 is handoff_manifest.
         # Pad absent metadata so the new raw marker is always column 14 (#680).
         row += "\t-" * (13 - len(row.split("\t"))) + "\t1"
+    # Missing/corrupt retained state must stay an actionable placeholder. Never
+    # discard its marker and let restore silently start a different conversation.
+    if sleep_record:
+        row += "\t-" * (14 - len(row.split("\t"))) + "\t" + sleep_record
     print(row)

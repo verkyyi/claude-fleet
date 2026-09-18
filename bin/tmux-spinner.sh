@@ -354,7 +354,7 @@ needs_check() {
   left="$NEEDS_BUDGET"
   touched=0
   ncand=0 nstarved=0   # trace counters (issue #675) — three ints, no forks
-  needs_fmt='#{window_id} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0} #{?@cc_agent,#{@cc_agent},claude}'
+  needs_fmt='#{window_id} #{?@worker_lifecycle,#{@worker_lifecycle},#{?@claude_state,#{@claude_state},-}} #{?@claude_needs,#{@claude_needs},-} #{?@claude_state_ts,#{@claude_state_ts},0} #{?@cc_agent,#{@cc_agent},claude}'
   for sock in $SOCKETS; do
     [ "$left" -gt 0 ] || break
     # Own scan, like stuck_check's: window_id (the write target, stable across
@@ -527,7 +527,7 @@ while :; do
     # is empty for every window that is not red. #{window_name} stays LAST because a
     # name may contain spaces and `read`'s final name swallows the rest; a new field
     # goes BEFORE it, and the awk tally below counts columns from the same list.
-    wins=$(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index} #{?@claude_state,#{@claude_state},-} #{?@claude_needs,#{@claude_needs},-} #{window_name}' 2>/dev/null) || continue
+    wins=$(tmux -L "$sock" list-windows -a -F '#{session_name}:#{window_index} #{?@worker_lifecycle,#{@worker_lifecycle},#{?@claude_state,#{@claude_state},-}} #{?@claude_needs,#{@claude_needs},-} #{window_name}' 2>/dev/null) || continue
     cmdf="$CMDF.$sock"
     changed=0
     : > "$cmdf"
@@ -542,6 +542,9 @@ while :; do
       case "$st" in
         working) glyph="$frame "; sfg="$cyan";      nfg="$NAME_WORKING"; wst="fg=#565f89" ;;
         looping) glyph="$frame "; sfg="$indigo";    nfg="#9d7cd8";       wst="fg=#565f89" ;;
+        sleeping) glyph="z "; sfg="$NAME_IDLE"; nfg="$NAME_IDLE"; wst="fg=#565f89" ;;
+        preparing|waking) glyph="↻ "; sfg="$cyan"; nfg="$NAME_WORKING"; wst="fg=#565f89" ;;
+        failed) glyph="! "; sfg="$NAME_NEEDS"; nfg="$NAME_NEEDS"; wst="fg=$NAME_NEEDS,bold" ;;
         done)    glyph="✓ ";      sfg="$NAME_DONE"; nfg="$NAME_DONE";    wst="fg=#565f89" ;;
         # `needs` splits by its subtype (issue #640) so the TAB says which reflex it
         # wants: `?` is an AskUserQuestion — answerable from the dash (⌃k) without

@@ -399,6 +399,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # An unmerged PR requires strict ancestry; dirty worktrees are kept untouched.
 # @label=Cleanup idle done raw sessions @group=bridge @tier=advanced @scope=fleet @edit=int @unit=min
 #FLEET_REAP_IDLE_DONE_MIN=30
+# Preserve idle workers in their original windows and resume on entry. Start in
+# observe mode (logs only); on supersedes the idle scratch-window disposal above.
+# Unknown native idle/input/background-task evidence always keeps the agent alive.
+# @label=Worker sleep @group=bridge @tier=advanced @scope=fleet @edit=enum @options=off,observe,on
+#FLEET_SLEEP=observe
+# Continuous idle interval in seconds. Native Stop required; viewing the worker,
+# drafts, background jobs, loops, permissions and transfers prevent sleep.
+# @label=Worker sleep idle grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_SLEEP_AFTER=1800
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
 # cooldown). Default 4.
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick

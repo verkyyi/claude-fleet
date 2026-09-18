@@ -73,6 +73,7 @@ Screen:
 # and a per-window lock. Never fails the caller.
 classify_one() {
   target="$1"
+  [ -z "$(TM display-message -p -t "$target" '#{@worker_lifecycle}' 2>/dev/null)" ] || return 0
   st=$(TM display-message -p -t "$target" '#{@claude_state}' 2>/dev/null)
   case "$st" in
     done|needs|looping) : ;;   # quiet/ambiguous -> candidate

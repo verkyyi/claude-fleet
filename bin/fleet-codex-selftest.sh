@@ -238,6 +238,7 @@ run --model haiku --resume abc 'nudge text'
 [ "$(argv1l | paste -sd' ' -)" = "--model haiku --resume abc nudge text" ] || fail "D the resume argv must pass through intact" "$(argv1l)"
 run --agent codex --resume abc
 [ "$(ran)" = codex ] || fail "D an explicit --agent codex overrides the resume heuristic" "$(ran)"
+hasarg --dangerously-bypass-approvals-and-sandbox && fail "D remote resume must retain native permissions without unsupported overrides" "$(argv1l)"
 ok "D --resume/--continue/--from-pr/--fork-session/--model → claude on a codex fleet; explicit --agent still wins"
 
 # ============================================================================
