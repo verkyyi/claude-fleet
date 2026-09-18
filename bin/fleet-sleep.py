@@ -275,7 +275,12 @@ class Worker:
                     self.phase(path,data,'sleeping')
                     command=self.command('park')
                     self.tm('respawn-pane','-k','-t',self.pane,'-c',source['worktree'],command)
-                    data['rss_parked_kb']=process_tree_rss(self.opt('pane_pid'))
+                    # Measure the settled placeholder, not its transient shell
+                    # immediately after respawn (which understates memory).
+                    ready=time.monotonic()+5
+                    while self.opt('@sleep_park_ready')!=path.stem and time.monotonic()<ready:time.sleep(.05)
+                    if self.opt('@sleep_park_ready')==path.stem:
+                        data['rss_parked_kb']=process_tree_rss(self.opt('pane_pid'))
                     save(path,data)
                     if self.visible(): self.wake_locked(path,data)
                     return {'state':data['state'],'record':str(path)}
@@ -586,9 +591,10 @@ def launch(w):
 
 
 def park(w):
-    _,data=w.record()
+    path,data=w.record()
     print('\033[2J\033[H'+data.get('screen',''))
     print('\nFleet · sleeping — enter this worker to resume the saved conversation.',flush=True)
+    w.stamp('@sleep_park_ready',path.stem)
     # Blocking on a descriptor, no periodic per-worker polling. tmux focus hooks
     # and explicit wake replace this exact park process under the window lock.
     import signal
