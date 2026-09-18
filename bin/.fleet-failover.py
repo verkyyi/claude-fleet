@@ -163,6 +163,8 @@ def validate(request, session, pane, sid):
     if (session, pane, sid) != (expected.get('session'), expected.get('pane'), expected.get('session_id')):
         raise ValueError('quota request belongs to a different source')
     source = inspect(session, pane)
+    if opt(source, '@worker_lifecycle'):
+        raise ValueError('worker is sleeping or transitioning')
     for key in ('pid','session_id','agent','worktree','transcript'):
         if source.get(key) != expected.get(key):
             raise ValueError('source identity changed after quota observation')
@@ -373,6 +375,10 @@ def cancel_obsolete(session, enabled):
                 except (OSError,ValueError,KeyError,subprocess.SubprocessError): pass
             continue
         try:
+            # Retained workers deliberately have no live native identity. Keep
+            # their request until wake can reconcile the replacement PID.
+            if opt(source, '@worker_lifecycle'):
+                continue
             current = inspect(session,source['window'])
             obsolete = not same_source(current,source) or opt(current,'@reported') == '1'
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
@@ -484,6 +490,8 @@ def reconcile_windows(session, dry):
         if time.monotonic() >= deadline: break
         considered += 1
         try:
+            if tm(session,'display-message','-p','-t',window,'#{@worker_lifecycle}'):
+                continue
             source=inspect(session,window)
             if opt(source,'@reported') == '1': continue
             account=source_account(source,data)

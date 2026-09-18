@@ -79,7 +79,47 @@ def analyze(screen, cursor_x=None, cursor_y=None, columns=0):
     return result
 
 
-def snapshot(socket, pane):
+def codex_empty_with_particles(screen, cursor_x, cursor_y, columns):
+    """Recognize the empty Codex composer beneath its colored dot animation.
+
+    Never discard arbitrary Braille text: require the native faint placeholder,
+    the cursor at its start, and single-dot cells painted with foreground AND
+    background colors. Preserve all other input and the multiline boundary.
+    """
+    if cursor_x != 2 or cursor_y is None or columns <= 0: return False
+    foreground = background = False
+    output = []
+    dots = '\u2801\u2802\u2804\u2808\u2810\u2820\u2840\u2880'
+    for part in re.split(r'(\x1b\[[0-9;]*m)', screen):
+        if not part.startswith('\x1b['):
+            output.append(''.join(' ' if c in dots and foreground and background else c for c in part))
+            continue
+        output.append(part)
+        params = [int(x or 0) for x in part[2:-1].split(';')]
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if p == 0: foreground = background = False
+            elif p == 39: foreground = False
+            elif p == 49: background = False
+            elif p in (38,48,58):
+                if p == 38: foreground = True
+                elif p == 48: background = True
+                i += 3 if params[i+1:i+2] == [5] else 5 if params[i+1:i+2] == [2] else 1
+                continue
+            elif 30 <= p <= 37 or 90 <= p <= 97: foreground = True
+            elif 40 <= p <= 47 or 100 <= p <= 107: background = True
+            i += 1
+    normalized = ''.join(output)
+    lines = normalized.splitlines()
+    if not 0 <= cursor_y < len(lines): return False
+    cells = styled(lines[cursor_y])
+    if ''.join(c for c,_ in cells).strip() != '› Ask Codex to do anything': return False
+    if any(not faint for c,faint in cells[2:] if not c.isspace()): return False
+    return analyze(normalized,cursor_x,cursor_y,columns)['state'] == 'empty'
+
+
+def snapshot(socket, pane, agent=None):
     base = ['tmux'] + (['-L', socket] if socket else [])
     def tm(*args):
         return subprocess.check_output(base + list(args), timeout=5, stderr=subprocess.PIPE, text=True).rstrip('\n')
@@ -89,6 +129,8 @@ def snapshot(socket, pane):
     if len(values) == 2:
         values.append(0)  # Old probes still support the bridge's busy-only test.
     result = analyze(screen, *values)
+    if agent == 'codex' and result['state'] != 'empty' and codex_empty_with_particles(screen,*values):
+        result = {'state':'empty','busy':False,'text':''}
     # Only prompt content, not changing status/footer or the source conversation.
     result['digest'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real isolated tmux panes with deterministic native agent/identity fixtures."""
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import runpy
@@ -108,8 +109,10 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(self.opt('window_id'),window)
         record=Path(self.opt('@sleep_record'))
         self.assertEqual(record.stat().st_mode&0o777,0o600)
+        self.stamp('@quota_failover','waiting: retired process')
         self.cli('wake',self.pane)
         self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(self.opt('@quota_failover'),'')
         self.assertEqual(self.opt('window_id'),window)
         args=(self.root/'launch.args').read_text().splitlines()
         self.assertEqual(args,['--agent','claude','--resume',self.sid,'--permission-mode','default'])
@@ -234,6 +237,132 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             with self.assertRaisesRegex(ValueError,'subagent'):
                 worker.eligible(manual=True)
 
+    @contextmanager
+    def codex_probe(self):
+        source=dict(agent='codex',session_id=self.sid,pid=self.pid,home=str(self.root),
+                    session=self.socket,window=self.opt('window_id'),pane=self.pane,
+                    worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix://fixture'})
+        thread=dict(id=self.sid,cwd=str(self.wt),path=str(self.transcript),status={'type':'idle'},
+                    turns=[dict(id='finished-turn',status='completed',completedAt=time.time()-60,items=[])])
+        class Client:
+            def __init__(self,*a,**kw):pass
+            def close(self):pass
+            def call(self,method,args):
+                if method=='thread/goal/get':return {'goal':None}
+                if method=='thread/loaded/list':return {'data':[SleepTest.sid]}
+                if method=='hooks/list':return {'data':[{'errors':[],'hooks':[]}]}
+                return {'thread':thread}
+        with patch.dict(os.environ,self.env):
+            worker=LIB['Worker'](self.socket,self.pane)
+            with patch.object(worker,'inspect',return_value=source), \
+                 patch.dict(worker.eligible.__globals__,RPC=Client,source_options=lambda source: [],quiet_processes=lambda source: None):
+                yield worker,source,thread
+
+    def test_native_completion_bootstraps_old_codex_without_stop(self):
+        self.stamp('@sleep_evidence','')
+        with self.codex_probe() as (worker,source,thread):
+            _,proof=worker.eligible()
+            self.assertEqual(proof['proof'],'native-completed-turn')
+            self.assertEqual(proof['turn_id'],'finished-turn')
+            self.assertEqual(proof['at'],thread['turns'][-1]['completedAt'])
+            self.assertEqual(self.opt('@sleep_evidence'),'')  # observation never invents a Stop
+
+    def test_codex_wake_and_recovery_recognize_animation_and_retire_old_quota_marker(self):
+        self.cli('sleep',self.pane)
+        with self.codex_probe() as (worker,source,thread):
+            path,data=worker.record()
+            data['source']=dict(source)
+            source['pid']=self.pid+1000000  # simulated exact native rebind
+            real_tm=worker.tm
+            def tm(*args):
+                return '' if args[0]=='respawn-pane' else real_tm(*args)
+            def snapshot(session,pane,agent=None):
+                self.assertEqual(agent,'codex')
+                screen='› \x1b[2mAsk Codex to do anything\x1b[0m \x1b[38;2;60;83;90m\x1b[48;2;42;67;76m⠁\n'
+                empty=LIB['INPUT']['codex_empty_with_particles'](screen,2,0,100)
+                return {'state':'empty' if empty else 'unknown'}
+            with patch.object(worker,'tm',side_effect=tm),patch.object(worker,'replaceable'), \
+                 patch.object(worker,'bind_resumed_codex'),patch.dict(LIB['INPUT'],snapshot=snapshot):
+                self.stamp('@quota_failover','waiting: retired process')
+                worker.wake_locked(path,data)
+                self.assertEqual(self.opt('@worker_lifecycle'),'')
+                self.assertEqual(self.opt('@quota_failover'),'')
+                for original in (False,True):
+                    data['state']='failed'
+                    if original:data['source']['pid']=source['pid']
+                    LIB['save'](path,data);self.stamp('@worker_lifecycle','failed')
+                    self.stamp('@quota_failover','waiting: retained marker')
+                    worker.recover()
+                    self.assertEqual(self.opt('@worker_lifecycle'),'')
+                    self.assertEqual(self.opt('@quota_failover'),'waiting: retained marker' if original else '')
+
+    def test_native_idle_requires_terminal_tools_exact_history_and_time(self):
+        self.stamp('@sleep_evidence','')
+        with self.codex_probe() as (worker,source,thread):
+            last=thread['turns'][-1]
+            for status in ('inProgress','pending','unknown'):
+                last['items']=[{'type':'commandExecution','status':status}]
+                with self.assertRaisesRegex(ValueError,'tool'):worker.eligible()
+            last['items']=[]
+            for at in (None,0,True,float('nan'),time.time()+60):
+                last['completedAt']=at
+                with self.assertRaisesRegex(ValueError,'completion time'):worker.eligible()
+            last['completedAt']=time.time()-60
+            thread['path']=str(self.root/'wrong-history')
+            with self.assertRaisesRegex(ValueError,'history'):worker.eligible()
+            thread['path']=str(self.transcript);thread['status']={'type':'active'}
+            with self.assertRaisesRegex(ValueError,'natively idle'):worker.eligible()
+
+    def test_resumed_codex_observes_fresh_grace_without_an_extra_turn(self):
+        self.stamp('@sleep_evidence','')
+        with self.codex_probe() as (worker,source,thread):
+            self.stamp('@sleep_woke_at',time.time())
+            with self.assertRaisesRegex(ValueError,'grace'):worker.eligible()
+            self.stamp('@sleep_woke_at',time.time()-60)
+            worker.eligible()
+            thread['turns'][-1]['completedAt']=time.time()
+            with self.assertRaisesRegex(ValueError,'grace'):worker.eligible()
+
+    def test_only_verified_proactive_quota_wait_can_sleep(self):
+        import hashlib
+        self.stamp('@quota_failover','waiting: old process warning')
+        with self.codex_probe() as (worker,source,thread):
+            with self.assertRaisesRegex(ValueError,'unverified'):worker.eligible()
+            key=hashlib.sha256(json.dumps([source[k] for k in ('session','window','session_id','pid','agent')]).encode()).hexdigest()[:32]
+            path=worker.quota_directory/key/'request.json'
+            request={'source':source,'state':'waiting','hard':False}
+            LIB['save'](path,request);worker.eligible()
+            for state in ('preparing','ambiguous','recovery-sending','bound','unknown'):
+                request['state']=state;LIB['save'](path,request)
+                with self.assertRaisesRegex(ValueError,'quota failover'):worker.eligible()
+            request.update(state='waiting-quota',hard=True);LIB['save'](path,request)
+            with self.assertRaisesRegex(ValueError,'quota failover'):worker.eligible()
+            request.update(hard=False);request['source']=dict(source,pid=self.pid+1);LIB['save'](path,request)
+            with self.assertRaisesRegex(ValueError,'another source'):worker.eligible()
+
+    def test_quota_controller_lock_excludes_sleep(self):
+        with patch.dict(os.environ,self.env):
+            worker=LIB['Worker'](self.socket,self.pane)
+            with LIB['lock'](worker.quota_directory/(self.socket+'.lock')):
+                result=self.cli('sleep',self.pane,ok=False)
+                self.assertIn('owns this worker',result.stderr)
+        self.assertTrue(LIB['alive'](self.pid))
+
+    def test_bundled_code_host_is_idle_infrastructure_but_its_jobs_are_not(self):
+        quiet=LIB['quiet_processes'];base=self.pid
+        source={'pid':base,'agent':'codex','codex_identity':{'remote':'unix:///owned'}}
+        rows={base+1:(base,'codex'),base+2:(base+1,'codex-code-mode-host')}
+        args={base+1:['codex','app-server','--listen','unix:///owned'],base+2:['/release/codex-code-mode-host']}
+        exes={base+1:Path('/release/codex'),base+2:Path('/release/codex-code-mode-host')}
+        with patch.dict(LIB['TRANSFER'],process_rows=lambda:rows), \
+             patch.dict(LIB['ARGV'],process_argv=lambda pid:args[pid],process_executable=lambda pid:exes[pid]):
+            quiet(source)
+            exes[base+2]=Path('/other/codex-code-mode-host')
+            with self.assertRaisesRegex(ValueError,'background/tool'):quiet(source)
+            exes[base+2]=Path('/release/codex-code-mode-host')
+            rows[base+3]=(base+2,'bash');args[base+3]=['bash','active-job']
+            with self.assertRaisesRegex(ValueError,'background/tool'):quiet(source)
+
     def test_message_wakes_and_delivers_to_saved_conversation(self):
         self.cli('sleep',self.pane)
         p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),'deliver','--session',self.socket,self.pane],
@@ -352,6 +481,19 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         analyze=LIB['INPUT']['analyze']
         for screen in ('❯ \n  second line','❯ \n[Image #1]','❯ unsent','not an input prompt'):
             self.assertNotEqual(analyze(screen,2,0,100)['state'],'empty')
+
+    def test_codex_particles_require_empty_placeholder_and_preserve_drafts(self):
+        check=LIB['INPUT']['codex_empty_with_particles']
+        particle='\x1b[38;2;60;83;90m\x1b[48;2;42;67;76m⠁\x1b[39m'
+        screen='›'+particle+'\x1b[2mAsk Codex to do anything\x1b[0m '+particle+'\n  '+particle+'\nfooter'
+        self.assertNotEqual(LIB['INPUT']['analyze'](screen,2,0,100)['state'],'empty')
+        self.assertTrue(check(screen,2,0,100))
+        for draft in ('real draft','⠁','Ask Codex to do anything'):
+            self.assertFalse(check('› '+draft+' '+particle+'\n',2,0,100))
+        for extra in ('second line','[Image #1]','[Pasted text #1]','⠁'):
+            self.assertFalse(check(screen.replace('\n  '+particle,'\n\x1b[0m'+extra),2,0,100))
+        self.assertFalse(check(screen,3,0,100))
+        self.assertFalse(check(screen.replace('\x1b[48;2;42;67;76m',''),2,0,100))
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
