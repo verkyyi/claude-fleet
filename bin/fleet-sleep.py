@@ -368,11 +368,15 @@ class Worker:
                     new=self.inspect()
                     if new['session_id']!=source['session_id'] or new['agent']!=source['agent']:
                         raise ValueError('resumed a different native conversation')
-                    if new['pid']!=source['pid'] and INPUT['snapshot'](self.session,self.pane).get('state')=='empty':
+                    if new['pid']!=source['pid'] and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty':
                         if source['agent']=='codex' and new['home']!=source['home']:
                             raise ValueError('resumed under a different Codex home')
                         data['wake_seconds']=round(time.monotonic()-started,3)
                         data['resumed_pid']=new['pid']
+                        # Quota reconciliation skips waking workers. This marker
+                        # belongs to the retired PID; the next tick re-evaluates
+                        # the resumed owner instead of inheriting its old wait.
+                        self.stamp('@quota_failover','')
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())
                         self.phase(path,data,'awake')
@@ -489,7 +493,10 @@ class Worker:
                     source=self.inspect()
                     if (source['session_id']==data['source']['session_id']
                             and source['agent']==data['source']['agent']
-                            and INPUT['snapshot'](self.session,self.pane).get('state')=='empty'):
+                            and (source['agent']!='codex' or source['home']==data['source']['home'])
+                            and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty'):
+                        if source['pid']!=data['source']['pid']:
+                            self.stamp('@quota_failover','')
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())
                         self.phase(path,data,'awake')

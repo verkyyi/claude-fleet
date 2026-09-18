@@ -60,6 +60,9 @@ are not a reason to delete or commit anything.
 A verified proactive quota-switch request that is only waiting does not prevent
 sleep. The sleep operation holds the quota reconciler's lock through exit; quota
 reconciliation skips retained workers and rechecks their identity after wake.
+Successful native resume clears the retired process's quota marker before the
+new owner is reconciled. An aborted sleep that leaves the original process alive
+keeps its marker.
 Hard quota failures, cutovers in progress and ambiguous deliveries still prevent
 sleep. A text status flag alone cannot authorize this exception.
 

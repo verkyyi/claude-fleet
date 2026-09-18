@@ -109,8 +109,10 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(self.opt('window_id'),window)
         record=Path(self.opt('@sleep_record'))
         self.assertEqual(record.stat().st_mode&0o777,0o600)
+        self.stamp('@quota_failover','waiting: retired process')
         self.cli('wake',self.pane)
         self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(self.opt('@quota_failover'),'')
         self.assertEqual(self.opt('window_id'),window)
         args=(self.root/'launch.args').read_text().splitlines()
         self.assertEqual(args,['--agent','claude','--resume',self.sid,'--permission-mode','default'])
@@ -264,6 +266,35 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertEqual(proof['turn_id'],'finished-turn')
             self.assertEqual(proof['at'],thread['turns'][-1]['completedAt'])
             self.assertEqual(self.opt('@sleep_evidence'),'')  # observation never invents a Stop
+
+    def test_codex_wake_and_recovery_recognize_animation_and_retire_old_quota_marker(self):
+        self.cli('sleep',self.pane)
+        with self.codex_probe() as (worker,source,thread):
+            path,data=worker.record()
+            data['source']=dict(source)
+            source['pid']=self.pid+1000000  # simulated exact native rebind
+            real_tm=worker.tm
+            def tm(*args):
+                return '' if args[0]=='respawn-pane' else real_tm(*args)
+            def snapshot(session,pane,agent=None):
+                self.assertEqual(agent,'codex')
+                screen='› \x1b[2mAsk Codex to do anything\x1b[0m \x1b[38;2;60;83;90m\x1b[48;2;42;67;76m⠁\n'
+                empty=LIB['INPUT']['codex_empty_with_particles'](screen,2,0,100)
+                return {'state':'empty' if empty else 'unknown'}
+            with patch.object(worker,'tm',side_effect=tm),patch.object(worker,'replaceable'), \
+                 patch.object(worker,'bind_resumed_codex'),patch.dict(LIB['INPUT'],snapshot=snapshot):
+                self.stamp('@quota_failover','waiting: retired process')
+                worker.wake_locked(path,data)
+                self.assertEqual(self.opt('@worker_lifecycle'),'')
+                self.assertEqual(self.opt('@quota_failover'),'')
+                for original in (False,True):
+                    data['state']='failed'
+                    if original:data['source']['pid']=source['pid']
+                    LIB['save'](path,data);self.stamp('@worker_lifecycle','failed')
+                    self.stamp('@quota_failover','waiting: retained marker')
+                    worker.recover()
+                    self.assertEqual(self.opt('@worker_lifecycle'),'')
+                    self.assertEqual(self.opt('@quota_failover'),'waiting: retained marker' if original else '')
 
     def test_native_idle_requires_terminal_tools_exact_history_and_time(self):
         self.stamp('@sleep_evidence','')
