@@ -91,6 +91,7 @@ fleet_daemon_units() {
     'collect 60 hb:collect.heartbeat,pid:collect.pid' \
     'quotawatch 60 tick' \
     'cleanup 60 tick' \
+    'sleep 60 tick' \
     'dispatch 60 tick' \
     'base-sync 60 tick' \
     'diskguard 60 tick' \

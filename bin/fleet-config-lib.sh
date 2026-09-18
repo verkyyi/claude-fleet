@@ -333,6 +333,11 @@ fcfg_model_aliases() {
 # keys; the selftest cross-checks that every token it emits also validates.
 fcfg_enum_options() {
   case "$1" in
+    FLEET_SLEEP)
+      printf '%s%s%s\n' \
+        observe "$FCFG_US" 'report idle candidates without exiting agents (default)' \
+        on      "$FCFG_US" 'hibernate idle workers and resume on entry' \
+        off     "$FCFG_US" 'disable automatic sleep scans' ;;
     FLEET_HANDOFF_DEST)
       printf '%s%s%s\n' \
         comment "$FCFG_US" 'store the handoff as an issue comment (default)' \
@@ -382,6 +387,13 @@ fcfg_validate() {
         *)   printf '%s must be 0 or 1 (got: %s)' "$key" "${val:-<empty>}"; return 1 ;;
       esac ;;
     enum)
+      if [ "$key" = FLEET_SLEEP ]; then
+        case "$val" in
+          ''|off|observe|on) : ;;
+          *) printf '%s must be off|observe|on or empty (got: %s)' "$key" "$val"; return 1 ;;
+        esac
+        return 0
+      fi
       # FLEET_HANDOFF_DEST is an enum over its OWN small set (comment|file), not a
       # model alias — a per-key special-case shape like "inherit" for
       # FLEET_SUBAGENT_MODEL below.

@@ -41,8 +41,10 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 while holding the shared land lease
 #   dispatch                      autofill spawns `git worktree add` (a full
 #                                 checkout) synchronously as a CHILD process
+#   sleep                         transcript inspection and native resume on
+#                                 the user's entry/message path
 # POLL: gh / tmux / network polling only — Background is correct and stays.
-IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch'
+IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep'
 POLL_UNITS='collect pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 
 ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent

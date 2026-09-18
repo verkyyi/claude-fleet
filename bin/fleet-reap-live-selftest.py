@@ -21,11 +21,15 @@ spec.loader.exec_module(live)
 
 
 class LiveTests(unittest.TestCase):
-    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800):
-        outputs = iter([state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
+    def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle=""):
+        outputs = iter([lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)):
             return live.live_reason("@1", minimum)
+
+    def test_retained_workers_are_never_automatically_reaped(self):
+        for phase in ('preparing','sleeping','waking','failed'):
+            self.assertEqual(self.probe(minimum=0,lifecycle=phase),'retained:'+phase)
 
     def test_state_never_overridden_by_age_knob(self):
         for state in ("working", "looping", "busy", "waiting", "unknown"):
@@ -63,11 +67,11 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(live.main(), 1)
 
     def test_explicit_socket_applies_to_every_tmux_probe(self):
-        replies = iter(["done", "100", "100 1 01:00:00 zsh", "100 zsh"])
+        replies = iter(["", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
         with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read:
             self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
         calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))
 
     @unittest.skipUnless(shutil.which("tmux") and shutil.which("perl"), "tmux/perl absent")

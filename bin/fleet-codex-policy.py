@@ -49,6 +49,20 @@ def translate(server):
     return server
 
 
+def disabled_server(item):
+    # `mcp list` also discovers plugin/project servers. The app-server can load
+    # these in a different layer (or fall back to its default config), so an
+    # enabled=false override alone can create a server with no transport.
+    # Keep its transport discriminator valid even when that layer is absent.
+    # Only command/url is needed for a disabled entry; do not copy credentials.
+    transport = item.get('transport')
+    if isinstance(transport, dict):
+        key = {'stdio': 'command', 'streamable_http': 'url'}.get(transport.get('type'))
+        if key and isinstance(transport.get(key), str) and transport[key]:
+            return {key: transport[key], 'enabled': False}
+    raise ValueError('cannot disable Codex MCP server without a valid transport: ' + item['name'])
+
+
 def policy(argv):
     runtime = runpy.run_path(str(Path(__file__).with_name('fleet-codex-runtime.py')))
     toml = runtime['toml_value']
@@ -73,7 +87,7 @@ def policy(argv):
     configured = json.loads(result.stdout)
     if not isinstance(configured, list) or any(not isinstance(x, dict) or not isinstance(x.get('name'), str) for x in configured):
         raise ValueError('unrecognised codex mcp list response; refusing an incomplete allowlist')
-    overrides = {item['name']: {'enabled': False} for item in configured if item['name'] not in servers}
+    overrides = {item['name']: disabled_server(item) for item in configured if item['name'] not in servers}
     # Apps/connectors and automatic skill-driven MCP installation have separate
     # controls in Codex. A strict fleet allowlist must also close those paths.
     out += ['features.apps=false', 'features.skill_mcp_dependency_install=false']

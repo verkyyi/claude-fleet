@@ -30,7 +30,7 @@ root=pathlib.Path(os.environ['TEST_ROOT']);args=sys.argv[1:]
 if 'mcp' in args:
  (root/'enumerated.json').write_text(json.dumps(args))
  if os.environ.get('ENUM_FAIL'):sys.exit(1)
- print(json.dumps([{'name':'legacy'},{'name':'other.server'}]))
+ print(json.dumps([{'name':'legacy','transport':{'type':'stdio','command':'fixture-server','env':{'TOKEN':'secret-fixture'}}},{'name':'other.server','transport':{'type':'streamable_http','url':'https://example.invalid/mcp','http_headers':{'Authorization':'secret-fixture'}}}]))
 else:
  (root/'launched.json').write_text(json.dumps({'args':args,'home':os.environ.get('CODEX_HOME')}))
 '''); codex.chmod(0o755)
@@ -65,7 +65,8 @@ else:
         for value in ('features.apps=false', 'agents.default_subagent_model="native-model"',
                       'agents.default_subagent_reasoning_effort="high"'):
             self.assertIn(value, args)
-        self.assertIn('mcp_servers={"legacy"={"enabled"=false},"other.server"={"enabled"=false}}', args)
+        self.assertIn('mcp_servers={"legacy"={"command"="fixture-server","enabled"=false},"other.server"={"url"="https://example.invalid/mcp","enabled"=false}}', args)
+        self.assertNotIn('secret-fixture', '\n'.join(args))
         self.assertEqual(args[-1], 'seed'); self.assertNotIn('--mcp-config', args)
 
     def test_shared_allowlist_and_explicit_caller_override(self):

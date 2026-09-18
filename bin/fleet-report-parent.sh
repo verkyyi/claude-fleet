@@ -182,7 +182,9 @@ pwin=$(fleet_win_for_key "$worigin" "$SOCK") \
 
 parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
 ppid=''
-if [ "$parent_agent" != codex ]; then
+parent_sleep=$(TM display-message -p -t "$pwin" '#{@worker_lifecycle}' 2>/dev/null)
+parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
+if [ "$parent_agent" != codex ] && [ -z "$parent_sleep$parent_evidence" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) \
     || quiet "parent $worigin ($pwin) has no live Claude under it"
   [ -n "$ppid" ] || quiet "parent $worigin ($pwin) has no live Claude under it"
@@ -225,6 +227,10 @@ if [ "$DRY" = 1 ]; then
 fi
 
 send_report() {
+  if [ -n "$parent_sleep$parent_evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
+    printf '%s' "$msg" | python3 "$BIN/fleet-sleep.py" deliver --session "$sess" "$pwin"
+    return $?
+  fi
   if [ "$parent_agent" = codex ]; then
     printf '%s' "$msg" | python3 "$BIN/fleet-codex-session.py" send --pane "$pwin" --socket "$SOCK"
   else

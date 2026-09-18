@@ -42,6 +42,9 @@ def live_reason(target, minimum, socket_name=None):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
+    lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
+    if lifecycle:
+        return "retained:" + lifecycle
     state = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_state}").strip()
     if state not in ("", "done"):
         return "state:"+state

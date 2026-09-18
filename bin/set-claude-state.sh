@@ -130,6 +130,8 @@ case "${1:-}" in
     ;;
   done)
     sem="done"
+    _stop_payload=''
+    [ -t 0 ] || _stop_payload=$(cat 2>/dev/null)
     # Auto-handoff (issue #330): capture the PRIOR state BEFORE the write below
     # overwrites @claude_state — the nudge must not hijack a pane that stopped in
     # a needs-attention state (an open operator question). Only the Stop hook
@@ -199,6 +201,7 @@ if [ "$sem" != "leave" ]; then
   # In particular, a typing hold must not let a later stale `done` stamp reuse it.
   if [ "$sem" != "done" ]; then
     tmux set-window-option -u -t "$TMUX_PANE" @agent_transfer_ready 2>/dev/null
+    tmux set-window-option -u -t "$TMUX_PANE" @sleep_evidence 2>/dev/null
   fi
   tmux set-window-option -t "$TMUX_PANE" @claude_state "$sem" 2>/dev/null
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
@@ -266,7 +269,7 @@ if [ "$sem" = "done" ]; then
   # continuation (Claude Code's built-in anti-loop signal, belt-and-suspenders with
   # the @handoff_armed latch below). Read stdin only when armed and not a tty.
   if [ "$_hp" -gt 0 ] && [ ! -t 0 ]; then
-    case "$(cat 2>/dev/null)" in
+    case "$_stop_payload" in
       *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) _hp=0 ;;
     esac
   fi
@@ -356,4 +359,11 @@ if [ "$sem" = "done" ] && [ "$handoff_prev" != "looping" ]; then
   esac
 fi
 
+# A separate native proof, never populated by screen classifiers or stale-working
+# reconciliation. Reusing this installed hook also reaches already-running CLIs.
+if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then
+  _bin=$(cd "$(dirname "$0")" && pwd)
+  [ ! -f "$_bin/fleet-sleep.py" ] || printf '%s' "$_stop_payload" \
+    | python3 "$_bin/fleet-sleep.py" hook >/dev/null 2>&1 || :
+fi
 exit 0

@@ -47,6 +47,13 @@ assumes — this doc is only the install/uninstall procedure.
 
 ## Install steps
 
+Worker hibernation is described in [WORKER-SLEEP.md](WORKER-SLEEP.md). Install
+`com.claude-fleet.sleep` / `claude-fleet-sleep.timer` with the other interval
+daemons in step 6. Its default `FLEET_SLEEP=observe` reports candidates only;
+after validating native sleep/resume, set `FLEET_SLEEP=on` to retain idle workers
+in the dashboard while releasing their agent processes. Existing sessions pick
+up the native Stop evidence writer through `set-claude-state.sh` without restart.
+
 1. **Preflight.** Run `sh ~/.claude/fleet/bin/fleet-doctor.sh` (or from the repo
    before copying) — it checks tmux ≥ 3.2 · fzf ≥ 0.45 · gh (+ auth) · python3 ·
    claude · perl `Time::HiRes` and prints pass/warn/fail. Offer to

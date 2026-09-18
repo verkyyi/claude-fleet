@@ -7,6 +7,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SESSION="${1:?session required}"; shift
 fleet_load_conf "$FLEET_SESSION"
 [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
+# Automatic sleep retains idle tasks in their original windows. Do not race its
+# observation/exit policy with the older raw-window disposal timer.
+[ "${FLEET_SLEEP:-observe}" != on ] || exit 0
 export FLEET_SESSION
 export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}"
 export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"

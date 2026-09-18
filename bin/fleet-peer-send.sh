@@ -41,6 +41,13 @@ if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 case "$tgt" in
   @*|%*|*:*)
     tm=(tmux); [ -n "$SOCK" ] && tm+=(-L "$SOCK")
+    lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
+    evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
+    if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
+      session=$("${tm[@]}" display-message -p -t "$tgt" '#{session_name}' 2>/dev/null)
+      printf '%s' "$text" | python3 "$BIN/fleet-sleep.py" deliver --session "$session" "$tgt"
+      exit $?
+    fi
     agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)
     if [ "$agent" = codex ]; then
       printf '%s' "$text" | python3 "$BIN/fleet-codex-session.py" send --pane "$tgt" --socket "$SOCK"

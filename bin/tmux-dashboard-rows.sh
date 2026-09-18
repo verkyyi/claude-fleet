@@ -43,7 +43,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -77,6 +77,9 @@ FRAME=${SPINF:$(( TICK % 10 )):1}
 # padded against, so a 2-cell emoji here (🔒) would shear every red row.
 state_v() { case "$1" in
   needs)   gc=$RD; rk=0; case "${2:-}" in ask) gl='?';; perm) gl='⊘';; blocked) gl='⊠';; *) gl='!';; esac;;
+  sleeping) gc=$GY; gl='z'; rk=1;;
+  preparing|waking) gc=$TX; gl='↻'; rk=1;;
+  failed) gc=$RD; gl='!'; rk=0;;
   done)    gc=$GN; gl='✓';      rk=1;;
   working) gc=$CY; gl=$FRAME;   rk=2;;
   looping) gc=$IN; gl='↻';      rk=3;;
