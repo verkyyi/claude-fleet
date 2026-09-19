@@ -395,7 +395,13 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         globals_=module['LOOP']['sleep_snapshot'].__globals__
         with patch.dict(os.environ,self.env),patch.dict(globals_,current=lambda r:None):
             worker=module['Worker'](self.socket,self.pane)
-            result=worker.sleep(manual=True)
+            try:result=worker.sleep(manual=True)
+            except Exception as exc:
+                trace=self.root/('input-'+str(self.pid)+'.log')
+                status=subprocess.run(['ps','-p',str(self.pid),'-o','pid=,ppid=,stat=,comm='],text=True,capture_output=True).stdout
+                self.fail('%s; fake input=%r; process=%r; pane=%r' %
+                          (exc,trace.read_bytes() if trace.exists() else None,status,
+                           self.tm('display-message','-p','-t',self.pane,'#{pane_pid}|#{pane_dead}|#{pane_input_off}')))
             self.assertEqual(result['state'],'sleeping')
             self.assertFalse(LIB['alive'](self.pid))
             self.assertEqual(json.loads(path.read_text())['status'],'hibernating')
