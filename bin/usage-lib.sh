@@ -87,6 +87,18 @@ fleet_usage_summary_plain() {
 #     <t> · esc to cancel", which stays on screen after the classic line scrolled
 #     out of the capture window. No zone in it → the caller benches by TTL.
 # Either match stops at the pane border (│) so a split pane can't bleed in.
+#
+# Codex's wall is NEVER one of these, though its first words are the same: "You've
+# hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … or try
+# again at …". Claude composes its wall as `hit your <name> limit · resets …` and
+# only ends the sentence at "limit." for spend caps, so `hit your usage limit.`, a
+# chatgpt.com URL or the word Codex marks the line as Codex's. Every caller
+# attributes the banner to a CLAUDE account, and a pane switched from Codex to
+# Claude in place (fleet-transfer.sh respawns the same pane) keeps the Codex
+# session's scrollback — on 2026-09-18 that stale line benched a Claude account at
+# 5h 8% / 7d 2%, which left no eligible subscription, so every new spawn exited
+# at launch and its pane was left at a bare shell.
+FLEET_CODEX_WALL_RE='^hit your usage limit\.|chatgpt\.com|[Cc]odex'
 fleet_limit_banner() {
   local text classic sticky
   text=$(cat)
@@ -100,7 +112,8 @@ fleet_limit_banner() {
   # 12 s. A `case` is exact here, not a heuristic: it can only skip work the
   # greps were guaranteed to find nothing in.
   case "$text" in *limit*) ;; *) return 0 ;; esac
-  classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 .-]*limit[^│]*" | tail -1)
+  classic=$(printf '%s\n' "$text" | grep -aoE "hit your [A-Za-z0-9 .-]*limit[^│]*" \
+    | grep -avE "$FLEET_CODEX_WALL_RE" | tail -1)
   if [ -n "$classic" ]; then printf '%s\n' "$classic"; return 0; fi
   # The per-MODEL wall's second shape (issue #524): "You've reached your Fable
   # limit. Run /usage-credits to continue or switch models with /model." — sticky

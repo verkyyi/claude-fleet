@@ -128,6 +128,26 @@ eq "banner: the LAST classic line wins" "hit your weekly limit · resets Mon" \
 eq "banner: stops at the pane border" "hit your weekly limit · resets Mon " \
    "$(printf 'hit your weekly limit · resets Mon │ other pane\n' | fleet_limit_banner)"
 
+# --- Codex's wall is not a Claude account's --------------------------------------
+# A Codex pane switched to Claude in place keeps Codex's scrollback; its "hit your
+# usage limit." line benched a healthy Claude account on 2026-09-18 and every spawn
+# was left at a bare shell. Each shape codex-rs prints must scan as NO banner, and a
+# genuine Claude wall in the same capture must still win.
+CODEX_PRO="■ You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 24th, 2026 1:10"
+CODEX_FREE="You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at 3:00 PM."
+CODEX_TEAM="You've hit your usage limit. To get more access now, send a request to your admin or try again in 2 hours."
+CODEX_BARE="You've hit your usage limit. Try again at 3:00 PM."
+eq "banner: Codex Pro wall → empty"  "" "$(printf '%s\nPM.\n\n› handoff to claude\n' "$CODEX_PRO" | fleet_limit_banner)"
+eq "banner: Codex Free wall → empty" "" "$(printf '%s\n' "$CODEX_FREE" | fleet_limit_banner)"
+eq "banner: Codex Team wall → empty" "" "$(printf '%s\n' "$CODEX_TEAM" | fleet_limit_banner)"
+eq "banner: Codex bare wall → empty" "" "$(printf '%s\n' "$CODEX_BARE" | fleet_limit_banner)"
+eq "banner: Claude wall after a Codex one still wins" "$CLASSIC" \
+   "$(printf "%s\n  ⎿  You've %s\n" "$CODEX_PRO" "$CLASSIC" | fleet_limit_banner)"
+eq "banner: Claude wall before a Codex one still wins" "$CLASSIC" \
+   "$(printf "  ⎿  You've %s\n%s\n" "$CLASSIC" "$CODEX_PRO" | fleet_limit_banner)"
+eq "banner: Claude's own usage-limit wall still counts" "hit your usage limit · resets 3pm (America/Los_Angeles)" \
+   "$(printf "  ⎿  You've hit your usage limit · resets 3pm (America/Los_Angeles)\n" | fleet_limit_banner)"
+
 # --- model-specific caps (Fable / Opus) vs the subscription (issue #524) ---------
 # A model cap is NOT a subscription limit: the account keeps its 5h/7d headroom for
 # every other model. Treating "hit your Fable 5 limit" as the subscription banner
