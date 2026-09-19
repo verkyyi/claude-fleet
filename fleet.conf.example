@@ -404,10 +404,15 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Unknown native idle/input/background-task evidence always keeps the agent alive.
 # @label=Worker sleep @group=bridge @tier=advanced @scope=fleet @edit=enum @options=off,observe,on
 #FLEET_SLEEP=observe
-# Continuous idle interval in seconds. Native Stop required; viewing the worker,
-# drafts, background jobs, loops, permissions and transfers prevent sleep.
+# Continuous idle interval in seconds. Native completion/Stop evidence required;
+# viewed workers, drafts, active jobs and ambiguous transfers prevent sleep.
 # @label=Worker sleep idle grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_SLEEP_AFTER=1800
+# Comma-separated native MCP server names whose volatile state may be discarded.
+# Empty by default. Exact configured stdio launchers/package entrypoints only;
+# child jobs/browser processes still prevent sleep. Do not list stateful REPLs.
+# @label=Restartable MCP services @group=bridge @tier=advanced @scope=fleet @edit=str
+#FLEET_SLEEP_MCP_RESTARTABLE=
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
 # cooldown). Default 4.
 # @label=Cleanup batch size @group=bridge @tier=advanced @scope=fleet @edit=int @unit=per tick

@@ -143,7 +143,7 @@ class LoopTests(unittest.TestCase):
     def test_claude_delivery_requires_exact_transcript_ack_and_never_replays(self):
         history=self.root/'source.jsonl';history.write_text('')
         r=self.read();r.update(agent='claude');loop.save(self.path,r)
-        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
+        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_,**kw:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
             loop.dispatch(self.path,now=10000)
             self.assertEqual(self.read()['status'],'delivering')
             self.assertEqual(self.read()['deliveries'],0)
@@ -158,7 +158,7 @@ class LoopTests(unittest.TestCase):
     def test_claude_unacknowledged_frame_pauses_without_resending(self):
         history=self.root/'source.jsonl';history.write_text('')
         r=self.read();r.update(agent='claude');loop.save(self.path,r)
-        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
+        with patch.object(loop,'claude_transcript',return_value=history), patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *_,**kw:{'state':'empty'}}), patch.object(loop.subprocess,'run') as send:
             loop.dispatch(self.path,now=10000);loop.dispatch(self.path,now=10031);loop.dispatch(self.path,now=20000)
             self.assertEqual(self.read()['status'],'paused');self.assertEqual(send.call_count,1)
 
@@ -214,6 +214,88 @@ class LoopTests(unittest.TestCase):
         rows[0]['message']['content'][0]['input'] = {'stop': True}
         transcript.write_text(''.join(json.dumps(x) + '\n' for x in rows))
         with self.assertRaises(ValueError): loop.from_claude(a)
+
+
+    def sleep_fixture(self, status='active'):
+        self.path = self.root / 'loop/state.json'
+        self.path.parent.mkdir(exist_ok=True)
+        r = dict(self.r, agent='codex', status=status, controller_pid=42,
+                 schedule=dict(self.r['schedule'], next_run_at=time.time()+3600))
+        loop.save(self.path, r)
+        source = dict(previous=r['manifest'], session_id=SID, agent='codex', pid=100,
+                      session='isolated', window='@2', pane='%2', home=str(self.root),
+                      worktree=str(self.root), codex_identity={'remote':'unix:///new.sock'})
+        return source, self.root / 'sleep.json'
+
+    def test_sleep_rebinds_schedule_without_turn_then_dispatches_once(self):
+        source, retained = self.sleep_fixture()
+        snapshot = loop.sleep_snapshot(source)
+        due = snapshot['record']['schedule']['next_run_at']
+        loop.sleep_suspend(snapshot, retained)
+        loop.dispatch(self.path, now=due+100)
+        self.assertEqual(self.messages, [])
+        loop.sleep_resume(snapshot, retained, source, 55)
+        loop.sleep_resume(snapshot, retained, source, 55)  # crash after rebind
+        r = self.read()
+        self.assertEqual(r['driver'], 'quotawatch')
+        self.assertEqual(r['controller_pid'], 0)
+        self.assertEqual(r['pane_pid'], 55)
+        self.assertEqual(r['socket'], '/new.sock')
+        self.assertEqual(r['schedule'], snapshot['record']['schedule'])
+        self.assertEqual(self.messages, [])
+        with patch.object(loop.runpy,'run_path',return_value={'snapshot':lambda *a,**kw:{'state':'empty'}}):
+            loop.dispatch(self.path, now=due+100)
+            loop.dispatch(self.path, now=due+101)
+        self.assertEqual(len(self.messages), 1)
+
+    def test_sleep_failure_rolls_back_without_losing_quota_wait(self):
+        source, retained = self.sleep_fixture('waiting-quota')
+        snapshot = loop.sleep_snapshot(source)
+        loop.sleep_resume(snapshot, retained, source, 42, rollback=True)  # crash before suspend
+        loop.sleep_suspend(snapshot, retained)
+        loop.sleep_resume(snapshot, retained, source, 42, rollback=True)
+        self.assertEqual(self.read(), snapshot['record'])
+        loop.sleep_suspend(snapshot, retained)
+        loop.sleep_resume(snapshot, retained, source, 55)
+        self.assertEqual(self.read()['status'], 'waiting-quota')
+        self.assertEqual(self.messages, [])
+
+    def test_sleep_never_revives_explicit_stop_or_changed_schedule(self):
+        source, retained = self.sleep_fixture()
+        for kind in ('stop','schedule','thread','token'):
+            loop.save(self.path, dict(self.r,agent='codex',schedule=dict(self.r['schedule'],next_run_at=time.time()+3600)))
+            snapshot = loop.sleep_snapshot(source)
+            loop.sleep_suspend(snapshot, retained)
+            r=self.read()
+            if kind=='stop':r.update(status='stopped',detail='Stopped by owner thread')
+            elif kind=='schedule':r['schedule']['next_run_at']+=1
+            elif kind=='thread':r['thread_id']='replacement'
+            else:r['sleep_record']='another-sleep'
+            loop.save(self.path,r)
+            with self.assertRaises(ValueError):loop.sleep_resume(snapshot,retained,source,55)
+        self.assertEqual(self.messages,[])
+
+    def test_old_bridge_exit_is_recoverable_only_with_sleep_token(self):
+        source, retained = self.sleep_fixture()
+        snapshot=loop.sleep_snapshot(source);loop.sleep_suspend(snapshot,retained)
+        r=self.read();r.update(status='stopped',detail='Codex TUI/controller ended; no automatic restart')
+        loop.save(self.path,r);loop.sleep_resume(snapshot,retained,source,55)
+        self.assertEqual(self.read()['status'],'active')
+
+    def test_sleep_rejects_due_ambiguous_and_wrong_owner(self):
+        source, retained=self.sleep_fixture()
+        for status in ('delivering','paused','unbound'):
+            r=self.read();r['status']=status;loop.save(self.path,r)
+            with self.assertRaisesRegex(ValueError,'unresolved'):loop.sleep_snapshot(source)
+        r['status']='active';r['schedule']['next_run_at']=0;loop.save(self.path,r)
+        with self.assertRaisesRegex(ValueError,'due'):loop.sleep_snapshot(source)
+        r['schedule']['next_run_at']=time.time()+3600;loop.save(self.path,r)
+        with self.assertRaisesRegex(ValueError,'another native'):loop.sleep_snapshot(dict(source,session_id='wrong'))
+
+    def test_lifecycle_guard_prevents_dispatch_during_rebind(self):
+        with patch.object(loop,'pane',side_effect=lambda _,f:'waking' if f=='#{@worker_lifecycle}' else 'done' if f=='#{@claude_state}' else ''):
+            loop.dispatch(self.path,now=10000)
+        self.assertEqual(self.messages,[])
 
 
 class BridgeTest(unittest.TestCase):
@@ -285,7 +367,7 @@ if a[2:3]==['display-message']:
  if f=='#{pane_pid}':print('42')
  elif f=='#{pane_dead}':print('0')
  elif f=='#{@claude_state}':print('done')
- elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}'):print('')
+ elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}','#{@worker_lifecycle}'):print('')
  elif f=='#{cursor_x} #{cursor_y} #{pane_width}':print('2 0 80')
  elif f=='#{@codex_identity}':print(json.dumps({'session_id':'12345678-1234-1234-1234-123456789abc'}))
  else:print('isolated|@2|42|codex|'+r+'/manifest.json|'+r)

@@ -31,6 +31,8 @@ def valid_id(value):
 
 
 def saved_identity(raw, owner):
+    if not raw:
+        return {}
     data = json.loads(raw)
     if (not isinstance(data, dict) or data.get("owner") != owner
             or not owner.isdigit() or not valid_id(data.get("session_id"))

@@ -117,6 +117,14 @@ def source_account(source, data):
 
 
 def quiet_processes(source):
+    if source['agent']=='codex':
+        # Use the same exact executable/endpoint and restartable-service rules
+        # as hibernation, so a quota-triggered wake can actually migrate.
+        sleep=runpy.run_path(str(BIN/'fleet-sleep.py'))
+        rpc=RPC(source['codex_identity'].get('remote',''),timeout=5)
+        try:sleep['quiet_native_children'](rpc,source['session_id'])
+        finally:rpc.close()
+        return sleep['quiet_processes'](source)
     rows = TRANSFER['process_rows']()
     pending = [int(source['pid'])]
     descendants, seen = [], set()
@@ -129,17 +137,6 @@ def quiet_processes(source):
     if source['agent'] == 'claude':
         if descendants:
             raise ValueError('source still owns tool/background processes')
-    else:
-        # A Fleet Codex root owns its runtime supervisor, guardian, server and
-        # TUI. Anything else (including a tool shell) is unfinished work.
-        for pid, comm in descendants:
-            argv = run(['ps','-p',str(pid),'-o','command='],timeout=3).split(None,2)
-            if comm == 'codex': continue
-            if len(argv) > 1 and Path(argv[1]).name in ('fleet-codex-runtime.py','fleet-loop.py'):
-                continue
-            raise ValueError('Codex still owns a tool/background process')
-        if sum(comm == 'codex' for _, comm in descendants) > 2:
-            raise ValueError('Codex still owns additional agent processes')
 
 
 def unresolved_claude_tools(path):
@@ -178,7 +175,8 @@ def validate(request, session, pane, sid):
         if thread.get('status', {}).get('type') not in ('idle','systemError'):
             raise ValueError('source Codex turn or approval is still active')
         turns = thread.get('turns') or []
-        if any(i.get('status') == 'inProgress' for t in turns[-1:] for i in t.get('items', [])):
+        if any(i.get('status') not in (None,'completed','failed','declined','interrupted')
+               for t in turns[-1:] for i in t.get('items', [])):
             raise ValueError('source Codex tool is still active')
         if source['state'] != 'done' and not hard:
             raise ValueError('source has no terminal quota failure')
@@ -193,7 +191,7 @@ def validate(request, session, pane, sid):
         activity, win = line.split('|',1)
         if win == source['window'] and time.time()-int(activity) <= 30:
             raise ValueError('operator is active in the source window')
-    snapshot = INPUT['snapshot'](session, pane)
+    snapshot = INPUT['snapshot'](session, pane, agent=source['agent'])
     if snapshot['state'] == 'unknown':
         raise ValueError('source prompt/draft is not completely visible; leaving it untouched')
     frozen = read(request / 'input.json')

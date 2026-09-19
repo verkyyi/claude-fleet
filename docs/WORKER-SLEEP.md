@@ -52,7 +52,7 @@ evidence.
 Claude requires empty `background_tasks` and `session_crons` arrays and a known
 permission mode. Missing arrays mean unknown and prevent sleep. Codex additionally
 requires its exact private app-server thread to be idle with a completed turn.
-Owned tool processes, pending interactions, Fleet loops, transfers, failover,
+Owned tool processes, pending interactions, unresolved loop deliveries, transfers, failover,
 an unsubmitted draft or an unrecognized input layout prevent sleep. Unknown
 probes always keep the worker running. Worktree modifications are preserved and
 are not a reason to delete or commit anything.
@@ -66,12 +66,59 @@ keeps its marker.
 Hard quota failures, cutovers in progress and ambiguous deliveries still prevent
 sleep. A text status flag alone cannot authorize this exception.
 
+A waiting text marker whose exact request has disappeared can be treated as
+orphaned only while holding the quota lock and after checking every request for
+that window or native session. Any nonterminal/ambiguous request still vetoes
+sleep. Native completion, input, process and history checks remain mandatory;
+dry-run does not clear the marker. Successful exact resume retires it.
+
 Codex's persistent `codex-code-mode-host` is allowed only as a direct child of
 this worker's exact app-server, with its kernel executable path matching the
 server's bundled release. Children of that host still undergo tool-process checks.
 The empty Codex composer can be recognized beneath its colored dot animation
 only with the native faint placeholder and cursor at the start. Real drafts,
 attachments and unrecognized layouts still prevent sleep.
+
+## Loops and restartable tool services
+
+An exact `active` or `waiting-quota` Fleet loop can now hibernate. Fleet saves
+its ownership generation, schedule and delivery counters before exit, marks the
+loop `hibernating`, and rebinds it to the same native conversation after wake.
+Failed exit restores the original loop. A changed owner, explicit stop, changed
+schedule or uncertain delivery is never silently revived. Loops due within the
+next scan interval remain awake.
+
+The existing sleep scan wakes an active loop when its saved deadline arrives.
+A quota-waiting loop wakes only when fresh account policy reports a usable
+subscription (its own, or a failover target when failover is enabled). User entry
+and incoming messages can still wake it immediately. Native resume submits no
+turn; the existing quota tick resumes dispatch after exact rebind, preserving
+the one-delivery/no-catch-up rule. There is no additional scheduler process.
+
+MCP presence alone is not evidence of an active tool call. Set
+`FLEET_SLEEP_MCP_RESTARTABLE` to comma-separated **native MCP server names** whose
+volatile service state may be discarded, for example after verifying that a
+particular deployment of `mcp-image` is stateless:
+
+```sh
+FLEET_SLEEP_MCP_RESTARTABLE=mcp-image
+```
+
+The default is empty. This is an explicit restartability contract, not a global
+process-name allowlist. Fleet matches the live server's effective configuration
+to exact stdio launcher argv and kernel executable paths. Supported npm/uv
+entrypoint wrappers are checked separately; additional jobs/browser descendants
+still prevent sleep. Native threads must be idle with no active tool items.
+Only config digests and service names are retained, never MCP credentials.
+After resume, the same configuration and initialized service inventory must be
+available before the worker is declared awake. A changed configuration leaves
+a reviewable failed recovery; a slow service can finish on a later scan.
+
+Do not list a stateful browser or REPL merely because it currently uses little
+CPU. Native conversation resume preserves history, not process memory. Legacy
+workers without a bound native identity or private endpoint remain awake with
+an explicit diagnostic; Fleet does not guess their account/session or restart
+them to manufacture evidence.
 
 ## Retained state and recovery
 
@@ -132,5 +179,5 @@ ancestry instead of requiring that registry entry to survive shutdown.
 
 Claude workers already idle when this feature is installed need a subsequent real
 Stop event before they can sleep; Codex can use native completion evidence.
-Unknown descendant processes (including unverified MCP/tool infrastructure) keep
+Unknown descendant processes (including unapproved MCP/tool infrastructure) keep
 a worker awake. A quiet screen alone is never sufficient.
