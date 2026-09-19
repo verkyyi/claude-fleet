@@ -33,6 +33,18 @@ else
 fi
 fails=0; warns=0
 
+# Where the fleet's durable state lives. fleet-lib.sh defaults this for every bash
+# caller, but this doctor is /bin/sh and cannot source it, so it defaults the
+# value ITSELF — and every `$FLEET_CONF_DIR` below must read `$conf_dir`, never
+# the raw variable. Under `set -u` a raw read is fatal when the variable is unset,
+# and it is unset exactly where the doctor is run by hand: the launcher never
+# exports it and neither does a login shell. The selftest gate DOES export it
+# (bin/run-selftests.sh points it at an empty shadow dir), which is how a raw
+# read once shipped green through CI and killed the doctor on both live machines
+# at its first use (#759: `line 254: FLEET_CONF_DIR: unbound variable`, every
+# later check silently gone). bin/fleet-doctor-conf-dir-selftest.sh pins this.
+conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+
 # The interval-daemon liveness registry (issue #639). POSIX-clean on purpose so
 # this /bin/sh doctor can source it, unlike the bash-only fleet-lib.sh.
 _dlib="$(dirname "$0")/fleet-daemon-lib.sh"
@@ -251,8 +263,8 @@ else
 fi
 
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
-if [ -d "$FLEET_CONF_DIR/handoffs/quota-requests" ]; then
-  _failover=$(python3 - "$FLEET_CONF_DIR/handoffs/quota-requests" <<'PY'
+if [ -d "$conf_dir/handoffs/quota-requests" ]; then
+  _failover=$(python3 - "$conf_dir/handoffs/quota-requests" <<'PY'
 import json,pathlib,sys
 for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
     try: r=json.loads(p.read_text())
@@ -446,7 +458,7 @@ daemon_verdict() {   # $1=tag $2=label $3=pass-msg $4=what-is-lost-when-missing
 }
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
-conf_dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+# $conf_dir is defaulted once at the top of the file (see the note there).
 
 # Enumerate configured fleet conf paths, dual-layout (issue #203): the new
 # per-fleet layout (fleets/<sess>/conf, #181) preferred, with the legacy flat
