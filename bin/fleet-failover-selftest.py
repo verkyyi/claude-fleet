@@ -45,6 +45,30 @@ class Failover(unittest.TestCase):
 
     def request(self):return flow.read(self.path/'request.json',{})
 
+    def test_hibernation_and_failover_share_verified_infrastructure_checks(self):
+        sleep=module('sleep_guard','fleet-sleep.py')
+        source=dict(self.source,codex_identity={'remote':'unix:///owned'})
+        rows={43:(42,'codex'),44:(43,'codex-code-mode-host')}
+        argv={43:['codex','app-server','--listen','unix:///owned'],44:['code-host']}
+        exes={43:Path('/release/codex'),44:Path('/release/codex-code-mode-host')}
+        loaded=['source']
+        class Client:
+            def __init__(self,*a,**kw):pass
+            def close(self):pass
+            def call(self,method,params):
+                if method=='thread/loaded/list':return {'data':loaded}
+                if method=='thread/read':return {'thread':{'status':{'type':'active'}}}
+                raise AssertionError(method)
+        with patch.object(flow.runpy,'run_path',return_value=vars(sleep)),patch.object(flow,'RPC',Client), \
+             patch.dict(sleep.TRANSFER,process_rows=lambda:rows), \
+             patch.dict(sleep.ARGV,process_argv=lambda pid:argv[pid],process_executable=lambda pid:exes[pid]):
+            flow.quiet_processes(source)
+            rows[45]=(44,'bash');argv[45]=['bash','job'];exes[45]=Path('/bin/bash')
+            with self.assertRaisesRegex(ValueError,'background/tool'):flow.quiet_processes(source)
+            del rows[45]
+            loaded.append('child')
+            with self.assertRaisesRegex(ValueError,'subagent'):flow.quiet_processes(source)
+
     def test_wait_retries_after_alert_dedup_and_prefers_same_agent(self):
         flow.reconcile_one(self.source,self.account,self.data)
         self.assertEqual(self.request()['state'],'waiting-quota')

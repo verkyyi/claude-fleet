@@ -65,7 +65,7 @@ def codex_source(a):
     adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
     data = adapter['identity'](a.pane, a.socket)
     if not data:
-        raise ValueError('no current Codex identity; wait until its first turn')
+        raise ValueError('no current Codex identity; native launcher/session binding is missing (legacy or unbound worker)')
     owner = int(data['owner'])
     os.kill(owner, 0)
     root = int(run('tmux', '-L', a.socket, 'display-message', '-p', '-t', a.pane, '#{pane_pid}'))

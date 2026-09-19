@@ -29,6 +29,8 @@ INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
 CODEX = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 ARGV = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))
+LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
+MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
 
 
 def run(argv, **kwargs):
@@ -71,14 +73,25 @@ def alive(pid):
     except ProcessLookupError: return False
 
 
+def process_state(pid):
+    # (state, start) — the start fingerprint stays comparable across calls.
+    if int(pid)<=0: return '',''
+    try: fields=run(['ps','-p',str(pid),'-o','stat=','-o','lstart=','-o','comm=']).split(None,1)
+    except subprocess.CalledProcessError: return '',''
+    return fields[0], (fields[1] if len(fields)>1 else '')
+
+
 def process_start(pid):
-    if int(pid)<=0: return ''
-    try: return run(['ps','-p',str(pid),'-o','lstart=','-o','comm='])
-    except subprocess.CalledProcessError: return ''
+    return process_state(pid)[1]
 
 
 def source_alive(data):
-    return bool(data.get('source_start')) and process_start(data['source']['pid'])==data['source_start']
+    # An exited agent stays a zombie until its parent (tmux) reaps it. BSD ps
+    # renames the command to <defunct>; Linux procps prints the zombie's
+    # lstart/comm exactly like the live process, so the state must be read.
+    if not data.get('source_start'): return False
+    state,start=process_state(data['source']['pid'])
+    return start==data['source_start'] and not state.startswith('Z')
 
 
 def process_tree_rss(pid):
@@ -167,19 +180,23 @@ class Worker:
         if self.opt('@worker_lifecycle'): raise ValueError('already sleeping or transitioning')
         if self.opt('@sleep_keep_awake') == '1': raise ValueError('keep awake enabled')
         if self.visible(): raise ValueError('a client is viewing this worker')
-        if self.opt('@claude_state') != 'done': raise ValueError('worker is not done')
+        if self.opt('@claude_state') not in ('done','looping'): raise ValueError('worker is not done')
         for option in ('@handoff_armed','@agent_transfer_request'):
             if self.opt(option): raise ValueError('handoff/failover is pending')
         until = self.opt('@agent_transfer_until')
         if until and (not until.isdigit() or int(until) > time.time()): raise ValueError('transfer is active')
         source = self.inspect()
+        if source['agent']=='codex' and not source.get('codex_identity',{}).get('remote','').startswith('unix:///'):
+            raise ValueError('legacy Codex has no private endpoint; exact native rebind is required before sleep')
         source['restart_options']=source_options(source)
         self.check_quota_wait(source)
-        previous = self.opt('@handoff_manifest')
-        if previous:
-            loop = Path(previous).parent/'loop/state.json'
-            if loop.exists() and json.loads(loop.read_text()).get('status') not in ('stopped','complete','cancelled'):
-                raise ValueError('Fleet loop is active')
+        source['sleep_loop']=LOOP['sleep_snapshot'](source)
+        if self.opt('@claude_state')=='looping' and not source['sleep_loop']:
+            raise ValueError('looping worker has no verified loop schedule')
+        if source['sleep_loop'] and source['sleep_loop']['record']['status']=='waiting-quota':
+            policy=runpy.run_path(str(BIN/'.fleet-failover.py'))
+            account=policy['source_account'](source,policy['ACCOUNT']['inventory']())
+            source['sleep_account_key']=account['key']
         evidence = json.loads(self.opt('@sleep_evidence') or '{}')
         matching_stop = (evidence.get('session_id') == source['session_id']
                          and evidence.get('pane') == self.pane and evidence.get('pid') == source['pid'])
@@ -200,17 +217,7 @@ class Worker:
                 thread = client.call('thread/read',{'threadId':source['session_id'],'includeTurns':True})['thread']
                 goal=client.call('thread/goal/get',{'threadId':source['session_id']}).get('goal')
                 if goal and goal.get('status')!='complete': raise ValueError('Codex goal is unfinished')
-                loaded=client.call('thread/loaded/list',{})
-                if loaded.get('nextCursor') or not isinstance(loaded.get('data'),list):
-                    raise ValueError('loaded thread inventory is incomplete')
-                for sid in loaded['data']:
-                    if sid==source['session_id']: continue
-                    child=client.call('thread/read',{'threadId':sid,'includeTurns':False})['thread']
-                    if child.get('status',{}).get('type')!='idle':
-                        raise ValueError('another thread/subagent is active or unknown')
-                    child_goal=client.call('thread/goal/get',{'threadId':sid}).get('goal')
-                    if child_goal and child_goal.get('status')!='complete':
-                        raise ValueError('another thread/subagent has an unfinished goal')
+                quiet_native_children(client,source['session_id'])
                 hooks=client.call('hooks/list',{'cwds':[source['worktree']]})
                 source['hook_trust']=hook_trust(hooks,source['restart_options'])
             finally: client.close()
@@ -257,7 +264,21 @@ class Worker:
         identity = [source[k] for k in ('session','window','session_id','pid','agent')]
         key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
         path = self.quota_directory / key / 'request.json'
-        if not path.is_file(): raise ValueError('unverified quota failover marker')
+        if not path.is_file():
+            if not self.opt('@quota_failover').startswith(('waiting:', 'waiting-quota:', 'waiting-evidence:')):
+                raise ValueError('unverified quota failover marker')
+            # The caller holds the same fleet lock as the quota controller.
+            # Inspect the whole journal: a missing exact request is harmless
+            # only when no live/ambiguous request can own this window/thread.
+            for candidate in self.quota_directory.glob('*/request.json'):
+                request=json.loads(candidate.read_text())
+                owner=request.get('source',{})
+                if (owner.get('session')==self.session
+                        and (owner.get('window')==self.window or owner.get('session_id')==source['session_id'])
+                        and request.get('state') not in ('cancelled','recovered')):
+                    raise ValueError('quota marker has an unresolved request for this worker')
+            source['stale_quota_marker']=self.opt('@quota_failover')
+            return
         request = json.loads(path.read_text())
         if any(request.get('source',{}).get(k) != source[k]
                for k in ('session','window','session_id','pid','agent')):
@@ -290,7 +311,9 @@ class Worker:
                 if not data['source_start']:raise ValueError('source process disappeared')
                 save(path,data)
                 current,current_evidence = self.eligible(manual)
-                if self.source_key(current) != self.source_key(source) or current_evidence != evidence:
+                if (self.source_key(current) != self.source_key(source) or current_evidence != evidence
+                        or current.get('sleep_loop') != source.get('sleep_loop')
+                        or current.get('sleep_mcp') != source.get('sleep_mcp')):
                     raise ValueError('source changed during preparation')
                 self.stamp('@sleep_record',path)
                 self.phase(path,data,'preparing')
@@ -299,6 +322,7 @@ class Worker:
                 # in a shell. Native programmatic deliveries use this same lock.
                 self.tm('select-pane','-d','-t',self.pane)
                 try:
+                    LOOP['sleep_suspend'](source.get('sleep_loop'),path)
                     if self.visible(): raise ValueError('user entered during preparation')
                     text = '\x1b[200~/exit\x1b[201~' if source['agent']=='codex' else '/exit'
                     # input-off suppresses send-keys too. A single server command
@@ -328,6 +352,8 @@ class Worker:
                     return {'state':data['state'],'record':str(path)}
                 except Exception as exc:
                     self.phase(path,data,'failed',str(exc))
+                    if source_alive(data):
+                        self.resume_loop(path,data,source,rollback=True)
                     raise
                 finally:
                     if data['state'] not in ('sleeping','preparing','waking'):
@@ -371,8 +397,12 @@ class Worker:
                     if new['pid']!=source['pid'] and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty':
                         if source['agent']=='codex' and new['home']!=source['home']:
                             raise ValueError('resumed under a different Codex home')
+                        if not self.verify_resumed_services(source,new):
+                            time.sleep(.25)
+                            continue
                         data['wake_seconds']=round(time.monotonic()-started,3)
                         data['resumed_pid']=new['pid']
+                        self.resume_loop(path,data,new)
                         # Quota reconciliation skips waking workers. This marker
                         # belongs to the retired PID; the next tick re-evaluates
                         # the resumed owner instead of inheriting its old wait.
@@ -435,6 +465,35 @@ class Worker:
             path,data=self.record()
             self.wake_locked(path,data)
 
+    def resume_loop(self,path,data,source,rollback=False):
+        snapshot=data['source'].get('sleep_loop')
+        if not snapshot:return
+        LOOP['sleep_resume'](snapshot,path,source,self.opt('pane_pid'),rollback=rollback)
+        if not rollback:self.stamp('@claude_state','done')
+
+    def verify_resumed_services(self,source,new):
+        if not source.get('sleep_mcp'):return True
+        client=RPC(new['codex_identity'].get('remote',''),timeout=5)
+        try:return MCP['verify_resume'](source,client)
+        finally:client.close()
+
+    def scheduled_wake(self,path,data):
+        snapshot=data['source'].get('sleep_loop')
+        if not snapshot:return False
+        LOOP['sleep_retained'](snapshot,path)
+        record=snapshot['record']
+        if record['status']=='active':
+            return time.time()>=record['schedule']['next_run_at']
+        # Quota waiting is not a due timer. Only a fresh usable subscription
+        # wakes it; old readings/reset timestamps alone cannot cause churn.
+        account=runpy.run_path(str(BIN/'.fleet-account.py'))
+        inventory=account['inventory']()
+        key=data['source'].get('sleep_account_key')
+        if any(a['key']==key and account['eligible'](a) for a in inventory['accounts']):return True
+        if os.environ.get('FLEET_FAILOVER','0')!='1':return False
+        allowed=os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
+        return bool(account['choose'](inventory,data['source']['agent'],[key],allowed=allowed)['target'])
+
     def deliver(self,text):
         if not text.strip(): raise ValueError('empty message')
         # Record before waking. A timeout leaves reviewable pending data, never a
@@ -479,6 +538,7 @@ class Worker:
             path,data=self.record()
             if data['state']=='preparing':
                 if source_alive(data):
+                    self.resume_loop(path,data,data['source'],rollback=True)
                     self.phase(path,data,'failed','sleep controller stopped before confirming exit')
                     self.tm('select-pane','-e','-t',self.pane)
                     return
@@ -495,20 +555,38 @@ class Worker:
                             and source['agent']==data['source']['agent']
                             and (source['agent']!='codex' or source['home']==data['source']['home'])
                             and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty'):
+                        if not self.verify_resumed_services(data['source'],source):return
                         if source['pid']!=data['source']['pid']:
                             self.stamp('@quota_failover','')
+                        self.resume_loop(path,data,source,rollback=source['pid']==data['source']['pid'])
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())
                         self.phase(path,data,'awake')
                         self.tm('select-pane','-e','-t',self.pane)
                         self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
                 except (ValueError,OSError,subprocess.SubprocessError): pass
-            if data['state']=='sleeping' and self.visible(): self.wake_locked(path,data)
+            if data['state']=='sleeping' and (self.visible() or self.scheduled_wake(path,data)):
+                self.wake_locked(path,data)
+
+
+def quiet_native_children(client,session_id):
+    loaded=client.call('thread/loaded/list',{})
+    if loaded.get('nextCursor') or not isinstance(loaded.get('data'),list):
+        raise ValueError('loaded thread inventory is incomplete')
+    for sid in loaded['data']:
+        if sid==session_id:continue
+        child=client.call('thread/read',{'threadId':sid,'includeTurns':False})['thread']
+        if child.get('status',{}).get('type')!='idle':
+            raise ValueError('another thread/subagent is active or unknown')
+        goal=client.call('thread/goal/get',{'threadId':sid}).get('goal')
+        if goal and goal.get('status')!='complete':
+            raise ValueError('another thread/subagent has an unfinished goal')
 
 
 def quiet_processes(source):
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
+    mcp_pids=set()
     while pending:
         parent=pending.pop()
         if parent in seen: continue
@@ -528,7 +606,14 @@ def quiet_processes(source):
                 for flag in ('--remote','--listen'):
                     if flag in argv and argv[argv.index(flag)+1:argv.index(flag)+2]==[remote]:break
                 else:raise ValueError('another Codex process owns a different endpoint')
+                if native and 'app-server' in argv:
+                    children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
+                    if children:
+                        client=RPC(remote,timeout=5)
+                        try:mcp_pids.update(MCP['classify'](source,client,rows,pid,ARGV['process_argv'],ARGV['process_executable']))
+                        finally:client.close()
                 continue
+            if pid in mcp_pids:continue
             if len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py': continue
             if len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge': continue
             if comm=='codex-code-mode-host':
@@ -542,7 +627,9 @@ def quiet_processes(source):
                         and ARGV['process_executable'](pid)==
                             ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
                     continue
-            raise ValueError('Codex owns background/tool processes')
+            try:name=ARGV['process_executable'](pid).name
+            except OSError:name='unknown'
+            raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
 
 
 def source_options(source):
@@ -720,7 +807,10 @@ def main():
                     continue
                 else: result=w.sleep(dry=a.dry_run or mode!='on')
             except (ValueError,OSError,subprocess.SubprocessError) as exc:
-                result={'skip':str(exc)}
+                reason=str(exc)
+                if isinstance(exc,subprocess.CalledProcessError) and exc.stderr:
+                    reason=exc.stderr.strip()[-400:]
+                result={'skip':reason}
             print(json.dumps(dict(session=a.session,window=window,**result),ensure_ascii=False),flush=True)
         return 0
     w=Worker(a.session,a.window or '')

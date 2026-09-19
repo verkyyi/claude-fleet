@@ -551,6 +551,7 @@ account_reconcile() {
   export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_CODEX_SERVER
   export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL
   export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
+  export FLEET_SLEEP_MCP_RESTARTABLE FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_QUOTA_TTL
   exec python3 "$BIN/.fleet-failover.py" "$@"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.

@@ -108,6 +108,112 @@ def record_path():
     return Path(value)
 
 
+def sleep_snapshot(source):
+    """Freeze only an exact, quiescent loop; delivery uncertainty is never idle."""
+    manifest = source.get('previous')
+    if not manifest:
+        return None
+    path = Path(manifest).parent / 'loop/state.json'
+    if not path.exists():
+        return None
+    with locked(path, nonblocking=True) as r:
+        if r['status'] in ('stopped', 'complete', 'cancelled'):
+            return None
+        if r['status'] not in ('active', 'waiting-quota'):
+            raise ValueError('Fleet loop delivery or recovery is unresolved')
+        if (r.get('thread_id') != source['session_id']
+                or r.get('agent', 'codex') != source['agent']
+                or r.get('manifest') != manifest
+                or Path(r['worktree']).resolve() != Path(source['worktree']).resolve()):
+            raise ValueError('Fleet loop belongs to another native session')
+        current(r)
+        schedule = spec(r['schedule'])
+        if r['status'] == 'active' and schedule['next_run_at'] <= time.time() + 60:
+            raise ValueError('Fleet loop is due within the next scan interval')
+        return dict(path=str(path), record=r)
+
+
+def sleep_suspend(snapshot, sleep_record):
+    if not snapshot:
+        return
+    path = Path(snapshot['path'])
+    with locked(path, nonblocking=True) as r:
+        if r != snapshot['record']:
+            raise ValueError('Fleet loop changed while preparing sleep')
+        current(r)
+        r.update(status='hibernating', sleep_record=str(sleep_record),
+                 detail='Loop schedule retained by worker hibernation')
+        save(path, r)
+
+
+def sleep_retained(snapshot, sleep_record):
+    """Validate the suspension token and ownership before automatic wake."""
+    path = Path(snapshot['path'])
+    r = json.loads(path.read_text())
+    old = snapshot['record']
+    if (r.get('sleep_record') != str(sleep_record)
+            or any(r.get(k) != old.get(k) for k in
+                   ('id', 'thread_id', 'manifest', 'worktree', 'generation', 'schedule'))):
+        raise ValueError('retained loop identity or schedule changed')
+    # A bridge loaded before hibernation support may mark its normal exit as
+    # stopped. Only that specific exit, with our durable token, is recoverable.
+    exited = (r['status'] == 'stopped' and
+              r.get('detail', '').startswith(('Codex TUI/controller ended;', 'Claude TUI/controller ended;')))
+    if r['status'] != 'hibernating' and not exited:
+        raise ValueError('retained loop was stopped or requires review')
+    if r.get('owner_record'):
+        owner = json.loads(Path(r['owner_record']).read_text())
+        if (owner.get('active_record') != str(path)
+                or owner.get('active_generation') != r.get('generation', 0)):
+            raise ValueError('retained loop ownership moved')
+    return r
+
+
+def sleep_resume(snapshot, sleep_record, source, pane_pid, rollback=False):
+    """Rebind without a model turn. The existing quota tick owns future dispatch."""
+    if not snapshot:
+        return
+    path = Path(snapshot['path'])
+    with locked(path, nonblocking=True) as r:
+        if rollback and r.get('sleep_record') != str(sleep_record):
+            # Failure before suspension, or an explicit stop won the race.
+            # Nothing is ours to undo; preserve the independently changed loop.
+            current(r)
+            return
+        # Idempotent recovery after rebind but before the worker's awake stamp.
+        if r.get('resumed_sleep_record') == str(sleep_record):
+            current(r)
+            return
+        sleep_retained(snapshot, sleep_record)
+        old = snapshot['record']
+        if (source['session_id'] != old['thread_id']
+                or source['agent'] != old.get('agent', 'codex')
+                or Path(source['worktree']).resolve() != Path(old['worktree']).resolve()):
+            raise ValueError('resumed loop native identity changed')
+        if rollback:
+            r = dict(old)
+        r.update(status=old['status'], pane_pid=int(pane_pid),
+                 fleet=dict(old['fleet'], session=source['session'],
+                            window_id=source['window'], pane_id=source['pane']))
+        if not rollback:
+            r.update(controller_pid=0, driver='quotawatch',
+                     resumed_sleep_record=str(sleep_record),
+                     detail='Exact hibernated loop reattached; no turn submitted')
+            if source['agent'] == 'codex':
+                remote = source['codex_identity'].get('remote', '')
+                if not remote.startswith('unix:///'):
+                    raise ValueError('resumed loop has no private endpoint')
+                r.update(socket=remote[7:], home=source['home'])
+                with Rpc(r['socket']) as rpc:
+                    if thread(r, rpc).get('status', {}).get('type') != 'idle':
+                        raise ValueError('resumed loop is not natively idle')
+            else:
+                r['native_pid'] = source['pid']
+        r.pop('sleep_record', None)
+        current(r)
+        save(path, r)
+
+
 def thread(r, rpc):
     t = rpc.call('thread/read', {'threadId': r['thread_id'], 'includeTurns': False})['thread']
     if t['id'] != r['thread_id'] or Path(t['cwd']).resolve() != Path(r['worktree']).resolve():
@@ -154,6 +260,7 @@ def command(a):
             r['schedule'] = spec(update)
         elif a.command == 'stop':
             r['status'] = 'stopped'
+            r.pop('sleep_record', None)
             r['detail'] = 'Stopped by owner thread'
         save(path, r)
         print(json.dumps({'id': r['id'], 'status': r['status'],
@@ -193,6 +300,7 @@ def dispatch(path, now=None):
                 current(r)
                 # Wait behind a real turn, an operator dialog, or recent typing.
                 if (pane(r, '#{@claude_state}') != 'done'
+                        or pane(r, '#{@worker_lifecycle}')
                         or pane(r, '#{@agent_transfer_request}')
                         or pane(r, '#{@quota_failover}')
                         or int(pane(r, '#{@agent_transfer_until}') or 0) > now
@@ -205,7 +313,7 @@ def dispatch(path, now=None):
                 # The same cursor/faint reader as issue relay; preserve unsent
                 # drafts even after its operator-activity deferral has expired.
                 if r.get('agent') or r.get('generation') is not None:
-                    view = runpy.run_path(str(Path(__file__).with_name('fleet-input.py')))['snapshot'](r['fleet']['session'],r['fleet']['pane_id'])
+                    view = runpy.run_path(str(Path(__file__).with_name('fleet-input.py')))['snapshot'](r['fleet']['session'],r['fleet']['pane_id'],agent=r.get('agent'))
                     if view['state'] != 'empty':
                         return
                 if r.get('agent') == 'claude':
@@ -391,7 +499,7 @@ def claude_bridge(args,path,r,env):
         return code
     finally:
         with locked(path) as final:
-            if code == 0:
+            if code == 0 and final.get('status') != 'hibernating':
                 final['status']='stopped'
             final['detail']='Claude TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)
@@ -455,7 +563,7 @@ def bridge(args):
         return code
     finally:
         with locked(path) as final:
-            if code == 0:
+            if code == 0 and final.get('status') != 'hibernating':
                 final['status']='stopped'
             final['detail']='Codex TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)

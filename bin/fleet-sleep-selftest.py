@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,7 @@ class SleepTest(unittest.TestCase):
         cls.root=Path(cls.tmp.name)
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
-        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py'):
+        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
         cls.sid='11111111-1111-4111-8111-111111111111'
@@ -55,7 +56,7 @@ if opt('pane_dead')=='1':sys.exit(1)
 pid=int(opt('pane_pid'))
 cmd=subprocess.check_output(['ps','-p',str(pid),'-o','command='],text=True)
 if 'agent.py' not in cmd:sys.exit(1)
-print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIPT,home='',registry='',session=session,window=opt('window_id'),pane=pane,worktree=WT,state='done',previous='',label='',subscription={},codex_identity={})))
+print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIPT,home='',registry='',session=session,window=opt('window_id'),pane=pane,worktree=WT,state='done',previous=opt('@handoff_manifest'),label='',subscription={},codex_identity={})))
 '''.replace('SID',repr(cls.sid)).replace('TRANSCRIPT',repr(str(cls.transcript))).replace('WT',repr(str(cls.wt))))
         inspect.chmod(0o755)
         (cls.bin/'fleet-transfer.sh').write_text('exec python3 '+str(inspect)+' "$@"\n')
@@ -97,6 +98,9 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         else:self.fail('fake CLI prompt did not become ready')
 
     def tearDown(self):self.tm('kill-window','-t',self.pane)
+    def assertExited(self,pid):
+        # tmux before 3.5 can lose SIGCHLD and leave the exited agent unreaped.
+        self.assertIn(LIB['process_state'](pid)[0][:1],('','Z'))
     def opt(self,key):return self.tm('display-message','-p','-t',self.pane,'#{'+key+'}')
     def stamp(self,key,value):self.tm('set-option','-w','-t',self.pane,key,str(value))
 
@@ -105,7 +109,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         dirty=self.wt/'uncommitted.txt';dirty.write_text('keep these bytes')
         self.cli('sleep',self.pane)
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-        self.assertFalse(LIB['alive'](self.pid))
+        self.assertExited(self.pid)
         self.assertEqual(self.opt('window_id'),window)
         record=Path(self.opt('@sleep_record'))
         self.assertEqual(record.stat().st_mode&0o777,0o600)
@@ -164,7 +168,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         try:
             self.cli('wake',self.pane,ok=False)
             self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-            self.assertFalse(LIB['alive'](self.pid))
+            self.assertExited(self.pid)
         finally:(self.root/'hidden-history').rename(self.transcript)
 
     def test_viewing_client_prevents_sleep(self):
@@ -204,7 +208,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.stamp('@worker_lifecycle','preparing')
         self.cli('scan')
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-        self.assertFalse(LIB['alive'](self.pid))
+        self.assertExited(self.pid)
 
     def test_restore_rebinds_saved_record_without_starting_agent(self):
         self.cli('sleep',self.pane)
@@ -224,7 +228,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
 
     def test_native_codex_subagent_veto(self):
         worker=LIB['Worker'](self.socket,self.pane)
-        source=dict(agent='codex',session_id=self.sid,pid=self.pid,home=str(self.root),worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix://fixture'})
+        source=dict(agent='codex',session_id=self.sid,pid=self.pid,home=str(self.root),worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix:///fixture'})
         class Client:
             def __init__(self,*a,**kw):pass
             def close(self):pass
@@ -241,7 +245,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
     def codex_probe(self):
         source=dict(agent='codex',session_id=self.sid,pid=self.pid,home=str(self.root),
                     session=self.socket,window=self.opt('window_id'),pane=self.pane,
-                    worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix://fixture'})
+                    worktree=str(self.wt),transcript=str(self.transcript),codex_identity={'remote':'unix:///fixture'})
         thread=dict(id=self.sid,cwd=str(self.wt),path=str(self.transcript),status={'type':'idle'},
                     turns=[dict(id='finished-turn',status='completed',completedAt=time.time()-60,items=[])])
         class Client:
@@ -327,7 +331,12 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         import hashlib
         self.stamp('@quota_failover','waiting: old process warning')
         with self.codex_probe() as (worker,source,thread):
-            with self.assertRaisesRegex(ValueError,'unverified'):worker.eligible()
+            worker.eligible()  # orphaned text marker, no unresolved journal
+            self.assertEqual(source['stale_quota_marker'],'waiting: old process warning')
+            unrelated=worker.quota_directory/'old-source'/'request.json'
+            LIB['save'](unrelated,{'source':dict(source,pid=1),'state':'ambiguous'})
+            with self.assertRaisesRegex(ValueError,'unresolved'):worker.eligible()
+            unrelated.unlink()
             key=hashlib.sha256(json.dumps([source[k] for k in ('session','window','session_id','pid','agent')]).encode()).hexdigest()[:32]
             path=worker.quota_directory/key/'request.json'
             request={'source':source,'state':'waiting','hard':False}
@@ -348,6 +357,72 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
                 self.assertIn('owns this worker',result.stderr)
         self.assertTrue(LIB['alive'](self.pid))
 
+    def test_loop_scheduler_wakes_only_when_due_or_quota_is_fresh(self):
+        with patch.dict(os.environ,self.env):
+            worker=LIB['Worker'](self.socket,self.pane)
+            snapshot={'record':{'status':'active','schedule':{'next_run_at':time.time()+3600}}}
+            data={'source':{'agent':'codex','sleep_loop':snapshot,'sleep_account_key':'owned'}}
+            with patch.dict(LIB['LOOP'],sleep_retained=lambda *a:None):
+                self.assertFalse(worker.scheduled_wake('record',data))
+                snapshot['record']['schedule']['next_run_at']=time.time()-1
+                self.assertTrue(worker.scheduled_wake('record',data))
+                snapshot['record']['status']='waiting-quota'
+                row={'key':'owned','fresh':False}
+                policy={'inventory':lambda:{'accounts':[row]},'eligible':lambda r:r['fresh'],
+                        'choose':lambda *a,**kw:{'target':None}}
+                with patch.object(LIB['runpy'],'run_path',return_value=policy):
+                    self.assertFalse(worker.scheduled_wake('record',data))
+                    row['fresh']=True
+                    self.assertTrue(worker.scheduled_wake('record',data))
+                    row['key']='unrelated'
+                    self.assertFalse(worker.scheduled_wake('record',data))
+                    with patch.dict(os.environ,FLEET_FAILOVER='1'):
+                        policy['choose']=lambda *a,**kw:{'target':row}
+                        self.assertTrue(worker.scheduled_wake('record',data))
+
+    def test_legacy_endpoint_is_diagnostic_not_permission_to_guess(self):
+        with self.codex_probe() as (worker,source,thread):
+            source['codex_identity']['remote']=''
+            with self.assertRaisesRegex(ValueError,'legacy Codex.*rebind'):worker.eligible()
+        self.assertEqual(LIB['CODEX']['saved_identity']('', ''),{})
+
+    def test_real_pane_loop_sleeps_and_timer_resumes_exact_history(self):
+        module=runpy.run_path(str(self.bin/'fleet-sleep.py'))
+        manifest=self.root/('loop-packet-'+self.pane[1:])/'manifest.json'
+        path=manifest.parent/'loop/state.json';path.parent.mkdir(parents=True)
+        due=time.time()+3600
+        record=dict(id='retained-loop',status='active',agent='claude',thread_id=self.sid,
+                    manifest=str(manifest),worktree=str(self.wt),controller_pid=self.pid,
+                    pane_pid=self.pid,fleet={'session':self.socket,'window_id':self.opt('window_id'),'pane_id':self.pane},
+                    schedule={'prompt':'continue authorized monitoring','interval_seconds':3600,'next_run_at':due},deliveries=7)
+        path.write_text(json.dumps(record));self.stamp('@handoff_manifest',manifest)
+        globals_=module['LOOP']['sleep_snapshot'].__globals__
+        with patch.dict(os.environ,self.env),patch.dict(globals_,current=lambda r:None):
+            worker=module['Worker'](self.socket,self.pane)
+            try:result=worker.sleep(manual=True)
+            except Exception as exc:
+                trace=self.root/('input-'+str(self.pid)+'.log')
+                status=subprocess.run(['ps','-p',str(self.pid),'-o','pid=,ppid=,stat=,comm='],text=True,capture_output=True).stdout
+                self.fail('%s; fake input=%r; process=%r; pane=%r' %
+                          (exc,trace.read_bytes() if trace.exists() else None,status,
+                           self.tm('display-message','-p','-t',self.pane,'#{pane_pid}|#{pane_dead}|#{pane_input_off}')))
+            self.assertEqual(result['state'],'sleeping')
+            self.assertExited(self.pid)
+            self.assertEqual(json.loads(path.read_text())['status'],'hibernating')
+            worker.recover()
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+            with patch.object(module['time'],'time',return_value=due+1):worker.recover()
+            self.assertEqual(self.opt('@worker_lifecycle'),'')
+            self.assertEqual(self.opt('@claude_state'),'done')
+            resumed=json.loads(path.read_text())
+            self.assertEqual(resumed['schedule'],record['schedule'])
+            self.assertEqual(resumed['deliveries'],7)
+            self.assertEqual(resumed['thread_id'],self.sid)
+            self.assertEqual(resumed['driver'],'quotawatch')
+            self.assertNotEqual(resumed['native_pid'],self.pid)
+            trace=self.root/('input-'+str(resumed['native_pid'])+'.log')
+            self.assertEqual(trace.read_bytes(),b'')  # wake itself sends no prompt
+
     def test_bundled_code_host_is_idle_infrastructure_but_its_jobs_are_not(self):
         quiet=LIB['quiet_processes'];base=self.pid
         source={'pid':base,'agent':'codex','codex_identity':{'remote':'unix:///owned'}}
@@ -361,6 +436,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             with self.assertRaisesRegex(ValueError,'background/tool'):quiet(source)
             exes[base+2]=Path('/release/codex-code-mode-host')
             rows[base+3]=(base+2,'bash');args[base+3]=['bash','active-job']
+            exes[base+3]=Path('/bin/bash')
             with self.assertRaisesRegex(ValueError,'background/tool'):quiet(source)
 
     def test_message_wakes_and_delivers_to_saved_conversation(self):
@@ -494,6 +570,135 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertFalse(check(screen.replace('\n  '+particle,'\n\x1b[0m'+extra),2,0,100))
         self.assertFalse(check(screen,3,0,100))
         self.assertFalse(check(screen.replace('\x1b[48;2;42;67;76m',''),2,0,100))
+
+
+class McpRestartTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(prefix='fleet-mcp-sleep-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name).resolve()
+        self.node=self.root/'node';self.node.touch()
+        self.script=self.root/'server.js';self.script.touch()
+        self.config={'safe':{'command':str(self.node),'args':[str(self.script)]}}
+        self.status={'data':[{'name':'safe','runtimeStatus':'ready','toolsError':None}]}
+        self.rows={2:(1,'node')};self.argv={2:[str(self.node),str(self.script)]}
+        self.exes={2:self.node};self.source={}
+        owner=self
+        class Client:
+            def call(self,method,args):
+                if method=='config/read':return {'config':{'mcp_servers':owner.config}}
+                if method=='mcpServerStatus/list':return owner.status
+                raise AssertionError(method)
+        self.client=Client()
+
+    def classify(self):
+        return LIB['MCP']['classify'](self.source,self.client,self.rows,1,
+                                      lambda pid:self.argv[pid],lambda pid:self.exes[pid])
+
+    def test_exact_config_and_explicit_contract_required(self):
+        self.config['remote']={'url':'https://example.invalid/mcp','command':None,'args':None}
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            with self.assertRaisesRegex(ValueError,'restartability contract'):self.classify()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            self.assertEqual(self.classify(),{2})
+            self.assertEqual(set(self.source['sleep_mcp']),{'safe'})
+            self.argv[2].append('--different')
+            self.assertEqual(self.classify(),set())
+            self.argv[2].pop();self.exes[2]=self.root/'impostor'
+            self.assertEqual(self.classify(),set())
+
+    def test_children_and_partial_inventory_still_veto(self):
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            self.rows[3]=(2,'browser');self.argv[3]=['browser'];self.exes[3]=self.root/'browser'
+            with self.assertRaisesRegex(ValueError,'child process'):self.classify()
+            del self.rows[3]
+            self.status['nextCursor']='more'
+            with self.assertRaisesRegex(ValueError,'incomplete'):self.classify()
+            del self.status['nextCursor']
+            self.status['data'].append(None)
+            with self.assertRaisesRegex(ValueError,'incomplete'):self.classify()
+            self.status['data'].pop()
+            self.status['data'][0]['runtimeStatus']='starting'
+            with self.assertRaisesRegex(ValueError,'not ready'):self.classify()
+
+    def test_resume_waits_for_service_and_rejects_changed_config(self):
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            self.classify()
+        verify=LIB['MCP']['verify_resume']
+        self.assertTrue(verify(self.source,self.client))
+        self.status['data'][0]['runtimeStatus']='starting'
+        self.assertFalse(verify(self.source,self.client))
+        self.config['safe']['args'].append('changed')
+        with self.assertRaisesRegex(ValueError,'configuration changed'):verify(self.source,self.client)
+
+    def test_older_runtime_requires_initialize_and_tool_inventory(self):
+        ready=LIB['MCP']['runtime_ready']
+        self.assertFalse(ready({'runtimeStatus':None}))
+        old={'runtimeStatus':None,'serverInfo':{'name':'safe'},'tools':{'read':{}},'toolsError':None}
+        self.assertTrue(ready(old))
+        old['toolsError']='failed';self.assertFalse(ready(old))
+
+    def test_npx_package_entrypoint_is_allowed_but_its_browser_is_not(self):
+        wrapper=self.root/'npx';wrapper.touch()
+        package=self.root/'node_modules/safe-mcp';package.mkdir(parents=True)
+        script=package/'cli.js';script.touch()
+        (package/'package.json').write_text(json.dumps({'name':'safe-mcp','bin':{'safe':'cli.js'}}))
+        self.config['safe']={'command':str(wrapper),'args':['safe-mcp@1.0','--stdio']}
+        self.argv[2]=[str(self.node),str(wrapper),'safe-mcp@1.0','--stdio']
+        self.rows[3]=(2,'node');self.argv[3]=[str(self.node),str(script),'--stdio'];self.exes[3]=self.node
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            self.assertEqual(self.classify(),{2,3})
+            self.argv[2]=['npm exec safe-mcp@1.0 --stdio','','','']
+            self.assertEqual(self.classify(),{2,3})
+            self.exes[3]=self.root/'different-node'
+            self.assertEqual(self.classify(),set())
+            self.exes[3]=self.node
+            self.rows[4]=(3,'browser')
+            with self.assertRaisesRegex(ValueError,'job/browser'):self.classify()
+            del self.rows[4]
+            self.argv[3].append('--wrong')
+            self.assertEqual(self.classify(),set())  # rewritten wrapper cannot prove its child
+
+    def test_uvx_reexec_requires_sibling_binary_and_isolated_entrypoint(self):
+        uvx=self.root/'uvx';uvx.touch()
+        uv=self.root/'uv';uv.touch()
+        self.config['safe']={'command':str(uvx),'args':['--from','safe-mcp','safe-mcp']}
+        self.exes[2]=uv;self.argv[2]=[str(uv),'tool','uvx','--from','safe-mcp','safe-mcp']
+        env=self.root/'env';(env/'bin').mkdir(parents=True)
+        (env/'pyvenv.cfg').touch()
+        python=env/'bin/python';python.touch()
+        entry=env/'bin/safe-mcp';entry.touch()
+        self.rows[3]=(2,'python');self.exes[3]=python;self.argv[3]=[str(python),str(entry)]
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            self.assertEqual(self.classify(),{2,3})
+            (env/'pyvenv.cfg').unlink()
+            with self.assertRaisesRegex(ValueError,'unverified child'):self.classify()
+
+
+class ExitDetectionTest(unittest.TestCase):
+    def test_unreaped_zombie_counts_as_exited(self):
+        # tmux may reap an exited pane process late. BSD ps renames a zombie's
+        # comm to <defunct>; Linux procps prints lstart/comm unchanged, so the
+        # start fingerprint alone would keep reporting the agent as alive.
+        child=subprocess.Popen(['python3','-c','import time;time.sleep(30)'])
+        try:
+            # macOS reports the launcher's comm until exec settles; fingerprint
+            # the running process, as sleep does for a long-idle agent.
+            until=time.monotonic()+5;start=LIB['process_start'](child.pid)
+            while time.monotonic()<until:
+                time.sleep(.1);current=LIB['process_start'](child.pid)
+                if current==start:break
+                start=current
+            data={'source':{'pid':child.pid},'source_start':start}
+            self.assertTrue(data['source_start']);self.assertTrue(LIB['source_alive'](data))
+            os.kill(child.pid,signal.SIGTERM)
+            until=time.monotonic()+5
+            while time.monotonic()<until and not LIB['process_state'](child.pid)[0].startswith('Z'):time.sleep(.05)
+            self.assertTrue(LIB['process_state'](child.pid)[0].startswith('Z'))
+            self.assertFalse(LIB['source_alive'](data))
+        finally:child.wait()
+        self.assertEqual(LIB['process_state'](child.pid),('',''))
+        self.assertFalse(LIB['source_alive'](data))
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
