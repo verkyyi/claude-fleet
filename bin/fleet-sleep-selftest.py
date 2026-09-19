@@ -607,6 +607,22 @@ class McpRestartTest(unittest.TestCase):
             self.argv[2].pop();self.exes[2]=self.root/'impostor'
             self.assertEqual(self.classify(),set())
 
+    def test_bare_interpreter_name_matches_the_launchers_build_not_the_verifiers_path(self):
+        # The daemon's PATH resolved `node` to node 26 while Codex had started the
+        # server under node@22: a bare command name must match the running
+        # program's name and exact argv, whatever build the verifier would find.
+        other=self.root/'path'/'node';other.parent.mkdir();other.touch();other.chmod(0o755)
+        self.config['safe']={'command':'node','args':[str(self.script)]}
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            for path in (str(other.parent),str(self.root/'empty')):
+                with patch.dict(os.environ,PATH=path):
+                    self.assertEqual(self.classify(),{2})
+            with patch.dict(os.environ,PATH=str(other.parent)):
+                self.exes[2]=self.root/'python';self.exes[2].touch()
+                self.assertEqual(self.classify(),set())
+                self.exes[2]=self.node;self.argv[2]=[str(self.node),str(self.script),'--other']
+                self.assertEqual(self.classify(),set())
+
     def test_children_and_partial_inventory_still_veto(self):
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
             self.rows[3]=(2,'browser');self.argv[3]=['browser'];self.exes[3]=self.root/'browser'
