@@ -922,6 +922,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # demoter, which disables auto-handoff along with it — fleet-doctor.sh says so.
 # @label=Demote stuck-working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_STUCK_WORKING_SECS=120
+# Native-truth reconcile (issue #806): a `working` window whose Claude session
+# registry (~/.claude/sessions/<pid>.json) or bound Codex thread reports idle for
+# at least this long, while the working stamp is equally old, is demoted to done and
+# re-classified — the floor the activity demoter above cannot provide for an idle
+# TUI that keeps repainting its footer. Runs first on the sleep daemon's 60s tick,
+# independent of the spinner. 0 disables the pass.
+# @label=Reconcile native-idle working after @group=status @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_STATE_IDLE_SECS=30
 
 # Show a compact live hub list on the left of worker/scratch windows. prefix+e
 # toggles and saves this preference for the fleet; prefix+E browses by keyboard.

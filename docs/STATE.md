@@ -269,6 +269,46 @@ Two things trigger it:
 The classifier is **optional** — everything else works without it; you simply lose
 `looping` detection and false-alarm correction.
 
+## The floor — native-truth reconcile (#806)
+
+The demoter below reads *activity*; this pass reads the **agent**. Every tick of the
+sleep daemon ([`bin/fleet-sleep-daemon.sh`](../bin/fleet-sleep-daemon.sh), 60s, its
+own launchd/systemd unit — not the spinner) runs
+[`bin/fleet-state-reconcile.py`](../bin/fleet-state-reconcile.py) first, over every
+live fleet socket, whatever `FLEET_SLEEP` says:
+
+- **Claude** — Claude Code registers each TUI under `~/.claude/sessions/<pid>.json`
+  with `status` (`busy` / `idle` / `shell`), `statusUpdatedAt`, its tmux pane and
+  `procStart`, written by the TUI itself with no hook involved. A `working` window
+  whose record says `idle`, when both that idle status and the `working` stamp are
+  at least `FLEET_STATE_IDLE_SECS` (default **30s**) old, has no turn running —
+  either its turn ended without a `Stop`, or the classifier promoted a screen it
+  misread after Claude had already stopped: it is demoted to `done`, the reason
+  cleared, and the classifier kicked to refine it exactly as the demoter does.
+  `busy`, `shell`, a stamp younger than the grace (a turn the TUI has not marked
+  yet), or a record whose pid is gone or reused are all left alone.
+- **Codex (bound)** — the private app-server RPC: thread `idle` with its last turn
+  completed at least the grace ago, stamp equally old → the same demotion.
+  Legacy/unbound Codex is left alone.
+- **No agent under the pane** (a dead pane, a bare shell) with a stamp older than
+  120s → `done` with reason `exited`, so nothing spins on a window nothing runs in.
+
+It only ever demotes `working` — never promotes, never touches `needs`/`blocked`,
+panels, or a window in a sleep transition — and the write is one server-side
+`if-shell` that re-checks `working`, so a prompt submitted between the read and the
+write is never overwritten. Each change is one line in `logs/reconcile.log`; the
+heartbeat `global/reconcile.heartbeat` (`at=`, `working=`, `demoted=`, `skipped=`)
+feeds `fleet-doctor.sh`'s `state` line.
+
+Why it exists: on 2026-09-19 a window sat `working` for 50+ min at an empty prompt
+while the TUI's footer repaint kept `window_activity` bouncing between 44s and
+209s — under the demoter's 120s bar as often as not — and the spinner, with the
+demoter inside it, had just spent 15h wedged in a busy loop. `logs/stuck.log` held
+300 missed-Stop demotions averaging 757s late, 39 of them past 30 min, and the
+sleep daemon's largest rejection (`worker is not done`, 34% of verdicts) was fed by
+the same windows. Pinned by
+[`bin/fleet-state-reconcile-selftest.sh`](../bin/fleet-state-reconcile-selftest.sh).
+
 ## The backstop — stuck-working demotion (#101)
 
 A window pinned at `working` whose `Stop` hook was **missed** (a crash, a race, a
@@ -283,7 +323,9 @@ So a `working` window whose `window_activity` age exceeds
 (a 2-strike debounce) is provably idle → demoted to `done`, and the classifier is
 kicked to refine it into `done` / `needs` / `looping`. The large threshold + the
 debounce make a false demote of a live session effectively impossible. Set
-`FLEET_STUCK_WORKING_SECS=0` to disable.
+`FLEET_STUCK_WORKING_SECS=0` to disable. Since #806 this is the **fallback** for a
+worker with neither a registry record nor a bound endpoint; the reconcile above is
+the floor, and it is not fooled by a pane that keeps repainting while idle.
 
 ### This backstop is the floor under auto-handoff (#677)
 
@@ -431,13 +473,14 @@ PART B goes red, so a flake there arrives with its own evidence.
 
 ## Who writes `@claude_state` — the whole picture
 
-Four writers, one option, exactly one source of truth per window:
+Five writers, one option, exactly one source of truth per window:
 
 | Writer | When | Writes |
 |---|---|---|
 | `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
 | `classify-sessions.sh` (haiku) | on `Stop`, and after a stuck-demote — ~1–2s / change-gated | `done` / `needs` / `looping` (reason **cleared**) |
-| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s | `done` (reason **cleared**; then kicks the classifier) |
+| `fleet-state-reconcile.py` (sleep daemon tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**; then kicks the classifier) |
+| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s (fallback) | `done` (reason **cleared**; then kicks the classifier) |
 | `tmux-spinner.sh` needs-reconcile | a `needs` window the transcript contradicts, ≥2 checks running | `done` / *(empty)*, or the **reason** re-settled — never a new `needs` |
 
 Only the hook knows *why* a window went red, so only the hook **invents**
@@ -458,7 +501,9 @@ LLM classifier (haiku)         │                 self-contained glyph renderer
   · change-gated + locked      └──────────────► cross-fleet  →  ● N orange (@attn_other_windows)
       ▲
       │
-   stuck-working demote (spinner, #101): a working pane frozen ≥120s → done → re-classify
+   native-truth reconcile (sleep daemon, #806): a working window whose agent's own
+                                          registry/RPC says idle since the stamp → done → re-classify
+   stuck-working demote (spinner, #101): a working pane frozen ≥120s → done → re-classify (fallback)
    stale-needs reconcile (spinner, #658): a `needs` the TRANSCRIPT contradicts → cleared
                                           (or its reason re-settled) — never re-reddened
 ```
