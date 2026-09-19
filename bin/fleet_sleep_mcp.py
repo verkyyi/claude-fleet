@@ -42,14 +42,21 @@ def runtime_ready(status):
 def configured_process(pid, config, argv_reader, exe_reader):
     command = config.get('command')
     args = config.get('args') or []
-    if not isinstance(command, str) or not isinstance(args, list):
+    if not isinstance(command, str) or not isinstance(args, list) or not command:
         return False
+    argv = argv_reader(pid)
+    executable = exe_reader(pid)
+    # A bare program name resolves on the VERIFIER's PATH, which need not be the
+    # launcher's: the sleep daemon found node 26 first while Codex had started
+    # mcp-image under node@22, and the exact-path comparison below called the
+    # configured server an unverified job. The same program name running the
+    # exact configured argv is that server; a different build of it is not a job.
+    if not os.path.isabs(command) and executable.name == Path(command).name and argv[1:] == args:
+        return True
     resolved = Path(command) if os.path.isabs(command) else Path(shutil.which(command) or '/nonexistent')
     if not resolved.is_file():
         return False
     resolved = resolved.resolve()
-    argv = argv_reader(pid)
-    executable = exe_reader(pid)
     if executable == resolved and argv[1:] == args:
         return True
     if (Path(command).name == 'uvx' and executable == resolved.with_name('uv').resolve()
