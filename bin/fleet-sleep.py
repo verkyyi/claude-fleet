@@ -73,14 +73,25 @@ def alive(pid):
     except ProcessLookupError: return False
 
 
+def process_state(pid):
+    # (state, start) — the start fingerprint stays comparable across calls.
+    if int(pid)<=0: return '',''
+    try: fields=run(['ps','-p',str(pid),'-o','stat=','-o','lstart=','-o','comm=']).split(None,1)
+    except subprocess.CalledProcessError: return '',''
+    return fields[0], (fields[1] if len(fields)>1 else '')
+
+
 def process_start(pid):
-    if int(pid)<=0: return ''
-    try: return run(['ps','-p',str(pid),'-o','lstart=','-o','comm='])
-    except subprocess.CalledProcessError: return ''
+    return process_state(pid)[1]
 
 
 def source_alive(data):
-    return bool(data.get('source_start')) and process_start(data['source']['pid'])==data['source_start']
+    # An exited agent stays a zombie until its parent (tmux) reaps it. BSD ps
+    # renames the command to <defunct>; Linux procps prints the zombie's
+    # lstart/comm exactly like the live process, so the state must be read.
+    if not data.get('source_start'): return False
+    state,start=process_state(data['source']['pid'])
+    return start==data['source_start'] and not state.startswith('Z')
 
 
 def process_tree_rss(pid):

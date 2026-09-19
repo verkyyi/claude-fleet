@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,9 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         else:self.fail('fake CLI prompt did not become ready')
 
     def tearDown(self):self.tm('kill-window','-t',self.pane)
+    def assertExited(self,pid):
+        # tmux before 3.5 can lose SIGCHLD and leave the exited agent unreaped.
+        self.assertIn(LIB['process_state'](pid)[0][:1],('','Z'))
     def opt(self,key):return self.tm('display-message','-p','-t',self.pane,'#{'+key+'}')
     def stamp(self,key,value):self.tm('set-option','-w','-t',self.pane,key,str(value))
 
@@ -105,7 +109,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         dirty=self.wt/'uncommitted.txt';dirty.write_text('keep these bytes')
         self.cli('sleep',self.pane)
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-        self.assertFalse(LIB['alive'](self.pid))
+        self.assertExited(self.pid)
         self.assertEqual(self.opt('window_id'),window)
         record=Path(self.opt('@sleep_record'))
         self.assertEqual(record.stat().st_mode&0o777,0o600)
@@ -164,7 +168,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         try:
             self.cli('wake',self.pane,ok=False)
             self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-            self.assertFalse(LIB['alive'](self.pid))
+            self.assertExited(self.pid)
         finally:(self.root/'hidden-history').rename(self.transcript)
 
     def test_viewing_client_prevents_sleep(self):
@@ -204,7 +208,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.stamp('@worker_lifecycle','preparing')
         self.cli('scan')
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-        self.assertFalse(LIB['alive'](self.pid))
+        self.assertExited(self.pid)
 
     def test_restore_rebinds_saved_record_without_starting_agent(self):
         self.cli('sleep',self.pane)
@@ -403,7 +407,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
                           (exc,trace.read_bytes() if trace.exists() else None,status,
                            self.tm('display-message','-p','-t',self.pane,'#{pane_pid}|#{pane_dead}|#{pane_input_off}')))
             self.assertEqual(result['state'],'sleeping')
-            self.assertFalse(LIB['alive'](self.pid))
+            self.assertExited(self.pid)
             self.assertEqual(json.loads(path.read_text())['status'],'hibernating')
             worker.recover()
             self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
@@ -669,6 +673,32 @@ class McpRestartTest(unittest.TestCase):
             self.assertEqual(self.classify(),{2,3})
             (env/'pyvenv.cfg').unlink()
             with self.assertRaisesRegex(ValueError,'unverified child'):self.classify()
+
+
+class ExitDetectionTest(unittest.TestCase):
+    def test_unreaped_zombie_counts_as_exited(self):
+        # tmux may reap an exited pane process late. BSD ps renames a zombie's
+        # comm to <defunct>; Linux procps prints lstart/comm unchanged, so the
+        # start fingerprint alone would keep reporting the agent as alive.
+        child=subprocess.Popen(['python3','-c','import time;time.sleep(30)'])
+        try:
+            # macOS reports the launcher's comm until exec settles; fingerprint
+            # the running process, as sleep does for a long-idle agent.
+            until=time.monotonic()+5;start=LIB['process_start'](child.pid)
+            while time.monotonic()<until:
+                time.sleep(.1);current=LIB['process_start'](child.pid)
+                if current==start:break
+                start=current
+            data={'source':{'pid':child.pid},'source_start':start}
+            self.assertTrue(data['source_start']);self.assertTrue(LIB['source_alive'](data))
+            os.kill(child.pid,signal.SIGTERM)
+            until=time.monotonic()+5
+            while time.monotonic()<until and not LIB['process_state'](child.pid)[0].startswith('Z'):time.sleep(.05)
+            self.assertTrue(LIB['process_state'](child.pid)[0].startswith('Z'))
+            self.assertFalse(LIB['source_alive'](data))
+        finally:child.wait()
+        self.assertEqual(LIB['process_state'](child.pid),('',''))
+        self.assertFalse(LIB['source_alive'](data))
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

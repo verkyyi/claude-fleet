@@ -130,9 +130,14 @@ mode 0600. Treat these records as sensitive conversation data.
 A per-worker kernel lock serializes sleep, wake and message delivery; the
 worktree transition lock also excludes migration. A saved record precedes exit.
 Only a confirmed exited process and a dead pane or childless shell can be
-replaced. A timeout does not kill an agent. The retained-exit check prevents the
-ordinary SessionEnd cleanup from closing the task. Automatic cleanup and screen
-classification recognize retained workers.
+replaced. The exit check compares the saved start-time fingerprint and reads the
+process state: an exited agent that tmux has not reaped yet is a zombie, which
+Linux `ps` prints with the same start time and command as the live process
+(tmux 3.4 on the Ubuntu CI runners can lose the SIGCHLD that reaps it, leaving
+`pane_dead` set with the process still listed). A timeout does not kill an
+agent. The retained-exit check prevents the ordinary SessionEnd cleanup from
+closing the task. Automatic cleanup and screen classification recognize retained
+workers.
 
 Messages are persisted before waking and sent to the exact resumed agent's
 native inbox. Failed delivery is not reported as success. A delivery timeout is
