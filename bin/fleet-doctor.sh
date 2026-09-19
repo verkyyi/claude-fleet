@@ -1035,6 +1035,31 @@ elif [ "$hb_age" -gt 180 ]; then
 else
   pass handoff "stuck-working demoter alive (heartbeat ${hb_age}s ago)"
 fi
+# --- state reconcile (issue #806) — the native-truth floor under the demoter ------
+# The sleep daemon's 60s tick runs bin/fleet-state-reconcile.py first: a `working`
+# window whose Claude session registry says idle (or whose bound Codex thread is
+# idle) past the grace, with an equally old working stamp, is demoted to done —
+# a Stop that never fired, or a classifier misread promoted after the TUI had
+# already stopped. Unlike the activity
+# heuristic above it is not fooled by an idle TUI repainting its footer, and it does
+# not share the spinner's process, so a wedged spinner no longer means `working`
+# forever. Silence here means com.claude-fleet.sleep itself is not ticking.
+rhb="${TMPDIR:-/tmp}/.claude-dash/global/reconcile.heartbeat"
+rhb_age=''
+if [ -f "$rhb" ]; then
+  rhb_at=$(sed -n 's/^at=//p' "$rhb" | head -n1)
+  case "$rhb_at" in ''|*[!0-9]*) ;; *) rhb_age=$(( $(date +%s 2>/dev/null || echo 0) - rhb_at )) ;; esac
+fi
+if [ -z "$rhb_age" ]; then
+  warn state "no state-reconcile heartbeat (global/reconcile.heartbeat) — bin/fleet-sleep-daemon.sh has not run bin/fleet-state-reconcile.py yet (#806); a \`working\` window whose Stop never fired is caught only by the spinner's activity heuristic"
+elif [ "$rhb_age" -gt 180 ]; then
+  warn state "state reconcile last ran ${rhb_age}s ago (the sleep daemon's 60s tick runs it) — check com.claude-fleet.sleep and logs/sleep.launchd.log (#806)"
+else
+  rhb_get() { sed -n "s/^$1=//p" "$rhb" | head -n1; }
+  rhb_note=''
+  [ -n "$(rhb_get skipped)" ] && rhb_note="; skipped: $(rhb_get skipped)"
+  pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted$rhb_note"
+fi
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
 if [ -x "$inv" ]; then
