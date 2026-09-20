@@ -62,24 +62,36 @@ const errMsg = (reason) => (reason && reason.message) || String(reason || '');
 
 /* --------------------------------------------------------------- one entry */
 
-/** accountRows is one subscription: its name, then one row per window, then
+/** accountEntry is one subscription: its name, then one row per window, then
  *  whatever its provider adds that is not a window (a credit balance, a blocked
  *  flag, the plan and observation time).
  *
  *  The non-window notes stay `.hint`s rather than becoming rows because they are
  *  not readings of a pool — a credit balance has no ceiling to be a percentage
  *  of, and rendering it at the weight of a utilization would put the card's
- *  biggest number on something that cannot fill up. */
-function accountRows(entry, { showSource } = {}) {
+ *  biggest number on something that cannot fill up.
+ *
+ *  #129 gave those rows a WRAPPER, and the wrapper is the whole change on this
+ *  side: the card's one remaining extravagance was that it flowed down a single
+ *  column however wide the viewport got — ten windows meant ten stacked rows and
+ *  a bar 670px long to fill the slack. A column can only flow into a second lane
+ *  if something says where one subscription's rows end and the next begins, and
+ *  a flat list of siblings does not. This element does.
+ *
+ *  It is `display: contents` until the card is wide enough for two lanes
+ *  (styles.css), so on a narrow viewport it is not a box at all and the cells
+ *  join `.qgroup` exactly as they did before. Nothing here decides the lane
+ *  count; this file renders, and the layout is the stylesheet's. */
+function accountEntry(entry, { showSource } = {}) {
   const out = [el('div', { class: 'qacct' }, entry.label || entry.account_uuid)];
   const v = entry.limits || {};
   if (!v.available) {
     out.push(el('div', { class: 'qempty' }, v.reason || t('wall.noReading')));
-    return out;
+  } else {
+    out.push(...windowRows(v, { showSource }));
+    out.push(...extraNotes(v));
   }
-  out.push(...windowRows(v, { showSource }));
-  out.push(...extraNotes(v));
-  return out;
+  return el('div', { class: 'qentry' }, ...out);
 }
 
 /** windowRows turns one reading into gauge rows, in the provider's own terms.
@@ -163,7 +175,11 @@ function worstLine(worst, shownSet, sourceOf) {
   return el('p', { class: 'hint' }, t('wall.closest', {
     label: worst.label,
     source: sourceLabel(quotaSourceOf(worst, sourceOf)),
-    pct: highest(worst.limits).toFixed(1),
+    // Whole percent, like the gauge below it (#129). This line quotes the very
+    // figure one of those rows prints, so the two have to round the same way --
+    // "at 94.2%" over a row reading "94%" reads as two different readings of
+    // the same window.
+    pct: Math.round(highest(worst.limits)),
   }));
 }
 
@@ -249,7 +265,7 @@ function quotaCard(result, accounts) {
     for (const g of groups) {
       card.appendChild(el('div', { class: 'qgroup' },
         groupHeading(g.source, g.entries.length),
-        ...g.entries.flatMap((e) => accountRows(e))));
+        ...g.entries.map((e) => accountEntry(e))));
     }
     return card;
   }

@@ -233,9 +233,86 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
    column: the windows are the readings, and a name in column one would push
    every number right by however long the longest email is. */
 .qacct { grid-column: 1 / -1; margin-top: 9px; font-size: 12px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
-.qgroup-head + .qacct { margin-top: 4px; }
+/* The first subscription sits closer to the heading than the ones after it. The
+   `.qentry` form is not a second case: #129 wrapped each subscription, and a
+   `display: contents` wrapper is invisible to LAYOUT but not to a SELECTOR, so
+   without this half the rule silently stopped matching and the phone card grew
+   5px. */
+.qgroup-head + .qacct, .qgroup-head + .qentry > .qacct { margin-top: 4px; }
 .qempty, .qnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--ink-3); margin: 0; }
 .quota-card .qsub { margin-top: 22px; }
+
+/* One subscription, as a unit (#129). `display: contents` means it is NOT a box
+   here — its cells join `.qgroup` exactly as they did when quota.js returned
+   them loose, so every rule above and the phone layout below are untouched. It
+   exists so the wide layout has something to move; see the two-lane block. */
+.qentry { display: contents; }
+
+/* ---- two lanes, once there is room for two (#129) ----
+
+   The card's last extravagance was that it flowed down ONE column at every
+   width. Ten windows were ten stacked rows — measured here at 538px of group
+   for five subscriptions — while the bar column, the only flexible one, ate the
+   slack and rendered 670px long. Nothing reads a 670px bar more accurately than
+   a 120px one; the width was being spent on nothing while the reader scrolled.
+
+   So above 1180px the group is TWO five-column lanes and a subscription flows
+   into whichever one is next: 5 blocks over 3 rows instead of 5, measured at
+   1440px as 538px -> 335px of group (-37.7%), 631px -> 428px of whole card
+   (-32.2%).
+
+   Why a hand-written `repeat(2, ...)` and not `.tiles`'s `repeat(auto-fit,
+   minmax(140px, 1fr))`, which is this file's other multi-column grid: auto-fit
+   cannot express this. An auto-repeat track list may not contain intrinsic or
+   flexible sizes, and four of these five columns are `auto` and the fifth is
+   `1fr` — the sizing that makes the five columns agree across subscriptions in
+   the first place. `.tiles` can auto-fit because a tile is one opaque 140px
+   box. A gauge is five cells that must line up with the gauge above it.
+
+   Which is also why the lane is `subgrid` rather than a nested grid of its own.
+   A nested grid would size its five columns from its own block's content, so
+   two subscriptions stacked in the same lane would set different widths and the
+   percent column would wander — the exact failure the `display: contents` note
+   above describes. Subgrid puts every block on the lane's tracks, so a lane
+   reads as one column of numbers from top to bottom. Verified: in a five-
+   subscription card the `.pct` cells of every block in lane one share a right
+   edge, and so do lane two's.
+
+   1180px is `.wrap`'s own max-width, which is the whole reason it is the
+   breakpoint rather than a number picked to look responsive. The group is the
+   viewport less the wrap's 40px and the card's 36px, so it grows with the
+   window until the wrap stops and then stays at 1104px forever — and switching
+   exactly there means these ten columns only ever run at the ONE width measured
+   above. Lower would be a range whose wide end is fine and whose narrow end
+   overflows sideways: at 1140px the group is 1064px, and this needs 54 more.
+
+   Two things buy the room it needs. The bar's floor drops to 60px, because
+   when something has to give, a shorter bar is a smaller loss than a forecast
+   pushed off the card — it is a floor, not a width, and at 1440px the bars
+   still measure 101px. And the lanes are separated by 20px of padding on the
+   forecast cell instead of a wider `column-gap`: a gap applies to all nine
+   gutters, so a 30px lane separation would also widen the eight gutters INSIDE
+   the lanes, spending 160px to separate two things. The padding costs 40px and
+   is symmetric — lane one's trailing space separates the lanes, lane two's
+   falls in the card's own right padding. Against the worst content this branch
+   can be handed (a 62-character account name, every window "100.0%" and
+   "critical", a three-digit forecast on every row) the bars still come out at
+   89px, clear of the floor.
+
+   Blocks are placed by ordinary auto-flow in DOM order, row-major: each lands
+   in the first row where a lane is free. Tab order is untouched and nothing
+   here uses `order`. */
+@media (min-width: 1180px) {
+  .qgroup { grid-template-columns: repeat(2, auto auto auto minmax(60px, 1fr) auto); gap: 14px 10px; }
+  .qentry {
+    display: grid; grid-column: span 5; grid-template-columns: subgrid;
+    align-items: baseline; gap: 5px 10px;
+  }
+  .gauge .meta { padding-right: 20px; }
+  /* The block supplies the separation between subscriptions now (the grid's
+     14px row gap), so the name stops adding its own on top of it. */
+  .qentry > .qacct, .qgroup-head + .qentry > .qacct { margin-top: 0; }
+}
 
 /* Under ~640px the five columns cannot hold: an email, a 26px number and a
    forecast do not share a phone's width. The row becomes two lines — the

@@ -52,7 +52,7 @@
 // here summarise rather than enumerate.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtFull } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
 import { bucketMs, densify, inferBucket } from './lib/buckets.js';
@@ -374,23 +374,21 @@ export function withTable(card, chartEl, tableEl, cardId) {
 
 /* ------------------------------------------------------------------ gauge */
 
-/** gauge is ONE window's reading: what share of it is spent, on a bar, with
- *  when it resets and where the current burn rate lands.
+/** gauge is ONE window's reading: what share of it is spent, on a bar, and when
+ *  it resets.
  *
- *  #95 rewrote its SHAPE, not its content — every figure the old three-line
- *  block printed is still here. It used to be a name/percent/state/reset row, a
- *  bar, and then a full sentence of its own ("At the current rate (22.6%/h) this
+ *  #95 rewrote its SHAPE — it used to be a name/percent/state/reset row, a bar,
+ *  and then a full sentence of its own ("At the current rate (22.6%/h) this
  *  window fills around 03:25 AM."), about 75px per window. The brief for this
- *  card is "make the current utilization the biggest number, and let the reset
- *  and the forecast fall back to second place", and the old layout could not do
- *  that however large the percent was set: a sentence on its own line reads as
- *  a peer of the thing above it, and there were two windows per subscription and
- *  up to five subscriptions on the card.
+ *  card is "make the current utilization the biggest number, and let everything
+ *  else fall back to second place", and the old layout could not do that however
+ *  large the percent was set: a sentence on its own line reads as a peer of the
+ *  thing above it, and there were two windows per subscription and up to five
+ *  subscriptions on the card.
  *
- *  So the reset and the forecast are one trailing `.meta` string, and the row is
- *  one line. The percent keeps its size and everything else shrank around it,
- *  which is the only way one number becomes the big one on a card where every
- *  row wants to be read.
+ *  So the row is one line with one trailing `.meta` string. The percent keeps
+ *  its size and everything else shrank around it, which is the only way one
+ *  number becomes the big one on a card where every row wants to be read.
  *
  *  The state LABEL stays, and is not the hue's spare tyre: styles.css's rule is
  *  that status colour is always reinforced by the word beside it, never carried
@@ -404,33 +402,41 @@ export function withTable(card, chartEl, tableEl, cardId) {
 export function gauge(name, w) {
   const pct = Math.max(0, Math.min(100, Number(w.utilization) || 0));
   const b = band(pct);
-  const burn = w.burn || {};
 
-  // Only the forecast, and only when there is one. The reset countdown used to
-  // lead this line -- "resets in 2h 29m · burning 8.0%/h" -- and #124 dropped it:
-  // a window that resets in two hours and one that resets in five behave
-  // identically to a reader who is at 17%, and the number that DOES change what
-  // they do next is the burn rate already sitting beside it. `w.resets_at` is
-  // untouched on the wire and still drives that forecast (recon.go), the
-  // endpoint-share window, the contradiction check and the account fingerprint;
-  // it just stopped being printed raw.
+  // The reset time, and nothing else. This line has now been argued both ways,
+  // so both are on the record.
   //
-  // One string, not a joined list: with the countdown gone the line can hold at
-  // most one thing, and a `join(' · ')` over an array that can never reach two
-  // entries is a separator kept for a second item that no longer exists.
-  let meta = '';
-  if (burn.exhausted_at) {
-    meta = t('gauge.fillsAround', {
-      rate: burn.percent_per_hour.toFixed(1),
-      time: new Date(burn.exhausted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    });
-  } else if (burn.percent_per_hour > 0) {
-    meta = t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) });
-  }
+  // #124 removed the reset countdown and kept the burn rate, on this reasoning,
+  // which is quoted rather than paraphrased because reversing a decision is not
+  // a licence to rewrite what it said: "a window that resets in two hours and
+  // one that resets in five behave identically to a reader who is at 17%, and
+  // the number that DOES change what they do next is the burn rate already
+  // sitting beside it."
+  //
+  // #129 reverses it on the operator's direction: the burn rate goes, the reset
+  // time comes back on EVERY window. The rate answers "how fast is this
+  // filling", which is a question about the past five minutes and swings with
+  // them; the reset answers "when do I get this back", which is a fact about
+  // the window and is the one a reader plans around. Where the two conflict,
+  // the operator's call stands — so this is the fourth reversal this batch has
+  // had to write down rather than quietly re-decide.
+  //
+  // `relTime` came back verbatim from fd1d888 (lib/format.js), not rewritten:
+  // the removed version is the one the five `reset.*` keys were written for.
+  //
+  // What did NOT change either time: `w.resets_at` on the wire. It still drives
+  // the burn forecast (recon.go) even though that forecast is no longer
+  // printed, plus the endpoint-share window, the contradiction check and the
+  // account fingerprint. `w.burn` is likewise still computed and still sent;
+  // this row simply stopped reading it.
+  const meta = relTime(w.resets_at);
 
   return el('div', { class: 'gauge' },
     el('span', { class: 'name' }, name),
-    el('span', { class: 'pct' }, pct.toFixed(1) + '%'),
+    // Whole percent. A tenth of a percent of a five-hour window is under two
+    // minutes of work — below what anyone acts on — and `.pct` is tabular-nums,
+    // so dropping the decimal narrows the column for every row at once.
+    el('span', { class: 'pct' }, Math.round(pct) + '%'),
     el('span', { class: 'state st-' + b.key }, b.label),
     el('div', { class: 'track' }, el('div', { class: 'fill bg-' + b.key, style: `width:${pct}%` })),
     el('span', { class: 'meta' }, meta));
