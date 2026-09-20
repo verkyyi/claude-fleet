@@ -426,16 +426,46 @@ team@acme.example      max   default_claude_max_20x   2 endpoints
 ```
 
 The dashboard grows a subscription switcher as soon as a second one reports, and
-every query is scoped to one account. With more than one on the hub, a query
-that names none is **refused** rather than answered for whichever came first:
+every query carries an account scope: a uuid for one subscription, or `all` to
+span every one. The switcher's first entry is *All N accounts / usage pools*.
+
+A query that names none is **answered, and told what it spans** — one
+subscription is inferred when the hub holds only one, and with several the
+answer is every one of them, labelled:
 
 ```
-GET /v1/usage?by=endpoint
-→ 400  this hub holds several subscriptions; pass ?account=<uuid> (see /v1/accounts)
+GET /v1/usage?by=endpoint          # no ?account=, hub holds three
+→ 200  "account_uuid": "*",
+       "all_accounts": true,
+       "scope_note": "Totals span every subscription on this hub. Tokens and
+                      notional costs are additive; rate-limit utilization is not
+                      and is reported per subscription."
 ```
 
-The MCP tools behave the same way, returning an error that lists the available
-accounts so the model can retry correctly instead of guessing.
+Refusing was the older answer, and it was the wrong one: it made the
+subscription a *mode* the whole page was stuck in rather than an axis you pick
+up and put down. The label is what makes spanning safe — a cross-subscription
+total is never mistaken for one subscription's, because it says so in the
+response. `?account=<uuid>` still scopes to exactly one, and `/v1/accounts`
+still lists them.
+
+The MCP tools take the same default and carry the same `all_accounts` /
+`scope_note` pair, so a model reading a spanned total knows it spanned.
+`list_accounts` is there when it needs the uuids.
+
+**What is not additive says so.** Tokens add across subscriptions, and so does
+each *source's* cost. Two things never do, and each says so in the response —
+the first in `scope_note`, the second in the `disclaimer` that travels with the
+totals:
+
+- **Rate-limit utilization** — a percentage of one subscription's window.
+  Averaging three of them describes no window that exists, so it is reported
+  per subscription and the dashboard's limits banner switches off entirely
+  while the scope is `all`.
+- **Cost across sources** — `claude` and `codex` figures are notional (what the
+  tokens would have cost at API rates; nobody is billed them, the plan is),
+  while a gateway's are billed per call. Adding them invents spending that
+  never happened. Each row carries its own kind; see the per-source breakdown.
 
 ### Several users on one machine
 
