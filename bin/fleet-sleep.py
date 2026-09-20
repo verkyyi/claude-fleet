@@ -186,15 +186,37 @@ class Worker:
             seen.add(pid);pid=rows[pid][0]
         return pid==root_pid
 
-    def eligible(self, manual=False):
-        if self.opt('@worker_lifecycle'): raise ValueError('already sleeping or transitioning')
-        if self.opt('@sleep_keep_awake') == '1': raise ValueError('keep awake enabled')
-        if self.visible(): raise ValueError('a client is viewing this worker')
-        if self.opt('@claude_state') not in ('done','looping'): raise ValueError('worker is not done')
-        for option in ('@handoff_armed','@agent_transfer_request'):
-            if self.opt(option): raise ValueError('handoff/failover is pending')
+    def cheap_vetoes(self):
+        # The window-option gates that need no native inspection: the common
+        # blockers, each independently checkable, so a diagnostic can list ALL of
+        # them at once (issue #837) while eligible() still raises on the first.
         until = self.opt('@agent_transfer_until')
-        if until and (not until.isdigit() or int(until) > time.time()): raise ValueError('transfer is active')
+        return [
+            (not self.opt('@worker_lifecycle'), 'already sleeping or transitioning'),
+            (self.opt('@sleep_keep_awake') != '1', 'keep awake enabled'),
+            (not self.visible(), 'a client is viewing this worker'),
+            (self.opt('@claude_state') in ('done','looping'), 'worker is not done'),
+            (not self.opt('@handoff_armed') and not self.opt('@agent_transfer_request'), 'handoff/failover is pending'),
+            (not until or (until.isdigit() and int(until) <= time.time()), 'transfer is active'),
+        ]
+
+    def unmet_reasons(self):
+        """Every currently-unmet sleep condition (issue #837). All the cheap
+        window-option vetoes, then — only if those are clean — the first deep
+        reason from a read-only eligible() probe (its ordered checks presuppose
+        one another, so it cannot list past its own first failure)."""
+        reasons = [msg for ok, msg in self.cheap_vetoes() if not ok]
+        if not reasons:
+            try:
+                with lock(self.lockfile):
+                    self.eligible()
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                reasons.append(str(exc))
+        return reasons
+
+    def eligible(self, manual=False):
+        for ok, msg in self.cheap_vetoes():
+            if not ok: raise ValueError(msg)
         source = self.inspect()
         if source['agent']=='codex' and not source.get('codex_identity',{}).get('remote','').startswith('unix:///'):
             raise ValueError('legacy Codex has no private endpoint; exact native rebind is required before sleep')
@@ -812,7 +834,7 @@ def park(w):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore'))
+    p.add_argument('action',choices=('hook','scan','status','sleep','wake','park','launch','keep-awake','allow-sleep','holds-exit','deliver','restore','why'))
     p.add_argument('--session',default='')
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
@@ -860,7 +882,8 @@ def main():
             print(json.dumps(record,ensure_ascii=False),flush=True)
         return 0
     w=Worker(a.session,a.window or '')
-    if a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
+    if a.action=='why': print(json.dumps({'window':w.window,'reasons':w.unmet_reasons()},ensure_ascii=False))
+    elif a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
     elif a.action=='holds-exit':
         _,data=w.record()
         return 0 if w.holds_exit(data) else 1
