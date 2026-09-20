@@ -14,6 +14,10 @@ import { spendTerms } from './lib/spend.js';
 
 export { spendTerms };
 
+// Where the explanation fold remembers whether it is open. Namespaced like
+// every other per-browser fold state on this page ('ccquota-fleet').
+const FOLD_KEY = 'ccquota-spend-working';
+
 export function renderSpend(root, summary) {
   if (!summary) { root.replaceChildren(); return; }
   const rs = summary.real_spend;
@@ -48,10 +52,28 @@ export function renderSpend(root, summary) {
   // is that this page no longer prints it: subscription work is reported in
   // TOKENS, which is the unit it is actually measured in, and the money owed for
   // it is the plan price — a term in the total above.
-  // Disclosed once, under the headline: at what rate, read when, and whether
-  // it is a live reading at all. pricing.GatewayCNYPerUSD's comment warns that a
-  // live feed "would silently restate every historical figure each morning" —
-  // this line is the difference between restating them and saying so.
+
+  // `spend.incomplete` is the ONE sentence that stays out of the fold below,
+  // and it stays out for the same reason the `≥` stays on the figure: neither
+  // explains the number, both say the number itself is LOW. A card that folds
+  // "this total is missing a source" is a card showing a knowingly biased
+  // figure as if it were exact. Everything else here is working, and working
+  // folds (issue #94).
+  if (rs && !rs.complete) {
+    card.appendChild(el('p', { class: 'hint warn' },
+      t('spend.incomplete', { missing: (rs.missing || []).join('; ') })));
+  }
+
+  // The working: up to three sentences of fx disclosure, three more from the
+  // server, and the unpriced-requests caveat — around a card whose whole job is
+  // to show one number. None of it is deleted; all of it moves one click away.
+  const working = [];
+
+  // Disclosed once, in the fold under the headline: at what rate, read when,
+  // and whether it is a live reading at all. pricing.GatewayCNYPerUSD's comment
+  // warns that a live feed "would silently restate every historical figure each
+  // morning" — this line is the difference between restating them and saying
+  // so, and `≈` on the figure itself is what survives the fold being shut.
   const fx = currentFx();
   if (fx) {
     const bits = [t('fx.rateLine', {
@@ -60,16 +82,39 @@ export function renderSpend(root, summary) {
     if (fx.fallback) bits.push(t('fx.fallbackLine', { source: fx.source }));
     else if (fx.stale) bits.push(t('fx.staleLine', { asOf: fxAsOf() }));
     bits.push(t('fx.billedIn'));
-    card.appendChild(el('p', { class: 'hint' + (fx.fallback ? ' warn' : '') }, bits.join(' ')));
+    working.push(el('p', { class: 'hint' + (fx.fallback ? ' warn' : '') }, bits.join(' ')));
   }
-  if (summary.real_spend_note) card.appendChild(el('p', { class: 'hint' }, summary.real_spend_note));
-  if (rs && !rs.complete) {
-    card.appendChild(el('p', { class: 'hint warn' },
-      t('spend.incomplete', { missing: (rs.missing || []).join('; ') })));
-  }
+  // Server-side prose (internal/api/i18n.go), reproduced verbatim: it is what
+  // stops a reader taking the notional figure for money somebody paid. Only
+  // where it sits changed.
+  if (summary.real_spend_note) working.push(el('p', { class: 'hint' }, summary.real_spend_note));
   const unpriced = unpricedEvents(summary);
   if (unpriced) {
-    card.appendChild(el('p', { class: 'hint' }, t('spend.unpriced', { n: unpriced })));
+    working.push(el('p', { class: 'hint' }, t('spend.unpriced', { n: unpriced })));
   }
+  if (working.length) card.appendChild(workingFold(working));
+
   root.replaceChildren(card);
+}
+
+/** workingFold collapses the explanation behind the figure.
+ *
+ *  <details>, not a class that hides them: it is the one collapse the platform
+ *  gives a keyboard and find-in-page for free, so a reader searching the page
+ *  for "汇率" still lands on the sentence. The summary names what is inside —
+ *  "how this number is worked out" — because "详情" would make opening it a
+ *  guess.
+ *
+ *  Open state is remembered per browser, the way the fleet roster's fold is
+ *  (now.js): app.js re-renders this card on every 60-second refresh, and a fold
+ *  that forgot would snap shut under a reader mid-sentence. */
+function workingFold(kids) {
+  let open = false;
+  try { open = localStorage.getItem(FOLD_KEY) === '1'; } catch {}
+  const det = el('details', { class: 'working', open: open ? '' : false },
+    el('summary', {}, t('spend.working')), ...kids);
+  det.addEventListener('toggle', () => {
+    try { localStorage.setItem(FOLD_KEY, det.open ? '1' : '0'); } catch {}
+  });
+  return det;
 }

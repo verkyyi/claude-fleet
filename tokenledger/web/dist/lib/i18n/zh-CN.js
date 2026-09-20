@@ -79,6 +79,7 @@ export const zhCN = {
   'spend.title': '这段时间真正花了多少',
   'spend.incomplete': '不完整 —— {missing}',
   'spend.unpriced': '有 {n} 次请求没有价格数据，所以这里每个数字都是下界。',
+  'spend.working': '这个数是怎么算的',
   'spendTerm.subscription': '订阅',
   'spendTerm.gateway': '按量计费 · 走网关',
   'spendTerm.vendor_bill': '按量计费 · 厂商直接开账单',

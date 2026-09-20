@@ -600,6 +600,21 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
   font-variant-numeric: tabular-nums;
 }
 #real-spend .hint.warn { color: var(--serious); }
+
+/* The working, folded (issue #94). The card exists to show one figure, and the
+   sentences that explain it outnumbered it five to one; they are all still
+   here, one click away. The summary is deliberately the quietest thing in the
+   card -- it is a door, not a heading, and the one loud thing here is still the
+   number. */
+#real-spend details.working { margin: 0 0 4px; }
+#real-spend details.working > summary {
+  color: var(--ink-3); font-size: 12px; padding: 2px 0;
+  cursor: pointer; list-style: revert; user-select: none;
+}
+#real-spend details.working > summary:hover { color: var(--ink-2); }
+#real-spend details.working > .hint:first-of-type { margin-top: 8px; }
+#real-spend details.working > .hint:last-child { margin-bottom: 0; }
+
 @media (max-width: 480px) {
   #real-spend .figure { font-size: 2rem; }
   #real-spend .terms { font-size: .9em; }
