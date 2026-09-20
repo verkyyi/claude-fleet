@@ -142,6 +142,56 @@ type Summary struct {
 
 func (s *Store) Summary(f Filter) (*Summary, error) { return readSummary(s.read, f) }
 
+// AccountSource is the grain an account-wide vendor observation lands on: one
+// subscription as seen through one source. It is the key AttributedTotals
+// hands back, so a caller holding a list of observations can look its own row
+// up instead of asking the store again per row.
+type AccountSource struct{ Account, Source string }
+
+// Attributed is how much of an account's volume this hub can actually point
+// at a local event — Summary's two additive members, nothing else.
+type Attributed struct {
+	Events int64
+	Tokens int64
+}
+
+// AttributedTotals is Summary's events+tokens for EVERY (account, source)
+// pair under f, in a single pass over the rollup.
+//
+// It exists because /v1/account-usage used to call Summary once per
+// observation row, and an observation row IS an (account, source) pair: a hub
+// watching three sources across four subscriptions scanned the whole rollup
+// twelve times to draw one strip of the first screen — on a single-replica
+// SQLite that contends with ingest for the same read connection. One GROUP BY
+// answers all twelve.
+//
+// A pair with no local events is absent from the map rather than present at
+// zero; the zero value of Attributed is what a caller wants there anyway, and
+// a map read gives it for free.
+func (s *Store) AttributedTotals(f Filter) (map[AccountSource]Attributed, error) {
+	where, args, err := f.where("hour")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.read.Query(fmt.Sprintf(`
+		SELECT account_uuid, source, COALESCE(SUM(events),0), COALESCE(SUM%s,0)
+		FROM usage_hourly %s GROUP BY account_uuid, source`, hourlyTokens, where), args...)
+	if err != nil {
+		return nil, fmt.Errorf("attributed totals: %w", err)
+	}
+	defer rows.Close()
+	out := map[AccountSource]Attributed{}
+	for rows.Next() {
+		var k AccountSource
+		var a Attributed
+		if err := rows.Scan(&k.Account, &k.Source, &a.Events, &a.Tokens); err != nil {
+			return nil, err
+		}
+		out[k] = a
+	}
+	return out, rows.Err()
+}
+
 func readSummary(db interface{ QueryRow(string, ...any) *sql.Row }, f Filter) (*Summary, error) {
 	where, args, err := f.where("hour")
 	if err != nil {

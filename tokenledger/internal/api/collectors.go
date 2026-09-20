@@ -186,13 +186,29 @@ func (s *Server) AccountUsageView(account, source string) (map[string]any, error
 		LocalTokens   int64 `json:"local_attributed_tokens"`
 		LocalRequests int64 `json:"local_attributed_requests"`
 	}
+	// One GROUP BY for every row below, rather than one whole-ledger Summary
+	// per row (issue #49). A row here is an (account, source) pair — that is
+	// what Store.AccountUsage dedups to — so the N scans were N slices of a
+	// single grouped scan, paid for one at a time against the same SQLite
+	// read connection ingest is using.
+	//
+	// The range stays all-time deliberately. The number beside it is the
+	// vendor's own lifetime figure, so narrowing the local side would put two
+	// different periods on one line — and this endpoint's whole point is that
+	// the two are shown side by side and never added.
+	acct := account
+	if acct == "" || isAllAccounts(acct) {
+		acct = store.AllAccounts
+	}
+	local, err := s.Store.AttributedTotals(store.Filter{Account: acct, Source: source,
+		Start: time.Unix(0, 0).UTC(), End: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		return nil, err
+	}
 	out := []observation{}
 	for _, u := range rows {
-		sum, err := s.Store.Summary(store.Filter{Account: u.AccountUUID, Source: u.Source, Start: time.Unix(0, 0).UTC(), End: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, observation{AccountUsage: u, LocalTokens: sum.Tokens, LocalRequests: sum.Events})
+		a := local[store.AccountSource{Account: u.AccountUUID, Source: u.Source}]
+		out = append(out, observation{AccountUsage: u, LocalTokens: a.Tokens, LocalRequests: a.Events})
 	}
 	return map[string]any{"observations": out, "comparable": false, "note": accountUsageNoteEN}, nil
 }
