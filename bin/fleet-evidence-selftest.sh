@@ -16,7 +16,9 @@
 #      nothing reads `none` (the #7579 acceptance: no crash, no invention), and a
 #      member captured before its parent link existed is still found
 #   E. `export` copies beside a report page and prints RELATIVE paths
-#   F. `line` extracts the 上线证据 line in its label variants; none → exit 1, silent
+#   F. `line` extracts the 上线证据 line — the labelled form, and the `## 上线证据`
+#      heading with the line under it (#841); neither → exit 1, silent. Plus one
+#      END-TO-END round trip of /fleet-epic-plan's own template through the reader
 #   G. issue resolution: --issue › @issue › issue-<N> worktree in cwd; usage codes
 # The whole file re-runs itself once under /bin/bash when that is a 3.x bash (the
 # operator's macOS), because #703's class of bug is only observable there.
@@ -213,6 +215,43 @@ eq "F3 numbered list" "capture-pane the dash" "$OUT"
 run GH_BODY='## body\nno such line here\n' -- line --session fevsess --issue 42
 eq "F4 absent → exit 1" 1 "$RC"
 eq "F4 absent → silent" "" "$OUT"
+# the HEADING form (issue #841): what /fleet-epic-plan wrote before #840 unified
+# the write side — `## 上线证据` with the line under it, blank line and all
+run GH_BODY='## 完成判据\nx\n\n## 上线证据\n\n把「现在」拨到 08:48Z 跑一次，贴出那条告警原文\n\n---\nPart of EPIC #7.\n' -- line --session fevsess --issue 42
+eq "F5 heading form exits 0" 0 "$RC"
+eq "F5 heading form: the line under it" "把「现在」拨到 08:48Z 跑一次，贴出那条告警原文" "$OUT"
+run GH_BODY='## Evidence\n- curl -s https://api/health | jq .\n' -- line --session fevsess --issue 42
+eq "F6 heading + bullet, no blank line" "curl -s https://api/health | jq ." "$OUT"
+run GH_BODY='## 上线证据\n\n## 下一节\n这不是证据\n' -- line --session fevsess --issue 42
+eq "F7 empty section → exit 1" 1 "$RC"
+eq "F7 empty section → not the next section, not an empty string" "" "$OUT"
+run GH_BODY='## 完成判据\nx\n\n## 上线证据\n\n\n' -- line --session fevsess --issue 42
+eq "F8 heading at the end of the body → exit 1" 1 "$RC"
+eq "F8 → silent" "" "$OUT"
+# the labelled line still WINS, wherever it sits relative to a heading
+run GH_BODY='## 上线证据\n标题下的那行\n\n**上线证据**：带冒号的那行\n' -- line --session fevsess --issue 42
+eq "F9 labelled form wins even when a heading comes first" "带冒号的那行" "$OUT"
+run GH_BODY='## 上线证据:\n标题带个空冒号\n' -- line --session fevsess --issue 42
+eq "F10 a label with nothing after the colon falls through, never an empty line" "标题带个空冒号" "$OUT"
+
+# END-TO-END: the shape /fleet-epic-plan WRITES must be a shape `line` READS.
+# The two sides were fixed in separate passes (#840 write, #841 read) and the gap
+# between them is exactly what filed 8 unreadable members on another fleet, so the
+# assertion is one round trip through the command doc's own template, not two
+# separate opinions about the format.
+PLAN="$BIN/../commands/fleet-epic-plan.md"
+if [ -f "$PLAN" ]; then
+  # the template line in whatever shape it is written — plus the line under it, so
+  # a heading-shaped template is round-tripped through the heading branch
+  tmpl=$(awk '/^[[:space:]]*(#+[[:space:]]*)?[*_`]*(上线证据|[Ee]vidence)[*_`]*[[:space:]]*([:：]|$)/ { print; if ((getline nxt) > 0) print nxt; exit }' "$PLAN" \
+           | sed 's/<[^>]*>/一句话证据/')
+  [ -n "$tmpl" ] && ok || fail "F11 no 上线证据 template found in commands/fleet-epic-plan.md"
+  run GH_BODY="$tmpl" -- line --session fevsess --issue 42
+  eq "F11 the plan's own template round-trips through line" 0 "$RC"
+  eq "F11 it yields the evidence line, not the label" "一句话证据" "$OUT"
+else
+  printf 'fleet-evidence-selftest: F11 skipped — no commands/ beside %s\n' "$BIN"
+fi
 
 # ---------- G. issue resolution + usage codes ------------------------------------
 run TMUX_AT_ISSUE=42 -- dir --session fevsess

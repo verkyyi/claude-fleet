@@ -55,8 +55,10 @@
 #   --post        after storing, also post the comment (same as a `post` call)
 #   -q            quiet (no per-file line on stdout)
 #
-# Exit: 0 ok · 1 gh/copy failure · 2 usage · 4 no issue resolvable. `line` exits
-# 1 when the body has no such line (print nothing) — the worker then judges.
+# Exit: 0 ok · 1 gh/copy failure · 2 usage · 4 no issue resolvable. `line` reads
+# the labelled form first (`**上线证据**：…` / `evidence: …`, content on the line)
+# and falls back to a `## 上线证据` heading with the line under it (issue #841);
+# it exits 1 when the body has neither (print nothing) — the worker then judges.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -66,7 +68,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-evidence: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || { usage >&2; exit 2; }
 shift
@@ -173,13 +175,40 @@ if [ "$cmd" = line ]; then
   [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)" 2
   command -v gh >/dev/null 2>&1 || die "gh not on PATH" 1
   body=$(gh issue view "$m" --repo "$repo" --json body --jq .body 2>/dev/null) || die "could not read issue #$m in $repo" 1
-  # `- **上线证据**：…` / `evidence: …` / `3. 上线证据: …` — label variants, both colons
-  # (spelled case-insensitively in the pattern itself: BSD sed has no `I` flag)
-  pat='^[[:space:]]*([-*+]|[0-9]+[.)])?[[:space:]]*[*_`]*(上线证据|[Ee]vidence|EVIDENCE)[*_`]*[[:space:]]*[:：]'
-  l=$(printf '%s\n' "$body" | grep -E "$pat" | head -1)
-  [ -n "$l" ] || exit 1
-  printf '%s\n' "$l" | sed -E "s/${pat}[[:space:]]*//"
-  exit 0
+  # 1) the canonical shape — a LABELLED line: `- **上线证据**：…` / `evidence: …` /
+  # `3. 上线证据: …` / `## 上线证据: …`; label variants, both colons, content on the
+  # SAME line (spelled case-insensitively in the pattern itself: BSD sed has no `I`)
+  pat='^[[:space:]]*(#+|[-*+]|[0-9]+[.)])?[[:space:]]*[*_`]*(上线证据|[Ee]vidence|EVIDENCE)[*_`]*[[:space:]]*[:：]'
+  # first labelled line with something AFTER the colon — a bare `上线证据：` is not a
+  # line, and must not shadow a real one further down (or the heading form below)
+  l=$(printf '%s\n' "$body" | grep -E "$pat" | sed -E "s/${pat}[[:space:]]*//" \
+        | grep -v '^[[:space:]]*$' | head -1)
+  if [ -n "$l" ]; then printf '%s\n' "$l"; exit 0; fi
+  # 2) the fallback — a HEADING-style section: `## 上线证据` with the line UNDER it
+  # (issue #841). /fleet-epic-plan wrote that shape until #840 unified the write
+  # side on the labelled line, and those members are already filed: on 2026-09-20
+  # all 8 members of the two live EPICs on 24haowan-monorepo had it, so every one
+  # of them read as 无证据. Read it back rather than asking the operator to rewrite
+  # bodies. Blank lines under the heading are skipped; the next heading (or the end
+  # of the body) ends the section and, with nothing in it, is still exit 1 — never
+  # an empty string, never the next section's text.
+  printf '%s\n' "$body" | awk '
+    BEGIN { st = 1 }
+    /^[[:space:]]*#+[[:space:]]*[*_`]*(上线证据|[Ee]vidence|EVIDENCE)[*_`]*[[:space:]]*(:|：)?[[:space:]]*$/ { seen = 1; next }
+    seen {
+      if ($0 ~ /^[[:space:]]*$/) next
+      if ($0 ~ /^[[:space:]]*#/) exit
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      t = line; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/, "", t)
+      if (t != "") line = t
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "") next
+      print line; st = 0; exit
+    }
+    END { exit st }
+  '
+  exit $?
 fi
 
 # ---- `list` / `export`: the report's read -----------------------------------

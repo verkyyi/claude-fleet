@@ -308,10 +308,12 @@ now, and in this order:
    ```
 
    Two shapes that are load-bearing, not cosmetic:
-   - **`上线证据` is a LABELLED LINE, not a heading.** `bin/fleet-evidence.sh line`
-     greps the body for `上线证据：…` / `evidence: …` (the label, then a colon, on
-     one line) — a `## 上线证据` heading with the text underneath matches nothing,
-     and the worker's `before` capture silently falls back to its own judgment.
+   - **Write `上线证据` as a LABELLED LINE, not a heading.** `bin/fleet-evidence.sh
+     line` reads `上线证据：…` / `evidence: …` (the label, then a colon, then the
+     line) first; since #841 it also falls back to a `## 上线证据` heading with the
+     text underneath, so bodies filed in the old shape still read — but the fallback
+     is a compatibility path for what is already on GitHub, not a second format to
+     write. One line, one label, one colon.
    - **Keep the blank lines around the `<details>` tags.** GitHub renders
      `<details>` in an issue body, but without a blank line after `<summary>` the
      markdown inside stops being parsed as markdown.
