@@ -57,4 +57,9 @@ hook, surface only what changed.
 Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
 sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
 edits inside its `issue-<N>` worktree and lands via PR; the operator files/triages
-from the hub and hands implementation to a worker.
+from the hub and hands implementation to a worker. That hand-off is a worker
+spawn, never a writing subagent: `hooks/agent-guard.py` lets only the read-only
+`Explore` / `Plan` / `claude-code-guide` subagents through in a fleet pane
+(issue #811) — anything that writes code goes to `dash-issue-session.sh <N>` /
+`fleet-issue-file.sh --spawn` / `dash-raw-session.sh`, which is the only way it
+gets the dash, quota migration, one-worker-one-PR, history and handoff rails.

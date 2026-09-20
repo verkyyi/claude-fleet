@@ -76,6 +76,8 @@ grep -q 'Edit|Write' "$WORK/codex.tsv" \
   && fail "the Claude edit matcher leaked into the codex table" "$cdx"
 grep -q 'artifact-guard' "$WORK/codex.tsv" \
   && fail "artifact-guard.py reached codex, which has no Artifact tool" "$cdx"
+grep -q 'agent-guard' "$WORK/codex.tsv" \
+  && fail "agent-guard.py reached codex, which has no Agent tool" "$cdx"
 grep -q 'classify-hook' "$WORK/codex.tsv" \
   || fail "Codex Stop must invoke the agent-aware screen classifier" "$cdx"
 grep -q 'handoff-latch-reset-hook\|session-end-hook' "$WORK/codex.tsv" \

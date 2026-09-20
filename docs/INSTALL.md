@@ -15,7 +15,7 @@ assumes — this doc is only the install/uninstall procedure.
 | Piece | What | Requires |
 |---|---|---|
 | Attention layer | hooks → window colors/spinner/urgency-sort; the spinner daemon also demotes stuck-`working` windows (missed Stop hook) via a marker-agnostic `window_activity`-staleness check (`FLEET_STUCK_WORKING_SECS`) | tmux ≥ 3.2 |
-| Bypass-permissions guards (issue #355) | two `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. Both **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
+| Bypass-permissions guards (issue #355) | `PreToolUse` hooks — the last line of defense once workers run `bypassPermissions` (CC never prompts). `hooks/bash-guard.py` (matcher `Bash`): a GENERIC deny-list (`rm -rf` on `/` `~` `.git`; force-push onto the base branch) with statement-segment splitting + git-subcommand matching for near-zero false positives, plus a never-shipped local overlay (`~/.claude/hooks/bash-guard-local.py`) for operator-specific rails. `hooks/base-readonly-guard.py` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`): makes the base checkout edit-read-only for **every** seat by denying writes inside `FLEET_MAIN` (worktree siblings stay writable) — closes the gap for the worker seat, which had no base-checkout protection at all. `hooks/artifact-guard.py` (matcher `Artifact`, #526): a fleet session never *publishes* an Artifact (account-scoped; use doc-preview). `hooks/agent-guard.py` (matcher `Agent`, #811): in a fleet pane only the read-only `Explore` / `Plan` / `claude-code-guide` subagents may start — code-writing work is a fleet WORKER (`dash-issue-session.sh` / `fleet-issue-file.sh --spawn`), since a subagent gets none of the fleet's rails; `FLEET_ALLOW_SUBAGENT=1` overrides. All **fail OPEN** (a guard bug or a non-fleet session → allow) | python3 |
 | Dashboard (`prefix+g`) | fzf mission control — an embedded pane in the `plan` hub, which holds the dash and nothing else (no hub Claude session — that pane is retired because it rebuilt itself on every ⌂ tap / F9 / fresh fleet / crash recovery); `prefix+g` focuses it and toggles it fullscreen (`dash-zoom.sh`), as does F9. No standalone dash window | fzf ≥ 0.45 (0.60+ best); its binds use `transform` |
 | Backlog (`prefix+b`) | GitHub issues panel, Enter = spawn issue-bound session. Each row tags its `priority:pN` (from `labels_<slug>`, no extra gh call) and issues sort by priority within a milestone; `⌃y` cycles a row's priority label (none→p2→p1→p0, `bin/dash-issue-priority.sh`, no popup). `⌃n` files a one-line issue | gh (authed) |
 | Config modal (`prefix+c`) | fzf popup to view/edit `FLEET_*` config across both layers (per-fleet overlay ▸ global ▸ default); ⌃s toggles the write scope, enter edits a key (typed validation, backup-first) | fzf ≥ 0.45 |
@@ -189,6 +189,23 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      This closes the gap for the **worker** seat, which had
      no base-checkout protection at all. A no-op outside a fleet (no `FLEET_MAIN`
      resolvable → allow), so it's safe to add globally.
+   - `hooks/artifact-guard.py` (matcher `Artifact`, issue #526) — a fleet
+     session never *publishes* an Artifact: the page is scoped to the claude.ai
+     account that published it and the fleet rotates accounts under sessions, so
+     the refusal points at the `doc-preview` share instead. Reading / listing /
+     commenting stays allowed; `FLEET_ALLOW_ARTIFACT=1` overrides.
+   - `hooks/agent-guard.py` (matcher `Agent`, issue #811) — in a fleet pane,
+     **code-writing work goes to a fleet worker, never a subagent**. Only the
+     read-only `Explore` / `Plan` / `claude-code-guide` subagent types may start;
+     `general-purpose`, `claude`, `fork`, an unnamed type and any
+     `isolation: worktree` are refused with a pointer at
+     `dash-issue-session.sh <N>` / `fleet-issue-file.sh --spawn` /
+     `dash-raw-session.sh`. A subagent runs outside every fleet rail (invisible
+     to the dash, no state, killed mid-edit when the quota migration moves the
+     window, several writing one worktree, no one-worker-one-PR / history /
+     handoff). Fleet-scoped: a no-op without `$TMUX`, or in a tmux session that
+     has no fleet conf. `FLEET_ALLOW_SUBAGENT=1` overrides. Codex has no Agent
+     tool, so `hooks/codex-map.json` drops the group.
 
 6. **Daemons.**
    - macOS: for each template in `launchd/`, substitute `__HOME__` with the
