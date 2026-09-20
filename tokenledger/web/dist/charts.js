@@ -18,19 +18,24 @@
 // selectedKey, stays the raw filter value the chip actually needs. Every
 // other helper here matched review.js's real backend responses as read from
 // internal/api/{review,query}.go and internal/store/rollup_query.go, with
-// two adapter-layer gaps worth knowing about (both handled in review.js, not
+// one adapter-layer gap worth knowing about (handled in review.js, not
 // here): `timeline`/`stackedArea` want `series[i].stack` as a name→tokens
 // MAP, but the backend's `Series.Stack` is an ARRAY of Bucket in
-// `stack_models` order; and `timeline`'s internal bucket-key parsing has no
-// case for the `6h` granularity's 13-char keys (`YYYY-MM-DDTHH`, which
-// `Date.parse` cannot read) — review.js normalizes every bucket key to a
-// full RFC3339 string before handing series to either function, which
-// sidesteps both.
+// `stack_models` order. Bucket KEYS, by contrast, are read here — every
+// shape the rollup emits, by lib/buckets.js's `bucketMs` — so a caller that
+// has not normalized (review.js has, for its own reasons) is still safe.
+//
+// Issue #52: `stackedArea` gained the axes, the hover readout and the
+// shared "other" grey it never had. What the two time charts have in
+// common now lives in one place each — bucket arithmetic in
+// lib/buckets.js, the y scale in `yTicks` below — because the duplication
+// is what let them drift into disagreeing about the same data.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
+import { bucketMs, densify, inferBucket } from './lib/buckets.js';
 import { t } from './lib/i18n.js';
 
 const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
@@ -39,6 +44,31 @@ const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
  *  that is not there. */
 export const seriesColor = (i) => `var(${SERIES[Math.min(i, SERIES.length - 1)]})`;
 const OTHER_COLOR = 'var(--ink-3)';
+
+/** yTicks draws the three-tick y scale every token chart here uses — a
+ *  gridline plus a right-aligned number at 0, half and max. `bars`,
+ *  `timeline` and `stackedArea` had (or, in stackedArea's case before issue
+ *  #52, lacked) byte-identical copies of this; one copy means a chart cannot
+ *  quietly ship without a readable scale again. `lines` keeps its own: it
+ *  ticks at 50/90 percent, not at a data max. */
+function yTicks(g, { max, y, PAD, W }) {
+  for (const v of [0, max / 2, max]) {
+    g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
+    g.appendChild(el('text', { x: PAD.l - 8, y: y(v) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)',
+      'font-size': '10.5' }, fmtInt(v)));
+  }
+}
+
+/** axisLabel is what an x-axis tick says for a bucket key: the date, plus
+ *  the time when the buckets are finer than a day. Slices the KEY rather
+ *  than formatting a Date so it stays in the same (UTC) frame the keys and
+ *  every other label on the page are already in — `bars` slices the same
+ *  way, and a local-time rendering here would disagree with the table
+ *  underneath the chart. */
+function axisLabel(key, granularity) {
+  const k = String(key);
+  return granularity === 'day' || k.length === 10 ? k.slice(5, 10) : k.slice(5, 10) + ' ' + k.slice(11, 16);
+}
 
 /** Utilization -> status. Four named bands so the label, not the hue, is what
  *  carries the meaning. */
@@ -283,15 +313,10 @@ export function bars(series, granularity) {
   const gap = n > 60 ? 1 : 2;
   const bw = Math.max(1, iw / n - gap);
 
-  const ticks = [0, max / 2, max];
   const y = (v) => PAD.t + ih - (v / max) * ih;
 
   const g = el('g', {});
-  for (const t of ticks) {
-    g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(t), y2: y(t), stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 8, y: y(t) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)',
-      'font-size': '10.5' }, fmtInt(t)));
-  }
+  yTicks(g, { max, y, PAD, W });
 
   const peak = series.reduce((a, b) => (b.tokens > a.tokens ? b : a), series[0]);
   series.forEach((s, i) => {
@@ -348,25 +373,11 @@ export function timeline(series, opts) {
   const gap = n > 90 ? 1 : 2;
   const bw = Math.max(1, iw / n - gap);
 
-  // keyMs accepts a bucket key in any of the three raw shapes the rollup
-  // emits (internal/api/history.go's bucketKey: day 'YYYY-MM-DD' — 10
-  // chars, 6h 'YYYY-MM-DDTHH' — 13 chars, hour 'YYYY-MM-DDTHH:00' — 16
-  // chars) or an already-normalized full timestamp. The three raw lengths
-  // are mutually exclusive, so branching on length alone is sufficient —
-  // the previous version of this only had a branch for 16, so every 6h
-  // (30d-span) bucket silently mis-dated. Kept granularity-free (no
-  // `gran`/`bucket`-derived signal) on purpose: a caller's series can mix
-  // in an already-full ISO key (review.js normalizes upstream for its own,
-  // unrelated reasons — see its `bucketISO`) and this still has to accept
-  // that too.
-  const keyMs = (s) => {
-    if (typeof s.key === 'number') return s.key;
-    const k = s.key;
-    if (k.length === 10) return Date.parse(k + 'T00:00:00Z');
-    if (k.length === 13) return Date.parse(k + ':00:00Z');
-    if (k.length === 16) return Date.parse(k + ':00Z');
-    return Date.parse(k);
-  };
+  // Bucket keys arrive in any of the shapes the rollup emits; lib/buckets.js
+  // owns that parsing now (issue #52 gave stackedArea a real time axis and
+  // needed the identical reader — one copy, so the two charts on this page
+  // cannot date the same bucket differently).
+  const keyMs = (s) => bucketMs(s.key);
   const xOf = (ms) => PAD.l + ((ms - ext.start) / span) * iw;
 
   // Stack heights per bucket, in the fixed palette order (+ "other" last).
@@ -391,10 +402,7 @@ export function timeline(series, opts) {
 
   const g = el('g', {});
   const y = (v) => PAD.t + ih - (v / max) * ih;
-  for (const t of [0, max / 2, max]) {
-    g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(t), y2: y(t), stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 8, y: y(t) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)', 'font-size': '10.5' }, fmtInt(t)));
-  }
+  yTicks(g, { max, y, PAD, W });
   built.forEach(({ ms, parts, other, total, s }) => {
     const x = xOf(ms);
     let base = 0;
@@ -542,31 +550,132 @@ export function timeline(series, opts) {
 
 /* ------------------------------------------------------------- stackedArea */
 
-/** stackedArea: one cumulative SVG path per stack name (palette order) plus a
- *  legend. `series` items are `{key, stack: {name: value, ...}}`. */
-export function stackedArea(series, stackNames) {
-  const W = 560, H = 170, PAD = { t: 10, r: 8, b: 8, l: 8 };
+/** stackedArea: one cumulative SVG path per stack name (palette order) over
+ *  a real TIME axis, with the y scale, the x labels, the hover readout and
+ *  the grey "other" the timeline directly above it already had. Before issue
+ *  #52 it had none of them: no tick anywhere (`PAD` was 8 on every side, so
+ *  there was nowhere to put one), x by ARRAY INDEX over a series whose empty
+ *  buckets the API never sends — so the axis was neither time nor labelled —
+ *  zero hover, and "other" drawn in a palette hue while the chart above it
+ *  drew the same word grey.
+ *
+ *  `series` items are `{key, stack: {name: value, ...}}`, `key` in any shape
+ *  lib/buckets.js's `bucketMs` reads. `stackNames` must be the TOP names
+ *  only: anything in a bucket's `stack` that is NOT in it folds into "other"
+ *  and is drawn in OTHER_COLOR — the same rule `timeline` applies, which is
+ *  what keeps one word one colour down the page. Pass 'other' inside
+ *  `stackNames` and it takes a palette hue instead, which was exactly the
+ *  bug. Options:
+ *    - `bucket` (ms): the bucket width. Used to put back the buckets
+ *      /v1/history omitted (lib/buckets.js's `densify`) so a gap reads as
+ *      the zero it is instead of the area interpolating across it, and to
+ *      give the last bucket its own width on the axis. Inferred from the
+ *      data when absent.
+ *    - `granularity`: picks how much of the key the two x labels show.
+ *
+ *  Why this is not simply `timeline` with a different fill: timeline exists
+ *  to own the BRUSH — pointer capture, snapping, an absolutely-positioned
+ *  `.brush` overlay, keyboard nudging — and it draws discrete bars because
+ *  each bar is a brush target. This is a continuous area with no selection
+ *  model at all, and it lives in a half-width card. Merging them would mean
+ *  carrying that whole interaction layer behind a flag. What is genuinely
+ *  shared is the bucket arithmetic (now lib/buckets.js) and the y scale
+ *  (now `yTicks`) — so those are shared, and the duplication that let the
+ *  two drift apart is gone. */
+export function stackedArea(series, stackNames, opts = {}) {
+  const W = 560, H = 190, PAD = { t: 14, r: 8, b: 26, l: 46 };
   const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
-  const n = Math.max(1, series.length);
-  const totals = series.map((s) => stackNames.reduce((a, name) => a + ((s.stack && s.stack[name]) || 0), 0));
+  const names = stackNames || [];
+  const { granularity } = opts;
+
+  const raw = (series || [])
+    .map((s) => ({ ms: bucketMs(s.key), key: String(s.key), stack: s.stack || {} }))
+    .filter((p) => Number.isFinite(p.ms))
+    .sort((a, b) => a.ms - b.ms);
+  if (!raw.length) return el('div', { class: 'empty' }, t('common.noUsagePeriod'));
+
+  const bw = opts.bucket > 0 ? opts.bucket : (inferBucket(raw.map((p) => p.ms)) || 36e5);
+  const pts = densify(raw, bw);
+
+  // Anything the caller did not name is "other" — one grey band, exactly as
+  // timeline folds it, rather than a series that quietly vanishes.
+  const otherOf = (p) => Object.entries(p.stack || {})
+    .reduce((a, [k, v]) => a + (names.includes(k) ? 0 : (v || 0)), 0);
+  const valueOf = (p, name) => (p.stack && p.stack[name]) || 0;
+  const totals = pts.map((p) => names.reduce((a, n) => a + valueOf(p, n), 0) + otherOf(p));
   const max = Math.max(1, ...totals);
-  const x = (i) => PAD.l + (n > 1 ? (i / (n - 1)) * iw : 0);
+
+  // The axis spans the time the buckets COVER: the last bucket owns [t1,
+  // t1+bw), so the domain ends there and every bucket gets an equal slot.
+  const t0 = pts[0].ms, t1 = pts[pts.length - 1].ms + bw;
+  const span = Math.max(1, t1 - t0);
+  const x = (ms) => PAD.l + ((ms - t0) / span) * iw;
   const y = (v) => PAD.t + ih - (v / max) * ih;
+  const slot = Math.max(1, (bw / span) * iw);
 
   const g = el('g', {});
-  let base = new Array(n).fill(0);
-  stackNames.forEach((name, si) => {
-    const top = series.map((s, i) => base[i] + ((s.stack && s.stack[name]) || 0));
-    const points = top.map((v, i) => [x(i), y(v)]);
-    const floor = base.map((v, i) => [x(i), y(v)]).reverse();
-    const d = 'M' + points.map((p) => p.join(',')).join('L') + 'L' + floor.map((p) => p.join(',')).join('L') + 'Z';
-    g.appendChild(el('path', { d, fill: seriesColor(si), 'fill-opacity': '0.85' }));
+  yTicks(g, { max, y, PAD, W });
+
+  // A bucket's value is plotted at its own CENTRE, then held flat out to
+  // each edge of the plot. Anchoring at the left edge instead would shift
+  // every reading half a bucket earlier than the tooltip and the table say
+  // it happened, and stopping at the last centre would leave a bucket of
+  // blank canvas that reads as "no data" rather than "the axis ended".
+  const along = (vals) => [
+    [PAD.l, y(vals[0])],
+    ...vals.map((v, i) => [x(pts[i].ms + bw / 2), y(v)]),
+    [PAD.l + iw, y(vals[vals.length - 1])],
+  ];
+  const bands = [...names, null];   // null = the folded "other" band, drawn last
+  let base = new Array(pts.length).fill(0);
+  bands.forEach((name, si) => {
+    const add = pts.map((p) => (name == null ? otherOf(p) : valueOf(p, name)));
+    if (!add.some((v) => v > 0)) { return; }
+    const top = base.map((v, i) => v + add[i]);
+    const d = 'M' + along(top).map((p) => p.join(',')).join('L')
+            + 'L' + along(base).reverse().map((p) => p.join(',')).join('L') + 'Z';
+    g.appendChild(el('path', { d, fill: name == null ? OTHER_COLOR : seriesColor(si), 'fill-opacity': '0.85' }));
     base = top;
   });
 
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
-  const legend = el('div', { class: 'legend' }, stackNames.map((name, i) =>
-    el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)));
+  // One transparent full-height band per bucket: hovering anywhere in a
+  // column reads out THAT bucket, which is the question this card exists to
+  // answer ("what was the mix at this moment"), and a per-path hover could
+  // not answer it at all. Each band also carries a native <title>, so a
+  // touch device or a pointer-less environment still gets the total — the
+  // same fallback `bars` gives its rects.
+  pts.forEach((p, i) => {
+    const total = totals[i];
+    const rows = [...names.map((n) => [n, valueOf(p, n)]), [t('chart.other'), otherOf(p)]]
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const label = `<b>${escapeHTML(axisLabel(p.key, granularity))}</b><br>`
+      + escapeHTML(t('chart.tip.tokens', { tokens: fmtFull(total) }))
+      + rows.map(([n, v]) => '<br>' + escapeHTML(t('chart.tip.mixRow', {
+          name: n, tokens: fmtFull(v), pct: ((v / total) * 100).toFixed(0) + '%' }))).join('');
+    g.appendChild(el('rect', {
+      x: x(p.ms), y: PAD.t, width: slot, height: ih, fill: 'transparent',
+      onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
+    }, el('title', {}, t('chart.tip.barTitle', {
+      key: axisLabel(p.key, granularity), tokens: fmtFull(total) }))));
+  });
+
+  // Ends only, like `bars` — a label per bucket would be unreadable at this
+  // width, and the hover readout names every bucket in between.
+  const tick = (key, at, anchor) => el('text', { x: at, y: H - 8, 'text-anchor': anchor,
+    fill: 'var(--ink-3)', 'font-size': '10.5' }, axisLabel(key, granularity));
+  g.appendChild(tick(pts[0].key, PAD.l, 'start'));
+  if (pts.length > 1) g.appendChild(tick(pts[pts.length - 1].key, PAD.l + iw, 'end'));
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H,
+    role: 'img', 'aria-label': t('chart.ariaModelMix', {
+      from: axisLabel(pts[0].key, granularity),
+      to: axisLabel(pts[pts.length - 1].key, granularity),
+      peak: fmtInt(max) }) }, g);
+  const hasOther = pts.some((p) => otherOf(p) > 0);
+  const legend = el('div', { class: 'legend' },
+    names.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+    hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), t('chart.other')) : null);
   return el('div', {}, svg, legend);
 }
 

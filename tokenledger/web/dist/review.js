@@ -73,10 +73,11 @@ const fmtMD = (ms) => new Date(ms).toISOString().slice(5, 10);
 // bucketISO turns one of the three raw bucket-key shapes the rollup emits
 // (day 'YYYY-MM-DD', 6h 'YYYY-MM-DDTHH', hour 'YYYY-MM-DDTHH:00' — see
 // internal/api/history.go's bucketKey) into a full RFC3339 string. Driven by
-// the known granularity rather than the key's length, which is what keeps
-// this correct for 6h (charts.js's own length-based heuristic has no branch
-// for a 13-char key, so `timeline`/`stackedArea` would otherwise mis-date
-// every 30d-span bucket).
+// the known granularity rather than the key's length: lib/buckets.js's
+// `bucketMs` does read all three lengths (it has to — it is handed keys from
+// callers that never normalized), but a granularity we already know beats a
+// shape we have to guess at, and normalizing once here also gives every
+// downstream reader (`ms`, the table, the chart) one key format.
 function bucketISO(key, gran) {
   if (gran === 'day') return key + 'T00:00:00Z';
   if (gran === '6h') return key + ':00:00Z';
@@ -631,9 +632,16 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
 
 function modelMixCard(result, ctx) {
   if (result.status === 'rejected') return errCard(t('modelMix.title'), result);
-  const { gran, sel } = ctx;
+  const { gran, sel, ext } = ctx;
   const data = result.value;
   const stackModels = data.stack_models || [];
+  // The SAME split timelineCard makes (topModels above): 'other' is a
+  // rollup-side bucket name, not a model, and both charts must hand it to
+  // the chart helper as a leftover so it lands in the shared grey. Passing
+  // the unfiltered list here is what drew 'other' in a palette hue on this
+  // card while the timeline one card up drew it grey — the same word, two
+  // colours, on one screen (issue #52).
+  const topModels = stackModels.filter((m) => m !== 'other');
   const norm = normalizeSeries(data.series, gran, stackModels);
   const inSel = norm.filter((n) => n.ms >= sel.from && n.ms < sel.to);
 
@@ -645,7 +653,10 @@ function modelMixCard(result, ctx) {
   }
 
   const areaSeries = inSel.map((n) => ({ key: n.key, stack: n.stack || {} }));
-  const chart = C.stackedArea(areaSeries, stackModels);
+  // `ext.bucket` is what lets the chart put back the buckets /v1/history
+  // never sent (it emits only buckets that had rows), so a quiet stretch
+  // draws as the zero it was instead of the area sliding across it.
+  const chart = C.stackedArea(areaSeries, topModels, { bucket: ext.bucket, granularity: gran });
 
   const totals = {};
   for (const n of inSel) {

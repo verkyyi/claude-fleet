@@ -142,8 +142,10 @@ export const en = {
   'chart.tip.tokensPct': '{tokens} tokens · {pct}',
   'chart.tip.heatCell': '{day} {hour} — {tokens} tokens, {turns} turns',
   'chart.tip.barTitle': '{key}: {tokens} tokens',
+  'chart.tip.mixRow': '{name} · {tokens} · {pct}',
   'chart.subagent': 'subagent',
   'chart.ariaTokensPer': 'Tokens per {granularity}, peak {peak}',
+  'chart.ariaModelMix': 'Model mix over time, {from} to {to}, peak {peak} tokens per bucket',
 
   /* ------------------------------------------------------------- charts */
   'chart.turns': 'Turns',

@@ -143,8 +143,10 @@ export const zhCN = {
   'chart.tip.tokensPct': '{tokens} token · {pct}',
   'chart.tip.heatCell': '{day} {hour} —— {tokens} token，{turns} 轮次',
   'chart.tip.barTitle': '{key}：{tokens} token',
+  'chart.tip.mixRow': '{name} · {tokens} · {pct}',
   'chart.subagent': '子代理',
   'chart.ariaTokensPer': '每{granularity}的 token 数，峰值 {peak}',
+  'chart.ariaModelMix': '模型构成随时间的变化，{from} 至 {to}，单桶峰值 {peak} token',
 
   /* ------------------------------------------------------------- charts */
   'chart.turns': '轮次',
