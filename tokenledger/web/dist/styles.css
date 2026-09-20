@@ -749,3 +749,15 @@ th[aria-sort] { color: var(--ink); }
 #repo-health tr.unread td.figure { white-space: normal; }
 #repo-health .unread-tag { color: var(--serious); font-weight: 600; }
 #repo-health .hint.warn { color: var(--serious); }
+
+/* The manual-step card. Its marks are deliberately loud: every one of them
+   says "this row is not going to move on its own" — a step nobody was told
+   about, or an owner nothing could resolve. Rendering them as ordinary text
+   is how they become invisible in a list of ordinary rows. */
+#repo-human .warn { color: var(--serious); }
+#repo-human h3 { margin-top: 20px; font-size: 1.02em; }
+#repo-human .controls { margin-top: 14px; }
+/* "nobody told" is three words in English and five characters in Chinese; in a
+   column sized to its header it wraps into a vertical stack of single
+   characters, which reads as decoration rather than as the warning it is. */
+#repo-human td:last-child, #repo-human td.num { white-space: nowrap; }

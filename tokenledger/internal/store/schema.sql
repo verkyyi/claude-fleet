@@ -494,6 +494,73 @@ CREATE TABLE IF NOT EXISTS repo_health (
   readings_json       TEXT    NOT NULL                -- []model.RepoReading, verbatim
 );
 
+-- The other half of progress: release work that is waiting on a PERSON.
+--
+-- Two tables again, and again because they have two lifetimes. repo_human_days
+-- is kept forever (it is the ratio the whole thing is judged by, and nothing
+-- can reconstruct last week's denominator afterwards); repo_human_steps is a
+-- live list that ages out with its shipper, exactly like repo_issues.
+--
+-- Nothing here is a threshold. There is no "overdue" column: how long a step
+-- has been waiting is computed on read from todo_at, because a stored age is
+-- wrong the moment it is stored -- and because the ESCALATION ladder (who gets
+-- told at three days, at seven, at fourteen) belongs to the system that does
+-- the telling, not to the one that draws the list. Two copies of a ladder is
+-- two ladders that drift.
+CREATE TABLE IF NOT EXISTS repo_human_steps (
+  repo           TEXT    NOT NULL,
+  -- The release fragment's issue number, and the numbered step inside it.
+  -- The key is WHERE THE STEP IS WRITTEN, deliberately not any id the
+  -- notification channel minted: a card can be deleted and rebuilt, and the
+  -- step it describes is the same step throughout.
+  fragment       INTEGER NOT NULL,
+  ord            INTEGER NOT NULL,
+  owner          TEXT    NOT NULL,     -- verbatim, as written in the fragment
+  owner_kind     TEXT    NOT NULL,     -- person | not-a-person | unresolved
+  owner_id       TEXT,                 -- NULL unless owner_kind = 'person'
+  title          TEXT    NOT NULL,
+  how            TEXT,                 -- NULL: the author did not write one
+  pass           TEXT,                 -- NULL: no acceptance criterion written
+  exit           TEXT,                 -- NULL: no "what if I can't" written
+  fragment_title TEXT,
+  fragment_url   TEXT,
+  fragment_at    TEXT    NOT NULL,
+  -- NULL means nobody has been told yet. That is a different failure from
+  -- "told and not done", and the two want different fixes.
+  todo_at        TEXT,
+  -- 0 means still owed. Done steps keep arriving until their fragment is
+  -- archived: if "done" meant the shipper stopped sending the row, a broken
+  -- shipper would look exactly like a productive afternoon.
+  done           INTEGER NOT NULL DEFAULT 0,
+  -- NULL with done=1 is legal and common: somebody struck the step out by
+  -- hand in the issue body, so it is finished and no clock recorded when.
+  done_at        TEXT,
+  done_by        TEXT,
+  observed_at    TEXT    NOT NULL,
+  PRIMARY KEY (repo, fragment, ord)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_human_open ON repo_human_steps(repo, done, fragment_at);
+
+-- One UTC day of "how much of this repo's release work needed a human".
+--
+-- Stored as its two halves, never as the quotient: a percentage cannot be
+-- re-summed into a week, and a week is the grain anyone actually asks about.
+-- fragments is the denominator -- "3 manual fragments" means nothing until you
+-- know whether the day had four or four hundred.
+CREATE TABLE IF NOT EXISTS repo_human_days (
+  repo        TEXT    NOT NULL,
+  day         TEXT    NOT NULL,       -- YYYY-MM-DD, UTC, sorts as a string
+  fragments   INTEGER NOT NULL DEFAULT 0,
+  with_human  INTEGER NOT NULL DEFAULT 0,
+  steps       INTEGER NOT NULL DEFAULT 0,
+  steps_done  INTEGER NOT NULL DEFAULT 0,
+  observed_at TEXT    NOT NULL,
+  PRIMARY KEY (repo, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_human_days_day ON repo_human_days(repo, day DESC);
+
 -- The business ledger: what the company earns while the two books above are
 -- running. One row per (shipper, UTC day), whole-document upsert.
 --

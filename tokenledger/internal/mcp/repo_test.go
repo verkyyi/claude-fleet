@@ -16,7 +16,7 @@ func secs(f float64) *float64 { return &f }
 func seedRepo(t *testing.T, st *store.Store) {
 	t.Helper()
 	now := time.Now().UTC()
-	_, _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
+	_, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: now,
 		Issues: []model.RepoIssue{
 			{Number: 1, Title: "old", State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -40)},
@@ -84,7 +84,7 @@ func TestToolsList_RepoToolsSayWhereTheRowsCameFromAndHowToScaleThem(t *testing.
 func TestCall_ListRepoIssues_StaleNeedsAMeasuredScale(t *testing.T) {
 	ts, st := newMCP(t)
 	now := time.Now().UTC()
-	if _, _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/noscale", ObservedAt: now,
 		Issues: []model.RepoIssue{{Number: 1, State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -400)}},
 	}); err != nil {
@@ -186,7 +186,7 @@ func TestCall_RepoIssueCost_CarriesTheUnattributedBucket(t *testing.T) {
 func TestCall_RepoIssueCost_RefusesWhenTheNumberCannotBeBound(t *testing.T) {
 	ts, st := newMCP(t)
 	seedRepo(t, st)
-	if _, _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/second", ObservedAt: time.Now().UTC(),
 		Issues: []model.RepoIssue{{Number: 1, State: model.RepoStateOpen, CreatedAt: time.Now().UTC()}},
 	}); err != nil {

@@ -23,6 +23,8 @@ import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo,
          labelFacets, filterStalled, sortStalled,
          healthRows, healthAge,
          issueSpendRows, issueShare, concentration } from './lib/repo.js';
+import { groupByOwner, untold, weeklyHuman, windowRatio, trend, pct, trimLeadingEmpty,
+         OWNER_NOT_A_PERSON, OWNER_UNRESOLVED } from './lib/human.js';
 
 /** renderRepo mounts the progress tier. It returns the {fetchers, apply} pair
  *  app.js's loader expects, or null when this hub holds no repo data at all —
@@ -48,13 +50,17 @@ export function renderRepo(root, state, app, repos) {
       // go") while the backlog answers about now, and the two ranges are not
       // the same question wearing one URL.
       (signal) => app.api('/v1/repo/cost?' + q({}), signal),
+      // Open manual steps plus the daily ratio behind them. A hub whose
+      // shipper does not parse release fragments gets an empty pair back and
+      // the card renders as nothing — same rule as the section itself.
+      (signal) => app.api('/v1/repo/human-debt?' + q({}), signal),
     ],
     apply: (results) => apply(root, results, repo, repos, state, app),
   };
 }
 
 function apply(root, results, repo, repos, state, app) {
-  const [flowR, issuesR, costR] = results;
+  const [flowR, issuesR, costR, humanR] = results;
   // Three slots, and which card goes where is fixed rather than positional:
   // the picker is full width above the pair, flow and age share the two-up
   // row, and the stalled table runs full width beneath them. Slicing a flat
@@ -87,7 +93,20 @@ function apply(root, results, repo, repos, state, app) {
   const health = flowR.status === 'fulfilled'
     ? healthCard(flowR.value.verify_health)
     : null;
+  // The manual-step card goes FIRST when there is anything in it. Everything
+  // below says how fast the machine half is moving; this says whether the
+  // release is moving at all — and a batch with an unfinished manual step
+  // does not ship, however green every check above it is.
+  const human = humanR.status === 'rejected'
+    ? errCard(t('repo.human.title'), humanR.reason)
+    : humanCard(humanR.value);
+  // Health before the manual steps: it is the card that says whether the
+  // verification behind every other figure here -- including this one --
+  // still works, so it qualifies the page rather than competing with it.
+  // Both sit ABOVE the two-up row for the same reason: what is below says
+  // how fast the machine half moves, and neither of these is about that.
   root.replaceChildren(...(head ? [head] : []), ...(health ? [health] : []),
+    ...(human ? [human] : []),
     el('div', { class: 'grid2' }, flow, age), ...below);
 }
 
@@ -547,4 +566,168 @@ function costUnavailableCard(reason) {
     el('h2', {}, t('repo.cost.title')),
     el('div', { class: 'empty' }, t('repo.cost.unbound')),
     el('p', { class: 'hint' }, (reason && reason.message) || String(reason)));
+}
+
+/* ----------------------------------------------------------------- human */
+
+/** humanCard is the release work that is waiting on a PERSON: what is owed
+ *  right now, grouped by whose it is, and whether the share of releases that
+ *  need a hand is falling.
+ *
+ *  ★ It shows EVERYONE'S rows, and says so in the first line. This hub's SSO
+ *    ticket carries one fixed subject per (app, tenant) — every colleague's
+ *    session is byte-identical here — so "yours" is not a question it can
+ *    answer. Filtering anyway would put a personal claim on rows picked by a
+ *    coin flip, on the one card whose entire job is saying who owes what.
+ *
+ *  ★ It is a VIEW, never a control. Finishing a step happens on the channel
+ *    that told somebody about it; a "done" button here would be a second
+ *    writer and therefore a second truth. */
+function humanCard(data) {
+  const steps = (data && data.steps) || [];
+  const weeks = trimLeadingEmpty(weeklyHuman((data && data.days) || []));
+  // Nothing shipped at all — not an empty card explaining a feature nobody
+  // turned on. (Nothing OWED, with days shipped, is a real and good answer
+  // and does get a card.)
+  if (!steps.length && !weeks.length) return null;
+
+  const card = el('div', { class: 'card', id: 'repo-human' },
+    el('h2', {}, t('repo.human.title')),
+    el('p', { class: 'hint' }, t('repo.human.hint')),
+    el('p', { class: 'hint' }, t('repo.human.everyone')));
+
+  if (!steps.length) {
+    card.appendChild(el('div', { class: 'empty' }, t('repo.human.none')));
+  } else {
+    const n = untold(steps);
+    if (n) {
+      // Not a footnote: a step nobody was told about is the system failing to
+      // deliver it, and the total above blames the wrong party for it.
+      card.appendChild(el('p', { class: 'warn' }, t('repo.human.untold', { n })));
+    }
+    for (const g of groupByOwner(steps)) card.appendChild(ownerGroup(g));
+  }
+
+  card.appendChild(el('h3', {}, t('repo.human.ratio.title')));
+  card.appendChild(el('p', { class: 'hint' }, t('repo.human.ratio.hint')));
+  if (!weeks.length) {
+    card.appendChild(el('div', { class: 'empty' }, t('repo.human.ratio.none')));
+  } else {
+    card.appendChild(ratioChart(weeks));
+    card.appendChild(el('p', { class: 'hint' }, ratioLine(weeks)));
+  }
+  return card;
+}
+
+const clip = (v, n) => (String(v).length <= n ? String(v) : String(v).slice(0, n - 1) + '\u2026');
+
+const KIND_LABEL = {
+  [OWNER_NOT_A_PERSON]: 'repo.human.kind.notAPerson',
+  [OWNER_UNRESOLVED]: 'repo.human.kind.unresolved',
+};
+
+function ownerGroup(g) {
+  const label = el('div', { class: 'controls' },
+    el('span', { class: 'label' }, g.owner),
+    // The two kinds nobody can be reminded about are marked, because "waiting
+    // on 发起人" and "waiting on a name nothing could resolve" look identical
+    // in a list and are not the same problem at all.
+    ...(KIND_LABEL[g.kind] ? [el('span', { class: 'warn' }, t(KIND_LABEL[g.kind]))] : []),
+    el('span', { class: 'hint' }, t('repo.human.group', { n: g.steps.length, age: fmtAge(g.waiting, t) })));
+
+  const head = el('tr', {},
+    el('th', {}, t('repo.human.col.step')),
+    el('th', {}, t('repo.human.col.waiting')),
+    el('th', {}, t('repo.human.col.told')));
+  const body = g.steps.map((s) => {
+    const name = `#${s.fragment}.${s.ord} ${s.title || ''}`.trim();
+    // The link goes back to the fragment issue, because that is where the
+    // step is WRITTEN — the row here is a copy, and a reader who wants to act
+    // needs the original.
+    const link = s.fragment_url
+      ? el('a', { href: s.fragment_url, target: '_blank', rel: 'noopener noreferrer' }, name)
+      : name;
+    // "How to do it" travels with the row. Without it the reader has to open
+    // the issue to find out whether this is a two-second kubectl or an
+    // afternoon — which is the friction this whole page exists to remove.
+    // Clipped, with the whole thing (plus what counts as done, and what to do
+    // if you can't) in the tooltip. A step whose instructions run to a screen
+    // of text would push every other owner's rows below the fold — and the
+    // rows below the fold are the ones nobody acts on.
+    const how = s.how
+      ? el('div', { class: 'hint', title: [s.how, s.pass, s.exit].filter(Boolean).join('\n\n') }, clip(s.how, 180))
+      : el('div', { class: 'hint' }, t('repo.human.noHow'));
+    return el('tr', {},
+      el('td', {}, link, how),
+      el('td', { class: 'num' }, fmtAge(s.waiting_seconds, t)),
+      el('td', {}, s.todo_at ? '' : el('span', { class: 'warn' }, t('repo.human.notTold'))));
+  });
+  return el('div', {}, label,
+    el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, head), el('tbody', {}, body))));
+}
+
+/** ratioChart draws the weekly share as bars, with the week's fragment count
+ *  as the tooltip's denominator.
+ *
+ *  A week with no fragments draws NOTHING rather than a zero-height bar: the
+ *  gap is the honest rendering of "nothing to measure", and a flat zero would
+ *  read as "nothing needed a human that week", which is the opposite claim. */
+function ratioChart(weeks) {
+  const W = 560, H = 120, PAD = { t: 12, r: 12, b: 22, l: 40 };
+  const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
+  const max = Math.max(0.05, ...weeks.map((w) => w.ratio || 0));
+  const step = iw / weeks.length;
+  // Capped: with three weeks of history a bar sized to its slot is 170px
+  // wide, which reads as a block of colour rather than as a measurement. The
+  // cap only binds early — it stops mattering the moment there is a quarter
+  // of history, which is when this chart starts being worth reading.
+  const bw = Math.min(34, Math.max(3, step - 6));
+  const g = el('g', {});
+  for (const [v, y] of [[max, PAD.t], [0, PAD.t + ih]]) {
+    g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y, y2: y, stroke: 'var(--grid)' }));
+    g.appendChild(el('text', { x: PAD.l - 8, y: y + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)' }, pct(v)));
+  }
+  weeks.forEach((w, i) => {
+    const x = PAD.l + i * step;
+    if (w.ratio == null) return;
+    const h = (w.ratio / max) * ih;
+    const tip = `<b>${escapeHTML(w.week)}</b><br>` +
+      escapeHTML(t('repo.human.tip', { pct: pct(w.ratio), n: w.withHuman, total: w.fragments }));
+    g.appendChild(el('rect', {
+      x, y: PAD.t + ih - h, width: bw, height: Math.max(w.withHuman ? 1.5 : 0, h), rx: 2,
+      fill: 'var(--s2)', onmousemove: (e) => showTip(e, tip), onmouseleave: hideTip,
+    }, el('title', {}, t('repo.human.tip', { pct: pct(w.ratio), n: w.withHuman, total: w.fragments }))));
+  });
+  const label = (i, anchor) => el('text', {
+    x: PAD.l + i * step + bw / 2, y: H - 6, 'text-anchor': anchor, fill: 'var(--ink-3)',
+  }, weeks[i].week.slice(5));
+  g.appendChild(label(0, 'start'));
+  if (weeks.length > 1) g.appendChild(label(weeks.length - 1, 'end'));
+  // Same three rules the flow chart above follows (issue #55): no pixel
+  // `height`, no `font-size` attribute, and `--cw` handed to styles.css so
+  // it can divide the viewBox scaling back out of the tick labels. Drawn by
+  // hand rather than through charts.js's `chartSvg` for the same reason the
+  // flow chart is -- repo.js deliberately does not import charts.js.
+  return el('svg', {
+    viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'chart', style: `--cw:${W}`, role: 'img',
+    'aria-label': t('repo.human.ratio.aria', { weeks: weeks.length, pct: pct(windowRatio(weeks)) || '—' }),
+  }, g);
+}
+
+/** ratioLine is the sentence under the chart: where the share stands, and
+ *  whether it is moving. It refuses to name a direction from a single week —
+ *  see trend(). */
+function ratioLine(weeks) {
+  const tr = trend(weeks);
+  const bits = [];
+  const win = windowRatio(weeks);
+  if (win != null) bits.push(t('repo.human.ratio.window', { pct: pct(win), weeks: weeks.length }));
+  if (tr.direction === 'unknown') {
+    bits.push(t('repo.human.ratio.unknown'));
+  } else {
+    bits.push(t(`repo.human.ratio.${tr.direction}`, {
+      pct: pct(tr.latest.ratio), before: pct(tr.before), week: tr.latest.week,
+    }));
+  }
+  return bits.join(' ');
 }

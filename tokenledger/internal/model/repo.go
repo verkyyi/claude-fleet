@@ -53,6 +53,26 @@ type RepoSnapshot struct {
 	// repository's post-release verification is. Nil means the shipper does
 	// not measure it — NOT that it is healthy.
 	VerifyHealth *RepoVerifyHealth `json:"verify_health,omitempty"`
+
+	// HumanSteps and HumanDays carry the OTHER half of progress: the work
+	// that is waiting on a person rather than on a machine.
+	//
+	// They ride the same snapshot, under the same repo key and the same
+	// enrollment credential, because they answer a question the flow cards
+	// above cannot: a backlog can be moving fast and still be blocked, if
+	// what it is blocked on is somebody doing something by hand. Splitting
+	// them into a second endpoint would have bought a second contract, a
+	// second token and a second way for the two halves to disagree about
+	// which repository they describe.
+	//
+	// A shipper may send either list alone: the collector that holds issue
+	// flow and the collector that can parse a repo's release fragments are
+	// not necessarily the same program (in the fleet that motivated this,
+	// they are not — one runs in-cluster with a GitHub token, the other runs
+	// where the repository is checked out, because the parse rules live in
+	// the repo and must never be copied).
+	HumanSteps []RepoHumanStep `json:"human_steps,omitempty"`
+	HumanDays  []RepoHumanDay  `json:"human_days,omitempty"`
 }
 
 // RepoVerifyHealth carries readings the hub stores and shows but never
@@ -120,6 +140,125 @@ type RepoReading struct {
 	// purpose: a producer that forgets to set it gets the fail-closed reading,
 	// not a silent claim of health.
 	OK bool `json:"ok"`
+}
+
+// RepoHumanStep is one step of release work that is waiting on a PERSON.
+//
+// # Why the hub stores these at all
+//
+// Everything else in this package is a fact about machines: tokens spent,
+// issues opened, commits landed. This is the one fact about people, and it is
+// here because it is the one that stalls a release: a batch with an unfinished
+// manual step does not ship, however green every check is.
+//
+// # Done steps are still shipped
+//
+// Done false means "still owed". A step that has been done keeps arriving —
+// with a time when anyone recorded one — until its fragment is archived. That is deliberate: if done
+// meant "the shipper stops sending it", then a broken shipper and a productive
+// afternoon would look identical here — and the second one is the one a reader
+// would assume.
+//
+// # OwnerID is not an identity this hub can match a viewer against
+//
+// It is whatever the producing repo uses to address the person on its own
+// notification channel (a WeCom open_userid, in the fleet this was built for).
+// This hub's SSO ticket carries no per-person subject at all — one fixed
+// subject per (app, tenant) — so a surface here MUST NOT filter rows by "the
+// signed-in user". Group by owner and say so; claiming "these are yours" on a
+// hub that cannot tell two colleagues apart is a lie with a login page in
+// front of it.
+type RepoHumanStep struct {
+	// Fragment is the issue number of the release fragment this step lives
+	// in, and Ord is the numbered step within it. Together with Repo they key
+	// the row: a step is identified by WHERE IT IS WRITTEN, not by any id the
+	// notification channel minted, because the same step keeps its place
+	// across a card being deleted and rebuilt.
+	Fragment int `json:"fragment"`
+	Ord      int `json:"ord"`
+
+	// Owner is the raw owner string as written in the fragment ("发起人",
+	// "Verky Yi", "agent"). It is kept verbatim beside the resolution below
+	// because a row whose owner could not be resolved must still be able to
+	// say WHO IT NAMED — that string is the whole lead for fixing it.
+	Owner string `json:"owner"`
+	// OwnerKind is how the producing repo resolved that string. A closed set:
+	// see the RepoOwner* constants. "unresolved" and "not-a-person" are shown,
+	// never silently dropped — a step nobody can be reminded about is the most
+	// stuck kind there is, and dropping it would make it the most invisible.
+	OwnerKind string `json:"owner_kind"`
+	OwnerID   string `json:"owner_id,omitempty"`
+
+	// Title is the step itself. How/Pass/Exit are the three things the person
+	// doing it needs: how to do it, what counts as done, and what to do if
+	// they cannot. They are optional because the author may not have written
+	// them — and when they did not, the surface says so rather than inventing
+	// an acceptance criterion the reader has no second source to check.
+	Title string `json:"title"`
+	How   string `json:"how,omitempty"`
+	Pass  string `json:"pass,omitempty"`
+	Exit  string `json:"exit,omitempty"`
+
+	FragmentTitle string    `json:"fragment_title,omitempty"`
+	FragmentURL   string    `json:"fragment_url,omitempty"`
+	FragmentAt    time.Time `json:"fragment_at"`
+
+	// TodoAt is when the person was actually told (a card was created on the
+	// notification channel). Nil means nobody has been told yet, which is a
+	// different problem from "told and ignored" — and the two want different
+	// fixes, so they must not render the same.
+	TodoAt *time.Time `json:"todo_at,omitempty"`
+
+	// Done and DoneAt are two different facts, and the second one is the
+	// optional half.
+	//
+	// A step is marked done by striking it out in the fragment, and a person
+	// can do that by hand in the editor — in which case it IS done and there
+	// is no timestamp anywhere. Requiring a time would force the shipper to
+	// choose between inventing one and reporting the step as still owed;
+	// both are wrong, and the second one is the one that keeps a finished
+	// step at the top of somebody's list forever.
+	Done   bool       `json:"done,omitempty"`
+	DoneAt *time.Time `json:"done_at,omitempty"`
+	DoneBy string     `json:"done_by,omitempty"`
+}
+
+// Owner resolutions. Closed set for the same reason issue states are: a fourth
+// spelling would quietly create a fourth bucket that no surface counts.
+const (
+	// RepoOwnerPerson: the producing repo resolved the owner to someone it can
+	// address on its notification channel.
+	RepoOwnerPerson = "person"
+	// RepoOwnerNotAPerson: the step names something that is not a human at all
+	// (an agent, a workflow). It still blocks the release; it just cannot be
+	// solved by reminding anybody.
+	RepoOwnerNotAPerson = "not-a-person"
+	// RepoOwnerUnresolved: a name nobody could match. Loudest of the three,
+	// because it is the one where the person is never going to hear about it.
+	RepoOwnerUnresolved = "unresolved"
+)
+
+// RepoHumanDay is one UTC day of "how much of this repo's release work needed
+// a human", pre-aggregated by the shipper.
+//
+// This is the ratio the whole feature is judged by, so it is stored as its two
+// halves and never as the quotient: a stored percentage cannot be re-summed
+// into a week, and a week is the grain a reader actually asks about.
+//
+// Fragments counts every release fragment created that day; WithHuman counts
+// the subset carrying at least one manual step. Both are needed — "3 manual
+// fragments" is a number that means nothing until you know whether the day had
+// four fragments or four hundred.
+type RepoHumanDay struct {
+	Day       string `json:"day"` // YYYY-MM-DD, UTC
+	Fragments int    `json:"fragments"`
+	WithHuman int    `json:"with_human"`
+	Steps     int    `json:"steps"`
+	// StepsDone is how many of that day's steps have since been completed. It
+	// is a property of the steps born that day, not of the day they were
+	// finished — otherwise a burst of catching-up would read as a day that
+	// created no manual work.
+	StepsDone int `json:"steps_done"`
 }
 
 // RepoIssue is one issue as the shipper last saw it.
@@ -217,8 +356,9 @@ func (s RepoSnapshot) Validate(now time.Time) error {
 	if s.ObservedAt.After(now.Add(5 * time.Minute)) {
 		return fmt.Errorf("repo %s: observed_at %s is in the future", s.Repo, s.ObservedAt.Format(time.RFC3339))
 	}
-	if len(s.Issues) == 0 && len(s.Days) == 0 && s.VerifyHealth == nil {
-		return fmt.Errorf("repo %s: snapshot carries neither issues, days nor verify_health", s.Repo)
+	if len(s.Issues) == 0 && len(s.Days) == 0 && s.VerifyHealth == nil &&
+		len(s.HumanSteps) == 0 && len(s.HumanDays) == 0 {
+		return fmt.Errorf("repo %s: snapshot carries no rows at all", s.Repo)
 	}
 	for _, i := range s.Issues {
 		if err := i.validate(s.Repo); err != nil {
@@ -232,6 +372,16 @@ func (s RepoSnapshot) Validate(now time.Time) error {
 	}
 	if s.VerifyHealth != nil {
 		if err := s.VerifyHealth.validate(s.Repo); err != nil {
+			return err
+		}
+	}
+	for _, h := range s.HumanSteps {
+		if err := h.validate(s.Repo); err != nil {
+			return err
+		}
+	}
+	for _, d := range s.HumanDays {
+		if err := d.validate(s.Repo); err != nil {
 			return err
 		}
 	}
@@ -290,6 +440,72 @@ func (h RepoVerifyHealth) validate(repo string) error {
 					repo, r.Key, name, maxReadingText)
 			}
 		}
+	}
+	return nil
+}
+
+func (h RepoHumanStep) validate(repo string) error {
+	if h.Fragment <= 0 {
+		return fmt.Errorf("repo %s: human step fragment must be positive, got %d", repo, h.Fragment)
+	}
+	if h.Ord <= 0 {
+		return fmt.Errorf("repo %s fragment %d: human step ord must be positive, got %d", repo, h.Fragment, h.Ord)
+	}
+	switch h.OwnerKind {
+	case RepoOwnerPerson, RepoOwnerNotAPerson, RepoOwnerUnresolved:
+	default:
+		return fmt.Errorf("repo %s fragment %d step %d: owner_kind must be %q, %q or %q, got %q",
+			repo, h.Fragment, h.Ord, RepoOwnerPerson, RepoOwnerNotAPerson, RepoOwnerUnresolved, h.OwnerKind)
+	}
+	// A resolved person with no id would render as somebody the channel can
+	// reach while nothing can address them. The shipper knows which of the
+	// three it is; making it say so here keeps that knowledge from being
+	// re-derived (wrongly) on every surface.
+	if h.OwnerKind == RepoOwnerPerson && h.OwnerID == "" {
+		return fmt.Errorf("repo %s fragment %d step %d: owner_kind %q needs owner_id",
+			repo, h.Fragment, h.Ord, RepoOwnerPerson)
+	}
+	if h.Title == "" {
+		return fmt.Errorf("repo %s fragment %d step %d: title is required", repo, h.Fragment, h.Ord)
+	}
+	if h.FragmentAt.IsZero() {
+		return fmt.Errorf("repo %s fragment %d step %d: fragment_at is required", repo, h.Fragment, h.Ord)
+	}
+	if h.DoneAt != nil && h.DoneAt.Before(h.FragmentAt) {
+		return fmt.Errorf("repo %s fragment %d step %d: done_at precedes fragment_at", repo, h.Fragment, h.Ord)
+	}
+	// A time without the fact is a shipper that filled one field and forgot
+	// the other. Storing it would put the row in the owed list with a
+	// completion time printed beside it — a contradiction a reader would
+	// resolve by distrusting the whole card.
+	if h.DoneAt != nil && !h.Done {
+		return fmt.Errorf("repo %s fragment %d step %d: done_at without done", repo, h.Fragment, h.Ord)
+	}
+	if h.DoneBy != "" && !h.Done {
+		return fmt.Errorf("repo %s fragment %d step %d: done_by without done", repo, h.Fragment, h.Ord)
+	}
+	return nil
+}
+
+func (d RepoHumanDay) validate(repo string) error {
+	if _, err := time.Parse(RepoDayLayout, d.Day); err != nil {
+		return fmt.Errorf("repo %s: human day %q is not %s", repo, d.Day, RepoDayLayout)
+	}
+	if d.Fragments < 0 || d.WithHuman < 0 || d.Steps < 0 || d.StepsDone < 0 {
+		return fmt.Errorf("repo %s human day %s: counts cannot be negative", repo, d.Day)
+	}
+	// The subset relations are the whole meaning of the row. A day claiming
+	// more manual fragments than fragments, or more done steps than steps,
+	// would render as a ratio above 100%% -- and a reader seeing that would
+	// distrust the axis, not the shipper that produced it.
+	if d.WithHuman > d.Fragments {
+		return fmt.Errorf("repo %s human day %s: with_human %d exceeds fragments %d", repo, d.Day, d.WithHuman, d.Fragments)
+	}
+	if d.StepsDone > d.Steps {
+		return fmt.Errorf("repo %s human day %s: steps_done %d exceeds steps %d", repo, d.Day, d.StepsDone, d.Steps)
+	}
+	if d.Steps > 0 && d.WithHuman == 0 {
+		return fmt.Errorf("repo %s human day %s: %d steps but no fragment carrying them", repo, d.Day, d.Steps)
 	}
 	return nil
 }

@@ -70,7 +70,7 @@ func (s *Server) handleRepoIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issues, days, err := s.Store.UpsertRepoSnapshot(snap)
+	written, err := s.Store.UpsertRepoSnapshot(snap)
 	if err != nil {
 		log.Printf("repo ingest from %s: %v", ep.ID, err)
 		httpError(w, http.StatusInternalServerError, "could not store snapshot")
@@ -86,8 +86,56 @@ func (s *Server) handleRepoIngest(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.MarkRepoShipper(ep.ID); err != nil {
 		log.Printf("mark repo shipper %s: %v", ep.ID, err)
 	}
+	// Echo every kind of row, including the ones this snapshot carried none
+	// of. A shipper that believes it is pushing manual steps and gets back
+	// "human_steps": 0 has been told something; a response that simply omits
+	// the key leaves it guessing whether the hub is too old to know about them.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"repo": snap.Repo, "issues": issues, "days": days,
+		"repo": snap.Repo, "issues": written.Issues, "days": written.Days,
+		"human_steps": written.HumanSteps, "human_days": written.HumanDays,
+	})
+}
+
+// handleRepoHumanDebt serves the release work that is waiting on a PERSON:
+// the open steps, and the daily ratio of release fragments that needed one.
+//
+// # It does not filter by the signed-in viewer, and that is not an oversight
+//
+// This hub's SSO ticket carries no per-person subject — one fixed subject per
+// (app, tenant), so two colleagues' sessions are indistinguishable here. A
+// "mine" filter would therefore be a guess rendered as a fact, on the one
+// surface whose entire job is to say who owes what. The rows carry owner and
+// owner_id so a caller can GROUP by person and say "everyone's", which is
+// true; narrowing it is a change to the ticket, not to this handler.
+func (s *Server) handleRepoHumanDebt(w http.ResponseWriter, r *http.Request) {
+	repo, start, end, ok := repoScope(w, r)
+	if !ok {
+		return
+	}
+	steps, err := s.Store.RepoHumanSteps(store.RepoHumanFilter{
+		Repo: repo, OpenOnly: r.URL.Query().Get("state") != "all", Limit: 500, Now: time.Now(),
+	})
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if steps == nil {
+		steps = []store.RepoHumanStepRow{}
+	}
+	days, err := s.Store.RepoHumanDays(repo, start, end)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if days == nil {
+		days = []model.RepoHumanDay{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo":  repo,
+		"since": start.UTC().Format(model.RepoDayLayout),
+		"until": end.UTC().Format(model.RepoDayLayout),
+		"steps": steps,
+		"days":  days,
 	})
 }
 

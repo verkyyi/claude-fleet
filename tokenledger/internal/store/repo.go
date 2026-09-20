@@ -77,16 +77,30 @@ type RepoIssueFilter struct {
 	Now time.Time
 }
 
+// RepoWritten counts what one snapshot wrote, per kind of row.
+//
+// A struct rather than a list of return values because the kinds are not
+// fixed: this started as issues and days, and the manual-step rows arrived
+// later. Each new kind would otherwise rewrite every call site, which is how
+// "one more count" turns into a reason not to add one.
+type RepoWritten struct {
+	Issues     int `json:"issues"`
+	Days       int `json:"days"`
+	HumanSteps int `json:"human_steps"`
+	HumanDays  int `json:"human_days"`
+}
+
 // UpsertRepoSnapshot stores one shipper observation and reports what it wrote.
 //
-// Everything here is an upsert keyed by (repo, number) or (repo, day), so a
-// replayed snapshot is a no-op rather than a double count — which is what lets
-// a shipper page a large backlog across several POSTs with one ObservedAt, and
-// lets a flaky network retry without corrupting a single figure.
-func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, err error) {
+// Everything here is an upsert keyed by (repo, number), (repo, day) or
+// (repo, fragment, ord), so a replayed snapshot is a no-op rather than a
+// double count — which is what lets a shipper page a large backlog across
+// several POSTs with one ObservedAt, and lets a flaky network retry without
+// corrupting a single figure.
+func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (w RepoWritten, err error) {
 	tx, err := s.write.Begin()
 	if err != nil {
-		return 0, 0, fmt.Errorf("begin: %w", err)
+		return w, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -111,7 +125,7 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 			  observed_at = excluded.observed_at
 			WHERE excluded.observed_at >= repo_issues.observed_at`)
 		if err != nil {
-			return 0, 0, fmt.Errorf("prepare repo issue: %w", err)
+			return w, fmt.Errorf("prepare repo issue: %w", err)
 		}
 		defer stmt.Close()
 		for _, i := range snap.Issues {
@@ -120,9 +134,9 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 				fmtTime(i.CreatedAt), fmtTimePtr(i.UpdatedAt), fmtTimePtr(i.ClosedAt),
 				string(labels), i.Comments, i.URL,
 				fmtTimePtr(i.ShippedAt), i.ShippedRef, observed); err != nil {
-				return 0, 0, fmt.Errorf("upsert repo issue %s#%d: %w", snap.Repo, i.Number, err)
+				return w, fmt.Errorf("upsert repo issue %s#%d: %w", snap.Repo, i.Number, err)
 			}
-			issues++
+			w.Issues++
 		}
 	}
 
@@ -145,9 +159,52 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 			snap.Repo, d.Day, d.Opened, d.Closed, d.OpenAtEnd, nullInt(d.MergedPRs),
 			nullFloat(d.CloseP50Seconds), nullFloat(d.CloseP90Seconds),
 			nullFloat(d.CloseP95Seconds), nullInt(d.ClosedSample), observed); err != nil {
-			return 0, 0, fmt.Errorf("upsert repo day %s/%s: %w", snap.Repo, d.Day, err)
+			return w, fmt.Errorf("upsert repo day %s/%s: %w", snap.Repo, d.Day, err)
 		}
-		days++
+		w.Days++
+	}
+
+	// Manual steps. Same late-arrival guard as the rows above, and the same
+	// reason: a shipper retry that lands out of order must not resurrect a
+	// step somebody has since ticked off.
+	for _, h := range snap.HumanSteps {
+		if _, err := tx.Exec(`
+			INSERT INTO repo_human_steps
+			  (repo, fragment, ord, owner, owner_kind, owner_id, title, how, pass, exit,
+			   fragment_title, fragment_url, fragment_at, todo_at, done, done_at, done_by, observed_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(repo, fragment, ord) DO UPDATE SET
+			  owner = excluded.owner, owner_kind = excluded.owner_kind,
+			  owner_id = excluded.owner_id, title = excluded.title,
+			  how = excluded.how, pass = excluded.pass, exit = excluded.exit,
+			  fragment_title = excluded.fragment_title, fragment_url = excluded.fragment_url,
+			  fragment_at = excluded.fragment_at, todo_at = excluded.todo_at,
+			  done = excluded.done, done_at = excluded.done_at, done_by = excluded.done_by,
+			  observed_at = excluded.observed_at
+			WHERE excluded.observed_at >= repo_human_steps.observed_at`,
+			snap.Repo, h.Fragment, h.Ord, h.Owner, h.OwnerKind, nullStr(h.OwnerID),
+			h.Title, nullStr(h.How), nullStr(h.Pass), nullStr(h.Exit),
+			h.FragmentTitle, h.FragmentURL, fmtTime(h.FragmentAt),
+			fmtTimePtr(h.TodoAt), h.Done, fmtTimePtr(h.DoneAt), h.DoneBy, observed); err != nil {
+			return w, fmt.Errorf("upsert human step %s#%d.%d: %w", snap.Repo, h.Fragment, h.Ord, err)
+		}
+		w.HumanSteps++
+	}
+
+	for _, d := range snap.HumanDays {
+		if _, err := tx.Exec(`
+			INSERT INTO repo_human_days
+			  (repo, day, fragments, with_human, steps, steps_done, observed_at)
+			VALUES (?,?,?,?,?,?,?)
+			ON CONFLICT(repo, day) DO UPDATE SET
+			  fragments = excluded.fragments, with_human = excluded.with_human,
+			  steps = excluded.steps, steps_done = excluded.steps_done,
+			  observed_at = excluded.observed_at
+			WHERE excluded.observed_at >= repo_human_days.observed_at`,
+			snap.Repo, d.Day, d.Fragments, d.WithHuman, d.Steps, d.StepsDone, observed); err != nil {
+			return w, fmt.Errorf("upsert human day %s/%s: %w", snap.Repo, d.Day, err)
+		}
+		w.HumanDays++
 	}
 
 	// One row per repo, same late-arrival rule as everything above: a snapshot
@@ -159,7 +216,7 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 	if h := snap.VerifyHealth; h != nil {
 		readings, err := json.Marshal(h.Readings)
 		if err != nil {
-			return 0, 0, fmt.Errorf("encode verify_health for %s: %w", snap.Repo, err)
+			return w, fmt.Errorf("encode verify_health for %s: %w", snap.Repo, err)
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO repo_health (repo, observed_at, source, stale_after_seconds, readings_json)
@@ -170,14 +227,14 @@ func (s *Store) UpsertRepoSnapshot(snap model.RepoSnapshot) (issues, days int, e
 			  readings_json = excluded.readings_json
 			WHERE excluded.observed_at >= repo_health.observed_at`,
 			snap.Repo, observed, h.Source, nullFloat(h.StaleAfterSeconds), string(readings)); err != nil {
-			return 0, 0, fmt.Errorf("upsert repo health %s: %w", snap.Repo, err)
+			return w, fmt.Errorf("upsert repo health %s: %w", snap.Repo, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, 0, fmt.Errorf("commit: %w", err)
+		return w, fmt.Errorf("commit: %w", err)
 	}
-	return issues, days, nil
+	return w, nil
 }
 
 // RepoHealthRow is repo_health as it is read back, with the observation time
@@ -243,6 +300,15 @@ func (s *Store) Repos() ([]Repo, error) {
 		    SELECT repo, observed_at FROM repo_days
 		    UNION ALL
 		    SELECT repo, observed_at FROM repo_health
+		    UNION ALL
+		    -- The manual-step rows count too. They come from a DIFFERENT
+		    -- shipper (the one that can parse release fragments, which needs
+		    -- the repo checked out), so a hub can legitimately hold nothing
+		    -- but these — and leaving them out made that hub answer "no
+		    -- repositories" while holding a full list of what it owes.
+		    SELECT repo, observed_at FROM repo_human_steps
+		    UNION ALL
+		    SELECT repo, observed_at FROM repo_human_days
 		  ) GROUP BY repo
 		) AS r
 		LEFT JOIN (
@@ -485,4 +551,168 @@ func floatPtr(f sql.NullFloat64) *float64 {
 		return nil
 	}
 	return &f.Float64
+}
+
+// RepoHumanStepRow is one manual step as stored, plus the age a reader needs.
+type RepoHumanStepRow struct {
+	model.RepoHumanStep
+	Repo string `json:"repo"`
+	// WaitingSeconds is how long this step has been waiting on somebody: from
+	// when they were told (todo_at) if they were, otherwise from when the
+	// fragment was written. Derived on read, never stored — a stored age is
+	// wrong by the time anyone looks at it.
+	//
+	// For a step that is done it measures what the wait WAS, which is what
+	// makes "it took eleven days" answerable at all.
+	WaitingSeconds float64 `json:"waiting_seconds"`
+	// ToldSeconds is how long the step sat before anybody was told, or nil if
+	// nobody has been. It is the half of the delay this hub's own side of the
+	// system is responsible for, and it is invisible in the total.
+	ToldSeconds *float64  `json:"told_seconds,omitempty"`
+	ObservedAt  time.Time `json:"observed_at"`
+}
+
+// RepoHumanFilter scopes a manual-step query. Repo is required, for the same
+// reason it is on the backlog: two repositories' release processes blended
+// into one list read as one process that neither team runs.
+type RepoHumanFilter struct {
+	Repo string
+	// OpenOnly keeps only steps nobody has finished.
+	OpenOnly bool
+	Limit    int
+	// Now is the clock the wait is measured against. Tests set it.
+	Now time.Time
+}
+
+// RepoHumanSteps returns manual steps, longest wait first.
+//
+// The ordering is the point of the list: whatever has been waiting longest is
+// what the release is actually blocked on, and it is the row a reader should
+// see without scrolling. Ties break on the fragment number so the order is
+// stable between reads rather than whatever SQLite last happened to do.
+func (s *Store) RepoHumanSteps(f RepoHumanFilter) ([]RepoHumanStepRow, error) {
+	if err := model.ValidRepoName(f.Repo); err != nil {
+		return nil, err
+	}
+	now := f.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	q := `SELECT repo, fragment, ord, owner, owner_kind, owner_id, title, how, pass, exit,
+	             fragment_title, fragment_url, fragment_at, todo_at, done, done_at, done_by, observed_at
+	      FROM repo_human_steps WHERE repo = ?`
+	args := []any{f.Repo}
+	if f.OpenOnly {
+		// On done, never on done_at: a step struck out by hand is finished and
+		// carries no time, and filtering on the timestamp would leave it at
+		// the top of somebody's list forever.
+		q += ` AND done = 0`
+	}
+	q += ` ORDER BY COALESCE(todo_at, fragment_at) ASC, fragment ASC, ord ASC`
+	if f.Limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, f.Limit)
+	}
+	rows, err := s.read.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("repo human steps: %w", err)
+	}
+	defer rows.Close()
+	var out []RepoHumanStepRow
+	for rows.Next() {
+		var r RepoHumanStepRow
+		var fragmentAt, observed string
+		var ownerID, how, pass, exitLine, fragTitle, fragURL, doneBy sql.NullString
+		var todoAt, doneAt sql.NullString
+		if err := rows.Scan(&r.Repo, &r.Fragment, &r.Ord, &r.Owner, &r.OwnerKind, &ownerID,
+			&r.Title, &how, &pass, &exitLine, &fragTitle, &fragURL, &fragmentAt,
+			&todoAt, &r.Done, &doneAt, &doneBy, &observed); err != nil {
+			return nil, err
+		}
+		r.OwnerID, r.How, r.Pass, r.Exit = ownerID.String, how.String, pass.String, exitLine.String
+		r.FragmentTitle, r.FragmentURL, r.DoneBy = fragTitle.String, fragURL.String, doneBy.String
+		r.FragmentAt, _ = time.Parse(rfc, fragmentAt)
+		r.TodoAt = parseNullTime(todoAt)
+		r.DoneAt = parseNullTime(doneAt)
+		r.ObservedAt, _ = time.Parse(rfc, observed)
+
+		// Waiting starts when the person was told; before that the system,
+		// not the person, is the one holding it up.
+		from := r.FragmentAt
+		if r.TodoAt != nil {
+			from = *r.TodoAt
+			told := r.TodoAt.Sub(r.FragmentAt).Seconds()
+			r.ToldSeconds = &told
+		}
+		end := now
+		if r.DoneAt != nil {
+			end = *r.DoneAt
+		} else if r.Done {
+			// Finished, and nobody recorded when. The last time a shipper saw
+			// it is the tightest bound available — an over-estimate of the
+			// wait, never an under-estimate, and stated here rather than
+			// dressed up as a measurement.
+			end = r.ObservedAt
+		}
+		r.WaitingSeconds = end.Sub(from).Seconds()
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RepoHumanDays returns the daily manual-work rows in [start, end].
+//
+// Empty is a real answer: a repo whose shipper does not parse release
+// fragments has no rows here, and the surface must render that as "nobody
+// measured" rather than as a flat zero line — a zero ratio and an absent one
+// look identical on a chart and mean opposite things.
+func (s *Store) RepoHumanDays(repo string, start, end time.Time) ([]model.RepoHumanDay, error) {
+	if err := model.ValidRepoName(repo); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.Query(`
+		SELECT day, fragments, with_human, steps, steps_done
+		FROM repo_human_days
+		WHERE repo = ? AND day >= ? AND day <= ?
+		ORDER BY day ASC`,
+		repo, start.UTC().Format(model.RepoDayLayout), end.UTC().Format(model.RepoDayLayout))
+	if err != nil {
+		return nil, fmt.Errorf("repo human days: %w", err)
+	}
+	defer rows.Close()
+	var out []model.RepoHumanDay
+	for rows.Next() {
+		var d model.RepoHumanDay
+		if err := rows.Scan(&d.Day, &d.Fragments, &d.WithHuman, &d.Steps, &d.StepsDone); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// PruneRepoHumanSteps bounds the step table the same way PruneRepoIssues bounds
+// the backlog: by LAST SIGHTING, never by done-ness.
+//
+// A step stops being shipped when its fragment is archived, so ageing out by
+// observed_at is what clears finished release batches. Deleting on done_at
+// instead would erase a step the moment somebody ticked it — losing both the
+// "how long did that take" answer and, worse, any trace that it was ever
+// owed. The daily rows keep the counts either way.
+func (s *Store) PruneRepoHumanSteps(olderThan time.Time) (int64, error) {
+	res, err := s.write.Exec(`DELETE FROM repo_human_steps WHERE observed_at < ?`, fmtTime(olderThan))
+	if err != nil {
+		return 0, fmt.Errorf("prune repo human steps: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// nullStr keeps "the author did not write one" distinct from "they wrote an
+// empty one" in the column, so a surface can say which.
+func nullStr(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
 }

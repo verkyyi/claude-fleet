@@ -270,7 +270,7 @@ func TestIssueLifetimeSpend_RefusesTheEmptyAccount(t *testing.T) {
 func TestRepoIssues_FilterByNumbers(t *testing.T) {
 	s := newStore(t)
 	now := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: now,
 		Issues: []model.RepoIssue{
 			{Number: 57, Title: "seam", State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -3)},

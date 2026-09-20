@@ -61,7 +61,7 @@ func TestRepoSnapshot_RoundTrips(t *testing.T) {
 			MergedPRs: ptrI(5), CloseP95Seconds: ptrF(941760), ClosedSample: ptrI(2257),
 		}},
 	}
-	if _, _, err := s.UpsertRepoSnapshot(snap); err != nil {
+	if _, err := s.UpsertRepoSnapshot(snap); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestRepoSnapshot_ReplayIsANoOp(t *testing.T) {
 		Days:   []model.RepoDay{{Day: "2026-09-13", Opened: 2, Closed: 1, OpenAtEnd: 10}},
 	}
 	for i := 0; i < 3; i++ {
-		if _, _, err := s.UpsertRepoSnapshot(snap); err != nil {
+		if _, err := s.UpsertRepoSnapshot(snap); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -132,10 +132,10 @@ func TestRepoSnapshot_OlderObservationNeverOverwrites(t *testing.T) {
 		Repo: repo, ObservedAt: tsAt("2026-09-14T06:00:00Z"),
 		Issues: []model.RepoIssue{issue(7, "2026-09-01T00:00:00Z")},
 	}
-	if _, _, err := s.UpsertRepoSnapshot(fresh); err != nil {
+	if _, err := s.UpsertRepoSnapshot(fresh); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.UpsertRepoSnapshot(stale); err != nil {
+	if _, err := s.UpsertRepoSnapshot(stale); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ := s.RepoIssues(RepoIssueFilter{Repo: repo})
@@ -150,7 +150,7 @@ func TestRepoSnapshot_OlderObservationNeverOverwrites(t *testing.T) {
 func TestRepoIssues_AgeStopsAtClose(t *testing.T) {
 	s := newStore(t)
 	now := tsAt("2026-09-14T00:00:00Z")
-	_, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	_, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: now,
 		Issues: []model.RepoIssue{
 			issue(1, "2026-09-04T00:00:00Z"),
@@ -188,7 +188,7 @@ func TestRepoIssues_MinAgeIsAppliedBeforeLimit(t *testing.T) {
 		issues = append(issues, issue(n, "2026-09-13T00:00:00Z"))
 	}
 	issues = append(issues, issue(90, "2026-06-01T00:00:00Z"), issue(91, "2026-06-02T00:00:00Z"))
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{Repo: "o/r", ObservedAt: now, Issues: issues}); err != nil {
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{Repo: "o/r", ObservedAt: now, Issues: issues}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.RepoIssues(RepoIssueFilter{
@@ -208,7 +208,7 @@ func TestRepoIssues_MinAgeIsAppliedBeforeLimit(t *testing.T) {
 // would print a confident badge derived from a number nobody measured.
 func TestRepoCloseScale_AbsentIsNotZero(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: tsAt("2026-09-14T00:00:00Z"),
 		Days: []model.RepoDay{{Day: "2026-09-13", Opened: 1, Closed: 1, OpenAtEnd: 5}},
 	}); err != nil {
@@ -224,7 +224,7 @@ func TestRepoCloseScale_AbsentIsNotZero(t *testing.T) {
 
 	// A later day that does carry them wins; an earlier one that does not must
 	// not shadow it.
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: tsAt("2026-09-15T00:00:00Z"),
 		Days: []model.RepoDay{
 			{Day: "2026-09-12", Opened: 1, Closed: 1, OpenAtEnd: 5, CloseP95Seconds: ptrF(100)},
@@ -251,7 +251,7 @@ func TestRepoCloseScale_AbsentIsNotZero(t *testing.T) {
 func TestPruneRepoIssues_KeepsOpenAndEveryDayRow(t *testing.T) {
 	s := newStore(t)
 	now := tsAt("2026-09-14T00:00:00Z")
-	_, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	_, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: now,
 		Issues: []model.RepoIssue{
 			issue(1, "2026-01-01T00:00:00Z"),                               // open, seen today
@@ -285,7 +285,7 @@ func TestPruneRepoIssues_KeepsOpenAndEveryDayRow(t *testing.T) {
 // of the stalled list, which is where a wrong row does the most damage.
 func TestPruneRepoIssues_DropsOpenIssuesNobodySeesAnyMore(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/r", ObservedAt: tsAt("2026-01-02T00:00:00Z"),
 		Issues: []model.RepoIssue{issue(1, "2026-01-01T00:00:00Z")},
 	}); err != nil {
@@ -302,13 +302,13 @@ func TestPruneRepoIssues_DropsOpenIssuesNobodySeesAnyMore(t *testing.T) {
 
 func TestRepos_ListsReposWithOnlyDayRows(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/day-only", ObservedAt: tsAt("2026-09-14T00:00:00Z"),
 		Days: []model.RepoDay{{Day: "2026-09-13", Opened: 1, Closed: 1, OpenAtEnd: 3}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
+	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
 		Repo: "o/issues-only", ObservedAt: tsAt("2026-09-15T00:00:00Z"),
 		Issues: []model.RepoIssue{issue(1, "2026-09-01T00:00:00Z"), closedIssue(2, "2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z")},
 	}); err != nil {
