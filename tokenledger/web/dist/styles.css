@@ -84,9 +84,12 @@ a { color: var(--s1); }
    Rendered as the tokenman odometer: the character eats the dot stream while
    the fleet is working, and the wheels roll to follow the projection. */
 /* The lifetime token counter is a badge. Every metric inside it is in em, so
-   the one font-size below sets the whole thing -- it used to reach 40px. */
-#pulse:empty { display: none; }
-.hero { padding: 0 0 14px; font-size: 15px; }
+   the one font-size below sets the whole thing -- it used to reach 40px, then
+   15px as a badge opening <main>, and 12.5px is what it costs to live in the
+   top bar (#96). The bar is where the size argument stops being cosmetic: see
+   `.scope #pulse` below for why this number is load-bearing.
+   No padding: the badge no longer sits in page flow with cards under it. */
+.hero { font-size: 12.5px; }
 .hero .tm {
   display: inline-flex; align-items: center; gap: .4em; flex-wrap: nowrap;
   padding: .26em .7em .26em .4em; border: 1px solid var(--border); border-radius: 999px;
@@ -450,6 +453,41 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
    "中", and a button that changes width on click drags the theme toggle with it. */
 .scope #lang, .scope #theme { padding: 5px 0; width: 30px; text-align: center; }
 .scope #lang { margin-right: -8px; }
+
+/* The lifetime token badge's slot in the bar (#96).
+
+   THE HEIGHT IS THE POINT. --navh is this bar measured (scope.js's navHeight),
+   and it is the scroll-margin everything the page scrolls to lands against --
+   the session overlay closing back onto its row, a browser restoring a scroll
+   position. The badge's first frame arrives about one round trip after the page
+   does: the stream that feeds it is opened only once the first screen's fetches
+   have settled (now.js's startLive says why). So a badge that made this bar
+   taller would be changing that offset a round trip late, under a reader who
+   has already been handed a page laid out against the old one.
+
+   The badge is therefore sized to fit inside the height the bar ALREADY has,
+   rather than being given a slot of its own. Measured at 61af559, this row's
+   content box is 33.5px, set by a .secnav button (13px/1.5 + 6px padding + the
+   2px current-view rule); with the nav hidden it is 31.5px, set by #lang. The
+   pill below is ~27px at 12.5px type. Inserting it changes the bar's height by
+   exactly nothing -- so there is no shift to correct, and no reserved height to
+   keep in sync with the badge's real one, which is the failure mode a fixed
+   slot would have had: a magic number that silently stops matching.
+
+   #98 had already made the bar's height self-correcting for its own reasons (a
+   ResizeObserver on the bar; see scope.js), and that is the backstop for what
+   sizing cannot promise -- `.row1` wraps, and a width, locale or default font
+   nobody tried could still put the badge on a second row. Note the order:
+   fitting is the mechanism, the observer is the net. A badge that relied on the
+   net would re-publish --navh correctly and still have grown the bar under the
+   reader's eyes, which is the part no observer can undo. */
+.scope #pulse { display: flex; align-items: center; min-width: 0; }
+/* Empty means empty -- no pill, and no 14px flex gap left where one would have
+   been. Two selectors, because there are two different empties: before the
+   first frame #pulse itself has no children, and on a scope change now.js
+   clears the persistent .hero-wrap without unmounting it (renderNow), which
+   leaves #pulse holding an empty div and therefore not :empty at all. */
+.scope #pulse:empty, .scope #pulse:has(> .hero-wrap:empty) { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border-radius: 999px; background: var(--s1); color: #fff; font-size: 12.5px; }
 .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .chip.clear { background: var(--ink-3); }
@@ -567,6 +605,15 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
      its content and actually scroll — without it the nav pushes the theme and
      language buttons off the right edge instead. */
   .scope .row1 { padding: 8px 12px; gap: 6px; } .scope h1 { display: none; }
+  /* ...and the token badge goes with the wordmark (#96), for the same reason
+     and by the same argument. Even stripped of its caption the pill is ~200px
+     of monospace odometer wheels, which on a 320px phone is the nav's width;
+     the nav is the one thing in this bar worth it. Nothing is lost that is not
+     still on the page: the badge is ambient, not a figure anyone reads off, and
+     every number it summarises is in the cards below. Hiding it here also makes
+     the phone bar's height trivially invariant -- there is no badge to arrive
+     late and no wrap for it to cause. */
+  .scope #pulse { display: none; }
   .secnav { min-width: 0; flex: 1 1 auto; }
   .secnav button { padding: 6px 8px; font-size: 12.5px; }
   .kpis { grid-template-columns: repeat(2, 1fr); }

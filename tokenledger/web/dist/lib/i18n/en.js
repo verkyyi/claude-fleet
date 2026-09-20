@@ -185,8 +185,16 @@ export const en = {
   'chart.sourceCostTip': "{source}: {kind} cost — never added to another source's",
 
   /* --------------------------------------------------------- token badge */
+  /* The title carries the whole definition of the figure -- what is counted,
+     over which scope, over what span, and that it is projected between
+     measurements. It stays long on purpose: it is the only place that says
+     what this number means, and #96 shortened the caption, not this. */
   'hero.title': 'tokens consumed · selected account and source · all time · projected between measurements',
-  'hero.caption': 'tokens · all time',
+  /* One word, because the badge now lives in the top bar and every character
+     of it competes with the section nav (#96). "· all time" moved into the
+     title above rather than being dropped -- the scope qualifier is part of
+     the definition, and the definition was already there. */
+  'hero.caption': 'tokens',
 
   /* ---------------------------------------------------------------- live */
   'live.title': 'Right now',

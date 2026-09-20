@@ -152,6 +152,32 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("%s carries a data-band -- it floats above the tiers and belongs on every view", floater)
 		}
 	}
+	// The token badge's mount point is in the BAR, not in <main> (#96).
+	//
+	// It is the strongest form of the floater rule just above. #alerts earns
+	// "on every view" by carrying no data-band, which works but depends on an
+	// attribute staying absent; #pulse earns it structurally -- a node mountView
+	// never walks cannot be unmounted by a view at all.
+	//
+	// The other half is not a styling preference either. --navh is the sticky
+	// bar measured (scope.js's navHeight), the offset everything the page
+	// scrolls to lands against, and the badge's first frame arrives about one
+	// round trip after the page does (now.js's startLive). In the bar it is
+	// sized to fit inside the row's existing height so a late arrival cannot
+	// move that number; back in <main> that sizing, and the reasoning around it,
+	// becomes dead weight -- and the two-line move that put it there would read
+	// like the revert of a cosmetic change.
+	src := string(b)
+	pulseAt := strings.Index(src, `id="pulse"`)
+	headEnd := strings.Index(src, `</header>`)
+	switch {
+	case pulseAt < 0:
+		t.Error(`index.html has no id="pulse" -- now.js has nowhere to mount the lifetime token badge`)
+	case headEnd < 0:
+		t.Error(`index.html has no </header> -- the sticky bar is the shell's one static element`)
+	case pulseAt > headEnd:
+		t.Error(`id="pulse" is outside <header id="scope"> -- #96 put the token badge in the sticky bar, where no view can unmount it and its late first frame cannot move --navh`)
+	}
 	// The dead `<footer id="footer">` #54 removed. No module ever wrote it, so
 	// it rendered as nothing on every page view; re-adding an empty one is
 	// re-adding a placeholder that outlives whoever remembers why.

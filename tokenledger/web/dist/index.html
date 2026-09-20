@@ -47,6 +47,21 @@
     <h1>TokenLedger</h1>
     <nav id="secnav" class="secnav" hidden></nav>
     <span class="spacer"></span>
+    <!-- The lifetime token badge (#96). now.js mounts its persistent
+         heroWrapEl here; this div is the stable point it looks up, the same
+         way #scope itself is — it is written in the shell, so it survives the
+         module state being reset on a scope change (now.js's renderNow clears
+         the wrap, it does not unmount it).
+         It reads as a status light, not as a figure: it is the one thing in
+         this bar that says whether the fleet is still moving, which belongs
+         beside the two "how this page is rendered for me" toggles rather than
+         in the ledger it does not price. Empty renders as nothing, gap
+         included (see `.scope #pulse` in styles.css).
+         Sized to be SHORTER than this row's tallest child so its late first
+         frame cannot change the bar's height — which is --navh, which is every
+         anchor's landing offset. styles.css has the full argument; scope.js's
+         ResizeObserver is the backstop. -->
+    <div id="pulse"></div>
     <button id="lang" data-i18n-title="app.language" title="Language">中</button>
     <button id="theme" data-i18n-title="app.theme" title="Toggle light / dark">◐</button>
   </div>
@@ -86,24 +101,25 @@
        preserves it, because it re-lists these same nodes rather than building
        new ones. -->
   <main id="page" aria-busy="false">
-    <!-- These two carry NO `data-band`, which is what puts them on every view.
+    <!-- This one carries NO `data-band`, which is what puts it on every view.
          Alerts float above the tiers rather than living in one: something that
          needs attention is not a tier-3 concern just because the fleet roster
          is. Empty renders as nothing (see #alerts:empty). Unmounting it with a
          band would be the same mistake as folding it away -- an alert nobody
          can reach is an alert nobody sees, and a reader on the usage view is
          no less entitled to be told the collector died. -->
-    <!-- The lifetime token badge, same reasoning. Outside the fold on purpose:
-         it is small enough not to compete with the money now, and it is the
-         one ambient "is the fleet still moving" signal on the page -- folded
-         away, or unmounted, it answers nothing. -->
-    <div id="pulse"></div>
-
     <section id="alerts"></section>
 
-    <!-- The tier-1 band (#54). Below #pulse and #alerts, not above: both of
-         those float over the tiers rather than belonging to one, and a band
-         label printed above them would be claiming they are ledger cards. -->
+    <!-- The tier-1 band (#54). Below #alerts, not above: an alert floats over
+         the tiers rather than belonging to one, and a band label printed above
+         it would be claiming it is a ledger card.
+         #pulse used to be the other floater here, directly above #alerts and
+         by the same argument -- no `data-band`, because folded away OR
+         unmounted the token badge answers nothing. #96 took the argument one
+         step further and moved it out of <main> altogether, into the sticky
+         bar: a node mountView never sees cannot be unmounted by a view at all,
+         which is what "on every view" was reaching for. It is also one less
+         row the ledger has to start below. -->
     <div class="band" id="ledger-band" data-band="ledger">
       <span class="band-title" data-i18n="band.ledger">Ledger</span>
       <span class="band-note" data-i18n="band.ledger.note">what was paid, and to whom</span>

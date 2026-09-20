@@ -114,6 +114,12 @@ function applyCounter(c) {
     // The caption moves inside the badge and shortens; the part that names the
     // scope moves to the title, because it repeats what the scope controls
     // directly above already say.
+    //
+    // #96 moved the badge again -- out of <main> and into the sticky top bar --
+    // and shortened the caption to one word for it. The title is untouched and
+    // has to stay untouched: it is where the figure's whole definition lives
+    // (what is counted, over which scope and span, and that it is projected),
+    // and a badge in a bar has room for a label, not for a definition.
     heroWrapEl.replaceChildren(el('div', {
       class: 'hero', id: 'hero-root',
       title: t('hero.title'),
@@ -878,7 +884,12 @@ function applyNow(root, state, app, results, opsOpen) {
   const alertsRoot = $('#alerts');
   if (alertsRoot) alertsRoot.replaceChildren(...(alerts ? [alerts] : []));
 
-  // The token badge mounts at the top of the page, not in this (folded) block.
+  // The token badge mounts in the top BAR, not in this (folded) block — #96
+  // moved #pulse out of <main> and into <header id="scope">. The lookup is
+  // document-wide and always was, so nothing here changes: what matters is that
+  // #pulse is still written in the shell, which is what makes it a mount point
+  // this module's own state can be reset around (renderNow clears heroWrapEl on
+  // a scope change; it never unmounts it).
   const pulseRoot = $('#pulse');
   if (pulseRoot && heroWrapEl.parentNode !== pulseRoot) pulseRoot.replaceChildren(heroWrapEl);
 
@@ -974,11 +985,21 @@ export function renderNow(root, state, app, opsOpen) {
  *
  *  Deferred, but NOT gated on the operations fold, and the difference matters:
  *  the stream feeds the live strip inside the fold *and* the lifetime token
- *  badge in #pulse, which index.html keeps outside the fold deliberately -- it
- *  is the page's one ambient "is the fleet still moving" signal, and folded
- *  away it answers nothing. So what this removes is the stream competing with
- *  the first screen for one of six connections, not the badge itself. The
- *  badge's first frame lands about one round trip later than it used to. */
+ *  badge in #pulse, which is not in the fold at all -- it is the page's one
+ *  ambient "is the fleet still moving" signal, and folded away it answers
+ *  nothing. So what this removes is the stream competing with the first screen
+ *  for one of six connections, not the badge itself. The badge's first frame
+ *  lands about one round trip later than it used to.
+ *
+ *  That last sentence became load-bearing at #96, which moved #pulse into the
+ *  sticky top bar: a badge arriving a round trip late is a badge arriving after
+ *  the page has been laid out against the bar it now lives in, and that bar's
+ *  height is --navh (scope.js's navHeight), the offset everything the page
+ *  scrolls to lands against. Handled where it belongs rather than here: the
+ *  badge is sized not to change the bar's height at all (styles.css's
+ *  `.scope #pulse`), with #98's ResizeObserver on the bar as the net. Deferring
+ *  the stream stays the right call; it is just no longer free of consequences
+ *  elsewhere. */
 export function startLive(app) {
   if (!liveState.pending) return;
   liveState.pending = false;

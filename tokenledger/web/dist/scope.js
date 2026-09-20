@@ -114,7 +114,15 @@ const navButtons = new Map();
  *  closing back onto its row, a browser restoring a scroll position — stops
  *  short of the sticky bar instead of under it, and ⟨C5⟩'s badge is measured
  *  against the same bar. The +8 is breathing room: landing a band label flush
- *  against the bar reads as tucked under it. */
+ *  against the bar reads as tucked under it.
+ *
+ *  #96 put the lifetime token badge IN that bar, which is the first thing to
+ *  live there whose first frame lands about one round trip after the page does
+ *  (now.js's startLive). It is sized to fit inside the row's existing height so
+ *  it does not move this number at all (styles.css's `.scope #pulse` carries the
+ *  measurements) — the observer below is its backstop, not its mechanism. Worth
+ *  saying because it cuts the other way too: whatever else goes in this bar, the
+ *  cheap answer is to make it fit, not to let it resize and re-publish. */
 function navHeight(root) {
   document.documentElement.style.setProperty(
     '--navh', Math.round(root.getBoundingClientRect().height) + 8 + 'px');
