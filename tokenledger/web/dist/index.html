@@ -49,6 +49,29 @@
     <h1>TokenLedger</h1>
     <nav id="secnav" class="secnav" hidden></nav>
     <span class="spacer"></span>
+    <!-- The alert bell (#123). now.js mounts a <details> here: a count while
+         closed, the findings themselves once opened. Same contract as #pulse
+         below — a stable point written in the shell, no `data-band`, and so on
+         every view.
+
+         It is FIRST of the bar's right-hand cluster, and the order is the
+         claim: alerts, then the pulse, then the two "how this page is rendered
+         for me" toggles. #pulse keeps its place beside those toggles (its
+         comment below is still literally true); what goes in front of it is the
+         one thing in this bar a reader is meant to ACT on rather than glance at.
+
+         Why the bar rather than a card at the top of <main>: an alerts card was
+         ~300px of the default view whenever the fleet had anything to say, and
+         the page's own argument for it ("an alert nobody can reach is an alert
+         nobody sees") is satisfied more cheaply by a count that is always on
+         screen — the bar is sticky, the card was not.
+
+         The height rule is #pulse's, and it is not optional: this row's height
+         is --navh, every anchor's landing offset. Closed, the bell is sized to
+         fit inside the height the row already has; OPEN, its panel is taken out
+         of flow (`.scope #alertbell[open] .bell-panel`) so expanding it cannot
+         move that number either. styles.css carries both measurements. -->
+    <div id="alertbell"></div>
     <!-- The lifetime token badge (#96). now.js mounts its persistent
          heroWrapEl here; this div is the stable point it looks up, the same
          way #scope itself is — it is written in the shell, so it survives the
@@ -116,7 +139,16 @@
          is. Empty renders as nothing (see #alerts:empty). Unmounting it with a
          band would be the same mistake as folding it away -- an alert nobody
          can reach is an alert nobody sees, and a reader on the usage view is
-         no less entitled to be told the collector died. -->
+         no less entitled to be told the collector died.
+
+         #123 moved the ALERTS THEMSELVES into the bar (#alertbell above), and
+         left this slot holding the one case a count cannot state: a /v1/findings
+         query that FAILED. A bell is a number, and there is no honest number for
+         "nothing is known" -- an empty bell would report a healthy fleet. So the
+         failure stays a card, here, and the reasoning above applies to it
+         unchanged: a page that cannot tell whether anything is wrong has to say
+         so on whichever view the reader is standing on.
+         now.js writes this on every pass (applyNow's alertsError). -->
     <section id="alerts"></section>
 
     <!-- The page's scope: which subscription, which source, which span, and the

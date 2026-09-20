@@ -35,7 +35,7 @@ import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './pro
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
-import { ownerLine, splitMuted } from './lib/findings.js';
+import { ownerLine, splitMuted, worstSeverity } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
 import * as C from './charts.js';
 import { t, withLocale } from './lib/i18n.js';
@@ -429,28 +429,129 @@ function connectLive(app) {
 // and `findings` always an array, never null. Read tolerantly regardless:
 // if the body is still a bare array (whichever order this and the backend
 // fix land in), treat it as the findings list directly.
-function alertsCard(result, app) {
-  if (result.status === 'rejected') {
-    return el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')),
-      el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
-  }
+//
+// A rejected query returns [] here rather than throwing: it has its own
+// renderer (alertsError), because "the query failed" is not a number and the
+// bell's whole job is to print one.
+function findingsOf(result) {
+  if (result.status === 'rejected') return [];
   const data = result.value || {};
-  const findings = Array.isArray(data) ? data : (data.findings || []);
-  // Spec §4 item 1: the Alerts card is hidden when empty, not shown with a
-  // reassuring "nothing unusual" message — a healthy fleet should not carry
-  // a permanent card at the top of Now. (A rejected query above still shows
-  // its own error card; "empty" here means the query succeeded and found
-  // nothing, not that it failed.)
+  return Array.isArray(data) ? data : (data.findings || []);
+}
+
+/** Whether the bell's panel is open, held for the life of the PAGE.
+ *
+ *  A module variable, deliberately not localStorage — which is what the
+ *  other two folds on this page use (spend.js's workingFold, and #ops). The
+ *  difference is what the fold contains. "How this number is worked out" is a
+ *  preference about reading the page, and a reader who opened it once means it
+ *  next time. A panel of live alerts is not: restoring it on every load would
+ *  open the page mid-alert for somebody who dealt with that alert yesterday,
+ *  and the count in the summary is the thing that is supposed to decide whether
+ *  it is worth opening today.
+ *
+ *  It still has to survive the 60-second refresh, though, which is why it
+ *  exists at all: app.js re-renders this on a timer and mute's app.refresh()
+ *  re-renders it immediately, and a panel that shut itself under the reader
+ *  each time would make the mute button look like it dismissed the page. */
+let bellOpen = false;
+
+/** alertBell is the top bar's alert entry (#123): a count while closed, the
+ *  findings themselves once opened.
+ *
+ *  # Why a count in the bar rather than a card at the top of the page
+ *
+ *  The card this replaces was ~300px of the default view for as long as the
+ *  fleet had anything to say, and it said it in full whether or not anyone was
+ *  going to act on it. Its own argument for being there — "an alert nobody can
+ *  reach is an alert nobody sees" — is met better by a counter that is always
+ *  on screen: the bar is sticky, the card was not, so the card stopped being
+ *  reachable the moment the reader scrolled past it.
+ *
+ *  # Why <details> and not a popover
+ *
+ *  Because there is no popover in this house and this is not the change that
+ *  should introduce one. <details>/<summary> is the collapse the platform
+ *  gives a keyboard, a screen reader and find-in-page for free (spend.js's
+ *  workingFold and mutedTail below make the same bet), and it needs no JS at
+ *  all to open and close. The panel being positioned rather than in flow is a
+ *  CSS fact about where it lands, not a component: there is no focus trap, no
+ *  outside-click handler, no aria-haspopup, and nothing here to keep in sync
+ *  with the element's real state.
+ *
+ *  That positioning is also what keeps the bar's promise. --navh is this bar
+ *  measured (scope.js's navHeight) and it is every anchor's landing offset;
+ *  the closed pill is sized to fit inside the height the row already has, and
+ *  the open panel is taken out of flow, so NEITHER state moves that number.
+ *  An alert panel that grew the bar would re-lay-out the page under the reader
+ *  at the exact moment they were trying to read something urgent.
+ *
+ *  Returns null when the query found nothing at all — an empty bar entry, like
+ *  an empty #pulse, renders as nothing including its flex gap (styles.css). */
+function alertBell(result, app) {
+  const findings = findingsOf(result);
+  // Hidden when empty, not shown with a reassuring zero: a healthy fleet
+  // should not carry a permanent badge in the bar any more than it carried a
+  // permanent card at the top of Now. ("Empty" is the query succeeding and
+  // finding nothing; a failed query is alertsError's, below.)
   if (!findings.length) return null;
   const { live, muted } = splitMuted(findings);
-  // A card of nothing but silenced alerts is still worth showing -- that IS
-  // the state of the fleet, and hiding it would make a muted alert look
-  // resolved. But it must not sit at the top of Now looking urgent, so the
-  // fold below stays closed and the heading says how many.
-  const card = el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')));
-  for (const f of live) card.appendChild(alertRow(f, app));
-  if (muted.length) card.appendChild(mutedTail(muted, app));
-  return card;
+
+  // `findings` as well as `bell-panel`: the rows are the Findings card's rows,
+  // drawn by the same alertRow, and this class is what lets every `.findings`
+  // rule in styles.css reach them without a second copy scoped to the bar.
+  const panel = el('div', { class: 'bell-panel findings' });
+  for (const f of live) panel.appendChild(alertRow(f, app));
+  if (muted.length) panel.appendChild(mutedTail(muted, app));
+
+  // The count is the LIVE findings only: a silenced alert is one somebody has
+  // already answered for, and letting it push the number up would make the
+  // mute button look like it did nothing.
+  //
+  // Nothing live and something muted is still a state worth a bell — hiding it
+  // would make a muted alert look resolved, which is the one thing muting must
+  // never be mistaken for. It says so in words ("muted (2)") instead of a
+  // number, recessed, because "0" beside a bell is a sentence nobody can read.
+  const sev = live.length ? worstSeverity(live) : 'muted';
+  const label = live.length
+    ? t('alerts.bell.label', { n: live.length, severity: t('alerts.sev.' + sev) })
+    : t('alerts.bell.allMuted', { n: muted.length });
+  // The severity WORD, not just the dot's colour. styles.css:256 — "status
+  // colour is reinforced by the label text beside it, never alone" — and a bar
+  // is where that rule bites hardest: an amber dot at 12.5px next to a digit is
+  // the whole message, and to a reader who cannot separate amber from red it is
+  // no message at all.
+  const summary = el('summary', { title: label, 'aria-label': label },
+    el('span', { class: 'dot ' + sev }),
+    live.length ? el('b', { class: 'n' }, String(live.length)) : null,
+    el('span', { class: 'w' }, live.length
+      ? t('alerts.sev.' + sev)
+      : t('findings.mutedCount', { n: muted.length })));
+
+  const det = el('details', { class: 'bell', 'data-sev': sev, open: bellOpen ? '' : false },
+    summary, panel);
+  det.addEventListener('toggle', () => { bellOpen = det.open; });
+  return det;
+}
+
+/** alertsError keeps #alerts — the shell's slot above the tiers — in work.
+ *
+ *  A findings query that FAILED is the one thing the bell cannot say. Its
+ *  summary is a count, and there is no honest count for "the request came
+ *  back 500"; a bell showing nothing would report a healthy fleet, and a bell
+ *  showing an error glyph would be a pill the reader has to open to learn it
+ *  means nothing is known.
+ *
+ *  So the failure stays exactly where it has always been: a card above the
+ *  tiers, carrying no `data-band` and therefore on every view, because a page
+ *  that cannot tell whether anything is wrong must say so on whichever view
+ *  the reader is standing on. This is also what keeps #alerts from becoming
+ *  the dead markup embed_test.go bans (`id="footer"`): applyNow writes it on
+ *  every pass, and on this path it draws. */
+function alertsError(result) {
+  if (result.status !== 'rejected') return null;
+  return el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')),
+    el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
 }
 
 function alertRow(f, app) {
@@ -844,12 +945,27 @@ function applyNow(root, state, app, results, opsOpen) {
   // bare `null` argument into a literal "null" text node instead of skipping
   // it, so every card here (all of which can legitimately be null-ish only
   // through a future edit) is filtered before it reaches the DOM.
-  // Alerts mount ABOVE the tiers, not inside this one. Everything else here is
-  // operational detail that the page now folds away by default, and an alert
-  // inside a fold is an alert nobody sees.
-  const alerts = alertsCard(findingsR, app);
+  // Alerts are in the BAR now (#123), not in a card above the tiers and not in
+  // this one. Everything else here is operational detail that the page folds
+  // away by default, and an alert inside a fold is an alert nobody sees — the
+  // bar is the other end of that argument: it is the only part of this page
+  // that is on screen no matter how far the reader has scrolled.
+  //
+  // Two mount points, because the two things being said are different in kind.
+  // #alertbell takes a COUNT (alertBell); #alerts keeps the case the bar cannot
+  // put a number on — a findings query that failed (alertsError). Both are
+  // written on every pass, including with nothing to draw, so neither can keep
+  // showing a fleet state that has since gone away.
+  const bellRoot = $('#alertbell');
+  if (bellRoot) {
+    const bell = alertBell(findingsR, app);
+    bellRoot.replaceChildren(...(bell ? [bell] : []));
+  }
   const alertsRoot = $('#alerts');
-  if (alertsRoot) alertsRoot.replaceChildren(...(alerts ? [alerts] : []));
+  if (alertsRoot) {
+    const failed = alertsError(findingsR);
+    alertsRoot.replaceChildren(...(failed ? [failed] : []));
+  }
 
   // The token badge mounts in the top BAR, not in this (folded) block — #96
   // moved #pulse out of <main> and into <header id="scope">. The lookup is

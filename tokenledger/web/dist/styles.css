@@ -485,8 +485,29 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
    Plain text, with the current section marked by weight and a rule under it —
    a position indicator, not a selected state.
    It scrolls rather than wraps: wrapping grows the sticky bar, and the bar's
-   height is the offset every anchor lands against (--navh). */
-.secnav { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+   height is the offset every anchor lands against (--navh).
+
+   `flex: 1 1 0` is what makes that sentence true, and #123 is where it had to
+   be. The nav had `min-width: 0` at mobile "to let the flex item shrink below
+   its content and actually scroll" — but `.row1` is `flex-wrap: wrap`, and a
+   wrapping flex container breaks its lines on each item's HYPOTHETICAL size,
+   before any shrinking happens. So the nav's ~219px of content pushed the rest
+   of the bar onto a second line rather than scrolling, and the nav then had a
+   full line to itself and never needed to shrink at all. Nothing exposed it
+   while the bar's right-hand side was two 30px buttons and a badge that hides
+   on phones; adding the alert bell did, at 375px (--navh 58 → 95) and again in
+   the 721–810px band where the wordmark and the token badge are both still up.
+   A zero BASIS is the fix: the nav asks for no width of its own, takes what is
+   left after the fixed items, and scrolls inside it — which is what the
+   paragraph above always said it did. */
+.secnav { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1 1 0; min-width: 0; }
+/* ...and with the nav growing, the spacer beside it must not. They would
+   otherwise split the free space and leave the language/theme pair stranded in
+   the middle of the bar. The spacer is NOT redundant, which is why this is a
+   conditional rather than a deletion: #secnav is `hidden` in the shell until
+   app.js decides which entries exist, and on that first frame the spacer is the
+   only thing holding the right-hand cluster against the right edge. */
+.scope .row1 .secnav:not([hidden]) ~ .spacer { flex: 0 0 auto; }
 .secnav::-webkit-scrollbar { display: none; }
 .secnav button {
   border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 13px;
@@ -537,6 +558,87 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
    clears the persistent .hero-wrap without unmounting it (renderNow), which
    leaves #pulse holding an empty div and therefore not :empty at all. */
 .scope #pulse:empty, .scope #pulse:has(> .hero-wrap:empty) { display: none; }
+
+/* The alert bell's slot in the bar (#123).
+
+   IT OBEYS #pulse's HEIGHT RULE, IN BOTH OF ITS STATES. That rule is the one
+   above: whatever goes in this bar fits the height the bar already has, because
+   the bar's height is --navh and --navh is the scroll-margin every anchor on
+   the page lands against. A bell has a second state #pulse does not, and it is
+   the dangerous one -- an open panel of eight findings in page flow would push
+   this row down by most of a screen, re-publish --navh through scope.js's
+   ResizeObserver, and move every landing point on the page at the moment the
+   reader clicked something urgent.
+
+   So: the SUMMARY fits (same recipe as .hero -- one font-size, everything
+   inside it in em, measured ~27px against this row's 33.5px, set by a .secnav
+   button), and the PANEL is taken out of flow. Neither state touches the bar's
+   height; the observer stays a backstop rather than a mechanism, which is the
+   order the #pulse block above argues for.
+
+   Measured at 915d924, 1280px wide: --navh is 65px with the bell absent, 65px
+   with it closed, and 65px with it open. */
+.scope #alertbell { display: flex; align-items: center; min-width: 0; font-size: 12.5px; }
+/* Empty means empty -- no pill, and no 14px flex gap left where one would have
+   been. One selector, not #pulse's two: now.js mounts the <details> itself
+   here rather than a persistent wrapper it later empties, so there is no
+   "holding an empty child" case to catch. */
+.scope #alertbell:empty { display: none; }
+
+/* The closed pill. A near-twin of `.hero .tm`, and that is deliberate: these
+   are the bar's two fleet-state readouts and a reader should see them as one
+   pair. `list-style: none` (plus the WebKit pseudo-element) removes the
+   disclosure triangle -- the count IS the affordance, and a marker at this size
+   reads as a stray glyph. */
+.scope #alertbell summary {
+  display: inline-flex; align-items: center; gap: .45em; cursor: pointer;
+  padding: .26em .7em; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); list-style: none; white-space: nowrap;
+}
+.scope #alertbell summary::-webkit-details-marker { display: none; }
+.scope #alertbell summary:hover { background: var(--grid); }
+.scope #alertbell summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.scope #alertbell summary .dot { width: .6em; height: .6em; border-radius: 50%; margin-top: 0; flex: none; }
+.scope #alertbell .n { font-variant-numeric: tabular-nums; }
+/* The severity word. Quieter than the count -- the number is what a reader
+   takes in at a glance, the word is what makes the colour legible to someone
+   who cannot separate amber from red (styles.css's "never alone" rule). It is
+   NOT hidden at any width: dropping it on a phone would drop exactly the half
+   of the message that does not depend on colour vision. */
+.scope #alertbell .w { color: var(--ink-3); }
+/* Nothing live, something muted: the bell still appears -- hiding it would make
+   a silenced alert look resolved -- but it must not look like an alarm. No
+   severity colour, and the whole pill recedes. */
+.scope #alertbell summary .dot.muted { background: var(--ink-3); }
+.scope #alertbell [data-sev="muted"] summary { color: var(--ink-3); }
+
+/* The open panel. Absolutely positioned against .scope -- the BAR, not the
+   pill -- so it hangs from the bar's bottom edge even at the widths where
+   .row1 wraps and the pill is no longer on the last line.
+   It inherits .scope's z-index: 20 by being inside it, which settles the
+   layering this had to be reconciled with: above the page and #tip's z-20
+   (which is pointer-events: none and could not hold the mute buttons anyway),
+   below the #detail drawer's z-30 -- a reader who has opened a session detail
+   is reading that, and an alert panel is not entitled to cover it. */
+.scope #alertbell .bell-panel {
+  position: absolute; top: 100%; right: 20px;
+  /* 100% is .scope, this panel's containing block -- not 100vw, which includes
+     the scrollbar and so hangs the panel 3px off the left edge of a phone. */
+  width: min(400px, calc(100% - 24px));
+  max-height: min(60vh, 30em); overflow-y: auto;
+  padding: 4px 14px 10px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-top: 0; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
+}
+/* The rows inside are the Findings card's, to the letter: now.js gives the
+   panel the `findings` class as well, so every `.findings ...` rule below --
+   the dashed row separators, the severity dots, the owner line, the mute
+   footer, the muted tail -- applies here with nothing restated. One renderer
+   (alertRow) drew them in a card and draws them in the bar, and a second copy
+   of their styling is exactly the drift this file keeps warning about.
+   The only thing that had to be re-scoped is the dot, and upward rather than
+   down: `summary .dot` above is the pill's own, in em so it tracks the pill's
+   one font-size knob; the rows' 9px dots are untouched. */
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border-radius: 999px; background: var(--s1); color: #fff; font-size: 12.5px; }
 .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .chip.clear { background: var(--ink-3); }
@@ -660,9 +762,12 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 @media (max-width: 720px) {
   /* The wordmark goes, and the nav takes the room it freed: on a phone the
      4,459px page is nearer 9,000, so the nav is the one thing in this bar
-     worth the width. `min-width: 0` is what lets the flex item shrink below
-     its content and actually scroll — without it the nav pushes the theme and
-     language buttons off the right edge instead. */
+     worth the width.
+     The `min-width: 0; flex: 1 1 auto` that used to be restated here is gone,
+     and not because it stopped mattering — it is in the base `.secnav` rule
+     now, as `flex: 1 1 0`, because #123 found it was needed at every width and
+     that `auto` basis was the half that did not work (see that rule's note). A
+     copy down here would have re-broken it by winning the cascade. */
   .scope .row1 { padding: 8px 12px; gap: 6px; } .scope h1 { display: none; }
   /* ...and the token badge goes with the wordmark (#96), for the same reason
      and by the same argument. Even stripped of its caption the pill is ~200px
@@ -673,7 +778,17 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
      the phone bar's height trivially invariant -- there is no badge to arrive
      late and no wrap for it to cause. */
   .scope #pulse { display: none; }
-  .secnav { min-width: 0; flex: 1 1 auto; }
+  /* The bell STAYS, and the contrast with the line above is the point. The
+     badge is ambient — every number it summarises is in the cards below, so a
+     phone loses nothing by dropping it. An alert is the opposite: it is the one
+     thing in this bar a reader is meant to act on, and it is now the only place
+     the page says a collector died. Dropping it on a phone would not be saving
+     width, it would be deciding that phone readers do not need to know.
+     It costs little: the closed pill is ~60px of the width the wordmark just
+     freed, and it is shorter than the row's remaining tallest child, so the
+     phone bar's height stays as invariant as the note above claims.
+     Only the panel's inset moves, to follow .row1's 12px padding. */
+  .scope #alertbell .bell-panel { right: 12px; }
   .secnav button { padding: 6px 8px; font-size: 12.5px; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .detail .kpis { grid-template-columns: repeat(2, 1fr); }

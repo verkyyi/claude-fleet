@@ -242,6 +242,15 @@ export const zhCN = {
 
   /* -------------------------------------------------------------- alerts */
   'alerts.title': '告警',
+  /* 顶栏那个铃铛的无障碍名与 title（#123）。可见的只有「数字 + 严重度词」，
+     位置有限；这一句补上它数的是什么。 */
+  'alerts.bell.label': '告警：{n} 条{severity}',
+  'alerts.bell.allMuted': '告警：{n} 条，全部已静音',
+  /* 三档严重度的词形。颜色不单独承载语义（styles.css:256），铃铛的颜色由
+     这个词加固。 */
+  'alerts.sev.critical': '严重',
+  'alerts.sev.warning': '警告',
+  'alerts.sev.info': '提示',
 
   /* --------------------------------------------------------------- fleet */
   'endpoints.title': '端点',

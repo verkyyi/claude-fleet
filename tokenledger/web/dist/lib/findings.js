@@ -30,6 +30,38 @@ export function ownerLine(f) {
   return null;
 }
 
+// -------------------------------------------------------------- severity
+
+// The three severities internal/findings emits, worst first. They are also the
+// three colours styles.css gives `.dot`, and the order below is the one
+// findings.go's `finish` sorts by — written here as data rather than inferred
+// from that sort, because the caller needs the worst of a SET and a sort tells
+// it only which happens to be first in a list it did not order.
+const SEV_RANK = { critical: 0, warning: 1, info: 2 };
+
+// worstSeverity is the severity a summary of `list` should wear: the most
+// severe one present, not the first one.
+//
+// The difference is the whole reason this is a function. The bar's alert bell
+// prints ONE colour and one word over a set of findings, and taking them from
+// findings[0] would understate the fleet the moment the server's ordering
+// changed, or the moment a mute pulled the only critical out of the live half
+// — a silent, colour-shaped lie that nothing else on the page would contradict.
+//
+// An unknown severity counts as 'info' rather than as worst. A hub newer than
+// this page can add one, and a name this build has never seen is not evidence
+// of an emergency; the alert still renders, with its own title saying what it
+// is. Empty (or no recognised severity at all) is 'info' for the same reason:
+// this returns a label, and there is no honest "worst" in an empty set.
+export function worstSeverity(list) {
+  let worst = 'info';
+  for (const f of list || []) {
+    const s = f && f.severity;
+    if (s in SEV_RANK && SEV_RANK[s] < SEV_RANK[worst]) worst = s;
+  }
+  return worst;
+}
+
 // ---------------------------------------------------------------- muting
 
 // A finding an operator has silenced arrives with `muted` = {until, note, by}

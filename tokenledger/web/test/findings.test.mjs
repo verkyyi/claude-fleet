@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isMuted, muteLine, ownerLine, splitMuted } from '../dist/lib/findings.js';
-import { useLocale } from '../dist/lib/i18n.js';
+import { isMuted, muteLine, ownerLine, splitMuted, worstSeverity } from '../dist/lib/findings.js';
+import { t, useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
 
 // The two shapes the backend actually sends, and the one thing the page must
@@ -138,4 +138,79 @@ test('the muter name is not translated', () => {
   const eng = muteLine(f, now);
   assert.notEqual(zh, eng, 'zh-CN must have its own wording');
   for (const line of [zh, eng]) assert.match(line, /verky/);
+});
+
+// ------------------------------------------------------------- severity
+//
+// The bar's alert bell (#123) prints ONE colour and one word over a whole set
+// of findings, which is a claim no single finding in the set makes. These are
+// the tests for the only thing that claim can honestly be.
+
+test('the worst severity present wins, whatever the order', () => {
+  const warn = { severity: 'warning' }, crit = { severity: 'critical' }, info = { severity: 'info' };
+  assert.equal(worstSeverity([warn, crit, info]), 'critical');
+  // The order is the point: the server ranks criticals first today, so reading
+  // findings[0] would pass this file and still be wrong the day it stops, or
+  // the day a mute pulls the only critical out of the live half.
+  assert.equal(worstSeverity([info, warn, crit]), 'critical');
+  assert.equal(worstSeverity([info, warn]), 'warning');
+  assert.equal(worstSeverity([info]), 'info');
+});
+
+// A hub newer than this page can emit a severity this build has never heard
+// of. Treating it as the worst would turn every such finding into a red bell;
+// the finding still renders, and its own title says what it is.
+test('an unknown severity is not an emergency', () => {
+  assert.equal(worstSeverity([{ severity: 'apocalyptic' }]), 'info');
+  assert.equal(worstSeverity([{ severity: 'apocalyptic' }, { severity: 'warning' }]), 'warning');
+  assert.equal(worstSeverity([{}, { severity: null }]), 'info');
+});
+
+// There is no honest "worst" in an empty set, and this returns a label rather
+// than null because every caller is about to put it in a class name.
+test('an empty set degrades to info rather than throwing', () => {
+  assert.equal(worstSeverity([]), 'info');
+  assert.equal(worstSeverity(null), 'info');
+  assert.equal(worstSeverity(undefined), 'info');
+});
+
+// The count beside that colour is the LIVE half only. splitMuted is what the
+// bell counts, and this pins the pairing the bell depends on: a silenced alert
+// must not push the number up, and must not disappear either.
+test('the bell counts live findings and keeps the muted ones', () => {
+  const list = [
+    { id: 'a', severity: 'critical' },
+    { id: 'b', severity: 'warning', muted: { until: '2026-09-21T10:00:00Z' } },
+    { id: 'c', severity: 'info' },
+  ];
+  const { live, muted } = splitMuted(list);
+  assert.equal(live.length, 2);
+  assert.equal(muted.length, 1);
+  assert.equal(worstSeverity(live), 'critical');
+  // And the muted critical case, which is the one that would be a lie: silence
+  // the critical and the bell must stop being red.
+  const hushed = splitMuted([
+    { id: 'a', severity: 'critical', muted: { until: '2026-09-21T10:00:00Z' } },
+    { id: 'c', severity: 'info' },
+  ]);
+  assert.equal(hushed.live.length, 1);
+  assert.equal(worstSeverity(hushed.live), 'info');
+});
+
+// The bell's colour never travels alone: styles.css:256 ("status colour is
+// reinforced by the label text beside it, never alone"), and a 12.5px dot in
+// the top bar is the thinnest possible place to break that rule. Every
+// severity worstSeverity can return must therefore have a word in every
+// locale — i18n.test.mjs proves the two dictionaries agree, this proves the
+// keys the renderer builds by hand actually exist.
+test('every severity the bell can wear has a word in both locales', () => {
+  for (const sev of ['critical', 'warning', 'info']) {
+    for (const loc of ['en', 'zh-CN']) {
+      useLocale(loc);
+      const word = t('alerts.sev.' + sev);
+      assert.notEqual(word, 'alerts.sev.' + sev, `${loc} has no word for ${sev}`);
+      assert.notEqual(word.trim(), '');
+    }
+  }
+  useLocale('en');
 });

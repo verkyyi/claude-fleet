@@ -52,6 +52,10 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		// anywhere until they had a home of their own.
 		`id="quota"`, `id="scopebar"`,
 		// The three-tier shell: alerts above the tiers, operations folded.
+		// #alerts survived #123, which moved the alerts themselves into the bar
+		// (#alertbell, checked with #pulse below): it is where a /v1/findings
+		// query that FAILED is reported, because a bell's summary is a count and
+		// there is no honest count for "nothing is known".
 		`id="alerts"`, `id="ops"`, `id="ops-analysis"`,
 		// The progress band and its section. The band starts hidden and app.js
 		// unhides it only where a shipper has pushed repo facts, so the mount
@@ -157,7 +161,13 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// of money for a subscription the reader could not change, narrowed by chips
 	// they could neither see nor remove. Give this node a data-band and that
 	// comes straight back for whichever views it is not tagged with.
-	for _, floater := range []string{`id="pulse"`, `id="alerts"`, `id="scopebar"`} {
+	// #alertbell joins them at #123, and for it the rule is inherited twice
+	// over: it is the alerts, which the entry above already argues belong on
+	// every view, AND it is in the bar, which mountView never walks. The
+	// attribute check is still worth making -- a data-band here would be
+	// silently inert today and quietly correct-looking to whoever later moved
+	// the bell back into <main>.
+	for _, floater := range []string{`id="pulse"`, `id="alerts"`, `id="alertbell"`, `id="scopebar"`} {
 		at := strings.Index(string(b), floater)
 		if at < 0 {
 			continue // the id check above already reported it
@@ -182,16 +192,31 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// move that number; back in <main> that sizing, and the reasoning around it,
 	// becomes dead weight -- and the two-line move that put it there would read
 	// like the revert of a cosmetic change.
+	//
+	// #123 put the ALERT BELL in the bar on the same argument, and for it the
+	// second half is the load-bearing one. The count has to be on screen when
+	// the reader needs it, and the card it replaces stopped being on screen the
+	// moment anyone scrolled past it; --navh then says the bell must not change
+	// the bar's height, which is why styles.css sizes the closed pill to fit and
+	// takes the open panel out of flow. Back in <main> none of that is true and
+	// none of it is needed -- so a move back is a real change, and this is where
+	// it has to be argued rather than committed as a tidy-up.
 	src := string(b)
-	pulseAt := strings.Index(src, `id="pulse"`)
 	headEnd := strings.Index(src, `</header>`)
-	switch {
-	case pulseAt < 0:
-		t.Error(`index.html has no id="pulse" -- now.js has nowhere to mount the lifetime token badge`)
-	case headEnd < 0:
+	if headEnd < 0 {
 		t.Error(`index.html has no </header> -- the sticky bar is the shell's one static element`)
-	case pulseAt > headEnd:
-		t.Error(`id="pulse" is outside <header id="scope"> -- #96 put the token badge in the sticky bar, where no view can unmount it and its late first frame cannot move --navh`)
+	}
+	for _, inBar := range []struct{ id, why string }{
+		{`id="pulse"`, `#96 put the token badge in the sticky bar, where no view can unmount it and its late first frame cannot move --navh`},
+		{`id="alertbell"`, `#123 put the alert count in the sticky bar, where it stays on screen however far the reader has scrolled -- a card above the tiers did not`},
+	} {
+		at := strings.Index(src, inBar.id)
+		switch {
+		case at < 0:
+			t.Errorf(`index.html has no %s -- now.js has nowhere to mount it`, inBar.id)
+		case headEnd >= 0 && at > headEnd:
+			t.Errorf(`%s is outside <header id="scope"> -- %s`, inBar.id, inBar.why)
+		}
 	}
 	// The dead `<footer id="footer">` #54 removed. No module ever wrote it, so
 	// it rendered as nothing on every page view; re-adding an empty one is
