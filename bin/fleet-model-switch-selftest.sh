@@ -308,6 +308,9 @@ ok; has "$W_STUCK" "$out" || fail "the stop-hook-pinned window should be named i
 typed=$(cat "$WORK/typed.walled")
 ok; has '/model opus' "$typed" || fail "the walled pane should have been handed /model opus" "$typed"
 ok; has '/model opus' "$(cat "$WORK/typed.stuck")" || fail "a window pinned at working by the missed Stop hook must still be flipped" "$(cat "$WORK/typed.stuck")"
+# A5: the settled walled turn is recorded `done` (its turn ended on the cap, no
+# Stop) rather than left a false `working` for the demoters to clear later.
+eq "the settled walled window is recorded done, not left working" "done" "$(tmux -L "$LBL" display-message -p -t "$W_STUCK" '#{@claude_state}')"
 eq "the genuinely-busy pane was never typed into" "" "$(cat "$WORK/typed.busy")"
 eq "the recovered pane was never typed into" "" "$(cat "$WORK/typed.recovered")"
 

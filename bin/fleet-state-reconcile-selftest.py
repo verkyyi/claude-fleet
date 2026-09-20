@@ -25,6 +25,7 @@ class ReconcileTest(unittest.TestCase):
         cls.socket = 'reconcile-test-' + str(os.getpid())
         cls.bin = cls.root / 'bin'; cls.bin.mkdir()
         shutil.copyfile(BIN / 'fleet-state-reconcile.py', cls.bin / 'fleet-state-reconcile.py')
+        shutil.copyfile(BIN / 'fleet-input.py', cls.bin / 'fleet-input.py')
         fake = cls.bin / 'classify-sessions.sh'
         fake.write_text('#!/bin/bash\nprintf "%s %s\\n" "${CLASSIFY_SOCK:-}" "$*" >> ' + str(cls.root / 'classify.log') + '\n')
         fake.chmod(0o755)
@@ -141,6 +142,21 @@ class ReconcileTest(unittest.TestCase):
         wid, pane = self.window(age=10)                                            # too fresh to call exited
         self.run_cli()
         self.assertEqual(self.state(wid)[0], 'working')
+
+    def test_no_record_live_process_demotes_only_on_a_provably_empty_prompt(self):
+        # A3: a live Claude process (comm 'claude') with no registry record falls
+        # back to the screen. An empty prompt past the grace is demoted; the
+        # blank-screen counterpart (test_an_agent_process_without_a_record...) is
+        # snapshot 'unknown' and stays working, so the fallback can never guess.
+        drawn = "sh -c 'printf \"\\033[2J\\033[H> \"; exec %s 300'" % (self.root / 'claude')
+        wid, pane = self.window(age=300, command=drawn)
+        until = time.time() + 5
+        while time.time() < until and MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state') != 'empty':
+            time.sleep(0.1)
+        self.assertEqual(MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state'), 'empty')
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'done')
+        self.assertIn('prompt idle', self.log.read_text())
 
     def test_an_agent_process_without_a_record_is_not_exited(self):
         wid, _ = self.window(age=3000, command=str(self.root / 'claude') + ' 300')

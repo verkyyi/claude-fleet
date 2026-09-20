@@ -462,6 +462,18 @@ main() {
         model:*) vis=1 ;;
       esac
       cap_settled "$vis" "$sts" "$NOW_S" "${FLEET_STUCK_WORKING_SECS:-120}" && settled=1
+      # A5: a per-model cap ABORTS the turn with no Stop hook, so a settled window
+      # is pinned at `working` though its turn is provably over. Record the truth
+      # now — `done` — rather than leave a false `working` for #806/#101 to clear a
+      # grace-period later. It is the correct state, it lets the in-place switch
+      # below proceed, and it satisfies the quota failover's done-check when the
+      # target model is also capped and the window is handed to the subscription
+      # path. Only on a confirmed-settled cap; a genuinely-live turn is untouched.
+      if [ "$settled" = 1 ] && [ "${DRY:-0}" != 1 ]; then
+        TM set-window-option -t "$wid" @claude_state done 2>/dev/null
+        TM set-window-option -t "$wid" @claude_needs '' 2>/dev/null
+        TM set-window-option -t "$wid" @claude_state_ts "$NOW_S" 2>/dev/null
+      fi
       trace banner
     fi
     case "$kind" in

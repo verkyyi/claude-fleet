@@ -33,6 +33,20 @@ from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
 AGENT_COMMS = ('claude', 'codex', 'codex-real')
+INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
+
+
+def prompt_idle(session, pane, agent):
+    """True only when the pane provably shows an empty prompt (issue A3).
+
+    fleet-input.py distinguishes an empty prompt from a busy/streaming one and
+    from an unrecognized frame, so this never mistakes the footer repaint that
+    keeps window_activity fresh for real work. Fail closed: any doubt is False.
+    """
+    try:
+        return INPUT['snapshot'](session, pane, agent=agent).get('state') == 'empty'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
 
 
 def tm(session, *args, timeout=5):
@@ -255,12 +269,20 @@ def reconcile(session, args, records, rows, now, stats):
             elif identity.get('remote', '').startswith('unix:///'):
                 continue
         if not reason:
-            # No native record: only a pane with no agent under it, and a stamp old
-            # enough to rule out a launch in progress, is provably not working.
+            # No usable native record. A pane with no agent under it and a stamp
+            # old enough to rule out a launch in progress is provably not working.
             exited = row['dead'] == '1' or (row['pane_pid'].isdigit() and not has_agent_process(rows, row['pane_pid']))
-            if not exited or now - state_ts < args.exited_secs:
+            if exited and now - state_ts >= args.exited_secs:
+                reason = 'exited; no agent process under the pane for %ds' % (now - state_ts)
+            elif (not exited and record is None and row['agent'] != 'codex'
+                  and now - state_ts >= args.idle_secs and prompt_idle(session, row['pane'], row['agent'])):
+                # A live Claude process with no registry record (a build that does
+                # not write ~/.claude/sessions, or a cleaned record): the screen is
+                # the only truth left. An empty prompt past the grace is a finished
+                # turn (issue A3) — never the footer repaint window_activity trusts.
+                reason = 'prompt idle %ds; no native record for the live process' % (now - state_ts)
+            else:
                 continue
-            reason = 'exited; no agent process under the pane for %ds' % (now - state_ts)
         if demote(session, row, reason, args.dry_run, args.log):
             stats['demoted'] += 1
 
