@@ -45,7 +45,7 @@ printf 'called\n' >> "$TEST_CALLS"
 if [ "${BLOCK_DURING_CLASSIFY:-0}" = 1 ]; then
   env TMUX="$TEST_TMUX" TMUX_PANE="$TEST_PANE" sh "$TEST_HOOK" blocked >/dev/null
 fi
-printf 'STOPPED\n'
+printf '%s\n' "${CLASSIFY_VERDICT:-STOPPED}"
 SH
 cat > "$WORK/inst/bin/fleet-pending-tool.sh" <<'SH'
 #!/bin/sh
@@ -111,6 +111,7 @@ CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PAN
 same 'classifier preserves blocked before calling the helper' "$(snapshot)" "$BLOCKED"
 [ ! -f "$TEST_CALLS" ] || fail 'blocked screen must not spend a classifier call'
 
+
 # Invalid/missing/nested event data cannot masquerade as a new prompt.
 for payload in '' 'not-json' '{"tool_response":{"hook_event_name":"UserPromptSubmit"},"hook_event_name":"PostToolUse"}'; do
   hook "$POST" "$payload"
@@ -158,5 +159,18 @@ printf 'FLEET_REPO="test/blocked"\n' > "$WORK/conf/fleet704.conf"
 FLEET_CONF_DIR="$WORK/conf" FLEET_NEEDS_PLAIN_SECS=1 FLEET_NEEDS_RECONCILE_SECS=1 \
   FLEET_NEEDS_STRIKE_TTL=120 sh "$WORK/inst/bin/tmux-spinner.sh" --needs-check
 same 'in-flight reconcile cannot overwrite a new blocker' "$(state)" needs/blocked
+
+# A4 (#846): a screen read never PROMOTES a quiet window to working. A WORKING
+# verdict on a done window (a stale frame re-reddening what #806/#101 demoted)
+# spends a call but changes nothing; only the UserPromptSubmit hook starts a turn.
+tf set-window-option -t "$TEST_PANE" @claude_state done
+tf set-window-option -t "$TEST_PANE" @claude_needs ''
+tf set-window-option -t "$TEST_PANE" @claude_state_ts 123
+A4WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
+A4KEY=$(printf '%s' "$A4WID" | tr '/:@' '___')
+rm -f "$WORK/inst/logs/.classify-cache/$A4KEY.hash" "$TEST_CALLS"
+CLASSIFY_VERDICT=WORKING CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
+[ -s "$TEST_CALLS" ] || fail 'A4 fixture never called the classifier helper'
+same 'a WORKING screen read never promotes a quiet window' "$(state)" done/
 
 printf 'blocked-state-selftest: OK (%s checks)\n' "$CHECKS"

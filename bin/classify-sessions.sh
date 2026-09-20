@@ -138,7 +138,13 @@ classify_one() {
     *LOOPING*) new="looping" ;;
     *STOPPED*) new="done" ;;
     *ERROR*)   new="needs" ;;
-    *WORKING*) new="working" ;;
+    *WORKING*) # A screen frame never PROMOTES a quiet window to working (issue
+               # #846): only the UserPromptSubmit hook starts a turn, and this
+               # path only ever runs on a done|needs|looping window (working is
+               # skipped up top). A WORKING read here is a stale/misread frame
+               # re-reddening what #806/#101 just demoted — record it, change
+               # nothing, and let the hook own working-detection.
+               printf '%s  %-10s working-read ignored (screen never promotes; #846)\n' "$(date +%H:%M:%S)" "$target" >> "$LOG" ;;
     *) printf '%s  %-10s unparsed [%s]\n' "$(date +%H:%M:%S)" "$target" "${raw:0:40}" >> "$LOG" ;;
   esac
 
