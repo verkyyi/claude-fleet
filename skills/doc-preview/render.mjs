@@ -1,8 +1,14 @@
-// Render Markdown for the doc-preview skill. Three modes:
-//   page  <srcMd> <outHtml> <metaJson>   — render one doc + write its entry metadata
+// Render Markdown for the doc-preview skill. Four modes:
+//   page  <srcMd|srcHtml> <outHtml> <metaJson> — render one doc + write its entry metadata
 //                                           (reads ID/HREF/ADDED/SESSION/SRC from env)
+//   repage <metaJson> <outHtml>           — re-render an existing entry from its source (--refresh)
 //   index <outIndexHtml> <entriesDir>     — (re)build the fixed root page listing ALL entries
 //   list  <entriesDir>                    — print current entries as plain text (for --list)
+//
+// Local images a page references by a RELATIVE path — `![](shots/a.png)` in Markdown,
+// `<img src="evidence/42/after.png">` in an .html page (issue #810) — are copied next
+// to the served page so the reference resolves. Remote / data: / site-absolute URLs are
+// left alone; a missing file just doesn't render.
 //
 // Rendering is client-side (marked + github-markdown-css from a CDN, loaded by the
 // viewer's browser) so the host needs no npm install — just node.
@@ -362,22 +368,19 @@ function writePage(src, raw, out, title, meta) {
   else fs.writeFileSync(out, pageHtml(title, Buffer.from(raw, 'utf8').toString('base64'), meta));
 }
 
-if (mode === 'page') {
-  const [src, out, meta] = rest;
-  const raw = fs.readFileSync(src, 'utf8');
-  const title = titleOf(src, raw);
-  writePage(src, raw, out, title, {
-    id: process.env.ID,
-    session: process.env.SESSION, added: process.env.ADDED,
-    disp: process.env.DISP, full: process.env.SRC,
-  });
-
-  // Copy referenced LOCAL images next to the served page so relative paths resolve
-  // (e.g. ![](assets/x.svg) or ![](../../doc/assets/x.svg)). Remote/data URLs are left alone.
+// Copy referenced LOCAL images next to the served page so relative paths resolve
+// (e.g. ![](assets/x.svg), ![](../../doc/assets/x.svg), or <img src="evidence/42/after.png">
+// in an .html page — the EPIC report's before/after evidence, issue #810). Remote, data:
+// and site-absolute (`/…`) URLs are left alone. Runs on `page` AND `repage`, so a
+// --refresh after new images were added beside the source picks them up too.
+function copyLocalImages(src, raw, out) {
   const srcDir = path.dirname(path.resolve(src));
   const outDir = path.dirname(out);
   const seen = new Set();
-  for (const mm of (isHtml(src) ? [] : raw.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g))) {
+  const refs = isHtml(src)
+    ? raw.matchAll(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi)
+    : raw.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g);
+  for (const mm of refs) {
     const url = mm[1].replace(/^<|>$/g, '');
     if (/^(https?:|data:|\/\/|\/)/.test(url) || seen.has(url)) continue;
     seen.add(url);
@@ -390,6 +393,19 @@ if (mode === 'page') {
       }
     } catch { /* best-effort: a missing image just won't render */ }
   }
+}
+
+if (mode === 'page') {
+  const [src, out, meta] = rest;
+  const raw = fs.readFileSync(src, 'utf8');
+  const title = titleOf(src, raw);
+  writePage(src, raw, out, title, {
+    id: process.env.ID,
+    session: process.env.SESSION, added: process.env.ADDED,
+    disp: process.env.DISP, full: process.env.SRC,
+  });
+
+  copyLocalImages(src, raw, out);
   const entry = {
     id: process.env.ID, title,
     src: process.env.DISP || process.env.SRC || src, // short display path (repo/cwd folder + relative)
@@ -412,6 +428,7 @@ if (mode === 'page') {
     id: e.id,
     session: e.session, added: e.added, disp: e.src, full: e.full,
   });
+  copyLocalImages(src, raw, out);
   if (title !== e.title) { e.title = title; fs.writeFileSync(metaJson, JSON.stringify(e, null, 2)); }
   process.stdout.write(title);
 } else if (mode === 'index') {

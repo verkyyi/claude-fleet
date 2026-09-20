@@ -120,6 +120,27 @@ what to read is your call, and *under*-grounding ships the wrong change, which
 costs more than any dump. This steers HOW you load context, not how much you are
 allowed to know.
 
+### Before you touch code: the 「改动前」 capture
+
+Read the issue body's **`上线证据:`** line — `~/.claude/fleet/bin/fleet-evidence.sh line`
+prints it (`/fleet-epic-plan` writes one per EPIC member, issue #809: which URL to
+screenshot, which command's output, which pane to capture). It names what the
+EPIC report will show side by side as 改动前 / 改动后 / 已上线 — so take the
+**before** now, along that line, while the change does not exist yet; a "before"
+taken later is fiction (issue #810):
+
+```sh
+~/.claude/fleet/bin/fleet-evidence.sh before --note '一句话：这是什么' <file>   # `-` = a command's output on stdin · `--pane <t>` = a TUI
+```
+
+No such line (exit 1)? Your judgment — at minimum one after-image or one output
+of the changed thing at ship time (step 4 below). It lands in
+`$FLEET_CONF_DIR/fleets/<sess>/epic/<E>/evidence/<M>/` when the issue has an EPIC
+parent (GitHub's link, resolved for you), else `…/fleets/<sess>/evidence/<M>/`,
+named `<stage>-<UTC>-<name>`, and is never committed to the repo. A playwright-MCP
+screenshot lands under the worktree (`.playwright-mcp/`): pass `--mv` so the ship
+step's `git status --porcelain` stays empty.
+
 ## 2. The standing contract (built-in charter — the base layer)
 
 Implement under these invariants (a charter layer from the brief may extend or
@@ -194,7 +215,21 @@ override them):
      short summary + how you verified:
      `gh pr create --repo "$FLEET_REPO" --base "$FLEET_BASE_BRANCH" --fill` (or
      `gh pr edit … --body …` if one exists).
-  4. **Land it once the gate is green.** READ the gate, never eyeball it — one
+  4. **Capture the 「改动后」 evidence** (issue #810) — PR open, nothing landed
+     yet, the same URL / command / pane as your before-capture (the issue's
+     `上线证据:` line, or your own judgment: at least one image or output of the
+     changed thing), then leave the record on your issue:
+
+     ```sh
+     ~/.claude/fleet/bin/fleet-evidence.sh after --note '一句话：改了什么、看哪里' <file>   # `-` = stdin · `--pane <t>` = a TUI · `--mv` for a .playwright-mcp/ shot
+     ~/.claude/fleet/bin/fleet-evidence.sh post    # ONE record-only comment: every path + its note
+     ```
+
+     The EPIC report collects exactly these files and writes **无证据** for a
+     member that has none — it never re-shoots and never invents, so this is the
+     only moment the "after" can be taken honestly. `gh` cannot attach an image to
+     a comment: the comment carries the paths, the files stay on this machine.
+  5. **Land it once the gate is green.** READ the gate, never eyeball it — one
      command folds state + mergeability + every check into one verdict
      (exit 0 ⇔ `READY`):
 
@@ -236,7 +271,7 @@ override them):
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.
-  5. **Report to whoever spawned you** (issue #574) — one command, right after the
+  6. **Report to whoever spawned you** (issue #574) — one command, right after the
      merge is confirmed and before you stop:
 
      ```sh
@@ -249,7 +284,7 @@ override them):
      hub-spawned worker needs no special case**: with no parent — or a parent that
      has already been reaped — it exits 0 silently, so this is one unconditional
      line on every ship path, never a decision. It cannot fail your merge.
-  6. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
+  7. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
      and records the resume ledger after the merged grace (default 10 minutes)
      and liveness checks; the dash marks pending cleanup with `rNm`.
      Don't start new work in a

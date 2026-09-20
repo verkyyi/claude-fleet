@@ -132,8 +132,9 @@ language:
      `capture-pane`. E.g. *`tmux capture-pane -p` of the dash after `⌃r`, showing
      the `rNm` marker*; *截图 `/solutions/space` 首屏 (匿名态)*; *`curl -s …/api/x |
      jq .count` 的输出*. This line is `/fleet-epic-report`'s input (issue #810):
-     the worker collects it before landing, the report shows it. Write it so
-     neither has to ask.
+     the worker reads it with `bin/fleet-evidence.sh line` and captures 改动前 /
+     改动后 along it before landing, the report shows those side by side in the
+     member's card. Write it so neither has to ask.
    Mark each card `已有 #N` or `new · 拆自 #N` (a proposed split from step 3).
    **Reserve items left untouched do not count as unfinished** — they exist so a
    batch that runs faster than expected does not idle, not to inflate the scope.

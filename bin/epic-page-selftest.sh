@@ -44,6 +44,15 @@ done
 hasF "$T" 'class="evidence"' "template: 上线证据 is styled as the one-line evidence slot"
 hasF "$PLAN" '上线证据' "plan: the member section defines the 上线证据 line"
 hasF "$REPORT" '上线证据' "report: reads the member's 上线证据 line (the #810 seam)"
+# 2b. the report-only evidence block lives IN the frame (issue #810), not in a second stylesheet
+hasF "$T" 'class="proof"' "template: member card carries the report-only .proof grid"
+for st in 改动前 改动后 已上线; do
+  hasF "$T" "<div class=\"stage\">$st</div>" "template: .proof column $st"
+done
+hasF "$T" 'class="none"' "template: a stage nobody captured is a .none cell"
+hasF "$REPORT" '.proof' "report: fills the frame's .proof grid, no page-local styling"
+hasF "$REPORT" '无证据' "report: a missing stage is written 无证据"
+hasF "$REPORT" 'fleet-evidence.sh' "report: collects evidence through bin/fleet-evidence.sh"
 
 # 3. artifact-design contract for a page doc-preview serves byte-for-byte
 hasF "$T" '<title>' "template: has a <title> (doc-preview titles the entry from it)"
