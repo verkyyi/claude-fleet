@@ -555,7 +555,8 @@ cmd_rows() {
   local COLS=${FZF_COLUMNS:-}
   case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
   case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-  local LEFTW=35 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
+  # LEFTW = glyph1+sp + issue5+sp + tree1+sp + window26+sp = 37 (tree col, #836)
+  local LEFTW=37 ACTW=8 RIGHTW=21 USABLE=$(( COLS - 4 ))
   [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
   # pad/truncate to N DISPLAY chars → $fld_out (mirror of the live producer's fld).
   local fld_out
@@ -639,7 +640,9 @@ cmd_rows() {
   # the live list's flex span is blank since the summary column retired (#535).
   h_pad=$(( USABLE - LEFTW - 5 - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1   # 5 = len("title")
   printf -v h_gap '%*s' "$h_pad" ''
-  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
+  # the two blanks after the issue column are the empty tree cell (#836) — the live
+  # header's own spelling, so the two lists still read as one table.
+  printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
   # Rows are BUFFERED, not printed straight out (they used to be): nesting has to
@@ -723,9 +726,14 @@ cmd_rows() {
     local issd icol=$GN
     issd=$(key_label "$iss")
     is_scratch_key "$iss" && icol=$IN
-    # `└ ` marks a nested row, the live list's own indent (#503) — only when the
-    # parent really is the line above, which after the fold filter it always is.
-    [ "$ldepth" -gt 0 ] && wname="└ $wname"
+    # tree cell (issue #836): the fixed 2-cell column between issue and window, the
+    # live list's own. `└` marks a nested row — only when the parent really is the
+    # line above, which after the fold filter it always is — and the caret below
+    # takes the same cell on a row that OWNS a block. It used to be an indent
+    # spliced into the name (`wname="└ $wname"`), which cost a child row 2 of the
+    # window column's 26 cells and started its name 2 columns right of a root's.
+    local treed=''
+    [ "$ldepth" -gt 0 ] && treed='└'
     local f_iss f_name f_act f_pr f_ctx
     fld 5  "$issd";   f_iss=$fld_out
     # window cell: pad/clip by DISPLAY width, not code points — the same #534 fix
@@ -778,10 +786,11 @@ cmd_rows() {
       lland=$(( (${#lkidtab} - ${#lkt}) / ${#lkn} ))
       kidd="$lland/$ltot ✓"
       if landed_is_open "$okey"; then carg='▾'; else carg='▸'; fi
-      # the caret rides a CONSTANT 2 (glyph + space), never a ${#} count: ▸/▾ are
-      # East-Asian AMBIGUOUS width and a CJK-wide terminal may draw them 2 cells,
-      # which a character count would walk the right-pinned act/PR/dep block off by.
-      lextra=$(( 2 + ${#kidd} + 1 ))
+      # the caret takes the TREE CELL (#836), left of the name it folds, as on the
+      # live list; only the tally still borrows width from the flex span. `ltot>0`
+      # implies depth 0, so the caret and the `└` can never both want the cell.
+      treed=$carg
+      lextra=$(( ${#kidd} + 1 ))
     fi
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
     [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
@@ -789,11 +798,14 @@ cmd_rows() {
     fleet_clip_display "$avail" "$dsmry"; dsmry="${clip_out:-}"
     local dw=${clip_w:-0}
     [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R} "; dw=$(( dw + ${#tagd} + 1 )); }
-    [ -n "$carg" ] && { tagpfx+="${GY}${carg}${R} ${GY}${kidd}${R} "; dw=$(( dw + lextra )); }
+    [ -n "$carg" ] && { tagpfx+="${GY}${kidd}${R} "; dw=$(( dw + lextra )); }
     local pad=$(( USABLE - LEFTW - dw - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
     local gap; printf -v gap '%*s' "$pad" ''
     lbuf+="$lgrp"$'\t'"$ldepth"$'\t'"$lrow"$'\t'
-    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
+    # the tree cell is exactly one cell of source text (glyph, or a space on a
+    # root/orphan) and a CONSTANT width inside LEFTW, never a ${#} count — `└`/`▸`/`▾`
+    # are East-Asian AMBIGUOUS, so a CJK-wide terminal may draw them 2 cells.
+    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
   done <<< "$out"
 
   # Emit newest-first, nested: the group slot first (a root's own position, which a

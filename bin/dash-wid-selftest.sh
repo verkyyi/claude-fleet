@@ -254,7 +254,8 @@ has "row: the worker description remains visible" "$row_w" "worker-row"
 has "row: the scratch description remains visible" "$row_s" "scratch-row"
 hdr=$(printf '%s\n' "$rows2" | grep -F "hdr${US}hdr")
 hasnt "header: no worker id column" "$hdr" "id  issue"
-has "header: issue and window columns remain" "$hdr" "issue window"
+# the two blanks between them are the empty tree-column header cell (issue #836).
+has "header: issue and window columns remain" "$hdr" "issue   window"
 
 # the issue column is ISSUE-ONLY now (#566): `#77` for the worker, BLANK for the
 # scratch — the `~4` sigil moved out, its slot number still names the worktree.

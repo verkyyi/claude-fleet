@@ -116,13 +116,16 @@ they repaint instantly:
   from where another left off.
 - **Spawn provenance / child report** — every spawned window carries `@origin`:
   the key (`issue-<N>` / `scratch-<N>`) of the session that spawned it, empty for
-  the hub. The dash GROUPS children under their parent (`└` indent) and renders
-  `@origin` as a `↳#483` tag — but only where that indent cannot say the same
-  thing: a direct child of the row its block hangs off draws no tag (the indent is
-  the tag), while a **grandchild** keeps one (the grouping is two-level-flat, so it
-  is drawn under the ultimate root beside its own parent, and `↳#<middle>` is the
-  only thing naming that parent), as do an **orphan** whose parent window is gone
-  (no indent at all) and a non-window origin (`↳autofill`, `↳bridge`).
+  the hub. The dash GROUPS children under their parent, marking each one `└` in
+  the **tree column** (issue #836 — a fixed 2-cell column between `issue` and
+  `window`, so every name starts at the same column and gets the window field's
+  full 26 cells whatever its depth), and renders `@origin` as a `↳#483` tag — but
+  only where that cell cannot say the same thing: a direct child of the row its
+  block hangs off draws no tag (the `└` is the tag), while a **grandchild** keeps
+  one (the grouping is two-level-flat, so it is drawn under the ultimate root
+  beside its own parent, and `↳#<middle>` is the only thing naming that parent),
+  as do an **orphan** whose parent window is gone (blank tree cell) and a
+  non-window origin (`↳autofill`, `↳bridge`).
   Since #574 `@origin` is also an **address** — `bin/fleet-report-parent.sh`
   resolves it back to the parent's live window and pushes a fixed four-line
   `[child-report]` over the peer inbox when the child merges, blocks, or is
@@ -131,11 +134,12 @@ they repaint instantly:
   off per fleet. Since #624 the parent's own row also carries the **aggregate**
   the individual reports never added up to — `3/5 ✓ · 1!`: three of its five
   descendants done, one asking for you. Same attribution as the grouping, so the
-  count describes exactly the indented block under it; a row that spawned nothing
-  draws nothing.
+  count describes exactly the block under it; a row that spawned nothing draws
+  nothing.
 - **Fold** — a parent's block is **collapsed by default** on the dash: the list
-  shows one line per parent, marked `▸`, and its aggregate badge is what the
-  folded block says. `→` opens the block the cursor's row owns, `←` shuts the
+  shows one line per parent, marked `▸` in the tree column (`▾` when open —
+  directly left of the name it folds, since #836), and its aggregate badge is what
+  the folded block says. `→` opens the block the cursor's row owns, `←` shuts the
   block the cursor is *in* (from the parent or from any row inside it, which puts
   the cursor back on the parent); with text typed on the prompt line the arrows
   stay that line's cursor keys. Two things never fold: a child in `needs` (the

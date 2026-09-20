@@ -255,8 +255,8 @@ def ui(screen, session, worker, lock):
             if shown:
                 result = run(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"], env=env)
                 if result.returncode == 0:
-                    rows = [line.split(US, 3) for line in result.stdout.split("\n")
-                            if len(line.split(US, 3)) == 4]
+                    rows = [line.split(US, 4) for line in result.stdout.split("\n")
+                            if len(line.split(US, 4)) == 5]
         if not shown:
             follow_at = None  # a hidden view never switches windows
             screen.timeout(1000)
@@ -285,14 +285,18 @@ def ui(screen, session, worker, lock):
 
         screen.erase()
         colors = {"working": 1, "needs": 2, "done": 3, "looping": 4}
-        for y, (wid, state, glyph, label) in enumerate(rows[offset:offset + page]):
+        for y, (wid, state, glyph, label, tree) in enumerate(rows[offset:offset + page]):
             attr = curses.color_pair(colors.get(state, 0))
             if wid == window:
                 attr = curses.color_pair(5) | curses.A_BOLD
             if navigation and wid == selected:
                 attr = curses.color_pair(6) | curses.A_BOLD
             marker = "▶" if wid == window else "›" if navigation and wid == selected else " "
-            put(y, marker + " " + glyph + " " + label, attr,
+            # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
+            # fixed cell between the state glyph and the name, so at 30 columns every
+            # name starts in the same place instead of a child's text sitting two
+            # columns right of its parent's.
+            put(y, marker + " " + glyph + " " + (tree or " ") + " " + label, attr,
                 fill=wid == window or (navigation and wid == selected))
         # Hide is keyboard-only (q here, prefix e anywhere): a tap on the bottom
         # row used to hide the sidebar across every window, and on a touch

@@ -113,6 +113,13 @@ rows() { raw | awk -F"$US" 'NR>1 {print $3}' | strip; }
 NAMES='root kid grand red lonely orph'
 order() { printf '%s\n' "$1" | awk -v ns=" $NAMES " '{for(i=1;i<=NF;i++) if(index(ns," "$i" ")){print $i; break}}'; }
 row_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print; exit}}'; }
+# The TREE COLUMN (issue #836): glyph1+sp + issue5+sp + tree1+sp, so the tree cell
+# is character 8 of a colour-stripped row and the window name starts at 10 — for
+# EVERY row, root and child alike. That fixed offset is the whole point of the
+# column, so the assertions below read the cell by position rather than grepping
+# for a `└ ` prefix that a name-spliced indent would satisfy just as well.
+tree_of() { printf '%s' "${1:8:1}"; }
+name_of() { printf '%s' "${1:10}"; }
 line_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print NR; exit}}'; }
 opt() { tmux show-options -wqv -t "$1" @expand 2>/dev/null; }
 idx_of() { tmux display-message -p -t "$1" 'fleetF:#{window_index}' 2>/dev/null; }
@@ -126,17 +133,17 @@ out=$(rows)
 # A1. DEFAULT IS FOLDED — nobody has written @expand, and the quiet children are
 #     already gone. This is the polarity the whole feature rests on.
 eq "no @expand was written by merely rendering" "" "$(opt "$W_root")$(opt "$W_kid")"
-not_contains "default: a quiet child is folded away" "$out" "└ kid"
+not_contains "default: a quiet child is folded away" "$out" "kid"
 not_contains "default: a quiet grandchild is folded away" "$out" "grand"
 
 # A2. the loud layer never folds — a `needs` child stays, indent intact. The
 #     exemption is on the RANK, not the glyph, so it covers all three reflexes
 #     #640 split the red row into (`?` question · `⊘` permission · `!` plain) —
 #     the two that carry a subtype are exactly the ones you must not lose.
-contains "a child in needs is EXEMPT from the fold" "$out" "└ red"
+eq "a child in needs is EXEMPT from the fold, tree cell intact" "└" "$(tree_of "$(row_of red "$out")")"
 for sub in ask perm; do
   tmux set-window-option -t "fleetF:$(tmux list-windows -t fleetF -F '#{window_index} #{window_name}' | awk '$2=="red"{print $1}')" @claude_needs "$sub"
-  contains "a needs child with the '$sub' subtype is exempt too" "$(rows)" "└ red"
+  eq "a needs child with the '$sub' subtype is exempt too" "└" "$(tree_of "$(row_of red "$(rows)")")"
 done
 tmux set-window-option -t "fleetF:$(tmux list-windows -t fleetF -F '#{window_index} #{window_name}' | awk '$2=="red"{print $1}')" -u @claude_needs
 out=$(rows)
@@ -149,10 +156,9 @@ eq "folded list: roots, the red child, the orphan — nothing else" \
   "$(printf 'root\nred\nlonely\norph')" "$(order "$out")"
 
 # A4. the caret marks exactly where a fold is governed.
-contains "a folded parent is marked ▸" "$(row_of root "$out")" "▸"
-not_contains "a childless root grows no caret" "$(row_of lonely "$out")" "▸"
-not_contains "… and no ▾ either" "$(row_of lonely "$out")" "▾"
-not_contains "an orphan grows no caret" "$(row_of orph "$out")" "▸"
+eq "a folded parent is marked ▸ in the tree cell" "▸" "$(tree_of "$(row_of root "$out")")"
+eq "a childless root's tree cell is blank" " " "$(tree_of "$(row_of lonely "$out")")"
+eq "an orphan's tree cell is blank too" " " "$(tree_of "$(row_of orph "$out")")"
 
 # A5. the badge still describes the WHOLE subtree while it is shut — that is what
 #     makes folding by default safe: the parent row speaks for the block.
@@ -166,27 +172,35 @@ tmux set-window-option -t "$W_root" @expand 1
 out=$(rows)
 eq "unfolded: the whole block is back, in #503 order" \
   "$(printf 'root\nred\nkid\ngrand\nlonely\norph')" "$(order "$out")"
-contains "an unfolded parent is marked ▾" "$(row_of root "$out")" "▾"
-not_contains "… and no longer ▸" "$(row_of root "$out")" "▸"
-contains "a restored child keeps its └ indent" "$out" "└ kid"
-contains "a restored grandchild keeps its └ indent" "$out" "└ grand"
+eq "an unfolded parent is marked ▾ in the tree cell" "▾" "$(tree_of "$(row_of root "$out")")"
+eq "a restored child is marked └ in the tree cell" "└" "$(tree_of "$(row_of kid "$out")")"
+eq "a restored grandchild too" "└" "$(tree_of "$(row_of grand "$out")")"
+# …and the hierarchy is the ONLY thing in that cell: every name — caret row, `└`
+# row, blank row — starts at the same column, with the full window field behind it.
+for n in root kid grand red lonely orph; do
+  eq "the window name starts at the same column on '$n'" \
+    "$n" "$(printf '%s' "$(name_of "$(row_of "$n" "$out")")" | awk '{print $1}')"
+done
 # The ↳ tag now survives only where that indent cannot say the same thing.
 not_contains "a direct child drops its ↳ tag — the indent already says it" "$(row_of kid "$out")" "↳"
 contains "a GRANDCHILD keeps its tag: it names ITS OWN parent (kid = #101), which the indent cannot — it is drawn under the ROOT, at the same depth as kid" \
   "$(row_of grand "$out")" "↳#101"
 # the grouping is two-level-flat: `kid` owns no fold of its own, so it draws no
 # caret — otherwise the operator would press → on it and nothing would happen.
-not_contains "an intermediate parent draws no caret" "$(row_of kid "$out")" "▸"
-not_contains "… not even an open one" "$(row_of kid "$out")" "▾"
+eq "an intermediate parent draws no caret — it is a child, not a holder" \
+  "└" "$(tree_of "$(row_of kid "$out")")"
 eq "the badge is unchanged by unfolding" \
   "$(printf '%s' "$(row_of root "$out")" | grep -c '2/3 ✓')" "1"
 
-# A7. the caret must not shove the right-pinned act/PR/ctx block over. Its width
-#     is a CONSTANT 2 (glyph + space), never a ${#} count — ▸/▾ are East-Asian
-#     AMBIGUOUS width. Both rows are ASCII-named, so display width == length here.
+# A7. the tree cell must not shove the right-pinned act/PR/ctx block over. It is
+#     one cell of source text inside a CONSTANT-width LEFTW, never a ${#} count —
+#     `└`/`▸`/`▾` are East-Asian AMBIGUOUS width. Both rows are ASCII-named, so
+#     display width == length here.
 r_open=$(row_of root "$out")
 r_lone=$(row_of lonely "$out")
-eq "a caret row is the same total width as a caret-less one" "${#r_lone}" "${#r_open}"
+r_kid=$(row_of kid "$out")
+eq "a caret row is the same total width as a blank-cell one" "${#r_lone}" "${#r_open}"
+eq "… and so is a └ child row" "${#r_lone}" "${#r_kid}"
 tmux set-window-option -t "$W_root" -u @expand
 out=$(rows); r_shut=$(row_of root "$out")
 eq "folding does not change the row's width either" "${#r_shut}" "${#r_open}"
@@ -198,7 +212,7 @@ out=$(rows)
 eq "a pinned FOLDED parent floats with nothing but its exempt child" \
   "$(printf 'root\nred\nlonely\norph')" "$(order "$out")"
 contains "the pinned row is still marked 📌" "$(row_of root "$out")" "📌"
-contains "… and still marked folded" "$(row_of root "$out")" "▸"
+eq "… and still marked folded" "▸" "$(tree_of "$(row_of root "$out")")"
 tmux set-window-option -t "$W_root" -u @pin
 
 # ============================================================================
