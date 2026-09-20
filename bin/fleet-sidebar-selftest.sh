@@ -233,7 +233,16 @@ try:
     check(w2 not in [r[0] for r in row_data()], 'folded child visible without current/needs exemption')
     check(w2 in [r[0] for r in row_data(current=w2)], 'fold hid the current worker')
     tm('set-option', '-w', '-t', w1, '@expand', '1')
-    check(any('└ 修复侧栏' in r[3] for r in row_data()), 'parent-child indent was lost')
+    # The hierarchy glyph is its OWN field since #836 (field 5), not spliced into
+    # the label — so a 30-column sidebar draws `marker glyph tree label` and every
+    # name starts at the same column whatever its depth.
+    kid = [r for r in row_data() if r[0] == w2]
+    check(bool(kid) and kid[0][4] == '└', 'parent-child tree cell was lost')
+    check(bool(kid) and kid[0][3].startswith('修复侧栏'),
+          'the label still carries the tree glyph — it belongs in its own field')
+    check(all(len(r) == 5 for r in row_data()), 'sidebar rows must carry 5 fields')
+    root = [r for r in row_data() if r[0] == w1]
+    check(bool(root) and root[0][4] in ('▾', '▸'), 'a holder row must carry its caret in the tree cell')
     cache = work / '.claude-dash/global'
     cache.mkdir(parents=True, exist_ok=True)
     (cache / 'dash_view_fleet-test').write_text('landed')
@@ -242,6 +251,10 @@ try:
 
     # Keyboard input is sent only to the UI; Enter selects by stable window ID.
     wait_for(lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side), 'fold update did not reach view')
+    # `marker glyph tree label` — a root's name and a child's start at the same column.
+    pane = [l for l in tm('capture-pane', '-p', '-t', side).split('\n') if '修复侧栏' in l]
+    check(bool(pane) and pane[0].index('修复侧栏') == 6,
+          'the sidebar name column moved: ' + repr(pane[:1]))
     os.write(terminal, b'\x02E')  # actual prefix E, then terminal arrow + Enter
     wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
     wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),

@@ -163,14 +163,14 @@ ckey_v() { ckey=${1//_/_u}; ckey=${ckey//\//_s}; ckey=${ckey// /_w}; }
 # the pane), so it's only a fallback for the very first pre-fzf render before
 # FZF_COLUMNS exists; 120 as a last resort. Keep a 2-col gutter + 2-col right
 # margin so fzf never clips the ctx% digits. Layout column widths:
-#   LEFTW  = glyph1+sp + issue5+sp + window26+sp = 35
+#   LEFTW  = glyph1+sp + issue5+sp + tree1+sp + window26+sp = 37   (tree: issue #836)
 #   RIGHTW = act8+sp + PR7+sp + ctx4 = 21   (act = last-activity, issue #228)
 # NB: LEFTW/ACTW/RIGHTW MUST stay in step with fleet-history.sh cmd_rows so the
 # live list and the landed history list render the SAME aligned columns (#228).
 COLS=${FZF_COLUMNS:-}
 case "$COLS" in ''|*[!0-9]*) COLS=$( { tput cols </dev/tty; } 2>/dev/null );; esac
 case "$COLS" in ''|*[!0-9]*) COLS=120;; esac
-LEFTW=35; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
+LEFTW=37; ACTW=8; RIGHTW=21; USABLE=$(( COLS - 4 ))
 [ "$USABLE" -lt $(( LEFTW + RIGHTW + 1 )) ] && USABLE=$(( LEFTW + RIGHTW + 1 ))
 
 # One tmux read, iterated twice (issue #503): pass A below builds the parent
@@ -416,16 +416,23 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # --- spawn provenance (issue #503) -----------------------------------------
   # ↳ tag: rendered in the flex span for every non-hub origin (`↳#483` for a
   # worker parent, `↳~12` for a scratch one — key_label's grammar — the literal
-  # word for autofill/bridge). └ indent: only when the parent is a WINDOW kind
+  # word for autofill/bridge). └ TREE CELL: only when the parent is a WINDOW kind
   # (issue-*/scratch-*), i.e. the row is a child in the grouped list.
   # Built as TWO pieces and composed after the chain walk below, because whether the
   # provenance half survives depends on where the row ends up nesting — and the
   # agent half must survive either way.
-  provd=''; dname=$name
+  #
+  # $treed is the fixed 2-cell TREE COLUMN between issue and window (issue #836).
+  # It used to be an indent spliced into the name (`dname="└ $name"`), which cost
+  # the child row 2 of the window column's 26 cells — so a 13-glyph CJK name lost
+  # its last character on a child row and kept it on a root — and started the two
+  # kinds of row at different columns. The glyph moved out; $dname is now the name,
+  # nothing else, and every row's name starts at the same column with all 26 cells.
+  provd=''; dname=$name; treed=''
   case "$origin" in
     '') : ;;
-    issue-*)   provd="↳#${origin#issue-}";   dname="└ $name" ;;
-    scratch-*) provd="↳~${origin#scratch-}"; dname="└ $name" ;;
+    issue-*)   provd="↳#${origin#issue-}";   treed='└' ;;
+    scratch-*) provd="↳~${origin#scratch-}"; treed='└' ;;
     *)         provd="↳$origin" ;;
   esac
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
@@ -464,16 +471,16 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       chain_v "$origin"; grk=$crk; gidx=$cidx; rootpin=$crootpin
       [ -z "$pnrk" ] && [ -n "$cpnrk" ] && { pnrk=$cpnrk; pnidx=$cpnidx; pndepth=1; }
       # parent not on this dash at all (closed, or a key from ANOTHER fleet):
-      # keep the ↳ tag but drop the └ indent — an orphan sinks below every live
-      # group, and indenting it there reads as a child of an unrelated row.
-      [ -z "$croot" ] && [ "$chops" -eq 0 ] && dname=$name ;;
+      # keep the ↳ tag but blank the tree cell — an orphan sinks below every live
+      # group, and drawing it as a child there reads as a child of an unrelated row.
+      [ -z "$croot" ] && [ "$chops" -eq 0 ] && treed='' ;;
   esac
   pinned=1
   if [ "$rootpin" = 1 ]; then
     pinned=0                            # whole group floats, exactly as it grouped
   elif [ -n "$pnrk" ]; then
     pinned=0; grk=$pnrk; gidx=$pnidx; depth=$pndepth
-    [ "$pndepth" = 0 ] && dname=$name   # promoted to a group root → no └ indent
+    [ "$pndepth" = 0 ] && treed=''      # promoted to a group root → empty tree cell
   fi
   # --- fold: a collapsed holder hides its subtree ------------------------------
   # Default-collapsed (the @expand polarity in exp_v): a row only survives here if
@@ -550,20 +557,30 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       # @origin is hub/autofill/none, so only a top-level row can carry a count —
       # which is why a caret is guaranteed present for every subtree the filter
       # above can hide.
+      # It rides the TREE COLUMN (issue #836), directly left of the name it folds,
+      # rather than the flex span it used to share with 📌/↳/agent/badge. `ktot>0`
+      # implies depth 0, so the caret and the `└` can never both want the cell.
       if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
+      treed=$carg
     fi
   fi
   if [ "$SIDEBAR" = 1 ]; then
     # The view clips by terminal cells (including CJK), after preserving the
     # full name here. Stable window IDs survive renumbering between draw/click.
-    label="${carg:+$carg }$dname"
+    # The tree cell is its OWN field (issue #836), not spliced into the label: the
+    # view draws `marker glyph tree label`, so a 30-column sidebar starts every
+    # name at the same column instead of indenting the child's text by two.
+    label="$dname"
     [ "$pin" = 1 ] && label="* $label"
     [ -n "$kidd" ] && label="$label · $kidd"
-    buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label"$'\n'
+    buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$wid$US$state$US$gl$US$label$US${treed:- }"$'\n'
     continue
   fi
-  # full row: glyph1·issue5·window26·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
-  # window sits right after the issue; act/PR/ctx right-align to the edge, the
+  # full row: glyph1·issue5·tree1·window26·⟨flex: ↳tag or empty⟩·act8·PR7·ctx4
+  # the tree cell (issue #836) carries the hierarchy — `▾`/`▸` on a row that owns a
+  # subtree, `└` on a child, blank on a root/orphan/pin-root — so the window column
+  # holds the NAME and nothing else and every name starts at the same column.
+  # window sits right after it; act/PR/ctx right-align to the edge, the
   # flex gap between them absorbing the width so the metadata block stays pinned
   # right. The flex span used to carry the LLM one-liner (summary column, retired
   # in issue #535 — it was the dash's only token-spending column); the ↳
@@ -591,13 +608,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #  takes the width-aware path above.)
   tagpfx=''; dwidth=0
   [ -n "$tagd" ] && { tagpfx="${IN}${tagd}${R}"; dwidth=${#tagd}; }
-  # The caret rides the 📌 rule, not the ${#} one: its width is the CONSTANT 2
-  # (glyph + space) below, never a character count — ▸/▾ are East-Asian AMBIGUOUS
-  # width, so a CJK-wide terminal may draw them 2 cells and a ${#}=1 pad would
-  # walk the right-pinned act/PR/ctx block off by a column on parent rows only.
-  [ -n "$carg" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-                      tagpfx+="${GY}${carg}${R} "; dwidth=$(( dwidth + 2 )); }
-  [ -n "$kidd" ] && { tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
+  # (the caret used to open this span and cost it a constant 2; since issue #836 it
+  # lives in the fixed tree column, so the flex span carries no caret width at all.)
+  [ -n "$kidd" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+                      tagpfx+="$kidpfx"; dwidth=$(( dwidth + ${#kidd} )); }
   # 📌 marks a pinned row (issue #623): without it the operator sees a row sitting
   # above a red `needs` one and has no idea why. It OPENS the flex span, ahead of
   # any ↳ tag, so every pin sits at the same column and the eye can scan for them.
@@ -614,14 +628,20 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$pin" = 1 ] && { pinpfx='📌 '; dwidth=$(( dwidth + 3 )); }
   pad=$(( USABLE - LEFTW - dwidth - RIGHTW )); [ "$pad" -lt 1 ] && pad=1
   printf -v gap '%*s' "$pad" ''
-  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
+  # tree cell: exactly one cell of source text — the glyph, or a space when the row
+  # is a root/orphan/pin-root. Like 📌 and the old caret it is a CONSTANT width, not
+  # a ${#} count: `└`/`▸`/`▾` are East-Asian AMBIGUOUS, so a CJK-wide terminal may
+  # draw them 2 cells; folding the cell into the fixed LEFTW keeps the right-pinned
+  # act/PR/ctx block put whatever the terminal measures.
+  disp="${gc}${gl}${R} ${icol}${f_iss}${R} ${GY}${treed:- }${R} ${nmcol}${f_name}${R} ${pinpfx}${tagpfx}${gap}${acol}${f_act}${R} ${pcol}${f_pr}${R} ${pcolr}${f_pct}${R}"
 
   buf+="$pinned	$grk	$gidx	$depth	$rk	$idx	$sess:$idx$US$wid$US$disp"$'\n'
 done <<< "$WLIST"
 
 # column header — pinned at top of the list by fzf --header-lines=1. Same
-# right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot,
-# the flex span is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
+# right-aligned layout as the rows: leading "  " fills the glyph(1)+space slot, the
+# blank tree cell (#836) adds two more spaces after the issue column, the flex span
+# is blank, act/PR/ctx pinned right. Underlined muted-grey to read as a rule.
 if [ "$SIDEBAR" = 0 ]; then
 fld 5  "issue";  h_i=$fld_out
 fld 26 "window"; h_n=$fld_out
@@ -630,7 +650,7 @@ fld 7  "PR";     h_p=$fld_out
 fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
-printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i} ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}   ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
 fi
 
 # emit pinned-first (issue #623), then grouped by spawn provenance (issue #503):

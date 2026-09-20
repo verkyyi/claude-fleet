@@ -75,6 +75,12 @@ tgts() { raw | awk -F"$US" 'NR>1 {print $1}'; }
 NAMES='#100 #101 #102 #103 ~5 #104 #200 #300'
 order() { printf '%s\n' "$1" | awk -v ns=" $NAMES " '{for(i=1;i<=NF;i++) if(index(ns," "$i" ")){print $i; break}}'; }
 row_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print; exit}}'; }
+# The TREE COLUMN (issue #836), shared with the live list: glyph1+sp + issue5+sp +
+# tree1+sp, so the hierarchy glyph is character 8 of a rendered row and the window
+# name starts at 10 — on EVERY row. Reading the cell by position is what keeps the
+# two lists in lockstep; a `└ kid` substring would pass on a name-spliced indent too.
+tree_of() { printf '%s' "${1:8:1}"; }
+name_of() { printf '%s' "${1:10}"; }
 
 # ============================================================================
 # A. rows
@@ -93,7 +99,7 @@ not_contains "a closed-unlanded child folds too (nothing is waiting on you here)
 # A2. an orphan is never hidden — there would be no row left to open it from.
 contains "an orphan stays on the list" "$out" "lost its parent"
 contains "… and keeps its ↳ provenance tag" "$(row_of '#300' "$out")" "↳#999"
-not_contains "… and is NOT indented under an unrelated row" "$out" "└ lost-its-parent"
+eq "… and its tree cell is blank — not drawn under an unrelated row" " " "$(tree_of "$(row_of '#300' "$out")")"
 
 # A3. the tally describes the whole block while it is shut. parent's block is
 #     kidA + grand + kidB = 3, of which kidB was closed-unlanded ⇒ 2 landed.
@@ -102,13 +108,13 @@ not_contains "… the grandchild is IN the count (3, not 2)" "$(row_of '#100' "$
 contains "a folded scratch parent counts its block too" "$(row_of '~5' "$out")" "1/1 ✓"
 
 # A4. the caret marks exactly the rows that own a block.
-contains "a folded block is marked ▸" "$(row_of '#100' "$out")" "▸"
-not_contains "a childless row grows no caret" "$(row_of '#200' "$out")" "▸"
-not_contains "… nor an open one" "$(row_of '#200' "$out")" "▾"
-not_contains "an orphan grows no caret" "$(row_of '#300' "$out")" "▸"
+eq "a folded block is marked ▸ in the tree cell" "▸" "$(tree_of "$(row_of '#100' "$out")")"
+eq "a childless row's tree cell is blank" " " "$(tree_of "$(row_of '#200' "$out")")"
+eq "an orphan's tree cell is blank too" " " "$(tree_of "$(row_of '#300' "$out")")"
 
-# A5. the caret must not shove the right-pinned act/PR/dep block over (constant
-#     width, not a ${#} count — ▸/▾ are East-Asian AMBIGUOUS width).
+# A5. the tree cell must not shove the right-pinned act/PR/dep block over — one
+#     cell of source text inside a CONSTANT-width LEFTW, never a ${#} count
+#     (`└`/`▸`/`▾` are East-Asian AMBIGUOUS width).
 r_par=$(row_of '#100' "$out"); r_solo=$(row_of '#200' "$out")
 eq "a caret row is the same total width as a caret-less one" "${#r_solo}" "${#r_par}"
 
@@ -119,18 +125,23 @@ printf 'issue-100\n' > "$FOLDFILE"
 out=$(rows)
 eq "unfolded: the block sits under its parent, newest first inside it" \
   "$(printf '#100\n#101\n#102\n#103\n~5\n#200\n#300')" "$(order "$out")"
-contains "a restored child is indented" "$out" "└ child-a"
-contains "a restored grandchild is indented" "$out" "└ the-grandchild"
-# The ↳ tag survives only where the indent cannot say the same thing.
-not_contains "a direct child drops its ↳ tag — the └ indent says it" "$(row_of '#101' "$out")" "↳"
+eq "a restored child draws └ in the tree cell" "└" "$(tree_of "$(row_of '#101' "$out")")"
+eq "a restored grandchild too" "└" "$(tree_of "$(row_of '#102' "$out")")"
+# …and every name starts at the same column — the point of the column (#836).
+for k in '#100' '#101' '#102' '#103' '~5' '#200' '#300'; do
+  r=$(row_of "$k" "$out")
+  case "$(name_of "$r")" in ' '*|'') fail "the window name does not start at the fixed column on $k" "$r" ;; esac
+  CHECKS=$((CHECKS + 1))
+done
+# The ↳ tag survives only where the tree cell cannot say the same thing.
+not_contains "a direct child drops its ↳ tag — the └ cell says it" "$(row_of '#101' "$out")" "↳"
 contains "a GRANDCHILD keeps its tag: it names ITS OWN parent, which the indent cannot — the grouping is two-level-flat, so it is drawn under the root beside its own parent" "$(row_of '#102' "$out")" "↳#101"
 contains "an orphan keeps its tag too" "$(row_of '#300' "$out")" "↳#999"
-contains "an open block is marked ▾" "$(row_of '#100' "$out")" "▾"
-not_contains "… and no longer ▸" "$(row_of '#100' "$out")" "▸"
+eq "an open block is marked ▾ in the tree cell" "▾" "$(tree_of "$(row_of '#100' "$out")")"
 contains "the tally is unchanged by unfolding" "$(row_of '#100' "$out")" "2/3 ✓"
 # the grouping is two-level-flat, so the middle node owns no fold of its own
-not_contains "an intermediate parent draws no caret" "$(row_of '#101' "$out")" "▸"
-not_contains "… not even an open one" "$(row_of '#101' "$out")" "▾"
+eq "an intermediate parent draws no caret — it is a child, not a holder" \
+  "└" "$(tree_of "$(row_of '#101' "$out")")"
 # one block open must not open the other
 not_contains "opening one block leaves the other shut" "$out" "scratch kid"
 r_par2=$(row_of '#100' "$out")

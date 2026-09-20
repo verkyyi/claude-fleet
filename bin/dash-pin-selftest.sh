@@ -104,6 +104,15 @@ NAMES='pA pB cA cB gA'
 order() { printf '%s\n' "$1" | awk -v ns=" $NAMES " '{for(i=1;i<=NF;i++) if(index(ns," "$i" ")){print $i; break}}'; }
 # line_of <name> <out> → that row's 1-based line number.
 line_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print NR; exit}}'; }
+# The TREE COLUMN (issue #836): the hierarchy glyph is a fixed cell between issue
+# and window, not an indent spliced into the name — glyph1+sp + issue5+sp + tree1+sp,
+# so on a DISPLAY-field-only row it is character 8 and every name starts at 10.
+# `rows()` above keeps the two target fields, so read the display field on its own.
+US=$(printf '\037')
+drows() { FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null \
+            | awk -F"$US" 'NR>1 {print $3}' | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
+drow_of() { printf '%s\n' "$2" | awk -v n="$1" '{for(i=1;i<=NF;i++) if($i==n){print; exit}}'; }
+tree_of() { local r; r=$(drow_of "$1" "$(drows)"); printf '%s' "${r:8:1}"; }
 
 # ============================================================================
 # A. the toggle script
@@ -157,8 +166,8 @@ eq "pin beats the status rank: pinned idle pA above red pB" \
 contains "the pinned window is marked" "$(printf '%s\n' "$out" | grep ' pA ')" "📌"
 not_contains "a floated CHILD is not marked (the indent says why it is up there)" \
   "$(printf '%s\n' "$out" | grep 'cA ')" "📌"
-contains "a floated child keeps its └ indent" "$out" "└ cA"
-contains "a floated grandchild keeps its └ indent" "$out" "└ gA"
+eq "a floated child keeps its └ tree cell" "└" "$(tree_of cA)"
+eq "a floated grandchild keeps its └ tree cell" "└" "$(tree_of gA)"
 tmux set-window-option -t "$W_pB" -u @claude_state
 
 # --- B2. pinning a parent floats its whole subtree ----------------------------
@@ -168,7 +177,7 @@ eq "pinned pB + its child float above the unpinned group" \
   "$(printf 'pB\ncB\npA\ncA\ngA')" "$(order "$out")"
 eq "cB sits DIRECTLY under its pinned parent" \
   "$(( $(line_of pB "$out") + 1 ))" "$(line_of cB "$out")"
-contains "cB keeps its indent while floated" "$out" "└ cB"
+eq "cB keeps its tree cell while floated" "└" "$(tree_of cB)"
 
 # --- B3. several pins sort among themselves by their ordinary order -----------
 pin "$W_pA"
@@ -184,12 +193,12 @@ eq "a pinned child floats, taking its grandchild with it" \
   "$(printf 'cA\ngA\npA\npB\ncB')" "$(order "$out")"
 eq "the grandchild stays directly under it" \
   "$(( $(line_of cA "$out") + 1 ))" "$(line_of gA "$out")"
-# promoted to a group root ⇒ no └ indent (its parent is no longer the line above),
-# but the ↳ provenance tag is never lost.
+# promoted to a group root ⇒ BLANK tree cell (its parent is no longer the line
+# above), but the ↳ provenance tag is never lost.
 cA_line=$(printf '%s\n' "$out" | grep 'cA ')
-not_contains "a promoted pinned child sheds the └ indent" "$cA_line" "└ cA"
+eq "a promoted pinned child blanks its tree cell" " " "$(tree_of cA)"
 contains "… but keeps its ↳ provenance tag" "$cA_line" "↳#100"
-contains "… and its own child is still indented under it" "$out" "└ gA"
+eq "… and its own child still draws └ under it" "└" "$(tree_of gA)"
 unpin "$W_cA"
 
 # --- B5. no residue ----------------------------------------------------------

@@ -228,16 +228,23 @@ for v in "$l_rootA" "$l_rootB" "$l_kidA" "$l_scrP" "$l_kidS"; do
 done
 CHECKS=$((CHECKS + 8))
 
-# tags + indent. The ↳ tag is drawn ONLY where the `└` indent cannot say the same
-# thing: a direct child of the row its block hangs off drops it (that is what the
-# indent means), an ORPHAN keeps it (it has no indent at all, so the tag is the
-# only trace of where it came from).
+# tags + the TREE COLUMN (#836). The ↳ tag is drawn ONLY where the `└` tree cell
+# cannot say the same thing: a direct child of the row its block hangs off drops it
+# (that is what the cell means), an ORPHAN keeps it (its cell is blank, so the tag
+# is the only trace of where it came from).
 row_of() { printf '%s\n' "$out" | grep -- "$1" | head -1; }
-contains "grouping: kidA is indented" "$out" "└ kidA"
-not_contains "grouping: a direct child drops the ↳ tag — the indent already says it" "$(row_of 'kidA')" "↳"
-contains "grouping: kidS is indented under its scratch parent" "$out" "└ kidS"
+# the cell sits at a FIXED offset — glyph1+sp + issue5+sp + tree1+sp — on the
+# display field, which is field 3 of the US-delimited row.
+dout=$(FLEET_SESSION=fleetC FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null \
+         | awk -F"$US" 'NR>1 {print $3}' | LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g')
+tree_of() { local r; r=$(printf '%s\n' "$dout" | grep -- "$1" | head -1); printf '%s' "${r:8:1}"; }
+eq "grouping: kidA draws └ in the tree cell" "└" "$(tree_of 'kidA')"
+not_contains "grouping: a direct child drops the ↳ tag — the tree cell already says it" "$(row_of 'kidA')" "↳"
+eq "grouping: kidS draws └ under its scratch parent" "└" "$(tree_of 'kidS')"
 not_contains "grouping: … and drops its ↳~5 tag for the same reason" "$(row_of 'kidS')" "↳"
-contains "grouping: orphX KEEPS its tag — no indent to say it" "$out" "↳#999"
+eq "grouping: an orphan's tree cell is blank" " " "$(tree_of 'orphX')"
+contains "grouping: orphX KEEPS its tag — no tree cell to say it" "$out" "↳#999"
+eq "grouping: a hub root's tree cell is blank too" " " "$(tree_of ' rootB')"
 rootA_line=$(row_of ' rootA')
 not_contains "grouping: a hub root has no tag" "$rootA_line" "↳"
 
