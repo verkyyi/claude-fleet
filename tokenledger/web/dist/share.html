@@ -254,7 +254,15 @@ function render(d) {
         : "utilization unavailable"));
   });
 
-  root.replaceChildren(
+  // `.filter(Boolean)` is load-bearing, not padding (issue #121, and quota.js
+  // carries the same note for the same reason): replaceChildren() takes
+  // `(Node or DOMString)…`, so a member that is not a Node is STRINGIFIED
+  // rather than skipped — a bare `null` from either optional card below became
+  // a text node reading "null", printed above the footer. `el()` has its own
+  // guard for exactly this and is why nothing else on the page hit it. Both
+  // holes are shapes /v1/share returns normally: a hub with no quota reading
+  // yet sends `subscriptions: []`, and `model_split: []` comes with it.
+  root.replaceChildren(...[
     el("header", {},
       el("h1", {}, d.title),
       el("div", { class: "sub" },
@@ -288,7 +296,7 @@ function render(d) {
       subs) : null,
 
     el("footer", {}, d.disclaimer),
-  );
+  ].filter(Boolean));
 }
 
 fetch("/v1/share" + location.search, { headers: { Accept: "application/json" } })
