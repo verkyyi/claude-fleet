@@ -44,7 +44,13 @@ that dies at the boundary. Therefore:
   slots: <k>/<cap> · spawned: #… · landed: #… · reaped: #…
   blocked: #… (<why>)
   待决: <question that no charter answer covers>
+  report: <pending | the report's URL>      ← closing tick only (step 4)
   ```
+
+  The `report:` line appears on the **closing** tick and nowhere else. It is the
+  one piece of state that outlives the core going empty, so a session that picks
+  this EPIC up after a handoff can tell «核心空了，报告还没跑» from «跑完了» by
+  reading it instead of guessing (issue #852).
 
 - **Context full ⇒ `/fleet-handoff`, not a summary.** The handoff doc need only
   say *"driving EPIC #N, re-read it"*; everything else is on the issue. The
@@ -177,18 +183,56 @@ next delay is chosen from what you are actually waiting for.
 Do not poll for things the harness reports on its own; a `Monitor` on a PR's
 checks is cheaper and more accurate than a tick that wakes to look.
 
-## 4. Stop, and what wakes the operator
+## 4. Stop — the report is the last tick, not a handoff
 
-**Stop when the core layer is empty** — every core member merged (and
-deploy-green where the fleet has a deploy signal), or `blocked` with a reason on
-the parent. Then hand off to `/fleet-epic-report <N>`.
+**The core layer going empty is not the end of the run. The report is**
+(issue #852). Core empty = every core member merged (and deploy-green where the
+fleet has a deploy signal), or `blocked` with a reason on the parent. That
+condition does not stop the loop; it switches this tick to the closing sequence
+below, which **runs in this same hub session, now** — `/fleet-epic-report` is a
+hub skill and you are the hub, so there is nothing to hand it to.
+
+Why it is not prose advice: a batch whose report never runs looks, from the
+outside, exactly like a batch that finished. The tick log holds the whole
+12-hour run and nobody reads it; the page and the parent comment are the only
+artefacts that survive the tailnet reboot, the context boundary and the morning.
+**An EPIC whose report never ran is not finished** — treat a core-empty EPIC
+with no `report:` line the way you would treat an unmerged PR.
+
+The closing sequence, in this order — it is a tick like any other, so it
+survives a context boundary the same way everything else here does:
+
+1. **Write the closing tick first, carrying `report: pending`** (step 1's
+   format). Before running the report, not after: if this session dies between
+   the two, `pending` is what tells the next one there is work left.
+2. **Run `/fleet-epic-report <N>` right here.** Not «hand off to», not «suggest
+   the operator run» — execute it, this tick. It gathers, builds the page, hosts
+   it via doc-preview, posts the durable comment, and closes the EPIC when every
+   member is resolved. Its own rails still apply; you are just its caller.
+3. **Post the URL back on the parent** as one final tick whose `report:` line
+   carries the tailnet URL in place of `pending` — one grep now separates a
+   reported EPIC from an unreported one. Then push the done notification, with
+   the URL in it.
+
+**Resuming into a `report: pending`.** The stateless rule (step 1) covers this
+with no extra bookkeeping: a tick that re-reads the parent, finds the core empty
+and finds `pending` on the newest tick re-enters step 4.2 — it does **not**
+refill slots, and it does not start over. Re-running `/fleet-epic-report` is
+safe and expected (the skill is built to be re-run — read it), so a duplicated
+report is a far cheaper failure than a missing one.
+
+**The report failing is a stall, not a finish.** If the report cannot complete —
+doc-preview down, gh refusing, the page unbuildable — leave `report: pending`
+standing, say why on the parent, and push the *stalled* notification. Never
+write the done notification off a report that did not run.
 
 Push a notification for exactly two things:
 
-- **Done** — the core is empty and the report is ready.
+- **Done** — the core is empty **and the report has run**: the notification
+  carries its URL.
 - **Stalled** — every account is at its ceiling with no window in sight, the
-  handoff failed to clear, spawning is refusing, or N consecutive ticks made no
-  progress.
+  handoff failed to clear, spawning is refusing, the closing report failed, or N
+  consecutive ticks made no progress.
 
 Everything else — a single worker's question, one red PR, one reaped window —
 goes to the parent's tick log and waits for morning. A batch that wakes its
@@ -198,7 +242,8 @@ operator for each worker is a batch that has not been delegated.
 
 One line per tick in the terminal: tick number, slots, what landed, what blocked.
 The durable record is the parent's tick comments — the terminal scrollback is not
-where this batch's history lives.
+where this batch's history lives. The closing tick's line carries the report's
+URL, because that is the one thing the operator will want to click.
 
 ---
 

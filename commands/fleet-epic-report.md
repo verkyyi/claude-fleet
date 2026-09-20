@@ -11,6 +11,15 @@ Read-only against the repo except for that one closing comment.
 the most recently updated `epic` issue in this fleet. Works on any past EPIC, not
 just the one that just ended, so a report can be re-run after the fact.
 
+**Its usual caller is not a human.** `/fleet-epic-run`'s closing tick runs this
+skill itself, in the same hub session, the moment the core layer empties
+(issue #852) — a batch is not finished until it has. So this skill is written to
+be **re-runnable and self-contained**: it rebuilds everything from GitHub and the
+fleet's records on every run, which is why a resumed run loop re-entering the
+closing tick can just call it again rather than reasoning about whether a report
+already exists. Being run by hand — on this EPIC or a two-week-old one — is the
+same code path, not a special case.
+
 **Re-run it in two weeks.** Most of what a batch was *for* cannot be read on the
 day it ends — a metric with a 「2 周」 horizon is still blank when the last PR
 merges. That is not a reason to skip the metric or to invent one: write 「还读不
