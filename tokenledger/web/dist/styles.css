@@ -243,8 +243,51 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 
 svg { display: block; max-width: 100%; overflow: visible; }
-.axis text { font-size: 10.5px; fill: var(--ink-3); }
-.axis line { stroke: var(--grid); }
+
+/* ---- charts (issue #55) ----
+
+   `.chart` is every viewBox'd SVG charts.js and repo.js draw. Two rules, and
+   both exist because a viewBox scales EVERYTHING inside it, type included.
+
+   `height: auto` is the first. A viewBox plus `width:100%` plus a pixel
+   `height` gives preserveAspectRatio two constraints, so it fits the tighter
+   one and centres the rest: a 900x190 chart drew at 900px inside a 1104px
+   card (~100px of white each side), and on a 340px phone it drew 72px of
+   content inside a 190px box — 118px of dead white under every chart. With
+   no height attribute the viewBox's own ratio sizes the box and the drawing
+   fills its slot at every width.
+
+   The font-size is the second, and the `--cw` / `--slot` pair is what makes
+   it honest. Text in a viewBox is measured in USER UNITS, so what a reader
+   sees is `declared * rendered_width / design_width`. The old `font-size:
+   10.5` attribute therefore rendered ~10.5px in a half-width card, ~7.7px in
+   a full-width one and ~4px on a phone — the same declaration, three sizes,
+   and two charts side by side in one row visibly disagreeing.
+
+     --cw    the chart's own viewBox width, set by the JS that draws it.
+     --slot  roughly how many CSS pixels the surrounding card actually gets.
+
+   Dividing one by the other cancels the scaling out: rendered size works out
+   as `11px * real_width / --slot`, i.e. one number everywhere `--slot` is
+   honest, whatever `W` an individual chart was drawn at. `--slot` is the one
+   thing CSS cannot measure, so it is declared per layout below and stepped by
+   media query — which is also why no ResizeObserver appears anywhere near
+   this: a media query and a ratio are both recomputed by the layout engine on
+   every reflow, for free. (The brush is percentage-positioned for the same
+   reason; see charts.js's `timeline`.) */
+:root { --slot: 340; }                        /* phone: one card, most of the viewport */
+@media (min-width: 481px) { :root { --slot: 470; } }
+@media (min-width: 641px) { :root { --slot: 620; } }
+@media (min-width: 821px) {
+  /* .grid2 splits into two columns here, so a card's width stops tracking the
+     viewport: 1180 max-width - 40 wrap padding - 36 card padding = 1104 for a
+     full-bleed card, (1140 - 16 gap) / 2 - 36 = 526 for one of a pair, and
+     min(760, 100vw) - 40 = 720 inside the session panel. */
+  :root { --slot: 1100; }
+  .grid2 { --slot: 525; }
+  .detail { --slot: 720; }
+}
+svg.chart { width: 100%; height: auto; font-size: calc(var(--cw) / var(--slot) * 11px); }
 
 table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
@@ -377,7 +420,14 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 .kpi .l { font-size: 12px; color: var(--ink-3); }
 /* timeline + brush */
 .timeline { position: relative; user-select: none; touch-action: none; }
-.timeline .brush { position: absolute; top: 0; bottom: 26px; background: color-mix(in srgb, var(--s1) 12%, transparent); border-left: 2px solid var(--s1); border-right: 2px solid var(--s1); cursor: grab; }
+/* The brush is anchored to the PLOT, not to `.timeline` — the legend and the
+   caption live in `.timeline` too, so a `bottom` measured from its edge moved
+   whenever one of them appeared. `--axis-band` (set by charts.js, the x-axis
+   padding as a share of the chart's height) replaces the old `bottom: 26px`,
+   which was only ever right at exactly one rendering scale — and since issue
+   #55 dropped the pixel height there is no such scale any more. */
+.timeline .plot { position: relative; }
+.timeline .brush { position: absolute; top: 0; bottom: var(--axis-band, 0); background: color-mix(in srgb, var(--s1) 12%, transparent); border-left: 2px solid var(--s1); border-right: 2px solid var(--s1); cursor: grab; }
 .timeline .brush .h { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; } .timeline .brush .h.l { left: -6px } .timeline .brush .h.r { right: -6px }
 .timeline .caption { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
 /* heatmap */

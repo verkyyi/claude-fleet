@@ -135,7 +135,7 @@ function flowChart(weeks) {
   // Three gridlines only: the zero axis and the two flow extremes.
   for (const [v, y] of [[maxFlow, mid - half], [0, mid], [maxFlow, mid + half]]) {
     g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y, y2: y, stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 8, y: y + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)', 'font-size': '10.5' }, fmtInt(v)));
+    g.appendChild(el('text', { x: PAD.l - 8, y: y + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)' }, fmtInt(v)));
   }
 
   weeks.forEach((w, i) => {
@@ -160,16 +160,21 @@ function flowChart(weeks) {
   if (pts.length > 1) {
     g.appendChild(el('polyline', { points: pts.join(' '), fill: 'none', stroke: 'var(--s1)', 'stroke-width': '1.6' }));
   }
-  g.appendChild(el('text', { x: W - PAD.r + 6, y: PAD.t + 4, fill: 'var(--ink-3)', 'font-size': '10.5' }, fmtInt(maxOpen)));
+  g.appendChild(el('text', { x: W - PAD.r + 6, y: PAD.t + 4, fill: 'var(--ink-3)' }, fmtInt(maxOpen)));
 
   const label = (i, anchor) => el('text', {
-    x: PAD.l + i * step + step / 2, y: H - 6, 'text-anchor': anchor, fill: 'var(--ink-3)', 'font-size': '10.5',
+    x: PAD.l + i * step + step / 2, y: H - 6, 'text-anchor': anchor, fill: 'var(--ink-3)',
   }, weeks[i].week.slice(5));
   g.appendChild(label(0, 'start'));
   if (n > 1) g.appendChild(label(n - 1, 'end'));
 
+  // No pixel `height` and no `font-size` attribute, for the reasons
+  // charts.js's `chartSvg` spells out (issue #55): the viewBox's own ratio
+  // sizes the box, and `--cw` lets styles.css cancel the viewBox scaling out
+  // of the tick labels. This chart is drawn by hand rather than through
+  // `chartSvg` because repo.js deliberately does not import charts.js.
   return el('svg', {
-    viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, role: 'img',
+    viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'chart', style: `--cw:${W}`, role: 'img',
     'aria-label': t('repo.flow.aria', { weeks: n, open: fmtInt(maxOpen) }),
   }, g);
 }

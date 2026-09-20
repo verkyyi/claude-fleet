@@ -534,11 +534,15 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   const d = summaryResult.value;
 
   const parts = [
-    { key: t('part.cacheRead'), tokens: d.cache_read_tokens, color: C.seriesColor(0) },
-    { key: t('part.cacheCreate'), tokens: d.cache_create_tokens, color: C.seriesColor(1) },
-    { key: t('part.output'), tokens: Math.max(0, (d.output_tokens || 0) - (d.thinking_tokens || 0)), color: C.seriesColor(2) },
-    { key: t('part.input'), tokens: d.input_tokens, color: C.seriesColor(3) },
-    { key: t('part.thinking'), tokens: d.thinking_tokens, color: C.seriesColor(4) },
+    // slotColor, not the name-keyed palette: these five are a FIXED
+    // enumeration drawn in a designed order (biggest contributor first), and
+    // their names are translated — hashing them would hand the same chart
+    // different colours in English and in Chinese (issue #55).
+    { key: t('part.cacheRead'), tokens: d.cache_read_tokens, color: C.slotColor(0) },
+    { key: t('part.cacheCreate'), tokens: d.cache_create_tokens, color: C.slotColor(1) },
+    { key: t('part.output'), tokens: Math.max(0, (d.output_tokens || 0) - (d.thinking_tokens || 0)), color: C.slotColor(2) },
+    { key: t('part.input'), tokens: d.input_tokens, color: C.slotColor(3) },
+    { key: t('part.thinking'), tokens: d.thinking_tokens, color: C.slotColor(4) },
   ];
   const compTotal = parts.reduce((a, p) => a + (p.tokens || 0), 0) || 1;
   const compChart = C.composition(parts);

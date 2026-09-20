@@ -30,6 +30,14 @@
 // common now lives in one place each — bucket arithmetic in
 // lib/buckets.js, the y scale in `yTicks` below — because the duplication
 // is what let them drift into disagreeing about the same data.
+//
+// Issue #55: two things every chart here used to get wrong on its own, both
+// now decided in one place. COLOUR comes from the series' name (lib/
+// palette.js) instead of its array index, so a model keeps its hue when the
+// ranking moves. SIZE is settled by `chartSvg` below plus the "charts" block
+// in styles.css: no pixel height, no `font-size` attribute, because both are
+// measured inside a viewBox that scales — which is how the same declared
+// `10.5` rendered as ~4px on a phone.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
@@ -37,13 +45,14 @@ import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from
 import { snap, clamp } from './lib/brush.js';
 import { bucketMs, densify, inferBucket } from './lib/buckets.js';
 import { t } from './lib/i18n.js';
+import { seriesPalette, OTHER_COLOR } from './lib/palette.js';
 
-const SERIES = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
-/** seriesColor assigns hues in FIXED order and never cycles. A ninth series
- *  folds into "Other" rather than reusing slot 1 and implying a relationship
- *  that is not there. */
-export const seriesColor = (i) => `var(${SERIES[Math.min(i, SERIES.length - 1)]})`;
-const OTHER_COLOR = 'var(--ink-3)';
+// Issue #55: which hue a series gets — and the reason it is the same hue
+// after the next refresh — now lives in lib/palette.js, because it is pure
+// arithmetic worth testing and because the rule it encodes ("colour follows
+// the NAME, never the array index") is the whole point. Re-exported so
+// review.js keeps importing its colours from one place.
+export { slotColor } from './lib/palette.js';
 
 /** yTicks draws the three-tick y scale every token chart here uses — a
  *  gridline plus a right-aligned number at 0, half and max. `bars`,
@@ -54,8 +63,8 @@ const OTHER_COLOR = 'var(--ink-3)';
 function yTicks(g, { max, y, PAD, W }) {
   for (const v of [0, max / 2, max]) {
     g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 8, y: y(v) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)',
-      'font-size': '10.5' }, fmtInt(v)));
+    g.appendChild(el('text', { x: PAD.l - 8, y: y(v) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)' },
+      fmtInt(v)));
   }
 }
 
@@ -69,6 +78,29 @@ function axisLabel(key, granularity) {
   const k = String(key);
   return granularity === 'day' || k.length === 10 ? k.slice(5, 10) : k.slice(5, 10) + ' ' + k.slice(11, 16);
 }
+
+/** chartSvg builds the `<svg>` element every chart in this file returns, and
+ *  exists so that the two things issue #55 had to unlearn are unlearnable in
+ *  one place:
+ *
+ *  - **No pixel `height`.** A `viewBox` plus `width:100%` plus a hard
+ *    `height` gives `preserveAspectRatio` two dimensions to satisfy, so it
+ *    scales to fit the tighter one and centres the rest. A 900x190 chart in
+ *    a 1104px card drew at 900px with ~100px of white on each side; the same
+ *    chart on a 340px phone drew 72px of content inside a 190px box, i.e.
+ *    118px of dead white. Leaving the height out lets `height:auto` (in
+ *    styles.css) take the ratio from the viewBox, so the drawing simply
+ *    fills its slot at every width.
+ *  - **No `font-size` attribute on the tick labels.** Text inside a viewBox
+ *    is measured in USER UNITS, so a declared `10.5` is 10.5px only when the
+ *    chart happens to render at its design width — it was ~4px on a phone,
+ *    and two charts in one row disagreed whenever their `W` did. `--cw`
+ *    hands the design width to styles.css, which divides it out. See the
+ *    "charts" block there.
+ *
+ *  `extra` carries whatever the individual chart adds (role / aria-label). */
+const chartSvg = (W, H, extra, g) =>
+  el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'chart', style: `--cw:${W}`, ...extra }, g);
 
 /** Utilization -> status. Four named bands so the label, not the hue, is what
  *  carries the meaning. */
@@ -335,7 +367,7 @@ export function bars(series, granularity) {
   // Selective labels: first, last and the peak — never a number on every bar.
   const labelAt = (s, i, anchor) => {
     const x = PAD.l + i * (iw / n) + bw / 2;
-    return el('text', { x, y: H - 8, 'text-anchor': anchor, fill: 'var(--ink-3)', 'font-size': '10.5' },
+    return el('text', { x, y: H - 8, 'text-anchor': anchor, fill: 'var(--ink-3)' },
       granularity === 'hour' ? s.key.slice(11, 16) : s.key.slice(5));
   };
   g.appendChild(labelAt(series[0], 0, 'start'));
@@ -343,7 +375,7 @@ export function bars(series, granularity) {
   const pi = series.indexOf(peak);
   if (n > 4 && pi > 1 && pi < n - 2) g.appendChild(labelAt(peak, pi, 'middle'));
 
-  return el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H,
+  return chartSvg(W, H, {
     role: 'img', 'aria-label': t('chart.ariaTokensPer', { granularity, peak: fmtInt(max) }) }, g);
 }
 
@@ -380,8 +412,12 @@ export function timeline(series, opts) {
   const keyMs = (s) => bucketMs(s.key);
   const xOf = (ms) => PAD.l + ((ms - ext.start) / span) * iw;
 
-  // Stack heights per bucket, in the fixed palette order (+ "other" last).
+  // Stack heights per bucket, in the order the caller ranked them (+ "other"
+  // last). The COLOURS do not follow that order — `stack_models` is ranked by
+  // tokens in the current window, so following it is what made a model change
+  // hue whenever the span moved (issue #55). seriesPalette keys off the name.
   const names = [...stackNames];
+  const colors = seriesPalette(names);
   let max = 1;
   const built = series.map((s) => {
     const ms = keyMs(s);
@@ -413,29 +449,40 @@ export function timeline(series, opts) {
       const h = Math.max(0, (v / max) * ih);
       g.appendChild(el('rect', {
         x, y: y(base + v), width: bw, height: h,
-        fill: i < names.length ? seriesColor(i) : OTHER_COLOR,
+        fill: i < names.length ? colors[i] : OTHER_COLOR,
         onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
       }));
       base += v;
     });
   });
 
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
-  const container = el('div', { class: 'timeline', tabindex: '-1' }, svg);
+  const svg = chartSvg(W, H, {}, g);
+  const container = el('div', { class: 'timeline', tabindex: '-1' });
+
+  // The brush is positioned against the PLOT, not against `.timeline`: the
+  // legend and the caption are appended to the container below, and a
+  // `bottom` measured from the container's own edge therefore moved every
+  // time one of them appeared. `--axis-band` is the x-axis strip as a share
+  // of the plot's height, so the brush stops exactly at the axis at any
+  // width — the same reason `paint()` below works in percentages (issue #55
+  // dropped the pixel `height` that used to make one of those two a
+  // constant).
+  const plot = el('div', { class: 'plot', style: `--axis-band:${(PAD.b / H) * 100}%` }, svg);
+  container.appendChild(plot);
 
   const brush = el('div', { class: 'brush', tabindex: '0' },
     el('div', { class: 'h l' }), el('div', { class: 'h r' }));
-  container.appendChild(brush);
+  plot.appendChild(brush);
 
   // A stack of up to 7 series (6 top models + "other") with no legend is
   // unreadable — every other multi-series chart here (stackedArea, lines,
   // composition) builds one; this one didn't. Same palette order the stack
   // itself is drawn in (built.forEach above: `i < names.length ?
-  // seriesColor(i) : OTHER_COLOR`), so the mapping is actually correct.
+  // colors[i] : OTHER_COLOR`), so the mapping is actually correct.
   if (names.length) {
     const hasOther = built.some((b) => b.other > 0);
     const legend = el('div', { class: 'legend' },
-      names.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+      names.map((name, i) => el('span', {}, el('i', { style: `background:${colors[i]}` }), name)),
       hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), t('chart.other')) : null);
     container.appendChild(legend);
   }
@@ -586,6 +633,7 @@ export function stackedArea(series, stackNames, opts = {}) {
   const W = 560, H = 190, PAD = { t: 14, r: 8, b: 26, l: 46 };
   const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
   const names = stackNames || [];
+  const colors = seriesPalette(names);
   const { granularity } = opts;
 
   const raw = (series || [])
@@ -634,7 +682,7 @@ export function stackedArea(series, stackNames, opts = {}) {
     const top = base.map((v, i) => v + add[i]);
     const d = 'M' + along(top).map((p) => p.join(',')).join('L')
             + 'L' + along(base).reverse().map((p) => p.join(',')).join('L') + 'Z';
-    g.appendChild(el('path', { d, fill: name == null ? OTHER_COLOR : seriesColor(si), 'fill-opacity': '0.85' }));
+    g.appendChild(el('path', { d, fill: name == null ? OTHER_COLOR : colors[si], 'fill-opacity': '0.85' }));
     base = top;
   });
 
@@ -663,18 +711,18 @@ export function stackedArea(series, stackNames, opts = {}) {
   // Ends only, like `bars` — a label per bucket would be unreadable at this
   // width, and the hover readout names every bucket in between.
   const tick = (key, at, anchor) => el('text', { x: at, y: H - 8, 'text-anchor': anchor,
-    fill: 'var(--ink-3)', 'font-size': '10.5' }, axisLabel(key, granularity));
+    fill: 'var(--ink-3)' }, axisLabel(key, granularity));
   g.appendChild(tick(pts[0].key, PAD.l, 'start'));
   if (pts.length > 1) g.appendChild(tick(pts[pts.length - 1].key, PAD.l + iw, 'end'));
 
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H,
+  const svg = chartSvg(W, H, {
     role: 'img', 'aria-label': t('chart.ariaModelMix', {
       from: axisLabel(pts[0].key, granularity),
       to: axisLabel(pts[pts.length - 1].key, granularity),
       peak: fmtInt(max) }) }, g);
   const hasOther = pts.some((p) => otherOf(p) > 0);
   const legend = el('div', { class: 'legend' },
-    names.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+    names.map((name, i) => el('span', {}, el('i', { style: `background:${colors[i]}` }), name)),
     hasOther ? el('span', {}, el('i', { style: `background:${OTHER_COLOR}` }), t('chart.other')) : null);
   return el('div', {}, svg, legend);
 }
@@ -715,7 +763,11 @@ export function heatmap(grid, events) {
  *  `seven_day_pct` line, gridlines at 50/90, and a legend. `accounts` is
  *  `[{label, points: [{ts, five_hour_pct, seven_day_pct}]}]`. */
 export function lines(accounts, { start, end }) {
-  const W = 900, H = 200, PAD = { t: 14, r: 8, b: 22, l: 40 };
+  // W matches the card this chart actually lives in — a `.grid2` half, the
+  // same slot `bars` sits in beside it. It was 900 (the full-width figure)
+  // until issue #55, which is why the two charts in that one row rendered the
+  // identical `font-size: 10.5` at visibly different sizes.
+  const W = 560, H = 200, PAD = { t: 14, r: 8, b: 22, l: 40 };
   const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
   const span = Math.max(1, end - start);
   const x = (t) => PAD.l + ((t - start) / span) * iw;
@@ -724,12 +776,17 @@ export function lines(accounts, { start, end }) {
   const g = el('g', {});
   for (const gl of [50, 90]) {
     g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(gl), y2: y(gl), stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 6, y: y(gl) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)', 'font-size': '10.5' }, gl + '%'));
+    g.appendChild(el('text', { x: PAD.l - 6, y: y(gl) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)' }, gl + '%'));
   }
+
+  // By account LABEL, not by position in `accounts`: the array order is the
+  // API's, and an account that drops out of the window used to repaint every
+  // account after it (issue #55).
+  const colors = seriesPalette((accounts || []).map((a) => a.label));
 
   const legend = [];
   (accounts || []).forEach((a, i) => {
-    const color = seriesColor(i);
+    const color = colors[i];
     const pts = (a.points || []).slice().sort((p, q) => p.ts - q.ts);
     if (pts.length && pts.some((p) => Number.isFinite(p.seven_day_pct))) {
       const d7 = pts.map((p, idx) => `${idx ? 'L' : 'M'}${x(p.ts)},${y(p.seven_day_pct)}`).join(' ');
@@ -754,7 +811,7 @@ export function lines(accounts, { start, end }) {
     legend.push(el('span', {}, el('i', { style: `background:${color}` }), a.label));
   });
 
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
+  const svg = chartSvg(W, H, {}, g);
   return el('div', {}, svg, el('div', { class: 'legend' }, legend));
 }
 
@@ -797,6 +854,10 @@ export function turnBars(turns) {
   const bw = Math.max(1, iw / n - 2);
   const models = [];
   for (const turn of turns) if (turn.model && !models.includes(turn.model)) models.push(turn.model);
+  // First-seen order decides the DRAWING order of the legend; it used to
+  // decide the colours too, so "load more" — which can only ever prepend an
+  // earlier turn — repainted the whole session (issue #55).
+  const colors = seriesPalette(models);
   const anySidechain = turns.some((turn) => turn.sidechain);
 
   const defs = el('defs', {}, el('pattern',
@@ -816,17 +877,17 @@ export function turnBars(turns) {
       `<br>${escapeHTML(t('chart.tip.tokens', { tokens: fmtFull(turn.tokens || 0) }))}` +
       (turn.cost_usd != null ? ` · ${escapeHTML(fmtUSD(turn.cost_usd))}` : '');
     g.appendChild(el('rect', {
-      x, y: yTop, width: bw, height: h, fill: models.includes(turn.model) ? seriesColor(models.indexOf(turn.model)) : OTHER_COLOR,
+      x, y: yTop, width: bw, height: h, fill: models.includes(turn.model) ? colors[models.indexOf(turn.model)] : OTHER_COLOR,
       onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
     }));
     if (turn.sidechain) g.appendChild(el('rect', { x, y: yTop, width: bw, height: h, fill: 'url(#ccq-sidechain-hatch)' }));
   });
 
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H }, g);
+  const svg = chartSvg(W, H, {}, g);
   if (models.length < 2 && !anySidechain) return svg;
 
   const legend = el('div', { class: 'legend' },
-    models.map((name, i) => el('span', {}, el('i', { style: `background:${seriesColor(i)}` }), name)),
+    models.map((name, i) => el('span', {}, el('i', { style: `background:${colors[i]}` }), name)),
     anySidechain ? el('span', {},
       el('i', { style: 'background:repeating-linear-gradient(45deg, var(--ink-3), var(--ink-3) 1px, transparent 1px, transparent 3px)' }),
       t('chart.subagent')) : null);
