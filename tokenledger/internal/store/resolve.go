@@ -192,12 +192,12 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 const hourlyFoldSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-  effort, entrypoint, is_sidechain, source,
+  issue_number, effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
   cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,
   cache_write_tokens, cache_write_known_events)
 SELECT hour, ?, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-       effort, entrypoint, is_sidechain, source,
+       issue_number, effort, entrypoint, is_sidechain, source,
        events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
        cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,
        cache_write_tokens, cache_write_known_events

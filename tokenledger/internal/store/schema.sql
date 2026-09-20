@@ -168,6 +168,15 @@ CREATE TABLE IF NOT EXISTS usage_events (
   cwd                    TEXT NOT NULL DEFAULT '',
   os_user                TEXT NOT NULL DEFAULT '',
   git_branch             TEXT NOT NULL DEFAULT '',
+  -- The issue this turn was worked under, read from git_branch by one anchored
+  -- rule (store.IssueFromBranch). NULL means the branch did not say -- never 0,
+  -- which would be a real issue number, and never a guess: on 420k measured
+  -- events a looser rule would file 15.6% of them under a scratch-session
+  -- ordinal that collides with real issues. It carries NO repository, on
+  -- purpose: `owner/name` appears nowhere on the spend side, so binding these
+  -- to repo_issues is the READER's job and has to be scoped to one repo.
+  -- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
+  issue_number           INTEGER,
   entrypoint             TEXT NOT NULL DEFAULT '',
   effort                 TEXT NOT NULL DEFAULT '',
   is_sidechain           INTEGER NOT NULL DEFAULT 0
@@ -286,6 +295,11 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   model         TEXT NOT NULL DEFAULT '',
   provider      TEXT NOT NULL DEFAULT '',
   git_branch    TEXT NOT NULL DEFAULT '',
+  -- Derived from git_branch, exactly as on usage_events above, and NOT part of
+  -- the key below: it is a pure function of a column that already is, so it
+  -- adds no grain -- and it can be re-derived in place when the rule changes,
+  -- without the rebuild from usage_events that pruned history would refuse.
+  issue_number  INTEGER,
   effort        TEXT NOT NULL DEFAULT '',
   entrypoint    TEXT NOT NULL DEFAULT '',
   is_sidechain  INTEGER NOT NULL DEFAULT 0,
@@ -355,7 +369,18 @@ CREATE INDEX IF NOT EXISTS idx_plans_period
 -- what actually landed?" -- the other half of that question is repo history.
 -- The issue NUMBER is the axis that joins the two: a fleet-style orchestrator
 -- binds a session to an issue, a commit convention binds a commit to an issue,
--- and this hub already keys spend by session. Two tables sharing a binary gain
+-- and this hub already keys spend by session.
+--
+-- Half of that axis now exists: usage_events.issue_number and
+-- usage_hourly.issue_number carry the number read off the branch. The other
+-- half does not. A spend row names a NUMBER and no repository, so binding it
+-- to a row here is the reader's job and is sound only while the hub holds one
+-- repo -- see §5 of
+-- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md, which is
+-- also where the refusal that has to go with it is specified. Until that read
+-- exists (#58), the sentence below is still a statement of intent.
+--
+-- Two tables sharing a binary gain
 -- nothing; the same key is what makes cost-per-issue answerable.
 --
 -- Deliberately NOT keyed by account_uuid, unlike every fact table above it.

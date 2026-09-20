@@ -72,6 +72,13 @@ func Open(path string) (*Store, error) {
 		write.Close()
 		return nil, err
 	}
+	// Fills issue_number wherever the stored rule version is not the current
+	// one: a database that just acquired the column, or a changed rule. Reads
+	// only git_branch, so it never needs raw events retention has pruned.
+	if err := ensureIssueNumbers(write); err != nil {
+		write.Close()
+		return nil, err
+	}
 
 	// The schema exists by now, so the read pool opens against a database that
 	// is already complete — query_only cannot create or alter anything.
@@ -113,6 +120,11 @@ func migrate(db *sql.DB) error {
 		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "kind", "TEXT NOT NULL DEFAULT 'agent'"},
 		{"growth_facts", "okr_kill_switch_date", "TEXT NOT NULL DEFAULT ''"},
+		// Nullable with no default: NULL is "the branch did not say", which is
+		// the correct state for every row written before the column existed,
+		// and ensureIssueNumbers fills in the ones whose branch does say.
+		{"usage_events", "issue_number", "INTEGER"},
+		{"usage_hourly", "issue_number", "INTEGER"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -594,8 +606,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
-		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider,issue_number
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
@@ -643,7 +655,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			fmtTime(e.TS), e.Model,
 			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
-			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known, e.Provider)
+			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known, e.Provider,
+			issueNumber(e.GitBranch))
 		if err != nil {
 			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
 		}
