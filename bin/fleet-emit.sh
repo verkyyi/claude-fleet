@@ -103,6 +103,19 @@ _emit_spool() {
   printf '%s' "${FLEET_EMIT_DIR:-${TMPDIR:-/tmp}/.claude-dash/emit}"
 }
 
+# The spool name's clock: `<seconds>-<microseconds>`, both zero-padded to a FIXED
+# width (10 + 6 digits). This is the only order the cap and the drain have — a
+# plain glob — so it has to be the arrival order within a second, not just across
+# seconds (issue #815). BSD `date` has no %N, so perl (Time::HiRes is already a
+# fleet dependency — fleet_now_ms, the dash spinner), then python3, then whole
+# seconds with a zero fraction as a coarse last resort. Formatted at the source:
+# a bash printf '%d' would read a zero-led fraction as OCTAL.
+_emit_stamp() {
+  perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%010d-%06d\n",$s,$u' 2>/dev/null && return
+  python3 -c 'import time;print("%010d-%06d"%divmod(time.time_ns()//1000,1000000))' 2>/dev/null && return
+  printf '%010d-000000\n' "$(date -u +%s 2>/dev/null || echo 0)"
+}
+
 # ── field filters ─────────────────────────────────────────────────────────────
 # Each field is reduced to its declared charset. This is the privacy allowlist AND
 # the JSON safety rail in one: no quote, backslash, newline or control byte can
@@ -171,7 +184,8 @@ if [ "$MODE" = flush ]; then
   TOK="${FLEET_EMIT_TOKEN:-}"
   TMO="${FLEET_EMIT_TIMEOUT:-5}"; case "$TMO" in ''|*[!0-9]*) TMO=5 ;; esac
 
-  # The glob expands sorted and the names are epoch-prefixed, so this is oldest-first.
+  # The glob expands sorted, and a spool name is fixed-width digits led by a
+  # microsecond stamp (see the spool block below), so this is oldest-first.
   for p in "$SPOOL"/*.json; do
     [ -f "$p" ] || continue          # also catches the no-match literal glob
     if [ -n "$TOK" ]; then
@@ -273,9 +287,22 @@ json="$json}"
 mkdir -p "$SPOOL" 2>/dev/null || exit 0
 # One file per event: an append is a single create, so concurrent hooks across
 # every window of every fleet can never interleave or lose each other's writes,
-# and the drain can delete exactly what it delivered. The epoch prefix is what
-# makes a plain name sort oldest-first.
-f="$SPOOL/$(date -u +%s)-$$-${RANDOM:-0}.json"
+# and the drain can delete exactly what it delivered.
+#
+# The NAME is the order (issue #815): the cap below and the drain above both walk
+# a plain `*.json` glob and trust it to be oldest-first. Every field is therefore
+# fixed-width digits — `<sec 10>-<µs 6>-<pid 7>-<random 5>` — so the lexical order
+# IS the numeric order in every locale (glibc's en_US collation skips the hyphens
+# at its first pass; with the digits at the same offsets that changes nothing),
+# and the microsecond stamp makes it the ARRIVAL order within one second. The
+# old `<sec>-$$-$RANDOM` was oldest-first only ACROSS seconds: inside one it fell
+# to the PID, unpadded, and a GitHub runner whose PIDs crossed 99999→100000
+# mid-burst sorted the 6-digit ones FIRST — so the cap dropped pr 4 and kept
+# pr 1, and fleet-emit-selftest went red on 2 of 5 master runs. Widths: Linux
+# pid_max tops out at 4194304 (7 digits, macOS 99998); RANDOM is 0..32767.
+printf -v _pid '%07d' "$$"
+printf -v _rnd '%05d' "${RANDOM:-0}"
+f="$SPOOL/$(_emit_stamp)-${_pid}-${_rnd}.json"
 printf '%s\n' "$json" > "$f" 2>/dev/null || exit 0
 
 # Bound the queue: keep the NEWEST cap events, drop the oldest. A permanently dead
@@ -284,8 +311,9 @@ printf '%s\n' "$json" > "$f" 2>/dev/null || exit 0
 CAP="${FLEET_EMIT_QUEUE_MAX:-500}"; case "$CAP" in ''|*[!0-9]*) CAP=500 ;; esac
 if [ "$CAP" -gt 0 ]; then
   # Count, then drop exactly the overflow off the FRONT of the sorted (=
-  # oldest-first) glob. `head -n -N` would say this in one line but it is a GNU
-  # extension BSD head rejects, and this runs on macOS as much as Linux.
+  # oldest-first, by the fixed-width name above) glob. `head -n -N` would say
+  # this in one line but it is a GNU extension BSD head rejects, and this runs
+  # on macOS as much as Linux.
   _n=0
   for _p in "$SPOOL"/*.json; do [ -f "$_p" ] && _n=$((_n + 1)); done
   if [ "$_n" -gt "$CAP" ]; then

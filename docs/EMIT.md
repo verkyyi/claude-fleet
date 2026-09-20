@@ -181,7 +181,9 @@ Emission is fire-and-forget and **can never block or fail a session**:
   foreground**, and nothing sleeps.
 - The spool is capped (`FLEET_EMIT_QUEUE_MAX`, default 500) and drops the
   **oldest** on overflow, so a permanently dead endpoint costs a fixed amount of
-  disk and keeps the fresh tail rather than wedging on stale events.
+  disk and keeps the fresh tail rather than wedging on stale events. "Oldest" is
+  the spool file's name: fixed-width digits, `<sec>-<µs>-<pid>-<random>.json`,
+  so a plain glob is the arrival order even inside one second (issue #815).
 - A **4xx is treated as permanent** and the event is dropped. One malformed event
   must not wedge the queue forever.
 - Concurrency is free: one file per event, so every window of every fleet can emit
