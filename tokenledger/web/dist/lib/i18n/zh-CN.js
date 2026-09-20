@@ -113,6 +113,8 @@ export const zhCN = {
   'billing.notional': '订阅',
   'billing.unknown': '未分类',
   'rows.notDeclared': '未声明',
+  // 只在这一行的用量全部来自 claude 时出现 —— 那时「空」只可能有一个原因。
+  'rows.notDeclaredClaude': 'Claude（该来源不声明上游）',
   'rows.foldedTail': '其余 {n} 个上游 · 各 ≤{max} 次请求，且无费用',
 
   /* ------------------------------------------------------- time formatting */

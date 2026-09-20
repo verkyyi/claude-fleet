@@ -595,3 +595,74 @@ func TestGateway_FreeAllowanceValidation(t *testing.T) {
 		t.Error("still accepted a rate that is neither priced nor declared free")
 	}
 }
+
+// ---- upstream display names ------------------------------------------
+
+// GatewayProviderLabel shipped with the provider dimension and went unused
+// until the consumption table reached for it, so this is its first test: the
+// label half of a providers block has never been asserted anywhere. The fixture
+// above parses labels and throws them away -- what it locks is the per-upstream
+// RATE.
+func TestGatewayProviderLabel_NamesOnlyWhatTheOperatorNamed(t *testing.T) {
+	tbl := gatewayTable(t, twoProviderFile)
+
+	if got := tbl.GatewayProviderLabel("dashscope.aliyuncs.com"); got != "阿里云百炼" {
+		t.Errorf("dashscope label = %q, want 阿里云百炼", got)
+	}
+	if got := tbl.GatewayProviderLabel("ark.cn-beijing.volces.com"); got != "火山方舟" {
+		t.Errorf("ark label = %q, want 火山方舟", got)
+	}
+	// A host the file never mentions gets no name. The caller then shows the
+	// raw string -- the hub does not invent one, which is the whole reason
+	// this returns "" rather than something friendlier.
+	if got := tbl.GatewayProviderLabel("180.184.47.154"); got != "" {
+		t.Errorf("unnamed upstream label = %q, want empty", got)
+	}
+	// "" is not an upstream: it means the reporting side declared none, and
+	// validate() already refuses to let a file give it a contract. Asking for
+	// its label must not surface some other provider's.
+	if got := tbl.GatewayProviderLabel(""); got != "" {
+		t.Errorf("empty provider label = %q, want empty", got)
+	}
+}
+
+// A label is display only. If it could move a rate, the table would hold two
+// facts in one field and a rename would silently reprice history.
+func TestGatewayProviderLabel_DoesNotAffectRates(t *testing.T) {
+	labelled := gatewayTable(t, twoProviderFile)
+	bare := gatewayTable(t, `{
+  "gateway": {
+    "rates_as_of": "2026-09-12",
+    "cny_per_usd": 7.0,
+    "cny_per_usd_as_of": "2026-09-12",
+    "providers": {
+      "dashscope.aliyuncs.com":    {"models": {"deepseek-v4-flash": {"input": 10.0, "output": 10.0}}},
+      "ark.cn-beijing.volces.com": {"models": {"deepseek-v4-flash": {"input": 20.0, "output": 20.0}}}
+    }
+  }
+}`)
+	for _, p := range []string{"dashscope.aliyuncs.com", "ark.cn-beijing.volces.com"} {
+		withLabel, without := labelled.Cost(gwEvent(p)), bare.Cost(gwEvent(p))
+		if withLabel == nil || without == nil {
+			t.Fatalf("%s: both should price: %v %v", p, withLabel, without)
+		}
+		if math.Abs(*withLabel-*without) > 1e-12 {
+			t.Errorf("%s priced %v with a label and %v without; a label must not move a rate",
+				p, *withLabel, *without)
+		}
+	}
+	if bare.GatewayProviderLabel("dashscope.aliyuncs.com") != "" {
+		t.Error("a providers block with no label must yield no label")
+	}
+}
+
+// A label can be stated on its own. The operator naming an upstream they were
+// never charged per call for -- an invoice-only vendor like volc -- must not be
+// forced to invent a rate, and validate()'s "undated rates" rule must not fire
+// on a file that states no rate at all.
+func TestGatewayProviderLabel_LabelOnlyFileNeedsNoRates(t *testing.T) {
+	tbl := gatewayTable(t, `{"gateway": {"providers": {"volc": {"label": "火山引擎"}}}}`)
+	if got := tbl.GatewayProviderLabel("volc"); got != "火山引擎" {
+		t.Errorf("volc label = %q, want 火山引擎", got)
+	}
+}

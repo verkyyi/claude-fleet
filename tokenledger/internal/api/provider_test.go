@@ -1,10 +1,13 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/pricing"
 )
 
 func gatewayBatch(account string, rows ...[2]string) model.Batch {
@@ -97,5 +100,97 @@ func TestUsage_NoNoteWhenEveryBucketDeclaresAProvider(t *testing.T) {
 	h.getJSON(t, "/v1/usage?by=provider&since=1d&account=all", &got)
 	if got.ProviderNote != "" {
 		t.Errorf("unexpected note %q", got.ProviderNote)
+	}
+}
+
+// labelled gives the harness a --pricing table that names some upstreams, which
+// is the only place an upstream's display name can come from.
+func labelled(t *testing.T, h *harness) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "pricing.json")
+	if err := os.WriteFile(p, []byte(
+		`{"gateway": {"providers": {"ark.cn-beijing.volces.com": {"label": "火山方舟"}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.Default()
+	if err := tbl.LoadOverrides(p); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.Pricing = tbl
+}
+
+// The store cannot name an upstream -- it has no edge to internal/pricing and
+// leaves Label empty in this dimension. The api layer, which already holds the
+// table, is where the two meet; before this the mechanism had no caller at all
+// and every provider row rendered as a bare hostname.
+func TestUsage_ByProvider_CarriesTheOperatorsLabel(t *testing.T) {
+	h := newHarness(t)
+	labelled(t, h)
+	tok := h.enroll(t, "gw")
+	h.push(t, tok, gatewayBatch("gateway:aicall",
+		[2]string{"L1", "ark.cn-beijing.volces.com"},
+		[2]string{"L2", "dashscope.aliyuncs.com"}))
+
+	var got struct {
+		Buckets []struct {
+			Key   string `json:"key"`
+			Label string `json:"label"`
+		} `json:"buckets"`
+	}
+	h.getJSON(t, "/v1/usage?by=provider&since=1d&account=all", &got)
+
+	want := map[string]string{
+		"ark.cn-beijing.volces.com": "火山方舟",
+		// Named by nobody, so named by nothing: the caller falls back to the
+		// key. A hub that invented a label here would be publishing a guess
+		// about whose money this is.
+		"dashscope.aliyuncs.com": "",
+	}
+	if len(got.Buckets) != len(want) {
+		t.Fatalf("buckets = %+v; want %d", got.Buckets, len(want))
+	}
+	for _, b := range got.Buckets {
+		w, ok := want[b.Key]
+		if !ok {
+			t.Errorf("unexpected bucket %q", b.Key)
+			continue
+		}
+		if b.Label != w {
+			t.Errorf("%s label = %q, want %q", b.Key, b.Label, w)
+		}
+	}
+}
+
+// The empty provider is not a vendor, so it has no name to carry -- and
+// --pricing refuses to give it one. A labelled table must leave it blank and
+// let provider_note do the explaining.
+func TestUsage_ByProvider_EmptyProviderStaysUnlabelled(t *testing.T) {
+	h := newHarness(t)
+	labelled(t, h)
+	tok := h.enroll(t, "cc")
+	h.push(t, tok, model.Batch{
+		Identity: model.Identity{AccountUUID: "acct", Hostname: "h", OS: "linux", Arch: "amd64", MachineID: "m"},
+		Events: []model.UsageEvent{{
+			AccountUUID: "acct", MessageUUID: "e1", TS: time.Now().UTC().Add(-time.Minute),
+			Model: "claude-sonnet-5", OutputTokens: 10,
+		}},
+	})
+
+	var got struct {
+		Buckets []struct {
+			Key   string `json:"key"`
+			Label string `json:"label"`
+		} `json:"buckets"`
+		ProviderNote string `json:"provider_note"`
+	}
+	h.getJSON(t, "/v1/usage?by=provider&since=1d&account=all", &got)
+	if len(got.Buckets) != 1 || got.Buckets[0].Key != "" {
+		t.Fatalf("buckets = %+v; want one blank bucket", got.Buckets)
+	}
+	if got.Buckets[0].Label != "" {
+		t.Errorf("blank provider got label %q; it is not a vendor", got.Buckets[0].Label)
+	}
+	if got.ProviderNote == "" {
+		t.Error("the blank bucket is still explained by the note, not by a label")
 	}
 }

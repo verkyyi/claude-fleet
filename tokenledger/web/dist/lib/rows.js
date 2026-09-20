@@ -13,6 +13,28 @@ import { t } from './i18n.js';
 // belongs to no total and should not sit between the two that do.
 const KIND_ORDER = { billed: 0, notional: 1, unknown: 2 };
 
+/** notDeclaredLabel says WHY a blank upstream is blank, when the bucket itself
+ *  can prove it.
+ *
+ *  The empty provider has two causes that must not be conflated (the hub's own
+ *  ProviderNote lists them): a source that carries no upstream at all, and
+ *  hourly rows aggregated before this hub gained the dimension, which were left
+ *  blank rather than re-attributed to a vendor they may not belong to. One
+ *  source in the bucket and that source is claude ⇒ only the first cause can
+ *  apply, because a Claude transcript has nowhere to put an upstream. Anything
+ *  else — two sources, or none — and the blank has more than one possible
+ *  origin, so the row says the unqualified thing.
+ *
+ *  Derived from what already arrived, never assumed: `activeSources` is the
+ *  same list the row's billing kind is computed from. That is why this belongs
+ *  here and not in the collector — nobody is asked to declare what they do not
+ *  know, and a hub whose sources differ gets the right wording on its own. */
+function notDeclaredLabel(sources) {
+  return sources.length === 1 && sources[0] === 'claude'
+    ? t('rows.notDeclaredClaude')
+    : t('rows.notDeclared');
+}
+
 /** consumptionRows flattens one breakdown into rows carrying the two facts a
  *  reader needs before comparing anything: which contract served it, and
  *  which kind of money the figure is. */
@@ -29,9 +51,12 @@ export function consumptionRows(buckets) {
     const unpriced = sources.reduce((n, s) => n + (costOf(b, s).unpriced_events || 0), 0);
     return {
       provider: b.key,
-      // Empty is the reporting side declaring none. Naming it beats a blank
-      // cell the reader has to interpret, and it must not look like a vendor.
-      providerLabel: b.key || t('rows.notDeclared'),
+      // A named upstream shows the operator's own name for it when --pricing
+      // gave it one, and the raw string otherwise: the hub never invents a name
+      // for a host it cannot identify. Empty is the reporting side declaring
+      // none. Naming it beats a blank cell the reader has to interpret, and it
+      // must not look like a vendor.
+      providerLabel: b.key ? (b.label || b.key) : notDeclaredLabel(sources),
       sources,
       kind,
       events: b.events || 0,

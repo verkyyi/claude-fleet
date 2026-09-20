@@ -6,10 +6,17 @@ const gw = (n, cost) => ({ source: 'gateway', kind: 'billed', events: n, cost_us
 const cc = (n, cost) => ({ source: 'claude', kind: 'notional', events: n, cost_usd: cost, unpriced_events: 0 });
 const vb = (n, cost) => ({ source: 'vendor_bill', kind: 'billed', events: n, cost_usd: cost, unpriced_events: 0 });
 
-test('a blank provider key is "not declared", never a vendor', () => {
-  const [r] = consumptionRows([{ key: '', events: 5, tokens: 10, cost: [cc(5, 1)] }]);
-  assert.equal(r.provider, '');
-  assert.equal(r.providerLabel, 'not declared');
+// The wording of a blank row now depends on which sources are in it (see the
+// "not declared" tests at the bottom). What never depends on anything: the row
+// keeps the empty key as its identity, and never renders as a blank cell or as
+// something a reader could mistake for a vendor's name.
+test('a blank provider key is always said in words, never left blank', () => {
+  for (const cost of [[cc(5, 1)], [cc(5, 1), gw(1, 2)], []]) {
+    const [r] = consumptionRows([{ key: '', events: 5, tokens: 10, cost }]);
+    assert.equal(r.provider, '');
+    assert.ok(r.providerLabel && r.providerLabel !== r.provider,
+      `blank bucket rendered as ${JSON.stringify(r.providerLabel)}`);
+  }
 });
 
 test('rows carry their billing kind so the two are never sorted together', () => {
@@ -203,4 +210,58 @@ test('a fold row sits at the end of its own kind, not after every kind', () => {
   const kinds = foldTail(rows).map((r) => r.kind);
   assert.deepEqual(kinds, ['billed', 'billed', 'notional'],
     'the folded billed row escaped its kind group');
+});
+
+// --- the operator's name for an upstream --------------------------------
+
+// Bucket.label arrives from --pricing by way of the api layer. Before it had a
+// caller, every provider row printed the raw key.
+test('a labelled upstream shows the operator name, not the hostname', () => {
+  const [r] = consumptionRows([
+    { key: 'ark.cn-beijing.volces.com', label: '火山方舟', events: 3, tokens: 9, cost: [gw(3, 2)] },
+  ]);
+  assert.equal(r.provider, 'ark.cn-beijing.volces.com');
+  assert.equal(r.providerLabel, '火山方舟');
+});
+
+// The hub never invents a name. An upstream nobody configured keeps the string
+// the data actually carries, however unfriendly it is.
+test('an unlabelled upstream keeps its raw key', () => {
+  const [r] = consumptionRows([
+    { key: '180.184.47.154', label: '', events: 2, tokens: 0, cost: [gw(2, 0.08)] },
+  ]);
+  assert.equal(r.providerLabel, '180.184.47.154');
+});
+
+// --- what "not declared" is allowed to claim -----------------------------
+
+// One source, and it is claude: a Claude transcript has nowhere to record an
+// upstream, so the blank has exactly one possible cause and the row may name
+// it. This is derived from the bucket, never configured.
+test('a blank bucket that is all claude says which source declares nothing', () => {
+  const [r] = consumptionRows([{ key: '', events: 5, tokens: 10, cost: [cc(5, 1)] }]);
+  assert.equal(r.provider, '');
+  assert.equal(r.providerLabel, 'Claude (declares no upstream)');
+});
+
+// Two sources in one blank bucket means the blank has more than one origin --
+// the pre-dimension rollup rows are the other. Attributing all of it to claude
+// would be the invention this table exists to avoid.
+test('a blank bucket spanning two sources falls back to the plain wording', () => {
+  const [r] = consumptionRows([{ key: '', events: 6, tokens: 10, cost: [cc(5, 1), gw(1, 2)] }]);
+  assert.equal(r.providerLabel, 'not declared');
+});
+
+// A codex-only blank row is a different absence again, and gets no claim made
+// about it either.
+test('a blank bucket from another single source is not called Claude', () => {
+  const cx = (n, cost) => ({ source: 'codex', kind: 'notional', events: n, cost_usd: cost, unpriced_events: 0 });
+  const [r] = consumptionRows([{ key: '', events: 4, tokens: 10, cost: [cx(4, 1)] }]);
+  assert.equal(r.providerLabel, 'not declared');
+});
+
+// A bucket with no active source at all has no evidence to derive from.
+test('a blank bucket with no active source stays unqualified', () => {
+  const [r] = consumptionRows([{ key: '', events: 0, tokens: 0, cost: [] }]);
+  assert.equal(r.providerLabel, 'not declared');
 });

@@ -117,6 +117,9 @@ export const en = {
   'billing.notional': 'subscription',
   'billing.unknown': 'unclassified',
   'rows.notDeclared': 'not declared',
+  // Only when every figure in the row came from claude: then "blank" has one
+  // possible cause, and the row can name it.
+  'rows.notDeclaredClaude': 'Claude (declares no upstream)',
   'rows.foldedTail': 'other {n} providers · ≤{max} requests, no charge',
 
   /* ------------------------------------------------------- time formatting */

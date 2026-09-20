@@ -1208,6 +1208,13 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Same method the dashboard's /v1/usage calls, deliberately: an operator who
+	// names an upstream in --pricing named it once, and an agent reading this
+	// breakdown must not be told a different name -- or, as it was until now, no
+	// name at all while the dashboard shows one.
+	if d == store.ByProvider {
+		s.api.LabelProviders(buckets)
+	}
 	out := map[string]any{
 		"account_uuid": account, "by": string(d),
 		"since": f.Start, "until": f.End, "buckets": buckets,

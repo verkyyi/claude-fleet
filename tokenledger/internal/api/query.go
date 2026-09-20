@@ -414,6 +414,9 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if buckets == nil {
 		buckets = []store.Bucket{}
 	}
+	if dim == store.ByProvider {
+		s.LabelProviders(buckets)
+	}
 	out := map[string]any{
 		"account_uuid": f.Account,
 		"all_accounts": f.Account == store.AllAccounts,
@@ -438,6 +441,37 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// LabelProviders fills each upstream bucket's display name from --pricing.
+//
+// The mechanism has been in place since the provider dimension shipped and had
+// no caller: pricing.Table holds the operator's labels, store.Bucket has the
+// Label field to put one in, and nothing joined them. It cannot be joined in
+// the store -- naming an upstream is a pricing fact, and internal/store neither
+// imports internal/pricing nor should grow an edge to it just to carry a
+// string. The api layer already holds the table, so this is the cheapest seam;
+// MCP calls this same method rather than keeping a second copy that could one
+// day name the same host differently.
+//
+// Two rules are inherited, not re-decided here:
+//
+//   - An upstream --pricing did not name keeps its raw key, because Label ends
+//     up empty and every reader falls back to the key. The hub never invents a
+//     name for a host it cannot identify (pricing.Table.GatewayProviderLabel).
+//   - The empty provider is skipped outright. It means "the reporting side
+//     declared none", so there is no vendor to name -- and --pricing refuses an
+//     empty provider key for exactly that reason. It gets provider_note below.
+func (s *Server) LabelProviders(buckets []store.Bucket) {
+	if s.Pricing == nil {
+		return
+	}
+	for i := range buckets {
+		if buckets[i].Key == "" {
+			continue
+		}
+		buckets[i].Label = s.Pricing.GatewayProviderLabel(buckets[i].Key)
+	}
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
