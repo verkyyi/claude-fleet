@@ -221,7 +221,7 @@ line, which exits silently without it.)
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix g` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen. If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
-| `prefix E` | focus the sidebar (or click it): ↑↓ choose, Enter jump and focus worker, ←→ fold, Esc return, q hide |
+| `prefix E` | focus the sidebar (or click it): ↑↓ choose, Enter jump and focus worker, ←→ fold, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, Esc return, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
