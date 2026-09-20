@@ -908,3 +908,74 @@ func TestDashboard_UndeclaredSentinelMatchesTheStore(t *testing.T) {
 			"an empty chip means NO CONSTRAINT, which is the #134 bug")
 	}
 }
+
+// The default page is not the whole page, and the record of how it got that way
+// is still in the file.
+//
+// Issue #130 is the FOURTH turn this page has taken on "what is the navigation",
+// and it is the one with no other guard. The JS tests pin bandsFor and VIEWS;
+// nothing outside them pins the two things that are easiest to undo by accident
+// from the Go side of this repo, where index.html and the embedded modules are
+// the contract:
+//
+//  1. The default view is a SET of its own (nav.js's DEFAULT_BANDS), and
+//     state.js's DEFAULTS points at it rather than at `all`. A "simplification"
+//     that points the default back at every band passes every assertion about
+//     `all` — because `all` is unchanged — while quietly restoring the whole
+//     page, every band and every request those bands read on every first
+//     screen. That is the entire saving of #130, reverted in one word.
+//  2. `all` still exists and still means all. It is the bar's way back to the
+//     whole page; narrowing it would leave this page with no view that shows
+//     usage, progress and operations together at all.
+//
+// And the record itself, which EPIC #122's charter requires be APPENDED to and
+// never trimmed: nav.js's header carries all four turns (no navigation → the
+// anchor nav of #54 → the mounting views of #98 → this one). A later edit that
+// "tidies" that header by keeping only the current position deletes the only
+// place this page explains why it is shaped the way it is — the same failure
+// mode as deleting a limiting sentence because it reads like an explanation.
+func TestDashboard_TheDefaultViewIsNotTheWholePage(t *testing.T) {
+	assets := Assets()
+	read := func(name string) string {
+		b, err := fs.ReadFile(assets, name)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", name, err)
+		}
+		return string(b)
+	}
+
+	nav, state := read("lib/nav.js"), read("lib/state.js")
+
+	// The default is its own set, and the set is the one #122 拍板 6 named.
+	if !strings.Contains(nav, "export const DEFAULT_BANDS") {
+		t.Error("lib/nav.js no longer exports DEFAULT_BANDS -- the default view is a set of its own (#130); " +
+			"without it the only way to be the default again is to BE `all`, which is the page this change stopped opening")
+	}
+	if !strings.Contains(nav, "export const VIEW_DEFAULT") {
+		t.Error("lib/nav.js no longer exports VIEW_DEFAULT -- the default needs a word of its own, or the bar " +
+			"has nothing to mark on the page every shared link lands on (scope.js's syncNav marks by view)")
+	}
+	if !strings.Contains(state, "view: VIEW_DEFAULT") {
+		t.Error("state.js's DEFAULTS.view is not VIEW_DEFAULT any more: a bare URL is opening some other view. " +
+			"If that is `all`, every band and every request it reads is back on every first screen (#130)")
+	}
+
+	// ...and `all` is untouched by it.
+	if !strings.Contains(nav, "export const VIEW_ALL = 'all'") {
+		t.Error("lib/nav.js no longer spells VIEW_ALL = 'all': #130 made the default a smaller set, " +
+			"it did not retire the whole page -- `all` is the bar's only way back to it")
+	}
+
+	// The four turns. Matched on the numbered markers rather than on prose, so
+	// rewording a paragraph is free and dropping one is not.
+	for _, turn := range []string{"#54", "#98", "#130"} {
+		if !strings.Contains(nav, turn) {
+			t.Errorf("lib/nav.js's header no longer mentions %s -- it records every position this page has taken "+
+				"on its own navigation, and EPIC #122 requires the fourth be APPENDED to the first three, not replace them", turn)
+		}
+	}
+	if !strings.Contains(nav, "FOURTH position") {
+		t.Error("lib/nav.js no longer opens by saying how many positions this page has taken on the same question; " +
+			"that count is what makes the next person read the three that were overturned before adding a fifth")
+	}
+}

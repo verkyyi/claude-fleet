@@ -65,10 +65,20 @@ test('the view is a query key, not a path segment', () => {
   assert.equal(parse('#/usage').view, DEFAULTS.view);
 });
 
+// #130 swapped which view is the omitted one, and both halves of that are here.
+// `#/` is the DEFAULT SET now, not the whole page, so the whole page is the one
+// that has to spell itself out in a link.
 test('the default view stays out of the hash, and an unknown one falls back', () => {
   assert.equal(format({ ...DEFAULTS }), '#/');
-  assert.equal(format({ ...DEFAULTS, view: 'all' }), '#/', 'the nav must not stamp view=all on every link');
-  assert.equal(parse('#/').view, 'all');
+  assert.equal(DEFAULTS.view, 'overview', 'the default is the default SET, not every band (#130)');
+  assert.equal(parse('#/').view, 'overview');
+  assert.equal(format({ ...DEFAULTS, view: 'overview' }), '#/', 'the nav must not stamp the default on every link');
+  // ...and `all` is now a view like any other: it is written, and it survives a
+  // round trip. Before #130 this assertion read `'#/'` — a bare link and a link
+  // to the whole page were the same string, and that is exactly what could not
+  // stay true once they stopped being the same page.
+  assert.equal(format({ ...DEFAULTS, view: 'all' }), '#/?view=all');
+  assert.equal(parse('#/?view=all').view, 'all');
   assert.equal(parse('#/?view=bogus').view, DEFAULTS.view);
   assert.equal(parse('#/?view=').view, DEFAULTS.view);
 });
@@ -78,7 +88,10 @@ test('the default view stays out of the hash, and an unknown one falls back', ()
 // state.js is checked rather than assumed: a SECTIONS entry whose view fell out
 // of VIEWS would be a nav button that silently resets itself on the next route.
 test('every nav entry names a view the router accepts', () => {
-  assert.deepEqual(VIEWS, ['all', 'quota', 'ledger', 'usage', 'progress', 'ops']);
+  // Two values that are not bands lead this list since #130, and they are two
+  // different values: the default set, then the whole page. A router that
+  // accepts only one of them cannot spell the other.
+  assert.deepEqual(VIEWS, ['overview', 'all', 'quota', 'ledger', 'usage', 'progress', 'ops']);
   for (const { view, key } of SECTIONS) {
     assert.ok(VIEWS.includes(view), `${key} writes an unroutable view: ${view}`);
     assert.equal(parse(`#/?view=${view}`).view, view);

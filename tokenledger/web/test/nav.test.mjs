@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SECTIONS, BANDS, VIEW_ALL, bandsFor } from '../dist/lib/nav.js';
+import { SECTIONS, BANDS, VIEW_ALL, VIEW_DEFAULT, DEFAULT_BANDS, bandsFor } from '../dist/lib/nav.js';
 import { en } from '../dist/lib/i18n/en.js';
 
 // #98 deleted this file's other export, `pickActive`, and the six tests that
@@ -21,9 +21,11 @@ test('every section prints its own band key, and the dictionary has it', () => {
   for (const { key } of SECTIONS) {
     assert.ok(key in en, `${key} is missing from the dictionary`);
   }
-  // scope.js puts one more entry in front of these -- the way back to the whole
-  // page -- and it is not a band, so it is not in SECTIONS. It still prints
-  // through t(), so it still needs a key that exists.
+  // scope.js puts two more entries in front of these -- the way back to where
+  // the page starts (#130) and the way to the whole page -- and neither is a
+  // band, so neither is in SECTIONS. Both still print through t(), so both
+  // still need a key that exists.
+  assert.ok('nav.overview' in en, 'nav.overview is missing from the dictionary');
   assert.ok('nav.all' in en, 'nav.all is missing from the dictionary');
 });
 
@@ -49,20 +51,56 @@ test('every section names the view it writes', () => {
   // No two entries may write the same view: they would be two buttons the
   // router cannot tell apart, and mounting would have no way to pick a band.
   assert.equal(new Set(SECTIONS.map((s) => s.view)).size, SECTIONS.length);
-  // ...and none of them may collide with `all`, which is not a band and would
-  // mount every band if one tried to be.
+  // ...and none of them may collide with either of the two words that are not
+  // bands. `all` would mount every band if one tried to be; the default view
+  // would mount two, and bandsFor would never reach the band of that name.
   assert.ok(!BANDS.includes(VIEW_ALL), 'a band may not be named "all"');
+  assert.ok(!BANDS.includes(VIEW_DEFAULT), `a band may not be named "${VIEW_DEFAULT}"`);
+  assert.notEqual(VIEW_DEFAULT, VIEW_ALL, 'the default view and "all" are two sets, so they are two words');
 });
 
-// bandsFor is the whole of #98's routing decision, and these are the two cases
-// it has. The isolation is what the issue asked for; `all` staying the WHOLE
-// page is what keeps every link ever shared -- none of which carries a `view`
-// -- landing on the page its sender saw.
-test('the default view is every band, and any other view is exactly itself', () => {
+// #130's own table: what the page opens as. DEFAULT_BANDS is asserted against
+// BANDS rather than only against its literal contents, because a typo in it is
+// otherwise silent -- bandsFor filters, so a band spelled wrong simply does not
+// come back and the page opens one band shorter than anyone intended.
+test('the default set is quota and ledger, and both are real bands', () => {
+  assert.deepEqual([...DEFAULT_BANDS], ['quota', 'ledger']);
+  for (const band of DEFAULT_BANDS) {
+    assert.ok(BANDS.includes(band), `${band} is not a band, so no view can mount it`);
+  }
+  // It is a strict subset both ways: smaller than the whole page (that is the
+  // point of #130) and larger than one band (or it would be a band view with a
+  // second name).
+  assert.ok(DEFAULT_BANDS.length > 1 && DEFAULT_BANDS.length < BANDS.length);
+});
+
+// bandsFor is the whole of #98's routing decision, and as of #130 it has three
+// cases rather than two. The isolation is what #98 asked for; `all` staying the
+// WHOLE page is what keeps the bar's way back honest -- what it no longer keeps
+// is where a bare link lands, which is #130 and is asserted below.
+test('"all" is every band, and any single view is exactly itself', () => {
   assert.deepEqual(bandsFor(VIEW_ALL), BANDS);
   for (const band of BANDS) {
     assert.deepEqual(bandsFor(band), [band], `view=${band} must mount only its own band`);
   }
+});
+
+// The fourth turn (#130), asserted as the thing it actually is: the default is
+// no longer `all`. lib/nav.js's header records all four turns and must keep
+// doing so; this is the executable half.
+test('the default view is the default set, and it is not the whole page', () => {
+  assert.deepEqual(bandsFor(VIEW_DEFAULT), ['quota', 'ledger']);
+  assert.deepEqual(bandsFor(VIEW_DEFAULT), [...DEFAULT_BANDS]);
+  // The regression this file exists to catch: someone "simplifies" by pointing
+  // the default back at every band, and every saving #130 bought goes quietly.
+  assert.notDeepEqual(bandsFor(VIEW_DEFAULT), BANDS);
+  // ...and the opposite regression: `all` quietly narrowed to the default set,
+  // which would leave the page with no way to show usage, progress and ops
+  // together at all.
+  assert.equal(bandsFor(VIEW_ALL).length, BANDS.length);
+  // Page order, not DEFAULT_BANDS' order: bandsFor filters BANDS, so this holds
+  // however the list is written.
+  assert.deepEqual(bandsFor(VIEW_DEFAULT), BANDS.filter((b) => DEFAULT_BANDS.includes(b)));
 });
 
 test('a view mounts its band and nothing else, in page order', () => {

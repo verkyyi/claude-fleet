@@ -2,7 +2,7 @@
 // The one import this file has, and it costs it nothing: lib/nav.js is the view
 // VOCABULARY, not its rendering (scope.js does the DOM, app.js the mounting),
 // so the line above still holds. VIEWS is derived from it below.
-import { SECTIONS, VIEW_ALL } from './nav.js';
+import { SECTIONS, VIEW_ALL, VIEW_DEFAULT } from './nav.js';
 
 export const DIMS = ['machine', 'login', 'project', 'model', 'branch', 'team', 'session', 'source'];
 export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project', model: 'model', branch: 'branch', team: 'team', session: 'session', source: 'source' };
@@ -25,15 +25,21 @@ export const RSORTS = ['age', 'comments'];
 // navigates to cannot be spelled. The same reason nav.js shares one i18n key
 // between the entry and the band it names.
 //
-// `all` is the extra value and it is the default: the whole page, every band,
-// which is exactly what this page has always been. That is what keeps every
-// link ever shared — none of which carries a `view` — landing on the page its
-// sender saw. As of #98 the other four MOUNT their band and unmount the rest,
-// and the page's loaders are gated on what is mounted; VIEW_ALL is defined
-// beside SECTIONS in nav.js and re-exported here, because "no band filter" and
-// "exactly one band" are one vocabulary and it should have one home.
-export { VIEW_ALL };
-export const VIEWS = [VIEW_ALL, ...SECTIONS.map((s) => s.view)];
+// There are TWO extra values beside the five bands, and as of #130 they are two
+// different values: `all` is the whole page, every band, and `overview` is the
+// DEFAULT — quota and ledger, nav.js's DEFAULT_BANDS. They were one word until
+// then, and nav.js carries both the argument for splitting them and the bill:
+// no link ever shared carries a `view`, so every one of them now lands on the
+// smaller page rather than on the page its sender saw. As of #98 a band view
+// MOUNTS its band and unmounts the rest, and the page's loaders are gated on
+// what is mounted; both extra values are defined beside SECTIONS in nav.js and
+// re-exported here, because "no band filter", "the default set" and "exactly one
+// band" are one vocabulary and it should have one home.
+//
+// `overview` leads this list for the same reason it leads the bar: it is where
+// the page starts, and VIEWS is read in order by nothing, but by people often.
+export { VIEW_ALL, VIEW_DEFAULT };
+export const VIEWS = [VIEW_DEFAULT, VIEW_ALL, ...SECTIONS.map((s) => s.view)];
 // `g2: 'model'` is LOAD-BEARING, not an inherited default (issue #103).
 //
 // The page's primary model reading is the consumption table, not this card:
@@ -52,7 +58,7 @@ export const VIEWS = [VIEW_ALL, ...SECTIONS.map((s) => s.view)];
 // The duplication #103 was filed for was removed at the other end instead: the
 // timeline no longer stacks by model (web/dist/review.js), so this card is now
 // the usage band's ONLY model cut rather than one of two.
-export const DEFAULTS = Object.freeze({ view: VIEW_ALL, session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
+export const DEFAULTS = Object.freeze({ view: VIEW_DEFAULT, session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -103,9 +109,12 @@ export function parse(hash) {
 export function format(s) {
   const p = new URLSearchParams();
   // First, so a shared link says which page it is before it says how it is
-  // filtered. Omitted at the default like every other key: `#/` still means
-  // the whole page, and the nav writing `view=all` into every URL would be a
-  // change to what a clean link looks like for no gain.
+  // filtered. Omitted at the default like every other key — and since #130 the
+  // default is `overview`, so the omission has swapped sides: `#/` means the
+  // two-band page, and the WHOLE page is now the one that has to spell itself,
+  // `#/?view=all`. That inversion IS the visible half of #130. Stamping the
+  // default into every URL instead would be a change to what a clean link looks
+  // like for no gain, which was true of `view=all` and is true of this one.
   if (s.view !== DEFAULTS.view) p.set('view', s.view);
   if (s.sub && s.sub !== DEFAULTS.sub) p.set('sub', s.sub);
   if (s.span !== DEFAULTS.span) p.set('span', s.span);

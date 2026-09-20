@@ -20,6 +20,10 @@ export const zhCN = {
   'app.language': '语言',
   'app.unreachable': '连不上 hub：{error}',
   'nav.sections': '页面分段',
+  // 「概览」是页面的落点（#130）：额度 + 账本；「全部」是五个 band 的整页 ——
+  // #130 之前它就是缺省，现在它是一个要主动去的地方。两个词不能读成同义词，
+  // 因为它们已经不是同一页了。
+  'nav.overview': '概览',
   'nav.all': '全部',
   'band.quota': '额度',
   'band.quota.note': '还剩多少余量',

@@ -17,9 +17,17 @@ export const en = {
   'app.language': 'Language',
   'app.unreachable': 'Cannot reach the hub: {error}',
   'nav.sections': 'Sections',
-  // The bar's first entry: the whole page, every band, which is the default
-  // view and the way back from any single one (#98). Not a band, so it has no
-  // `band.` key and index.html has no label printing it.
+  // The bar's first two entries. Neither is a band, so neither has a `band.`
+  // key and index.html has no label printing either of them.
+  //
+  // `nav.overview` is where the page starts (#130): quota and ledger, the two
+  // bands that answer "can I still work" and "what did it cost". `nav.all` is
+  // the whole page, every band — it was the default until #130 and is now the
+  // place you go, and it is still the way back from any single band (#98).
+  //
+  // Two words that must not read as synonyms, because they no longer name the
+  // same page. "Overview" says a summary of the whole; "All" says the whole.
+  'nav.overview': 'Overview',
   'nav.all': 'All',
   'band.quota': 'Quota',
   'band.quota.note': 'how much runway is left',

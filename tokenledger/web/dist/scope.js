@@ -32,7 +32,7 @@
 // first clause — no fetching in this file. app.js owns the load loop and calls
 // back into whichever handlers were passed at update() time.
 import { DIMS, accountsInScope, VIEW_ALL } from './lib/state.js';
-import { SECTIONS, VIEW_QUOTA } from './lib/nav.js';
+import { SECTIONS, VIEW_QUOTA, VIEW_DEFAULT } from './lib/nav.js';
 import { shortProject } from './lib/format.js';
 import { accountGroups, quotaWindowAccounts, sourceLabel } from './lib/providers.js';
 import { el, $ } from './lib/dom.js';
@@ -82,22 +82,37 @@ export const nextLocale = (cur) => LOCALES[(LOCALES.indexOf(cur) + 1) % LOCALES.
 
 /* ---------------------------------------------------------- the view nav */
 
-/** NAV_ENTRIES is what the bar prints, and it is SECTIONS with one entry in
- *  front of it: the way back to the whole page.
+/** NAV_ENTRIES is what the bar prints, and it is SECTIONS with TWO entries in
+ *  front of it: the way back to where the page starts, and the way to the whole
+ *  page. Neither is a band and index.html has no element for either, which is
+ *  why they are added here rather than in nav.js's table.
  *
- *  That entry is not a band and index.html has no element for it, which is why
- *  it is added here rather than in nav.js's table. It earns its place twice
- *  over. Without it a reader who pressed "Usage" has no way back to `view=all`
- *  short of editing the URL, because no band entry writes it — the page would
- *  be a one-way door. And with it there is ALWAYS exactly one current entry,
- *  including on the default view every shared link lands on, so the bar can say
- *  where the reader is instead of going blank whenever they are looking at
- *  everything.
+ *  `nav.all` earns its place twice over. Without it a reader who pressed "Usage"
+ *  has no way back to `view=all` short of editing the URL, because no band entry
+ *  writes it — the page would be a one-way door. And with it there is ALWAYS
+ *  exactly one current entry, so the bar can say where the reader is instead of
+ *  going blank whenever they are looking at everything.
+ *
+ *  `nav.overview` is #130's half of the same argument, and it exists because
+ *  that second property is the one that would otherwise have broken. Once the
+ *  default stopped being `all`, a bare URL was a view no entry in this list
+ *  named: the bar would have opened with NOTHING marked on the one page every
+ *  shared link lands on, and the two-band page would have been the one that was
+ *  a one-way door — reachable only by deleting the query from the URL by hand.
+ *
+ *  It goes FIRST, ahead of "All", which is a change to the bar #130 makes
+ *  deliberately. The entries then read left to right as the page reads: where
+ *  you land, then everything, then each band on its own. Putting it second
+ *  would have made the leftmost entry a place the reader has never been.
  *
  *  The alternative considered was making each band entry a toggle (press the
  *  current one again to go back). Rejected: an affordance nobody can see is not
  *  an affordance, and it would leave `view=all` with nothing marked. */
-const NAV_ENTRIES = [{ key: 'nav.all', view: VIEW_ALL }, ...SECTIONS];
+const NAV_ENTRIES = [
+  { key: 'nav.overview', view: VIEW_DEFAULT },
+  { key: 'nav.all', view: VIEW_ALL },
+  ...SECTIONS,
+];
 
 /** The nav's buttons, keyed by the view each one writes. Built once by
  *  buildSecNav and then only ever hidden/marked. */
@@ -217,9 +232,9 @@ function buildSecNav(root) {
  *  The bar itself is no longer hidden from here. #54 hid it when fewer than two
  *  entries survived, because a nav offering one destination is a label
  *  pretending to be a control — and on a hub with no repo band that check could
- *  genuinely bite. It cannot any more: "All", Ledger, Usage and Operations are
- *  on every hub, so the count never drops below four, and buildSecNav's one
- *  unhide is the last word. */
+ *  genuinely bite. It cannot any more: Overview, All, Quota, Ledger, Usage and
+ *  Operations are on every hub, so the count never drops below six, and
+ *  buildSecNav's one unhide is the last word. */
 let hasProgress = false;
 export function syncNav(view, progress) {
   if (progress !== undefined) hasProgress = progress;
