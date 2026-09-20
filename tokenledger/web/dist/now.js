@@ -1,9 +1,14 @@
-import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive, liveUnknown, quotaAccounts } from './providers.js';
-// web/dist/now.js — the Now view: hero odometer, live strip, "am I about to
-// hit the wall" gauges, and the collapsible Fleet tables.
+import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './providers.js';
+// web/dist/now.js — the live half: hero odometer, live strip, the banners, and
+// the operations tier's collector/roster/switch tables.
+//
+// It no longer draws the quota gauges. #95 moved that card to
+// web/dist/quota.js and gave it a band; this file still SENDS the /v1/limits
+// request (LIMITS_INDEX), because the limits banners it does draw read the same
+// response.
 //
 // hero (applyCounter/pacSVG/dotStream/the odometer wheels/tickHero),
-// renderLive, connectLive, wallCard, endpointRosterCard, endpointAccountsCard,
+// renderLive, connectLive, endpointRosterCard, endpointAccountsCard,
 // switchesCard and the lossy/spanning/stale banners are ported from the old
 // <script> block of web/dist/index.html (pre-Task-11), unchanged except for
 // the structural moves the Task 11 brief calls for:
@@ -18,27 +23,22 @@ import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive
 //     below / gone entirely (rankedBars is now the only Now-view chart; there
 //     is no per-card table toggle here) — Now has no time range of its own,
 //     it is *right now*.
-import { el, $, escapeHTML } from './lib/dom.js';
+import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
 import { isDismissed, setDismissed } from './lib/dismiss.js';
 import { ownerLine, splitMuted } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
-import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
 import { t, withLocale } from './lib/i18n.js';
 
-// Now's scope-controls widget: subscription select + chips row, no span
-// control — Now has no time range, it is *right now* (see the module
-// comment above). Mounted on the "Am I about to hit the wall?" card, below
-// (Task 15 nav restructure): that card is per-subscription by definition,
-// the natural first-substantive-card home for Now's scope, the same way
-// Review's Timeline card owns Review's. Built once, module-eval time, same
-// persistent-node reasoning as heroWrapEl/liveWrapEl just below — its
-// content is kept current by app.js's route() calling scope.js's
-// renderScopeControls on every hashchange, independent of this view's own
-// async load() cycle.
-const nowScope = createScopeControls({ span: false });
+// This file used to own the page's second scope-controls widget, mounted on
+// the "Am I about to hit the wall?" card because that card is per-subscription
+// by definition. #95 moved both: the card is its own band (web/dist/quota.js)
+// and the widget is the page's, mounted in the shell by app.js (#scopebar).
+// The widget was never really Now's -- it was the page's, hosted by whatever
+// card happened to be on screen -- and #98 proved it by leaving two views with
+// no scope control at all.
 
 /* ------------------------------------------------------- persistent nodes */
 
@@ -400,120 +400,18 @@ function connectLive(app) {
   }
 }
 
-/* ------------------------------------------------------------- wall (Q1) */
+/* ------------------------------------------------------- moved out: quota */
 
-// Spec §3.3: wall gauges are per subscription and ignore chips entirely (a
-// machine/project/model/etc. chip narrows the OTHER cards; utilization here
-// is always the whole subscription's, because that is what the account's
-// rate limit actually tracks). chipsIgnoredHint says so, on this card, only
-// when there is something to ignore — it would be noise on every load
-// otherwise.
-function chipsIgnoredHint(chips) {
-  if (!chips || !Object.keys(chips).some((k) => k !== 'source')) return null;
-  return el('p', { class: 'hint' }, t('wall.chipsIgnored'));
-}
-
-function wallCard(limits, chips, accounts) {
-  // The cross-subscription shape is a LIST, never a total: two pools at 4% and
-  // 19% are not 23% of anything.
-  if (limits && Array.isArray(limits.per_account)) {
-    // ...and it is a list of SUBSCRIPTIONS. /v1/limits answers for every
-    // account the hub has ever ingested, gateway callers and vendor invoices
-    // included, because that is the right shape for an API consumer. This
-    // card's title is a question, and a calling application billed per call is
-    // not one of its answers: it has no ceiling to be near, so a heading over
-    // "no reading available" here claimed a gap that does not exist (#50).
-    // They are dropped rather than folded into a sub-section — the card
-    // answers one question, and the usage cards below already account for
-    // them, in the units they are actually billed in.
-    const { shown, metered } = quotaAccounts(limits.per_account, accounts);
-    const card = el('div', { class: 'card' },
-      el('h2', {}, t('wall.title')),
-      el('p', { class: 'hint' }, limits.note),
-      nowScope.el,
-      chipsIgnoredHint(chips));
-    // Only if it is still on screen. "Closest to its limit: X" naming a
-    // heading the viewer cannot find is worse than no line at all.
-    if (limits.worst && shown.some((e) => e.account_uuid === limits.worst.account_uuid)) {
-      card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
-        t('wall.closest', { label: limits.worst.label, pct: highestQuota(limits.worst.limits).toFixed(1) })));
-    }
-    // Filtered down to nothing says something, and it is not the blank the
-    // card would otherwise render: every account in view is metered.
-    if (!shown.length && metered.length) {
-      card.appendChild(el('div', { class: 'empty' }, t('wall.meteredOnly')));
-    }
-    for (const entry of shown) {
-      card.appendChild(el('h2', { style: 'margin-top:20px' }, entry.label));
-      if (!entry.limits.available) {
-        card.appendChild(el('div', { class: 'empty' }, entry.limits.reason || t('wall.noReading')));
-        continue;
-      }
-      card.append(...quotaGauges(entry.limits));
-    }
-    return card;
-  }
-
-  const card = el('div', { class: 'card' },
-    el('h2', {}, t('wall.title')),
-    el('p', { class: 'hint' }, t('wall.exact')),
-    nowScope.el,
-    chipsIgnoredHint(chips));
-
-  if (!limits.available) {
-    // No gauge at all. A 0% bar rendered the same as a live one is the failure
-    // this project exists to avoid.
-    card.appendChild(el('div', { class: 'empty' }, t('wall.noReadingSeeNotice')));
-    return card;
-  }
-
-  card.append(...quotaGauges(limits));
-
-  for (const s of limits.scoped || []) {
-    if (!s.model && !s.surface) continue;
-    card.appendChild(C.gauge(t('quota.scopedWeekly', { name: s.model || s.surface }), s));
-  }
-
-  const shares = (limits.endpoint_shares || []).filter((s) => s.weighted_tokens > 0);
-  if (shares.length) {
-    card.appendChild(el('h2', { style: 'margin-top:24px' }, t('wall.whose')));
-    card.appendChild(el('p', { class: 'hint' },
-      t('wall.whoseHint', { pct: limits.five_hour.utilization.toFixed(1) })));
-    card.appendChild(C.rankedBars(shares.map((s) => ({
-      key: s.label || s.endpoint_id,
-      value: s.estimated_utilization,
-      right: s.estimated_utilization.toFixed(1) + '%',
-      tip: `<b>${escapeHTML(s.label || s.endpoint_id)}</b><br>` +
-           `${escapeHTML(t('wall.share.ofWindow', { pct: (s.fraction_of_window * 100).toFixed(1) }))}<br>` +
-           `${escapeHTML(t('wall.share.tokens', { tokens: fmtFull(s.tokens), events: s.events }))}<br>` +
-           `<span style="opacity:.7">${escapeHTML(t('wall.share.estimate', { pct: s.estimated_utilization.toFixed(1) }))}</span>`,
-    }))));
-  }
-  return card;
-}
-
-// wallCardFromResult does NOT delegate a rejected result to queryFailed()
-// the way every other card on this view does (Task 15 fix round). Those
-// other cards own no persistent state; this one hosts nowScope.el, the
-// scope-controls widget Now mounts here (see the module comment above and
-// scope.js's createScopeControls) precisely because Now has no span control
-// to fall back on -- it is the ONLY place Now can change subscription or
-// chips at all. queryFailed()'s error card has no room for it, and
-// applyNow()'s replaceChildren() would detach the widget from the live DOM
-// along with the rest of the failed card, stranding the viewer with the one
-// control that view has. So a rejection here builds its own card, with the
-// same h2 and nowScope.el every other branch of wallCard() carries, and
-// only the body below them is the error state.
-function wallCardFromResult(result, chips, accounts) {
-  if (result.status === 'rejected') {
-    return el('div', { class: 'card' },
-      el('h2', {}, t('wall.title')),
-      nowScope.el,
-      el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
-  }
-  return wallCard(result.value, chips, accounts);
-}
-
+// The "am I about to hit the wall?" card lived here, from Task 11 until #95.
+// It is web/dist/quota.js now, and it is its own band rather than the first
+// child of the operations fold.
+//
+// What stayed behind is the REQUEST. /v1/limits is still fetched by this file's
+// loader (LIMITS_INDEX below), because the same response also feeds the two
+// limits banners in buildBanners, which are not in any band -- so the fetch
+// cannot follow the card without either duplicating the request or making the
+// banners depend on a band being mounted. app.js hands the slot to
+// renderQuota, the same way it hands review.js's summary slot to renderSpend.
 /* --------------------------------------------------------------- alerts */
 
 // /v1/findings's contract (a backend fix landing alongside Review's, task
@@ -860,6 +758,8 @@ function buildBanners(state, endpointsR, limitsR) {
 /* ------------------------------------------------------------------- main */
 
 function applyNow(root, state, app, results, opsOpen) {
+  // limitsR still lands here even though no card in this file draws it: the two
+  // limits banners do, and they are in no band (see NEEDED's row 1).
   const [findingsR, limitsR, endpointsR, epAcctR, switchesR, collectorsR, accountUsageR] = results;
 
   // scope.js resolves a "machine" chip's label from this on its next render.
@@ -911,7 +811,6 @@ function applyNow(root, state, app, results, opsOpen) {
   if (!opsOpen || !root) return;
 
   root.replaceChildren(...[
-    wallCardFromResult(limitsR, state.chips, app.accounts),
     liveWrapEl,
     collectorsCard(collectorsR, endpoints, app.accounts),
     accountUsageCard(accountUsageR, app.accounts),
@@ -919,21 +818,35 @@ function applyNow(root, state, app, results, opsOpen) {
   ].filter(Boolean));
 }
 
+/** LIMITS_INDEX is the /v1/limits slot in the fetcher list below.
+ *
+ *  Exported because the response is read by THREE things that live in three
+ *  different places: this file's limits banners (no band), web/dist/quota.js's
+ *  card (the quota band), and nothing in the operations fold any more. app.js
+ *  is where those are reassembled, so it needs the position by name rather than
+ *  by a `1` that silently means something else after the next insertion. Same
+ *  pattern, and the same reason, as review.js's SUMMARY_INDEX. */
+export const LIMITS_INDEX = 1;
+
 /** NEEDED says, per fetcher position below, whether that request has anything
- *  to render RIGHT NOW. `ops` is the operations fold's open state.
+ *  to render RIGHT NOW. `shown` is app.js's live-band set.
  *
- *  This view's seven requests do not all serve the folded tier, which is the
- *  whole reason this table exists rather than a flat "skip them all when
- *  closed": three of them are the only source for things drawn ABOVE the fold,
- *  and deferring those would trade a fast first screen for a page that is
- *  quietly wrong about itself.
+ *  This file's seven requests do not all serve one band, which is the whole
+ *  reason this table exists rather than a flat "skip them all when the fold is
+ *  shut": three of them are the only source for things that belong to NO band
+ *  and are therefore on every view, and deferring those would trade a fast first
+ *  screen for a page that is quietly wrong about itself.
  *
- *    0  findings         -> #alerts, which mounts above the tiers on purpose
+ *    0  findings         -> #alerts, which floats above the tiers on purpose
  *                           (applyNow says why: an alert inside a fold is an
  *                           alert nobody sees)
- *    1  limits           -> the wall gauges (folded) AND the two limits
- *                           banners (not folded) -- see limitsBannerApplies
- *    2  endpoints        -> #banners' lossy-history warning (not folded), and
+ *    1  limits           -> the QUOTA BAND's card (#95) AND the two limits
+ *                           banners, which are in no band -- see
+ *                           limitsBannerApplies. It used to be "the wall gauges
+ *                           inside the fold", and moving that card out of the
+ *                           fold is exactly why this row no longer mentions ops
+ *                           at all: the operations tier reads nothing from it.
+ *    2  endpoints        -> #banners' lossy-history warning (no band), and
  *                           app.endpoints, which scope.js reads for a machine
  *                           chip's label and review.js for its group-by
  *    3  endpoint-accounts \
@@ -943,15 +856,15 @@ function applyNow(root, state, app, results, opsOpen) {
  */
 const NEEDED = [
   () => true,
-  (ops, state) => ops || limitsBannerApplies(state),
+  (shown, state) => shown.has('quota') || limitsBannerApplies(state),
   () => true,
-  (ops) => ops,
-  (ops) => ops,
-  (ops) => ops,
-  (ops) => ops,
+  (shown) => shown.has('ops'),
+  (shown) => shown.has('ops'),
+  (shown) => shown.has('ops'),
+  (shown) => shown.has('ops'),
 ];
 
-export function renderNow(root, state, app, opsOpen) {
+export function renderNow(root, state, app, shown) {
   const liveKey = liveScopeKey(app);
   if (liveState.key !== liveKey) {
     liveState.key = liveKey; liveState.snap = null;
@@ -975,7 +888,8 @@ export function renderNow(root, state, app, opsOpen) {
     get(`/v1/account-switches?account=${acct}&source=${source}&limit=20`),
     get(`/v1/collectors?account=${acct}&source=${source}`),
     get(`/v1/account-usage?account=${acct}&source=${source}`),
-  ].map((f, i) => (NEEDED[i](opsOpen, state) ? f : null));
+  ].map((f, i) => (NEEDED[i](shown, state) ? f : null));
+  const opsOpen = shown.has('ops');
   return { fetchers, apply: (results) => applyNow(root, state, app, results, opsOpen) };
 }
 

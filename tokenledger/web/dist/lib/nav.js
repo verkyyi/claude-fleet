@@ -60,6 +60,21 @@ export const VIEW_ALL = 'all';
  *  a colleague -- `view=progress` says what they are being sent to;
  *  `view=repo-band` names a div.
  *
+ *  The order is the PAGE order, and quota leads it as of #95. That overturns a
+ *  positioning #98 had just argued for — "on `view=all` it is still the same
+ *  continuous page, just folded, so the page opens as a ledger" — so it is
+ *  written down rather than quietly done. What #98 was defending is that the
+ *  operations tier, nine cards of gauges and machines and sessions, should not
+ *  be the first thing a reader meets; that still holds and the fold is still
+ *  shut. What it did not separate out is that ONE card in that tier is not
+ *  operational trivia: every other band on this page answers in the past tense
+ *  — what was paid, what drove it, what it bought — and this one answers "how
+ *  much runway is left before work stops", which is the only question here with
+ *  a deadline. A reader who opens the page to find out whether they are about to
+ *  be blocked was, until #95, the one reader the page could not serve without a
+ *  click into a shut <details>. The ledger is one band lower and one label
+ *  clearer, which is a smaller cost than that.
+ *
  *  There used to be a third column, `target`: the id of the band-label element
  *  the entry SCROLLED TO. #98 removed it with the scrolling. A nav entry no
  *  longer points at an element on a page that is already showing it -- it
@@ -67,6 +82,7 @@ export const VIEW_ALL = 'all';
  *  is where that mapping is now written, because a band is several sibling
  *  nodes (its label and its sections) and never one. */
 export const SECTIONS = [
+  { key: 'band.quota', view: 'quota' },
   { key: 'band.ledger', view: 'ledger' },
   { key: 'band.usage', view: 'usage' },
   { key: 'band.progress', view: 'progress' },

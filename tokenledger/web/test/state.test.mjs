@@ -78,7 +78,7 @@ test('the default view stays out of the hash, and an unknown one falls back', ()
 // state.js is checked rather than assumed: a SECTIONS entry whose view fell out
 // of VIEWS would be a nav button that silently resets itself on the next route.
 test('every nav entry names a view the router accepts', () => {
-  assert.deepEqual(VIEWS, ['all', 'ledger', 'usage', 'progress', 'ops']);
+  assert.deepEqual(VIEWS, ['all', 'quota', 'ledger', 'usage', 'progress', 'ops']);
   for (const { view, key } of SECTIONS) {
     assert.ok(VIEWS.includes(view), `${key} writes an unroutable view: ${view}`);
     assert.equal(parse(`#/?view=${view}`).view, view);

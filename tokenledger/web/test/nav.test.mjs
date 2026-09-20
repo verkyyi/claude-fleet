@@ -15,7 +15,7 @@ test('every section prints its own band key, and the dictionary has it', () => {
   // The nav must not carry its own copy of the band names: `band.ledger` is
   // what index.html prints on the band itself, so the two cannot disagree.
   assert.deepEqual(SECTIONS.map((s) => s.key),
-    ['band.ledger', 'band.usage', 'band.progress', 'ops.title']);
+    ['band.quota', 'band.ledger', 'band.usage', 'band.progress', 'ops.title']);
   // t() falls back to the key, so a nav entry naming a key no dictionary has
   // renders the literal `band.ledger` in the sticky bar of every page view.
   for (const { key } of SECTIONS) {
@@ -36,7 +36,7 @@ test('every section prints its own band key, and the dictionary has it', () => {
 // one word now spans the URL, the markup and the fetch plan.
 test('every section names the view it writes', () => {
   assert.deepEqual(SECTIONS.map((s) => s.view),
-    ['ledger', 'usage', 'progress', 'ops']);
+    ['quota', 'ledger', 'usage', 'progress', 'ops']);
   assert.deepEqual(BANDS, SECTIONS.map((s) => s.view));
   for (const { key, view } of SECTIONS) {
     assert.match(view, /^[a-z]+$/, `${key}: a view is a URL word`);
@@ -69,7 +69,14 @@ test('a view mounts its band and nothing else, in page order', () => {
   // Page order, not the order the caller happened to ask in: index.html's
   // <main> is a fixed sequence and app.js re-lists the survivors from it, so a
   // band can never appear above one that is written above it.
-  assert.deepEqual(bandsFor(VIEW_ALL), ['ledger', 'usage', 'progress', 'ops']);
+  assert.deepEqual(bandsFor(VIEW_ALL), ['quota', 'ledger', 'usage', 'progress', 'ops']);
+  // Quota leads, and this is the assertion that says so (#95). The band it is
+  // ahead of is the ledger, which #98 had just argued should open the page --
+  // lib/nav.js's SECTIONS carries the argument for overturning that. Asserted
+  // here rather than left to the list above because a later edit that "tidies"
+  // the order alphabetically or by age would pass every other check in this
+  // file.
+  assert.equal(bandsFor(VIEW_ALL)[0], 'quota');
   // The ledger view does not carry the usage band's questions, which is the
   // measurable half of #98: review.js drops three of its four first-screen
   // requests here.

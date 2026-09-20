@@ -188,16 +188,70 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 }
 .banner .dismiss:hover { color: var(--ink); }
 
-/* ---- gauges ---- */
-.gauge + .gauge { margin-top: 20px; }
-.gauge .top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; }
-.gauge .name { font-size: 13px; color: var(--ink-2); font-weight: 500; }
-.gauge .pct { font-size: 30px; font-weight: 620; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.gauge .state { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; border: 1px solid; }
-.gauge .reset { margin-left: auto; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* ---- gauges ----
+
+   One window is ONE ROW, and #95 is where it became one.
+
+   It used to be three stacked pieces — a name/percent/state/reset line, a bar,
+   and a full sentence of forecast — about 75px tall. The brief for the quota
+   card is that the current utilization should be the biggest number on it, and
+   that could not be had by enlarging the percent: it was already 30px. It was
+   the OTHER figures that had to give way, and a sentence on its own line reads
+   as a peer of whatever is above it however small the type. Measured across
+   five subscriptions with two windows each, the old form was a 1,248px card.
+
+   The row is `display: contents`, so these cells join the enclosing `.qgroup`
+   grid rather than forming a box of their own. That is what lines the five
+   columns up across every subscription in a group — with per-row boxes, a
+   "5-hour window" and a "Codex · 7-day window" set their own widths and nothing
+   below agrees with anything above it. */
+.gauge { display: contents; }
+.gauge .name { font-size: 12.5px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.gauge .pct { font-size: 26px; font-weight: 620; letter-spacing: -.02em; font-variant-numeric: tabular-nums; text-align: right; line-height: 1.15; }
+.gauge .state { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; border: 1px solid; justify-self: start; white-space: nowrap; }
+/* The bar is the row's flexible column, and it is vertically centred against a
+   26px number rather than sitting under it. */
+.gauge .track { align-self: center; }
+.gauge .meta { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .track { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; }
 .fill { height: 100%; border-radius: 5px; transition: width .35s ease; }
-.gauge .note { margin-top: 7px; font-size: 12px; color: var(--ink-3); }
+
+/* ---- the quota card (#95) ----
+
+   A group is a grid of five columns, and every subscription under one heading
+   shares them: window name · utilization · state · bar · when it resets and
+   where the burn lands. The bar takes whatever is left, with a floor, because a
+   2px bar is a decoration rather than a reading.
+
+   The grouping itself is in lib/providers.js's quotaGroups, and it is not
+   cosmetic either: Claude reports a fixed five-hour/seven-day pair and Codex
+   reports whatever windows its provider names plus a credit balance, so a flat
+   list made the reader work out which vocabulary each row spoke. On this hub it
+   was worse than that — one person's Claude and Codex subscriptions share an
+   email, so the flat list printed the same name twice in a row. */
+.qgroup { display: grid; grid-template-columns: auto auto auto minmax(90px, 1fr) auto; align-items: baseline; gap: 5px 10px; margin-top: 18px; }
+.qgroup-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding-bottom: 2px; border-bottom: 1px solid var(--grid); }
+.qgroup-name { font-size: 13px; font-weight: 640; letter-spacing: .02em; }
+.qgroup-count { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.qgroup-note { font-size: 11.5px; color: var(--ink-3); }
+/* The subscription's name spans the row above its windows rather than taking a
+   column: the windows are the readings, and a name in column one would push
+   every number right by however long the longest email is. */
+.qacct { grid-column: 1 / -1; margin-top: 9px; font-size: 12px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
+.qgroup-head + .qacct { margin-top: 4px; }
+.qempty, .qnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--ink-3); margin: 0; }
+.quota-card .qsub { margin-top: 22px; }
+
+/* Under ~640px the five columns cannot hold: an email, a 26px number and a
+   forecast do not share a phone's width. The row becomes two lines — the
+   reading, then the bar and its meta — and the percent stays the largest thing
+   on both. */
+@media (max-width: 640px) {
+  .qgroup { grid-template-columns: 1fr auto auto; }
+  .gauge .track { grid-column: 1 / -1; }
+  .gauge .meta { grid-column: 1 / -1; text-align: left; white-space: normal; }
+  .gauge .name { white-space: normal; }
+}
 
 /* Status colour is reinforced by the label text beside it, never alone. */
 .st-good     { color: var(--good);     border-color: var(--good); }

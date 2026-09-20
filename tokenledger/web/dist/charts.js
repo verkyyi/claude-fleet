@@ -374,29 +374,57 @@ export function withTable(card, chartEl, tableEl, cardId) {
 
 /* ------------------------------------------------------------------ gauge */
 
+/** gauge is ONE window's reading: what share of it is spent, on a bar, with
+ *  when it resets and where the current burn rate lands.
+ *
+ *  #95 rewrote its SHAPE, not its content — every figure the old three-line
+ *  block printed is still here. It used to be a name/percent/state/reset row, a
+ *  bar, and then a full sentence of its own ("At the current rate (22.6%/h) this
+ *  window fills around 03:25 AM."), about 75px per window. The brief for this
+ *  card is "make the current utilization the biggest number, and let the reset
+ *  and the forecast fall back to second place", and the old layout could not do
+ *  that however large the percent was set: a sentence on its own line reads as
+ *  a peer of the thing above it, and there were two windows per subscription and
+ *  up to five subscriptions on the card.
+ *
+ *  So the reset and the forecast are one trailing `.meta` string, and the row is
+ *  one line. The percent keeps its size and everything else shrank around it,
+ *  which is the only way one number becomes the big one on a card where every
+ *  row wants to be read.
+ *
+ *  The state LABEL stays, and is not the hue's spare tyre: styles.css's rule is
+ *  that status colour is always reinforced by the word beside it, never carried
+ *  alone, which is what makes this legible to a reader who cannot separate the
+ *  four band colours. Shrinking it was allowed; dropping it was not.
+ *
+ *  The row's own element is `display: contents` (styles.css), so the cells land
+ *  in the ENCLOSING grid and the five columns line up across every subscription
+ *  in a group rather than each row measuring itself. That is why this returns a
+ *  flat row and not a self-contained box. */
 export function gauge(name, w) {
   const pct = Math.max(0, Math.min(100, Number(w.utilization) || 0));
   const b = band(pct);
   const burn = w.burn || {};
 
-  let note = '';
+  // Reset first, forecast second, and the separator only between two things
+  // that are both there: "resets in 2h 29m · " trailing into nothing reads as a
+  // sentence the page failed to finish.
+  const parts = [relTime(w.resets_at)];
   if (burn.exhausted_at) {
-    note = t('gauge.fillsAround', {
+    parts.push(t('gauge.fillsAround', {
       rate: burn.percent_per_hour.toFixed(1),
       time: new Date(burn.exhausted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    });
+    }));
   } else if (burn.percent_per_hour > 0) {
-    note = t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) });
+    parts.push(t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) }));
   }
 
   return el('div', { class: 'gauge' },
-    el('div', { class: 'top' },
-      el('span', { class: 'name' }, name),
-      el('span', { class: 'pct' }, pct.toFixed(1) + '%'),
-      el('span', { class: 'state st-' + b.key }, b.label),
-      el('span', { class: 'reset' }, relTime(w.resets_at))),
+    el('span', { class: 'name' }, name),
+    el('span', { class: 'pct' }, pct.toFixed(1) + '%'),
+    el('span', { class: 'state st-' + b.key }, b.label),
     el('div', { class: 'track' }, el('div', { class: 'fill bg-' + b.key, style: `width:${pct}%` })),
-    note ? el('div', { class: 'note' }, note) : null);
+    el('span', { class: 'meta' }, parts.join(' · ')));
 }
 
 /* ------------------------------------------------------------------- tile */

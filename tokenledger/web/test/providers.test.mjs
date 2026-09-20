@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL, quotaAccounts, hasQuotaWindow} from '../dist/lib/providers.js';
+import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL, quotaAccounts, quotaGroups, quotaSourceOf, sourceMap, hasQuotaWindow} from '../dist/lib/providers.js';
 import {fmtCost} from '../dist/lib/format.js';
 
 test('missing costs stay unknown across bucket and session totals',()=>{
@@ -177,4 +177,71 @@ test('an empty or missing list is not an error', () => {
   // No account list at all cannot mean "hide everything": boot stops when
   // /v1/accounts fails, so this is only ever a transient.
   assert.deepEqual(quotaAccounts(entries('sub-a'), []).shown.length, 1);
+});
+
+// --- and it groups them by provider (#95) ---------------------------------
+//
+// Claude and Codex do not describe a quota in the same words -- Claude reports
+// a fixed five-hour/seven-day pair, Codex reports whatever windows its provider
+// names plus a credit balance -- so one flat list made the reader work out, per
+// row, which vocabulary they were reading. The failure is not hypothetical on
+// the hub this was written against: one person's Claude and Codex
+// subscriptions share an email, so the list printed the same name twice in a
+// row with nothing between them saying which was which.
+
+test('the shown subscriptions are split by provider, Claude first', () => {
+  const { groups } = quotaGroups(entries('sub-b', 'sub-a', 'legacy'), ACCOUNTS);
+  assert.deepEqual(groups.map((g) => g.source), ['claude', 'codex']);
+  // QUOTA_SOURCES order, not the order /v1/limits answered in: the response is
+  // ordered by the accounts table and would reshuffle the card whenever a new
+  // subscription was ingested.
+  assert.deepEqual(groups[0].entries.map((e) => e.account_uuid), ['sub-a', 'legacy']);
+  assert.deepEqual(groups[1].entries.map((e) => e.account_uuid), ['sub-b']);
+});
+
+test('a metered account is filtered out before grouping, not into a group', () => {
+  const { groups, metered } = quotaGroups(entries('sub-a', 'app-1', 'bill-1'), ACCOUNTS);
+  assert.deepEqual(groups.map((g) => g.source), ['claude']);
+  assert.deepEqual(groups[0].entries.map((e) => e.account_uuid), ['sub-a']);
+  // Still handed back, for the same reason quotaAccounts hands it back: the
+  // card has to be able to say "every account in view is billed per call"
+  // rather than render a blank.
+  assert.deepEqual(metered.map((e) => e.account_uuid), ['app-1', 'bill-1']);
+});
+
+// A heading over nothing claims this hub has a provider it does not have --
+// the same rule accountGroups applies to an empty optgroup.
+test('a provider with no subscription gets no heading', () => {
+  const { groups } = quotaGroups(entries('sub-a'), ACCOUNTS);
+  assert.deepEqual(groups.map((g) => g.source), ['claude']);
+});
+
+// The reading's own word for itself wins, and it is the ONLY field that can
+// resolve this during the window where /v1/limits has an account the account
+// list has not caught up with. api.LimitsView sets `source` on the Codex path
+// and omits it on the Claude one, so a present value is always authoritative.
+test('a reading that names its own source is believed over the account list', () => {
+  const map = sourceMap(ACCOUNTS);
+  assert.equal(quotaSourceOf({ account_uuid: 'brand-new', limits: { source: 'codex' } }, map), 'codex');
+  // Absent means "not Codex", never "unknown": that is what the account list is
+  // consulted for.
+  assert.equal(quotaSourceOf({ account_uuid: 'sub-b', limits: {} }, map), 'codex');
+  assert.equal(quotaSourceOf({ account_uuid: 'sub-a', limits: {} }, map), 'claude');
+  // Neither field can answer -- model.UsageSource's own default, so an entry
+  // mid-race lands in a named group rather than one invented for it.
+  assert.equal(quotaSourceOf({ account_uuid: 'nobody', limits: {} }, map), 'claude');
+});
+
+// An unlisted account is SHOWN by quotaAccounts (hiding a real subscription
+// from "am I about to hit the wall?" is the dangerous direction), so grouping
+// has to have somewhere to put it.
+test('an account the hub has not listed yet still lands in a group', () => {
+  const { groups } = quotaGroups(entries('brand-new'), ACCOUNTS);
+  assert.deepEqual(groups.map((g) => g.source), ['claude']);
+  assert.deepEqual(groups[0].entries.map((e) => e.account_uuid), ['brand-new']);
+});
+
+test('grouping an empty or missing list is not an error', () => {
+  assert.deepEqual(quotaGroups([], ACCOUNTS), { groups: [], metered: [] });
+  assert.deepEqual(quotaGroups(undefined, undefined), { groups: [], metered: [] });
 });

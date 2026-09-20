@@ -2,8 +2,9 @@
 import { parse, format, dataKey, resolveSub } from './lib/state.js';
 import { bandsFor } from './lib/nav.js';
 import { createLoader } from './lib/seq.js';
-import { renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
-import { renderNow, startLive } from './now.js';
+import { createScopeControls, renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
+import { renderNow, startLive, LIMITS_INDEX } from './now.js';
+import { renderQuota } from './quota.js';
 import { renderReview, SUMMARY_INDEX } from './review.js';
 import { renderSpend } from './spend.js';
 import { renderConsumption } from './consumption.js';
@@ -74,6 +75,28 @@ export const app = {
 };
 
 const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader(), repo: createLoader() };
+
+/** The page's scope-controls widget: subscription, source, span, chips.
+ *
+ *  Built here rather than by a view, and that is the change #95 makes. Every
+ *  other instance of this widget belongs to a card — Review's to the Timeline,
+ *  whose brush the span scales — and until now the second instance belonged to
+ *  the quota card, on the same reasoning. It never really did: subscription,
+ *  source, span and chips scope the WHOLE page, and hosting them on a card was
+ *  survivable only while every card was on screen at once. #98 ended that, and
+ *  the measurement is in index.html's #scopebar comment: two of the five views
+ *  had no scope control at all.
+ *
+ *  `span: true`, unlike the instance it replaces. The old one sat on a card that
+ *  has no time range ("Now is *right now*") so it rendered none; this one is
+ *  also the only control on `view=ledger`, whose consumption table and spend
+ *  headline are both resolved against the span. A control that is missing from
+ *  the one view that needs it is the bug this widget was just moved to fix.
+ *
+ *  Module-eval time, once, like the view instances: createScopeControls binds
+ *  its listeners in its own closure and self-registers for renderScopeControls,
+ *  so there is nothing to re-bind and nothing to guard against re-binding. */
+const pageScope = createScopeControls({ span: true });
 let lastRendered = '';
 // What the last load ASKED FOR. Compared against the next one to tell a change
 // that needs new rows from one that only re-draws the rows already in hand --
@@ -124,8 +147,16 @@ function route() {
     onClear: () => app.setState({ ...s, chips: {} }),
   };
   renderNav($('#scope'), { onView, view: s.view });
-  // Updates EVERY section's scope-controls widget synchronously — see
-  // scope.js's renderScopeControls doc comment.
+  // The page-level widget into its shell mount point, idempotently — the same
+  // parent check now.js does for the token badge, and for the same reason:
+  // #scopebar is written in the shell and carries no `data-band`, so mountView
+  // re-lists it on every view and the widget it holds is never detached. The
+  // guard is what keeps this from being a re-append on every hashchange, which
+  // would drop focus out of the <select> a reader had just opened.
+  const bar = $('#scopebar');
+  if (bar && pageScope.el.parentNode !== bar) bar.replaceChildren(pageScope.el);
+  // Updates EVERY scope-controls instance synchronously — this one and Review's
+  // — see scope.js's renderScopeControls doc comment.
   renderScopeControls(s, app.accounts, cb);
   if (s.session) renderDetail($('#detail'), s, app); else closeDetail($('#detail'));
   const key = format({ ...s, session: null });
@@ -262,15 +293,26 @@ async function load(reuse = false) {
   // the brush touches the right edge -- and seq.js's per-loader sequencing is
   // what stops a slow response from overwriting a newer scope.
   //
-  // now.js still takes the operations boolean rather than the whole set, and
-  // that is not an oversight: three of its seven requests feed #alerts, #pulse
-  // and #banners, which belong to no band and are therefore on every view (see
-  // index.html). Its other four are the fleet tables inside the fold. So "is
-  // operations live" remains the entire question that file has to answer.
-  // review.js is the one that needs the set, because its eight requests are
-  // read by three DIFFERENT bands.
-  const nowR = renderNow($('#status'), s, app, shown.has('ops'));
+  // now.js takes the whole set as of #95, where it used to take just the
+  // operations boolean. The old note said "is operations live" was the entire
+  // question that file had to answer, because its seven requests split two ways:
+  // three feeding #alerts / #pulse / #banners, which belong to no band, and four
+  // feeding the fleet tables inside the fold. /v1/limits was counted with the
+  // fold. It no longer is -- the quota card it draws is its own band now -- so
+  // the file has three answers to give, not two, and review.js's argument for
+  // taking the set applies to it as well.
+  const nowR = renderNow($('#status'), s, app, shown);
   const reviewR = renderReview($('#analysis'), s, app, shown);
+  // The quota card reads the /v1/limits slot the loader above already asked for,
+  // rather than fetching for itself. Same arrangement as the spend headline and
+  // review.js's summary below, and the same reason: that one response also
+  // feeds the two limits banners, which are in no band, so a second request
+  // would buy nothing but a second chance to disagree with the first.
+  const nowApply = (results) => {
+    const quota = $('#quota');
+    if (quota) renderQuota(quota, results[LIMITS_INDEX], s, app);
+    nowR.apply(results);
+  };
   // Same range the analysis section resolves, so the consumption table and the
   // charts below it are answering about one period. Duplicating the arithmetic
   // here would let the two drift apart the first time the brush logic changes.
@@ -306,7 +348,7 @@ async function load(reuse = false) {
   const repoDone = loadRepoTier(s, reuse, shown);
   root.setAttribute('aria-busy', 'true'); setBusy(true);
   const [a, b, c, d] = await Promise.all([
-    runOrReplay(loaders.now, nowR.fetchers, nowR.apply, reuse),
+    runOrReplay(loaders.now, nowR.fetchers, nowApply, reuse),
     runOrReplay(loaders.consumption, consumptionR.fetchers, consumptionR.apply, reuse),
     runOrReplay(loaders.review, reviewR.fetchers, reviewApply, reuse),
     repoDone,

@@ -46,6 +46,11 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	for _, want := range []string{
 		"<title>", `href="styles.css"`, `src="app.js"`,
 		`id="page"`, `id="spend"`, `id="status"`, `id="consumption"`, `id="analysis"`,
+		// The quota band's mount point, and the page's scope strip (#95). The
+		// strip is the reason the first is possible: that card used to HOST the
+		// only scope controls the operations view had, so it could not be moved
+		// anywhere until they had a home of their own.
+		`id="quota"`, `id="scopebar"`,
 		// The three-tier shell: alerts above the tiers, operations folded.
 		`id="alerts"`, `id="ops"`, `id="ops-analysis"`,
 		// The progress band and its section. The band starts hidden and app.js
@@ -63,7 +68,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// from these attributes. Drop the attribute and that string stays English
 	// forever, in the middle of a page that translated around it.
 	for _, want := range []string{
-		`id="lang"`, `data-i18n="band.ledger"`, `data-i18n="band.usage"`, `data-i18n="band.progress"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
+		`id="lang"`, `data-i18n="band.quota"`, `data-i18n="band.ledger"`, `data-i18n="band.usage"`, `data-i18n="band.progress"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html is missing the i18n hook %q", want)
@@ -107,7 +112,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// whether the labels are on the page at all -- and the ids stay structural
 	// in exactly the sense the note above describes.
 	for _, want := range []string{
-		`id="secnav"`, `id="ledger-band"`, `id="usage-band"`,
+		`id="secnav"`, `id="quota-band"`, `id="ledger-band"`, `id="usage-band"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html shell is missing %q -- the view nav has no band to mount", want)
@@ -123,6 +128,8 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// word shared by the URL, this markup and review.js's fetch plan -- so a
 	// typo here is a band that no view can ever show.
 	for _, want := range []string{
+		`id="quota-band" data-band="quota"`,
+		`id="quota" data-band="quota"`,
 		`id="ledger-band" data-band="ledger"`,
 		`id="spend" data-band="ledger"`,
 		`id="consumption" data-band="ledger"`,
@@ -142,7 +149,15 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// "is the fleet still moving" signal. Both were deliberately kept outside
 	// the operations fold for that reason; putting them in a band would fold
 	// them away again under another name.
-	for _, floater := range []string{`id="pulse"`, `id="alerts"`} {
+	// #scopebar joins them as of #95, and it is the one that had to be ARGUED
+	// into the list rather than inheriting a rule. Subscription, source, span and
+	// chips scope every band, so the widget cannot belong to one -- and before
+	// this it belonged to the quota card inside the operations fold, which meant
+	// `view=ledger` and `view=progress` rendered no scope control at all: a page
+	// of money for a subscription the reader could not change, narrowed by chips
+	// they could neither see nor remove. Give this node a data-band and that
+	// comes straight back for whichever views it is not tagged with.
+	for _, floater := range []string{`id="pulse"`, `id="alerts"`, `id="scopebar"`} {
 		at := strings.Index(string(b), floater)
 		if at < 0 {
 			continue // the id check above already reported it
@@ -191,22 +206,42 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// the whole point of the tier is that the ledger opens unfolded, so a
 	// future edit that moves #spend or #consumption inside the fold has undone
 	// the thing this structure exists for.
+	//
+	// #95 put two more nodes under the same rule, and for them it is not a
+	// regression guard but the change itself:
+	//
+	//   #quota     was the FIRST CHILD of this fold, and the fold is shut by
+	//              default. "How much runway is left before work stops" is the
+	//              only question on this page with a deadline, and it was the
+	//              one question a reader had to go looking for -- measured, the
+	//              default view was 6,998px that did not contain it.
+	//   #scopebar  is the page's subscription / source / span / chips. Folded
+	//              away it takes the only control over what every other band is
+	//              showing with it, which is how it ended up here: it was
+	//              mounted ON the quota card, so neither could move alone.
 	shell := string(b)
 	opsAt := strings.Index(shell, `<details id="ops"`)
 	if opsAt < 0 {
 		t.Error("the operations tier is not a <details> -- a div+button fold loses keyboard and find-in-page for free behaviour")
 	} else {
-		for _, ledger := range []string{`id="spend"`, `id="consumption"`, `id="alerts"`} {
+		for _, ledger := range []string{`id="spend"`, `id="consumption"`, `id="alerts"`, `id="quota"`, `id="scopebar"`} {
 			if at := strings.Index(shell, ledger); at > opsAt {
-				t.Errorf("%s is inside the folded operations tier; the ledger must open unfolded", ledger)
+				t.Errorf("%s is inside the folded operations tier; it must be on the page the reader opens", ledger)
 			}
 		}
+	}
+	// The quota band opens the page: it comes before the ledger band, which is
+	// what "bring quota usage to the front" (#95) actually asks for. Checked by
+	// POSITION rather than by the label, because the label is translated and the
+	// ordering is the claim.
+	if q, l := strings.Index(shell, `id="quota-band"`), strings.Index(shell, `id="ledger-band"`); q < 0 || l < 0 || q > l {
+		t.Error(`the quota band must come before the ledger band -- every other band on this page answers in the past tense, and this one is the only question with a deadline`)
 	}
 	// Every module the shell depends on must actually be embedded, and none
 	// of them may be a truncated placeholder.
 	minBytes := map[string]int64{
 		"styles.css": 4096, "app.js": 1024, "scope.js": 1024,
-		"charts.js": 4096, "now.js": 4096,
+		"charts.js": 4096, "now.js": 4096, "quota.js": 2048,
 		"lib/dom.js": 512, "lib/state.js": 512,
 		// scope.js imports this one, so a miss here is not a degraded nav —
 		// it is a module-resolution error that stops the whole page booting.
@@ -226,17 +261,36 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("%s is %d bytes; that is a placeholder, not the real module", name, st.Size())
 		}
 	}
-	// The "am I about to hit the wall" gauge and its account-spanning shape
-	// used to be right there in index.html; both now live in now.js's
-	// wallCard.
+	// The "am I about to hit the wall" gauge and its account-spanning shape used
+	// to be right there in index.html, then in now.js's wallCard, and since #95
+	// they are quota.js's -- its own band, out of the operations fold.
+	//
+	// The two halves are checked in the two files they actually live in, because
+	// #95 SPLIT them: now.js still sends the request, since the same response
+	// feeds the limits banners it draws and those are in no band, while quota.js
+	// reads per_account and groups it. Asserting both against one file would have
+	// gone green on a build where the card renders from a second, duplicate fetch.
 	nowJS, err := fs.ReadFile(assets, "now.js")
 	if err != nil {
 		t.Fatalf("now.js unreadable: %v", err)
 	}
-	for _, want := range []string{"/v1/limits", "per_account"} {
-		if !strings.Contains(string(nowJS), want) {
-			t.Errorf("now.js is missing %q", want)
+	if !strings.Contains(string(nowJS), "/v1/limits") {
+		t.Error("now.js no longer requests /v1/limits -- the limits banners have no other source")
+	}
+	quotaJS, err := fs.ReadFile(assets, "quota.js")
+	if err != nil {
+		t.Fatalf("quota.js unreadable: %v", err)
+	}
+	for _, want := range []string{"per_account", "quotaGroups"} {
+		if !strings.Contains(string(quotaJS), want) {
+			t.Errorf("quota.js is missing %q -- the card answers across subscriptions, grouped by provider", want)
 		}
+	}
+	// ...and the card must not have quietly kept a fetch of its own. One response
+	// feeds the card AND the banners; two would be one request spent to buy a
+	// second chance at disagreeing with the first.
+	if strings.Contains(string(quotaJS), "app.api(") {
+		t.Error("quota.js fetches for itself -- it must read now.js's LIMITS_INDEX slot, which the banners already read")
 	}
 }
 

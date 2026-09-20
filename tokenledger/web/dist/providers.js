@@ -1,38 +1,27 @@
 import { el } from './lib/dom.js';
 import { fmtInt } from './lib/format.js';
-import * as C from './charts.js';
 
-import {windowName, loginLabel} from './lib/providers.js';
+import {loginLabel} from './lib/providers.js';
 import { t } from './lib/i18n.js';
-export {selectLive, liveUnknown, windowName, quotaAccounts} from './lib/providers.js';
+export {selectLive, liveUnknown} from './lib/providers.js';
 
-export function quotaGauges(v) {
-  const out = [];
-  if (v.windows) for (const w of v.windows) out.push(C.gauge(windowName(w), w));
-  else {
-    if (v.five_hour) out.push(C.gauge(t('quota.fiveHour'), v.five_hour));
-    if (v.seven_day) out.push(C.gauge(t('quota.sevenDay'), v.seven_day));
-  }
-  for (const c of v.credits || []) out.push(el('p', { class: 'hint' },
-    t('quota.credits', {
-      id: c.limit_id,
-      value: c.unlimited ? t('quota.credits.unlimited')
-        : c.balance != null ? c.balance
-        : c.has_credits ? t('quota.credits.available') : t('quota.credits.none'),
-    })));
-  if (v.blocked) out.push(el('p', { class: 'hint' },
-    t('quota.blocked', { reason: v.reason || t('quota.blocked.reported') })));
-  if (v.source === 'codex') out.push(el('p', { class: 'hint' },
-    t('quota.codexNote', {
-      plan: v.plan || t('quota.codexAccount'),
-      when: v.observed_at ? new Date(v.observed_at).toLocaleString() : t('common.unknownTime'),
-    })));
-  return out;
-}
-
-export function highestQuota(v) {
-  return Math.max(v?.five_hour?.utilization || 0, ...(v?.windows || []).map((w) => w.utilization));
-}
+// quotaGauges and highestQuota were here until #95, and both went with the card
+// that was their only caller (web/dist/quota.js now).
+//
+// quotaGauges was a flat list of gauges -- every window of every subscription,
+// in one sequence, with the provider's extra notes appended. The card it fed is
+// grouped now, and the grouping is not a wrapper around the same list: which
+// notes belong to which heading, and whether a Codex window still needs to say
+// "Codex" in its own name, are decisions the group makes. A function that
+// returns a flat array cannot make them.
+//
+// highestQuota is worth a word, because its replacement is not a rename.
+// It read `max(five_hour, ...windows)` and did NOT count `blocked`, while
+// api.LimitsView.HighestUtilization -- the function the SERVER picks `worst`
+// with -- returns 100 for a blocked account. So on a blocked subscription the
+// card could name it the closest to its limit and then print a percentage lower
+// than the reading the server ranked it by. quota.js's `highest` mirrors the Go
+// rule instead.
 
 export function collectorsCard(result, endpoints = [], accounts = []) {
   const card = el('div', { class: 'card' }, el('h2', {}, t('collectors.title')));

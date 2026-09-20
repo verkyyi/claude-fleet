@@ -21,6 +21,8 @@ export const en = {
   // view and the way back from any single one (#98). Not a band, so it has no
   // `band.` key and index.html has no label printing it.
   'nav.all': 'All',
+  'band.quota': 'Quota',
+  'band.quota.note': 'how much runway is left',
   'band.ledger': 'Ledger',
   'band.ledger.note': 'what was paid, and to whom',
   'band.usage': 'Usage',
@@ -28,7 +30,7 @@ export const en = {
   'band.progress': 'Progress',
   'band.progress.note': 'what the spend bought',
   'ops.title': 'Operations',
-  'ops.note': 'quota headroom · machines · collection health · sessions',
+  'ops.note': 'machines · collection health · sessions',
   'ops.access': 'Ways in — every door, its credential, and what is turned on here',
 
   /* ----------------------------------------------------------- common */
@@ -153,8 +155,8 @@ export const en = {
   'gauge.high': 'high',
   'gauge.moderate': 'moderate',
   'gauge.healthy': 'healthy',
-  'gauge.fillsAround': 'At the current rate ({rate}%/h) this window fills around {time}.',
-  'gauge.burning': 'Burning {rate}%/h — it resets before it fills.',
+  'gauge.fillsAround': 'full around {time} at {rate}%/h',
+  'gauge.burning': 'burning {rate}%/h, resets first',
   'chart.tip.tokens': '{tokens} tokens',
   'chart.tip.tokensTurns': '{tokens} tokens · {turns} turns',
   'chart.tip.turnsCost': '{turns} turns · {cost}',
@@ -224,7 +226,11 @@ export const en = {
   'wall.noReading': 'No reading available.',
   'wall.meteredOnly': 'Every account in view is billed per call — there is no quota window to be near. Their spend is on the usage cards below.',
   'wall.noReadingSeeNotice': 'No reading available — see the notice above.',
-  'wall.closest': 'Closest to its limit: {label} at {pct}%.',
+  'wall.closest': 'Closest to its limit: {label} ({source}) at {pct}%.',
+  'quota.group.count.one': '{n} subscription',
+  'quota.group.count.other': '{n} subscriptions',
+  'quota.group.claude.note': 'a fixed five-hour and seven-day pair',
+  'quota.group.codex.note': 'the windows the provider reports, plus a credit balance',
   'wall.whose': 'Whose 5-hour window is it',
   'wall.whoseHint': 'Estimated split of the {pct}% above, by weighted spend.',
   'wall.share.ofWindow': "{pct}% of this window's spend",

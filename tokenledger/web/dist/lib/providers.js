@@ -152,8 +152,17 @@ export const hasQuotaWindow = (source) => QUOTA_SOURCES.has(UsageSource(source))
  *  list going stale between two fetches must not hide a real subscription, and
  *  the server's own reason on such an entry now says "billed per call" rather
  *  than "no reading available" anyway. */
+/** sourceMap is the hub's account list as uuid -> source, with model.UsageSource's
+ *  default applied. Exported so the three callers that need it cannot each build
+ *  a slightly different one — the last time this lookup was inlined twice, one
+ *  copy defaulted an unknown account to `claude` and the other left it
+ *  undefined, which is the difference between a subscription being grouped and
+ *  being dropped. */
+export const sourceMap = (accounts) =>
+  new Map((accounts || []).map((a) => [a.account_uuid, UsageSource(a.source)]));
+
 export function quotaAccounts(perAccount, accounts) {
-  const sourceOf = new Map((accounts || []).map((a) => [a.account_uuid, UsageSource(a.source)]));
+  const sourceOf = sourceMap(accounts);
   const shown = [], metered = [];
   for (const entry of perAccount || []) {
     const source = sourceOf.get(entry.account_uuid);
@@ -161,4 +170,61 @@ export function quotaAccounts(perAccount, accounts) {
     else shown.push(entry);
   }
   return { shown, metered };
+}
+
+/** quotaSourceOf answers which provider one `per_account` entry belongs to, and
+ *  it asks the READING first.
+ *
+ *  Two existing fields, in this order, and no new one (#95 is a render-layer
+ *  change; /v1/limits keeps its shape):
+ *
+ *    1. `limits.source` — the reading's own word for itself. api.LimitsView sets
+ *       it on the Codex path and leaves it off the Claude one (`omitempty`), so
+ *       a present value is always authoritative and an absent one is only ever
+ *       "not Codex".
+ *    2. the hub's account list, which is what quotaAccounts already resolves
+ *       through, and which covers the Claude case the field above is silent on.
+ *
+ *  Falling back to `claude` last is model.UsageSource's own rule for a row
+ *  written before the source column existed, applied here so an entry the
+ *  account list has not caught up with still lands in a named group rather than
+ *  in a third one called "other" that exists only for a race. */
+export function quotaSourceOf(entry, sourceOf) {
+  return entry?.limits?.source || sourceOf.get(entry?.account_uuid) || 'claude';
+}
+
+/** quotaGroups is quotaAccounts plus the split #95 asks for: the shown entries,
+ *  grouped by provider, in QUOTA_SOURCES order.
+ *
+ *  Claude and Codex do not describe a quota in the same words — Claude reports a
+ *  fixed five-hour and seven-day pair (model.LimitsSnapshot), Codex reports
+ *  whatever windows its provider names plus a credit balance and a blocked flag
+ *  (api.ProviderWindow) — so a single flat list makes the reader work out, per
+ *  row, which vocabulary they are reading. Worse on this hub than in theory: one
+ *  person's Claude and Codex subscriptions share an email, so the flat list
+ *  printed `verky.yi@gmail.com` twice in a row with nothing between them saying
+ *  which was which.
+ *
+ *  Grouping is a RENDER decision and lives here rather than in the API for the
+ *  same reason the shown/metered split does (#50): an API consumer wants the
+ *  whole list in one shape.
+ *
+ *  An empty group is dropped, exactly as accountGroups drops one: a heading over
+ *  nothing claims this hub has a provider it does not have. */
+export function quotaGroups(perAccount, accounts) {
+  const sourceOf = sourceMap(accounts);
+  const { shown, metered } = quotaAccounts(perAccount, accounts);
+  const bySource = new Map([...QUOTA_SOURCES].map((s) => [s, []]));
+  for (const entry of shown) {
+    const source = quotaSourceOf(entry, sourceOf);
+    // A source with a window but no bucket here cannot happen while
+    // QUOTA_SOURCES is the allow-list both this and hasQuotaWindow read, but an
+    // entry is never dropped on the floor for being unexpected: the reading
+    // exists, so it gets a group.
+    if (!bySource.has(source)) bySource.set(source, []);
+    bySource.get(source).push(entry);
+  }
+  const groups = [...bySource].filter(([, entries]) => entries.length)
+    .map(([source, entries]) => ({ source, entries }));
+  return { groups, metered };
 }
