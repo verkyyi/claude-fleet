@@ -96,10 +96,18 @@ a handoff is itself expensive, since the fresh session re-grounds from a doc.
 
 Three habits buy most of it back:
 
-- **Delegate the broad sweep.** "Which files touch X, and where" is a fan-out
-  search — hand it to the `Explore` subagent and you get back the conclusion
-  instead of every file it read on the way. Keep the main window for the code
-  you are actually changing.
+- **Delegate the broad sweep — to a READ-ONLY subagent.** "Which files touch
+  X, and where" is a fan-out search — hand it to the `Explore` subagent and you
+  get back the conclusion instead of every file it read on the way. Keep the
+  main window for the code you are actually changing. `Explore`, `Plan` and
+  `claude-code-guide` are the only subagent types a fleet pane can start:
+  `hooks/agent-guard.py` blocks `general-purpose`, `claude`, `fork`, an
+  unnamed type and any `isolation: worktree` (issue #811). A writing subagent
+  runs outside every fleet rail — invisible to the dash, no state, killed
+  mid-edit when the quota migration moves the *window*, several writing one
+  worktree, no one-worker-one-PR, no history row, no handoff — so work that
+  writes code is a WORKER: `fleet-issue-file.sh --parent N --spawn` below, and
+  its `[child-report]` is how the result comes back.
 - **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
   symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
   `cat -n` — read the function, not the file that contains it.

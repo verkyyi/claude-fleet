@@ -35,6 +35,18 @@ Do not install from memory: read the doc and work from it.
 - **The base checkout is edit-read-only** (hook-enforced): a worker edits inside
   its `issue-<N>` git worktree and lands via PR; the operator files/triages from
   the hub and hands implementation to a worker. Never commit to the base checkout.
+- **Code-writing work is a fleet WORKER, never a subagent** (issue #811,
+  hook-enforced by `hooks/agent-guard.py` on every fleet pane — hub, scratch,
+  worker). A `general-purpose` / `claude` / `fork` subagent runs outside every
+  rail above: the dash cannot see it, it has no `@claude_state`, the quota
+  migration moves *windows* so a subagent that hits the limit dies mid-edit,
+  several can write one worktree, and there is no one-worker-one-PR, no
+  `/fleet-history` row, no handoff. Hand implementation to a worker
+  (`dash-issue-session.sh <N>`, `fleet-issue-file.sh --spawn`,
+  `dash-raw-session.sh`); a subagent is for READ-ONLY fan-out only —
+  `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
+  (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
+  is the operator's escape hatch.
 - **One tmux session ↔ one GitHub repo.** The PR map is one repo-wide
   `gh pr list`; multi-repo fleets need per-window repo detection (not built).
 - **Panel windows, not sessions.** Windows named `dash`, `plan`, `backlog` are

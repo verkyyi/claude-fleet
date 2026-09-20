@@ -19,11 +19,13 @@
   },
   "matchers": {
     "Edit|Write|MultiEdit|NotebookEdit": "apply_patch",
-    "Artifact": null
+    "Artifact": null,
+    "Agent": null
   },
   "matcher_notes": {
     "Edit|Write|MultiEdit|NotebookEdit": "Codex edits through ONE tool: apply_patch, with the patch text in tool_input.command.",
-    "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard."
+    "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard.",
+    "Agent": "Codex has no Agent (subagent) tool, so agent-guard.py has nothing to guard (issue #811)."
   },
   "drop_commands": {
     "handoff-latch-reset-hook.sh": "Claude-only reset hook; the Codex launcher owns the fresh-conversation latch.",

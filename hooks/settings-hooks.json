@@ -23,6 +23,12 @@
         "hooks": [
           { "type": "command", "command": "python3 ~/.claude/fleet/hooks/artifact-guard.py" }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/agent-guard.py" }
+        ]
       }
     ],
     "PostToolUse": [
