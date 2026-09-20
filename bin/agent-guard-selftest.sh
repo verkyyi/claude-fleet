@@ -100,7 +100,7 @@ STUB
   STUB_SESSION=fleet-x assert_exit 2 "tmux session WITH a fleet conf → blocked" "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')"
   STUB_SESSION=fleet-x assert_exit 0 "tmux session WITH a fleet conf → Explore still allowed" "$(agent_json '{"subagent_type":"Explore","prompt":"p","description":"d"}')"
   STUB_SESSION=adhoc   assert_exit 0 "ad-hoc tmux session (no fleet conf) → allowed" "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')"
-  STUB_SESSION=        assert_exit 0 "tmux, no resolvable session → allowed" "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')"
+  STUB_SESSION=''      assert_exit 0 "tmux, no resolvable session → allowed" "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')"
   exit $fails ); rc=$?; fails=$((fails + rc))
 ( fails=0; unset FLEET_ALLOW_SUBAGENT FLEET_MAIN; export TMUX=/tmp/tmux-0/x,1,0 FLEET_LIB="$TMP/no-such-lib.sh"
   assert_exit 0 "tmux but no fleet-lib installed → allowed (fail open)" "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')"
