@@ -156,6 +156,26 @@ fleet_daemon_interval() {
   printf '%s' "$_fd_i"
 }
 
+# fleet_daemon_fair_budget <remaining-secs> <units-left-including-this> [floor] —
+# an even split of a tick's remaining budget across the units (fleets) still to
+# visit, so one slow unit cannot starve the rest WITHIN a tick (issue #850). The
+# caller's cursor rotation already gives fairness ACROSS ticks; this gives it
+# within one. Adaptive: a unit that finishes early shrinks the divisor for the
+# next, handing over its leftover. Floored (default 5s) so every unit gets a
+# usable slice, and capped at what remains so the total never overruns the tick.
+fleet_daemon_fair_budget() {
+  _fd_rem="${1:-0}"; _fd_n="${2:-1}"; _fd_fl="${3:-5}"
+  case "$_fd_rem" in ''|*[!0-9]*) _fd_rem=0 ;; esac
+  case "$_fd_n"   in ''|*[!0-9]*) _fd_n=1 ;; esac
+  case "$_fd_fl"  in ''|*[!0-9]*) _fd_fl=5 ;; esac
+  [ "$_fd_n" -ge 1 ] || _fd_n=1
+  _fd_b=$(( _fd_rem / _fd_n ))
+  [ "$_fd_b" -lt "$_fd_fl" ] && _fd_b="$_fd_fl"
+  [ "$_fd_b" -gt "$_fd_rem" ] && _fd_b="$_fd_rem"
+  printf '%s' "$_fd_b"
+}
+
+
 # fleet_daemon_stale_secs <unit> — the staleness threshold, RELATIVE to the unit's
 # own interval: max(MULT × interval, FLOOR). An absolute per-unit override wins
 # outright (FLEET_DAEMON_STALE_<UNIT>, and FLEET_COLLECT_STALE for `collect` so
