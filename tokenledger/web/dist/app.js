@@ -48,10 +48,11 @@ export const app = {
 
 const loaders = { now: createLoader(), review: createLoader(), consumption: createLoader(), repo: createLoader() };
 let lastRendered = '';
-// The progress tier's last results, kept so a presentation-only change can be
-// drawn from them. See the `reuse` branch in load() for why.
+// What the last load ASKED FOR. Compared against the next one to tell a change
+// that needs new rows from one that only re-draws the rows already in hand --
+// see the `reuse` branch in route(). Each loader keeps its own last results;
+// seq.js's replay() is what hands them back.
 let lastDataKey = null;
-let lastRepoResults = null;
 
 function route() {
   app.state = parse(location.hash);
@@ -92,8 +93,12 @@ function route() {
   const key = format({ ...s, session: null });
   if (key !== lastRendered) {
     // Did this change alter what we ASK for, or only how we show it? Narrowing
-    // the stalled table to one label changes neither request the progress tier
-    // makes, so it redraws from the rows already in hand.
+    // the stalled table to one label, or re-sorting the consumption table by
+    // tokens, changes not one request URL on the page -- so every tier redraws
+    // from the rows already in hand and the whole click costs zero requests.
+    // It is the page-wide answer, not the progress tier's: the other three
+    // loaders in load() used to go out unconditionally underneath the band
+    // that had just redrawn itself for free.
     const dk = dataKey(s);
     const reuse = lastDataKey === dk;
     lastRendered = key;
@@ -132,20 +137,22 @@ async function load(reuse = false) {
     }), signal)],
     apply: ([r]) => renderConsumption($('#consumption'), r, s, app, range),
   };
+  // The spend headline reads the summary this loader already fetched -- folded
+  // in here rather than at the call site so the reuse path below gets it too.
+  const reviewApply = (results) => {
+    const r = results[SUMMARY_INDEX];
+    renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
+    reviewR.apply(results);
+  };
   // The progress tier renders only where a shipper has pushed something. A
   // hub that never turned the feature on must look exactly as it did before
   // it landed -- no empty card, no band, no extra request per route.
   const repoDone = loadRepoTier(s, reuse);
   root.setAttribute('aria-busy', 'true'); setBusy(true);
   const [a, b, c, d] = await Promise.all([
-    loaders.now.run(nowR.fetchers, nowR.apply),
-    loaders.consumption.run(consumptionR.fetchers, consumptionR.apply),
-    loaders.review.run(reviewR.fetchers, (results) => {
-      // The spend headline reads the summary this loader already fetched.
-      const r = results[SUMMARY_INDEX];
-      renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
-      reviewR.apply(results);
-    }),
+    runOrReplay(loaders.now, nowR.fetchers, nowR.apply, reuse),
+    runOrReplay(loaders.consumption, consumptionR.fetchers, consumptionR.apply, reuse),
+    runOrReplay(loaders.review, reviewR.fetchers, reviewApply, reuse),
     repoDone,
   ]);
   // The event stream opens HERE, once the first screen is off the wire -- not
@@ -161,6 +168,25 @@ async function load(reuse = false) {
     root.setAttribute('aria-busy', 'false');
     setBusy(loaders.now.inFlight || loaders.review.inFlight || loaders.consumption.inFlight || loaders.repo.inFlight);
   }
+}
+
+/** runOrReplay is the ONE gate between "this change needs new rows" and "this
+ *  change re-draws rows we already have", and every tier on the page now goes
+ *  through it. It used to be one tier: #36 taught the progress band to redraw
+ *  synchronously, which is why the stalled table's filter stopped lying about
+ *  its own state -- but the three loaders beside it still went out
+ *  unconditionally, so filtering that table by a label kept costing 17
+ *  requests. The control was honest and the network was not.
+ *
+ *  `reuse` is route()'s verdict on the STATE (did the dataKey move?); seq.js's
+ *  replay() has the last word on the RESULTS (does what we kept cover what
+ *  this round would ask?), and answers false when it does not. So a change
+ *  that genuinely moves the data -- a new span, a dragged brush, a chip, a
+ *  different group-by -- never reaches the replay at all, and one that arrives
+ *  while the fold has outrun the cache falls through to a real fetch. */
+function runOrReplay(loader, fetchers, apply, reuse) {
+  if (reuse && loader.replay(fetchers, apply)) return Promise.resolve(true);
+  return loader.run(fetchers, apply);
 }
 
 /** loadRepoTier draws the progress band and its cards, and is the ONE place
@@ -192,8 +218,7 @@ function loadRepoTier(s, reuse) {
   //
   // The 60-second refresh and the repo picker both call load() with no
   // argument, so neither can be served a stale page from here.
-  if (reuse && lastRepoResults) { repoR.apply(lastRepoResults); return Promise.resolve(true); }
-  return loaders.repo.run(repoR.fetchers, (results) => { lastRepoResults = results; repoR.apply(results); });
+  return runOrReplay(loaders.repo, repoR.fetchers, repoR.apply, reuse);
 }
 
 // The operations tier remembers whether it was open, per viewer.

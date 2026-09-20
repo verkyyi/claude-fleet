@@ -77,14 +77,21 @@ export function format(s) {
 
 // PRESENTATION_KEYS narrow or reorder rows the page ALREADY HAS. None of them
 // appears in any request: the stalled table's filter and sort are applied to
-// the same 348 issues the tier fetched once.
+// the same 348 issues the tier fetched once, and `csort` reorders the provider
+// rows of one /v1/usage answer that is already in memory.
+//
+// The test for membership is mechanical, and it is the one to apply to any key
+// added later: does changing it change the URL of a single request the page
+// sends? `sort` does -- /v1/sessions is sorted server-side -- so it is NOT in
+// here. `csort` does not: rows.js sorts those rows in the browser, and the key
+// appears in no query string anywhere in the repo.
 //
 // dataKey is `format` with those keys flattened back to their defaults, so two
 // states that ask the hub for exactly the same thing produce the same key.
 // That is how app.js tells "redraw" from "re-fetch" -- without it, hiding some
 // rows costs a round trip for every one of them, and the control that did the
 // hiding goes on reporting its old value until the answer lands.
-export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped'];
+export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped', 'csort'];
 export function dataKey(s) {
   const flat = { ...s, session: null };
   for (const k of PRESENTATION_KEYS) flat[k] = DEFAULTS[k];

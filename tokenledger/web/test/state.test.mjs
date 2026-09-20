@@ -125,16 +125,26 @@ test('dataKey ignores presentation, and nothing else', async () => {
   const { dataKey, PRESENTATION_KEYS } = await import('../dist/lib/state.js');
   const base = { ...DEFAULTS, sub: 'acct', span: '7d', repo: 'o/r' };
   const k = dataKey(base);
-  for (const [key, value] of [['rsort', 'comments'], ['rlabel', 'security'], ['rshipped', '1']]) {
+  for (const [key, value] of [['rsort', 'comments'], ['rlabel', 'security'], ['rshipped', '1'],
+    // csort reorders provider rows already in memory (rows.js sortRows) and
+    // appears in no query string -- the same shape as the three above, and it
+    // sat outside this list for long enough to cost 19 requests per click.
+    ['csort', 'tokens']]) {
     assert.equal(dataKey({ ...base, [key]: value }), k, `${key} must not force a re-fetch`);
   }
-  // ...and every key that DOES change a request still moves it.
+  // ...and every key that DOES change a request still moves it. This half is
+  // the guard against over-reaching: a short circuit that swallowed one of
+  // these would serve rows from the wrong period, account or grouping.
   assert.notEqual(dataKey({ ...base, repo: 'o/other' }), k, 'the repo picker changes both requests');
   assert.notEqual(dataKey({ ...base, span: '30d' }), k);
   assert.notEqual(dataKey({ ...base, sub: 'other' }), k);
   assert.notEqual(dataKey({ ...base, sort: 'cost' }), k, '/v1/sessions is sorted server-side');
+  assert.notEqual(dataKey({ ...base, from: 1788300000000, to: 1788380000000 }), k, 'the brush moves the range');
+  assert.notEqual(dataKey({ ...base, g1: 'model' }), k, 'the group-by is the by= parameter');
+  assert.notEqual(dataKey({ ...base, g2: 'team' }), k);
+  assert.notEqual(dataKey({ ...base, chips: { project: '/x' } }), k, 'a chip filters every card');
   // The session id is not part of it either way: opening the detail pane is
   // route()'s business, and it already excludes it from its own key.
   assert.equal(dataKey({ ...base, session: 'abc' }), k);
-  assert.deepEqual(PRESENTATION_KEYS, ['rsort', 'rlabel', 'rshipped']);
+  assert.deepEqual(PRESENTATION_KEYS, ['rsort', 'rlabel', 'rshipped', 'csort']);
 });
