@@ -147,6 +147,57 @@ ok; has '"via":"hook"' "$line" || fail "the hook end must be distinguishable fro
 # ============================================================================
 # 6. THE QUEUE IS BOUNDED, AND DROPS THE OLDEST
 # ============================================================================
+# The spool NAME is the only order the cap and the drain have — a plain glob,
+# trusted to be oldest-first. `<sec>-$$-$RANDOM` was that only ACROSS seconds:
+# within one second it fell to the PID, unpadded, so on a runner whose PIDs
+# crossed 99999→100000 mid-burst the 6-digit ones sorted FIRST, the cap dropped
+# pr 4 and kept pr 1, and this test went red on 2 of 5 master runs (issue #815).
+# The old assertion ("6 kept, 1 dropped") passed by luck whenever the six writes
+# straddled a second. Three pins now, each one a distinct way the order can rot:
+#
+#  (a) the name is fixed-width digits — lexical order == numeric order, in every
+#      locale, whatever the PID width;
+#  (b) a same-second burst's names sort in EMISSION order, with a strictly
+#      increasing stamp — a whole-second clock would tie, a PID-ordered name would
+#      sort by luck;
+#  (c) with cap+3 writes, what survives is EXACTLY the newest cap, oldest-first —
+#      the set, not one member of it.
+spooled_names() { local p; for p in "$SPOOL"/*.json; do [ -f "$p" ] && printf '%s\n' "${p##*/}"; done; }
+spooled_prs()   { local p; for p in "$SPOOL"/*.json; do [ -f "$p" ] && sed -n 's/.*"pr":\([0-9]*\).*/\1/p' "$p"; done | tr '\n' ' '; }
+
+# (a) fixed width: 10-digit seconds, 6-digit microseconds, 7-digit PID (Linux
+#     pid_max tops out at 4194304), 5-digit RANDOM (0..32767).
+rm -f "$SPOOL"/*.json
+bash "$CLI" session.pr --repo o/r --pr 1 >/dev/null 2>&1
+name=$(spooled_names)
+ok; printf '%s\n' "$name" | grep -Eq '^[0-9]{10}-[0-9]{6}-[0-9]{7}-[0-9]{5}\.json$' \
+  || fail "a spool name must be fixed-width digits (sec-usec-pid-random), so lexical order is arrival order" "$name"
+
+# (b) a burst inside one second: emission order == sorted order, stamps strictly
+#     increasing. Each emit is its own process, so consecutive stamps are at
+#     least a fork apart — a tie means the sub-second clock is not live.
+rm -f "$SPOOL"/*.json
+emitted=''
+for i in 1 2 3 4 5 6 7 8; do
+  bash "$CLI" session.pr --repo o/r --pr "$i" >/dev/null 2>&1
+  new=''
+  for n in $(spooled_names); do
+    case "$emitted" in *"$n"*) ;; *) new=$n ;; esac
+  done
+  [ -n "$new" ] || fail "emit $i left no new spool file" "$(spooled_names)"
+  emitted="$emitted$new"$'\n'
+done
+eq "a same-second burst must sort in emission order" "$emitted" "$(printf '%s' "$emitted" | sort)"$'\n'
+prev=0
+for n in $emitted; do
+  sec=${n%%-*}; rest=${n#*-}; usec=${rest%%-*}
+  st=$(( 10#${sec}${usec} ))
+  ok; [ "$st" -gt "$prev" ] || fail "the microsecond stamp must strictly increase across a burst" "$emitted"
+  prev=$st
+done
+
+# (c) cap+3 writes ⇒ exactly the newest cap survive, oldest-first (the drain's
+#     order too — it walks the same glob).
 rm -f "$SPOOL"/*.json
 export FLEET_EMIT_QUEUE_MAX=3
 for i in 1 2 3 4 5 6; do bash "$CLI" session.pr --repo o/r --pr "$i" >/dev/null 2>&1; done
@@ -154,6 +205,7 @@ eq "the spool is capped at FLEET_EMIT_QUEUE_MAX" 3 "$(depth)"
 kept=$(spooled)
 ok; has '"pr":6' "$kept" || fail "overflow must keep the NEWEST events" "$kept"
 ok; has '"pr":1' "$kept" && fail "overflow must drop the OLDEST events" "$kept"
+eq "overflow must keep EXACTLY the newest cap events, oldest-first" "4 5 6 " "$(spooled_prs)"
 unset FLEET_EMIT_QUEUE_MAX
 
 # ============================================================================
@@ -208,6 +260,26 @@ got=$(cat "$WORK/sink.log" 2>/dev/null)
 ok; has 'Bearer tok-123' "$got" || fail "the bearer token must be sent" "$got"
 ok; has '"event":"session.pr"' "$got" || fail "the sink must receive the event" "$got"
 ok; has '"pr":99' "$got" || fail "the PR number must be delivered" "$got"
+kill "$SINK_PID" 2>/dev/null; SINK_PID=
+
+# The drain delivers OLDEST-FIRST — the same fixed-width glob the cap trusts
+# (issue #815). Queue four behind a dead endpoint, then point --flush at the sink
+# and read the order the sink saw. A kick from the dead-endpoint emits may still
+# hold the flush lock for a moment, so the flush is retried, bounded.
+rm -f "$SPOOL"/*.json
+export FLEET_EMIT_URL="http://127.0.0.1:9/dead"
+for i in 1 2 3 4; do bash "$CLI" session.pr --repo o/r --pr "$i" >/dev/null 2>&1; done
+eq "four events wait behind the dead endpoint" 4 "$(depth)"
+export FLEET_EMIT_URL="http://127.0.0.1:$PORT/e"
+start_sink accept
+flushed() {
+  local i
+  for i in $(seq 1 50); do bash "$CLI" --flush >/dev/null 2>&1; [ "$(depth)" = 0 ] && return 0; sleep 0.1; done
+  return 1
+}
+ok; flushed || fail "--flush must drain a waiting spool" "$(spooled)"
+eq "the drain must deliver oldest-first" "1 2 3 4 " \
+  "$(sed -n 's/.*"pr":\([0-9]*\).*/\1/p' "$WORK/sink.log" 2>/dev/null | tr '\n' ' ')"
 kill "$SINK_PID" 2>/dev/null; SINK_PID=
 
 # A 4xx is PERMANENT — the event is dropped, not retried forever. One bad event
