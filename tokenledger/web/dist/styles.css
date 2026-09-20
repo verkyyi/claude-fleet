@@ -492,6 +492,11 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
    to be findable by keyboard, not merely reachable — same ring as .secnav and
    .ops summary already use. */
 .card .tbl:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+/* A retired endpoint's row in the Fleet roster (issue #42). Greyed rather
+   than hidden once revealed: the operator asked to see it, and the question
+   they are answering — "did I retire the right one" — needs it legible, not
+   whispered. Not `display:none` anywhere; hiding is done by not fetching. */
+.card tr.retired > td { color: var(--ink-3); }
 /* sessions */
 .sessions tr { cursor: pointer; } .sessions td a { color: inherit; text-decoration: underline dotted; }
 /* detail overlay */

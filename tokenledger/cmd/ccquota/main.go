@@ -7,6 +7,7 @@
 //	ccquota agent    run on each endpoint; scans transcripts, pushes to a hub
 //	ccquota hub      the collector, dashboard and MCP server
 //	ccquota enroll   mint an endpoint token (run on the hub)
+//	ccquota endpoint list/retire/delete an endpoint (run on the hub)
 //	ccquota budget   headroom verdict for a scheduler (read-only advice)
 package main
 
@@ -34,6 +35,8 @@ func main() {
 		err = runHub(os.Args[2:])
 	case "enroll":
 		err = runEnroll(os.Args[2:])
+	case "endpoint":
+		err = runEndpoint(os.Args[2:])
 	case "stamp":
 		err = runStamp(os.Args[2:])
 	case "name":
@@ -74,6 +77,8 @@ Usage:
   ccquota agent  [flags]    Collect on this endpoint and push to a hub
   ccquota hub    [flags]    Run the collector, dashboard and MCP server
   ccquota enroll [flags]    Mint an enrollment token for a new endpoint
+  ccquota endpoint <cmd>    List, retire or delete an enrolled endpoint
+                            (list | retire <id> | delete <id>)
   ccquota stamp  [flags]    Record which subscription a session is on
                             (install as Claude Code's statusLine)
   ccquota name   [flags]    List subscriptions, or name one permanently

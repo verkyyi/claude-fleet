@@ -582,7 +582,54 @@ function mutedTail(muted, app) {
 // limits banner's 600s, which ages a rate-limit reading, not an endpoint.
 const STALE_ENDPOINT_SEC = 3600;
 
-function endpointRosterCard(endpoints, app) {
+// rosterTable is the roster's rows on their own, so the "show retired" toggle
+// can swap them without rebuilding the card's headings around them.
+//
+// A retired endpoint is greyed out and says when it was retired in the
+// "last seen" column's place, because for a retired endpoint that is the
+// honest answer: it is not late reporting, it is not coming back.
+function rosterTable(endpoints, app) {
+  return el('div', { class: 'scroll' }, el('table', {},
+    el('thead', {}, el('tr', {},
+      el('th', {}, t('endpoints.col.name')), el('th', {}, t('endpoints.col.subscription')), el('th', {}, t('endpoints.col.platform')),
+      el('th', {}, t('endpoints.col.cc')), el('th', {}, t('endpoints.col.agent')),
+      el('th', {}, t('endpoints.col.lastSeen')), el('th', {}, t('endpoints.col.excluded')))),
+    el('tbody', {}, endpoints.map((e) => {
+      const secs = e.last_seen ? (Date.now() - new Date(e.last_seen)) / 1000 : null;
+      const stale = secs == null || secs > STALE_ENDPOINT_SEC;
+      const dropped = (e.dropped_pre_account || 0) + (e.dropped_beyond_backfill || 0);
+      const retired = !!e.retired_at;
+      return el('tr', retired ? { class: 'retired' } : {},
+        el('td', { title: e.hostname || '' }, e.label || e.endpoint_id),
+        el('td', { title: e.account_uuid || '' }, accountLabel(app, e.account_uuid)),
+        el('td', {}, e.os ? `${e.os}/${e.arch}` : '—'),
+        el('td', {}, e.cc_version || '—'),
+        el('td', {}, e.agent_version || '—'),
+        el('td', { style: stale || retired ? 'color:var(--ink-3)' : '' },
+          retired
+            ? t('endpoints.retiredOn', { date: new Date(e.retired_at).toLocaleDateString() })
+            : secs == null ? t('endpoints.neverReported') : ago(secs)),
+        el('td', { style: dropped ? '' : 'color:var(--ink-3)' },
+          dropped ? t('endpoints.droppedTurns', { n: fmtInt(dropped) }) : '—'));
+    }))));
+}
+
+/** endpointRosterCard lists the fleet, hiding retired endpoints behind a
+ *  toggle.
+ *
+ *  Hidden by DEFAULT because that is the whole point of retiring one: a
+ *  machine that was decommissioned should stop being something an operator has
+ *  to recognise and dismiss every time they read the roster. Shown on request
+ *  because "where did it go" is the next question, and a row that vanished
+ *  with no way back is how you get someone opening the database.
+ *
+ *  The toggle is built like the ⊞ table toggle in charts.js and for the same
+ *  reasons: `aria-expanded` says which state it is in and is rewritten on
+ *  every click, and `aria-controls` points at the table it swaps. The retired
+ *  rows are fetched lazily, on first reveal — the page's own roster fetch
+ *  stays active-only, so `app.endpoints`, the scope picker's machine chips and
+ *  the lossy-history banner keep meaning "the live fleet". */
+function endpointRosterCard(endpoints, app, state) {
   const card = el('div', { class: 'card' },
     el('h2', {}, t('endpoints.title')),
     el('p', { class: 'hint' }, t('endpoints.hint')),
@@ -592,31 +639,48 @@ function endpointRosterCard(endpoints, app) {
     card.appendChild(el('div', { class: 'empty' }, t('endpoints.empty')));
     return card;
   }
-  card.appendChild(el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {},
-      el('th', {}, t('endpoints.col.name')), el('th', {}, t('endpoints.col.subscription')), el('th', {}, t('endpoints.col.platform')),
-      el('th', {}, t('endpoints.col.cc')), el('th', {}, t('endpoints.col.agent')),
-      el('th', {}, t('endpoints.col.lastSeen')), el('th', {}, t('endpoints.col.excluded')))),
-    el('tbody', {}, endpoints.map((e) => {
-      const secs = e.last_seen ? (Date.now() - new Date(e.last_seen)) / 1000 : null;
-      const stale = secs == null || secs > STALE_ENDPOINT_SEC;
-      const dropped = (e.dropped_pre_account || 0) + (e.dropped_beyond_backfill || 0);
-      return el('tr', {},
-        el('td', { title: e.hostname || '' }, e.label || e.endpoint_id),
-        el('td', { title: e.account_uuid || '' }, accountLabel(app, e.account_uuid)),
-        el('td', {}, e.os ? `${e.os}/${e.arch}` : '—'),
-        el('td', {}, e.cc_version || '—'),
-        el('td', {}, e.agent_version || '—'),
-        el('td', { style: stale ? 'color:var(--ink-3)' : '' },
-          secs == null ? t('endpoints.neverReported') : ago(secs)),
-        el('td', { style: dropped ? '' : 'color:var(--ink-3)' },
-          dropped ? t('endpoints.droppedTurns', { n: fmtInt(dropped) }) : '—'));
-    })))));
+
+  const body = rosterTable(endpoints, app);
+  body.id = 'endpoint-roster';
+  let showing = false;
+  let withRetired = null;
+  const btn = el('button', {
+    class: 'tbl', type: 'button',
+    title: t('endpoints.showRetired'),
+    'aria-label': t('endpoints.showRetired'),
+    'aria-expanded': 'false',
+    'aria-controls': body.id,
+    onclick: async () => {
+      showing = !showing;
+      btn.setAttribute('aria-expanded', String(showing));
+      if (!showing) {
+        body.replaceChildren(...rosterTable(endpoints, app).childNodes);
+        return;
+      }
+      if (withRetired === null) {
+        const acct = encodeURIComponent((state && state.sub) || 'all');
+        const source = encodeURIComponent((state && state.chips && state.chips.source) || '');
+        try {
+          withRetired = await app.api(
+            `/v1/endpoints?account=${acct}&source=${source}&include=retired`);
+        } catch {
+          // A failed reveal must not leave the button claiming it is showing
+          // something it is not.
+          withRetired = null;
+          showing = false;
+          btn.setAttribute('aria-expanded', 'false');
+          return;
+        }
+      }
+      body.replaceChildren(...rosterTable(withRetired, app).childNodes);
+    },
+  }, '⊟');
+  card.append(btn, body);
   return card;
 }
-function endpointRosterCardFromResult(result, app) {
+function endpointRosterCardFromResult(result, app, state) {
   if (result.status === 'rejected') return queryFailed(t('endpoints.title'), result);
-  return endpointRosterCard(result.value, app);
+  return endpointRosterCard(result.value, app, state);
 }
 
 // Deliberately a list per machine. Claude Code takes its account from the
@@ -768,7 +832,7 @@ function applyNow(root, state, app, results, opsOpen) {
 
   const endpoints = endpointsR.status === 'fulfilled' ? endpointsR.value : [];
   const fleet = fleetCard(
-    endpointRosterCardFromResult(endpointsR, app),
+    endpointRosterCardFromResult(endpointsR, app, state),
     endpointAccountsCardFromResult(epAcctR),
     switchesCardFromResult(switchesR, app, endpoints));
 

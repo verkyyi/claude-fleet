@@ -277,11 +277,14 @@ func (s *Server) doors(f HubFacts) []Door {
 			ID: "ingest", Name: "Shipper ingest", Via: "http",
 			Where: []string{"/v1/ingest", "/v1/live/report", "/v1/collectors/quota-lease",
 				"/v1/ingest/repo", "/v1/ingest/growth", "/v1/growth/latest"},
-			Credential: "each shipper's OWN enrollment token from `ccquota enroll` — never the viewer token",
+			Credential: "each shipper's OWN enrollment token from `ccquota enroll` — never the viewer token, " +
+				"and revocable on its own with `ccquota endpoint retire`",
 			Can: "Write: push usage batches, live session reports, repo progress or the business ledger. " +
 				"The endpoint's identity comes from the token lookup, never from the body. /v1/growth/latest " +
 				"reads the revenue ledger back and is gated a SECOND time on the enrollment's kind, because " +
-				"every shipper here holds a token and only the growth ones may read revenue.",
+				"every shipper here holds a token and only the growth ones may read revenue. Retiring an " +
+				"endpoint closes every one of these doors to its token at once — they all resolve it through " +
+				"the same lookup — so the count beside this row is live tokens, not rows in the table.",
 			State: "open",
 			Note: "Here: " + plural(f.enrolled("agent"), "agent", "agents") +
 				", " + plural(f.enrolled("repo_shipper"), "repo shipper", "repo shippers") +

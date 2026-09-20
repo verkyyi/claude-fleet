@@ -199,6 +199,67 @@ it carries a token.
 > lookup fails and the dashboard reports a TLS error against that endpoint.
 > `apt-get install -y ca-certificates` (or your distro's equivalent) fixes it.
 
+**Retiring one** (also on the hub, same database, same access assumption):
+
+```bash
+ccquota endpoint list                  # every enrollment: agents AND shippers
+ccquota endpoint list --all            # retired ones too
+ccquota endpoint retire <endpoint_id>  # stop accepting its token, keep its history
+```
+
+`endpoint list` is the operator's inventory, so unlike the dashboard's Endpoints
+roster it shows **every kind** — agents, repo shippers, growth tokens — with a
+`KIND` column. The roster filters to agents because a shipper is not a machine
+and would be reported as one that stopped reporting; but a shipper is one of the
+likelier things to need retiring, and one you cannot see is one whose id you
+cannot look up.
+
+`retire` is the one you want. It keeps the endpoint's row and every usage row
+pointing at it — **past totals do not move** — and its enrollment token stops
+being accepted immediately: usage pushes, repo and growth pushes, the live
+report and the quota lease all reject it from that moment. The dashboard's
+roster hides it, with a toggle on the Endpoints card to show retired ones
+again, and its spend keeps its name everywhere history is drawn.
+
+There is **no un-retire**. The token hash is still on the row, so restoring it
+would put the credential you just killed back in service. Re-enroll instead:
+that mints a new id and a new token, and the retired endpoint keeps its history
+exactly as it stands.
+
+```bash
+ccquota endpoint delete <endpoint_id>  # remove it entirely
+```
+
+`delete` is only for an endpoint that **never reported anything** — a token
+minted for a one-off experiment, or for a shipper that was replaced before it
+ever pushed. It refuses the moment the endpoint has reported, and names what it
+found:
+
+```
+ep_1789872512194365000 has reported usage, so deleting it would change historical totals:
+
+  usage_events                 1 rows
+  usage_hourly                 1 rows
+  endpoint_accounts            1 rows
+
+Retire it instead — same effect on the roster and the token, and the
+numbers stay true:
+
+  ccquota endpoint retire ep_1789872512194365000
+```
+
+The distinction is the point: one is safe, the other rewrites the past.
+Deleting an endpoint whose spend is already in the ledger would make last
+month's report come back smaller with nothing left to say why — and nothing in
+the schema references `endpoints(endpoint_id)`, so it would not be a clean
+removal either: the row would go and nine tables would keep rows pointing at an
+id that no longer names anything.
+
+There is deliberately **no DELETE over HTTP**. `enroll` is already a hub-local
+operation that requires access to the database; retiring lives in exactly the
+same place, so the attack surface is unchanged. `GET /v1/endpoints` grows only
+a read-only `?include=retired`.
+
 **Just want a local report?** No hub, no network:
 
 ```bash
@@ -963,7 +1024,7 @@ JSON
 ```
 
 It is an enrollment token, not the viewer token — one credential per shipper,
-revocable on its own. Unlike `/v1/ingest` it carries no identity: a repo shipper
+revocable on its own (`ccquota endpoint retire`). Unlike `/v1/ingest` it carries no identity: a repo shipper
 is a cron job with a GitHub token, not a machine running an agent, and making it
 invent an `account_uuid` to be let in would stamp a fabricated attribution on
 every row it writes. **Repo rows carry no account at all**, deliberately: one

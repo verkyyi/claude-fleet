@@ -125,6 +125,9 @@ func migrate(db *sql.DB) error {
 		// and ensureIssueNumbers fills in the ones whose branch does say.
 		{"usage_events", "issue_number", "INTEGER"},
 		{"usage_hourly", "issue_number", "INTEGER"},
+		// Nullable with no default: NULL is "active", which is the correct
+		// state for every endpoint enrolled before retiring existed.
+		{"endpoints", "retired_at", "TEXT"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -334,6 +337,10 @@ type Endpoint struct {
 	Team       string     `json:"team"`
 	EnrolledAt time.Time  `json:"enrolled_at"`
 	LastSeen   *time.Time `json:"last_seen"`
+	// RetiredAt is when the operator retired this endpoint; nil means active.
+	// Omitted from the JSON of an active endpoint so a client can treat its
+	// presence as the whole answer.
+	RetiredAt *time.Time `json:"retired_at,omitempty"`
 
 	// What this endpoint could not attribute. Surfaced so a total that
 	// excludes history says so, instead of just looking smaller.
@@ -401,8 +408,14 @@ func (s *Store) EndpointKind(endpointID string) (string, error) {
 // endpoint — no caller can decide anything about one endpoint from it — so the
 // page can say "three agents, one growth shipper" without handing anyone a
 // kind to mistake for a credential.
+// Retired enrollments are NOT counted. The sentence above is the reason: this
+// page says how open each ingest door is, and a retired token cannot push
+// through one -- EndpointByTokenHash refuses it. Counting it would make the
+// door map overstate the hub's exposure, which is the one thing a page whose
+// whole job is "what is actually open here" must not do.
 func (s *Store) EnrollmentCounts() (map[string]int, error) {
-	rows, err := s.read.Query(`SELECT kind, COUNT(*) FROM endpoints GROUP BY kind`)
+	rows, err := s.read.Query(
+		`SELECT kind, COUNT(*) FROM endpoints WHERE retired_at IS NULL GROUP BY kind`)
 	if err != nil {
 		return nil, fmt.Errorf("enrollment counts: %w", err)
 	}
@@ -423,8 +436,21 @@ func (s *Store) EnrollmentCounts() (map[string]int, error) {
 }
 
 // EndpointByTokenHash resolves an enrollment token to its endpoint.
+//
+// A RETIRED endpoint does not resolve. This one filter is what makes retiring
+// a revocation rather than a label: every path that authenticates an
+// enrollment token -- /v1/ingest, /v1/ingest/repo, /v1/growth in both
+// directions, the live report, the quota lease -- reaches the endpoint through
+// this query and nowhere else, so they all stop accepting the token at the
+// same instant, and a path added later inherits it without having to know.
+//
+// A retired token is rejected exactly like an unknown one, with no way to tell
+// them apart. That is deliberate, the same reasoning as ShareLinkByToken: a
+// machine that was decommissioned and is still running its agent learns only
+// that it is not welcome, not that it once was.
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
-	row := s.read.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)
+	row := s.read.QueryRow(endpointColumns+
+		` FROM endpoints WHERE token_hash = ? AND retired_at IS NULL`, hash)
 	return scanEndpoint(row)
 }
 
@@ -463,21 +489,22 @@ const endpointColumns = `
 	SELECT endpoint_id, account_uuid, label, hostname, os, arch, machine_id,
 	       cc_version, agent_version, os_user, team, enrolled_at, last_seen,
 	       dropped_pre_account, earliest_dropped, dropped_beyond_backfill,
-	       backfill_limit, limits_unavailable`
+	       backfill_limit, limits_unavailable, retired_at`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	var e Endpoint
 	var enrolled string
-	var lastSeen, account, earliest sql.NullString
+	var lastSeen, account, earliest, retired sql.NullString
 	err := row.Scan(&e.ID, &account, &e.Label, &e.Hostname, &e.OS, &e.Arch,
 		&e.MachineID, &e.CCVersion, &e.AgentVersion, &e.OSUser, &e.Team, &enrolled, &lastSeen,
 		&e.DroppedPreAccount, &earliest, &e.DroppedBeyondBackfill,
-		&e.BackfillLimit, &e.LimitsUnavailable)
+		&e.BackfillLimit, &e.LimitsUnavailable, &retired)
 	if err != nil {
 		return nil, err
 	}
+	e.RetiredAt = parseNullTime(retired)
 	e.AccountUUID = account.String
 	e.EnrolledAt, _ = time.Parse(rfc, enrolled)
 	if lastSeen.Valid {

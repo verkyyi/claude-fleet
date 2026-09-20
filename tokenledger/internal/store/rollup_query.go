@@ -472,8 +472,10 @@ func (s *Store) fillSessionModels(f Filter, rows []SessionRow, ids []string) err
 	return res.Err()
 }
 
+// Retired endpoints included, same reason as labelEndpoints: a past session
+// ran on the machine that has since been retired, and it still has a name.
 func (s *Store) labelSessionEndpoints(rows []SessionRow) {
-	eps, err := s.ListEndpoints("")
+	eps, err := s.ListEndpointsWithRetired("")
 	if err != nil {
 		return
 	}

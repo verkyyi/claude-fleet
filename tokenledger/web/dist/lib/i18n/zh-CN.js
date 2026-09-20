@@ -251,6 +251,8 @@ export const zhCN = {
   'endpoints.col.excluded': '已排除',
   'endpoints.neverReported': '从未上报',
   'endpoints.droppedTurns': '{n} 轮次',
+  'endpoints.showRetired': '显示已退役的端点',
+  'endpoints.retiredOn': '{date} 退役',
   'machines.title': '每台机器在跑什么',
   'machines.concurrent': '{total} 个端点里有 {n} 个同时跑着不止一个订阅。'
     + '这是正常的 —— 账号来自每个进程各自的环境变量，而不是机器。',

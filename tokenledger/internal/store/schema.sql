@@ -131,7 +131,25 @@ CREATE TABLE IF NOT EXISTS endpoints (
   dropped_pre_account     INTEGER NOT NULL DEFAULT 0,
   earliest_dropped        TEXT,
   dropped_beyond_backfill INTEGER NOT NULL DEFAULT 0,
-  backfill_limit          TEXT NOT NULL DEFAULT ''
+  backfill_limit          TEXT NOT NULL DEFAULT '',
+
+  -- When this endpoint was retired. NULL = active; a timestamp means the
+  -- operator is done with it.
+  --
+  -- Retiring KEEPS the row and every usage row pointing at it. That is the
+  -- whole point: an endpoint's spend is already in the ledger, and deleting it
+  -- would silently change historical totals -- last month's report would come
+  -- back smaller with no record of why. So retire is the default and the only
+  -- thing offered for an endpoint that has ever reported; DeleteEndpoint
+  -- exists for the mint-then-abandon case and refuses everything else.
+  --
+  -- It is also a real revocation, not a label: EndpointByTokenHash filters on
+  -- it, and that is the one query every enrollment-token path goes through, so
+  -- the token stops being accepted everywhere at once. There is deliberately
+  -- no un-retire -- the token hash is still on this row, so restoring the row
+  -- would restore the credential the operator just killed. Re-enroll instead:
+  -- a new id, a new token, and the old spend stays where it was.
+  retired_at              TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_endpoints_account ON endpoints(account_uuid);

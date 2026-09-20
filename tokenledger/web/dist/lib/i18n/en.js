@@ -255,6 +255,8 @@ export const en = {
   'endpoints.col.excluded': 'Excluded',
   'endpoints.neverReported': 'never reported',
   'endpoints.droppedTurns': '{n} turns',
+  'endpoints.showRetired': 'Show retired endpoints',
+  'endpoints.retiredOn': 'retired {date}',
   'machines.title': 'What each machine is running',
   'machines.concurrent': '{n} of {total} endpoint(s) run more than one subscription at once. '
     + "That is normal — the account comes from each process's environment, not the machine.",

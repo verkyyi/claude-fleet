@@ -229,7 +229,10 @@ func (s *Server) endpointTeams(account, source string) (map[string]string, error
 	if account == store.AllAccounts {
 		account = ""
 	}
-	eps, err := s.Store.ListEndpoints(account, source)
+	// Retired endpoints included: this resolves a TEAM for spend that has
+	// already happened, and retiring a machine must not quietly move its past
+	// spend off the team that incurred it and into "unassigned".
+	eps, err := s.Store.ListEndpointsWithRetired(account, source)
 	if err != nil {
 		return nil, err
 	}

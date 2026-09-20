@@ -83,15 +83,37 @@ func (s *Store) ListAccounts() ([]Account, error) {
 	return out, rows.Err()
 }
 
-// ListEndpoints returns the endpoints for one account, or all when account is
-// empty.
+// ListEndpoints returns the ACTIVE endpoints for one account, or all when
+// account is empty. Retired endpoints are excluded; ListEndpointsWithRetired
+// is the way to see them.
+//
+// Excluding them here rather than at each caller is the point: the roster, the
+// stale-agent finding, the scope picker's machine chips and the MCP tool all
+// read this one function, and a retired endpoint showing up in any of them
+// would be reported as a machine that stopped reporting -- which is exactly
+// the false alarm retiring exists to clear.
 func (s *Store) ListEndpoints(account string, sources ...string) ([]Endpoint, error) {
+	return s.listEndpoints(account, false, sources...)
+}
+
+// ListEndpointsWithRetired is ListEndpoints plus the retired ones, for the
+// surfaces whose job is to show what was retired: `ccquota endpoint list` and
+// the dashboard roster's "show retired" toggle. Each row carries retired_at,
+// so a caller can tell them apart.
+func (s *Store) ListEndpointsWithRetired(account string, sources ...string) ([]Endpoint, error) {
+	return s.listEndpoints(account, true, sources...)
+}
+
+func (s *Store) listEndpoints(account string, withRetired bool, sources ...string) ([]Endpoint, error) {
 	// Repo shippers are enrolled endpoints but they are not part of the fleet:
 	// they never collect usage, so every surface fed from here -- the roster,
 	// the stale-agent finding -- would report one as a machine that stopped
 	// reporting. Their health is visible where it means something, on the
 	// repositories list's observed_at.
 	q := endpointColumns + ` FROM endpoints WHERE kind = 'agent'`
+	if !withRetired {
+		q += ` AND retired_at IS NULL`
+	}
 	var args []any
 	if account != "" && account != AllAccounts {
 		q += ` AND (account_uuid = ? OR endpoint_id IN (SELECT endpoint_id FROM endpoint_accounts WHERE account_uuid = ?))`
@@ -496,8 +518,14 @@ func (s *Store) labelAccounts(bs []Bucket) {
 }
 
 // labelEndpoints replaces opaque endpoint ids with their human labels.
+//
+// Retired endpoints are INCLUDED here, unlike on the roster. These buckets are
+// history, and a retired endpoint's history is precisely what retiring
+// promises to keep: drop it from the lookup and last month's spend comes back
+// labelled `ep_1789872512194365000` instead of `web-01` -- the rows survive
+// but stop meaning anything, which is the outcome retire exists to avoid.
 func (s *Store) labelEndpoints(bs []Bucket) {
-	eps, err := s.ListEndpoints("")
+	eps, err := s.ListEndpointsWithRetired("")
 	if err != nil {
 		return
 	}

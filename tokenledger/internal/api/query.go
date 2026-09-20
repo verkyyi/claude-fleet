@@ -261,8 +261,10 @@ func (s *Server) LimitsForAllSource(source string) (*LimitsAcross, error) {
 	return out, nil
 }
 
+// Retired endpoints included: this names history, and a retired endpoint's
+// history is kept on purpose. See Store.labelEndpoints.
 func (s *Server) endpointLabels(account string) (map[string]string, error) {
-	eps, err := s.Store.ListEndpoints(account)
+	eps, err := s.Store.ListEndpointsWithRetired(account)
 	if err != nil {
 		return nil, err
 	}
@@ -333,6 +335,13 @@ func isAllAccounts(v string) bool {
 	return v == store.AllAccounts || v == "all"
 }
 
+// handleEndpoints lists the fleet. Retired endpoints are omitted unless
+// ?include=retired asks for them, and then each one carries retired_at.
+//
+// A read-only widening of a read-only route, on purpose: retiring itself stays
+// a hub-local CLI operation with the same access assumption as `enroll`, so
+// there is no DELETE here and no way to retire anything over HTTP. What the
+// dashboard needs is only to be able to SHOW what was retired.
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	source, ok := querySource(w, r)
 	if !ok {
@@ -342,7 +351,22 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	if isAllAccounts(account) {
 		account = ""
 	}
-	eps, err := s.Store.ListEndpoints(account, source)
+	withRetired := false
+	switch inc := r.URL.Query().Get("include"); inc {
+	case "":
+	case "retired":
+		withRetired = true
+	default:
+		// Rejected rather than ignored: a typo that silently returned the
+		// default would read as "there are no retired endpoints".
+		httpError(w, http.StatusBadRequest, "include must be: retired")
+		return
+	}
+	list := s.Store.ListEndpoints
+	if withRetired {
+		list = s.Store.ListEndpointsWithRetired
+	}
+	eps, err := list(account, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
