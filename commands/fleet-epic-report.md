@@ -28,7 +28,10 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **The parent**: charter, the `<!-- fleet:epic-tick -->` comment stream (the
   batch's own minute-by-minute log), the 待决 section.
 - **The members**: every sub-issue — state, labels (`blocked` and why), its PR,
-  merge time, and deploy state where the fleet has one.
+  merge time, and deploy state where the fleet has one. A member filed by
+  `/fleet-epic-plan` carries a **上线证据** line in its body (issue #809): that
+  line names the evidence the worker was asked to leave — a URL, a command's
+  output, a pane — and is what to look for per member (issue #810).
 - **The spend proxy**: **worker × hours**, from each member's window lifetime
   (spawn → reap) as recorded in `/fleet-history` and the tick log.
 - **The quota trace**: the 5h% / week% snapshots the tick lines carry.
@@ -44,6 +47,10 @@ worse than no number, because the next batch would be planned against it.
 
 Before writing any chart, load the `dataviz` skill; before the page itself, load
 `artifact-design`. This is a document somebody reads at breakfast, not a log dump.
+Start from the shared frame — `cat ~/.claude/skills/epic-page/template.html` —
+the same `<style>` and section ids the batch's design page used (issue #809), so
+the operator reads plan and report as one document; swap the plan-only sections
+(`#signoff`) for the report's own (verdict, quota curve, obstacles).
 
 What earns its place:
 
