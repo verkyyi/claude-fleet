@@ -10,6 +10,10 @@
 #               fleet's "no Artifacts" rail can be absolute.
 #   • REPAGE    `--refresh` re-renders both kinds from the entry's source path and
 #               keeps html verbatim (the CURRENT file content).
+#   • IMAGES    (issue #810) a LOCAL image referenced by a RELATIVE path — `![]()`
+#               in Markdown, `<img src>` in html — is copied beside the served
+#               page (on `page` and on `repage`); remote / data: / site-absolute
+#               refs and a missing file are left alone, without error.
 #
 # node absent → SKIP cleanly (exit 0), per the run-selftests convention.
 set -uo pipefail
@@ -44,6 +48,25 @@ eq "html: entry keeps the display path" "repo/b.html" "$(node -e 'process.stdout
 printf '<p>no title here</p>\n' > "$WORK/c.htm"
 render h2 "$WORK/c.htm" || fail "page(htm) exited non-zero"
 eq "html: no <title> → file name" "c.htm" "$(title_of "$WORK/entries/h2.json")"
+
+# html: RELATIVE <img src> files are copied beside the served page (issue #810);
+# remote / data: / site-absolute refs and a missing file are left alone, no error
+mkdir -p "$WORK/evidence/42"; printf 'PNG' > "$WORK/evidence/42/after.png"
+printf '<!doctype html><title>EPIC 7</title>\n<img src="evidence/42/after.png" alt="after"><img src="evidence/42/missing.png">\n<img src="https://x/y.png"><img src="/abs/z.png"><img src="data:image/png;base64,AA==">\n' > "$WORK/e.html"
+render h3 "$WORK/e.html" || fail "page(html+img) exited non-zero"
+CHECKS=$((CHECKS + 1)); cmp -s "$WORK/e.html" "$WORK/serve/d/h3/index.html" || fail "html+img: the page itself is still served verbatim"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/serve/d/h3/evidence/42/after.png" ] || fail "html: a relative <img src> file must be copied beside the page"
+eq "html: copied image bytes intact" "PNG" "$(cat "$WORK/serve/d/h3/evidence/42/after.png")"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/serve/d/h3/abs" ] && [ ! -e "$WORK/serve/d/h3/evidence/42/missing.png" ] || fail "html: absolute / missing refs must not produce files"
+# a --refresh after a NEW image was referenced picks it up too
+printf 'PNG2' > "$WORK/evidence/42/before.png"
+printf '<!doctype html><title>EPIC 7</title>\n<img src="evidence/42/before.png"><img src="evidence/42/after.png">\n' > "$WORK/e.html"
+node "$R" repage "$WORK/entries/h3.json" "$WORK/serve/d/h3/index.html" >/dev/null || fail "repage(html+img) exited non-zero"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/serve/d/h3/evidence/42/before.png" ] || fail "repage(html): a newly referenced image must be copied"
+# markdown images: the pre-existing behaviour, unchanged
+printf '# Pics\n\n![after](evidence/42/after.png)\n' > "$WORK/p.md"
+render md2 "$WORK/p.md" || fail "page(md+img) exited non-zero"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/serve/d/md2/evidence/42/after.png" ] || fail "md: a relative image must be copied beside the page"
 
 # repage (--refresh) re-reads the CURRENT html verbatim
 printf '<!doctype html><title>v2</title><p>edited</p>\n' > "$WORK/b.html"

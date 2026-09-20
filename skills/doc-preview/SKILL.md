@@ -18,7 +18,11 @@ here; issue #526). This URL is on the tailnet: any device, no login, every sessi
 in one list. **`.html` files are accepted too** and served as-is — a dashboard, a report
 page, an interactive mockup — titled from their `<title>`; Markdown gets the GitHub-styled
 viewer. Anything you would have published as an Artifact: write the file, share it here,
-relay the `READY` URL.
+relay the `READY` URL. A local image an `.html` page references by a **relative**
+`<img src>` is copied beside the served page (as a Markdown `![]()` image already was), so
+a report can show screenshots from a sibling `evidence/` folder — the EPIC report's
+before/after evidence (issue #810) rides along to the tailnet URL; remote, `data:` and
+site-absolute refs are left alone.
 
 ## How it works
 
