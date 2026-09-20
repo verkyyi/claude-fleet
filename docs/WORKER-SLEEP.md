@@ -114,6 +114,24 @@ After resume, the same configuration and initialized service inventory must be
 available before the worker is declared awake. A changed configuration leaves
 a reviewable failed recovery; a slow service can finish on a later scan.
 
+The contract covers both agents, with a different inventory behind the same
+matcher (issue #784). Codex reports its effective config and per-server runtime
+status over the app-server RPC. Claude has no such channel — `claude mcp list`
+starts every approved server to health-check it, so a daemon cannot ask — and
+Fleet rebuilds the effective set the way the CLI resolves it: the `--mcp-config`
+documents on the live process's argv (the whole set under `--strict-mcp-config`,
+which is how every fleet spawn passes `FLEET_MCP_CONFIG`), else those over the
+CLI's own store — local scope (`projects[<worktree>].mcpServers` in
+`.claude.json` under the worker's `CLAUDE_CONFIG_DIR`), the approved project
+`.mcp.json` (`enabledMcpjsonServers`), then user scope. A server a plugin ships,
+or one approved only through a settings file, is not inventoried, so a Claude
+worker running one keeps vetoing exactly as before; the skip reason names the
+process. **Claude readiness is process-fingerprint plus config digest only**:
+the worker is declared awake once every saved server runs again as a direct
+child from an unchanged configuration, which does not prove the server finished
+initializing — the first tool call after a wake can still meet a server that is
+starting. Codex additionally waits for its native `ready` status.
+
 Do not list a stateful browser or REPL merely because it currently uses little
 CPU. Native conversation resume preserves history, not process memory. Legacy
 workers without a bound native identity or private endpoint remain awake with
@@ -185,4 +203,4 @@ ancestry instead of requiring that registry entry to survive shutdown.
 Claude workers already idle when this feature is installed need a subsequent real
 Stop event before they can sleep; Codex can use native completion evidence.
 Unknown descendant processes (including unapproved MCP/tool infrastructure) keep
-a worker awake. A quiet screen alone is never sufficient.
+a worker awake, for Claude and Codex alike. A quiet screen alone is never sufficient.
