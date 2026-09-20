@@ -66,3 +66,24 @@ test('every section targets a band label, and prints that band own key', () => {
     assert.ok(key in en, `${key} is missing from the dictionary`);
   }
 });
+
+// #97: each entry also names the value it writes into the hash. The words are
+// what a reader sees in a link they were sent, so they are short and they are
+// not the element ids -- `view=progress` says where you are being sent,
+// `view=repo-band` names a div. state.js derives VIEWS from this column, which
+// is why a typo here is a routing bug and not just a cosmetic one.
+test('every section names the view it writes', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.view),
+    ['ledger', 'usage', 'progress', 'ops']);
+  for (const { view, target } of SECTIONS) {
+    assert.match(view, /^[a-z]+$/, `${target}: a view is a URL word`);
+    // The markup's `-band` suffix must not reach the URL. Operations is the
+    // exception the table above already calls out on its other two columns:
+    // its band label IS its <summary>, so `ops` is target, label and view at
+    // once -- one word, not an id leaking out.
+    assert.ok(!view.endsWith('-band'), `${target}: ${view} is an element id, not a URL word`);
+  }
+  // No two entries may write the same view: they would be two buttons the
+  // router cannot tell apart, and #98 would have no way to pick a band.
+  assert.equal(new Set(SECTIONS.map((s) => s.view)).size, SECTIONS.length);
+});

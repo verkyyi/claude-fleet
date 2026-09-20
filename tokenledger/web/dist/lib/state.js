@@ -1,4 +1,9 @@
 // web/dist/lib/state.js — URL ⇄ state. No DOM. The hash is the only copy of the state.
+// The one import this file has, and it costs it nothing: lib/nav.js is the
+// nav's TABLE, not its rendering (scope.js does the DOM), so the line above
+// still holds. VIEWS is derived from it below.
+import { SECTIONS } from './nav.js';
+
 export const DIMS = ['machine', 'login', 'project', 'model', 'branch', 'team', 'session', 'source'];
 export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project', model: 'model', branch: 'branch', team: 'team', session: 'session', source: 'source' };
 export const SPAN_VALUES = ['7d', '30d', '90d'];
@@ -14,7 +19,20 @@ export const CSORTS = ['cost', 'tokens', 'events'];
 // for an issue, and `age` means nothing for a provider row. One shared key
 // would let a sort survive into a table that cannot honour it.
 export const RSORTS = ['age', 'comments'];
-export const DEFAULTS = Object.freeze({ session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
+// VIEWS is which band the page is showing, and it is DERIVED from the nav's own
+// table rather than written out again here. The two cannot disagree: a section
+// added to SECTIONS is a routable view the moment it exists, and a view nothing
+// navigates to cannot be spelled. The same reason nav.js shares one i18n key
+// between the entry and the band it points at.
+//
+// `all` is the extra value and it is the default: the whole page, every band,
+// which is exactly what this page has always been. That is what keeps every
+// link ever shared — none of which carries a `view` — landing on the page its
+// sender saw. #98 is what makes the other four actually unmount anything; until
+// then `view` is a key the URL carries and the nav writes, and nothing more.
+export const VIEW_ALL = 'all';
+export const VIEWS = [VIEW_ALL, ...SECTIONS.map((s) => s.view)];
+export const DEFAULTS = Object.freeze({ view: VIEW_ALL, session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -31,6 +49,13 @@ export function parse(hash) {
   const m = path.match(/^\/(?:(?:now|review)\/?)?(?:session\/([^/?]+))?\/?$/);
   if (m && m[1]) s.session = decodeURIComponent(m[1]);
   const p = new URLSearchParams(qs);
+  // A query key, not a path segment, and that is deliberate. The path is where
+  // /now and /review lived, and the reason they had to be consumed-and-dropped
+  // above is that a path segment is exclusive: it cannot sit beside the session
+  // overlay, so `#/review/session/abc` needed its own branch in the grammar. A
+  // query key is orthogonal by construction — `#/session/abc?view=ops` opens the
+  // overlay ON the operations view and closing it lands back there.
+  s.view = pick(p.get('view'), VIEWS, DEFAULTS.view);
   if (p.get('sub')) s.sub = p.get('sub');
   s.span = pick(p.get('span'), SPAN_VALUES, DEFAULTS.span);
   s.from = num(p.get('from'));
@@ -57,6 +82,11 @@ export function parse(hash) {
 
 export function format(s) {
   const p = new URLSearchParams();
+  // First, so a shared link says which page it is before it says how it is
+  // filtered. Omitted at the default like every other key: `#/` still means
+  // the whole page, and the nav writing `view=all` into every URL would be a
+  // change to what a clean link looks like for no gain.
+  if (s.view !== DEFAULTS.view) p.set('view', s.view);
   if (s.sub && s.sub !== DEFAULTS.sub) p.set('sub', s.sub);
   if (s.span !== DEFAULTS.span) p.set('span', s.span);
   if (s.from) p.set('from', String(s.from));
@@ -91,7 +121,18 @@ export function format(s) {
 // That is how app.js tells "redraw" from "re-fetch" -- without it, hiding some
 // rows costs a round trip for every one of them, and the control that did the
 // hiding goes on reporting its old value until the answer lands.
-export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped', 'csort'];
+//
+// `view` passes that mechanical test outright, and it is the key this list
+// exists for. Switching view narrows WHICH bands the page shows; it does not
+// change a single character of a single request URL -- every band on every view
+// asks about the same account, the same window and the same chips. So the page
+// re-draws from the rows already in hand and the switch costs zero requests.
+// Leaving it out would make a view a full reload of the whole page: the same
+// mistake `csort` made, at four times the price (#48 measured that one at 19
+// requests per click). It stays true after #98 unmounts bands for real -- an
+// unmounted band sends no request at all, which is fewer requests, never a
+// different one, and seq.js's replay() is what hands its rows back on return.
+export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped', 'csort', 'view'];
 export function dataKey(s) {
   const flat = { ...s, session: null };
   for (const k of PRESENTATION_KEYS) flat[k] = DEFAULTS[k];

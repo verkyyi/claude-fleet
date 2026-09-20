@@ -118,16 +118,43 @@ function navHeight(root) {
   return h;
 }
 
-/** goToSection scrolls to one band. It does NOT write location.hash, and that
- *  is load-bearing rather than fussy: this page's hash is its entire state
- *  (lib/state.js — "the hash is the only copy of the state"), and app.js
- *  re-derives the subscription, span, chips and repo filter from it on every
- *  hashchange. A plain <a href="#spend"> would therefore parse as an unknown
- *  path, reset every one of those to its default, and rewrite the URL back to
- *  `#/` — so the nav would silently throw away the reader's filters as the
- *  price of scrolling. That is also why these are <button>s and not links:
- *  there is no URL here worth copying, and an <a> would promise one. */
-function goToSection(id) {
+/** onView is how the nav writes the view — app.js's setState, handed over on
+ *  every renderNav rather than captured when the buttons were built.
+ *
+ *  That distinction is the whole of it. buildSecNav runs exactly ONCE, behind
+ *  renderNav's `data-bound` guard, so a handler baked into the click listener
+ *  would hold app.js's FIRST route's state forever and spread that state's
+ *  span, chips and subscription back over whatever the reader had set since.
+ *  Re-pointing this on every route is what makes "switch view" a change of one
+ *  key rather than a rewind of the other twelve. */
+let onView = null;
+
+/** goToSection switches to one band's view, and scrolls to it.
+ *
+ *  It writes location.hash now — through app.setState, with the rest of the
+ *  state carried over — and that OVERTURNS what #54 said here a few hours ago:
+ *  "It does NOT write location.hash, and that is load-bearing." The hazard that
+ *  comment named is real and has not gone anywhere: this page's hash is its
+ *  entire state (lib/state.js — "the hash is the only copy of the state"), and
+ *  a plain <a href="#spend"> still parses as an unknown path, resets the
+ *  subscription, span, chips and repo filter to their defaults, and rewrites
+ *  the URL back to `#/`. What changed is that there is now a key worth writing
+ *  (#97): `view` is a member of the state like any other, so setState spreads
+ *  the current state and moves that one key, and the reader's filters survive
+ *  the switch by construction.
+ *
+ *  These stay <button>s and not links for a reason that also survived: a real
+ *  <a href> would have to be rebuilt with the whole current scope on every
+ *  state change, or it would promise the one thing above — a URL that resets
+ *  what the reader set. A button asks app.js what the state is at the moment
+ *  it is pressed.
+ *
+ *  The scroll stays too, and that is temporary. Until #98 unmounts the bands a
+ *  view does not hide anything, so a button that only wrote the hash would
+ *  look broken — same page, nothing moved. #98 takes the scroll out along with
+ *  the reason for it. */
+function goToSection(id, view) {
+  if (view) onView?.(view);
   // The operations tier is a closed <details> for most viewers. Scrolling to a
   // shut fold parks the reader on a single <summary> line and answers nothing,
   // so asking for Operations opens Operations. app.js's toggle listener
@@ -146,9 +173,9 @@ function buildSecNav(root) {
   const nav = $('#secnav', root);
   if (!nav) return;
   nav.setAttribute('aria-label', t('nav.sections'));
-  nav.replaceChildren(...SECTIONS.map(({ target, key }) => {
-    const b = el('button', { type: 'button', 'data-target': target }, t(key));
-    b.addEventListener('click', () => goToSection(target));
+  nav.replaceChildren(...SECTIONS.map(({ target, key, view }) => {
+    const b = el('button', { type: 'button', 'data-target': target, 'data-view': view }, t(key));
+    b.addEventListener('click', () => goToSection(target, view));
     navButtons.set(target, b);
     return b;
   }));
@@ -197,8 +224,11 @@ function spy() {
   const at = pickActive(live.map(({ node }) => node.getBoundingClientRect().top), navHeight(root), atBottom);
   for (const b of navButtons.values()) b.removeAttribute('aria-current');
   // aria-current, not aria-selected: this says "the section you are looking at",
-  // which is a position on one page. aria-selected would say "the view you
-  // chose", and this page has exactly one view — see the overturn note up top.
+  // which is a position on one page — and while `view` defaults to `all`, every
+  // band IS still on one page, so scroll position remains the honest answer and
+  // the spy is left exactly as #54 built it. aria-selected would say "the view
+  // you chose"; that only becomes the truer statement once #98 makes a view
+  // actually unmount the others, and it is #98's line to change, not this one's.
   if (at >= 0) navButtons.get(live[at].target)?.setAttribute('aria-current', 'true');
 }
 
@@ -215,8 +245,12 @@ function queueSpy() {
  *  language switch and theme toggle. `root` is the static
  *  `<header id="scope">` from index.html (always present, never recreated), so
  *  listeners are bound exactly once behind a `data-bound` guard the same way
- *  the whole bar used to be before Task 15 split it. */
-export function renderNav(root) {
+ *  the whole bar used to be before Task 15 split it.
+ *
+ *  `cb.onView` is the one handler the bar takes, and it takes it on EVERY call
+ *  precisely because the listeners are bound once — see onView above. */
+export function renderNav(root, { onView: onViewCb } = {}) {
+  onView = onViewCb || null;
   if (!root.dataset.bound) {
     // Theme toggle: copied verbatim from the old page's click handler.
     $('#theme', root).addEventListener('click', () => {

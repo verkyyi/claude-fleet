@@ -103,8 +103,13 @@ function route() {
   // route() (replaceState fires no hashchange), which would recurse.
   const canonical = format(s);
   if (canonical !== location.hash) history.replaceState(null, '', canonical);
-  // renderNav takes no handlers any more: with the view gone the bar has
-  // nothing to invoke. These four belong to the scope-controls widgets.
+  // The bar takes one handler again (#97). It had none while the page had no
+  // views to switch between; now each nav entry names one, and pressing it
+  // moves `view` and NOTHING else -- the spread is what keeps the reader's
+  // subscription, span, chips and repo filter across the switch, and `view`
+  // being a presentation key (state.js) is what keeps the switch free.
+  const onView = (view) => app.setState({ ...s, view });
+  // These five belong to the scope-controls widgets.
   const cb = {
     onSub: (sub) => app.setState({ ...s, sub }),
     onSource: (source) => { const chips = { ...s.chips }; if (source) chips.source = source; else delete chips.source; app.setState({ ...s, chips }); },
@@ -112,7 +117,7 @@ function route() {
     onChipRemove: (dim) => { const chips = { ...s.chips }; delete chips[dim]; app.setState({ ...s, chips }); },
     onClear: () => app.setState({ ...s, chips: {} }),
   };
-  renderNav($('#scope'));
+  renderNav($('#scope'), { onView });
   // Updates EVERY section's scope-controls widget synchronously — see
   // scope.js's renderScopeControls doc comment.
   renderScopeControls(s, app.accounts, cb);

@@ -2,11 +2,18 @@
 // decision. No DOM: web/dist/scope.js does the measuring and the rendering,
 // this file holds the parts worth testing without a browser.
 //
-// #54 added a nav to a page that deliberately had none. The thing it is NOT is
-// the retired Now/Review tabs: those split the page into regions that fetched
-// and refreshed on their own rhythms, and that split is still wrong for the
-// same reason it was retired (see index.html). This moves the viewport. It
-// issues no request, mounts nothing, hides nothing, and owns no state.
+// #54 added a nav to a page that deliberately had none, and said of it: "This
+// moves the viewport. It issues no request, mounts nothing, hides nothing, and
+// owns no state." Half of that is now overturned, on purpose (#97, EPIC #91):
+// the nav OWNS STATE -- each entry names a `view`, and pressing it writes that
+// view into the hash. #98 is what will make it hide things too.
+//
+// What is NOT overturned is the reason the Now/Review tabs were retired: they
+// split the page into regions that fetched and refreshed on their own rhythms.
+// A view here is a slice of ONE scope and ONE set of answers -- `view` is in
+// state.js's PRESENTATION_KEYS, so switching one sends no request at all. That
+// is the whole difference between this and the tabs, and it is why this is not
+// the old mistake wearing a new name.
 
 /** SECTIONS is the nav, in page order, and it is also the page's own band list.
  *
@@ -20,14 +27,22 @@
  *  "Progress" over a band that says something else is worse than no nav, and
  *  one key cannot disagree with itself.
  *
+ *  `view` is the value the entry WRITES into the hash (`#/?view=usage`), and
+ *  this table is the only place the set of views is spelled: state.js derives
+ *  its VIEWS from exactly this column, so a view that no entry can reach does
+ *  not exist and an entry that reaches nothing cannot be written. It is a
+ *  short, URL-shaped word rather than the `target` id, because it is what a
+ *  reader sees in a link they paste to a colleague -- `view=progress` says
+ *  what they are being sent to; `view=repo-band` names an element.
+ *
  *  Operations is the exception on both counts and it is not an inconsistency:
  *  its band label IS its <summary>, so `#ops` is both the target and the
  *  labelled band. */
 export const SECTIONS = [
-  { target: 'ledger-band', key: 'band.ledger' },
-  { target: 'usage-band', key: 'band.usage' },
-  { target: 'repo-band', key: 'band.progress' },
-  { target: 'ops', key: 'ops.title' },
+  { target: 'ledger-band', key: 'band.ledger', view: 'ledger' },
+  { target: 'usage-band', key: 'band.usage', view: 'usage' },
+  { target: 'repo-band', key: 'band.progress', view: 'progress' },
+  { target: 'ops', key: 'ops.title', view: 'ops' },
 ];
 
 /** pickActive is the whole scroll-spy decision, as a pure function of numbers.
