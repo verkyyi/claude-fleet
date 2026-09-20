@@ -712,6 +712,34 @@ class McpRestartTest(unittest.TestCase):
         config,_=self.claude_inventory(['claude'])
         self.assertEqual(set(config),{'shared','only-user','muted'})
 
+    def test_claude_plugin_servers_carry_the_clis_names_and_gates(self):
+        # A plugin's server is `plugin:<plugin>:<server>`, from the enabled plugins'
+        # install roots (issue #830). Anything unresolvable contributes nothing.
+        wt=self.root/'worktree';wt.mkdir();home=self.root/'home';home.mkdir()
+        (home/'.claude.json').write_text(json.dumps({'projects':{str(wt.resolve()):{'disabledMcpServers':['plugin:muted:tool']}}}))
+        (home/'settings.json').write_text(json.dumps({'enabledPlugins':{'shipped@market':True,'muted@market':True,'off@market':False,'ghost@market':True,'twice@market':True,'broken@market':True}}))
+        (wt/'.claude').mkdir();(wt/'.claude'/'settings.json').write_text(json.dumps({'enabledPlugins':{'wrapped@market':True}}))
+        def install(key,servers,wrapped=False,manifest='.mcp.json'):
+            root=home/'plugins'/'cache'/key;(root/'.claude-plugin').mkdir(parents=True)
+            (root/manifest).write_text(json.dumps({'mcpServers':servers} if wrapped else servers) if isinstance(servers,dict) else servers)
+            return {'installPath':str(root)}
+        registry={'shipped@market':[install('shipped',{'tool':{'command':'${CLAUDE_PLUGIN_ROOT}/bin/tool','args':['--root','${CLAUDE_PLUGIN_ROOT}'],'env':{'HOME':'${CLAUDE_PLUGIN_ROOT}'}}})],
+                  'wrapped@market':[install('wrapped',{'tool':{'command':'/w','args':[]},'remote':{'type':'http','url':'https://example.invalid'}},wrapped=True)],
+                  'muted@market':[install('muted',{'tool':{'command':'/m','args':[]}})],
+                  'off@market':[install('off',{'tool':{'command':'/o','args':[]}})],
+                  'twice@market':[install('twice-a',{'tool':{'command':'/t','args':[]}}),install('twice-b',{'tool':{'command':'/t','args':[]}})],
+                  'broken@market':[install('broken','{not json')]}
+        (home/'plugins'/'installed_plugins.json').write_text(json.dumps({'version':2,'plugins':registry}))
+        inventory=LIB['MCP']['claude_inventory']
+        config,_=inventory(['claude'],wt,home)
+        root=registry['shipped@market'][0]['installPath']
+        self.assertEqual(config,{'plugin:shipped:tool':{'command':root+'/bin/tool','args':['--root',root],'env':{'HOME':root}},
+                                 'plugin:wrapped:tool':{'command':'/w','args':[]},
+                                 'plugin:wrapped:remote':{'type':'http','url':'https://example.invalid'}})
+        self.assertEqual(inventory(['claude','--strict-mcp-config'],wt,home)[0],{})
+        (home/'plugins'/'installed_plugins.json').unlink()
+        self.assertEqual(inventory(['claude'],wt,home)[0],{})
+
     def test_claude_process_evidence_replaces_runtime_status_until_the_server_restarts(self):
         # No runtime RPC: the exact live child is the evidence at sleep, and its
         # restart from an unchanged digest is the evidence at wake.
