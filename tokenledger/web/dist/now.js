@@ -528,7 +528,13 @@ function alertBell(result, app) {
       ? t('alerts.sev.' + sev)
       : t('findings.mutedCount', { n: muted.length })));
 
-  const det = el('details', { class: 'bell', 'data-sev': sev, open: bellOpen ? '' : false },
+  // `name` makes this bar's two folds an accordion the PLATFORM runs: #128 hung
+  // the ledger chip beside this one and both panels drop from the same corner
+  // of .scope, so two open at once would stack one over the other. An exclusive
+  // group is one attribute where the alternative is an outside-click handler
+  // per fold -- which is the component this file's "# Why <details>" note above
+  // declines to build.
+  const det = el('details', { class: 'bell', name: 'barfold', 'data-sev': sev, open: bellOpen ? '' : false },
     summary, panel);
   det.addEventListener('toggle', () => { bellOpen = det.open; });
   return det;

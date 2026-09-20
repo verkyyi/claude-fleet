@@ -6,7 +6,7 @@ import { createScopeControls, renderNav, renderScopeControls, setBusy, syncNav }
 import { renderNow, startLive, LIMITS_INDEX } from './now.js';
 import { renderQuota } from './quota.js';
 import { renderReview, SUMMARY_INDEX } from './review.js';
-import { renderSpend } from './spend.js';
+import { renderLedgerChip, renderSpend } from './spend.js';
 import { renderConsumption } from './consumption.js';
 import { renderRepo } from './repo.js';
 import { apiQuery } from './lib/state.js';
@@ -333,12 +333,20 @@ async function load(reuse = false) {
   };
   // The spend headline reads the summary this loader already fetched -- folded
   // in here rather than at the call site so the reuse path below gets it too.
+  //
+  // TWO mount points since #128, because the two things being said are
+  // different in kind, and it is the same split #123 made for the alerts.
+  // #ledgerchip takes the FIGURE, in the bar, on every view; #spend keeps the
+  // case a figure cannot carry -- a /v1/summary that failed. Both are written
+  // on every pass, including with nothing to draw, so neither can keep showing
+  // a total the deployment has since stopped reporting.
   const reviewApply = (results) => {
+    const r = results[SUMMARY_INDEX];
+    const chip = $('#ledgerchip');
+    // `s` rather than the response for the period word: see renderLedgerChip.
+    if (chip) renderLedgerChip(chip, r && r.status === 'fulfilled' ? r.value : null, s);
     const spend = $('#spend');
-    if (spend) {
-      const r = results[SUMMARY_INDEX];
-      renderSpend(spend, r && r.status === 'fulfilled' ? r.value : null);
-    }
+    if (spend) renderSpend(spend, r);
     reviewR.apply(results);
   };
   // The progress tier renders only where a shipper has pushed something, and

@@ -72,6 +72,33 @@
          of flow (`.scope #alertbell[open] .bell-panel`) so expanding it cannot
          move that number either. styles.css carries both measurements. -->
     <div id="alertbell"></div>
+    <!-- The ledger's headline (#128). app.js mounts a <details> here: the
+         figure while closed, its terms and the working fold once opened. Same
+         contract as the two neighbours — a stable point written in the shell,
+         no `data-band`, and so on every view.
+
+         It sits BETWEEN them, and the order is still the claim the block above
+         makes: alerts first, because they are the one thing here to act on;
+         then the money, which is what this page is named after; then the pulse
+         beside the two "how this page is rendered for me" toggles, where #96
+         put it and where its own comment below still places it.
+
+         Why the bar rather than a card in <main>: the ledger card was 206px of
+         the default view at 1280px, and its entire content was one number, its
+         terms, and a shut fold. The number is what a reader opens this page
+         for, and a card stops being on screen the moment anyone scrolls past
+         it — the bar does not.
+
+         The height rule is #pulse's, and it is not optional: this row's height
+         is --navh, every anchor's landing offset. Closed, the chip is sized to
+         fit inside the height the row already has; OPEN, its panel is taken
+         out of flow (`.scope #ledgerchip .ledger-panel`) so expanding it
+         cannot move that number either. styles.css carries both measurements.
+
+         Two folds now hang from this bar, and they share `name="barfold"` so
+         the platform keeps them exclusive rather than stacking one panel over
+         the other. -->
+    <div id="ledgerchip"></div>
     <!-- The lifetime token badge (#96). now.js mounts its persistent
          heroWrapEl here; this div is the stable point it looks up, the same
          way #scope itself is — it is written in the shell, so it survives the
@@ -196,6 +223,14 @@
       <span class="band-title" data-i18n="band.ledger">Ledger</span>
       <span class="band-note" data-i18n="band.ledger.note">what was paid, and to whom</span>
     </div>
+    <!-- #128 moved the FIGURE into the bar (#ledgerchip above) and left this
+         slot holding the one case a chip cannot state: a /v1/summary query
+         that FAILED. A chip is a figure, and there is no honest figure for
+         "nothing is known" -- an absent chip would report a deployment that
+         spent nothing. So the failure stays a card, here, where the ledger's
+         card has always been, and app.js writes this slot on every pass
+         (renderSpend) so it can never keep showing a state that has gone away.
+         On the default path it draws nothing at all, which is the change. -->
     <section id="spend" data-band="ledger"></section>
     <section id="consumption" data-band="ledger"></section>
 

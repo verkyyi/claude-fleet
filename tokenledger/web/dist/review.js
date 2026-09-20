@@ -264,11 +264,14 @@ function kpisCard(result) {
   });
 
   // There is no "real spend" TILE here either (issue #93). `real_spend.total`
-  // already has a card of its own -- spend.js's `#real-spend`, the page
-  // headline -- and app.js hands BOTH readers the same `results[SUMMARY_INDEX]`
-  // object, so the tile and the headline were the same field of the same
-  // response rendered twice on one screen. Being the only tile with no delta
-  // was the tell: it never had a second thing to say.
+  // already has a place of its own -- the ledger chip in the sticky bar since
+  // #128, spend.js's `#ledgerchip`, and a card before that -- and app.js hands
+  // BOTH readers the same `results[SUMMARY_INDEX]` object, so the tile and the
+  // headline were the same field of the same response rendered twice on one
+  // screen. Being the only tile with no delta was the tell: it never had a
+  // second thing to say. The move to the bar makes the point harder, not
+  // softer: the headline is now on screen on every view and at every scroll
+  // position, so a tile repeating it would be repeating something visible.
 
   const card = el('div', { class: 'card' }, el('h2', {}, t('kpis.title')),
     el('p', { class: 'hint' }, t('kpis.hint')));
@@ -1021,11 +1024,13 @@ export const SUMMARY_INDEX = 1;
  *
  *    0  history (extent) -> usage:   r-timeline
  *    1  summary          -> usage:   r-kpis, r-efficiency
- *                           ledger:  #spend, which app.js draws from this same
- *                                    result rather than fetching /v1/summary a
- *                                    second time (SUMMARY_INDEX above). So this
- *                                    is the one position two bands share, and
- *                                    the only one either can drop alone.
+ *                           ledger:  #spend, the failed-query card
+ *                           THE BAR: #ledgerchip, the figure itself, which
+ *                                    app.js draws from this same result rather
+ *                                    than fetching /v1/summary a second time
+ *                                    (SUMMARY_INDEX above). The bar is on every
+ *                                    view, so this position is ALWAYS sent --
+ *                                    see the ALWAYS note below.
  *    2  findings         -> ops:     r-findings
  *    3  usage by g1      -> usage:   r-breakdowns
  *    4  usage by g2      -> usage:   r-breakdowns, r-efficiency
@@ -1050,9 +1055,27 @@ export const SUMMARY_INDEX = 1;
  *  fetcher that used to be position 5 -- which is exactly the breakage a
  *  positional contract invites, and exactly why the table is written out here.
  */
+/** ALWAYS is a reader that is not a band, and since #128 exactly one position
+ *  has one.
+ *
+ *  The ledger's figure is in the STICKY BAR now (#ledgerchip), and the bar is
+ *  written in the shell: mountView never walks it, so no view can unmount it.
+ *  A position whose reader cannot be unmounted cannot be skipped either --
+ *  gated on `ledger` it would have gone blank the moment a reader switched to
+ *  the quota view, and a money figure that disappears when you change views is
+ *  worse than one that was never in the bar.
+ *
+ *  This is the one thing #128 changed about the REQUESTS, and it is a real
+ *  cost: `view=quota` and `view=progress` now send /v1/summary where they sent
+ *  nothing from this loader at all. The alternative was a second fetch of the
+ *  same figure from a bandless loader, which is the arrangement the note on
+ *  that fetcher below already refuses -- two fetches of one figure can land at
+ *  different moments and disagree on screen. */
+const ALWAYS = '*';
+
 const READ_BY = [
   ['usage'],
-  ['usage', 'ledger'],
+  ['usage', 'ledger', ALWAYS],
   ['ops'],
   ['usage'],
   ['usage'],
@@ -1120,7 +1143,7 @@ export function renderReview(root, state, app, shown) {
     // subscriptions, all of it points nothing now draws.
     get(`/v1/limits/history?${q({ extra: { points: 1 } })}`),
     get(`/v1/sessions?${q({ extra: { sort: state.sort, limit: 50 } })}`),
-  ].map((f, i) => (READ_BY[i].some((band) => shown.has(band)) ? f : null));
+  ].map((f, i) => (READ_BY[i].some((band) => band === ALWAYS || shown.has(band)) ? f : null));
 
   const ctx = { ext, sel, gran };
   return { fetchers, apply: (results) => applyAll(root, state, app, ctx, results) };

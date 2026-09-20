@@ -45,7 +45,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// with the sections every renderer mounts into.
 	for _, want := range []string{
 		"<title>", `href="styles.css"`, `src="app.js"`,
-		`id="page"`, `id="spend"`, `id="status"`, `id="consumption"`, `id="analysis"`,
+		`id="page"`, `id="spend"`, `id="ledgerchip"`, `id="status"`, `id="consumption"`, `id="analysis"`,
 		// The quota band's mount point, and the page's scope strip (#95). The
 		// strip is the reason the first is possible: that card used to HOST the
 		// only scope controls the operations view had, so it could not be moved
@@ -56,6 +56,10 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		// (#alertbell, checked with #pulse below): it is where a /v1/findings
 		// query that FAILED is reported, because a bell's summary is a count and
 		// there is no honest count for "nothing is known".
+		// #spend survived #128 on exactly that argument, one band down: the
+		// figure is #ledgerchip in the bar now, and this slot is where a
+		// /v1/summary that failed is reported, because an absent chip would
+		// report a deployment that spent nothing.
 		`id="alerts"`, `id="ops"`, `id="ops-analysis"`,
 		// The progress band and its section. The band starts hidden and app.js
 		// unhides it only where a shipper has pushed repo facts, so the mount
@@ -167,7 +171,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// attribute check is still worth making -- a data-band here would be
 	// silently inert today and quietly correct-looking to whoever later moved
 	// the bell back into <main>.
-	for _, floater := range []string{`id="pulse"`, `id="alerts"`, `id="alertbell"`, `id="scopebar"`} {
+	for _, floater := range []string{`id="pulse"`, `id="alerts"`, `id="alertbell"`, `id="ledgerchip"`, `id="scopebar"`} {
 		at := strings.Index(string(b), floater)
 		if at < 0 {
 			continue // the id check above already reported it
@@ -209,6 +213,7 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	for _, inBar := range []struct{ id, why string }{
 		{`id="pulse"`, `#96 put the token badge in the sticky bar, where no view can unmount it and its late first frame cannot move --navh`},
 		{`id="alertbell"`, `#123 put the alert count in the sticky bar, where it stays on screen however far the reader has scrolled -- a card above the tiers did not`},
+		{`id="ledgerchip"`, `#128 put the ledger's figure in the sticky bar, where it stays on screen however far the reader has scrolled -- the 206px card it replaces did not`},
 	} {
 		at := strings.Index(src, inBar.id)
 		switch {

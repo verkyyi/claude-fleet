@@ -84,6 +84,9 @@ export const en = {
   /* --------------------------------------------------------- spend (money) */
   'spend.title': 'What this actually cost',
   'spend.incomplete': 'Incomplete — {missing}',
+  'spend.incompleteShort': 'incomplete',
+  'spend.chip.verb': 'spent',
+  'spend.chip.range': 'this range',
   'spend.unpriced': '{n} request(s) have no price data, so every figure here is a lower bound.',
   // The one door into the folded explanation. It names what is behind it, so
   // opening it is a decision rather than a guess — "Details" would not be.
