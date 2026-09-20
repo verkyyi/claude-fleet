@@ -21,8 +21,18 @@ last=$(cat "$cursor" 2>/dev/null || :)
 ordered=$(printf '%s\n' "$sockets" | awk -v last="$last" '
   {a[NR]=$0; if ($0==last) start=NR}
   END {for(i=start+1;i<=NR;i++)print a[i]; for(i=1;i<=start;i++)print a[i]}')
+# Divide the remaining budget across the fleets still to visit (issue #850): the
+# cursor rotation above gives fairness ACROSS ticks, this gives it within one, so
+# a slow first fleet can no longer eat the whole tick and starve the rest. A
+# truncated fleet scan resumes from fleet-sleep.sh's own per-window cursor next
+# tick. No single-flight lock is needed: launchd/systemd never start a second
+# copy of a unit whose previous tick is still running, and this tick is bounded
+# to 55s under the 60s interval.
+count=$(printf '%s\n' "$ordered" | awk 'NF' | wc -l | tr -d ' ')
 for session in $ordered; do
   [ "$SECONDS" -lt "$deadline" ] || break
+  budget=$(fleet_daemon_fair_budget "$((deadline - SECONDS))" "$count" 5)
+  count=$((count - 1))
   printf '%s\n' "$session" > "$cursor"
-  fleet_timebox "$((deadline - SECONDS))" bash "$BIN/fleet-sleep.sh" scan "$session" "$@" || :
+  fleet_timebox "$budget" bash "$BIN/fleet-sleep.sh" scan "$session" "$@" || :
 done

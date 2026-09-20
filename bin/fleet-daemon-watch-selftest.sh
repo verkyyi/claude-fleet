@@ -539,5 +539,19 @@ case "$(FAKE_RUNNING=dispatch watch_err --unit dispatch --dry-run)" in
 esac
 [ "$(kicks)" -eq 0 ] || fail "16: --dry-run kicked"; ok
 
-printf 'selftest PASS: %s assertions (registry · relative · never · pended · running · per-unit · scoping · status · bar · stamps · off · escalate · inflight · dry-run · lock · wedged)\n' "$CHECKS"
+# --- fleet_daemon_fair_budget (issue #850) ------------------------------------
+# Pure arithmetic: an even, adaptive, floored, capped split of a tick's remaining
+# budget across the fleets still to visit.
+fb() { lib "fleet_daemon_fair_budget $1 $2 ${3:-5}"; }
+[ "$(fb 60 3)" = 20 ] || fail "fair_budget: 60s across 3 fleets is 20 each"; ok
+[ "$(fb 40 2)" = 20 ] || fail "fair_budget: leftover after the first fleet is re-divided (40/2=20)"; ok
+[ "$(fb 20 1)" = 20 ] || fail "fair_budget: the last fleet gets all that remains"; ok
+[ "$(fb 12 5)" = 5  ] || fail "fair_budget: a thin slice is floored to 5s"; ok
+[ "$(fb 3 1)"  = 3  ] || fail "fair_budget: the floor never exceeds what remains"; ok
+[ "$(fb 30 0)" = 30 ] || fail "fair_budget: a zero divisor is treated as one"; ok
+[ "$(fb x 3)"  = 0  ] || fail "fair_budget: garbage remaining is 0, and 0 caps the floor to 0"; ok
+[ "$(fb 60 3 15)" = 20 ] || fail "fair_budget: an explicit floor below the share is inert"; ok
+[ "$(fb 10 3 15)" = 10 ] || fail "fair_budget: an explicit floor is still capped at what remains"; ok
+
+printf 'selftest PASS: %s assertions (registry · relative · never · pended · running · per-unit · scoping · status · bar · stamps · off · escalate · inflight · dry-run · lock · wedged · fair-budget)\n' "$CHECKS"
 exit 0
