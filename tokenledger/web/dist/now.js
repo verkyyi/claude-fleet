@@ -1,4 +1,4 @@
-import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive } from './providers.js';
+import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive, quotaAccounts } from './providers.js';
 // web/dist/now.js — the Now view: hero odometer, live strip, "am I about to
 // hit the wall" gauges, and the collapsible Fleet tables.
 //
@@ -360,20 +360,37 @@ function chipsIgnoredHint(chips) {
   return el('p', { class: 'hint' }, t('wall.chipsIgnored'));
 }
 
-function wallCard(limits, chips) {
+function wallCard(limits, chips, accounts) {
   // The cross-subscription shape is a LIST, never a total: two pools at 4% and
   // 19% are not 23% of anything.
   if (limits && Array.isArray(limits.per_account)) {
+    // ...and it is a list of SUBSCRIPTIONS. /v1/limits answers for every
+    // account the hub has ever ingested, gateway callers and vendor invoices
+    // included, because that is the right shape for an API consumer. This
+    // card's title is a question, and a calling application billed per call is
+    // not one of its answers: it has no ceiling to be near, so a heading over
+    // "no reading available" here claimed a gap that does not exist (#50).
+    // They are dropped rather than folded into a sub-section — the card
+    // answers one question, and the usage cards below already account for
+    // them, in the units they are actually billed in.
+    const { shown, metered } = quotaAccounts(limits.per_account, accounts);
     const card = el('div', { class: 'card' },
       el('h2', {}, t('wall.title')),
       el('p', { class: 'hint' }, limits.note),
       nowScope.el,
       chipsIgnoredHint(chips));
-    if (limits.worst) {
+    // Only if it is still on screen. "Closest to its limit: X" naming a
+    // heading the viewer cannot find is worse than no line at all.
+    if (limits.worst && shown.some((e) => e.account_uuid === limits.worst.account_uuid)) {
       card.appendChild(el('p', { class: 'hint', style: 'margin-top:-8px' },
         t('wall.closest', { label: limits.worst.label, pct: highestQuota(limits.worst.limits).toFixed(1) })));
     }
-    for (const entry of limits.per_account) {
+    // Filtered down to nothing says something, and it is not the blank the
+    // card would otherwise render: every account in view is metered.
+    if (!shown.length && metered.length) {
+      card.appendChild(el('div', { class: 'empty' }, t('wall.meteredOnly')));
+    }
+    for (const entry of shown) {
       card.appendChild(el('h2', { style: 'margin-top:20px' }, entry.label));
       if (!entry.limits.available) {
         card.appendChild(el('div', { class: 'empty' }, entry.limits.reason || t('wall.noReading')));
@@ -434,14 +451,14 @@ function wallCard(limits, chips) {
 // control that view has. So a rejection here builds its own card, with the
 // same h2 and nowScope.el every other branch of wallCard() carries, and
 // only the body below them is the error state.
-function wallCardFromResult(result, chips) {
+function wallCardFromResult(result, chips, accounts) {
   if (result.status === 'rejected') {
     return el('div', { class: 'card' },
       el('h2', {}, t('wall.title')),
       nowScope.el,
       el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
   }
-  return wallCard(result.value, chips);
+  return wallCard(result.value, chips, accounts);
 }
 
 /* --------------------------------------------------------------- alerts */
@@ -678,7 +695,7 @@ function applyNow(root, state, app, results) {
   if (pulseRoot && heroWrapEl.parentNode !== pulseRoot) pulseRoot.replaceChildren(heroWrapEl);
 
   root.replaceChildren(...[
-    wallCardFromResult(limitsR, state.chips),
+    wallCardFromResult(limitsR, state.chips, app.accounts),
     liveWrapEl,
     collectorsCard(collectorsR, endpoints, app.accounts),
     accountUsageCard(accountUsageR, app.accounts),

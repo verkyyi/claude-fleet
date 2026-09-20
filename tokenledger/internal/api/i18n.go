@@ -80,12 +80,18 @@ func scopeNoteIn(account, locale string) string {
 const (
 	ReasonCodexNoLimits     = "codex_no_limits"
 	ReasonNoEndpointReading = "no_endpoint_reading"
-	ReasonEndpointReports   = "endpoint_reports"
-	ReasonWrongSource       = "wrong_source"
-	ReasonCodexUnassigned   = "codex_unassigned"
-	ReasonCodexUnverified   = "codex_unverified"
-	ReasonCodexStale        = "codex_stale"
-	ReasonCodexWindowReset  = "codex_window_reset"
+	// ReasonMeteredNoWindow is "there is nothing to read", not "we failed to
+	// read it". A gateway caller, a voice application and a vendor invoice are
+	// billed per call and have no quota window at all, so
+	// ReasonNoEndpointReading — which blames a collector gap — was describing a
+	// problem that does not exist. See model.HasQuotaWindow.
+	ReasonMeteredNoWindow  = "metered_no_window"
+	ReasonEndpointReports  = "endpoint_reports"
+	ReasonWrongSource      = "wrong_source"
+	ReasonCodexUnassigned  = "codex_unassigned"
+	ReasonCodexUnverified  = "codex_unverified"
+	ReasonCodexStale       = "codex_stale"
+	ReasonCodexWindowReset = "codex_window_reset"
 )
 
 var limitsReasons = map[string]i18n.Text{
@@ -96,6 +102,10 @@ var limitsReasons = map[string]i18n.Text{
 	ReasonNoEndpointReading: {
 		i18n.EN:   "no endpoint on this subscription has been able to read its account-wide limits",
 		i18n.ZhCN: "这个订阅下没有任何端点能读到它的账号级额度",
+	},
+	ReasonMeteredNoWindow: {
+		i18n.EN:   "billed per call; this account has no quota window to read",
+		i18n.ZhCN: "这个账号按调用计费，没有额度窗口可读",
 	},
 	ReasonWrongSource: {
 		i18n.EN:   "account does not belong to the selected source",

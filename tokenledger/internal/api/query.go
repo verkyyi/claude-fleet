@@ -155,6 +155,15 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 		return nil, err
 	}
 	if snap == nil {
+		// Nothing to read is not the same as nobody could read it. A gateway
+		// caller, a voice application or a vendor invoice is billed per call
+		// and has no window at all, so the endpoint-gap wording below would be
+		// blaming a collector that was never supposed to exist.
+		if !model.HasQuotaWindow(source) {
+			view.ReasonCode = ReasonMeteredNoWindow
+			view.Reason = LimitsReasonIn(view.ReasonCode, i18n.EN)
+			return view, nil
+		}
 		source, err := s.Store.SourceForAccount(account)
 		if err != nil {
 			return nil, err

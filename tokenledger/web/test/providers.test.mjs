@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL} from '../dist/lib/providers.js';
+import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL, quotaAccounts, hasQuotaWindow} from '../dist/lib/providers.js';
 import {fmtCost} from '../dist/lib/format.js';
 
 test('missing costs stay unknown across bucket and session totals',()=>{
@@ -109,4 +109,72 @@ test('every source this build offers has a human name', () => {
     assert.equal(typeof SOURCE_LABEL[s], 'string', `${s} has no label`);
     assert.notEqual(SOURCE_LABEL[s], s);
   }
+});
+
+// --- the wall card lists subscriptions, not callers (#50) -----------------
+//
+// /v1/limits answers for every account the hub has ingested, because the
+// accounts table is upserted on every batch whatever its source. That is right
+// for an API consumer and wrong for a card whose title is a question: a
+// gateway caller has no ceiling, so it used to occupy a heading and a line of
+// "no reading available" — a gap that cannot be closed, next to real gauges.
+
+const ACCOUNTS = [
+  { account_uuid: 'sub-a', source: 'claude' },
+  { account_uuid: 'sub-b', source: 'codex' },
+  { account_uuid: 'legacy', source: '' },
+  { account_uuid: 'app-1', source: 'gateway' },
+  { account_uuid: 'voice-1', source: 'voice' },
+  { account_uuid: 'bill-1', source: 'vendor_bill' },
+];
+const entries = (...uuids) => uuids.map((u) => ({ account_uuid: u, label: u, limits: {} }));
+
+test('only accounts that can have a ceiling reach the wall card', () => {
+  const { shown, metered } = quotaAccounts(
+    entries('sub-a', 'app-1', 'sub-b', 'bill-1', 'voice-1'), ACCOUNTS);
+  assert.deepEqual(shown.map((e) => e.account_uuid), ['sub-a', 'sub-b']);
+  // Kept, not discarded: the card needs to know the list was filtered down to
+  // nothing so it can say why instead of rendering a blank.
+  assert.deepEqual(metered.map((e) => e.account_uuid), ['app-1', 'bill-1', 'voice-1']);
+});
+
+// A vendor invoice is not a caller — accountGroups files it with the
+// subscriptions, and correctly, since it IS a billing relationship. It still
+// has no quota window. The two axes are different questions and this is the
+// one case where they disagree.
+test('a vendor invoice groups with subscriptions but still has no window', () => {
+  assert.equal(hasQuotaWindow('vendor_bill'), false);
+  assert.equal(accountGroups([{ account_uuid: 'i', source: 'vendor_bill' }])[0].label, 'Subscriptions');
+});
+
+// A row stored before the source column existed is Claude, here as in Go.
+test('an empty source keeps its gauges', () => {
+  assert.equal(hasQuotaWindow(''), true);
+  assert.equal(hasQuotaWindow(undefined), true);
+  assert.deepEqual(quotaAccounts(entries('legacy'), ACCOUNTS).shown.map((e) => e.account_uuid), ['legacy']);
+});
+
+// An allow-list, mirroring model.HasQuotaWindow: a source nobody has
+// classified goes missing from the card, which somebody notices, rather than
+// living on it forever claiming a collector gap.
+test('an unclassified source has no window', () => {
+  assert.equal(hasQuotaWindow('some_future_source'), false);
+});
+
+// The account list and /v1/limits are two fetches; they can disagree for a
+// minute after an account appears. Hiding a real subscription from "am I about
+// to hit the wall?" is the dangerous direction, so an unresolvable entry is
+// shown — and the server's own reason on it now says "billed per call" anyway.
+test('an account the hub has not listed yet is shown, not hidden', () => {
+  const { shown, metered } = quotaAccounts(entries('brand-new'), ACCOUNTS);
+  assert.deepEqual(shown.map((e) => e.account_uuid), ['brand-new']);
+  assert.deepEqual(metered, []);
+});
+
+test('an empty or missing list is not an error', () => {
+  assert.deepEqual(quotaAccounts([], ACCOUNTS), { shown: [], metered: [] });
+  assert.deepEqual(quotaAccounts(undefined, undefined), { shown: [], metered: [] });
+  // No account list at all cannot mean "hide everything": boot stops when
+  // /v1/accounts fails, so this is only ever a transient.
+  assert.deepEqual(quotaAccounts(entries('sub-a'), []).shown.length, 1);
 });

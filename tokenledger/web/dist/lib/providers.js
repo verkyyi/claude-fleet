@@ -107,3 +107,40 @@ const UsageSource = (s) => s || 'claude';
 // A set, not a comparison, because there are now two of them and the next one
 // should be an entry here rather than another `||` nobody reads.
 const CALLER_SOURCES = new Set(['gateway', 'voice']);
+
+/** The sources whose account can have a QUOTA WINDOW — a pool with a ceiling
+ *  and a reset. Everything else (a gateway caller, a voice application, a
+ *  vendor invoice) is billed per call: no ceiling, no percentage, nothing to
+ *  be near. This mirrors model.HasQuotaWindow in Go, and is an ALLOW-list for
+ *  the same reason it is one there: a source added later has no window until
+ *  somebody says it does, so it goes missing from a quota card — visible and
+ *  harmless — rather than sitting on one forever claiming "no reading". */
+const QUOTA_SOURCES = new Set(['claude', 'codex']);
+
+export const hasQuotaWindow = (source) => QUOTA_SOURCES.has(UsageSource(source));
+
+/** quotaAccounts splits a /v1/limits `per_account` list by whether the account
+ *  could have a reading at all.
+ *
+ *  The endpoint answers for EVERY account the hub has seen — the accounts
+ *  table is upserted on every ingest batch whatever its source — and that is
+ *  the right shape for an API consumer. It is the wrong shape for a card whose
+ *  title is the question "am I about to hit the wall?", because a calling
+ *  application is not an answer to it. The split happens here, in the render
+ *  layer, so MCP and API consumers keep the full list (#50).
+ *
+ *  `per_account` entries carry no source, so it is resolved through the hub's
+ *  account list. An entry no account row matches counts as shown: the account
+ *  list going stale between two fetches must not hide a real subscription, and
+ *  the server's own reason on such an entry now says "billed per call" rather
+ *  than "no reading available" anyway. */
+export function quotaAccounts(perAccount, accounts) {
+  const sourceOf = new Map((accounts || []).map((a) => [a.account_uuid, UsageSource(a.source)]));
+  const shown = [], metered = [];
+  for (const entry of perAccount || []) {
+    const source = sourceOf.get(entry.account_uuid);
+    if (source !== undefined && !hasQuotaWindow(source)) metered.push(entry);
+    else shown.push(entry);
+  }
+  return { shown, metered };
+}

@@ -96,3 +96,29 @@ func CostKind(source string) string {
 	}
 	return CostUnknown
 }
+
+// HasQuotaWindow reports whether a source's account can have a QUOTA WINDOW at
+// all — a pool with a ceiling and a reset that "am I about to hit the wall?"
+// is a question about.
+//
+// It is a third axis, independent of the two above: CostKind says what the
+// money means and CostIsSupplied says who produced it, while this says whether
+// there is a ceiling to be near. A gateway or voice "account" is one calling
+// application and a vendor_bill "account" is an invoice; all three are billed
+// per call, so they have no window, no percentage, and no reset. That is not
+// the same as a subscription whose window nobody managed to READ — and the two
+// must never render as one sentence, the way "free" and "no rate configured"
+// were separated in 299bd67.
+//
+// The default is deliberately false: a source added to the constants and
+// forgotten here goes missing from a quota card, which is visible and
+// harmless, rather than appearing there forever saying "no reading available".
+// web/dist/lib/providers.js mirrors this set for the dashboard's own filter;
+// the guard in cost_quota_test.go keeps both honest.
+func HasQuotaWindow(source string) bool {
+	switch UsageSource(source) {
+	case SourceClaude, SourceCodex:
+		return true
+	}
+	return false
+}

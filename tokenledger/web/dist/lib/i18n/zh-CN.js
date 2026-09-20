@@ -181,6 +181,7 @@ export const zhCN = {
   'wall.chipsIgnored': '额度只跟着选中的来源和账号走。项目、机器这些筛选只作用于用量明细；仪表盘看的始终是整个订阅。',
   'wall.exact': '账号级精确值，已经覆盖这个订阅下的每一台设备。',
   'wall.noReading': '没有读数。',
+  'wall.meteredOnly': '当前视图里的账号都按调用计费 —— 没有额度窗口，也就谈不上快撞上。它们花了多少，看下面的用量卡片。',
   'wall.noReadingSeeNotice': '没有读数 —— 原因见上方提示。',
   'wall.closest': '离上限最近的是 {label}，{pct}%。',
   'wall.whose': '这个 5 小时窗口是谁在用',

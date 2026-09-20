@@ -4,7 +4,7 @@ import * as C from './charts.js';
 
 import {windowName, loginLabel} from './lib/providers.js';
 import { t } from './lib/i18n.js';
-export {selectLive, windowName} from './lib/providers.js';
+export {selectLive, windowName, quotaAccounts} from './lib/providers.js';
 
 export function quotaGauges(v) {
   const out = [];
