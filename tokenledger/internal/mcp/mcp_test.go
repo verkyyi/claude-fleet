@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 24 {
-		t.Fatalf("tools = %d, want 24", len(tools))
+	if len(tools) != 32 {
+		t.Fatalf("tools = %d, want 32", len(tools))
 	}
 
 	want := map[string]bool{
@@ -124,7 +124,11 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"usage_by_account": false, "usage_by_endpoint": false,
 		"usage_by_source": false, "usage_by_provider": false,
 		"usage_by_user": false, "usage_by_project": false,
-		"usage_by_session": false, "usage_history": false,
+		"usage_by_session": false, "usage_by_model": false,
+		"usage_by_team": false, "usage_by_branch": false,
+		"usage_by_effort": false, "usage_by_entrypoint": false,
+		"usage_history":      false,
+		"get_limits_history": false, "get_fx": false, "get_user": false,
 		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
 		"list_repos": false, "repo_progress": false, "list_repo_issues": false,
 	}

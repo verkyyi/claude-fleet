@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/verkyyi/ccquota/internal/store"
 )
@@ -30,21 +31,36 @@ func (s *Server) handleUserData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start, end := timeRange(r.URL.Query().Get("since"), r.URL.Query().Get("until"))
-
-	sum, err := s.Store.UserSummary(login, start, end)
+	view, err := s.UserPage(login, start, end)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// UserPage assembles one person's page: their totals, the projects they worked
+// in and the machines they worked on.
+//
+// Shared with MCP, where it answers a question usage_by_user cannot. That tool
+// returns one BUCKET per login — a row in a ranking. This is the person: which
+// teams their machines belong to, which projects the time went into, how many
+// machines they touched. An agent asked "what is alice spending it on" needs
+// the second, and building it out of several usage_by_* calls would produce a
+// different answer, because top_projects is scoped to the login rather than
+// filtered from a fleet-wide ranking.
+func (s *Server) UserPage(login string, start, end time.Time) (*UserView, error) {
+	sum, err := s.Store.UserSummary(login, start, end)
+	if err != nil {
+		return nil, err
 	}
 	projects, err := s.Store.UsageByUser(login, store.ByProject, start, end, 12)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	machines, err := s.Store.UsageByUser(login, store.ByEndpoint, start, end, 20)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	if projects == nil {
 		projects = []store.Bucket{}
@@ -55,10 +71,10 @@ func (s *Server) handleUserData(w http.ResponseWriter, r *http.Request) {
 	if sum.Teams == nil {
 		sum.Teams = []string{}
 	}
-	writeJSON(w, http.StatusOK, UserView{
+	return &UserView{
 		UserSummary: sum, TopProjects: projects, MachinesBreakdown: machines,
 		Disclaimer: shareDisclaimer,
-	})
+	}, nil
 }
 
 // serveUserPage serves /u/<login>. The page fetches its own data from

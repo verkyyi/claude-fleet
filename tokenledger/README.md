@@ -785,12 +785,43 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Twenty-four read-only tools: `list_accounts`, `get_limits`, `list_endpoints`, `usage_by_source`,
+Thirty-two read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
+`list_endpoints`, `usage_by_source`,
 `usage_by_provider`, `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
-`usage_history`, `usage_summary`, `list_sessions`, `get_session`,
-`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`,
+`usage_by_model`, `usage_by_team`, `usage_by_branch`, `usage_by_effort`, `usage_by_entrypoint`,
+`usage_history`, `usage_summary`, `list_sessions`, `get_session`, `get_user`,
+`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`, `get_fx`,
 `list_repos`, `repo_progress`, `list_repo_issues`.
+
+**Every axis the HTTP API can group by, MCP can group by too.** They went out of
+step once: `team`, `branch`, `model`, `effort` and `entrypoint` were reachable as
+*filters* over MCP but had no `usage_by_*` tool, so an agent asked "what did each
+team spend this week" — one of the questions an agent most ought to be able to
+answer — could only narrow to a team it already knew the name of. `usage_summary`
+carries the effort and entrypoint splits that `GET /v1/summary` has always
+returned, for the same reason: those two are the only axes with no chip to filter
+on, so a missing split left them unreachable rather than merely inconvenient.
+
+`get_fx` is there because an agent reading a plan priced in CNY beside gateway
+charges in USD otherwise has no way to reach a rate at all, nor to learn how
+stale it is — and one that converts at a rate it invented produces a figure
+nobody can check.
+
+The asymmetry ran the other way too, and `GET /v1/quota/history` closes it: the
+provider-defined quota windows were reachable from the dashboard and from MCP,
+but over HTTP only as the `quota_series` key folded inside `/v1/limits/history`
+— so an API caller who wanted the windows had to fetch every subscription's
+utilization series to get at them. `/v1/limits/history` keeps its folded copy:
+the dashboard draws both on one axis, and splitting that into two round-trips
+would let the halves straddle a refresh.
+
+What stays deliberately one-sided: `/v1/share`, `/badge/*` and `/embed/*` are
+public-facing renderings and have no MCP tools; `/v1/growth/latest` is gated on
+the enrollment's *kind* rather than the viewer token, so moving it would be a
+permission change rather than a parity fix; and `/v1/live/stream` is a stream,
+which this server does not open (see the GET handler). MCP is read-only
+throughout — `POST /v1/accounts/label` has no tool and will not grow one.
 
 The last three read repo progress rather than spend. They exist because agents
 read backlogs and humans read dashboards: one source, two renderers. A second

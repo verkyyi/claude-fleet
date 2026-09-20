@@ -139,6 +139,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
 	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
+	// The quota windows on their own. /v1/limits/history still folds a copy in
+	// for the dashboard, which draws both series on one axis; this is for a
+	// caller that wants only the windows -- see handleQuotaHistory.
+	mux.Handle("/v1/quota/history", s.viewerOnly(http.HandlerFunc(s.handleQuotaHistory)))
 	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
 	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
 	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))

@@ -251,6 +251,55 @@ func toolSpecs() []toolSpec {
 		{Name: "get_live", Title: "Live and recent sessions", Description: "Claude heartbeats and Codex recent log activity, filtered by source/account, with scoped aggregates. Never add these overlapping counters to stored totals." + caveat, InputSchema: obj(map[string]any{"account": accountProp, "source": chipProps["source"]})},
 		{Name: "quota_history", Title: "Provider quota window history", Description: "Codex provider-defined quota windows and critical time within the selected interval. Windows and accounts are separate series; percentages are not added." + caveat, InputSchema: obj(withChips(map[string]any{"account": accountProp, "since": sinceProp, "until": untilProp}))},
 		{
+			Name:  "get_limits_history",
+			Title: "Rate-limit utilization over time",
+			Description: "How full each subscription's rate-limit window was over a period, as one series " +
+				"PER SUBSCRIPTION, plus how long each spent in the critical band (at or above 90%) and " +
+				"how many separate episodes that was — with the same critical figure for the previous " +
+				"period to compare against. get_limits answers \"where am I right now\"; this answers " +
+				"\"how often did I hit the wall, and is it getting worse\". The series are never merged: " +
+				"two subscriptions at 4% and 19% are separate quota pools with separate resets, and an " +
+				"average across them is a number that means nothing while looking authoritative. Points " +
+				"are downsampled by keeping each slot's HIGHEST reading, so a spike survives the " +
+				"downsample rather than being averaged away. Takes no drill-down chips beyond source: a " +
+				"rate limit is a property of the SUBSCRIPTION, so there is no such thing as one " +
+				"project's or one branch's utilization, and accepting a chip it could only ignore would " +
+				"hand back a fleet-wide series that looks scoped." + caveat,
+			InputSchema: obj(map[string]any{
+				"account": accountProp, "source": chipProps["source"],
+				"since": sinceProp, "until": untilProp,
+				"points": map[string]any{
+					"type":        "integer",
+					"description": "Maximum points per series (default 400).",
+				},
+			}),
+		},
+		{
+			Name:  "get_fx",
+			Title: "Exchange rate, with its provenance",
+			Description: "One currency conversion rate, with where it came from, when the feed last " +
+				"moved and whether it is stale. Needed because some figures on this hub are billed in a " +
+				"currency other than the one a question is asked in — a plan priced in CNY beside " +
+				"gateway charges in USD — and an agent that converts at a rate it invented, or compares " +
+				"two currencies without converting at all, produces a figure nobody can check. " +
+				"available: false means this hub cannot convert that pair; report each figure in its " +
+				"own currency rather than substituting a rate. fallback: true means the rate is pinned " +
+				"in the binary because the feed has not answered — say so when quoting it. CONVERSION " +
+				"IS FOR DISPLAY ONLY: the ledger keeps every figure in the currency it was billed in, " +
+				"no total is computed through this rate, and a converted amount is an approximation of " +
+				"an invoice, never the invoice.",
+			InputSchema: obj(map[string]any{
+				"base": map[string]any{
+					"type":        "string",
+					"description": `Currency to convert FROM, as an ISO code. Defaults to "USD".`,
+				},
+				"target": map[string]any{
+					"type":        "string",
+					"description": "Currency to convert TO, as an ISO code. Defaults to base, which is the identity rate.",
+				},
+			}),
+		},
+		{
 			Name:  "list_accounts",
 			Title: "List subscriptions",
 			Description: "List the subscriptions and local usage pools this hub tracks, with source, plan tier and how " +
@@ -343,6 +392,25 @@ func toolSpecs() []toolSpec {
 			})),
 		},
 		{
+			Name:  "get_user",
+			Title: "One person's page",
+			Description: "Everything about ONE OS login over a period: their totals, the teams their " +
+				"machines belong to, how many projects and machines they touched, and the breakdown of " +
+				"their own spend by project and by machine. usage_by_user returns a row in a ranking; " +
+				"this is the person behind one of those rows, and it is what to call once a ranking has " +
+				"named somebody. The project and machine breakdowns are scoped to this login, not " +
+				"filtered out of a fleet-wide list, so they are that person's own top twelve and top " +
+				"twenty rather than whichever of their rows survived a global cut. Internal figures: " +
+				"they carry project paths and machine names." + caveat,
+			InputSchema: obj(map[string]any{
+				"user": map[string]any{
+					"type":        "string",
+					"description": "The OS login, exactly as usage_by_user or a finding's owner.user spells it.",
+				},
+				"since": sinceProp, "until": untilProp,
+			}, "user"),
+		},
+		{
 			Name:  "usage_by_endpoint",
 			Title: "Spend by machine",
 			Description: "Token and cost totals grouped by machine over a time range — which server or " +
@@ -370,6 +438,65 @@ func toolSpecs() []toolSpec {
 			})),
 		},
 		{
+			Name:  "usage_by_model",
+			Title: "Spend by model",
+			Description: "Token and cost totals grouped by model id — which model the period's spend " +
+				"went to. Answers \"is the expensive model earning its keep\"; it cannot answer which " +
+				"contract the money went to, because failover reaches one model id through several " +
+				"upstreams at several prices — that is usage_by_provider." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_team",
+			Title: "Spend by team",
+			Description: "Token and cost totals grouped by the operator-assigned team a machine belongs " +
+				"to — the axis a budget is actually held against. Team is a property of the ENDPOINT, " +
+				"resolved at query time, so re-assigning a machine moves its whole history with it. " +
+				"Machines nobody has assigned come back as one bucket labelled \"unassigned\" rather " +
+				"than being dropped: a team breakdown that does not add up to the fleet total is worse " +
+				"than one with an unassigned row in it." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_branch",
+			Title: "Spend by git branch",
+			Description: "Token and cost totals grouped by the git branch the work ran on — what a " +
+				"feature, a migration or one long-running refactor cost. Branch names repeat across " +
+				"repositories (every repo has a \"main\"), so narrow with the project chip before " +
+				"reading a single branch's total as one piece of work. An empty branch means the turn " +
+				"ran outside a git worktree." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_effort",
+			Title: "Spend by reasoning effort",
+			Description: "Token and cost totals grouped by the reasoning effort each turn was run at — " +
+				"what the high-effort setting is costing against what it is being used for. There is no " +
+				"effort filter to pair with this: effort is an axis only, on this surface and on the " +
+				"HTTP one alike. An empty bucket means the reporting side declared no effort, which is " +
+				"the normal case for sources that have no such setting." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
+			Name:  "usage_by_entrypoint",
+			Title: "Spend by how the turn was invoked",
+			Description: "Token and cost totals grouped by entrypoint — cli, ide and whatever else the " +
+				"reporting side names. Answers \"how much of this is interactive and how much is " +
+				"automation\". Like effort, it is an axis only and has no matching filter. An empty " +
+				"bucket means the reporting side declared none." + caveat,
+			InputSchema: obj(withChips(map[string]any{
+				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
+			})),
+		},
+		{
 			Name:  "usage_history",
 			Title: "Usage over time",
 			Description: "A time series of a subscription's usage plus a per-model split, for trend and " +
@@ -387,7 +514,8 @@ func toolSpecs() []toolSpec {
 			Title: "Totals for a period",
 			Description: "Totals for a period under optional drill-down filters: tokens, cost per source, " +
 				"turns, sessions, token composition (cache read / create, input, output, thinking), " +
-				"subagent share, and the same figures for the previous period of equal length. " +
+				"subagent share, the split by reasoning effort and by entrypoint, " +
+				"and the same figures for the previous period of equal length. " +
 				"Also the two figures that ARE real money — subscription_spend (what the plans cost over " +
 				"the period, billed whether or not a token was spent) and real_spend (subscriptions plus " +
 				"metered gateway charges). Quote real_spend when asked what something cost; quote " +
@@ -651,6 +779,52 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return s.usage(args, store.ByProject)
 	case "usage_by_session":
 		return s.usage(args, store.BySession)
+	case "usage_by_model":
+		return s.usage(args, store.ByModel)
+	case "usage_by_team":
+		return s.usage(args, store.ByTeam)
+	case "usage_by_branch":
+		return s.usage(args, store.ByBranch)
+	case "usage_by_effort":
+		return s.usage(args, store.ByEffort)
+	case "usage_by_entrypoint":
+		return s.usage(args, store.ByEntrypoint)
+
+	case "get_user":
+		login := str(args, "user")
+		if login == "" {
+			return nil, fmt.Errorf("user is required: the OS login, as usage_by_user spells it")
+		}
+		start, end := timeRange(args)
+		view, err := s.api.UserPage(login, start, end)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"since": start, "until": end, "user": view}, nil
+
+	case "get_fx":
+		return s.api.FXView(str(args, "base"), str(args, "target")), nil
+
+	case "get_limits_history":
+		f, err := s.filter(args)
+		if err != nil {
+			return nil, err
+		}
+		n := intArg(args, "points")
+		if n <= 0 {
+			n = 400
+		}
+		out, err := s.api.LimitsHistoryView(f, n)
+		if err != nil {
+			return nil, err
+		}
+		out["account_uuid"] = f.Account
+		out["disclaimer"] = strings.TrimSpace(caveat)
+		if note := scopeNote(f.Account); note != "" {
+			out["all_accounts"] = true
+			out["scope_note"] = note
+		}
+		return out, nil
 
 	case "usage_history":
 		f, err := s.filter(args)
@@ -711,9 +885,23 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The two splits GET /v1/summary has always carried and this tool did
+		// not. Effort and entrypoint are the only axes with no chip to filter
+		// on, so until usage_by_effort and usage_by_entrypoint existed this
+		// omission left them unreachable over MCP entirely rather than merely
+		// inconvenient. Both doors now answer the same shape (issue #60).
+		effort, err := s.api.Store.UsageByFiltered(f, store.ByEffort, 10)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := s.api.Store.UsageByFiltered(f, store.ByEntrypoint, 10)
+		if err != nil {
+			return nil, err
+		}
 		out := map[string]any{
 			"account_uuid": f.Account, "since": f.Start, "until": f.End,
 			"summary": sum, "prev": psum,
+			"effort": nonNil(effort), "entrypoint": nonNil(entry),
 			"cost_notional":      sum.Cost.Notional(),
 			"cost_billed":        sum.Cost.Billed(),
 			"subscription_spend": api.PlansForSource(plans, f.Source),
@@ -911,6 +1099,16 @@ func repoRange(args map[string]any) (time.Time, time.Time) {
 		start = end.AddDate(0, 0, -90)
 	}
 	return start, end
+}
+
+// nonNil renders an empty breakdown as [] rather than null. A model reading
+// null has to decide whether it means "no rows" or "this build does not
+// report it"; an empty list only means the first.
+func nonNil(b []store.Bucket) []store.Bucket {
+	if b == nil {
+		return []store.Bucket{}
+	}
+	return b
 }
 
 // boolArg reads a JSON boolean, tolerating the string spellings a few clients

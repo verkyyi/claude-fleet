@@ -198,16 +198,31 @@ func (s *Server) handleLimitsHistory(w http.ResponseWriter, r *http.Request) {
 	if n <= 0 {
 		n = 400
 	}
-	pts, err := s.Store.LimitsHistory(f.Account, f.Start, f.End, f.Source)
+	out, err := s.LimitsHistoryView(f, n)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// LimitsHistoryView is the utilization-over-time answer both the dashboard and
+// MCP read: one series per subscription, each with the time it spent in the
+// critical band, plus the provider-defined quota windows over the same range.
+//
+// Lifted out of the handler so the agent-facing surface reads the SAME
+// computation rather than a second one that drifts. Everything here is
+// identifiers and numbers — there is no prose to translate, which is why this
+// needs no locale.
+func (s *Server) LimitsHistoryView(f store.Filter, n int) (map[string]any, error) {
+	pts, err := s.Store.LimitsHistory(f.Account, f.Start, f.End, f.Source)
+	if err != nil {
+		return nil, err
+	}
 	prev := f.Prev()
 	prevPts, err := s.Store.LimitsHistory(f.Account, prev.Start, prev.End, f.Source)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	labels := s.accountLabels()
 	byAcct := map[string]*LimitSeries{}
@@ -235,10 +250,9 @@ func (s *Server) handleLimitsHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	quotas, err := s.QuotaHistorySeries(f, n)
 	if err != nil {
-		httpError(w, 500, err.Error())
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"since": f.Start, "until": f.End, "accounts": out, "quota_series": quotas})
+	return map[string]any{"since": f.Start, "until": f.End, "accounts": out, "quota_series": quotas}, nil
 }
 
 // accountLabels maps uuid -> the display label the rest of the API uses.

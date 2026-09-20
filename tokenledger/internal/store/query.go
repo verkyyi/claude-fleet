@@ -306,6 +306,33 @@ const (
 	ByEntrypoint Dimension = "entrypoint"
 )
 
+// Dimensions is every axis this build can group by.
+//
+// It exists because the set was previously knowable only by reading the switch
+// in column(), so each surface kept its own idea of it: the HTTP API accepted
+// all twelve through ?by=, while MCP registered a tool for seven and offered
+// the other five as filters only. Nobody notices a list that is merely
+// incomplete, and that one stayed incomplete for months -- an agent could
+// narrow to a team it already knew the name of, but never ask what each team
+// spent (issue #60).
+//
+// A surface that offers a per-dimension entry point should be generated from,
+// or tested against, THIS list rather than a hand-written one.
+var Dimensions = []Dimension{
+	BySource, ByAccount, ByEndpoint, ByProject, BySession, ByModel,
+	ByProvider, ByBranch, ByUser, ByTeam, ByEffort, ByEntrypoint,
+}
+
+// dimensionNames is Dimensions as prose, for an error that tells the caller
+// what it could have asked for instead.
+func dimensionNames() string {
+	out := make([]string, len(Dimensions))
+	for i, d := range Dimensions {
+		out[i] = string(d)
+	}
+	return strings.Join(out, ", ")
+}
+
 // AllAccounts asks for every subscription at once.
 //
 // It is a distinct sentinel rather than the empty string on purpose: "" is
@@ -344,7 +371,10 @@ func (d Dimension) column() (string, error) {
 	case ByEntrypoint:
 		return "entrypoint", nil
 	default:
-		return "", fmt.Errorf("unknown dimension %q", d)
+		// Naming the alternatives, the way an unknown source does. A caller
+		// told only that its axis is unknown has to go and read this switch;
+		// one handed the list can retry.
+		return "", fmt.Errorf("unknown dimension %q (want one of: %s)", d, dimensionNames())
 	}
 }
 
