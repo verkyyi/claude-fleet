@@ -140,7 +140,11 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertTrue(LIB['alive'](self.pid))
 
     def test_pending_and_keep_awake_veto(self):
-        for option,value in (('@claude_state','needs'),('@claude_state','working'),('@handoff_armed','1'),('@agent_transfer_request','x'),('@quota_failover','waiting'),('@sleep_keep_awake','1')):
+        # A bare @quota_failover marker is no longer an unconditional veto: the
+        # journal decides sleep-eligibility now (#755/#809), covered by
+        # test_only_verified_proactive_quota_wait_can_sleep and
+        # test_stale_failover_marker_from_a_completed_episode_allows_sleep.
+        for option,value in (('@claude_state','needs'),('@claude_state','working'),('@handoff_armed','1'),('@agent_transfer_request','x'),('@sleep_keep_awake','1')):
             before=self.opt(option);self.stamp(option,value)
             self.cli('sleep',self.pane,ok=False)
             self.stamp(option,before)
@@ -217,6 +221,22 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.cli('scan')
         self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
         self.assertExited(self.pid)
+
+    def test_scan_skips_panels_silently_and_stamps_each_record(self):
+        # A panel/hub window produces no per-tick skip record (#755/#809
+        # follow-up: it was ~a fifth of the log's noise); a real worker's record
+        # carries a timestamp the log previously lacked.
+        panel=self.tm('new-window','-d','-P','-F','#{pane_id}','-t',self.socket,'-c',str(self.wt),'exec /bin/sh')
+        panel_win=self.tm('display-message','-p','-t',panel,'#{window_id}')
+        self.tm('rename-window','-t',panel,'dash')
+        try:
+            out=self.cli('scan').stdout.strip().splitlines()
+            records=[json.loads(l) for l in out if l.startswith('{')]
+            self.assertFalse([r for r in records if r.get('window')==panel_win])
+            mine=[r for r in records if r.get('window')==self.opt('window_id')]
+            self.assertTrue(mine and all('at' in r for r in records))
+        finally:
+            self.tm('kill-window','-t',panel)
 
     def test_restore_rebinds_saved_record_without_starting_agent(self):
         self.cli('sleep',self.pane)
@@ -356,6 +376,27 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             with self.assertRaisesRegex(ValueError,'quota failover'):worker.eligible()
             request.update(hard=False);request['source']=dict(source,pid=self.pid+1);LIB['save'](path,request)
             with self.assertRaisesRegex(ValueError,'another source'):worker.eligible()
+
+    def test_stale_failover_marker_from_a_completed_episode_allows_sleep(self):
+        # A marker that outlived its episode no longer vetoes hibernation
+        # (#755/#809): a non-waiting prefix is not an automatic refusal, a
+        # completed migration for this window is terminal, and a soft proactive
+        # wait means sleep rather than migrate. Only a live cutover or a hard
+        # failure for this window still blocks.
+        with self.codex_probe() as (worker,source,thread):
+            self.stamp('@quota_failover','preparing: selected claude/acct')
+            worker.eligible()
+            self.assertEqual(source['stale_quota_marker'],'preparing: selected claude/acct')
+            other=worker.quota_directory/'episode'/'request.json'
+            for state in ('bound','cancelled','recovered'):
+                LIB['save'](other,{'source':dict(source,pid=self.pid+9),'state':state})
+                worker.eligible()
+            LIB['save'](other,{'source':dict(source,pid=self.pid+9),'state':'waiting','hard':False})
+            worker.eligible()
+            for req in ({'state':'preparing'},{'state':'ambiguous'},{'state':'waiting','hard':True}):
+                LIB['save'](other,dict(source={'session':source['session'],'window':source['window'],
+                                                'session_id':'unrelated','pid':self.pid+9},**req))
+                with self.assertRaisesRegex(ValueError,'unresolved'):worker.eligible()
 
     def test_quota_controller_lock_excludes_sleep(self):
         with patch.dict(os.environ,self.env):

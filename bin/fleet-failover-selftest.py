@@ -216,6 +216,29 @@ class Failover(unittest.TestCase):
         self.assertEqual(flow.read(path/'request.json')['state'],'waiting')
 
 
+    def test_claude_failover_uses_the_sleep_mcp_contract_not_a_blanket_veto(self):
+        # Both agents share hibernation's restartable-MCP contract (#784/#808/
+        # #830): Claude delegates straight to sleep quiet_processes with no
+        # blanket child veto; codex additionally runs the native-children idle
+        # check first. Without this a done Claude worker with MCP children could
+        # neither migrate nor sleep.
+        calls=[]
+        fake={'quiet_processes':lambda src:(calls.append(('quiet',src)),{7})[1],
+              'quiet_native_children':lambda *a:calls.append(('native',a))}
+        claude=dict(self.source,agent='claude',pid=42,session_id='s',worktree='/w')
+        with patch.object(flow.runpy,'run_path',return_value=fake):
+            self.assertEqual(flow.quiet_processes(claude),{7})
+        self.assertEqual(calls,[('quiet',claude)])
+        calls.clear()
+        codex=dict(self.source,agent='codex',session_id='c',codex_identity={'remote':'unix:///x'})
+        closed=[]
+        with patch.object(flow.runpy,'run_path',return_value=fake), \
+             patch.object(flow,'RPC',lambda *a,**k:type('C',(),{'close':lambda s:closed.append(1)})()):
+            flow.quiet_processes(codex)
+        self.assertEqual([c[0] for c in calls],['native','quiet'])
+        self.assertEqual(closed,[1])
+
+
 class Drafts(unittest.TestCase):
     def test_waiting_loop_and_unsent_draft_survive_another_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -266,6 +289,39 @@ class Drafts(unittest.TestCase):
             script=(p/'launch.sh').read_text()
             self.assertIn('--agent claude --resume exact-uuid',script)
             self.assertIn('FLEET_ACCOUNT_LABEL=work',script)
+
+
+class MarkerClear(unittest.TestCase):
+    def source(self):
+        return dict(session='test',window='@2',pane='%2',pid=42,session_id='old',agent='claude')
+
+    def test_empty_status_clears_the_window_marker_even_after_a_rebind(self):
+        # After a bound migration the window holds the target's new session, so
+        # the identity guard would refuse to touch it. A completed episode must
+        # still clear its marker there, or it vetoes hibernation forever
+        # (#755/#809); a non-empty status keeps the guard.
+        src=self.source();sets=[]
+        rebound=dict(src,pid=99,session_id='new')
+        with patch.object(flow,'inspect',return_value=rebound), \
+             patch.object(flow,'tm',side_effect=lambda sess,*a:(sets.append(a),'')[1]):
+            flow.stamp(src,'waiting: x')          # identity changed -> not written
+            self.assertEqual(sets,[])
+            flow.stamp(src,'')                     # clear -> lands regardless
+            self.assertEqual(len(sets),1)
+            self.assertEqual(sets[0][-2:],('@quota_failover',''))
+            self.assertEqual(sets[0][-3],src['window'])
+
+    def test_outcome_clears_on_every_terminal_state(self):
+        for state in ('bound','cancelled','recovered'):
+            with tempfile.TemporaryDirectory() as d:
+                path=Path(d);(path).mkdir(exist_ok=True)
+                r={'source':self.source(),'manifest':str(path/'m.json')}
+                cleared=[]
+                with patch.object(flow,'stamp',side_effect=lambda src,status:cleared.append(status)), \
+                     patch.object(flow,'quota_loop'):
+                    flow.outcome(path,r,state)
+                self.assertEqual(cleared,[''])
+                self.assertEqual(flow.read(path/'request.json',{})['state'],state)
 
 
 if __name__=='__main__':unittest.main()
