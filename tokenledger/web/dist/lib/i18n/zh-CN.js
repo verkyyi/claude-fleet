@@ -361,12 +361,18 @@ export const zhCN = {
   'findings.owner.team': '该找谁：团队 {team}',
 
   /* ---------------------------------------------------------- breakdowns */
-  'breakdown.title': '分组 {n}',
-  'breakdown.hint': '按{dim}分组，取 50 行，与上一段时间对比。',
+  'breakdown.title': '按{dim}分组',
+  'breakdown.hint': '取前 50 行，与上一段时间对比；占比跟随当前选区。',
   'breakdown.groupBy': '分组维度（分组 {n}）',
+  'breakdown.scaleNote': '两张分组卡共用一条刻度：满格 = {max} token。细竖线是上一期。',
   'breakdown.prevTokens': '上期 token',
   'breakdown.prevSource': '上期 {source} $',
-  'breakdown.tip.tokens': '{tokens} token（上期 {prev}）',
+  'breakdown.prevMark': '上期：{prev} token',
+  'breakdown.share': '占比',
+  'breakdown.shareTip': '占本卡这 {n} 行的 token 合计（当前选区内 {total}）。只算 token —— 本页三种钱从不相加。',
+  'breakdown.tip.cur': '本期：{tokens} token · 占本卡 {share}',
+  'breakdown.tip.prev': '上期：{prev} token（{abs}，{pct}）',
+  'breakdown.tip.noPrev': '这一行上期没有数据。',
   'breakdown.tip.exact': '精确变化：{pct}',
 
   /* ---------------------------------------------------------- efficiency */
@@ -384,6 +390,8 @@ export const zhCN = {
   'efficiency.effort': '推理强度',
   'efficiency.entrypoint': '入口',
   'efficiency.turns': '轮次：主线程 vs 子代理',
+  'efficiency.sharedScale': '与「{other}」共用 token 刻度。',
+  'efficiency.unitTurns': '单位是轮次，自成一条刻度 —— 这些条与旁边两张 token 图不可比。',
   'efficiency.noData': '没有数据。',
   'efficiency.default': '默认',
   'efficiency.mainThread': '主线程',

@@ -366,12 +366,18 @@ export const en = {
   'findings.owner.team': 'who to ask: team {team}',
 
   /* ---------------------------------------------------------- breakdowns */
-  'breakdown.title': 'Breakdown {n}',
-  'breakdown.hint': 'Grouped by {dim}, 50 rows requested, compared with the period before.',
+  'breakdown.title': 'By {dim}',
+  'breakdown.hint': 'Top 50 rows, compared with the period before. Shares follow the current selection.',
   'breakdown.groupBy': 'group by (breakdown {n})',
+  'breakdown.scaleNote': 'Both breakdown cards share one scale: a full bar is {max} tokens. The thin rule marks the previous period.',
   'breakdown.prevTokens': 'Prev tokens',
   'breakdown.prevSource': 'Prev {source} $',
-  'breakdown.tip.tokens': '{tokens} tokens (was {prev})',
+  'breakdown.prevMark': 'Previous period: {prev} tokens',
+  'breakdown.share': 'Share',
+  'breakdown.shareTip': 'Share of the {n} rows on this card ({total} tokens in the current selection). Tokens only — the three kinds of money on this page are never added.',
+  'breakdown.tip.cur': 'This period: {tokens} tokens · {share} of this card',
+  'breakdown.tip.prev': 'Previous period: {prev} tokens ({abs}, {pct})',
+  'breakdown.tip.noPrev': 'No previous-period data for this row.',
   'breakdown.tip.exact': 'exact change: {pct}',
 
   /* ---------------------------------------------------------- efficiency */
@@ -389,6 +395,8 @@ export const en = {
   'efficiency.effort': 'Effort',
   'efficiency.entrypoint': 'Entrypoint',
   'efficiency.turns': 'Turns: main vs. subagent',
+  'efficiency.sharedScale': 'Same token scale as “{other}”.',
+  'efficiency.unitTurns': 'Unit: turns. Its own scale — these bars are not comparable with the token lists beside it.',
   'efficiency.noData': 'No data.',
   'efficiency.default': 'default',
   'efficiency.mainThread': 'main thread',

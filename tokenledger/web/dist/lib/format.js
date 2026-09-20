@@ -201,10 +201,63 @@ export function fmtDur(ms) {
 export const DELTA_CAP_PCT = 999;
 
 // delta compares two additive values. null pct means "no previous data".
+//
+// `abs` is the plain difference and is ALWAYS a number, including when `pct`
+// is null: "no previous data" is a statement about the ratio, not about the
+// subtraction. A percentage alone cannot be read back into either figure, and
+// on a bar row the reader wants "+41M tokens" at least as often as "+18%" —
+// so every caller that has the two numbers can now show the one it needs.
 export function delta(cur, prev) {
-  if (!prev || !Number.isFinite(prev)) return { pct: null, text: '—' };
+  const abs = (Number(cur) || 0) - (Number(prev) || 0);
+  if (!prev || !Number.isFinite(prev)) return { pct: null, abs, text: '—' };
   const pct = ((cur - prev) / prev) * 100;
   const sign = pct > 0 ? '+' : '';
-  if (Math.abs(pct) >= DELTA_CAP_PCT) return { pct, text: `${sign}≫${DELTA_CAP_PCT}%` };
-  return { pct, text: `${sign}${Math.abs(pct) >= 10 ? Math.round(pct) : pct.toFixed(1)}%` };
+  if (Math.abs(pct) >= DELTA_CAP_PCT) return { pct, abs, text: `${sign}≫${DELTA_CAP_PCT}%` };
+  return { pct, abs, text: `${sign}${Math.abs(pct) >= 10 ? Math.round(pct) : pct.toFixed(1)}%` };
+}
+
+/** fmtSigned renders an absolute difference with its sign kept: `0` is "±0",
+ *  not "0", so a row that did not move says so rather than looking like a
+ *  missing figure. */
+export const fmtSigned = (n) => {
+  const v = Number(n) || 0;
+  return (v > 0 ? '+' : v < 0 ? '−' : '±') + fmtFull(Math.abs(v));
+};
+
+/* ------------------------------------------------- one scale, one denominator */
+
+/** scaleMax is the single denominator two or more bar lists must share before
+ *  their bars can be compared by eye. `rows` is the CONCATENATION of every
+ *  list that will be drawn at this scale; the result is the largest figure
+ *  any of them will draw — current values AND previous-period markers, since
+ *  a marker outside the track is a marker that lies about where it sits.
+ *
+ *  Sharing a denominator is the whole point: two lists normalized to their own
+ *  first row draw a full-width bar each for two numbers that are not equal,
+ *  which is the defect this exists to prevent. Never mix units through here —
+ *  tokens and turns share no scale, and a shared max would make them look as
+ *  if they did.
+ *
+ *  Floors at 1 so an all-zero list divides by something. */
+export const scaleMax = (rows) =>
+  Math.max(1, ...(rows || []).map((r) => Math.max(Number(r.value) || 0, Number(r.prev) || 0)));
+
+/** shareText is `value` as a percentage of `total`, or null when there is no
+ *  denominator to be a share OF.
+ *
+ *  null is deliberate and callers must render it as absence, not as "—": on
+ *  this page a dash already means "no cost", "unknown" and "notional", and a
+ *  fourth meaning would finish the job of making it mean nothing.
+ *
+ *  The CALLER owns what `total` is, and owes the reader that sentence. The one
+ *  rule this file can enforce is the repo's: a denominator is a sum of ONE
+ *  quantity. Token share takes a token total. Cost share takes one source's
+ *  cost — never a cross-source total, which internal/store/cost.go refuses to
+ *  compute for the same reason. */
+export function shareText(value, total) {
+  const t = Number(total) || 0;
+  if (t <= 0) return null;
+  const pct = ((Number(value) || 0) / t) * 100;
+  if (pct > 0 && pct < 0.1) return '<0.1%';
+  return `${pct.toFixed(1)}%`;
 }

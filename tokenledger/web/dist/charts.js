@@ -64,12 +64,39 @@ const band = (pct) =>
  *  (optional) overrides the row's tooltip text, defaulting to the same
  *  display text otherwise — a shortened project path (breakdown-by-project
  *  rows) wants its tooltip to still carry the full raw path, not the
- *  shortened label. */
-export function rankedBars(rows, { onClick, selectedKey } = {}) {
-  const max = Math.max(...rows.map((r) => r.value), 1);
+ *  shortened label.
+ *
+ *  Issue #51 adds the three things a SIDE-BY-SIDE pair of these needs:
+ *    - `max` (option): the scale to draw at, instead of this list's own
+ *      largest row. Two lists of the same quantity drawn at one `max` are
+ *      comparable by eye — without it each normalized to its own first row,
+ *      so a full-width bar here and a full-width bar there were different
+ *      numbers. Compute it with format.js's `scaleMax` over BOTH lists.
+ *    - `r.prev` (row): the previous period, drawn as a thin marker on the
+ *      track at the same scale, with `r.prevTitle` as its hover text. The
+ *      change stops being a string at the end of the line.
+ *    - `r.rightTitle` (row): hover text for the clipped `.v` column. */
+export function rankedBars(rows, { onClick, selectedKey, max: fixedMax } = {}) {
+  // An EXPLICIT max wins outright — it is not merged with this list's own
+  // largest row. That is the entire contract: two lists drawn at the same
+  // `max` can be compared by eye, and quietly widening one of them to fit
+  // its own tallest row would silently break exactly the promise the caller
+  // passed it to make. A value past the scale clamps to full width instead
+  // (see `Math.min(100, …)` below) — callers compute the shared max with
+  // format.js's `scaleMax` over EVERY list, so in practice nothing clamps.
+  const max = Number.isFinite(fixedMax) && fixedMax > 0
+    ? fixedMax
+    : Math.max(...rows.map((r) => r.value), 1);
   return el('div', { class: 'bars' }, rows.map((r) => {
     const sel = selectedKey != null && r.key === selectedKey;
     const display = r.label || r.key;
+    // The previous period, ON the track at the same scale as the fill: a
+    // reader sees which way a row moved without reading a number, and the
+    // marker's distance from the bar's end IS the change. `r.prev` absent
+    // (or zero — the API sends no previous bucket for a key that did not
+    // exist) means there is nothing to mark, which is different from
+    // marking zero.
+    const prevPct = r.prev > 0 ? Math.min(100, (r.prev / max) * 100) : null;
     // FIX (execution review, Finding 4): a display label can differ from
     // the raw identity enough that the identity is worth keeping visible
     // somewhere (a shortened project path is not the full path) — `r.title`
@@ -88,15 +115,32 @@ export function rankedBars(rows, { onClick, selectedKey } = {}) {
       el('div', { class: 'k', title: tipTitle }, display),
       el('div', { class: 'bar-track' },
         el('div', { class: 'bar-fill',
-          style: `width:${Math.max(1.5, (r.value / max) * 100)}%${r.color ? ';background:' + r.color : ''}` })),
-      el('div', { class: 'v' }, r.right));
+          style: `width:${Math.min(100, Math.max(1.5, (r.value / max) * 100))}%${r.color ? ';background:' + r.color : ''}` }),
+        prevPct == null ? null
+          : el('i', { class: 'bar-prev', style: `left:${prevPct}%`, title: r.prevTitle || null })),
+      // FIX (issue #51): `.v` is clipped by CSS in a narrow `.grid2` column
+      // (styles.css `overflow:hidden; text-overflow:ellipsis`), and with no
+      // title the clipped half — cost, share, change — was unrecoverable.
+      // `r.rightTitle` lets a caller put the LONGER form here (absolute
+      // change, exact figures); otherwise the hover simply restores the
+      // string that was cut — unless the row already carries a floating
+      // `r.tip` saying more than the clipped line did, in which case a
+      // native tooltip would only fight with it for the same hover.
+      el('div', { class: 'v', title: r.rightTitle || (r.tip || typeof r.right !== 'string' ? null : r.right) }, r.right));
   }));
 }
 
 /** bucketTable is the relief the palette validator requires in light mode, and
  *  the accessible fallback for anyone who cannot read the charts. `extraCols`
- *  (Review's compare-with-previous-period columns) is `[{label, value(b)}]`,
- *  appended after Unpriced; omitted it behaves exactly as before.
+ *  (Review's compare-with-previous-period columns) is
+ *  `[{label, value(b), at}]`, appended after Unpriced; omitted it behaves
+ *  exactly as before.
+ *
+ *  `at: 'tokens'` instead puts a column immediately after the tokens column
+ *  (issue #51). Comparison is a reading distance: "tokens" and "prev tokens"
+ *  landing at opposite ends of the row, with two or more cost columns
+ *  between them, made the table's one job — read the two numbers, subtract —
+ *  a scroll. Columns keep their given order within each position.
  *
  *  Cost is ONE COLUMN PER SOURCE, headed with the kind of money it is, and
  *  there is no total column. The three figures the hub holds are not addable —
@@ -111,22 +155,26 @@ export function bucketTable(buckets, keyLabel, extraCols = []) {
   // does not print that figure, the column would be dashes all the way down —
   // worse than absent, because an empty column reads as missing data.
   const sources = activeSourcesAcross(buckets).filter((s) => kindOf(s) === 'billed');
+  const besideTokens = extraCols.filter((c) => c.at === 'tokens');
+  const trailing = extraCols.filter((c) => c.at !== 'tokens');
   return el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, keyLabel),
       el('th', { class: 'num' }, t('chart.turns')),
       el('th', { class: 'num' }, t('chart.tokens')),
+      ...besideTokens.map((c) => el('th', { class: 'num', title: c.title || null }, c.label)),
       ...sources.map((s) => el('th', { class: 'num', title: t('chart.sourceCostTip', { source: s, kind: KIND_LABEL[kindOf(s)] }) },
         `${s} $`, el('span', { class: 'kind' }, ` ${KIND_LABEL[kindOf(s)]}`))),
       el('th', { class: 'num' }, t('chart.unpriced')),
-      ...extraCols.map((c) => el('th', { class: 'num' }, c.label)))),
+      ...trailing.map((c) => el('th', { class: 'num', title: c.title || null }, c.label)))),
     el('tbody', {}, buckets.map((b) => el('tr', {},
       el('td', { title: b.key }, b.label || b.key || t('common.unknown')),
       el('td', { class: 'num' }, fmtFull(b.events)),
       el('td', { class: 'num' }, fmtFull(b.tokens)),
+      ...besideTokens.map((c) => el('td', { class: 'num' }, c.value(b))),
       ...sources.map((s) => el('td', { class: 'num' }, fmtSourceCost(b, s))),
       el('td', { class: 'num' }, b.unpriced_events ? fmtFull(b.unpriced_events) : '—'),
-      ...extraCols.map((c) => el('td', { class: 'num' }, c.value(b))))))));
+      ...trailing.map((c) => el('td', { class: 'num' }, c.value(b))))))));
 }
 
 /** withTable pairs a chart element with its table fallback under one card,

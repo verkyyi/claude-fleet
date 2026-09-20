@@ -13,7 +13,8 @@
 import { apiQuery, withChip, GROUPS } from './lib/state.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
-import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, shortProject, DELTA_CAP_PCT } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, fmtSigned,
+         scaleMax, shareText, shortProject, DELTA_CAP_PCT } from './lib/format.js';
 import { SOURCES, KIND_LABEL, kindOf, costOf,
          activeSources, addCost, costLine, fmtSourceCost, fmtRealSpend } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
@@ -369,7 +370,7 @@ function findingsCard(result, state, app) {
 
 /* ------------------------------------------------------- card 4: breakdowns */
 
-function breakdownCard(n, dim, result, state, app, hasTeam) {
+function breakdownCard(n, dim, result, state, app, hasTeam, sharedMax) {
   const stateKey = n === 1 ? 'g1' : 'g2';
   const groups = GROUPS.filter((g) => g !== 'team' || hasTeam || g === dim);
   const seg = el('div', { class: 'seg', role: 'group', 'aria-label': t('breakdown.groupBy', { n }) },
@@ -378,12 +379,22 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
       onclick: () => app.setState({ ...state, [stateKey]: g }, { push: false }),
     }, DIM_LABEL[g])));
 
-  const card = el('div', { class: 'card' }, el('h2', {}, t('breakdown.title', { n })),
-    // toLowerCase() on the dimension name is English grammar, not a fact about
-    // the word: Chinese has no case, and lower-casing a translated label is at
-    // best a no-op and at worst wrong for a language that does. The dictionary
-    // supplies whatever form the sentence needs.
-    el('p', { class: 'hint' }, t('breakdown.hint', { dim: DIM_LABEL[dim] })),
+  // FIX (issue #51): the heading was `Breakdown {n}` — two cards side by side
+  // both titled with nothing but a slot number, while the one fact a reader
+  // needs to tell them apart (which dimension this one groups by) lived only
+  // in the segmented control below. The dimension is now the title; `n` stays
+  // as a muted slot badge, because the control's aria-label and the table
+  // toggle's storage key still speak in slot numbers and a reader following
+  // either of those needs to find the card they name.
+  //
+  // toLowerCase() on the dimension name is English grammar, not a fact about
+  // the word: Chinese has no case, and lower-casing a translated label is at
+  // best a no-op and at worst wrong for a language that does. The dictionary
+  // supplies whatever form the sentence needs.
+  const card = el('div', { class: 'card' },
+    el('h2', {}, t('breakdown.title', { dim: DIM_LABEL[dim] }),
+      el('span', { class: 'slot' }, `#${n}`)),
+    el('p', { class: 'hint' }, t('breakdown.hint')),
     seg);
   if (result.status === 'rejected') {
     card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
@@ -392,6 +403,28 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
 
   const buckets = result.value.buckets || [];
   const selectedKey = state.chips[dim];
+  // The share denominator (issue #51's open question, answered here): the sum
+  // of the TOKENS ON THIS CARD, over the current brush selection.
+  //
+  // Following the selection is the only choice that keeps a share next to the
+  // absolute figure it is a share of — every other number in this card, and
+  // on the page, already moves with the brush, and a share that did not would
+  // disagree with the token count sitting beside it on the same line.
+  //
+  // The card's own rows, not a page-wide total, because the two breakdowns do
+  // not always cover the same scope: `omitDim` drops a chip on the card's own
+  // dimension (review.js's fetchers), so card 1 can be showing every project
+  // while card 2 shows one project split by model. One shared denominator
+  // across both would make one card's shares sum to well under 100% for no
+  // reason a reader could see. `/v1/usage` sends no total of its own — it
+  // sends the top `limit` buckets — so this IS the honest denominator, and
+  // the column's tooltip says how many rows went into it rather than letting
+  // "share" imply the whole selection.
+  //
+  // Tokens only. A cost share would need a per-source denominator (the three
+  // kinds of money never add — internal/store/cost.go deliberately has no
+  // Total()), and this card's cost cell is already one figure per source.
+  const tokenTotal = buckets.reduce((sum, b) => sum + (b.tokens || 0), 0);
   const body = el('div', {});
   let expanded = false;
 
@@ -418,36 +451,64 @@ function breakdownCard(n, dim, result, state, app, hasTeam) {
     // percentage against a near-zero baseline carries no information beyond
     // "there was almost nothing before", and forced this exact row's width
     // past its card on real data — see lib/format.js). `d.pct` stays the
-    // real, uncapped number; when it WAS capped, a `tip` on the row keeps it
-    // reachable (rankedBars already renders `r.tip` via the floating
-    // tooltip — no new plumbing needed for this).
+    // real, uncapped number; when it WAS capped, the row's tip carries it.
+    //
+    // Issue #51 moved the comparison off the end of the line and onto the
+    // bar: `prev` draws the previous period as a marker on the same track at
+    // the same scale, so the change is a distance rather than a percentage
+    // the reader has to turn back into two numbers. The line now spends its
+    // width on the two figures that ARE the row — tokens and this card's
+    // share of them — and the full comparison (absolute AND percentage,
+    // which `delta` never used to give) lives in the hover, always, not just
+    // when the percentage was too big to print.
     const rows = shown.map((b) => {
       const d = delta(b.tokens, b.prev_tokens || 0);
       const capped = d.pct != null && Math.abs(d.pct) >= DELTA_CAP_PCT;
+      const share = shareText(b.tokens, tokenTotal);
+      const prev = b.prev_tokens || 0;
       return {
         key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
-        right: `${fmtFull(b.tokens)} · ${costLine(b)} · ${d.text}`,
-        tip: capped
-          ? `<b>${escapeHTML(displayLabel(b))}</b><br>` +
-            `${escapeHTML(t('breakdown.tip.tokens', { tokens: fmtFull(b.tokens), prev: fmtFull(b.prev_tokens || 0) }))}<br>` +
-            `${escapeHTML(t('breakdown.tip.exact', { pct: `${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%` }))}`
-          : null,
+        prev,
+        prevTitle: t('breakdown.prevMark', { prev: fmtFull(prev) }),
+        right: `${fmtFull(b.tokens)}${share ? ` · ${share}` : ''} · ${costLine(b)}`,
+        tip: `<b>${escapeHTML(displayLabel(b))}</b><br>` +
+          `${escapeHTML(t('breakdown.tip.cur', { tokens: fmtFull(b.tokens), share: share || '—' }))}<br>` +
+          `${escapeHTML(costLine(b))}<br>` +
+          `${escapeHTML(prev > 0
+            ? t('breakdown.tip.prev', { prev: fmtFull(prev), abs: fmtSigned(d.abs), pct: d.text })
+            : t('breakdown.tip.noPrev'))}` +
+          (capped ? `<br>${escapeHTML(t('breakdown.tip.exact', { pct: `${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%` }))}` : ''),
       };
     });
-    const chart = C.rankedBars(rows, { selectedKey, onClick: (r) => app.setState(withChip(state, dim, r.key)) });
+    const chart = C.rankedBars(rows, { max: sharedMax, selectedKey, onClick: (r) => app.setState(withChip(state, dim, r.key)) });
     // Same shortening for the table fallback — bucketTable draws the
     // identical `b.label || b.key` off the RAW bucket objects, so the fix
     // has to travel with the data, not just the rankedBars view.
     const tableBuckets = dim === 'project' ? buckets.map((b) => ({ ...b, label: shortProject(b.key) })) : buckets;
     const table = C.bucketTable(tableBuckets, DIM_LABEL[dim], [
-      { label: t('breakdown.prevTokens'), value: (b) => fmtFull(b.prev_tokens || 0) },
+      // `at: 'tokens'` (charts.js, issue #51): both of these are read
+      // AGAINST the tokens column, and they used to sit past Unpriced with
+      // every cost column in between — a subtraction the reader had to do
+      // across a horizontal scroll.
+      { at: 'tokens', label: t('breakdown.prevTokens'), value: (b) => fmtFull(b.prev_tokens || 0) },
+      { at: 'tokens', label: t('breakdown.share'),
+        title: t('breakdown.shareTip', { n: buckets.length, total: fmtFull(tokenTotal) }),
+        value: (b) => shareText(b.tokens, tokenTotal) || '—' },
       // Previous period, per source, for the same reason the current one is:
       // one "prev cost" column would have re-blended what the row beside it
       // keeps apart.
       ...SOURCES.filter((src) => buckets.some((b) => costOf({ cost: b.prev_cost }, src).events > 0))
         .map((src) => ({ label: t('breakdown.prevSource', { source: src }), value: (b) => fmtSourceCost({ cost: b.prev_cost }, src) })),
     ]);
-    C.withTable(body, chart, table, `review-breakdown-${n}`);
+    // Stated once per card, under the bars: a shared scale is only useful if
+    // the reader knows the bars are on one, and the figure names what a full
+    // track is worth so a bar can be read without hovering it. It rides
+    // INSIDE the chart half of withTable, since "a full bar is N tokens"
+    // says nothing about the table the toggle swaps in.
+    const chartWrap = sharedMax > 1
+      ? el('div', {}, chart, el('p', { class: 'hint scale-note' }, t('breakdown.scaleNote', { max: fmtFull(sharedMax) })))
+      : chart;
+    C.withTable(body, chartWrap, table, `review-breakdown-${n}`);
     if (!expanded && buckets.length > 12) {
       body.appendChild(el('a', {
         href: '#', style: 'display:inline-block;margin-top:10px',
@@ -489,24 +550,51 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   C.withTable(compWrap, compChart, compTable, 'review-efficiency');
   card.appendChild(compWrap);
 
-  const miniList = (title, rows) => el('div', {},
+  // Three lists in one row, and issue #51's second scale defect lived here:
+  // effort and entrypoint cut the SAME token total two ways, so a bar in one
+  // was directly comparable with a bar in the other — except each normalized
+  // to its own first row, so they never were. They now share a scale.
+  //
+  // The third list does NOT join them, and must not: it counts TURNS. Same
+  // bars, same row, different quantity — the one thing a shared scale would
+  // actively assert is the one thing that is false here. It keeps its own
+  // scale and says its unit out loud instead.
+  const miniList = (title, rows, { max, note } = {}) => el('div', {},
     el('h2', { style: 'margin-top:16px' }, title),
-    rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, t('efficiency.noData')));
+    note ? el('p', { class: 'hint' }, note) : null,
+    rows.length ? C.rankedBars(rows, { max }) : el('div', { class: 'empty' }, t('efficiency.noData')));
+  // Share of each list's OWN total, which for these two is the same token
+  // total cut two ways — the denominator a reader would assume, and the only
+  // one the repo's one-quantity rule allows.
+  const effortTotal = (d.effort || []).reduce((s, e) => s + (e.tokens || 0), 0);
+  const entryTotal = (d.entrypoint || []).reduce((s, e) => s + (e.tokens || 0), 0);
+  const withShare = (text, value, total) => {
+    const s = shareText(value, total);
+    return s ? `${text} · ${s}` : text;
+  };
   const effortRows = (d.effort || []).map((e) => ({
     key: e.key || t('efficiency.default'), value: e.tokens,
-    right: t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }),
+    right: withShare(t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }), e.tokens, effortTotal),
   }));
   const entryRows = (d.entrypoint || []).map((e) => ({
     key: e.key || t('common.unknown'), value: e.tokens,
-    right: t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }),
+    right: withShare(t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }), e.tokens, entryTotal),
   }));
+  const tokenListMax = scaleMax([...effortRows, ...entryRows]);
   const mainEvents = Math.max(0, (d.events || 0) - (d.sidechain_events || 0));
+  const turnTotal = mainEvents + (d.sidechain_events || 0);
   const subRows = [
-    { key: t('efficiency.mainThread'), value: mainEvents, right: t('efficiency.turnsOnly', { events: fmtFull(mainEvents) }) },
-    { key: t('efficiency.subagent'), value: d.sidechain_events || 0, right: t('efficiency.turnsOnly', { events: fmtFull(d.sidechain_events || 0) }) },
+    { key: t('efficiency.mainThread'), value: mainEvents,
+      right: withShare(t('efficiency.turnsOnly', { events: fmtFull(mainEvents) }), mainEvents, turnTotal) },
+    { key: t('efficiency.subagent'), value: d.sidechain_events || 0,
+      right: withShare(t('efficiency.turnsOnly', { events: fmtFull(d.sidechain_events || 0) }), d.sidechain_events || 0, turnTotal) },
   ];
   card.appendChild(el('div', { class: 'eff-lists' },
-    miniList(t('efficiency.effort'), effortRows), miniList(t('efficiency.entrypoint'), entryRows), miniList(t('efficiency.turns'), subRows)));
+    miniList(t('efficiency.effort'), effortRows,
+      { max: tokenListMax, note: t('efficiency.sharedScale', { other: t('efficiency.entrypoint') }) }),
+    miniList(t('efficiency.entrypoint'), entryRows,
+      { max: tokenListMax, note: t('efficiency.sharedScale', { other: t('efficiency.effort') }) }),
+    miniList(t('efficiency.turns'), subRows, { note: t('efficiency.unitTurns') })));
 
   // $ per 1M output by model: prefer breakdown 2's fuller (limit 50) list
   // when it is already grouped by model, otherwise fall back to the
@@ -811,9 +899,21 @@ function applyAll(root, state, app, ctx, results) {
   // cut-down page), rather than dropping the cards on the floor.
   const ops = document.querySelector('#ops-analysis') || root;
   section(ops, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
+  // ONE scale for both breakdown cards (issue #51). They draw the same
+  // quantity — tokens — over the same brush selection, cut two different
+  // ways, and side by side each normalized to its own tallest row: a
+  // full-width bar on the left and a full-width bar on the right were
+  // different numbers, every time, with nothing on screen saying so. The max
+  // spans every bucket BOTH responses returned (not just the 12 rows a card
+  // shows unexpanded), so clicking "show all" cannot move the scale under a
+  // reader mid-comparison, and it counts previous-period figures too so the
+  // marker charts.js draws for them always lands on the track.
+  const bdScaleRows = (r) => (r.status === 'fulfilled' ? (r.value.buckets || []) : [])
+    .map((b) => ({ value: b.tokens || 0, prev: b.prev_tokens || 0 }));
+  const bdMax = scaleMax([...bdScaleRows(g1R), ...bdScaleRows(g2R)]);
   section(root, 'r-breakdowns').replaceChildren(el('div', { class: 'grid2' },
-    breakdownCard(1, state.g1, g1R, state, app, hasTeam),
-    breakdownCard(2, state.g2, g2R, state, app, hasTeam)));
+    breakdownCard(1, state.g1, g1R, state, app, hasTeam, bdMax),
+    breakdownCard(2, state.g2, g2R, state, app, hasTeam, bdMax)));
   section(root, 'r-effmix').replaceChildren(el('div', { class: 'grid2' },
     efficiencyCard(summaryR, modelR, g2R, state),
     modelMixCard(historyExtR, ctx)));

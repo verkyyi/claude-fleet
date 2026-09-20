@@ -190,7 +190,16 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 
 /* ---- bars ---- */
 .bars { display: flex; flex-direction: column; gap: 9px; }
-.bar-row { display: grid; grid-template-columns: minmax(90px, 250px) 1fr auto; gap: 12px; align-items: center; }
+/* The bar gets the row, and the two text columns are capped (issue #51).
+   Measured before this: in a `.grid2` breakdown card 562px wide, `.k` took
+   its full 250px and the `auto` value column took its content's 239px, which
+   left the BAR — the only part of a bar chart that encodes anything — 11
+   pixels. Two 11px bars cannot be compared no matter how honestly they are
+   scaled, so the shared scale above is worth nothing without this.
+   Percentage caps keep the track at ≥44% of the row at every width; both
+   text columns already clip with an ellipsis, and both are recoverable —
+   `.k` by its title, `.v` by the title rankedBars now sets on it. */
+.bar-row { display: grid; grid-template-columns: minmax(64px, 24%) minmax(0, 1fr) minmax(0, 32%); gap: 12px; align-items: center; }
 .bar-row .k { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* FIX (execution review, Finding 1 follow-up): unlike `.k` just above,
    this had no overflow/text-overflow, so its `auto` grid column's
@@ -204,8 +213,20 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
    the `auto` track still grows to fill available space when there IS
    room, and only clips when the grid is actually too narrow to fit it. */
 .bar-row .v { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar-track { height: 16px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.bar-track { height: 16px; background: var(--grid); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; }
+/* Previous period, on the track at the same scale as the fill (issue #51).
+   A 2px rule, not a second bar: the reader is comparing ONE length against
+   ONE mark, and a filled shadow bar behind a filled bar reads as a stack.
+   `left` is the marker's own position, so `translateX(-50%)` centres the
+   rule ON the value rather than starting it there — at 100% the whole rule
+   still lands inside the track rather than being clipped in half. The tick
+   above it is what survives when the fill is darker than the rule. */
+.bar-prev {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
+  transform: translateX(-50%); background: var(--ink-3); opacity: .85;
+  box-shadow: 0 0 0 1px var(--surface); border-radius: 1px; pointer-events: auto;
+}
 
 /* ---- legend ---- */
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; }
@@ -523,6 +544,19 @@ details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 10
   font-size: 12.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
   color: var(--ink-3); margin: 0 0 6px;
 }
+
+/* Same reasoning as the h2 rule above, for `.hint` (issue #51): `.card >
+   .hint` styled only the direct child, and the notes that now sit beside a
+   nested chart — "both cards share one scale", "unit: turns" — are one level
+   deeper, so they rendered at the browser's default paragraph size with
+   default margins, louder than the card title they qualify. */
+.card * .hint { color: var(--ink-3); font-size: 12px; margin: 0 0 8px; }
+/* The scale note follows its bars rather than introducing them. */
+.card * .hint.scale-note { margin: 10px 0 0; }
+/* The slot number, demoted: the dimension is the title now, and "#2" is only
+   there so the group-by control's aria-label ("group by (breakdown 2)") and
+   the per-card table toggle still name something a reader can find. */
+.card > h2 .slot { color: var(--ink-3); font-weight: 400; margin-left: 6px; }
 
 /* A sortable column header is a control and has to look like one. Both the
    sessions table and the stalled table mark theirs role="button", which is
