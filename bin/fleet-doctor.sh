@@ -1060,6 +1060,31 @@ else
   [ -n "$(rhb_get skipped)" ] && rhb_note="; skipped: $(rhb_get skipped)"
   pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted$rhb_note"
 fi
+# The sleep-judgment distribution over the last hour (#837). Every scan record now
+# carries an `at` timestamp (#838), so the histogram the 2026-09-19 analysis built
+# by hand is a line here: without the number, the next approach to the ceiling is a
+# manual hunt across the whole log (the same reasoning as `over=` in #653). Info
+# only — a distribution is never a pass/fail; the read is tail-bounded and never
+# fails the doctor.
+slog="$(dirname "$0")/../logs/sleep.log"
+if [ -f "$slog" ] && command -v python3 >/dev/null 2>&1; then
+  sdist=$(tail -n 6000 "$slog" 2>/dev/null | python3 -c '
+import sys, json, time, collections
+cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 3600))
+c = collections.Counter(); n = 0
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("{"): continue
+    try: d = json.loads(line)
+    except ValueError: continue
+    if d.get("at", "") < cut: continue           # pre-#838 records have no `at`
+    c[d.get("skip") or ("state:" + d.get("state", "?"))] += 1; n += 1
+if n:
+    top = ", ".join("%s x%d" % (k[:44], v) for k, v in c.most_common(5))
+    print("%d judgments/hr across %d reasons; top: %s" % (n, len(c), top))
+' 2>/dev/null)
+  [ -n "$sdist" ] && pass state "sleep judgments (last hour): $sdist"
+fi
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
 if [ -x "$inv" ]; then

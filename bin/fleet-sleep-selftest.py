@@ -150,6 +150,23 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.stamp(option,before)
         self.assertTrue(LIB['alive'](self.pid))
 
+    def test_why_lists_every_unmet_condition_not_just_the_first(self):
+        # #837: a diagnostic must show ALL the cheap blockers at once, where
+        # eligible() (and every scan skip) reports only the first.
+        self.stamp('@claude_state','working')      # not done
+        self.stamp('@sleep_keep_awake','1')        # keep awake
+        reasons=json.loads(self.cli('why',self.pane).stdout)['reasons']
+        self.assertIn('worker is not done',reasons)
+        self.assertIn('keep awake enabled',reasons)
+        # A window past the cheap gates falls through to the first deep reason only.
+        self.stamp('@claude_state','done');self.stamp('@sleep_keep_awake','')
+        self.stamp('@sleep_evidence',json.dumps(dict(self.evidence,session_id='other')))
+        deep=json.loads(self.cli('why',self.pane).stdout)['reasons']
+        self.assertEqual(deep,['no native Stop evidence for this process/session'])
+        # A window that can sleep has no unmet condition.
+        self.stamp('@sleep_evidence',json.dumps(self.evidence))
+        self.assertEqual(json.loads(self.cli('why',self.pane).stdout)['reasons'],[])
+
     def test_dry_run_does_not_exit_or_create_record(self):
         self.cli('sleep',self.pane,'--dry-run')
         self.assertTrue(LIB['alive'](self.pid))
