@@ -416,6 +416,8 @@ export const en = {
   'breakdown.title': 'By {dim}',
   'breakdown.hint': 'Top 50 rows, compared with the period before. Shares follow the current selection.',
   'breakdown.groupBy': 'group by (breakdown {n})',
+  'breakdown.openUser': "Open {user}'s own page",
+  'breakdown.subscriptionNote': 'Everything on this card ran on a subscription ({sources}) — the same sentence on every row, so it is said once here. Billed money still prints per row.',
   'breakdown.scaleNote': 'Both breakdown cards share one scale: a full bar is {max} tokens. The thin rule marks the previous period.',
   'breakdown.prevTokens': 'Prev tokens',
   'breakdown.prevSource': 'Prev {source} $',

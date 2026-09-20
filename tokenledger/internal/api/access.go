@@ -229,7 +229,13 @@ func (s *Server) doors(f HubFacts) []Door {
 			Where:      []string{"/", "/u/<os login>", "/growth"},
 			Credential: dashCred,
 			Can: "Read every figure this hub holds: spend, usage, live sessions, alerts, repo progress. " +
-				"/u/<login> is one person's totals; /growth is the revenue ledger, the most sensitive " +
+				// Issue #99: this row said /u/<login> exists while the dashboard
+				// linked to it from nowhere, so "a door" and "a URL you have to
+				// know" were the same thing. The by-user breakdown card now has
+				// the link, and this says so -- a door is described by how you
+				// reach it, not only by what is behind it.
+				"/u/<login> is one person's totals, reached from the by-user breakdown card on the " +
+				"dashboard or by typing the path; /growth is the revenue ledger, the most sensitive " +
 				"figures in this binary, behind the same gate as the rest.",
 			State: pick(f.Dashboard, "open", "off"),
 			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so / answers JSON instead."),

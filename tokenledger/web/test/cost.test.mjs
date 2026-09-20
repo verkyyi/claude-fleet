@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   SOURCES, kindOf, costOf, notionalCost, billedCost, unpricedEvents,
   activeSources, activeSourcesAcross, fmtSourceCost, costLine, addCost, fmtRealSpend,
+  billedCostLine, notionalSourcesAcross,
 } from '../dist/lib/cost.js';
 
 // The dashboard half of the guard in internal/store/cost_guard_test.go. The
@@ -29,6 +30,33 @@ test('folds are per kind, and the blend is unreachable', () => {
   assert.notEqual(billedCost(bucket), 123);
   // Counts DO add across sources — they are the same kind of thing.
   assert.equal(unpricedEvents(bucket), 1);
+});
+
+// Issue #99. costLine is a TOOLTIP line and names a notional source without a
+// figure, because there "it ran on the plan" is the answer. A ranked row is a
+// COLUMN, and there the same sentence on all twelve rows says nothing about
+// any of them while being the longest thing on each — which is what clipped
+// the two figures that do differ. billedCostLine is the row's half.
+test('billedCostLine keeps real money and drops the subscription sentence', () => {
+  const line = billedCostLine(bucket);
+  assert.match(line, /gateway/, 'billed source went missing from the row');
+  assert.match(line, /100/, 'the billed FIGURE went missing — the whole point of keeping the cell');
+  for (const notional of ['claude', 'codex']) {
+    assert.ok(!line.includes(notional),
+      `billedCostLine printed the notional source ${notional}: a name with no figure, identical on every row`);
+  }
+  // A subscription-only row gets NOTHING, not "—" and not a name. The card
+  // says it once; a per-row placeholder would be the same repetition again.
+  assert.equal(billedCostLine({ cost: [{ source: 'claude', kind: 'notional', events: 3, cost_usd: 3 }] }), '');
+  // And the tooltip is untouched — nothing was lost, it moved.
+  assert.match(costLine(bucket), /claude/);
+});
+
+test('notionalSourcesAcross names what the card states once', () => {
+  assert.deepEqual(notionalSourcesAcross([bucket]), ['claude', 'codex']);
+  // Nothing to say when no subscription work is in scope, so the card prints
+  // no line at all rather than an empty parenthesis.
+  assert.deepEqual(notionalSourcesAcross([{ cost: [{ source: 'gateway', kind: 'billed', events: 1, cost_usd: 5 }] }]), []);
 });
 
 test('no export produces a blended total', () => {

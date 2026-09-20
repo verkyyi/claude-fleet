@@ -14,8 +14,8 @@ import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
 import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, fmtSigned,
          scaleMax, shareText, shortProject, DELTA_CAP_PCT } from './lib/format.js';
-import { SOURCES, KIND_LABEL, kindOf, costOf,
-         activeSources, costLine, fmtSourceCost } from './lib/cost.js';
+import { SOURCES, KIND_LABEL, kindOf, costOf, activeSources, costLine,
+         billedCostLine, notionalSourcesAcross, fmtSourceCost } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
 import { ownerLine, splitMuted } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
@@ -44,6 +44,18 @@ const DIM_TO_API = { project: 'project', login: 'user', machine: 'endpoint', mod
 // Same keys the chips row reads (scope.js), so a dimension is called one thing
 // on the group-by control and the chip it produces.
 const DIM_LABEL = { project: t('dim.project'), login: t('dim.login'), machine: t('dim.machine'), model: t('dim.model'), branch: t('dim.branch'), team: t('dim.team'), source: t('dim.source') };
+// The per-person page, which this binary has routed (internal/api/server.go)
+// and served (internal/api/user.go) since it was added, and which /access has
+// been listing as a door the whole time — while the dashboard linked to it
+// from nowhere, so the only way in was to type the URL (issue #99).
+//
+// Built here, not by the server: the login IS the path segment, and
+// `serveUserPage` takes it straight off the path, so anything that can
+// contain a slash or a `#` has to be encoded or it becomes a different route.
+// A relative path deliberately — the page is served by the same hub as this
+// dashboard, on whatever host and port and behind whatever prefix the reader
+// reached it on, and an absolute URL would have to guess all three.
+export const userHref = (login) => `/u/${encodeURIComponent(login)}`;
 // kpiTile's `tone` only special-cases the literal string 'neutral' (its own
 // default) — anything else gets the up=red/down=green colouring. Named here
 // rather than passed as an arbitrary truthy string so every "more usage is
@@ -460,11 +472,29 @@ function breakdownCard(n, dim, result, state, app, hasTeam, sharedMax) {
       const capped = d.pct != null && Math.abs(d.pct) >= DELTA_CAP_PCT;
       const share = shareText(b.tokens, tokenTotal);
       const prev = b.prev_tokens || 0;
+      const billed = billedCostLine(b);
       return {
         key: b.key, label: displayLabel(b), title: dim === 'project' ? b.key : null, value: b.tokens,
         prev,
         prevTitle: t('breakdown.prevMark', { prev: fmtFull(prev) }),
-        right: `${fmtFull(b.tokens)}${share ? ` · ${share}` : ''} · ${costLine(b)}`,
+        // Three facts in one string (issue #51's `right`) were one fact in
+        // practice: `.v` is a third of half a page, so every row rendered
+        // `717,858 · 23.0% · claude …` and the cost was an ellipsis on all
+        // twelve. The two that differ per row now have their own aligned
+        // cells, and the third — a NAME, not a number, and the same name on
+        // every row — is stated once under the bars instead (see below).
+        // Billed money is a real figure and stays on the row.
+        cells: [
+          { text: fmtFull(b.tokens), class: 'tok' },
+          { text: share || '—', class: 'pct', title: t('breakdown.shareTip', { n: buckets.length, total: fmtFull(tokenTotal) }) },
+          ...(billed ? [{ text: billed, class: 'money' }] : []),
+        ],
+        // The one dimension with a page of its own. `withChip` (the row's
+        // own click) and this are both useful and neither replaces the
+        // other: the chip filters THIS page to that person, the link opens
+        // that person's page. Issue #99 — the page has been routed and
+        // served since /u/ was added and nothing on the dashboard led to it.
+        ...(dim === 'login' ? { href: userHref(b.key), hrefLabel: t('breakdown.openUser', { user: displayLabel(b) }) } : {}),
         tip: `<b>${escapeHTML(displayLabel(b))}</b><br>` +
           `${escapeHTML(t('breakdown.tip.cur', { tokens: fmtFull(b.tokens), share: share || '—' }))}<br>` +
           `${escapeHTML(costLine(b))}<br>` +
@@ -493,15 +523,23 @@ function breakdownCard(n, dim, result, state, app, hasTeam, sharedMax) {
       // keeps apart.
       ...SOURCES.filter((src) => buckets.some((b) => costOf({ cost: b.prev_cost }, src).events > 0))
         .map((src) => ({ label: t('breakdown.prevSource', { source: src }), value: (b) => fmtSourceCost({ cost: b.prev_cost }, src) })),
-    ]);
+    ], { keyHref: dim === 'login' ? (b) => userHref(b.key) : null });
     // Stated once per card, under the bars: a shared scale is only useful if
     // the reader knows the bars are on one, and the figure names what a full
     // track is worth so a bar can be read without hovering it. It rides
     // INSIDE the chart half of withTable, since "a full bar is N tokens"
     // says nothing about the table the toggle swaps in.
-    const chartWrap = sharedMax > 1
-      ? el('div', {}, chart, el('p', { class: 'hint scale-note' }, t('breakdown.scaleNote', { max: fmtFull(sharedMax) })))
-      : chart;
+    //
+    // The subscription note rides here for the same reason (issue #99): it
+    // is what the rows used to repeat twelve times, and it is a fact about
+    // the BARS' right-hand column, not about the table — which already has
+    // one cost column per source, headed with the kind of money it is.
+    const notional = notionalSourcesAcross(buckets);
+    const chartNotes = [
+      sharedMax > 1 ? el('p', { class: 'hint scale-note' }, t('breakdown.scaleNote', { max: fmtFull(sharedMax) })) : null,
+      notional.length ? el('p', { class: 'hint scale-note' }, t('breakdown.subscriptionNote', { sources: notional.join(', ') })) : null,
+    ].filter(Boolean);
+    const chartWrap = chartNotes.length ? el('div', {}, chart, chartNotes) : chart;
     C.withTable(body, chartWrap, table, `review-breakdown-${n}`);
     if (!expanded && buckets.length > 12) {
       body.appendChild(el('a', {

@@ -156,7 +156,26 @@ const band = (pct) =>
  *    - `r.prev` (row): the previous period, drawn as a thin marker on the
  *      track at the same scale, with `r.prevTitle` as its hover text. The
  *      change stops being a string at the end of the line.
- *    - `r.rightTitle` (row): hover text for the clipped `.v` column. */
+ *    - `r.rightTitle` (row): hover text for the clipped `.v` column.
+ *
+ *  Issue #99 adds the two a row needs to stop being a dead end:
+ *    - `r.cells` (row): the right-hand column as SEPARATE, aligned figures —
+ *      `[{text, class, title}]` — instead of one `r.right` string. `.v` is a
+ *      narrow column with `text-overflow: ellipsis`, so a caller packing
+ *      three facts into one string got the last one eaten on every row and
+ *      the ones that survived did not line up down the list. Cells are laid
+ *      out right to left with their own widths, so a column of figures reads
+ *      as a column. `r.right` still works and is unchanged for every caller
+ *      that passes it.
+ *    - `r.href` (row): a real link at the end of the row, a SECOND and
+ *      explicit way in that does not replace `onClick`. The two do different
+ *      things — on the breakdown cards `onClick` adds a filter chip and the
+ *      link opens that key's own page — so the link stops the click at
+ *      itself rather than letting the row's handler also fire. It is an
+ *      `<a href>`, not a button, because the point is that it behaves like a
+ *      link: middle-click, cmd-click and "open in new tab" all work.
+ *      `r.hrefLabel` is its accessible name (it renders as a glyph, which is
+ *      not one) and `r.hrefText` overrides the glyph. */
 export function rankedBars(rows, { onClick, selectedKey, max: fixedMax } = {}) {
   // An EXPLICIT max wins outright — it is not merged with this list's own
   // largest row. That is the entire contract: two lists drawn at the same
@@ -218,7 +237,37 @@ export function rankedBars(rows, { onClick, selectedKey, max: fixedMax } = {}) {
       // string that was cut — unless the row already carries a floating
       // `r.tip` saying more than the clipped line did, in which case a
       // native tooltip would only fight with it for the same hover.
-      el('div', { class: 'v', title: r.rightTitle || (r.tip || typeof r.right !== 'string' ? null : r.right) }, r.right));
+      // `r.cells` (issue #99) draws the same column as a row of figures that
+      // keep their own widths, so tokens sit under tokens and shares under
+      // shares. `r.right` is the original single string and is untouched.
+      el('div', { class: 'v', title: r.rightTitle || (r.tip || typeof r.right !== 'string' ? null : r.right) },
+        Array.isArray(r.cells)
+          ? r.cells.map((c) => el('span', { class: 'vc' + (c.class ? ' ' + c.class : ''), title: c.title || null }, c.text))
+          : r.right,
+        // INSIDE `.v`, not in a fourth grid column. A fourth column comes out
+        // of the `1fr` the TRACK is drawn in, so a card with links would draw
+        // a shorter bar for the same number than a card without — which is
+        // precisely the promise `max` exists to make (issue #51: two lists on
+        // one scale are comparable by eye). Measured while building this: 22px
+        // of link column plus its gap took ~60px off the track, and a
+        // side-by-side pair disagreed about how long 717,858 tokens is.
+        //
+        // It survives `.v`'s ellipsis anyway: `.v` packs from the right, so
+        // overflow falls off the LEFT, and the link is `flex: none` while the
+        // figure cells shrink. The thing that clips is a number the tip still
+        // carries; the way out of the card is not.
+        r.href
+          ? el('a', {
+              class: 'drill-in', href: r.href,
+              'aria-label': r.hrefLabel || null, title: r.hrefLabel || null,
+              // The row is a button that filters; this link opens a page. A
+              // click that did both would filter the list the reader is
+              // leaving, and that state change would be waiting for them on
+              // the way back.
+              onclick: (e) => e.stopPropagation(),
+              onkeydown: (e) => e.stopPropagation(),
+            }, r.hrefText || '↗')
+          : null));
   }));
 }
 
@@ -240,8 +289,20 @@ export function rankedBars(rows, { onClick, selectedKey, max: fixedMax } = {}) {
  *  subscription, a gateway column is an actual per-call charge — so a "Cost"
  *  column summing whichever of them a scope happened to contain was a number
  *  with no meaning and no way to notice. Only sources with usage in these
- *  buckets get a column, so a single-source hub still shows exactly one. */
-export function bucketTable(buckets, keyLabel, extraCols = []) {
+ *  buckets get a column, so a single-source hub still shows exactly one.
+ *
+ *  `keyHref(b)` (issue #99) makes the key cell a link to that row's own page.
+ *  It travels with the table rather than being left to the chart, because
+ *  this table IS the chart for anyone the drawing does not serve — a drill-in
+ *  that only exists in the bars is a door behind a picture. Returning a falsy
+ *  value for a row leaves that cell as plain text. */
+const keyCell = (b, keyHref) => {
+  const text = b.label || b.key || t('common.unknown');
+  const href = typeof keyHref === 'function' ? keyHref(b) : null;
+  return href ? el('a', { href }, text) : text;
+};
+
+export function bucketTable(buckets, keyLabel, extraCols = [], { keyHref } = {}) {
   // Only BILLED sources get a money column. A subscription source's column was
   // an API-equivalent estimate of money nobody was charged; now that the page
   // does not print that figure, the column would be dashes all the way down —
@@ -260,7 +321,7 @@ export function bucketTable(buckets, keyLabel, extraCols = []) {
       el('th', { class: 'num' }, t('chart.unpriced')),
       ...trailing.map((c) => el('th', { class: 'num', title: c.title || null }, c.label)))),
     el('tbody', {}, buckets.map((b) => el('tr', {},
-      el('td', { title: b.key }, b.label || b.key || t('common.unknown')),
+      el('td', { title: b.key }, keyCell(b, keyHref)),
       el('td', { class: 'num' }, fmtFull(b.events)),
       el('td', { class: 'num' }, fmtFull(b.tokens)),
       ...besideTokens.map((c) => el('td', { class: 'num' }, c.value(b))),

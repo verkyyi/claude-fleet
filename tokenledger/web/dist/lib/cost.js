@@ -104,6 +104,27 @@ export const costLine = (b) => {
   }).join(' · ');
 };
 
+/** the BILLED half of costLine: only the sources that carry a real figure,
+ *  never the notional ones. Empty string when this row was all subscription
+ *  work — which is different from `costLine`'s "claude — subscription", and
+ *  deliberately so (issue #99).
+ *
+ *  costLine names a notional source without a figure because on a TOOLTIP,
+ *  where it answers "what did this row cost", "it ran on the plan" is the
+ *  answer and silence would read as "nothing ran here". Down a COLUMN of
+ *  twelve rows that same sentence is identical on every one of them: it says
+ *  nothing about any row while being the longest thing on each, and it is
+ *  what pushed the two figures that DO differ — tokens and share — into an
+ *  ellipsis. The card states it once instead, and this is what the rows keep. */
+export const billedCostLine = (b) =>
+  activeSources(b).filter((s) => kindOf(s) === 'billed')
+    .map((s) => `${s} ${fmtSourceCost(b, s)}`).join(' · ');
+
+/** the notional sources present ANYWHERE in a list of buckets, for the one
+ *  place a card says "all of this ran on a subscription". */
+export const notionalSourcesAcross = (buckets) =>
+  activeSourcesAcross(buckets).filter((s) => kindOf(s) === 'notional');
+
 /** fold a list of splits into one, per source. Used where the page assembles
  *  a total the API did not (model-mix column totals). */
 export function addCost(into, from) {

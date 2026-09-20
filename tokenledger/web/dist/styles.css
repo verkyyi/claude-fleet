@@ -231,6 +231,47 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
    the `auto` track still grows to fill available space when there IS
    room, and only clips when the grid is actually too narrow to fit it. */
 .bar-row .v { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Issue #99: the same column, as CELLS. One string packed with three facts
+   ("717,858 · 23.0% · claude — subscription") is about 260px of content in a
+   column that is 32% of half a page — roughly 180px — so on real data every
+   row lost its tail to the ellipsis, and the figures that survived did not
+   line up down the list because each row's text starts wherever its own
+   content does. Laid out as flex items from the right with `.pct` given a
+   fixed width, tokens sit under tokens and shares under shares, and the
+   reader can scan the column instead of reading each row. The gap does the
+   separating that "·" used to: right-aligned figures in their own columns
+   are already read as a table, and a cell can then be absent without
+   leaving a dangling separator behind it. */
+.bar-row .v { display: flex; justify-content: flex-end; align-items: baseline; gap: 14px; }
+.bar-row .v .vc { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+/* What gives way first, when the row is too narrow for all of it. Order
+   matters and it is not the DOM order: the token count is the figure the row
+   is FOR, and a `flex: none` share next to a shrinkable count meant that at
+   phone width the share survived at its full 46px while the count collapsed
+   to nothing — measured at a 390px viewport, where the row read "23.0% ↗".
+   The floor on `.tok` is the fix: it holds the count, the share absorbs the
+   shortfall, and the share is the one that can afford to go, since the bar
+   already draws it and the tip and the table both still carry it.
+
+   `width` on `.pct` is a BASIS, not a promise — it is what lines the % signs
+   up down the card whenever there is room, which is every width that has any
+   space to spare. */
+.bar-row .v .tok { flex: 0 1 auto; min-width: 4.5em; }
+.bar-row .v .pct { flex: 0 1 46px; width: 46px; color: var(--ink-3); }
+.bar-row .v .money { flex: none; }
+/* The drill-in link (issue #99). `flex: none` is what keeps it out of the
+   ellipsis: `.v` packs from the right, so when the row is too narrow the
+   overflow falls off the left and the figure cells — which DO shrink — are
+   what clips. `grid-template-columns` above is deliberately untouched, so a
+   card with links draws its track at exactly the width a card without them
+   does; see rankedBars for why that is not cosmetic. A 22px box, not a bare
+   glyph: the tap target is the point. */
+.bar-row .drill-in {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 5px; text-decoration: none;
+  font-size: 12.5px; color: var(--ink-3); flex: none;
+}
+.bar-row .drill-in:hover, .bar-row .drill-in:focus-visible { color: var(--s1); background: var(--grid); }
 .bar-track { height: 16px; background: var(--grid); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; }
 /* Previous period, on the track at the same scale as the fill (issue #51).

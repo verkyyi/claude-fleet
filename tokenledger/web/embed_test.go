@@ -256,6 +256,38 @@ func TestAssets_AccessPageIsEmbeddedAndFetchesItsFacts(t *testing.T) {
 	}
 }
 
+// The per-person page is REACHED from the dashboard, not only routed by it.
+//
+// Issue #99: /u/<login> was routed in internal/api/server.go, served by
+// internal/api/user.go, and listed by /access as a door — and searching all of
+// web/ for "/u/" turned up nothing but user.html's own badge URL. Every part
+// of the door existed except the way to it, and nothing failed, because
+// "nobody links here" is not a thing a router or a handler can notice.
+//
+// So the Go side holds it: the route is declared here beside the assertion
+// that some embedded script builds it. Delete the link from review.js and this
+// fails, which is the only version of this fix that survives the next
+// refactor of the breakdown card.
+func TestAssets_DashboardLinksToTheUserPage(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "review.js")
+	if err != nil {
+		t.Fatalf("review.js unreadable: %v", err)
+	}
+	src := string(b)
+	// The path this build actually routes (server.go: "/u/"). Built from the
+	// login, which is why it is a template rather than a literal.
+	if !strings.Contains(src, "`/u/${encodeURIComponent(login)}`") {
+		t.Error("review.js no longer builds a /u/<login> link: the by-user breakdown row is a dead end again, " +
+			"and /access still tells readers the dashboard leads there")
+	}
+	// Encoded, not interpolated raw. serveUserPage takes the login straight off
+	// the path, so a login containing a slash or a '#' would silently become a
+	// different route -- or no route.
+	if strings.Contains(src, "`/u/${login}`") {
+		t.Error("review.js interpolates a raw login into the path; a login with a '/' or '#' becomes another route")
+	}
+}
+
 // A source this build knows must be nameable by the page that offers it, and a
 // billed one must be a named term of real spend.
 //

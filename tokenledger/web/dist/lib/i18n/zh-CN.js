@@ -400,6 +400,8 @@ export const zhCN = {
   'breakdown.title': '按{dim}分组',
   'breakdown.hint': '取前 50 行，与上一段时间对比；占比跟随当前选区。',
   'breakdown.groupBy': '分组维度（分组 {n}）',
+  'breakdown.openUser': '打开 {user} 的人均页',
+  'breakdown.subscriptionNote': '这张卡上的用量都算在订阅里（{sources}）—— 每行都是同一句，所以只在这里说一次。按次计费的钱还是逐行印。',
   'breakdown.scaleNote': '两张分组卡共用一条刻度：满格 = {max} token。细竖线是上一期。',
   'breakdown.prevTokens': '上期 token',
   'breakdown.prevSource': '上期 {source} $',
