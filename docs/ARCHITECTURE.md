@@ -122,8 +122,20 @@ present and is cleared from the source window when the view moves. The UI follow
 this binding after each move. Clicking the sidebar enters its key table, including
 clicks on blank space; tmux 3.6+ also reports clicks on the top pane border.
 Release/repeat events preserve navigation.
-A row click switches workers but retains sidebar navigation. Clicking the worker,
-Enter or Escape returns input; auto-hiding the sidebar also clears its key table.
+A row click switches workers but retains sidebar navigation. So do ↑↓/Home/End
+(issue #822): a movement key moves the highlight at once and schedules one
+follow for `FOLLOW_SECS` (0.25s) later; every further movement pushes the
+deadline, so a held key on a slow link is one switch and a row passed over is
+never selected. The follow is the same `jump()` a click makes, and touches no
+key table — the movement binds re-enter `fleet-sidebar` before their key
+arrives, which is what keeps browsing alive across the switch. The mouse wheel
+only scrolls the highlight. Clicking the worker, Enter or Escape returns input
+(Escape, Enter and `n` also drop a pending follow); auto-hiding the sidebar also
+clears its key table. The wake hooks (`session-window-changed[72]`,
+`client-attached[72]`) carry a two-second dwell — `fleet-sleep.sh wake … --dwell 2`
+sleeps, then wakes only if the window is still the session's current one — so
+scanning past a sleeping worker never resumes it; the dash is unchanged and
+still never switches on highlight or preview.
 A double-click on the worker while its sidebar is on screen is tmux's stock
 select-word, not zoom (issue #820): the gate is `@sidebar_worker` set and the
 window not zoomed, so a zoomed worker and a sidebar-less window keep

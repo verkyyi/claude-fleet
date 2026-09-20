@@ -19,6 +19,11 @@ import unicodedata
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
 VIEW_VERSION = "4"  # #821: footer + bottom-row semantics changed; replace live v3 views once
+# ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
+# it only after this much quiet. A held key on a slow link is one switch, not
+# one per row, and a row passed over is never selected — so the wake hook's
+# dwell (fleet-sleep.py) never sees it either.
+FOLLOW_SECS = 0.25
 
 
 def run(args, **kwargs):
@@ -212,11 +217,20 @@ def ui(screen, session, worker, lock):
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
-    screen.timeout(1000)
     rows, selected, offset, refresh_at = [], window, 0, 0.0
-    shown, navigation = False, False
+    shown, navigation, follow_at = False, False, None
     while True:
         now = time.monotonic()
+        if follow_at is not None and now >= follow_at:
+            # The highlight settled: switch once. Nothing here touches the
+            # client's key table, and the Up/Down binds re-enter fleet-sidebar
+            # before their key arrives, so ↑↓ keep browsing after the switch;
+            # Enter/Escape (whose binds do not re-enter) still hand input back.
+            follow_at = None
+            if selected and selected != window:
+                jump(session, selected, pane, lock)
+                refresh_at = 0
+                continue
         if now >= refresh_at:
             refresh_at = now + 1
             info = fields(pane, US.join(("#{window_active}", "#{window_zoomed_flag}",
@@ -244,6 +258,8 @@ def ui(screen, session, worker, lock):
                     rows = [line.split(US, 3) for line in result.stdout.split("\n")
                             if len(line.split(US, 3)) == 4]
         if not shown:
+            follow_at = None  # a hidden view never switches windows
+            screen.timeout(1000)
             screen.getch()
             continue
         height, width = screen.getmaxyx()
@@ -285,17 +301,32 @@ def ui(screen, session, worker, lock):
             " Keyboard: WORKER →", curses.A_DIM)
         put(height - 1, " + n: new task", curses.A_DIM)
         screen.refresh()
+        # Wake for whichever comes first: the next repaint or a pending follow.
+        wait = refresh_at - time.monotonic()
+        if follow_at is not None:
+            wait = min(wait, follow_at - time.monotonic())
+        screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
         if key in (curses.KEY_UP, ord("k")) and ids:
             selected = ids[max(0, index - 1)]
+            follow_at = time.monotonic() + FOLLOW_SECS
         elif key in (curses.KEY_DOWN, ord("j")) and ids:
             selected = ids[min(len(ids) - 1, index + 1)]
+            follow_at = time.monotonic() + FOLLOW_SECS
         elif key == curses.KEY_HOME and ids:
             selected = ids[0]
+            follow_at = time.monotonic() + FOLLOW_SECS
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
+            follow_at = time.monotonic() + FOLLOW_SECS
         elif key in (10, 13, curses.KEY_ENTER):
-            jump(session, selected, pane, lock)
+            # The Enter bind already returned the client to root; the key reaches
+            # here a run-shell hop later. If the follow (or anyone) has moved the
+            # session since, a switch back to the row it was read against would
+            # yank the operator — with nothing to jump to, Enter only hands over.
+            follow_at = None
+            if selected != window:
+                jump(session, selected, pane, lock)
             refresh_at = 0
         elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and selected:
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
@@ -305,9 +336,14 @@ def ui(screen, session, worker, lock):
             run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])
             return
         elif key == ord("n"):
+            # The popup blocks; a follow scheduled just before must not fire
+            # after it and switch away from the window the spawn made current.
+            follow_at = None
             new_task(screen, env)
             refresh_at = 0
         elif key == 27:
+            # Escape bails out of a pending follow too: the worker in view keeps input.
+            follow_at = None
             selected = window
             refresh_at = 0
         elif key == curses.KEY_MOUSE:

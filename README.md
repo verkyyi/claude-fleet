@@ -221,7 +221,7 @@ line, which exits silently without it.)
 | `prefix a` | jump to the next window that needs you (red first, then green) |
 | `prefix g` | focus the hub's dash pane (jump / new task); press again to zoom it fullscreen. If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
 | `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
-| `prefix E` | focus the sidebar (or click it): ↑↓ choose, Enter jump and focus worker, ←→ fold, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, Esc return, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
+| `prefix E` | focus the sidebar (or click it): ↑↓ switch tasks (follows once you pause), Home/End ends, ←→ fold, Enter/Esc give input back to the worker, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
 | `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
 | `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; identity keys locked, global-only vs per-fleet scoped; `⌃s` toggles the write layer, `?` reveals raw keys, enter edits |
 | `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
@@ -242,9 +242,13 @@ highlights the current worker, and keeps that worker visible even in a folded
 group. Rows use your task descriptions, without internal worker IDs or a second
 title row inside the sidebar. The current task has a `▶` marker. Click the
 sidebar (or press `prefix E`) to give it the arrow keys: an amber
-**TASKS · INPUT** pane border and selection show keyboard focus. Clicking a task
-switches workers while keeping the sidebar focused, so ↑↓ still browse tasks.
-Click the worker, or press Enter/Esc, to return keyboard input to the worker;
+**TASKS · INPUT** pane border and selection show keyboard focus. ↑↓ (and
+Home/End) switch to the highlighted task without Enter, once the highlight has
+rested for about a quarter second: a held key is one switch, not one per row,
+and a row you only passed over is never selected — nor woken, since a sleeping
+worker resumes only after the view has stayed on it for two seconds. The
+sidebar keeps the arrow keys after each switch, and a click switches the same
+way. Click the worker, or press Enter/Esc, to return keyboard input to the worker;
 its top border then shows a blue **WORKER · INPUT** badge before the task name.
 Clicking the top border itself requires tmux 3.7 or newer; on older versions,
 click inside the sidebar or use `prefix E` to focus it.

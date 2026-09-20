@@ -555,21 +555,53 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(bound['owner'],str(self.pid))
         self.assertEqual(bound['remote'],'unix:///test')
 
-    def test_navigation_hook_wakes_retained_window(self):
+    def source_navigation_hook(self):
+        # The shipped [72] hook, its wake command pointed at the sandbox. The
+        # dwell it carries (issue #822) is what the tests below exercise.
         import shlex
-        self.cli('sleep',self.pane)
         line=next(line for line in (BIN.parent/'conf/tmux-attention.conf').read_text().splitlines()
                   if line.startswith('set-hook -g session-window-changed[72]'))
-        original="bash ~/.claude/fleet/bin/fleet-sleep.sh wake '#{session_name}' '#{window_id}'"
-        command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])+" '#{session_name}' '#{window_id}'"
+        original="bash ~/.claude/fleet/bin/fleet-sleep.sh wake"
+        self.assertIn(original+" '#{session_name}' '#{window_id}' --dwell 2",line)
+        command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])
         hookfile=self.root/'focus.conf';hookfile.write_text(line.replace(original,command)+'\n')
+        self.tm('source-file',str(hookfile))
+
+    def resume_count(self):
+        return json.loads(Path(self.opt('@sleep_record')).read_text())['resume_count']
+
+    def test_navigation_hook_wakes_retained_window(self):
+        self.cli('sleep',self.pane)
         try:
-            self.tm('source-file',str(hookfile))
+            self.source_navigation_hook()
             self.tm('select-window','-t',self.pane)
-            deadline=time.monotonic()+8
+            deadline=time.monotonic()+15
             while time.monotonic()<deadline and self.opt('@worker_lifecycle'):time.sleep(.1)
             self.assertEqual(self.opt('@worker_lifecycle'),'')
-            self.assertEqual(json.loads(Path(self.opt('@sleep_record')).read_text())['resume_count'],1)
+            self.assertEqual(self.resume_count(),1)
+        finally:self.tm('set-hook','-gu','session-window-changed[72]')
+
+    def test_navigation_hook_dwell_skips_passed_window(self):
+        # Selecting the sleeper and leaving again within the dwell — the
+        # sidebar's ↑↓ follow, prefix n past it — must not resume it; a direct
+        # wake with a dwell honours the same rule, and settling on it wakes.
+        first=self.tm('list-windows','-t',self.socket,'-F','#{window_id}').splitlines()[0]
+        self.cli('sleep',self.pane)
+        try:
+            self.source_navigation_hook()
+            self.tm('select-window','-t',self.pane)
+            self.tm('select-window','-t',first)
+            time.sleep(3.5)
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+            self.assertEqual(self.resume_count(),0)
+            self.assertExited(self.pid)
+            self.cli('wake',self.pane,'--dwell','0.2')
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+            self.assertEqual(self.resume_count(),0)
+            self.tm('select-window','-t',self.pane)
+            self.cli('wake',self.pane,'--dwell','0.2')
+            self.assertEqual(self.opt('@worker_lifecycle'),'')
+            self.assertEqual(self.resume_count(),1)
         finally:self.tm('set-hook','-gu','session-window-changed[72]')
 
     def test_hook_trust_preserves_only_authorized_hashes(self):

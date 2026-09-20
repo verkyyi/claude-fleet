@@ -147,6 +147,11 @@ class Worker:
     def visible(self):
         return self.window in self.tm('list-clients','-F','#{window_id}').splitlines()
 
+    def current(self):
+        # The session's current window — what the navigation hook fired for —
+        # not a client's, so a detached select-window still counts as settling.
+        return self.tm('display-message','-p','-t',self.session+':','#{window_id}')==self.window
+
     def record(self):
         path = Path(self.opt('@sleep_record'))
         if path.parent != self.directory or not path.name.endswith('.json'):
@@ -459,7 +464,15 @@ class Worker:
         test='#{==:#{@cc_launcher_pid},'+owner+'}'
         self.tm('if-shell','-F','-t',self.pane,test,' ; '.join(cmds))
 
-    def wake(self):
+    def wake(self,dwell=0):
+        if dwell>0:
+            # Dwell threshold (issue #822): the navigation hooks fire for every
+            # window the operator passes — the sidebar's ↑↓ follow, prefix n/p
+            # scanning — and a wake resumes the agent and its MCP children.
+            # Wait, then require the window to still be current: every run for
+            # a passed window gives up here; only the one settled on wakes.
+            time.sleep(dwell)
+            if not self.current(): return
         with lock(self.lockfile):
             if not self.opt('@worker_lifecycle'): return
             path,data=self.record()
@@ -793,6 +806,7 @@ def main():
     p.add_argument('window',nargs='?')
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
+    p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     a=p.parse_intermixed_args()
     if a.action=='hook':
         try: hook()
@@ -834,7 +848,7 @@ def main():
     elif a.action=='holds-exit':
         _,data=w.record()
         return 0 if w.holds_exit(data) else 1
-    elif a.action=='wake': w.wake()
+    elif a.action=='wake': w.wake(dwell=a.dwell)
     elif a.action=='deliver': w.deliver(sys.stdin.read())
     elif a.action=='restore':
         path=Path(a.record)

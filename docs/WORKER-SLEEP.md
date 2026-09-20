@@ -30,8 +30,10 @@ bash ~/.claude/fleet/bin/fleet-sleep.sh allow-sleep fleet-name @123
 
 Manual sleep bypasses only the idle duration, never safety checks. A client
 viewing the window prevents sleep, even if it has not typed recently. Normal
-tmux navigation, sidebar selection and client attach wake a sleeping worker;
-highlighting a dashboard row does not. During resume, wait for the native input
+tmux navigation, sidebar selection and client attach wake a sleeping worker
+once the window has stayed current for two seconds (`wake --dwell 2` in the
+hooks; a window only passed over — the sidebar's ↑↓ follow, `prefix n` past a
+sleeper — is not resumed); highlighting a dashboard row does not. During resume, wait for the native input
 prompt before typing. No wake action authorizes an additional model turn. Codex resumes its saved native
 permission profile. Its existing hook authorization is carried as exact native
 hashes in temporary launch arguments; user trust configuration is not modified.
