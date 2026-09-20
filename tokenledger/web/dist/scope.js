@@ -32,9 +32,9 @@
 // first clause — no fetching in this file. app.js owns the load loop and calls
 // back into whichever handlers were passed at update() time.
 import { DIMS, accountsInScope, VIEW_ALL } from './lib/state.js';
-import { SECTIONS } from './lib/nav.js';
+import { SECTIONS, VIEW_QUOTA } from './lib/nav.js';
 import { shortProject } from './lib/format.js';
-import { accountGroups, sourceLabel } from './lib/providers.js';
+import { accountGroups, quotaWindowAccounts, sourceLabel } from './lib/providers.js';
 import { el, $ } from './lib/dom.js';
 import { t, locale, LOCALES, LOCALE_LABEL, chooseLocale } from './lib/i18n.js';
 // `app` is read only inside functions below (never at module-eval time), so
@@ -304,6 +304,19 @@ export function setBusy(b) {
 // exist or import each view's own mount point.
 const instances = [];
 
+/** allLabelKey picks which "all" the picker is offering, because on the quota
+ *  view it is no longer the same set.
+ *
+ *  The page-wide label names both halves of what this list holds — accounts and
+ *  metered usage pools — and that is exactly right everywhere the list holds
+ *  both. The quota view's does not offer the pools at all (#126), so keeping
+ *  the "/ usage pools" half would leave a category heading over nothing, which
+ *  is the same defect as the count it sits next to. Both keys take `{n}` and
+ *  only `{n}`, so web/test/i18n.test.mjs's placeholder check covers the new one
+ *  on the same terms as the old. */
+const allLabelKey = (state) =>
+  (state.view === VIEW_QUOTA ? 'scope.allQuotaAccounts' : 'scope.allAccounts');
+
 /** createScopeControls builds one instance of the scope widget: a
  *  subscription <select>, an OPTIONAL span segmented control, and a chips
  *  row with per-chip remove + "Clear all". Unlike the old single sticky-bar
@@ -344,11 +357,24 @@ export function createScopeControls({ span = true } = {}) {
     handlers = cb || {};
 
     const relevant = accountsInScope(accounts, state);
+    // On the quota view, and ONLY there, the picker drops the accounts that
+    // cannot have a quota reading at all (#126). This widget is the PAGE's, not
+    // a band's — #95 moved it out of the quota card precisely so every view
+    // would have one — so the narrowing has to be per-view rather than per
+    // instance: the ledger and usage bands are about money and calls, where a
+    // gateway caller is half the answer, and filtering them would delete the
+    // reader's only way to reach it. The quota band is the one place a caller
+    // billed per call is an option that leads nowhere: the card already splits
+    // it out of its own rows (providers.js's quotaAccounts), so until now the
+    // picker above it offered twelve choices the card below would answer with
+    // "no window". Keyed on VIEW_QUOTA and nothing else, which is why C8's
+    // coming multi-band default (#130) leaves this alone.
+    const pickable = state.view === VIEW_QUOTA ? quotaWindowAccounts(relevant, state.sub) : relevant;
     // Grouped, not prefixed. The old `Claude · ` / `Codex · ` prefix asserted
     // a two-source world and, worse, said "account" meant one thing when it
     // means two: a subscription somebody pays for monthly, or one calling
     // application on the gateway. The optgroup heading carries that now.
-    const groups = accountGroups(relevant).map((g) =>
+    const groups = accountGroups(pickable).map((g) =>
       el('optgroup', { label: g.label },
         ...g.options.map((o) => el('option', { value: o.value }, o.text))));
     // No "all" when there is exactly one in scope: route() resolves that state
@@ -356,8 +382,19 @@ export function createScopeControls({ span = true } = {}) {
     // control reporting a choice the router undoes on the very next tick. One
     // subscription is not a set to aggregate, and a picker over a set of one is
     // not a picker.
+    //
+    // `relevant`, not `pickable`, and that is load-bearing: resolveSub reads
+    // accountsInScope, so it is the UNNARROWED set that decides whether the
+    // router will overwrite 'all'. Keying this on the narrowed one would, on a
+    // hub with one subscription and a dozen gateway callers, drop the 'all'
+    // option while the router kept the state on 'all' — a <select> whose value
+    // matches no option, which renders blank.
+    //
+    // The COUNT is the narrowed one, because the count names what this list
+    // offers. Reading it off `relevant` while the options came from `pickable`
+    // is the specific lie #126 was filed about: "all 16" over five rows.
     sel.replaceChildren(
-      ...(relevant.length === 1 ? [] : [el('option', { value: 'all' }, t('scope.allAccounts', { n: relevant.length }))]),
+      ...(relevant.length === 1 ? [] : [el('option', { value: 'all' }, t(allLabelKey(state), { n: pickable.length }))]),
       ...groups);
     sel.style.display = relevant.length ? '' : 'none';
     sel.value = state.sub;

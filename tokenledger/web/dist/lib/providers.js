@@ -137,6 +137,30 @@ const QUOTA_SOURCES = new Set(['claude', 'codex']);
 
 export const hasQuotaWindow = (source) => QUOTA_SOURCES.has(UsageSource(source));
 
+/** quotaWindowAccounts narrows an ACCOUNT LIST — the hub's own roster, not a
+ *  `per_account` reading — to the ones a quota question can be asked about.
+ *  quotaAccounts above does the same job for the card's rows; this does it for
+ *  the picker that scopes them (#126), and both go through hasQuotaWindow so
+ *  the two cannot drift.
+ *
+ *  Not a filter on `accountGroups`, and deliberately not: that function answers
+ *  "is this account a billing relationship or a caller", and a `vendor_bill` is
+ *  a billing relationship (`providers.test.mjs`'s vendor_bill case locks that,
+ *  and it is right). "Has a quota window" is a DIFFERENT question, and
+ *  `vendor_bill` answers yes to the first and no to this one. Two predicates,
+ *  two answers, neither wrong — so this is a second pass over the list rather
+ *  than a change to the grouping.
+ *
+ *  `keep` is the uuid the state is currently scoped to, and it is let through
+ *  whatever its source. A picker that cannot display its own value is worse
+ *  than an unfiltered one: the reader arrives from the ledger view scoped to a
+ *  gateway caller, and a <select> with no matching option renders BLANK while
+ *  the page underneath is still filtered to it. The source picker a few lines
+ *  down in scope.js has kept the selected value visible for the same reason
+ *  since it was written. 'all' is not a uuid, so the default costs nothing. */
+export const quotaWindowAccounts = (accounts, keep) =>
+  (accounts || []).filter((a) => hasQuotaWindow(a.source) || (keep && a.account_uuid === keep));
+
 /** quotaAccounts splits a /v1/limits `per_account` list by whether the account
  *  could have a reading at all.
  *

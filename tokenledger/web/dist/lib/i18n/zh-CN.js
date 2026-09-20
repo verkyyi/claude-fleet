@@ -47,6 +47,7 @@ export const zhCN = {
   'scope.source': '用量来源',
   'scope.span': '时间跨度',
   'scope.allAccounts': '全部 {n} 个账号 / 用量池',
+  'scope.allQuotaAccounts': '全部 {n} 个账号',
   'scope.allSources': '全部来源',
   'scope.removeChip': '移除 {dim}',
   'scope.clearAll': '全部清除',

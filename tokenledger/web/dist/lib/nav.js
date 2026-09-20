@@ -42,6 +42,16 @@
  */
 export const VIEW_ALL = 'all';
 
+/** VIEW_QUOTA is the quota band's own view, named here because one caller
+ *  outside this file has to ASK for it rather than merely list it.
+ *
+ *  scope.js narrows the subscription picker to the accounts that can have a
+ *  quota reading, and only on this view (#126) -- so it needs the word, and
+ *  taking it from `SECTIONS[0].view` would key that behaviour on the band's
+ *  POSITION, which #95 has already moved once. A named constant survives the
+ *  next reorder; an index does not. */
+export const VIEW_QUOTA = 'quota';
+
 /** SECTIONS is the page's band list, in page order, and it is also what the bar
  *  prints (after the "All" entry scope.js puts in front of it).
  *
@@ -82,7 +92,7 @@ export const VIEW_ALL = 'all';
  *  is where that mapping is now written, because a band is several sibling
  *  nodes (its label and its sections) and never one. */
 export const SECTIONS = [
-  { key: 'band.quota', view: 'quota' },
+  { key: 'band.quota', view: VIEW_QUOTA },
   { key: 'band.ledger', view: 'ledger' },
   { key: 'band.usage', view: 'usage' },
   { key: 'band.progress', view: 'progress' },

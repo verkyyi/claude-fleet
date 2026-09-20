@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL, quotaAccounts, quotaGroups, quotaSourceOf, sourceMap, hasQuotaWindow} from '../dist/lib/providers.js';
+import {selectLive, windowName, pricingCoverage, loginLabel, accountGroups, SOURCE_LABEL, quotaAccounts, quotaGroups, quotaSourceOf, sourceMap, hasQuotaWindow, quotaWindowAccounts} from '../dist/lib/providers.js';
 import {fmtCost} from '../dist/lib/format.js';
 
 test('missing costs stay unknown across bucket and session totals',()=>{
@@ -177,6 +177,47 @@ test('an empty or missing list is not an error', () => {
   // No account list at all cannot mean "hide everything": boot stops when
   // /v1/accounts fails, so this is only ever a transient.
   assert.deepEqual(quotaAccounts(entries('sub-a'), []).shown.length, 1);
+});
+
+// --- and the picker that scopes it offers the same set (#126) -------------
+//
+// quotaAccounts filters the card's ROWS; this filters the <select> above them.
+// Until #126 they disagreed: the card showed five gauges while the picker over
+// it offered sixteen options, eleven of which the card would answer with "no
+// window". Same predicate, so the two cannot drift apart again.
+
+test('the quota picker keeps only the accounts a ceiling can be asked about', () => {
+  assert.deepEqual(quotaWindowAccounts(ACCOUNTS).map((a) => a.account_uuid),
+    ['sub-a', 'sub-b', 'legacy']);
+});
+
+// The disagreement between the two axes, seen from the picker's side: the
+// invoice is grouped with the subscriptions AND dropped from this list, and
+// both are right. accountGroups is untouched by #126 for exactly this reason.
+test('a vendor invoice is a subscription to accountGroups and not to the quota picker', () => {
+  assert.equal(accountGroups([{ account_uuid: 'bill-1', source: 'vendor_bill' }])[0].label, 'Subscriptions');
+  assert.deepEqual(quotaWindowAccounts([{ account_uuid: 'bill-1', source: 'vendor_bill' }]), []);
+});
+
+// A reader who scoped the ledger to a gateway caller and then switched to the
+// quota view must still see which account the page is filtered to. Dropping it
+// would leave the <select> with no matching option -- rendered blank, over a
+// page that is still narrowed to it.
+test('the account currently scoped to survives the filter whatever its source', () => {
+  assert.deepEqual(quotaWindowAccounts(ACCOUNTS, 'app-1').map((a) => a.account_uuid),
+    ['sub-a', 'sub-b', 'legacy', 'app-1']);
+  // and it is not duplicated when it had a window all along
+  assert.deepEqual(quotaWindowAccounts(ACCOUNTS, 'sub-a').map((a) => a.account_uuid),
+    ['sub-a', 'sub-b', 'legacy']);
+});
+
+test('the default scope is not a uuid and keeps nothing extra', () => {
+  // 'all' is state.js's DEFAULTS.sub, and it is what the picker is on until a
+  // reader chooses otherwise -- it must not smuggle a row past the filter.
+  assert.deepEqual(quotaWindowAccounts(ACCOUNTS, 'all').map((a) => a.account_uuid),
+    ['sub-a', 'sub-b', 'legacy']);
+  assert.deepEqual(quotaWindowAccounts([], 'app-1'), []);
+  assert.deepEqual(quotaWindowAccounts(undefined, undefined), []);
 });
 
 // --- and it groups them by provider (#95) ---------------------------------

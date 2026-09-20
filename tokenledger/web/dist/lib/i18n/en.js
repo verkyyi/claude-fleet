@@ -47,6 +47,7 @@ export const en = {
   'scope.source': 'Usage source',
   'scope.span': 'Timeline span',
   'scope.allAccounts': 'All {n} accounts / usage pools',
+  'scope.allQuotaAccounts': 'All {n} accounts',
   'scope.allSources': 'All sources',
   'scope.removeChip': 'remove {dim}',
   'scope.clearAll': 'Clear all',
