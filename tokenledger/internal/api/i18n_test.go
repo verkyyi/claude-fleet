@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/verkyyi/ccquota/internal/fx"
 	"github.com/verkyyi/ccquota/internal/i18n"
@@ -157,8 +158,39 @@ func TestLimitsReasonIn_EveryCodeIsTranslated(t *testing.T) {
 	}
 }
 
+// A reason is a whole sentence, in the punctuation of its own language.
+//
+// The dashboard prints these straight after a bold title that has already
+// ended in a full stop, so a lowercase fragment reads as a sentence that fell
+// over ("Account-wide limits unavailable. no endpoint on this subscription…"),
+// and a caller that finishes the fragment itself can only do it in ONE
+// language — which is how an ASCII "." ended up inside a Chinese sentence
+// (#107). Punctuation belongs to whoever writes the sentence.
+func TestLimitsReasonIn_EveryReasonIsAWholeSentence(t *testing.T) {
+	for code := range limitsReasons {
+		en := LimitsReasonIn(code, i18n.EN)
+		if !strings.HasSuffix(en, ".") {
+			t.Errorf("%s: en does not end in a full stop: %q", code, en)
+		}
+		if r := []rune(en)[0]; r != unicode.ToUpper(r) {
+			t.Errorf("%s: en starts mid-sentence: %q", code, en)
+		}
+
+		zh := LimitsReasonIn(code, i18n.ZhCN)
+		if !strings.HasSuffix(zh, "。") {
+			t.Errorf("%s: zh-CN does not end in a full-width full stop: %q", code, zh)
+		}
+		// The half-width dot is the actual #107 defect, not a style note: it is
+		// a Latin mark sitting inside a Chinese sentence.
+		if strings.ContainsAny(zh, ".;!?") {
+			t.Errorf("%s: zh-CN carries half-width punctuation: %q", code, zh)
+		}
+	}
+}
+
 // An endpoint's own reported reason is relayed, never rewritten: an agent said
-// those words. Only the frame around them is this hub's wording.
+// those words. Only the frame around them — and the full stop that closes the
+// frame — is this hub's wording.
 func TestEndpointReports_RelaysTheAgentsOwnWords(t *testing.T) {
 	const said = "HTTP 429 from the account endpoint"
 	for _, loc := range []string{i18n.EN, i18n.ZhCN} {
@@ -172,6 +204,28 @@ func TestEndpointReports_RelaysTheAgentsOwnWords(t *testing.T) {
 	}
 	if endpointReports("m", said, i18n.EN) == endpointReports("m", said, i18n.ZhCN) {
 		t.Error("the frame was not translated")
+	}
+}
+
+// The frame is a sentence too, and an endpoint hands over a fragment as often
+// as not. The hub closes its OWN sentence -- in the reader's punctuation -- and
+// never touches an endpoint that already closed one.
+func TestEndpointReports_FinishesTheSentenceItStarted(t *testing.T) {
+	if got := endpointReports("mac-studio", "HTTP 429 from the account endpoint", i18n.EN); !strings.HasSuffix(got, ".") {
+		t.Errorf("en: unfinished sentence: %q", got)
+	}
+	if got := endpointReports("mac-studio", "凭证已过期", i18n.ZhCN); !strings.HasSuffix(got, "。") {
+		t.Errorf("zh-CN: unfinished sentence: %q", got)
+	}
+	// Already punctuated: relayed as-is, never doubled.
+	for _, tc := range []struct{ said, loc, want string }{
+		{"HTTP 429.", i18n.EN, "mac-studio reports: HTTP 429."},
+		{"凭证已过期。", i18n.ZhCN, "mac-studio 报告：凭证已过期。"},
+		{"is it throttled?", i18n.EN, "mac-studio reports: is it throttled?"},
+	} {
+		if got := endpointReports("mac-studio", tc.said, tc.loc); got != tc.want {
+			t.Errorf("endpointReports(%q, %s) = %q; want %q", tc.said, tc.loc, got, tc.want)
+		}
 	}
 }
 

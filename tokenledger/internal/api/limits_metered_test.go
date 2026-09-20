@@ -30,10 +30,14 @@ func TestLimits_MeteredAccountSaysThereIsNoWindow(t *testing.T) {
 	if v.Available {
 		t.Fatal("a gateway caller has no quota reading to be available")
 	}
-	if !strings.Contains(v.Reason, "billed per call") {
+	// Case-insensitively: #107 made every reason a whole sentence, so the same
+	// words can now arrive capitalised. WHICH reason it is, is what this test is
+	// about; how the sentence is cased is not. (ReasonCode would be the sturdier
+	// assertion, but it is deliberately unserialised -- see LimitsView.)
+	if !strings.Contains(strings.ToLower(v.Reason), "billed per call") {
 		t.Errorf("reason = %q; want it to say the account has no window, not that nobody read one", v.Reason)
 	}
-	if strings.Contains(v.Reason, "no endpoint") {
+	if strings.Contains(strings.ToLower(v.Reason), "no endpoint") {
 		t.Errorf("reason = %q; that describes a collector gap, and there is no collector to gap", v.Reason)
 	}
 }
@@ -53,7 +57,7 @@ func TestLimits_SubscriptionKeepsTheEndpointGapWording(t *testing.T) {
 	if v.Available {
 		t.Fatal("this fixture pushes no limits snapshot")
 	}
-	if !strings.Contains(v.Reason, "no endpoint") {
+	if !strings.Contains(strings.ToLower(v.Reason), "no endpoint") {
 		t.Errorf("reason = %q; a subscription with no reading still has a window somebody failed to read", v.Reason)
 	}
 }

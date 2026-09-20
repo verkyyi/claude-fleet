@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { en } from '../dist/lib/i18n/en.js';
 import { zhCN } from '../dist/lib/i18n/zh-CN.js';
 import { pickLocale, interpolate, lookup, t, tIn, useLocale, withLocale,
-         LOCALES, LOCALE_LABEL, DICTS, FALLBACK } from '../dist/lib/i18n.js';
+         LOCALES, LOCALE_LABEL, DICTS, FALLBACK, punct, LOCALE_PUNCT } from '../dist/lib/i18n.js';
 import { SOURCE_LABEL, sourceLabel } from '../dist/lib/providers.js';
 
 // A key present in one dictionary and not the other is the failure mode this
@@ -123,5 +123,51 @@ test('withLocale tags a path exactly once, query string or not', () => {
     assert.equal(withLocale(withLocale('/v1/accounts')), '/v1/accounts?locale=zh-CN');
   } finally {
     useLocale('en');
+  }
+});
+
+// #107: the "limits unavailable" banner used to finish the server's reason
+// itself, with `.replace(/\.?$/, '.')` — one ASCII full stop, whatever the
+// language. In Chinese that is a Latin dot sitting inside a Chinese sentence.
+//
+// The rule these two tests pin: punctuation the PAGE supplies follows the
+// page's language; punctuation inside text that arrives already written is
+// never touched. The reason now arrives terminated from internal/api/i18n.go.
+test('punctuation the page supplies follows the reader language', () => {
+  try {
+    useLocale('en');
+    assert.deepEqual(punct(), { list: '; ', end: '.', gap: ' ' });
+    useLocale('zh-CN');
+    assert.deepEqual(punct(), { list: '；', end: '。', gap: '' });
+    // A locale with no set of its own falls back rather than yielding undefined
+    // and printing "undefined" between two fragments.
+    useLocale('fr');
+    assert.deepEqual(punct(), LOCALE_PUNCT.en);
+  } finally {
+    useLocale('en');
+  }
+});
+
+// The banner reads as ONE sentence pair: a bold title that already ends in a
+// full stop, then the reason. Neither the template nor the join may add a
+// half-width mark to the Chinese one.
+test('the limits banner joins onto a finished sentence without ASCII punctuation', () => {
+  // The zh template must not re-open the gap the title already closed: no
+  // space between the reason's "。" and the sentence that follows it.
+  assert.ok(zhCN['banner.limitsUnavailable.body'].startsWith('{reason}下面'),
+    'a half-width space crept back in after {reason}');
+  assert.ok(en['banner.limitsUnavailable.body'].startsWith('{reason} The'),
+    'English still wants its space after the reason');
+
+  for (const loc of LOCALES) {
+    for (const key of ['banner.limitsUnavailable.title', 'wall.noReading']) {
+      const s = DICTS[loc][key];
+      const end = loc === 'zh-CN' ? '。' : '.';
+      assert.ok(s.endsWith(end), `${loc}/${key} does not end its own sentence: ${s}`);
+    }
+    // wall.noReading is what the banner prints when a reading carries no
+    // reason at all, so it has to BE a sentence, not a fragment.
+    assert.ok(!DICTS[loc]['wall.noReading'].includes('{'),
+      `${loc}/wall.noReading interpolates — it is used as a bare fallback`);
   }
 });

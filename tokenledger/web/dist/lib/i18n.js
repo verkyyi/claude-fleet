@@ -86,6 +86,29 @@ if (typeof document !== 'undefined') {
 
 export const locale = () => current;
 
+/** LOCALE_PUNCT is the punctuation this page SUPPLIES ITSELF, in the width of
+ *  the language it is writing in.
+ *
+ *  Only for marks the page adds between or after pieces of text: the separator
+ *  when it joins a list of fragments, the full stop when it closes a sentence
+ *  it started, the gap between a bold lead-in and the sentence that follows.
+ *  Chinese wants the full-width marks and no space around them; English wants
+ *  the half-width marks and the space.
+ *
+ *  Text that arrives ALREADY WRITTEN is never punctuated here — a reason from
+ *  /v1/limits, an endpoint's own words, a translator's sentence. Those carry
+ *  their own terminator, written by whoever wrote the sentence (#107: the
+ *  banner used to append an ASCII "." to the server's reason, which is right in
+ *  English and a Latin dot dropped mid-sentence in Chinese). See the matching
+ *  rule in internal/api/i18n.go. */
+export const LOCALE_PUNCT = {
+  en: { list: '; ', end: '.', gap: ' ' },
+  'zh-CN': { list: '；', end: '。', gap: '' },
+};
+
+/** punct is this viewer's punctuation set. */
+export const punct = () => LOCALE_PUNCT[current] || LOCALE_PUNCT[FALLBACK];
+
 /** LOCALE_CURRENCY is the currency a viewer of each locale reads money in.
  *
  *  A reader's language is a decent proxy for the currency they think in, and it

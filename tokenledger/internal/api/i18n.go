@@ -3,6 +3,8 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/verkyyi/ccquota/internal/i18n"
 	"github.com/verkyyi/ccquota/internal/store"
@@ -94,38 +96,50 @@ const (
 	ReasonCodexWindowReset = "codex_window_reset"
 )
 
+// Every entry is a COMPLETE SENTENCE in its own language: it starts the way a
+// sentence starts and it carries its own terminator, half-width in English and
+// full-width in Chinese.
+//
+// That is a contract with the callers, not decoration. These sentences are
+// dropped into prose the reader is already mid-way through — the dashboard's
+// "limits unavailable" banner prints them straight after a bold title that has
+// already ended in a full stop. While they were lowercase, terminator-less
+// English fragments, every caller had to finish them, and the dashboard did it
+// by appending an ASCII "." to whatever came back (#107): correct in English,
+// and a half-width dot dropped into the middle of a Chinese sentence. Punctuation
+// belongs to whoever writes the sentence, so it is written here.
 var limitsReasons = map[string]i18n.Text{
 	ReasonCodexNoLimits: {
-		i18n.EN:   "Codex local usage reports token consumption only; subscription limits are not collected",
-		i18n.ZhCN: "Codex 的本地用量只上报 token 消耗，不采集订阅额度",
+		i18n.EN:   "Codex local usage reports token consumption only; subscription limits are not collected.",
+		i18n.ZhCN: "Codex 的本地用量只上报 token 消耗，不采集订阅额度。",
 	},
 	ReasonNoEndpointReading: {
-		i18n.EN:   "no endpoint on this subscription has been able to read its account-wide limits",
-		i18n.ZhCN: "这个订阅下没有任何端点能读到它的账号级额度",
+		i18n.EN:   "No endpoint on this subscription has been able to read its account-wide limits.",
+		i18n.ZhCN: "这个订阅下没有任何端点能读到它的账号级额度。",
 	},
 	ReasonMeteredNoWindow: {
-		i18n.EN:   "billed per call; this account has no quota window to read",
-		i18n.ZhCN: "这个账号按调用计费，没有额度窗口可读",
+		i18n.EN:   "This account is billed per call; there is no quota window to read.",
+		i18n.ZhCN: "这个账号按调用计费，没有额度窗口可读。",
 	},
 	ReasonWrongSource: {
-		i18n.EN:   "account does not belong to the selected source",
-		i18n.ZhCN: "这个账号不属于当前选中的来源",
+		i18n.EN:   "This account does not belong to the selected source.",
+		i18n.ZhCN: "这个账号不属于当前选中的来源。",
 	},
 	ReasonCodexUnassigned: {
-		i18n.EN:   "Historical or unassigned Codex usage; select a linked Codex account to view its quota",
-		i18n.ZhCN: "历史的或未归属的 Codex 用量；选一个已关联的 Codex 账号才能看到它的额度",
+		i18n.EN:   "Historical or unassigned Codex usage; select a linked Codex account to view its quota.",
+		i18n.ZhCN: "历史的或未归属的 Codex 用量；选一个已关联的 Codex 账号才能看到它的额度。",
 	},
 	ReasonCodexUnverified: {
-		i18n.EN:   "No verified Codex quota reading; local usage history is retained separately",
-		i18n.ZhCN: "没有已核实的 Codex 额度读数；本地用量历史是单独保留的",
+		i18n.EN:   "No verified Codex quota reading; local usage history is retained separately.",
+		i18n.ZhCN: "没有已核实的 Codex 额度读数；本地用量历史是单独保留的。",
 	},
 	ReasonCodexStale: {
-		i18n.EN:   "Codex quota reading is stale; waiting for a fresh observation",
-		i18n.ZhCN: "Codex 的额度读数已过期，正在等新的观测",
+		i18n.EN:   "The Codex quota reading is stale; waiting for a fresh observation.",
+		i18n.ZhCN: "Codex 的额度读数已过期，正在等新的观测。",
 	},
 	ReasonCodexWindowReset: {
-		i18n.EN:   "Codex quota window reset; waiting for a fresh reading",
-		i18n.ZhCN: "Codex 的额度窗口已重置，正在等新的读数",
+		i18n.EN:   "The Codex quota window has reset; waiting for a fresh reading.",
+		i18n.ZhCN: "Codex 的额度窗口已重置，正在等新的读数。",
 	},
 }
 
@@ -137,8 +151,36 @@ var endpointReportsFrame = i18n.Text{
 	i18n.ZhCN: "%s 报告：%s",
 }
 
+// sentenceEnders is what counts as "this sentence already ends". Both widths,
+// because the text being judged is in one of two languages.
+const sentenceEnders = ".。!！?？…"
+
+// terminate finishes a sentence this package assembled, in the punctuation of
+// the language it assembled it in. It only ever APPENDS, and only to something
+// that does not already end: nothing is ever stripped or rewritten.
+//
+// The test is on the last RUNE, not the last byte — "。" is three bytes, and a
+// byte-wise look at the final one would conclude the sentence is unfinished.
+func terminate(s, locale string) string {
+	if s == "" {
+		return s
+	}
+	if last, _ := utf8.DecodeLastRuneInString(s); strings.ContainsRune(sentenceEnders, last) {
+		return s
+	}
+	if i18n.Normalize(locale) == i18n.ZhCN {
+		return s + "。"
+	}
+	return s + "."
+}
+
+// endpointReports states, as one finished sentence, what an endpoint reported.
+//
+// The frame is ours and so is the full stop that closes it; the endpoint's own
+// words sit inside, verbatim. An endpoint that already punctuated its sentence
+// keeps its punctuation — terminate only finishes what was left unfinished.
 func endpointReports(endpoint, reason, locale string) string {
-	return fmt.Sprintf(endpointReportsFrame.In(locale), endpoint, reason)
+	return terminate(fmt.Sprintf(endpointReportsFrame.In(locale), endpoint, reason), locale)
 }
 
 // LimitsReasonIn names one unavailability code in a viewer's language. An

@@ -38,7 +38,7 @@ import { withChip } from './lib/state.js';
 import { ownerLine, splitMuted, worstSeverity } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
 import * as C from './charts.js';
-import { t, withLocale } from './lib/i18n.js';
+import { t, withLocale, punct } from './lib/i18n.js';
 
 // This file used to own the page's second scope-controls widget, mounted on
 // the "Am I about to hit the wall?" card because that card is per-subscription
@@ -869,9 +869,13 @@ function endpointRosterCardFromResult(result, app, state, switchesR) {
  *  in the same viewport. The whole dismissal mechanism left with it, since it
  *  had arrived for that banner alone and had no second caller. */
 function banner(kind, title, msg) {
+  // Title and message are one running sentence pair, not two blocks, so the
+  // gap between them is the page's own punctuation: a space in English, and
+  // nothing in Chinese, where a title already closed by "。" wants no space
+  // after it (#107).
   return el('div', { class: 'banner' + (kind === 'err' ? ' err' : '') },
     el('span', { class: 'ico' }, kind === 'err' ? '✕' : '!'),
-    el('div', { class: 'msg' }, el('b', {}, title + ' '), msg));
+    el('div', { class: 'msg' }, el('b', {}, title + punct().gap), msg));
 }
 
 /** limitsBannerApplies is the ONE predicate for "a banner outside the fold
@@ -904,7 +908,10 @@ function buildBanners(state, endpointsR, limitsR) {
     if (e.dropped_beyond_backfill > 0) {
       bits.push(t('banner.droppedBeyondBackfill', { n: fmtFull(e.dropped_beyond_backfill), window: e.backfill_limit }));
     }
-    banners.push(banner('warn', t('banner.excludesHistory', { name: e.label || e.hostname }), bits.join('; ') + '.'));
+    // The bits are deliberately written as fragments, so this line is the one
+    // that ends the sentence -- in the reader's punctuation, not ASCII's.
+    const p = punct();
+    banners.push(banner('warn', t('banner.excludesHistory', { name: e.label || e.hostname }), bits.join(p.list) + p.end));
   }
 
   // "Nothing below is scoped to one subscription" used to be stated here too,
@@ -922,8 +929,14 @@ function buildBanners(state, endpointsR, limitsR) {
   if (limitsR.status === 'fulfilled' && limitsBannerApplies(state)) {
     const limits = limitsR.value;
     if (!limits.available) {
+      // The reason arrives as a finished sentence in the viewer's language --
+      // the server writes it, terminator included (internal/api/i18n.go). This
+      // line used to append an ASCII "." to whatever came back, which read
+      // correctly in English and dropped a half-width dot into the middle of a
+      // Chinese sentence (#107). A reading with no reason at all says so in the
+      // page's own words rather than contributing a bare full stop.
       banners.push(banner('warn', t('banner.limitsUnavailable.title'),
-        t('banner.limitsUnavailable.body', { reason: (limits.reason || '').replace(/\.?$/, '.') })));
+        t('banner.limitsUnavailable.body', { reason: limits.reason || t('wall.noReading') })));
     } else if (limits.stale_seconds > 600) {
       banners.push(banner('warn', t('banner.limitsStale.title'),
         t('banner.limitsStale.body', { ago: ago(limits.stale_seconds) })));
