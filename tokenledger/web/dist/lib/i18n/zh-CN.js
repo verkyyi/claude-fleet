@@ -150,6 +150,13 @@ export const zhCN = {
   'chart.subagent': '子代理',
   'chart.ariaTokensPer': '每{granularity}的 token 数，峰值 {peak}',
   'chart.ariaModelMix': '模型构成随时间的变化，{from} 至 {to}，单桶峰值 {peak} token',
+  'chart.ariaTimeline': 'token 用量随时间的变化（按模型堆叠），{from} 至 {to}，单桶峰值 {peak} token',
+  'chart.ariaBrush': '时间范围选择器。方向键移动选区，Shift + 方向键移动右边界；当前选区以文字写在图表下方。',
+  'chart.ariaWallHistory': '订阅额度用量随时间的变化，{from} 至 {to}，共 {n} 个订阅，网格线位于 50% 与 90%',
+  'chart.ariaTurnBars': '每轮次的 token 数，共 {turns} 轮，峰值 {peak} token，按模型着色',
+  'chart.ariaComposition': '按类型划分的 token 构成，占比最大的是 {name}，为 {pct}；每一项的占比都列在条形下方',
+  'chart.ariaHeatmap': '按星期与小时划分的 token 用量，最忙的是{day} {hour}，{tokens} token',
+  'chart.ariaHeatmapEmpty': '按星期与小时划分的 token 用量 —— 本时段没有用量',
 
   /* ------------------------------------------------------------- charts */
   'chart.turns': '轮次',

@@ -46,14 +46,36 @@ export const escapeHTML = (s) => String(s).replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const tip = $('#tip');
+
+/** anchorOf is where the tooltip hangs from when the event that raised it
+ *  carries no pointer position.
+ *
+ *  Issue #56 wired `showTip` to FOCUS as well as to `mousemove`, because the
+ *  tip is where charts.js's ranked rows keep the figures they do not print —
+ *  the untruncated share, the "this is an estimate" caveat — and hover was
+ *  the only door to them. A FocusEvent has no `clientX`/`clientY`, so the old
+ *  arithmetic produced `NaNpx` for both coordinates; the browser drops an
+ *  invalid length, which left the tip parked wherever the last mouse hover
+ *  put it (top-left of the viewport on a keyboard-only session) while its
+ *  text changed underneath. Hanging it off the focused element's own box is
+ *  the same "just below and right of the thing in question" the pointer path
+ *  produces, measured from the element instead of from the cursor. */
+const anchorOf = (node) => {
+  const r = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+  return r ? { x: r.left, y: r.bottom } : { x: 0, y: 0 };
+};
+
 export function showTip(evt, html) {
   if (!tip) return;
   tip.innerHTML = html;
   tip.style.opacity = '1';
   const pad = 14, r = tip.getBoundingClientRect();
-  let x = evt.clientX + pad, y = evt.clientY + pad;
-  if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
-  if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+  const a = Number.isFinite(evt.clientX) && Number.isFinite(evt.clientY)
+    ? { x: evt.clientX, y: evt.clientY }
+    : anchorOf(evt.currentTarget || evt.target);
+  let x = a.x + pad, y = a.y + pad;
+  if (x + r.width > innerWidth - 8) x = a.x - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = a.y - r.height - pad;
   tip.style.left = x + 'px';
   tip.style.top = y + 'px';
 }

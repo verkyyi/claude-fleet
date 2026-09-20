@@ -429,6 +429,11 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 .timeline .plot { position: relative; }
 .timeline .brush { position: absolute; top: 0; bottom: var(--axis-band, 0); background: color-mix(in srgb, var(--s1) 12%, transparent); border-left: 2px solid var(--s1); border-right: 2px solid var(--s1); cursor: grab; }
 .timeline .brush .h { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; } .timeline .brush .h.l { left: -6px } .timeline .brush .h.r { right: -6px }
+/* The brush has been a tabindex="0" arrow-key control all along; issue #56
+   gave it a name, and this gives it the ring that says where the keyboard
+   currently is — without which "arrow keys move the selection" is advice a
+   reader cannot act on. */
+.timeline .brush:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
 .timeline .caption { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
 /* heatmap */
 .heat { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; align-items: center; font-size: 11px; color: var(--ink-3); }
@@ -444,6 +449,19 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 .findings .owner { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
 /* card table toggle */
 .card { position: relative; } .card .tbl { position: absolute; right: 12px; top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; font-size: 12px; padding: 2px 6px; cursor: pointer; color: var(--ink-2); }
+/* The toggle is absolutely positioned in the card's top-right corner, which
+   is the h2's own line box (issue #56): a card title long enough to reach the
+   right edge — or any title at all once the card is a narrow .grid2 half on a
+   phone — ran underneath the button. Reserve the corner on the heading, the
+   same way .detail h2 already reserves room for its fixed × below.
+   Scoped with :has() so only a card that ACTUALLY carries a toggle pays for
+   it; where :has() is unsupported the whole rule drops and the corner is
+   exactly as crowded as it is today, which is a safe way to fail. */
+.card:has(.tbl) > h2 { padding-right: 40px; }
+/* The toggle is the designated way out of every chart on this page, so it has
+   to be findable by keyboard, not merely reachable — same ring as .secnav and
+   .ops summary already use. */
+.card .tbl:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
 /* sessions */
 .sessions tr { cursor: pointer; } .sessions td a { color: inherit; text-decoration: underline dotted; }
 /* detail overlay */
@@ -480,6 +498,12 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
    selected. */
 .bar-row.sel .k { color: var(--ink); font-weight: 600; }
 .bar-row.sel .bar-track { outline: 2px solid var(--s1); outline-offset: 1px; border-radius: 6px; }
+/* Issue #56 made a row a tab stop whenever it is clickable OR carries a tip
+   (the tip holds figures the row itself does not print). A new tab stop with
+   no visible focus indicator is its own failure, so the ring comes with it —
+   on the ROW, offset outward, which is what keeps it distinguishable from the
+   `.sel` ring above: that one marks the active facet and sits on the track. */
+.bar-row:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 6px; }
 
 /* ------------------------------------------------------------------------ */
 /* Task 12 (review.js): the segmented group-by control every breakdown card

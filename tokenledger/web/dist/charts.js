@@ -38,12 +38,25 @@
 // in styles.css: no pixel height, no `font-size` attribute, because both are
 // measured inside a viewBox that scales — which is how the same declared
 // `10.5` rendered as ~4px on a phone.
+//
+// Issue #56: every chart this file returns now carries `role="img"` and an
+// `aria-label` that states what the picture is, the span it covers and its
+// scale. The rule this encodes, and the reason it is worth stating: a chart
+// element with no role is not "partly readable" to a screen reader, it is
+// ABSENT — a `<div>` of coloured `<i>`s and an `<svg>` of `<rect>`s announce
+// nothing at all. `role="img"` is also deliberately a WALL: it takes the
+// drawing's internals out of the accessibility tree, because 168 unlabelled
+// heatmap cells or 900 bars were never the data, they were the rendering of
+// it. The DATA equivalent is the table the ⊞ toggle swaps in — which is why
+// that toggle (`withTable`) now reports its own state, and why the labels
+// here summarise rather than enumerate.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
 import { bucketMs, densify, inferBucket } from './lib/buckets.js';
+import { busiest } from './lib/fold.js';
 import { t } from './lib/i18n.js';
 import { seriesPalette, OTHER_COLOR } from './lib/palette.js';
 
@@ -78,6 +91,12 @@ function axisLabel(key, granularity) {
   const k = String(key);
   return granularity === 'day' || k.length === 10 ? k.slice(5, 10) : k.slice(5, 10) + ' ' + k.slice(11, 16);
 }
+
+/** dayLabel is `axisLabel` for a chart whose extent is milliseconds rather
+ *  than bucket keys (`timeline`, `lines`). Same UTC frame and same MM-DD
+ *  shape as `axisLabel` and review.js's caption, so an aria-label and the
+ *  x-axis under it cannot name different days for the same edge. */
+const dayLabel = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(5, 10) : '—');
 
 /** chartSvg builds the `<svg>` element every chart in this file returns, and
  *  exists so that the two things issue #55 had to unlearn are unlearnable in
@@ -168,9 +187,20 @@ export function rankedBars(rows, { onClick, selectedKey, max: fixedMax } = {}) {
     return el('div', {
         class: 'bar-row' + (sel ? ' sel' : ''),
         role: onClick ? 'button' : null,
-        tabindex: onClick ? '0' : null,
+        // Issue #56: focusable when the row is a BUTTON, and also when it
+        // merely carries a `tip` — because the tip is where the figures the
+        // row does not print live: the untruncated share (review.js's
+        // breakdown rows clip `.v` to an ellipsis) and now.js's "this is an
+        // estimate" caveat, which appears nowhere else on the page. Hover was
+        // the only way in, so a keyboard or switch user could not reach it at
+        // all. A tabstop plus the two handlers below is the whole fix: `#tip`
+        // is already a `role="status"` live region, so filling it on focus is
+        // what makes it spoken.
+        tabindex: onClick || r.tip ? '0' : null,
         onmousemove: r.tip ? (e) => showTip(e, r.tip) : null,
         onmouseleave: r.tip ? hideTip : null,
+        onfocus: r.tip ? (e) => showTip(e, r.tip) : null,
+        onblur: r.tip ? hideTip : null,
         onclick: onClick ? () => onClick(r) : null,
         onkeydown: onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(r); } } : null,
       },
@@ -240,23 +270,45 @@ export function bucketTable(buckets, keyLabel, extraCols = []) {
 }
 
 /** withTable pairs a chart element with its table fallback under one card,
- *  toggled by a ⊞ button whose state is remembered per card id. */
+ *  toggled by a ⊞ button whose state is remembered per card id.
+ *
+ *  Issue #56: this button is the page's designated way out of every chart
+ *  above — the data as a table, for anyone the drawing does not serve — and
+ *  it was a bare glyph with a `title`. That gave it no name in the
+ *  accessibility tree (a `title` on a button is a last-resort name at best,
+ *  and `⊞` itself announces as a box-drawing character), no way to tell
+ *  which of its two states it was in, and nothing connecting it to the thing
+ *  it swaps in. All three are now stated: `aria-label` names it,
+ *  `aria-expanded` reports whether the table is showing AND is rewritten on
+ *  every click (a state attribute that is only correct on first render is
+ *  worse than none — it asserts something false), and `aria-controls` points
+ *  at the table, which takes an id derived from `cardId` since that is
+ *  already unique per card. */
 export function withTable(card, chartEl, tableEl, cardId) {
   const key = 'ccquota-table:' + cardId;
   let showingTable = false;
   try { showingTable = localStorage.getItem(key) === '1'; } catch {}
   chartEl.hidden = showingTable;
   tableEl.hidden = !showingTable;
+  if (!tableEl.id) tableEl.id = 'tbl-' + cardId;
   const btn = el('button', {
     class: 'tbl', type: 'button', title: t('chart.toggleTable'),
+    'aria-label': t('chart.toggleTable'),
+    'aria-expanded': String(showingTable),
+    'aria-controls': tableEl.id,
     onclick: () => {
       showingTable = !showingTable;
       chartEl.hidden = showingTable;
       tableEl.hidden = !showingTable;
+      btn.setAttribute('aria-expanded', String(showingTable));
       try { localStorage.setItem(key, showingTable ? '1' : '0'); } catch {}
     },
   }, '⊞');
-  card.append(chartEl, tableEl, btn);
+  // The toggle goes FIRST in the DOM. It is `position:absolute` (styles.css),
+  // so nothing about the rendering changes — but in reading and tab order it
+  // used to come after the entire chart AND the entire table, and a fallback
+  // you only reach by tabbing past the thing you could not read is not one.
+  card.append(btn, chartEl, tableEl);
   return card;
 }
 
@@ -456,7 +508,15 @@ export function timeline(series, opts) {
     });
   });
 
-  const svg = chartSvg(W, H, {}, g);
+  // The span comes from `ext`, not from the first and last buckets: the chart
+  // is DRAWN over the extent, and a quiet stretch at either end means the
+  // buckets stop short of it. Naming the buckets' own edges would tell a
+  // reader the chart covers less time than the axis under it does.
+  const svg = chartSvg(W, H, {
+    role: 'img',
+    'aria-label': t('chart.ariaTimeline', {
+      from: dayLabel(ext.start), to: dayLabel(ext.end), peak: fmtInt(max) }),
+  }, g);
   const container = el('div', { class: 'timeline', tabindex: '-1' });
 
   // The brush is positioned against the PLOT, not against `.timeline`: the
@@ -470,7 +530,14 @@ export function timeline(series, opts) {
   const plot = el('div', { class: 'plot', style: `--axis-band:${(PAD.b / H) * 100}%` }, svg);
   container.appendChild(plot);
 
-  const brush = el('div', { class: 'brush', tabindex: '0' },
+  // The brush sits OUTSIDE the svg (it is an overlay div), so `role="img"`
+  // above does not hide it — which matters, because it is a `tabindex="0"`
+  // element that had no name at all: focus landed on it and a screen reader
+  // said nothing, on the one control that changes what every other card is
+  // showing. The label says what it is and what the arrow keys do; the
+  // selected range itself is printed as text in the caption below.
+  const brush = el('div', {
+      class: 'brush', tabindex: '0', role: 'group', 'aria-label': t('chart.ariaBrush') },
     el('div', { class: 'h l' }), el('div', { class: 'h r' }));
   plot.appendChild(brush);
 
@@ -753,7 +820,21 @@ export function heatmap(grid, events) {
       }));
     });
   });
-  return el('div', { class: 'heat' }, cells);
+  // One summary, not 168 labelled cells. Each `<i>` keeps its `title` for a
+  // pointer, but under `role="img"` they leave the accessibility tree on
+  // purpose: walking 168 unlabelled `<i>`s taught a screen reader nothing,
+  // and the honest equivalent of this grid is the table the ⊞ toggle swaps in
+  // (review.js's `when` card) plus fold.js's `sentence()` printed under it.
+  // Giving the grid real row/column semantics is its own issue — this is the
+  // label, which is what the grid was missing entirely.
+  const b = busiest(grid);
+  return el('div', {
+    class: 'heat', role: 'img',
+    'aria-label': b.tokens > 0
+      ? t('chart.ariaHeatmap', {
+          day: DOW[b.dow], hour: String(b.hour).padStart(2, '0') + ':00', tokens: fmtFull(b.tokens) })
+      : t('chart.ariaHeatmapEmpty'),
+  }, cells);
 }
 
 /* --------------------------------------------------------------------- lines */
@@ -811,7 +892,15 @@ export function lines(accounts, { start, end }) {
     legend.push(el('span', {}, el('i', { style: `background:${color}` }), a.label));
   });
 
-  const svg = chartSvg(W, H, {}, g);
+  // `start`/`end` rather than the points' own range for the same reason
+  // `timeline` uses its extent: the lines are drawn across the selected
+  // window, and a subscription that reported nothing for its last hour must
+  // not shorten what the chart claims to cover.
+  const svg = chartSvg(W, H, {
+    role: 'img',
+    'aria-label': t('chart.ariaWallHistory', {
+      from: dayLabel(start), to: dayLabel(end), n: (accounts || []).length }),
+  }, g);
   return el('div', {}, svg, el('div', { class: 'legend' }, legend));
 }
 
@@ -830,7 +919,17 @@ export function composition(parts) {
       onmousemove: (e) => showTip(e, label), onmouseleave: hideTip,
     });
   });
-  const bar = el('div', { style: 'display:flex;height:16px;border-radius:4px;overflow:hidden' }, segs);
+  // The label names the graphic and its biggest slice, and stops there: the
+  // legend directly below is real text that already gives every part and its
+  // share, so enumerating them here would make a screen reader read the same
+  // five figures twice before reaching anything new.
+  const top = parts.reduce((a, p) => ((p.tokens || 0) > (a.tokens || 0) ? p : a), { key: '', tokens: 0 });
+  const bar = el('div', {
+    role: 'img',
+    'aria-label': t('chart.ariaComposition', {
+      name: top.key || t('common.unknown'), pct: ((top.tokens || 0) / total * 100).toFixed(1) + '%' }),
+    style: 'display:flex;height:16px;border-radius:4px;overflow:hidden',
+  }, segs);
   const legend = el('div', { class: 'legend' }, parts.map((p) =>
     el('span', {}, el('i', { style: `background:${p.color}` }), `${p.key} ${((p.tokens / total) * 100).toFixed(1)}%`)));
   return el('div', {}, bar, legend);
@@ -883,7 +982,14 @@ export function turnBars(turns) {
     if (turn.sidechain) g.appendChild(el('rect', { x, y: yTop, width: bw, height: h, fill: 'url(#ccq-sidechain-hatch)' }));
   });
 
-  const svg = chartSvg(W, H, {}, g);
+  // This one is returned BARE when there is nothing to put in a legend, so
+  // the label is the only thing a reader gets from the drawing — hence the
+  // turn count and the peak, not just "tokens per turn". The per-turn
+  // figures are in the turns table session.js renders directly underneath.
+  const svg = chartSvg(W, H, {
+    role: 'img',
+    'aria-label': t('chart.ariaTurnBars', { turns: fmtInt(turns.length), peak: fmtInt(max) }),
+  }, g);
   if (models.length < 2 && !anySidechain) return svg;
 
   const legend = el('div', { class: 'legend' },

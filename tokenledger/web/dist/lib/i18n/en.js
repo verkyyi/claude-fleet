@@ -149,6 +149,16 @@ export const en = {
   'chart.subagent': 'subagent',
   'chart.ariaTokensPer': 'Tokens per {granularity}, peak {peak}',
   'chart.ariaModelMix': 'Model mix over time, {from} to {to}, peak {peak} tokens per bucket',
+  // Issue #56: one aria-label per chart. Each names the picture, the span it
+  // covers and its scale — the three things a reader who cannot see it needs
+  // before deciding whether to open the table the ⊞ toggle swaps in.
+  'chart.ariaTimeline': 'Tokens over time, stacked by model, {from} to {to}, peak {peak} tokens per bucket',
+  'chart.ariaBrush': 'Time range selector. Arrow keys move the selection, Shift with arrow keys moves its right edge; the selected range is written below the chart.',
+  'chart.ariaWallHistory': 'Subscription utilization over time, {from} to {to}, {n} subscriptions, gridlines at 50% and 90%',
+  'chart.ariaTurnBars': 'Tokens per turn, {turns} turns, peak {peak} tokens, coloured by model',
+  'chart.ariaComposition': 'Token composition by type, largest part {name} at {pct}; every share is listed below the bar',
+  'chart.ariaHeatmap': 'Tokens by weekday and hour, busiest {day} {hour} at {tokens} tokens',
+  'chart.ariaHeatmapEmpty': 'Tokens by weekday and hour — no usage in this period',
 
   /* ------------------------------------------------------------- charts */
   'chart.turns': 'Turns',
