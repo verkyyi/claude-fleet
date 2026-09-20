@@ -125,10 +125,15 @@ documents on the live process's argv (the whole set under `--strict-mcp-config`,
 which is how every fleet spawn passes `FLEET_MCP_CONFIG`), else those over the
 CLI's own store — local scope (`projects[<worktree>].mcpServers` in
 `.claude.json` under the worker's `CLAUDE_CONFIG_DIR`), the approved project
-`.mcp.json` (`enabledMcpjsonServers`), then user scope. A server a plugin ships,
-or one approved only through a settings file, is not inventoried, so a Claude
-worker running one keeps vetoing exactly as before; the skip reason names the
-process. **Claude readiness is process-fingerprint plus config digest only**:
+`.mcp.json` (`enabledMcpjsonServers`), then user scope — plus the servers the
+enabled plugins ship, under the CLI's own names, `plugin:<plugin>:<server>`
+(issue #830: `enabledPlugins` in the settings files, the install root from
+`plugins/installed_plugins.json`, its `.mcp.json` or `plugin.json`, with
+`${CLAUDE_PLUGIN_ROOT}` substituted). A contract that wants one lists that full
+name, e.g. `plugin:playwright:playwright`; a plugin that cannot be resolved
+contributes nothing, so its server vetoes as an unverified process. A server
+approved only through a settings file is still not inventoried, and the skip
+reason names the process. **Claude readiness is process-fingerprint plus config digest only**:
 the worker is declared awake once every saved server runs again as a direct
 child from an unchanged configuration, which does not prove the server finished
 initializing — the first tool call after a wake can still meet a server that is

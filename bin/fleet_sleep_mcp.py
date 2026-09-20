@@ -78,8 +78,10 @@ def claude_inventory(argv, worktree, config_home=None):
     the --mcp-config documents — the whole set under --strict-mcp-config, which is
     how every fleet spawn passes FLEET_MCP_CONFIG — else those over the CLI's own
     store: local scope (`projects[<worktree>].mcpServers`) over the approved
-    project `.mcp.json` over user scope, as the CLI ranks them. Servers a plugin
-    ships, or approved only through settings, are not inventoried and so veto.
+    project `.mcp.json` over user scope, as the CLI ranks them, plus the servers
+    the enabled plugins ship under the CLI's own `plugin:<plugin>:<server>` names
+    (issue #830). A server approved only through a settings file is not
+    inventoried and so vetoes.
     """
     strict, values = claude_layers(argv)
     flagged = {}
@@ -97,7 +99,8 @@ def claude_inventory(argv, worktree, config_home=None):
         raise ValueError(INCOMPLETE)
     project = next((projects[key] for key in (str(Path(worktree).resolve()), str(worktree))
                     if isinstance(projects.get(key), dict)), {})
-    config = dict(claude_servers(store, required=False))
+    config = plugin_servers(config_home, worktree)
+    config.update(claude_servers(store, required=False))
     manifest = Path(worktree) / '.mcp.json'
     if manifest.is_file():
         approved = set(project.get('enabledMcpjsonServers') or []) - set(project.get('disabledMcpjsonServers') or [])
@@ -107,6 +110,77 @@ def claude_inventory(argv, worktree, config_home=None):
         config.pop(name, None)
     config.update(flagged)
     return config, None
+
+
+def plugin_root(value, root):
+    if isinstance(value, str):
+        return value.replace('${CLAUDE_PLUGIN_ROOT}', root)
+    if isinstance(value, list):
+        return [plugin_root(item, root) for item in value]
+    if isinstance(value, dict):
+        return {key: plugin_root(item, root) for key, item in value.items()}
+    return value
+
+
+def plugin_servers(config_home, worktree):
+    """Servers the enabled plugins ship, named as the CLI names them: plugin:<plugin>:<server>.
+
+    A plugin that cannot be resolved (no registry, an ambiguous install, an
+    unreadable manifest) contributes nothing: its server, if running, then vetoes
+    as an unverified process, which is the pre-#830 behaviour for every plugin.
+    """
+    home = Path(config_home) if config_home else Path.home() / '.claude'
+    enabled = {}
+    for settings in (home / 'settings.json', Path(worktree) / '.claude' / 'settings.json',
+                     Path(worktree) / '.claude' / 'settings.local.json'):
+        if not settings.is_file():
+            continue
+        try:
+            flags = read_json(settings).get('enabledPlugins')
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(flags, dict):
+            enabled.update(flags)
+    registry = home / 'plugins' / 'installed_plugins.json'
+    try:
+        installed = read_json(registry).get('plugins') if registry.is_file() else None
+    except (ValueError, AttributeError):
+        installed = None
+    config = {}
+    if not isinstance(installed, dict):
+        return config
+    for key, on in enabled.items():
+        entries = installed.get(key) if on is True else None
+        if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
+            continue
+        root = entries[0].get('installPath')
+        if not isinstance(root, str) or not Path(root).is_dir():
+            continue
+        plugin = key.split('@', 1)[0]
+        for manifest in (Path(root) / '.mcp.json', Path(root) / '.claude-plugin' / 'plugin.json'):
+            if not manifest.is_file():
+                continue
+            try:
+                document = read_json(manifest)
+            except ValueError:
+                continue
+            if not isinstance(document, dict):
+                continue
+            # A plugin's .mcp.json is a bare server map or the mcpServers-wrapped
+            # form; plugin.json carries an inline mcpServers map or a file path.
+            servers = document.get('mcpServers') if manifest.name == 'plugin.json' else document.get('mcpServers', document)
+            if isinstance(servers, str):
+                try:
+                    servers = read_json(Path(root) / servers)
+                    servers = servers.get('mcpServers', servers) if isinstance(servers, dict) else None
+                except ValueError:
+                    servers = None
+            if not isinstance(servers, dict):
+                continue
+            for name, conf in servers.items():
+                if isinstance(conf, dict):
+                    config['plugin:%s:%s' % (plugin, name)] = plugin_root(conf, root)
+    return config
 
 
 def runtime_ready(status):
