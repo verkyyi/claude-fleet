@@ -232,7 +232,8 @@ The dashboard's "turns" count represents model requests, including tool-use
 iterations, rather than user messages.
 
 The local report includes **By source**. The dashboard is one continuous page
-with a single source selector; accounts follow that selection. Usage, quota history, findings,
+with a single source selector; accounts follow that selection. (The top nav
+bar anchors within that one page — see [The dashboard](#the-dashboard).) Usage, quota history, findings,
 Live/SSE, machine lists and MCP accept `source=codex`. The all-time headline
 follows the selected account/source; project and machine chips narrow details.
 
@@ -419,9 +420,20 @@ running side by side is **not** a switch, and is not recorded as one.
 
 ## The dashboard
 
-One page, no tabs. It reads top to bottom: what this actually cost, what is
-running right now, every model that ran and what it cost, then the analysis
-and the fleet.
+One page, no tabs — with a nav bar across the top of it. Those are not in
+tension, and the distinction is the whole design: the bar scrolls you to a
+place on this page, it does not switch you between pages. Tabs used to split
+the dashboard into regions that fetched and refreshed on their own rhythms,
+and that split was wrong — "what is burning right now" and "what did this
+period cost" are one question at two time scales, so picking a tab meant
+picking half an answer. One surface, one refresh loop, four labelled bands:
+**Ledger** (what was paid, and to whom) · **Usage** (what drove it) ·
+**Progress** (what the spend bought, where a shipper pushes repo facts) ·
+**Operations** (quota, machines, collection health, sessions — folded by
+default). The nav names those four, and highlights the one you are reading.
+
+It still reads top to bottom: what this actually cost, what is running right
+now, every model that ran and what it cost, then the analysis and the fleet.
 
 ![the usage half: timeline and selection totals](docs/img/usage.png)
 

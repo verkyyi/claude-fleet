@@ -1,7 +1,7 @@
 // web/dist/app.js — boot, router, loader wiring.
 import { parse, format, dataKey } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
-import { renderNav, renderScopeControls, setBusy } from './scope.js';
+import { renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
 import { renderNow } from './now.js';
 import { renderReview, SUMMARY_INDEX } from './review.js';
 import { renderSpend } from './spend.js';
@@ -127,6 +127,10 @@ async function load(reuse = false) {
   const repoR = renderRepo($('#repo'), s, app, app.repos);
   const band = $('#repo-band');
   if (band) band.hidden = !repoR;
+  // ...and the nav entry that points at that band goes with it. Same call
+  // decides both, one line apart, because a nav offering a destination the page
+  // does not have is the specific failure #54 set out to avoid.
+  syncNav();
   // Applied SYNCHRONOUSLY on a presentation-only change, and that is the whole
   // point: measured against the deployed hub, re-fetching this tier to hide
   // some of its own rows took 4.4 seconds, and for those 4.4 seconds the

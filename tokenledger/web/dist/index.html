@@ -11,20 +11,32 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<!-- The bar holds the wordmark and the theme toggle, and nothing else.
-     There are no view tabs: the page is one continuous surface, because the
-     split those tabs named was a split of REFRESH RHYTHM, not of question —
-     "what is burning right now" and "what did this period cost" are the same
-     question at two time scales.
+<!-- The bar holds the wordmark, the section nav, and the two "how this page is
+     rendered for me" toggles.
+     OVERTURNED (#54): this comment used to say the bar held no navigation
+     because the page was one surface with nothing to navigate BETWEEN. The
+     first half of that still holds and is not up for revision — see the note
+     on the tiers below, and the tab guard in web/embed_test.go. What changed
+     is the second half: at 68f5811 the page measures 4,459px over ~20 cards,
+     36% of it behind the operations fold, and "one surface" stopped implying
+     "one screenful". Scrolling four thousand pixels to find out whether the
+     collector is healthy is navigation too — just the unaided kind. So the
+     bar grows an ANCHOR nav over the bands this page already had, which moves
+     the viewport and nothing else.
+     #secnav is filled by web/dist/scope.js (renderNav), not written here: one
+     of its four entries (Progress) exists only on a hub a shipper pushes to,
+     and the current-section highlight has to be wired anyway.
      Subscription / span / chips are per-section scope, not global navigation:
      each section mounts its own "scope controls" widget (web/dist/scope.js's
      createScopeControls) on its first substantive card. See scope.js for why.
      Section ids are structural on purpose — web/embed_test.go anchors on them,
      and per #8 an anchor must not be a product name or a heading that a
-     rewording moves. -->
+     rewording moves. That now buys something it did not before: the nav's
+     targets are those same ids, so a reworded band label cannot break a link. -->
 <header class="scope" id="scope">
   <div class="row1">
     <h1>TokenLedger</h1>
+    <nav id="secnav" class="secnav" hidden></nav>
     <span class="spacer"></span>
     <button id="lang" data-i18n-title="app.language" title="Language">中</button>
     <button id="theme" data-i18n-title="app.theme" title="Toggle light / dark">◐</button>
@@ -44,7 +56,18 @@
        tool started as, and it is the half that made the page read as "Claude
        monitoring": nine cards of quota gauges, machines and sessions,
        interleaved with the money. It is still here, and still one continuous
-       page -- it is just folded, so the page opens as a ledger. -->
+       page -- it is just folded, so the page opens as a ledger.
+
+       Each tier is introduced by a `.band` label, and #54 made that true of
+       the FIRST one too. It had none: the ledger simply began, and the reader
+       inferred the tier from the fact that money was showing. That was
+       survivable while the labels were only signposts. It stopped being
+       survivable once the nav bar names the bands, because a nav that offers
+       four destinations over a page showing three labels is a nav that
+       disagrees with the page under it. Four bands, four nav entries, one
+       structure -- and #ops's <summary> is the fourth band's label, which is
+       why it is set in the same type (see the three-tiers block in
+       styles.css). -->
   <main id="page" aria-busy="false">
     <!-- Alerts float above the tiers rather than living in one: something that
          needs attention is not a tier-3 concern just because the fleet roster
@@ -57,13 +80,20 @@
 
     <section id="alerts"></section>
 
+    <!-- The tier-1 band (#54). Below #pulse and #alerts, not above: both of
+         those float over the tiers rather than belonging to one, and a band
+         label printed above them would be claiming they are ledger cards. -->
+    <div class="band" id="ledger-band">
+      <span class="band-title" data-i18n="band.ledger">Ledger</span>
+      <span class="band-note" data-i18n="band.ledger.note">what was paid, and to whom</span>
+    </div>
     <section id="spend"></section>
     <section id="consumption"></section>
 
     <!-- The tier-2 band. It reads as a sibling of the operations summary
-         below on purpose: the page is three labelled bands, and the label is
+         below on purpose: the page is four labelled bands, and the label is
          what says which question the cards under it answer. -->
-    <div class="band">
+    <div class="band" id="usage-band">
       <span class="band-title" data-i18n="band.usage">Usage</span>
       <span class="band-note" data-i18n="band.usage.note">what drove the figures above</span>
     </div>
@@ -94,7 +124,15 @@
       <section id="ops-analysis"></section>
     </details>
   </main>
-  <footer id="footer"></footer>
+  <!-- #54 removed a dead, empty <footer> element from here. No module ever
+       wrote it, so it rendered as nothing on every page view, and the one
+       thing a tail element would have been worth on a 4,459px page -- "back
+       to top" -- is what the sticky bar above already is: it never leaves the
+       viewport, and its first entry scrolls to the top of the ledger. The
+       generic `footer` rule in styles.css stays; internal/api/growth.go links
+       that stylesheet and renders a footer of its own.
+       (web/embed_test.go guards the removal by id, so this note deliberately
+       does not spell that attribute out -- it would match its own guard.) -->
 </div>
 <aside id="detail" class="detail" hidden aria-modal="true" role="dialog"></aside>
 <div class="tip" id="tip" role="status"></div>

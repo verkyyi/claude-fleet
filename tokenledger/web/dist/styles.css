@@ -36,6 +36,15 @@
   /* tokenman -- the same palette the badge renders with */
   --tm-pac: #f0b90b; --tm-eye: #1a1a1f; --tm-dot: #8a7a55;
   --tm-cell: #e6e2d8; --tm-cell-top: #ffffff; --tm-digit: #1a1a1f; --tm-comma: #8a8577;
+
+  /* How much of the viewport the sticky bar covers, and therefore how far
+     above a scroll target the page must stop so the target is not parked
+     underneath it. scope.js MEASURES the bar and overwrites this on every spy
+     frame (the bar wraps at narrow widths, and loses its wordmark under
+     720px), so one number serves both the anchors here and the spy's own
+     line — the two cannot drift apart. This value is the pre-JS fallback and
+     the width the bar actually is at desktop size. */
+  --navh: 96px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -295,22 +304,53 @@ footer { margin-top: 26px; color: var(--ink-3); font-size: 12px; line-height: 1.
 /* ------------------------------------------------------------------------ */
 /* Everything below is new for the module-shell redesign (Task 11 brief).   */
 
-/* scope bar (Task 15: nav only — wordmark, view tabs, theme toggle. No
-   subscription/span/chips here any more; see .scope-controls below for
-   where those moved. Fewer elements, so the tabs read as a calm segmented
-   switch rather than the old "row of controls" look.) */
+/* `hidden` has to actually hide.
+   Every `display` rule in this file outranks the user-agent's
+   `[hidden] { display: none }` — same specificity, and an author sheet beats
+   the UA sheet on origin. So `.band { display: flex }` quietly defeated the
+   `hidden` attribute app.js sets on #repo-band, and the Progress band rendered
+   on hubs no shipper has ever pushed to: an empty labelled band asserting a
+   feature nobody turned on. Same for `.scope-controls .chips-row`, which held
+   8px of dead padding whenever there were no chips, against its own comment
+   below. Found while wiring #54's nav (a nav entry must appear exactly when
+   its band does), and `!important` is the point rather than a shortcut — this
+   rule exists to outrank every `display` in this file, including ones not
+   written yet. */
+[hidden] { display: none !important; }
+
+/* scope bar (Task 15: nav only — no subscription/span/chips here any more;
+   see .scope-controls below for where those moved. #54 gave it the section
+   nav: wordmark, anchor nav, language switch, theme toggle.) */
 .scope { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
 .scope .row1 { display: flex; align-items: center; gap: 14px; padding: 11px 20px; flex-wrap: wrap; }
 .scope h1 { font-size: 17px; }
+
+/* The section nav (#54).
+   Deliberately NOT the segmented-control look the retired view tabs had (the
+   `.scope .views` rules this replaces are gone with them). That styling says
+   "pick one of these modes, the others are put away"; these are four places on
+   one page that is all there at once, and a filled pill claiming otherwise
+   would re-assert the tab split in CSS after the markup stopped making it.
+   Plain text, with the current section marked by weight and a rule under it —
+   a position indicator, not a selected state.
+   It scrolls rather than wraps: wrapping grows the sticky bar, and the bar's
+   height is the offset every anchor lands against (--navh). */
+.secnav { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.secnav::-webkit-scrollbar { display: none; }
+.secnav button {
+  border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 13px;
+  color: var(--ink-3); padding: 6px 10px; border-radius: 8px; white-space: nowrap;
+  border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0;
+}
+.secnav button:hover { color: var(--ink-2); background: var(--grid); }
+.secnav button[aria-current="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--s1); }
+.secnav button:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
 /* The two "how this page is rendered for me" controls, as one pair at the right
    of the bar. They sit tighter than the bar's own 14px gap because they belong
    together, and #lang is width-locked: its label alternates between "EN" and
    "中", and a button that changes width on click drags the theme toggle with it. */
 .scope #lang, .scope #theme { padding: 5px 0; width: 30px; text-align: center; }
 .scope #lang { margin-right: -8px; }
-.scope .views { display: inline-flex; gap: 2px; background: var(--grid); border-radius: 10px; padding: 3px; }
-.scope .views button { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; }
-.scope .views button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border-radius: 999px; background: var(--s1); color: #fff; font-size: 12.5px; }
 .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .chip.clear { background: var(--ink-3); }
@@ -368,7 +408,14 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
 /* mobile */
 @media (max-width: 720px) {
+  /* The wordmark goes, and the nav takes the room it freed: on a phone the
+     4,459px page is nearer 9,000, so the nav is the one thing in this bar
+     worth the width. `min-width: 0` is what lets the flex item shrink below
+     its content and actually scroll — without it the nav pushes the theme and
+     language buttons off the right edge instead. */
   .scope .row1 { padding: 8px 12px; gap: 6px; } .scope h1 { display: none; }
+  .secnav { min-width: 0; flex: 1 1 auto; }
+  .secnav button { padding: 6px 8px; font-size: 12.5px; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .detail .kpis { grid-template-columns: repeat(2, 1fr); }
   .detail { padding: 16px; }
@@ -403,7 +450,13 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
 .seg button:last-child { border-right: 0; }
 .seg button[aria-pressed="true"] { background: var(--s1); color: #fff; }
 
-.card { scroll-margin-top: 96px; }
+/* Anything the page scrolls to stops --navh short of the sticky bar, instead
+   of under it. .card was already doing this with a hardcoded 96px for the
+   findings' "apply →"; #54 gave the bar a second job (it is now also what the
+   nav's four anchors land against) and a measured height, so both share the
+   one variable rather than one of them being a constant that was true when it
+   was written. */
+.card, #ledger-band, #usage-band, #repo-band, #ops { scroll-margin-top: var(--navh); }
 
 .eff-lists { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 4px; }
 .eff-lists > div { flex: 1 1 180px; min-width: 160px; }

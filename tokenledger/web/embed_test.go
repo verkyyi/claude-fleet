@@ -60,18 +60,51 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 	// from these attributes. Drop the attribute and that string stays English
 	// forever, in the middle of a page that translated around it.
 	for _, want := range []string{
-		`id="lang"`, `data-i18n="band.usage"`, `data-i18n="band.progress"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
+		`id="lang"`, `data-i18n="band.ledger"`, `data-i18n="band.usage"`, `data-i18n="band.progress"`, `data-i18n="ops.title"`, `data-i18n-title="app.theme"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("index.html is missing the i18n hook %q", want)
 		}
 	}
-	// The retired view tabs must not come back by accident: the page is one
-	// continuous surface, and a stray tab would be navigation to nowhere.
+	// The retired view tabs must not come back by accident. This assertion is
+	// UNCHANGED by #54, and that is the point worth recording here.
+	//
+	// #54 gave this page a top nav, which reads like the thing this check was
+	// written to prevent and is not. What the tabs did was split the page into
+	// regions that fetched and refreshed on their own rhythms, and the reason
+	// they were retired stands: "what is burning right now" and "what did this
+	// period cost" are one question at two time scales, so a reader who picked
+	// one was told to choose between halves of an answer. #54 adds anchors over
+	// the bands this one surface already has. It moves the viewport; it issues
+	// no request and mounts nothing. One <main>, one load(), four bands.
+	//
+	// So the guard stays, and it is now load-bearing in a way it was not
+	// before: with a nav bar in the header, a `<button id="tab-now">` is one
+	// plausible edit away, and it would silently restore the split behind
+	// navigation that looks identical to the anchors beside it.
 	for _, gone := range []string{`id="tab-now"`, `id="tab-review"`} {
 		if strings.Contains(string(b), gone) {
-			t.Errorf("index.html still has %q -- the Now/Review split is retired", gone)
+			t.Errorf("index.html still has %q -- the Now/Review split is retired; #54's nav scrolls, it does not switch views", gone)
 		}
+	}
+	// The nav itself, and the four bands it targets (web/dist/lib/nav.js's
+	// SECTIONS). #54's own requirement was that the nav's segments match the
+	// page's visible groups, so the first tier grew the band label it never
+	// had: a nav offering four destinations over three labels disagrees with
+	// the page under it. These ids are the anchor targets, which makes them
+	// structural in exactly the sense the note above describes.
+	for _, want := range []string{
+		`id="secnav"`, `id="ledger-band"`, `id="usage-band"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("index.html shell is missing %q -- the section nav has nothing to anchor to", want)
+		}
+	}
+	// The dead `<footer id="footer">` #54 removed. No module ever wrote it, so
+	// it rendered as nothing on every page view; re-adding an empty one is
+	// re-adding a placeholder that outlives whoever remembers why.
+	if strings.Contains(string(b), `id="footer"`) {
+		t.Error(`index.html has id="footer" again -- it was dead markup no module wrote; the sticky bar is the "back to top"`)
 	}
 	// The operations tier is a <details>, and the money is NOT inside it.
 	//
@@ -97,6 +130,9 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 		"styles.css": 4096, "app.js": 1024, "scope.js": 1024,
 		"charts.js": 4096, "now.js": 4096,
 		"lib/dom.js": 512, "lib/state.js": 512,
+		// scope.js imports this one, so a miss here is not a degraded nav —
+		// it is a module-resolution error that stops the whole page booting.
+		"lib/nav.js": 512,
 		// A dictionary that fails to embed does not fail loudly: lib/i18n.js's
 		// t() falls back to the key, so the page renders `spend.title` where a
 		// card heading belongs. Embedding is the only place that can catch it.
