@@ -152,7 +152,8 @@ func localizeFinding(f findings.Finding, locale string) findings.Finding {
 }
 
 // localizeFindings re-renders a list. Severity, Kind, Scope and Link are
-// untouched: they are identifiers and the page acts on them.
+// untouched: they are identifiers and the page acts on them. So is Owner: a
+// login and a team name are somebody's actual names, which no locale rewrites.
 func localizeFindings(fs []findings.Finding, locale string) []findings.Finding {
 	out := make([]findings.Finding, len(fs))
 	for i, f := range fs {

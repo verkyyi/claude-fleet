@@ -37,6 +37,66 @@ var Templates = []string{
 	TmplFreeAllowanceGone, TmplFreeAllowanceNear,
 }
 
+// Owner is "who should this finding go to". Both halves are optional and an
+// empty Owner is the normal case: most rules run over an aggregate (a model, a
+// project, the period as a whole) that no one person owns.
+//
+// It is deliberately NOT an assignee. Nothing here is claimed, acknowledged or
+// routed anywhere -- a finding is still recomputed on every read. This says
+// only what the hub already knows about where the subject lives, so a reader
+// who has to act on it does not have to go look that up by hand.
+//
+// Guessing is worse than saying nothing: an owner attributed to the wrong
+// person sends someone after a machine that is not theirs, and it is believed
+// because the page printed it. A rule that cannot name the owner exactly
+// leaves this zero.
+//
+// User and Team are identifiers of PEOPLE and ORG UNITS -- an OS login, an
+// operator's own team name. Like Severity/Kind/Scope they are never
+// translated: there is nothing in them to translate.
+//
+// Which rules fill it, and why the rest do not:
+//
+//	stale_agent      yes -- an endpoint IS a (machine, login) pair
+//	runaway_session  yes -- a session ran as one login on one endpoint
+//	live_runaway     yes -- same, for a session still in flight
+//	unpriced_model   no  -- a model, used fleet-wide
+//	free_allowance   no  -- a model's month, fleet-wide
+//	cache_hit_drop   no  -- a project, which several logins share
+//	spend_spike      no  -- the period, or the project driving it
+//	time_in_critical no  -- a subscription, not a person: the label is an
+//	                        account, and the endpoints drawing on it are many
+//	window_high      no  -- same, a subscription's rate-limit window
+//
+// The "no" rows are not gaps waiting to be filled in. Each one's subject is an
+// aggregate over several people, so any single name on it would be the guess
+// this type refuses to make.
+type Owner struct {
+	// User is the OS login the work runs as -- store.Endpoint.OSUser.
+	User string `json:"user,omitempty"`
+	// Team is the operator's allocation for the subject -- store.Endpoint.Team.
+	// Empty means unassigned, and the surfaces say so rather than inventing one.
+	Team string `json:"team,omitempty"`
+}
+
+// Zero reports whether this Owner names nobody, so a surface can skip the line
+// entirely instead of rendering an empty one.
+func (o Owner) Zero() bool { return o.User == "" && o.Team == "" }
+
+// owner is what a rule calls with whatever attribution it happens to hold. Two
+// empty strings give nil, not a pointer to an empty struct: "nobody named"
+// must be one shape on the wire (the key absent), so a consumer's `if
+// (f.owner)` cannot be true for a finding that names no one. Half-known is
+// still worth carrying -- a login with no team assigned is the normal state of
+// an unallocated endpoint.
+func owner(user, team string) *Owner {
+	o := Owner{User: user, Team: team}
+	if o.Zero() {
+		return nil
+	}
+	return &o
+}
+
 type Finding struct {
 	Severity string            `json:"severity"` // critical | warning | info
 	Kind     string            `json:"kind"`
@@ -44,6 +104,11 @@ type Finding struct {
 	Detail   string            `json:"detail"`
 	Scope    map[string]string `json:"scope,omitempty"` // chips to apply (hash param names)
 	Link     string            `json:"link,omitempty"`  // an in-app anchor, e.g. "#sessions"
+
+	// Owner is who to go to about this finding, when the hub knows. Omitted
+	// from the wire when it names nobody -- a consumer tests for the key's
+	// absence, exactly as it does for Scope and Link.
+	Owner *Owner `json:"owner,omitempty"`
 
 	// Template names WHICH sentence this is, and Args holds the values
 	// interpolated into it. Together they let a surface re-render the finding in
@@ -66,6 +131,11 @@ type SessionStat struct {
 	SessionID, CWD, Model string
 	Tokens, Turns         int64
 	Duration              time.Duration
+
+	// OSUser and Team are who the session ran as, when the caller knows.
+	// A session belongs to exactly one (machine, login) pair, so this is a
+	// lookup rather than an inference. Empty stays empty.
+	OSUser, Team string
 }
 type ModelStat struct {
 	Model            string
@@ -239,6 +309,7 @@ func runaway(ss []SessionStat, populationMedian int64) []Finding {
 				"project": shortPath(s.CWD), "model": s.Model, "duration": dur(s.Duration),
 				"turns": fmt.Sprint(s.Turns),
 			},
+			Owner:  owner(s.OSUser, s.Team),
 			Scope:  map[string]string{"session": s.SessionID},
 			Link:   "#sessions",
 			weight: float64(s.Tokens),
@@ -436,10 +507,19 @@ type WindowStat struct {
 type EndpointSeen struct {
 	Label    string
 	LastSeen *time.Time
+
+	// OSUser and Team come straight off the endpoint record. An endpoint IS a
+	// (machine, login) pair, which makes this the one rule whose owner is
+	// never in doubt -- "go make the agent on this machine live again" has an
+	// exact addressee, and the hub has always had it.
+	OSUser, Team string
 }
 type LiveStat struct {
 	SessionID, CWD string
 	Tokens         int64
+
+	// OSUser and Team are who is burning the tokens right now, when known.
+	OSUser, Team string
 }
 type NowInputs struct {
 	Windows   []WindowStat
@@ -492,7 +572,8 @@ func Now(in NowInputs) []Finding {
 		}
 		fs = append(fs, Finding{Severity: "warning", Kind: "stale_agent", Title: title,
 			Detail:   "Its share of every total is under-counted until it returns.",
-			Template: tmpl, Args: args, Link: "#fleet", weight: w})
+			Template: tmpl, Args: args, Owner: owner(e.OSUser, e.Team),
+			Link: "#fleet", weight: w})
 	}
 	for _, l := range in.Live {
 		if l.Tokens < liveRunawayTokens {
@@ -503,6 +584,7 @@ func Now(in NowInputs) []Finding {
 			Detail:   shortPath(l.CWD),
 			Template: TmplLiveRunaway,
 			Args:     map[string]string{"session": short(l.SessionID), "tokens": tokens(l.Tokens), "project": shortPath(l.CWD)},
+			Owner:    owner(l.OSUser, l.Team),
 			Scope:    map[string]string{"session": l.SessionID}, Link: "#live", weight: float64(l.Tokens)})
 	}
 	return finish(fs)

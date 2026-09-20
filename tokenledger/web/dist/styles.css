@@ -327,6 +327,10 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
 .findings .f:first-child { border-top: 0; }
 .findings .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; flex: none; }
 .dot.critical { background: var(--critical) } .dot.warning { background: var(--warning) } .dot.info { background: var(--s1) }
+/* "who to ask" — the attribution line, only present when the hub knows it.
+   Quieter than the title but not as recessed as .muted's detail text: it is
+   the one part of a finding a reader ACTS on, so it stays legible. */
+.findings .owner { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
 /* card table toggle */
 .card { position: relative; } .card .tbl { position: absolute; right: 12px; top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; font-size: 12px; padding: 2px 6px; cursor: pointer; color: var(--ink-2); }
 /* sessions */

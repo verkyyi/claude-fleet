@@ -248,3 +248,106 @@ func TestFreeAllowance_ExceededOutranksApproaching(t *testing.T) {
 		t.Errorf("first finding is %q; the exceeded allowance must lead", fs[0].Scope["model"])
 	}
 }
+
+// Owner is the answer to "who do I go to about this", and it has exactly two
+// correct shapes: named exactly, or absent. This covers both, because both are
+// load-bearing -- an owner GUESSED onto a fleet-wide finding sends somebody
+// after a machine that is not theirs, and is believed precisely because the
+// page printed it.
+func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * time.Hour)
+
+	fs := Now(NowInputs{Now: now,
+		// A window belongs to a SUBSCRIPTION, which many logins draw on: no owner.
+		Windows: []WindowStat{{Label: "a@x", FiveHourPct: 95}},
+		Endpoints: []EndpointSeen{
+			// Both halves known: the stale-agent alert can finally say whose
+			// machine it is and which team owns the spend.
+			{Label: "macmini-zx", LastSeen: &old, OSUser: "verky", Team: "infra"},
+			// Enrolled but never allocated to a team. Half-known is still worth
+			// carrying -- "go find verky" beats "go find somebody".
+			{Label: "never-allocated", OSUser: "ci"},
+			// An endpoint the hub holds no attribution for at all. It must still
+			// produce its finding, with no owner rather than no alert.
+			{Label: "anonymous"},
+		},
+		Live: []LiveStat{{SessionID: "s1", CWD: "/p", Tokens: 250_000_000, OSUser: "verky", Team: "infra"}},
+	})
+
+	byKind := map[string][]Finding{}
+	for _, f := range fs {
+		byKind[f.Kind] = append(byKind[f.Kind], f)
+	}
+	if n := len(byKind["stale_agent"]); n != 3 {
+		t.Fatalf("stale_agent count = %d, want 3 -- a missing owner must not drop the finding: %s", n, kinds(fs))
+	}
+	stale := byKind["stale_agent"]
+	// Ordered by weight: "never reported" outranks any elapsed time, so the two
+	// never-reported endpoints lead and macmini-zx (2h) comes last.
+	var named, halfNamed, unnamed *Finding
+	for i := range stale {
+		switch stale[i].Args["label"] {
+		case "macmini-zx":
+			named = &stale[i]
+		case "never-allocated":
+			halfNamed = &stale[i]
+		case "anonymous":
+			unnamed = &stale[i]
+		}
+	}
+	if named == nil || halfNamed == nil || unnamed == nil {
+		t.Fatalf("missing one of the three stale findings: %+v", stale)
+	}
+	if named.Owner == nil || named.Owner.User != "verky" || named.Owner.Team != "infra" {
+		t.Errorf("stale agent with a known login and team: Owner = %+v, want verky/infra", named.Owner)
+	}
+	if halfNamed.Owner == nil || halfNamed.Owner.User != "ci" || halfNamed.Owner.Team != "" {
+		t.Errorf("unallocated endpoint: Owner = %+v, want user ci and an empty team", halfNamed.Owner)
+	}
+	// nil, not &Owner{}: "nobody named" must be ONE shape, so a consumer's
+	// presence check cannot be true for a finding that names no one.
+	if unnamed.Owner != nil {
+		t.Errorf("endpoint with no attribution: Owner = %+v, want nil", unnamed.Owner)
+	}
+	if w := byKind["window_high"]; len(w) != 1 || w[0].Owner != nil {
+		t.Errorf("a rate-limit window is a subscription's, not a person's: %+v", w)
+	}
+	if l := byKind["live_runaway"]; len(l) != 1 || l[0].Owner == nil || l[0].Owner.User != "verky" {
+		t.Errorf("live runaway: %+v", l)
+	}
+
+	// The period rules: a session has one login on one endpoint; a model and a
+	// project are shared, so neither may name anyone.
+	review := Review(Inputs{
+		SessionTokenMedian: 1_000,
+		Sessions: []SessionStat{
+			{SessionID: "abcdef123456", CWD: "/srv/api", Model: "claude-opus-5",
+				Tokens: 400_000_000, Turns: 9, Duration: time.Hour, OSUser: "verky", Team: "infra"},
+			{SessionID: "beefbeefbeef", CWD: "/srv/api", Model: "claude-opus-5",
+				Tokens: 300_000_000, Turns: 9, Duration: time.Hour},
+		},
+		Models: []ModelStat{{Model: "qwen-plus", Tokens: 900, Unpriced: 19}},
+	})
+	var runaways, unpriced []Finding
+	for _, f := range review {
+		switch f.Kind {
+		case "runaway_session":
+			runaways = append(runaways, f)
+		case "unpriced_model":
+			unpriced = append(unpriced, f)
+		}
+	}
+	if len(runaways) != 2 {
+		t.Fatalf("want 2 runaway sessions, got %d: %s", len(runaways), kinds(review))
+	}
+	if runaways[0].Owner == nil || runaways[0].Owner.User != "verky" || runaways[0].Owner.Team != "infra" {
+		t.Errorf("runaway session with a known login: Owner = %+v", runaways[0].Owner)
+	}
+	if runaways[1].Owner != nil {
+		t.Errorf("runaway session the caller could not attribute: Owner = %+v, want nil", runaways[1].Owner)
+	}
+	if len(unpriced) != 1 || unpriced[0].Owner != nil {
+		t.Errorf("a model is used fleet-wide and has no owner: %+v", unpriced)
+	}
+}

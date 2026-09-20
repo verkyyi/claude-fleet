@@ -434,7 +434,10 @@ func toolSpecs() []toolSpec {
 				"agent that has stopped reporting, a runaway session in flight) — that mode ignores " +
 				"since/until and the drill-down filters. Findings are ranked, capped at a handful, and " +
 				"each carries a scope map naming the chip an equivalent usage_by_* or list_sessions " +
-				"call can drill into." + caveat,
+				"call can drill into. A finding whose subject has one may also carry owner.user " +
+				"(an OS login) and/or owner.team — who to go to about it. The key is ABSENT when " +
+				"the hub does not know, which is the normal case for a finding about a model, a " +
+				"project or a whole period: those are shared, so do not infer an owner for one." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp,
 				"view": map[string]any{

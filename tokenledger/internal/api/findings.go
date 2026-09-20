@@ -105,9 +105,18 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	if err != nil {
 		return in, err
 	}
+	teams, err := s.endpointTeams(f.Account, f.Source)
+	if err != nil {
+		return in, err
+	}
 	for _, sr := range sessions {
 		in.Sessions = append(in.Sessions, findings.SessionStat{SessionID: sr.SessionID, CWD: sr.CWD, Model: sr.Model,
-			Tokens: sr.Tokens, Turns: sr.Turns, Duration: sr.Ended.Sub(sr.Started)})
+			Tokens: sr.Tokens, Turns: sr.Turns, Duration: sr.Ended.Sub(sr.Started),
+			// The login is on the row; the team lives only on the endpoint. A
+			// runaway session has exactly one of each, so both are lookups --
+			// see findings.Owner for why a rule that cannot do that lookup
+			// leaves the field empty instead of approximating it.
+			OSUser: sr.OSUser, Team: teams[sr.EndpointID]})
 	}
 	in.SessionTokenMedian, err = s.Store.SessionTokenMedian(f)
 	if err != nil {
@@ -184,6 +193,40 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	}
 	in.Tokens, in.PrevTokens = sum.Tokens, psum.Tokens
 	return in, nil
+}
+
+// endpointTeams maps endpoint id → the operator's team allocation for that
+// endpoint, so a rule whose subject is a SESSION can still name the team: the
+// assignment lives on the endpoint record and nowhere else, and a session row
+// carries the endpoint id but not the team.
+//
+// One pull per findings request, deliberately: the endpoints table is the
+// fleet's machine roster (tens of rows, not millions), which is far cheaper to
+// read whole than to denormalise the team into every rollup row and then have
+// to re-write history every time the operator re-allocates a machine.
+//
+// A miss leaves the team empty, which is the honest answer in both cases that
+// produce one: the endpoint has been removed, or it was never allocated to a
+// team at all.
+func (s *Server) endpointTeams(account, source string) (map[string]string, error) {
+	if account == store.AllAccounts {
+		account = ""
+	}
+	eps, err := s.Store.ListEndpoints(account, source)
+	if err != nil {
+		return nil, err
+	}
+	return teamsByEndpoint(eps), nil
+}
+
+func teamsByEndpoint(eps []store.Endpoint) map[string]string {
+	teams := make(map[string]string, len(eps))
+	for _, e := range eps {
+		if e.Team != "" {
+			teams[e.ID] = e.Team
+		}
+	}
+	return teams
 }
 
 func projectStat(b store.Bucket, prevTokens int64) findings.ProjectStat {
@@ -269,10 +312,25 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 		if label == "" {
 			label = e.Hostname
 		}
-		in.Endpoints = append(in.Endpoints, findings.EndpointSeen{Label: label, LastSeen: e.LastSeen})
+		// OSUser and Team, not just the label. The whole point of a stale-agent
+		// alert is "go make the agent on this machine live again", and the hub
+		// has always known whose machine that is -- an endpoint IS a (machine,
+		// login) pair, and Team is the operator's own allocation of it. Passing
+		// only Label was the alert refusing to say who to go to while holding
+		// the answer.
+		in.Endpoints = append(in.Endpoints, findings.EndpointSeen{
+			Label: label, LastSeen: e.LastSeen, OSUser: e.OSUser, Team: e.Team,
+		})
 	}
+	// Same roster, reused: the live sessions below are filtered to the same
+	// account and source as eps, so this needs no second query.
+	teams := teamsByEndpoint(eps)
 	for _, l := range s.FilterLive(s.liveStore().Snapshot(), account, source).Sessions {
-		in.Live = append(in.Live, findings.LiveStat{SessionID: l.SessionID, CWD: l.CWD, Tokens: l.InputTokens + l.OutputTokens})
+		in.Live = append(in.Live, findings.LiveStat{SessionID: l.SessionID, CWD: l.CWD,
+			Tokens: l.InputTokens + l.OutputTokens,
+			// OSUser is already on the heartbeat (the hub's enrich hook fills it
+			// from this same endpoint record); the team comes off the roster.
+			OSUser: l.OSUser, Team: teams[l.EndpointID]})
 	}
 	return in, nil
 }

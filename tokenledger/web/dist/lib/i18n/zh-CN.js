@@ -355,6 +355,9 @@ export const zhCN = {
   'findings.title': '发现',
   'findings.empty': '这段时间没有异常。',
   'findings.apply': '应用 →',
+  'findings.owner.both': '该找谁：{user} · 团队 {team}',
+  'findings.owner.user': '该找谁：{user}',
+  'findings.owner.team': '该找谁：团队 {team}',
 
   /* ---------------------------------------------------------- breakdowns */
   'breakdown.title': '分组 {n}',

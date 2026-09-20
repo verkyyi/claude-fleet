@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/verkyyi/ccquota/internal/findings"
 	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/store"
 )
 
 // The findings envelope must match the rest of the rollup-backed endpoints
@@ -161,5 +164,124 @@ func TestFindings_RunawayUsesPopulationMedianNotSample(t *testing.T) {
 	}
 	if len(runaways) != 1 || runaways[0].Scope["session"] != "outlier" {
 		t.Fatalf("runaway findings = %+v, want exactly one naming the outlier session; all findings: %+v", runaways, got.Findings)
+	}
+}
+
+// The wire shape of a finding's attribution, end to end through the real
+// ingest path and the real handler.
+//
+// This is the issue's headline bug as a test: GatherNowSource held the whole
+// store.Endpoint -- OSUser and Team included -- and passed only Label, so the
+// stale-agent alert could not say whose machine it was while the hub knew
+// exactly. It asserts the two shapes that matter and nothing in between:
+//
+//   - known  -> owner.user / owner.team, verbatim, untranslated
+//   - unknown-> the "owner" KEY IS ABSENT, not null and not an empty object,
+//     because downstream tests presence to decide whether to print the line.
+//
+// Both endpoints are stale, so the second one also proves the weaker property
+// the issue calls out: a finding with no attribution still SHOWS UP. Losing
+// the alert because nobody owns the box would be worse than the bug.
+func TestFindingsNow_OwnerOnTheWire(t *testing.T) {
+	h := newHarness(t)
+
+	// ep_mac: the hub knows both halves. os_user arrives on the batch's
+	// identity; team is operator-side and has only one writer.
+	macTok := h.enroll(t, "mac")
+	if resp := h.push(t, macTok, batchFor("acct-a", "mac", []string{"m-1"}, "/srv/api")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("push mac: %d", resp.StatusCode)
+	}
+	if err := h.srv.Store.SetEndpointTeam("ep_mac", "infra"); err != nil {
+		t.Fatal(err)
+	}
+
+	// ep_anon: enrolled, reporting, and attributed to nobody. Clearing os_user
+	// in SQL is the only way to get there -- the ingest identity always carries
+	// one -- and it is the state of any endpoint enrolled before the column
+	// existed.
+	anonTok := h.enroll(t, "anon")
+	if resp := h.push(t, anonTok, batchFor("acct-a", "anon", []string{"a-1"}, "/srv/api")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("push anon: %d", resp.StatusCode)
+	}
+	if _, err := h.srv.Store.DB().Exec(`UPDATE endpoints SET os_user = '' WHERE endpoint_id = 'ep_anon'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both past staleAfter, so both rules fire and the two shapes appear in one
+	// response rather than two runs that could diverge.
+	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := h.srv.Store.DB().Exec(`UPDATE endpoints SET last_seen = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	var env struct {
+		Findings []struct {
+			Kind  string `json:"kind"`
+			Title string `json:"title"`
+			Owner *struct {
+				User string `json:"user"`
+				Team string `json:"team"`
+			} `json:"owner"`
+		} `json:"findings"`
+	}
+	h.getJSON(t, "/v1/findings?account=all&view=now", &env)
+	if len(env.Findings) != 2 {
+		t.Fatalf("want two stale_agent findings, got %+v", env.Findings)
+	}
+	for _, f := range env.Findings {
+		if f.Kind != "stale_agent" {
+			t.Fatalf("unexpected finding %q: %+v", f.Kind, f)
+		}
+		switch {
+		case strings.Contains(f.Title, "mac"):
+			if f.Owner == nil || f.Owner.User != "ci" || f.Owner.Team != "infra" {
+				t.Errorf("mac is a known (login, team): owner = %+v, want ci/infra", f.Owner)
+			}
+		case strings.Contains(f.Title, "anon"):
+			if f.Owner != nil {
+				t.Errorf("anon has no attribution: owner = %+v, want none", f.Owner)
+			}
+		default:
+			t.Errorf("finding names neither endpoint: %q", f.Title)
+		}
+	}
+
+	// Absent, not null: a missing key and an explicit null both decode to a nil
+	// pointer above, so the distinction has to be read off the raw bytes.
+	_, raw := h.get(t, "/v1/findings?account=all&view=now")
+	var rawEnv struct {
+		Findings []map[string]json.RawMessage `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &rawEnv); err != nil {
+		t.Fatal(err)
+	}
+	var withOwner, withoutOwner int
+	for _, f := range rawEnv.Findings {
+		if _, present := f["owner"]; present {
+			withOwner++
+			continue
+		}
+		withoutOwner++
+	}
+	if withOwner != 1 || withoutOwner != 1 {
+		t.Errorf("want exactly one finding carrying \"owner\" and one omitting the key entirely, got %d/%d: %s",
+			withOwner, withoutOwner, raw)
+	}
+
+	// The MCP surface reads the same gatherer and does NOT translate -- a login
+	// and a team name are somebody's actual names. Checked here because
+	// internal/mcp cannot see this package's harness.
+	in, err := h.srv.GatherNowSource(store.AllAccounts, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mac *findings.EndpointSeen
+	for i := range in.Endpoints {
+		if in.Endpoints[i].Label == "mac" {
+			mac = &in.Endpoints[i]
+		}
+	}
+	if mac == nil || mac.OSUser != "ci" || mac.Team != "infra" {
+		t.Errorf("GatherNowSource must pass OSUser and Team, not just Label: %+v", in.Endpoints)
 	}
 }

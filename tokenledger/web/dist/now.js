@@ -21,6 +21,7 @@ import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive
 import { el, $, escapeHTML } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago } from './lib/format.js';
 import { withChip } from './lib/state.js';
+import { ownerLine } from './lib/findings.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
 import { t, withLocale } from './lib/i18n.js';
@@ -467,11 +468,17 @@ function alertsCard(result) {
   if (!findings.length) return null;
   const card = el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')));
   for (const f of findings) {
+    // A stale agent is the alert this matters most to: "go make the agent on
+    // that machine live again" is useless without a name attached, and the hub
+    // knows it. An alert with no owner (a hot rate-limit window belongs to a
+    // subscription, not a person) simply prints no such line.
+    const owner = ownerLine(f);
     card.appendChild(el('div', { class: 'f' },
       el('span', { class: 'dot ' + (f.severity || 'info') }),
       el('div', {},
         el('div', {}, el('b', {}, f.title)),
-        f.detail ? el('div', { class: 'muted' }, f.detail) : null)));
+        f.detail ? el('div', { class: 'muted' }, f.detail) : null,
+        owner ? el('div', { class: 'owner' }, owner) : null)));
   }
   return card;
 }

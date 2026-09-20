@@ -356,6 +356,13 @@ export const en = {
   'findings.title': 'Findings',
   'findings.empty': 'Nothing unusual in this period.',
   'findings.apply': 'apply →',
+  // A finding's attribution. Only printed when the hub actually knows it —
+  // absent is the normal case for a finding about a model or a whole period,
+  // and these lines never appear rather than saying "unknown". {user} is an OS
+  // login and {team} the operator's own allocation; neither is translated.
+  'findings.owner.both': 'who to ask: {user} · team {team}',
+  'findings.owner.user': 'who to ask: {user}',
+  'findings.owner.team': 'who to ask: team {team}',
 
   /* ---------------------------------------------------------- breakdowns */
   'breakdown.title': 'Breakdown {n}',
