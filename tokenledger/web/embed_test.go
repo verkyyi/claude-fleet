@@ -455,6 +455,95 @@ func TestAssets_WhenCardIsPeriodicOnly(t *testing.T) {
 	}
 }
 
+// `by=model` has ONE rendering in the usage band, and the timeline is not it.
+//
+// Issue #103: the same cut was drawn three times on the default page — the
+// timeline stacked by top-6 model, breakdown card 2 (`DEFAULTS.g2`), and the
+// consumption table's per-provider expansion one band up. The consumption
+// table is the primary reading, because (provider, model) is the only key
+// under which a per-model cost is safe (commit 321e027). The timeline's stack
+// is the copy that went: that card is the page's SELECTOR, and its question is
+// "when did work run", which a stack of coloured bands does not answer any
+// better for having also half-answered "which model".
+//
+// Both halves are asserted because both fail silently. A re-added
+// `stack: 'model'` draws a chart nobody notices is breakdown 2 in worse
+// notation AND pays for a per-bucket top-6 breakdown on every span change; a
+// `DEFAULTS.g2` moved off `model` empties the efficiency card's "$ per 1M
+// output by model" list on every first screen, because issue #93 deleted the
+// dedicated fetch behind it and left that list reading breakdown 2's response.
+// The two are one decision and neither can be changed alone.
+func TestDashboard_ModelIsCutOnceInTheUsageBand(t *testing.T) {
+	assets := Assets()
+	read := func(name string) string {
+		b, err := fs.ReadFile(assets, name)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", name, err)
+		}
+		return string(b)
+	}
+
+	review := read("review.js")
+	if strings.Contains(review, "stack: 'model'") {
+		t.Error("review.js asks /v1/history for `stack=model` again: the timeline is the page's selector " +
+			"and breakdown card 2 already draws that cut with numbers, a share and a previous-period mark (issue #103)")
+	}
+	if strings.Contains(review, "stackNames:") {
+		t.Error("review.js stacks the timeline again (issue #103): one bar per bucket is the whole point — " +
+			"the stack's top-6 membership re-ranks as the brush moves, which is the worst notation on the page for a ranking")
+	}
+
+	// The surviving copy, and the reason it survives: the efficiency card has
+	// no by=model fetch of its own since #93.
+	if !strings.Contains(read("lib/state.js"), "g2: 'model'") {
+		t.Error("DEFAULTS.g2 is no longer 'model': the efficiency card's \"$ per 1M output by model\" list reads " +
+			"breakdown card 2's response and has no fetch of its own (issue #93), so it now renders its " +
+			"\"group breakdown 2 by model\" empty state on every default load (issue #103)")
+	}
+	if !strings.Contains(review, "state.g2 === 'model'") {
+		t.Error("the efficiency card no longer gates on breakdown 2 being by model; if it gained its own " +
+			"by=model fetch, DEFAULTS.g2 is free to move and this guard should say so instead of failing (issue #103)")
+	}
+}
+
+// `source` and `provider` are two axes, and the page says so.
+//
+// Issue #103: they read as the same "group by vendor" cut to anyone who has
+// not been told otherwise, and the difference — source is which tool reported
+// the call, provider is who served it — lived only in web/dist/consumption.js's
+// header comment, which no reader of the dashboard can see. Merging them is
+// the one thing that must never happen here (it adds two invoices into one
+// number), so the distinction has to be legible where a reader meets it.
+//
+// Asserted on the dictionaries rather than on rendered HTML because the strings
+// are the artifact: a note deleted as redundant is exactly the silent failure.
+func TestDashboard_SourceAndProviderAreDistinguishedOnThePage(t *testing.T) {
+	assets := Assets()
+	for _, loc := range []string{"lib/i18n/en.js", "lib/i18n/zh-CN.js"} {
+		b, err := fs.ReadFile(assets, loc)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", loc, err)
+		}
+		if !strings.Contains(string(b), "breakdown.sourceNote") {
+			t.Errorf("%s has no breakdown.sourceNote: the breakdown card grouped by source no longer tells a "+
+				"reader how that axis differs from the consumption table's upstream (issue #103)", loc)
+		}
+	}
+	if !strings.Contains(string(mustRead(t, assets, "review.js")), "dim === 'source' ?") {
+		t.Error("review.js no longer prints the source note on the breakdown card: the string exists but " +
+			"nothing renders it, which is the same as not having it (issue #103)")
+	}
+}
+
+func mustRead(t *testing.T, assets fs.FS, name string) []byte {
+	t.Helper()
+	b, err := fs.ReadFile(assets, name)
+	if err != nil {
+		t.Fatalf("%s unreadable: %v", name, err)
+	}
+	return b
+}
+
 // A source this build knows must be nameable by the page that offers it, and a
 // billed one must be a named term of real spend.
 //

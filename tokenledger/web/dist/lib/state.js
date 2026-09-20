@@ -34,6 +34,24 @@ export const RSORTS = ['age', 'comments'];
 // "exactly one band" are one vocabulary and it should have one home.
 export { VIEW_ALL };
 export const VIEWS = [VIEW_ALL, ...SECTIONS.map((s) => s.view)];
+// `g2: 'model'` is LOAD-BEARING, not an inherited default (issue #103).
+//
+// The page's primary model reading is the consumption table, not this card:
+// that table is keyed on (provider, model), which is the only key under which
+// a per-model cost is safe -- one model id reached through two upstreams is
+// two contracts and two prices (commit 321e027). A breakdown keyed on `model`
+// alone cannot say that, so it is the secondary reading by construction.
+//
+// What keeps `model` here anyway is the efficiency card: its "$ per 1M output
+// tokens, by model" list reads breakdown card 2's response and has no fetch of
+// its own (issue #93 deleted the fallback as dead on every default load). Move
+// this default to `login` or `machine` and that list renders its "group
+// breakdown 2 by model" empty state on every first screen -- trading a
+// duplicate reading for a blank card, which is the worse of the two.
+//
+// The duplication #103 was filed for was removed at the other end instead: the
+// timeline no longer stacks by model (web/dist/review.js), so this card is now
+// the usage band's ONLY model cut rather than one of two.
 export const DEFAULTS = Object.freeze({ view: VIEW_ALL, session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
 
 const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);

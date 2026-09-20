@@ -99,23 +99,23 @@ function bucketISO(key, gran) {
 
 // normalizeSeries adapts one /v1/history response's `series` to what
 // charts.js's `timeline` actually reads: a full-ISO `key` (see bucketISO
-// above) and, when the request asked for `stack=model`, a name→tokens MAP —
-// the backend's `Series.Stack` is an ARRAY of Bucket in `stackModels` order,
-// not the map the chart helper expects.
-function normalizeSeries(rawSeries, gran, stackModels) {
+// above).
+//
+// It used to also fold `stack=model` into a name→tokens map, because the
+// backend's `Series.Stack` is an ARRAY of Bucket in `stack_models` order and
+// not the map the chart helper wants. That translation is gone with the stack
+// itself (issue #103) — the timeline no longer asks for one. charts.js's
+// `timeline` still ACCEPTS a stack, which is the chart library's contract
+// rather than this page's; nothing here hands it one.
+function normalizeSeries(rawSeries, gran) {
   return (rawSeries || []).map((s) => {
     const iso = bucketISO(s.key, gran);
-    let stack;
-    if (Array.isArray(s.stack) && stackModels && stackModels.length) {
-      stack = {};
-      stackModels.forEach((name, i) => { stack[name] = (s.stack[i] && s.stack[i].tokens) || 0; });
-    }
     return {
       // `cost` travels as the per-source split all the way to the tooltip.
       // It used to be a single cost_usd, which is the shape that made a
       // blended figure the path of least resistance.
       key: iso, ms: Date.parse(iso), events: s.events, tokens: s.tokens, cost: s.cost,
-      unpriced_events: s.unpriced_events, sidechain_tokens: s.sidechain_tokens, stack, raw: s,
+      unpriced_events: s.unpriced_events, sidechain_tokens: s.sidechain_tokens, raw: s,
     };
   });
 }
@@ -166,9 +166,16 @@ function timelineCard(result, ctx, state, app) {
 
   const { ext, sel, gran } = ctx;
   const data = result.value;
-  const topModels = (data.stack_models || []).filter((m) => m !== 'other');
-  const norm = normalizeSeries(data.series, gran, data.stack_models || []);
-  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost: n.cost, unpriced_events: n.unpriced_events, stack: n.stack }));
+  // One bar per bucket, not six stacked bands (issue #103). This card is the
+  // page's SELECTOR -- the brush below decides the window every other card
+  // reports on -- and its question is "when was work running". Stacking it by
+  // model made the selector also answer "which model", which is breakdown
+  // card 2's question 400px further down, drawn there with numbers, a share
+  // and a previous-period mark. The stack said the same thing in the one
+  // notation a ranking reads worst: coloured bands whose top-6 membership
+  // re-ranks as the brush moves.
+  const norm = normalizeSeries(data.series, gran);
+  const tSeries = norm.map((n) => ({ key: n.key, tokens: n.tokens, events: n.events, cost: n.cost, unpriced_events: n.unpriced_events }));
 
   const captionText = (s) => {
     const to = s.to == null ? ext.end : s.to;
@@ -193,7 +200,7 @@ function timelineCard(result, ctx, state, app) {
   const chart = C.timeline(tSeries, {
     bucket: ext.bucket, extent: ext,
     selection: { from: sel.from, to: sel.live ? null : sel.to },
-    stackNames: topModels, onBrush,
+    onBrush,
   });
   chart.appendChild(caption);
 
@@ -539,6 +546,14 @@ function breakdownCard(n, dim, result, state, app, hasTeam, sharedMax) {
     const chartNotes = [
       sharedMax > 1 ? el('p', { class: 'hint scale-note' }, t('breakdown.scaleNote', { max: fmtFull(sharedMax) })) : null,
       notional.length ? el('p', { class: 'hint scale-note' }, t('breakdown.subscriptionNote', { sources: notional.join(', ') })) : null,
+      // Only on `source`, and only because `source` and the consumption
+      // table's `provider` read as the same cut to anyone who has not been
+      // told otherwise -- both look like "group by vendor" (issue #103).
+      // The distinction was real but lived only in a code comment
+      // (web/dist/consumption.js's header), which is not somewhere a reader
+      // of this page can see it. The consumption table's own hint says the
+      // mirror of this sentence.
+      dim === 'source' ? el('p', { class: 'hint scale-note' }, t('breakdown.sourceNote')) : null,
     ].filter(Boolean);
     const chartWrap = chartNotes.length ? el('div', {}, chart, chartNotes) : chart;
     C.withTable(body, chartWrap, table, `review-breakdown-${n}`);
@@ -971,9 +986,17 @@ function drawUsageBand(root, state, app, ctx, { historyExtR, summaryR, g1R, g2R,
   // "Model mix over time" used to sit beside this in a grid2. It is gone
   // (issue #93): it drew `historyExtR` -- the SAME response the timeline above
   // already draws, already stacked by model -- so it cost no request and
-  // carried no reading the page did not have. Between the timeline's stack and
-  // breakdown card 2 (by=model by default) the same cut was on screen three
-  // times. Efficiency now has the row to itself.
+  // carried no reading the page did not have. Efficiency now has the row to
+  // itself.
+  //
+  // #93 removed the third copy of `by=model` by deleting a card; #103 removed
+  // the second by unstacking the timeline. What is left is THIS card, and it
+  // is deliberately the usage band's only model cut: the efficiency card's
+  // "$ per 1M output by model" reads its response (there is no second fetch
+  // behind it since #93), so `DEFAULTS.g2` staying `model` is load-bearing and
+  // not merely inherited. lib/state.js says the same thing from the other end.
+  // The page's PRIMARY model reading is neither of them -- it is the
+  // consumption table, one band up, keyed on (provider, model).
   section(root, 'r-efficiency').replaceChildren(efficiencyCard(summaryR, g2R, state));
 }
 
@@ -1056,7 +1079,13 @@ export function renderReview(root, state, app, shown) {
   const get = (path) => (signal) => app.api(path, signal);
 
   const fetchers = [
-    get(`/v1/history?${apiQuery(state, { from: ext.start, to: ext.end, extra: { granularity: gran, stack: 'model' } })}`),
+    // No model stack on this request any more (issue #103). The timeline draws
+    // one bar per bucket now, so the per-bucket top-6 split it used to ask for
+    // had nowhere to go -- the same "do not ask for what nothing will draw"
+    // rule READ_BY applies per band, applied here to one parameter. The server
+    // still serves that split for the API and MCP surfaces; this page is
+    // simply not a caller any more.
+    get(`/v1/history?${apiQuery(state, { from: ext.start, to: ext.end, extra: { granularity: gran } })}`),
     // SUMMARY_INDEX names this one: app.js reads the same result to draw the
     // spend headline, rather than fetching /v1/summary a second time. Two
     // fetches of one figure can land at different moments and disagree on

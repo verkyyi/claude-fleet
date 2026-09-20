@@ -570,10 +570,10 @@ export function timeline(series, opts) {
       });
       for (const [k, v] of Object.entries(s.stack)) if (!names.includes(k)) other += v || 0;
       max = Math.max(max, acc + other);
-      return { ms, parts, other, total: acc + other, s };
+      return { ms, parts, other, total: acc + other, s, stacked: true };
     }
     max = Math.max(max, s.tokens || 0);
-    return { ms, parts: [s.tokens || 0], other: 0, total: s.tokens || 0, s };
+    return { ms, parts: [s.tokens || 0], other: 0, total: s.tokens || 0, s, stacked: false };
   });
 
   const g = el('g', {});
@@ -600,9 +600,19 @@ export function timeline(series, opts) {
   // is DRAWN over the extent, and a quiet stretch at either end means the
   // buckets stop short of it. Naming the buckets' own edges would tell a
   // reader the chart covers less time than the axis under it does.
+  //
+  // Two labels, picked by what was actually DRAWN rather than by what this
+  // helper CAN draw (issue #103). The label said "stacked by model"
+  // unconditionally, which was true of the only caller until that caller
+  // stopped stacking -- at which point a sighted reader saw plain bars while a
+  // screen reader was told about a breakdown that was not there. A chart's
+  // name has to be a fact about its pixels, so `built` decides it: the flag is
+  // set on the branch that actually laid out segments, not inferred from the
+  // segment count (a one-model stack draws one band and is still a stack).
+  const stacked = built.some((b) => b.stacked);
   const svg = chartSvg(W, H, {
     role: 'img',
-    'aria-label': t('chart.ariaTimeline', {
+    'aria-label': t(stacked ? 'chart.ariaTimelineStacked' : 'chart.ariaTimeline', {
       from: dayLabel(ext.start), to: dayLabel(ext.end), peak: fmtInt(max) }),
   }, g);
   const container = el('div', { class: 'timeline', tabindex: '-1' });

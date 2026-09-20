@@ -94,7 +94,9 @@ export const en = {
 
   /* -------------------------------------------------------- consumption */
   'consumption.title': 'Consumption',
-  'consumption.hint': 'Every model that ran, by the upstream that served it. Subscription rows show no amount: '
+  'consumption.hint': 'Every model that ran, by the upstream that served it — who served the call, which is not '
+    + 'the source the usage band groups by (that is which tool reported it). One call has both. '
+    + 'Subscription rows show no amount: '
     + 'a plan bills monthly, not per request, so its cost belongs to the plan rather than to any '
     + 'row here. Their usage is the token count.',
   'consumption.empty': 'No usage in this selection.',
@@ -170,7 +172,8 @@ export const en = {
   // Issue #56: one aria-label per chart. Each names the picture, the span it
   // covers and its scale — the three things a reader who cannot see it needs
   // before deciding whether to open the table the ⊞ toggle swaps in.
-  'chart.ariaTimeline': 'Tokens over time, stacked by model, {from} to {to}, peak {peak} tokens per bucket',
+  'chart.ariaTimeline': 'Tokens over time, {from} to {to}, peak {peak} tokens per bucket',
+  'chart.ariaTimelineStacked': 'Tokens over time, stacked by model, {from} to {to}, peak {peak} tokens per bucket',
   'chart.ariaBrush': 'Time range selector. Arrow keys move the selection, Shift with arrow keys moves its right edge; the selected range is written below the chart.',
   'chart.ariaTurnBars': 'Tokens per turn, {turns} turns, peak {peak} tokens, coloured by model',
   'chart.ariaComposition': 'Token composition by type, largest part {name} at {pct}; every share is listed below the bar',
@@ -360,7 +363,7 @@ export const en = {
 
   /* ------------------------------------------------------------ timeline */
   'timeline.title': 'Timeline',
-  'timeline.hint': 'Tokens per bucket across the current span, stacked by model (top 6 + other). Drag the '
+  'timeline.hint': 'Tokens per bucket across the current span — when work ran, not what ran it. Drag the '
     + 'body to move the selection every other card reports on, an edge to resize it, or '
     + 'double-click to reset to the whole span.',
   'timeline.caption': 'selected {from} → {to} ({len}) · compared with the {len} before',
@@ -435,6 +438,7 @@ export const en = {
   'breakdown.groupBy': 'group by (breakdown {n})',
   'breakdown.openUser': "Open {user}'s own page",
   'breakdown.subscriptionNote': 'Everything on this card ran on a subscription ({sources}) — the same sentence on every row, so it is said once here. Billed money still prints per row.',
+  'breakdown.sourceNote': 'Source is which tool reported the call, and so which kind of money its cost is: a subscription estimate (claude, codex) or a real per-call charge (gateway). It is not the consumption table’s upstream, which is who actually served the call. One call has both, and the two are never added.',
   'breakdown.scaleNote': 'Both breakdown cards share one scale: a full bar is {max} tokens. The thin rule marks the previous period.',
   'breakdown.prevTokens': 'Prev tokens',
   'breakdown.prevSource': 'Prev {source} $',

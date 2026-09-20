@@ -149,6 +149,38 @@ test('a chart names the span it covers, not just its own kind', () => {
   assert.match(heat, /14:00/, 'heatmap label does not name its busiest hour');
 });
 
+// A chart's name has to be a fact about the pixels. This one was a fact about
+// its only CALLER, and it went stale the moment that caller changed: review.js
+// stopped stacking the timeline by model (issue #103), and the label went on
+// announcing a model breakdown that a sighted reader could plainly see was not
+// drawn. Nothing failed — an aria-label has no other reader to disagree with
+// it, which is exactly why it needs a test rather than a review habit.
+test('the timeline claims a model stack only when it drew one', () => {
+  const unstacked = labelled(C.timeline(HOURLY, { bucket: EXT.bucket, extent: EXT }), 'unstacked timeline');
+  assert.doesNotMatch(unstacked, /stacked by model|按模型堆叠/,
+    'a timeline drawn as one bar per bucket still tells a screen reader it is stacked by model');
+  assert.match(unstacked, /09-18/, 'the unstacked label lost the extent it was drawn over');
+
+  // The other half: passing stackNames but no stack data must not claim one
+  // either, because that is what an empty `stack_models` looks like.
+  const noData = labelled(C.timeline(HOURLY, { bucket: EXT.bucket, extent: EXT, stackNames: MODELS }), 'stackNames with no stack');
+  assert.doesNotMatch(noData, /stacked by model|按模型堆叠/,
+    'a timeline whose buckets carry no stack claims a breakdown it could not have drawn');
+
+  const stacked = labelled(C.timeline(STACKED, { bucket: EXT.bucket, extent: EXT, stackNames: MODELS }), 'stacked timeline');
+  assert.match(stacked, /stacked by model|按模型堆叠/,
+    'a timeline that DID stack no longer says so — the breakdown is now invisible to a screen reader');
+
+  // A one-model stack draws ONE band and is still a stack: the bar is coloured
+  // by that model and the reader is being shown a breakdown, however short.
+  // This is why the flag is set where the segments are laid out rather than
+  // counted off the result.
+  const oneModel = HOURLY.map((s) => ({ key: s.key, tokens: s.tokens, stack: { [MODELS[0]]: s.tokens } }));
+  const single = labelled(C.timeline(oneModel, { bucket: EXT.bucket, extent: EXT, stackNames: [MODELS[0]] }), 'one-model stack');
+  assert.match(single, /stacked by model|按模型堆叠/,
+    'a stack with a single name is reported as unstacked — the label is counting bands, not reading what was drawn');
+});
+
 test('an empty heatmap says so rather than claiming a busiest hour', () => {
   const label = labelled(C.heatmap(grid7x24(), grid7x24()), 'empty heatmap');
   assert.doesNotMatch(label, /00:00/, 'an all-zero grid reported cell 0,0 as its peak');

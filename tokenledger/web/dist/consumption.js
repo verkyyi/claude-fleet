@@ -4,6 +4,19 @@
 // it is the channel a metered source reports through, not something that ran
 // a model. It shows up in exactly two places on this page — the billing
 // column's tooltip, and collection health further down.
+//
+// This table is the page's PRIMARY model reading (issue #103). (provider,
+// model) is the only key under which a per-model cost is safe: one model id
+// reached through two upstreams is two contracts at two prices, which is what
+// commit 321e027 fixed. The usage band's "by model" breakdown keys on `model`
+// alone, so it ranks and compares periods while this one is what the money is
+// actually attributed to.
+//
+// The provider/source distinction above is no longer only in this comment:
+// `consumption.hint` says it on the card, and `breakdown.sourceNote` says the
+// mirror of it on the breakdown card whenever that card is grouped by source.
+// It had to reach the page, because the two axes read as one cut to anyone who
+// has not been shown the difference.
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtUSD, fmtCost } from './lib/format.js';
 import { consumptionRows, foldTail, sortRows } from './lib/rows.js';

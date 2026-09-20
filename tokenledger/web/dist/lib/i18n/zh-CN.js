@@ -90,7 +90,9 @@ export const zhCN = {
 
   /* -------------------------------------------------------- consumption */
   'consumption.title': '消耗',
-  'consumption.hint': '跑过的每个模型，按服务它的上游分组。订阅行不显示金额：'
+  'consumption.hint': '跑过的每个模型，按服务它的上游分组 —— 说的是谁真的服务了这次调用，'
+    + '不是用量那一栏切的「来源」（那个说的是哪个工具报上来的）。一次调用两者都有。'
+    + '订阅行不显示金额：'
     + '订阅按月计费，不按请求计费，这笔钱属于订阅本身，不属于这里的任何一行。'
     + '它们的用量看 token 数。',
   'consumption.empty': '当前筛选下没有用量。',
@@ -162,7 +164,8 @@ export const zhCN = {
   'chart.subagent': '子代理',
   'chart.ariaTokensPer': '每{granularity}的 token 数，峰值 {peak}',
   'chart.ariaModelMix': '模型构成随时间的变化，{from} 至 {to}，单桶峰值 {peak} token',
-  'chart.ariaTimeline': 'token 用量随时间的变化（按模型堆叠），{from} 至 {to}，单桶峰值 {peak} token',
+  'chart.ariaTimeline': 'token 用量随时间的变化，{from} 至 {to}，单桶峰值 {peak} token',
+  'chart.ariaTimelineStacked': 'token 用量随时间的变化（按模型堆叠），{from} 至 {to}，单桶峰值 {peak} token',
   'chart.ariaBrush': '时间范围选择器。方向键移动选区，Shift + 方向键移动右边界；当前选区以文字写在图表下方。',
   'chart.ariaTurnBars': '每轮次的 token 数，共 {turns} 轮，峰值 {peak} token，按模型着色',
   'chart.ariaComposition': '按类型划分的 token 构成，占比最大的是 {name}，为 {pct}；每一项的占比都列在条形下方',
@@ -345,7 +348,7 @@ export const zhCN = {
 
   /* ------------------------------------------------------------ timeline */
   'timeline.title': '时间线',
-  'timeline.hint': '当前跨度内每个时段的 token，按模型堆叠（前 6 名 + 其他）。'
+  'timeline.hint': '当前跨度内每个时段的 token —— 说的是什么时候在跑，不是谁在跑。'
     + '拖动主体可以移动选区 —— 下面每张卡说的都是这个选区；拖边缘可以缩放，'
     + '双击回到整个跨度。',
   'timeline.caption': '已选 {from} → {to}（{len}） · 与之前等长的 {len} 对比',
@@ -412,6 +415,7 @@ export const zhCN = {
   'breakdown.groupBy': '分组维度（分组 {n}）',
   'breakdown.openUser': '打开 {user} 的人均页',
   'breakdown.subscriptionNote': '这张卡上的用量都算在订阅里（{sources}）—— 每行都是同一句，所以只在这里说一次。按次计费的钱还是逐行印。',
+  'breakdown.sourceNote': '来源 = 这次调用是哪个工具报上来的，也就决定了这笔钱算哪一种：订阅口径的估算（claude、codex），还是按次真扣的钱（gateway）。它不是消耗表里的「上游」—— 那一栏说的是谁真的服务了这次调用。一次调用两者都有，而且从不相加。',
   'breakdown.scaleNote': '两张分组卡共用一条刻度：满格 = {max} token。细竖线是上一期。',
   'breakdown.prevTokens': '上期 token',
   'breakdown.prevSource': '上期 {source} $',
