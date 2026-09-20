@@ -1,0 +1,4 @@
+# Optional, Hub host only. The SSH bridge uses Python's standard library.
+# Keep the SDK version explicit: its transport/auth APIs are part of our boundary.
+mcp==2.2.0
+PyJWT[crypto]>=2.14,<3

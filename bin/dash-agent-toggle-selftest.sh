@@ -47,7 +47,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 
 # --- sandbox --------------------------------------------------------------------
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/.claude-dash/global"
-for f in dash-agent-prompt.sh dash-agent-toggle.sh dash-keymap.sh fleet-lib.sh fleet-config-lib.sh; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
+for f in dash-agent-prompt.sh dash-agent-toggle.sh dash-keymap.sh fleet-lib.sh fleet-config-lib.sh fleet_config_write.py; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
 ln -s "$BIN/../fleet.conf.example" "$WORK/fleet.conf.example"   # fcfg_default / fcfg_validate read it off ../
 DISPLAY_LOG="$WORK/display"
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'

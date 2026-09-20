@@ -458,36 +458,10 @@ EOF
 # upsert the assignment (replace an existing uncommented KEY= line in place, else
 # append). Creates FILE (with a header) if absent. Prints "created" or "updated".
 # num/bool write bare (KEY=5); enum/str write double-quoted (KEY="…"). VALUE is
-# passed to awk via the environment so backslashes/metachars survive verbatim.
+# passed as one argv entry so backslashes/metachars survive verbatim. The shared
+# Python writer serializes dashboard and remote writes with a kernel-held lock.
 fcfg_write() {
-  local file="$1" key="$2" val="$3" type="$4" line wstatus
-  case "$type" in
-    num|int|bool) line="$key=$val" ;;
-    *)            line="$key=\"$val\"" ;;
-  esac
-  if [ -f "$file" ]; then
-    cp -p "$file" "$file.bak" 2>/dev/null || cp "$file" "$file.bak" || return 1
-    wstatus=updated
-  else
-    mkdir -p "$(dirname "$file")" 2>/dev/null
-    {
-      printf '# claude-fleet config — created by the prefix+c config modal.\n'
-      printf '# Assignments only (this file is sourced). Per-fleet overlays the global fleet.conf.\n'
-    } > "$file" || return 1
-    wstatus=created
-  fi
-  # Upsert to a temp then atomically rename. On ANY failure (full/read-only
-  # volume — a first-class case in this repo) leave the original untouched and
-  # return non-zero so the caller reports failure instead of a false success.
-  if LINE="$line" awk -v key="$key" '
-       $0 ~ /^[[:space:]]*#/                { print; next }
-       $0 ~ ("^[[:space:]]*" key "=")       { print ENVIRON["LINE"]; repl=1; next }
-                                            { print }
-       END { if (!repl) print ENVIRON["LINE"] }
-     ' "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"; then
-    printf '%s' "$wstatus"
-    return 0
-  fi
-  rm -f "$file.tmp.$$" 2>/dev/null
-  return 1
+  # Use the same kernel-held lock as Fleet Hub's compare-and-set writer. A
+  # dashboard edit and a remote edit must not overwrite each other's snapshot.
+  python3 "$FCFG_DIR/fleet_config_write.py" "$1" "$2" "$3" "$4"
 }
