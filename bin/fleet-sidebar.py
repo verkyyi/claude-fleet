@@ -18,7 +18,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "3"
+VIEW_VERSION = "4"  # #821: footer + bottom-row semantics changed; replace live v3 views once
 
 
 def run(args, **kwargs):
@@ -132,7 +132,7 @@ def sync(session, enabled, width, lock):
 
 
 def send_key(session, key):
-    if key not in ("Up", "Down", "Left", "Right", "Enter", "Escape", "q", "Home", "End"):
+    if key not in ("Up", "Down", "Left", "Right", "Enter", "Escape", "q", "n", "Home", "End"):
         return
     window = fields(session + ":", "#{window_id}")[0]
     for pane in panes(session):
@@ -169,6 +169,21 @@ def clip(text, width):
         out.append(char)
         used += size
     return "".join(out)
+
+
+def new_task(screen, env):
+    """The hub's ⌃n popup, launched from this pane (issue #821): file an issue
+    and spawn its worker. dash-popup.sh resolves the client, raises @popup_open
+    for the popup's lifetime and clears it on the way out; the spawned window
+    becomes current and the session-window-changed hook moves this view there.
+    Leave curses meanwhile: a popup draws on the client, not on this pane, but
+    when none can open (no client, an overlay already up) dash-popup.sh runs the
+    command INLINE here, and its fzf title prompt then needs a sane tty. No
+    timeout — the popup lives as long as the operator types."""
+    curses.endwin()
+    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--",
+                     "bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
+    screen.clear()  # the next refresh resumes curses and repaints the whole grid
 
 
 def visible(info, now):
@@ -263,9 +278,12 @@ def ui(screen, session, worker, lock):
             marker = "▶" if wid == window else "›" if navigation and wid == selected else " "
             put(y, marker + " " + glyph + " " + label, attr,
                 fill=wid == window or (navigation and wid == selected))
-        put(height - 2, " ↑↓ choose · ↵/Esc: worker" if navigation else
+        # Hide is keyboard-only (q here, prefix e anywhere): a tap on the bottom
+        # row used to hide the sidebar across every window, and on a touch
+        # screen that row is the easiest one to mis-hit (issue #821).
+        put(height - 2, " ↑↓ choose · ↵/Esc · q hide" if navigation else
             " Keyboard: WORKER →", curses.A_DIM)
-        put(height - 1, " ‹ Hide · prefix e", curses.A_DIM)
+        put(height - 1, " + n: new task", curses.A_DIM)
         screen.refresh()
         key = screen.getch()
         if key in (curses.KEY_UP, ord("k")) and ids:
@@ -286,6 +304,9 @@ def ui(screen, session, worker, lock):
         elif key == ord("q"):
             run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])
             return
+        elif key == ord("n"):
+            new_task(screen, env)
+            refresh_at = 0
         elif key == 27:
             selected = window
             refresh_at = 0
@@ -301,8 +322,7 @@ def ui(screen, session, worker, lock):
                     jump(session, selected, pane, lock)
                     refresh_at = 0
                 elif y == height - 1:
-                    run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])
-                    return
+                    new_task(screen, env)
             elif buttons & curses.BUTTON4_PRESSED and ids:
                 selected = ids[max(0, index - 3)]
             elif buttons & getattr(curses, "BUTTON5_PRESSED", 0) and ids:

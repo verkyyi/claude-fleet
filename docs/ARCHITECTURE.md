@@ -128,6 +128,16 @@ A double-click on the worker while its sidebar is on screen is tmux's stock
 select-word, not zoom (issue #820): the gate is `@sidebar_worker` set and the
 window not zoomed, so a zoomed worker and a sidebar-less window keep
 double-click-to-zoom; `DoubleClick1Border` is unchanged.
+Two dim footer rows close the list: a hint line, and `+ n: new task`. A click on
+that bottom row, or `n` while navigating, opens the hub's ⌃n popup from the
+sidebar pane (`dash-popup.sh`, which resolves the client and holds `@popup_open`
+for the popup's lifetime; the view pauses its repaint meanwhile and leaves curses
+so an inline fallback has a tty) to file an issue and spawn its worker; the new
+window becomes current and the window-changed hook moves the view there, and a
+cap refusal leaves the issue filed with a toast, as from the dash. Hiding is
+keyboard-only — `q` while navigating, or prefix e — and no click anywhere in the
+sidebar hides it or writes the saved preference: the bottom row was the easiest
+target to mis-hit on a touch screen (issue #821).
 Focus cues use the client's key table, not just `pane_active`: an amber
 **TASKS · INPUT** pane border means sidebar navigation, a blue **WORKER · INPUT**
 badge means worker input, while the `▶` row always identifies the current task.

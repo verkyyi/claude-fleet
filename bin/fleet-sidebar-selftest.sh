@@ -383,10 +383,53 @@ try:
     check(view_on(w1) != [legacy] and len(view_on(w1)) == 1,
           'sync must replace a pre-upgrade renderer once before reusing panes')
     side = view_on(w1)[0]
-    wait_for(lambda: '‹ Hide' in tm('capture-pane', '-p', '-t', side), 'upgraded view not ready')
+    wait_for(lambda: '+ n: new task' in tm('capture-pane', '-p', '-t', side), 'upgraded view not ready')
+    check('Hide' not in tm('capture-pane', '-p', '-t', side), 'sidebar still paints a click target for hide')
+
+    # The bottom row starts a new task (issue #821): the hub's ^n popup, launched
+    # from the sidebar pane, which must neither hide the view nor touch the saved
+    # preference. The popup's title prompt is stubbed — `fzf` on PATH drops a
+    # marker and waits — so the popup provably ran and stays open until closed.
+    ran = work / 'new-task-ran'
+    (shim / 'fzf').write_text('#!/bin/sh\nprintf 1 > ' + shlex.quote(str(ran)) + '\nexec sleep 20\n')
+    (shim / 'fzf').chmod(0o755)
+    (shim / 'gh').write_text('#!/bin/sh\nexit 1\n')
+    (shim / 'gh').chmod(0o755)
+    conf.write_text('FLEET_SIDEBAR=1\nFLEET_REPO=example/repo\n')
+    attached = tm('list-clients', '-t', 'fleet-test', '-F', '#{client_name}').splitlines()[0]
+    def popup_open():
+        return tm('show-options', '-gqv', '@popup_open') not in ('', '0')
     click(side, row=int(tm('display-message', '-p', '-t', side, '#{pane_height}')) - 1)
-    wait_for(lambda: not views(), 'clicking Hide left a view')
-    check(not navigation(), 'clicking Hide retained sidebar keyboard focus')
+    wait_for(ran.exists, 'clicking the bottom row did not open the new-task popup')
+    check(popup_open(), 'new-task popup did not raise @popup_open')
+    check(bool(view_on(w1)), 'clicking the bottom row hid the sidebar')
+    check('FLEET_SIDEBAR=1' in conf.read_text(), 'clicking the bottom row changed the saved preference')
+    tm('display-popup', '-C', '-c', attached)
+    wait_for(lambda: not popup_open(), 'closing the new-task popup left @popup_open raised')
+    ran.unlink()
+    wait_for(lambda: 'q hide' in tm('capture-pane', '-p', '-t', side),
+             'sidebar did not repaint its navigation hint after the popup')
+    check(bool(view_on(w1)), 'sidebar vanished after the new-task popup closed')
+    # n while navigating opens the same popup and returns input to the worker.
+    os.write(terminal, b'n')
+    wait_for(ran.exists, 'n while navigating did not open the new-task popup')
+    check(popup_open() and bool(view_on(w1)), 'keyboard new-task popup hid the sidebar or skipped @popup_open')
+    tm('display-popup', '-C', '-c', attached)
+    wait_for(lambda: not popup_open(), 'closing the keyboard new-task popup left @popup_open raised')
+    ran.unlink()
+    (shim / 'fzf').unlink()
+    (shim / 'gh').unlink()
+    conf.write_text('FLEET_SIDEBAR=1\n')
+    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
+             'n did not return input to the worker after the popup')
+    check('FLEET_SIDEBAR=1' in conf.read_text() and bool(view_on(w1)), 'n hid the sidebar')
+
+    # Hide is keyboard-only: q while navigating (and prefix e), never a click.
+    os.write(terminal, b'\x02E')
+    wait_for(navigation, 'prefix E before q did not enter sidebar navigation')
+    os.write(terminal, b'q')
+    wait_for(lambda: not views(), 'q left a view')
+    check(not navigation(), 'q retained sidebar keyboard focus')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')
     tm('select-window', '-t', w2)
     call()
