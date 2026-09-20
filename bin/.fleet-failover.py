@@ -40,10 +40,15 @@ def opt(source, key):
 
 
 def stamp(source, status):
-    # A late failed controller must not mark a replacement conversation.
-    current = inspect(source['session'], source['window'])
-    if any(current.get(k) != source.get(k) for k in ('pid','session_id','agent')):
-        return
+    # A late failed controller must not MARK a replacement conversation; but
+    # CLEARING a completed episode's marker is safe whoever now holds the window,
+    # so an empty status skips the identity guard and always lands. Without this,
+    # a bound migration (window now on the target's new session) left the old
+    # marker to veto hibernation forever (#755/#809).
+    if status:
+        current = inspect(source['session'], source['window'])
+        if any(current.get(k) != source.get(k) for k in ('pid','session_id','agent')):
+            return
     tm(source['session'], 'set-option', '-w', '-t', source['window'], '@quota_failover', status)
 
 
@@ -117,26 +122,17 @@ def source_account(source, data):
 
 
 def quiet_processes(source):
-    if source['agent']=='codex':
-        # Use the same exact executable/endpoint and restartable-service rules
-        # as hibernation, so a quota-triggered wake can actually migrate.
-        sleep=runpy.run_path(str(BIN/'fleet-sleep.py'))
-        rpc=RPC(source['codex_identity'].get('remote',''),timeout=5)
-        try:sleep['quiet_native_children'](rpc,source['session_id'])
-        finally:rpc.close()
-        return sleep['quiet_processes'](source)
-    rows = TRANSFER['process_rows']()
-    pending = [int(source['pid'])]
-    descendants, seen = [], set()
-    while pending:
-        parent = pending.pop()
-        if parent in seen: continue
-        seen.add(parent)
-        children = [(p, comm) for p, (pp, comm) in rows.items() if pp == parent and p != parent]
-        descendants.extend(children); pending.extend(p for p, _ in children)
-    if source['agent'] == 'claude':
-        if descendants:
-            raise ValueError('source still owns tool/background processes')
+    # The same exact executable/endpoint and restartable-MCP contract as
+    # hibernation, for BOTH agents (#784/#808/#830): a quota-triggered wake must
+    # be able to migrate a done worker whose only children are contract-listed
+    # MCP servers, exactly as sleep can hibernate it. A pre-#784 blanket veto
+    # here left every MCP-carrying Claude worker unable to fail over OR sleep.
+    sleep = runpy.run_path(str(BIN / 'fleet-sleep.py'))
+    if source['agent'] == 'codex':
+        rpc = RPC(source['codex_identity'].get('remote', ''), timeout=5)
+        try: sleep['quiet_native_children'](rpc, source['session_id'])
+        finally: rpc.close()
+    return sleep['quiet_processes'](source)
 
 
 def unresolved_claude_tools(path):
@@ -262,15 +258,10 @@ def quota_loop(path, source, state, restored=False):
 def outcome(path, r, state, detail=''):
     r.update(state=state, detail=detail, updated_at=time.time())
     save(path / 'request.json', r)
-    if state == 'bound' and r.get('manifest'):
-        source = r['source']
-        m = read(r['manifest'], {})
-        try:
-            current = inspect(source['session'], source['window'])
-            if (current.get('session_id') == m.get('target',{}).get('session_id')
-                    and opt(current,'@handoff_manifest') == r['manifest']):
-                stamp(current,'')
-        except (OSError,ValueError,subprocess.SubprocessError): pass
+    # A completed episode clears its window marker unconditionally: after a bound
+    # migration the window holds the target's new session, so the previous
+    # manifest-equality clear missed it. stamp() lets the empty status through
+    # its identity guard for exactly this case (#755/#809).
     try: stamp(r['source'], '' if state in ('bound','cancelled','recovered') else state + ': ' + detail[:160])
     except (OSError, ValueError, subprocess.SubprocessError): pass
     try: quota_loop(path, r['source'], state)

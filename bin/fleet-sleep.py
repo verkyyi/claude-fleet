@@ -33,6 +33,11 @@ LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
 MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
 
 
+class NotAWorker(ValueError):
+    """A window that structurally cannot be a worker (a panel or the hub): the
+    scan skips it silently instead of logging a per-tick skip record for it."""
+
+
 def run(argv, **kwargs):
     return subprocess.check_output([str(x) for x in argv], text=True,
                                    stderr=subprocess.PIPE, timeout=kwargs.pop('timeout', 15), **kwargs).strip()
@@ -117,10 +122,10 @@ class Worker:
         if self.opt('session_name') != session: raise ValueError('wrong fleet')
         panes = self.tm('list-panes', '-t', self.window, '-F', '#{pane_id} #{@sidebar} #{@dash}').splitlines()
         workers = [p.split()[0] for p in panes if len(p.split()) == 1]
-        if len(workers) != 1: raise ValueError('requires exactly one worker pane')
+        if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
         self.pane = workers[0]
         if self.opt('window_name') in ('dash','plan','backlog') or self.opt('@hub') == '1':
-            raise ValueError('panel/hub is not a worker')
+            raise NotAWorker('panel/hub is not a worker')
         if not self.opt('@issue').isdigit() and self.opt('@raw') != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
@@ -270,18 +275,24 @@ class Worker:
         key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
         path = self.quota_directory / key / 'request.json'
         if not path.is_file():
-            if not self.opt('@quota_failover').startswith(('waiting:', 'waiting-quota:', 'waiting-evidence:')):
-                raise ValueError('unverified quota failover marker')
-            # The caller holds the same fleet lock as the quota controller.
-            # Inspect the whole journal: a missing exact request is harmless
-            # only when no live/ambiguous request can own this window/thread.
+            # No request at this exact identity: the marker outlived its episode.
+            # That is the normal shape after a bound migration (the window's
+            # pid/session changed) and after a stale preparing/selected marker
+            # whose request was cleaned (#755/#809). The caller holds the same
+            # fleet lock as the quota controller, so inspect the whole journal by
+            # window/thread and apply the same rule as an exact match: a completed
+            # episode (bound/cancelled/recovered) or a soft, unstarted proactive
+            # wait never blocks sleep; an in-flight cutover or a hard failure does.
             for candidate in self.quota_directory.glob('*/request.json'):
                 request=json.loads(candidate.read_text())
                 owner=request.get('source',{})
-                if (owner.get('session')==self.session
-                        and (owner.get('window')==self.window or owner.get('session_id')==source['session_id'])
-                        and request.get('state') not in ('cancelled','recovered')):
-                    raise ValueError('quota marker has an unresolved request for this worker')
+                if (owner.get('session')!=self.session
+                        or (owner.get('window')!=self.window and owner.get('session_id')!=source['session_id'])):
+                    continue
+                state=request.get('state')
+                if state in ('bound','cancelled','recovered'): continue
+                if state in ('waiting','waiting-quota','waiting-evidence') and request.get('hard') is False: continue
+                raise ValueError('quota marker has an unresolved request for this worker')
             source['stale_quota_marker']=self.opt('@quota_failover')
             return
         request = json.loads(path.read_text())
@@ -836,12 +847,17 @@ def main():
                     if not a.dry_run and mode=='on': w.recover()
                     continue
                 else: result=w.sleep(dry=a.dry_run or mode!='on')
+            except NotAWorker:
+                continue
             except (ValueError,OSError,subprocess.SubprocessError) as exc:
                 reason=str(exc)
                 if isinstance(exc,subprocess.CalledProcessError) and exc.stderr:
                     reason=exc.stderr.strip()[-400:]
                 result={'skip':reason}
-            print(json.dumps(dict(session=a.session,window=window,**result),ensure_ascii=False),flush=True)
+            # A timestamp on every record: the log had none, so the last analysis
+            # had to correlate by hand (#755/#809 follow-up). Emit-only; not state.
+            record=dict(session=a.session,window=window,at=time.strftime('%Y-%m-%dT%H:%M:%S'),**result)
+            print(json.dumps(record,ensure_ascii=False),flush=True)
         return 0
     w=Worker(a.session,a.window or '')
     if a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
