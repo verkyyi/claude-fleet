@@ -280,24 +280,38 @@ try:
           'worker still advertises input focus after a sidebar click')
     check('TASKS · INPUT' in tm('display-message', '-p', '-t', side, '#{E:pane-border-format}'),
           'sidebar border did not advertise keyboard focus')
+    # ↑↓ follow (issue #822): an arrow through the key table switches to the
+    # highlighted worker once the highlight settles, keeps the client in the
+    # sidebar key table and keeps the worker pane active; a burst that ends on
+    # the current row never switches. Enter/Esc still hand input back (below).
+    tm('set-option', '-g', '@switches', '')
+    tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
+    switches = lambda: tm('show-options', '-gv', '@switches').split()
     worker_before = tm('capture-pane', '-p', '-t', p1)
     os.write(terminal, b'\x1b[B')
-    wait_for(lambda: any('›' in line and '修复侧栏' in line for line in
-                        tm('capture-pane', '-p', '-t', side).splitlines()),
-             'Down after a click did not move the sidebar selection')
+    wait_for(lambda: bool(view_on(w2)), 'Down after a click did not follow to the highlighted worker')
     check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'sidebar arrow leaked into worker input')
-    click(side)
-    wait_for(lambda: not any('›' in line and '修复侧栏' in line for line in
-                            tm('capture-pane', '-p', '-t', side).splitlines()),
-             'clicking the current worker did not reset the keyboard selection')
-    os.write(terminal, b'\x1b[B')
-    wait_for(lambda: any('›' in line and '修复侧栏' in line for line in
-                        tm('capture-pane', '-p', '-t', side).splitlines()),
-             'Down after reselecting the current worker did not move the selection')
+    check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
+          'follow recreated the sidebar instead of moving its populated grid')
+    wait_for(navigation, 'follow did not keep the client in the sidebar key table')
+    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side), 'follow lost the navigation cue')
+    check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'follow did not keep the worker pane active')
+    check('INPUT' not in tm('display-message', '-p', '-t', p2, '#{E:pane-border-format}'),
+          'worker advertises input focus after a follow')
+    check(switches() == [w2], 'one arrow made %r window switches' % switches())
     os.write(terminal, b'\x1b[A')
-    wait_for(lambda: not any('›' in line and '修复侧栏' in line for line in
-                            tm('capture-pane', '-p', '-t', side).splitlines()),
-             'Up after a click did not return the sidebar selection')
+    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back to the first worker')
+    wait_for(navigation, 'Up follow left the sidebar key table')
+    check(switches() == [w2, w1], 'Up follow made %r window switches' % switches())
+    # One pty write lands both keys inside the debounce, ending on the current
+    # row: a row only passed over is never switched to (nor woken — the wake
+    # hook's dwell is the sleep selftest's). Long enough for a wrong follow to show.
+    tm('send-keys', '-t', side, 'Down', 'Up')
+    time.sleep(1)
+    check(switches() == [w2, w1], 'passing over a row switched windows: %r' % switches())
+    check(view_on(w1) == [side], 'a pass-over moved the sidebar')
+    wait_for(navigation, 'a pass-over left the sidebar key table')
+    tm('set-hook', '-gu', 'session-window-changed[73]')
 
     # The right pane was already tmux-active: clicking it must still leave the
     # navigation table. Actual typing then reaches that pane, not the sidebar.

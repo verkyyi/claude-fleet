@@ -108,7 +108,7 @@ print_sheet() {
   key "prefix a" "jump to the next window that needs you (red first, then green)"
   key "prefix g" "focus the dash — jump to the hub's dash pane; press again to zoom it"
   key "prefix e" "show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)"
-  key "prefix E" "focus sidebar (or click it) — ↑↓ choose, enter jump + focus worker, ←→ fold, n new task (= the bottom row: file an issue + spawn its worker), q hide, esc return"
+  key "prefix E" "focus sidebar (or click it) — ↑↓ switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected), home/end ends, ←→ fold, enter/esc give input back to the worker, n new task (= the bottom row: file an issue + spawn its worker), q hide (keyboard-only)"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
