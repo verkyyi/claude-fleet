@@ -248,7 +248,7 @@ class Worker:
         if not manual and now-max(at,float(self.opt('@sleep_woke_at') or 0)) < after:
             raise ValueError('idle grace has not elapsed')
         # A native idle turn can still own commands. Unknown descendants veto.
-        quiet_processes(source)
+        quiet_processes(source,evidence.get('config_home'))
         draft = INPUT['snapshot'](self.session,self.pane,agent=source['agent'])
         if draft.get('state') != 'empty': raise ValueError('input contains a draft or cannot be proven empty')
         transcript = Path(source['transcript'])
@@ -397,7 +397,7 @@ class Worker:
                     if new['pid']!=source['pid'] and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty':
                         if source['agent']=='codex' and new['home']!=source['home']:
                             raise ValueError('resumed under a different Codex home')
-                        if not self.verify_resumed_services(source,new):
+                        if not self.verify_resumed_services(data,new):
                             time.sleep(.25)
                             continue
                         data['wake_seconds']=round(time.monotonic()-started,3)
@@ -471,10 +471,16 @@ class Worker:
         LOOP['sleep_resume'](snapshot,path,source,self.opt('pane_pid'),rollback=rollback)
         if not rollback:self.stamp('@claude_state','done')
 
-    def verify_resumed_services(self,source,new):
+    def verify_resumed_services(self,data,new):
+        source=data['source']
         if not source.get('sleep_mcp'):return True
+        if source['agent']=='claude':
+            # No runtime status RPC: the resumed agent is awake once every saved
+            # server runs again under it from an unchanged configuration.
+            inventory=MCP['claude_inventory'](ARGV['process_argv'](new['pid']),new['worktree'],data['evidence'].get('config_home'))
+            return MCP['verify_resume'](source,inventory,(TRANSFER['process_rows'](),new['pid'],ARGV['process_argv'],ARGV['process_executable']))
         client=RPC(new['codex_identity'].get('remote',''),timeout=5)
-        try:return MCP['verify_resume'](source,client)
+        try:return MCP['verify_resume'](source,MCP['inventory'](client))
         finally:client.close()
 
     def scheduled_wake(self,path,data):
@@ -555,7 +561,7 @@ class Worker:
                             and source['agent']==data['source']['agent']
                             and (source['agent']!='codex' or source['home']==data['source']['home'])
                             and INPUT['snapshot'](self.session,self.pane,agent=source['agent']).get('state')=='empty'):
-                        if not self.verify_resumed_services(data['source'],source):return
+                        if not self.verify_resumed_services(data,source):return
                         if source['pid']!=data['source']['pid']:
                             self.stamp('@quota_failover','')
                         self.resume_loop(path,data,source,rollback=source['pid']==data['source']['pid'])
@@ -583,10 +589,16 @@ def quiet_native_children(client,session_id):
             raise ValueError('another thread/subagent has an unfinished goal')
 
 
-def quiet_processes(source):
+def quiet_processes(source,config_home=None):
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
     mcp_pids=set()
+    if source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
+        # Claude starts its stdio MCP servers as direct children and has no RPC
+        # to enumerate them; the effective config is rebuilt from its own argv
+        # and store (issue #784). Nothing else beneath Claude is infrastructure.
+        inventory=MCP['claude_inventory'](ARGV['process_argv'](source['pid']),source['worktree'],config_home)
+        mcp_pids=MCP['classify'](source,inventory,rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'])
     while pending:
         parent=pending.pop()
         if parent in seen: continue
@@ -594,7 +606,11 @@ def quiet_processes(source):
         for pid,(pp,comm) in rows.items():
             if pp!=parent or pid==parent: continue
             pending.append(pid)
-            if source['agent']=='claude': raise ValueError('Claude owns background/tool processes')
+            if source['agent']=='claude':
+                if pid in mcp_pids: continue
+                try:name=ARGV['process_executable'](pid).name
+                except OSError:name='unknown'
+                raise ValueError('Claude owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
             argv=ARGV['process_argv'](pid)
             remote=source['codex_identity'].get('remote','')
             native=comm in ('codex','codex-real')
@@ -610,7 +626,7 @@ def quiet_processes(source):
                     children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
                     if children:
                         client=RPC(remote,timeout=5)
-                        try:mcp_pids.update(MCP['classify'](source,client,rows,pid,ARGV['process_argv'],ARGV['process_executable']))
+                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable']))
                         finally:client.close()
                 continue
             if pid in mcp_pids:continue

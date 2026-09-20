@@ -32,7 +32,13 @@ class SleepTest(unittest.TestCase):
         cls.transcript=cls.root/'history.jsonl'; cls.transcript.write_text('{}\n')
         cls.env=dict(os.environ,FLEET_CONF_DIR=str(cls.root/'config'),FLEET_SLEEP_AFTER='1',FLEET_SLEEP='on')
         cls.agent=cls.root/'agent.py'
-        cls.agent.write_text('''import os,sys,tty,json
+        cls.agent.write_text('''import os,sys,tty,json,subprocess,atexit
+servers=[]
+for arg in sys.argv[1:]:
+    if arg.startswith('--mcp-config='):
+        for conf in json.load(open(arg.split('=',1)[1]))['mcpServers'].values():
+            servers.append(subprocess.Popen([conf['command'],*conf['args']],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL))
+atexit.register(lambda:[p.kill() for p in servers])
 tty.setraw(0)
 trace=open(os.path.join(os.path.dirname(__file__),'input-'+str(os.getpid())+'.log'),'ab',buffering=0)
 print('\\033[2J\\033[H❯ ',end='',flush=True)
@@ -45,7 +51,7 @@ while True:
     else: text+=c
 ''')
         launcher=cls.bin/'fleet-claude.sh'
-        launcher.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > '+str(cls.root/'launch.args')+'\nexec python3 '+str(cls.agent)+'\n')
+        launcher.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > '+str(cls.root/'launch.args')+'\nexec python3 '+str(cls.agent)+' "$@"\n')
         launcher.chmod(0o755)
         inspect=cls.bin/'fake-source.py'
         inspect.write_text('''#!/usr/bin/env python3
@@ -75,16 +81,18 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
     def tm(cls,*args):
         return subprocess.check_output(['tmux','-L',cls.socket,*args],text=True,stderr=subprocess.PIPE).strip()
 
-    def cli(self,*args,ok=True):
-        p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),args[0],'--session',self.socket,*args[1:]],env=self.env,text=True,capture_output=True,timeout=55)
+    def cli(self,*args,ok=True,**env):
+        p=subprocess.run(['python3',str(self.bin/'fleet-sleep.py'),args[0],'--session',self.socket,*args[1:]],env=dict(self.env,**env),text=True,capture_output=True,timeout=55)
         if ok:
             trace=self.root/('input-'+str(self.pid)+'.log')
             self.assertEqual(p.returncode,0,p.stderr+' fake input='+repr(trace.read_bytes() if trace.exists() else b''))
         else:self.assertNotEqual(p.returncode,0,p.stdout)
         return p
 
-    def setUp(self):
-        self.pane=self.tm('new-window','-d','-P','-F','#{pane_id}','-t',self.socket,'-c',str(self.wt),'exec python3 '+str(self.agent))
+    def setUp(self):self.open_worker()
+
+    def open_worker(self,*agent_args):
+        self.pane=self.tm('new-window','-d','-P','-F','#{pane_id}','-t',self.socket,'-c',str(self.wt),'exec python3 '+str(self.agent)+''.join(' '+a for a in agent_args))
         self.tm('set-option','-w','-t',self.pane,'@raw','1')
         for key,value in (('@claude_state','done'),('@cc_agent','claude'),('@worktree',str(self.wt))):
             self.stamp(key,value)
@@ -259,7 +267,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         with patch.dict(os.environ,self.env):
             worker=LIB['Worker'](self.socket,self.pane)
             with patch.object(worker,'inspect',return_value=source), \
-                 patch.dict(worker.eligible.__globals__,RPC=Client,source_options=lambda source: [],quiet_processes=lambda source: None):
+                 patch.dict(worker.eligible.__globals__,RPC=Client,source_options=lambda source: [],quiet_processes=lambda source,*args: None):
                 yield worker,source,thread
 
     def test_native_completion_bootstraps_old_codex_without_stop(self):
@@ -422,6 +430,42 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             self.assertNotEqual(resumed['native_pid'],self.pid)
             trace=self.root/('input-'+str(resumed['native_pid'])+'.log')
             self.assertEqual(trace.read_bytes(),b'')  # wake itself sends no prompt
+
+    def test_claude_mcp_child_sleeps_only_under_the_contract_and_restarts_on_resume(self):
+        # A Claude worker's MCP servers are its direct children with no RPC to
+        # enumerate them (issue #784). Copying /bin/sleep trips code signing on
+        # macOS; a symlink gives the fixture its own launcher path.
+        server=self.root/'fake-mcp'
+        if not server.exists():server.symlink_to('/bin/sleep')
+        config=self.root/'mcp.json'
+        config.write_text(json.dumps({'mcpServers':{'fake':{'type':'stdio','command':str(server),'args':['300']}}}))
+        self.tm('kill-window','-t',self.pane)
+        self.open_worker('--strict-mcp-config','--mcp-config='+str(config))
+        def child():
+            rows=LIB['TRANSFER']['process_rows']()
+            return [pid for pid,(pp,_) in rows.items() if pp==self.pid]
+        until=time.monotonic()+5
+        while time.monotonic()<until and not child():time.sleep(.05)
+        first=child();self.assertEqual(len(first),1)
+        p=self.cli('sleep',self.pane,'--dry-run',ok=False)
+        self.assertIn('restartability contract',p.stderr)
+        self.cli('sleep',self.pane,'--dry-run',FLEET_SLEEP_MCP_RESTARTABLE='fake')
+        config.write_text(json.dumps({'mcpServers':{'fake':{'type':'stdio','command':str(server),'args':['301']}}}))
+        p=self.cli('sleep',self.pane,'--dry-run',ok=False,FLEET_SLEEP_MCP_RESTARTABLE='fake')
+        self.assertIn('Claude owns unverified background/tool process',p.stderr)
+        config.write_text(json.dumps({'mcpServers':{'fake':{'type':'stdio','command':str(server),'args':['300']}}}))
+        self.cli('sleep',self.pane,FLEET_SLEEP_MCP_RESTARTABLE='fake')
+        self.assertExited(self.pid)
+        self.assertIn(LIB['process_state'](first[0])[0][:1],('','Z'))
+        record=Path(self.opt('@sleep_record'));data=json.loads(record.read_text())
+        self.assertEqual(sorted(data['source']['sleep_mcp']),['fake'])
+        self.assertIn('--mcp-config='+str(config),data['options']);self.assertIn('--strict-mcp-config',data['options'])
+        self.cli('wake',self.pane)
+        self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(json.loads(record.read_text())['state'],'awake')
+        self.pid=int(self.opt('pane_pid'))
+        self.assertEqual(len(child()),1)
+        self.assertIn('--mcp-config='+str(config),(self.root/'launch.args').read_text().splitlines())
 
     def test_bundled_code_host_is_idle_infrastructure_but_its_jobs_are_not(self):
         quiet=LIB['quiet_processes'];base=self.pid
@@ -592,8 +636,63 @@ class McpRestartTest(unittest.TestCase):
         self.client=Client()
 
     def classify(self):
-        return LIB['MCP']['classify'](self.source,self.client,self.rows,1,
+        return LIB['MCP']['classify'](self.source,LIB['MCP']['inventory'](self.client),self.rows,1,
                                       lambda pid:self.argv[pid],lambda pid:self.exes[pid])
+
+    def claude_inventory(self,argv,config_home=None):
+        return LIB['MCP']['claude_inventory'](argv,self.root/'worktree',config_home or self.root/'home')
+
+    def test_claude_strict_inventory_is_exactly_the_mcp_config_documents(self):
+        inventory=LIB['MCP']['claude_inventory']
+        one=self.root/'one.json';one.write_text(json.dumps({'mcpServers':{'safe':self.config['safe']}}))
+        two=self.root/'two.json';two.write_text(json.dumps({'mcpServers':{'remote':{'type':'http','url':'https://example.invalid'}}}))
+        for argv in (['claude','--strict-mcp-config','--mcp-config='+str(one)],
+                     ['claude','--mcp-config',str(one),'--strict-mcp-config'],
+                     ['claude','--strict-mcp-config','--mcp-config='+json.dumps({'mcpServers':{'safe':self.config['safe']}})]):
+            config,statuses=inventory(argv,self.root/'nowhere')
+            self.assertEqual((set(config),statuses),({'safe'},None))
+        config,_=inventory(['claude','--mcp-config',str(one),str(two),'--strict-mcp-config','prompt'],self.root/'nowhere')
+        self.assertEqual(set(config),{'safe','remote'})
+        with self.assertRaisesRegex(ValueError,'more than once'):
+            inventory(['claude','--strict-mcp-config','--mcp-config',str(one),str(one)],self.root/'nowhere')
+        for bad in ('{"mcpServers":[]}','{"mcpServers":{"x":1}}','not json',str(self.root/'missing.json')):
+            with self.assertRaisesRegex(ValueError,'incomplete'):
+                inventory(['claude','--strict-mcp-config','--mcp-config='+bad],self.root/'nowhere')
+        with self.assertRaisesRegex(ValueError,'incomplete'):  # no store beneath a non-strict launch
+            inventory(['claude','--mcp-config='+str(one)],self.root/'nowhere',self.root/'nowhere')
+
+    def test_claude_store_scopes_rank_local_over_project_over_user(self):
+        wt=self.root/'worktree';wt.mkdir();home=self.root/'home';home.mkdir()
+        user={'command':'/u','args':[]};local={'command':'/l','args':[]};project={'command':'/p','args':[]}
+        (wt/'.mcp.json').write_text(json.dumps({'mcpServers':{'shared':project,'approved':project,'pending':project,'refused':project}}))
+        store={'mcpServers':{'shared':user,'only-user':user,'muted':user},
+               'projects':{str(wt.resolve()):{'mcpServers':{'shared':local,'only-local':local},
+                                              'enabledMcpjsonServers':['approved','refused'],'disabledMcpjsonServers':['refused'],
+                                              'disabledMcpServers':['muted','plugin:x:y']}}}
+        (home/'.claude.json').write_text(json.dumps(store))
+        flag=self.root/'flag.json';flag.write_text(json.dumps({'mcpServers':{'only-user':{'command':'/f','args':[]}}}))
+        config,statuses=self.claude_inventory(['claude','--mcp-config='+str(flag)])
+        self.assertIsNone(statuses)
+        self.assertEqual({name:conf['command'] for name,conf in config.items()},
+                         {'shared':'/l','only-local':'/l','approved':'/p','only-user':'/f'})
+        store['projects']={}
+        (home/'.claude.json').write_text(json.dumps(store))
+        config,_=self.claude_inventory(['claude'])
+        self.assertEqual(set(config),{'shared','only-user','muted'})
+
+    def test_claude_process_evidence_replaces_runtime_status_until_the_server_restarts(self):
+        # No runtime RPC: the exact live child is the evidence at sleep, and its
+        # restart from an unchanged digest is the evidence at wake.
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
+            readers=(lambda pid:self.argv[pid],lambda pid:self.exes[pid])
+            self.assertEqual(LIB['MCP']['classify'](self.source,(self.config,None),self.rows,1,*readers),{2})
+            verify=LIB['MCP']['verify_resume']
+            self.assertFalse(verify(self.source,(self.config,None),({},9,*readers)))
+            self.assertTrue(verify(self.source,(self.config,None),({2:(9,'node')},9,*readers)))
+            self.argv[3]=self.argv[2];self.exes[3]=self.node  # two copies prove nothing about which one Claude owns
+            self.assertFalse(verify(self.source,(self.config,None),({2:(9,'node'),3:(9,'node')},9,*readers)))
+            changed={'safe':dict(self.config['safe'],env={'TOKEN':'x'})}
+            with self.assertRaisesRegex(ValueError,'configuration changed'):verify(self.source,(changed,None),({2:(9,'node')},9,*readers))
 
     def test_exact_config_and_explicit_contract_required(self):
         self.config['remote']={'url':'https://example.invalid/mcp','command':None,'args':None}
@@ -640,12 +739,12 @@ class McpRestartTest(unittest.TestCase):
     def test_resume_waits_for_service_and_rejects_changed_config(self):
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
             self.classify()
-        verify=LIB['MCP']['verify_resume']
-        self.assertTrue(verify(self.source,self.client))
+        verify=lambda:LIB['MCP']['verify_resume'](self.source,LIB['MCP']['inventory'](self.client))
+        self.assertTrue(verify())
         self.status['data'][0]['runtimeStatus']='starting'
-        self.assertFalse(verify(self.source,self.client))
+        self.assertFalse(verify())
         self.config['safe']['args'].append('changed')
-        with self.assertRaisesRegex(ValueError,'configuration changed'):verify(self.source,self.client)
+        with self.assertRaisesRegex(ValueError,'configuration changed'):verify()
 
     def test_older_runtime_requires_initialize_and_tool_inventory(self):
         ready=LIB['MCP']['runtime_ready']

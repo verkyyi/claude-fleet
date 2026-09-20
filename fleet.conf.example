@@ -411,6 +411,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # Comma-separated native MCP server names whose volatile state may be discarded.
 # Empty by default. Exact configured stdio launchers/package entrypoints only;
 # child jobs/browser processes still prevent sleep. Do not list stateful REPLs.
+# Applies to Claude and Codex workers; a Claude worker's set is the names in its
+# FLEET_MCP_CONFIG (--mcp-config) document, e.g. mcp-image,playwright (#784).
 # @label=Restartable MCP services @group=bridge @tier=advanced @scope=fleet @edit=str
 #FLEET_SLEEP_MCP_RESTARTABLE=
 # Max PRs reaped per fleet per tick (a stampede guard; the ~60s interval is the
