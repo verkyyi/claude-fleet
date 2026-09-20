@@ -500,14 +500,17 @@ machine can be on two different plans. Measured on the development machine:
 three at once.
 
 So an endpoint has a *list* of subscriptions, not a current one — that is what
-`list_endpoint_accounts` and the "what each machine is running" card show. The
-endpoint's own login (from `~/.claude.json`) is tracked separately, and only a
-change of *that* is a switch.
+`list_endpoint_accounts` returns, and what the **Subscription** column of the
+Endpoints table expands to when you open its ⊞. The endpoint's own login (from
+`~/.claude.json`) is what that column shows closed, it is tracked separately,
+and only a change of *that* is a switch.
 
 If someone logs out and into a *different* account on a machine, ccquota records
-the switch and shows it in the UI. Rows already ingested keep their old
-attribution and cannot be corrected — see the known limits below. Two plans
-running side by side is **not** a switch, and is not recorded as one.
+the switch and shows it in the UI — in that same table's **Last switch** column,
+on the row of the machine the switch happened to. The column appears only when a
+switch has actually happened in the current scope. Rows already ingested keep
+their old attribution and cannot be corrected — see the known limits below. Two
+plans running side by side is **not** a switch, and is not recorded as one.
 
 ## Ways in — one process is not one entrance
 

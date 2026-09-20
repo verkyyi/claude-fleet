@@ -8,10 +8,10 @@ import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './pro
 // response.
 //
 // hero (applyCounter/pacSVG/dotStream/the odometer wheels/tickHero),
-// renderLive, connectLive, endpointRosterCard, endpointAccountsCard,
-// switchesCard and the lossy/spanning/stale banners are ported from the old
-// <script> block of web/dist/index.html (pre-Task-11), unchanged except for
-// the structural moves the Task 11 brief calls for:
+// renderLive, connectLive, endpointRosterCard and the lossy/spanning/stale
+// banners are ported from the old <script> block of web/dist/index.html
+// (pre-Task-11), unchanged except for the structural moves the Task 11 brief
+// calls for:
 //   - two stored tiles ("tokens (range)" / "spend (range)") are dropped from
 //     the live card — they move to Review's KPI strip (task 12);
 //   - the three fleet tables move under a closed-by-default
@@ -23,6 +23,15 @@ import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './pro
 //     below / gone entirely (rankedBars is now the only Now-view chart; there
 //     is no per-card table toggle here) — Now has no time range of its own,
 //     it is *right now*.
+//
+// #100 then collapsed those three fleet tables into ONE, so the second bullet
+// above describes a <details> that no longer exists. "What each machine is
+// running" and "Subscription switches" were both keyed by endpoint_id, and so
+// is the roster — three tables about one subject, two of them costing a request
+// each to say something the third had room for. They are columns of the roster
+// now (subscriptionCell / switchCell), and with a single table left the
+// <details class="fleet"> wrapper went with them: it existed to group three
+// cards, and #ops is already the fold.
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
@@ -487,18 +496,91 @@ function mutedTail(muted, app) {
 // limits banner's 600s, which ages a rate-limit reading, not an endpoint.
 const STALE_ENDPOINT_SEC = 3600;
 
-// rosterTable is the roster's rows on their own, so the "show retired" toggle
-// can swap them without rebuilding the card's headings around them.
+/** lastSwitchByEndpoint reduces the switch log to the NEWEST switch per machine.
+ *
+ *  The server sends them newest first, but this compares timestamps rather than
+ *  trusting that order: a column that silently showed a machine's OLDEST switch
+ *  would be worse than no column at all, and the cost of not depending on it is
+ *  one comparison. */
+function lastSwitchByEndpoint(switches) {
+  const m = new Map();
+  for (const s of switches || []) {
+    const prev = m.get(s.endpoint_id);
+    if (!prev || new Date(s.observed_at) > new Date(prev.observed_at)) m.set(s.endpoint_id, s);
+  }
+  return m;
+}
+
+/** switchCell is the roster's "last switch" column — the attribution seam,
+ *  printed on the machine the seam runs through.
+ *
+ *  This used to be a resident card of its own ("Subscription switches"). It was
+ *  never wrong, it just had nowhere to lead: there is no action attached to a
+ *  switch and no way to repair one, because rows ingested before it keep their
+ *  old attribution for good (README's "Known limits"). So it is not deleted and
+ *  must not be — a seam the page hides is a page that is quietly wrong — but it
+ *  does not earn a card and a table. As a column it is strictly easier to read
+ *  than it was: the switch now sits on the row of the machine it happened to,
+ *  instead of in a separate table that repeated the machine's name to say so. */
+function switchCell(sw, app) {
+  if (!sw) return el('span', { style: 'color:var(--ink-3)' }, '—');
+  const secs = Math.max(0, (Date.now() - new Date(sw.observed_at)) / 1000);
+  const from = accountLabel(app, sw.from_account), to = accountLabel(app, sw.to_account);
+  return el('div', { title: `${new Date(sw.observed_at).toLocaleString()} · ${from} → ${to}` },
+    el('div', {}, ago(secs)),
+    el('div', { class: 'muted' }, `${from} → ${to}`));
+}
+
+/** subscriptionCell is the roster's "subscription" column.
+ *
+ *  Closed (`accounts` null) it prints the endpoint's OWN login, which is the one
+ *  account /v1/endpoints carries. Opened, it prints every subscription that
+ *  machine has been SEEN running — the list that used to be the card "what each
+ *  machine is running".
+ *
+ *  Deliberately a list, and deliberately not a switch. Claude Code takes its
+ *  account from each process's environment, not from the machine, so one machine
+ *  routinely runs several subscriptions at the same instant and "the current
+ *  account" is a value that does not exist. Collapsing the list into one is what
+ *  would manufacture a switch history out of ordinary concurrency — which is
+ *  exactly why this column and the switch column beside it are different
+ *  questions and are never merged. */
+function subscriptionCell(e, app, accounts) {
+  const own = accountLabel(app, e.account_uuid);
+  const rows = accounts ? accounts.get(e.endpoint_id) : null;
+  if (!rows || !rows.length) return el('span', { title: e.account_uuid || '' }, own);
+  return el('div', {}, rows.map((r) => {
+    // accountLabel falls back to the uuid for a subscription the page has no
+    // /v1/accounts row for; the endpoint-accounts row carries its own name, so
+    // prefer that over printing a raw uuid at the reader.
+    const l = accountLabel(app, r.account_uuid);
+    return el('div', { title: r.account_uuid },
+      l === r.account_uuid ? (r.account_name || r.account_uuid) : l, ' ',
+      el('span', { class: 'muted' },
+        r.origin === 'login' ? t('endpoints.ownLogin') : t('endpoints.seenInSession')));
+  }));
+}
+
+// rosterTable is the roster's rows on their own, so the "show retired" and
+// "show subscriptions" toggles can swap them without rebuilding the card's
+// headings around them.
 //
 // A retired endpoint is greyed out and says when it was retired in the
 // "last seen" column's place, because for a retired endpoint that is the
 // honest answer: it is not late reporting, it is not coming back.
-function rosterTable(endpoints, app) {
+//
+// `view.switches` is a Map or null, and null means the column is not drawn at
+// all — see endpointRosterCard for why "no switch has happened here" is a
+// column that should not exist rather than a column full of dashes.
+function rosterTable(endpoints, app, view) {
+  const seam = view.switches;
   return el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, t('endpoints.col.name')), el('th', {}, t('endpoints.col.subscription')), el('th', {}, t('endpoints.col.platform')),
       el('th', {}, t('endpoints.col.cc')), el('th', {}, t('endpoints.col.agent')),
-      el('th', {}, t('endpoints.col.lastSeen')), el('th', {}, t('endpoints.col.excluded')))),
+      el('th', {}, t('endpoints.col.lastSeen')),
+      seam ? el('th', {}, t('endpoints.col.lastSwitch')) : null,
+      el('th', {}, t('endpoints.col.excluded')))),
     el('tbody', {}, endpoints.map((e) => {
       const secs = e.last_seen ? (Date.now() - new Date(e.last_seen)) / 1000 : null;
       const stale = secs == null || secs > STALE_ENDPOINT_SEC;
@@ -506,7 +588,7 @@ function rosterTable(endpoints, app) {
       const retired = !!e.retired_at;
       return el('tr', retired ? { class: 'retired' } : {},
         el('td', { title: e.hostname || '' }, e.label || e.endpoint_id),
-        el('td', { title: e.account_uuid || '' }, accountLabel(app, e.account_uuid)),
+        el('td', {}, subscriptionCell(e, app, view.accounts)),
         el('td', {}, e.os ? `${e.os}/${e.arch}` : '—'),
         el('td', {}, e.cc_version || '—'),
         el('td', {}, e.agent_version || '—'),
@@ -514,6 +596,7 @@ function rosterTable(endpoints, app) {
           retired
             ? t('endpoints.retiredOn', { date: new Date(e.retired_at).toLocaleDateString() })
             : secs == null ? t('endpoints.neverReported') : ago(secs)),
+        seam ? el('td', {}, switchCell(seam.get(e.endpoint_id), app)) : null,
         el('td', { style: dropped ? '' : 'color:var(--ink-3)' },
           dropped ? t('endpoints.droppedTurns', { n: fmtInt(dropped) }) : '—'));
     }))));
@@ -533,138 +616,138 @@ function rosterTable(endpoints, app) {
  *  every click, and `aria-controls` points at the table it swaps. The retired
  *  rows are fetched lazily, on first reveal — the page's own roster fetch
  *  stays active-only, so `app.endpoints`, the scope picker's machine chips and
- *  the lossy-history banner keep meaning "the live fleet". */
-function endpointRosterCard(endpoints, app, state) {
+ *  the lossy-history banner keep meaning "the live fleet".
+ *
+ *  Since #100 there are TWO such toggles, built the same way for the same
+ *  reasons. The second one reveals the per-machine subscription list, and it is
+ *  lazy for a sharper reason than the first: making it lazy is what took
+ *  /v1/endpoint-accounts off the operations tier's default path. It used to be
+ *  sent on every open to fill a resident card answering a question ("which
+ *  subscriptions does this machine run") that matters when you are chasing a
+ *  specific machine and never otherwise. A request nobody reads is the cost;
+ *  a click is the price of reading it. */
+function endpointRosterCard(endpoints, app, state, switchesR) {
+  // A rejected switch query and an empty one are NOT the same answer, and the
+  // difference is the whole reason this page shows switches at all. Empty means
+  // "no machine in scope has switched", which is information. Rejected means the
+  // seam could not be read — and a seam that is silently absent is precisely the
+  // failure README's "Known limits" says this page exists to prevent.
+  const seamOK = switchesR.status === 'fulfilled';
+  const switches = seamOK ? (switchesR.value || []) : [];
+  // Drawn only when a switch has actually happened in scope. The old card did
+  // the same thing by rendering null when empty; as a column it costs a column
+  // of dashes instead of a card, so the same rule is worth keeping.
+  const seam = switches.length ? lastSwitchByEndpoint(switches) : null;
+
   const card = el('div', { class: 'card' },
     el('h2', {}, t('endpoints.title')),
     el('p', { class: 'hint' }, t('endpoints.hint')),
-    el('p', { class: 'hint' }, t('endpoints.staleHint', { window: windowOf(STALE_ENDPOINT_SEC) })));
+    el('p', { class: 'hint' }, t('endpoints.staleHint', { window: windowOf(STALE_ENDPOINT_SEC) })),
+    seam ? el('p', { class: 'hint' }, t('endpoints.switchHint')) : null,
+    seamOK ? null : el('p', { class: 'hint' }, t('endpoints.switchUnavailable')));
 
   if (!endpoints.length) {
     card.appendChild(el('div', { class: 'empty' }, t('endpoints.empty')));
     return card;
   }
 
-  const body = rosterTable(endpoints, app);
+  // The two reveals are independent, and either can be on while the other
+  // flips, so both read one redraw rather than each rebuilding the table from
+  // its own idea of the current state.
+  let retired = false, withRetired = null;
+  let subs = false, byEndpoint = null;
+  const view = () => ({ switches: seam, accounts: subs ? byEndpoint : null });
+  const body = rosterTable(endpoints, app, view());
   body.id = 'endpoint-roster';
-  let showing = false;
-  let withRetired = null;
-  const btn = el('button', {
+  const redraw = () => body.replaceChildren(
+    ...rosterTable(retired && withRetired ? withRetired : endpoints, app, view()).childNodes);
+
+  const scope = () => {
+    const acct = encodeURIComponent((state && state.sub) || 'all');
+    const source = encodeURIComponent((state && state.chips && state.chips.source) || '');
+    return `account=${acct}&source=${source}`;
+  };
+
+  const retiredBtn = el('button', {
     class: 'tbl', type: 'button',
     title: t('endpoints.showRetired'),
     'aria-label': t('endpoints.showRetired'),
     'aria-expanded': 'false',
     'aria-controls': body.id,
     onclick: async () => {
-      showing = !showing;
-      btn.setAttribute('aria-expanded', String(showing));
-      if (!showing) {
-        body.replaceChildren(...rosterTable(endpoints, app).childNodes);
-        return;
-      }
-      if (withRetired === null) {
-        const acct = encodeURIComponent((state && state.sub) || 'all');
-        const source = encodeURIComponent((state && state.chips && state.chips.source) || '');
+      retired = !retired;
+      retiredBtn.setAttribute('aria-expanded', String(retired));
+      if (retired && withRetired === null) {
         try {
-          withRetired = await app.api(
-            `/v1/endpoints?account=${acct}&source=${source}&include=retired`);
+          withRetired = await app.api(`/v1/endpoints?${scope()}&include=retired`);
         } catch {
           // A failed reveal must not leave the button claiming it is showing
           // something it is not.
           withRetired = null;
-          showing = false;
-          btn.setAttribute('aria-expanded', 'false');
+          retired = false;
+          retiredBtn.setAttribute('aria-expanded', 'false');
           return;
         }
       }
-      body.replaceChildren(...rosterTable(withRetired, app).childNodes);
+      redraw();
     },
   }, '⊟');
-  card.append(btn, body);
+
+  const subsBtn = el('button', {
+    class: 'tbl', type: 'button',
+    title: t('endpoints.showAccounts'),
+    'aria-label': t('endpoints.showAccounts'),
+    'aria-expanded': 'false',
+    'aria-controls': body.id,
+    onclick: async () => {
+      subs = !subs;
+      subsBtn.setAttribute('aria-expanded', String(subs));
+      if (subs && byEndpoint === null) {
+        try {
+          const rows = await app.api(`/v1/endpoint-accounts?${scope()}&limit=200`);
+          byEndpoint = new Map();
+          for (const r of rows || []) {
+            if (!byEndpoint.has(r.endpoint_id)) byEndpoint.set(r.endpoint_id, []);
+            byEndpoint.get(r.endpoint_id).push(r);
+          }
+        } catch {
+          byEndpoint = null;
+          subs = false;
+          subsBtn.setAttribute('aria-expanded', 'false');
+          return;
+        }
+      }
+      redraw();
+    },
+  }, '⊞');
+
+  // One anchored row, not two absolutely-positioned buttons: `.card .tbl` pins
+  // itself to the card's top right, so a second one would land exactly on the
+  // first. See styles.css's `.card .tbls`.
+  card.append(el('div', { class: 'tbls' }, subsBtn, retiredBtn), body);
   return card;
 }
-function endpointRosterCardFromResult(result, app, state) {
+function endpointRosterCardFromResult(result, app, state, switchesR) {
   if (result.status === 'rejected') return queryFailed(t('endpoints.title'), result);
-  return endpointRosterCard(result.value, app, state);
+  return endpointRosterCard(result.value, app, state, switchesR);
 }
 
-// Deliberately a list per machine. Claude Code takes its account from the
-// process environment, so one machine+login runs several subscriptions at the
-// same time; collapsing that into a single "current account" is what used to
-// manufacture a switch history out of ordinary concurrency.
-function endpointAccountsCard(rows) {
-  if (!rows || !rows.length) return null;
-
-  const byEndpoint = new Map();
-  for (const r of rows) {
-    if (!byEndpoint.has(r.endpoint_id)) byEndpoint.set(r.endpoint_id, []);
-    byEndpoint.get(r.endpoint_id).push(r);
-  }
-  const concurrent = [...byEndpoint.values()].filter((v) => v.length > 1).length;
-
-  const card = el('div', { class: 'card' },
-    el('h2', {}, t('machines.title')),
-    el('p', { class: 'hint' },
-      concurrent
-        ? t('machines.concurrent', { n: concurrent, total: byEndpoint.size })
-        : t('machines.single')));
-
-  card.appendChild(el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {},
-      el('th', {}, t('machines.col.machine')), el('th', {}, t('machines.col.login')), el('th', {}, t('machines.col.subscription')),
-      el('th', {}, t('machines.col.how')), el('th', {}, t('machines.col.firstSeen')), el('th', {}, t('machines.col.lastSeen')))),
-    el('tbody', {}, rows.map((r) => el('tr', {},
-      el('td', {}, r.endpoint_name || r.endpoint_id),
-      el('td', {}, r.os_user || '—'),
-      el('td', { title: r.account_uuid }, r.account_name || r.account_uuid),
-      el('td', {}, r.origin === 'login' ? t('machines.ownLogin') : t('machines.seenInSession')),
-      el('td', {}, new Date(r.first_seen).toLocaleString()),
-      el('td', {}, new Date(r.last_seen).toLocaleString())))))));
-  return card;
-}
-function endpointAccountsCardFromResult(result) {
-  if (result.status === 'rejected') return queryFailed(t('machines.title'), result);
-  return endpointAccountsCard(result.value);
-}
-
-function switchesCard(switches, app, endpoints) {
-  if (!switches || !switches.length) return null;
-
-  const card = el('div', { class: 'card' },
-    el('h2', {}, t('switches.title')),
-    el('p', { class: 'hint' }, t('switches.hint')));
-
-  const epByID = {};
-  for (const e of (endpoints || [])) epByID[e.endpoint_id] = e.label || e.hostname;
-
-  card.appendChild(el('div', { class: 'scroll' }, el('table', {},
-    el('thead', {}, el('tr', {},
-      el('th', {}, t('switches.col.when')), el('th', {}, t('switches.col.machine')), el('th', {}, t('switches.col.from')), el('th', {}, t('switches.col.to')))),
-    el('tbody', {}, switches.map((s) => el('tr', {},
-      el('td', {}, new Date(s.observed_at).toLocaleString()),
-      el('td', {}, epByID[s.endpoint_id] || s.endpoint_id),
-      el('td', { title: s.from_account }, accountLabel(app, s.from_account)),
-      el('td', { title: s.to_account }, accountLabel(app, s.to_account))))))));
-  return card;
-}
-function switchesCardFromResult(result, app, endpoints) {
-  if (result.status === 'rejected') return queryFailed(t('switches.title'), result);
-  return switchesCard(result.value, app, endpoints);
-}
-
-/** fleetCard wraps the three roster tables in a closed-by-default <details>,
- *  its open state remembered per browser. */
-function fleetCard(roster, epAccounts, switches) {
-  let open = false;
-  try { open = localStorage.getItem('ccquota-fleet') === '1'; } catch {}
-  const det = el('details', { class: 'fleet', open: open ? '' : false },
-    el('summary', {}, t('fleet.title')),
-    roster, epAccounts, switches);
-  det.addEventListener('toggle', () => {
-    try { localStorage.setItem('ccquota-fleet', det.open ? '1' : '0'); } catch {}
-  });
-  return det;
-}
+// Two cards and a fold used to live here, and #100 removed all three.
+//
+// "What each machine is running" (/v1/endpoint-accounts) and "Subscription
+// switches" (/v1/account-switches) were tables keyed by endpoint_id, sitting
+// beside a roster keyed by endpoint_id. Each repeated the machine's name to say
+// which machine it was talking about, and each cost a request on every open of
+// the operations tier. Neither was WRONG, which is why neither was simply
+// deleted: they are the roster's "subscription" and "last switch" columns now,
+// and the one request that is still unconditional is the one that draws a
+// column (switches). The subscription list moved behind the roster's ⊞, which
+// is what took its request off the default path.
+//
+// The <details class="fleet"> around them went too. It grouped three cards; one
+// card is not a group, and #ops is already the fold — a fold inside a fold, with
+// its own heading above the card's own heading, was asking the reader to open
+// two doors to reach one table.
 
 /* --------------------------------------------------------------- banners */
 
@@ -760,7 +843,7 @@ function buildBanners(state, endpointsR, limitsR) {
 function applyNow(root, state, app, results, opsOpen) {
   // limitsR still lands here even though no card in this file draws it: the two
   // limits banners do, and they are in no band (see NEEDED's row 1).
-  const [findingsR, limitsR, endpointsR, epAcctR, switchesR, collectorsR, accountUsageR] = results;
+  const [findingsR, limitsR, endpointsR, switchesR, collectorsR, accountUsageR] = results;
 
   // scope.js resolves a "machine" chip's label from this on its next render.
   if (endpointsR.status === 'fulfilled') app.endpoints = endpointsR.value;
@@ -768,10 +851,7 @@ function applyNow(root, state, app, results, opsOpen) {
   $('#banners').replaceChildren(...buildBanners(state, endpointsR, limitsR));
 
   const endpoints = endpointsR.status === 'fulfilled' ? endpointsR.value : [];
-  const fleet = fleetCard(
-    endpointRosterCardFromResult(endpointsR, app, state),
-    endpointAccountsCardFromResult(epAcctR),
-    switchesCardFromResult(switchesR, app, endpoints));
+  const roster = endpointRosterCardFromResult(endpointsR, app, state, switchesR);
 
   // The stray-null bug this guards against: replaceChildren stringifies a
   // bare `null` argument into a literal "null" text node instead of skipping
@@ -814,7 +894,7 @@ function applyNow(root, state, app, results, opsOpen) {
     liveWrapEl,
     collectorsCard(collectorsR, endpoints, app.accounts),
     accountUsageCard(accountUsageR, app.accounts),
-    fleet,
+    roster,
   ].filter(Boolean));
 }
 
@@ -831,7 +911,7 @@ export const LIMITS_INDEX = 1;
 /** NEEDED says, per fetcher position below, whether that request has anything
  *  to render RIGHT NOW. `shown` is app.js's live-band set.
  *
- *  This file's seven requests do not all serve one band, which is the whole
+ *  This file's six requests do not all serve one band, which is the whole
  *  reason this table exists rather than a flat "skip them all when the fold is
  *  shut": three of them are the only source for things that belong to NO band
  *  and are therefore on every view, and deferring those would trade a fast first
@@ -849,16 +929,20 @@ export const LIMITS_INDEX = 1;
  *    2  endpoints        -> #banners' lossy-history warning (no band), and
  *                           app.endpoints, which scope.js reads for a machine
  *                           chip's label and review.js for its group-by
- *    3  endpoint-accounts \
- *    4  account-switches  |  the three fleet tables, all inside the fold
- *    5  collectors        |  and nowhere else
- *    6  account-usage    /
+ *    3  account-switches \  the roster's "last switch" column, the collector
+ *    4  collectors       |  card and the account-usage card -- all inside the
+ *    5  account-usage    /  fold and nowhere else
+ *
+ *  There were seven until #100. /v1/endpoint-accounts was slot 3, and it is not
+ *  in this table any more because it is no longer sent from here at all: the
+ *  roster's ⊞ fetches it on demand (endpointRosterCard). A request that only
+ *  ever filled a card the reader had to go looking for does not belong on the
+ *  path that every open of the operations tier pays for.
  */
 const NEEDED = [
   () => true,
   (shown, state) => shown.has('quota') || limitsBannerApplies(state),
   () => true,
-  (shown) => shown.has('ops'),
   (shown) => shown.has('ops'),
   (shown) => shown.has('ops'),
   (shown) => shown.has('ops'),
@@ -884,7 +968,6 @@ export function renderNow(root, state, app, shown) {
     get(`/v1/findings?view=now&account=${acct}&source=${source}`),
     get(`/v1/limits?account=${acct}&source=${source}`),
     get(`/v1/endpoints?account=${acct}&source=${source}`),
-    get(`/v1/endpoint-accounts?account=${acct}&source=${source}&limit=200`),
     get(`/v1/account-switches?account=${acct}&source=${source}&limit=20`),
     get(`/v1/collectors?account=${acct}&source=${source}`),
     get(`/v1/account-usage?account=${acct}&source=${source}`),

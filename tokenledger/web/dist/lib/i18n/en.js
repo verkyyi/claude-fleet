@@ -261,7 +261,6 @@ export const en = {
   'alerts.title': 'Alerts',
 
   /* --------------------------------------------------------------- fleet */
-  'fleet.title': 'Fleet',
   'endpoints.title': 'Endpoints',
   'endpoints.hint': 'Every machine reporting in, which subscription it is on, and what it could not '
     + 'attribute. An agent that stops reporting is the usual reason a total looks too low.',
@@ -280,27 +279,16 @@ export const en = {
   'endpoints.droppedTurns': '{n} turns',
   'endpoints.showRetired': 'Show retired endpoints',
   'endpoints.retiredOn': 'retired {date}',
-  'machines.title': 'What each machine is running',
-  'machines.concurrent': '{n} of {total} endpoint(s) run more than one subscription at once. '
-    + "That is normal — the account comes from each process's environment, not the machine.",
-  'machines.single': 'Each endpoint is running a single subscription.',
-  'machines.col.machine': 'Machine',
-  'machines.col.login': 'Login',
-  'machines.col.subscription': 'Subscription',
-  'machines.col.how': 'How',
-  'machines.col.firstSeen': 'First seen',
-  'machines.col.lastSeen': 'Last seen',
-  'machines.ownLogin': 'its own login',
-  'machines.seenInSession': 'seen in a session',
-  'switches.title': 'Subscription switches',
-  'switches.hint': 'Machines that logged OUT of one subscription and INTO another. Turns recorded '
-    + 'before a switch keep their old attribution and cannot be corrected — these are '
-    + 'the seams where historical figures stop being reliable. Running several '
-    + 'subscriptions side by side is not a switch; see what each machine is running.',
-  'switches.col.when': 'When',
-  'switches.col.machine': 'Machine',
-  'switches.col.from': 'From',
-  'switches.col.to': 'To',
+  'endpoints.showAccounts': 'Show every subscription each machine runs',
+  'endpoints.ownLogin': 'its own login',
+  'endpoints.seenInSession': 'seen in a session',
+  'endpoints.col.lastSwitch': 'Last switch',
+  'endpoints.switchHint': 'A machine logged OUT of one subscription and INTO another. Turns recorded '
+    + 'before a switch keep their old attribution and cannot be corrected — that is the '
+    + 'seam where this machine’s historical figures stop being reliable. Running several '
+    + 'subscriptions side by side is not a switch: the subscription column lists those.',
+  'endpoints.switchUnavailable': 'The switch record could not be read, so this table cannot say '
+    + 'whether any machine changed subscription. Treat the figures as unverified rather than clean.',
 
   /* ------------------------------------------------------------- banners */
   'banner.excludesHistory': '{name} excludes history.',

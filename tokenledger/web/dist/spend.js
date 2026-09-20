@@ -14,8 +14,10 @@ import { spendTerms } from './lib/spend.js';
 
 export { spendTerms };
 
-// Where the explanation fold remembers whether it is open. Namespaced like
-// every other per-browser fold state on this page ('ccquota-fleet').
+// Where the explanation fold remembers whether it is open. Namespaced
+// `ccquota-<thing>`, the convention every per-browser fold state on this page
+// follows. (It used to cite 'ccquota-fleet' as the sibling example; #100
+// removed that fold, so the convention is stated rather than pointed at.)
 const FOLD_KEY = 'ccquota-spend-working';
 
 export function renderSpend(root, summary) {

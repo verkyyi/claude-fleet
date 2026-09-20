@@ -630,6 +630,15 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
    it; where :has() is unsupported the whole rule drops and the corner is
    exactly as crowded as it is today, which is a safe way to fail. */
 .card:has(.tbl) > h2 { padding-right: 40px; }
+/* Two toggles on one card (#100). The roster now owns both reveals — "show
+   retired" and the per-machine subscription list that used to be its own card —
+   and `.card .tbl` pins itself to the corner, so a second one would land
+   exactly on top of the first. They share one anchored flex row instead, and
+   the heading reserves the wider corner. Same :has() fallback reasoning as
+   above: where it is unsupported the corner is merely crowded. */
+.card .tbls { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+.card .tbls .tbl { position: static; }
+.card:has(.tbls) > h2 { padding-right: 76px; }
 /* The toggle is the designated way out of every chart on this page, so it has
    to be findable by keyboard, not merely reachable — same ring as .secnav and
    .ops summary already use. */
@@ -649,8 +658,9 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
    runs under the fixed × button. */
 .detail h2 { font-size: 18px; padding-right: 34px; }
 .detail .kpis { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
-/* fleet */
-details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
+/* #100 removed `details.fleet` and its summary rule with it. The fold grouped
+   three roster tables; two of them are columns of the third now, and one card
+   is not a group — #ops is already the fold it sits in. */
 /* mobile */
 @media (max-width: 720px) {
   /* The wordmark goes, and the nav takes the room it freed: on a phone the

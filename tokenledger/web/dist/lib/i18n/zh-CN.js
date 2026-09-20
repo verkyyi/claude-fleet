@@ -249,7 +249,6 @@ export const zhCN = {
   'alerts.title': '告警',
 
   /* --------------------------------------------------------------- fleet */
-  'fleet.title': '机器群',
   'endpoints.title': '端点',
   'endpoints.hint': '每一台在上报的机器：它挂在哪个订阅下，以及它有哪些数据归不了档。'
     + '某个 agent 停止上报，通常就是总数看起来偏低的原因。',
@@ -267,26 +266,15 @@ export const zhCN = {
   'endpoints.droppedTurns': '{n} 轮次',
   'endpoints.showRetired': '显示已退役的端点',
   'endpoints.retiredOn': '{date} 退役',
-  'machines.title': '每台机器在跑什么',
-  'machines.concurrent': '{total} 个端点里有 {n} 个同时跑着不止一个订阅。'
-    + '这是正常的 —— 账号来自每个进程各自的环境变量，而不是机器。',
-  'machines.single': '每个端点都只跑一个订阅。',
-  'machines.col.machine': '机器',
-  'machines.col.login': '登录用户',
-  'machines.col.subscription': '订阅',
-  'machines.col.how': '来源',
-  'machines.col.firstSeen': '首次出现',
-  'machines.col.lastSeen': '最后出现',
-  'machines.ownLogin': '它自己的登录',
-  'machines.seenInSession': '在会话里见到的',
-  'switches.title': '订阅切换',
-  'switches.hint': '从一个订阅登出、又登入另一个订阅的机器。切换之前记下的轮次'
-    + '保留着旧的归属，而且无法更正 —— 这些就是历史数字不再可靠的接缝。'
-    + '同时并行跑几个订阅不算切换，那种情况看「每台机器在跑什么」。',
-  'switches.col.when': '时间',
-  'switches.col.machine': '机器',
-  'switches.col.from': '从',
-  'switches.col.to': '到',
+  'endpoints.showAccounts': '展开每台机器在跑的全部订阅',
+  'endpoints.ownLogin': '它自己的登录',
+  'endpoints.seenInSession': '在会话里见到的',
+  'endpoints.col.lastSwitch': '最近一次切换',
+  'endpoints.switchHint': '有机器从一个订阅登出、又登入了另一个订阅。切换之前记下的轮次'
+    + '保留着旧的归属，而且无法更正 —— 那就是这台机器的历史数字不再可靠的接缝。'
+    + '同时并行跑几个订阅不算切换：那种情况列在「订阅」那一列里。',
+  'endpoints.switchUnavailable': '切换记录读不出来，所以这张表说不了有没有机器换过订阅。'
+    + '把这里的数字当作「未经核对」，而不是「干净」。',
 
   /* ------------------------------------------------------------- banners */
   'banner.excludesHistory': '{name} 排除了一部分历史。',

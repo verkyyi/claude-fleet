@@ -720,6 +720,92 @@ func TestDashboard_StaleEndpointThresholdMatchesFindings(t *testing.T) {
 	}
 }
 
+// The attribution seam must stay visible, whatever shape it is drawn in.
+//
+// README's "Known limits" makes a promise the code has to keep: when a machine
+// logs out of one subscription and into another, rows already ingested keep
+// their old attribution and CANNOT be corrected, so ccquota records the switch
+// "so the seam is visible in the UI rather than silently wrong". That is the
+// one thing the dashboard must not quietly stop doing.
+//
+// #100 downgraded the seam from a resident card to a column of the endpoint
+// roster, which is a change of shape and explicitly allowed. Deleting the
+// request, or the column, is a change of PROMISE — and it would look like an
+// ordinary cleanup in a diff, because nothing else on the page reads
+// /v1/account-switches. This test is what makes that specific deletion loud.
+//
+// Deliberately not asserting a card, a table or a heading: the point is that
+// the page still ASKS and still RENDERS, not that it does so in the layout
+// #100 happened to pick.
+func TestDashboard_AttributionSeamStaysVisible(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "now.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The CALL, not the path. now.js names both these routes in prose too (the
+	// comment where the two deleted cards used to be), and an assertion that a
+	// comment satisfies is an assertion that goes green on the regression it
+	// exists to catch. `get(...)` is the local helper that builds renderNow's
+	// fetcher list, so this matches the request actually being sent.
+	if !strings.Contains(string(b), "get(`/v1/account-switches") {
+		t.Error("now.js no longer requests /v1/account-switches -- nothing else on the page reads it, " +
+			"so the attribution seam README's \"Known limits\" promises to show is now invisible")
+	}
+	// Asked for AND drawn. A request whose result no card reads is the same
+	// invisibility with a network cost attached.
+	//
+	// Both of these are CALL sites, for the same reason the request above is:
+	// a bare identifier would still match after someone renamed the renderer
+	// out of use, which is exactly the regression being guarded.
+	for _, want := range []string{"t('endpoints.col.lastSwitch')", "switchCell(seam.get("} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("now.js is missing %q -- the switch record is fetched but no longer rendered "+
+				"into the roster, which shows a clean history that is not clean", want)
+		}
+	}
+	// A failed switch query must not read as "nobody switched". Empty is an
+	// answer; unreadable is not, and the two must not render the same.
+	if !strings.Contains(string(b), "endpoints.switchUnavailable") {
+		t.Error("now.js no longer distinguishes a FAILED switch query from an empty one -- " +
+			"a seam that could not be read must not be drawn as a seam that is not there")
+	}
+}
+
+// The operations tier must not pay for /v1/endpoint-accounts on every open.
+//
+// #100's subtraction: the per-machine subscription list was a resident card
+// costing a request on every open of the tier, answering a question ("which
+// subscriptions does this machine run") that matters when you are chasing one
+// specific machine and never otherwise. It is the roster's ⊞ reveal now, so the
+// request is sent on demand, from the click handler -- not from renderNow's
+// fetcher list.
+//
+// The regression this catches is the easy one: someone re-adds the fetcher to
+// get the data "for free" at render time, and the request quietly returns to
+// the default path where nothing reads it until a reader goes looking.
+func TestDashboard_EndpointAccountsIsFetchedOnDemand(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "now.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	// Matched on the reveal's own call site rather than on the bare path: the
+	// path also appears in prose a few hundred lines up, and a comment must not
+	// be able to satisfy this.
+	if !strings.Contains(src, "app.api(`/v1/endpoint-accounts") {
+		t.Fatal("now.js no longer requests /v1/endpoint-accounts from the roster's ⊞ reveal -- " +
+			"the reveal has no source, and nothing else on the page can say which subscriptions " +
+			"a machine runs (the concurrency README's \"Several subscriptions at the same time\" documents)")
+	}
+	// The fetcher list is built with the local `get(...)` helper, which is what
+	// makes a request part of the default round. The lazy reveal calls
+	// app.api(...) directly from its click handler.
+	if strings.Contains(src, "get(`/v1/endpoint-accounts") {
+		t.Error("/v1/endpoint-accounts is back in renderNow's fetcher list -- it is sent on every " +
+			"open of the operations tier again, to fill a reveal most readers never open")
+	}
+}
+
 // The live card has to state the window behind the word "active".
 //
 // The count comes from the server with the threshold that produced it
