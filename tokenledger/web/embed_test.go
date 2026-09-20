@@ -363,6 +363,44 @@ func TestAssets_DashboardLinksToTheUserPage(t *testing.T) {
 	}
 }
 
+// The "when do we work" card draws the PERIODIC reading and nothing else, and
+// it does not ask for data it will not draw.
+//
+// Issue #102: under 48 hours that card used to fall back to hourly BARS, which
+// is the timeline's answer one band up -- the same measure in the same
+// chronological order, at literally the same 1h granularity on span=7d. The
+// card's own hint promised hour x weekday the whole time. So the bars are gone,
+// and with them the only reader the `granularity=hour` request ever had at that
+// length -- which is what lets the request itself be skipped.
+//
+// This is a Go guard rather than a comment for the reason the others here are:
+// both halves fail SILENTLY if they drift apart. A re-added bars() branch just
+// draws a chart nobody notices is a duplicate, and a threshold copied into the
+// fetch plan is a request sent for a card that will not read it (or, the other
+// way, a card drawn from a hole).
+func TestAssets_WhenCardIsPeriodicOnly(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "review.js")
+	if err != nil {
+		t.Fatalf("review.js unreadable: %v", err)
+	}
+	src := string(b)
+	if strings.Contains(src, "C.bars(") {
+		t.Error("review.js draws bars again: a chronological hourly chart is the timeline card's answer, " +
+			"and the 'when' card's hint promises hour x weekday (issue #102)")
+	}
+	if !strings.Contains(src, "sel.to - sel.from < WHEN_MIN_MS ? null : get(`/v1/history?") {
+		t.Error("the granularity=hour request is no longer gated on the selection being long enough to fold: " +
+			"below WHEN_MIN_MS its only reader draws nothing, so the response has nowhere to go (issue #102)")
+	}
+	// ONE copy of the threshold. The card decides what to draw from it and the
+	// fetch plan decides what to ask for from it; a second literal is how those
+	// two answers start disagreeing about the same selection.
+	if n := strings.Count(src, "48 * 3600e3"); n != 1 {
+		t.Errorf("review.js spells the 48h threshold %d times, want 1 (WHEN_MIN_MS): "+
+			"the when card and the fetch plan must read the same constant", n)
+	}
+}
+
 // A source this build knows must be nameable by the page that offers it, and a
 // billed one must be a named term of real spend.
 //

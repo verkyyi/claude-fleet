@@ -463,6 +463,7 @@ export const en = {
   'when.title': 'When',
   'when.hint': 'Hour × weekday, in your local time zone, folded from the selected window.',
   'when.hour': 'Hour',
+  'when.tooShort': 'Under 48 hours there is not enough of each weekday-hour to fold. The timeline above already shows this window hour by hour.',
 
   /* -------------------------------------------------------- wall history */
   'wallHistory.title': 'Wall history',
