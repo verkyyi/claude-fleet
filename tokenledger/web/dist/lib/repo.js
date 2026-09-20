@@ -249,3 +249,77 @@ export function healthAge(health, now = Date.now()) {
     : null;
   return { seconds, after, stale: after === null ? null : seconds > after };
 }
+
+/* ------------------------------------------------- the issue axis (#58) */
+
+/** issueSpendRows turns /v1/repo/cost into the rows the ranked list draws,
+ *  with the unattributed bucket PINNED LAST rather than sorted into place.
+ *
+ *  Pinned because it is not a competitor: it is the part of the window the
+ *  branch never named, and on the corpus the attribution rule was measured
+ *  against it is 63.5% of events — bigger than every real issue put together,
+ *  so sorting it by size would bury the actual distribution under one bar.
+ *  Last, always present, and never silently dropped: attributed +
+ *  unattributed = total is the only reason the other bars can be read as
+ *  shares of anything.
+ *
+ *  `limit` trims the ATTRIBUTED rows only. The caller is told what it cut
+ *  (`hidden`) so the card can say so. */
+export function issueSpendRows(cost, limit = 12) {
+  if (!cost) return null;
+  const issues = Array.isArray(cost.issues) ? cost.issues : [];
+  const shown = limit > 0 ? issues.slice(0, limit) : issues;
+  const un = cost.unattributed || null;
+  return {
+    // Lift the window's figures onto the row. An issue row nests them under
+    // `window` (it also carries `lifetime`, which is a different question)
+    // while the unattributed bucket IS a spend total, and every consumer
+    // below wants one shape. Normalising here rather than at each call site
+    // is what stopped the shares silently reading 0%: `r.tokens` was simply
+    // undefined on an issue row, which is a falsy number, not an error.
+    rows: shown.map((i) => ({
+      ...i,
+      kind: 'issue',
+      tokens: Number(i.window && i.window.tokens) || 0,
+      events: Number(i.window && i.window.events) || 0,
+    })),
+    unattributed: un ? { ...un, kind: 'unattributed' } : null,
+    // What the top-N hid: the rows this card cut, plus the ones the API had
+    // already cut before it got here.
+    hidden: Math.max(0, (Number(cost.distinct_issues) || issues.length) - shown.length),
+    total: cost.total || null,
+    attributed: cost.attributed || null,
+  };
+}
+
+/** issueShare is one bucket's share of the window, in TOKENS.
+ *
+ *  Tokens and not money, and the reason is not a preference: the three kinds
+ *  of money this hub holds are never added, so there is no single cost figure
+ *  a share could be taken of. Tokens are one physical quantity across every
+ *  source. Null when there is no denominator — a share of nothing is not 0%.
+ */
+export function issueShare(bucket, total) {
+  const denom = Number(total && total.tokens) || 0;
+  if (!denom) return null;
+  return (Number(bucket && bucket.tokens) || 0) / denom;
+}
+
+/** concentration answers "do a few issues eat the lot, or is it spread flat"
+ *  with the one number a reader actually asks for: what share of the window's
+ *  ATTRIBUTED tokens the top `n` issues carry.
+ *
+ *  Measured against the attributed total, never the grand total, and the card
+ *  has to say so. Against the grand total it would read as a claim about all
+ *  the spend, and the unattributed bucket would silently flatter it.
+ *
+ *  Null when nothing is attributed, or when there are not more than `n`
+ *  issues to concentrate — "the top 3 of 3 issues carry 100%" is arithmetic,
+ *  not a finding. */
+export function concentration(rows, attributed, n = 3) {
+  const denom = Number(attributed && attributed.tokens) || 0;
+  const list = Array.isArray(rows) ? rows : [];
+  if (!denom || list.length <= n) return null;
+  const top = list.slice(0, n).reduce((a, r) => a + (Number(r.tokens) || 0), 0);
+  return { n, share: top / denom, of: list.length };
+}

@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 32 {
-		t.Fatalf("tools = %d, want 32", len(tools))
+	if len(tools) != 33 {
+		t.Fatalf("tools = %d, want 33", len(tools))
 	}
 
 	want := map[string]bool{
@@ -131,6 +131,7 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"get_limits_history": false, "get_fx": false, "get_user": false,
 		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
 		"list_repos": false, "repo_progress": false, "list_repo_issues": false,
+		"repo_issue_cost": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)

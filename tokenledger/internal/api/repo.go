@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -211,9 +212,36 @@ func (s *Server) handleRepoIssues(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.RepoIssueRow{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"repo": repo, "stale": stale, "issues": rows, "scale": scale,
-	})
+	out := map[string]any{"repo": repo, "stale": stale, "issues": rows, "scale": scale}
+
+	// cost=1 puts each issue's lifetime spend beside it -- "this one has been
+	// open past p95, and here is what it has already burned".
+	//
+	// Opt-in, and it DEGRADES rather than refusing. /v1/repo/cost answers 409
+	// when the issue numbers cannot be bound to this repository, because cost
+	// is the only thing it has to say. Here cost is an adornment on a backlog
+	// that is correct either way, and taking the whole stalled list down over
+	// a binding it never needed would hide progress data to protect a money
+	// column. So the rows go out unpriced and `cost_unavailable` says why, in
+	// the same words the 409 would have used -- stated out loud, never a
+	// silently missing field.
+	if q.Get("cost") == "1" {
+		switch err := s.issueBinding(repo); {
+		case err == nil:
+			priced, err := s.attachIssueCost(rows)
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			out["issues"] = priced
+		case errors.As(err, new(*issueBindingError)):
+			out["cost_unavailable"] = err.Error()
+		default:
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // repoScope reads the repo name and the day range every repo endpoint shares.

@@ -72,8 +72,8 @@ func TestToolsList_RepoToolsSayWhereTheRowsCameFromAndHowToScaleThem(t *testing.
 			t.Errorf("%s does not tell the reader to scale ages to the repo's percentiles", name)
 		}
 	}
-	if seen != 3 {
-		t.Errorf("found %d repo tools, want 3", seen)
+	if seen != 4 {
+		t.Errorf("found %d repo tools, want 4", seen)
 	}
 }
 
@@ -112,12 +112,89 @@ func TestCall_ListRepoIssues_StaleNeedsAMeasuredScale(t *testing.T) {
 func TestCall_RepoTools_RejectAnAmbiguousRepoName(t *testing.T) {
 	ts, st := newMCP(t)
 	seedRepo(t, st)
-	for _, name := range []string{"repo_progress", "list_repo_issues"} {
+	for _, name := range []string{"repo_progress", "list_repo_issues", "repo_issue_cost"} {
 		for _, repo := range []string{"", "r", "https://github.com/o/r"} {
 			out := call(t, ts, name, map[string]any{"repo": repo})
 			if out["result"].(map[string]any)["isError"] != true {
 				t.Errorf("%s accepted repo %q", name, repo)
 			}
 		}
+	}
+}
+
+// The issue axis over MCP. What an agent must not be able to do is report the
+// attributed share as the whole bill, so the unattributed bucket and the
+// totals that let it be checked have to arrive in the same payload.
+func TestCall_RepoIssueCost_CarriesTheUnattributedBucket(t *testing.T) {
+	ts, st := newMCP(t)
+	seedRepo(t, st)
+	seed(t, st, "acct-a", "ep-1", "/a", "warm")
+
+	now := time.Now().UTC().Add(-time.Minute)
+	cost := 1.0
+	ev := func(uuid, branch string, out int64) model.UsageEvent {
+		return model.UsageEvent{
+			AccountUUID: "acct-a", EndpointID: "ep-1", MessageUUID: uuid,
+			SessionID: uuid, TS: now, Model: "claude-sonnet-5", CWD: "/a",
+			GitBranch: branch, OutputTokens: out, CostUSD: &cost,
+		}
+	}
+	if _, _, err := st.InsertEvents([]model.UsageEvent{
+		ev("c-1", "issue-1", 900),
+		ev("c-2", "scratch-94", 100),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := structured(t, call(t, ts, "repo_issue_cost", map[string]any{"repo": "o/r"}))
+
+	issues := sc["issues"].([]any)
+	if len(issues) != 1 || issues[0].(map[string]any)["number"].(float64) != 1 {
+		t.Fatalf("issues = %v; want issue #1 alone", issues)
+	}
+	if title := issues[0].(map[string]any)["title"]; title != "old" {
+		t.Errorf("issue #1 title = %v; the progress row did not travel with the money", title)
+	}
+	// #1 has been open 40 days against a 3-day p95.
+	if stale := issues[0].(map[string]any)["stale"]; stale != true {
+		t.Errorf("stale = %v, want true against this repo's own p95", stale)
+	}
+
+	// Two events the rule declines: scratch-94, and the warm-up event whose
+	// branch was never recorded at all. Both belong in the bucket.
+	un := sc["unattributed"].(map[string]any)
+	if un["events"].(float64) != 2 {
+		t.Fatalf("unattributed = %v; scratch-94 and the branchless event must both have a place", un)
+	}
+	branches := map[string]bool{}
+	for _, raw := range un["branches"].([]any) {
+		branches[raw.(map[string]any)["branch"].(string)] = true
+	}
+	if !branches["scratch-94"] || !branches[""] {
+		t.Errorf("branches = %v; the bucket has to be explicable, not just disclosed", branches)
+	}
+	att := sc["attributed"].(map[string]any)
+	total := sc["total"].(map[string]any)
+	if att["events"].(float64)+un["events"].(float64) != total["events"].(float64) {
+		t.Errorf("attributed %v + unattributed %v != total %v",
+			att["events"], un["events"], total["events"])
+	}
+}
+
+// The §5 refusal reaches an agent too. A tool that answered where the browser
+// gets a 409 would hand back a blend across repositories as a measurement.
+func TestCall_RepoIssueCost_RefusesWhenTheNumberCannotBeBound(t *testing.T) {
+	ts, st := newMCP(t)
+	seedRepo(t, st)
+	if _, _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
+		Repo: "o/second", ObservedAt: time.Now().UTC(),
+		Issues: []model.RepoIssue{{Number: 1, State: model.RepoStateOpen, CreatedAt: time.Now().UTC()}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := call(t, ts, "repo_issue_cost", map[string]any{"repo": "o/r"})["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatalf("two repositories were answered rather than refused: %v", res)
 	}
 }

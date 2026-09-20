@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/ccquota/internal/model"
@@ -57,6 +58,14 @@ type RepoScale struct {
 type RepoIssueFilter struct {
 	Repo  string
 	State string // "" = both
+	// Numbers keeps only these issue numbers. Empty means no constraint.
+	//
+	// It exists for the join back from the spend side, where the issue axis
+	// hands over a set of numbers read off branch names and needs the rows
+	// that go with them. A number with no row here is not an error: per-issue
+	// rows are bounded by retention, so spend can outlive the issue it names,
+	// and the caller has to be able to say so rather than drop the money.
+	Numbers []int64
 	// MinAgeSeconds keeps only issues at least this old. The caller passes the
 	// repo's own p95, never a constant.
 	MinAgeSeconds float64
@@ -357,6 +366,12 @@ func (s *Store) RepoIssues(f RepoIssueFilter) ([]RepoIssueRow, error) {
 	}
 	if f.ShippedOnly {
 		q += ` AND shipped_at IS NOT NULL`
+	}
+	if len(f.Numbers) > 0 {
+		q += ` AND number IN (` + strings.TrimSuffix(strings.Repeat("?,", len(f.Numbers)), ",") + `)`
+		for _, n := range f.Numbers {
+			args = append(args, n)
+		}
 	}
 	if f.MinAgeSeconds > 0 {
 		// Age is measured to closed_at once closed and to now while open, so

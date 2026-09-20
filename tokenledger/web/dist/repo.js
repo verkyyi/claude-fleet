@@ -15,11 +15,14 @@
 // measured one.
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
 import { t } from './lib/i18n.js';
-import { fmtInt } from './lib/format.js';
+import { fmtInt, fmtPct } from './lib/format.js';
 import { rankedBars } from './charts.js';
+import { seriesPalette, OTHER_COLOR } from './lib/palette.js';
+import { costLine } from './lib/cost.js';
 import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo,
          labelFacets, filterStalled, sortStalled,
-         healthRows, healthAge } from './lib/repo.js';
+         healthRows, healthAge,
+         issueSpendRows, issueShare, concentration } from './lib/repo.js';
 
 /** renderRepo mounts the progress tier. It returns the {fetchers, apply} pair
  *  app.js's loader expects, or null when this hub holds no repo data at all —
@@ -39,14 +42,19 @@ export function renderRepo(root, state, app, repos) {
       // whole open backlog to be a distribution rather than a sample, and the
       // stalled list is drawn from the same rows so the two can never
       // disagree about what is open.
-      (signal) => app.api('/v1/repo/issues?' + q({ state: 'open', limit: '1000' }), signal),
+      (signal) => app.api('/v1/repo/issues?' + q({ state: 'open', limit: '1000', cost: '1' }), signal),
+      // The issue axis. Its own request rather than a field on the one above,
+      // because it answers about a WINDOW ("where did this period's money
+      // go") while the backlog answers about now, and the two ranges are not
+      // the same question wearing one URL.
+      (signal) => app.api('/v1/repo/cost?' + q({}), signal),
     ],
     apply: (results) => apply(root, results, repo, repos, state, app),
   };
 }
 
 function apply(root, results, repo, repos, state, app) {
-  const [flowR, issuesR] = results;
+  const [flowR, issuesR, costR] = results;
   // Three slots, and which card goes where is fixed rather than positional:
   // the picker is full width above the pair, flow and age share the two-up
   // row, and the stalled table runs full width beneath them. Slicing a flat
@@ -61,7 +69,17 @@ function apply(root, results, repo, repos, state, app) {
   const age = issues === null
     ? errCard(t('repo.backlog.title'), issuesR.reason)
     : ageCard(issues, scale);
-  const below = issues === null ? [] : [stalledCard(issues, scale, state, app)];
+  const below = issues === null
+    ? []
+    : [stalledCard(issues, scale, state, app,
+        issuesR.status === 'fulfilled' ? issuesR.value.cost_unavailable : null)];
+  // Money on the issue axis, directly under the two-up row: it reads against
+  // the flow above it, and it is the card that says how much of the window
+  // nobody could attribute at all.
+  const cost = costR && costR.status === 'fulfilled' ? costCard(costR.value)
+    : costR && costR.status === 'rejected' ? costUnavailableCard(costR.reason)
+    : null;
+  if (cost) below.unshift(cost);
   // Above the pair, not below the table. These three figures say whether the
   // checks behind every other number on this page still work, and they landed
   // here because the surface they used to live on was one nobody opened. Put
@@ -284,7 +302,7 @@ function scaleLine(scale) {
  *  language switcher re-renders, it does not reload. */
 const SORT_LABEL = { age: 'repo.sort.age', comments: 'repo.sort.comments' };
 
-function stalledCard(issues, scale, state, app) {
+function stalledCard(issues, scale, state, app, costUnavailable) {
   const card = el('div', { class: 'card', id: 'repo-stalled' },
     el('h2', {}, t('repo.stalled.title')),
     el('p', { class: 'hint' }, t('repo.stalled.hint')));
@@ -310,7 +328,15 @@ function stalledCard(issues, scale, state, app) {
     card.appendChild(el('div', { class: 'empty' }, t('repo.stalled.noMatch')));
     return card;
   }
-  card.appendChild(el('div', { class: 'scroll' }, stalledTable(shown, state, app)));
+  // The money column exists only when the hub could bind these numbers to
+  // this repository. When it could not, the reason is printed instead of the
+  // column -- a blank column would read as "nothing was spent".
+  const priced = !costUnavailable && shown.some((i) => i.lifetime);
+  card.appendChild(el('div', { class: 'scroll' }, stalledTable(shown, state, app, priced)));
+  if (costUnavailable) {
+    card.appendChild(el('p', { class: 'hint' },
+      t('repo.stalled.noCost') + ' ' + costUnavailable));
+  }
   card.appendChild(el('p', { class: 'hint' },
     t('repo.stalled.count', { shown: fmtInt(shown.length), total: fmtInt(rows.length) })
     + ' ' + t('repo.stalled.sortedBy', { what: t(SORT_LABEL[state.rsort] || SORT_LABEL.age) })));
@@ -359,13 +385,15 @@ function stalledControls(rows, state, app) {
 const STALLED_COLS = [
   { key: 'issue', label: 'repo.col.issue' },
   { key: 'age', label: 'repo.col.age', sort: 'age', num: true },
+  { key: 'burned', label: 'repo.col.burned', cost: true },
   { key: 'comments', label: 'repo.col.comments', sort: 'comments', num: true },
   { key: 'shipped', label: 'repo.col.shipped' },
 ];
 
-function stalledTable(shown, state, app) {
+function stalledTable(shown, state, app, priced) {
   const setSort = (s) => () => app.setState({ ...state, rsort: s }, { push: false });
-  const head = el('tr', {}, STALLED_COLS.map((c) => el('th', {
+  const cols = STALLED_COLS.filter((c) => !c.cost || priced);
+  const head = el('tr', {}, cols.map((c) => el('th', {
     class: c.num ? 'num' : null,
     role: c.sort ? 'button' : null,
     tabindex: c.sort ? '0' : null,
@@ -379,6 +407,10 @@ function stalledTable(shown, state, app) {
       ? el('a', { href: i.url, target: '_blank', rel: 'noopener noreferrer' }, `#${i.number} ${i.title || ''}`.trim())
       : `#${i.number} ${i.title || ''}`.trim()),
     el('td', { class: 'num' }, fmtAge(i.age_seconds, t)),
+    // Per source, never a sum -- and "no cost" rather than a zero when no
+    // branch ever named this issue, because a zero would claim the work was
+    // free instead of unattributed.
+    ...(priced ? [el('td', { title: costLine(i.lifetime || {}) }, costLine(i.lifetime || {}))] : []),
     el('td', { class: 'num' }, fmtInt(i.comments || 0)),
     // The actionable half: the work already landed and nobody closed it.
     // That is a close, not an investigation, so it is called out rather than
@@ -388,4 +420,131 @@ function stalledTable(shown, state, app) {
       : '')));
 
   return el('table', {}, el('thead', {}, head), el('tbody', {}, body));
+}
+
+/* ------------------------------------------------ cost on the issue axis */
+
+/** costCard puts the window's money on the issue axis, with the part nobody
+ *  could attribute sitting on the same chart rather than in a footnote.
+ *
+ *  Three rules, and none of them is a rendering preference:
+ *
+ *  - The bars are TOKENS. Cost comes back split by source because the three
+ *    kinds of money this hub holds mean nothing added together, so there is
+ *    no single cost figure to draw a bar from. Every money figure here is a
+ *    per-source line, never a sum.
+ *  - The unattributed bucket is a bar, pinned last. On the corpus the
+ *    attribution rule was measured against it is 63.5% of events — a chart
+ *    that drops it is not slightly optimistic, it is wrong by a factor of
+ *    three in the flattering direction.
+ *  - `stale` comes from the repository's own p95 or not at all. A null verdict
+ *    renders as nothing, never as "fine".
+ */
+function costCard(cost) {
+  const card = el('div', { class: 'card', id: 'repo-cost' },
+    el('h2', {}, t('repo.cost.title')),
+    el('p', { class: 'hint' }, t('repo.cost.hint')));
+
+  const page = issueSpendRows(cost);
+  if (!page || (!page.rows.length && !(page.unattributed && page.unattributed.events))) {
+    card.appendChild(el('div', { class: 'empty' }, t('repo.cost.empty')));
+    return card;
+  }
+
+  // Colour by NAME, not by position: an issue's rank changes every window,
+  // and index colours would repaint the whole chart when two issues swap
+  // places. The unattributed bucket is the one bar that never takes a series
+  // colour — it is not a series, it is the remainder.
+  const colors = seriesPalette(page.rows.map((r) => '#' + r.number));
+  const bars = page.rows.map((r, i) => issueBar(r, colors[i], page.total, cost.scale));
+  if (page.unattributed) {
+    bars.push(issueBar(page.unattributed, OTHER_COLOR, page.total, cost.scale));
+  }
+  card.appendChild(rankedBars(bars));
+
+  for (const line of costFooter(page, cost)) card.appendChild(line);
+  return card;
+}
+
+/** issueBar is one row of the ranked list: a number, what it is, how much of
+ *  the window it took, and — only in the hover — the money, per source. */
+function issueBar(r, color, total, scale) {
+  const unattributed = r.kind === 'unattributed';
+  const share = issueShare(r, total);
+  // A number the hub holds no issue row for keeps its money and says so. Its
+  // spend outlived the issue (per-issue rows are bounded by retention), and
+  // dropping it would break the sum the card is built on.
+  const label = unattributed ? t('repo.cost.unattributed')
+    : r.known ? `#${r.number} ${r.title}`
+    : t('repo.cost.unknownIssue', { n: r.number });
+
+  const tip = [];
+  tip.push(t('repo.cost.tipWindow', { tokens: fmtInt(r.tokens), cost: costLine(r.window || r) }));
+  if (!unattributed && r.lifetime && r.lifetime.events) {
+    tip.push(t('repo.cost.tipLifetime', { cost: costLine(r.lifetime) }));
+  }
+  if (!unattributed && r.stale === true && scale && typeof scale.p95_seconds === 'number') {
+    tip.push(t('repo.cost.tipStale', {
+      age: fmtAge(r.age_seconds, t), after: fmtAge(scale.p95_seconds, t),
+    }));
+  }
+  if (unattributed && Array.isArray(r.branches) && r.branches.length) {
+    tip.push(t('repo.cost.tipBranches', {
+      branches: r.branches.slice(0, 4).map((b) => b.branch || t('repo.cost.noBranch')).join(', '),
+    }));
+  }
+  return {
+    key: unattributed ? 'unattributed' : String(r.number),
+    label,
+    value: Number(r.tokens) || 0,
+    right: share == null ? fmtInt(r.tokens) : fmtPct(share, 0),
+    rightTitle: t('repo.cost.tokens', { n: fmtInt(r.tokens) }),
+    color,
+    tip: escapeHTML(tip.join(' · ')),
+  };
+}
+
+/** costFooter is the three sentences the bars cannot say themselves: how
+ *  concentrated the spend is, how much of it was never attributed, and what
+ *  the top-N left out. */
+function costFooter(page, cost) {
+  const out = [];
+  const conc = concentration(page.rows, page.attributed);
+  if (conc) {
+    // Explicitly "of the attributed", because it is: measuring against the
+    // grand total would let the unattributed bucket flatter the figure.
+    out.push(el('p', { class: 'hint' },
+      t('repo.cost.concentration', { n: conc.n, of: conc.of, share: fmtPct(conc.share, 0) })));
+  }
+  if (page.hidden > 0) {
+    out.push(el('p', { class: 'hint' }, t('repo.cost.hidden', { n: fmtInt(page.hidden) })));
+  }
+
+  const un = page.unattributed;
+  const unShare = un ? issueShare(un, page.total) : null;
+  if (un && unShare != null) {
+    // warn, not a neutral hint: this is the number that decides whether every
+    // bar above it is a distribution or a sample, and it has to be read.
+    const biggest = (un.branches || [])[0];
+    const why = biggest
+      ? t('repo.cost.unattributedWhy', { branch: biggest.branch || t('repo.cost.noBranch') })
+      : '';
+    out.push(el('p', { class: unShare >= 0.5 ? 'hint warn' : 'hint' },
+      t('repo.cost.unattributedShare', { share: fmtPct(unShare, 0) }) + (why ? ' ' + why : '')));
+  }
+  if (!cost.scale || typeof cost.scale.p95_seconds !== 'number') {
+    out.push(el('p', { class: 'hint' }, t('repo.cost.noScale')));
+  }
+  return out;
+}
+
+/** costUnavailableCard renders the refusal as an explanation rather than as a
+ *  failed query. The hub is saying it will not guess which repository a spend
+ *  row belongs to, which is an answer — and the reader needs to be told what
+ *  would make it answerable, not handed a status code. */
+function costUnavailableCard(reason) {
+  return el('div', { class: 'card', id: 'repo-cost' },
+    el('h2', {}, t('repo.cost.title')),
+    el('div', { class: 'empty' }, t('repo.cost.unbound')),
+    el('p', { class: 'hint' }, (reason && reason.message) || String(reason)));
 }

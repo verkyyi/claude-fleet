@@ -147,6 +147,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
 	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))
 	mux.Handle("/v1/repo/issues", s.viewerOnly(http.HandlerFunc(s.handleRepoIssues)))
+	mux.Handle("/v1/repo/cost", s.viewerOnly(http.HandlerFunc(s.handleRepoCost)))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))

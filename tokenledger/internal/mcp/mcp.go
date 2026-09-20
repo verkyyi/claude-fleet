@@ -629,6 +629,31 @@ func toolSpecs() []toolSpec {
 				"limit": limitProp,
 			}, "repo"),
 		},
+		{
+			Name:  "repo_issue_cost",
+			Title: "What the money landed on, per issue",
+			Description: "Spend for one repository on the ISSUE axis: the window's tokens and cost per " +
+				"issue, each issue's LIFETIME cost (every hour ever attributed to it, unbounded " +
+				"by the window), and the issue's own progress beside it. " +
+				"ALWAYS report the unattributed bucket: an issue number is read from the branch " +
+				"name by one anchored rule (`issue-<N>`), so work whose branch never said what it " +
+				"was for is NOT attributed -- measured at 63.5% of events on a real corpus. " +
+				"attributed + unattributed = total, and `unattributed.branches` says which branches " +
+				"it was. An answer that quotes only the attributed share is wrong by a factor of " +
+				"three, in the flattering direction. " +
+				"Cost is split by source and must never be added across them. `stale` is null when " +
+				"the repo has shipped no close-time percentiles -- say the scale is unknown, do not " +
+				"substitute one. Errors when the hub holds a number of repositories other than this " +
+				"one alone: a spend row names an issue NUMBER and no repository, and every repo " +
+				"starts at #1, so the binding is only sound while the hub holds exactly this repo." +
+				repoCaveat,
+			InputSchema: obj(map[string]any{
+				"repo":  repoProp,
+				"since": sinceProp,
+				"until": untilProp,
+				"limit": limitProp,
+			}, "repo"),
+		},
 	}
 }
 
@@ -1077,6 +1102,22 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			"repo": repo, "stale": stale, "issues": rows, "scale": scale,
 			"disclaimer": strings.TrimSpace(repoCaveat),
 		}, nil
+
+	case "repo_issue_cost":
+		repo := str(args, "repo")
+		if err := model.ValidRepoName(repo); err != nil {
+			return nil, err
+		}
+		start, end := repoRange(args)
+		// The same body /v1/repo/cost serves, including the §5 refusal. An
+		// agent that could get a blended answer where the browser gets a 409
+		// would report the blend as measured.
+		out, err := s.api.IssueCost(repo, start, end, intArg(args, "limit"))
+		if err != nil {
+			return nil, err
+		}
+		out["disclaimer"] = strings.TrimSpace(repoCaveat)
+		return out, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isoWeekStart, weeklyFlow, net, scaleBands, ageHistogram, stalled,
          shippedButOpen, fmtAge, pickRepo, STALLED_SORTS, labelFacets,
-         filterStalled, sortStalled } from '../dist/lib/repo.js';
+         filterStalled, sortStalled,
+         issueSpendRows, issueShare, concentration } from '../dist/lib/repo.js';
 
 const day = (d, opened, closed, open) => ({ day: d, opened, closed, open_at_end: open });
 const DAY = 86400;
@@ -238,4 +239,97 @@ test('stalled, filtered and sorted compose into what the card shows', () => {
   assert.deepEqual(shown.map((r) => r.number), [103]);
   assert.equal(shown.length, 1);
   assert.equal(st.length, 3, 'the hint prints "1 of 3" — the denominator is what is stalled, not what is open');
+});
+
+/* --------------------------------------------- the issue axis (#58) */
+
+const spend = (tokens, events = 1) => ({
+  tokens, events,
+  cost: [{ source: 'claude', kind: 'notional', events, cost_usd: 1, unpriced_events: 0 }],
+});
+
+// The shape /v1/repo/cost actually sends: an issue row nests the window's
+// figures under `window` and carries `lifetime` beside it. A fixture that put
+// tokens at the top level passed every test while the real card drew 0%.
+const costPayload = () => ({
+  issues: [
+    { number: 57, title: 'seam', known: true, window: spend(600, 6), lifetime: spend(900, 9) },
+    { number: 58, title: 'axis', known: true, window: spend(300, 3), lifetime: spend(300, 3) },
+    { number: 59, title: 'other', known: true, window: spend(100, 1), lifetime: spend(100, 1) },
+  ],
+  distinct_issues: 3,
+  attributed: spend(1000, 10),
+  unattributed: { ...spend(2000, 20), branches: [{ branch: 'scratch-94', tokens: 1500, events: 15 }] },
+  total: spend(3000, 30),
+});
+
+test('issueSpendRows pins the unattributed bucket last rather than sorting it', () => {
+  const got = issueSpendRows(costPayload());
+  assert.equal(got.rows.length, 3);
+  assert.equal(got.rows[0].number, 57);
+  // It is larger than every issue and must still not be in the ranked list.
+  assert.ok(!got.rows.some((r) => r.kind === 'unattributed'));
+  assert.equal(got.unattributed.kind, 'unattributed');
+  assert.equal(got.unattributed.tokens, 2000);
+});
+
+test('issueSpendRows reports what a top-N hid', () => {
+  const got = issueSpendRows(costPayload(), 2);
+  assert.equal(got.rows.length, 2);
+  assert.equal(got.hidden, 1);
+  // Truncation must not touch the totals — they are the only thing letting a
+  // reader tell a long tail from a short one.
+  assert.equal(got.attributed.tokens, 1000);
+  assert.equal(got.total.tokens, 3000);
+});
+
+test('issueSpendRows keeps the bucket present when it is empty', () => {
+  const payload = { ...costPayload(), unattributed: { ...spend(0, 0), branches: [] } };
+  const got = issueSpendRows(payload);
+  assert.ok(got.unattributed, 'an empty bucket still needs a place on the chart');
+  assert.equal(got.unattributed.tokens, 0);
+});
+
+test('issueSpendRows declines a missing payload rather than inventing an empty one', () => {
+  assert.equal(issueSpendRows(null), null);
+});
+
+test('issueShare is taken in tokens, and is null with no denominator', () => {
+  const p = costPayload();
+  assert.equal(issueShare(p.unattributed, p.total), 2000 / 3000);
+  assert.equal(issueShare(issueSpendRows(p).rows[0], p.total), 600 / 3000,
+    'the window figures have to be lifted onto the row, or every share reads 0%');
+  assert.equal(issueShare(issueSpendRows(p).rows[0], spend(0, 0)), null);
+  assert.equal(issueShare(issueSpendRows(p).rows[0], null), null);
+});
+
+test('concentration measures against the attributed total, not the grand one', () => {
+  const p = costPayload();
+  const c = concentration(issueSpendRows(p).rows, p.attributed, 2);
+  // 600 + 300 of 1000 attributed. Against the 3000 grand total it would read
+  // 30% and flatter the concentration by folding in the unattributed bucket.
+  assert.equal(c.share, 0.9);
+  assert.equal(c.n, 2);
+  assert.equal(c.of, 3);
+});
+
+test('concentration says nothing when there is nothing to concentrate', () => {
+  const p = costPayload();
+  assert.equal(concentration(issueSpendRows(p).rows, p.attributed, 3), null,
+    'top 3 of 3 is arithmetic, not a finding');
+  assert.equal(concentration(issueSpendRows(p).rows, spend(0, 0), 2), null);
+  assert.equal(concentration([], p.attributed, 2), null);
+});
+
+test('issueSpendRows lifts the window figures onto the row', () => {
+  // The regression: an issue row nests tokens under `window`, so reading
+  // `r.tokens` straight off the API row gave undefined — a falsy number that
+  // drew every bar at zero width and every share at 0%, with no error.
+  const got = issueSpendRows(costPayload());
+  assert.equal(got.rows[0].tokens, 600);
+  assert.equal(got.rows[0].events, 6);
+  // lifetime is a different question and must not be flattened over it.
+  assert.equal(got.rows[0].lifetime.tokens, 900);
+  // The bucket already is a spend total and keeps its own figures.
+  assert.equal(got.unattributed.tokens, 2000);
 });
