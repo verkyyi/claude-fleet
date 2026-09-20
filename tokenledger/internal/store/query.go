@@ -464,6 +464,10 @@ func (s *Store) UsageBy(account string, d Dimension, start, end time.Time, limit
 		s.labelAccounts(out)
 	case ByTeam:
 		labelTeams(out)
+	case ByUser:
+		s.labelUsers(out, "usage_events",
+			fmt.Sprintf("WHERE %s ts >= ? AND ts < ?", accountClause(account)),
+			accountArgs(account, fmtTime(start), fmtTime(end)))
 	}
 	return out, nil
 }
@@ -481,6 +485,110 @@ func labelTeams(bs []Bucket) {
 		}
 		bs[i].Label = bs[i].Key
 	}
+}
+
+// noLoginLabel is what the blank OS login IS: a reporter with no OS login to
+// report, not a person this hub failed to identify.
+//
+// English, like labelTeams' "unassigned" a few lines up, and for the same
+// reason: it is a name the hub computed, not a phrase the page wrote, so it
+// travels to the dashboard, the JSON API and MCP as one string. The
+// alternative is what this replaces -- an empty label that each surface
+// renders through its own generic fallback, which is how two renderers came to
+// invent "(unknown)" separately (issue #132).
+const noLoginLabel = "non-login source"
+
+// labelUsers names the login-less bucket after whatever actually reported it.
+//
+// The blank os_user is not missing data and not a person. Every OS agent path
+// stamps the login it runs as (internal/model/identity.go), so a row can only
+// be blank when the sender had no OS login to stamp -- on this hub, a gateway
+// shipper. Left unlabelled it reached the page as the empty string, and both
+// the bars and the table fell through to their own "(unknown)", which reads as
+// "the hub lost track of somebody" about the one row in this breakdown
+// carrying a real invoice.
+//
+// Kept in the breakdown rather than filtered out, for labelTeams' reason: a
+// by-login card whose rows do not add up to the period's total is worse than
+// one with a named non-person in it.
+//
+// Only the blank bucket is touched. A real login is already its own name, and
+// echoing every one of them into `label` would put the same string twice in
+// every row of the payload to say nothing new.
+//
+// The caller hands over the table and WHERE it just grouped, rather than a
+// time range this could rebuild: the same breakdown is served from
+// usage_events (UsageBy) and from the rollup under a Filter carrying the
+// reader's drill-down chips (UsageByFiltered), and a name proven against
+// anything other than the rows in hand is a name for a different question.
+func (s *Store) labelUsers(bs []Bucket, table, where string, args []any) {
+	for i := range bs {
+		if bs[i].Key == "" {
+			bs[i].Label = s.loginlessLabel(table, where, args)
+		}
+	}
+}
+
+// loginlessLabel says WHO reported without a login, when the events can prove
+// it: exactly one endpoint behind the blank bucket means that endpoint IS the
+// answer, and its own label is already the operator's name for it
+// ("ai-gateway-shipper"). Two or more and the hub says only the thing it can
+// stand behind, because picking one would attribute another's spend to it.
+//
+// Proven per query, not once: the same hub can answer "one shipper" for last
+// week and "two" for last month, and the label has to follow the rows it is
+// labelling. `where` and `args` are the caller's own, re-run against the same
+// table it grouped, for that reason -- so narrowing the range, the
+// subscription or any drill-down chip re-proves the name under the narrower
+// question instead of carrying the wider one's answer into it.
+//
+// The endpoint name is qualified rather than used bare, and the qualifier goes
+// FIRST. A by-login row reading `ai-gateway-shipper` invites the reader to
+// take it for a login; and the label column is narrow enough to clip -- at the
+// card's real width `ai-gateway-shipper (non-login source)` renders as
+// `ai-gateway-shipper …`, which is the bare name again with the correction
+// thrown away. Leading with the kind means the part that must survive
+// truncation is the part that always does; the full string stays in the row's
+// hover either way.
+func (s *Store) loginlessLabel(table, where string, args []any) string {
+	q := fmt.Sprintf(`
+		SELECT DISTINCT endpoint_id FROM %s
+		%s AND os_user = ''
+		LIMIT 2`, table, where)
+	rows, err := s.read.Query(q, args...)
+	if err != nil {
+		return noLoginLabel
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return noLoginLabel
+		}
+		ids = append(ids, id)
+	}
+	if rows.Err() != nil || len(ids) != 1 {
+		return noLoginLabel
+	}
+	eps, err := s.ListEndpointsWithRetired("")
+	if err != nil {
+		return noLoginLabel
+	}
+	for _, e := range eps {
+		if e.ID != ids[0] {
+			continue
+		}
+		name := e.Label
+		if name == "" {
+			name = e.Hostname
+		}
+		if name == "" {
+			break
+		}
+		return fmt.Sprintf("%s: %s", noLoginLabel, name)
+	}
+	return noLoginLabel
 }
 
 // accountClause returns the WHERE fragment that scopes to one subscription, or
@@ -872,6 +980,10 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 		s.labelEndpoints(out)
 	case ByAccount:
 		s.labelAccounts(out)
+	// Deliberately no ByUser arm, unlike UsageBy's otherwise identical switch:
+	// this query is already scoped to one non-empty login, so grouping it by
+	// user returns that login and nothing else. The blank bucket labelUsers
+	// exists for cannot occur here.
 	case ByTeam:
 		labelTeams(out)
 	}

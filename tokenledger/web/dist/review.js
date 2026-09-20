@@ -56,7 +56,19 @@ const DIM_LABEL = { project: t('dim.project'), login: t('dim.login'), machine: t
 // A relative path deliberately — the page is served by the same hub as this
 // dashboard, on whatever host and port and behind whatever prefix the reader
 // reached it on, and an absolute URL would have to guess all three.
-export const userHref = (login) => `/u/${encodeURIComponent(login)}`;
+//
+// null for the blank login, because there is no such page and never was: the
+// login IS the path segment, so `/u/` has nothing in it to serve and
+// `serveUserPage` answers 404 ("no login in the path"), while the data behind
+// it refuses the same way (`UserSummary("")` → "os user is required"). The
+// login-less row IS a real row — a gateway shipper reports with no OS login
+// (see labelUsers in internal/store/query.go) — but it is not a person with a
+// page, and a door painted on a wall is worse than no door. Returning null
+// rather than guarding at each call site is what makes that true everywhere:
+// both the bars and the table already render a falsy href as plain text
+// (charts.js `rankedBars` and `keyCell`), so neither can grow the dead link
+// back on its own (issue #132).
+export const userHref = (login) => (login ? `/u/${encodeURIComponent(login)}` : null);
 // kpiTile's `tone` only special-cases the literal string 'neutral' (its own
 // default) — anything else gets the up=red/down=green colouring. Named here
 // rather than passed as an arbitrary truthy string so every "more usage is

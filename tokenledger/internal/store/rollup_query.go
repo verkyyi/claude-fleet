@@ -70,6 +70,13 @@ func (s *Store) UsageByFiltered(f Filter, d Dimension, limit int) ([]Bucket, err
 		s.labelAccounts(out)
 	case ByTeam:
 		labelTeams(out)
+	case ByUser:
+		// The dashboard's by-login card comes through HERE, not through
+		// UsageBy -- which is why the blank login reached the page unnamed and
+		// two renderers each fell back to their own "(unknown)" (issue #132).
+		// Proven against this query's own rows: same table, same filter, so a
+		// drill-down chip re-proves the name under its narrower question.
+		s.labelUsers(out, "usage_hourly", where, args)
 	}
 	return out, nil
 }

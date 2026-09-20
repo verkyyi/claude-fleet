@@ -117,3 +117,189 @@ func TestUserSummary_AgreesWithUsageByUser(t *testing.T) {
 		t.Errorf("summary says %d tokens, the breakdown sums to %d", sum.Tokens, viaBuckets)
 	}
 }
+
+// enrollLabelled gives an endpoint a label that is NOT its id, so a test can
+// tell the two apart -- seedAccount deliberately uses the id for both.
+func enrollLabelled(t *testing.T, s *Store, account, endpoint, label string) {
+	t.Helper()
+	if err := s.UpsertAccount(ident(account), "max", "default_claude_max_20x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enroll(endpoint, label, "hash-"+endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.TouchEndpoint(endpoint, ident(account), "test", true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func loginlessBucket(t *testing.T, bs []Bucket) Bucket {
+	t.Helper()
+	for _, b := range bs {
+		if b.Key == "" {
+			return b
+		}
+	}
+	t.Fatalf("the login-less bucket is gone from the breakdown: %+v", bs)
+	return Bucket{}
+}
+
+// The blank login is a REPORTER, not a person the hub lost track of, and when
+// one endpoint is behind it the hub can say which one (issue #132). On this
+// deployment every one of those 6,204 turns came from `ai-gateway-shipper`, a
+// gateway shipper that has no OS login to send -- and the row carried the only
+// real invoice on the card while rendering as "(unknown)".
+func TestUsageBy_LoginlessBucketIsNamedAfterItsOneReporter(t *testing.T) {
+	s := newStore(t)
+	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ai-gateway-shipper")
+	seedAccount(t, s, "acct-1", "ep-laptop")
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		userEv("acct-1", "ep_1789272199291316987", "g1", "", "/w", 900),
+		userEv("acct-1", "ep_1789272199291316987", "g2", "", "/w", 100),
+		userEv("acct-1", "ep-laptop", "a1", "alice", "/repo/a", 400),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+
+	bs, err := s.UsageBy(AllAccounts, ByUser, start, end, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blank := loginlessBucket(t, bs)
+	if want := "non-login source: ai-gateway-shipper"; blank.Label != want {
+		t.Errorf("login-less bucket label = %q, want %q", blank.Label, want)
+	}
+	// Named, not hidden: it is the row with the real money on it.
+	if blank.Tokens != 1000 {
+		t.Errorf("login-less bucket tokens = %d, want 1000 -- naming it must not drop any of it", blank.Tokens)
+	}
+	// A real login is already its own name; labelling it again would put the
+	// same string twice in every row to say nothing new.
+	for _, b := range bs {
+		if b.Key == "alice" && b.Label != "" {
+			t.Errorf("alice got a redundant label %q", b.Label)
+		}
+	}
+}
+
+// Two reporters and the hub says only what it can stand behind: picking one of
+// them would put the other's spend under its name.
+func TestUsageBy_LoginlessBucketStaysGenericWhenSeveralReported(t *testing.T) {
+	s := newStore(t)
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		userEv("acct-1", "ep-gw", "g1", "", "/w", 900),
+		userEv("acct-1", "ep-voice", "v1", "", "/w", 100),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bs, err := s.UsageBy(AllAccounts, ByUser,
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loginlessBucket(t, bs).Label; got != "non-login source" {
+		t.Errorf("label = %q, want %q -- two reporters cannot be named as one", got, "non-login source")
+	}
+}
+
+// The name is proven against the window being labelled, not against the hub's
+// whole history: the same hub answers "one shipper" for a narrow range and
+// "two" for a wide one, and the label has to follow the rows it is on.
+func TestUsageBy_LoginlessLabelFollowsTheWindow(t *testing.T) {
+	s := newStore(t)
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
+	gw := userEv("acct-1", "ep-gw", "g1", "", "/w", 900)
+	old := userEv("acct-1", "ep-voice", "v1", "", "/w", 100)
+	old.TS = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	if _, _, err := s.InsertEvents([]model.UsageEvent{gw, old}); err != nil {
+		t.Fatal(err)
+	}
+	narrow, err := s.UsageBy(AllAccounts, ByUser,
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loginlessBucket(t, narrow).Label; got != "non-login source: ai-gateway-shipper" {
+		t.Errorf("narrow window label = %q, want the one reporter inside it", got)
+	}
+	wide, err := s.UsageBy(AllAccounts, ByUser,
+		time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loginlessBucket(t, wide).Label; got != "non-login source" {
+		t.Errorf("wide window label = %q, want the unqualified name -- two reporters are inside it", got)
+	}
+}
+
+// The dashboard's by-login card is served from the ROLLUP (UsageByFiltered),
+// not from usage_events -- which is why the blank login reached the page
+// unnamed even after UsageBy learned to name it. Two paths, two switches; a
+// labeler wired into one of them is not wired in.
+func TestUsageByFiltered_LoginlessBucketIsNamedOnTheDashboardPath(t *testing.T) {
+	s := newStore(t)
+	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ai-gateway-shipper")
+	seedAccount(t, s, "acct-1", "ep-laptop")
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		userEv("acct-1", "ep_1789272199291316987", "g1", "", "/w", 900),
+		userEv("acct-1", "ep-laptop", "a1", "alice", "/repo/a", 400),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{
+		Account: AllAccounts,
+		Start:   time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		End:     time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC),
+	}
+	bs, err := s.UsageByFiltered(f, ByUser, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "non-login source: ai-gateway-shipper"; loginlessBucket(t, bs).Label != want {
+		t.Errorf("rollup login-less label = %q, want %q -- the page reads THIS query",
+			loginlessBucket(t, bs).Label, want)
+	}
+}
+
+// A drill-down chip narrows the question, so the name is re-proven under it:
+// two reporters on the hub, one inside the filter, and the row says which.
+func TestUsageByFiltered_LoginlessLabelFollowsTheDrilldown(t *testing.T) {
+	s := newStore(t)
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
+	if _, _, err := s.InsertEvents([]model.UsageEvent{
+		userEv("acct-1", "ep-gw", "g1", "", "/w", 900),
+		userEv("acct-1", "ep-voice", "v1", "", "/w", 100),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{
+		Account: AllAccounts,
+		Start:   time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		End:     time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC),
+	}
+	unfiltered, err := s.UsageByFiltered(f, ByUser, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loginlessBucket(t, unfiltered).Label; got != "non-login source" {
+		t.Errorf("unfiltered label = %q, want the unqualified name", got)
+	}
+	f.Endpoint = "ep-voice"
+	narrowed, err := s.UsageByFiltered(f, ByUser, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "non-login source: voice-shipper"; loginlessBucket(t, narrowed).Label != want {
+		t.Errorf("drilled-down label = %q, want %q -- the chip narrowed the rows, so it narrows the name",
+			loginlessBucket(t, narrowed).Label, want)
+	}
+}

@@ -141,3 +141,38 @@ test('the table fallback carries the same door', () => {
   // Unasked-for, absent: every other bucketTable caller renders plain text.
   assert.equal(anchor(C.bucketTable(buckets, 'Login')), null);
 });
+
+// Issue #132: the by-login card has one row that is not a person. A gateway
+// shipper reports with no OS login, so its bucket key is '' — and `/u/` is not
+// that row's page, it is a 404 ("no login in the path", internal/api/user.go)
+// with a 400 behind it (`UserSummary("")`). review.js's `userHref` now returns
+// null for a blank login, which only removes the dead link if BOTH renderers
+// treat a falsy href as "no door". These pin that, because the guard lives one
+// module away from the damage and nothing else would notice it coming back.
+const LOGINLESS = 'non-login source: ai-gateway-shipper';
+
+test('a null href draws no drill-in: the login-less row gets no door to a 404', () => {
+  const bars = C.rankedBars([{ ...ROW, key: '', href: null, hrefLabel: 'Open' }]);
+  assert.equal(anchor(bars), null,
+    'the row rendered a link from a null href — `/u/` answers 404, so this door opens onto nothing');
+  assert.equal(bars.children[0].children.length, 3,
+    'the row changed shape when its link went away — bars on this card would stop sharing a scale with the others');
+});
+
+test('the table fallback drops the same door, and prints the name the hub computed', () => {
+  const buckets = [
+    { key: 'liang.hui', events: 3, tokens: 900, cost: [] },
+    { key: '', label: LOGINLESS, events: 6204, tokens: 11_400_000, cost: [] },
+  ];
+  const table = C.bucketTable(buckets, 'Login', [], { keyHref: (b) => (b.key ? `/u/${b.key}` : null) });
+  const hrefs = [];
+  const walk = (n) => { if (n && typeof n === 'object') { if (n.tagName === 'a') hrefs.push(n.getAttribute('href')); (n.children || []).forEach(walk); } };
+  walk(table);
+  assert.deepEqual(hrefs, ['/u/liang.hui'],
+    'the blank key still produced a link — a row that is not a person must not offer that person\'s page');
+  // And the cell is not blank where the link used to be: the store now names
+  // that bucket (labelUsers, internal/store/query.go), so the reader gets the
+  // reporter instead of the "(unknown)" two renderers each invented.
+  assert.ok(find(table, (n) => n.tagName === '#text' && n.text === LOGINLESS),
+    `the login-less row lost its name — expected the cell to read ${LOGINLESS}`);
+});
