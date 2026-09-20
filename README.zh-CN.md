@@ -350,6 +350,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 
 ### 可选能力
 
+- **统一 MCP 管理多台机器。** 可选的 [Fleet Hub](docs/FLEET-HUB.md) 集中注册 MINI 等 SSH 主机，让授权 Agent 查询 Fleet、按 Issue 启动 worker、修改指定配置，并跟踪操作结果。支持本机 stdio、OAuth HTTP，以及通过私有 HTTPS 使用授权令牌的常驻服务。
 - **SSH 远程使用。** 可以从笔记本连接常开的开发机。项目的 URL 打开工具支持通过 SSH 隧道在本地浏览器打开链接，也有弹窗和剪贴板回退方式，见 [SSH 链接设置](README.md#opening-links-over-ssh)。
 - **Codex worker。** 可通过看板 `Ctrl-V` 或 `FLEET_AGENT=codex` 选择 Codex。工作目录隔离、Issue 绑定和 PR/CI 管理共用，但 Claude Code 的上下文交接、会话恢复和配额管理尚未适配到 Codex。完整能力表由代码生成并检查，见 [Claude Code 与 Codex 对照](README.md#agents-claude-code-and-codex)。
 
@@ -369,6 +370,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 | [安装与卸载](docs/INSTALL.md) | 完整安装流程、组件、后台服务和卸载 |
 | [术语表](docs/TERMS.md) | fleet、hub、worker、collector 等概念 |
 | [架构说明](docs/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
+| [Fleet Hub](docs/FLEET-HUB.md) | 跨机器 MCP 入口、机器注册、授权与操作记录 |
 | [状态机制](docs/STATE.md) | 会话状态如何产生、展示和纠正 |
 | [多账号与额度](docs/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
 | [任务清理](docs/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |

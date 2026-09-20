@@ -351,6 +351,16 @@ so the hub can drive the fleet without ever committing to it.
 Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
 `bin/fleet-migrate-layout.sh` once (idempotent; readers dual-read both layouts).
 
+### Manage registered machines through MCP
+
+The optional **Fleet Hub** gives authorized Agents one MCP endpoint for Fleets
+on several machines, including SSH-connected hosts. It supports scoped status
+queries, Issue-worker starts, limited configuration updates and persistent
+operation tracking. Nodes use a fixed SSH control entry point; existing workers
+continue if the Hub disconnects. A launchd installer runs a persistent Hub on
+macOS, with private HTTPS grant tokens or an OAuth HTTP deployment.
+See [Fleet Hub setup and authorization](docs/FLEET-HUB.md).
+
 <a id="multiple-subscription-accounts-auto-failover"></a>
 
 ## Subscription accounts and quota management
