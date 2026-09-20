@@ -1,7 +1,7 @@
 // web/dist/lib/format.js — pure number/time formatting. No DOM.
-// fmtInt, fmtUSD, fmtFull, shortProject, relTime, ago are copied verbatim from
-// the <script> block of the original web/dist/index.html — they were already
-// pure, just inlined there.
+// fmtInt, fmtUSD, fmtFull, shortProject, ago are copied verbatim from the
+// <script> block of the original web/dist/index.html — they were already pure,
+// just inlined there.
 import { t, locale, displayCurrency } from './i18n.js';
 
 export const fmtInt = (n) => {
@@ -162,17 +162,6 @@ export const shortProject = (p) => {
   // gets clipped — otherwise every row reads "…/projects/24haowan-monorepo…".
   const two = parts.slice(-2).join("/");
   return "…/" + (two.length <= 30 ? two : parts[parts.length - 1]);
-};
-
-export const relTime = (iso) => {
-  if (!iso) return t('reset.unknown');
-  const ms = new Date(iso) - Date.now();
-  if (ms <= 0) return t('reset.now');
-  const m = Math.round(ms / 60000);
-  if (m < 60) return t('reset.minutes', { m });
-  const h = Math.floor(m / 60);
-  if (h < 24) return t('reset.hours', { h, m: m % 60 });
-  return t('reset.days', { d: Math.floor(h / 24), h: h % 24 });
 };
 
 export const ago = (secs) => {

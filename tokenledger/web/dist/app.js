@@ -310,7 +310,7 @@ async function load(reuse = false) {
   // would buy nothing but a second chance to disagree with the first.
   const nowApply = (results) => {
     const quota = $('#quota');
-    if (quota) renderQuota(quota, results[LIMITS_INDEX], s, app);
+    if (quota) renderQuota(quota, results[LIMITS_INDEX], app);
     nowR.apply(results);
   };
   // Same range the analysis section resolves, so the consumption table and the

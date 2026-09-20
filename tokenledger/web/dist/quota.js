@@ -1,5 +1,7 @@
-// web/dist/quota.js — the quota band: "am I about to hit the wall?", grouped by
-// provider, with the current utilization as the biggest number on the card.
+// web/dist/quota.js — the quota band: subscription quota, grouped by provider,
+// with the current utilization as the biggest number on the card. The card was
+// titled with the question "am I about to hit the wall?" until #124; the
+// question is still what it answers, it just stopped being printed.
 //
 // Lifted out of now.js by #95, and the move is the point rather than a tidy-up.
 // The card used to be the first child of <details id="ops">, which is SHUT by
@@ -144,17 +146,6 @@ function extraNotes(v) {
 
 /* ------------------------------------------------------------------- card */
 
-// Spec §3.3: quota gauges are per subscription and ignore chips entirely (a
-// machine/project/model/etc. chip narrows the OTHER cards; utilization here
-// is always the whole subscription's, because that is what the account's
-// rate limit actually tracks). chipsIgnoredHint says so, on this card, only
-// when there is something to ignore — it would be noise on every load
-// otherwise.
-function chipsIgnoredHint(chips) {
-  if (!chips || !Object.keys(chips).some((k) => k !== 'source')) return null;
-  return el('p', { class: 'hint' }, t('wall.chipsIgnored'));
-}
-
 /** worstLine names the subscription closest to its ceiling — and, since #95,
  *  which provider it is.
  *
@@ -192,7 +183,6 @@ function sharesBlock(v) {
   if (!shares.length) return [];
   return [
     el('h2', { class: 'qsub' }, t('wall.whose')),
-    el('p', { class: 'hint' }, t('wall.whoseHint', { pct: v.five_hour.utilization.toFixed(1) })),
     C.rankedBars(shares.map((s) => ({
       key: s.label || s.endpoint_id,
       value: s.estimated_utilization,
@@ -210,7 +200,7 @@ function sharesBlock(v) {
  *  The cross-subscription shape is a LIST, never a total: two pools at 4% and
  *  19% are not 23% of anything. Grouping does not change that — a group is a
  *  heading over a list, and there is deliberately no per-group figure either. */
-function quotaCard(result, chips, accounts) {
+function quotaCard(result, accounts) {
   const card = el('div', { class: 'card quota-card' }, el('h2', {}, t('wall.title')));
 
   if (result.status === 'rejected') {
@@ -223,33 +213,31 @@ function quotaCard(result, chips, accounts) {
   if (limits && Array.isArray(limits.per_account)) {
     // ...and it is a list of SUBSCRIPTIONS. /v1/limits answers for every
     // account the hub has ever ingested, gateway callers and vendor invoices
-    // included, because that is the right shape for an API consumer. This
-    // card's title is a question, and a calling application billed per call is
-    // not one of its answers: it has no ceiling to be near, so a heading over
-    // "no reading available" here claimed a gap that does not exist (#50).
+    // included, because that is the right shape for an API consumer. This card
+    // lists SUBSCRIPTION quota, and a calling application billed per call has
+    // none: it has no ceiling to be near, so a heading over "no reading
+    // available" here claimed a gap that does not exist (#50).
     const { groups, metered } = quotaGroups(limits.per_account, accounts);
     const sourceOf = sourceMap(accounts);
     const shownSet = new Set(groups.flatMap((g) => g.entries.map((e) => e.account_uuid)));
 
-    // No opening hint here, and that is the point of #125: this card used to
-    // lead with `limits.note` -- the server's "utilization is never summed"
-    // sentence from this very response -- while now.js printed the same claim
-    // as a banner seventy lines up, in the same viewport, on the same trigger
-    // (both fire only at account=all, because that is the only scope where
-    // /v1/limits answers in the per_account shape). One of the two had to go;
-    // both did, because the gauges below say it better than either sentence:
-    // a reader looking at five separate bars with five separate resets is not
-    // in danger of adding them up. `note` still ships on the response for the
-    // API and MCP callers that get no gauges.
+    // Nothing opens this branch any more, and both halves of that are
+    // deliberate.
     //
-    // .filter(Boolean) stays, and it is not defensive padding: append()
-    // stringifies a bare `null` argument into a literal "null" TEXT NODE
-    // rather than skipping it, and chipsIgnoredHint returns null on every load
-    // with no chips -- which is most of them. Caught in the browser on the
-    // first render of this card, where it printed "null" above the
-    // closest-to-its-limit line. now.js carries the same guard, with the same
-    // note, for the same reason.
-    card.append(...[chipsIgnoredHint(chips)].filter(Boolean));
+    // #125 removed `limits.note` -- the server's "utilization is never summed"
+    // sentence -- because now.js printed the same claim as a banner seventy
+    // lines up, in the same viewport, on the same trigger. #124 then removed
+    // chipsIgnoredHint, the scope note that only appeared when a chip was set.
+    // What is left is the thing both sentences were talking about: a reader
+    // looking at five separate bars with five separate resets is not in danger
+    // of adding them up. `note` still ships on the response for the API and MCP
+    // callers that get no gauges.
+    //
+    // The .filter(Boolean) went with the hint. It was not defensive padding --
+    // append() stringifies a bare `null` into a literal "null" TEXT NODE, and
+    // chipsIgnoredHint returned null on every load with no chips -- but with the
+    // hint gone there is no nullable member left to guard. now.js still carries
+    // that guard, with the same note, for a list that really can hold a null.
     const worst = worstLine(limits.worst, shownSet, sourceOf);
     if (worst) card.appendChild(worst);
 
@@ -269,8 +257,10 @@ function quotaCard(result, chips, accounts) {
   // One subscription in scope. No grouping to do — but the group heading stays,
   // because its subtitle is the window vocabulary and a reader looking at a
   // single Codex account needs it at least as much as one comparing five.
-  card.append(...[el('p', { class: 'hint' }, t('wall.exact')), chipsIgnoredHint(chips)].filter(Boolean));
-
+  //
+  // It is now the FIRST thing under the title: the two hints that stood between
+  // them -- "exact, account-wide, covering every device" and the chips-ignored
+  // note -- both went with #124, so this branch opens on the reading itself.
   if (!limits.available) {
     // No gauge at all. A 0% bar rendered the same as a live one is the failure
     // this project exists to avoid.
@@ -297,7 +287,7 @@ function quotaCard(result, chips, accounts) {
  *  are not in any band, so asking twice would be one request spent to render
  *  what is already in hand. Same arrangement the ledger headline has with
  *  review.js's summary. */
-export function renderQuota(root, result, state, app) {
+export function renderQuota(root, result, app) {
   // A SKIPPED slot is a question nobody asked, not an answer of "nothing" — the
   // distinction lib/seq.js's SKIPPED exists to make. The mount point being on
   // the page should mean the request went out (app.js gates both on the same
@@ -305,5 +295,5 @@ export function renderQuota(root, result, state, app) {
   // disagree by drawing "no readings" about a fetch that never happened. Leave
   // whatever is already here; the next load redraws it.
   if (!result || result.status === SKIPPED) return;
-  root.replaceChildren(quotaCard(result, state.chips, app.accounts));
+  root.replaceChildren(quotaCard(result, app.accounts));
 }

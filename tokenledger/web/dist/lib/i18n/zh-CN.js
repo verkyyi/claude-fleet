@@ -126,11 +126,6 @@ export const zhCN = {
   'dur.minutes.other': '{n} 分钟',
   'dur.hours.one': '{n} 小时',
   'dur.hours.other': '{n} 小时',
-  'reset.unknown': '重置时间未知',
-  'reset.now': '正在重置',
-  'reset.minutes': '{m} 分钟后重置',
-  'reset.hours': '{h} 小时 {m} 分钟后重置',
-  'reset.days': '{d} 天 {h} 小时后重置',
   'day.0': '周日',
   'day.1': '周一',
   'day.2': '周二',
@@ -211,9 +206,10 @@ export const zhCN = {
   'live.row.contextTip': '上下文 {pct}%',
 
   /* ---------------------------------------------------------------- wall */
-  'wall.title': '我快撞到额度上限了吗？',
-  'wall.chipsIgnored': '额度只跟着选中的来源和账号走。项目、机器这些筛选只作用于用量明细；仪表盘看的始终是整个订阅。',
-  'wall.exact': '账号级精确值，已经覆盖这个订阅下的每一台设备。',
+  // #124 把标题从问句换成名词：卡片仍然需要一个 h2（全仓每张卡都有，
+  // 而顶上的带标签是一组 span，不进标题大纲），但一个问句再加三句解释，
+  // 说的都是下面那些数字自己就说得清的事。
+  'wall.title': '订阅额度',
   'wall.noReading': '没有读数。',
   'wall.meteredOnly': '当前视图里的账号都按调用计费 —— 没有额度窗口，也就谈不上快撞上。它们花了多少，看下面的用量卡片。',
   'wall.noReadingSeeNotice': '没有读数 —— 原因见上方提示。',
@@ -223,7 +219,6 @@ export const zhCN = {
   'quota.group.claude.note': '固定的 5 小时与 7 天两个窗口',
   'quota.group.codex.note': '供应商自己报的窗口，外加额度余额',
   'wall.whose': '这个 5 小时窗口是谁在用',
-  'wall.whoseHint': '按加权消耗估算的上面那 {pct}% 的分摊。',
   'wall.share.ofWindow': '占本窗口消耗的 {pct}%',
   'wall.share.tokens': '{tokens} token · {events} 轮次',
   'wall.share.estimate': '≈ 上限的 {pct}%（估算）',

@@ -142,9 +142,9 @@ export const hasQuotaWindow = (source) => QUOTA_SOURCES.has(UsageSource(source))
  *
  *  The endpoint answers for EVERY account the hub has seen — the accounts
  *  table is upserted on every ingest batch whatever its source — and that is
- *  the right shape for an API consumer. It is the wrong shape for a card whose
- *  title is the question "am I about to hit the wall?", because a calling
- *  application is not an answer to it. The split happens here, in the render
+ *  the right shape for an API consumer. It is the wrong shape for a card that
+ *  answers "how much runway is left", because a calling application billed per
+ *  call has no runway to report. The split happens here, in the render
  *  layer, so MCP and API consumers keep the full list (#50).
  *
  *  `per_account` entries carry no source, so it is resolved through the hub's

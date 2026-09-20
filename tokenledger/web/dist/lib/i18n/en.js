@@ -131,11 +131,6 @@ export const en = {
   'dur.minutes.other': '{n} minutes',
   'dur.hours.one': '{n} hour',
   'dur.hours.other': '{n} hours',
-  'reset.unknown': 'reset time unknown',
-  'reset.now': 'resetting now',
-  'reset.minutes': 'resets in {m}m',
-  'reset.hours': 'resets in {h}h {m}m',
-  'reset.days': 'resets in {d}d {h}h',
   'day.0': 'Sun',
   'day.1': 'Mon',
   'day.2': 'Tue',
@@ -223,9 +218,11 @@ export const en = {
   'live.row.contextTip': 'context {pct}%',
 
   /* ---------------------------------------------------------------- wall */
-  'wall.title': 'Am I about to hit the wall?',
-  'wall.chipsIgnored': 'Quota follows the selected source and account. Project and machine filters apply to usage details; gauges cover the whole subscription.',
-  'wall.exact': 'Exact, account-wide, and already covering every device on the subscription.',
+  // #124 turned the title from a question into a noun: the card still needs an
+  // h2 (every card in this build has one, and the band label above it is a pair
+  // of spans that no heading outline sees), but a question plus three sentences
+  // of explanation said what the numbers under them already say.
+  'wall.title': 'Subscription quota',
   'wall.noReading': 'No reading available.',
   'wall.meteredOnly': 'Every account in view is billed per call — there is no quota window to be near. Their spend is on the usage cards below.',
   'wall.noReadingSeeNotice': 'No reading available — see the notice above.',
@@ -235,7 +232,6 @@ export const en = {
   'quota.group.claude.note': 'a fixed five-hour and seven-day pair',
   'quota.group.codex.note': 'the windows the provider reports, plus a credit balance',
   'wall.whose': 'Whose 5-hour window is it',
-  'wall.whoseHint': 'Estimated split of the {pct}% above, by weighted spend.',
   'wall.share.ofWindow': "{pct}% of this window's spend",
   'wall.share.tokens': '{tokens} tokens · {events} turns',
   'wall.share.estimate': '≈ {pct}% of the limit (estimate)',

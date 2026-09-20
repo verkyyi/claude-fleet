@@ -52,7 +52,7 @@
 // here summarise rather than enumerate.
 
 import { el, escapeHTML, showTip, hideTip } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtFull, relTime } from './lib/format.js';
+import { fmtInt, fmtUSD, fmtFull } from './lib/format.js';
 import { KIND_LABEL, kindOf, activeSourcesAcross, costLine, fmtSourceCost } from './lib/cost.js';
 import { snap, clamp } from './lib/brush.js';
 import { bucketMs, densify, inferBucket } from './lib/buckets.js';
@@ -406,17 +406,26 @@ export function gauge(name, w) {
   const b = band(pct);
   const burn = w.burn || {};
 
-  // Reset first, forecast second, and the separator only between two things
-  // that are both there: "resets in 2h 29m · " trailing into nothing reads as a
-  // sentence the page failed to finish.
-  const parts = [relTime(w.resets_at)];
+  // Only the forecast, and only when there is one. The reset countdown used to
+  // lead this line -- "resets in 2h 29m · burning 8.0%/h" -- and #124 dropped it:
+  // a window that resets in two hours and one that resets in five behave
+  // identically to a reader who is at 17%, and the number that DOES change what
+  // they do next is the burn rate already sitting beside it. `w.resets_at` is
+  // untouched on the wire and still drives that forecast (recon.go), the
+  // endpoint-share window, the contradiction check and the account fingerprint;
+  // it just stopped being printed raw.
+  //
+  // One string, not a joined list: with the countdown gone the line can hold at
+  // most one thing, and a `join(' · ')` over an array that can never reach two
+  // entries is a separator kept for a second item that no longer exists.
+  let meta = '';
   if (burn.exhausted_at) {
-    parts.push(t('gauge.fillsAround', {
+    meta = t('gauge.fillsAround', {
       rate: burn.percent_per_hour.toFixed(1),
       time: new Date(burn.exhausted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }));
+    });
   } else if (burn.percent_per_hour > 0) {
-    parts.push(t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) }));
+    meta = t('gauge.burning', { rate: burn.percent_per_hour.toFixed(1) });
   }
 
   return el('div', { class: 'gauge' },
@@ -424,7 +433,7 @@ export function gauge(name, w) {
     el('span', { class: 'pct' }, pct.toFixed(1) + '%'),
     el('span', { class: 'state st-' + b.key }, b.label),
     el('div', { class: 'track' }, el('div', { class: 'fill bg-' + b.key, style: `width:${pct}%` })),
-    el('span', { class: 'meta' }, parts.join(' · ')));
+    el('span', { class: 'meta' }, meta));
 }
 
 /* ------------------------------------------------------------------- tile */
