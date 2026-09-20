@@ -170,7 +170,6 @@ export const en = {
   // before deciding whether to open the table the ⊞ toggle swaps in.
   'chart.ariaTimeline': 'Tokens over time, stacked by model, {from} to {to}, peak {peak} tokens per bucket',
   'chart.ariaBrush': 'Time range selector. Arrow keys move the selection, Shift with arrow keys moves its right edge; the selected range is written below the chart.',
-  'chart.ariaWallHistory': 'Subscription utilization over time, {from} to {to}, {n} subscriptions, gridlines at 50% and 90%',
   'chart.ariaTurnBars': 'Tokens per turn, {turns} turns, peak {peak} tokens, coloured by model',
   'chart.ariaComposition': 'Token composition by type, largest part {name} at {pct}; every share is listed below the bar',
   'chart.ariaHeatmap': 'Tokens by weekday and hour, busiest {day} {hour} at {tokens} tokens',
@@ -467,10 +466,8 @@ export const en = {
 
   /* -------------------------------------------------------- wall history */
   'wallHistory.title': 'Wall history',
-  'wallHistory.hint': 'Quota observations for the selected source and accounts. Each Codex window is separate; red marks ≥ 90%.',
+  'wallHistory.hint': 'How often each subscription sat ON its limit, and for how long. A critical episode is an unbroken stretch at ≥ 90% of the 5-hour window; each Codex window is counted separately.',
   'wallHistory.empty': 'No limit snapshots in this period.',
-  'wallHistory.note.one': '{label}: {n} critical episode · {time} in critical (prev {prev})',
-  'wallHistory.note.other': '{label}: {n} critical episodes · {time} in critical (prev {prev})',
   'wallHistory.col.subscription': 'Subscription',
   'wallHistory.col.episodes': 'Critical episodes',
   'wallHistory.col.time': 'Critical time',

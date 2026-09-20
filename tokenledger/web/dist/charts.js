@@ -5,7 +5,7 @@
 // web/dist/index.html (pre-Task-11) — unchanged except where the Task 11
 // brief calls for it (rankedBars gains onClick/selectedKey, bucketTable gains
 // extraCols, `timeSeries` is renamed `bars`). Everything else here
-// (withTable, kpiTile, timeline, stackedArea, heatmap, lines, composition,
+// (withTable, kpiTile, timeline, stackedArea, heatmap, composition,
 // turnBars) is new: the Review view (task 12) and session detail (task 13)
 // consume these, but neither was wired up when Task 11 landed, so their
 // input shapes came from those tasks' briefs rather than a running backend.
@@ -71,8 +71,7 @@ export { slotColor } from './lib/palette.js';
  *  gridline plus a right-aligned number at 0, half and max. `bars`,
  *  `timeline` and `stackedArea` had (or, in stackedArea's case before issue
  *  #52, lacked) byte-identical copies of this; one copy means a chart cannot
- *  quietly ship without a readable scale again. `lines` keeps its own: it
- *  ticks at 50/90 percent, not at a data max. */
+ *  quietly ship without a readable scale again. */
 function yTicks(g, { max, y, PAD, W }) {
   for (const v of [0, max / 2, max]) {
     g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
@@ -93,7 +92,7 @@ function axisLabel(key, granularity) {
 }
 
 /** dayLabel is `axisLabel` for a chart whose extent is milliseconds rather
- *  than bucket keys (`timeline`, `lines`). Same UTC frame and same MM-DD
+ *  than bucket keys (`timeline`). Same UTC frame and same MM-DD
  *  shape as `axisLabel` and review.js's caption, so an aria-label and the
  *  x-axis under it cannot name different days for the same edge. */
 const dayLabel = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(5, 10) : '—');
@@ -603,7 +602,7 @@ export function timeline(series, opts) {
   plot.appendChild(brush);
 
   // A stack of up to 7 series (6 top models + "other") with no legend is
-  // unreadable — every other multi-series chart here (stackedArea, lines,
+  // unreadable — every other multi-series chart here (stackedArea,
   // composition) builds one; this one didn't. Same palette order the stack
   // itself is drawn in (built.forEach above: `i < names.length ?
   // colors[i] : OTHER_COLOR`), so the mapping is actually correct.
@@ -896,73 +895,6 @@ export function heatmap(grid, events) {
           day: DOW[b.dow], hour: String(b.hour).padStart(2, '0') + ':00', tokens: fmtFull(b.tokens) })
       : t('chart.ariaHeatmapEmpty'),
   }, cells);
-}
-
-/* --------------------------------------------------------------------- lines */
-
-/** lines draws one polyline per account for `five_hour_pct` (red where the
- *  point is >= 90%, split into its own segment), a fainter dashed
- *  `seven_day_pct` line, gridlines at 50/90, and a legend. `accounts` is
- *  `[{label, points: [{ts, five_hour_pct, seven_day_pct}]}]`. */
-export function lines(accounts, { start, end }) {
-  // W matches the card this chart actually lives in — a `.grid2` half, the
-  // same slot `bars` sits in beside it. It was 900 (the full-width figure)
-  // until issue #55, which is why the two charts in that one row rendered the
-  // identical `font-size: 10.5` at visibly different sizes.
-  const W = 560, H = 200, PAD = { t: 14, r: 8, b: 22, l: 40 };
-  const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
-  const span = Math.max(1, end - start);
-  const x = (t) => PAD.l + ((t - start) / span) * iw;
-  const y = (v) => PAD.t + ih - (Math.max(0, Math.min(100, v)) / 100) * ih;
-
-  const g = el('g', {});
-  for (const gl of [50, 90]) {
-    g.appendChild(el('line', { x1: PAD.l, x2: W - PAD.r, y1: y(gl), y2: y(gl), stroke: 'var(--grid)' }));
-    g.appendChild(el('text', { x: PAD.l - 6, y: y(gl) + 3.5, 'text-anchor': 'end', fill: 'var(--ink-3)' }, gl + '%'));
-  }
-
-  // By account LABEL, not by position in `accounts`: the array order is the
-  // API's, and an account that drops out of the window used to repaint every
-  // account after it (issue #55).
-  const colors = seriesPalette((accounts || []).map((a) => a.label));
-
-  const legend = [];
-  (accounts || []).forEach((a, i) => {
-    const color = colors[i];
-    const pts = (a.points || []).slice().sort((p, q) => p.ts - q.ts);
-    if (pts.length && pts.some((p) => Number.isFinite(p.seven_day_pct))) {
-      const d7 = pts.map((p, idx) => `${idx ? 'L' : 'M'}${x(p.ts)},${y(p.seven_day_pct)}`).join(' ');
-      g.appendChild(el('path', { d: d7, fill: 'none', stroke: color, 'stroke-width': '1', 'stroke-dasharray': '3,3', opacity: '.55' }));
-    }
-    // five_hour_pct, split into critical (>=90, red) vs normal segments.
-    let seg = [], critical = null;
-    const flush = () => {
-      if (seg.length >= 2) {
-        const d = seg.map((p, idx) => `${idx ? 'L' : 'M'}${x(p.ts)},${y(p.five_hour_pct)}`).join(' ');
-        g.appendChild(el('path', { d, fill: 'none', stroke: critical ? 'var(--critical)' : color, 'stroke-width': '1.6' }));
-      }
-      seg = [];
-    };
-    for (const p of pts) {
-      const c = p.five_hour_pct >= 90;
-      if (critical === null) critical = c;
-      if (c !== critical) { seg.push(p); flush(); seg.push(p); critical = c; }
-      else seg.push(p);
-    }
-    flush();
-    legend.push(el('span', {}, el('i', { style: `background:${color}` }), a.label));
-  });
-
-  // `start`/`end` rather than the points' own range for the same reason
-  // `timeline` uses its extent: the lines are drawn across the selected
-  // window, and a subscription that reported nothing for its last hour must
-  // not shorten what the chart claims to cover.
-  const svg = chartSvg(W, H, {
-    role: 'img',
-    'aria-label': t('chart.ariaWallHistory', {
-      from: dayLabel(start), to: dayLabel(end), n: (accounts || []).length }),
-  }, g);
-  return el('div', {}, svg, el('div', { class: 'legend' }, legend));
 }
 
 /* --------------------------------------------------------------- composition */

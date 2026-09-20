@@ -671,40 +671,39 @@ function whenCard(result, ctx) {
 
 /* -------------------------------------------------------- card 8: wall history */
 
-function wallHistoryCard(result, ctx) {
+// Issue #101: this card used to lead with a utilization-over-time line chart,
+// and that line said the same thing as the wall card's gauges one band up --
+// one is this instant, the other is this instant joined up. What no other card
+// on the page can answer is the table's question: how many times did this
+// subscription sit ON the limit, and for how long. So the chart is gone and
+// the table, which `withTable` kept hidden behind a ⊞ by default, is the card.
+//
+// The per-account `<p class=hint>` summary lines went with it. They named the
+// same four values as the table's four columns, which was defensible while the
+// table was the hidden half and the chart was what you saw -- and is just the
+// page printing a number twice (issue #93) now that the table is always up.
+function wallHistoryCard(result) {
   const card = el('div', { class: 'card', id: 'wall-history' }, el('h2', {}, t('wallHistory.title')),
     el('p', { class: 'hint' }, t('wallHistory.hint')));
   if (result.status === 'rejected') {
     card.appendChild(el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
     return card;
   }
-  const { sel } = ctx;
   const data = result.value;
-  const accounts = [...(data.accounts || []), ...(data.quota_series || []).map((s) => ({ ...s,
-    points: s.points.map((p) => ({ t: p.t, five_hour_pct: p.utilization })) }))];
-  const totalPoints = accounts.reduce((a, x) => a + ((x.points || []).length), 0);
-  if (!totalPoints) {
+  const accounts = [...(data.accounts || []), ...(data.quota_series || [])];
+  if (!accounts.length) {
     // Not "snapshots exist from <date>": that hardcoded a date true only of
     // the author's hub, and every other hub would show it verbatim and
     // wrongly. No response field gives an actual earliest-snapshot date to
     // derive it from, so say plainly that this period has none.
+    //
+    // This used to count POINTS rather than rows, which is the same test by a
+    // longer route: the server only emits a series for an account it found at
+    // least one observation for. Counting rows keeps the guard honest now that
+    // the request asks for one point per series rather than 400.
     card.appendChild(el('div', { class: 'empty' }, t('wallHistory.empty')));
     return card;
   }
-
-  const lineAccounts = accounts.map((a) => ({
-    label: a.label,
-    points: (a.points || []).map((p) => ({ ts: Date.parse(p.t), five_hour_pct: p.five_hour_pct, seven_day_pct: p.seven_day_pct })),
-  }));
-  const chart = C.lines(lineAccounts, { start: sel.from, end: sel.to });
-
-  const notes = el('div', { style: 'margin-top:10px' }, accounts.map((a) => el('p', { class: 'hint' },
-    t(a.critical_episodes === 1 ? 'wallHistory.note.one' : 'wallHistory.note.other', {
-      label: a.label,
-      n: fmtFull(a.critical_episodes || 0),
-      time: fmtDur((a.critical_seconds || 0) * 1000),
-      prev: fmtDur((a.prev_critical_seconds || 0) * 1000),
-    }))));
 
   const table = el('div', { class: 'scroll' }, el('table', {},
     el('thead', {}, el('tr', {}, el('th', {}, t('wallHistory.col.subscription')), el('th', { class: 'num' }, t('wallHistory.col.episodes')),
@@ -714,10 +713,7 @@ function wallHistoryCard(result, ctx) {
       el('td', { class: 'num' }, fmtDur((a.critical_seconds || 0) * 1000)),
       el('td', { class: 'num' }, fmtDur((a.prev_critical_seconds || 0) * 1000)))))));
 
-  const wrap = el('div', {});
-  C.withTable(wrap, chart, table, 'review-wall-history');
-  card.appendChild(wrap);
-  card.appendChild(notes);
+  card.appendChild(table);
   return card;
 }
 
@@ -915,7 +911,7 @@ function applyAll(root, state, app, ctx, results) {
   if (!opsRoot || findingsR.status === SKIPPED) return;
   section(opsRoot, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
   section(opsRoot, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
-    whenCard(hourR, ctx), wallHistoryCard(wallR, ctx)));
+    whenCard(hourR, ctx), wallHistoryCard(wallR)));
   section(opsRoot, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
 }
 
@@ -1035,7 +1031,19 @@ export function renderReview(root, state, app, shown) {
     // was grouped by model -- which is the default. So on every default first
     // screen this request was sent, answered, and thrown away.
     get(`/v1/history?${q({ extra: { granularity: 'hour' } })}`),
-    get(`/v1/limits/history?${q({ extra: { points: 400 } })}`),
+    // points=1, not 400 (issue #101). 400 was the resolution a smooth line
+    // needed; the wall-history card is a table of counts and durations now and
+    // reads no point at all. It cannot be 0 -- the handler treats points<=0 as
+    // "unset" and defaults back to 400 -- so 1 is the floor, and the response
+    // still carries one row per series for the card's empty check.
+    //
+    // This costs the server nothing to compute and does not blunt the table:
+    // LimitsHistoryView and QuotaHistorySeries both run criticalTime() over
+    // the FULL scan and only then downsample to `points`, so the episode count
+    // and the critical seconds are byte-identical at 400 and at 1. What it
+    // saves is the payload -- 238KB -> 2KB over a 7-day window with three
+    // subscriptions, all of it points nothing now draws.
+    get(`/v1/limits/history?${q({ extra: { points: 1 } })}`),
     get(`/v1/sessions?${q({ extra: { sort: state.sort, limit: 50 } })}`),
   ].map((f, i) => (READ_BY[i].some((band) => shown.has(band)) ? f : null));
 

@@ -128,8 +128,6 @@ test('every chart primitive returns a named graphic', () => {
   labelled(C.bars(HOURLY, 'hour'), 'bars');
   labelled(C.timeline(STACKED, { bucket: EXT.bucket, extent: EXT, stackNames: MODELS }), 'timeline');
   labelled(C.stackedArea(STACKED, MODELS, { bucket: EXT.bucket, granularity: 'hour' }), 'stackedArea');
-  labelled(C.lines([{ label: 'work', points: [{ ts: EXT.start, five_hour_pct: 40, seven_day_pct: 20 }] }],
-    { start: EXT.start, end: EXT.end }), 'lines');
   labelled(C.turnBars([{ tokens: 900, model: MODELS[0] }, { tokens: 400, model: MODELS[1], sidechain: true }]), 'turnBars');
   labelled(C.composition([{ key: 'cache read', tokens: 800, color: '#111' },
     { key: 'output', tokens: 200, color: '#222' }]), 'composition');
@@ -144,9 +142,6 @@ test('a chart names the span it covers, not just its own kind', () => {
   // whether to open the table: "tokens over time" is true of six cards.
   const tl = labelled(C.timeline(STACKED, { bucket: EXT.bucket, extent: EXT, stackNames: MODELS }), 'timeline');
   assert.match(tl, /09-18/, 'timeline label does not name the extent it was drawn over');
-
-  const wall = labelled(C.lines([{ label: 'work', points: [] }], { start: EXT.start, end: EXT.end }), 'lines');
-  assert.match(wall, /09-18/, 'wall-history label does not name the window it was drawn over');
 
   const grid = grid7x24();
   grid[3][14] = 9000;
