@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- epic-page · the ONE frame both /fleet-epic-plan (design page) and
+     /fleet-epic-report (batch report) render into, so the operator reads the
+     pair as one document (issue #809). Copy this file, keep the <style> and the
+     section ids, replace every slot marked ⟨…⟩. Nothing here is fetched from a
+     CDN except the font — doc-preview serves the page byte-for-byte. -->
+<title>⟨theme · 2–4 words⟩</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#f7f8fa; --surface:#ffffff; --surface-2:#f0f2f6;
+    --ink:#14171c; --ink-2:#4d5566; --ink-3:#7b8496;
+    --rule:#dfe3ea; --rule-2:#eceff4;
+    --accent:#2a78d6; --accent-soft:#e8f0fb;
+    --s1:#2a78d6; --s2:#eb6834;
+    --ok:#008300; --ok-soft:#e6f2e6;
+    --warn:#eda100; --crit:#e34948;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,"PingFang SC","Noto Sans SC",Segoe UI,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    --ground:#101215; --surface:#171a1f; --surface-2:#1e222a;
+    --ink:#eef1f6; --ink-2:#a9b2c2; --ink-3:#79839a;
+    --rule:#2a2f38; --rule-2:#222731;
+    --accent:#4f93e5; --accent-soft:#16283f;
+    --s1:#3987e5; --s2:#d95926;
+    --ok:#3fa34d; --ok-soft:#14261a;
+    --warn:#c98500; --crit:#e66767;
+  }}
+  :root[data-theme="dark"]{
+    --ground:#101215; --surface:#171a1f; --surface-2:#1e222a;
+    --ink:#eef1f6; --ink-2:#a9b2c2; --ink-3:#79839a;
+    --rule:#2a2f38; --rule-2:#222731;
+    --accent:#4f93e5; --accent-soft:#16283f;
+    --s1:#3987e5; --s2:#d95926;
+    --ok:#3fa34d; --ok-soft:#14261a;
+    --warn:#c98500; --crit:#e66767;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;margin:0}
+  .wrap{max-width:52rem;margin:0 auto;padding-inline:16px;padding-block:44px 80px}
+  h1{font-size:clamp(1.9rem,5vw,2.6rem);line-height:1.15;margin:0 0 6px;font-weight:600;letter-spacing:-.02em;text-wrap:balance}
+  .sub{color:var(--ink-2);font-size:1.02rem;margin:0 0 4px;text-wrap:balance}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin:0 0 14px}
+  h2{font-size:1.22rem;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}
+  h3{font-size:.95rem;font-weight:600;margin:0 0 6px}
+  section{margin-top:52px}
+  .lede{color:var(--ink-2);margin:0 0 20px;max-width:62ch}
+  p{max-width:64ch}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  a{color:var(--accent)}
+
+  /* verdict band — counts above the fold (plan: core/reserve/new/warnings; report: done/blocked/PRs) */
+  .verdict{display:grid;grid-template-columns:repeat(auto-fit,minmax(122px,1fr));gap:1px;background:var(--rule);
+           border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:26px}
+  .v{background:var(--surface);padding:16px 14px}
+  .v .n{font-family:var(--mono);font-size:1.85rem;font-weight:600;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .v .k{font-size:.74rem;color:var(--ink-3);margin-top:7px;letter-spacing:.02em}
+  .v.good .n{color:var(--ok)} .v.warn .n{color:var(--warn)} .v.crit .n{color:var(--crit)}
+
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);padding:14px 16px;border-radius:0 8px 8px 0;margin:22px 0}
+  .callout p{margin:0;max-width:60ch}
+  .callout.warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--surface))}
+  .callout.crit{border-left-color:var(--crit);background:color-mix(in srgb,var(--crit) 9%,var(--surface))}
+
+  table{border-collapse:collapse;width:100%;font-size:.88rem}
+  .scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+  th{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);font-weight:600;white-space:nowrap;
+     background:var(--surface-2);position:sticky;top:0}
+  tr:last-child td{border-bottom:0}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-2)}
+  td.id{font-family:var(--mono);white-space:nowrap;font-weight:500}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:.7rem;padding:1px 7px;border-radius:99px;
+        background:var(--ok-soft);color:var(--ok);white-space:nowrap;border:1px solid color-mix(in srgb,var(--ok) 25%,transparent)}
+  .pill.muted{background:var(--surface-2);color:var(--ink-2);border-color:var(--rule)}
+  .pill.new{background:var(--accent-soft);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+  .pill.warn{background:color-mix(in srgb,var(--warn) 12%,var(--surface));color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .layer{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+
+  figure{margin:0}
+  figcaption{font-size:.8rem;color:var(--ink-3);margin-top:9px;max-width:62ch}
+  .chart{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:18px 16px 12px}
+  svg{display:block;width:100%;height:auto;max-width:100%}
+
+  pre{font-family:var(--mono);font-size:.76rem;line-height:1.55;background:var(--surface-2);border:1px solid var(--rule);
+      border-radius:8px;padding:13px 14px;overflow-x:auto;margin:0;color:var(--ink-2)}
+
+  ul,ol{padding-left:1.1rem;max-width:64ch}
+  li{margin-bottom:9px}
+  li::marker{color:var(--ink-3)}
+
+  /* member card — one per batch member (plan: the design; report: what shipped) */
+  .ob{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:15px 17px;margin-bottom:12px}
+  .ob h3{font-family:var(--mono);font-size:.84rem;color:var(--ink);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .ob p{margin:0;font-size:.9rem;color:var(--ink-2)}
+  .ob p+p{margin-top:8px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;font-size:.88rem;margin:10px 0 0}
+  .kv dt{font-family:var(--mono);font-size:.78rem;color:var(--ink-3);white-space:nowrap}
+  .kv dd{margin:0;color:var(--ink-2)}
+  .kv dd.evidence{font-family:var(--mono);font-size:.8rem;color:var(--ink)}
+  footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--rule);font-size:.8rem;color:var(--ink-3)}
+  @media (max-width:520px){ .kv{grid-template-columns:1fr;gap:1px 0} .kv dd{margin-bottom:9px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="eyebrow">EPIC ⟨#N once filed · else 「提案」⟩ · ⟨owner/repo⟩ · ⟨YYYY-MM-DD⟩</p>
+<h1>⟨theme, as the operator said it⟩</h1>
+<p class="sub">⟨one sentence: what this batch is for and where it stops⟩</p>
+
+<div class="verdict">
+  <div class="v"><div class="n">⟨6–8⟩</div><div class="k">核心层</div></div>
+  <div class="v"><div class="n">⟨8–10⟩</div><div class="k">储备层</div></div>
+  <div class="v"><div class="n">⟨k⟩</div><div class="k">新建子单</div></div>
+  <div class="v warn"><div class="n">⟨w⟩</div><div class="k">预检警告</div></div>
+</div>
+
+<!-- §1 preflight — bin/fleet-epic-preflight.sh verdict + its warning rows, verbatim -->
+<section id="preflight">
+<h2>预检</h2>
+<div class="callout"><p><strong>⟨READY / FIXABLE / BLOCKED⟩。</strong>⟨one line on what it means for this batch⟩</p></div>
+<div class="callout warn"><p>⟨each warning row: base drift / slots / quota — the "this will hurt" column; on FIXABLE, the labels --fix would seed⟩</p></div>
+</section>
+
+<!-- §2 charter — verbatim into the parent body after the nod -->
+<section id="charter">
+<h2>主题 · 范围 · 不做 · 共同约定</h2>
+<h3>主题</h3><p>⟨…⟩</p>
+<h3>范围</h3><ul><li>⟨…⟩</li></ul>
+<h3>这批不做</h3><ul><li>⟨…⟩</li></ul>
+<h3>共同约定</h3><ol><li>⟨…⟩</li></ol>
+</section>
+
+<!-- §3 members — one card per member, core first then reserve; the card IS the sub-issue body -->
+<section id="members">
+<h2>成员</h2>
+<p class="lede">⟨core N · reserve M; what "core empty" means for this batch⟩</p>
+
+<div class="ob" id="m-C1">
+<h3>C1 <span class="pill muted">#⟨N⟩ 已有</span> ⟨title⟩</h3>
+<dl class="kv">
+  <dt>目标</dt><dd>⟨what this member delivers, one sentence⟩</dd>
+  <dt>方案</dt><dd>⟨改哪里、怎么改 — files / scripts / surfaces, the shape of the change⟩</dd>
+  <dt>接口 / 约定</dt><dd>⟨what it exposes or promises to the others: a helper name, a conf key, a file layout, a marker⟩</dd>
+  <dt>依赖</dt><dd>依赖 ⟨C0 / 无⟩ · 被依赖 ⟨C2 C3 / 无⟩</dd>
+  <dt>完成判据</dt><dd>⟨acceptance, testable⟩</dd>
+  <dt>上线证据</dt><dd class="evidence">⟨ONE line a worker and the report can both follow: a URL to screenshot, a command whose output to keep, a pane to capture-pane⟩</dd>
+</dl>
+</div>
+
+<div class="ob" id="m-C2">
+<h3>C2 <span class="pill new">new · 拆自 #⟨N⟩</span> ⟨title⟩</h3>
+<dl class="kv">
+  <dt>目标</dt><dd>⟨…⟩</dd>
+  <dt>方案</dt><dd>⟨…⟩</dd>
+  <dt>接口 / 约定</dt><dd>⟨…⟩</dd>
+  <dt>依赖</dt><dd>依赖 ⟨…⟩ · 被依赖 ⟨…⟩</dd>
+  <dt>完成判据</dt><dd>⟨…⟩</dd>
+  <dt>上线证据</dt><dd class="evidence">⟨…⟩</dd>
+</dl>
+</div>
+
+<h3 style="margin-top:28px">储备层 <span class="layer">promoted only when the core is done and quota remains</span></h3>
+<div class="ob" id="m-R1">
+<h3>R1 <span class="pill muted">#⟨N⟩ 已有</span> ⟨title⟩</h3>
+<dl class="kv">
+  <dt>目标</dt><dd>⟨…⟩</dd>
+  <dt>方案</dt><dd>⟨…⟩</dd>
+  <dt>接口 / 约定</dt><dd>⟨…⟩</dd>
+  <dt>依赖</dt><dd>⟨…⟩</dd>
+  <dt>完成判据</dt><dd>⟨…⟩</dd>
+  <dt>上线证据</dt><dd class="evidence">⟨…⟩</dd>
+</dl>
+</div>
+</section>
+
+<!-- §4 order — who lands first, who waits, what runs in parallel. A table is enough;
+     an inline SVG (dataviz skill) only if the graph has real branches -->
+<section id="order">
+<h2>依赖顺序</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>波次</th><th>成员</th><th>等谁</th><th>可并行</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td class="id">C1</td><td>—</td><td>单独先落</td></tr>
+<tr><td class="num">2</td><td class="id">C2 C3 C4</td><td>C1</td><td>三个并行</td></tr>
+<tr><td class="num">3</td><td class="id">C5</td><td>C2 C4</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- §5 risks + why this split -->
+<section id="risks">
+<h2>风险与拆分理由</h2>
+<ul>
+<li><strong>⟨risk⟩</strong> — ⟨what would go wrong, and which member or convention holds it⟩</li>
+<li><strong>为什么这样切</strong> — ⟨why these seams: one worker one PR, what was too big, what was left whole⟩</li>
+</ul>
+</section>
+
+<!-- §6 open questions — run appends here after filing -->
+<section id="open">
+<h2>待决</h2>
+<ul>
+<li>⟨a question no charter answer covers; or 「无」⟩</li>
+</ul>
+</section>
+
+<!-- §7 sign-off — before the nod: the decisions this plan asks the operator to make (nodding confirms them);
+     after the nod: recorded verbatim in the parent body with the date, and workers do not re-open them -->
+<section id="signoff">
+<h2>发起人拍板</h2>
+<ol>
+<li>⟨decision 1 — proposed; nodding confirms it⟩</li>
+</ol>
+<p class="lede" style="margin-top:14px">⟨before the nod: 「点头即确认以上各条；改哪条直接说」 · after: 「发起人 @login YYYY-MM-DD 拍板，worker 照做，不再讨论方向」⟩</p>
+</section>
+
+<footer>
+⟨plan: 「本页在 tailnet 内可达，重启即失效；点头后全部内容写回 parent 与各子单，页面失效不丢信息。」 ·
+report: 「durable 半份在 EPIC issue 的收尾评论里。」⟩
+</footer>
+
+</div>
+</body>
+</html>
