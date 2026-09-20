@@ -267,7 +267,8 @@ selectable body below). (Comment out `set -g mouse on` in
 `conf/tmux-attention.conf` to keep native select-to-copy.)
 
 To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
-`prefix z`; `F9` and `prefix g` both jump to the hub's dash and toggle its
+`prefix z` — except a worker with its task sidebar on screen, where a double-click
+selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9` and `prefix g` both jump to the hub's dash and toggle its
 zoom (press again to restore). On iPad / Termius the double-tap
 doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
 so the reliable single-tap footer ranges are the `⌂` hub icon and the `● N` needs

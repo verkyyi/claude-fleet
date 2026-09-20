@@ -124,6 +124,10 @@ clicks on blank space; tmux 3.6+ also reports clicks on the top pane border.
 Release/repeat events preserve navigation.
 A row click switches workers but retains sidebar navigation. Clicking the worker,
 Enter or Escape returns input; auto-hiding the sidebar also clears its key table.
+A double-click on the worker while its sidebar is on screen is tmux's stock
+select-word, not zoom (issue #820): the gate is `@sidebar_worker` set and the
+window not zoomed, so a zoomed worker and a sidebar-less window keep
+double-click-to-zoom; `DoubleClick1Border` is unchanged.
 Focus cues use the client's key table, not just `pane_active`: an amber
 **TASKS · INPUT** pane border means sidebar navigation, a blue **WORKER · INPUT**
 badge means worker input, while the `▶` row always identifies the current task.
