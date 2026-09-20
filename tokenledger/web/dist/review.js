@@ -894,7 +894,7 @@ function sessionsCard(result, state, app, sel) {
 
 /* ------------------------------------------------------------------- main */
 
-function applyAll(root, state, app, ctx, results) {
+function applyAll(root, state, app, ctx, results, opsOpen) {
   const [historyExtR, summaryR, findingsR, g1R, g2R, modelR, hourR, wallR, sessionsR] = results;
   // Cached by now.js after its own /v1/endpoints fetch (Review issues no
   // endpoints request of its own — see task-12-report.md). Empty until the
@@ -904,12 +904,6 @@ function applyAll(root, state, app, ctx, results) {
 
   section(root, 'r-timeline').replaceChildren(timelineCard(historyExtR, ctx, state, app));
   section(root, 'r-kpis').replaceChildren(kpisCard(summaryR));
-  // findings / when+wall / sessions answer operational questions, so they mount
-  // in the folded operations tier rather than beside the money. Falling back to
-  // `root` keeps this working if the ops block is ever absent (an embedded or
-  // cut-down page), rather than dropping the cards on the floor.
-  const ops = document.querySelector('#ops-analysis') || root;
-  section(ops, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
   // ONE scale for both breakdown cards (issue #51). They draw the same
   // quantity — tokens — over the same brush selection, cut two different
   // ways, and side by side each normalized to its own tallest row: a
@@ -928,9 +922,21 @@ function applyAll(root, state, app, ctx, results) {
   section(root, 'r-effmix').replaceChildren(el('div', { class: 'grid2' },
     efficiencyCard(summaryR, modelR, g2R, state),
     modelMixCard(historyExtR, ctx)));
-  section(ops, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
+
+  // findings / when+wall / sessions answer operational questions, so they mount
+  // in the folded operations tier rather than beside the money -- and their four
+  // requests (see OPS_ONLY below) are only SENT when that tier is open, so with
+  // it closed the results here are SKIPPED holes, not empty answers. Drawing a
+  // card from one would report "no findings" / "no sessions" about a question
+  // this load never asked. Falling back to `root` keeps this working if the ops
+  // block is ever absent (an embedded or cut-down page), rather than dropping
+  // the cards on the floor.
+  if (!opsOpen) return;
+  const opsRoot = document.querySelector('#ops-analysis') || root;
+  section(opsRoot, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
+  section(opsRoot, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
     whenCard(hourR, ctx), wallHistoryCard(wallR, ctx)));
-  section(ops, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
+  section(opsRoot, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
 }
 
 /** SUMMARY_INDEX is where /v1/summary lands in the fetcher list above. It is
@@ -938,7 +944,22 @@ function applyAll(root, state, app, ctx, results) {
  *  hard-coding a position that a later edit would silently shift. */
 export const SUMMARY_INDEX = 1;
 
-export function renderReview(root, state, app) {
+/** OPS_ONLY names the fetcher positions below whose results have exactly one
+ *  reader, inside the folded operations tier -- so with the tier closed they
+ *  are not sent at all. Positions, because a fetcher list is a positional
+ *  contract (SUMMARY_INDEX above is the standing proof); seq.js leaves each
+ *  unsent slot as a SKIPPED hole rather than closing the gap.
+ *
+ *    2  findings        -> r-findings
+ *    6  history (hour)  -> r-whenwall's "when do we work" card, and nothing
+ *                          else -- position 0 is the separate extent-wide
+ *                          history the timeline above the fold draws from
+ *    7  limits history  -> r-whenwall's wall card
+ *    8  sessions        -> r-sessions
+ */
+const OPS_ONLY = new Set([2, 6, 7, 8]);
+
+export function renderReview(root, state, app, opsOpen) {
   // A re-render (any state change -- a chip removed, the subscription
   // switched, ...) invalidates whatever brush-commit timer a PREVIOUS render
   // may have armed: that timer closes over the state as it stood when it was
@@ -966,8 +987,8 @@ export function renderReview(root, state, app) {
     get(`/v1/history?${q({ extra: { granularity: 'hour' } })}`),
     get(`/v1/limits/history?${q({ extra: { points: 400 } })}`),
     get(`/v1/sessions?${q({ extra: { sort: state.sort, limit: 50 } })}`),
-  ];
+  ].map((f, i) => (OPS_ONLY.has(i) && !opsOpen ? null : f));
 
   const ctx = { ext, sel, gran };
-  return { fetchers, apply: (results) => applyAll(root, state, app, ctx, results) };
+  return { fetchers, apply: (results) => applyAll(root, state, app, ctx, results, opsOpen) };
 }

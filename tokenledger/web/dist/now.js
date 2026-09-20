@@ -236,7 +236,7 @@ function tickHero() {
 
 /* ------------------------------------------------------------------- live */
 
-const liveState = { snap: null, es: null, key: null, retry: null };
+const liveState = { snap: null, es: null, key: null, retry: null, pending: false };
 const liveScopeKey = (app) => new URLSearchParams({account:app.state.sub || 'all', source:app.state.chips.source || ''}).toString();
 
 /** matchesChips filters a live session against the current chips. Only the
@@ -321,8 +321,8 @@ function renderLive(snap, app) {
 }
 
 /** connectLive subscribes to the hub's event stream, falling back to polling
- *  when the stream cannot be held open. Called once (guarded by
- *  `liveStarted` in renderNow, below) — reconnecting on every render would
+ *  when the stream cannot be held open. Called once per scope (guarded by
+ *  `liveState.key` in renderNow, below) — reconnecting on every render would
  *  thrash the connection every time a chip changes or the minute timer fires. */
 function connectLive(app) {
   if (liveState.es) liveState.es.close();
@@ -624,6 +624,18 @@ function banner(kind, title, msg) {
     el('div', { class: 'msg' }, el('b', {}, title + ' '), msg));
 }
 
+/** limitsBannerApplies is the ONE predicate for "a banner outside the fold
+ *  needs /v1/limits". renderNow reads it to decide whether to send that
+ *  request at all while the operations tier is closed, and buildBanners reads
+ *  the same one to decide whether to draw the banner -- written once so the
+ *  two cannot drift into "fetched but never read", or worse, "read but never
+ *  fetched".
+ *
+ *  Nothing below is scoped to one subscription when sub is 'all', so neither
+ *  limits banner has anything to say; the wall gauges that DO read this result
+ *  live inside the fold. */
+const limitsBannerApplies = (state) => state.sub !== 'all';
+
 function buildBanners(state, endpointsR, limitsR) {
   const banners = [];
   const endpoints = endpointsR.status === 'fulfilled' ? endpointsR.value : [];
@@ -650,7 +662,7 @@ function buildBanners(state, endpointsR, limitsR) {
     banners.push(banner('warn', t('banner.allSubs.title'), t('banner.allSubs.body')));
   }
 
-  if (limitsR.status === 'fulfilled' && state.sub !== 'all') {
+  if (limitsR.status === 'fulfilled' && limitsBannerApplies(state)) {
     const limits = limitsR.value;
     if (!limits.available) {
       banners.push(banner('warn', t('banner.limitsUnavailable.title'),
@@ -665,7 +677,7 @@ function buildBanners(state, endpointsR, limitsR) {
 
 /* ------------------------------------------------------------------- main */
 
-function applyNow(root, state, app, results) {
+function applyNow(root, state, app, results, opsOpen) {
   const [findingsR, limitsR, endpointsR, epAcctR, switchesR, collectorsR, accountUsageR] = results;
 
   // scope.js resolves a "machine" chip's label from this on its next render.
@@ -694,6 +706,15 @@ function applyNow(root, state, app, results) {
   const pulseRoot = $('#pulse');
   if (pulseRoot && heroWrapEl.parentNode !== pulseRoot) pulseRoot.replaceChildren(heroWrapEl);
 
+  // Everything above this line is drawn from the three requests that go out
+  // whatever the fold is doing. Everything below reads a result that was only
+  // ASKED FOR when the fold is open (see renderNow's NEEDED table) -- so with
+  // the tier closed we stop here rather than hand a card a SKIPPED slot and
+  // have it print "no readings" about a question nobody asked. Cards already in
+  // the DOM from a previous open stay as they are, invisible; the next open
+  // re-fetches and redraws them.
+  if (!opsOpen) return;
+
   root.replaceChildren(...[
     wallCardFromResult(limitsR, state.chips, app.accounts),
     liveWrapEl,
@@ -703,13 +724,49 @@ function applyNow(root, state, app, results) {
   ].filter(Boolean));
 }
 
-export function renderNow(root, state, app) {
+/** NEEDED says, per fetcher position below, whether that request has anything
+ *  to render RIGHT NOW. `ops` is the operations fold's open state.
+ *
+ *  This view's seven requests do not all serve the folded tier, which is the
+ *  whole reason this table exists rather than a flat "skip them all when
+ *  closed": three of them are the only source for things drawn ABOVE the fold,
+ *  and deferring those would trade a fast first screen for a page that is
+ *  quietly wrong about itself.
+ *
+ *    0  findings         -> #alerts, which mounts above the tiers on purpose
+ *                           (applyNow says why: an alert inside a fold is an
+ *                           alert nobody sees)
+ *    1  limits           -> the wall gauges (folded) AND the two limits
+ *                           banners (not folded) -- see limitsBannerApplies
+ *    2  endpoints        -> #banners' lossy-history warning (not folded), and
+ *                           app.endpoints, which scope.js reads for a machine
+ *                           chip's label and review.js for its group-by
+ *    3  endpoint-accounts \
+ *    4  account-switches  |  the three fleet tables, all inside the fold
+ *    5  collectors        |  and nowhere else
+ *    6  account-usage    /
+ */
+const NEEDED = [
+  () => true,
+  (ops, state) => ops || limitsBannerApplies(state),
+  () => true,
+  (ops) => ops,
+  (ops) => ops,
+  (ops) => ops,
+  (ops) => ops,
+];
+
+export function renderNow(root, state, app, opsOpen) {
   const liveKey = liveScopeKey(app);
   if (liveState.key !== liveKey) {
     liveState.key = liveKey; liveState.snap = null;
     hero.anchor = hero.shown = hero.until = hero.perMs = 0;
     wheels.length = 0; heroWrapEl.replaceChildren(); liveWrapEl.replaceChildren();
-    clearTimeout(liveState.retry); connectLive(app);
+    // Armed here, opened by startLive() below. The stream used to be opened on
+    // this line, synchronously, from inside the first route() -- which put a
+    // connection that is then held for the whole session into the middle of the
+    // first screen's burst, on a protocol that allows six per origin.
+    clearTimeout(liveState.retry); liveState.pending = true;
   } else if (liveState.snap) renderLive(liveState.snap, app);
 
   const acct = encodeURIComponent(state.sub || 'all');
@@ -723,6 +780,23 @@ export function renderNow(root, state, app) {
     get(`/v1/account-switches?account=${acct}&source=${source}&limit=20`),
     get(`/v1/collectors?account=${acct}&source=${source}`),
     get(`/v1/account-usage?account=${acct}&source=${source}`),
-  ];
-  return { fetchers, apply: (results) => applyNow(root, state, app, results) };
+  ].map((f, i) => (NEEDED[i](opsOpen, state) ? f : null));
+  return { fetchers, apply: (results) => applyNow(root, state, app, results, opsOpen) };
+}
+
+/** startLive opens the event stream, and app.js calls it AFTER the first
+ *  screen's fetches have settled rather than renderNow calling it before they
+ *  start.
+ *
+ *  Deferred, but NOT gated on the operations fold, and the difference matters:
+ *  the stream feeds the live strip inside the fold *and* the lifetime token
+ *  badge in #pulse, which index.html keeps outside the fold deliberately -- it
+ *  is the page's one ambient "is the fleet still moving" signal, and folded
+ *  away it answers nothing. So what this removes is the stream competing with
+ *  the first screen for one of six connections, not the badge itself. The
+ *  badge's first frame lands about one round trip later than it used to. */
+export function startLive(app) {
+  if (!liveState.pending) return;
+  liveState.pending = false;
+  connectLive(app);
 }

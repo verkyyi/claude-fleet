@@ -2,7 +2,7 @@
 import { parse, format, dataKey } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
 import { renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
-import { renderNow } from './now.js';
+import { renderNow, startLive } from './now.js';
 import { renderReview, SUMMARY_INDEX } from './review.js';
 import { renderSpend } from './spend.js';
 import { renderConsumption } from './consumption.js';
@@ -17,10 +17,12 @@ import { useFxRate } from './lib/format.js';
 export const app = {
   state: parse(location.hash),
   accounts: [],
-  // Repositories a shipper has pushed progress for. Read once at boot: the
-  // list changes when somebody points a new shipper at this hub, which is not
-  // a per-minute event, and an empty list is the normal state of every hub
-  // that never turned the feature on.
+  // Repositories a shipper has pushed progress for. Read once at boot, and NOT
+  // on the critical path -- boot() lets the first screen render against this
+  // empty list and fills it when the answer arrives. The list changes when
+  // somebody points a new shipper at this hub, which is not a per-minute
+  // event, and an empty list is the normal state of every hub that never
+  // turned the feature on.
   repos: [],
   now: () => Date.now(),
   async api(path, signal) {
@@ -108,8 +110,17 @@ async function load(reuse = false) {
   // 60s timer, analysis only when the brush touches the right edge -- and
   // seq.js's per-loader sequencing is what stops a slow response from
   // overwriting a newer scope.
-  const nowR = renderNow($('#status'), s, app);
-  const reviewR = renderReview($('#analysis'), s, app);
+  //
+  // Both are also told whether the operations tier is OPEN, and they answer by
+  // leaving the requests that only fill it unsent -- eight of this page's
+  // requests exist to fill a box that is closed by default. Read live rather
+  // than captured once: the fold's own toggle handler calls load() again, so
+  // opening it is what sends them, and every refresh after that keeps them
+  // coming because the fold is still open.
+  const ops = opsOpen();
+  lastLoadOps = ops;
+  const nowR = renderNow($('#status'), s, app, ops);
+  const reviewR = renderReview($('#analysis'), s, app, ops);
   // Same range the analysis section resolves, so the consumption table and the
   // charts below it are answering about one period. Duplicating the arithmetic
   // here would let the two drift apart the first time the brush logic changes.
@@ -124,24 +135,7 @@ async function load(reuse = false) {
   // The progress tier renders only where a shipper has pushed something. A
   // hub that never turned the feature on must look exactly as it did before
   // it landed -- no empty card, no band, no extra request per route.
-  const repoR = renderRepo($('#repo'), s, app, app.repos);
-  const band = $('#repo-band');
-  if (band) band.hidden = !repoR;
-  // ...and the nav entry that points at that band goes with it. Same call
-  // decides both, one line apart, because a nav offering a destination the page
-  // does not have is the specific failure #54 set out to avoid.
-  syncNav();
-  // Applied SYNCHRONOUSLY on a presentation-only change, and that is the whole
-  // point: measured against the deployed hub, re-fetching this tier to hide
-  // some of its own rows took 4.4 seconds, and for those 4.4 seconds the
-  // toggle the reader had just pressed still showed its old value. A control
-  // that misreports its own state is worse than one that is merely slow.
-  //
-  // The 60-second refresh and the repo picker both call load() with no
-  // argument, so neither can be served a stale page from here.
-  const repoDone = !repoR ? Promise.resolve(true)
-    : reuse && lastRepoResults ? (repoR.apply(lastRepoResults), Promise.resolve(true))
-    : loaders.repo.run(repoR.fetchers, (results) => { lastRepoResults = results; repoR.apply(results); });
+  const repoDone = loadRepoTier(s, reuse);
   root.setAttribute('aria-busy', 'true'); setBusy(true);
   const [a, b, c, d] = await Promise.all([
     loaders.now.run(nowR.fetchers, nowR.apply),
@@ -154,10 +148,52 @@ async function load(reuse = false) {
     }),
     repoDone,
   ]);
+  // The event stream opens HERE, once the first screen is off the wire -- not
+  // from inside renderNow, before it. It is held for the whole session, so
+  // opening it during the burst spent one of the origin's six connections for
+  // the entire time the page was trying to use all six. now.js's startLive is
+  // a no-op unless a render armed it, and it is deliberately not gated on the
+  // fold: the stream also feeds the token badge outside it. Every loader above
+  // resolves (seq.js settles rather than throws), so this line is always
+  // reached.
+  startLive(app);
   if (a && b && c && d) {
     root.setAttribute('aria-busy', 'false');
     setBusy(loaders.now.inFlight || loaders.review.inFlight || loaders.consumption.inFlight || loaders.repo.inFlight);
   }
+}
+
+/** loadRepoTier draws the progress band and its cards, and is the ONE place
+ *  that does -- load() calls it on every route, and boot() calls it again if
+ *  /v1/repos turns out to hold something after the first screen has already
+ *  rendered without it. Re-running the whole load() there instead would re-ask
+ *  every other question on the page to answer this one.
+ *
+ *  The tier renders only where a shipper has pushed something. A hub that never
+ *  turned the feature on must look exactly as it did before it landed -- no
+ *  empty card, no band, no extra request per route. */
+function loadRepoTier(s, reuse) {
+  const repoR = renderRepo($('#repo'), s, app, app.repos);
+  const band = $('#repo-band');
+  if (band) band.hidden = !repoR;
+  // ...and the nav entry that points at that band goes with it. Same call
+  // decides both, one line apart, because a nav offering a destination the page
+  // does not have is the specific failure #54 set out to avoid. It is also why
+  // boot()'s late /v1/repos comes back through HERE and not through a bare
+  // renderRepo: a band that appears without its nav entry is that same failure
+  // wearing the other face.
+  syncNav();
+  if (!repoR) return Promise.resolve(true);
+  // Applied SYNCHRONOUSLY on a presentation-only change, and that is the whole
+  // point: measured against the deployed hub, re-fetching this tier to hide
+  // some of its own rows took 4.4 seconds, and for those 4.4 seconds the
+  // toggle the reader had just pressed still showed its old value. A control
+  // that misreports its own state is worse than one that is merely slow.
+  //
+  // The 60-second refresh and the repo picker both call load() with no
+  // argument, so neither can be served a stale page from here.
+  if (reuse && lastRepoResults) { repoR.apply(lastRepoResults); return Promise.resolve(true); }
+  return loaders.repo.run(repoR.fetchers, (results) => { lastRepoResults = results; repoR.apply(results); });
 }
 
 // The operations tier remembers whether it was open, per viewer.
@@ -169,12 +205,48 @@ async function load(reuse = false) {
 // private window throws on access, and the page must still open.
 const OPS_KEY = 'ccquota-ops-open';
 
+/** opsOpen is what the two loaders ask before deciding which of their requests
+ *  to send. Read from the DOM rather than a mirrored variable so there is no
+ *  second copy of the fold's state to fall out of step with the element the
+ *  reader actually clicked -- and it is false before wireOpsFold runs, which is
+ *  the safe direction: a load that beat the restore sends the small set. */
+function opsOpen() {
+  const ops = $('#ops');
+  return !!(ops && ops.open);
+}
+
+/** What the last load()'s fetch plan assumed the fold was doing, or null if no
+ *  load has run yet. The toggle handler below needs it to tell an open the
+ *  READER performed from the one wireOpsFold performs on their behalf. */
+let lastLoadOps = null;
+
 function wireOpsFold() {
   const ops = $('#ops');
   if (!ops) return;
   try { ops.open = localStorage.getItem(OPS_KEY) === '1'; } catch {}
   ops.addEventListener('toggle', () => {
     try { localStorage.setItem(OPS_KEY, ops.open ? '1' : '0'); } catch {}
+    // Opening the tier is what ASKS for its eight requests; until now they were
+    // never sent. Closing it needs no load: what is already drawn stays, and
+    // the next load simply stops refreshing it.
+    //
+    // This fires for a programmatic open too, which is what the section nav
+    // does -- scope.js's goToSection sets `open` on the way to scrolling there,
+    // so the nav entry fetches the tier as well as reveals it.
+    //
+    // The condition is "the last load planned for a CLOSED fold", not "the fold
+    // is open", and the difference is a doubled first screen. A <details> fires
+    // toggle ASYNCHRONOUSLY, so the `open` wireOpsFold restores from
+    // localStorage above lands here as an event of its own -- after boot()'s
+    // route() has already loaded, with the fold open, having fetched
+    // everything. Measured before this guard: an ops-open viewer sent 36
+    // requests where they used to send 20. Reading what the last load actually
+    // planned for tells the two opens apart:
+    //   null  -- no load yet (the restore beat route()); route()'s own load is
+    //            coming and will see an open fold. Nothing to do.
+    //   true  -- that load already fetched the tier. Nothing to do.
+    //   false -- the reader just opened a fold the last load left out. Fetch.
+    if (ops.open && lastLoadOps === false) load();
   });
 }
 
@@ -207,9 +279,10 @@ async function boot() {
     ? Promise.resolve(null)
     : app.api(`/v1/fx?base=USD&target=${encodeURIComponent(display)}`).catch(() => null);
   const accountsReq = app.api('/v1/accounts');
-  // Third request, sent at the same time as the other two and awaited after
-  // them. It depends on nothing, and #30 is the standing lesson about what
-  // putting a dependency-free request on the critical path costs a viewer
+  // Third request, sent at the same time as the other two and awaited by
+  // NOBODY -- see the .then() below route(). It depends on nothing and nothing
+  // on the first screen depends on it, and #30 is the standing lesson about
+  // what putting a dependency-free request on the critical path costs a viewer
   // outside the cluster: a whole round trip staring at an empty page.
   //
   // Failure is not an error state, for the same reason a missing FX feed is
@@ -219,9 +292,25 @@ async function boot() {
   try { app.accounts = await accountsReq; }
   catch (err) { $('#banners').replaceChildren(el('div', { class: 'banner err' }, t('app.unreachable', { error: err.message }))); return; }
   useFxRate(await fxReq);
-  app.repos = await reposReq;
   addEventListener('hashchange', route);
   route();
+  // route() does NOT wait for /v1/repos, and that is the half of #30's lesson
+  // that never landed. Sending it in parallel bought nothing while the line
+  // below still read `app.repos = await reposReq` above route(): the whole
+  // first screen sat behind a request that decides ONE thing -- whether one
+  // optional band appears -- and on every hub nobody ever pointed a shipper
+  // at, decides that the band stays hidden. A round trip to render nothing.
+  //
+  // Arriving late breaks nothing, because the tier was already built to render
+  // as nothing: the first route() drew it from the empty list and hid the band
+  // and its nav entry, exactly as it does on a hub with no repos. A non-empty
+  // answer then draws it for real, and that is the only case that costs the two
+  // repo requests. A failure still resolves to [] via the .catch above, so
+  // there is no branch for it here -- a hub with no repo data is a working hub.
+  reposReq.then((repos) => {
+    app.repos = Array.isArray(repos) ? repos : [];
+    if (app.repos.length) loadRepoTier(app.state, false);
+  });
   // The stored cards refresh every minute; the analysis section only when the
   // brush is at the right edge, every five minutes.
   setInterval(async () => {
