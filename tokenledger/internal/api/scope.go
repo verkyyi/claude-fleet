@@ -13,6 +13,13 @@ import (
 // range for a typo is how a dashboard shows the wrong week with confidence.
 //
 // The range is widened to whole hours because the rollup cannot split one.
+//
+// A chip's value reaches store.Filter verbatim, which is what gives the query
+// string all three of the filter's states: an absent (or empty) ?provider= is
+// no constraint, ?provider=store.Undeclared is "only the rows that declared
+// none", and anything else is that value. Nothing is translated here on
+// purpose — a sentinel the URL cannot spell is a sentinel the dashboard cannot
+// use, and this is the layer the dashboard types into.
 func (s *Server) scope(w http.ResponseWriter, r *http.Request) (store.Filter, bool) {
 	if _, ok := querySource(w, r); !ok {
 		return store.Filter{}, false

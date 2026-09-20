@@ -235,3 +235,46 @@ func TestToolDescriptionsStateWhichFiguresAreBilled(t *testing.T) {
 		t.Fatalf("source chip enum = %v, want every source in model.Sources (%v)", enum, model.Sources)
 	}
 }
+
+// The provider chip gained a third state (issue #134). Two things must hold at
+// once, and a regression in either is silent: the sentinel has to REACH the
+// filter through the same passthrough every chip uses, and the sentence that
+// says what a blank provider MEANS in a result must survive -- an agent that
+// loses it starts reading "" as a vendor called unknown.
+func TestChipsCarryTheUndeclaredSentinelWithoutLosingProviderSemantics(t *testing.T) {
+	s := &mcpServer{}
+	f, err := s.filter(map[string]any{"account": "all", "provider": store.Undeclared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Provider != store.Undeclared {
+		t.Errorf("provider = %q; the sentinel must reach store.Filter verbatim", f.Provider)
+	}
+	// Omitted is still no constraint. This is the distinction the sentinel was
+	// added to preserve, not to replace.
+	f, err = s.filter(map[string]any{"account": "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Provider != "" {
+		t.Errorf("provider = %q; an omitted chip must place no constraint", f.Provider)
+	}
+
+	prov := chipProps["provider"].(map[string]any)["description"].(string)
+	for _, want := range []string{
+		"An empty value in a result means the reporting side declared none",
+		store.Undeclared,
+	} {
+		if !strings.Contains(prov, want) {
+			t.Errorf("the provider chip no longer says %q:\n%s", want, prov)
+		}
+	}
+	// The source chip is the one dimension deliberately left out: it is NOT
+	// NULL DEFAULT 'claude' and never blank, and its schema pins an enum that
+	// the sentinel is not a member of. Advertising a value the enum rejects
+	// would be a contradiction a strict client refuses.
+	src := chipProps["source"].(map[string]any)["description"].(string)
+	if strings.Contains(src, store.Undeclared) {
+		t.Errorf("the source chip must not advertise the sentinel:\n%s", src)
+	}
+}

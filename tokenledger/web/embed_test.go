@@ -9,6 +9,7 @@ import (
 
 	"github.com/verkyyi/ccquota/internal/findings"
 	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/verkyyi/ccquota/internal/store"
 )
 
 // The dashboard is embedded, so a missing web/dist is not a cosmetic problem:
@@ -870,5 +871,40 @@ func TestDashboard_LiveStripHintIsStyled(t *testing.T) {
 	if !strings.Contains(string(b), ".live > .hint") {
 		t.Error("styles.css has no rule for a .hint inside the live strip; the sentence " +
 			"stating the active window will outrank the card's own title")
+	}
+}
+
+// The sentinel is one value with two spellings, and the failure is silent.
+//
+// store.Undeclared is what the hub matches a blank dimension against; rows.js
+// declares the same literal because it is the dashboard that TYPES it into the
+// query string. Drift does not error anywhere: the page would send "(none)"
+// against a hub expecting something else, `eq` would treat it as an ordinary
+// provider name, and the "declares no upstream" row would go back to answering
+// with zero rows instead of every row -- a different wrong answer to the same
+// question issue #134 was about.
+//
+// Asserted as the exported declaration rather than a bare substring so that
+// deleting the constant is as loud as changing it.
+func TestDashboard_UndeclaredSentinelMatchesTheStore(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "lib/rows.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("export const UNDECLARED = '%s';", store.Undeclared)
+	if !strings.Contains(string(b), want) {
+		t.Errorf("lib/rows.js does not declare %q -- the dashboard's drill-down sentinel has drifted "+
+			"from store.Undeclared (%q), which is what internal/store/filter.go matches a blank "+
+			"dimension against", want, store.Undeclared)
+	}
+	// The regression itself: sending the row's own empty key as the chip. That
+	// is what made expanding a blank bucket return every upstream on the hub.
+	c, err := fs.ReadFile(Assets(), "consumption.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(c), "provider: row.provider,") {
+		t.Error("consumption.js sends the blank row's own empty key as ?provider= again -- " +
+			"an empty chip means NO CONSTRAINT, which is the #134 bug")
 	}
 }

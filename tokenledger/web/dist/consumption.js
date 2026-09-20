@@ -18,10 +18,10 @@
 // It had to reach the page, because the two axes read as one cut to anyone who
 // has not been shown the difference.
 import { el, $ } from './lib/dom.js';
-import { fmtInt, fmtUSD, fmtCost } from './lib/format.js';
-import { consumptionRows, foldTail, sortRows } from './lib/rows.js';
+import { fmtInt, fmtUSD } from './lib/format.js';
+import { bucketCost, consumptionRows, foldTail, scopeKey, sortRows } from './lib/rows.js';
 import { CSORTS } from './lib/state.js';
-import { costOf, KIND_LABEL } from './lib/cost.js';
+import { KIND_LABEL } from './lib/cost.js';
 import { t } from './lib/i18n.js';
 
 const SORT_LABEL = { cost: t('sort.cost'), tokens: t('sort.tokens'), events: t('sort.events') };
@@ -29,6 +29,16 @@ const SORT_LABEL = { cost: t('sort.cost'), tokens: t('sort.tokens'), events: t('
 // What the row's kind means to somebody reading a bill, rather than what the
 // cost column calls it internally.
 const BILLING = { billed: t('billing.billed'), notional: t('billing.notional'), unknown: t('billing.unknown') };
+
+/** The cost cell, from a bucket's OWN cost fold. One function so the provider
+ *  row and its model sub-table cannot disagree about what a row cost.
+ *
+ *  An amount on a notional row would be an API-equivalent estimate for work
+ *  billed by the month. Absent, not zero — the same nil-not-zero rule the
+ *  tokens column keeps for rows that count no tokens at all. */
+const costCell = (c) => (c.kind === 'notional'
+  ? '—'
+  : (c.unpriced ? '≥ ' + fmtUSD(c.cost) : fmtUSD(c.cost)));
 
 function sortControl(state, app) {
   const seg = el('div', { class: 'seg' });
@@ -42,7 +52,10 @@ function sortControl(state, app) {
 }
 
 /** modelRows renders one provider's models underneath its row, fetched on
- *  demand. Scoped by ?provider=, so the figures are that contract's own. */
+ *  demand. Scoped by ?provider=, so the figures are that contract's own —
+ *  including the blank contract, which is why the key goes through scopeKey:
+ *  a bare `?provider=` reads as "no constraint" at the other end and answered
+ *  the "declares no upstream" row with every upstream on the hub (issue #134). */
 async function expand(tr, row, state, app, range) {
   if (tr.dataset.loaded) { tr.hidden = !tr.hidden; return; }
   tr.dataset.loaded = '1';
@@ -52,20 +65,20 @@ async function expand(tr, row, state, app, range) {
   try {
     const qs = new URLSearchParams({
       account: state.sub || 'all', by: 'model', limit: '50',
-      provider: row.provider,
+      provider: scopeKey(row.provider),
       since: new Date(range.from).toISOString(), until: new Date(range.to).toISOString(),
     });
     const d = await app.api('/v1/usage?' + qs.toString());
     const models = (d.buckets || []).filter((b) => b.key);
     if (!models.length) { cell.replaceChildren(el('span', { class: 'hint' }, t('consumption.noModels'))); return; }
     const modelsTable = el('table', { class: 'sub' },
-      el('tbody', {}, models.map((b) => {
-        const c = costOf(b, row.sources[0] || 'gateway');
-        return el('tr', {},
-          el('td', {}, b.key),
-          el('td', { class: 'num' }, b.tokens ? fmtInt(b.tokens) : '—'),
-          el('td', { class: 'num' }, fmtCost(c)));
-      })));
+      el('tbody', {}, models.map((b) => el('tr', {},
+        el('td', {}, b.key),
+        el('td', { class: 'num' }, b.tokens ? fmtInt(b.tokens) : '—'),
+        // This model's own cost split, not the parent row's first source: one
+        // upstream can front two sources, and pricing the sub-rows off whichever
+        // sorted first reported a metered charge as $0.00 (issue #134).
+        el('td', { class: 'num' }, costCell(bucketCost(b)))))));
     cell.replaceChildren(modelsTable);
   } catch (err) {
     cell.replaceChildren(el('span', { class: 'hint' }, t('consumption.modelsFailed', { error: err.message })));
@@ -115,12 +128,7 @@ export function renderConsumption(root, result, state, app, range) {
       el('td', { title: t('consumption.costKindTip', { kind: KIND_LABEL[r.kind] || r.kind }) }, BILLING[r.kind]),
       el('td', { class: 'num' }, fmtInt(r.events)),
       el('td', { class: 'num' }, r.tokens == null ? '—' : fmtInt(r.tokens)),
-      // An amount here would be an API-equivalent estimate for work billed by
-      // the month. Absent, not zero — the same nil-not-zero rule the tokens
-      // column keeps for rows that count no tokens at all.
-      el('td', { class: 'num' }, r.kind === 'notional'
-        ? '—'
-        : (r.unpriced ? '≥ ' + fmtUSD(r.cost) : fmtUSD(r.cost))));
+      el('td', { class: 'num' }, costCell(r)));
     $('button', tr).addEventListener('click', () => expand(detail, r, state, app, range));
     body.append(tr, detail);
   }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/verkyyi/ccquota/internal/model"
 	"github.com/verkyyi/ccquota/internal/pricing"
+	"github.com/verkyyi/ccquota/internal/store"
 )
 
 func gatewayBatch(account string, rows ...[2]string) model.Batch {
@@ -192,5 +194,72 @@ func TestUsage_ByProvider_EmptyProviderStaysUnlabelled(t *testing.T) {
 	}
 	if got.ProviderNote == "" {
 		t.Error("the blank bucket is still explained by the note, not by a label")
+	}
+}
+
+// The reported bug (issue #134), at the layer it was reported from: the
+// dashboard expands the "declares no upstream" row by asking for that row's
+// own key. A blank key reached `where` as "no constraint", so the drill-down
+// answered with every upstream on the hub -- the one reading that must never
+// come back from a row the reader clicked to NARROW.
+func TestUsage_DrillIntoUndeclaredReturnsOnlyUndeclaredModels(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "mixed")
+	// Two upstreams that declare themselves...
+	h.push(t, tok, gatewayBatch("gateway:aicall",
+		[2]string{"u1", "ark.cn-beijing.volces.com"},
+		[2]string{"u2", "dashscope.aliyuncs.com"}))
+	// ...and one Claude transcript, which declares none. gatewayBatch's events
+	// all run "deepseek-v4-flash", so a leak is visible by model id alone.
+	h.push(t, tok, model.Batch{
+		Identity: model.Identity{AccountUUID: "acct", Hostname: "h", OS: "linux", Arch: "amd64", MachineID: "m"},
+		Events: []model.UsageEvent{{
+			AccountUUID: "acct", MessageUUID: "u3", TS: time.Now().UTC().Add(-time.Minute),
+			Model: "claude-sonnet-5", OutputTokens: 10,
+		}},
+	})
+
+	var got struct {
+		Buckets []struct {
+			Key    string `json:"key"`
+			Events int64  `json:"events"`
+		} `json:"buckets"`
+	}
+	h.getJSON(t, "/v1/usage?by=model&provider="+url.QueryEscape(store.Undeclared)+"&since=1d&account=all", &got)
+
+	if len(got.Buckets) != 1 {
+		t.Fatalf("buckets = %+v; want only the models with no declared upstream", got.Buckets)
+	}
+	if got.Buckets[0].Key != "claude-sonnet-5" || got.Buckets[0].Events != 1 {
+		t.Errorf("bucket = %+v; want claude-sonnet-5 with 1 event", got.Buckets[0])
+	}
+}
+
+// The other half of the same distinction, and the reason the sentinel had to
+// be a new value rather than a reinterpretation of "": an omitted chip still
+// places no constraint. Regressing this would silently narrow every unscoped
+// read on the hub.
+func TestUsage_OmittedProviderStillSpansEveryUpstream(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "mixed")
+	h.push(t, tok, gatewayBatch("gateway:aicall",
+		[2]string{"o1", "ark.cn-beijing.volces.com"},
+		[2]string{"o2", "dashscope.aliyuncs.com"}))
+	h.push(t, tok, model.Batch{
+		Identity: model.Identity{AccountUUID: "acct", Hostname: "h", OS: "linux", Arch: "amd64", MachineID: "m"},
+		Events: []model.UsageEvent{{
+			AccountUUID: "acct", MessageUUID: "o3", TS: time.Now().UTC().Add(-time.Minute),
+			Model: "claude-sonnet-5", OutputTokens: 10,
+		}},
+	})
+
+	for _, qs := range []string{"", "&provider="} {
+		var got struct {
+			Events int64 `json:"events"`
+		}
+		h.getJSON(t, "/v1/summary?since=1d&account=all"+qs, &got)
+		if got.Events != 3 {
+			t.Errorf("provider%q: events = %d, want all 3", qs, got.Events)
+		}
 	}
 }

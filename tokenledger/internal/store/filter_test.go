@@ -67,3 +67,85 @@ func TestFilterPrevAndAlign(t *testing.T) {
 		t.Fatal("aligning twice must be idempotent")
 	}
 }
+
+// The bug this constant exists for: `where` skipped an empty dimension, so the
+// drill-down into a blank bucket produced no predicate at all and the answer
+// was every row in the scope. Undeclared is the other question, and it has to
+// reach SQL as a predicate.
+func TestFilterWhereUndeclaredConstrainsToTheBlankSide(t *testing.T) {
+	f := Filter{Account: AllAccounts, Start: time.Unix(0, 0).UTC(), End: time.Unix(3600, 0).UTC(),
+		Provider: Undeclared}
+	clause, args, err := f.where("ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(clause, "provider = ''") {
+		t.Fatalf("clause lacks the blank-provider predicate: %s", clause)
+	}
+	// The sentinel is this package's own literal, never a bind argument: it is
+	// written into the SQL, so only the two time bounds are bound.
+	if len(args) != 2 {
+		t.Fatalf("want 2 time args, got %d: %v", len(args), args)
+	}
+	for _, a := range args {
+		if a == Undeclared {
+			t.Errorf("the sentinel must not be bound as a value: %v", args)
+		}
+	}
+}
+
+// The distinction the whole constant rests on. Left unset, a dimension places
+// no constraint; set to Undeclared it places one. Conflating them is the bug.
+func TestFilterWhereEmptyStringIsStillNoConstraint(t *testing.T) {
+	f := Filter{Account: AllAccounts, Start: time.Unix(0, 0).UTC(), End: time.Unix(3600, 0).UTC(),
+		Provider: ""}
+	clause, _, err := f.where("ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(clause, "provider") {
+		t.Fatalf("an unset dimension must not be constrained: %s", clause)
+	}
+}
+
+// Every dimension, not just the one the bug was reported on. A sentinel that
+// worked on some columns and silently meant a literal value on the rest would
+// be worse than none: the caller cannot see which kind they got.
+func TestFilterWhereUndeclaredWorksOnEveryDimension(t *testing.T) {
+	base := Filter{Account: AllAccounts, Start: time.Unix(0, 0).UTC(), End: time.Unix(3600, 0).UTC()}
+	for _, c := range []struct {
+		name string
+		set  func(*Filter)
+		want string
+	}{
+		{"endpoint", func(f *Filter) { f.Endpoint = Undeclared }, "endpoint_id = ''"},
+		{"user", func(f *Filter) { f.OSUser = Undeclared }, "os_user = ''"},
+		{"project", func(f *Filter) { f.CWD = Undeclared }, "cwd = ''"},
+		{"model", func(f *Filter) { f.Model = Undeclared }, "model = ''"},
+		{"provider", func(f *Filter) { f.Provider = Undeclared }, "provider = ''"},
+		{"source", func(f *Filter) { f.Source = Undeclared }, "source = ''"},
+		{"branch", func(f *Filter) { f.Branch = Undeclared }, "git_branch = ''"},
+		{"repo", func(f *Filter) { f.Repo = Undeclared }, "git_repo = ''"},
+		{"session", func(f *Filter) { f.Session = Undeclared }, "session_id = ''"},
+		// Team is not a column on these tables, so it takes its own branch --
+		// which is exactly why it is asserted here rather than assumed.
+		{"team", func(f *Filter) { f.Team = Undeclared }, "WHERE team = ''"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := base
+			c.set(&f)
+			clause, args, err := f.where("ts")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(clause, c.want) {
+				t.Errorf("clause lacks %q: %s", c.want, clause)
+			}
+			for _, a := range args {
+				if a == Undeclared {
+					t.Errorf("the sentinel leaked into the bind args: %v", args)
+				}
+			}
+		})
+	}
+}

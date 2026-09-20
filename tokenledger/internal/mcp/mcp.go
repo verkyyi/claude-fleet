@@ -212,6 +212,16 @@ const repoCaveat = " These rows are SHIPPED to the hub by an external collector,
 	"rather than an empty one. Age is only ever meaningful against the same repo's close-time " +
 	"percentiles, never against a fixed number of days."
 
+// undeclaredChip is the one sentence every chip says about the third state.
+//
+// Omitting a chip means NO CONSTRAINT on that dimension, so an empty string
+// cannot also mean "only the rows that are empty here" — store.Undeclared is
+// the value that asks for that side. Said on each chip rather than once in the
+// caveat because a client reads one property's description while filling it
+// in, and this is the moment the distinction matters.
+var undeclaredChip = ` Pass "` + store.Undeclared +
+	`" to select only the rows that declared nothing on this dimension; omitting the argument places no constraint at all.`
+
 // chipProps are the drill-down dimensions store.Filter accepts, at most one
 // value per dimension, ANDed together.
 var chipProps = map[string]any{
@@ -222,14 +232,14 @@ var chipProps = map[string]any{
 			"is a real charge. Filtering to one source is what makes a single cost figure " +
 			"meaningful — unfiltered, cost comes back split.",
 	},
-	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id."},
-	"user":     map[string]any{"type": "string", "description": "Limit to one OS login."},
-	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)."},
-	"model":    map[string]any{"type": "string", "description": "Limit to one model id."},
-	"provider": map[string]any{"type": "string", "description": "Limit to one upstream provider. With a gateway that fails over between vendors this is NOT derivable from the model id: one model id is reachable through several upstreams at several contracted prices. An empty value in a result means the reporting side declared none."},
-	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch."},
-	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team."},
-	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id."},
+	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id." + undeclaredChip},
+	"user":     map[string]any{"type": "string", "description": "Limit to one OS login." + undeclaredChip},
+	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)." + undeclaredChip},
+	"model":    map[string]any{"type": "string", "description": "Limit to one model id." + undeclaredChip},
+	"provider": map[string]any{"type": "string", "description": "Limit to one upstream provider. With a gateway that fails over between vendors this is NOT derivable from the model id: one model id is reachable through several upstreams at several contracted prices. An empty value in a result means the reporting side declared none." + undeclaredChip},
+	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch." + undeclaredChip},
+	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team." + undeclaredChip},
+	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id." + undeclaredChip},
 }
 
 // withChips merges the drill-down chips into a tool's own properties.

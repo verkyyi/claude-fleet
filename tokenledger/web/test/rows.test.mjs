@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { consumptionRows, foldTail, sortRows } from '../dist/lib/rows.js';
+import { bucketCost, consumptionRows, foldTail, scopeKey, sortRows, UNDECLARED } from '../dist/lib/rows.js';
+import { costOf } from '../dist/lib/cost.js';
 
 const gw = (n, cost) => ({ source: 'gateway', kind: 'billed', events: n, cost_usd: cost, unpriced_events: 0 });
 const cc = (n, cost) => ({ source: 'claude', kind: 'notional', events: n, cost_usd: cost, unpriced_events: 0 });
@@ -264,4 +265,49 @@ test('a blank bucket from another single source is not called Claude', () => {
 test('a blank bucket with no active source stays unqualified', () => {
   const [r] = consumptionRows([{ key: '', events: 0, tokens: 0, cost: [] }]);
   assert.equal(r.providerLabel, 'not declared');
+});
+
+// issue #134. A blank key is a real answer, and expanding it has to ask a real
+// question. `?provider=` means NO CONSTRAINT at the other end, so sending the
+// row's own empty key drilled into every upstream on the hub instead of into
+// the one row the reader clicked.
+test('the blank row scopes to the sentinel, never to a bare empty chip', () => {
+  assert.equal(scopeKey(''), UNDECLARED);
+  assert.notEqual(UNDECLARED, '');
+  // A named upstream is still asked for by its own name; the sentinel is only
+  // ever substituted for the absence.
+  assert.equal(scopeKey('ark.cn-beijing.volces.com'), 'ark.cn-beijing.volces.com');
+});
+
+// It travels in a URL and in an MCP argument, and it has to be a value no real
+// upstream, model id, branch or login could ever be.
+test('the sentinel cannot collide with a real dimension value', () => {
+  assert.match(UNDECLARED, /[()]/);
+  assert.equal(UNDECLARED, encodeURIComponent(UNDECLARED).replace(/%28/g, '(').replace(/%29/g, ')'));
+});
+
+// The second half of issue #134. One upstream can front two sources, and the
+// model sub-table priced every row with the PARENT row's first source: a
+// metered charge served alongside subscription work rendered as $0.00.
+test('a bucket is priced from its own sources, never from a neighbouring row', () => {
+  const mixed = { key: 'ark.cn-beijing.volces.com', events: 4, tokens: 10, cost: [cc(2, 0), gw(2, 7)] };
+  const billedOnly = { key: 'deepseek-v4-flash', events: 2, tokens: 10, cost: [gw(2, 7)] };
+
+  // The parent row fronts two kinds of money, so it refuses to name one.
+  assert.equal(bucketCost(mixed).kind, 'unknown');
+  // The model underneath it was served by one source only, and keeps that
+  // source's real figure rather than inheriting the parent's first one.
+  assert.equal(bucketCost(billedOnly).kind, 'billed');
+  assert.equal(bucketCost(billedOnly).cost, 7);
+});
+
+// The regression itself, stated as the arithmetic: costing a bucket by the
+// parent's leading source reads the wrong entry entirely.
+test('the leading source of the parent row is not what prices a sub-row', () => {
+  const b = { key: 'gpt-5-codex', events: 3, tokens: 10, cost: [gw(3, 12)] };
+  // 'claude' leads SOURCES, and is what the old code would have reached for on
+  // a parent row that carried it. This bucket has no claude entry at all.
+  assert.equal(costOf(b, 'claude').cost_usd, 0);
+  assert.equal(bucketCost(b).cost, 12);
+  assert.equal(bucketCost(b).sources.join(), 'gateway');
 });

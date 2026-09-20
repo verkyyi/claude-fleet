@@ -8,6 +8,21 @@
 import { activeSources, costOf, kindOf } from './cost.js';
 import { t } from './i18n.js';
 
+/** UNDECLARED is what a drill-down sends to mean "only the rows that declared
+ *  nothing on this dimension". It must stay in step with store.Undeclared in
+ *  internal/store/filter.go, which is where the SQL side of it is explained.
+ *
+ *  It is needed because `?provider=` already means something else — no
+ *  constraint at all — so sending a blank row's own key expanded it into every
+ *  upstream on the hub (issue #134). A row whose key is '' is a real answer
+ *  and must ask a real question. */
+export const UNDECLARED = '(none)';
+
+/** scopeKey turns a bucket key into the value a `?`-chip should carry: itself,
+ *  or the sentinel when the bucket IS the blank one. One place decides it, so
+ *  no caller re-derives the rule and gets the third state wrong again. */
+export const scopeKey = (key) => (key ? key : UNDECLARED);
+
 // Billed first: it is the money somebody was actually charged, and it is the
 // shorter list. Unknown last, because a source this build has not classified
 // belongs to no total and should not sit between the two that do.
@@ -35,20 +50,38 @@ function notDeclaredLabel(sources) {
     : t('rows.notDeclared');
 }
 
+/** bucketCost folds ONE bucket's own cost split into the three facts a money
+ *  cell needs: which sources are in it, which kind of money that makes the
+ *  figure, and the amount with its unpriced count.
+ *
+ *  Always from the bucket in hand, never from a neighbouring row's sources.
+ *  That was the bug: the model sub-table priced every row with
+ *  `costOf(b, parentRow.sources[0])`, so a mixed-source upstream — codex and
+ *  gateway behind the same host — priced its models off whichever source
+ *  happened to sort first, and the billed half of a real invoice rendered as
+ *  $0.00 (issue #134). A bucket already carries its own split; nothing else
+ *  may stand in for it.
+ *
+ *  A provider can front more than one source. Summing their cost is legitimate
+ *  only when they are the same kind of money; when they are not, the fold
+ *  reports the kind as unknown rather than adding them. */
+export function bucketCost(b) {
+  const sources = activeSources(b);
+  const kinds = new Set(sources.map(kindOf));
+  return {
+    sources,
+    kind: kinds.size === 1 ? kindOf(sources[0]) : 'unknown',
+    cost: sources.reduce((n, s) => n + (costOf(b, s).cost_usd || 0), 0),
+    unpriced: sources.reduce((n, s) => n + (costOf(b, s).unpriced_events || 0), 0),
+  };
+}
+
 /** consumptionRows flattens one breakdown into rows carrying the two facts a
  *  reader needs before comparing anything: which contract served it, and
  *  which kind of money the figure is. */
 export function consumptionRows(buckets) {
   return (buckets || []).map((b) => {
-    const sources = activeSources(b);
-    const src = sources[0] || 'claude';
-    // A provider can front more than one source. Summing their cost is
-    // legitimate only when they are the same kind of money; when they are
-    // not, the row reports the kind as unknown rather than adding them.
-    const kinds = new Set(sources.map(kindOf));
-    const kind = kinds.size === 1 ? kindOf(src) : 'unknown';
-    const cost = sources.reduce((n, s) => n + (costOf(b, s).cost_usd || 0), 0);
-    const unpriced = sources.reduce((n, s) => n + (costOf(b, s).unpriced_events || 0), 0);
+    const { sources, kind, cost, unpriced } = bucketCost(b);
     return {
       provider: b.key,
       // A named upstream shows the operator's own name for it when --pricing
