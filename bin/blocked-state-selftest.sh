@@ -163,7 +163,7 @@ same 'in-flight reconcile cannot overwrite a new blocker' "$(state)" needs/block
 # A4 (#846): a screen read never PROMOTES a quiet window to working. A WORKING
 # verdict on a done window (a stale frame re-reddening what #806/#101 demoted)
 # spends a call but changes nothing; only the UserPromptSubmit hook starts a turn.
-tf set-window-option -t "$TEST_PANE" @claude_state done
+tf set-window-option -t "$TEST_PANE" @claude_state "done"
 tf set-window-option -t "$TEST_PANE" @claude_needs ''
 tf set-window-option -t "$TEST_PANE" @claude_state_ts 123
 A4WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
