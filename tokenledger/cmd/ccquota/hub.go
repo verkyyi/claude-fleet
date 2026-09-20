@@ -257,6 +257,28 @@ func runHub(args []string) error {
 		map[string]float64{"CNY": pricing.GatewayCNYPerUSD},
 		"pinned in this build, reviewed "+pricing.GatewayFXAsOf)
 
+	// Resolve the HTTPS name HERE rather than in the TLS block below, so the
+	// Server is complete before Handler() is called and nothing writes to it
+	// again once requests are being served. /access reports these addresses,
+	// and a field filled in after the first listener is up is a data race, not
+	// a late initialisation.
+	//
+	// It also fails earlier: a missing tailscale binary now stops the hub
+	// before it binds anything, with the same message it always gave.
+	var tlsBin, tlsName, httpsURL string
+	if *httpsAddr != "" {
+		var err error
+		if tlsBin, err = api.FindTailscaleBin(*tailscaleBin); err != nil {
+			return fmt.Errorf("--https-addr: %w", err)
+		}
+		if tlsName = *tlsHost; tlsName == "" {
+			if tlsName, err = detectMagicDNSName(tlsBin); err != nil {
+				return fmt.Errorf("--https-addr: %w", err)
+			}
+		}
+		httpsURL = "https://" + tlsName + "/"
+	}
+
 	srv := &api.Server{
 		Store:               st,
 		FX:                  feed,
@@ -268,6 +290,10 @@ func runHub(args []string) error {
 		LimitsPollIntervalS: *pollInterval,
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
+		// Where we are about to bind, so /access can print a URL instead of
+		// "some port". The HTTPS half is filled in below, once the certificate
+		// has told us the name it is actually for.
+		Listeners: api.ListenerFacts{HTTP: addrs, HTTPS: *httpsAddr, HTTPSURL: httpsURL},
 	}
 	srv.MCP = mcp.Handler(srv)
 
@@ -307,17 +333,8 @@ func runHub(args []string) error {
 	}
 
 	if *httpsAddr != "" {
-		bin, err := api.FindTailscaleBin(*tailscaleBin)
-		if err != nil {
-			return fmt.Errorf("--https-addr: %w", err)
-		}
-		host := *tlsHost
-		if host == "" {
-			if host, err = detectMagicDNSName(bin); err != nil {
-				return fmt.Errorf("--https-addr: %w", err)
-			}
-		}
-		tc := newTailscaleCert(bin, host, filepath.Join(filepath.Dir(dbFile), "tls"))
+		// tlsBin and tlsName were resolved above, before the Server was built.
+		tc := newTailscaleCert(tlsBin, tlsName, filepath.Join(filepath.Dir(dbFile), "tls"))
 		if err := tc.refresh(); err != nil {
 			return fmt.Errorf("--https-addr: obtain certificate: %w", err)
 		}
@@ -335,7 +352,7 @@ func runHub(args []string) error {
 			TLSConfig:         &tls.Config{GetCertificate: tc.get, MinVersion: tls.VersionTLS12},
 		}
 		servers = append(servers, hs)
-		log.Printf("ccquota hub listening on %s (https, tailnet peers only) -> https://%s/", *httpsAddr, host)
+		log.Printf("ccquota hub listening on %s (https, tailnet peers only) -> %s", *httpsAddr, httpsURL)
 		go func() { errCh <- hs.ServeTLS(ln, "", "") }()
 	}
 

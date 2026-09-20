@@ -55,6 +55,12 @@ type Server struct {
 	// UI is the built dashboard, or nil when the binary was built without one.
 	UI fs.FS
 
+	// Listeners is where the hub command actually bound, so the door map at
+	// /access can print a URL rather than "some port". Presentation only:
+	// nothing routes on it, and the zero value just means the page names the
+	// doors without their addresses.
+	Listeners ListenerFacts
+
 	// SSO connects the human-facing surfaces to the company's WeCom single
 	// sign-on. Nil means not wired up — /enter 404s and nothing else changes.
 	SSO *SSO
@@ -161,6 +167,16 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
 	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
+
+	// The door map: every way into this hub, what each costs in credentials,
+	// and what is actually turned on here. Behind the viewer gate like every
+	// other human surface -- it describes the configuration, and /enter's
+	// unconditional 404 exists precisely so an uncredentialled prober cannot
+	// learn that. Both spellings, so /access/ is the page rather than the SPA
+	// fallback. See access.go.
+	mux.Handle("/v1/access", s.viewerOnly(http.HandlerFunc(s.handleAccess)))
+	mux.Handle("/access", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
+	mux.Handle("/access/", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
 
 	// The business board. Gated like every other human surface -- these are
 	// the most sensitive figures this binary holds -- and mounted at a fixed

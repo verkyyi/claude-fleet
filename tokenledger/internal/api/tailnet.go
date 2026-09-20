@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,25 @@ func NewTailnetViewers(logins []string, self []string, whois func(netip.Addr) (W
 		}
 	}
 	return t
+}
+
+// Logins returns the allowlist, sorted, for the door map at /access — an
+// operator reading "who gets in here without a token" should not have to go
+// back to the command line the hub was started with. Nil (the feature off)
+// returns nothing, which is the honest answer: nobody.
+//
+// These are logins, not credentials. Nothing here lets anyone in; tailscaled
+// still has to say a connection came from one of them.
+func (t *TailnetViewers) Logins() []string {
+	if t == nil {
+		return nil
+	}
+	out := make([]string, 0, len(t.logins))
+	for l := range t.logins {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out
 }
 
 var (

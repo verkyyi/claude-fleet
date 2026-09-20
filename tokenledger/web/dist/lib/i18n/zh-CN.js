@@ -28,6 +28,7 @@ export const zhCN = {
   'band.progress.note': '这些钱换来了什么',
   'ops.title': '运维',
   'ops.note': '额度余量 · 机器 · 采集健康 · 会话',
+  'ops.access': '入口一览 —— 每扇门、各要什么凭证、本机开了什么',
 
   /* ----------------------------------------------------------- common */
   'common.queryFailed': '查询失败：{error}',

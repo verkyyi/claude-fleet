@@ -223,6 +223,39 @@ func TestAssets_UserPageIsEmbedded(t *testing.T) {
 	}
 }
 
+// The door map's page (#61) is embedded, and it gets its facts from the hub
+// rather than from its own markup.
+//
+// The second half is the assertion worth having. The whole reason /access
+// exists is that the repository had no single true statement about its
+// entrances -- the README described some doors, index.html's `<details
+// id="ops">` fold looked like one and is not, and nothing listed the CLI at
+// all. A page that hard-codes the table re-creates exactly that: markup that
+// was true on the day it was written and drifts from internal/api/server.go's
+// router the first time someone mounts a route. So the page is asserted to
+// FETCH, and the door names are asserted to be absent from it -- they live in
+// access.go's doors(), beside Handler(), or they live nowhere.
+func TestAssets_AccessPageIsEmbeddedAndFetchesItsFacts(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "access.html")
+	if err != nil {
+		t.Fatalf("access.html unreadable: %v", err)
+	}
+	src := string(b)
+	if len(b) < 1024 {
+		t.Fatalf("access.html is %d bytes; that is a placeholder", len(b))
+	}
+	if !strings.Contains(src, `fetch("/v1/access"`) {
+		t.Error("the access page does not fetch /v1/access; its facts would be frozen markup")
+	}
+	// Route strings the page must NOT carry. Each is a door whose description
+	// belongs to the router: find one here and the table has started drifting.
+	for _, leaked := range []string{"/v1/ingest", "ccquota enroll", "/badge/u/", "POST /mcp"} {
+		if strings.Contains(src, leaked) {
+			t.Errorf("access.html hard-codes %q -- door descriptions come from /v1/access, not from the page", leaked)
+		}
+	}
+}
+
 // A source this build knows must be nameable by the page that offers it, and a
 // billed one must be a named term of real spend.
 //

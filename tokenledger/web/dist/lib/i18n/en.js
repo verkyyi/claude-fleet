@@ -25,6 +25,7 @@ export const en = {
   'band.progress.note': 'what the spend bought',
   'ops.title': 'Operations',
   'ops.note': 'quota headroom · machines · collection health · sessions',
+  'ops.access': 'Ways in — every door, its credential, and what is turned on here',
 
   /* ----------------------------------------------------------- common */
   'common.queryFailed': 'Query failed: {error}',

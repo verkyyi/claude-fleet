@@ -391,6 +391,37 @@ func (s *Store) EndpointKind(endpointID string) (string, error) {
 	return kind, nil
 }
 
+// EnrollmentCounts reports how many enrollments this hub holds of each kind,
+// for the door map at /access: the ingest doors are only as open as the number
+// of tokens that can push through them.
+//
+// An aggregate on purpose. EndpointKind's note above is that a kind must never
+// ride along inside a struct a dozen read paths share, because that is how an
+// authorisation gate silently widens. A count is not a kind attached to an
+// endpoint — no caller can decide anything about one endpoint from it — so the
+// page can say "three agents, one growth shipper" without handing anyone a
+// kind to mistake for a credential.
+func (s *Store) EnrollmentCounts() (map[string]int, error) {
+	rows, err := s.read.Query(`SELECT kind, COUNT(*) FROM endpoints GROUP BY kind`)
+	if err != nil {
+		return nil, fmt.Errorf("enrollment counts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return nil, fmt.Errorf("enrollment counts: %w", err)
+		}
+		out[kind] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("enrollment counts: %w", err)
+	}
+	return out, nil
+}
+
 // EndpointByTokenHash resolves an enrollment token to its endpoint.
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 	row := s.read.QueryRow(endpointColumns+` FROM endpoints WHERE token_hash = ?`, hash)

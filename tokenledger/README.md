@@ -418,6 +418,42 @@ the switch and shows it in the UI. Rows already ingested keep their old
 attribution and cannot be corrected — see the known limits below. Two plans
 running side by side is **not** a switch, and is not recorded as one.
 
+## Ways in — one process is not one entrance
+
+The hub is one binary on one port. That is a fact about *deployment*, and it
+gets read as a fact about *access*, which it is not: these surfaces share a
+process, and they do not share a credential.
+
+| Door | What you need | What it gives you |
+|---|---|---|
+| Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
+| `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
+| `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
+| `POST /mcp` | the same viewer token again | the read tools, for an agent |
+| `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
+| `/share?token=…` | a share token from `ccquota share` | one redacted page |
+| `/badge/…`, `/embed/…` | nothing with `--public-badges`, the viewer token otherwise | one number, for a README |
+| `ccquota enroll / share / team / plan / name` | a shell on the hub machine | the only door that can change who gets in |
+
+That table is the software. The half it cannot tell you is *your* hub — whether
+SSO is wired up, who is on the tailnet allowlist, whether badges are public,
+how many shippers are enrolled. The hub answers that itself:
+
+    https://<your hub>/access          # the page
+    https://<your hub>/v1/access       # the same thing as JSON
+
+Both sit behind the viewer token, like every other human surface. That is
+deliberate rather than incidental: `/enter` is mounted unconditionally and
+404s when SSO is unconfigured *precisely* so the route cannot tell an
+uncredentialled prober whether the feature is on, and a page that reports the
+configuration must not undo it. You read `/access` because you already came
+through a door.
+
+It is a description, not a control plane. Nothing on it mints, revokes or
+widens a credential, and no command has been moved from the hub's shell onto
+HTTP. `enroll`, `team` and `plan` stay local because a machine that could name
+its own team could move its spend onto another team's budget.
+
 ## The dashboard
 
 One page, no tabs — with a nav bar across the top of it. Those are not in

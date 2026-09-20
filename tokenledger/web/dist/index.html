@@ -115,6 +115,13 @@
         <span class="ops-title" data-i18n="ops.title">Operations</span>
         <span class="ops-note" data-i18n="ops.note">quota headroom · machines · collection health · sessions</span>
       </summary>
+      <!-- The door map (#61). A plain link in the shell, not a rendered card:
+           it must cost nothing on a page whose whole ops tier is lazy-loaded,
+           and it must still be there when the thing a reader came to look up
+           is why the rest of this tier will not load for them. -->
+      <p class="ops-link">
+        <a href="/access" data-i18n="ops.access">Ways in — every door, its credential, and what is turned on here</a>
+      </p>
       <!-- now.js renders this whole block: live activity, quota gauges,
            collector health and the fleet roster. "status", not "live",
            because it is all four. -->

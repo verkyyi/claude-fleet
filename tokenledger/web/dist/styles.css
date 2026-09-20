@@ -632,6 +632,12 @@ details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 10
 .ops > summary:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
 .ops-title { font-weight: 600; font-size: 14px; letter-spacing: .02em; }
 .ops-note { color: var(--ink-3); font-size: 12.5px; }
+/* The link to /access. Quiet -- it is a pointer to another page, not a card --
+   but underlined, because a link that looks like prose is a link nobody finds
+   on the one visit where they need it most. */
+.ops-link { margin: 6px 0 14px; font-size: 12.5px; }
+.ops-link a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+.ops-link a:hover, .ops-link a:focus-visible { color: var(--s1); }
 @media (prefers-reduced-motion: reduce) { .ops > summary::before { transition: none; } }
 
 /* ── three tiers, three weights ────────────────────────────────────────────
