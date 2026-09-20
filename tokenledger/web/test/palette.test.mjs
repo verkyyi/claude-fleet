@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { seriesPalette, slotColor, SERIES_SLOTS, OTHER_COLOR } from '../dist/lib/palette.js';
 
 // The defect this file exists for (issue #55): chart colour came from the
@@ -77,4 +78,49 @@ test('slotColor is the fixed-enumeration accessor and folds past the palette', (
   assert.equal(new Set(Array.from({ length: SERIES_SLOTS }, (_, i) => slotColor(i))).size, SERIES_SLOTS);
   assert.equal(slotColor(SERIES_SLOTS), OTHER_COLOR);
   assert.equal(slotColor(-1), OTHER_COLOR);
+});
+
+// ---------------------------------------------------------------------------
+// The share page's copy (issue #55 fixed the dashboard; #73 the other half).
+//
+// web/dist/share.html is served at /share behind the share-token gate, while
+// /lib/ is behind the viewer gate — a share recipient importing
+// ./lib/palette.js is answered 401 — so the page carries its own copy of the
+// palette rather than importing this one. A copy is only as good as the day
+// it was taken, and the failure it would reintroduce is quiet: the share page
+// keeps colouring by name, just by a DIFFERENT name-to-hue map, so a reader
+// comparing the dashboard with the page they shared still sees Opus change
+// colour. Nothing on screen says which copy moved.
+//
+// So this runs the real inline implementation — lifted out of share.html
+// between its `>>> palette` / `<<< palette` markers, never a transcription of
+// it — against this module over inputs that matter, and fails the moment one
+// side moves. Evaluating the extracted block needs no DOM: it is pure string
+// arithmetic, which is exactly why it can be extracted at all.
+function sharePalette() {
+  const html = readFileSync(new URL('../dist/share.html', import.meta.url), 'utf8');
+  const block = html.match(/\/\/ >>> palette[^\n]*\n([\s\S]*?)\n\/\/ <<< palette/);
+  assert.ok(block, 'share.html has lost its `>>> palette` / `<<< palette` markers');
+  return new Function(`${block[1]}\nreturn { seriesPalette, OTHER_COLOR, SERIES };`)();
+}
+
+test('share.html colours a name exactly as lib/palette.js does', () => {
+  const share = sharePalette();
+  assert.equal(share.OTHER_COLOR, OTHER_COLOR, 'the folded "other" colour has drifted');
+  assert.equal(share.SERIES.length, SERIES_SLOTS, 'the two palettes have different slot counts');
+
+  // Names the share page really sees (model_split is ByModel, ranked by
+  // tokens), plus a set larger than the palette so the overflow rule is
+  // compared too — the old `% SERIES.length` gave the ninth model the first
+  // one's hue instead of folding it into grey.
+  const models = [OPUS, SONNET, HAIKU, 'gpt-5', 'gemini-2.5-pro', 'grok-4',
+    'claude-opus-4-5', 'claude-sonnet-4', 'claude-haiku-3-5', 'o3'];
+  for (let n = 0; n <= models.length; n++) {
+    const names = models.slice(0, n);
+    assert.deepEqual(share.seriesPalette(names), seriesPalette(names),
+      `share.html and lib/palette.js disagree on ${n} models`);
+    const reversed = [...names].reverse();
+    assert.deepEqual(share.seriesPalette(reversed), seriesPalette(reversed),
+      `share.html and lib/palette.js disagree once the ranking flips (${n} models)`);
+  }
 });

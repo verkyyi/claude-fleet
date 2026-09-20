@@ -91,8 +91,64 @@ const fmt = (n) => n >= 1e9 ? (n/1e9).toFixed(1)+"B"
   : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
   : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
 const full = (n) => n.toLocaleString();
+// Model colour. What follows is a deliberate SECOND COPY of
+// web/dist/lib/palette.js (issue #73), and the copy is not laziness: this
+// page is served at /share behind the share-token gate, while everything
+// under /lib/ sits behind the viewer gate. A relative
+// `import "./lib/palette.js"` from a share link resolves to a URL the
+// recipient is answered 401 for, and the page would render nothing at all —
+// so it stays the self-contained single file it has always been.
+//
+// What a copy costs is drift, and drift here IS the defect. The point of
+// hashing the name is that the dashboard and the share page agree on which
+// hue Opus gets; a copy that diverges is no better than the index-based
+// colour it replaced, only harder to notice. web/test/palette.test.mjs runs
+// both implementations over the same names and fails when either moves — the
+// markers below are what it extracts, so keep them.
+//
+// >>> palette: mirrors web/dist/lib/palette.js — keep in lockstep
 const SERIES = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
-const color = (i) => `var(${SERIES[i % SERIES.length]})`;
+const OTHER_COLOR = "var(--ink-3)";
+
+function fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// Names to colours, aligned to the input: index i of the result is the colour
+// for names[i]. A name's home slot comes from its hash, collisions probe
+// forward, and the probing runs in NAME order rather than the caller's —
+// because the caller's order is precisely the thing that moves here
+// (`model_split` is ranked by tokens inside the shared window). Past the end
+// of the palette a name folds into the recessive grey instead of taking a
+// second helping of an existing hue.
+function seriesPalette(names) {
+  const list = (names || []).map((n) => String(n));
+  const out = new Array(list.length).fill(OTHER_COLOR);
+  const taken = new Array(SERIES.length).fill(false);
+
+  const byName = list
+    .map((name, i) => ({ name, i }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.i - b.i));
+
+  for (const { name, i } of byName) {
+    const home = fnv1a(name) % SERIES.length;
+    let slot = home;
+    while (taken[slot]) {
+      slot = (slot + 1) % SERIES.length;
+      if (slot === home) { slot = -1; break; }   // every slot taken: fold into "other"
+    }
+    if (slot < 0) continue;
+    taken[slot] = true;
+    out[i] = `var(${SERIES[slot]})`;
+  }
+  return out;
+}
+// <<< palette
 
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
@@ -150,15 +206,20 @@ function historyChart(buckets) {
   return svg;
 }
 
+// The model mix. Colour comes from the model NAME, never from the bucket's
+// position: `model_split` arrives ranked by tokens in the shared window, so
+// two shares of the same data over different spans reorder it, and an
+// index-keyed colour repainted every model each time (issue #73).
 function modelBars(buckets) {
   const total = buckets.reduce((a, b) => a + b.tokens, 0) || 1;
+  const colors = seriesPalette(buckets.map((b) => b.key));
   const bar = el("div", { style: "display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--grid)" });
   buckets.forEach((b, i) => bar.append(el("div", {
-    style: `width:${(b.tokens / total) * 100}%;background:${color(i)}`,
+    style: `width:${(b.tokens / total) * 100}%;background:${colors[i]}`,
     title: `${b.key}: ${full(b.tokens)} tokens`,
   })));
   const legend = el("div", { class: "legend" }, buckets.map((b, i) =>
-    el("span", {}, el("i", { style: `background:${color(i)}` }),
+    el("span", {}, el("i", { style: `background:${colors[i]}` }),
       `${b.key} · ${((b.tokens / total) * 100).toFixed(0)}%`)));
   return el("div", {}, bar, legend);
 }
