@@ -35,7 +35,7 @@
 //
 // No fetching in this file either way — app.js owns the load loop and calls
 // back into whichever handlers were passed at update() time.
-import { DIMS } from './lib/state.js';
+import { DIMS, accountsInScope } from './lib/state.js';
 import { SECTIONS, pickActive } from './lib/nav.js';
 import { shortProject } from './lib/format.js';
 import { accountGroups, sourceLabel } from './lib/providers.js';
@@ -318,7 +318,7 @@ export function createScopeControls({ span = true } = {}) {
   function update(state, accounts, cb) {
     handlers = cb || {};
 
-    const relevant = accounts.filter((a) => !state.chips.source || (a.source || 'claude') === state.chips.source);
+    const relevant = accountsInScope(accounts, state);
     // Grouped, not prefixed. The old `Claude · ` / `Codex · ` prefix asserted
     // a two-source world and, worse, said "account" meant one thing when it
     // means two: a subscription somebody pays for monthly, or one calling
@@ -326,8 +326,13 @@ export function createScopeControls({ span = true } = {}) {
     const groups = accountGroups(relevant).map((g) =>
       el('optgroup', { label: g.label },
         ...g.options.map((o) => el('option', { value: o.value }, o.text))));
+    // No "all" when there is exactly one in scope: route() resolves that state
+    // to the one account (state.js's resolveSub, #92), so the option would be a
+    // control reporting a choice the router undoes on the very next tick. One
+    // subscription is not a set to aggregate, and a picker over a set of one is
+    // not a picker.
     sel.replaceChildren(
-      el('option', { value: 'all' }, t('scope.allAccounts', { n: relevant.length })),
+      ...(relevant.length === 1 ? [] : [el('option', { value: 'all' }, t('scope.allAccounts', { n: relevant.length }))]),
       ...groups);
     sel.style.display = relevant.length ? '' : 'none';
     sel.value = state.sub;

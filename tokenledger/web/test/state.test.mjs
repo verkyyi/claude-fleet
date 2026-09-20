@@ -148,3 +148,47 @@ test('dataKey ignores presentation, and nothing else', async () => {
   assert.equal(dataKey({ ...base, session: 'abc' }), k);
   assert.deepEqual(PRESENTATION_KEYS, ['rsort', 'rlabel', 'rshipped', 'csort']);
 });
+
+// #92: on a hub with one subscription, `sub` was pinned to 'all' by
+// construction -- DEFAULTS.sub is 'all', format() omits a default, so `#/`
+// parses back to 'all', and the old fallback rewrote every unrecognised sub to
+// 'all' including where there was only one to choose. The banner explaining
+// cross-subscription arithmetic was therefore permanent, and the two limits
+// banners (gated on `sub !== 'all'`) were permanently unreachable.
+test('resolveSub selects the only account, and keeps a real one', async () => {
+  const { resolveSub, accountsInScope } = await import('../dist/lib/state.js');
+  const one = [{ account_uuid: 'a1', source: 'claude' }];
+  const two = [...one, { account_uuid: 'b2', source: 'claude' }];
+
+  // The fix itself: one subscription is not a set to aggregate.
+  assert.equal(resolveSub(DEFAULTS, one), 'a1');
+  assert.equal(resolveSub(parse('#/'), one), 'a1');
+  // ...and the resolved state round-trips, so the correction runs ONCE rather
+  // than on every reload. This is the assertion that would have caught the bug:
+  // under the old rule this hash came back as 'all' forever.
+  assert.equal(parse(format({ ...DEFAULTS, sub: resolveSub(DEFAULTS, one) })).sub, 'a1');
+
+  // More than one, none, and an unknown uuid all still land on 'all'.
+  assert.equal(resolveSub(DEFAULTS, two), 'all');
+  assert.equal(resolveSub(DEFAULTS, []), 'all');
+  assert.equal(resolveSub({ ...DEFAULTS, sub: 'gone' }, two), 'all');
+  // An explicitly chosen account that exists is never second-guessed.
+  assert.equal(resolveSub({ ...DEFAULTS, sub: 'b2' }, two), 'b2');
+
+  // The source chip takes an account OUT of scope without naming it, so it
+  // narrows both the validity check and the count. Two accounts, one per
+  // source: pinning a source leaves exactly one, and that one gets selected.
+  const mixed = [{ account_uuid: 'a1', source: 'claude' }, { account_uuid: 'g9', source: 'gateway' }];
+  assert.equal(resolveSub({ ...DEFAULTS, chips: { source: 'gateway' } }, mixed), 'g9');
+  assert.equal(resolveSub({ ...DEFAULTS, sub: 'a1', chips: { source: 'gateway' } }, mixed), 'g9');
+  assert.equal(resolveSub(DEFAULTS, mixed), 'all');
+  // A row written before the source column existed reads as Claude, the same
+  // rule model.UsageSource applies in Go.
+  assert.equal(resolveSub({ ...DEFAULTS, chips: { source: 'claude' } }, [{ account_uuid: 'old' }]), 'old');
+
+  // scope.js counts the same set to decide whether to offer "all" at all --
+  // one function, so the picker cannot offer a choice the router would undo.
+  assert.equal(accountsInScope(mixed, DEFAULTS).length, 2);
+  assert.equal(accountsInScope(mixed, { ...DEFAULTS, chips: { source: 'claude' } }).length, 1);
+  assert.deepEqual(accountsInScope(null, DEFAULTS), []);
+});

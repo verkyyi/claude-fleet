@@ -1,5 +1,5 @@
 // web/dist/app.js — boot, router, loader wiring.
-import { parse, format, dataKey } from './lib/state.js';
+import { parse, format, dataKey, resolveSub } from './lib/state.js';
 import { createLoader } from './lib/seq.js';
 import { renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
 import { renderNow, startLive } from './now.js';
@@ -83,23 +83,24 @@ let lastDataKey = null;
 function route() {
   app.state = parse(location.hash);
   const s = app.state;
-  if (!s.sub || (s.sub !== 'all' && !app.accounts.some((a) => a.account_uuid === s.sub && (!s.chips.source || (a.source || 'claude') === s.chips.source)))) {
-    s.sub = 'all';
-    // Fix the URL to match, not just the in-memory state: state.js's whole
-    // premise is "there is no second copy of the state", and leaving the
-    // hash on the unknown/invalid sub would silently re-run this same
-    // correction on every reload or shared link. replaceState (not push):
-    // this is a correction of the current entry, not a new navigation, and
-    // it must not itself trigger another route() (replaceState fires no
-    // hashchange), which would recurse into this same branch.
-    const corrected = format(s);
-    if (corrected !== location.hash) history.replaceState(null, '', corrected);
-  }
-  // Normalise the path the same way, for the same reason. parse() still
-  // accepts the retired /now and /review prefixes so old links keep working,
-  // but leaving one in the address bar means every copy of that link spreads
-  // a path this build no longer emits. replaceState, not push: reading a
-  // shared link is not a navigation the reader performed.
+  // Which subscription is this state actually looking at? state.js owns that
+  // rule -- route()'s job is only to make the state, and then the URL, agree
+  // with its answer. It still corrects an unknown or out-of-scope sub, and it
+  // now SELECTS the only subscription on a hub that has one rather than leaving
+  // it on 'all' (#92), which nothing could ever leave.
+  s.sub = resolveSub(s, app.accounts);
+  // Fix the URL to match, not just the in-memory state: state.js's whole
+  // premise is "there is no second copy of the state", and leaving the hash on
+  // the unknown sub -- or on the omitted-because-default 'all' just resolved
+  // away from -- would silently re-run this same correction on every reload or
+  // shared link. The same call normalises the path, for the same reason:
+  // parse() still accepts the retired /now and /review prefixes so old links
+  // keep working, but leaving one in the address bar means every copy of that
+  // link spreads a path this build no longer emits.
+  //
+  // replaceState, not push: this is a correction of the current entry, not a
+  // navigation the reader performed, and it must not itself trigger another
+  // route() (replaceState fires no hashchange), which would recurse.
   const canonical = format(s);
   if (canonical !== location.hash) history.replaceState(null, '', canonical);
   // renderNav takes no handlers any more: with the view gone the bar has

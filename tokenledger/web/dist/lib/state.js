@@ -98,6 +98,43 @@ export function dataKey(s) {
   return format(flat);
 }
 
+/** accountsInScope narrows the account list to the ones the CURRENT state can
+ *  actually be looking at. Today that is the source chip, which is the one
+ *  filter that takes a subscription out of scope without naming it.
+ *
+ *  Exported because two callers must agree on this set or the page contradicts
+ *  itself: resolveSub picks from it, and scope.js's <select> lists it and
+ *  counts it to decide whether to offer "all" at all. A private copy in each is
+ *  how a picker ends up offering a choice the router immediately undoes. */
+export const accountsInScope = (accounts, s) => {
+  const source = (s && s.chips && s.chips.source) || null;
+  return (accounts || []).filter((a) => !source || (a.source || 'claude') === source);
+};
+
+/** resolveSub is the ONE rule for "which subscription is this state actually
+ *  looking at". It ANSWERS, it does not mutate: app.js's route() is what writes
+ *  the answer back into the state and the hash.
+ *
+ *  Three cases, in order:
+ *    - the state names an account that exists in scope   -> keep it
+ *    - exactly one account exists in scope               -> that one
+ *    - anything else (none, several, an unknown uuid)    -> 'all'
+ *
+ *  The middle case is the whole of #92. 'all' is DEFAULTS.sub and format()
+ *  omits a default, so the canonical hash `#/` parses back to 'all' forever --
+ *  and the old fallback forced any unrecognised sub to 'all' including on a hub
+ *  that has exactly one. So a one-subscription hub could not leave the
+ *  "showing all subscriptions" state by any route, and spent every screen
+ *  explaining cross-subscription arithmetic it had never performed (while the
+ *  two limits banners, gated on the complement of that same condition, could
+ *  never appear at all). One subscription is not a set to aggregate; it is the
+ *  subscription. */
+export function resolveSub(s, accounts) {
+  const inScope = accountsInScope(accounts, s);
+  if (s.sub && s.sub !== 'all' && inScope.some((a) => a.account_uuid === s.sub)) return s.sub;
+  return inScope.length === 1 ? inScope[0].account_uuid : DEFAULTS.sub;
+}
+
 export const withChip = (s, dim, value) => ({ ...s, chips: { ...s.chips, [dim]: value } });
 export function withoutChip(s, dim) { const chips = { ...s.chips }; delete chips[dim]; return { ...s, chips }; }
 export const clearChips = (s) => ({ ...s, chips: {} });

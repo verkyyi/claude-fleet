@@ -21,6 +21,7 @@ import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive
 import { el, $, escapeHTML } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
+import { isDismissed, setDismissed } from './lib/dismiss.js';
 import { ownerLine, splitMuted } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
 import { createScopeControls } from './scope.js';
@@ -763,11 +764,36 @@ function fleetCard(roster, epAccounts, switches) {
 
 /* --------------------------------------------------------------- banners */
 
-function banner(kind, title, msg) {
-  return el('div', { class: 'banner' + (kind === 'err' ? ' err' : '') },
+/** `dismiss` is a dismiss.js key, and passing one is what gives a banner its
+ *  close button. Only a banner that states a STANDING condition gets one: the
+ *  others here report something that is currently wrong (history excluded, a
+ *  limits reading unavailable or stale) and go away by being fixed, so a close
+ *  button on them would hide a fault rather than acknowledge a caveat.
+ *
+ *  Removed from the DOM on click rather than waiting for the next applyNow:
+ *  this page refreshes on a 60s timer, and a notice that lingers for most of a
+ *  minute after the reader closed it is a control that misreports its state.
+ *  buildBanners re-reads the flag, so it does not come back. */
+function banner(kind, title, msg, dismiss) {
+  let root;
+  const close = dismiss
+    ? el('button', {
+        type: 'button', class: 'dismiss',
+        'aria-label': t('banner.dismiss'), title: t('banner.dismiss'),
+        onclick: () => { setDismissed(dismiss, true); root.remove(); },
+      }, '✕')
+    : null;
+  root = el('div', { class: 'banner' + (kind === 'err' ? ' err' : '') },
     el('span', { class: 'ico' }, kind === 'err' ? '✕' : '!'),
-    el('div', { class: 'msg' }, el('b', {}, title + ' '), msg));
+    el('div', { class: 'msg' }, el('b', {}, title + ' '), msg),
+    close);
+  return root;
 }
+
+/** The dismiss key for the all-subscriptions caveat. A constant, not a literal
+ *  at each site, because the writer and the reader are ten lines apart and a
+ *  typo between them is a close button that silently does nothing. */
+const ALL_SUBS_KEY = 'banner-all-subs';
 
 /** limitsBannerApplies is the ONE predicate for "a banner outside the fold
  *  needs /v1/limits". renderNow reads it to decide whether to send that
@@ -802,9 +828,14 @@ function buildBanners(state, endpointsR, limitsR) {
     banners.push(banner('warn', t('banner.excludesHistory', { name: e.label || e.hostname }), bits.join('; ') + '.'));
   }
 
-  if (state.sub === 'all') {
-    // Nothing below is scoped to one subscription; say so once, at the top.
-    banners.push(banner('warn', t('banner.allSubs.title'), t('banner.allSubs.body')));
+  // Nothing below is scoped to one subscription; say so once, at the top.
+  //
+  // Reaching here now means the hub really has more than one in scope --
+  // state.js's resolveSub selects the only one where there is only one (#92) --
+  // so the sentence is about arithmetic this screen is actually performing, and
+  // a reader who has taken it in may close it for good.
+  if (state.sub === 'all' && !isDismissed(ALL_SUBS_KEY)) {
+    banners.push(banner('warn', t('banner.allSubs.title'), t('banner.allSubs.body'), ALL_SUBS_KEY));
   }
 
   if (limitsR.status === 'fulfilled' && limitsBannerApplies(state)) {
