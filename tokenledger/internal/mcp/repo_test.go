@@ -198,3 +198,55 @@ func TestCall_RepoIssueCost_RefusesWhenTheNumberCannotBeBound(t *testing.T) {
 		t.Fatalf("two repositories were answered rather than refused: %v", res)
 	}
 }
+
+// §6: the refusal above lifts for an agent the moment the endpoints declare a
+// repository, and what lifts it also has to be legible to the agent — `binding`
+// says which reading it got, and `declaration` says what the scope left out.
+func TestCall_RepoIssueCost_BindsByTheDeclaredRepo(t *testing.T) {
+	ts, st := newMCP(t)
+	seedRepo(t, st)
+	seed(t, st, "acct-a", "ep-1", "/a", "warm")
+	if _, err := st.UpsertRepoSnapshot(model.RepoSnapshot{
+		Repo: "o/second", ObservedAt: time.Now().UTC(),
+		Issues: []model.RepoIssue{{Number: 1, State: model.RepoStateOpen, CreatedAt: time.Now().UTC()}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Add(-time.Minute)
+	cost := 1.0
+	ev := func(uuid, branch, repo string, out int64) model.UsageEvent {
+		return model.UsageEvent{
+			AccountUUID: "acct-a", EndpointID: "ep-1", MessageUUID: uuid,
+			SessionID: uuid, TS: now, Model: "claude-sonnet-5", CWD: "/a/" + repo,
+			GitBranch: branch, GitRepo: repo, OutputTokens: out, CostUSD: &cost,
+		}
+	}
+	if _, _, err := st.InsertEvents([]model.UsageEvent{
+		ev("d-1", "issue-1", "o/r", 900),
+		ev("d-2", "issue-1", "o/second", 400),
+		ev("d-3", "issue-1", "", 100), // an endpoint that has not upgraded
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := structured(t, call(t, ts, "repo_issue_cost", map[string]any{"repo": "o/r"}))
+	if sc["binding"] != "declared" {
+		t.Fatalf("binding = %v; two repositories must now be answerable, not refused", sc["binding"])
+	}
+	issues := sc["issues"].([]any)
+	if len(issues) != 1 || issues[0].(map[string]any)["window"].(map[string]any)["events"].(float64) != 1 {
+		t.Fatalf("issues = %v; want only o/r's own turn on #1", issues)
+	}
+	d, ok := sc["declaration"].(map[string]any)
+	if !ok {
+		t.Fatal("no declaration block: the agent cannot see what the scope dropped")
+	}
+	if d["other_repos"].(map[string]any)["events"].(float64) != 1 {
+		t.Errorf("other_repos = %v; want o/second's turn", d["other_repos"])
+	}
+	// The warm-up event has no repo either, so undeclared is that plus d-3.
+	if d["undeclared"].(map[string]any)["events"].(float64) != 2 {
+		t.Errorf("undeclared = %v; want the two turns that named no repository", d["undeclared"])
+	}
+}

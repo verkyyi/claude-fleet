@@ -240,6 +240,8 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	if err != nil {
 		return fmt.Errorf("scan Codex transcripts: %w", err)
 	}
+	// Same declaration as the Claude path, same resolver: a cwd is a cwd.
+	a.repos.stampRepos(ctx, events)
 	sessions := p.scanner.CodexSessions()
 	for _, warning := range p.scanner.Errs {
 		log.Printf("Codex transcript warning: %v", warning)

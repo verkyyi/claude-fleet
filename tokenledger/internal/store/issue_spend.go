@@ -223,7 +223,13 @@ func (s *Store) unattributedBranches(where string, args []any) ([]UnattributedBr
 // account scopes to one subscription, or store.AllAccounts to span every one.
 // A repository is worked by endpoints on several plans at once, so spanning is
 // the normal reading here, not the exception.
-func (s *Store) IssueLifetimeSpend(account string, numbers []int64) (map[int64]SpendTotal, error) {
+//
+// repo scopes to the repository the endpoint declared, or "" to span every row
+// -- which is only sound while the hub holds one repository, and is the caller's
+// call to make (api.issueScope). A lifetime figure needs it more than a windowed
+// one does, not less: it reaches back across ALL of history, so blending two
+// repositories' issue #12 here would be a bigger error than doing it for a week.
+func (s *Store) IssueLifetimeSpend(account, repo string, numbers []int64) (map[int64]SpendTotal, error) {
 	out := map[int64]SpendTotal{}
 	if len(numbers) == 0 {
 		return out, nil
@@ -237,6 +243,10 @@ func (s *Store) IssueLifetimeSpend(account string, numbers []int64) (map[int64]S
 	if account != AllAccounts {
 		where = append(where, "account_uuid = ?")
 		args = append(args, account)
+	}
+	if repo != "" {
+		where = append(where, "git_repo = ?")
+		args = append(args, repo)
 	}
 	// The numbers are int64 read back from our own column, never caller
 	// strings, but they still go in as bind parameters: an IN list built by

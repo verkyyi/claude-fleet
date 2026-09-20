@@ -292,6 +292,32 @@ export function issueSpendRows(cost, limit = 12) {
   };
 }
 
+/** undeclaredScope reads how /v1/repo/cost was bound to a repository, and what
+ *  the binding left out — the #84 half of the same disclosure rule the
+ *  unattributed bucket already obeys.
+ *
+ *  The card is now SCOPED: the endpoints declare which repository they run in,
+ *  so the bars are this repository's spend rather than the whole hub's. A scope
+ *  is a filter, and a filter drops rows without saying so. On a fleet that is
+ *  half upgraded most of the window still declares nothing, and a short set of
+ *  bars beside a large undeclared remainder means "not measured yet", never
+ *  "cheap" — the same factor-of-three error, in the same flattering direction.
+ *
+ *  Returns null when there is nothing to say: the legacy whole-hub reading has
+ *  no filter to disclose (`sole` is true for that instead), and a window where
+ *  everything declared has no remainder.
+ */
+export function undeclaredScope(cost) {
+  if (!cost) return null;
+  if (cost.binding === 'sole_repo') return { sole: true, share: null, tokens: 0 };
+  const d = cost.declaration;
+  if (!d || !d.total) return null;
+  const total = Number(d.total.tokens) || 0;
+  const tokens = Number(d.undeclared && d.undeclared.tokens) || 0;
+  if (!total || !tokens) return null;
+  return { sole: false, share: tokens / total, tokens };
+}
+
 /** issueShare is one bucket's share of the window, in TOKENS.
  *
  *  Tokens and not money, and the reason is not a preference: the three kinds

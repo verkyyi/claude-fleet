@@ -103,7 +103,8 @@ func (s *Server) handleRepoCost(w http.ResponseWriter, r *http.Request) {
 // by twelve is what #60 had to go and fix. A refusal, a null scale or a newly
 // added field has to reach an agent and a browser on the same day.
 func (s *Server) IssueCost(repo string, start, end time.Time, limit int) (map[string]any, error) {
-	if err := s.issueBinding(repo); err != nil {
+	scope, err := s.issueScope(repo)
+	if err != nil {
 		return nil, err
 	}
 
@@ -111,7 +112,7 @@ func (s *Server) IssueCost(repo string, start, end time.Time, limit int) (map[st
 	// worked by endpoints on several plans at once -- that is exactly why
 	// repo_issues carries no account_uuid (schema.sql) -- so scoping this to
 	// one subscription would report a fraction of an issue's cost as its cost.
-	f := store.Filter{Account: store.AllAccounts, Start: start, End: end}.AlignHours()
+	f := store.Filter{Account: store.AllAccounts, Start: start, End: end, Repo: scope.Repo}.AlignHours()
 	page, err := s.Store.SpendByIssue(f, limit)
 	if err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func (s *Server) IssueCost(repo string, start, end time.Time, limit int) (map[st
 	if err != nil {
 		return nil, err
 	}
-	lifetime, err := s.Store.IssueLifetimeSpend(store.AllAccounts, numbers)
+	lifetime, err := s.Store.IssueLifetimeSpend(store.AllAccounts, scope.Repo, numbers)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func (s *Server) IssueCost(repo string, start, end time.Time, limit int) (map[st
 		rows = append(rows, row)
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"repo":   repo,
 		"since":  start.UTC(),
 		"until":  end.UTC(),
@@ -170,7 +171,30 @@ func (s *Server) IssueCost(repo string, start, end time.Time, limit int) (map[st
 		// Null when nobody has computed percentiles. Readers must render that
 		// as "scale unknown" and must not substitute one.
 		"scale": scale,
-	}, nil
+		// How the numbers above were bound to this repository. "declared" is
+		// repo-scoped spend; "sole_repo" is every row on the hub, answerable
+		// only because the hub holds this repository and no other.
+		"binding": bindingName(scope),
+	}
+	if scope.Declared {
+		// What the repo filter left out, and why. Only meaningful in the
+		// declared regime -- under "sole_repo" nothing was filtered, so a
+		// split would be three buckets describing one.
+		decl, err := s.Store.RepoDeclaration(f, repo)
+		if err != nil {
+			return nil, err
+		}
+		out["declaration"] = decl
+	}
+	return out, nil
+}
+
+// bindingName names the regime issueScope chose, for the response.
+func bindingName(scope issueScope) string {
+	if scope.Declared {
+		return "declared"
+	}
+	return "sole_repo"
 }
 
 // staleAgainst judges one age against the repo's own p95.
@@ -205,29 +229,58 @@ func (s *Server) repoIssuesByNumber(repo string, numbers []int64, now time.Time)
 	return out, nil
 }
 
-// issueBinding is the §5 gate of the cost-per-issue design, and the only
-// thing standing between this endpoint and a confidently wrong answer.
+// issueScope decides how a cost-per-issue read is bound to a repository, and
+// it is the seam this whole design was pressure-testing.
 //
-// A spend row names an issue NUMBER and no repository -- `owner/name` appears
-// nowhere on the spend side, because the hub was never told which repository a
-// cwd is. So a number can be bound to this repo's backlog only while the hub
-// holds exactly one repository and it is this one. Every repository starts its
-// issues at #1, so the day a second shipper enrolls, `#104` means two different
-// pieces of work and nothing on the row can separate them.
+// §5 shipped a refusal because a spend row named an issue NUMBER and no
+// repository: every repository starts its issues at #1, so `#104` meant two
+// different pieces of work the day a second shipper enrolled, and nothing on
+// the row could separate them. The only honest answers were "the hub holds
+// exactly this one repository, so the numbers are unambiguous" and 409.
 //
-// It refuses rather than hedging, with the same 409 /v1/repo/issues?stale=1
-// gives for a missing scale, and for the same reason: a reader cannot tell a
-// blended cost-per-issue from a measured one. The discomfort is the point --
-// it is the pressure that gets the repository declared at the source.
-func (s *Server) issueBinding(repo string) error {
+// §6 removed the cause rather than the symptom: the endpoint runs inside the
+// checkout, so it declares `owner/name` at the source and the hub stores what
+// it was told (internal/store/gitrepo.go). Once ANY row declares, the binding
+// exists and this is a WHERE clause.
+//
+// Two regimes, therefore, and the switch is hub-wide on purpose:
+//
+//   - Something declares -> scope to `repo`. The answer is repo-scoped and
+//     correct across any number of repositories. What the clause DROPPED is
+//     reported beside it (store.RepoDeclaration), because on a half-upgraded
+//     fleet most rows still declare nothing, and a filter whose discards are
+//     invisible reads as "this repository cost nothing".
+//   - Nothing declares anywhere -> nothing has changed since §5, so §5's
+//     answer stands unchanged: the sole-repo hub answers whole-hub, and any
+//     other hub still gets the 409. Scoping here would return a hard zero that
+//     a reader cannot tell from a measured one -- the precise failure the
+//     refusal existed to prevent.
+type issueScope struct {
+	// Repo is what git_repo is filtered on, or "" for §5's whole-hub reading.
+	Repo string
+	// Declared says which regime produced the answer, and it ships in the
+	// response: "the numbers are this repository's" and "the numbers are this
+	// hub's, and this hub happens to hold only this repository" are different
+	// claims, and only one of them survives a second repo being enrolled.
+	Declared bool
+}
+
+func (s *Server) issueScope(repo string) (issueScope, error) {
+	declared, err := s.Store.AnyRepoDeclared()
+	if err != nil {
+		return issueScope{}, err
+	}
+	if declared {
+		return issueScope{Repo: repo, Declared: true}, nil
+	}
 	repos, err := s.Store.Repos()
 	if err != nil {
-		return err
+		return issueScope{}, err
 	}
 	if len(repos) == 1 && repos[0].Repo == repo {
-		return nil
+		return issueScope{}, nil
 	}
-	return &issueBindingError{msg: issueBindingRefusal(repo, repos)}
+	return issueScope{}, &issueBindingError{msg: issueBindingRefusal(repo, repos)}
 }
 
 // issueBindingError is the §5 refusal, typed so a caller can tell it from a
@@ -237,10 +290,14 @@ type issueBindingError struct{ msg string }
 
 func (e *issueBindingError) Error() string { return e.msg }
 
-// issueBindingRefusal says which of the two ways the binding failed, because
-// they need different fixes: a hub holding several repos needs the repository
-// declared on the spend side, while a hub holding none (or another one) needs a
+// issueBindingRefusal says which of the three ways the binding failed, because
+// they need different fixes: a hub holding several repos needs its endpoints
+// upgraded until they declare, while a hub holding none (or another one) needs a
 // shipper pointed at this repository.
+//
+// It is reached only while NOT ONE row on the hub declares a repository. Once
+// any does, issueScope filters instead of refusing and none of this runs -- so
+// these messages describe a hub that has not been upgraded yet, and they say so.
 func issueBindingRefusal(repo string, repos []store.Repo) string {
 	held := make([]string, 0, len(repos))
 	for _, r := range repos {
@@ -255,8 +312,9 @@ func issueBindingRefusal(repo string, repos []store.Repo) string {
 			": spend rows carry an issue number and no repository, so the numbers cannot be bound to " + repo
 	default:
 		return fmt.Sprintf(
-			"the hub holds %d repositories (%s) and spend rows carry an issue number without one: "+
-				"cost per issue cannot be bound to %s until the repository is declared on the spend side",
+			"the hub holds %d repositories (%s) and no spend row declares one: "+
+				"cost per issue cannot be bound to %s until the endpoints report which repository "+
+				"they are running in (agent >= the one that sends git_repo)",
 			len(repos), strings.Join(held, ", "), repo)
 	}
 }
@@ -271,12 +329,12 @@ func issueBindingRefusal(repo string, repos []store.Repo) string {
 // and zero events, and SourceCost.Events is what makes that legible: a cost of
 // 0 with events > 0 is free or unpriced work, a cost of 0 with no events is an
 // absence.
-func (s *Server) attachIssueCost(rows []store.RepoIssueRow) ([]IssueWithCost, error) {
+func (s *Server) attachIssueCost(scope issueScope, rows []store.RepoIssueRow) ([]IssueWithCost, error) {
 	numbers := make([]int64, 0, len(rows))
 	for _, r := range rows {
 		numbers = append(numbers, int64(r.Number))
 	}
-	spend, err := s.Store.IssueLifetimeSpend(store.AllAccounts, numbers)
+	spend, err := s.Store.IssueLifetimeSpend(store.AllAccounts, scope.Repo, numbers)
 	if err != nil {
 		return nil, err
 	}

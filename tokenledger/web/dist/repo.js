@@ -22,7 +22,7 @@ import { costLine } from './lib/cost.js';
 import { fmtAge, weeklyFlow, net, ageHistogram, stalled, pickRepo,
          labelFacets, filterStalled, sortStalled,
          healthRows, healthAge,
-         issueSpendRows, issueShare, concentration } from './lib/repo.js';
+         issueSpendRows, issueShare, concentration, undeclaredScope } from './lib/repo.js';
 import { groupByOwner, untold, weeklyHuman, windowRatio, trend, pct, trimLeadingEmpty,
          OWNER_NOT_A_PERSON, OWNER_UNRESOLVED } from './lib/human.js';
 
@@ -551,10 +551,39 @@ function costFooter(page, cost) {
     out.push(el('p', { class: unShare >= 0.5 ? 'hint warn' : 'hint' },
       t('repo.cost.unattributedShare', { share: fmtPct(unShare, 0) }) + (why ? ' ' + why : '')));
   }
+  for (const line of declarationLines(cost)) out.push(line);
   if (!cost.scale || typeof cost.scale.p95_seconds !== 'number') {
     out.push(el('p', { class: 'hint' }, t('repo.cost.noScale')));
   }
   return out;
+}
+
+/** declarationLines says how this card was bound to a repository, and what
+ *  that binding left out.
+ *
+ *  The card used to be either a chart or a 409, because a spend row named an
+ *  issue number and no repository. Now the endpoints declare one, so the chart
+ *  is scoped — and a scope is a filter, and a filter drops rows silently. On a
+ *  fleet that is half upgraded most of the window is still undeclared, and a
+ *  small set of bars beside a large undeclared remainder means "not measured
+ *  yet", never "cheap". Same rule as the unattributed bar directly above it:
+ *  the part that is missing is shown, not implied.
+ */
+function declarationLines(cost) {
+  const scope = undeclaredScope(cost);
+  if (!scope) return [];
+  if (scope.sole) {
+    // Nothing declares yet, so these are the whole hub's numbers and they are
+    // only this repository's because the hub holds no other. Saying so is the
+    // difference between a measurement and a coincidence.
+    return [el('p', { class: 'hint' }, t('repo.cost.soleRepo'))];
+  }
+  // warn past half, for the same reason the unattributed line warns: past that
+  // point the bars above are a sample, not a distribution.
+  return [el('p', { class: scope.share >= 0.5 ? 'hint warn' : 'hint' },
+    t('repo.cost.undeclared', {
+      share: fmtPct(scope.share, 0), tokens: fmtInt(scope.tokens),
+    }))];
 }
 
 /** costUnavailableCard renders the refusal as an explanation rather than as a

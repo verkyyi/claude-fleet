@@ -599,6 +599,8 @@ export const en = {
   'repo.cost.unattributedWhy': 'Mostly {branch} \u2014 work whose branch never said what it was for.',
   'repo.cost.noScale': 'No close-time percentiles have been shipped, so nothing here is called stalled.',
   'repo.cost.unbound': 'Spend rows carry an issue number and no repository, so this hub cannot say which repository these numbers belong to.',
+  'repo.cost.undeclared': '{share} of this window ({tokens} tokens) named no repository and is not counted here.',
+  'repo.cost.soleRepo': 'No endpoint has declared which repository it runs in yet, so this is the whole hub\u2019s spend \u2014 readable as this repository\u2019s only because the hub holds no other.',
 
   // The other half of progress (#89/PR #35): the pre-release steps a release
   // batch is waiting on a person for. Grouped by owner, never by viewer --

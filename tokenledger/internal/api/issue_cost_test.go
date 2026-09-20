@@ -30,8 +30,10 @@ type costResponse struct {
 		store.SpendTotal
 		Branches []store.UnattributedBranch `json:"branches"`
 	} `json:"unattributed"`
-	Total store.SpendTotal `json:"total"`
-	Scale *store.RepoScale `json:"scale"`
+	Total       store.SpendTotal       `json:"total"`
+	Scale       *store.RepoScale       `json:"scale"`
+	Binding     string                 `json:"binding"`
+	Declaration *store.RepoDeclaration `json:"declaration"`
 }
 
 // spendOnBranch pushes usage recorded on one branch, through the real ingest
@@ -51,6 +53,27 @@ func spendOnBranch(t *testing.T, h *harness, endpoint, branch string, uuids ...s
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("push on %s: HTTP %d", branch, resp.StatusCode)
+	}
+}
+
+// spendInRepo is spendOnBranch from an endpoint that DECLARES which repository
+// it is running in -- the §6 binding. Same ingest path, one more field.
+func spendInRepo(t *testing.T, h *harness, endpoint, repo, branch string, uuids ...string) {
+	t.Helper()
+	tok := h.tokens[endpoint]
+	if tok == "" {
+		tok = h.enroll(t, endpoint)
+	}
+	b := batchFor("acct-a", endpoint, uuids, "/w/"+repo)
+	for i := range b.Events {
+		b.Events[i].GitBranch = branch
+		b.Events[i].GitRepo = repo
+		b.Events[i].SessionID = uuids[i]
+	}
+	resp := h.push(t, tok, b)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push on %s in %s: HTTP %d", branch, repo, resp.StatusCode)
 	}
 }
 
@@ -302,5 +325,157 @@ func TestRepoIssues_CostIsOptInAndGated(t *testing.T) {
 	}
 	if !strings.Contains(degraded.CostUnavailable, "o/second") {
 		t.Errorf("cost_unavailable = %q; want the reason, naming what the hub holds", degraded.CostUnavailable)
+	}
+}
+
+// §6: once the endpoints declare which repository they are running in, two
+// repositories on one hub is an ordinary read rather than a 409. This is the
+// whole point of the seam — the same two-repo hub that refuses above answers
+// here, and answers DIFFERENTLY per repo, which is what makes the answer worth
+// having: both have an issue #57, and it is not the same #57.
+func TestRepoCost_ScopesByTheDeclaredRepo(t *testing.T) {
+	h := newHarness(t)
+	oneRepo(t, h, "o/r", true, repoIssue(57, 2, model.RepoStateOpen))
+	seedRepo(t, h, model.RepoSnapshot{
+		Repo: "o/second", ObservedAt: time.Now().UTC(),
+		Issues: []model.RepoIssue{repoIssue(57, 2, model.RepoStateOpen)},
+	})
+	spendInRepo(t, h, "web-01", "o/r", "issue-57", "a1", "a2")
+	spendInRepo(t, h, "web-02", "o/second", "issue-57", "b1")
+
+	var first costResponse
+	h.getJSON(t, "/v1/repo/cost?repo=o/r", &first)
+	if first.Binding != "declared" {
+		t.Fatalf("binding = %q; want declared once the spend side names repositories", first.Binding)
+	}
+	if len(first.Issues) != 1 || first.Issues[0].Number != 57 || first.Issues[0].Window.Events != 2 {
+		t.Fatalf("o/r issues = %+v; want #57 with its own two events", first.Issues)
+	}
+
+	var second costResponse
+	h.getJSON(t, "/v1/repo/cost?repo=o/second", &second)
+	if len(second.Issues) != 1 || second.Issues[0].Window.Events != 1 {
+		t.Fatalf("o/second issues = %+v; want #57 with one event", second.Issues)
+	}
+	if first.Issues[0].Window.Events == second.Issues[0].Window.Events {
+		t.Error("both repositories reported the same #57; the scope did nothing")
+	}
+}
+
+// Scoping is a WHERE clause, and a WHERE clause drops things silently. What it
+// dropped ships beside the answer: another repository's spend (correctly
+// excluded) and spend that declared nothing (excluded because "not declared" is
+// not "not this repo"). Without it a half-upgraded fleet reads as a repository
+// that cost almost nothing.
+func TestRepoCost_DisclosesWhatTheScopeLeftOut(t *testing.T) {
+	h := newHarness(t)
+	oneRepo(t, h, "o/r", true, repoIssue(57, 2, model.RepoStateOpen))
+	spendInRepo(t, h, "web-01", "o/r", "issue-57", "a1")
+	spendInRepo(t, h, "web-02", "o/second", "issue-57", "b1", "b2")
+	// An endpoint that has not been upgraded yet: it declares nothing.
+	spendOnBranch(t, h, "web-03", "issue-57", "c1", "c2", "c3")
+
+	var got costResponse
+	h.getJSON(t, "/v1/repo/cost?repo=o/r", &got)
+	d := got.Declaration
+	if d == nil {
+		t.Fatal("no declaration block: the read dropped rows without saying so")
+	}
+	if d.Scoped.Events != 1 || d.OtherRepos.Events != 2 || d.Undeclared.Events != 3 {
+		t.Fatalf("declaration = scoped %d / other %d / undeclared %d; want 1 / 2 / 3",
+			d.Scoped.Events, d.OtherRepos.Events, d.Undeclared.Events)
+	}
+	if sum := d.Scoped.Events + d.OtherRepos.Events + d.Undeclared.Events; sum != d.Total.Events {
+		t.Errorf("the parts sum to %d and total says %d", sum, d.Total.Events)
+	}
+	// And the answer itself is only this repository's.
+	if got.Total.Events != d.Scoped.Events {
+		t.Errorf("answer counted %d events while the scope holds %d", got.Total.Events, d.Scoped.Events)
+	}
+}
+
+// Until something declares, nothing has changed and §5 still governs: the
+// sole-repo hub answers whole-hub, and says so. Scoping here would return a
+// hard zero that a reader could not tell from a measured one — the precise
+// failure the refusal existed to prevent.
+func TestRepoCost_WithoutDeclarationsTheOldBindingStands(t *testing.T) {
+	h := newHarness(t)
+	oneRepo(t, h, "o/r", true, repoIssue(57, 2, model.RepoStateOpen))
+	spendOnBranch(t, h, "web-01", "issue-57", "a1", "a2")
+
+	var got costResponse
+	h.getJSON(t, "/v1/repo/cost?repo=o/r", &got)
+	if got.Binding != "sole_repo" {
+		t.Errorf("binding = %q; want sole_repo while no row declares", got.Binding)
+	}
+	if got.Declaration != nil {
+		t.Error("a declaration split on a hub where nothing was filtered")
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Window.Events != 2 {
+		t.Fatalf("issues = %+v; the pre-#84 reading must be unchanged", got.Issues)
+	}
+}
+
+// A repository whose endpoints have not upgraded gets an honest empty answer
+// with the undeclared spend named beside it — never a 409 once the binding
+// exists somewhere, and never a silent zero.
+func TestRepoCost_ARepoThatDeclaresNothingYetAnswersEmptyAndSaysWhy(t *testing.T) {
+	h := newHarness(t)
+	oneRepo(t, h, "o/r", true, repoIssue(57, 2, model.RepoStateOpen))
+	seedRepo(t, h, model.RepoSnapshot{
+		Repo: "o/second", ObservedAt: time.Now().UTC(),
+		Issues: []model.RepoIssue{repoIssue(57, 2, model.RepoStateOpen)},
+	})
+	spendInRepo(t, h, "web-01", "o/second", "issue-57", "b1")
+	spendOnBranch(t, h, "web-02", "issue-57", "c1", "c2")
+
+	resp, _ := h.get(t, "/v1/repo/cost?repo=o/r")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d; once anything declares, this is an answer, not a refusal", resp.StatusCode)
+	}
+	var got costResponse
+	h.getJSON(t, "/v1/repo/cost?repo=o/r", &got)
+	if len(got.Issues) != 0 || got.Total.Events != 0 {
+		t.Fatalf("o/r reported %+v; nothing declared it", got.Issues)
+	}
+	if got.Declaration == nil || got.Declaration.Undeclared.Events != 2 {
+		t.Fatalf("the empty answer does not say what it is blind to: %+v", got.Declaration)
+	}
+}
+
+// ?cost=1 follows the same switch: it degrades while nothing declares and
+// prices the backlog once something does, on a hub holding several repos.
+func TestRepoIssues_CostFollowsTheDeclaredScope(t *testing.T) {
+	h := newHarness(t)
+	oneRepo(t, h, "o/r", true, repoIssue(57, 9, model.RepoStateOpen))
+	seedRepo(t, h, model.RepoSnapshot{
+		Repo: "o/second", ObservedAt: time.Now().UTC(),
+		Issues: []model.RepoIssue{repoIssue(57, 9, model.RepoStateOpen)},
+	})
+	spendOnBranch(t, h, "web-01", "issue-57", "a1")
+
+	var degraded struct {
+		Unavailable string `json:"cost_unavailable"`
+	}
+	h.getJSON(t, "/v1/repo/issues?repo=o/r&cost=1", &degraded)
+	if degraded.Unavailable == "" {
+		t.Fatal("two repos and no declarations: cost must degrade with a reason")
+	}
+
+	spendInRepo(t, h, "web-02", "o/r", "issue-57", "b1", "b2")
+	var priced struct {
+		Unavailable string `json:"cost_unavailable"`
+		Issues      []struct {
+			Number   int64            `json:"number"`
+			Lifetime store.SpendTotal `json:"lifetime"`
+		} `json:"issues"`
+	}
+	h.getJSON(t, "/v1/repo/issues?repo=o/r&cost=1", &priced)
+	if priced.Unavailable != "" {
+		t.Fatalf("still degraded after the endpoints declared: %s", priced.Unavailable)
+	}
+	if len(priced.Issues) != 1 || priced.Issues[0].Lifetime.Events != 2 {
+		t.Fatalf("issues = %+v; want #57 priced at its own two declared events", priced.Issues)
 	}
 }

@@ -195,6 +195,16 @@ CREATE TABLE IF NOT EXISTS usage_events (
   -- to repo_issues is the READER's job and has to be scoped to one repo.
   -- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
   issue_number           INTEGER,
+  -- The repository the turn was spent in, as `owner/name`. DECLARED by the
+  -- endpoint, which runs inside the checkout and resolved it once per cwd from
+  -- `git remote get-url origin` — never derived here: the hub still shells out
+  -- to nothing and stores only what the reporter recorded.
+  --
+  -- '' means NOT DECLARED (an older agent, a cwd that is not a checkout, a
+  -- remote that names no host). It is the third state beside "this repo" and
+  -- "another repo", and a read has to disclose it rather than fold it into
+  -- either — see §6 of the design above, and internal/agent/gitrepo.go.
+  git_repo               TEXT NOT NULL DEFAULT '',
   entrypoint             TEXT NOT NULL DEFAULT '',
   effort                 TEXT NOT NULL DEFAULT '',
   is_sidechain           INTEGER NOT NULL DEFAULT 0
@@ -318,6 +328,12 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
   -- adds no grain -- and it can be re-derived in place when the rule changes,
   -- without the rebuild from usage_events that pruned history would refuse.
   issue_number  INTEGER,
+  -- Declared by the endpoint, exactly as on usage_events above, and NOT part of
+  -- the key below: it is a function of cwd, which already is, so it adds no
+  -- grain. Unlike issue_number it CANNOT be re-derived here -- the hub does not
+  -- read git -- so the write paths never let '' overwrite a declared value: an
+  -- endpoint upgrading mid-hour would otherwise erase its own declaration.
+  git_repo      TEXT NOT NULL DEFAULT '',
   effort        TEXT NOT NULL DEFAULT '',
   entrypoint    TEXT NOT NULL DEFAULT '',
   is_sidechain  INTEGER NOT NULL DEFAULT 0,
@@ -389,14 +405,15 @@ CREATE INDEX IF NOT EXISTS idx_plans_period
 -- binds a session to an issue, a commit convention binds a commit to an issue,
 -- and this hub already keys spend by session.
 --
--- Half of that axis now exists: usage_events.issue_number and
--- usage_hourly.issue_number carry the number read off the branch. The other
--- half does not. A spend row names a NUMBER and no repository, so binding it
--- to a row here is the reader's job and is sound only while the hub holds one
--- repo -- see §5 of
--- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md, which is
--- also where the refusal that has to go with it is specified. Until that read
--- exists (#58), the sentence below is still a statement of intent.
+-- Both halves of that axis now exist. usage_events.issue_number and
+-- usage_hourly.issue_number carry the number read off the branch (#57), and
+-- git_repo carries the repository the ENDPOINT declared it was running in
+-- (#84, §6 of the design) -- so a spend row names a repo AND a number, and
+-- joins to a row here on both. The §5 refusal survives only for a hub whose
+-- endpoints cannot declare yet: while nothing on the spend side names a
+-- repository, a number alone is still ambiguous the moment a second shipper
+-- enrolls.
+-- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
 --
 -- Two tables sharing a binary gain
 -- nothing; the same key is what makes cost-per-issue answerable.

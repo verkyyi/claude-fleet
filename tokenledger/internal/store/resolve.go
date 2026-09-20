@@ -192,12 +192,12 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 const hourlyFoldSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-  issue_number, effort, entrypoint, is_sidechain, source,
+  issue_number, git_repo, effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
   cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,
   cache_write_tokens, cache_write_known_events)
 SELECT hour, ?, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-       issue_number, effort, entrypoint, is_sidechain, source,
+       issue_number, git_repo, effort, entrypoint, is_sidechain, source,
        events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
        cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,
        cache_write_tokens, cache_write_known_events
@@ -216,7 +216,11 @@ ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, pr
   cache_write_tokens       = cache_write_tokens + excluded.cache_write_tokens,
   cache_write_known_events = cache_write_known_events + excluded.cache_write_known_events,
   min_ts                   = min(min_ts, excluded.min_ts),
-  max_ts                   = max(max_ts, excluded.max_ts)`
+  max_ts                   = max(max_ts, excluded.max_ts),
+  -- Same rule as ingest (rollupInsertSQL): a declaration wins over silence.
+  -- A merge folds two accounts' rows for one hour, and one of them may predate
+  -- the agent that could declare -- keeping '' would lose the other's.
+  git_repo                 = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE git_repo END`
 
 // DuplicateAccountsBySchedule groups accounts that share a seven-day reset
 // phase, returning src -> dst merges. A real uuid always wins over a

@@ -652,9 +652,16 @@ func toolSpecs() []toolSpec {
 				"three, in the flattering direction. " +
 				"Cost is split by source and must never be added across them. `stale` is null when " +
 				"the repo has shipped no close-time percentiles -- say the scale is unknown, do not " +
-				"substitute one. Errors when the hub holds a number of repositories other than this " +
-				"one alone: a spend row names an issue NUMBER and no repository, and every repo " +
-				"starts at #1, so the binding is only sound while the hub holds exactly this repo." +
+				"substitute one. " +
+				"`binding` says how the numbers were bound to the repo, and it changes what you may " +
+				"claim. \"declared\": the endpoints reported which repository they run in, the figures " +
+				"are this repo's, and `declaration` says what the scope left out -- ALWAYS report " +
+				"`declaration.undeclared` when it is non-zero, because that spend is invisible to this " +
+				"repo's answer and a small figure beside a large undeclared bucket means \"not yet " +
+				"measured\", never \"cheap\". \"sole_repo\": nothing declares yet, so these are the whole " +
+				"hub's numbers, answerable only because the hub holds this repository and no other. " +
+				"Errors while nothing declares AND the hub holds other repositories: a spend row would " +
+				"name an issue NUMBER without a repository, and every repo starts at #1." +
 				repoCaveat,
 			InputSchema: obj(map[string]any{
 				"repo":  repoProp,

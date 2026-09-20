@@ -14,6 +14,16 @@ type Filter struct {
 	Start, End time.Time
 
 	Endpoint, OSUser, CWD, Model, Provider, Branch, Team, Session, Source string
+
+	// Repo scopes to rows whose endpoint DECLARED that repository
+	// (`owner/name`, see internal/store/gitrepo.go). Rows that declared nothing
+	// are excluded -- "not declared" is not "not this repo", and counting them
+	// in would put one repository's issue #12 on another's money.
+	//
+	// That exclusion is exactly why it has a companion: whoever sets this is
+	// expected to report DeclaredSpend's undeclared side beside the answer, so
+	// the reader can see the size of what the filter dropped.
+	Repo string
 }
 
 // Prev is the period of the same length that ends where this one starts.
@@ -66,6 +76,7 @@ func (f Filter) where(tsCol string) (string, []any, error) {
 	eq("provider", f.Provider)
 	eq("source", f.Source)
 	eq("git_branch", f.Branch)
+	eq("git_repo", f.Repo)
 	eq("session_id", f.Session)
 	if f.Team != "" {
 		parts = append(parts, "endpoint_id IN (SELECT endpoint_id FROM endpoints WHERE team = ?)")

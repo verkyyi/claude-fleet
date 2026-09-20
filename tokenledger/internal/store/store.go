@@ -125,6 +125,13 @@ func migrate(db *sql.DB) error {
 		// and ensureIssueNumbers fills in the ones whose branch does say.
 		{"usage_events", "issue_number", "INTEGER"},
 		{"usage_hourly", "issue_number", "INTEGER"},
+		// '' is "not declared", which is the correct state for every row written
+		// before an endpoint could declare it -- and, unlike issue_number, there
+		// is nothing to fill them in with afterwards. The hub does not read git;
+		// only a reporter can say, and it can only say about turns it is still
+		// scanning. That blind spot is disclosed on the read, never guessed at.
+		{"usage_events", "git_repo", "TEXT NOT NULL DEFAULT ''"},
+		{"usage_hourly", "git_repo", "TEXT NOT NULL DEFAULT ''"},
 		// Nullable with no default: NULL is "active", which is the correct
 		// state for every endpoint enrolled before retiring existed.
 		{"endpoints", "retired_at", "TEXT"},
@@ -664,8 +671,8 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
-		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider,issue_number
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider,issue_number,git_repo
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
@@ -714,7 +721,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 			e.CacheRead, e.Thinking, e.WebSearchRequests, e.WebFetchRequests,
 			cost, e.CWD, e.OSUser, e.GitBranch, e.Entrypoint, e.Effort, e.IsSidechain, e.Source, string(details), write, known, e.Provider,
-			issueNumber(e.GitBranch))
+			issueNumber(e.GitBranch), declaredRepo(e.GitRepo))
 		if err != nil {
 			return 0, 0, fmt.Errorf("insert event %s: %w", e.MessageUUID, err)
 		}

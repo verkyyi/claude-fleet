@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { isoWeekStart, weeklyFlow, net, scaleBands, ageHistogram, stalled,
          shippedButOpen, fmtAge, pickRepo, STALLED_SORTS, labelFacets,
          filterStalled, sortStalled,
-         issueSpendRows, issueShare, concentration } from '../dist/lib/repo.js';
+         issueSpendRows, issueShare, concentration, undeclaredScope } from '../dist/lib/repo.js';
 
 const day = (d, opened, closed, open) => ({ day: d, opened, closed, open_at_end: open });
 const DAY = 86400;
@@ -332,4 +332,45 @@ test('issueSpendRows lifts the window figures onto the row', () => {
   assert.equal(got.rows[0].lifetime.tokens, 900);
   // The bucket already is a spend total and keeps its own figures.
   assert.equal(got.unattributed.tokens, 2000);
+});
+
+/* ------------------------------------------- the repo scope (#84) */
+
+test('undeclaredScope names what the repo filter dropped', () => {
+  const got = undeclaredScope({
+    binding: 'declared',
+    declaration: {
+      scoped: spend(1000, 10), other_repos: spend(500, 5),
+      undeclared: spend(2500, 25), total: spend(4000, 40),
+    },
+  });
+  assert.equal(got.sole, false);
+  assert.equal(got.tokens, 2500);
+  assert.equal(got.share, 2500 / 4000);
+});
+
+test('undeclaredScope says when the card is the whole hub rather than one repo', () => {
+  // The pre-#84 reading: nothing declares, so the numbers are this repo's only
+  // because the hub holds no other. That is a coincidence, not a measurement,
+  // and the card has to say which one it is showing.
+  const got = undeclaredScope({ binding: 'sole_repo' });
+  assert.equal(got.sole, true);
+  assert.equal(got.share, null);
+});
+
+test('undeclaredScope stays quiet when there is nothing to disclose', () => {
+  assert.equal(undeclaredScope(null), null);
+  assert.equal(undeclaredScope({ binding: 'declared' }), null,
+    'a payload with no declaration block has no filter to explain');
+  assert.equal(undeclaredScope({
+    binding: 'declared',
+    declaration: { scoped: spend(100, 1), undeclared: spend(0, 0), total: spend(100, 1) },
+  }), null, 'a window where everything declared has no remainder to show');
+});
+
+test('undeclaredScope does not turn an empty window into a share of nothing', () => {
+  assert.equal(undeclaredScope({
+    binding: 'declared',
+    declaration: { undeclared: spend(0, 0), total: spend(0, 0) },
+  }), null);
 });

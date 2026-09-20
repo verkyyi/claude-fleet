@@ -274,9 +274,9 @@ func (s *Server) handleRepoIssues(w http.ResponseWriter, r *http.Request) {
 	// the same words the 409 would have used -- stated out loud, never a
 	// silently missing field.
 	if q.Get("cost") == "1" {
-		switch err := s.issueBinding(repo); {
+		switch scope, err := s.issueScope(repo); {
 		case err == nil:
-			priced, err := s.attachIssueCost(rows)
+			priced, err := s.attachIssueCost(scope, rows)
 			if err != nil {
 				httpError(w, http.StatusInternalServerError, err.Error())
 				return

@@ -1141,15 +1141,34 @@ is not slightly optimistic; it is wrong by a factor of three, in the flattering
 direction. `unattributed.branches` says which branches it was, so the bucket is
 explicable and not merely disclosed.
 
-**A spend row names a number and no repository.** `owner/name` appears nowhere
-on the spend side — the hub was never told which repository a `cwd` is — and
-every repository starts its issues at #1. So the binding holds only while the
-hub holds exactly the repository being asked about, and otherwise
-`/v1/repo/cost` answers `409`, the same refusal `/v1/repo/issues?stale=1`
-already gives for a missing scale. `?cost=1` instead degrades: the backlog is
-correct either way, so the rows go out unpriced with `cost_unavailable` saying
-why. The fix is upstream — the endpoint agent declaring the repository it is
-running in — and refusing is the pressure that gets it built.
+**A spend row names the repository it was earned in, because the endpoint
+declares it.** The agent runs inside the checkout, so it resolves
+`git remote get-url origin` once per working directory and sends `owner/name`
+as one more field on the usage ingest. The hub still reads no git of its own —
+it stores what the reporter recorded, which is the same stance that keeps the
+issue number a pure function of the branch name.
+
+That declaration is what the read is scoped by, and `binding` on the response
+says which reading you got:
+
+- **`declared`** — at least one endpoint reports a repository, so the figures
+  are this repository's and stay correct on a hub holding any number of them.
+- **`sole_repo`** — nothing declares yet, so these are the whole hub's numbers,
+  readable as this repository's only because the hub holds no other. With two
+  repositories and no declarations, `/v1/repo/cost` still answers `409` and
+  `?cost=1` still degrades with `cost_unavailable` — the refusal did not go
+  away, it stopped being the only answer available.
+
+**A scope is a filter, and this one says what it dropped.** Under `declared`
+the response carries a `declaration` block: `scoped`, `other_repos`,
+`undeclared` and `total`, which sum. `undeclared` is spend that named no
+repository — an endpoint that has not been upgraded, a working directory that
+is not a checkout, and every row written before the column existed, which
+cannot be filled in afterwards because nobody ever told the hub. "Not declared"
+is not "not this repository", so it is excluded from the answer and disclosed
+beside it. A small set of bars next to a large `undeclared` means *not measured
+yet*, never *cheap* — the same factor-of-three error the unattributed bucket
+exists to prevent, one level up.
 
 ### The other half of progress: what is waiting on a person
 

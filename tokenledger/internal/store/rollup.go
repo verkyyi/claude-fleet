@@ -23,10 +23,10 @@ func hourKey(t time.Time) string {
 const rollupInsertSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-  issue_number, effort, entrypoint, is_sidechain, source,
+  issue_number, git_repo, effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
   cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,cache_write_tokens,cache_write_known_events
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 1,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 1,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider,
             git_branch, effort, entrypoint, is_sidechain, source) DO UPDATE SET
   events                 = events + 1,
@@ -41,7 +41,13 @@ ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, pr
   cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
   cache_write_known_events = cache_write_known_events + excluded.cache_write_known_events,
   min_ts                 = min(min_ts, excluded.min_ts),
-  max_ts                 = max(max_ts, excluded.max_ts)`
+  max_ts                 = max(max_ts, excluded.max_ts),
+  -- A declaration wins over silence, and silence never erases a declaration.
+  -- git_repo is not in the key, so an endpoint that upgrades mid-hour folds
+  -- rows that declare and rows that do not into the SAME row; plain assignment
+  -- would let whichever event happened to arrive last decide, and half the
+  -- time that is the older agent undoing the newer one.
+  git_repo               = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE git_repo END`
 
 // rollupUpsert folds one freshly inserted event into its hourly row.
 func rollupUpsert(stmt *sql.Stmt, e *model.UsageEvent) error {
@@ -60,7 +66,7 @@ func rollupUpsert(stmt *sql.Stmt, e *model.UsageEvent) error {
 	write, known := cacheWrite(e)
 	_, err := stmt.Exec(
 		hourKey(e.TS), e.AccountUUID, e.EndpointID, e.SessionID, e.OSUser, e.CWD, e.Model, e.Provider, e.GitBranch,
-		issueNumber(e.GitBranch), e.Effort, e.Entrypoint, side, model.UsageSource(e.Source),
+		issueNumber(e.GitBranch), declaredRepo(e.GitRepo), e.Effort, e.Entrypoint, side, model.UsageSource(e.Source),
 		e.InputTokens, e.OutputTokens, e.CacheCreate5m, e.CacheCreate1h,
 		e.CacheRead, e.Thinking, cost, unpriced, ts, ts, write, known)
 	return err
@@ -69,18 +75,26 @@ func rollupUpsert(stmt *sql.Stmt, e *model.UsageEvent) error {
 const rollupBackfillSQL = `
 INSERT INTO usage_hourly (
   hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-  issue_number, effort, entrypoint, is_sidechain, source,
+  issue_number, git_repo, effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
   cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,cache_write_tokens,cache_write_known_events)
 SELECT strftime('%Y-%m-%dT%H:00:00Z', ts), account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
-       issue_number, effort, entrypoint, is_sidechain, source,
+       issue_number, MAX(git_repo), effort, entrypoint, is_sidechain, source,
        COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_create_5m_tokens), SUM(cache_create_1h_tokens),
        SUM(cache_read_tokens), SUM(thinking_tokens), COALESCE(SUM(cost_usd), 0), /* cost-split-exempt: GROUP BY below includes source (column 14) */
        SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), MIN(ts), MAX(ts),SUM(cache_write_tokens),SUM(cache_write_known_events)
 FROM usage_events
 -- issue_number joins the key columns here only so the SELECT stays legal: it is
 -- a pure function of git_branch (column 9), so grouping by it splits no row.
-GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14`
+--
+-- git_repo does NOT join them, and is MAX() instead. It is a declaration, not a
+-- derivation, so the same (endpoint, cwd) can carry both '' and 'owner/name'
+-- across an agent upgrade -- grouping by it would split one hourly row into two
+-- that then collide on a primary key it is not part of, and this INSERT has no
+-- ON CONFLICT to absorb that. MAX picks the declared value over '' under the
+-- default BINARY collation, which is the same rule the incremental upsert
+-- states as a CASE: a declaration wins over silence.
+GROUP BY 1,2,3,4,5,6,7,8,9,10,12,13,14,15`
 
 // unreconstructableRowsError is RebuildRollup(false)'s refusal to rebuild
 // over usage_hourly rows older than the earliest surviving usage_events row

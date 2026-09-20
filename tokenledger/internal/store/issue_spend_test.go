@@ -222,7 +222,7 @@ func TestIssueLifetimeSpend_IgnoresTheWindow(t *testing.T) {
 		t.Errorf("window tokens = %d, want 5 (the older turn is outside it)", page.Issues[0].Tokens)
 	}
 
-	life, err := s.IssueLifetimeSpend(AllAccounts, []int64{57})
+	life, err := s.IssueLifetimeSpend(AllAccounts, "", []int64{57})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestIssueLifetimeSpend_UnknownNumberIsAbsent(t *testing.T) {
 	seedAccount(t, s, "acc", "ep")
 	seedIssueSpend(t, s, evSpend("acc", "ep", "u1", "issue-57", "claude", 10))
 
-	life, err := s.IssueLifetimeSpend(AllAccounts, []int64{57, 999})
+	life, err := s.IssueLifetimeSpend(AllAccounts, "", []int64{57, 999})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +255,11 @@ func TestIssueLifetimeSpend_UnknownNumberIsAbsent(t *testing.T) {
 // spanning every subscription would be a blend nobody asked for.
 func TestIssueLifetimeSpend_RefusesTheEmptyAccount(t *testing.T) {
 	s := newStore(t)
-	if _, err := s.IssueLifetimeSpend("", []int64{57}); err == nil {
+	if _, err := s.IssueLifetimeSpend("", "", []int64{57}); err == nil {
 		t.Error("an empty account was accepted; want a refusal naming store.AllAccounts")
 	}
 	// No numbers is not an error, it is an empty answer.
-	got, err := s.IssueLifetimeSpend("", nil)
+	got, err := s.IssueLifetimeSpend("", "", nil)
 	if err != nil || len(got) != 0 {
 		t.Errorf("IssueLifetimeSpend(\"\", nil) = %v, %v; want an empty map and no error", got, err)
 	}
@@ -306,7 +306,7 @@ func TestIssueLifetimeSpend_HandlesALargeNumberSet(t *testing.T) {
 	for i := 1; i <= 5000; i++ {
 		nums = append(nums, int64(i))
 	}
-	got, err := s.IssueLifetimeSpend(AllAccounts, nums)
+	got, err := s.IssueLifetimeSpend(AllAccounts, "", nums)
 	if err != nil {
 		t.Fatalf("5000 issue numbers: %v", err)
 	}

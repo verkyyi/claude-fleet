@@ -226,6 +226,31 @@ seam exists and #58 has shown what the numbers look like.
 Explicitly still out of scope, now and then: cost-per-PR, cost-per-merge, and
 any change to the repo ingest protocol.
 
+### What step two actually landed (#84)
+
+As designed, with three decisions this section did not pre-empt:
+
+- **The remote URL is read by an anchored rule, like the branch name was.**
+  `owner/name` comes only from a URL that names a HOST (`scheme://host/a/b` or
+  the scp-like `host:a/b`). A filesystem remote — `/srv/git/repos/app.git` — is
+  a real remote naming no repository, and splitting it on `/` yields `repos/app`,
+  which is §2.3's fabrication wearing a different hat. So is `group/sub/app`
+  truncated to `sub/app`. Both are undeclared instead, and the result is checked
+  by the same `model.ValidRepoName` the repo ingest uses, so this side cannot
+  emit a key the other side would reject.
+- **'' is a third state, not a second one.** Undeclared is not "not this
+  repository": it is an older agent, a cwd that is no checkout, and — forever —
+  every row written before the column existed, which nothing can fill in
+  afterwards because the hub does not read git. Scoping excludes it and the
+  response discloses it (`declaration.undeclared`), which is §4's invariant one
+  level up: a filter whose discards are invisible reads as "this repository cost
+  nothing".
+- **The §5 refusal narrowed rather than vanished.** While NOT ONE row declares,
+  nothing has changed and §5's answer still stands — the sole-repo hub answers
+  whole-hub (`binding: "sole_repo"`), any other hub still gets the 409. Scoping
+  there would return a hard zero indistinguishable from a measured one, which is
+  the exact failure the refusal existed to prevent.
+
 ## 7. What lands with this design
 
 Schema and write path only — no API, no MCP, no UI (that is #58 and R4):

@@ -118,8 +118,21 @@ type UsageEvent struct {
 	// request the hub may already have pruned from the raw ledger.
 	EnrichOnly bool `json:"enrich_only,omitempty"`
 
-	CWD         string `json:"cwd"`
-	GitBranch   string `json:"git_branch"`
+	CWD       string `json:"cwd"`
+	GitBranch string `json:"git_branch"`
+
+	// GitRepo is `owner/name`, resolved by the ENDPOINT from the checkout it
+	// was running in (`git remote get-url origin`, once per cwd) and sent as a
+	// declaration. Empty means NOT DECLARED — an older agent, a cwd that is not
+	// a checkout, or a remote that names no host — and it is never inferred,
+	// here or on the hub.
+	//
+	// It is what makes issue_number joinable: a number alone is repo-less and
+	// every repository starts at #1, so without this the cost-per-issue read
+	// could only answer while the hub happened to hold exactly one repository
+	// (§5 of the cost-per-issue seam design; this field is its §6).
+	GitRepo string `json:"git_repo,omitempty"`
+
 	Entrypoint  string `json:"entrypoint"`
 	Effort      string `json:"effort"`
 	IsSidechain bool   `json:"is_sidechain"` // true = subagent turn

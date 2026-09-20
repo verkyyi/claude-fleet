@@ -162,6 +162,11 @@ type Agent struct {
 	// the default one seen through the heuristic.
 	machineFingerprint string
 
+	// repos answers "which repository is this cwd", once per distinct path.
+	// Shared by both collectors on purpose: one machine's Claude and Codex
+	// sessions sit in the same checkouts.
+	repos repoResolver
+
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan
 	// re-reads everything — cheap once, wasteful every minute for an hour.
@@ -481,6 +486,11 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 	for _, e := range a.scanner.Errs {
 		log.Printf("transcript warning: %v", e)
 	}
+
+	// Declare the repository BEFORE anything queues: the spool is the durable
+	// copy, so a field stamped after enqueue would be missing from every batch
+	// written while the hub was down.
+	a.repos.stampRepos(ctx, evs)
 
 	// Credentials give the account tier as well as the token, so read them even
 	// when it is not yet time to poll.
@@ -884,7 +894,7 @@ func chunkEvents(evs []model.UsageEvent, maxCount, maxBytes int) [][]model.Usage
 func approxSize(e *model.UsageEvent) int {
 	const fixed = 420 // field names, numbers, punctuation
 	return fixed + len(e.MessageUUID) + len(e.SessionID) + len(e.RequestID) +
-		len(e.Model) + len(e.CWD) + len(e.GitBranch) + len(e.Entrypoint) + len(e.Effort)
+		len(e.Model) + len(e.CWD) + len(e.GitBranch) + len(e.GitRepo) + len(e.Entrypoint) + len(e.Effort)
 }
 
 func (a *Agent) shouldPollLimits() bool {
