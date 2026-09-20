@@ -94,6 +94,16 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	var in findings.Inputs
 	in.SelectionSeconds = int64(f.End.Sub(f.Start) / time.Second)
 
+	// Gathered here rather than in each caller so both doors -- GET
+	// /v1/findings and MCP get_findings -- see the same silences. A finding
+	// muted on the dashboard must also be muted for an agent reading the same
+	// hub, or "acknowledged" means two different things depending on who asks.
+	mutes, err := s.activeMutes()
+	if err != nil {
+		return in, err
+	}
+	in.Mutes = mutes
+
 	// 50, not the population: runaway()'s threshold now comes from
 	// SessionTokenMedian below, computed by the store over every session in
 	// the window, so this pull only needs enough of the tokens-descending
@@ -158,7 +168,7 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 	for _, a := range order {
 		secs, eps := criticalTime(byAcct[a])
 		prevSecs, _ := criticalTime(prevBy[a])
-		in.Critical = append(in.Critical, findings.AccountCritical{Label: labels[a], Seconds: secs, PrevSeconds: prevSecs, Episodes: eps})
+		in.Critical = append(in.Critical, findings.AccountCritical{AccountUUID: a, Label: labels[a], Seconds: secs, PrevSeconds: prevSecs, Episodes: eps})
 	}
 	cur, err := s.Store.UsageByFiltered(f, store.ByProject, 50)
 	qs, qerr := s.QuotaHistorySeries(f, 400)
@@ -166,7 +176,14 @@ func (s *Server) GatherReview(f store.Filter) (findings.Inputs, error) {
 		return in, qerr
 	}
 	for _, q := range qs {
-		in.Critical = append(in.Critical, findings.AccountCritical{Label: q.Label, Seconds: q.CriticalSeconds, PrevSeconds: q.PrevCriticalSeconds, Episodes: q.CriticalEpisodes})
+		// The uuid AND the window id: one subscription has several provider
+		// windows, they run hot independently, and their findings must not
+		// share an identity -- see findings/identity.go. q.Label already
+		// folds both in for display; the key does it without the prose.
+		in.Critical = append(in.Critical, findings.AccountCritical{
+			AccountUUID: q.AccountUUID + "\x1f" + q.WindowID,
+			Label:       q.Label, Seconds: q.CriticalSeconds,
+			PrevSeconds: q.PrevCriticalSeconds, Episodes: q.CriticalEpisodes})
 	}
 	if err != nil {
 		return in, err
@@ -269,6 +286,11 @@ func (s *Server) GatherNow(account string) (findings.NowInputs, error) {
 
 func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, error) {
 	in := findings.NowInputs{Now: time.Now().UTC()}
+	mutes, err := s.activeMutes()
+	if err != nil {
+		return in, err
+	}
+	in.Mutes = mutes
 	accts, err := s.Store.ListAccounts()
 	if err != nil {
 		return in, err
@@ -289,7 +311,7 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 				continue
 			}
 			for _, w := range v.Windows {
-				in.Windows = append(in.Windows, findings.WindowStat{Label: a.Label(), Window: w.Label, FiveHourPct: w.Utilization})
+				in.Windows = append(in.Windows, findings.WindowStat{AccountUUID: a.AccountUUID, Label: a.Label(), Window: w.Label, FiveHourPct: w.Utilization})
 			}
 			continue
 		}
@@ -297,7 +319,7 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 		if err != nil || snap == nil {
 			continue
 		}
-		in.Windows = append(in.Windows, findings.WindowStat{Label: a.Label(), FiveHourPct: snap.FiveHour.Utilization})
+		in.Windows = append(in.Windows, findings.WindowStat{AccountUUID: a.AccountUUID, Label: a.Label(), FiveHourPct: snap.FiveHour.Utilization})
 	}
 	scopeAcct := account
 	if scopeAcct == store.AllAccounts {
@@ -319,7 +341,10 @@ func (s *Server) GatherNowSource(account, source string) (findings.NowInputs, er
 		// only Label was the alert refusing to say who to go to while holding
 		// the answer.
 		in.Endpoints = append(in.Endpoints, findings.EndpointSeen{
-			Label: label, LastSeen: e.LastSeen, OSUser: e.OSUser, Team: e.Team,
+			// ID as well as Label: the label is what the alert PRINTS and it
+			// defaults to the hostname, so two machines can carry the same
+			// one. Muting is keyed on the id -- see findings/identity.go.
+			ID: e.ID, Label: label, LastSeen: e.LastSeen, OSUser: e.OSUser, Team: e.Team,
 		})
 	}
 	// Same roster, reused: the live sessions below are filtered to the same

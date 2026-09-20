@@ -231,3 +231,20 @@ func withViewer(ctx context.Context, login string) context.Context {
 	}
 	return ctx
 }
+
+// viewerOf reads back whoever the gate named, for a handler that records WHO
+// did something rather than only THAT it happened (see finding_mutes.go).
+//
+// It shares the access log's slot deliberately: there is one answer to "who is
+// this request", and a second copy could disagree with the line in the log.
+//
+// Empty is the normal, honest answer and not a failure. A request carrying the
+// shared viewer token names nobody -- that is what a shared secret means -- and
+// attributing it to a person would be an invention. A caller that stores this
+// has to be fine with the empty string.
+func viewerOf(ctx context.Context) string {
+	if p, ok := ctx.Value(viewerKey{}).(*string); ok && p != nil {
+		return *p
+	}
+	return ""
+}

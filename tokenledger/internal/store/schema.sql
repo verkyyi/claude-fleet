@@ -524,3 +524,42 @@ CREATE TABLE IF NOT EXISTS growth_facts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_growth_facts_day ON growth_facts(day DESC);
+
+-- The one piece of state a PERSON creates about a finding: "I know, be quiet
+-- until X".
+--
+-- Findings themselves are not stored. They are recomputed by internal/findings
+-- on every read, from the rollups, and that is deliberate -- a findings table
+-- would be a second copy of numbers that already exist and would go stale the
+-- moment a rule or a threshold changed. What cannot be recomputed is the
+-- operator's judgement, so that is the only thing here: a row per silenced
+-- finding, keyed by the stable id internal/findings/identity.go derives.
+--
+-- expires_at is NOT NULL, and there is no sentinel for "never". A permanently
+-- muted alert is a deleted alert that nobody remembers deleting: the condition
+-- stays true, the card stays quiet, and months later no one can say why that
+-- rule never fires. Forcing every silence to end makes it self-correcting --
+-- the worst case is being told again about something already handled.
+--
+-- Rows outlive their expiry until something writes: reads filter on the clock
+-- (store.ActiveFindingMutes) so an unpruned row can never silence anything,
+-- and the pruning rides along on the next mute/unmute rather than needing a
+-- daemon of its own.
+CREATE TABLE IF NOT EXISTS finding_mutes (
+  finding_id TEXT PRIMARY KEY,
+  -- The finding's kind at mute time, for the roster view only: an id is a
+  -- hash and says nothing a human can read. Never matched on -- the id is the
+  -- identity -- so a rule renaming its kind cannot orphan a live mute.
+  kind       TEXT NOT NULL DEFAULT '',
+  -- Why, in the operator's own words. Optional; a mute with no note is still
+  -- a decision, just an undocumented one.
+  note       TEXT NOT NULL DEFAULT '',
+  -- Who silenced it, when the hub knows (a tailnet or SSO identity). Empty
+  -- for a request carrying the shared viewer token, which names nobody --
+  -- and empty is the honest answer there rather than a guess at who holds it.
+  muted_by   TEXT NOT NULL DEFAULT '',
+  muted_at   TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_finding_mutes_expiry ON finding_mutes(expires_at);

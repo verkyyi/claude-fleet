@@ -150,6 +150,10 @@ func (s *Server) Handler() http.Handler {
 	// caller that wants only the windows -- see handleQuotaHistory.
 	mux.Handle("/v1/quota/history", s.viewerOnly(http.HandlerFunc(s.handleQuotaHistory)))
 	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
+	// The hub's second viewer-facing WRITE, behind the same gate as the
+	// first (/v1/accounts/label) and deliberately not behind a new one --
+	// see internal/api/finding_mutes.go on the trust boundary.
+	mux.Handle("/v1/findings/mutes", s.viewerOnly(http.HandlerFunc(s.handleFindingMutes)))
 	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
 	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))
 	mux.Handle("/v1/repo/issues", s.viewerOnly(http.HandlerFunc(s.handleRepoIssues)))

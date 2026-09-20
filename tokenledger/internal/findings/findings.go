@@ -98,12 +98,33 @@ func owner(user, team string) *Owner {
 }
 
 type Finding struct {
+	// ID is this finding's stable identity: the same problem computes the
+	// same id on every request, so something can be attached to it. See
+	// identity.go for exactly what "the same problem" means.
+	//
+	// Assigned by finish(), never by a rule -- a rule states its subject and
+	// the hashing happens in one place. Always present on the wire (not
+	// omitempty): a consumer that has to key on it must not have to handle
+	// the key being absent.
+	ID string `json:"id"`
+
 	Severity string            `json:"severity"` // critical | warning | info
 	Kind     string            `json:"kind"`
 	Title    string            `json:"title"`
 	Detail   string            `json:"detail"`
 	Scope    map[string]string `json:"scope,omitempty"` // chips to apply (hash param names)
 	Link     string            `json:"link,omitempty"`  // an in-app anchor, e.g. "#sessions"
+
+	// Muted is set when the operator has silenced this finding and the
+	// silence has not expired. The finding is STILL HERE -- muting ranks it
+	// below the live ones and out of their cap, it does not delete it. A
+	// muted alert that vanished would be indistinguishable from a condition
+	// that cleared, which is the one thing an operator must not have to
+	// guess about.
+	//
+	// Absent from the wire when the finding is not muted, so a consumer tests
+	// for the key exactly as it does for Scope, Link and Owner.
+	Muted *Mute `json:"muted,omitempty"`
 
 	// Owner is who to go to about this finding, when the hub knows. Omitted
 	// from the wire when it names nobody -- a consumer tests for the key's
@@ -123,6 +144,16 @@ type Finding struct {
 	// keeps getting exactly what it got before.
 	Template string            `json:"-"`
 	Args     map[string]string `json:"-"`
+
+	// subject is WHAT this finding is about, as an identifier rather than as
+	// prose -- a session id, a model name, an account uuid. Every rule sets
+	// it; finish() hashes it into ID. Never serialised: it is an input to the
+	// identity, and the identity is what consumers key on.
+	//
+	// An empty subject is legal and means "this rule produces exactly one
+	// finding of this sentence per request" -- see identity.go on
+	// spend_spike's blended sentence, the only case in tree.
+	subject string
 
 	weight float64
 }
@@ -153,6 +184,11 @@ type FreeAllowanceStat struct {
 	Allowance int64 // as declared by the rate
 }
 type AccountCritical struct {
+	// AccountUUID is the subscription this is about, when the caller has it.
+	// Label is what the sentence PRINTS; this is what the finding's identity
+	// is keyed on, because a label is renameable and not unique -- see
+	// identity.go. Empty falls back to Label, for a caller with no uuid.
+	AccountUUID          string
 	Label                string
 	Seconds, PrevSeconds int64
 	Episodes             int
@@ -191,17 +227,28 @@ type Inputs struct {
 	// Sessions (every test fixture in this package, and any small enough
 	// hub) needs no extra field and gets the identical number either way.
 	SessionTokenMedian int64
+
+	// Mutes are the silences in force for this reader, keyed by Finding.ID.
+	// Nil is the normal state of a hub nobody has muted anything on, and of
+	// every caller that does not care — the rules are unchanged by it, only
+	// the ranking and the cap are (see finish).
+	Mutes Mutes
 }
 
 const (
-	runawayMultiple   = 20
-	runawayFloor      = 100_000_000
-	criticalShare     = 0.10
-	cacheDropPoints   = 0.05
-	cacheMinTurns     = 200
-	spikeRatio        = 1.5
-	spikeFloor        = 1_000_000_000
-	maxFindings       = 8
+	runawayMultiple = 20
+	runawayFloor    = 100_000_000
+	criticalShare   = 0.10
+	cacheDropPoints = 0.05
+	cacheMinTurns   = 200
+	spikeRatio      = 1.5
+	spikeFloor      = 1_000_000_000
+	maxFindings     = 8
+	// maxMutedFindings bounds the folded tail of silenced findings. The tail
+	// is still a wire payload and still becomes DOM, and a fleet that has
+	// muted forty things does not need all forty echoed back on every poll —
+	// the mute roster is its own question, answered by GET /v1/findings/mutes.
+	maxMutedFindings  = 8
 	windowWarnPct     = 75.0
 	windowCriticalPct = 90.0
 	liveRunawayTokens = 200_000_000
@@ -223,19 +270,52 @@ const StaleAfter = time.Hour
 
 var rank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 
-// finish orders by severity, then groups same-kind findings together (kinds
-// ordered by first appearance) and ranks each kind's findings by weight,
-// descending. Kinds are never compared to each other by weight — the units
-// differ (percent, seconds, tokens, a ratio), and mixing them put a stale
-// agent's synthetic "never reported" figure ahead of a live runaway session,
-// which is backwards. Within one kind the units agree, so the cap below
-// keeps the largest findings of a kind rather than whichever were appended
-// first — with more than maxFindings same-kind, same-severity findings (a
-// real fleet can easily have more than 8 unpriced-model or runaway-session
-// hits), dropping the small ones instead of the big ones is the point.
-func finish(fs []Finding) []Finding {
+// finish names, ranks, annotates and caps.
+//
+// Ordering: by severity, then same-kind findings grouped together (kinds
+// ordered by first appearance), then by weight within a kind, descending.
+// Kinds are never compared to each other by weight — the units differ
+// (percent, seconds, tokens, a ratio), and mixing them put a stale agent's
+// synthetic "never reported" figure ahead of a live runaway session, which is
+// backwards. Within one kind the units agree, so the cap keeps the largest
+// findings of a kind rather than whichever were appended first — with more
+// than maxFindings same-kind, same-severity findings (a real fleet can easily
+// have more than 8 unpriced-model or runaway-session hits), dropping the small
+// ones instead of the big ones is the point.
+//
+// # Muting and the cap
+//
+// The cap and the mute list interact, and the interaction had to be decided
+// rather than fallen into. maxFindings exists to keep the card readable: show
+// the handful that matter and drop the tail. Muting says a finding does NOT
+// matter right now. Two wrong answers were available:
+//
+//   - Leave muted findings in the ranking. Then silencing an alert buys
+//     nothing: it still occupies one of the eight slots, and the ninth
+//     finding — the one the operator would now have room to see — stays
+//     hidden behind something they have explicitly dealt with.
+//   - Rank muted findings last and apply the one cap to the whole list. Then
+//     muting DELETES them: on a fleet with nine findings the muted one falls
+//     off the end and the page can no longer say it is muted rather than
+//     resolved. That contradicts the whole point of a mute having an expiry.
+//
+// So the cap is applied per tier. The live findings are ranked and capped at
+// maxFindings exactly as before — a muted finding gives up its slot, which is
+// what silencing it was for. The muted ones follow, ranked among themselves
+// and capped at maxMutedFindings, as a tail the surfaces render folded. A
+// muted finding therefore never costs a live one its place, and never
+// disappears while its silence holds.
+//
+// mutes is treated as already filtered to what is in force (see Mutes).
+func finish(fs []Finding, mutes Mutes) []Finding {
 	kindOrder := map[string]int{}
-	for _, f := range fs {
+	for i := range fs {
+		f := &fs[i]
+		f.ID = findingID(f.Kind, f.Template, f.Severity, f.subject)
+		if m, ok := mutes[f.ID]; ok {
+			cp := m
+			f.Muted = &cp
+		}
 		if _, ok := kindOrder[f.Kind]; !ok {
 			kindOrder[f.Kind] = len(kindOrder)
 		}
@@ -249,13 +329,21 @@ func finish(fs []Finding) []Finding {
 		}
 		return fs[i].weight > fs[j].weight
 	})
-	if len(fs) > maxFindings {
-		fs = fs[:maxFindings]
+	live, muted := make([]Finding, 0, len(fs)), []Finding{}
+	for _, f := range fs {
+		if f.Muted != nil {
+			muted = append(muted, f)
+			continue
+		}
+		live = append(live, f)
 	}
-	if fs == nil {
-		fs = []Finding{}
+	if len(live) > maxFindings {
+		live = live[:maxFindings]
 	}
-	return fs
+	if len(muted) > maxMutedFindings {
+		muted = muted[:maxMutedFindings]
+	}
+	return append(live, muted...)
 }
 
 // Review evaluates the period rules.
@@ -267,7 +355,7 @@ func Review(in Inputs) []Finding {
 	fs = append(fs, critical(in.Critical, in.SelectionSeconds)...)
 	fs = append(fs, cacheDrop(in.Projects, in.PrevProjects)...)
 	fs = append(fs, spike(in)...)
-	return finish(fs)
+	return finish(fs, in.Mutes)
 }
 
 // runaway flags sessions whose tokens are far past a median: runawayMultiple
@@ -322,10 +410,14 @@ func runaway(ss []SessionStat, populationMedian int64) []Finding {
 				"project": shortPath(s.CWD), "model": s.Model, "duration": dur(s.Duration),
 				"turns": fmt.Sprint(s.Turns),
 			},
-			Owner:  owner(s.OSUser, s.Team),
-			Scope:  map[string]string{"session": s.SessionID},
-			Link:   "#sessions",
-			weight: float64(s.Tokens),
+			Owner: owner(s.OSUser, s.Team),
+			Scope: map[string]string{"session": s.SessionID},
+			Link:  "#sessions",
+			// The FULL id, not short(): Title shows eight characters because
+			// that is enough to read, and an identity built from a truncation
+			// would merge two sessions that happen to share a prefix.
+			subject: s.SessionID,
+			weight:  float64(s.Tokens),
 		})
 	}
 	return out
@@ -362,8 +454,9 @@ func freeAllowance(as []FreeAllowanceStat) []Finding {
 				Args: map[string]string{
 					"model": a.Model, "used": tokens(a.Tokens), "allowance": tokens(a.Allowance),
 				},
-				Scope:  map[string]string{"model": a.Model},
-				weight: used * 1e6,
+				Scope:   map[string]string{"model": a.Model},
+				subject: a.Model,
+				weight:  used * 1e6,
 			})
 			continue
 		}
@@ -378,8 +471,9 @@ func freeAllowance(as []FreeAllowanceStat) []Finding {
 					"model": a.Model, "pct": fmt.Sprintf("%.0f", used*100),
 					"used": tokens(a.Tokens), "allowance": tokens(a.Allowance),
 				},
-				Scope:  map[string]string{"model": a.Model},
-				weight: used * 1e5,
+				Scope:   map[string]string{"model": a.Model},
+				subject: a.Model,
+				weight:  used * 1e5,
 			})
 		}
 	}
@@ -399,6 +493,7 @@ func unpriced(ms []ModelStat) []Finding {
 			Template: TmplUnpricedModel,
 			Args:     map[string]string{"model": m.Model, "n": fmt.Sprint(m.Unpriced)},
 			Scope:    map[string]string{"model": m.Model},
+			subject:  m.Model,
 			weight:   float64(m.Tokens),
 		})
 	}
@@ -424,8 +519,12 @@ func critical(cs []AccountCritical, selectionSeconds int64) []Finding {
 				"label": c.Label, "duration": dur(time.Duration(c.Seconds) * time.Second),
 				"episodes": fmt.Sprint(c.Episodes), "prev": dur(time.Duration(c.PrevSeconds) * time.Second),
 			},
-			Link:   "#wall-history",
-			weight: float64(c.Seconds),
+			Link: "#wall-history",
+			// The uuid when the caller has one: Label is the operator's
+			// display name, which they can rename and which two
+			// subscriptions may share -- see identity.go.
+			subject: firstNonEmpty(c.AccountUUID, c.Label),
+			weight:  float64(c.Seconds),
 		})
 	}
 	return out
@@ -456,8 +555,11 @@ func cacheDrop(cur, prev []ProjectStat) []Finding {
 				"from":    fmt.Sprintf("%.0f%%", q.CacheHit*100),
 				"to":      fmt.Sprintf("%.0f%%", p.CacheHit*100),
 			},
-			Scope:  map[string]string{"project": p.CWD},
-			weight: drop,
+			Scope: map[string]string{"project": p.CWD},
+			// The full path; Title shows shortPath(), and two sibling
+			// worktrees can shorten to the same two segments.
+			subject: p.CWD,
+			weight:  drop,
 		})
 	}
 	return out
@@ -476,7 +578,13 @@ func spike(in Inputs) []Finding {
 				"ratio":  fmt.Sprintf("%.1f", ratio),
 				"tokens": tokens(in.Tokens), "prev": tokens(in.PrevTokens),
 			},
-			weight: ratio,
+			// No subject, and that is the honest answer: this sentence is
+			// about the SELECTION as a whole, there is exactly one of it per
+			// request, and kind+template+severity already names it. Muting it
+			// means "I know spend is up" and holds however the brush moves --
+			// see identity.go.
+			subject: "",
+			weight:  ratio,
 		})
 		var top *ProjectStat
 		for i := range in.Projects {
@@ -496,7 +604,8 @@ func spike(in Inputs) []Finding {
 					"project": shortPath(top.CWD), "ratio": fmt.Sprintf("%.1f", r),
 					"tokens": tokens(top.Tokens), "prev": tokens(top.PrevTokens),
 				},
-				Scope: map[string]string{"project": top.CWD},
+				Scope:   map[string]string{"project": top.CWD},
+				subject: top.CWD,
 				// Same weight as the blended finding above, not its own ratio r: a
 				// spike concentrated in one project routinely makes r exceed the
 				// blended ratio, so magnitude cannot be trusted to keep this listed
@@ -513,11 +622,19 @@ func spike(in Inputs) []Finding {
 // ---- Now ----
 
 type WindowStat struct {
+	// AccountUUID as on AccountCritical: the identity key behind the
+	// printed Label. Empty falls back to Label.
+	AccountUUID string
 	Window      string
 	Label       string
 	FiveHourPct float64
 }
 type EndpointSeen struct {
+	// ID is the endpoint id, the identity key behind the printed Label. A
+	// label defaults to the hostname and two machines can carry the same
+	// one, so muting by label would silence both -- see identity.go. Empty
+	// falls back to Label.
+	ID       string
 	Label    string
 	LastSeen *time.Time
 
@@ -539,6 +656,9 @@ type NowInputs struct {
 	Endpoints []EndpointSeen
 	Live      []LiveStat
 	Now       time.Time
+
+	// Mutes as on Inputs: the silences in force, keyed by Finding.ID.
+	Mutes Mutes
 }
 
 // Now evaluates the minute-scale rules.
@@ -567,7 +687,15 @@ func Now(in NowInputs) []Finding {
 				"label": w.Label, "pct": fmt.Sprintf("%.0f", w.FiveHourPct),
 				"window": window, "windowDefaulted": fmt.Sprint(w.Window == ""),
 			},
-			Link: "#wall", weight: w.FiveHourPct})
+			Link: "#wall",
+			// Account AND window: one subscription has several windows and
+			// they run hot independently, so silencing the weekly must not
+			// silence the 5-hour. `window` here is the DEFAULTED label, which
+			// is a constant when the provider states none -- w.Window itself
+			// would make the identity depend on whether a reading happened to
+			// carry a label.
+			subject: subjectKey(firstNonEmpty(w.AccountUUID, w.Label), window),
+			weight:  w.FiveHourPct})
 	}
 	for _, e := range in.Endpoints {
 		if e.LastSeen != nil && in.Now.Sub(*e.LastSeen) <= StaleAfter {
@@ -586,7 +714,11 @@ func Now(in NowInputs) []Finding {
 		fs = append(fs, Finding{Severity: "warning", Kind: "stale_agent", Title: title,
 			Detail:   "Its share of every total is under-counted until it returns.",
 			Template: tmpl, Args: args, Owner: owner(e.OSUser, e.Team),
-			Link: "#fleet", weight: w})
+			Link: "#fleet",
+			// The endpoint id when the caller has one: a label defaults to
+			// the hostname and two machines can share it.
+			subject: firstNonEmpty(e.ID, e.Label),
+			weight:  w})
 	}
 	for _, l := range in.Live {
 		if l.Tokens < liveRunawayTokens {
@@ -598,9 +730,10 @@ func Now(in NowInputs) []Finding {
 			Template: TmplLiveRunaway,
 			Args:     map[string]string{"session": short(l.SessionID), "tokens": tokens(l.Tokens), "project": shortPath(l.CWD)},
 			Owner:    owner(l.OSUser, l.Team),
-			Scope:    map[string]string{"session": l.SessionID}, Link: "#live", weight: float64(l.Tokens)})
+			Scope:    map[string]string{"session": l.SessionID}, Link: "#live", weight: float64(l.Tokens),
+			subject: l.SessionID})
 	}
-	return finish(fs)
+	return finish(fs, in.Mutes)
 }
 
 // ---- formatting shared by the templates ----

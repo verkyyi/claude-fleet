@@ -386,6 +386,18 @@ export const zhCN = {
   'findings.owner.user': '该找谁：{user}',
   'findings.owner.team': '该找谁：团队 {team}',
 
+  'findings.mute': '静音 {hours} 小时',
+  'findings.unmute': '现在解除',
+  'findings.mutedCount': '已静音（{n}）',
+  'findings.muted.plain': '已静音',
+  'findings.muted.for': '已静音 · 还剩 {left}',
+  'findings.muted.by': '由 {by} 静音',
+  'findings.muted.byFor': '由 {by} 静音 · 还剩 {left}',
+  'findings.muted.days': '{n} 天',
+  'findings.muted.hours': '{n} 小时',
+  'findings.muted.minutes': '{n} 分钟',
+  'findings.muted.failed': '改不动：{error}',
+
   /* ---------------------------------------------------------- breakdowns */
   'breakdown.title': '按{dim}分组',
   'breakdown.hint': '取前 50 行，与上一段时间对比；占比跟随当前选区。',

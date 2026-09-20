@@ -240,7 +240,7 @@ func TestFreeAllowance_ExceededOutranksApproaching(t *testing.T) {
 	fs := finish(freeAllowance([]FreeAllowanceStat{
 		{Model: "near", Tokens: 999_999, Allowance: 1_000_000},
 		{Model: "over", Tokens: 1_000_001, Allowance: 1_000_000},
-	}))
+	}), nil)
 	if len(fs) < 2 {
 		t.Fatalf("got %d findings; want both", len(fs))
 	}

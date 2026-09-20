@@ -453,6 +453,30 @@ main[aria-busy="true"] .card { opacity: .6; transition: opacity .2s; }
    Quieter than the title but not as recessed as .muted's detail text: it is
    the one part of a finding a reader ACTS on, so it stays legible. */
 .findings .owner { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+/* The mute footer: the state ("muted · 20h left") and the one action.
+   Deliberately the quietest line in the row — it is a control, not a fact
+   about the fleet, and it must not compete with the title for attention. */
+.findings .mute { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12.5px; margin-top: 4px; }
+.findings .mute-state { color: var(--ink-3); }
+.findings .mute-err { color: var(--critical); }
+/* .linkish is a BUTTON that reads as a link. A button because the thing it
+   does is a write, not a navigation: that is what a keyboard, a screen reader
+   and a middle-click all expect, and an <a href="#"> here would offer to open
+   a mute in a new tab. */
+.findings .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--s1); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.findings .linkish:disabled { color: var(--ink-3); cursor: progress; text-decoration: none; }
+/* The silenced tail. Muted findings are FOLDED, never dropped — an alert that
+   vanished when silenced would be indistinguishable from one that cleared.
+   Everything inside is dimmed so a glance at an open fold still reads as
+   "handled" rather than as more alarm. */
+.findings .muted-tail { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 6px; }
+.findings .muted-tail > summary { font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: revert; }
+.findings .muted-tail .f { opacity: .62; }
+.findings .muted-tail .f:first-of-type { border-top: 0; }
+/* Opacity is a look, not a state. The dot keeps its severity colour so a
+   muted critical is still visibly a critical when the fold is open — the
+   operator silenced it, they did not downgrade it. */
+.findings .muted-tail .dot { opacity: 1; }
 /* card table toggle */
 .card { position: relative; } .card .tbl { position: absolute; right: 12px; top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; font-size: 12px; padding: 2px 6px; cursor: pointer; color: var(--ink-2); }
 /* The toggle is absolutely positioned in the card's top-right corner, which

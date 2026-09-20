@@ -38,6 +38,32 @@ export const app = {
     }
     return res.json();
   },
+  // The page's one WRITE. Kept beside api() rather than inside the card that
+  // needs it so there is a single place that knows the error shape -- a
+  // handler's `{error: "..."}` body, which is what the operator has to be
+  // shown when a write is refused.
+  //
+  // No locale tag: unlike api(), nothing here renders a server sentence into
+  // the page except the error, and an error is more useful in whatever words
+  // the server logged it under.
+  async post(path, body) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+  // refresh re-runs every loader against the CURRENT scope, bypassing the
+  // reuse gate in route(). A write the viewer just made changes what the
+  // server would answer without changing the hash, so there is nothing for
+  // route() to notice -- see lib/mute.js, which is the only caller.
+  refresh() { return load(false); },
   setState(next, { push = true } = {}) {
     const h = format(next);
     if (h === location.hash) return;

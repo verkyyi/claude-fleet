@@ -396,6 +396,22 @@ export const en = {
   'findings.owner.user': 'who to ask: {user}',
   'findings.owner.team': 'who to ask: team {team}',
 
+  // Muting: "I know about this, be quiet until then". Every one of these
+  // states WHEN the silence ends, because a mute with no visible expiry is
+  // indistinguishable from a deleted alert -- and the whole reason mutes
+  // expire is so nobody has to wonder which they are looking at.
+  'findings.mute': 'mute {hours}h',
+  'findings.unmute': 'unmute now',
+  'findings.mutedCount': 'muted ({n})',
+  'findings.muted.plain': 'muted',
+  'findings.muted.for': 'muted · {left} left',
+  'findings.muted.by': 'muted by {by}',
+  'findings.muted.byFor': 'muted by {by} · {left} left',
+  'findings.muted.days': '{n}d',
+  'findings.muted.hours': '{n}h',
+  'findings.muted.minutes': '{n}m',
+  'findings.muted.failed': "couldn't change that: {error}",
+
   /* ---------------------------------------------------------- breakdowns */
   'breakdown.title': 'By {dim}',
   'breakdown.hint': 'Top 50 rows, compared with the period before. Shares follow the current selection.',

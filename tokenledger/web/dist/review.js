@@ -18,7 +18,8 @@ import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, fmtS
 import { SOURCES, KIND_LABEL, kindOf, costOf,
          activeSources, addCost, costLine, fmtSourceCost, fmtRealSpend } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
-import { ownerLine } from './lib/findings.js';
+import { ownerLine, splitMuted } from './lib/findings.js';
+import { muteControls } from './lib/mute.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
 import { pricingCoverage } from './lib/providers.js';
@@ -344,29 +345,46 @@ function findingsCard(result, state, app) {
     return card;
   }
   const data = result.value;
-  const list = (Array.isArray(data) ? data : (data.findings || [])).slice(0, 8);
-  if (!list.length) {
+  // No blind .slice(0, 8) any more. The server already caps -- and since
+  // findings grew a muted tier it caps the two tiers SEPARATELY (see
+  // internal/findings/findings.go's finish), so a flat slice here would have
+  // chopped the silenced alerts off the end and made a mute look like a
+  // deletion, which is the one thing this feature must not do.
+  const { live, muted } = splitMuted(Array.isArray(data) ? data : (data.findings || []));
+  if (!live.length && !muted.length) {
     card.appendChild(el('div', { class: 'empty' }, t('findings.empty')));
     return card;
   }
-  for (const f of list) {
-    const hasScope = f.scope && Object.keys(f.scope).length > 0;
-    // Who to go to, when the hub knows. A runaway session has an owner; an
-    // unpriced model or a spend spike is everybody's, so those print nothing
-    // here rather than an "unknown" that reads like missing data.
-    const owner = ownerLine(f);
-    card.appendChild(el('div', { class: 'f' },
-      el('span', { class: 'dot ' + (f.severity || 'info') }),
-      el('div', {},
-        el('div', {}, el('b', {}, f.title)),
-        f.detail ? el('div', { class: 'muted' }, f.detail) : null,
-        owner ? el('div', { class: 'owner' }, owner) : null,
-        hasScope ? el('a', {
-          href: '#', style: 'display:inline-block;margin-top:4px;font-size:12.5px',
-          onclick: (e) => { e.preventDefault(); applyFindingScope(state, app, f); },
-        }, t('findings.apply')) : null)));
+  for (const f of live) card.appendChild(findingRow(f, state, app));
+  if (muted.length) {
+    // Folded, not hidden: a silenced finding is still a true statement about
+    // this period, and the summary line carries the count so the fold is
+    // informative while closed.
+    const d = el('details', { class: 'muted-tail' },
+      el('summary', {}, t('findings.mutedCount', { n: muted.length })));
+    for (const f of muted) d.appendChild(findingRow(f, state, app));
+    card.appendChild(d);
   }
   return card;
+}
+
+function findingRow(f, state, app) {
+  const hasScope = f.scope && Object.keys(f.scope).length > 0;
+  // Who to go to, when the hub knows. A runaway session has an owner; an
+  // unpriced model or a spend spike is everybody's, so those print nothing
+  // here rather than an "unknown" that reads like missing data.
+  const owner = ownerLine(f);
+  return el('div', { class: 'f' },
+    el('span', { class: 'dot ' + (f.severity || 'info') }),
+    el('div', {},
+      el('div', {}, el('b', {}, f.title)),
+      f.detail ? el('div', { class: 'muted' }, f.detail) : null,
+      owner ? el('div', { class: 'owner' }, owner) : null,
+      hasScope ? el('a', {
+        href: '#', style: 'display:inline-block;margin-top:4px;font-size:12.5px',
+        onclick: (e) => { e.preventDefault(); applyFindingScope(state, app, f); },
+      }, t('findings.apply')) : null,
+      muteControls(f, app)));
 }
 
 /* ------------------------------------------------------- card 4: breakdowns */

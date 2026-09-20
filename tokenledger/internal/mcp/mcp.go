@@ -565,7 +565,16 @@ func toolSpecs() []toolSpec {
 				"call can drill into. A finding whose subject has one may also carry owner.user " +
 				"(an OS login) and/or owner.team — who to go to about it. The key is ABSENT when " +
 				"the hub does not know, which is the normal case for a finding about a model, a " +
-				"project or a whole period: those are shared, so do not infer an owner for one." + caveat,
+				"project or a whole period: those are shared, so do not infer an owner for one. " +
+				"Every finding carries a stable `id`: the same problem gets the same id on every " +
+				"call, so two readings can be compared for whether they are about the same thing " +
+				"rather than merely similar. An id changes when the severity does, which is how an " +
+				"escalation is told apart from the same alert repeating. A finding an operator has " +
+				"silenced carries `muted` ({until, note, by}) and is listed AFTER the live ones, " +
+				"outside their cap — it is still present on purpose, so do not read its absence " +
+				"from the top of the list as the condition having cleared. This server is " +
+				"read-only: there is no tool to mute or unmute, and muting is a person's decision " +
+				"made through the dashboard." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp,
 				"view": map[string]any{

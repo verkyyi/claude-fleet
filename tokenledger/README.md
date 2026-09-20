@@ -857,7 +857,54 @@ public-facing renderings and have no MCP tools; `/v1/growth/latest` is gated on
 the enrollment's *kind* rather than the viewer token, so moving it would be a
 permission change rather than a parity fix; and `/v1/live/stream` is a stream,
 which this server does not open (see the GET handler). MCP is read-only
-throughout — `POST /v1/accounts/label` has no tool and will not grow one.
+throughout — the hub's two viewer-facing writes, `POST /v1/accounts/label` and
+`POST /v1/findings/mutes`, have no tools and will not grow any. The second one
+is why that matters more than it used to: an agent that could silence the
+fleet's alerts on its own initiative is not a capability anyone asked for.
+`get_findings` reports a finding's `id` and its `muted` state, so an agent can
+*see* what a person silenced and say it should be lifted — the lifting is a
+person's click.
+
+### Saying "I know" about an alert
+
+A `critical` finding used to come back on every page load, for as long as the
+window contained it, with no way to acknowledge it. It could not be otherwise:
+findings are recomputed on every read and had no names, so there was nothing to
+attach an acknowledgement to.
+
+Every finding now carries a stable `id` — the same problem computes the same id
+on every request — and `POST /v1/findings/mutes` records the one thing that
+cannot be recomputed: the operator's judgement.
+
+```sh
+curl -s https://your-hub/v1/findings/mutes \
+  -H "Authorization: Bearer $VIEWER_TOKEN" \
+  -d '{"id":"3f9a1c04be21","kind":"stale_agent","hours":24,"note":"box is in the shop"}'
+```
+
+Three rules make the silence safe to give out:
+
+**It expires.** There is no permanent mute, and `hours` is clamped to 30 days.
+A permanently muted alert is a deleted alert nobody remembers deleting: the
+condition stays true, the card stays quiet, and months later no one can say why
+that rule never fires. The worst case of an expiry is being told again about
+something already handled, which costs one click.
+
+**It is still visible.** Muted findings are not dropped from the response or
+from the page — they are ranked after the live ones and folded, with the time
+remaining and who silenced them. An alert that vanished when silenced would be
+indistinguishable from one that cleared.
+
+**An escalation breaks through it.** Severity is part of the identity, so a
+5-hour window silenced at 78% speaks up again when it crosses 90%, and a mute
+on the "80% of the free allowance" warning does not cover the "allowance is
+gone" critical. "I know it is warm" is not consent to be surprised by it
+running out.
+
+The `maxFindings = 8` cap now applies per tier: the live findings are capped as
+before — a muted finding gives up its slot, which is what silencing it was for
+— and the muted ones follow under their own cap. So muting makes room without
+deleting anything.
 
 The last three read repo progress rather than spend. They exist because agents
 read backlogs and humans read dashboards: one source, two renderers. A second

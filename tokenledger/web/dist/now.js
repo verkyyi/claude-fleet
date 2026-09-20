@@ -21,7 +21,8 @@ import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive
 import { el, $, escapeHTML } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
-import { ownerLine } from './lib/findings.js';
+import { ownerLine, splitMuted } from './lib/findings.js';
+import { muteControls } from './lib/mute.js';
 import { createScopeControls } from './scope.js';
 import * as C from './charts.js';
 import { t, withLocale } from './lib/i18n.js';
@@ -515,7 +516,7 @@ function wallCardFromResult(result, chips, accounts) {
 // and `findings` always an array, never null. Read tolerantly regardless:
 // if the body is still a bare array (whichever order this and the backend
 // fix land in), treat it as the findings list directly.
-function alertsCard(result) {
+function alertsCard(result, app) {
   if (result.status === 'rejected') {
     return el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')),
       el('div', { class: 'empty' }, t('common.queryFailed', { error: errMsg(result.reason) })));
@@ -528,21 +529,41 @@ function alertsCard(result) {
   // its own error card; "empty" here means the query succeeded and found
   // nothing, not that it failed.)
   if (!findings.length) return null;
+  const { live, muted } = splitMuted(findings);
+  // A card of nothing but silenced alerts is still worth showing -- that IS
+  // the state of the fleet, and hiding it would make a muted alert look
+  // resolved. But it must not sit at the top of Now looking urgent, so the
+  // fold below stays closed and the heading says how many.
   const card = el('div', { class: 'card findings' }, el('h2', {}, t('alerts.title')));
-  for (const f of findings) {
-    // A stale agent is the alert this matters most to: "go make the agent on
-    // that machine live again" is useless without a name attached, and the hub
-    // knows it. An alert with no owner (a hot rate-limit window belongs to a
-    // subscription, not a person) simply prints no such line.
-    const owner = ownerLine(f);
-    card.appendChild(el('div', { class: 'f' },
-      el('span', { class: 'dot ' + (f.severity || 'info') }),
-      el('div', {},
-        el('div', {}, el('b', {}, f.title)),
-        f.detail ? el('div', { class: 'muted' }, f.detail) : null,
-        owner ? el('div', { class: 'owner' }, owner) : null)));
-  }
+  for (const f of live) card.appendChild(alertRow(f, app));
+  if (muted.length) card.appendChild(mutedTail(muted, app));
   return card;
+}
+
+function alertRow(f, app) {
+  // A stale agent is the alert this matters most to: "go make the agent on
+  // that machine live again" is useless without a name attached, and the hub
+  // knows it. An alert with no owner (a hot rate-limit window belongs to a
+  // subscription, not a person) simply prints no such line.
+  const owner = ownerLine(f);
+  return el('div', { class: 'f' },
+    el('span', { class: 'dot ' + (f.severity || 'info') }),
+    el('div', {},
+      el('div', {}, el('b', {}, f.title)),
+      f.detail ? el('div', { class: 'muted' }, f.detail) : null,
+      owner ? el('div', { class: 'owner' }, owner) : null,
+      muteControls(f, app)));
+}
+
+// mutedTail folds the silenced alerts away without deleting them. <details>,
+// not a class that hides them: it is the one collapse the platform gives a
+// keyboard and a screen reader for free, and the summary states the count so
+// the fold is readable while closed.
+function mutedTail(muted, app) {
+  const d = el('details', { class: 'muted-tail' },
+    el('summary', {}, t('findings.mutedCount', { n: muted.length })));
+  for (const f of muted) d.appendChild(alertRow(f, app));
+  return d;
 }
 
 /* ------------------------------------------------------------------ fleet */
@@ -758,7 +779,7 @@ function applyNow(root, state, app, results, opsOpen) {
   // Alerts mount ABOVE the tiers, not inside this one. Everything else here is
   // operational detail that the page now folds away by default, and an alert
   // inside a fold is an alert nobody sees.
-  const alerts = alertsCard(findingsR);
+  const alerts = alertsCard(findingsR, app);
   const alertsRoot = $('#alerts');
   if (alertsRoot) alertsRoot.replaceChildren(...(alerts ? [alerts] : []));
 
