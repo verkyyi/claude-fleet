@@ -576,9 +576,6 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
    was written. */
 .card, #ledger-band, #usage-band, #repo-band, #ops { scroll-margin-top: var(--navh); }
 
-.eff-lists { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 4px; }
-.eff-lists > div { flex: 1 1 180px; min-width: 160px; }
-
 .sessions .cards .srow {
   background: var(--grid); border-radius: 8px; padding: 10px 12px; cursor: pointer;
   display: flex; flex-direction: column; gap: 3px; font-size: 12.5px;
@@ -635,6 +632,12 @@ details.fleet > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
    continuous surface they are on the default page, so they get the same
    overflow container every other wide table here has. */
 details.unpriced-reasons table { display: block; overflow-x: auto; max-width: 100%; }
+/* Those three tables now share ONE fold (issue #93), so each needs a heading
+   of its own inside it -- they used to be their own <summary>. Sized down
+   from the card's <h2> so the fold reads as one card section with parts,
+   not as three cards that lost their frames. */
+details.unpriced-reasons h3 { font-size: 13px; margin: 14px 0 6px; }
+details.unpriced-reasons > summary + * { margin-top: 8px; }
 
 /* Six group options do not fit a phone in one row. Wrapping beats a scroller
    for a segmented control: every option should be reachable without the user

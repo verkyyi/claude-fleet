@@ -1,8 +1,7 @@
 // web/dist/review.js — the Review view: timeline+brush, KPI strip, findings,
-// two group-by breakdowns, efficiency, model mix over time, an hour×weekday
-// heatmap, wall history, and the sessions table. Everything here is scoped
-// to the brush SELECTION (`sel`), the subscription and the chips; card 1
-// (and card 6, which reuses card 1's response) is the one exception that
+// two group-by breakdowns, efficiency, an hour×weekday heatmap, wall history,
+// and the sessions table. Everything here is scoped to the brush SELECTION
+// (`sel`), the subscription and the chips; card 1 is the one exception that
 // draws over the whole `span` EXTENT so the brush has something to drag
 // across.
 //
@@ -16,7 +15,7 @@ import { foldHourly, sentence } from './lib/fold.js';
 import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, fmtSigned,
          scaleMax, shareText, shortProject, DELTA_CAP_PCT } from './lib/format.js';
 import { SOURCES, KIND_LABEL, kindOf, costOf,
-         activeSources, addCost, costLine, fmtSourceCost, fmtRealSpend } from './lib/cost.js';
+         activeSources, costLine, fmtSourceCost } from './lib/cost.js';
 import { el, escapeHTML } from './lib/dom.js';
 import { ownerLine, splitMuted } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
@@ -86,10 +85,10 @@ function bucketISO(key, gran) {
 }
 
 // normalizeSeries adapts one /v1/history response's `series` to what
-// charts.js's `timeline`/`stackedArea` actually read: a full-ISO `key` (see
-// bucketISO above) and, when the request asked for `stack=model`, a
-// name→tokens MAP — the backend's `Series.Stack` is an ARRAY of Bucket in
-// `stackModels` order, not the map both chart helpers expect.
+// charts.js's `timeline` actually reads: a full-ISO `key` (see bucketISO
+// above) and, when the request asked for `stack=model`, a name→tokens MAP —
+// the backend's `Series.Stack` is an ARRAY of Bucket in `stackModels` order,
+// not the map the chart helper expects.
 function normalizeSeries(rawSeries, gran, stackModels) {
   return (rawSeries || []).map((s) => {
     const iso = bucketISO(s.key, gran);
@@ -200,22 +199,12 @@ function kpisCard(result) {
 
   const cacheHit = ratio(d.cache_read_tokens, d.cache_read_tokens + d.input_tokens + d.cache_create_tokens);
   const prevCacheHit = ratio(p.cache_read_tokens || 0, (p.cache_read_tokens || 0) + (p.input_tokens || 0) + (p.cache_create_tokens || 0));
-  // $ per 1M output is only meaningful WITHIN one source. The numerator is
-  // that source's money and the denominator is that source's tokens; mixing
-  // them — a notional numerator over every source's output, or worse a
-  // blended numerator — produces a rate per million tokens that no source
-  // actually charges. So the tile answers only when the scope has exactly one
-  // source in it, and otherwise says to pick one.
-  // ...and only when that one source is BILLED. For subscription work the
-  // numerator was an estimate, so the rate answered "what would a million
-  // tokens have cost at API rates" — a question about a bill that does not
-  // exist.
-  const oneSource = activeSources(d).length === 1 ? activeSources(d)[0] : null;
-  const only = oneSource && kindOf(oneSource) === 'billed' ? oneSource : null;
-  const perM = only && d.output_tokens > 0 && !d.unpriced_events
-    ? (costOf(d, only).cost_usd / d.output_tokens) * 1e6 : null;
-  const prevPerM = only && p.output_tokens > 0 && !p.unpriced_events && activeSources(p).length === 1
-    ? (costOf(p, only).cost_usd / p.output_tokens) * 1e6 : null;
+  // There is no "$ per 1M output" TILE here any more (issue #93). The rate is
+  // only meaningful within ONE billed source, and this deployment's default
+  // scope spans several subscription sources — so the tile rendered a literal
+  // '—' on every default load and only ever spoke when a source chip was on.
+  // The same formula still runs, per model and with its denominator visible,
+  // in the efficiency card's "$ per 1M output tokens, by model" list.
   const subShare = ratio(d.sidechain_tokens, d.tokens);
   const prevSubShare = ratio(p.sidechain_tokens || 0, p.tokens || 0);
 
@@ -254,51 +243,42 @@ function kpisCard(result) {
     return tile;
   });
 
-  const perMTile = C.kpiTile({
-    id: 'kpi-perm', label: t('kpis.perM'),
-    value: perM == null ? '—' : fmtUSD(perM),
-    delta: perM == null || prevPerM == null ? null : delta(perM, prevPerM),
-    tone: TONE_MORE_IS_WORSE,
-  });
-  perMTile.title = only
-    ? t('kpis.perM.one', { source: only })
-    : oneSource
-      ? t('kpis.perM.subscription', { source: oneSource })
-      : t('kpis.perM.many');
-
-  // The one figure that is money owed: subscriptions plus metered charges.
-  // The notional figure is not a term in it and cannot become one — the API
-  // computes it from the billed sources alone.
-  const rs = d.real_spend;
-  const realTile = C.kpiTile({
-    id: 'kpi-real-spend', label: t('kpis.realSpend'),
-    value: fmtRealSpend(rs), delta: null, tone: TONE_MORE_IS_WORSE,
-  });
-  if (rs) {
-    realTile.title = [
-      t('kpis.realSpendTip', {
-        subscription: fmtMoney(rs.subscription, rs.currency),
-        gateway: fmtMoney(rs.gateway, rs.currency),
-        total: fmtMoney(rs.total, rs.currency) }),
-      d.real_spend_note,
-      rs.complete ? null : t('spend.incomplete', { missing: (rs.missing || []).join('; ') }),
-    ].filter(Boolean).join('\n\n');
-  }
+  // There is no "real spend" TILE here either (issue #93). `real_spend.total`
+  // already has a card of its own -- spend.js's `#real-spend`, the page
+  // headline -- and app.js hands BOTH readers the same `results[SUMMARY_INDEX]`
+  // object, so the tile and the headline were the same field of the same
+  // response rendered twice on one screen. Being the only tile with no delta
+  // was the tell: it never had a second thing to say.
 
   const card = el('div', { class: 'card' }, el('h2', {}, t('kpis.title')),
     el('p', { class: 'hint' }, t('kpis.hint')));
   if (d.pricing_note) card.appendChild(el('p', {class:'hint'}, d.pricing_note));
-  // Provenance per source, beside the columns it belongs to: which rate table,
-  // reviewed when, and which kind of money the figure is. One date printed
-  // once for the whole card could only ever be right about one source.
-  if ((d.pricing || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, t('kpis.provenance')),
+  if ((d.cost_unclassified || []).length) card.appendChild(el('p', {class:'hint'},
+    t('kpis.unclassified', { list: d.cost_unclassified.map((c) => `${c.source} ${fmtUSD(c.cost_usd)}`).join(', ') })));
+  // ONE collapsible for all the pricing METADATA, not four stacked blocks
+  // (issue #93). Provenance, subscription spend, coverage and the unpriced
+  // reasons all answer the same question -- "where does this number come from,
+  // and how much of it is even priced" -- and they were four separate things
+  // between the card's title and its actual tiles, so the reader scrolled past
+  // ~40 lines of apparatus to reach the measurements.
+  //
+  // Folded, NOT dropped: coverage is how a reader decides whether to trust the
+  // figures at all, so the percentage stays in the summary line, readable with
+  // the fold shut. Only the detail behind it moves out of the way. Same
+  // treatment the ledger card gives its own provenance.
+  const coverage = pricingCoverage(d);
+  const meta = [];
+  // Provenance per source: which rate table, reviewed when, and which kind of
+  // money the figure is. One date printed once for the whole card could only
+  // ever be right about one source.
+  if ((d.pricing || []).length) meta.push(
+    el('h3', {}, t('kpis.provenance')),
     el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.source')), el('th', {}, t('kpis.col.kind')), el('th', {}, t('kpis.col.ratesAsOf')), el('th', {}, t('kpis.col.basis')))),
       el('tbody', {}, d.pricing.map((pr) => el('tr', {},
         el('td', {}, pr.source), el('td', {}, KIND_LABEL[pr.kind] || pr.kind),
-        el('td', {}, pr.rates_as_of || '—'), el('td', {}, pr.note)))))));
-  if ((d.subscription_spend || []).length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, t('kpis.subSpend')),
+        el('td', {}, pr.rates_as_of || '—'), el('td', {}, pr.note))))));
+  if ((d.subscription_spend || []).length) meta.push(
+    el('h3', {}, t('kpis.subSpend')),
     el('p', {class:'hint'}, d.real_spend_note || ''),
     el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.sourcePlan')), el('th', {}, t('kpis.col.seats')), el('th', {}, t('kpis.col.months')), el('th', {}, t('kpis.col.amount')))),
       el('tbody', {}, d.subscription_spend.map((sp) => el('tr', {},
@@ -306,18 +286,15 @@ function kpisCard(result) {
         el('td', {}, (sp.months || 0).toFixed(2)),
         // Each plan states its own currency -- store.SubscriptionSpend refuses
         // to fold two of them into one row, so a row is never mixed.
-        el('td', {}, sp.priced ? fmtMoney(sp.amount, sp.currency) : t('kpis.noRecordedPrice'))))))));
-  if ((d.cost_unclassified || []).length) card.appendChild(el('p', {class:'hint'},
-    t('kpis.unclassified', { list: d.cost_unclassified.map((c) => `${c.source} ${fmtUSD(c.cost_usd)}`).join(', ') })));
-  const coverage = pricingCoverage(d);
-  card.appendChild(el('div', {class:'pricing-coverage'},
-    el('p', {}, el('b', {}, t('kpis.coverage', { pct: coverage.percent }))),
-    el('p', {class:'hint'}, t('kpis.coverageHint', {
-      priced: fmtFull(coverage.priced), total: fmtFull(coverage.total), unpriced: fmtFull(coverage.unpriced) }))));
-  if (d.unpriced_reasons?.length) card.appendChild(el('details', {class:'unpriced-reasons'},
-    el('summary', {}, t('kpis.whyUnpriced', { n: fmtFull(coverage.unpriced) })),
+        el('td', {}, sp.priced ? fmtMoney(sp.amount, sp.currency) : t('kpis.noRecordedPrice')))))));
+  meta.push(el('p', {class:'hint'}, t('kpis.coverageHint', {
+    priced: fmtFull(coverage.priced), total: fmtFull(coverage.total), unpriced: fmtFull(coverage.unpriced) })));
+  if (d.unpriced_reasons?.length) meta.push(
+    el('h3', {}, t('kpis.whyUnpriced', { n: fmtFull(coverage.unpriced) })),
     el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, t('kpis.col.sourceModel')), el('th', {}, t('kpis.col.reason')), el('th', {}, t('kpis.col.requests')))),
-      el('tbody', {}, d.unpriced_reasons.map((r) => el('tr', {}, el('td', {}, `${r.source} / ${r.model || t('common.unknownTime')}`), el('td', {}, r.reason), el('td', {}, fmtFull(r.events))))))));
+      el('tbody', {}, d.unpriced_reasons.map((r) => el('tr', {}, el('td', {}, `${r.source} / ${r.model || t('common.unknownTime')}`), el('td', {}, r.reason), el('td', {}, fmtFull(r.events)))))));
+  card.appendChild(el('details', {class:'unpriced-reasons'},
+    el('summary', {}, t('kpis.coverage', { pct: coverage.percent })), ...meta));
   // With the Claude fallback gone, a scope that ran nothing has no spend tile
   // at all. Say so, rather than leaving a KPI row of zeroes that looks like a
   // measurement.
@@ -327,11 +304,9 @@ function kpisCard(result) {
   card.appendChild(el('div', { class: 'kpis' },
     C.kpiTile({ id: 'kpi-tokens', label: t('kpis.tile.tokens'), value: fmtInt(d.tokens), delta: delta(d.tokens, p.tokens), tone: TONE_MORE_IS_WORSE }),
     ...sourceTiles,
-    realTile,
     C.kpiTile({ id: 'kpi-turns', label: t('kpis.tile.requests'), value: fmtInt(d.events), delta: delta(d.events, p.events), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-sessions', label: t('kpis.tile.sessions'), value: fmtInt(d.sessions), delta: delta(d.sessions, p.sessions), tone: TONE_MORE_IS_WORSE }),
     C.kpiTile({ id: 'kpi-cachehit', label: t('kpis.tile.cacheHit'), value: fmtPct(cacheHit), delta: delta(cacheHit, prevCacheHit), tone: 'neutral' }),
-    perMTile,
     C.kpiTile({ id: 'kpi-subagent', label: t('kpis.tile.subagent'), value: fmtPct(subShare), delta: delta(subShare, prevSubShare), tone: 'neutral' })));
   return card;
 }
@@ -542,7 +517,7 @@ function breakdownCard(n, dim, result, state, app, hasTeam, sharedMax) {
 
 /* ------------------------------------------------------- card 5: efficiency */
 
-function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
+function efficiencyCard(summaryResult, breakdown2Result, state) {
   const card = el('div', { class: 'card' }, el('h2', {}, t('efficiency.title')),
     el('p', { class: 'hint' }, t('efficiency.hint')));
   if (summaryResult.status === 'rejected') {
@@ -573,62 +548,38 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
   C.withTable(compWrap, compChart, compTable, 'review-efficiency');
   card.appendChild(compWrap);
 
-  // Three lists in one row, and issue #51's second scale defect lived here:
-  // effort and entrypoint cut the SAME token total two ways, so a bar in one
-  // was directly comparable with a bar in the other — except each normalized
-  // to its own first row, so they never were. They now share a scale.
+  // The three mini-lists that used to sit here (effort, entrypoint, and
+  // "turns: main vs. subagent") are gone — issue #93.
   //
-  // The third list does NOT join them, and must not: it counts TURNS. Same
-  // bars, same row, different quantity — the one thing a shared scale would
-  // actively assert is the one thing that is false here. It keeps its own
-  // scale and says its unit out loud instead.
-  const miniList = (title, rows, { max, note } = {}) => el('div', {},
-    el('h2', { style: 'margin-top:16px' }, title),
-    note ? el('p', { class: 'hint' }, note) : null,
-    rows.length ? C.rankedBars(rows, { max }) : el('div', { class: 'empty' }, t('efficiency.noData')));
-  // Share of each list's OWN total, which for these two is the same token
-  // total cut two ways — the denominator a reader would assume, and the only
-  // one the repo's one-quantity rule allows.
-  const effortTotal = (d.effort || []).reduce((s, e) => s + (e.tokens || 0), 0);
-  const entryTotal = (d.entrypoint || []).reduce((s, e) => s + (e.tokens || 0), 0);
-  const withShare = (text, value, total) => {
-    const s = shareText(value, total);
-    return s ? `${text} · ${s}` : text;
-  };
-  const effortRows = (d.effort || []).map((e) => ({
-    key: e.key || t('efficiency.default'), value: e.tokens,
-    right: withShare(t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }), e.tokens, effortTotal),
-  }));
-  const entryRows = (d.entrypoint || []).map((e) => ({
-    key: e.key || t('common.unknown'), value: e.tokens,
-    right: withShare(t('efficiency.tokensTurns', { tokens: fmtFull(e.tokens), events: fmtFull(e.events) }), e.tokens, entryTotal),
-  }));
-  const tokenListMax = scaleMax([...effortRows, ...entryRows]);
-  const mainEvents = Math.max(0, (d.events || 0) - (d.sidechain_events || 0));
-  const turnTotal = mainEvents + (d.sidechain_events || 0);
-  const subRows = [
-    { key: t('efficiency.mainThread'), value: mainEvents,
-      right: withShare(t('efficiency.turnsOnly', { events: fmtFull(mainEvents) }), mainEvents, turnTotal) },
-    { key: t('efficiency.subagent'), value: d.sidechain_events || 0,
-      right: withShare(t('efficiency.turnsOnly', { events: fmtFull(d.sidechain_events || 0) }), d.sidechain_events || 0, turnTotal) },
-  ];
-  card.appendChild(el('div', { class: 'eff-lists' },
-    miniList(t('efficiency.effort'), effortRows,
-      { max: tokenListMax, note: t('efficiency.sharedScale', { other: t('efficiency.entrypoint') }) }),
-    miniList(t('efficiency.entrypoint'), entryRows,
-      { max: tokenListMax, note: t('efficiency.sharedScale', { other: t('efficiency.effort') }) }),
-    miniList(t('efficiency.turns'), subRows, { note: t('efficiency.unitTurns') })));
+  // `turns` was `kpi-subagent` in a second unit: the tile above states the
+  // subagent SHARE, the list restated the same split as two turn counts. One
+  // question, one reading; the tile keeps it.
+  //
+  // `effort` and `entrypoint` were the page's ONLY outlet for those two
+  // dimensions — neither is in lib/state.js's GROUPS, so no breakdown card can
+  // reach them. They are deleted anyway because issue #60 made them first-class
+  // grouping axes on the MCP surface (internal/mcp/mcp.go's `usage_by_effort`
+  // and `usage_by_entrypoint`, both verified present before this deletion):
+  // the DATA is still collected and still answerable, it just is not on this
+  // page. That is the trade, and it is deliberate — see the PR body.
 
-  // $ per 1M output by model: prefer breakdown 2's fuller (limit 50) list
-  // when it is already grouped by model, otherwise fall back to the
-  // dedicated limit-8 fetch (fetcher index 5) — either way the source can
-  // independently fail without taking the rest of this card down.
+  // $ per 1M output by model, read from breakdown card 2's response when that
+  // card is grouped by model — which is the default (lib/state.js's
+  // DEFAULTS.g2). There used to be a dedicated limit-8 `by=model` fetch behind
+  // this as a fallback (fetcher index 5); it was DEAD on every default load,
+  // because the line above preferred breakdown 2 and breakdown 2 is by model
+  // unless the reader changes it. It was a request sent on every first screen
+  // whose result was then discarded. Deleted with the fetcher (issue #93).
+  //
+  // The cost of deleting it is that this list now follows breakdown card 2: a
+  // reader who regroups that card loses this one. Better to say so than to send
+  // a request nobody reads — so the empty state names the control to change.
   const source = state.g2 === 'model' && breakdown2Result.status === 'fulfilled'
-    ? breakdown2Result.value.buckets
-    : (modelResult.status === 'fulfilled' ? modelResult.value.buckets : null);
+    ? breakdown2Result.value.buckets : null;
   const perMSection = el('div', { style: 'margin-top:16px' }, el('h2', {}, t('efficiency.perMTitle')));
   if (!source) {
-    perMSection.appendChild(el('div', { class: 'empty' }, t('efficiency.perMFailed')));
+    perMSection.appendChild(el('div', { class: 'empty' },
+      state.g2 === 'model' ? t('efficiency.perMFailed') : t('efficiency.perMNeedsModel')));
   } else {
     // Same rule as the KPI tile: a cost-per-token rate belongs to one source.
     // A model whose bucket spans sources is left out rather than given a
@@ -647,54 +598,6 @@ function efficiencyCard(summaryResult, modelResult, breakdown2Result, state) {
     perMSection.appendChild(rows.length ? C.rankedBars(rows) : el('div', { class: 'empty' }, t('efficiency.perMEmpty')));
   }
   card.appendChild(perMSection);
-  return card;
-}
-
-/* ------------------------------------------------------- card 6: model mix */
-
-function modelMixCard(result, ctx) {
-  if (result.status === 'rejected') return errCard(t('modelMix.title'), result);
-  const { gran, sel, ext } = ctx;
-  const data = result.value;
-  const stackModels = data.stack_models || [];
-  // The SAME split timelineCard makes (topModels above): 'other' is a
-  // rollup-side bucket name, not a model, and both charts must hand it to
-  // the chart helper as a leftover so it lands in the shared grey. Passing
-  // the unfiltered list here is what drew 'other' in a palette hue on this
-  // card while the timeline one card up drew it grey — the same word, two
-  // colours, on one screen (issue #52).
-  const topModels = stackModels.filter((m) => m !== 'other');
-  const norm = normalizeSeries(data.series, gran, stackModels);
-  const inSel = norm.filter((n) => n.ms >= sel.from && n.ms < sel.to);
-
-  const card = el('div', { class: 'card' }, el('h2', {}, t('modelMix.title')),
-    el('p', { class: 'hint' }, t('modelMix.hint')));
-  if (!inSel.length) {
-    card.appendChild(el('div', { class: 'empty' }, t('common.noUsagePeriod')));
-    return card;
-  }
-
-  const areaSeries = inSel.map((n) => ({ key: n.key, stack: n.stack || {} }));
-  // `ext.bucket` is what lets the chart put back the buckets /v1/history
-  // never sent (it emits only buckets that had rows), so a quiet stretch
-  // draws as the zero it was instead of the area sliding across it.
-  const chart = C.stackedArea(areaSeries, topModels, { bucket: ext.bucket, granularity: gran });
-
-  const totals = {};
-  for (const n of inSel) {
-    (n.raw.stack || []).forEach((b, i) => {
-      const name = stackModels[i];
-      if (!name) return;
-      const t = totals[name] || (totals[name] = { key: name, events: 0, tokens: 0, cost: [], unpriced_events: 0 });
-      t.events += b.events || 0; t.tokens += b.tokens || 0;
-      addCost(t.cost, b);
-      t.unpriced_events += b.unpriced_events || 0;
-    });
-  }
-  const table = C.bucketTable(Object.values(totals), t('modelMix.model'));
-  const wrap = el('div', {});
-  C.withTable(wrap, chart, table, 'review-model-mix');
-  card.appendChild(wrap);
   return card;
 }
 
@@ -917,7 +820,7 @@ function sessionsCard(result, state, app, sel) {
 /* ------------------------------------------------------------------- main */
 
 function applyAll(root, state, app, ctx, results, opsOpen) {
-  const [historyExtR, summaryR, findingsR, g1R, g2R, modelR, hourR, wallR, sessionsR] = results;
+  const [historyExtR, summaryR, findingsR, g1R, g2R, hourR, wallR, sessionsR] = results;
   // Cached by now.js after its own /v1/endpoints fetch (Review issues no
   // endpoints request of its own — see task-12-report.md). Empty until the
   // Now view has loaded at least once, which just means "team" starts out
@@ -941,9 +844,13 @@ function applyAll(root, state, app, ctx, results, opsOpen) {
   section(root, 'r-breakdowns').replaceChildren(el('div', { class: 'grid2' },
     breakdownCard(1, state.g1, g1R, state, app, hasTeam, bdMax),
     breakdownCard(2, state.g2, g2R, state, app, hasTeam, bdMax)));
-  section(root, 'r-effmix').replaceChildren(el('div', { class: 'grid2' },
-    efficiencyCard(summaryR, modelR, g2R, state),
-    modelMixCard(historyExtR, ctx)));
+  // "Model mix over time" used to sit beside this in a grid2. It is gone
+  // (issue #93): it drew `historyExtR` -- the SAME response the timeline above
+  // already draws, already stacked by model -- so it cost no request and
+  // carried no reading the page did not have. Between the timeline's stack and
+  // breakdown card 2 (by=model by default) the same cut was on screen three
+  // times. Efficiency now has the row to itself.
+  section(root, 'r-efficiency').replaceChildren(efficiencyCard(summaryR, g2R, state));
 
   // findings / when+wall / sessions answer operational questions, so they mount
   // in the folded operations tier rather than beside the money -- and their four
@@ -973,13 +880,17 @@ export const SUMMARY_INDEX = 1;
  *  unsent slot as a SKIPPED hole rather than closing the gap.
  *
  *    2  findings        -> r-findings
- *    6  history (hour)  -> r-whenwall's "when do we work" card, and nothing
+ *    5  history (hour)  -> r-whenwall's "when do we work" card, and nothing
  *                          else -- position 0 is the separate extent-wide
  *                          history the timeline above the fold draws from
- *    7  limits history  -> r-whenwall's wall card
- *    8  sessions        -> r-sessions
+ *    6  limits history  -> r-whenwall's wall card
+ *    7  sessions        -> r-sessions
+ *
+ *  These shifted down by one when issue #93 deleted the dead `by=model`
+ *  fetcher that used to be position 5 -- which is exactly the breakage a
+ *  positional contract invites, and exactly why the list is written out here.
  */
-const OPS_ONLY = new Set([2, 6, 7, 8]);
+const OPS_ONLY = new Set([2, 5, 6, 7]);
 
 export function renderReview(root, state, app, opsOpen) {
   // A re-render (any state change -- a chip removed, the subscription
@@ -1005,7 +916,11 @@ export function renderReview(root, state, app, opsOpen) {
     get(`/v1/findings?${q()}`),
     get(`/v1/usage?${q({ omitDim: state.g1, extra: { by: DIM_TO_API[state.g1], limit: 50, compare: 1 } })}`),
     get(`/v1/usage?${q({ omitDim: state.g2, extra: { by: DIM_TO_API[state.g2], limit: 50, compare: 1 } })}`),
-    get(`/v1/usage?${q({ extra: { by: 'model', limit: 8 } })}`),
+    // There is no second `by=model` fetch here any more (issue #93). A
+    // limit-8 one used to sit in this slot purely as the efficiency card's
+    // fallback, and the card preferred the line above it whenever breakdown 2
+    // was grouped by model -- which is the default. So on every default first
+    // screen this request was sent, answered, and thrown away.
     get(`/v1/history?${q({ extra: { granularity: 'hour' } })}`),
     get(`/v1/limits/history?${q({ extra: { points: 400 } })}`),
     get(`/v1/sessions?${q({ extra: { sort: state.sort, limit: 50 } })}`),
