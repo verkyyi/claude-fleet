@@ -11,6 +11,14 @@ Read-only against the repo except for that one closing comment.
 the most recently updated `epic` issue in this fleet. Works on any past EPIC, not
 just the one that just ended, so a report can be re-run after the fact.
 
+**Re-run it in two weeks.** Most of what a batch was *for* cannot be read on the
+day it ends — a metric with a 「2 周」 horizon is still blank when the last PR
+merges. That is not a reason to skip the metric or to invent one: write 「还读不
+出来，⟨date⟩ 再看」, and on that date run `/fleet-epic-report <N>` again. It
+rebuilds from GitHub and the fleet's records every time, so a second run costs one
+command and produces a page whose 指标 section is finally answerable. Say this at
+the bottom of the page too, with the date, so the operator knows to come back.
+
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
 ```sh
@@ -23,10 +31,18 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
 - **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`.
 
-## 1. Gather — five sources, no invention
+## 1. Gather — six sources, no invention
 
 - **The parent**: charter, the `<!-- fleet:epic-tick -->` comment stream (the
   batch's own minute-by-minute log), the 待决 section.
+- **The metric contract** (issue #839): the charter's **打算移动的指标** table —
+  指标 / 现在 / 期望 / 多久能读出来, plus the 读数口径 line under it, written by
+  `/fleet-epic-plan` before the batch ran. This is what the batch asked to be
+  judged by, and step 2 reads it back **row by row**. Two honest outcomes when it
+  is absent: a batch planned before #839, or one whose theme brought no
+  diagnosis, has **no table** — report 「本批未声明指标」 and stop there. **Never
+  reconstruct a baseline after the fact**: a "现在" measured today against a
+  "之前" nobody wrote down is a number the next batch would be planned against.
 - **The members**: every sub-issue — state, labels (`blocked` and why), its PR,
   merge time, and deploy state where the fleet has one. A member filed by
   `/fleet-epic-plan` carries a **上线证据** line in its body (issue #809): that
@@ -49,7 +65,10 @@ cannot attribute tokens to an issue. There is no session→spend join yet
 (issue #625), so "cost per issue" is **worker-hours**, and the quota curve is
 **pool-wide** — it includes whatever else ran on those accounts. Say that on the
 page. A number presented as a token attribution when it is an occupancy proxy is
-worse than no number, because the next batch would be planned against it.
+worse than no number, because the next batch would be planned against it. Since
+#839 this declaration rides in the folded `#ops` section beside the numbers it
+qualifies — **folded, not softened**: keep the wording, and never let the
+occupancy figure resurface upstairs as a cost.
 
 ## 2. Build the page
 
@@ -57,24 +76,86 @@ Before writing any chart, load the `dataviz` skill; before the page itself, load
 `artifact-design`. This is a document somebody reads at breakfast, not a log dump.
 Start from the shared frame — `cat ~/.claude/skills/epic-page/template.html` —
 the same `<style>` and section ids the batch's design page used (issue #809), so
-the operator reads plan and report as one document; swap the plan-only sections
-(`#signoff`) for the report's own (verdict, quota curve, obstacles), and fill the
-report-only block inside each member card — the `.proof` grid under its
+the operator reads plan and report as one document; keep the report's sections
+(`#delivered` `#metrics` `#members` `#gaps` `#obstacles` `#next` `#ops`), drop the
+plan-only ones (`#preflight` `#charter` `#order` `#risks` `#signoff`), and fill
+the report-only block inside each member card — the `.proof` grid under its
 `上线证据` line (issue #810, below).
 
-What earns its place:
+**Write it in the order below, and mean the order** (issue #839). A report whose
+headline is 「8/8 合并 · 84 分墙钟 · 2 次调度阻塞」 has told the reader that the
+machine ran, and nothing about whether it was worth running. The delivery and the
+metrics come first; how the batch ran is real, stays complete, and goes **into the
+folded `#ops`** at the bottom. **上层不用 fleet 黑话**: 占槽 → 占用时长, reap →
+回收, worker → 执行会话 (or just don't mention it), and the mirror ids
+(`prod-3a229eb80`) belong in the fold. `C1/C2` keys and PR numbers stay — they are
+how a reader gets from the page back to the record.
 
-- **The verdict, first.** Completed / not completed / blocked, in counts, above
-  the fold. Whether the batch achieved the thing the charter said.
-- **Per member**: what it was, what shipped (PR link), how long its worker held a
-  slot, and for anything unfinished — *why*, quoted from the tick log or the
-  `blocked` reason, not paraphrased.
-- **The quota curve** over the batch, annotated where an account was benched or a
-  window was waited out. The waits are the interesting part: they are where the
-  batch's wall-clock went.
-- **Obstacles.** Every retry, every red that turned out to be the gate rather than
-  the change, every 待决 that parked a worker. This section is the report's real
-  payload — it is what makes the next batch cheaper.
+What earns its place, in page order:
+
+1. **交付了什么** (`#delivered`) — **first, and in the reader's words**: what a
+   user can do now that they could not before. Not PR counts, not member counts —
+   the capability, who it is for, and whether it is live or merely merged. This
+   is the section a stakeholder reads if they read exactly one, and it is where
+   the old verdict's one real question goes: **did the batch achieve the thing the
+   charter said?** The counts behind it did not disappear — completed /
+   unfinished / blocked live in the band above the fold and in `#gaps`, and the
+   run figures in `#ops` — they just stopped being the headline.
+2. **指标怎么样** (`#metrics`) — **the effect, before the verdict.** Take the
+   charter's 打算移动的指标 table (step 1) and fill the 现在 column row by row,
+   with the 数据截至 date on the section lede and the 读数口径 line carried over
+   verbatim — the same filter rules, or the two numbers are not comparable:
+
+   ```
+   说好要移动的指标                     数据截至 2026-10-04（批次后 14 天）
+     真实读者/30天    62 → 149        ↑ 140%
+     读者转作者       0 人 → 3 人      ↑ 首次 >0
+     产品入口点击     0 → 88           ↑ 首次有数
+     空工作区占比     78/104 → 未量    本批未覆盖存量，仅新建生效
+   ```
+
+   Three outcomes, all of them honest, none of them a blank:
+   - **Readable now** → the number, and the delta.
+   - **Not readable yet** (the usual case on the day a batch ends) → 「还读不出来，
+     ⟨date⟩ 再看」 with the horizon the plan gave it. Better than a number nobody
+     measured, and better than silence.
+   - **No table** (a pre-#839 batch, or a theme with no diagnosis) → 「本批未声明
+     指标」. Do **not** back-fill a baseline — see step 1.
+3. **成员** (`#members`) — **the same two layers as the design page**: 目标 · 为谁
+   · 解决什么 · 怎么算成功 on the surface with the `.proof` grid; PR link, 占用时长,
+   mirror id, 方案/接口/依赖/完成判据/上线证据 inside the card's
+   `<details class="fold">`. For anything unfinished, *why* — quoted from the tick
+   log or the `blocked` reason, not paraphrased — belongs on the surface, not in
+   the fold: a reader must not have to click to find out something did not ship.
+4. **还差什么** (`#gaps`) — 待部署 / 要人做的 / 没验证的, split by who has to act.
+   This is where an honest 「要注册一个全新微信账号才看得到首次种入，本次未造号」
+   lives, in those words. Restate 这批不做 here so an out-of-scope item is not read
+   as a miss, and repeat that **储备层未动不算欠**.
+5. **障碍** (`#obstacles`) — see the split below.
+6. **建议下一批** (`#next`) — the theme's leftovers plus what this batch surfaced,
+   as input to `/fleet-epic-plan`, **explicitly not a decision**; keep the wording
+   that says so.
+7. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
+   额度曲线（annotated where an account was benched or a window was waited out —
+   the waits are where the batch's wall-clock went）· 甘特, plus the PR-merge
+   count. Nothing here is cut — including step 1's occupancy-not-tokens caveat,
+   which sits beside the numbers it qualifies and **keeps its wording**. Folding
+   is about position, not about softening.
+
+**Obstacles split by one test** (issue #839): *would this obstacle still exist in
+another repo, on another theme?*
+
+- **No → 产品侧**, it stays in the body, in full: why this change was hard, which
+  red was the change and which was the gate, which 待决 parked a member.
+- **Yes → fleet 侧** (并发上限, 回收拒收, dash-reap 目标写法, 占用时长口径…) —
+  it is a fleet defect, not this batch's story. **File it as an issue on the fleet
+  repo** and leave exactly one line in the body: *「fleet 侧问题已开 issue #N #M」*.
+  A report whose four obstacles are all fleet plumbing has spent its most valuable
+  section on something the reader cannot act on — and the defect gets fixed by
+  being an issue, not by being a paragraph.
+
+Item 3 in detail — the evidence grid (issue #810):
+
 - **Per member, 「上线后长什么样」** — inside that member's card (`#members` ›
   `.ob#m-<key>`), under its `上线证据` line, the frame's `.proof` grid: three
   columns **改动前 · 改动后 · 已上线**, each cell an `<img>`, a `<pre>` (a
@@ -106,8 +187,6 @@ What earns its place:
     already did for Markdown images), so the pictures ride along to the tailnet
     URL. A playwright-MCP screenshot lands under the worktree (`.playwright-mcp/`):
     that is a source to hand to `fleet-evidence.sh live`, not a path to reference.
-- **Proposed next batch**: the theme's leftovers plus what this batch surfaced,
-  as a suggestion for `/fleet-epic-plan`, explicitly not a decision.
 
 ## 3. Publish
 
@@ -120,11 +199,15 @@ use doc-preview, which is the repo-shipped skill for exactly this:
 
 Relay the READY tailnet URL to the operator.
 
-Then post the **durable half** as one comment on the EPIC issue: the verdict
-counts, the completed/unfinished/blocked lists, the obstacles, the URL, and per
-member which evidence exists — the `dir:` path from its worker's 📎 comment, or
-**无证据**. The tailnet URL dies with the next reboot; the comment is what
-survives, so it must stand on its own without the page. `gh` cannot attach an
+Then post the **durable half** as one comment on the EPIC issue, **in the page's
+order** (issue #839): 交付了什么 · 指标（filled, 「还读不出来 ⟨date⟩ 再看」, or
+「本批未声明指标」） · 还差什么 · 产品侧障碍 + the one fleet-side issue line ·
+建议下一批 — then the counts, the completed/unfinished/blocked lists, the run
+figures with their caveat, the URL, and per member which evidence exists — the
+`dir:` path from its worker's 📎 comment, or **无证据**. The tailnet URL dies with
+the next reboot; the comment is what survives, so it must stand on its own without
+the page — including the sentence telling the operator to re-run this command on
+⟨date⟩ when the metrics can be read. `gh` cannot attach an
 image to a comment, so the paths ARE the evidence's durable half; the files stay
 under `$FLEET_CONF_DIR/fleets/<sess>/epic/<N>/evidence/`. Do **not** commit the
 report or the evidence into the repo — this skill ships to team repos too, and a
@@ -138,7 +221,8 @@ closing note. Leave it open when anything is still `blocked`, and say which.
 
 ## 5. Report (keep it short)
 
-One line: the URL, the verdict counts, and the suggested next theme.
+One line: the URL, what the batch delivered, where the metrics stand (filled /
+「⟨date⟩ 再看」 / 「本批未声明指标」), and the suggested next theme.
 
 ---
 
