@@ -231,14 +231,25 @@ function quotaCard(result, chips, accounts) {
     const sourceOf = sourceMap(accounts);
     const shownSet = new Set(groups.flatMap((g) => g.entries.map((e) => e.account_uuid)));
 
-    // .filter(Boolean), and it is not defensive padding: append() stringifies a
-    // bare `null` argument into a literal "null" TEXT NODE rather than skipping
-    // it, and chipsIgnoredHint returns null on every load with no chips -- which
-    // is most of them. Caught in the browser on the first render of this card,
-    // where it printed "null" between the note and the closest-to-its-limit
-    // line. now.js carries the same guard, with the same note, for the same
-    // reason.
-    card.append(...[el('p', { class: 'hint' }, limits.note), chipsIgnoredHint(chips)].filter(Boolean));
+    // No opening hint here, and that is the point of #125: this card used to
+    // lead with `limits.note` -- the server's "utilization is never summed"
+    // sentence from this very response -- while now.js printed the same claim
+    // as a banner seventy lines up, in the same viewport, on the same trigger
+    // (both fire only at account=all, because that is the only scope where
+    // /v1/limits answers in the per_account shape). One of the two had to go;
+    // both did, because the gauges below say it better than either sentence:
+    // a reader looking at five separate bars with five separate resets is not
+    // in danger of adding them up. `note` still ships on the response for the
+    // API and MCP callers that get no gauges.
+    //
+    // .filter(Boolean) stays, and it is not defensive padding: append()
+    // stringifies a bare `null` argument into a literal "null" TEXT NODE
+    // rather than skipping it, and chipsIgnoredHint returns null on every load
+    // with no chips -- which is most of them. Caught in the browser on the
+    // first render of this card, where it printed "null" above the
+    // closest-to-its-limit line. now.js carries the same guard, with the same
+    // note, for the same reason.
+    card.append(...[chipsIgnoredHint(chips)].filter(Boolean));
     const worst = worstLine(limits.worst, shownSet, sourceOf);
     if (worst) card.appendChild(worst);
 

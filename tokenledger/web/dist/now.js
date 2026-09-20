@@ -35,7 +35,6 @@ import { collectorsCard, accountUsageCard, selectLive, liveUnknown } from './pro
 import { el, $ } from './lib/dom.js';
 import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
-import { isDismissed, setDismissed } from './lib/dismiss.js';
 import { ownerLine, splitMuted } from './lib/findings.js';
 import { muteControls } from './lib/mute.js';
 import * as C from './charts.js';
@@ -751,36 +750,22 @@ function endpointRosterCardFromResult(result, app, state, switchesR) {
 
 /* --------------------------------------------------------------- banners */
 
-/** `dismiss` is a dismiss.js key, and passing one is what gives a banner its
- *  close button. Only a banner that states a STANDING condition gets one: the
- *  others here report something that is currently wrong (history excluded, a
- *  limits reading unavailable or stale) and go away by being fixed, so a close
- *  button on them would hide a fault rather than acknowledge a caveat.
+/** No banner here is closable, and none should be: every one of them reports
+ *  something that is currently WRONG (history excluded, a limits reading
+ *  unavailable or stale) and goes away by being fixed, so a close button would
+ *  hide a fault rather than acknowledge a caveat.
  *
- *  Removed from the DOM on click rather than waiting for the next applyNow:
- *  this page refreshes on a 60s timer, and a notice that lingers for most of a
- *  minute after the reader closed it is a control that misreports its state.
- *  buildBanners re-reads the flag, so it does not come back. */
-function banner(kind, title, msg, dismiss) {
-  let root;
-  const close = dismiss
-    ? el('button', {
-        type: 'button', class: 'dismiss',
-        'aria-label': t('banner.dismiss'), title: t('banner.dismiss'),
-        onclick: () => { setDismissed(dismiss, true); root.remove(); },
-      }, '✕')
-    : null;
-  root = el('div', { class: 'banner' + (kind === 'err' ? ' err' : '') },
+ *  There used to be one exception — the all-subscriptions caveat, a STANDING
+ *  condition, which is why #92 gave banners a dismiss key and localStorage
+ *  (lib/dismiss.js) to remember it in. #125 deleted that banner: it said, at
+ *  the top of the screen, what the quota card said seventy lines further down
+ *  in the same viewport. The whole dismissal mechanism left with it, since it
+ *  had arrived for that banner alone and had no second caller. */
+function banner(kind, title, msg) {
+  return el('div', { class: 'banner' + (kind === 'err' ? ' err' : '') },
     el('span', { class: 'ico' }, kind === 'err' ? '✕' : '!'),
-    el('div', { class: 'msg' }, el('b', {}, title + ' '), msg),
-    close);
-  return root;
+    el('div', { class: 'msg' }, el('b', {}, title + ' '), msg));
 }
-
-/** The dismiss key for the all-subscriptions caveat. A constant, not a literal
- *  at each site, because the writer and the reader are ten lines apart and a
- *  typo between them is a close button that silently does nothing. */
-const ALL_SUBS_KEY = 'banner-all-subs';
 
 /** limitsBannerApplies is the ONE predicate for "a banner outside the fold
  *  needs /v1/limits". renderNow reads it to decide whether to send that
@@ -815,15 +800,17 @@ function buildBanners(state, endpointsR, limitsR) {
     banners.push(banner('warn', t('banner.excludesHistory', { name: e.label || e.hostname }), bits.join('; ') + '.'));
   }
 
-  // Nothing below is scoped to one subscription; say so once, at the top.
+  // "Nothing below is scoped to one subscription" used to be stated here too,
+  // as a dismissible warn banner. Gone (#125) -- not because the claim stopped
+  // being true, but because one screenful said it twice: the quota card opened
+  // with the server's `note` from the same /v1/limits response, seventy lines
+  // down and still above the fold, on the same trigger (account=all). Two
+  // identical warnings in one viewport teach a reader to skip both, so the
+  // pair went together; quota.js is where the second one was.
   //
-  // Reaching here now means the hub really has more than one in scope --
-  // state.js's resolveSub selects the only one where there is only one (#92) --
-  // so the sentence is about arithmetic this screen is actually performing, and
-  // a reader who has taken it in may close it for good.
-  if (state.sub === 'all' && !isDismissed(ALL_SUBS_KEY)) {
-    banners.push(banner('warn', t('banner.allSubs.title'), t('banner.allSubs.body'), ALL_SUBS_KEY));
-  }
+  // The claim itself is not lost: the per-subscription gauges ARE the shape of
+  // "these do not add up", and /v1/limits still carries `note` for the API and
+  // MCP callers that have no gauges to look at.
 
   if (limitsR.status === 'fulfilled' && limitsBannerApplies(state)) {
     const limits = limitsR.value;

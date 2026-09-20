@@ -178,15 +178,10 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .banner .ico { font-size: 15px; line-height: 1.3; }
 .banner .msg { font-size: 13px; color: var(--ink-2); }
 .banner .msg b { color: var(--ink); font-weight: 600; }
-/* Only a banner stating a standing caveat carries one (now.js says why). Pushed
-   to the far edge by the margin, not by a spacer element, so the message keeps
-   the full width when there is no button. */
-.banner .dismiss {
-  margin-left: auto; align-self: flex-start; flex: none;
-  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
-  font-size: 13px; line-height: 1; padding: 2px 2px 4px 8px;
-}
-.banner .dismiss:hover { color: var(--ink); }
+/* A `.dismiss` close button lived here until #125. Exactly one banner ever had
+   one -- the all-subscriptions caveat, the only STANDING condition among them
+   -- and deleting that banner left no banner that should be closable: the rest
+   report a fault, and a fault is fixed, not dismissed. */
 
 /* ---- gauges ----
 

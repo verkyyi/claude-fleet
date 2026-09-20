@@ -295,12 +295,6 @@ export const en = {
   'banner.droppedPreAccount': '{n} turn(s) older than this subscription{range} — they cannot belong to it, so they are excluded',
   'banner.backTo': ' (back to {date})',
   'banner.droppedBeyondBackfill': '{n} turn(s) beyond the {window} backfill window',
-  'banner.allSubs.title': 'Showing all subscriptions.',
-  'banner.allSubs.body': "Tokens are summed across them, and so is each SOURCE's cost. Cost is never summed "
-    + 'across sources — a Claude figure is an API-equivalent estimate, a gateway figure is a '
-    + 'real per-call charge. Rate-limit utilization is not summed either: each subscription is '
-    + 'a separate quota pool and is shown separately.',
-  'banner.dismiss': 'Dismiss this notice',
   'banner.limitsUnavailable.title': 'Account-wide limits unavailable.',
   'banner.limitsUnavailable.body': '{reason} The usage totals below are still accurate; only the quota gauges are missing.',
   'banner.limitsStale.title': 'Limits reading is stale.',

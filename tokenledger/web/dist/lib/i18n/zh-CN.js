@@ -281,11 +281,6 @@ export const zhCN = {
   'banner.droppedPreAccount': '有 {n} 个轮次早于这个订阅{range} —— 它们不可能属于它，所以被排除',
   'banner.backTo': '（最早到 {date}）',
   'banner.droppedBeyondBackfill': '有 {n} 个轮次超出了 {window} 的回填窗口',
-  'banner.allSubs.title': '正在显示全部订阅。',
-  'banner.allSubs.body': 'token 会跨订阅相加，每个「来源」各自的费用也会相加。'
-    + '但费用永远不跨来源相加 —— Claude 的数字是按 API 价折算的估算值，网关的数字是真收的按次费用。'
-    + '限流利用率同样不相加：每个订阅是独立的额度池，分开显示。',
-  'banner.dismiss': '关掉这条提示',
   'banner.limitsUnavailable.title': '拿不到账号级额度。',
   'banner.limitsUnavailable.body': '{reason} 下面的用量总数依然准确，只是缺了额度仪表盘。',
   'banner.limitsStale.title': '额度读数已过期。',
