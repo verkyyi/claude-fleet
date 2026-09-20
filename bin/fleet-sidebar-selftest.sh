@@ -90,14 +90,25 @@ def call(verb='sync', *args):
 def view_on(window):
     return [p[0] for p in views() if p[1] == window]
 
-def click(pane, row=0, column=2, repeat=False):
+def click(pane, row=0, column=2, repeat=False, count=1):
     # Separate ordinary single clicks from tmux's delayed double-click zoom.
     # The repeat-click regression below deliberately stays inside that interval.
+    # count=2 is a deliberate double-click: both press/release pairs go out in
+    # ONE write, so a loaded box cannot stretch them past tmux's click timeout.
     if not repeat:
         time.sleep(.6)
     x = int(tm('display-message', '-p', '-t', pane, '#{pane_left}')) + column + 1
     y = int(tm('display-message', '-p', '-t', pane, '#{pane_top}')) + row + 1
-    os.write(terminal, ('\x1b[<0;%d;%dM\x1b[<0;%d;%dm' % (x, y, x, y)).encode())
+    os.write(terminal, ('\x1b[<0;%d;%dM\x1b[<0;%d;%dm' % (x, y, x, y)).encode() * count)
+
+def zoomed(window):
+    return tm('display-message', '-p', '-t', window, '#{window_zoomed_flag}')
+
+def copied():
+    try:
+        return tm('show-buffer')
+    except AssertionError:
+        return ''
 
 def navigation():
     return 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}')
@@ -300,6 +311,31 @@ try:
     wait_for(lambda: 'worker-input-check' in tm('capture-pane', '-p', '-t', p1),
              'typing after a worker click did not reach the worker')
 
+    # Double-click on the worker while its sidebar is on screen is the
+    # select-word gesture (issue #820), never zoom: the view stays, the window
+    # does not zoom, tmux's stock copy lands in a buffer, and copy mode ends.
+    for name in tm('list-buffers', '-F', '#{buffer_name}').splitlines():
+        tm('delete-buffer', '-b', name)
+    text_row = next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', p1).splitlines())
+                    if 'worker-input-check' in line)
+    click(p1, row=text_row, column=2, count=2)
+    wait_for(lambda: copied() and copied() in 'worker-input-check',
+             'double-click on the worker did not select-word: buffer=%r' % copied())
+    check(zoomed(w1) == '0', 'double-click zoomed the worker and hid its sidebar')
+    check(view_on(w1) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
+          'double-click on the worker lost the sidebar view')
+    wait_for(lambda: tm('display-message', '-p', '-t', p1, '#{pane_in_mode}') == '0',
+             'select-word left the worker in copy mode')
+    check(not navigation(), 'double-click on the worker entered sidebar navigation')
+    # Zoomed, the sidebar is off screen: the double-click stays the way back.
+    tm('resize-pane', '-Z', '-t', p1)
+    check(zoomed(w1) == '1', 'worker zoom broken with a sidebar present')
+    click(p1, row=text_row, column=2, count=2)
+    wait_for(lambda: zoomed(w1) == '0', 'double-click on a zoomed worker did not unzoom it')
+    wait_for(lambda: view_on(w1) == [side], 'unzoom by double-click lost the sidebar view')
+    check(tm('display-message', '-p', '-t', p1, '#{pane_in_mode}') == '0',
+          'double-click on a zoomed worker entered copy mode')
+
     # Blank space and rapid repeat clicks are focus targets too. The
     # release/double-click events must not silently reset the custom key table.
     click(side, row=8)
@@ -364,7 +400,11 @@ try:
     # Enabling while another pane is zoomed must wait, then appear on unzoom.
     call('hide')
     extra = tm('split-window', '-d', '-h', '-t', p2, '-P', '-F', '#{pane_id}', 'sleep 600')
-    tm('resize-pane', '-Z', '-t', p2)
+    # Without a sidebar the double-click still zooms (the hub and dash rely on it).
+    check(tm('show-options', '-wqv', '-t', w2, '@sidebar_worker') == '',
+          'hidden sidebar left its worker metadata on the window')
+    click(p2, row=3, count=2)
+    wait_for(lambda: zoomed(w2) == '1', 'double-click without a sidebar did not zoom the worker')
     call('toggle')
     check(not views(), 'enabling sidebar interrupted a zoomed worker')
     tm('resize-pane', '-Z', '-t', p2)

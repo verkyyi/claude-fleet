@@ -122,7 +122,8 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    (`DoubleClick1Pane` → `resize-pane -Z -t=`, `DoubleClick1Border` on the divider)
    toggles a pane's fullscreen as the mouse counterpart to `prefix+g`/`F9` — its
    trade-off is losing tmux's default double-click = select-word (copy), so call it
-   out. All are overridable from the user's own `~/.tmux.conf` after the `source-file`
+   out; a worker whose task sidebar is on screen is the exception and keeps
+   select-word (issue #820). All are overridable from the user's own `~/.tmux.conf` after the `source-file`
    line, or comment them out — the same framing as the rest of the baseline block.
 
 5. **Wire the Claude Code hooks.** Two ways, and **the plugin in step 8 does
