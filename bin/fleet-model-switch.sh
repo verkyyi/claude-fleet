@@ -470,7 +470,7 @@ main() {
       # target model is also capped and the window is handed to the subscription
       # path. Only on a confirmed-settled cap; a genuinely-live turn is untouched.
       if [ "$settled" = 1 ] && [ "${DRY:-0}" != 1 ]; then
-        TM set-window-option -t "$wid" @claude_state done 2>/dev/null
+        TM set-window-option -t "$wid" @claude_state "done" 2>/dev/null
         TM set-window-option -t "$wid" @claude_needs '' 2>/dev/null
         TM set-window-option -t "$wid" @claude_state_ts "$NOW_S" 2>/dev/null
       fi
