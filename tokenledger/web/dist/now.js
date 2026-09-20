@@ -1,4 +1,4 @@
-import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive, quotaAccounts } from './providers.js';
+import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive, liveUnknown, quotaAccounts } from './providers.js';
 // web/dist/now.js — the Now view: hero odometer, live strip, "am I about to
 // hit the wall" gauges, and the collapsible Fleet tables.
 //
@@ -19,7 +19,7 @@ import { quotaGauges, highestQuota, collectorsCard, accountUsageCard, selectLive
 //     is no per-card table toggle here) — Now has no time range of its own,
 //     it is *right now*.
 import { el, $, escapeHTML } from './lib/dom.js';
-import { fmtInt, fmtFull, shortProject, ago } from './lib/format.js';
+import { fmtInt, fmtFull, shortProject, ago, windowOf } from './lib/format.js';
 import { withChip } from './lib/state.js';
 import { ownerLine } from './lib/findings.js';
 import { createScopeControls } from './scope.js';
@@ -274,11 +274,21 @@ function liveRow(s, app) {
       el('i', { style: `width:${Math.min(100, ctx)}%` })));
 }
 
+// Blanks a tile back to its placeholder and forgets the value tween would
+// otherwise animate away from — without that, the first real reading would
+// count up from a number that was never on screen.
+function tileUnknown(node) {
+  if (!node) return;
+  delete node.dataset.v;
+  node.textContent = '—';
+}
+
 function renderLive(snap, app) {
   liveState.snap = snap;
   applyCounter(snap && snap.counter);
   if (snap) snap = selectLive(snap, app.state.chips || {}, app.state.sub);
-  const active = snap && snap.active_sessions > 0;
+  const unknown = liveUnknown(snap);
+  const active = !unknown && snap && snap.active_sessions > 0;
 
   if (!liveWrapEl.firstChild) {
     liveWrapEl.replaceChildren(el('div', { class: 'live' },
@@ -286,6 +296,11 @@ function renderLive(snap, app) {
         el('span', { class: 'pulse', id: 'live-pulse' }),
         el('h2', {}, t('live.title')),
         el('span', { class: 'note', id: 'live-note' }, '')),
+      // "Active" is a claim with a threshold inside it, and until now the page
+      // made the claim without ever stating the threshold. The number comes
+      // from the server on every snapshot rather than being restated here, so
+      // the sentence cannot drift from the rule that produced the count.
+      el('p', { class: 'hint', id: 'live-window' }, ''),
       el('div', { class: 'tiles' },
         // No "$ / hour": the live tiles describe subscription work, whose
         // per-hour dollar figure was an API-equivalent estimate of money nobody
@@ -299,14 +314,34 @@ function renderLive(snap, app) {
 
   const pulse = $('#live-pulse', liveWrapEl), note = $('#live-note', liveWrapEl);
   pulse.className = 'pulse' + (active ? '' : ' off');
-  note.textContent = active
-    ? t(snap.endpoints === 1 ? 'live.reporting.one' : 'live.reporting.other', { n: snap.endpoints })
-    : t('live.noActivity');
+  const upFor = unknown ? sinceStart(snap) : null;
+  note.textContent = unknown
+    ? (upFor == null ? t('live.coldNoTime') : t('live.cold', { ago: ago(upFor) }))
+    : active
+      ? t(snap.endpoints === 1 ? 'live.reporting.one' : 'live.reporting.other', { n: snap.endpoints })
+      : t('live.noActivity');
+
+  const windowEl = $('#live-window', liveWrapEl);
+  if (windowEl) {
+    windowEl.textContent = snap && snap.active_window_sec
+      ? t('live.window', { window: windowOf(snap.active_window_sec) })
+      : '';
+  }
 
   if (!snap) return;
-  C.tween($('#lv-sessions', liveWrapEl), snap.active_sessions, (v) => String(Math.round(v)));
-  C.tween($('#lv-tpm', liveWrapEl), snap.tokens_per_min, (v) => fmtInt(Math.round(v)));
-  C.tween($('#lv-stok', liveWrapEl), snap.session_tokens || 0, (v) => fmtInt(Math.round(v)));
+
+  const sessionsEl = $('#lv-sessions', liveWrapEl);
+  const tpmEl = $('#lv-tpm', liveWrapEl), stokEl = $('#lv-stok', liveWrapEl);
+  if (unknown) {
+    // All three tiles come from the same nothing, so all three say so. Leaving
+    // tokens/min at 0 beside an unknown session count would read as "nothing is
+    // burning", which is the same unmeasured claim one column over.
+    [sessionsEl, tpmEl, stokEl].forEach(tileUnknown);
+  } else {
+    C.tween(sessionsEl, snap.active_sessions, (v) => String(Math.round(v)));
+    C.tween(tpmEl, snap.tokens_per_min, (v) => fmtInt(Math.round(v)));
+    C.tween(stokEl, snap.session_tokens || 0, (v) => fmtInt(Math.round(v)));
+  }
 
   const chips = app.state.chips || {};
   const all = snap.sessions || [];
@@ -314,10 +349,20 @@ function renderLive(snap, app) {
   const rowsEl = $('#live-rows', liveWrapEl);
   if (!rows.length) {
     rowsEl.replaceChildren(el('div', { class: 'empty' },
-      all.length ? t('live.noMatch') : t('live.noSessions')));
+      unknown ? t('live.coldRows') : all.length ? t('live.noMatch') : t('live.noSessions')));
     return;
   }
   rowsEl.replaceChildren(...rows.map((s) => liveRow(s, app)));
+}
+
+/** sinceStart is how long this hub's live store has been up, in seconds — the
+ *  age of its ignorance while `ever_reported` is false. Null-safe because a
+ *  hub predating the field sends no `started_at`, and "for a while" is a better
+ *  answer there than "NaN seconds ago". */
+function sinceStart(snap) {
+  const t0 = snap && snap.started_at ? new Date(snap.started_at).getTime() : NaN;
+  if (!isFinite(t0)) return null;
+  return Math.max(0, (Date.now() - t0) / 1000);
 }
 
 /** connectLive subscribes to the hub's event stream, falling back to polling
@@ -502,10 +547,25 @@ function alertsCard(result) {
 
 /* ------------------------------------------------------------------ fleet */
 
+// STALE_ENDPOINT_SEC is the one definition of "this machine has gone quiet".
+//
+// It mirrors internal/findings/findings.go's StaleAfter, which is what raises
+// the stale_agent alert. This table used to dim a row after 600s while that
+// alert waited an hour, so the same endpoint could be greyed out here and
+// unremarkable in the Alerts card directly above it — two thresholds for one
+// word, on one page. web/dist has no build step and cannot import the Go
+// constant, so web/embed_test.go asserts this literal still matches it.
+//
+// Not the live card's window: that one is about a SESSION's heartbeat, it is
+// minutes rather than an hour, and the card states it (see renderLive). Nor the
+// limits banner's 600s, which ages a rate-limit reading, not an endpoint.
+const STALE_ENDPOINT_SEC = 3600;
+
 function endpointRosterCard(endpoints, app) {
   const card = el('div', { class: 'card' },
     el('h2', {}, t('endpoints.title')),
-    el('p', { class: 'hint' }, t('endpoints.hint')));
+    el('p', { class: 'hint' }, t('endpoints.hint')),
+    el('p', { class: 'hint' }, t('endpoints.staleHint', { window: windowOf(STALE_ENDPOINT_SEC) })));
 
   if (!endpoints.length) {
     card.appendChild(el('div', { class: 'empty' }, t('endpoints.empty')));
@@ -518,7 +578,7 @@ function endpointRosterCard(endpoints, app) {
       el('th', {}, t('endpoints.col.lastSeen')), el('th', {}, t('endpoints.col.excluded')))),
     el('tbody', {}, endpoints.map((e) => {
       const secs = e.last_seen ? (Date.now() - new Date(e.last_seen)) / 1000 : null;
-      const stale = secs == null || secs > 600;
+      const stale = secs == null || secs > STALE_ENDPOINT_SEC;
       const dropped = (e.dropped_pre_account || 0) + (e.dropped_beyond_backfill || 0);
       return el('tr', {},
         el('td', { title: e.hostname || '' }, e.label || e.endpoint_id),

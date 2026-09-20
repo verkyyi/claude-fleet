@@ -204,9 +204,22 @@ const (
 	maxFindings       = 8
 	windowWarnPct     = 75.0
 	windowCriticalPct = 90.0
-	staleAfter        = time.Hour
 	liveRunawayTokens = 200_000_000
 )
+
+// StaleAfter is how long an endpoint may go without reporting before it counts
+// as stale — the one definition of the word for endpoints, exported because it
+// is not only this package's business.
+//
+// The dashboard's endpoint roster used to dim a row after ten minutes while
+// this alert waited an hour, so the same machine was "stale" in one place and
+// fine in another, on one page. The roster now reads this number (web/dist has
+// no build step and cannot import Go, so it carries the literal and
+// web/embed_test.go fails the build if the two ever drift).
+//
+// Not to be confused with the limits banner's ten-minute threshold, which is
+// about the age of a rate-limit READING, not about an endpoint being quiet.
+const StaleAfter = time.Hour
 
 var rank = map[string]int{"critical": 0, "warning": 1, "info": 2}
 
@@ -557,7 +570,7 @@ func Now(in NowInputs) []Finding {
 			Link: "#wall", weight: w.FiveHourPct})
 	}
 	for _, e := range in.Endpoints {
-		if e.LastSeen != nil && in.Now.Sub(*e.LastSeen) <= staleAfter {
+		if e.LastSeen != nil && in.Now.Sub(*e.LastSeen) <= StaleAfter {
 			continue
 		}
 		title := fmt.Sprintf("%s has never reported", e.Label)

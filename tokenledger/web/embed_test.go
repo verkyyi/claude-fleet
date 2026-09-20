@@ -1,10 +1,13 @@
 package web
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/verkyyi/ccquota/internal/findings"
 	"github.com/verkyyi/ccquota/internal/model"
 )
 
@@ -363,5 +366,72 @@ func TestDashboard_NestedCardHeadingsAreStyled(t *testing.T) {
 	if !strings.Contains(string(b), ".card * h2") {
 		t.Error("styles.css has no rule for headings nested inside a card; " +
 			"they will fall back to the browser default and outrank the card's own title")
+	}
+}
+
+// The dashboard and the alert rules must mean the same thing by "stale
+// endpoint".
+//
+// They did not: now.js dimmed a roster row after 600s while findings.StaleAfter
+// waited an hour, so one machine could be greyed out in the Fleet table and
+// entirely unremarkable in the Alerts card a few hundred pixels above it. #59
+// aligned them on the Go constant. web/dist has no build step — it is
+// hand-written ES modules embedded as they are — so the page cannot import the
+// constant and carries the literal instead. This is the thing that keeps the
+// literal honest: change StaleAfter and this test names the line to change.
+func TestDashboard_StaleEndpointThresholdMatchesFindings(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "now.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("const STALE_ENDPOINT_SEC = %d;", int(findings.StaleAfter/time.Second))
+	if !strings.Contains(string(b), want) {
+		t.Errorf("now.js does not declare %q -- the roster's idea of a stale endpoint has drifted "+
+			"from findings.StaleAfter (%s), which is what raises the stale_agent alert on the same page",
+			want, findings.StaleAfter)
+	}
+	// The old threshold, by value, in the roster's own comparison. Left as a
+	// separate check so a re-introduced 600 is reported as the specific
+	// regression it is rather than as a missing constant.
+	if strings.Contains(string(b), "secs > 600") {
+		t.Error("now.js compares an endpoint's last-seen against a bare 600 again -- " +
+			"that is the second definition of 'stale' #59 removed")
+	}
+}
+
+// The live card has to state the window behind the word "active".
+//
+// The count comes from the server with the threshold that produced it
+// (Snapshot.ActiveWindowSec), and the card renders that number rather than a
+// copy of it. A card that asserts "3 active sessions" over an unstated rule is
+// asking to be believed without saying what was measured; #59's whole point is
+// that the page says which three minutes it means.
+func TestDashboard_LiveCardStatesItsWindow(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "now.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"active_window_sec", "live.window", "ever_reported"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("now.js no longer reads %q -- the live card is back to asserting "+
+				"'active' without stating the window, or a cold hub without saying so", want)
+		}
+	}
+}
+
+// The live strip's window sentence needs a style rule of its own.
+//
+// `.live` is not a `.card`, so neither `.card > .hint` nor the nested
+// `.card * .hint` rule from issue #51 reaches a `.hint` inside it: the sentence
+// would render at body size with a default paragraph margin, larger than the
+// 13px card title above it. Same inversion #51 fixed one container over.
+func TestDashboard_LiveStripHintIsStyled(t *testing.T) {
+	b, err := fs.ReadFile(Assets(), "styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), ".live > .hint") {
+		t.Error("styles.css has no rule for a .hint inside the live strip; the sentence " +
+			"stating the active window will outrank the card's own title")
 	}
 }

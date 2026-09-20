@@ -68,6 +68,11 @@ type LiveSession struct {
 // Claude Code redraws the statusLine every turn, so a session that is actually
 // working reports far more often than this. A longer window would leave
 // finished sessions on screen pretending to be alive.
+//
+// The number is shipped to the page on every snapshot (Snapshot.ActiveWindowSec)
+// rather than restated in the dashboard's own source: "active" is a claim with a
+// threshold in it, and a reader who cannot see the threshold cannot check the
+// claim. Serving it from here also means the two can never drift.
 const activeWindow = 3 * time.Minute
 
 // Live holds the current state of every reporting session, in memory only.
@@ -80,6 +85,19 @@ type Live struct {
 	mu       sync.RWMutex
 	sessions map[string]*LiveSession
 	subs     map[chan []byte]struct{}
+
+	// startedAt and reported separate "no sessions are running" from "no agent
+	// has said anything yet". Both render as an empty map, and the second one
+	// is the normal state of a hub for the first seconds after a restart —
+	// exactly when someone is most likely to be looking at it. Reporting that
+	// as a confident zero would be the page inventing a measurement it never
+	// took, which is the one thing this codebase refuses to do anywhere else.
+	//
+	// `reported` latches on the first report of the process and never clears:
+	// once an agent has spoken to this hub, a later empty snapshot is a real
+	// zero, not ignorance.
+	startedAt time.Time
+	reported  bool
 
 	// enrich attaches data Live cannot reach on its own — the durable token
 	// total behind the hero counter, which lives in the store. Snapshots go out
@@ -99,7 +117,11 @@ func (l *Live) Enrich(fn func(*Snapshot)) {
 
 // NewLive returns an empty live store.
 func NewLive() *Live {
-	return &Live{sessions: map[string]*LiveSession{}, subs: map[chan []byte]struct{}{}}
+	return &Live{
+		sessions:  map[string]*LiveSession{},
+		subs:      map[chan []byte]struct{}{},
+		startedAt: time.Now().UTC(),
+	}
 }
 
 // Report merges an endpoint's snapshot of its running sessions.
@@ -115,6 +137,10 @@ func (l *Live) report(endpointID, endpointLabel string, in []LiveSession, comple
 	now := time.Now().UTC()
 
 	l.mu.Lock()
+	// The heartbeat itself is the news, not what survived the filters below: an
+	// endpoint that reports "nothing is running here" has told us something, and
+	// from then on an empty picture is a measured zero.
+	l.reported = true
 	present := map[string]bool{}
 	for i := range in {
 		s := in[i]
@@ -182,6 +208,20 @@ type Snapshot struct {
 	Endpoints      int     `json:"endpoints"`
 	TokensPerMin   float64 `json:"tokens_per_min"`
 
+	// ActiveWindowSec is the threshold behind ActiveSessions: a session counts
+	// as active for this many seconds after its last report. Sent on every
+	// snapshot so the card can state the rule it is applying instead of
+	// asserting "active" and leaving the reader to guess what that means.
+	ActiveWindowSec int `json:"active_window_sec"`
+
+	// StartedAt and EverReported are how a viewer tells a measured zero from a
+	// hub that has not been told anything yet. Live keeps nothing on disk, so
+	// the seconds after a restart look exactly like an idle fleet; these two
+	// say which it is. EverReported false means ActiveSessions is unknown, not
+	// zero, and the page renders it as unknown.
+	StartedAt    time.Time `json:"started_at"`
+	EverReported bool      `json:"ever_reported"`
+
 	// USDPerHour is the notional burn rate; USDPerHourBilled is the metered
 	// one. See SessionCost below for why they are two fields.
 	USDPerHour       float64 `json:"usd_per_hour"`
@@ -245,7 +285,14 @@ func (l *Live) Snapshot() Snapshot {
 
 	l.mu.Lock()
 	l.pruneLocked(now)
-	out := Snapshot{At: now, Note: liveNote, Sessions: make([]LiveSession, 0, len(l.sessions))}
+	out := Snapshot{
+		At:              now,
+		Note:            liveNote,
+		Sessions:        make([]LiveSession, 0, len(l.sessions)),
+		ActiveWindowSec: int(activeWindow / time.Second),
+		StartedAt:       l.startedAt,
+		EverReported:    l.reported,
+	}
 	eps := map[string]struct{}{}
 	for _, s := range l.sessions {
 		out.Sessions = append(out.Sessions, *s)

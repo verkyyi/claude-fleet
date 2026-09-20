@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -171,5 +172,98 @@ func TestLive_OSUserEnrichedFromEndpointRecord(t *testing.T) {
 	}
 	if got := byID["s-ghost"].OSUser; got != "" {
 		t.Errorf("a session on an unknown endpoint invented os_user %q, want none", got)
+	}
+}
+
+// "Nobody has told us anything" and "nothing is running" are the same empty
+// map, and the page renders them very differently. Live is in-memory by
+// design, so the first state is the normal one for the seconds after a hub
+// restart — which is exactly when someone is watching.
+func TestLive_ColdHubIsUnknownNotZero(t *testing.T) {
+	l := NewLive()
+
+	snap := l.Snapshot()
+	if snap.EverReported {
+		t.Error("a hub that has never been reported to says ever_reported=true; " +
+			"the page would render an unmeasured 0 as a measured one")
+	}
+	if snap.ActiveSessions != 0 {
+		t.Errorf("active_sessions = %d on a fresh store, want 0", snap.ActiveSessions)
+	}
+	if snap.StartedAt.IsZero() {
+		t.Error("started_at is zero, so the page cannot say how long it has been ignorant")
+	}
+
+	// An endpoint reporting "nothing is running here" is still news: from here
+	// on, an empty picture is a measured zero.
+	l.Report("ep1", "web-01", nil)
+	if snap = l.Snapshot(); !snap.EverReported {
+		t.Error("an empty report did not flip ever_reported; an endpoint saying " +
+			"'nothing running' has told us as much as one listing a session")
+	}
+	if snap.ActiveSessions != 0 {
+		t.Errorf("active_sessions = %d after an empty report, want 0", snap.ActiveSessions)
+	}
+
+	// And it never goes back: a hub that has heard from an agent does not
+	// become ignorant again when that agent's sessions age out.
+	l.Report("ep1", "web-01", []LiveSession{{SessionID: "s1", InputTokens: 10}})
+	l.mu.Lock()
+	for _, s := range l.sessions {
+		s.SeenAt = time.Now().UTC().Add(-time.Hour)
+	}
+	l.mu.Unlock()
+	if snap = l.Snapshot(); !snap.EverReported || snap.ActiveSessions != 0 {
+		t.Errorf("after everything expired: ever_reported=%v active=%d, want true/0",
+			snap.EverReported, snap.ActiveSessions)
+	}
+}
+
+// The card cannot state the rule behind "active" unless the snapshot carries
+// it, and a number copied into the dashboard's own source is a number that can
+// drift from the one the count was actually computed with.
+func TestLive_SnapshotDeclaresItsActiveWindow(t *testing.T) {
+	snap := NewLive().Snapshot()
+	if want := int(activeWindow / time.Second); snap.ActiveWindowSec != want {
+		t.Errorf("active_window_sec = %d, want %d -- the page states this number verbatim",
+			snap.ActiveWindowSec, want)
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"active_window_sec"`, `"started_at"`, `"ever_reported"`} {
+		if !bytes.Contains(b, []byte(key)) {
+			t.Errorf("%s missing from the serialised snapshot: %s", key, b)
+		}
+	}
+}
+
+// FilterLive rebuilds the snapshot from scratch, which is how a scoped viewer
+// once lost fields that describe the hub rather than the selection. A chip
+// narrows which sessions count; it cannot change how long the hub has been up
+// or whether anyone has reported to it.
+func TestFilterLive_KeepsHubFactsAcrossScoping(t *testing.T) {
+	l := NewLive()
+	l.Report("ep1", "web-01", []LiveSession{
+		{SessionID: "s1", Account: "acct-a", Source: "claude", InputTokens: 10},
+		{SessionID: "s2", Account: "acct-b", Source: "claude", InputTokens: 20},
+	})
+	s := &Server{}
+	full := l.Snapshot()
+
+	out := s.FilterLive(full, "acct-a", "")
+	if out.ActiveSessions != 1 {
+		t.Fatalf("scoped active_sessions = %d, want 1", out.ActiveSessions)
+	}
+	if !out.EverReported {
+		t.Error("ever_reported dropped by scoping -- every chipped viewer would be " +
+			"told this hub had just restarted")
+	}
+	if out.ActiveWindowSec != full.ActiveWindowSec {
+		t.Errorf("active_window_sec = %d after scoping, want %d", out.ActiveWindowSec, full.ActiveWindowSec)
+	}
+	if !out.StartedAt.Equal(full.StartedAt) {
+		t.Errorf("started_at = %v after scoping, want %v", out.StartedAt, full.StartedAt)
 	}
 }

@@ -303,6 +303,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .live-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .live-head h2 { font-size: 13px; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-2); }
 .live-head .note { color: var(--ink-3); font-size: 11.5px; }
+/* The live strip is NOT a `.card`, so neither `.card > .hint` nor the nested
+   `.card * .hint` rule reaches it. Without this, the sentence stating the
+   active window renders at body size with a browser default paragraph margin —
+   bigger than the 13px title directly above it, which is the same heading
+   inversion issue #51 fixed inside cards. */
+.live > .hint { color: var(--ink-3); font-size: 11.5px; margin: -6px 0 13px; }
 .pulse {
   width: 8px; height: 8px; border-radius: 50%; background: var(--good);
   box-shadow: 0 0 0 0 var(--good); animation: pulse 2s infinite;

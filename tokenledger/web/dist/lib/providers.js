@@ -1,5 +1,23 @@
 import { t } from './i18n.js';
 
+/** liveUnknown says the hub has not heard from any agent yet, so its session
+ *  count is unknown rather than zero.
+ *
+ *  Live state is in-memory by design — nothing is persisted — so this is the
+ *  normal condition for the first seconds after a hub restart, which is exactly
+ *  when someone is most likely to be watching. Rendering that as "0 active
+ *  sessions" is the page asserting a count it never took.
+ *
+ *  Strictly `=== false`, never falsy: a snapshot from a hub predating the field
+ *  carries no `ever_reported` at all, and guessing "unknown" there would put
+ *  every old deployment permanently into the restart state. Absent means "this
+ *  hub cannot tell us", and the honest fallback is the old behaviour.
+ *
+ *  Scope-independent, because it describes the hub and not the selection: a
+ *  chip that narrows to one subscription cannot make an unheard-from hub
+ *  informative. */
+export const liveUnknown = (snap) => !!snap && snap.ever_reported === false;
+
 export function selectLive(snap, chips = {}, account = 'all') {
   const sessions = (snap.sessions || []).filter(s =>
     (!account || account === 'all' || s.account === account) &&

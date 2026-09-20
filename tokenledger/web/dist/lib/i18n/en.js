@@ -111,6 +111,14 @@ export const en = {
   'ago.seconds': '{n}s ago',
   'ago.minutes': '{n}m ago',
   'ago.hours': '{n}h ago',
+  // How long a window IS, not how long ago something was. See windowOf in
+  // lib/format.js for why a threshold cannot borrow the `ago.*` phrasing.
+  'dur.seconds.one': '{n} second',
+  'dur.seconds.other': '{n} seconds',
+  'dur.minutes.one': '{n} minute',
+  'dur.minutes.other': '{n} minutes',
+  'dur.hours.one': '{n} hour',
+  'dur.hours.other': '{n} hours',
   'reset.unknown': 'reset time unknown',
   'reset.now': 'resetting now',
   'reset.minutes': 'resets in {m}m',
@@ -180,6 +188,10 @@ export const en = {
   'live.reporting.one': '{n} endpoint reporting · updates as sessions work',
   'live.reporting.other': '{n} endpoints reporting · updates as sessions work',
   'live.noActivity': 'No recent activity. Codex uses log observations; Claude uses statusLine heartbeats.',
+  'live.window': 'Active means a heartbeat within the last {window}. Nothing here is stored — the hub knows only what the agents have just said.',
+  'live.cold': 'Hub restarted {ago}; no agent has reported yet. This is not zero, it is not yet known.',
+  'live.coldNoTime': 'No agent has reported to this hub yet. This is not zero, it is not yet known.',
+  'live.coldRows': 'Nothing to show until the first agent reports in.',
   'live.noMatch': 'No live sessions match the current chips.',
   'live.noSessions': 'no sessions reporting',
   'live.row.filterTip': 'click to filter by this session',
@@ -229,6 +241,9 @@ export const en = {
   'endpoints.title': 'Endpoints',
   'endpoints.hint': 'Every machine reporting in, which subscription it is on, and what it could not '
     + 'attribute. An agent that stops reporting is the usual reason a total looks too low.',
+  'endpoints.staleHint': 'A "last seen" older than {window} is greyed out, and is the same threshold '
+    + 'that raises the stale-agent alert above. It is a different question from the live card\'s: '
+    + 'that one asks whether a SESSION is running right now.',
   'endpoints.empty': 'No endpoints enrolled yet.',
   'endpoints.col.name': 'Name',
   'endpoints.col.subscription': 'Subscription',

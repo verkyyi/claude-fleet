@@ -207,7 +207,7 @@ func TestFindingsNow_OwnerOnTheWire(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Both past staleAfter, so both rules fire and the two shapes appear in one
+	// Both past findings.StaleAfter, so both rules fire and the two shapes appear in one
 	// response rather than two runs that could diverge.
 	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := h.srv.Store.DB().Exec(`UPDATE endpoints SET last_seen = ?`, old); err != nil {

@@ -41,7 +41,18 @@ func (s *Server) FilterLive(in Snapshot, account, source string) Snapshot {
 	if (account == "" || account == store.AllAccounts) && source == "" {
 		return in
 	}
-	out := Snapshot{At: in.At, Note: in.Note, Sessions: []LiveSession{}}
+	// The three carried fields describe the HUB, not the selection: the active
+	// window is the same rule whichever chip is on, and "have we heard from
+	// anyone yet" cannot become true or false by narrowing to one subscription.
+	// Rebuilding the snapshot from scratch below is what would otherwise drop
+	// them, and a zeroed ever_reported would tell every scoped viewer the hub
+	// had just restarted.
+	out := Snapshot{
+		At: in.At, Note: in.Note, Sessions: []LiveSession{},
+		ActiveWindowSec: in.ActiveWindowSec,
+		StartedAt:       in.StartedAt,
+		EverReported:    in.EverReported,
+	}
 	eps := map[string]bool{}
 	for _, l := range in.Sessions {
 		if source != "" && model.UsageSource(l.Source) != source {

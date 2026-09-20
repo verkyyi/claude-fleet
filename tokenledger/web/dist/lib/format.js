@@ -182,6 +182,24 @@ export const ago = (secs) => {
   return t('ago.hours', { n: Math.round(secs / 3600) });
 };
 
+// `ago` says how long ago something happened; `windowOf` says how LONG a window
+// is. English nearly gets away with one phrasing for both, Chinese does not
+// ("3 分钟前" is not "3 分钟"), and a threshold rendered as "3m ago" reads as a
+// timestamp rather than as the rule it states.
+//
+// Whole units only, largest that divides exactly: these are thresholds someone
+// chose (three minutes, one hour), not measurements, so "3 minutes" is the
+// honest rendering and "0h 3m" is not. A value that divides into neither hours
+// nor minutes falls back to seconds rather than being rounded into a number the
+// code is not actually using.
+export const windowOf = (secs) => {
+  if (secs == null) return "";
+  const unit = (n, key) => t(`dur.${key}.${n === 1 ? 'one' : 'other'}`, { n });
+  if (secs >= 3600 && secs % 3600 === 0) return unit(secs / 3600, 'hours');
+  if (secs >= 60 && secs % 60 === 0) return unit(secs / 60, 'minutes');
+  return unit(Math.round(secs), 'seconds');
+};
+
 export const fmtPct = (x, digits = 1) => (Number(x) * 100).toFixed(digits) + '%';
 export function fmtDur(ms) {
   const m = Math.round(ms / 60000);

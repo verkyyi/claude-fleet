@@ -112,6 +112,13 @@ export const zhCN = {
   'ago.seconds': '{n} 秒前',
   'ago.minutes': '{n} 分钟前',
   'ago.hours': '{n} 小时前',
+  // 窗口有多长，不是多久以前。中文尤其不能复用 `ago.*`：「3 分钟前」不是「3 分钟」。
+  'dur.seconds.one': '{n} 秒',
+  'dur.seconds.other': '{n} 秒',
+  'dur.minutes.one': '{n} 分钟',
+  'dur.minutes.other': '{n} 分钟',
+  'dur.hours.one': '{n} 小时',
+  'dur.hours.other': '{n} 小时',
   'reset.unknown': '重置时间未知',
   'reset.now': '正在重置',
   'reset.minutes': '{m} 分钟后重置',
@@ -178,6 +185,10 @@ export const zhCN = {
   'live.reporting.one': '{n} 个端点在上报 · 随会话推进实时更新',
   'live.reporting.other': '{n} 个端点在上报 · 随会话推进实时更新',
   'live.noActivity': '近期没有活动。Codex 靠日志观测，Claude 靠 statusLine 心跳。',
+  'live.window': '「活跃」= 最近 {window} 内有心跳。这里的东西一概不落库 —— hub 只知道 agent 刚刚说过的话。',
+  'live.cold': 'hub 在 {ago} 重启，还没有 agent 上报过。这不是 0，是还不知道。',
+  'live.coldNoTime': '还没有 agent 向这个 hub 上报过。这不是 0，是还不知道。',
+  'live.coldRows': '第一个 agent 上报之前，这里没有东西可显示。',
   'live.noMatch': '没有符合当前筛选条件的实时会话。',
   'live.noSessions': '没有端点在上报会话',
   'live.row.filterTip': '点击以按此会话筛选',
@@ -227,6 +238,8 @@ export const zhCN = {
   'endpoints.title': '端点',
   'endpoints.hint': '每一台在上报的机器：它挂在哪个订阅下，以及它有哪些数据归不了档。'
     + '某个 agent 停止上报，通常就是总数看起来偏低的原因。',
+  'endpoints.staleHint': '「最后一次上报」超过 {window} 的会变灰，用的就是上面 stale-agent 告警的同一条线。'
+    + '这和「此刻」卡片问的不是一回事：那张卡问的是某个会话此刻是否在跑。',
   'endpoints.empty': '还没有端点接入。',
   'endpoints.col.name': '名称',
   'endpoints.col.subscription': '订阅',
