@@ -1,5 +1,6 @@
-// web/dist/app.js — boot, router, loader wiring.
+// web/dist/app.js — boot, router, band mounting, loader wiring.
 import { parse, format, dataKey, resolveSub } from './lib/state.js';
+import { bandsFor } from './lib/nav.js';
 import { createLoader } from './lib/seq.js';
 import { renderNav, renderScopeControls, setBusy, syncNav } from './scope.js';
 import { renderNow, startLive } from './now.js';
@@ -109,6 +110,11 @@ function route() {
   // subscription, span, chips and repo filter across the switch, and `view`
   // being a presentation key (state.js) is what keeps the switch free.
   const onView = (view) => app.setState({ ...s, view });
+  // Mount BEFORE anything below reads the page. renderScopeControls, the
+  // session overlay and load() all ask the DOM what exists -- `$('#consumption')`
+  // is how the consumption tier knows whether it is on this view at all -- so
+  // the mounting has to have happened by the time they look.
+  mountView(s.view);
   // These five belong to the scope-controls widgets.
   const cb = {
     onSub: (sub) => app.setState({ ...s, sub }),
@@ -117,7 +123,7 @@ function route() {
     onChipRemove: (dim) => { const chips = { ...s.chips }; delete chips[dim]; app.setState({ ...s, chips }); },
     onClear: () => app.setState({ ...s, chips: {} }),
   };
-  renderNav($('#scope'), { onView });
+  renderNav($('#scope'), { onView, view: s.view });
   // Updates EVERY section's scope-controls widget synchronously — see
   // scope.js's renderScopeControls doc comment.
   renderScopeControls(s, app.accounts, cb);
@@ -139,47 +145,165 @@ function route() {
   }
 }
 
+/* --------------------------------------------------------- mounting bands */
+
+/** #page's children exactly as the shell wrote them, with the band each one
+ *  belongs to, captured ONCE on the first mount.
+ *
+ *  Captured rather than re-queried because mounting is destructive to the
+ *  question: after the first `view=ledger`, #page no longer contains the usage
+ *  band, so asking the document what bands exist would answer "the one you are
+ *  already showing" and the reader could never get back. This list is the
+ *  shell, and it outlives every view.
+ *
+ *  A null band means "belongs to no band", which is what puts #pulse and
+ *  #alerts on every view -- see index.html, where that is a deliberate property
+ *  of those two and not an oversight. */
+let pageNodes = null;
+
+/** mountView makes #page hold exactly the bands `view` asks for.
+ *
+ *  It MOVES the shell's own nodes rather than building new ones, and that is
+ *  the load-bearing detail. Every one of them carries state a rebuild would
+ *  throw away: #ops has two listeners bound at boot (the fold's persistence and
+ *  its fetch trigger), and every band holds the cards its loader last drew. So
+ *  coming back to a band shows the rows that were there, immediately, and
+ *  seq.js's replay() then redraws them from the kept results without a request
+ *  -- which is the whole reason `view` is a presentation key. replaceChildren
+ *  re-lists the survivors in shell order, so it also cannot scramble the page:
+ *  the order below is index.html's order, always.
+ *
+ *  Nodes left out are detached, not destroyed. `pageNodes` is what keeps them
+ *  reachable, and being out of the document is what makes `$('#analysis')`
+ *  answer null -- which is exactly how every renderer downstream learns that
+ *  its band is not on this view. There is one copy of that fact and it is the
+ *  DOM. */
+/** What mountView last mounted, so it can do nothing when nothing changed.
+ *
+ *  Not an optimisation. route() runs on EVERY hash change -- a chip removed, a
+ *  subscription picked, a column re-sorted -- and replaceChildren is specified
+ *  as "remove every child, then insert these", so re-listing an unchanged set
+ *  still detaches and re-attaches every band. Anything the reader was touching
+ *  goes with it: focus inside a removed node is dropped, which means picking a
+ *  subscription from the <select> would blur the <select> it was picked from,
+ *  and a keyboard reader would be returned to the top of the document. */
+let mountedView = null;
+
+function mountView(view) {
+  const page = $('#page');
+  if (!page) return;
+  if (!pageNodes) {
+    pageNodes = [...page.children].map((node) => ({ node, band: node.dataset.band || null }));
+  }
+  if (view === mountedView) return;
+  mountedView = view;
+  const on = new Set(bandsFor(view));
+  page.replaceChildren(...pageNodes.filter((n) => !n.band || on.has(n.band)).map((n) => n.node));
+  syncOpsFold(view);
+}
+
+/** Whether the operations band is currently the WHOLE page (`view=ops`). */
+let opsSolo = false;
+
+/** How many `toggle` events on #ops the page caused and the reader did not.
+ *
+ *  A counter and not a flag, because <details> fires `toggle` ASYNCHRONOUSLY:
+ *  by the time the handler runs, the code that set `open` has long since
+ *  returned, so a flag it flipped back would already be wrong. The handler
+ *  decrements instead, which is correct however many transitions are in the
+ *  air. */
+let opsSynthetic = 0;
+
+function setOpsOpen(open) {
+  const ops = $('#ops');
+  if (!ops || ops.open === open) return;
+  opsSynthetic++;
+  ops.open = open;
+}
+
+/** syncOpsFold reconciles the operations <details> with the view.
+ *
+ *  On `view=ops` the fold is the entire page, so a shut one is a page that is a
+ *  single <summary> line -- which is what a shared `#/?view=ops` link would
+ *  otherwise open as for any reader whose stored preference is "closed". So it
+ *  is forced open while it is solo, and put back to the stored preference on
+ *  the way out; without that second half, visiting the operations view once
+ *  would silently unfold the tier on every later `view=all` too.
+ *
+ *  Forcing it does NOT write the preference, which is the difference between
+ *  this and what the old nav's Operations entry did (it opened the fold and let
+ *  the toggle handler persist it, on the grounds that the viewer had asked).
+ *  Asking for a view is not the same as asking for a fold: the fold's job is to
+ *  keep `view=all` opening as a ledger, and a reader who looked at operations
+ *  once has said nothing about that. */
+function syncOpsFold(view) {
+  const solo = view === 'ops';
+  if (solo === opsSolo) return;
+  opsSolo = solo;
+  setOpsOpen(solo ? true : storedOpsOpen());
+}
+
 async function load(reuse = false) {
   const s = app.state;
   const root = $('#page');
-  // Both sections render on every route. Two loaders, not one, because the
-  // rhythms genuinely differ -- status refreshes on the event stream and a
-  // 60s timer, analysis only when the brush touches the right edge -- and
-  // seq.js's per-loader sequencing is what stops a slow response from
-  // overwriting a newer scope.
+  // WHICH BANDS ARE LIVE (liveBands, below runOrReplay) is the one question
+  // every loader below is gated on, and it is asked once, here.
   //
-  // Both are also told whether the operations tier is OPEN, and they answer by
-  // leaving the requests that only fill it unsent -- eight of this page's
-  // requests exist to fill a box that is closed by default. Read live rather
-  // than captured once: the fold's own toggle handler calls load() again, so
-  // opening it is what sends them, and every refresh after that keeps them
-  // coming because the fold is still open.
-  const ops = opsOpen();
-  lastLoadOps = ops;
-  const nowR = renderNow($('#status'), s, app, ops);
-  const reviewR = renderReview($('#analysis'), s, app, ops);
+  // Folding out the requests of a box nobody opened is where this gating
+  // started -- it was the operations fold and nothing else, eight requests to
+  // fill a <details> that is shut by default. #98 is the generalisation of it
+  // to every band, and that is the bigger half of the saving: on `view=usage`
+  // the ledger's /v1/usage?by=provider is as pointless as the fleet roster is
+  // on a closed fold, and until now it went out on every route regardless.
+  const shown = liveBands(s.view);
+  lastLoadOps = shown.has('ops');
+  // Two loaders for these, not one, because the rhythms genuinely differ --
+  // status refreshes on the event stream and a 60s timer, analysis only when
+  // the brush touches the right edge -- and seq.js's per-loader sequencing is
+  // what stops a slow response from overwriting a newer scope.
+  //
+  // now.js still takes the operations boolean rather than the whole set, and
+  // that is not an oversight: three of its seven requests feed #alerts, #pulse
+  // and #banners, which belong to no band and are therefore on every view (see
+  // index.html). Its other four are the fleet tables inside the fold. So "is
+  // operations live" remains the entire question that file has to answer.
+  // review.js is the one that needs the set, because its eight requests are
+  // read by three DIFFERENT bands.
+  const nowR = renderNow($('#status'), s, app, shown.has('ops'));
+  const reviewR = renderReview($('#analysis'), s, app, shown);
   // Same range the analysis section resolves, so the consumption table and the
   // charts below it are answering about one period. Duplicating the arithmetic
   // here would let the two drift apart the first time the brush logic changes.
   const range = resolve({ from: s.from, to: s.to }, s.span, app.now());
   const consumptionR = {
-    fetchers: [(signal) => app.api('/v1/usage?' + apiQuery(s, {
+    fetchers: [shown.has('ledger') ? (signal) => app.api('/v1/usage?' + apiQuery(s, {
       from: range.from, to: range.to, omitDim: 'provider',
       extra: { by: 'provider', limit: 50 },
-    }), signal)],
-    apply: ([r]) => renderConsumption($('#consumption'), r, s, app, range),
+    }), signal) : null],
+    // Guarded on the MOUNT POINT, not on `shown`, and every apply below does
+    // the same. The two agree on the way in -- an unmounted band's fetcher is
+    // null, so the result is a SKIPPED hole nothing should draw from -- but
+    // they can disagree on the way back: replay() hands the last results to
+    // whatever apply is current, and a view switched away from before its
+    // response landed would otherwise draw into a detached node. Asking the DOM
+    // keeps one copy of "is this band on the page".
+    apply: ([r]) => { const n = $('#consumption'); if (n) renderConsumption(n, r, s, app, range); },
   };
   // The spend headline reads the summary this loader already fetched -- folded
   // in here rather than at the call site so the reuse path below gets it too.
   const reviewApply = (results) => {
-    const r = results[SUMMARY_INDEX];
-    renderSpend($('#spend'), r && r.status === 'fulfilled' ? r.value : null);
+    const spend = $('#spend');
+    if (spend) {
+      const r = results[SUMMARY_INDEX];
+      renderSpend(spend, r && r.status === 'fulfilled' ? r.value : null);
+    }
     reviewR.apply(results);
   };
-  // The progress tier renders only where a shipper has pushed something. A
-  // hub that never turned the feature on must look exactly as it did before
-  // it landed -- no empty card, no band, no extra request per route.
-  const repoDone = loadRepoTier(s, reuse);
+  // The progress tier renders only where a shipper has pushed something, and
+  // now only on a view that shows it. A hub that never turned the feature on
+  // must look exactly as it did before it landed -- no empty card, no band, no
+  // extra request per route.
+  const repoDone = loadRepoTier(s, reuse, shown);
   root.setAttribute('aria-busy', 'true'); setBusy(true);
   const [a, b, c, d] = await Promise.all([
     runOrReplay(loaders.now, nowR.fetchers, nowR.apply, reuse),
@@ -221,6 +345,21 @@ function runOrReplay(loader, fetchers, apply, reuse) {
   return loader.run(fetchers, apply);
 }
 
+/** liveBands is "which bands is this page actually showing right now", and it
+ *  is the one question every loader is gated on.
+ *
+ *  Two conditions, not one: MOUNTED, which mountView decided from the view --
+ *  and, for operations alone, UNFOLDED, because that band is a <details> and a
+ *  shut one draws nothing whatever the router says. A function rather than a
+ *  line inside load() because load() is not the only caller: boot()'s late
+ *  /v1/repos comes back straight into loadRepoTier, and that path needs the
+ *  same answer. Getting it by a different route is how the two drift. */
+function liveBands(view) {
+  const shown = new Set(bandsFor(view));
+  if (!opsOpen()) shown.delete('ops');
+  return shown;
+}
+
 /** loadRepoTier draws the progress band and its cards, and is the ONE place
  *  that does -- load() calls it on every route, and boot() calls it again if
  *  /v1/repos turns out to hold something after the first screen has already
@@ -230,17 +369,31 @@ function runOrReplay(loader, fetchers, apply, reuse) {
  *  The tier renders only where a shipper has pushed something. A hub that never
  *  turned the feature on must look exactly as it did before it landed -- no
  *  empty card, no band, no extra request per route. */
-function loadRepoTier(s, reuse) {
-  const repoR = renderRepo($('#repo'), s, app, app.repos);
+function loadRepoTier(s, reuse, shown = liveBands(s.view)) {
+  const mount = $('#repo');
+  const repoR = mount && shown.has('progress') ? renderRepo(mount, s, app, app.repos) : null;
   const band = $('#repo-band');
-  if (band) band.hidden = !repoR;
-  // ...and the nav entry that points at that band goes with it. Same call
-  // decides both, one line apart, because a nav offering a destination the page
-  // does not have is the specific failure #54 set out to avoid. It is also why
-  // boot()'s late /v1/repos comes back through HERE and not through a bare
-  // renderRepo: a band that appears without its nav entry is that same failure
-  // wearing the other face.
-  syncNav();
+  // `hidden` still means "this hub has no repo data", and on every view that
+  // shows other bands it still means the tier leaves no trace. The exception is
+  // the reader who typed `#/?view=progress` on such a hub anyway: the nav entry
+  // that would have taken them there is not offered (below), so they asked by
+  // hand -- and hiding the label leaves them a blank page with nothing on it
+  // saying why. An empty band that names itself is the better answer.
+  if (band) band.hidden = !app.repos.length && s.view !== 'progress';
+  // ...and the nav entry for that band goes with it. Same call decides both,
+  // one line apart, because a nav offering a destination the page does not have
+  // is the specific failure #54 set out to avoid. It is also why boot()'s late
+  // /v1/repos comes back through HERE and not through a bare renderRepo: a band
+  // that appears without its nav entry is that same failure wearing the other
+  // face.
+  //
+  // The predicate is the repo LIST, not this render's verdict, and it has to
+  // be: on `view=ledger` the progress band is not mounted, so nothing rendered
+  // and there is no verdict -- but the entry that would take the reader there
+  // must still be offered. renderRepo returns null on exactly `!repos.length`,
+  // so the two agreed all along; this just asks the question the nav is
+  // actually asking.
+  syncNav(s.view, app.repos.length > 0);
   if (!repoR) return Promise.resolve(true);
   // Applied SYNCHRONOUSLY on a presentation-only change, and that is the whole
   // point: measured against the deployed hub, re-fetching this tier to hide
@@ -262,11 +415,24 @@ function loadRepoTier(s, reuse) {
 // private window throws on access, and the page must still open.
 const OPS_KEY = 'ccquota-ops-open';
 
-/** opsOpen is what the two loaders ask before deciding which of their requests
- *  to send. Read from the DOM rather than a mirrored variable so there is no
- *  second copy of the fold's state to fall out of step with the element the
- *  reader actually clicked -- and it is false before wireOpsFold runs, which is
- *  the safe direction: a load that beat the restore sends the small set. */
+/** storedOpsOpen is the viewer's own preference, and the only reader of it
+ *  besides the boot-time restore is syncOpsFold putting the fold back after the
+ *  operations view forced it open. */
+function storedOpsOpen() {
+  try { return localStorage.getItem(OPS_KEY) === '1'; } catch { return false; }
+}
+
+/** opsOpen is half of what load() asks before deciding which requests to send
+ *  (bandsFor is the other half). Read from the DOM rather than a mirrored
+ *  variable so there is no second copy of the fold's state to fall out of step
+ *  with the element the reader actually clicked -- and it is false before
+ *  wireOpsFold runs, which is the safe direction: a load that beat the restore
+ *  sends the small set.
+ *
+ *  It answers false for an UNMOUNTED fold too, because a detached #ops is not
+ *  found by $() at all. That falls out of the mounting rather than being coded
+ *  for, and it is the right answer: a band that is not on the page is not
+ *  showing anything, whatever its `open` attribute says. */
 function opsOpen() {
   const ops = $('#ops');
   return !!(ops && ops.open);
@@ -280,16 +446,25 @@ let lastLoadOps = null;
 function wireOpsFold() {
   const ops = $('#ops');
   if (!ops) return;
-  try { ops.open = localStorage.getItem(OPS_KEY) === '1'; } catch {}
+  ops.open = storedOpsOpen();
   ops.addEventListener('toggle', () => {
+    // A toggle the PAGE performed is not a preference and not a request for
+    // data: syncOpsFold forces the fold open while `view=ops` makes it the
+    // whole page, and puts it back afterwards, and neither of those is the
+    // reader saying anything about how they want `view=all` folded. See
+    // opsSynthetic for why this is a count and not a flag.
+    if (opsSynthetic > 0) { opsSynthetic--; return; }
     try { localStorage.setItem(OPS_KEY, ops.open ? '1' : '0'); } catch {}
     // Opening the tier is what ASKS for its eight requests; until now they were
     // never sent. Closing it needs no load: what is already drawn stays, and
     // the next load simply stops refreshing it.
     //
-    // This fires for a programmatic open too, which is what the section nav
-    // does -- scope.js's goToSection sets `open` on the way to scrolling there,
-    // so the nav entry fetches the tier as well as reveals it.
+    // The operations VIEW does not come through here any more. It used to: the
+    // old nav entry opened the fold on its way to scrolling there, and this
+    // handler's load() is what fetched the tier. Now pressing it writes `view`,
+    // route() mounts the band and syncOpsFold unfolds it, and route()'s own
+    // load() -- which computes `shown` after the mount -- sends the requests.
+    // One path, and the synthetic-toggle guard above keeps this one out of it.
     //
     // The condition is "the last load planned for a CLOSED fold", not "the fold
     // is open", and the difference is a doubled first screen. A <details> fires

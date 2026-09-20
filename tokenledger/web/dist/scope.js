@@ -2,7 +2,7 @@
 // widget (subscription select · span segmented control · chips row).
 //
 // As of the Task 15 nav restructure, these are two SEPARATE things:
-//   - renderNav() draws the sticky bar itself — wordmark, section nav,
+//   - renderNav() draws the sticky bar itself — wordmark, view nav,
 //     language switch and theme toggle. It holds no scope state; that is the
 //     other half of this file.
 //   - createScopeControls() builds ONE instance of the scope-controls widget
@@ -20,23 +20,19 @@
 //     (renderScopeControls) without knowing how many views exist or where
 //     each one mounted its widget.
 //
-// OVERTURNED (#54). The bullet above used to end: "There is no longer anything
-// to navigate BETWEEN: the page is one surface, so the bar holds neither
-// navigation nor scope state." The premise is still true and this change does
-// not touch it — the page is one surface, one <main>, one refresh loop, and the
-// Now/Review tabs stay retired (web/embed_test.go guards that by name). What
-// the sentence got wrong was the inference: "one surface" is a statement about
-// STRUCTURE, and it was read as one about SIZE. At 68f5811 the surface is
-// 4,459px over ~20 cards with 36% of it behind the operations fold, and on a
-// page that long the reader still has to get somewhere — they were just doing
-// it by scrolling and guessing. An anchor nav is not a second structure; it is
-// the one structure, made addressable. Nothing here fetches, mounts, hides or
-// remembers anything: it moves the viewport.
-//
-// No fetching in this file either way — app.js owns the load loop and calls
+// OVERTURNED TWICE, and #98 is the second time — the history is in
+// web/dist/lib/nav.js's header, which is the one place it is told in full.
+// The short version for this file: #54 said of the nav it had just added
+// "Nothing here fetches, mounts, hides or remembers anything: it moves the
+// viewport." Every clause of that is now false except the first. The bar's
+// entries write `view` into the hash (#97), and app.js mounts one band and
+// unmounts the rest from it (#98), which is what finally makes the highlight
+// honest: the current view IS the current entry, so the scroll-spy that used
+// to measure band positions on every frame is gone. What did NOT change is the
+// first clause — no fetching in this file. app.js owns the load loop and calls
 // back into whichever handlers were passed at update() time.
-import { DIMS, accountsInScope } from './lib/state.js';
-import { SECTIONS, pickActive } from './lib/nav.js';
+import { DIMS, accountsInScope, VIEW_ALL } from './lib/state.js';
+import { SECTIONS } from './lib/nav.js';
 import { shortProject } from './lib/format.js';
 import { accountGroups, sourceLabel } from './lib/providers.js';
 import { el, $ } from './lib/dom.js';
@@ -84,39 +80,48 @@ const SHORT_LOCALE = { en: 'EN', 'zh-CN': '中' };
  *  toggle; written as a rotation so a third dictionary needs no new code here. */
 export const nextLocale = (cur) => LOCALES[(LOCALES.indexOf(cur) + 1) % LOCALES.length];
 
-/* ------------------------------------------------------- the section nav */
+/* ---------------------------------------------------------- the view nav */
 
-/** The nav's buttons, keyed by the element id each one scrolls to. Built once
- *  by buildSecNav and then only ever toggled/marked, so the spy never has to
- *  re-query the DOM on a scroll frame. */
+/** NAV_ENTRIES is what the bar prints, and it is SECTIONS with one entry in
+ *  front of it: the way back to the whole page.
+ *
+ *  That entry is not a band and index.html has no element for it, which is why
+ *  it is added here rather than in nav.js's table. It earns its place twice
+ *  over. Without it a reader who pressed "Usage" has no way back to `view=all`
+ *  short of editing the URL, because no band entry writes it — the page would
+ *  be a one-way door. And with it there is ALWAYS exactly one current entry,
+ *  including on the default view every shared link lands on, so the bar can say
+ *  where the reader is instead of going blank whenever they are looking at
+ *  everything.
+ *
+ *  The alternative considered was making each band entry a toggle (press the
+ *  current one again to go back). Rejected: an affordance nobody can see is not
+ *  an affordance, and it would leave `view=all` with nothing marked. */
+const NAV_ENTRIES = [{ key: 'nav.all', view: VIEW_ALL }, ...SECTIONS];
+
+/** The nav's buttons, keyed by the view each one writes. Built once by
+ *  buildSecNav and then only ever hidden/marked. */
 const navButtons = new Map();
-
-/** reduceMotion is asked per interaction rather than cached: the OS setting can
- *  change while the page is open, and a viewer who turns it on mid-session did
- *  so to stop exactly this kind of movement. */
-const reduceMotion = () =>
-  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/** visible answers "does this target take up space right now", which is not the
- *  same as "does it exist". #repo-band carries the `hidden` attribute on every
- *  hub no shipper pushes repo facts to, and a nav entry pointing at it would
- *  scroll to a zero-height element in the middle of the page. offsetParent is
- *  null for anything display:none — including inside a closed <details>, which
- *  is why #ops itself (never its children) is the operations target. */
-const visible = (n) => !!n && !n.hidden && n.offsetParent !== null;
 
 /** navHeight is how much of the viewport the sticky bar covers, measured rather
  *  than assumed: the bar wraps at narrow widths and loses its wordmark under
  *  720px, so a hardcoded offset would be wrong on the half of the page sizes it
- *  was not written against. Published to CSS as --navh so the scroll-margin on
- *  the targets and the spy's line are the same number by construction, never
- *  two constants that drift. The +8 is breathing room: landing a band label
- *  flush against the bar reads as tucked under it. */
+ *  was not written against. Published to CSS as --navh.
+ *
+ *  #98 deleted the scroll-spy, which was one of this number's two readers, and
+ *  deliberately KEPT the number: styles.css sets `scroll-margin-top: var(--navh)`
+ *  on every card and band so anything the page scrolls to — the session overlay
+ *  closing back onto its row, a browser restoring a scroll position — stops
+ *  short of the sticky bar instead of under it, and ⟨C5⟩'s badge is measured
+ *  against the same bar. The +8 is breathing room: landing a band label flush
+ *  against the bar reads as tucked under it. */
 function navHeight(root) {
-  const h = Math.round(root.getBoundingClientRect().height) + 8;
-  document.documentElement.style.setProperty('--navh', h + 'px');
-  return h;
+  document.documentElement.style.setProperty(
+    '--navh', Math.round(root.getBoundingClientRect().height) + 8 + 'px');
 }
+
+/** Held for lifetime, not for use — see where it is assigned in renderNav. */
+let barObserver = null;
 
 /** onView is how the nav writes the view — app.js's setState, handed over on
  *  every renderNav rather than captured when the buttons were built.
@@ -129,127 +134,105 @@ function navHeight(root) {
  *  key rather than a rewind of the other twelve. */
 let onView = null;
 
-/** goToSection switches to one band's view, and scrolls to it.
+/** selectView writes one key — the view — and nothing else happens here.
  *
- *  It writes location.hash now — through app.setState, with the rest of the
- *  state carried over — and that OVERTURNS what #54 said here a few hours ago:
- *  "It does NOT write location.hash, and that is load-bearing." The hazard that
- *  comment named is real and has not gone anywhere: this page's hash is its
- *  entire state (lib/state.js — "the hash is the only copy of the state"), and
- *  a plain <a href="#spend"> still parses as an unknown path, resets the
- *  subscription, span, chips and repo filter to their defaults, and rewrites
- *  the URL back to `#/`. What changed is that there is now a key worth writing
- *  (#97): `view` is a member of the state like any other, so setState spreads
- *  the current state and moves that one key, and the reader's filters survive
- *  the switch by construction.
+ *  It writes location.hash through app.setState, with the rest of the state
+ *  carried over, and that OVERTURNS what #54 said: "It does NOT write
+ *  location.hash, and that is load-bearing." The hazard that comment named is
+ *  real and has not gone anywhere: this page's hash is its entire state
+ *  (lib/state.js — "the hash is the only copy of the state"), and a plain
+ *  <a href="#spend"> still parses as an unknown path, resets the subscription,
+ *  span, chips and repo filter to their defaults, and rewrites the URL back to
+ *  `#/`. What changed is that there is now a key worth writing (#97): `view` is
+ *  a member of the state like any other, so setState spreads the current state
+ *  and moves that one key, and the reader's filters survive the switch by
+ *  construction.
  *
  *  These stay <button>s and not links for a reason that also survived: a real
  *  <a href> would have to be rebuilt with the whole current scope on every
  *  state change, or it would promise the one thing above — a URL that resets
- *  what the reader set. A button asks app.js what the state is at the moment
- *  it is pressed.
+ *  what the reader set. A button asks app.js what the state is at the moment it
+ *  is pressed.
  *
- *  The scroll stays too, and that is temporary. Until #98 unmounts the bands a
- *  view does not hide anything, so a button that only wrote the hash would
- *  look broken — same page, nothing moved. #98 takes the scroll out along with
- *  the reason for it. */
-function goToSection(id, view) {
-  if (view) onView?.(view);
-  // The operations tier is a closed <details> for most viewers. Scrolling to a
-  // shut fold parks the reader on a single <summary> line and answers nothing,
-  // so asking for Operations opens Operations. app.js's toggle listener
-  // persists that, which is correct: the viewer asked.
-  if (id === 'ops') {
-    const d = $('#ops');
-    if (d && !d.open) d.open = true;
-  }
-  const node = document.getElementById(id);
-  if (!node) return;
-  node.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' });
-}
+ *  #54's `goToSection` also SCROLLED, and said so was temporary: until a view
+ *  unmounted anything, a button that only wrote the hash would look broken —
+ *  same page, nothing moved. #98 mounts, so the scroll is gone, and with it the
+ *  prefers-reduced-motion check that existed only to soften it. What the reader
+ *  sees now is the page becoming the band they asked for, at the top, which is
+ *  where a new page starts. The forced-open handling for the operations fold
+ *  moved to app.js's mountView, beside the rest of the mounting. */
+const selectView = (view) => onView?.(view);
 
-/** buildSecNav fills the empty <nav id="secnav"> from SECTIONS. Called once. */
+/** buildSecNav fills the empty <nav id="secnav"> from NAV_ENTRIES. Called
+ *  once. */
 function buildSecNav(root) {
   const nav = $('#secnav', root);
   if (!nav) return;
   nav.setAttribute('aria-label', t('nav.sections'));
-  nav.replaceChildren(...SECTIONS.map(({ target, key, view }) => {
-    const b = el('button', { type: 'button', 'data-target': target, 'data-view': view }, t(key));
-    b.addEventListener('click', () => goToSection(target, view));
-    navButtons.set(target, b);
+  nav.replaceChildren(...NAV_ENTRIES.map(({ key, view }) => {
+    const b = el('button', { type: 'button', 'data-view': view }, t(key));
+    b.addEventListener('click', () => selectView(view));
+    navButtons.set(view, b);
     return b;
   }));
   nav.hidden = false;
 }
 
-/** syncNav shows exactly the entries whose target is on the page right now, and
- *  hides the nav entirely if fewer than two survive — a nav offering one
- *  destination is a label pretending to be a control. The only entry that
- *  actually comes and goes is Progress; app.js calls this from load() right
- *  after it decides whether the progress band exists on this hub. */
-export function syncNav() {
-  const nav = $('#secnav');
-  if (!nav) return;
-  let shown = 0;
-  for (const { target } of SECTIONS) {
-    const b = navButtons.get(target);
-    if (!b) continue;
-    b.hidden = !visible(document.getElementById(target));
-    if (!b.hidden) shown++;
+/** syncNav marks the entry for the view the page is CURRENTLY SHOWING, and
+ *  hides the one entry that does not exist everywhere.
+ *
+ *  Both halves used to be one question — "is this entry's target visible right
+ *  now" — answered by measuring the DOM, because with every band always mounted
+ *  the only thing that could remove a destination was the `hidden` on
+ *  #repo-band. #98 unmounts bands, so that measurement now answers "is this the
+ *  view you are on", which would leave the bar with a single entry and no way
+ *  off it. They are two questions and this takes two arguments:
+ *
+ *    `view`     what to mark. The current view IS the current entry, so there
+ *               is nothing to measure and nothing to re-measure on scroll.
+ *    `progress` whether this hub has a progress band at all. Remembered between
+ *               calls because renderNav calls this on every route while only
+ *               app.js's loadRepoTier knows the answer, and it learns it late:
+ *               /v1/repos is deliberately off the critical path, so the first
+ *               route runs with an empty repo list on every hub.
+ *
+ *  aria-current, not aria-selected: `aria-selected` is only valid on a handful
+ *  of roles (tab, option, row…), and giving these buttons role="tab" would mean
+ *  a tablist — aria-controls, roving tabindex, arrow-key navigation — which is
+ *  the retired Now/Review tabs coming back wearing ARIA. `aria-current="true"`
+ *  is the generic "the current item in a set of related items", it is valid on
+ *  a plain button in a <nav>, and it is what styles.css already draws. This is
+ *  the line #54 flagged for #98 to revisit; revisited, and it stays, for a
+ *  reason #54 did not have: the answer moved from scroll position to state, but
+ *  the attribute that states it was right all along.
+ *
+ *  The bar itself is no longer hidden from here. #54 hid it when fewer than two
+ *  entries survived, because a nav offering one destination is a label
+ *  pretending to be a control — and on a hub with no repo band that check could
+ *  genuinely bite. It cannot any more: "All", Ledger, Usage and Operations are
+ *  on every hub, so the count never drops below four, and buildSecNav's one
+ *  unhide is the last word. */
+let hasProgress = false;
+export function syncNav(view, progress) {
+  if (progress !== undefined) hasProgress = progress;
+  if (!$('#secnav')) return;
+  for (const [v, b] of navButtons) {
+    b.hidden = v === 'progress' && !hasProgress;
+    if (b.hidden || v !== view) b.removeAttribute('aria-current');
+    else b.setAttribute('aria-current', 'true');
   }
-  nav.hidden = shown < 2;
-  spy();
 }
 
-/* ------------------------------------------------------------- scroll spy */
-
-let spyQueued = false;
-/** Held for lifetime, not for use — see where it is assigned. */
-let pageObserver = null;
-
-/** spy marks the entry the reader is currently under. Reads layout and writes
- *  one attribute per button; the pick itself is lib/nav.js's pickActive, kept
- *  pure so it can be tested without a browser (web/test/nav.test.mjs). */
-function spy() {
-  spyQueued = false;
-  const root = $('#scope');
-  const nav = $('#secnav');
-  if (!root || !nav || nav.hidden) return;
-  const live = SECTIONS
-    .map(({ target }) => ({ target, node: document.getElementById(target) }))
-    .filter(({ target, node }) => visible(node) && !navButtons.get(target)?.hidden);
-  // Within 2px of the end counts as the end: browsers round the document
-  // height, and a page that stops 0.5px short would never light the last entry.
-  const atBottom = Math.ceil(scrollY + innerHeight) >= document.documentElement.scrollHeight - 2;
-  const at = pickActive(live.map(({ node }) => node.getBoundingClientRect().top), navHeight(root), atBottom);
-  for (const b of navButtons.values()) b.removeAttribute('aria-current');
-  // aria-current, not aria-selected: this says "the section you are looking at",
-  // which is a position on one page — and while `view` defaults to `all`, every
-  // band IS still on one page, so scroll position remains the honest answer and
-  // the spy is left exactly as #54 built it. aria-selected would say "the view
-  // you chose"; that only becomes the truer statement once #98 makes a view
-  // actually unmount the others, and it is #98's line to change, not this one's.
-  if (at >= 0) navButtons.get(live[at].target)?.setAttribute('aria-current', 'true');
-}
-
-/** queueSpy coalesces a burst of scroll events into one measurement per frame.
- *  Passive, because this listener never prevents a scroll and saying so is what
- *  keeps the scroll off the main thread. */
-function queueSpy() {
-  if (spyQueued) return;
-  spyQueued = true;
-  requestAnimationFrame(spy);
-}
-
-/** renderNav renders/updates the sticky top bar: wordmark, section nav,
- *  language switch and theme toggle. `root` is the static
- *  `<header id="scope">` from index.html (always present, never recreated), so
- *  listeners are bound exactly once behind a `data-bound` guard the same way
- *  the whole bar used to be before Task 15 split it.
+/** renderNav renders/updates the sticky top bar: wordmark, view nav, language
+ *  switch and theme toggle. `root` is the static `<header id="scope">` from
+ *  index.html (always present, never recreated), so listeners are bound exactly
+ *  once behind a `data-bound` guard the same way the whole bar used to be
+ *  before Task 15 split it.
  *
  *  `cb.onView` is the one handler the bar takes, and it takes it on EVERY call
- *  precisely because the listeners are bound once — see onView above. */
-export function renderNav(root, { onView: onViewCb } = {}) {
+ *  precisely because the listeners are bound once — see onView above. `cb.view`
+ *  is what to mark, and comes from the same route() call. */
+export function renderNav(root, { onView: onViewCb, view } = {}) {
   onView = onViewCb || null;
   if (!root.dataset.bound) {
     // Theme toggle: copied verbatim from the old page's click handler.
@@ -272,33 +255,33 @@ export function renderNav(root, { onView: onViewCb } = {}) {
       lang.addEventListener('click', () => chooseLocale(nextLocale(locale())));
     }
     buildSecNav(root);
-    addEventListener('scroll', queueSpy, { passive: true });
-    addEventListener('resize', queueSpy);
-    // Opening or closing the operations fold moves every band above it by
-    // thousands of pixels without the page scrolling, so the spy has to
-    // re-measure on a toggle as much as on a scroll.
-    $('#ops')?.addEventListener('toggle', queueSpy);
-    // ...and so does the page GROWING under a reader who has not scrolled.
+    // The four listeners that used to be bound here — scroll, resize, the
+    // operations fold's toggle, and a ResizeObserver on #page — were all the
+    // scroll-spy's, and all four are gone with it. Every one of them existed
+    // because the answer to "which entry is current" could change without the
+    // reader doing anything: a load landing, the repo band appearing, a card
+    // switching to its table view. The answer is now `state.view`, which
+    // changes only when the reader presses something, so there is nothing to
+    // watch.
     //
-    // This is not a hypothetical. Every card on this page arrives from an async
-    // fetch, so the first spy runs against a nearly empty <main>: the document
-    // is then shorter than the viewport, which is the `atBottom` case, and the
-    // bar opens with Operations marked while the reader is looking at the top
-    // of the ledger. It stays wrong until the first scroll, because until #54
-    // a scroll was the only thing that could ever have changed the answer.
-    // A load that lands, the repo band appearing, a card switching to its table
-    // view — all of them move every band below them and none of them scrolls.
-    // The reference is held rather than dropped on the floor: an observer
-    // reachable from nothing is at the mercy of how a given engine reads the
-    // spec's collection rules, and the failure mode if one is collected is
-    // silent — the nav just stops following, which is the bug above returning.
+    // What IS still watched is the bar's own height, and only that. --navh
+    // feeds styles.css's scroll-margin (see navHeight), and the bar genuinely
+    // does resize on its own: it wraps at narrow widths, loses its wordmark
+    // under 720px, and gains or loses the Progress entry when /v1/repos lands.
+    // Observing the bar rather than the page is the narrow version of what the
+    // spy's observer did — one element that changes rarely, instead of the
+    // whole document changing on every fetch. The reference is held rather than
+    // dropped on the floor: an observer reachable from nothing is at the mercy
+    // of how a given engine reads the spec's collection rules, and the failure
+    // mode if one is collected is silent.
     if (typeof ResizeObserver === 'function') {
-      pageObserver = new ResizeObserver(queueSpy);
-      pageObserver.observe($('#page'));
+      barObserver = new ResizeObserver(() => navHeight(root));
+      barObserver.observe(root);
     }
     root.dataset.bound = '1';
   }
-  syncNav();
+  syncNav(view);
+  navHeight(root);
 }
 
 export function setBusy(b) {

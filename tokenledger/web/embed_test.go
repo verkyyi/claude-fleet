@@ -69,38 +69,87 @@ func TestAssets_DashboardIsEmbedded(t *testing.T) {
 			t.Errorf("index.html is missing the i18n hook %q", want)
 		}
 	}
-	// The retired view tabs must not come back by accident. This assertion is
-	// UNCHANGED by #54, and that is the point worth recording here.
+	// The retired view tabs must not come back by accident. The assertion is
+	// unchanged; what it MEANS has been rewritten twice, and #98 is the second
+	// time, so the reasoning is worth keeping current rather than letting the
+	// check outlive its explanation.
 	//
-	// #54 gave this page a top nav, which reads like the thing this check was
-	// written to prevent and is not. What the tabs did was split the page into
-	// regions that fetched and refreshed on their own rhythms, and the reason
-	// they were retired stands: "what is burning right now" and "what did this
-	// period cost" are one question at two time scales, so a reader who picked
-	// one was told to choose between halves of an answer. #54 adds anchors over
-	// the bands this one surface already has. It moves the viewport; it issues
-	// no request and mounts nothing. One <main>, one load(), four bands.
+	// #54 gave this page a top nav and said of it: this is not the tabs, it
+	// only moves the viewport, it issues no request and mounts nothing.
+	// #98 makes the nav mount one band and unmount the others, and gates the
+	// page's loaders on what is mounted -- so "it mounts nothing" is now false,
+	// and a reader could reasonably ask what is left of the distinction.
 	//
-	// So the guard stays, and it is now load-bearing in a way it was not
-	// before: with a nav bar in the header, a `<button id="tab-now">` is one
-	// plausible edit away, and it would silently restore the split behind
-	// navigation that looks identical to the anchors beside it.
+	// This: what the Now/Review tabs did was split the page into regions that
+	// FETCHED AND REFRESHED ON THEIR OWN RHYTHMS. "What is burning right now"
+	// and "what did this period cost" are one question at two time scales, and
+	// a reader who picked one was told to choose between halves of an answer.
+	// A view is one hash, one scope, one load(), one 60-second refresh: `view`
+	// is in lib/state.js's PRESENTATION_KEYS, so switching costs no request and
+	// redraws from rows already in hand, and every band that IS mounted answers
+	// as of the same moment. Fewer questions asked, never two answers that
+	// disagree.
+	//
+	// So the guard stays, and it is more load-bearing than ever: with a nav bar
+	// in the header that now genuinely swaps content, a `<button id="tab-now">`
+	// is one plausible edit away, and it would restore the split behind
+	// navigation that looks identical to the view entries beside it.
 	for _, gone := range []string{`id="tab-now"`, `id="tab-review"`} {
 		if strings.Contains(string(b), gone) {
-			t.Errorf("index.html still has %q -- the Now/Review split is retired; #54's nav scrolls, it does not switch views", gone)
+			t.Errorf("index.html still has %q -- the Now/Review split is retired; a view shares one hash, one load and one refresh, which is what the tabs did not", gone)
 		}
 	}
-	// The nav itself, and the four bands it targets (web/dist/lib/nav.js's
-	// SECTIONS). #54's own requirement was that the nav's segments match the
-	// page's visible groups, so the first tier grew the band label it never
-	// had: a nav offering four destinations over three labels disagrees with
-	// the page under it. These ids are the anchor targets, which makes them
-	// structural in exactly the sense the note above describes.
+	// The nav, and the band labels. #54's requirement was that the nav's
+	// segments match the page's visible groups, so the first tier grew the band
+	// label it never had: a nav offering four destinations over three labels
+	// disagrees with the page under it. That requirement survives #98 with the
+	// terms swapped -- the entries no longer point AT these labels, they decide
+	// whether the labels are on the page at all -- and the ids stay structural
+	// in exactly the sense the note above describes.
 	for _, want := range []string{
 		`id="secnav"`, `id="ledger-band"`, `id="usage-band"`,
 	} {
 		if !strings.Contains(string(b), want) {
-			t.Errorf("index.html shell is missing %q -- the section nav has nothing to anchor to", want)
+			t.Errorf("index.html shell is missing %q -- the view nav has no band to mount", want)
+		}
+	}
+	// Every band node says which view mounts it, and #pulse / #alerts say
+	// nothing, which is what puts them on every view.
+	//
+	// This is the mapping app.js's mountView reads, and it is the whole of it:
+	// a section that loses its `data-band` silently becomes a section that
+	// never unmounts, which is #98 undone for that one card with no other
+	// symptom. The four names are lib/nav.js's SECTIONS `view` column -- one
+	// word shared by the URL, this markup and review.js's fetch plan -- so a
+	// typo here is a band that no view can ever show.
+	for _, want := range []string{
+		`id="ledger-band" data-band="ledger"`,
+		`id="spend" data-band="ledger"`,
+		`id="consumption" data-band="ledger"`,
+		`id="usage-band" data-band="usage"`,
+		`id="analysis" data-band="usage"`,
+		`id="repo-band" data-band="progress"`,
+		`id="repo" data-band="progress"`,
+		`id="ops" class="ops" data-band="ops"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("index.html is missing %q -- app.js mounts bands by data-band, so an untagged node is on every view", want)
+		}
+	}
+	// ...and the two that must NOT carry one. An alert nobody can reach is an
+	// alert nobody sees: a reader on the usage view is no less entitled to be
+	// told the collector died, and the token badge is the page's one ambient
+	// "is the fleet still moving" signal. Both were deliberately kept outside
+	// the operations fold for that reason; putting them in a band would fold
+	// them away again under another name.
+	for _, floater := range []string{`id="pulse"`, `id="alerts"`} {
+		at := strings.Index(string(b), floater)
+		if at < 0 {
+			continue // the id check above already reported it
+		}
+		if end := strings.IndexByte(string(b)[at:], '>'); end > 0 &&
+			strings.Contains(string(b)[at:at+end], "data-band") {
+			t.Errorf("%s carries a data-band -- it floats above the tiers and belongs on every view", floater)
 		}
 	}
 	// The dead `<footer id="footer">` #54 removed. No module ever wrote it, so

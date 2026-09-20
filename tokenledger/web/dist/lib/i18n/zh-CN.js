@@ -20,6 +20,7 @@ export const zhCN = {
   'app.language': '语言',
   'app.unreachable': '连不上 hub：{error}',
   'nav.sections': '页面分段',
+  'nav.all': '全部',
   'band.ledger': '账本',
   'band.ledger.note': '付了多少，付给谁',
   'band.usage': '用量',

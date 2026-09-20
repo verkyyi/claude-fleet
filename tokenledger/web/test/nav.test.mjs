@@ -1,61 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SECTIONS, pickActive } from '../dist/lib/nav.js';
+import { SECTIONS, BANDS, VIEW_ALL, bandsFor } from '../dist/lib/nav.js';
 import { en } from '../dist/lib/i18n/en.js';
 
-// The bar is ~96px; these tops are viewport-relative, the way
-// getBoundingClientRect() reports them.
-const NAV = 96;
+// #98 deleted this file's other export, `pickActive`, and the six tests that
+// covered it. It was the scroll-spy's one decision -- given the measured tops
+// of the visible bands and the height of the sticky bar, which band is the
+// reader under -- and it went with the spy, because a view that MOUNTS one band
+// and unmounts the rest has no such question left: the current view is the
+// current entry, and there is no position on the page to measure. The tests
+// below are its replacement, over the decision that took its place.
 
-test('at the top of the page the first band is current', () => {
-  // Nothing has passed under the bar yet: every band is below it.
-  assert.equal(pickActive([120, 900, 2400, 3800], NAV), 0);
-});
-
-test('the current band is the last one scrolled past, not the nearest', () => {
-  // Usage is 40px above the line and Progress is 700px below it. "Nearest
-  // band" would pick Progress; the reader is reading Usage.
-  assert.equal(pickActive([-1400, 56, 796, 2200], NAV), 1);
-  // Scroll on until Progress crosses: now it is Progress.
-  assert.equal(pickActive([-2100, -640, 90, 1500], NAV), 2);
-});
-
-test('a band on the line counts as passed, and a jump that lands just short still counts', () => {
-  assert.equal(pickActive([-500, 96, 1800], NAV), 1);
-  // Subpixel layout does not flip it back...
-  assert.equal(pickActive([-500, 96.4, 1800], NAV), 1);
-  // ...and neither does a click that settles a pixel or two below the line,
-  // which is the case that had the nav marking the band ABOVE the one the
-  // reader had just jumped to.
-  assert.equal(pickActive([-500, 97.8, 1800], NAV), 1);
-  assert.equal(pickActive([-500, 100, 1800], NAV), 1);
-  // Grace runs out well before the next band, which is ~700px away here.
-  assert.equal(pickActive([-500, 101, 1800], NAV), 0);
-});
-
-test('the bottom of the document always lights the last entry', () => {
-  // The whole reason this override exists: Operations folded shut is a single
-  // <summary> line, so scrolled to the very end its top is still well below
-  // the bar and the plain rule would leave Progress marked.
-  assert.equal(pickActive([-3800, -2400, -900, 700], NAV, true), 3);
-  assert.equal(pickActive([-3800, -2400, -900, 700], NAV, false), 2);
-});
-
-test('the pick is over the VISIBLE entries, so a hub with no repo data agrees', () => {
-  // scope.js passes only the bands that exist; on a hub nobody ships repo
-  // facts to, Progress is not among them and the indices close up.
-  const noProgress = [-2000, -700, 400]; // ledger, usage, ops
-  assert.equal(pickActive(noProgress, NAV), 1);
-  assert.equal(pickActive(noProgress, NAV, true), 2);
-});
-
-test('nothing to navigate means nothing marked', () => {
-  assert.equal(pickActive([], NAV), -1);
-});
-
-test('every section targets a band label, and prints that band own key', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.target),
-    ['ledger-band', 'usage-band', 'repo-band', 'ops']);
+test('every section prints its own band key, and the dictionary has it', () => {
   // The nav must not carry its own copy of the band names: `band.ledger` is
   // what index.html prints on the band itself, so the two cannot disagree.
   assert.deepEqual(SECTIONS.map((s) => s.key),
@@ -65,25 +21,67 @@ test('every section targets a band label, and prints that band own key', () => {
   for (const { key } of SECTIONS) {
     assert.ok(key in en, `${key} is missing from the dictionary`);
   }
+  // scope.js puts one more entry in front of these -- the way back to the whole
+  // page -- and it is not a band, so it is not in SECTIONS. It still prints
+  // through t(), so it still needs a key that exists.
+  assert.ok('nav.all' in en, 'nav.all is missing from the dictionary');
 });
 
 // #97: each entry also names the value it writes into the hash. The words are
 // what a reader sees in a link they were sent, so they are short and they are
 // not the element ids -- `view=progress` says where you are being sent,
 // `view=repo-band` names a div. state.js derives VIEWS from this column, which
-// is why a typo here is a routing bug and not just a cosmetic one.
+// is why a typo here is a routing bug and not just a cosmetic one. As of #98
+// index.html tags its nodes with the same column (`data-band="progress"`), so
+// one word now spans the URL, the markup and the fetch plan.
 test('every section names the view it writes', () => {
   assert.deepEqual(SECTIONS.map((s) => s.view),
     ['ledger', 'usage', 'progress', 'ops']);
-  for (const { view, target } of SECTIONS) {
-    assert.match(view, /^[a-z]+$/, `${target}: a view is a URL word`);
+  assert.deepEqual(BANDS, SECTIONS.map((s) => s.view));
+  for (const { key, view } of SECTIONS) {
+    assert.match(view, /^[a-z]+$/, `${key}: a view is a URL word`);
     // The markup's `-band` suffix must not reach the URL. Operations is the
-    // exception the table above already calls out on its other two columns:
-    // its band label IS its <summary>, so `ops` is target, label and view at
-    // once -- one word, not an id leaking out.
-    assert.ok(!view.endsWith('-band'), `${target}: ${view} is an element id, not a URL word`);
+    // exception the table already calls out on its other column: its band label
+    // IS its <summary>, so `ops` is label and view at once -- one word, not an
+    // id leaking out.
+    assert.ok(!view.endsWith('-band'), `${key}: ${view} is an element id, not a URL word`);
   }
   // No two entries may write the same view: they would be two buttons the
-  // router cannot tell apart, and #98 would have no way to pick a band.
+  // router cannot tell apart, and mounting would have no way to pick a band.
   assert.equal(new Set(SECTIONS.map((s) => s.view)).size, SECTIONS.length);
+  // ...and none of them may collide with `all`, which is not a band and would
+  // mount every band if one tried to be.
+  assert.ok(!BANDS.includes(VIEW_ALL), 'a band may not be named "all"');
+});
+
+// bandsFor is the whole of #98's routing decision, and these are the two cases
+// it has. The isolation is what the issue asked for; `all` staying the WHOLE
+// page is what keeps every link ever shared -- none of which carries a `view`
+// -- landing on the page its sender saw.
+test('the default view is every band, and any other view is exactly itself', () => {
+  assert.deepEqual(bandsFor(VIEW_ALL), BANDS);
+  for (const band of BANDS) {
+    assert.deepEqual(bandsFor(band), [band], `view=${band} must mount only its own band`);
+  }
+});
+
+test('a view mounts its band and nothing else, in page order', () => {
+  // Page order, not the order the caller happened to ask in: index.html's
+  // <main> is a fixed sequence and app.js re-lists the survivors from it, so a
+  // band can never appear above one that is written above it.
+  assert.deepEqual(bandsFor(VIEW_ALL), ['ledger', 'usage', 'progress', 'ops']);
+  // The ledger view does not carry the usage band's questions, which is the
+  // measurable half of #98: review.js drops three of its four first-screen
+  // requests here.
+  assert.ok(!bandsFor('ledger').includes('usage'));
+  assert.ok(!bandsFor('usage').includes('ledger'));
+});
+
+test('a view nothing can write mounts nothing', () => {
+  // state.js's parse() falls back to the default before this is ever reached,
+  // so this is the belt to that braces. Mounting nothing is the visible failure
+  // rather than the silent one -- a page that shows every band for an unknown
+  // word would hide the routing bug that produced it.
+  assert.deepEqual(bandsFor('bogus'), []);
+  assert.deepEqual(bandsFor(undefined), []);
 });

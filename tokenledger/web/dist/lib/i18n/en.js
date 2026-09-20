@@ -17,6 +17,10 @@ export const en = {
   'app.language': 'Language',
   'app.unreachable': 'Cannot reach the hub: {error}',
   'nav.sections': 'Sections',
+  // The bar's first entry: the whole page, every band, which is the default
+  // view and the way back from any single one (#98). Not a band, so it has no
+  // `band.` key and index.html has no label printing it.
+  'nav.all': 'All',
   'band.ledger': 'Ledger',
   'band.ledger.note': 'what was paid, and to whom',
   'band.usage': 'Usage',

@@ -10,6 +10,7 @@
 // rather than guessed — see task-12-report.md for the two adapter-layer
 // notes (stack shape, 6h bucket-key parsing) that fell out of that reading.
 import { apiQuery, withChip, GROUPS } from './lib/state.js';
+import { SKIPPED } from './lib/seq.js';
 import { extent, resolve } from './lib/brush.js';
 import { foldHourly, sentence } from './lib/fold.js';
 import { fmtInt, fmtUSD, fmtMoney, fmtCost, fmtFull, fmtPct, fmtDur, delta, fmtSigned,
@@ -857,7 +858,7 @@ function sessionsCard(result, state, app, sel) {
 
 /* ------------------------------------------------------------------- main */
 
-function applyAll(root, state, app, ctx, results, opsOpen) {
+function applyAll(root, state, app, ctx, results) {
   const [historyExtR, summaryR, findingsR, g1R, g2R, hourR, wallR, sessionsR] = results;
   // Cached by now.js after its own /v1/endpoints fetch (Review issues no
   // endpoints request of its own — see task-12-report.md). Empty until the
@@ -865,6 +866,60 @@ function applyAll(root, state, app, ctx, results, opsOpen) {
   // hidden from the group-by control rather than crashing.
   const hasTeam = (app.endpoints || []).some((e) => e.team);
 
+  // The usage band's four sections, and they are skipped WHOLESALE when that
+  // band is not on the page -- `root` is app.js's `$('#analysis')`, and a view
+  // that does not mount the usage band makes that null. This apply still runs
+  // in that case, because #spend is drawn from the same results (app.js wraps
+  // this function) and the ledger band may well be mounted: one loader, three
+  // bands, and each half checks its own mount point.
+  //
+  // Asking `root` rather than a passed-in flag is deliberate and it is the same
+  // rule app.js applies to #spend and #consumption: an apply can arrive from
+  // seq.js's replay() after the reader has already switched away, and the DOM
+  // is the one copy of "is this band on the page" that cannot be stale.
+  if (root) drawUsageBand(root, state, app, ctx, { historyExtR, summaryR, g1R, g2R, hasTeam });
+
+  // findings / when+wall / sessions answer operational questions, so they mount
+  // in the folded operations tier rather than beside the money -- and their four
+  // requests (see READ_BY above) are only SENT when that tier is live.
+  //
+  // TWO conditions, and they are genuinely different questions -- the first
+  // draft of #98 checked only the mount point and crashed on the very first
+  // page view:
+  //
+  //   the mount point   -- is the operations BAND on this view at all. Null on
+  //                        `view=ledger` / `view=usage`, where #ops is detached.
+  //   the SKIPPED hole  -- did THIS round of requests include the tier. A
+  //                        mounted #ops is still a <details> the reader has
+  //                        folded shut, and #ops-analysis sits inside it, in
+  //                        the document, findable -- which is the default state
+  //                        of `view=all`. So the mount point says yes while the
+  //                        results are holes, and findingsCard reading one of
+  //                        them is the TypeError that found this.
+  //
+  // Position 2 stands for all four: READ_BY gives them one reader between them,
+  // so they are sent together or not at all. Reading the hole rather than a
+  // flag is what makes this agree with the fetch plan by construction, incl. on
+  // a replay -- and the mount check is what covers the other direction, where a
+  // replay hands back a live-ops result set after the reader has switched to a
+  // view that has no #ops-analysis to draw it into.
+  //
+  // There is no `|| root` fallback any more. It used to read
+  // `querySelector('#ops-analysis') || root`, to keep working on "an embedded
+  // or cut-down page" -- but that fallback now names a failure #98 would have
+  // introduced: on `view=usage`, #ops-analysis is unmounted while `root` is
+  // #analysis, so it would drop three operations cards into the middle of the
+  // usage band. A missing mount point means the band is not here; that is the
+  // answer, not a reason to improvise.
+  const opsRoot = document.querySelector('#ops-analysis');
+  if (!opsRoot || findingsR.status === SKIPPED) return;
+  section(opsRoot, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
+  section(opsRoot, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
+    whenCard(hourR, ctx), wallHistoryCard(wallR, ctx)));
+  section(opsRoot, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
+}
+
+function drawUsageBand(root, state, app, ctx, { historyExtR, summaryR, g1R, g2R, hasTeam }) {
   section(root, 'r-timeline').replaceChildren(timelineCard(historyExtR, ctx, state, app));
   section(root, 'r-kpis').replaceChildren(kpisCard(summaryR));
   // ONE scale for both breakdown cards (issue #51). They draw the same
@@ -889,21 +944,6 @@ function applyAll(root, state, app, ctx, results, opsOpen) {
   // breakdown card 2 (by=model by default) the same cut was on screen three
   // times. Efficiency now has the row to itself.
   section(root, 'r-efficiency').replaceChildren(efficiencyCard(summaryR, g2R, state));
-
-  // findings / when+wall / sessions answer operational questions, so they mount
-  // in the folded operations tier rather than beside the money -- and their four
-  // requests (see OPS_ONLY below) are only SENT when that tier is open, so with
-  // it closed the results here are SKIPPED holes, not empty answers. Drawing a
-  // card from one would report "no findings" / "no sessions" about a question
-  // this load never asked. Falling back to `root` keeps this working if the ops
-  // block is ever absent (an embedded or cut-down page), rather than dropping
-  // the cards on the floor.
-  if (!opsOpen) return;
-  const opsRoot = document.querySelector('#ops-analysis') || root;
-  section(opsRoot, 'r-findings').replaceChildren(findingsCard(findingsR, state, app));
-  section(opsRoot, 'r-whenwall').replaceChildren(el('div', { class: 'grid2' },
-    whenCard(hourR, ctx), wallHistoryCard(wallR, ctx)));
-  section(opsRoot, 'r-sessions').replaceChildren(sessionsCard(sessionsR, state, app, ctx.sel));
 }
 
 /** SUMMARY_INDEX is where /v1/summary lands in the fetcher list above. It is
@@ -911,26 +951,61 @@ function applyAll(root, state, app, ctx, results, opsOpen) {
  *  hard-coding a position that a later edit would silently shift. */
 export const SUMMARY_INDEX = 1;
 
-/** OPS_ONLY names the fetcher positions below whose results have exactly one
- *  reader, inside the folded operations tier -- so with the tier closed they
- *  are not sent at all. Positions, because a fetcher list is a positional
- *  contract (SUMMARY_INDEX above is the standing proof); seq.js leaves each
- *  unsent slot as a SKIPPED hole rather than closing the gap.
+/** READ_BY names, per fetcher position below, WHICH BANDS read that result --
+ *  so a position whose every reader is unmounted is not sent at all.
  *
- *    2  findings        -> r-findings
- *    5  history (hour)  -> r-whenwall's "when do we work" card, and nothing
- *                          else -- position 0 is the separate extent-wide
- *                          history the timeline above the fold draws from
- *    6  limits history  -> r-whenwall's wall card
- *    7  sessions        -> r-sessions
+ *  This is the generalisation of what used to be `OPS_ONLY = new Set([2, 5, 6,
+ *  7])`: the same idea (do not ask a question nothing on the page will draw),
+ *  applied to every band instead of only to the folded operations tier. #98's
+ *  point is that the old set was half the answer -- it saved four requests when
+ *  the fold was shut, while `view=usage` still fetched the ledger's summary and
+ *  `view=ledger` still fetched the timeline's history and both breakdowns,
+ *  because until then every band was always on the page.
  *
- *  These shifted down by one when issue #93 deleted the dead `by=model`
+ *  This file draws into THREE bands, which is why it is the one that needs the
+ *  whole set rather than a boolean:
+ *
+ *    0  history (extent) -> usage:   r-timeline
+ *    1  summary          -> usage:   r-kpis, r-efficiency
+ *                           ledger:  #spend, which app.js draws from this same
+ *                                    result rather than fetching /v1/summary a
+ *                                    second time (SUMMARY_INDEX above). So this
+ *                                    is the one position two bands share, and
+ *                                    the only one either can drop alone.
+ *    2  findings         -> ops:     r-findings
+ *    3  usage by g1      -> usage:   r-breakdowns
+ *    4  usage by g2      -> usage:   r-breakdowns, r-efficiency
+ *    5  history (hour)   -> ops:     r-whenwall's "when do we work" card, and
+ *                                    nothing else -- position 0 is the separate
+ *                                    extent-wide history the timeline draws
+ *    6  limits history   -> ops:     r-whenwall's wall card
+ *    7  sessions         -> ops:     r-sessions
+ *
+ *  Positions, because a fetcher list is a positional contract (SUMMARY_INDEX is
+ *  the standing proof); seq.js leaves each unsent slot as a SKIPPED hole rather
+ *  than closing the gap, and its covers() reads those holes to decide whether a
+ *  kept result set can answer a later round -- which is exactly what makes
+ *  arriving at a band fetch it once and every return to it free.
+ *
+ *  The ops rows shifted down by one when issue #93 deleted the dead `by=model`
  *  fetcher that used to be position 5 -- which is exactly the breakage a
- *  positional contract invites, and exactly why the list is written out here.
+ *  positional contract invites, and exactly why the table is written out here.
  */
-const OPS_ONLY = new Set([2, 5, 6, 7]);
+const READ_BY = [
+  ['usage'],
+  ['usage', 'ledger'],
+  ['ops'],
+  ['usage'],
+  ['usage'],
+  ['ops'],
+  ['ops'],
+  ['ops'],
+];
 
-export function renderReview(root, state, app, opsOpen) {
+/** renderReview's `shown` is app.js's set of LIVE bands -- mounted, and for
+ *  operations also unfolded. It is a Set of the same words `view` takes and
+ *  index.html tags its nodes with (lib/nav.js's BANDS). */
+export function renderReview(root, state, app, shown) {
   // A re-render (any state change -- a chip removed, the subscription
   // switched, ...) invalidates whatever brush-commit timer a PREVIOUS render
   // may have armed: that timer closes over the state as it stood when it was
@@ -962,8 +1037,8 @@ export function renderReview(root, state, app, opsOpen) {
     get(`/v1/history?${q({ extra: { granularity: 'hour' } })}`),
     get(`/v1/limits/history?${q({ extra: { points: 400 } })}`),
     get(`/v1/sessions?${q({ extra: { sort: state.sort, limit: 50 } })}`),
-  ].map((f, i) => (OPS_ONLY.has(i) && !opsOpen ? null : f));
+  ].map((f, i) => (READ_BY[i].some((band) => shown.has(band)) ? f : null));
 
   const ctx = { ext, sel, gran };
-  return { fetchers, apply: (results) => applyAll(root, state, app, ctx, results, opsOpen) };
+  return { fetchers, apply: (results) => applyAll(root, state, app, ctx, results) };
 }

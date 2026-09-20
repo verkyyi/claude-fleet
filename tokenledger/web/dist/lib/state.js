@@ -1,8 +1,8 @@
 // web/dist/lib/state.js — URL ⇄ state. No DOM. The hash is the only copy of the state.
-// The one import this file has, and it costs it nothing: lib/nav.js is the
-// nav's TABLE, not its rendering (scope.js does the DOM), so the line above
-// still holds. VIEWS is derived from it below.
-import { SECTIONS } from './nav.js';
+// The one import this file has, and it costs it nothing: lib/nav.js is the view
+// VOCABULARY, not its rendering (scope.js does the DOM, app.js the mounting),
+// so the line above still holds. VIEWS is derived from it below.
+import { SECTIONS, VIEW_ALL } from './nav.js';
 
 export const DIMS = ['machine', 'login', 'project', 'model', 'branch', 'team', 'session', 'source'];
 export const API_PARAM = { machine: 'endpoint', login: 'user', project: 'project', model: 'model', branch: 'branch', team: 'team', session: 'session', source: 'source' };
@@ -23,14 +23,16 @@ export const RSORTS = ['age', 'comments'];
 // table rather than written out again here. The two cannot disagree: a section
 // added to SECTIONS is a routable view the moment it exists, and a view nothing
 // navigates to cannot be spelled. The same reason nav.js shares one i18n key
-// between the entry and the band it points at.
+// between the entry and the band it names.
 //
 // `all` is the extra value and it is the default: the whole page, every band,
 // which is exactly what this page has always been. That is what keeps every
 // link ever shared — none of which carries a `view` — landing on the page its
-// sender saw. #98 is what makes the other four actually unmount anything; until
-// then `view` is a key the URL carries and the nav writes, and nothing more.
-export const VIEW_ALL = 'all';
+// sender saw. As of #98 the other four MOUNT their band and unmount the rest,
+// and the page's loaders are gated on what is mounted; VIEW_ALL is defined
+// beside SECTIONS in nav.js and re-exported here, because "no band filter" and
+// "exactly one band" are one vocabulary and it should have one home.
+export { VIEW_ALL };
 export const VIEWS = [VIEW_ALL, ...SECTIONS.map((s) => s.view)];
 export const DEFAULTS = Object.freeze({ view: VIEW_ALL, session: null, sub: 'all', span: '30d', from: null, to: null, chips: {}, g1: 'project', g2: 'model', sort: 'tokens', csort: 'cost', repo: null, rsort: 'age', rlabel: null, rshipped: null });
 
@@ -129,9 +131,17 @@ export function format(s) {
 // re-draws from the rows already in hand and the switch costs zero requests.
 // Leaving it out would make a view a full reload of the whole page: the same
 // mistake `csort` made, at four times the price (#48 measured that one at 19
-// requests per click). It stays true after #98 unmounts bands for real -- an
-// unmounted band sends no request at all, which is fewer requests, never a
-// different one, and seq.js's replay() is what hands its rows back on return.
+// requests per click).
+//
+// #98 unmounted the bands for real and the test still passes, which is worth
+// being precise about because it looks at first glance like it should not. An
+// unmounted band sends no request at all -- FEWER requests, never a DIFFERENT
+// one -- so two states that differ only in `view` still ask a subset of one
+// question set, never two disagreeing ones. seq.js's covers() is what makes
+// that safe in the other direction: a kept result set with holes where this
+// round needs answers refuses to replay and falls through to a real fetch, so
+// arriving at a band for the first time fetches it once and every return to it
+// after that is free.
 export const PRESENTATION_KEYS = ['rsort', 'rlabel', 'rshipped', 'csort', 'view'];
 export function dataKey(s) {
   const flat = { ...s, session: null };

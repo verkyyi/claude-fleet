@@ -883,13 +883,21 @@ function applyNow(root, state, app, results, opsOpen) {
   if (pulseRoot && heroWrapEl.parentNode !== pulseRoot) pulseRoot.replaceChildren(heroWrapEl);
 
   // Everything above this line is drawn from the three requests that go out
-  // whatever the fold is doing. Everything below reads a result that was only
-  // ASKED FOR when the fold is open (see renderNow's NEEDED table) -- so with
-  // the tier closed we stop here rather than hand a card a SKIPPED slot and
-  // have it print "no readings" about a question nobody asked. Cards already in
-  // the DOM from a previous open stay as they are, invisible; the next open
-  // re-fetches and redraws them.
-  if (!opsOpen) return;
+  // whatever the fold is doing, and it draws into #alerts, #pulse and #banners
+  // -- which belong to no band and are therefore on EVERY view (index.html says
+  // why). Everything below reads a result that was only ASKED FOR when the
+  // operations tier is live (see renderNow's NEEDED table) -- so with the tier
+  // closed we stop here rather than hand a card a SKIPPED slot and have it
+  // print "no readings" about a question nobody asked. Cards already in the DOM
+  // from a previous open stay as they are, invisible; the next open re-fetches
+  // and redraws them.
+  //
+  // `root` is #status, and since #98 it is null whenever the operations band is
+  // not mounted at all. Checked as well as `opsOpen` rather than instead of it:
+  // the two cannot currently disagree (app.js derives both from one `shown` set
+  // computed after the mount), and this is the line that keeps a later edit
+  // from making them disagree silently.
+  if (!opsOpen || !root) return;
 
   root.replaceChildren(...[
     wallCardFromResult(limitsR, state.chips, app.accounts),
