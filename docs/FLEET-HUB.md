@@ -116,7 +116,9 @@ python3 -m venv ~/.claude/fleet-mcp-venv
 ~/.claude/fleet-mcp-venv/bin/python -m pip install -r ~/.claude/fleet/requirements-mcp.txt
 ```
 
-Create a grant using a Fleet UUID from registration:
+Create a grant using a Fleet UUID from registration. Without `--scope` a grant
+is read-only (`fleet:read`), and without `--ttl-hours` it expires in 24 hours;
+every write scope, key and longer life is added explicitly:
 
 ```sh
 python3 ~/.claude/fleet/bin/fleet-hub.py grant scheduler \
@@ -125,8 +127,10 @@ python3 ~/.claude/fleet/bin/fleet-hub.py grant scheduler \
 ```
 
 The result includes a `principal_id` and a token, printed once. Store the token
-in the MCP client's private environment as `FLEET_HUB_TOKEN`. Configure the
-client to run the venv's Python with arguments:
+in the MCP client's private environment as `FLEET_HUB_TOKEN`. One grant serves
+one Agent for one purpose; see [Grants](#grants-one-per-agent-one-per-purpose)
+before issuing a second one. Configure the client to run the venv's Python with
+arguments:
 
 ```text
 /absolute/path/to/.claude/fleet/bin/fleet-hub.py serve --transport stdio
@@ -139,6 +143,7 @@ Hub database. Remove a grant immediately with:
 ```sh
 python3 ~/.claude/fleet/bin/fleet-hub.py revoke '<principal UUID>'
 python3 ~/.claude/fleet/bin/fleet-hub.py audit
+python3 ~/.claude/fleet/bin/fleet-hub.py principals
 ```
 
 Revocation prevents subsequent calls; an already accepted operation may still
@@ -146,13 +151,72 @@ complete. Tokens do not isolate callers that independently have the same OS
 user's shell/database access. Use a separate service account and appropriate OS
 permissions when that boundary matters.
 
+## Grants: one per Agent, one per purpose
+
+A grant is the Hub's only notion of a caller. The audit trail and the operation
+journal record the principal UUID, `revoke` acts on one principal, and every
+tool call is checked against one policy. Two Agents that share a token are
+therefore one caller: the audit trail cannot tell their actions apart, they can
+only be revoked together, and each holds whatever scope the wider one needed.
+Issue one grant per Agent and per purpose, and never place one token in two
+client configurations. A read-only inventory client and a scheduler that starts
+workers are two grants even when the same person runs both.
+
+**Naming.** The grant name is the only human-readable handle `principals`
+shows, so name the holder and the job, not the scope list:
+`<machine>-<agent>-<purpose>`, for example `macbook-claude-read`,
+`macbook-claude-start` or `ci-nightly-config`. Names match
+`[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
+
+**Minimum scope.** Every grant carries `fleet:read`; the CLI adds it and grants
+nothing else by default. Add `--scope worker:start` only for a caller that
+starts workers, `--scope config:write --config-key KEY` only for the exact keys
+it changes, and `--fleet` only for the Fleets it operates. A grant that covers
+every Fleet with every scope is a break-glass credential: issue it for hours,
+not months, and revoke it when the task ends.
+
+**Expiry.** The default is 24 hours and the maximum is one year. An interactive
+or one-off caller gets a day. An unattended Agent that must keep working gets
+at most 30 days (`--ttl-hours 720`) and is renewed; a year-long grant outlives
+the reason it was issued and the person who remembers it. An expired grant is
+refused on its next request, and `principals` keeps listing it as `expired`
+until it is revoked, so an abandoned caller stays visible.
+
+**Renewal is a new grant, not an extension.** Issue the replacement with the
+same minimum policy, store its token in the client, confirm with `principals`
+that the new principal shows calls and the old one shows none since the swap,
+then revoke the old one. A short overlap is fine; a token that lives on after
+its replacement is not.
+
+**Leaked or suspected leaked token.** Revoke it first, by principal UUID; the
+refusal takes effect on the next request, while an already accepted operation
+may still complete. Then read `audit` for that actor since the suspected time
+and check the journal for writes it made. Issue a replacement with the minimum
+scope, and treat any other secret kept in the same client store as exposed.
+
+**Reviewing grants.** List every grant, its policy and its usage:
+
+```sh
+python3 ~/.claude/fleet/bin/fleet-hub.py principals        # active and expired
+python3 ~/.claude/fleet/bin/fleet-hub.py principals --all  # also revoked
+```
+
+Each row gives `principal_id`, `name`, `state` (`active`, `expired` or
+`revoked`), `auth` (`token` or `oauth`), `scopes`, `config_keys`, `fleets` (a
+count) with `fleet_ids`, `expires_at`, `calls` and `last_call_at` (UTC, from the
+audit trail; `null` for a grant that has never called). Neither the token nor
+its hash is listed. Rows are ordered by expiry, so the grants about to lapse
+come first. Revoke a grant that is `active` with `calls: 0` long after it was
+issued, or whose `last_call_at` is older than its purpose warrants.
+
 ## Persistent private HTTP service on a Mac mini
 
 For a private deployment, the Hub can accept the same pre-issued grants through
 HTTP Authorization headers. This explicit `--auth grant-token` mode requires a
 loopback listener and an HTTPS reverse proxy. It does not advertise an OAuth
 authorization server or offer automatic client consent. Each Agent receives its
-own expiring, revocable grant through the administrator CLI above.
+own expiring, revocable grant through the administrator CLI, following
+[Grants](#grants-one-per-agent-one-per-purpose) above.
 
 Install a launchd service after installing the optional SDK:
 
