@@ -12,9 +12,10 @@ import threading
 import uuid
 
 from fleet_config_write import revision, write
-from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, Database, Fault, canonical,
-                              fields, identifier, name, now, operation,
-                              read_request, run, validate_write)
+from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
+                              canonical, fields, identifier, name, now, operation,
+                              parse_worker_id, read_request, run, validate_write,
+                              worker_identity, worker_key)
 
 BIN = Path(__file__).absolute().parent
 SCHEMA = """
@@ -24,6 +25,10 @@ CREATE TABLE IF NOT EXISTS operations (
  request TEXT NOT NULL, actor TEXT NOT NULL, status TEXT NOT NULL,
  created REAL NOT NULL, updated REAL NOT NULL, result TEXT);
 """
+
+
+class Unattempted(Fault):
+    """A refusal raised before any side effect was attempted: always `failed`."""
 
 
 class Control:
@@ -44,9 +49,9 @@ class Control:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         return env
 
-    def adapter(self, mode, *args, timeout=20):
+    def adapter(self, mode, *args, timeout=20, payload=None):
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
-                   env=self.environment(), timeout=timeout)
+                   payload=payload, env=self.environment(), timeout=timeout)
 
     def inventory(self):
         code, output, _ = self.adapter("inventory")
@@ -80,15 +85,35 @@ class Control:
         workers = []
         for line in output.decode("utf-8").splitlines():
             parts = line.split("\t")
-            if len(parts) != 7 or not re.fullmatch(r"@[0-9]+", parts[0]):
+            if len(parts) != 8 or not re.fullmatch(r"@[0-9]+", parts[0]):
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
-            window, issue, scratch, worktree, state, agent, handle = parts
+            window, issue, scratch, worktree, state, agent, handle, lifecycle = parts
             if not issue and scratch != "1":
                 continue
-            workers.append(dict(window_id=window, issue=int(issue) if issue.isdigit() else None,
+            number = int(issue) if issue.isdigit() and int(issue) > 0 else None
+            key = worker_key(number, scratch == "1", worktree)
+            # worker_id is the durable identity (issue #834); window_id and handle
+            # are observations of where it lives right now.
+            workers.append(dict(worker_id=worker_identity(fleet["fleet_id"], key), key=key,
+                                window_id=window, issue=number,
                                 scratch=scratch == "1", worktree=worktree, state=state or "unknown",
+                                lifecycle=lifecycle or "awake",
                                 agent=agent or fleet["agent"], handle=handle))
         return {"state": "running", "workers": workers, "observed_at": now()}
+
+    def find_workers(self, fleet, key):
+        snapshot = self.workers(fleet)
+        return [w for w in snapshot["workers"] if w["key"] == key], snapshot
+
+    def target(self, fleet, key, action):
+        """Resolve a durable key to exactly one live window, or raise. The
+        window is re-resolved here, at action time; a caller never names one."""
+        matches, snapshot = self.find_workers(fleet, key)
+        if not matches:
+            raise Fault("NOT_FOUND", "No live worker holds this identity on the fleet")
+        if len(matches) > 1 and action != "worker_message":
+            raise Fault("AMBIGUOUS", "Several live windows hold this identity; resolve them on the fleet first")
+        return matches, snapshot
 
     def config(self, fleet):
         path = Path(fleet["config_path"])
@@ -153,6 +178,60 @@ class Control:
             db.execute("UPDATE operations SET status=?,result=?,updated=? WHERE id=?",
                        (state, canonical(result), now(), op_id))
 
+    def execute_worker(self, fleet, action, params):
+        """Lifecycle tools on a durable worker identity. Every refusal before the
+        adapter runs raises Unattempted (a clean `failed`); anything after it
+        is `unknown` unless the post-condition was observed."""
+        fleet_id, key = parse_worker_id(params["worker_id"])
+        if fleet_id != fleet["fleet_id"]:
+            raise Unattempted("INVALID_ARGUMENT", "worker_id belongs to a different fleet")
+        if action == "worker_message":
+            if not key.startswith("issue-"):
+                raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
+            matches, _ = self.target(fleet, key, action)
+            code, output, err = self.adapter("message", fleet["name"], key[len("issue-"):],
+                                             payload=params["text"].encode("utf-8"), timeout=60)
+            if code == 5:
+                raise Unattempted("UNAVAILABLE", "The issue bridge is not enabled on this fleet")
+            if code == 2:
+                raise Unattempted("EXECUTION_FAILED", "Fleet refused the message; inspect local Fleet logs")
+            if code:
+                raise Fault("UNKNOWN_OUTCOME", "Comment post did not confirm; inspect the issue before retrying")
+            return {"channel": "issue-bridge", "comment_url": output.decode("utf-8").strip(),
+                    "delivery": "relayed by the fleet's issue bridge on its next idle tick",
+                    "workers": matches, "observed_at": now()}
+        if action == "worker_stop":
+            matches, _ = self.target(fleet, key, action)
+            if matches[0]["lifecycle"] != "awake":
+                raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before stopping it")
+            code, output, err = self.adapter("stop", fleet["name"], key, timeout=120)
+            token = output.decode("utf-8").strip().splitlines()[-1:] or [""]
+            if code in (5, 6, 8):
+                raise Unattempted({5: "NOT_FOUND", 6: "AMBIGUOUS", 8: "INVALID_STATE"}[code],
+                                  "Stop refused on the fleet: " + token[0])
+            if code:
+                raise Fault("UNKNOWN_OUTCOME", "Worker did not confirm its exit: " + token[0])
+            remaining, snapshot = self.find_workers(fleet, key)
+            if remaining:
+                raise Fault("UNKNOWN_OUTCOME", "A window still holds this identity after the stop")
+            return {"stopped": matches[0], "how": token[0],
+                    "kept": "worktree, branch and issue are untouched; the session is resumable",
+                    "observed_at": snapshot["observed_at"]}
+        # worker_resume
+        matches, _ = self.find_workers(fleet, key)
+        if matches:
+            raise Unattempted("ALREADY_RUNNING", "A live window already holds this identity")
+        code, output, err = self.adapter("resume", fleet["name"], key, timeout=180)
+        if code in (2, 4, 5):
+            raise Unattempted({2: "AT_CAPACITY", 4: "RESOURCE_GATE", 5: "NOT_RESUMABLE"}[code],
+                              "Fleet refused to resume the worker; inspect local Fleet logs")
+        if code:
+            raise Fault("UNKNOWN_OUTCOME", "Restore returned an error after starting; inspect the fleet")
+        matches, snapshot = self.find_workers(fleet, key)
+        if not matches:
+            raise Fault("UNKNOWN_OUTCOME", "Restore returned but no matching worker is visible")
+        return {"workers": matches, "observed_at": snapshot["observed_at"]}
+
     def execute(self, op_id):
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -165,7 +244,9 @@ class Control:
         try:
             fleet = self.fleet(req["fleet_id"])
             params = req["params"]
-            if req["action"] == "worker_start":
+            if req["action"] in WORKER_ACTIONS:
+                result = self.execute_worker(fleet, req["action"], params)
+            elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
                 code, _, _ = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""), timeout=180)
@@ -188,6 +269,8 @@ class Control:
                 result = self.config(fleet)
                 result["effect"] = "Future scheduling decisions; existing workers are not stopped"
             self.finish(op_id, "succeeded", result)
+        except Unattempted as exc:
+            self.finish(op_id, "failed", {"error": exc.as_dict()})
         except Fault as exc:
             state = "unknown" if attempted or exc.code in ("TIMEOUT", "UNKNOWN_OUTCOME") else "failed"
             self.finish(op_id, state, {"error": exc.as_dict()})
