@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -187,6 +188,25 @@ class Hub:
         if scope not in policy["scopes"] or (fleet_id is not None and fleet_id not in policy["fleets"]):
             raise Fault("FORBIDDEN", "Operation is outside this caller's Fleet grant")
 
+    def principals(self, include_revoked=False):
+        """Every grant with its state, policy and last audited call (issue #833). Never the token or its hash."""
+        with self.store.connect() as db:
+            rows = [dict(r) for r in db.execute("SELECT * FROM principals ORDER BY expires, name")]
+            usage = {r["actor"]: (r["calls"], r["last"]) for r in db.execute(
+                "SELECT actor, COUNT(*) AS calls, MAX(created) AS last FROM audit WHERE actor IS NOT NULL GROUP BY actor")}
+        current, result = now(), []
+        for row in rows:
+            state = "revoked" if row["revoked"] else "expired" if row["expires"] <= current else "active"
+            if state == "revoked" and not include_revoked:
+                continue
+            policy, (calls, last) = json.loads(row["policy"]), usage.get(row["id"], (0, None))
+            result.append(dict(principal_id=row["id"], name=row["name"], state=state,
+                               auth="oauth" if row["oauth_issuer"] else "token",
+                               scopes=policy["scopes"], config_keys=policy["config_keys"],
+                               fleets=len(policy["fleets"]), fleet_ids=policy["fleets"],
+                               expires_at=iso(row["expires"]), calls=calls, last_call_at=iso(last)))
+        return result
+
     def fleet_node(self, fleet_id, require_present=True):
         identifier(fleet_id)
         with self.store.connect() as db:
@@ -319,6 +339,13 @@ class Hub:
                             outcome, result.get("operation_id") if isinstance(result, dict) else None, now()))
 
 
+def iso(timestamp):
+    """UTC ISO-8601 for the human-facing listings; None passes through."""
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir")
@@ -332,18 +359,22 @@ def main(argv=None):
     register.add_argument("--ssh-config", help="Administrator-owned OpenSSH configuration for this node")
     sub.add_parser("nodes")
     sub.add_parser("sync")
-    grant = sub.add_parser("grant", help="Administrator: issue an expiring grant; token is printed once")
-    grant.add_argument("name")
-    grant.add_argument("--fleet", action="append", required=True)
-    grant.add_argument("--scope", action="append", choices=sorted(SCOPES), default=[])
-    grant.add_argument("--config-key", action="append", choices=sorted(CONFIG_KEYS), default=[])
-    grant.add_argument("--ttl-hours", type=float, default=24)
+    grant = sub.add_parser("grant", help="Administrator: issue one expiring grant per Agent and purpose; token is printed once")
+    grant.add_argument("name", help="Who holds it and for what, e.g. macbook-claude-read")
+    grant.add_argument("--fleet", action="append", required=True, help="Fleet UUID; repeat for each Fleet this caller operates")
+    grant.add_argument("--scope", action="append", choices=sorted(SCOPES), default=[],
+                       help="fleet:read is always granted and is the whole default; add worker:start / config:write only for a caller that needs them")
+    grant.add_argument("--config-key", action="append", choices=sorted(CONFIG_KEYS), default=[],
+                       help="With config:write, each key this caller may set")
+    grant.add_argument("--ttl-hours", type=float, default=24, help="Expiry from now in hours; default 24, maximum 8760")
     grant.add_argument("--oauth-issuer")
     grant.add_argument("--oauth-subject")
     grant.add_argument("--oauth-client")
-    revoke = sub.add_parser("revoke")
+    revoke = sub.add_parser("revoke", help="Administrator: refuse this principal from its next request on")
     revoke.add_argument("principal_id")
-    sub.add_parser("audit")
+    principals = sub.add_parser("principals", help="Administrator: every grant with state, scopes, Fleet count, expiry and last call")
+    principals.add_argument("--all", action="store_true", help="Include revoked grants (default: active and expired)")
+    sub.add_parser("audit", help="Administrator: the last 100 audit rows, newest first")
     serve = sub.add_parser("serve")
     serve.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
     serve.add_argument("--auth", choices=("oauth", "grant-token"), default="oauth",
@@ -374,6 +405,8 @@ def main(argv=None):
             with hub.store.connect() as db:
                 count = db.execute("UPDATE principals SET revoked=1 WHERE id=?", (identifier(args.principal_id),)).rowcount
             result = {"revoked": bool(count)}
+        elif args.command == "principals":
+            result = hub.principals(args.all)
         elif args.command == "audit":
             with hub.store.connect() as db:
                 result = [dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")]

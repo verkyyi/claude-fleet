@@ -2,7 +2,9 @@
 """Hermetic Hub/SSH-bridge tests. No live tmux, SSH, GitHub or model calls."""
 
 import asyncio
+import contextlib
 import importlib.util
+import io
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version
 import json
@@ -121,6 +123,13 @@ class HubFixture(unittest.TestCase):
 
     def submit(self, key="request-1", issue=123):
         return self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key=key, params={"issue": issue}))
+
+    def cli(self, *argv):
+        """Run the administrator CLI against this fixture's registry; returns (exit code, parsed stdout)."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = hub_module.main(["--state-dir", str(self.hub.store.root), *argv])
+        return code, json.loads(out.getvalue()) if out.getvalue().strip() else None
 
 
 class HubTests(HubFixture):
@@ -336,6 +345,60 @@ class HubTests(HubFixture):
         self.assertNotIn(self.token, canonical(audit))
         self.assertNotIn(self.token.encode(), self.hub.store.path.read_bytes())
 
+    def test_cli_grant_defaults_to_read_only_for_one_day(self):
+        # Issue #833: the default grant is the minimum usable one; writes and a longer life are explicit.
+        code, issued = self.cli("grant", "minimal", "--fleet", self.fleet)
+        self.assertEqual(code, 0)
+        self.assertEqual(issued["policy"], {"fleets": [self.fleet], "scopes": ["fleet:read"], "config_keys": []})
+        self.assertAlmostEqual(issued["expires_at"], now() + 24 * 3600, delta=120)
+        with self.assertRaises(Fault):
+            self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="min", params={"issue": 1}), issued["token"])
+        code, wider = self.cli("grant", "scheduler-2", "--fleet", self.fleet, "--scope", "worker:start", "--ttl-hours", "720")
+        self.assertEqual((code, wider["policy"]["scopes"]), (0, ["fleet:read", "worker:start"]))
+        self.assertAlmostEqual(wider["expires_at"], now() + 720 * 3600, delta=120)
+
+    def test_principals_lists_state_scopes_usage_and_no_secrets(self):
+        # Issue #833: one grant per Agent — audit separates them, revoking one leaves the other, and
+        # `principals` shows every grant's scopes, Fleet count, expiry and last call without its hash.
+        reader = self.hub.grant("reader", [self.fleet], ["fleet:read"], ttl_hours=2)
+        self.call("fleet_list", {"refresh": False})
+        for _ in range(2):
+            self.call("fleet_list", {"refresh": False}, reader["token"])
+        with self.hub.store.connect() as db:
+            actors = [r[0] for r in db.execute("SELECT actor FROM audit WHERE action='fleet_list' ORDER BY id")]
+        self.assertEqual(actors, [self.grant["principal_id"], reader["principal_id"], reader["principal_id"]])
+        code, listed = self.cli("principals")
+        self.assertEqual(code, 0)
+        rows = {row["name"]: row for row in listed}
+        self.assertEqual(set(rows), {"scheduler", "reader"})
+        self.assertEqual(rows["scheduler"]["scopes"], ["config:write", "fleet:read", "worker:start"])
+        self.assertEqual(rows["scheduler"]["config_keys"], ["FLEET_MAX_SESSIONS"])
+        self.assertEqual((rows["reader"]["scopes"], rows["reader"]["fleets"], rows["reader"]["fleet_ids"]),
+                         (["fleet:read"], 1, [self.fleet]))
+        self.assertEqual((rows["reader"]["state"], rows["reader"]["auth"], rows["reader"]["calls"], rows["scheduler"]["calls"]),
+                         ("active", "token", 2, 1))
+        self.assertRegex(rows["reader"]["last_call_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertRegex(rows["reader"]["expires_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertLess(rows["reader"]["expires_at"], rows["scheduler"]["expires_at"])
+        text = canonical(listed)
+        for secret in (self.token, reader["token"], hub_module.digest(self.token), "token_hash"):
+            self.assertNotIn(secret, text)
+        # Never called → visible as idle; expired → still listed, marked; revoked → hidden unless --all.
+        idle = self.hub.grant("idle", [self.fleet], ["fleet:read"])
+        with self.hub.store.connect() as db:
+            db.execute("UPDATE principals SET expires=1 WHERE id=?", (idle["principal_id"],))
+        code, listed = self.cli("principals")
+        rows = {row["name"]: row for row in listed}
+        self.assertEqual((rows["idle"]["state"], rows["idle"]["calls"], rows["idle"]["last_call_at"]), ("expired", 0, None))
+        self.assertEqual(listed[0]["name"], "idle")
+        self.assertEqual(self.cli("revoke", reader["principal_id"]), (0, {"revoked": True}))
+        with self.assertRaises(Fault):
+            self.call("fleet_list", {"refresh": False}, reader["token"])
+        self.call("fleet_list", {"refresh": False})
+        self.assertEqual({row["name"] for row in self.cli("principals")[1]}, {"scheduler", "idle"})
+        rows = {row["name"]: row for row in self.cli("principals", "--all")[1]}
+        self.assertEqual((rows["reader"]["state"], rows["reader"]["calls"], rows["scheduler"]["calls"]), ("revoked", 2, 2))
+
 
 @unittest.skipUnless(HAS_MCP_SDK, "optional MCP SDK 2.2.0 is not installed")
 class MCPTests(HubFixture):
@@ -366,6 +429,14 @@ class MCPTests(HubFixture):
             with self.hub.store.connect() as db:
                 db.execute("UPDATE principals SET revoked=1 WHERE id=?", (reader["principal_id"],))
             self.assertEqual(client.post("/mcp", json=read, headers=headers).status_code, 401)
+            # Issue #833: 401 lands only on the revoked grant; the sibling grant is untouched.
+            headers["Authorization"] = "Bearer " + self.token
+            self.assertEqual(client.post("/mcp", json=read, headers=headers).status_code, 200)
+        with self.hub.store.connect() as db:
+            actors = {r[0] for r in db.execute("SELECT actor FROM audit WHERE action='fleet_list'")}
+        self.assertEqual(actors, {self.grant["principal_id"], reader["principal_id"]})
+        states = {row["name"]: row["state"] for row in self.hub.principals(include_revoked=True)}
+        self.assertEqual((states["http-reader"], states["scheduler"]), ("revoked", "active"))
 
     def test_stdio_protocol_tools_and_live_revocation(self):
         from mcp import ClientSession, StdioServerParameters, stdio_client
