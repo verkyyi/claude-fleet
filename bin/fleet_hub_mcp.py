@@ -125,7 +125,7 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
 
     @server.tool(annotations=read, structured_output=True)
     async def fleet_status(fleet_id: str) -> dict[str, Any]:
-        """Read a fleet's current state and workers. Window IDs are observations, not durable identities."""
+        """Read a fleet's current state and workers. Each worker's worker_id is its durable identity (use it for worker_message/stop/resume); window_id and handle are observations."""
         return await invoke("fleet_status", {"fleet_id": fleet_id})
 
     @server.tool(annotations=read, structured_output=True)
@@ -144,6 +144,23 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
         """Set one granted Fleet-level integer/bool key using config_get's revision; poll operation_get."""
         return await invoke("config_set", {"fleet_id": fleet_id, "idempotency_key": idempotency_key,
                                            "params": {"key": key, "value": value, "expected_revision": expected_revision}})
+
+    lifecycle = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
+
+    @server.tool(annotations=change, structured_output=True)
+    async def worker_message(worker_id: str, text: str, idempotency_key: str) -> dict[str, Any]:
+        """Send text to a live worker as its next turn through the fleet's issue bridge (a comment on its issue, no keystrokes). Needs worker:message; poll operation_get."""
+        return await invoke("worker_message", {"worker_id": worker_id, "text": text, "idempotency_key": idempotency_key})
+
+    @server.tool(annotations=lifecycle, structured_output=True)
+    async def worker_stop(worker_id: str, idempotency_key: str) -> dict[str, Any]:
+        """Gracefully end a live worker's session (/exit, then the fleet's normal exit policy). Worktree, branch and issue are left in place; the session stays resumable. Needs worker:stop; poll operation_get."""
+        return await invoke("worker_stop", {"worker_id": worker_id, "idempotency_key": idempotency_key})
+
+    @server.tool(annotations=change, structured_output=True)
+    async def worker_resume(worker_id: str, idempotency_key: str) -> dict[str, Any]:
+        """Resume a stopped worker from its /fleet-history row in a new window under local Fleet gates. Refused while a live window holds the identity. Needs worker:resume; poll operation_get."""
+        return await invoke("worker_resume", {"worker_id": worker_id, "idempotency_key": idempotency_key})
 
     @server.tool(annotations=read, structured_output=True)
     async def operation_get(operation_id: str) -> dict[str, Any]:

@@ -12,9 +12,9 @@ import secrets
 import sys
 import uuid
 
-from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, SCOPES, Database, Fault,
-                              canonical, digest, fields, identifier, name, now,
-                              operation, run, validate_write)
+from fleet_hub_common import (CONFIG_KEYS, PROTOCOL, SCOPE_OF, SCOPES, WORKER_ACTIONS,
+                              Database, Fault, canonical, digest, fields, identifier,
+                              name, now, operation, parse_worker_id, run, validate_write)
 
 BIN = Path(__file__).absolute().parent
 REMOTE_COMMAND = ('export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; '
@@ -239,7 +239,7 @@ class Hub:
     def submit(self, principal, action, params):
         fields(params, ("fleet_id", "idempotency_key", "params"))
         fleet_id = identifier(params["fleet_id"])
-        self.authorize(principal, "worker:start" if action == "worker_start" else "config:write", fleet_id)
+        self.authorize(principal, SCOPE_OF[action], fleet_id)
         key = params["idempotency_key"]
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):
             raise Fault("INVALID_ARGUMENT", "idempotency_key must be 1–128 letters, digits or ._:-")
@@ -301,8 +301,18 @@ class Hub:
                 return result
         return self.stored_operation(op_id)
 
+    @staticmethod
+    def worker_request(params):
+        """A lifecycle tool names a worker, not a fleet: the fleet half of the
+        worker id is what the grant is checked against and where it routes."""
+        fields(params, ("worker_id", "idempotency_key"), ("text",))
+        fleet_id, _ = parse_worker_id(params["worker_id"])
+        body = {k: v for k, v in params.items() if k in ("worker_id", "text")}
+        return fleet_id, dict(fleet_id=fleet_id, idempotency_key=params["idempotency_key"], params=body)
+
     def call(self, tool, params, *, token=None, oauth=None, token_scopes=None):
         principal, result, outcome = None, None, "OK"
+        audit_fleet = params.get("fleet_id") if isinstance(params, dict) else None
         try:
             principal = self.authenticate(token, oauth)
             if token_scopes is not None:
@@ -319,6 +329,9 @@ class Hub:
                 result = self.rpc(self.fleet_node(params["fleet_id"]), tool, params)
             elif tool in ("worker_start", "config_set"):
                 result = self.submit(principal, tool, params)
+            elif tool in WORKER_ACTIONS:
+                audit_fleet, request = self.worker_request(params)
+                result = self.submit(principal, tool, request)
             elif tool == "operation_get":
                 fields(params, ("operation_id",))
                 result = self.get_operation(principal, params["operation_id"])
@@ -334,8 +347,7 @@ class Hub:
         finally:
             with self.store.connect() as db:
                 db.execute("INSERT INTO audit(actor,action,fleet_id,outcome,operation_id,created) VALUES (?,?,?,?,?,?)",
-                           (principal["id"] if principal else None, str(tool),
-                            params.get("fleet_id") if isinstance(params, dict) else None,
+                           (principal["id"] if principal else None, str(tool), audit_fleet,
                             outcome, result.get("operation_id") if isinstance(result, dict) else None, now()))
 
 

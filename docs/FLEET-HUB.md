@@ -6,9 +6,10 @@ grants, an operation journal and an audit trail. Each machine continues running
 its own workers. The Hub invokes a fixed JSON control entry point over SSH;
 nodes do not need a new network listener or the MCP SDK.
 
-This first implementation supports discovery, status, issue-worker starts and
-three explicitly allowed configuration keys. It is opt-in: installing the files
-does not start a service, register machines or grant anyone access.
+The Hub supports discovery, status, issue-worker starts, three explicitly
+allowed configuration keys, and — on a durable worker identity — messaging,
+graceful stop and resume. It is opt-in: installing the files does not start a
+service, register machines or grant anyone access.
 
 Here, **Fleet Hub** means the cross-machine control service. The existing `plan`
 hub window remains the per-Fleet dashboard; it is not this service.
@@ -43,22 +44,46 @@ are administrator-owned registry data. Registration pins the node UUID; later
 responses from a different node identity are refused. OpenSSH host-key checking
 is required independently of this application-level identity check.
 
-Worker window IDs and short Fleet handles are returned as observations only.
-They are not durable cross-machine addresses. Stop, message, recovery and
-transfer tools require stronger worker-lifecycle identity and are deferred.
+### Worker identity
 
-## First-version tools
+`fleet_status` returns two kinds of value per worker, side by side:
+
+- `worker_id` — the **durable identity**: `<fleet UUID>/issue-<N>` for a worker
+  bound to an Issue, `<fleet UUID>/scratch-<N>` for a raw scratch session. It is
+  built from the binding the fleet itself keys every `/fleet-history` row and
+  ledger-watch snapshot on (`@issue`, or the scratch worktree slug), so it
+  survives a `/fleet-handoff` (same window, new native session), an account
+  migration (new window, `@issue` re-bound), `renumber-windows` and a tmux server
+  restart. A window whose scratch worktree cannot be resolved has `worker_id`
+  `null` and cannot be addressed.
+- `window_id`, `handle` — **observations** of where that identity lives right
+  now. They are re-minted by every migration, restore and warm-pool claim and are
+  never accepted as a target.
+
+`worker_message`, `worker_stop` and `worker_resume` take the `worker_id`. The
+node re-resolves it against the fleet's live windows at the moment it acts and
+refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
+that merely has the number a caller last saw is never touched. `lifecycle`
+reports hibernation (`awake`, `preparing`, `sleeping`, `waking`, `failed`); a
+sleeping worker is refused (`INVALID_STATE`) rather than typed at, because the
+sleep controller owns its pane. Transfer between machines is still deferred.
+
+## Tools
 
 | MCP tool | Behavior | Required grant |
 |---|---|---|
 | `fleet_list(refresh=true)` | Discover changes on the caller's registered nodes; return only granted Fleets | `fleet:read` |
-| `fleet_status(fleet_id)` | Read current workers on the named socket | `fleet:read` on that Fleet |
+| `fleet_status(fleet_id)` | Read current workers on the named socket, each with its durable `worker_id` | `fleet:read` on that Fleet |
 | `config_get(fleet_id)` | Read managed values and the Fleet-overlay revision | `fleet:read` on that Fleet |
 | `worker_start(fleet_id, issue, idempotency_key, agent?)` | Start an existing Issue through the headless Fleet launcher | `worker:start` on that Fleet |
+| `worker_message(worker_id, text, idempotency_key)` | Post `text` as the worker's next turn through the fleet's issue bridge (a `--to-worker` comment on its Issue; never keystrokes) | `worker:message` on the worker's Fleet |
+| `worker_stop(worker_id, idempotency_key)` | Graceful `/exit` of the live session; the fleet's own exit policy closes the window and records the `/fleet-history` row | `worker:stop` on the worker's Fleet |
+| `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 
-All callers need `fleet:read`. Tools do not expose shell commands, raw tmux
+All callers need `fleet:read`. Each lifecycle tool has its own scope; none of
+them is implied by `worker:start`. Tools do not expose shell commands, raw tmux
 commands, arbitrary paths, environment overrides, `--force`, registration or
 grant administration. A visible tool is not an authorization decision: the Hub
 checks the live grant on every call. HTTP access-token scopes further restrict
@@ -125,6 +150,10 @@ python3 ~/.claude/fleet/bin/fleet-hub.py grant scheduler \
   --fleet '<fleet UUID>' --scope worker:start \
   --scope config:write --config-key FLEET_MAX_SESSIONS --ttl-hours 24
 ```
+
+Lifecycle scopes are granted the same way and separately — `--scope
+worker:message`, `--scope worker:stop`, `--scope worker:resume` — so a caller
+that may nudge workers need not be able to end them.
 
 The result includes a `principal_id` and a token, printed once. Store the token
 in the MCP client's private environment as `FLEET_HUB_TOKEN`. One grant serves
@@ -330,6 +359,49 @@ a node is unreachable. An offline Fleet is not removed or treated as idle.
 There is no automatic write queue for disconnected nodes. Nodes continue
 running their existing workers if the Hub goes down.
 
+### Worker lifecycle tools
+
+The three lifecycle writes go through the same journal — recorded on the Hub
+and on the node before anything runs, deduplicated per caller by idempotency
+key, `unknown` when the outcome could not be confirmed — and each refuses
+before acting when its precondition does not hold, which is a plain `failed`
+with a code, never `unknown`:
+
+- `worker_message` requires a live worker and a fleet that has opted into the
+  issue bridge (`FLEET_ISSUE_BRIDGE=1`); otherwise `NOT_FOUND` / `UNAVAILABLE`,
+  and nothing is posted. It posts through `fleet-comment.sh --to-worker --from
+  hub`, so the comment is both the audit record and the delivery: the bridge
+  relays it as the worker's next idle turn (subject to the bridge's association
+  gate), typically within its ~15 s tick. A scratch session has no Issue and
+  cannot be messaged. Text is limited to 4000 characters and may not contain
+  HTML comments or control characters — a forged `<!-- fleet:… -->` marker
+  could suppress or misattribute the relay. A confirmed post is `succeeded`
+  with the comment URL; a post whose `gh` call failed after it was attempted is
+  `unknown`.
+- `worker_stop` is what the operator's own `/exit` does, from the outside
+  (`fleet-worker-stop.sh`): Escape, `/exit`, Enter — the only keys ever typed —
+  then wait for the agent process to be gone, then let the SessionEnd hook close
+  the window and record the closed-unlanded `/fleet-history` row. The stop runs
+  no git command: the worktree, branch and Issue are left exactly as they were
+  and the session is resumable. The hook applies the fleet's ordinary exit
+  policy to the worktree (it removes one only when its branch is already merged
+  or a strict ancestor of base; uncommitted or unmerged work is always kept) —
+  a stop is not exempt from that policy, and it is not a reap. When no hook
+  closes the window (`FLEET_CLOSE_ON_EXIT=0`, or a pane already sitting at a
+  bare shell) the script records the row itself and closes the shell-only
+  window. An agent that does not exit within `FLEET_STOP_EXIT_WAIT` (30 s) is
+  left as it is and the operation is `unknown`; a stop that lands is confirmed
+  by re-reading the fleet — the identity must no longer be held by any window.
+- `worker_resume` refuses while any live window holds the identity
+  (`ALREADY_RUNNING`), reads the `/fleet-history` verdict (`REVIEW-ONLY` ⇒
+  `NOT_RESUMABLE`), pays the same disk/quota gates a start pays
+  (`RESOURCE_GATE`) and the session cap (`AT_CAPACITY`), then runs the headless
+  `dash-restore-session.sh` — the same path as the dash's ⌃o — which reuses the
+  worktree if it is still on disk, otherwise rebuilds it off the recorded SHA,
+  and reopens the surviving transcript with `--resume`. The new window carries
+  the same `@issue`, so the same `worker_id` is live again; its window id and
+  handle are new. A resumed session holds a slot and spends tokens like a start.
+
 Worker starts reuse `dash-issue-session.sh` with an explicit target session and
 provider. They preserve its capacity and Issue-claim checks; the bridge also
 checks disk and configured provider quota gates. Existing fail-open quota/claim
@@ -363,8 +435,13 @@ future scheduling decisions and do not terminate existing workers.
 Run the hermetic regression suite through the normal shadow-root gate:
 
 ```sh
-bin/run-selftests.sh fleet-hub tmux-config dash-agent-toggle
+bin/run-selftests.sh fleet-hub fleet-worker-stop tmux-config dash-agent-toggle
 ```
+
+`fleet-worker-stop-selftest.sh` drives the real stop script against fake
+agents on an isolated tmux socket: a stop by key exits that agent and closes
+only that window, an unheld / doubly held / hibernating key is refused, an
+agent that will not exit is left alone, and a window number is not a key.
 
 The stdlib tests use temporary registries, fake SSH/spawn endpoints and real
 SQLite/config writers. When tmux is installed, an isolated server also verifies
@@ -375,9 +452,8 @@ boundary in process. No test contacts a real SSH host, changes a live Fleet or
 starts a model session.
 
 Next increments, in order: add cross-node scheduling reservations and caller
-budgets; introduce durable
-worker identities for messaging/stop/recovery; add outbound node connections
-for machines unreachable by SSH. High availability and automatic routing to the
+budgets; worker transfer between machines on the same identity; add outbound
+node connections for machines unreachable by SSH. High availability and automatic routing to the
 best machine are outside this first version.
 
 Protocol references: [official Python SDK](https://github.com/modelcontextprotocol/python-sdk),

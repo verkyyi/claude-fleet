@@ -362,8 +362,9 @@ Upgrading from the old flat layout is automatic — `/fleet-sync-install` runs
 
 The optional **Fleet Hub** gives authorized Agents one MCP endpoint for Fleets
 on several machines, including SSH-connected hosts. It supports scoped status
-queries, Issue-worker starts, limited configuration updates and persistent
-operation tracking. Nodes use a fixed SSH control entry point; existing workers
+queries, Issue-worker starts, messaging / graceful stop / resume of a worker by
+a durable identity that survives handoffs and account migrations, limited
+configuration updates and persistent operation tracking. Nodes use a fixed SSH control entry point; existing workers
 continue if the Hub disconnects. A launchd installer runs a persistent Hub on
 macOS, with private HTTPS grant tokens or an OAuth HTTP deployment.
 See [Fleet Hub setup and authorization](docs/FLEET-HUB.md).
