@@ -404,6 +404,26 @@ def reconcile_one(source, account, data, dry=False):
             # release it; the loop recovery scanner itself never assumes reset.
             quota_loop(path, source, 'cancelled', restored=True)
         return
+    # An idle `done` worker with no active turn is cheaper HIBERNATED than migrated
+    # when sleep is on: sleep retires its session — freeing the very quota that
+    # tripped the ceiling — and restores it on demand, where a proactive migration
+    # spends tokens moving a conversation that is doing nothing. So a proactive
+    # trigger (over/blocked, never a hard wall) hands a `done` source to the sleep
+    # daemon: no request, no bench, no marker, so check_quota_wait sees nothing and
+    # hibernation proceeds. A hard wall still migrates (sleep refuses a hard-walled
+    # source, and its account is genuinely out of headroom); a `working` source
+    # still migrates (moving it BEFORE it hits the wall is the point); and with
+    # sleep off it would neither sleep nor migrate, so it is not deferred.
+    # (operator choice, 2026-09-20 — idle done prefers sleep.)
+    if (not hard and (over or blocked) and source.get('state') == 'done'
+            and os.environ.get('FLEET_SLEEP') == 'on'):
+        if dry:
+            print(json.dumps(dict(source=source['session_id'],
+                  decision={'state':'deferred-to-hibernation','target':None,
+                            'reason':'idle done source; hibernation frees this quota, migration spends it'})))
+        elif r and r.get('state') not in ('bound','cancelled','recovered'):
+            outcome(path,r,'cancelled','idle done source deferred to hibernation')
+        return
     allowed = os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
     failed = [key for key,until in r.get('failed_targets',{}).items() if until > time.time()]
     decision = ACCOUNT['choose'](data,source['agent'],[account['key'],*failed],allowed=allowed)
