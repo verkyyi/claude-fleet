@@ -113,6 +113,33 @@ class Failover(unittest.TestCase):
         with patch.object(flow,'move') as move:flow.reconcile_one(self.source,self.account,self.data)
         self.assertTrue(move.called)
 
+    def test_an_idle_done_source_defers_to_hibernation_instead_of_migrating(self):
+        # Operator choice (2026-09-20): an idle `done` worker on an over-ceiling
+        # account is cheaper hibernated (frees the quota) than migrated (spends
+        # it). Proactive only, sleep on only; a hard wall or a working source
+        # still migrates.
+        flow.evidence.return_value = (False, 'turn:1')     # proactive, not hard
+        self.account.update(utilization=100)               # over the 85 ceiling
+        self.data['accounts'].append(self.other)
+        done = dict(self.source, agent='claude', state='done')
+        with patch.dict(os.environ, {'FLEET_SLEEP': 'on'}), patch.object(flow, 'move') as move:
+            flow.reconcile_one(done, self.account, self.data)
+        self.assertFalse(move.called)
+        self.assertFalse((self.path / 'request.json').exists())
+        # sleep off -> nothing to defer to -> it migrates as before
+        with patch.dict(os.environ, {'FLEET_SLEEP': 'observe'}), patch.object(flow, 'move') as move:
+            flow.reconcile_one(done, self.account, self.data)
+        self.assertTrue(move.called)
+        # a working source still migrates proactively even with sleep on
+        with patch.dict(os.environ, {'FLEET_SLEEP': 'on'}), patch.object(flow, 'move') as move:
+            flow.reconcile_one(dict(done, state='working'), self.account, self.data)
+        self.assertTrue(move.called)
+        # a hard wall on a done source still migrates (sleep refuses a hard one)
+        flow.evidence.return_value = (True, 'turn:1')
+        with patch.dict(os.environ, {'FLEET_SLEEP': 'on'}), patch.object(flow, 'move') as move:
+            flow.reconcile_one(done, self.account, self.data)
+        self.assertTrue(move.called)
+
     def test_dry_run_creates_no_request_or_pane_mutation(self):
         flow.reconcile_one(self.source,self.account,self.data,dry=True)
         self.assertFalse(self.path.exists());self.assertFalse(flow.stamp.called)
