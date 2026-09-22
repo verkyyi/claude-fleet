@@ -172,4 +172,15 @@ eq "kind: sticky Fable line → model:fable" model:fable  "$(printf '%s\n' "$FAB
 eq "kind: Opus cap → model:opus"           model:opus   "$(printf '%s\n' "hit your Opus limit · resets 3pm (America/Los_Angeles)" | fleet_limit_kind)"
 eq "kind: nothing → nothing"               ""           "$(printf '' | fleet_limit_kind)"
 
-printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind (%s assertions)\n' "$CHECKS"
+# fleet_banner_replayed (#870): the wall a migrated session left behind vs a new one.
+rp() { fleet_banner_replayed "$1" "$2" && echo replay || echo new; }
+WK="hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)"
+eq "replay: same wall → replay"                  replay "$(rp "$WK" "$WK")"
+eq "replay: redraw padding ignored → replay"     replay "$(rp "$WK   " "$WK")"
+eq "replay: own reset instant → new"             new    "$(rp "hit your weekly limit · resets Sep 20 at 7am (Asia/Shanghai)" "$WK")"
+eq "replay: never migrated (no stamp) → new"     new    "$(rp "$WK" "")"
+eq "replay: no banner, no stamp → new"           new    "$(rp "" "")"
+eq "replay: banner read off a real replayed pane" replay \
+   "$(rp "$(printf "  ⎿  You've %s\n     /usage-credits to finish\n" "$WK" | fleet_limit_banner)" "$WK")"
+
+printf 'selftest OK: usage-lib severity + freshness gate + summary + limit banner + limit kind + replay (%s assertions)\n' "$CHECKS"

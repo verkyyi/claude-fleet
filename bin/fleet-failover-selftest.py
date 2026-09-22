@@ -538,8 +538,21 @@ class ClaudeWall(unittest.TestCase):
                              ("Usage limit reached · continuing automatically at 1:50am", ('subscription','')),
                              ("You've hit your Fable 5 limit · resets Sep 6", ('model:fable','')),
                              ("all quiet", ('',''))):
-            with patch.object(flow,'tm',return_value=screen):
+            with patch.object(flow,'tm',side_effect=self.screen_tm(screen)):
                 self.assertEqual(flow.claude_banner(self.source), want, screen)
+
+    @staticmethod
+    def screen_tm(screen, migrated=''):
+        return lambda _s, *a: screen if a[0] == 'capture-pane' else migrated
+
+    def test_the_wall_a_window_was_migrated_off_is_no_evidence(self):
+        # #870: --resume re-renders the source's wall; @migrated_banner names it
+        screen = "  ⎿  You've hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)"
+        wall = 'hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)'
+        with patch.object(flow,'tm',side_effect=self.screen_tm(screen, wall)):
+            self.assertEqual(flow.claude_banner(self.source), ('',''))
+        with patch.object(flow,'tm',side_effect=self.screen_tm(screen, 'hit your weekly limit · resets Sep 19')):
+            self.assertEqual(flow.claude_banner(self.source), ('subscription','7d'))
 
 
 if __name__=='__main__':unittest.main()

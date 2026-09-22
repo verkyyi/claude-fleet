@@ -28,7 +28,7 @@ if [ "${1:-}" = -L ]; then [ "$2" = fixture ] || exit 1; shift 2; fi
 case "$1" in
   list-windows)
     if [[ "$*" = *pane_pid* ]]; then
-      printf '@1 %%1 101 acctB\n@2 %%2 102\n@3 %%3 103 acctB\n@4 %%4 104 acctB\n@5 %%5 105\n@6 %%6 106 acctB\n@7 %%7 107 acctA\n'
+      printf '@1 %%1 101 acctB\n@2 %%2 102\n@3 %%3 103 acctB\n@4 %%4 104 acctB\n@5 %%5 105\n@6 %%6 106 acctB\n@7 %%7 107 acctA\n@8 %%8 108 acctB\n@9 %%9 109 acctB\n'
     else
       printf 'fixture:1\037@1\037acctB\nfixture:2\037@2\037\nfixture:3\037@3\037acctB\nfixture:4\037@4\037acctB\nfixture:5\037@5\037\n'
     fi ;;
@@ -37,6 +37,9 @@ case "$1" in
       *session_name*) echo fixture ;;
       *pane_pid*) printf '@1 %%1 101\n' ;;
       *@ctx_pct*) echo 10 ;;
+      # #870: @8 was migrated off exactly this wall (a --resume replay); @9 off an older one
+      *'-t @8 #{@migrated_banner}'*) echo 'Usage limit reached · continuing automatically at 1:50am · esc to cancel' ;;
+      *'-t @9 #{@migrated_banner}'*) echo "hit your weekly limit · resets Sep 25 at 7am" ;;
     esac ;;
   capture-pane) case "$*" in *'%6'*|*'%7'*) exit 0 ;; esac; printf 'Usage limit reached · continuing automatically at 1:50am · esc to cancel\n' ;;
   set-window-option) : ;;
@@ -47,13 +50,13 @@ cat > "$WORK/fake/ps" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$PSLOG"
 case "$*" in
-  *comm=*) printf '101 1 zsh\n201 101 claude\n102 1 zsh\n202 102 claude\n103 1 zsh\n203 103 codex\n104 1 zsh\n204 104 claude\n105 1 zsh\n205 105 claude\n106 1 zsh\n206 106 claude\n107 1 zsh\n207 107 claude\n' ;;
-  *command=*) printf '101 zsh\n201 claude\n102 zsh\n202 claude\n103 zsh\n203 codex\n104 zsh\n204 claude\n105 zsh\n205 claude\n106 zsh\n206 claude\n107 zsh\n207 claude\n' ;;
+  *comm=*) printf '101 1 zsh\n201 101 claude\n102 1 zsh\n202 102 claude\n103 1 zsh\n203 103 codex\n104 1 zsh\n204 104 claude\n105 1 zsh\n205 105 claude\n106 1 zsh\n206 106 claude\n107 1 zsh\n207 107 claude\n108 1 zsh\n208 108 claude\n109 1 zsh\n209 109 claude\n' ;;
+  *command=*) printf '101 zsh\n201 claude\n102 zsh\n202 claude\n103 zsh\n203 codex\n104 zsh\n204 claude\n105 zsh\n205 claude\n106 zsh\n206 claude\n107 zsh\n207 claude\n108 zsh\n208 claude\n109 zsh\n209 claude\n' ;;
 esac
 FAKE
 cat > "$WORK/fake/token-probe" <<'FAKE'
 #!/bin/sh
-case "$1" in 201|206|207) echo token-A ;; 202|203) echo token-B ;; 204) echo unregistered-token ;; 205) exit 1 ;; esac
+case "$1" in 201|206|207) echo token-A ;; 202|203|208|209) echo token-B ;; 204) echo unregistered-token ;; 205) exit 1 ;; esac
 FAKE
 cat > "$WORK/bin/fleet-account.sh" <<'FAKE'
 #!/bin/sh
@@ -75,8 +78,11 @@ export TMLOG="$WORK/tmux.log" PSLOG="$WORK/ps.log" ACLOG="$WORK/account.log"
 ) > "$WORK/out" 2> "$WORK/err"
 fail() { printf 'collect-account FAIL: %s\n' "$1" >&2; exit 1; }
 grep -q '^mark-limited acctA ' "$ACLOG" || fail 'stale acctB stamp hid acctA token truth'
-[ "$(wc -l < "$ACLOG" | tr -d ' ')" = 2 ] || fail 'unknown/non-Claude windows attributed, or unstamped window skipped'
+[ "$(wc -l < "$ACLOG" | tr -d ' ')" = 3 ] || fail 'unknown/non-Claude windows attributed, or unstamped window skipped'
 grep -q '^mark-limited acctB ' "$ACLOG" || fail 'unstamped acctB process was not attributed'
+# #870: the wall a migrated session left behind, replayed by --resume on the NEW
+# account's pane (@8), benches nobody; a different wall (@9: its own reset) still does.
+[ "$(grep -c '^mark-limited acctB ' "$ACLOG")" = 2 ] || fail "replayed banner benched the new account, or a new wall was ignored: $(cat "$ACLOG")"
 grep -q -- '-L fixture set-window-option -t %1 @cc_account acctA' "$TMLOG" || fail 'stale stamp was not healed on its own socket/pane'
 grep -q -- '-L fixture set-window-option -t %2 @cc_account acctB' "$TMLOG" || fail 'empty stamp was not healed'
 grep -q -- '-L fixture set-window-option -t %6 @cc_account acctA' "$TMLOG" || fail 'quiet pane stamp was not healed'

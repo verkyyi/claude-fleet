@@ -19,7 +19,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 export FLEET_TRANSFER_EXIT_WAIT=2 FLEET_TRANSFER_BOOT_WAIT=3
 export TRANSFER_TEST_ROOT="$WORK"
@@ -223,6 +223,7 @@ ok; ! kill -0 "$PID" 2>/dev/null || fail 'source process must exit'
 ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ "$(field origin)" = scratch-99 ] || fail 'window bindings changed'
 ok; [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'target provenance stamps missing'
 ok; [ "$(field worktree)" = "$WT" ] || fail 'issue-worker cutover must record verified worktree'
+ok; [ -n "$(field migrated_at)" ] && [ -z "$(field migrated_banner)" ] || fail 'cutover must stamp @migrated_at, and no @migrated_banner off a wall-free source (#870)'
 ok; [ "$(git -C "$WT" diff --binary HEAD)" = "$BEFORE" ] && [ -f "$WT/untracked" ] || fail 'cutover modified the source work'
 python3 - "$BUNDLE" "$WORK/target-argv.json" <<'PY' || fail 'target must receive the exact pickup prompt and manifest'
 import json, pathlib, sys

@@ -972,6 +972,10 @@ if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
     # automatically at …" footer, which outlives the classic line on screen.
     banner=$(tmux -L "$sock" capture-pane -p -S -200 -t "$win" 2>/dev/null | fleet_limit_banner)
     [ -n "$banner" ] || continue
+    # The wall this window's session was MOVED away from (issue #870): a
+    # `--resume` re-renders it on the new pane, where it is not about $acct.
+    fleet_banner_replayed "$banner" \
+      "$(tmux -L "$sock" display-message -p -t "$wid" '#{@migrated_banner}' 2>/dev/null)" && continue
     # A PER-MODEL cap (issue #524) — "hit your Fable 5 limit · resets Sep 6" /
     # "reached your Fable limit" — is NOT the subscription wall: the account keeps
     # its 5h/7d headroom for every other model. Benching it here moved every

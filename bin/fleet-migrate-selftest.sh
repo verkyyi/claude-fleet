@@ -123,6 +123,9 @@ for (my $i = 0; $i < @ARGV; $i++) { $sid = $ARGV[$i+1] if $ARGV[$i] eq '--resume
 open(my $r, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.json") or die; print $r "{\"pid\":$$,\"sessionId\":\"$sid\",\"cwd\":\"x\"}\n"; close $r;
 open(my $t, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.tok") or die; print $t ($ENV{CLAUDE_CODE_OAUTH_TOKEN} // ''), "\n"; close $t;
 $| = 1; print "fake claude sid=$sid\n";
+# the transcript tail, rendered on start — on a --resume that re-renders the OLD
+# account's wall onto the new pane (#870)
+if (open(my $w, '<', "$ENV{FLEET_CC_SESSIONS_DIR}/../wall")) { print while <$w>; close $w }
 if ($ENV{FAKE_STUCK}) { sleep 1 while 1 }
 while (my $l = <STDIN>) { exit 0 if $l =~ m{/exit} }
 exit 0;
@@ -185,6 +188,8 @@ bash "$BIN/fleet-account.sh" mark-limited acctA >/dev/null
 [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: active should be acctB"
 
 mkdir -p "$WORK/wt1" "$WORK/wt2" "$WORK/wt3" "$WORK/wt4"
+WALL="hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)"
+printf "  ⎿  You've %s\n" "$WALL" > "$WORK/wall"
 TM new-session -d -s "$SESS" -n plan -c "$FLEET_MAIN" || fail "isolated server"
 spawn() {  # <name> <runner> <sid> <cwd> → window id (a claude-bearing window with fleet options)
   local w
@@ -254,7 +259,15 @@ ok; [ "$(cd "$(TM display-message -p -t "$nw1" '#{pane_current_path}')" && pwd -
 for opt in @raw=1 @worktree="$WORK/wt1" @origin=scratch-9 @claude_state=working; do
   ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "new w1 must carry ${opt%%=*}=${opt#*=} (got $(TM display-message -p -t "$nw1" "#{${opt%%=*}}"))"
 done
-ok; [ -n "$(TM display-message -p -t "$nw1" '#{@migrated}')" ] || fail "new w1 must be stamped @migrated"
+ok; [ -n "$(TM display-message -p -t "$nw1" '#{@migrated_at}')" ] || fail "new w1 must be stamped @migrated_at"
+# #870: the wall w1 left behind rides to the new window, and the copy its resume
+# re-rendered there reads as a replay — the collector will not bench acctB on it
+ok; [ "$(TM display-message -p -t "$nw1" '#{@migrated_banner}')" = "$WALL" ] || fail "new w1 must carry the wall it left as @migrated_banner (got '$(TM display-message -p -t "$nw1" '#{@migrated_banner}')')"
+( . "$BIN/usage-lib.sh"
+  b=$(TM capture-pane -p -S -200 -t "$nw1" | fleet_limit_banner)
+  [ -n "$b" ] && fleet_banner_replayed "$b" "$(TM display-message -p -t "$nw1" '#{@migrated_banner}')" ) \
+  || { ok; fail "the resumed pane's replayed wall must read as a replay: $(TM capture-pane -p -t "$nw1")"; }
+ok; [ "$(TM display-message -p -t "$nw1" '#{history_size}')" = 0 ] || fail "new w1's scrollback must be cleared after the resume verified"
 ok; grep -q -- '--resume sid-1111 Your previous turn was interrupted' "$WORK/launched" 2>/dev/null \
   || fail "the launcher must get --resume <sid> + the interrupted-turn nudge (launched: $(cat "$WORK/launched" 2>/dev/null))"
 ok; printf '%s' "$out" | grep -q 'w1 .*acctA → acctB' || fail "the report must verify A → B off the new process's token: $out"
@@ -266,6 +279,8 @@ ok; ! grep -q 'sid-2222' "$WORK/launched" 2>/dev/null || fail "a stuck session m
 ok; TM display-message -p -t "$w3" '#{pane_pid}' >/dev/null 2>&1 || fail "no-hook path must keep the window — $out $(diag)"
 for _ in $(seq 1 20); do grep -q 'sid-3333' "$WORK/typed" 2>/dev/null && break; sleep 0.3; done
 ok; grep -q -- "--resume 'sid-3333'" "$WORK/typed" 2>/dev/null || fail "no-hook path must type the resume line into the shell (typed: $(cat "$WORK/typed" 2>/dev/null))"
+ok; [ "$(TM display-message -p -t "$w3" '#{@migrated_banner}')" = "$WALL" ] && [ -n "$(TM display-message -p -t "$w3" '#{@migrated_at}')" ] \
+  || fail "no-hook path must stamp @migrated_at + @migrated_banner on the reused window"
 ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be 'moved 2, skipped 1': $out"
 
 # --- a second pass finds nothing benched (w1 is on B now; w2's truth is still A but
