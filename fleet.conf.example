@@ -947,6 +947,14 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
 #FLEET_SIDEBAR_WIDTH=30
 
+# Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
+# task sidebar — the next row, or the previous one when it was the last — instead
+# of tmux's pick, which is usually the hub (issue #900). A sleeping task is
+# skipped, never woken; with no other task left you land on the hub as before.
+# F9 / ⌂ / prefix g are never rewritten. 0 = today's behaviour exactly.
+# @label=Closing a task lands on the next task @group=status @tier=common @scope=fleet @edit=bool
+#FLEET_CLOSE_LANDS_NEXT=1
+
 # Optional: a docker container name to show as ●/○ in the status bar right side.
 # GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
 # — a per-fleet override would be a silent no-op — so it is machine-wide (like the

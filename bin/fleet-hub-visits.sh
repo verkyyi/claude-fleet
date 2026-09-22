@@ -17,6 +17,9 @@
 #                            `@hub_nav_via` session option before they jump
 #             closed         the window you were on no longer exists: you closed a
 #                            task and tmux dropped you on the hub
+#             closed-next    the same close, but the client was moved straight on
+#                            to the closed task's sidebar neighbour (issue #900,
+#                            FLEET_CLOSE_LANDS_NEXT) — the hub only flickered
 #             attach         a client attached with the hub as the current window
 #             other          anything else (prefix n/p, a click, a script)
 #           Later landings get a NEW cause token, never a new file (C4/C5 of
@@ -64,6 +67,40 @@ if [ "${1:-}" = record ]; then
   sock="${2:-}" sess="${3:-}" marker="${4:-}" from="${5:-}" fromid="${6:-}"
   [ -n "$sess" ] || exit 0
   T() { if [ -n "$sock" ]; then tmux -S "$sock" "$@"; else tmux "$@"; fi; }
+  # CLOSE LANDS NEXT (issue #900): a close just dropped the client on the hub.
+  # Move it on to the closed task's neighbour in the task list instead — the
+  # candidates fleet-sidebar.py published while that task was on screen
+  # (`@sidebar_next`, for the window named by `@sidebar_next_of`): the first one
+  # still alive, not asleep (landing must not wake it — the 2s-dwell rule) and
+  # not a panel. Only ever from here, i.e. only on a `closed` arrival: F9 / ⌂ /
+  # prefix g carry a marker and never reach this, so a deliberate trip to the hub
+  # is never rewritten. Nothing published, nothing alive, the hub no longer
+  # current, or FLEET_CLOSE_LANDS_NEXT=0 ⇒ stay on the hub, exactly as before.
+  land_next() {
+    local cur of nxt w id wid life dash name
+    cur=$(T display-message -p -t "=$sess:" '#{@sidebar_next_of}|#{P:#{?#{==:#{@dash},1},1,}}|#{@sidebar_next}' 2>/dev/null) || return 1
+    of=${cur%%|*}; cur=${cur#*|}
+    [ -n "$of" ] && [ "$of" = "$fromid" ] || return 1
+    case "${cur%%|*}" in *1*) ;; *) return 1 ;; esac   # the client has already moved on
+    nxt=${cur#*|}
+    [ -n "$nxt" ] || return 1
+    [ "$(bash "$BIN/fleet-hook-conf.sh" --session "$sess" FLEET_CLOSE_LANDS_NEXT 2>/dev/null)" != 0 ] || return 1
+    # Every field before the name is one never-empty token; the name goes last.
+    w=$(T list-windows -t "=$sess" -F '#{window_id} #{?#{@worker_lifecycle},#{@worker_lifecycle},-} #{?#{P:#{?#{==:#{@dash},1},1,}},hub,-} #{window_name}' 2>/dev/null) || return 1
+    for id in $nxt; do
+      case "$id" in @*) ;; *) continue ;; esac
+      while read -r wid life dash name; do
+        [ "$wid" = "$id" ] || continue
+        [ "$life" != sleeping ] && [ "$dash" = - ] || break
+        case "$name" in plan|dash|backlog) break ;; esac
+        T select-window -t "$id" 2>/dev/null && return 0
+        break
+      done <<EOF2
+$w
+EOF2
+    done
+    return 1
+  }
   case "$marker" in
     attach) cause=attach; from=- ;;
     *[!a-z0-9-]*|'') cause= ;;
@@ -76,6 +113,7 @@ if [ "${1:-}" = record ]; then
       cause=other
     else
       cause=closed   # the window we came from is gone: a close dropped us here
+      land_next && cause=closed-next
     fi
   fi
   [ -n "$from" ] || from=-
