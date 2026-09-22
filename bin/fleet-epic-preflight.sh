@@ -18,7 +18,7 @@
 #   labels    `epic` + `autofill` + `blocked` exist   missing ⇒ FIXABLE (--fix)
 #   base      FLEET_BASE_BRANCH == the repo default   drift ⇒ warn (#603)
 #   deploy    FLEET_DEPLOY_REF / _CHECK (#541)        neither ⇒ merged ≡ done
-#   slots     the effective concurrent-session cap    outside 4–6 ⇒ warn
+#   slots     the effective concurrent-session cap    stated, never warned (#881)
 #   quota     pool accounts under FLEET_ACCOUNT_CEILING  none ⇒ warn (waits for a window)
 #
 # Half these rows are REPO facts (gh, perm, subissue, labels) and half are FLEET
@@ -227,7 +227,11 @@ fi
 
 # --- slots: how many slices can actually run at once ---------------------------
 # The per-fleet cap only ever LOWERS the machine-wide one (fleet_capacity_block),
-# so the effective ceiling is the min — and an EPIC is sized for 4–6.
+# so the effective ceiling is the min. It is STATED, never warned about (issue
+# #881): the caps are the operator's own settings, and an EPIC works inside them —
+# the run keeps 4–6 busy within the cap and retries a full one next tick. A WARN
+# here read as advice to change the cap, and the plan page turned it into a
+# 「开跑前要处理」 the operator never asked for.
 fmax="${FLEET_MAX_SESSIONS:-0}"; gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
 case "$fmax" in ''|*[!0-9]*) fmax=0 ;; esac
 case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
@@ -239,11 +243,9 @@ else
   src="this fleet sets no FLEET_MAX_SESSIONS, so the machine-wide $gmax applies"
 fi
 if [ "$eff" -lt 4 ]; then
-  warn slots "$eff concurrent session(s) — an EPIC is sized for 4–6, so the batch will serialize ($src)"
-elif [ "$eff" -gt 6 ]; then
-  warn slots "up to $eff concurrent sessions — an EPIC is sized for 4–6; set FLEET_MAX_SESSIONS=6 in this fleet's conf or a run opens more panes (and burns more quota) than you meant ($src)"
+  pass slots "up to $eff concurrent session(s) — the run keeps as many busy as the cap allows ($src)"
 else
-  pass slots "$eff concurrent sessions — inside the 4–6 an EPIC is sized for ($src)"
+  pass slots "up to $eff concurrent sessions — the run keeps 4–6 busy within it ($src)"
 fi
 
 # --- quota: is there room to START a batch right now? --------------------------

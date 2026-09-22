@@ -103,7 +103,11 @@ window still exists, reap it —
 ### c. Refill to 4–6
 
 Count live EPIC worker windows. While under target and the core layer has an
-unstarted member, spawn the next one, highest-priority first:
+unstarted member, spawn the next one, highest-priority first. The target is 4–6
+**within the fleet's existing caps** — `FLEET_MAX_SESSIONS` /
+`FLEET_GLOBAL_MAX_SESSIONS` are the operator's settings, and the run never
+changes them, suggests changing them, or asks (issue #881). A full cap is
+normal: the spawn exits `2` and the next tick retries.
 
 ```sh
 bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --title "<the issue's own title>"
