@@ -956,6 +956,25 @@ if [ -f "$settings" ] && grep -q 'statusline\.sh' "$settings" 2>/dev/null; then
   fi
 fi
 
+# --- hook table: every fleet hook wired exactly once (issue #818) ---
+# The sync used to append the table and de-dup on the command STRING, so a
+# changed interpreter path left the old guard beside the new one and every Bash /
+# Edit / Artifact call ran it twice — found only because a worker happened to
+# look. The identity rule — (event, matcher, script basename) — lives in ONE
+# place, bin/fleet-hooks-merge.py, which both the sync merge and this line use.
+# With the plugin installed the plugin wires the table, so any fleet entry left in
+# settings.json is itself the duplicate.
+_hm="$(dirname "$0")/fleet-hooks-merge.py"
+if [ -f "$_hm" ] && command -v python3 >/dev/null 2>&1; then
+  _hplug=''; [ "${plug:-0}" = 1 ] && _hplug=--plugin
+  _hout="$(python3 "$_hm" check $_hplug --settings "$settings" 2>&1)"; _hrc=$?
+  if [ "$_hrc" = 0 ]; then
+    pass hooks "${_hout#ok }"
+  else
+    warn hooks "settings.json hook table off — $(printf '%s' "$_hout" | awk '{print $1, $2, $3}' | paste -sd ';' - | sed 's/;/; /g') (fix: python3 $_hm merge)"
+  fi
+fi
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing

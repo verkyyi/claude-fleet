@@ -131,10 +131,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    this for you** — if you install it, skip the merge below and read this section
    only for what the hooks are.
 
-   By hand: merge `hooks/settings-hooks.json` into
-   `~/.claude/settings.json` — APPEND to any existing hook arrays, never
-   replace them (jq: `.hooks.PreToolUse += [...]` etc., creating keys that
-   don't exist). Back up settings.json first. These hooks are no-ops outside
+   By hand: `python3 bin/fleet-hooks-merge.py merge` merges
+   `hooks/settings-hooks.json` into `~/.claude/settings.json` — it keeps every
+   existing hook that isn't the fleet's, wires each fleet hook exactly once by
+   identity `(event, matcher, script basename)` (issue #818 — never a jq `+=`,
+   which stacks a second copy the first time a command string changes), and
+   backs settings.json up first. `fleet-doctor`'s `hooks` line checks the result. These hooks are no-ops outside
    tmux and always exit 0, so they are safe to add globally. The `Stop` entry also
    fires `classify-hook.sh`, the real-time path for state classification: it
    hands just the stopped window to `classify-sessions.sh --window`, so the
