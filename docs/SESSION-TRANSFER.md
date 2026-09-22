@@ -285,6 +285,15 @@ the window, account, reason and the `fleet-account.sh migrate` command that
 unsticks it, the window is stamped `@quota_stuck=1` (dash: `⚠ stuck`), and
 doctor's `failover-stuck` line counts it. A new reason restarts the count and
 clears the mark; so does the request ending.
+The unstick is one key (issue #873): the dash's migrate key (`DASH_KEY_MIGRATE`,
+default ⌃l) on the row opens a confirm popup with `fleet-migrate.sh`'s own dry
+run — the account it would land on and every background command the move will
+stop — and `y` runs `fleet-migrate.sh --force-bg --toast <window>`. `--force-bg`
+takes the same inventory as the hard-wall grace before `/exit`, stops the
+survivors after it (fingerprint checked) and names them in the resume nudge.
+`fleet-account.sh migrate --stuck [--force-bg] [--dry-run]` does the same for
+every `@quota_stuck` window. Neither moves a window when no account has room
+(#567).
 Disable `FLEET_FAILOVER` to cancel pending requests on the next tick. Packets and
 source recovery recipes remain available. Existing sessions without a verified
 native identity stay `unsupported`; never infer a session from the newest file.

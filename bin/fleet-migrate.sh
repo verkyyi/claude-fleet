@@ -33,6 +33,9 @@
 #   fleet-migrate.sh [opts] --idle              done|needs windows NOT on the active account
 #   fleet-migrate.sh [opts] --all               every window NOT on the active account
 #   fleet-migrate.sh [opts] --account <label>   every window running on <label>
+#   fleet-migrate.sh [opts] --stuck             every window whose quota failover request
+#                                               is STUCK (@quota_stuck=1: the same veto
+#                                               FLEET_FAILOVER_STUCK_ATTEMPTS times, #872)
 #   fleet-migrate.sh whoami [<window>]          print the account a window really runs
 #                                               (token truth; re-stamps a stale @cc_account).
 #                                               NO window ⇒ the CALLER'S OWN pane (#703)
@@ -47,6 +50,14 @@
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
 #         --toast             tmux display-message the summary (for run-shell -b callers)
+#         --force-bg          move even though the session owns background/tool
+#                             processes (issue #873 — the dash's migrate key): they are
+#                             inventoried BEFORE /exit, stopped after Claude is gone
+#                             (start-fingerprint checked, SIGTERM then SIGKILL) and
+#                             named in the resume nudge — the same helpers as the
+#                             planner's hard-wall grace (#871). Without it the move
+#                             does not look at background work at all (the historic
+#                             behaviour). --dry-run lists what it would stop.
 #
 # Never touched: panels (dash/plan/backlog), the operator hub (@hub), windows with no
 # Claude process, raw scratch windows whose cwd is FLEET_MAIN without a registry
@@ -162,7 +173,7 @@ migrate_eligible() {
 # fallback); no pool at all (empty active) is left alone so a pool-less install
 # keeps its explicit-restart behaviour.
 migrate_noop() { [ -z "$3" ] && [ -n "$2" ] && { [ "$1" = "$2" ] || [ "${4:-0}" = 1 ]; }; }
-# migrate_selected <mode> <label> <state> <active> <benched> <wanted> → 0 iff selected
+# migrate_selected <mode> <label> <state> <active> <benched> <wanted> [<stuck>] → 0 iff selected
 migrate_selected() {
   local mode="$1" label="$2" state="$3" active="$4" benched="$5" wanted="$6"
   case "$mode" in
@@ -170,10 +181,30 @@ migrate_selected() {
     idle)    case "$state" in done|needs) [ "$label" != "$active" ] ;; *) return 1 ;; esac ;;
     all)     [ "$label" != "$active" ] ;;
     account) [ -n "$label" ] && [ "$label" = "$wanted" ] ;;
+    stuck)   [ "${7:-}" = 1 ] ;;
     explicit) return 0 ;;
     *) return 1 ;;
   esac
 }
+
+# --- background work (--force-bg, issue #873) -----------------------------------
+# One inventory of "what this move will terminate" (EPIC #875 contract 3): the
+# planner's own walk (.fleet-failover.py → fleet-sleep's quiet_processes), so the
+# popup, this move and the hard-wall grace can never disagree about what counts.
+FAILOVER_PY="${FLEET_MIGRATE_FAILOVER_PY:-$BIN/.fleet-failover.py}"
+BG_WHY='The operator forced this move with a background override (fleet-migrate --force-bg)'
+# bg_inventory <claude-pid> <worktree> → the JSON list on stdout; exit 1 + why on stderr
+bg_inventory() {
+  FLEET_SLEEP_MCP_RESTARTABLE="${FLEET_SLEEP_MCP_RESTARTABLE:-}" \
+    python3 "$FAILOVER_PY" background --pid "$1" --worktree "$2" --session "${SESS:-}"
+}
+# bg_lines <json> → one `  pid  argv  (cwd)` line per entry (for the plan + popup)
+bg_lines() {
+  printf '%s' "$1" | python3 -c 'import json,shlex,sys
+for e in json.load(sys.stdin): print("      %s  %s  (cwd %s)" % (e["pid"], shlex.join(e.get("argv") or ["?"]), e.get("cwd") or "?"))'
+}
+# bg_count <json> → number of entries (0 on anything unreadable)
+bg_count() { printf '%s' "$1" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0; }
 
 # --- the move -------------------------------------------------------------------
 
@@ -235,14 +266,27 @@ migrate_one_body() {
       if [ -n "$MODEL" ]; then nudge="${NUDGE_MODEL_DEFAULT//__MODEL__/$MODEL}"; else nudge="$NUDGE_DEFAULT"; fi
     else nudge=""; fi
   fi
-  nudge=$(printf '%s' "$nudge" | tr -d "'\`")             # embedded single-quoted below
-  # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
-  # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
-  local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
-  local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
+  # --force-bg (issue #873): inventory the background work NOW, while Claude is
+  # alive and still its parent — after /exit the survivors are PPID-1 orphans no
+  # walk from this pid can find.
+  local bgjson="" bgerr="" bgdir=""
+  if [ "$FORCE_BG" = 1 ]; then
+    bgjson=$(bg_inventory "$cpid" "${wt:-$cwd}" 2>"$MIGRATE_TMP/bg.err") \
+      || { bgerr=$(tail -1 "$MIGRATE_TMP/bg.err" 2>/dev/null); bgjson=""; }
+    [ "$(bg_count "$bgjson")" -gt 0 ] || bgjson=""
+  fi
   if [ "$DRY" = 1 ]; then
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
+    if [ "$FORCE_BG" = 1 ]; then
+      if [ -n "$bgerr" ]; then say "    ! background inventory failed: ${bgerr#fleet-failover: } — whatever it owns is stopped UNLISTED"
+      elif [ -n "$bgjson" ]; then say "    would stop $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
+      else say "    no background commands to stop"; fi
+    fi
     return 0
+  fi
+  if [ -n "$bgjson" ]; then
+    bgdir="$MIGRATE_TMP/bg-${wid//[^A-Za-z0-9]/_}"; mkdir -p "$bgdir"
+    printf '%s' "$bgjson" > "$bgdir/background.json"
   fi
   # A migrate is a CLOSE + RESUME, not a death: mark the window as already reported
   # (issue #574) so the SessionEnd hook's child-report backstop does not tell this
@@ -281,6 +325,28 @@ migrate_one_body() {
   if [ "$alive" = 1 ]; then
     lease_drop "$ldir"; say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
   fi
+  # --force-bg: Claude is verified gone — stop what it left running (only a pid
+  # whose start fingerprint still matches; a reused pid is never touched) and
+  # fold the note naming each command into the resume nudge (#871's helper).
+  local bgnote=""
+  if [ -n "$bgdir" ]; then
+    bgnote=$(python3 "$FAILOVER_PY" terminate-background "$bgdir" --note "$BG_WHY" 2>/dev/null)
+    say "  ⏹ $name ($wid): stopped $(bg_count "$bgjson") background command(s):"; bg_lines "$bgjson"
+  elif [ -n "$bgerr" ]; then
+    say "  ! $name ($wid): background inventory failed (${bgerr#fleet-failover: }) — nothing recorded"
+    bgnote="Background commands this session was running may have been stopped by the move; the inventory failed, so check for any you started."
+  fi
+  if [ -n "$bgnote" ]; then
+    # ONE line: the no-hook branch TYPES the command, and a newline would press Enter
+    bgnote=$(printf '%s' "$bgnote" | tr '\n' ' ' | tr -s ' ')
+    [ -n "$nudge" ] || nudge="The operator moved this session to another subscription account (a forced fleet migrate) and resumed it via claude --resume in a new tmux window. Re-check git status, your branch, and your open PR before continuing.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+    nudge="$nudge ${bgnote# }"
+  fi
+  nudge=$(printf '%s' "$nudge" | tr -d "'\`")             # embedded single-quoted below
+  # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
+  # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
+  local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"
+  local cmd="'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH'$mflag; exec \$SHELL"
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
     window_closed "$wid" && break
@@ -357,13 +423,15 @@ migrate_one_body() {
 # Sourced (fleet-migrate-selftest.sh pins the pure matrices) → define only; a
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
-  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=()
+  MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0
   local pinned_target='' quota_request='' verified=0
   FLEET_MIGRATION_LOCKED=''
-  trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"' EXIT
+  MIGRATE_TMP=''
+  trap '[ -z "${FLEET_MIGRATION_LOCKED:-}" ] || fleet_transition_lock_drop "$FLEET_MIGRATION_LOCKED"; [ -z "${MIGRATE_TMP:-}" ] || rm -rf "$MIGRATE_TMP"' EXIT
   while [ $# -gt 0 ]; do
     case "$1" in
-      --limited|--idle|--all) MODE="${1#--}"; shift ;;
+      --limited|--idle|--all|--stuck) MODE="${1#--}"; shift ;;
+      --force-bg) FORCE_BG=1; shift ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --session) SESS="${2:-}"; shift 2 ;;
@@ -378,12 +446,12 @@ migrate_main() {
       --toast) TOAST=1; shift ;;
       whoami) MODE=whoami; shift ;;
       --verified) verified=1; shift ;;
-      -h|--help) sed -n '2,49p' "$0"; return 0 ;;
+      -h|--help) sed -n '2,59p' "$0"; return 0 ;;
       --*) echo "fleet-migrate: unknown option '$1'" >&2; return 2 ;;
       *) WIDS+=("$1"); shift ;;
     esac
   done
-  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,49p' "$0" >&2; return 2; }
+  [ -n "$MODE" ] || [ "${#WIDS[@]}" -gt 0 ] || { sed -n '30,59p' "$0" >&2; return 2; }
   [ "$MODE" = account ] && [ -z "$ACCOUNT" ] && { echo "fleet-migrate: --account needs a label" >&2; return 2; }
   MODEL=$(printf '%s' "$MODEL" | LC_ALL=C tr -cd 'A-Za-z0-9._-')   # embedded single-quoted in the launch line
 
@@ -419,7 +487,7 @@ migrate_main() {
   # relaunch line, when no hook closes the window, is typed only after it is gone).
   SK() { FLEET_ALLOW_SENDKEYS=1 tmux -L "$SOCK" send-keys "$@"; }
 
-  say() { printf '%s\n' "$*"; }
+  say() { printf '%s\n' "$*"; LAST_SAY="$*"; }
   now() { date +%s; }
 
   # --- account truth -------------------------------------------------------------
@@ -437,6 +505,7 @@ migrate_main() {
   ACTIVE_BENCHED=0; [ -n "$ACTIVE" ] && acct_benched "$ACTIVE" && ACTIVE_BENCHED=1   # ⇒ no account is eligible (#567)
 
   moved=0; skipped=0; REPORT=""
+  MIGRATE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fleet-migrate.XXXXXX") || return 1
   # --- whoami -----------------------------------------------------------------------
   if [ "$MODE" = whoami ]; then
     # No window given ⇒ the CALLER'S OWN pane (issue #703). `whoami` answers exactly
@@ -486,12 +555,13 @@ migrate_main() {
     while IFS= read -r wid; do
       [ -n "$wid" ] || continue
       name=$(wopt "$wid" '#{window_name}'); state=$(wopt "$wid" '#{@claude_state}'); acct=$(wopt "$wid" '#{@cc_account}')
+      stuck=$(wopt "$wid" '#{@quota_stuck}')
       printf '%s' "$name" | grep -qE "$PANEL_RE" && continue
       cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || continue
       [ -n "$cpid" ] || continue
       label=$(window_account "$wid" "$cpid" "$acct")
       benched=0; [ -n "$label" ] && acct_benched "$label" && benched=1
-      migrate_selected "$MODE" "$label" "${state:--}" "$ACTIVE" "$benched" "$ACCOUNT" || continue
+      migrate_selected "$MODE" "$label" "${state:--}" "$ACTIVE" "$benched" "$ACCOUNT" "$stuck" || continue
       targets+=("$wid")
     done < <(TM list-windows -t "$SESS" -F '#{window_id}' 2>/dev/null)
   fi
@@ -507,9 +577,14 @@ migrate_main() {
     label=$(window_account "$wid" "$cpid" "$stamp")
     migrate_one "$wid" "$cpid" "$label"
   done
+  LAST_SKIP="${LAST_SAY:-}"; LAST_SKIP="${LAST_SKIP#*: }"
   say "fleet-migrate: moved $moved, skipped $skipped"
   if [ "$TOAST" = 1 ] && [ "$moved" -gt 0 ]; then
     TM display-message "fleet: moved $moved session$([ "$moved" = 1 ] || printf s) onto ${ACTIVE:-the active account} ($REPORT)" 2>/dev/null || :
+  elif [ "$TOAST" = 1 ] && [ "$skipped" -gt 0 ]; then
+    # The dash key runs this detached (#873): a move that did not happen must still
+    # say so, or the keypress looks dead.
+    TM display-message "fleet: migrate moved nothing ($skipped skipped: ${LAST_SKIP:-see fleet-account.sh migrate --dry-run})" 2>/dev/null || :
   fi
   return 0
 }
