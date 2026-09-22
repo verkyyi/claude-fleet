@@ -312,6 +312,9 @@ ok; has '/model opus' "$(cat "$WORK/typed.stuck")" || fail "a window pinned at w
 # Stop) rather than left a false `working` for the demoters to clear later.
 eq "the settled walled window is recorded done, not left working" "done" "$(tmux -L "$LBL" display-message -p -t "$W_STUCK" '#{@claude_state}')"
 eq "the genuinely-busy pane was never typed into" "" "$(cat "$WORK/typed.busy")"
+# …and A5's other half: a genuinely-live turn keeps its `working` — the done stamp
+# is for a SETTLED cap only, never for a cap line on a turn still running (#848).
+eq "the genuinely-live turn is left working, not stamped done" "working" "$(tmux -L "$LBL" display-message -p -t "$W_BUSY" '#{@claude_state}')"
 eq "the recovered pane was never typed into" "" "$(cat "$WORK/typed.recovered")"
 
 ok; has 'mid-turn' "$out" || fail "the genuinely-working window should be reported as mid-turn" "$out"
