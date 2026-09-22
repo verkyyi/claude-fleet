@@ -99,6 +99,8 @@ eq "canon: no target ≡ own fleet"                        "scratch-5"  "$(canon
 eq "canon: garbage explicit + cross-fleet → source fleet" "srcfleet"  "$(canon foo scratch-5 dstfleet srcfleet)"
 eq "canon: explicit key honoured across fleets (#516)"   "issue-77"   "$(canon issue-77 scratch-5 dstfleet srcfleet)"
 eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon '' '')"
+eq "canon: explicit hub beats a detected worker (#896)"  ""           "$(canon hub issue-42)"
+eq "canon: explicit hub, cross-fleet → still hub"        ""           "$(canon hub scratch-5 dstfleet srcfleet)"
 
 # rows: the ↳ tag renders on tagged rows only (strip ANSI + the US field bytes).
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1f/ /g'; }

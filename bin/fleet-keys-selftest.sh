@@ -51,7 +51,7 @@ SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh --plain exited
 [ -n "$SHEET" ] || fail "sheet rendered empty"
 
 # --- 4. all four group headers present ----------------------------------------
-for g in "tmux prefix" "dashboard" "backlog" "config modal"; do
+for g in "tmux prefix" "task sidebar" "dashboard" "backlog" "config modal"; do
   printf '%s\n' "$SHEET" | grep -qi "^$g " || fail "sheet missing group: $g"
 done
 
@@ -222,6 +222,41 @@ printf '%s\n' "$dash_block" | grep -q '^  ⌃v .*flip this fleet' \
 printf '%s\n' "$dash_block" | grep -q '^  ⌃a ' \
   && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
+# --- 7. task sidebar: keymap table ⇄ tmux key table ⇄ view ⇄ sheet (#896) ------
+# The sidebar's navigation table is a tmux key table whose `Any` bind types every
+# other key into the input line, so: no plain-letter bind may shadow typing, each
+# `--panel sidebar` action's ⌃ default reaches the view as a byte it handles, its
+# ⌥ fallback is rewritten to that ⌃ byte in the conf, and the sheet lists it.
+SIDEBAR_PY="$BIN/fleet-sidebar.py"
+grep -Eq '^bind -T fleet-sidebar Any ' "$CONF" \
+  || fail "conf has no 'bind -T fleet-sidebar Any' — typed keys cannot reach the input line (#896)"
+grep -Eq '^bind -T fleet-sidebar [[:alnum:]] ' "$CONF" \
+  && fail "conf binds a plain letter/digit in the fleet-sidebar table — it types into the input line since #896 (hide is prefix e)"
+side_block="$(awk '/^  if want sidebar; then/{f=1;next} f && /^  fi$/{f=0} f' "$KEYS")"
+[ -n "$side_block" ] || fail "fleet-keys.sh has no 'if want sidebar' block"
+side_table="$(bash "$KEYMAP" --panel sidebar list)" || fail "dash-keymap.sh --panel sidebar list exited non-zero"
+[ -n "$side_table" ] || fail "dash-keymap.sh --panel sidebar has no actions"
+while read -r action key glyph def remap state; do
+  [ -n "$action" ] || continue
+  printf '%s\n' "$side_block" | grep -q "\$(dg $action)" \
+    || fail "sidebar action '$action' has no \$(dg $action) row in fleet-keys.sh"
+  printf '%s\n' "$side_block" | grep -q "\$(dn $action)" \
+    || fail "sidebar action '$action' has no \$(dn $action) remap note in fleet-keys.sh"
+  letter="${def#ctrl-}"
+  [ "$letter" != "$def" ] && [ "${#letter}" = 1 ] || fail "sidebar default '$def' must be a ctrl-<letter> (a letter types)"
+  byte=$(( $(printf '%d' "'$letter") - 96 ))
+  grep -q "key == $byte\b" "$SIDEBAR_PY" \
+    || fail "sidebar action '$action' ($def = byte $byte) is not handled in fleet-sidebar.py"
+  fb=$(bash "$KEYMAP" --panel sidebar list | awk -v a="$action" '$1==a{print $4}')
+  grep -Eq "^bind -T fleet-sidebar M-$letter .*send-keys -t '\{top-left\}' C-$letter" "$CONF" \
+    || fail "sidebar action '$action': conf does not rewrite its ⌥$letter fallback to C-$letter"
+done <<EOF
+$side_table
+EOF
+NSHEET="$(FLEET_TMUX_PREFIX=C-n NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh under a C-n prefix exited non-zero"
+printf '%s\n' "$NSHEET" | awk '/^task sidebar /{f=1;next} f && NF && /^[^ ]/{f=0} f' \
+  | grep -q '^  ⌥n .*⌃n is your tmux prefix C-n' \
+  || fail "under a C-n tmux prefix the sidebar group must list ⌥n for new task and say why"
 
 # #558: panel tables, source bindings, rendered help and actual fzf argv agree.
 # Only test subprocesses run: fake tmux/gh cannot contact a fleet or GitHub, and

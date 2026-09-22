@@ -22,8 +22,8 @@ import termios
 import threading
 import time
 
-bin_dir = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location('sidebar', bin_dir / 'fleet-sidebar.py')
+real_bin = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('sidebar', real_bin / 'fleet-sidebar.py')
 sidebar = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sidebar)
 assert sidebar.clip('修复仪表盘', 5) == '修复'
@@ -33,9 +33,35 @@ assert not sidebar.visible(['1', '1', '1', ''], 100)
 assert not sidebar.visible(['1', '0', '0', ''], 100)
 assert not sidebar.visible(['1', '0', '1', '99'], 100)
 assert sidebar.visible(['1', '0', '1', '1'], 100)
+assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
+assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
+assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
 
 real_tmux = shutil.which('tmux')
 work = Path(tempfile.mkdtemp(prefix='sidebar-selftest.'))
+# A sandbox install root (issue #896): the input line spawns through the REAL
+# dash-raw-session.sh, so every script is the shipped one except the agent
+# launcher, which only holds its window open. Its fleet.conf lifts the machine-
+# wide session cap — the operator's own live sessions must not refuse this test.
+root = work / 'root'
+bin_dir = root / 'bin'
+bin_dir.mkdir(parents=True)
+for source in real_bin.iterdir():
+    if source.name != 'fleet-claude.sh':
+        (bin_dir / source.name).symlink_to(source)
+(bin_dir / 'fleet-claude.sh').write_text('#!/bin/sh\nexec sleep 600\n')
+(bin_dir / 'fleet-claude.sh').chmod(0o755)
+(root / 'conf').symlink_to(real_bin.parent / 'conf')
+(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\n')
+main = work / 'main'
+main.mkdir()
+for git in (['init', '-q'], ['config', 'user.email', 't@t'], ['config', 'user.name', 't'],
+            ['commit', '-q', '--allow-empty', '-m', 'seed']):
+    subprocess.run(['git', '-C', str(main), *git], check=True, timeout=15,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+base = subprocess.run(['git', '-C', str(main), 'branch', '--show-current'], text=True,
+                      capture_output=True, timeout=15).stdout.strip()
+fleet_conf = 'FLEET_SIDEBAR=1\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=%s\n' % (main, base)
 sock = str(work / 'fleet-test')
 env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
            TERM='xterm-256color')
@@ -47,7 +73,7 @@ shim.mkdir()
 env['PATH'] = str(shim) + os.pathsep + env['PATH']
 conf = work / 'conf/fleets/fleet-test/conf'
 conf.parent.mkdir(parents=True)
-conf.write_text('FLEET_SIDEBAR=1\n')
+conf.write_text(fleet_conf)
 client = None
 terminal = None
 checks = 0
@@ -113,6 +139,37 @@ def copied():
 def navigation():
     return 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}')
 
+def input_line(pane):
+    # The view's LAST row is the one input line (issue #896).
+    lines = tm('capture-pane', '-p', '-t', pane).splitlines()
+    return lines[-1].rstrip() if lines else ''
+
+def worker_cue(pane):
+    return input_line(pane) == '›'
+
+def tasks_cue(pane):
+    return input_line(pane).startswith('› 新会话名')
+
+def windows():
+    return tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}').splitlines()
+
+def server_version():
+    found = re.search(r'(\d+)\.(\d+)', tm('display-message', '-p', '#{version}'))
+    return tuple(map(int, found.groups())) if found else (0, 0)
+
+def type_keys(text):
+    """Type into the attached terminal as a burst (one write — an IME commit, a
+    fast typist), which tmux 3.7+ keeps in the sidebar table key by key. Older
+    tmux looks up a burst's later keys BEFORE the Any bind's queued switch-client
+    re-enters the table, so they fall to the worker (documented in
+    ARCHITECTURE.md); there the test types one character at a time."""
+    if server_version() >= (3, 7):
+        os.write(terminal, text.encode())
+        return
+    for char in text:
+        os.write(terminal, char.encode())
+        time.sleep(.15)
+
 def row_data(current='', compact=True):
     row_env = dict(env, FLEET_SESSION='fleet-test', FLEET_SIDEBAR_CURRENT=current)
     result = subprocess.run(['bash', str(bin_dir / 'tmux-dashboard-rows.sh')] +
@@ -163,7 +220,17 @@ try:
 
     # Load the shipped sidebar wiring, without unrelated status commands/daemons.
     shipped = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
+    # The status-bar tap is bound twice, root and fleet-sidebar (issue #896: the
+    # sidebar's `Any` would otherwise swallow it). Multi-line blocks, so they are
+    # compared here instead of loaded: the two bodies must never drift apart.
+    def status_block(head):
+        start = shipped.index(head)
+        return shipped[start + len(head):shipped.index('\n}\n', start)]
+    check(status_block('bind -n MouseDown1Status ') ==
+          status_block('bind -T fleet-sidebar MouseDown1Status '),
+          'the fleet-sidebar status-bar tap drifted from the root one')
     selected = [line for line in shipped.splitlines() if not line.startswith('#') and
+                'MouseDown1Status' not in line and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
@@ -204,7 +271,7 @@ try:
     call()
     check(len(views()) == 1, 'sync must be idempotent')
     wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'sidebar did not render tasks')
-    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side), 'worker focus cue missing')
+    wait_for(lambda: worker_cue(side), 'worker focus cue missing')
     check('worker-one' in tm('capture-pane', '-p', '-t', side).splitlines()[0] or
           '修复侧栏' in tm('capture-pane', '-p', '-t', side).splitlines()[0],
           'sidebar should start with a task, not an internal title row')
@@ -257,7 +324,7 @@ try:
           'the sidebar name column moved: ' + repr(pane[:1]))
     os.write(terminal, b'\x02E')  # actual prefix E, then terminal arrow + Enter
     wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
-    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: tasks_cue(side),
              'keyboard navigation needs a persistent focus cue')
     check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'worker header claims input focus while keys go to sidebar')
@@ -270,7 +337,7 @@ try:
           'source window retained sidebar worker metadata after the move')
     check(tm('show-options', '-wqv', '-t', w2, '@sidebar_ready_on_select') == p2,
           'destination was selected before its sidebar layout was ready')
-    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: worker_cue(side),
              'Enter did not restore the worker focus cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'jump did not focus worker input')
     # A terminal mouse event exercises the shipped root-table forwarding bind.
@@ -287,7 +354,7 @@ try:
           'mouse navigation showed a destination without its sidebar')
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'click changed worker pane identity')
     wait_for(navigation, 'mouse press/release did not leave arrow keys with the sidebar')
-    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: tasks_cue(side),
              'click did not visibly focus the sidebar')
     check('INPUT' not in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'worker still advertises input focus after a sidebar click')
@@ -307,7 +374,7 @@ try:
     check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
           'follow recreated the sidebar instead of moving its populated grid')
     wait_for(navigation, 'follow did not keep the client in the sidebar key table')
-    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side), 'follow lost the navigation cue')
+    wait_for(lambda: tasks_cue(side), 'follow lost the navigation cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'follow did not keep the worker pane active')
     check('INPUT' not in tm('display-message', '-p', '-t', p2, '#{E:pane-border-format}'),
           'worker advertises input focus after a follow')
@@ -330,7 +397,7 @@ try:
     # navigation table. Actual typing then reaches that pane, not the sidebar.
     click(p1, row=3)
     wait_for(lambda: not navigation(), 'clicking the already-active worker did not leave navigation')
-    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: worker_cue(side),
              'worker click left the sidebar highlighted')
     check('WORKER · INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'worker click did not restore its input badge')
@@ -369,7 +436,7 @@ try:
     wait_for(navigation, 'clicking sidebar blank space did not enter navigation')
     click(side, row=8, repeat=True)
     click(side, row=8, repeat=True)
-    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side),
+    wait_for(lambda: tasks_cue(side),
              'repeat/blank sidebar click lost the focus cue')
     wait_for(navigation, 'repeat/blank sidebar click lost keyboard navigation')
     os.write(terminal, b'\x1b[B\r')
@@ -379,9 +446,9 @@ try:
     wait_for(lambda: bool(view_on(w1)), 'sidebar did not follow return to first worker')
 
     os.write(terminal, b'\x02E')
-    wait_for(lambda: '↑↓ choose' in tm('capture-pane', '-p', '-t', side), 'second navigation entry lost focus cue')
+    wait_for(lambda: tasks_cue(side), 'second navigation entry lost focus cue')
     os.write(terminal, b'\x1b')
-    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side), 'Escape did not restore input focus')
+    wait_for(lambda: worker_cue(side), 'Escape did not restore input focus')
     check('INPUT' in tm('display-message', '-p', '-t', p1, '#{E:pane-border-format}'),
           'Escape left the worker border dimmed')
 
@@ -389,8 +456,7 @@ try:
     # hit test recognizes only right/bottom borders). 3.7+ exposes the top border.
     # Use the server version: it is the server that dispatches mouse events.
     version_text = tm('display-message', '-p', '#{version}')
-    version = re.search(r'(\d+)\.(\d+)', version_text)
-    if version and tuple(map(int, version.groups())) >= (3, 7):
+    if server_version() >= (3, 7):
         click(side, row=-1)
         wait_for(navigation, 'clicking the top border did not enter sidebar navigation')
     else:
@@ -410,53 +476,132 @@ try:
     check(view_on(w1) != [legacy] and len(view_on(w1)) == 1,
           'sync must replace a pre-upgrade renderer once before reusing panes')
     side = view_on(w1)[0]
-    wait_for(lambda: '+ n: new task' in tm('capture-pane', '-p', '-t', side), 'upgraded view not ready')
-    check('Hide' not in tm('capture-pane', '-p', '-t', side), 'sidebar still paints a click target for hide')
+    wait_for(lambda: input_line(side).startswith('›'), 'upgraded view not ready')
+    screen = tm('capture-pane', '-p', '-t', side)
+    check('Hide' not in screen and 'q hide' not in screen, 'sidebar still paints a click target for hide')
+    check('new task' not in screen and 'Keyboard' not in screen and '↑↓' not in screen,
+          'the footer hint rows survived: the list must end in ONE input line: ' + repr(screen))
 
-    # The bottom row starts a new task (issue #821): the hub's ^n popup, launched
-    # from the sidebar pane, which must neither hide the view nor touch the saved
-    # preference. The popup's title prompt is stubbed — `fzf` on PATH drops a
-    # marker and waits — so the popup provably ran and stays open until closed.
+    # ONE input line closes the list (issue #896). Away from the sidebar it is a
+    # bare `›`; a tap on it only focuses (no popup, no hide) and shows the dim
+    # placeholder.
+    wait_for(lambda: worker_cue(side), 'away from the sidebar the input line must be a bare ›')
+    height = int(tm('display-message', '-p', '-t', side, '#{pane_height}'))
+    def popup_open():
+        return tm('show-options', '-gqv', '@popup_open') not in ('', '0')
+    click(side, row=height - 1)
+    wait_for(navigation, 'tapping the input line did not put the keyboard on the sidebar')
+    wait_for(lambda: tasks_cue(side), 'the focused, empty input line must show its placeholder')
+    check(not popup_open() and bool(view_on(w1)) and 'FLEET_SIDEBAR=1' in conf.read_text(),
+          'tapping the input line opened a popup, hid the view or changed the saved preference')
+
+    # ⌃n (dash-keymap.sh --panel sidebar `new`, and its ⌥n fallback) opens the
+    # hub's new-task popup from the sidebar pane (issue #821's action, moved off
+    # the letter `n` because letters type now). The popup's title prompt is
+    # stubbed — `fzf` on PATH drops a marker and waits — so it provably ran.
     ran = work / 'new-task-ran'
     (shim / 'fzf').write_text('#!/bin/sh\nprintf 1 > ' + shlex.quote(str(ran)) + '\nexec sleep 20\n')
     (shim / 'fzf').chmod(0o755)
     (shim / 'gh').write_text('#!/bin/sh\nexit 1\n')
     (shim / 'gh').chmod(0o755)
-    conf.write_text('FLEET_SIDEBAR=1\nFLEET_REPO=example/repo\n')
+    conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
     attached = tm('list-clients', '-t', 'fleet-test', '-F', '#{client_name}').splitlines()[0]
-    def popup_open():
-        return tm('show-options', '-gqv', '@popup_open') not in ('', '0')
-    click(side, row=int(tm('display-message', '-p', '-t', side, '#{pane_height}')) - 1)
-    wait_for(ran.exists, 'clicking the bottom row did not open the new-task popup')
-    check(popup_open(), 'new-task popup did not raise @popup_open')
-    check(bool(view_on(w1)), 'clicking the bottom row hid the sidebar')
-    check('FLEET_SIDEBAR=1' in conf.read_text(), 'clicking the bottom row changed the saved preference')
-    tm('display-popup', '-C', '-c', attached)
-    wait_for(lambda: not popup_open(), 'closing the new-task popup left @popup_open raised')
-    ran.unlink()
-    wait_for(lambda: 'q hide' in tm('capture-pane', '-p', '-t', side),
-             'sidebar did not repaint its navigation hint after the popup')
-    check(bool(view_on(w1)), 'sidebar vanished after the new-task popup closed')
-    # n while navigating opens the same popup and returns input to the worker.
-    os.write(terminal, b'n')
-    wait_for(ran.exists, 'n while navigating did not open the new-task popup')
-    check(popup_open() and bool(view_on(w1)), 'keyboard new-task popup hid the sidebar or skipped @popup_open')
-    tm('display-popup', '-C', '-c', attached)
-    wait_for(lambda: not popup_open(), 'closing the keyboard new-task popup left @popup_open raised')
-    ran.unlink()
+    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)')):
+        os.write(terminal, chord)
+        wait_for(ran.exists, label + ' did not open the new-task popup')
+        check(popup_open() and bool(view_on(w1)), label + ' popup hid the sidebar or skipped @popup_open')
+        tm('display-popup', '-C', '-c', attached)
+        wait_for(lambda: not popup_open(), 'closing the ' + label + ' popup left @popup_open raised')
+        ran.unlink()
+        wait_for(lambda: tasks_cue(side), 'the input line did not repaint after the ' + label + ' popup')
+        check(input_line(side) == '› 新会话名…', label + ' leaked into the input line')
     (shim / 'fzf').unlink()
     (shim / 'gh').unlink()
-    conf.write_text('FLEET_SIDEBAR=1\n')
-    wait_for(lambda: 'Keyboard: WORKER' in tm('capture-pane', '-p', '-t', side),
-             'n did not return input to the worker after the popup')
-    check('FLEET_SIDEBAR=1' in conf.read_text() and bool(view_on(w1)), 'n hid the sidebar')
+    conf.write_text(fleet_conf)
 
-    # Hide is keyboard-only: q while navigating (and prefix e), never a click.
+    # Typing (issue #896): a click on blank sidebar space, then plain keys, fill
+    # the input line — the worker pane stays active and never sees them.
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking sidebar blank space did not enter navigation')
+    worker_before = tm('capture-pane', '-p', '-t', p1)
+    type_keys('demo')
+    wait_for(lambda: input_line(side) == '› demo▏', 'typed d e m o did not reach the input line: %r' % input_line(side))
+    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '1', 'a typed name did not set @sidebar_input')
+    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'typing into the sidebar leaked into the worker')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'typing made the sidebar the active pane')
+    # Esc clears a typed name and KEEPS the keyboard; letters that were commands
+    # (q hide, n new task, j/k move) type; backspace deletes.
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: tasks_cue(side), 'Esc did not clear the typed name')
+    check(navigation(), 'Esc on a typed name gave the keyboard back instead of only clearing')
+    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '', 'clearing left @sidebar_input set')
+    type_keys('qnjk')
+    wait_for(lambda: input_line(side) == '› qnjk▏', 'q/n/j/k did not type: %r' % input_line(side))
+    check(bool(view_on(w1)) and 'FLEET_SIDEBAR=1' in conf.read_text() and not popup_open(),
+          'a letter still acted as a command (q hid / n opened a popup)')
+    type_keys('\x7f\x7f\x7f\x7f')
+    wait_for(lambda: tasks_cue(side), 'backspace did not delete the typed name')
+
+    # Enter on a name the fleet refuses (the per-fleet cap): the reason shows on
+    # the input line, the name stays, nothing spawns, the keyboard stays.
+    before = set(windows())
+    conf.write_text(fleet_conf + 'FLEET_MAX_SESSIONS=1\n')
+    type_keys('demo')
+    wait_for(lambda: input_line(side) == '› demo▏', 'typing after the popup test failed')
+    os.write(terminal, b'\r')
+    wait_for(lambda: input_line(side).startswith('› ✗') and 'capacity' in input_line(side),
+             'a refused spawn did not toast its reason: %r' % input_line(side))
+    check(set(windows()) == before, 'a refused spawn created a window')
+    check(navigation(), 'a refused spawn took the keyboard off the sidebar')
+    wait_for(lambda: input_line(side) == '› demo▏', 'the typed name was lost after the refusal toast')
+    conf.write_text(fleet_conf)
+
+    # Enter on a name: a scratch session named after it, via the hub's own
+    # dash-raw-session.sh — it becomes current, the view moves there, the input
+    # line empties, and the NEW agent pane is active with the keyboard.
+    os.write(terminal, b'\r')
+    wait_for(lambda: set(windows()) - before, 'Enter on a typed name did not spawn a session')
+    new = (set(windows()) - before).pop()
+    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
+             'the spawned session did not become the current window')
+    check('demo' in tm('display-message', '-p', '-t', new, '#{window_name}'), 'the new session is not named after the input')
+    check(tm('show-options', '-wqv', '-t', new, '@raw') == '1', 'the input line spawned something other than a scratch')
+    check(tm('show-options', '-wqv', '-t', new, '@origin') == '',
+          'a sidebar spawn nested under the worker it was typed in (must be the hub ⌃s: no @origin)')
+    wait_for(lambda: view_on(new) == [side], 'the view did not follow to the new session')
+    wait_for(lambda: worker_cue(side), 'the input line did not empty and hand the keyboard back: %r' % input_line(side))
+    agent = tm('display-message', '-p', '-t', new, '#{pane_id}')
+    check(agent != side and tm('show-options', '-wqv', '-t', new, '@sidebar_worker') == agent,
+          'the new session\'s agent pane is not the active one')
+    check(not navigation(), 'the keyboard stayed on the sidebar after the spawn')
+    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '', 'the spawn left @sidebar_input set')
+    spawned = [new]
+
+    # A CJK name arrives whole (UTF-8 bytes through the Any bind) and sits in
+    # place: `› ` then the name, no cell drift.
+    click(side, row=height - 3)
+    wait_for(navigation, 'clicking the moved view did not enter navigation')
+    before = set(windows())
+    type_keys('修复 demo')
+    wait_for(lambda: input_line(side) == '› 修复 demo▏', 'a CJK name was mangled: %r' % input_line(side))
+    os.write(terminal, b'\r')
+    wait_for(lambda: set(windows()) - before, 'Enter on a CJK name did not spawn a session')
+    spawned += list(set(windows()) - before)
+    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_name}') == '修复 demo',
+             'the CJK session is not current or lost its name')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view did not come back to the first worker')
+    wait_for(lambda: not navigation(), 'the CJK spawn left the keyboard on the sidebar')
+    for window in spawned:
+        tm('kill-window', '-t', window)
+
+    # Hide is prefix e — from the sidebar's own key table too — never a click and
+    # never a letter.
     os.write(terminal, b'\x02E')
-    wait_for(navigation, 'prefix E before q did not enter sidebar navigation')
-    os.write(terminal, b'q')
-    wait_for(lambda: not views(), 'q left a view')
-    check(not navigation(), 'q retained sidebar keyboard focus')
+    wait_for(navigation, 'prefix E before hiding did not enter sidebar navigation')
+    os.write(terminal, b'\x02e')
+    wait_for(lambda: not views(), 'prefix e while navigating left a view')
+    check(not navigation(), 'hiding retained sidebar keyboard focus')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')
     tm('select-window', '-t', w2)
     call()

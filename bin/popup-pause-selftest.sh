@@ -73,11 +73,13 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 # Count in CODE lines only (skip the comment block, which names the flag in prose).
 # One epoch stamp and one clear per display-popup surface; there are 6 (prefix
 # b/c/? + the fleet-pick / xfleet-jump / usage mouse popups — the acct one went
-# with the ◉ account chip, #521). The clears number one MORE than the popups:
-# the client-detached hook also sets 0 (#431).
+# with the ◉ account chip, #521) — and the three mouse ones are bound TWICE, the
+# status-bar tap living in the task sidebar's key table too (#896), so 9 in code.
+# The clears number one MORE than the popups: the client-detached hook also sets
+# 0 (#431).
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 npop=$(code_only | grep -c 'display-popup')
-[ "$npop" -eq 6 ] || fail "expected 6 display-popup binds in conf code, found $npop"
+[ "$npop" -eq 9 ] || fail "expected 9 display-popup binds in conf code (6 surfaces, the 3 mouse ones also in fleet-sidebar), found $npop"
 nstamp=$(code_only | grep -c '@popup_open \$(date +%s)')
 nclose=$(code_only | grep -c '@popup_open 0')
 [ "$nstamp" -eq "$npop" ] \

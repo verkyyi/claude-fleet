@@ -20,7 +20,7 @@
 #      the help never names a key the terminal cannot deliver.
 #
 # Usage:
-#   dash-keymap.sh --panel dash|backlog|config <command>  # default panel: dash
+#   dash-keymap.sh --panel dash|backlog|config|sidebar <command>  # default panel: dash
 #                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
 #                                   #   DASH_KEY_<ACTION>=<fzf key>  DASH_GLYPH_<ACTION>=⌃x|⌥x
@@ -84,7 +84,17 @@ reload ctrl-r alt-r' ;;
 config) TABLE='scope ctrl-s alt-s
 reload ctrl-r alt-r
 preview ctrl-p alt-p' ;;
-*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config)" >&2; exit 2 ;;
+# The worker task sidebar's navigation keys (issue #896). NOT fzf: a tmux key
+# table (conf/tmux-attention.conf, fleet-sidebar) whose `Any` bind types every
+# other key into the input line — so a letter can never be an action here, and
+# an action is a ⌃-chord the view reads as a byte (⌃n = 0x0e). The prefix rule
+# is the same: tmux honours its prefix in that table too, so a colliding key
+# takes its ⌥ fallback, which the conf rewrites to the ⌃ byte (`bind -T
+# fleet-sidebar M-n … send-keys C-n`). Later EPIC #894 members add rows here.
+# `hide` is NOT a row: it left this table for prefix e (a global prefix bind),
+# since `q` types now.
+sidebar) TABLE='new ctrl-n alt-n' ;;
+*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
 esac
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered
@@ -212,5 +222,5 @@ case "$cmd" in
       esac
     done
     ;;
-  *) echo "usage: dash-keymap.sh [--panel dash|backlog|config] env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
+  *) echo "usage: dash-keymap.sh [--panel dash|backlog|config|sidebar] env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
 esac
