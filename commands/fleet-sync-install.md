@@ -207,24 +207,30 @@ copy is what those sessions resolve — and `/plugin update` as well.
 
 ## 4. Re-merge the settings-hooks delta (only if it changed)
 
-If the diff (step 2) touched `hooks/settings-hooks.json`, re-merge the delta into
-`~/.claude/settings.json` — **append** to the hook arrays, never clobber existing
-entries, and **back it up first**:
+If the diff (step 2) touched `hooks/settings-hooks.json`, re-merge the table into
+`~/.claude/settings.json` with the ONE merge script — never a hand-rolled jq `+=`:
 
 ```sh
-cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%s)
+python3 ~/.claude/fleet/bin/fleet-hooks-merge.py merge
 ```
 
-Merge each hook array with jq using `+=` (creating keys that don't exist), then
-de-dup so a re-run doesn't stack duplicate entries.
+It merges by **identity** — `(event, matcher, script basename)` — not by command
+string (issue #818). A fleet hook whose command text changed (say its interpreter
+went from `/opt/homebrew/bin/python3` to `python3`) is **replaced in place**, not
+appended beside the old one; extra copies of one identity collapse to one; a
+fleet-path hook the table no longer wires (a retired script, or a matcher that
+changed) is removed; anything that is not a `~/.claude/fleet/{hooks,bin}/` hook
+— the user's own — is left byte-for-byte. It backs up to
+`settings.json.bak.<epoch>` before writing, writes nothing when nothing changed,
+and prints one line per entry it `replaced` / `removed dup` / `removed stale` /
+`appended` — relay those lines in the report. `--dry-run` previews.
 
-The merge only ever ADDS. If the diff **removed** an entry from
-`settings-hooks.json` (a `-` line with a `"command"`), delete that exact entry
-from every hook array in `~/.claude/settings.json` too — e.g.
-`jq '(.hooks[][]?.hooks) |= map(select(.command != "sh ~/.claude/fleet/bin/<retired>.sh"))'`
-— otherwise the live config keeps firing a script that no longer exists on every
-turn. (Worked example: the two `summarize-hook.sh` entries on `Stop`/`SessionStart`,
-retired in #535.) If `settings-hooks.json` didn't change, skip this step.
+(The string-keyed append it replaces is how #818 happened: three guards each
+registered twice, every Bash / Edit / Artifact call ran its guard two times.)
+`fleet-doctor`'s `hooks` line reads the same identity rule and WARNs on a
+duplicate, a missing entry or a stale one, so run the merge even when the diff
+didn't touch the table if the doctor says so. Otherwise, if
+`settings-hooks.json` didn't change, skip this step.
 
 ## 5. Install new/changed fleet commands — and remove retired ones
 
