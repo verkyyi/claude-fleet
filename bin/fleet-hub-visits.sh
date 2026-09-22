@@ -147,7 +147,7 @@ for f in ${files[@]+"${files[@]}"}; do
     continue
   fi
   awk -F'\t' -v cut="$cut" -v name="$name" -v since="$since" -v brief="$brief" '
-    $1 >= cut && NF >= 3 {
+    $1 >= cut && NF >= 3 && $3 != "" {
       # repeat arrivals in one second = one visit (attach deduped on its own, so
       # an uncounted attach never swallows a real trip in the same second)
       key = $1 SUBSEP ($3 == "attach")
