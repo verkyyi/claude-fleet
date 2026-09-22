@@ -500,6 +500,13 @@ _fleet_confs() {
   done
 }
 
+# _conf_val <file> <KEY> → the LAST uncommented assignment's value, quotes/blanks
+# stripped ('' if none) — what sourcing the file would leave in KEY.
+_conf_val() {
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
+}
+
 # --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
 # OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
 # auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
@@ -909,6 +916,7 @@ mwarn="${FLEET_LOAD_WARN_PER_CORE:-4}"
 # The orphan scan lives in the daemon that acts on it, so the doctor and the
 # watchdog can never disagree about what counts as a runaway.
 _dg="$(dirname "$0")/fleet-diskguard.sh"
+hbf_m="$(dirname "$0")/../logs/spinner.heartbeat"
 morph=''
 [ -f "$_dg" ] && morph="$(bash "$_dg" --orphans 2>/dev/null)"
 # awk, not `grep -c` (issue #709): `grep -c` on no match prints `0` AND exits 1,
@@ -937,6 +945,74 @@ elif awk -v p="$mper" -v w="$mwarn" 'BEGIN{ exit !(p>=w) }'; then
   warn machine "load $mload on $mcores cores = ${mper}/core, at or over the ${mwarn}/core line — every fleet on this box is sharing it. No fleet-fingerprinted orphan is responsible (\`bin/fleet-diskguard.sh --orphans\` is empty), so look at what else is running"
 else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
+fi
+
+# --- machine pressure the load average cannot see (issue #889) -----------------
+# On 2026-09-22 every new session froze 6-8s at spawn and it took an hour of
+# manual digging to find three causes this screen could have named: macOS's
+# fseventsd had grown to 2.9 GB, the spinner was forking tmux many times a second,
+# and three fleets' caps added up to 35 sessions on a 10-core box. The load line
+# above read fine through all of it. Each gets its own `machine` line — WARN, never
+# FAIL, for the same reason as above: pressure is a condition, not a broken install.
+#
+# 1. fseventsd (macOS only; Linux prints nothing). Read through diskguard, the
+#    daemon that reminds about it, so the two cannot disagree on the number.
+fsev=''
+[ -f "$_dg" ] && fsev="$(bash "$_dg" --fseventsd 2>/dev/null | head -1)"
+if [ -n "$fsev" ]; then
+  fmb=$(printf '%s' "$fsev" | cut -f1); fcpu=$(printf '%s' "$fsev" | cut -f2)
+  fet=$(printf '%s' "$fsev" | cut -f3)
+  fwmb="${FLEET_FSEVENTSD_WARN_MB:-$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_FSEVENTSD_WARN_MB)}"
+  case "$fwmb" in ''|*[!0-9]*) fwmb=1024 ;; esac
+  if awk -v m="$fmb" -v c="$fcpu" -v w="$fwmb" 'BEGIN{ exit !((m+0 >= w+0) || (c+0 >= 90)) }'; then
+    warn machine "fseventsd at ${fmb} MB RSS, ${fcpu}% CPU, up ${fet} — over the ${fwmb} MB / 90% line; new sessions stall at spawn while it is bloated (issue #889). Fix: \`sudo killall fseventsd\` — launchd restarts it at once"
+  else
+    pass machine "fseventsd ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}"
+  fi
+fi
+# 2. tmux calls per second, as the spinner measures itself (issue #887). Loosely
+#    coupled: a heartbeat without the field (a spinner predating it) shows nothing.
+tcps=''
+[ -f "$hbf_m" ] && tcps=$(sed -n 's/.*tmux_calls_per_s=\([0-9.]*\).*/\1/p' "$hbf_m" 2>/dev/null | head -1)
+[ -n "$tcps" ] && pass machine "spinner forks ${tcps} tmux call(s)/s (logs/spinner.heartbeat)"
+# 3. Session caps vs cores. The ceiling that matters is the one a spawn actually
+#    hits: the global cap, or the per-fleet caps' sum when every fleet has one and
+#    they add up to less. Past 2 sessions per core the box is overcommitted before
+#    a single session does anything expensive.
+gmax="${FLEET_GLOBAL_MAX_SESSIONS:-$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_GLOBAL_MAX_SESSIONS)}"
+case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
+gfmax=$(_conf_val "$(dirname "$0")/../fleet.conf" FLEET_MAX_SESSIONS)
+csum=0; cn=0; cunl=0
+if [ -d "$conf_dir" ]; then
+  while IFS= read -r cf; do
+    [ -n "$cf" ] || continue
+    v=$(_conf_val "$cf" FLEET_MAX_SESSIONS); [ -n "$v" ] || v="$gfmax"
+    case "$v" in ''|*[!0-9]*) v=0 ;; esac
+    cn=$((cn+1))
+    if [ "$v" -gt 0 ]; then csum=$((csum+v)); else cunl=$((cunl+1)); fi
+  done <<EOF
+$(_fleet_confs "$conf_dir")
+EOF
+fi
+cceil=''
+if [ "$gmax" -gt 0 ]; then
+  cceil=$gmax
+  [ "$cn" -gt 0 ] && [ "$cunl" -eq 0 ] && [ "$csum" -lt "$gmax" ] && cceil=$csum
+elif [ "$cn" -gt 0 ] && [ "$cunl" -eq 0 ]; then
+  cceil=$csum
+fi
+csumtxt="per-fleet caps sum to $csum across $cn fleet(s)"
+[ "$cunl" -gt 0 ] && csumtxt="$csumtxt ($cunl uncapped)"
+gtxt="global cap $gmax"; [ "$gmax" -gt 0 ] || gtxt="no global cap"
+if [ -z "$cceil" ]; then
+  warn machine "sessions: $gtxt, $csumtxt — nothing bounds concurrent sessions on these $mcores cores; set FLEET_GLOBAL_MAX_SESSIONS (≤ $((mcores*2)))"
+else
+  cratio=$(awk -v n="$cceil" -v c="$mcores" 'BEGIN{ printf "%.1f", n/c }')
+  if [ "$cceil" -gt $((mcores*2)) ]; then
+    warn machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores = ${cratio}x, over the 2x line; lower FLEET_GLOBAL_MAX_SESSIONS to ≤ $((mcores*2)) (issue #889)"
+  else
+    pass machine "sessions: $gtxt, $csumtxt — up to $cceil concurrent on $mcores cores (${cratio}x)"
+  fi
 fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
@@ -968,12 +1044,6 @@ fi
 # pane→session→conf hop is exercised too), else resolved by session name.
 hc="$(dirname "$0")/fleet-hook-conf.sh"
 gconf="$(dirname "$0")/../fleet.conf"
-# _conf_val <file> <KEY> → the LAST uncommented assignment's value, quotes/blanks
-# stripped ('' if none) — what sourcing the file would leave in KEY.
-_conf_val() {
-  [ -f "$1" ] || return 0
-  sed -n 's/^[[:space:]]*'"$2"'[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p' "$1" | tail -1 | tr -d "\"' 	"
-}
 if [ ! -f "$hc" ]; then
   warn handoff "bin/fleet-hook-conf.sh missing — the Stop hook cannot read FLEET_AUTO_HANDOFF_PCT from the conf, so the auto-handoff nudge is inert (#561); run /fleet-sync-install"
 elif [ -d "$conf_dir" ]; then

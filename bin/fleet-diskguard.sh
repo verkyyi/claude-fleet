@@ -34,6 +34,8 @@
 #   --cpu-watch       run only the runaway-CPU check (what --watch also does); for
 #                     testing or a standalone timer. No-op unless the CPU knobs are set
 #   --orphan-watch    run only the orphaned-runaway check (what --watch also does)
+#   --fseventsd       print macOS fseventsd's "<rss-MB>\t<%cpu>\t<etime>" (issue #889);
+#                     empty on Linux / when it is not running. The doctor reads it.
 #   --orphans         print the CURRENT orphan candidates, one per line, no sustain
 #                     filter and no state written — what bin/fleet-doctor.sh reads,
 #                     and what a human runs when the machine feels wrong. Exit 0
@@ -56,6 +58,8 @@
 #   FLEET_ORPHAN_CPU_SECS   seconds hot before flagged   (default 300)
 #   FLEET_ORPHAN_CPU_ACTION notify | kill                (default notify)
 #   FLEET_ORPHAN_EXTRA_RE   extra ERE OR'd into the fleet fingerprint
+#   FLEET_FSEVENTSD_WARN_MB fseventsd RSS that counts as bloated (default 1024)
+#   FLEET_FSEVENTSD_WARN_CPU fseventsd %CPU that counts as pegged (default 90)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -101,6 +105,9 @@ ORPHAN_ACTION="${FLEET_ORPHAN_CPU_ACTION:-notify}"
 # appears in the argv of Claude-spawned shells and of essentially nothing else.
 ORPHAN_RE_DEFAULT='shell-snapshots/snapshot-|FLEET_LOADGEN_BURNER#|/\.claude/fleet/bin/|claude-fleet'
 ORPHAN_RE="$ORPHAN_RE_DEFAULT${FLEET_ORPHAN_EXTRA_RE:+|$FLEET_ORPHAN_EXTRA_RE}"
+FSEV_MB="${FLEET_FSEVENTSD_WARN_MB:-1024}"
+FSEV_CPU="${FLEET_FSEVENTSD_WARN_CPU:-90}"
+FSEV_REMIND=86400   # one reminder per bloat episode per day — it is not ours to fix
 GDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/diskguard"
 STAMP="$GDIR/last-capture"
 
@@ -436,6 +443,58 @@ machine_load() {   # 1-minute load average, or '' if unreadable
     | head -1 | awk '{ print ($1+0) }'
 }
 
+# --- fseventsd pressure (issue #889) ------------------------------------------
+# On 2026-09-22 every new session froze 6-8s at spawn and it took an hour of
+# manual digging to find why: macOS's file-event daemon had grown to 2.9 GB and
+# pegged a core, so every process that opened a watch waited on it. Nothing in the
+# fleet looked at it, because it is not the fleet's process — it is the machine's.
+# So it is reported, never acted on: it runs as root, and `sudo killall fseventsd`
+# (launchd restarts it at once) is the operator's call, not a daemon's.
+#
+# fseventsd_probe → "<rss-MB>\t<%cpu>\t<etime>" for the largest fseventsd, or
+# nothing on Linux / when it is absent. The doctor re-reads it through --fseventsd,
+# so the watchdog and the doctor share one definition of "the number".
+fseventsd_probe() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 0
+  ps -axo rss=,pcpu=,etime=,comm= 2>/dev/null | awk '
+    { c = $4; for (i = 5; i <= NF; i++) c = c " " $i }
+    c == "fseventsd" || c ~ /\/fseventsd$/ {
+      if (!seen || $1+0 > best) { best = $1+0; cpu = $2; et = $3; seen = 1 }
+    }
+    END { if (seen) printf "%d\t%s\t%s\n", int(best / 1024), cpu, et }'
+}
+# fseventsd_over <mb> <cpu> → rc 0 iff either reading is over its line.
+fseventsd_over() {
+  awk -v m="${1:-0}" -v c="${2:-0}" -v wm="$FSEV_MB" -v wc="$FSEV_CPU" \
+    'BEGIN{ exit !((m+0 >= wm+0) || (c+0 >= wc+0)) }'
+}
+# fseventsd_watch — the --watch tick's share: over the line → ONE reminder per
+# FSEV_REMIND (to the notifier + a toast on every fleet), never a kill. The stamp
+# clears when it recovers, so a fresh episode later the same day is reported.
+fseventsd_watch() {
+  local line mb cpu et stamp last nowt s
+  line="$(fseventsd_probe)"; stamp="$GDIR/last-fseventsd-remind"
+  [ -n "$line" ] || return 0
+  mb="$(printf '%s' "$line" | cut -f1)"; cpu="$(printf '%s' "$line" | cut -f2)"
+  et="$(printf '%s' "$line" | cut -f3)"
+  if ! fseventsd_over "$mb" "$cpu"; then rm -f "$stamp" 2>/dev/null; return 0; fi
+  nowt="$(now)"; last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $(( nowt - last )) -lt "$FSEV_REMIND" ] && return 0
+  mkdir -p "$GDIR" 2>/dev/null; printf '%s\n' "$nowt" > "$stamp" 2>/dev/null || true
+  notify "# ⚠ fseventsd is under pressure
+macOS's file-event daemon holds **${mb} MB** RSS at **${cpu}% CPU** (up ${et}); the
+warn line is ${FSEV_MB} MB / ${FSEV_CPU}%. This is what froze every new session
+6-8s at spawn on 2026-09-22 (issue #889). Fix: \`sudo killall fseventsd\` — launchd
+restarts it immediately. Reported once a day; the fleet never kills it."
+  if command -v fleet_sockets >/dev/null 2>&1; then
+    for s in $(fleet_sockets 2>/dev/null); do
+      tmux -L "$s" display-message "fleet: fseventsd at ${mb} MB / ${cpu}% CPU — new sessions stall at spawn; run \`sudo killall fseventsd\` (launchd restarts it)" 2>/dev/null || true
+    done
+  fi
+  return 0
+}
+
 # When sourced by the selftest (FLEET_DISKGUARD_SOURCE=1) stop here: expose the
 # functions above, run no mode. `return` is valid because we're being sourced.
 [ "${FLEET_DISKGUARD_SOURCE:-}" = 1 ] && return 0 2>/dev/null
@@ -466,6 +525,9 @@ case "${1:-}" in
   --orphan-watch)
     orphan_watch
     ;;
+  --fseventsd)
+    fseventsd_probe
+    ;;
   --orphans)
     # No sustain filter and no state: "what is hot RIGHT NOW". A human (or the
     # doctor) asking this question wants the current truth, not a 5-minute-old
@@ -479,6 +541,7 @@ case "${1:-}" in
   --watch)
     cpu_watch                                     # runaway-CPU check runs every tick
     orphan_watch                                  # orphaned-runaway check (#697), likewise
+    fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

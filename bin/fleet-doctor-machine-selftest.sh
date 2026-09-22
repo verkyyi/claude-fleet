@@ -31,7 +31,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-machine-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf"
-for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 
 ME="$(id -un)"
@@ -68,18 +68,27 @@ EOF
 cat > "$WORK/fakepath/ps" <<EOF
 #!/bin/sh
 case "\$*" in
+  *rss=,pcpu=,etime=,comm=*)    cat "$WORK/fsev"; exit 0 ;;
   *ppid=,user=,pcpu=,command=*) cat "$WORK/pstable"; exit 0 ;;
   *etime=*-p*)                  echo "  03:20:15"; exit 0 ;;
 esac
 exec /bin/ps "\$@"
 EOF
-chmod +x "$WORK/fakepath/sysctl" "$WORK/fakepath/nproc" "$WORK/fakepath/getconf" "$WORK/fakepath/ps"
+# --- fake uname: the fseventsd section is macOS-only, so the OS is switchable too.
+cat > "$WORK/fakepath/uname" <<EOF
+#!/bin/sh
+[ "\$1" = -s ] && { cat "$WORK/os"; exit 0; }
+exec /usr/bin/uname "\$@"
+EOF
+echo Darwin > "$WORK/os"
+printf '  9120  0.2 01:14:57 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd\n' > "$WORK/fsev"
+chmod +x "$WORK/fakepath/sysctl" "$WORK/fakepath/nproc" "$WORK/fakepath/getconf" "$WORK/fakepath/ps" "$WORK/fakepath/uname"
 
 # The doctor's `machine` line, plus a marker proving the run got PAST it.
 run_doctor() {
   : > "$WORK/stderr"
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
-  FLEET_CONF_DIR="$WORK/conf" \
+  FLEET_CONF_DIR="$WORK/conf" FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-8}" \
     sh "$WORK/bin/fleet-doctor.sh" 2>"$WORK/stderr"
 }
 machine_line() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+machine([[:space:]]|$)' | head -1; }
@@ -165,4 +174,120 @@ ok
 survived "$out" || fail "4: the doctor did not survive the unreadable-load WARN" "$l"
 quiet "4: the unreadable-load WARN must print NOTHING on stderr"
 
-printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, render-survival, stderr silence)\n' "$CHECKS"
+# ============================================================================
+# 5. fseventsd (issue #889). Every `machine` line, not just the first.
+# ============================================================================
+mlines() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+machine([[:space:]]|$)'; }
+fsline() { mlines "$1" | grep -a fseventsd | head -1; }
+capline() { mlines "$1" | grep -a 'sessions:' | head -1; }
+echo 8 > "$WORK/cores"; echo "1.20" > "$WORK/load"; : > "$WORK/pstable"
+out="$(run_doctor)"; l="$(fsline "$out")"
+has "PASS" "$l" "5a: an 8 MB fseventsd must PASS"
+has "8 MB" "$l" "5a: the line must state the RSS it read (9120 KB)"
+has "01:14:57" "$l" "5a: the line must state how long it has been up"
+quiet "5a: the fseventsd PASS must print NOTHING on stderr"
+# the 2026-09-22 shape: 2.9 GB
+printf '  3040000  12.0 3-02:11:40 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd\n' > "$WORK/fsev"
+out="$(run_doctor)"; l="$(fsline "$out")"
+has "WARN" "$l" "5b: a 2.9 GB fseventsd must WARN"
+has "2968 MB" "$l" "5b: the WARN must state the RSS"
+has "sudo killall fseventsd" "$l" "5b: the WARN must name the fix"
+has "launchd" "$l" "5b: the WARN must say launchd brings it back (so the fix is not scary)"
+survived "$out" || fail "5b: the doctor did not survive the fseventsd WARN" "$l"
+quiet "5b: the fseventsd WARN must print NOTHING on stderr"
+out="$(FLEET_FSEVENTSD_WARN_MB=4096 run_doctor)"; l="$(fsline "$out")"
+has "PASS" "$l" "5c: FLEET_FSEVENTSD_WARN_MB must be honored"
+# small but pegged
+printf '  90000  97.5 00:10:00 /usr/sbin/fseventsd\n' > "$WORK/fsev"
+out="$(run_doctor)"; l="$(fsline "$out")"
+has "WARN" "$l" "5d: a fseventsd at 97.5% CPU must WARN even when small"
+# Linux: no fseventsd section at all, and no error
+echo Linux > "$WORK/os"
+out="$(run_doctor)"
+CHECKS=$((CHECKS + 1))
+[ -z "$(fsline "$out")" ] || fail "5e: Linux must print no fseventsd line" "$(fsline "$out")"
+survived "$out" || fail "5e: the doctor did not survive the Linux branch" ""
+quiet "5e: the Linux branch must print NOTHING on stderr"
+echo Darwin > "$WORK/os"; : > "$WORK/fsev"
+out="$(run_doctor)"
+CHECKS=$((CHECKS + 1))
+[ -z "$(fsline "$out")" ] || fail "5f: no fseventsd running must print no line" "$(fsline "$out")"
+
+# ============================================================================
+# 6. Session caps vs cores (issue #889).
+# ============================================================================
+mkdir -p "$WORK/conf/fleets/fa" "$WORK/conf/fleets/fb" "$WORK/conf/fleets/fc"
+echo 10 > "$WORK/cores"
+printf 'FLEET_REPO=o/a\nFLEET_MAX_SESSIONS=9\n' > "$WORK/conf/fleets/fa/conf"
+printf 'FLEET_REPO=o/b\nFLEET_MAX_SESSIONS=20   # a comment\n' > "$WORK/conf/fleets/fb/conf"
+printf 'FLEET_REPO=o/c\nFLEET_MAX_SESSIONS="6"\n' > "$WORK/conf/fleets/fc/conf"
+out="$(GMAX=30 run_doctor)"; l="$(capline "$out")"
+has "WARN" "$l" "6a: global 30 on 10 cores must WARN"
+has "sum to 35" "$l" "6a: the WARN must state the per-fleet sum (9+20+6)"
+has "3.0x" "$l" "6a: the WARN must state sessions per core"
+has "FLEET_GLOBAL_MAX_SESSIONS" "$l" "6a: the WARN must name the knob"
+survived "$out" || fail "6a: the doctor did not survive the caps WARN" "$l"
+quiet "6a: the caps WARN must print NOTHING on stderr"
+out="$(GMAX=16 run_doctor)"; l="$(capline "$out")"
+has "PASS" "$l" "6b: global 16 on 10 cores must PASS"
+has "1.6x" "$l" "6b: the PASS must state sessions per core"
+# per-fleet caps below the global one are the real ceiling
+printf 'FLEET_REPO=o/b\nFLEET_MAX_SESSIONS=2\n' > "$WORK/conf/fleets/fb/conf"
+out="$(GMAX=40 run_doctor)"; l="$(capline "$out")"
+has "PASS" "$l" "6c: caps summing to 17 under a global 40 must PASS — the sum is the real ceiling"
+has "up to 17" "$l" "6c: the line must name the effective ceiling"
+# an uncapped fleet means the global cap is the ceiling again
+printf 'FLEET_REPO=o/b\n' > "$WORK/conf/fleets/fb/conf"
+out="$(GMAX=40 run_doctor)"; l="$(capline "$out")"
+has "WARN" "$l" "6d: with an uncapped fleet the global 40 is the ceiling and must WARN"
+has "1 uncapped" "$l" "6d: the line must say a fleet is uncapped"
+out="$(GMAX=0 run_doctor)"; l="$(capline "$out")"
+has "WARN" "$l" "6e: no global cap + an uncapped fleet = unbounded, must WARN"
+rm -rf "$WORK/conf/fleets"
+
+# ============================================================================
+# 7. tmux calls/s from the spinner heartbeat (issue #887 field) — shown only
+#    when present.
+# ============================================================================
+mkdir -p "$WORK/logs"
+date +%s > "$WORK/logs/spinner.heartbeat"
+out="$(run_doctor)"
+CHECKS=$((CHECKS + 1))
+mlines "$out" | grep -q 'tmux call' && fail "7a: no tmux_calls_per_s field must show no line" "$(mlines "$out")"
+printf '%s tmux_calls_per_s=41.5\n' "$(date +%s)" > "$WORK/logs/spinner.heartbeat"
+out="$(run_doctor)"; l="$(mlines "$out" | grep -a 'tmux call' | head -1)"
+has "41.5" "$l" "7b: the heartbeat's tmux_calls_per_s must be reported"
+quiet "7b: the tmux-rate line must print NOTHING on stderr"
+rm -rf "$WORK/logs"
+
+# ============================================================================
+# 8. The diskguard --watch share: remind ONCE per day, never kill, re-arm on
+#    recovery.
+# ============================================================================
+cat > "$WORK/notify" <<EOF
+#!/bin/sh
+printf '%s\n---\n' "\$1" >> "$WORK/notified"
+EOF
+chmod +x "$WORK/notify"; : > "$WORK/notified"
+fwatch() {
+  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+  FLEET_NOTIFY_CMD="$WORK/notify" FLEET_DISKGUARD_SOURCE=1 \
+    bash -c ". '$WORK/bin/fleet-diskguard.sh'; fseventsd_watch" 2>>"$WORK/stderr"
+}
+: > "$WORK/stderr"
+printf '  3040000  12.0 3-02:11:40 /usr/sbin/fseventsd\n' > "$WORK/fsev"
+fwatch; fwatch
+CHECKS=$((CHECKS + 1))
+[ "$(grep -c '^---$' "$WORK/notified")" = 1 ] || fail "8a: two ticks over the line must remind exactly ONCE" "$(cat "$WORK/notified")"
+has "sudo killall fseventsd" "$(cat "$WORK/notified")" "8a: the reminder must name the fix"
+printf '  9120  0.2 01:00:00 /usr/sbin/fseventsd\n' > "$WORK/fsev"; fwatch
+printf '  3040000  12.0 00:05:00 /usr/sbin/fseventsd\n' > "$WORK/fsev"; fwatch
+CHECKS=$((CHECKS + 1))
+[ "$(grep -c '^---$' "$WORK/notified")" = 2 ] || fail "8b: a recovery must re-arm the reminder for the next episode" "$(cat "$WORK/notified")"
+echo Linux > "$WORK/os"; : > "$WORK/notified"; fwatch
+CHECKS=$((CHECKS + 1))
+[ -s "$WORK/notified" ] && fail "8c: Linux must never remind" "$(cat "$WORK/notified")"
+quiet "8: the watch share must print NOTHING on stderr"
+echo Darwin > "$WORK/os"
+
+printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, fseventsd, session caps, tmux rate, render-survival, stderr silence)\n' "$CHECKS"

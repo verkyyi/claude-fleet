@@ -1356,6 +1356,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Doctor load warn per core @group=disk @tier=advanced @scope=global @edit=int
 #FLEET_LOAD_WARN_PER_CORE=4
 
+# macOS fseventsd RSS (MB) at which `fleet-doctor`'s `machine` check WARNs and the
+# diskguard --watch tick sends its once-a-day reminder (issue #889): a bloated
+# fseventsd stalls every new session 6-8s at spawn. Report-only — the fleet never
+# kills it; the fix is `sudo killall fseventsd` (launchd restarts it). Linux: unused.
+# @label=fseventsd warn MB @group=disk @tier=advanced @scope=global @edit=int @unit=MB
+#FLEET_FSEVENTSD_WARN_MB=1024
+
 # Load experiments (bin/fleet-loadgen.sh) — the sanctioned way to put a box under
 # CPU pressure, because the hand-written `trap … EXIT` form is what leaked the
 # orphans above. Each burner carries its OWN deadline (a kernel alarm(2) armed
