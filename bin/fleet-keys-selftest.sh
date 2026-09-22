@@ -236,7 +236,7 @@ side_block="$(awk '/^  if want sidebar; then/{f=1;next} f && /^  fi$/{f=0} f' "$
 [ -n "$side_block" ] || fail "fleet-keys.sh has no 'if want sidebar' block"
 side_table="$(bash "$KEYMAP" --panel sidebar list)" || fail "dash-keymap.sh --panel sidebar list exited non-zero"
 [ -n "$side_table" ] || fail "dash-keymap.sh --panel sidebar has no actions"
-while read -r action key glyph def remap state; do
+while read -r action _ _ def _; do
   [ -n "$action" ] || continue
   printf '%s\n' "$side_block" | grep -q "\$(dg $action)" \
     || fail "sidebar action '$action' has no \$(dg $action) row in fleet-keys.sh"
@@ -247,7 +247,6 @@ while read -r action key glyph def remap state; do
   byte=$(( $(printf '%d' "'$letter") - 96 ))
   grep -q "key == $byte\b" "$SIDEBAR_PY" \
     || fail "sidebar action '$action' ($def = byte $byte) is not handled in fleet-sidebar.py"
-  fb=$(bash "$KEYMAP" --panel sidebar list | awk -v a="$action" '$1==a{print $4}')
   grep -Eq "^bind -T fleet-sidebar M-$letter .*send-keys -t '\{top-left\}' C-$letter" "$CONF" \
     || fail "sidebar action '$action': conf does not rewrite its ⌥$letter fallback to C-$letter"
 done <<EOF
