@@ -577,6 +577,9 @@ fleet-account.sh migrate --idle             # done|needs windows not on the acti
 fleet-account.sh migrate --all              # everything not on the active account
 fleet-account.sh migrate --account work     # everything running on `work`
 fleet-account.sh migrate @12 @15            # these windows, whatever they run on
+fleet-account.sh migrate --stuck            # every window whose failover request is ⚠ stuck (#872)
+fleet-account.sh migrate --force-bg @12     # move despite background commands: stop them,
+                                            # name them in the resume nudge (#873; = dash ⌃l)
 fleet-account.sh migrate --dry-run --all    # print the plan only
 fleet-account.sh whoami @12                 # the account a window REALLY runs (token truth;
                                             # heals a stale @cc_account stamp)

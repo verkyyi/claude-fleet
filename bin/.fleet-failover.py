@@ -231,11 +231,24 @@ def background_override(r, hard):
     return bool(hard and grace and since and time.time() - since >= grace)
 
 
-def terminate_background(request, bundle=None):
+def claude_background(pid, worktree='', session=''):
+    """background_inventory() for a Claude pid named directly (#873).
+
+    fleet-migrate.sh's --force-bg is an operator's manual move, not a planner
+    request: it has no inspected source, only the pane's Claude pid. Everything
+    the hibernation walk needs for a Claude is the pid, its worktree (the MCP
+    inventory) and the fleet (the MCP contract), so build exactly that."""
+    return background_inventory(dict(pid=int(pid), agent='claude', worktree=worktree or '',
+                                     session=session or '', codex_identity={}))
+
+
+def terminate_background(request, bundle=None, why=None):
     """Stop the processes validate() recorded, after the source exited (#871).
 
     Only a pid whose start fingerprint still matches is signalled — a reused pid
-    is never touched. The resume prompt then names every recorded command."""
+    is never touched. The resume prompt then names every recorded command.
+    With `why` (fleet-migrate.sh --force-bg, #873) the note is also printed, for
+    the caller to fold into its own resume nudge."""
     entries = read(Path(request) / 'background.json', [])
     if not entries: return
     live = []
@@ -254,6 +267,8 @@ def terminate_background(request, bundle=None):
         try: os.kill(e['pid'], 9); e['stopped'] = 'SIGKILL'
         except ProcessLookupError: pass
     save(Path(request) / 'background.json', entries)
+    if why:
+        print(background_note(entries, why), end='')
     if bundle:
         note = background_note(entries)
         for name in ('pickup.md', 'handoff.md'):
@@ -430,8 +445,18 @@ def stuck_attempts():
     except ValueError: return 5
 
 
+def migrate_glyph():
+    """The dash key that migrates the highlighted row (#873), as the operator's
+    terminal will deliver it — the keymap resolver dodges a colliding prefix."""
+    try: return run(['bash', BIN / 'dash-keymap.sh', 'glyph', 'migrate'], timeout=5).strip() or '⌃l'
+    except (OSError, subprocess.SubprocessError): return '⌃l'
+
+
 def unstick_hint(source):
-    return 'fleet-account.sh migrate --session %s %s' % (source.get('session','?'), source.get('window','?'))
+    # Name the tap-first action first (#873): the operator reading this page is
+    # usually on a phone, one key + one confirm away from the fix.
+    return 'dash %s on the row (DASH_KEY_MIGRATE), or fleet-account.sh migrate --session %s --force-bg %s' % (
+        migrate_glyph(), source.get('session','?'), source.get('window','?'))
 
 
 def notify_stuck(r):
@@ -755,13 +780,17 @@ def main():
     for field in ('session','pane','sid'): q.add_argument('--'+field,required=True)
     q=sub.add_parser('settled'); q.add_argument('--session',required=True); q.add_argument('--pane',required=True)
     q=sub.add_parser('terminate-background'); q.add_argument('request',type=Path)
-    q.add_argument('--bundle',type=Path)
+    q.add_argument('--bundle',type=Path); q.add_argument('--note')
+    q=sub.add_parser('background'); q.add_argument('--pid',required=True,type=int)
+    q.add_argument('--worktree',default=''); q.add_argument('--session',default='')
     sub.add_parser('status')
     a=p.parse_args()
     if a.command=='reconcile': reconcile(a.session,a.dry_run)
     elif a.command=='validate': validate(a.request,a.session,a.pane,a.sid)
     elif a.command=='settled': settled(a.session,a.pane)
-    elif a.command=='terminate-background': terminate_background(a.request,a.bundle)
+    elif a.command=='terminate-background': terminate_background(a.request,a.bundle,a.note)
+    elif a.command=='background':
+        print(json.dumps(claude_background(a.pid,a.worktree,a.session),ensure_ascii=False))
     else:
         paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))
         print(json.dumps([read(f,{}) for f in paths],ensure_ascii=False))

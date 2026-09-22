@@ -83,6 +83,9 @@ unsel "all: on active"                all      acctB working  acctB  0  ""
 sel   "account: match"                account  acctA "done"     acctB  0  acctA
 unsel "account: other"                account  acctB "done"     acctB  0  acctA
 sel   "explicit: always"              explicit ""    ""       ""     0  ""
+# --stuck (issue #873) selects on the failover planner's @quota_stuck mark alone
+ok; migrate_selected stuck acctA working acctB 0 "" 1 || fail "stuck: a @quota_stuck=1 window must be selected"
+ok; migrate_selected stuck acctA working acctB 1 "" "" && fail "stuck: an unmarked window (even benched) must NOT be selected"
 
 # migrate_noop <label> <active> <model> <active-benched> — the #567 guard, every
 # caller goes through it
@@ -126,6 +129,9 @@ $| = 1; print "fake claude sid=$sid\n";
 # the transcript tail, rendered on start — on a --resume that re-renders the OLD
 # account's wall onto the new pane (#870)
 if (open(my $w, '<', "$ENV{FLEET_CC_SESSIONS_DIR}/../wall")) { print while <$w>; close $w }
+# a background command this session started (issue #873): its pid is recorded
+# for the test, and it outlives Claude's /exit unless the migrate stops it
+if ($ENV{FAKE_BG} && !$ARGV[0]) { my $c = fork; if (!$c) { exec 'sleep', '97' } open(my $b, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/../bg.pid"); print $b "$c\n"; close $b }
 if ($ENV{FAKE_STUCK}) { sleep 1 while 1 }
 while (my $l = <STDIN>) { exit 0 if $l =~ m{/exit} }
 exit 0;
@@ -149,6 +155,8 @@ tmux run-shell -b "tmux kill-window -t '\$WIN'"
 EOS
 # runner-hook-b: the hook runner, but under account B's token (the #567 case below)
 sed 's/tokA-secret/tokB-secret/' "$FB/runner-hook" > "$FB/runner-hook-b"
+# runner-hook-bg: the hook runner whose Claude starts a background command (#873)
+sed 's/FAKE_SID=/FAKE_BG=1 FAKE_SID=/' "$FB/runner-hook" > "$FB/runner-hook-bg"
 # runner-nohook: same, but drops to the recording shell (FLEET_CLOSE_ON_EXIT=0)
 cat > "$FB/runner-nohook" <<EOS
 #!/bin/sh
@@ -187,7 +195,7 @@ bash "$BIN/fleet-account.sh" use acctB >/dev/null || fail "use acctB"
 bash "$BIN/fleet-account.sh" mark-limited acctA >/dev/null
 [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: active should be acctB"
 
-mkdir -p "$WORK/wt1" "$WORK/wt2" "$WORK/wt3" "$WORK/wt4"
+mkdir -p "$WORK/wt1" "$WORK/wt2" "$WORK/wt3" "$WORK/wt4" "$WORK/wt5"
 WALL="hit your weekly limit · resets Sep 25 at 7am (Asia/Shanghai)"
 printf "  ⎿  You've %s\n" "$WALL" > "$WORK/wall"
 TM new-session -d -s "$SESS" -n plan -c "$FLEET_MAIN" || fail "isolated server"
@@ -288,6 +296,30 @@ ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be '
 out=$(bash "$SCRIPT" --session "$SESS" --idle 2>&1)
 ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the move must find nothing (all working or on B): $out"
 
+# --- --stuck + --force-bg (issue #873). A walled worker whose failover request is
+# stuck — here on a background command — is the dash key's target. Rig: w5 on A
+# (benched; B active) with a live `sleep 97` child, marked @quota_stuck=1; w2 is
+# on A too but NOT marked.
+w5=$(spawn w5 runner-hook-bg sid-5555 "$WORK/wt5"); sleep 1.5
+TM set-window-option -t "$w5" @quota_stuck 1
+bgpid=$(cat "$WORK/bg.pid" 2>/dev/null)
+ok; [ -n "$bgpid" ] && kill -0 "$bgpid" 2>/dev/null || fail "rig: w5's background command must be running (pid '$bgpid')"
+out=$(bash "$SCRIPT" --session "$SESS" --stuck --dry-run --force-bg 2>&1)
+ok; printf '%s' "$out" | grep -q 'w5 .*\[acctA → acctB\] would /exit' || fail "--stuck must plan the marked window: $out $(diag)"
+ok; ! printf '%s' "$out" | grep -q 'w2 ' || fail "--stuck must list ONLY @quota_stuck windows (w2 is unmarked): $out"
+ok; printf '%s' "$out" | grep -q "would stop 1 background command" && printf '%s' "$out" | grep -q "$bgpid  sleep 97" \
+  || fail "--dry-run --force-bg must list the background command it would stop: $out"
+ok; kill -0 "$bgpid" 2>/dev/null || fail "--dry-run must not stop anything"
+: > "$WORK/launched"
+out=$(bash "$SCRIPT" --session "$SESS" --force-bg "$w5" 2>&1)
+ok; printf '%s' "$out" | grep -q 'w5 .*acctA → acctB' || fail "--force-bg must move w5 A → B: $out $(diag)"
+ok; printf '%s' "$out" | grep -q "stopped 1 background command" || fail "the move must report what it stopped: $out"
+for _ in $(seq 1 20); do kill -0 "$bgpid" 2>/dev/null || break; sleep 0.3; done
+ok; ! kill -0 "$bgpid" 2>/dev/null || fail "--force-bg must stop the background command Claude left running (pid $bgpid)"
+ok; grep -q -- '--resume sid-5555 Your previous turn was interrupted.* Background commands terminated by migration .*forced this move.*sleep 97 (cwd ' "$WORK/launched" 2>/dev/null \
+  || fail "the resume nudge must name the stopped command (launched: $(cat "$WORK/launched" 2>/dev/null))"
+ok; [ "$(wc -l < "$WORK/launched" | tr -d ' ')" = 1 ] || fail "the nudge must stay ONE line (the no-hook branch types it): $(cat "$WORK/launched")"
+
 # --- explicit window ids need no account filter: move w1 (now on B) again, onto
 # A — un-benched and pinned active for it (a move onto the account a window
 # already runs on is a no-op since #567, see below).
@@ -345,6 +377,12 @@ out=$(bash "$SCRIPT" --session "$SESS" --dry-run --limited 2>&1)
 ok; printf '%s' "$out" | grep -q 'w1 .*already on acctA — skipped' || fail "--limited must skip a benched window whose account is still the active one: $out"
 ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move (acctB → acctA, benched too) — skipped' || fail "--limited must not bounce w4 from benched B onto benched A: $out $(diag)"
 ok; ! printf '%s' "$out" | grep -q 'would /exit' || fail "--limited with every account benched must plan nothing: $out"
+# …and so is the dash key's move (#873): a stuck row with no account to go to is
+# refused by the same guard, background override or not
+TM set-window-option -t "$w4" @quota_stuck 1
+out=$(bash "$SCRIPT" --session "$SESS" --dry-run --stuck --force-bg 2>&1)
+ok; printf '%s' "$out" | grep -q 'w4 .*nowhere to move' && ! printf '%s' "$out" | grep -q 'would /exit' \
+  || fail "--stuck --force-bg with every account benched must refuse: $out"
 # …but the SAME windows move once another account is eligible again
 bash "$BIN/fleet-account.sh" clear acctB >/dev/null
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail "rig: B un-benched ⇒ active rotates to acctB (got $(bash "$BIN/fleet-account.sh" active))"

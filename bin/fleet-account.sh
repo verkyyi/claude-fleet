@@ -85,7 +85,8 @@
 #   migrate …            — move LIVE sessions onto the active account by close +
 #                          `--resume` in a new window (issue #512): delegates to
 #                          bin/fleet-migrate.sh — see its header for the selectors
-#                          (<window-id>… | --limited | --idle | --all | --account L);
+#                          (<window-id>… | --limited | --idle | --all | --account L |
+#                          --stuck; --force-bg moves past background work, #873);
 #                          a window already on the active account, or any window
 #                          while the active account is benched itself, is skipped
 #                          (#567) — only a --model relaunch is exempt

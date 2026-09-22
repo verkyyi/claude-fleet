@@ -347,15 +347,18 @@ def package(a):
     print(bundle)
 
 
-def background_note(entries):
-    """The resume-prompt paragraph naming commands a quota migration stopped (#871)."""
+def background_note(entries, why='The source hit a hard quota wall'):
+    """The resume-prompt paragraph naming commands a quota migration stopped (#871).
+
+    `why` names who forced it: the planner's hard-wall grace, or an operator's
+    `fleet-migrate.sh --force-bg` (#873)."""
     if not entries:
         return ''
     lines = ''.join('- `%s` (cwd `%s`)\n' % (shlex.join(e.get('argv') or ['pid %s' % e.get('pid')]),
                                              e.get('cwd') or '?') for e in entries)
     return ('\n## Background commands terminated by migration\n\n'
-            'The source hit a hard quota wall, so these background commands were stopped '
-            'with it:\n\n%s\nRestart any that are still needed; the rest are gone on purpose.\n' % lines)
+            '%s, so these background commands were stopped '
+            'with it:\n\n%s\nRestart any that are still needed; the rest are gone on purpose.\n' % (why, lines))
 
 
 def process_rows():

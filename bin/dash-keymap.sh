@@ -58,6 +58,9 @@
 # the remaining bindings to spend, and the mnemonic survives (yank the row up).
 # ⌃u / ⌃w (clear line / delete word) were deliberately left alone: those two are
 # what an operator uses to fix a mistyped name.
+# `migrate` (issue #873) took ctrl-l on the same basis: fzf's ⌃l is
+# `clear-screen`, a repaint the dash's 1Hz reload already does every second.
+# (Mnemonic: Leave this account's wall.)
 set -uo pipefail
 
 PANEL=dash
@@ -75,7 +78,8 @@ pr ctrl-p alt-p
 reap ctrl-x alt-x
 rename ctrl-e alt-e
 answer ctrl-k alt-k
-pin ctrl-y alt-y' ;;
+pin ctrl-y alt-y
+migrate ctrl-l alt-l' ;;
 backlog) TABLE='new ctrl-n alt-n
 close ctrl-x alt-x
 priority ctrl-y alt-y

@@ -432,7 +432,8 @@ class StuckRequest(unittest.TestCase):
         self.veto(20)                                  # still stuck: never a second page
         self.assertEqual(len(self.sent()),1)
         msg=self.sent()[0]
-        for part in ('fleet-x','@7','claude/work','npm run dev','fleet-account.sh migrate --session fleet-x @7'):
+        for part in ('fleet-x','@7','claude/work','npm run dev','DASH_KEY_MIGRATE',
+                     'fleet-account.sh migrate --session fleet-x --force-bg @7'):
             self.assertIn(part,msg)
 
     def test_preparing_between_attempts_neither_extends_nor_breaks_the_streak(self):
@@ -588,6 +589,28 @@ class TerminateBackground(unittest.TestCase):
                 text=(bundle/name).read_text()
                 self.assertIn('Background commands terminated by migration',text)
                 self.assertIn('`sleep 60` (cwd `%s`)' % tmp,text)
+
+    def test_forced_migrate_prints_its_own_note_and_touches_no_bundle(self):
+        # fleet-migrate.sh --force-bg (#873): no transfer bundle, the note comes
+        # back on stdout for the caller's resume nudge and names who forced it.
+        with tempfile.TemporaryDirectory() as tmp:
+            req=Path(tmp)/'req';req.mkdir()
+            job=subprocess.Popen(['sleep','61']);self.addCleanup(lambda p=job:(p.kill(),p.wait()))
+            flow.save(req/'background.json',[dict(pid=job.pid,argv=['sleep','61'],cwd=tmp,
+                                                   start=flow.process_start(job.pid)[1])])
+            out=io.StringIO()
+            with contextlib.redirect_stdout(out): flow.terminate_background(req,None,'The operator forced this move')
+            self.assertEqual(job.wait(timeout=5),-15)
+            self.assertIn('The operator forced this move, so these background commands',out.getvalue())
+            self.assertIn('`sleep 61`',out.getvalue())
+            self.assertEqual(list(Path(tmp).iterdir()),[req])
+
+    def test_claude_background_collects_a_named_pids_children(self):
+        # The inventory for a Claude named by pid alone (#873): its non-MCP
+        # children are collected, never raised on.
+        with patch.object(flow,'background_inventory',side_effect=lambda src:[src]):
+            src=flow.claude_background('42','/w','fleet-x')[0]
+        self.assertEqual((src['pid'],src['agent'],src['worktree'],src['session']),(42,'claude','/w','fleet-x'))
 
 
 class ClaudeWall(unittest.TestCase):

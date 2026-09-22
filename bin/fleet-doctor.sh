@@ -291,7 +291,7 @@ for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
 if rows: print('%d stuck: %s' % (len(rows),', '.join(rows)))
 PY
 )
-  if [ -n "$_stuck" ]; then warn failover-stuck "$_stuck — same reason every retry (fleet-account.sh migrate --session <fleet> <window>)";
+  if [ -n "$_stuck" ]; then warn failover-stuck "$_stuck — same reason every retry (dash migrate key on the row, or fleet-account.sh migrate --stuck --force-bg --session <fleet>)";
   else pass failover-stuck '0 stuck failover requests'; fi
 fi
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
