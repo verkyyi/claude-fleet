@@ -961,6 +961,22 @@ fleet_wt_window() {
   printf '%s\t%s' "$wid" "${st:--}"
 }
 
+# fleet_pid_alive <pid> — has this process NOT exited? `kill -0` alone answers
+# "does the pid exist", and an exited child stays a zombie until its parent reaps
+# it. tmux 3.4 (the Linux CI runner) sometimes never handles SIGCHLD for a pane
+# process, so an agent that quit on /exit lingers as `Z` for 40s+ and every
+# `kill -0` wait times out on a process that is already gone (issue #842, same
+# root as #781's `source_alive` in fleet-sleep.py). A zombie is exited. Only a
+# positive `Z` reads as exited: a failed `ps` keeps the kill -0 answer (alive),
+# so a caller that launches a replacement on "exited" can never be told so early.
+fleet_pid_alive() {
+  local st
+  kill -0 "$1" 2>/dev/null || return 1
+  st=$(ps -o stat= -p "$1" 2>/dev/null) || st=''
+  case "$st" in *Z*) return 1 ;; esac
+  return 0
+}
+
 # Age of a process in SECONDS, portably (issue #469). macOS `ps` has no `etimes`
 # (Linux does), so parse the POSIX `etime` field — [[dd-]hh:]mm:ss. Prints 0 for a
 # pid that is gone or unparseable, which makes an age gate fail CLOSED (the process

@@ -219,7 +219,7 @@ TM set-option -wu -t "$WIN" @handoff_armed
 
 transfer --handoff "$WORK/notes.md" || fail 'actual issue-worker cutover'
 BUNDLE=$(packet)
-ok; ! kill -0 "$PID" 2>/dev/null || fail 'source process must exit'
+ok; ! fleet_pid_alive "$PID" || fail 'source process must exit'
 ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ "$(field origin)" = scratch-99 ] || fail 'window bindings changed'
 ok; [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'target provenance stamps missing'
 ok; [ "$(field worktree)" = "$WT" ] || fail 'issue-worker cutover must record verified worktree'
@@ -260,7 +260,7 @@ ok; [ -s "$BUNDLE/manifest.json" ] && [ -s "$BUNDLE/resume-source.sh" ] || fail 
 spawn 51 raw loop-dialog
 printf '{"prompt":"continue task","interval_seconds":3600}\n' > "$WORK/loop.json"
 FLEET_TRANSFER_EXIT_WAIT=5 transfer --loop "$WORK/loop.json" || fail 'source loop exit confirmation'; ok
-ok; ! kill -0 "$PID" 2>/dev/null && [ "$(field cc_agent)" = codex ] || fail 'source timer must exit before Codex starts'
+ok; ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'source timer must exit before Codex starts'
 ok; [ -s "$(packet)/loop-exit-confirmation.txt" ] || fail 'exit confirmation evidence missing'
 python3 - "$IBIN/.fleet-transfer.py" "$(packet)/loop-exit-confirmation.txt" <<'PY' || fail 'unknown or unrelated dialogs must not be confirmed'
 import pathlib, runpy, sys
@@ -484,7 +484,7 @@ FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --h
 REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
 kill -0 "$PID" || fail 'Codex exited before fresh Stop'
 stop_turn; wait_request started; ok
-kill -0 "$PID" 2>/dev/null && fail 'Codex source survived cutover'
+fleet_pid_alive "$PID" && fail 'Codex source survived cutover'
 [ "$(field source_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] || fail 'Codex cycle provenance lost'
 [ "$(TM display-message -p -t "$SIDEBAR" '#{window_id}')" = "$WIN" ] || fail 'handoff removed the sidebar'; ok
 TM kill-pane -t "$SIDEBAR"
