@@ -635,7 +635,10 @@ def quiet_native_children(client,session_id):
             raise ValueError('another thread/subagent has an unfinished goal')
 
 
-def quiet_processes(source,config_home=None):
+def quiet_processes(source,config_home=None,background=None):
+    # background=None is hibernation's contract: any unverified child vetoes.
+    # A list collects those pids instead (still walking their descendants) — only
+    # failover's hard-wall grace passes one (#871); every other veto still raises.
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
     mcp_pids=set()
@@ -654,6 +657,7 @@ def quiet_processes(source,config_home=None):
             pending.append(pid)
             if source['agent']=='claude':
                 if pid in mcp_pids: continue
+                if background is not None: background.append(pid); continue
                 try:name=ARGV['process_executable'](pid).name
                 except OSError:name='unknown'
                 raise ValueError('Claude owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
@@ -689,6 +693,7 @@ def quiet_processes(source,config_home=None):
                         and ARGV['process_executable'](pid)==
                             ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
                     continue
+            if background is not None: background.append(pid); continue
             try:name=ARGV['process_executable'](pid).name
             except OSError:name='unknown'
             raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))

@@ -347,6 +347,17 @@ def package(a):
     print(bundle)
 
 
+def background_note(entries):
+    """The resume-prompt paragraph naming commands a quota migration stopped (#871)."""
+    if not entries:
+        return ''
+    lines = ''.join('- `%s` (cwd `%s`)\n' % (shlex.join(e.get('argv') or ['pid %s' % e.get('pid')]),
+                                             e.get('cwd') or '?') for e in entries)
+    return ('\n## Background commands terminated by migration\n\n'
+            'The source hit a hard quota wall, so these background commands were stopped '
+            'with it:\n\n%s\nRestart any that are still needed; the rest are gone on purpose.\n' % lines)
+
+
 def process_rows():
     rows = {}
     for line in run("ps", "-axo", "pid=,ppid=,comm=").splitlines():

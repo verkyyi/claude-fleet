@@ -304,6 +304,13 @@ if kill -0 "$PID" 2>/dev/null; then
   die "source did not exit; no replacement $TO was launched"
 fi
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
+# A hard wall past its grace migrates despite background commands (#871): stop
+# the ones validate() recorded and name them in the resume prompt. Past /exit a
+# failure here must not strand the pane, so it only warns.
+if [ -n "$QUOTA_REQUEST" ]; then
+  python3 "$BIN/.fleet-failover.py" terminate-background "$QUOTA_REQUEST" --bundle "$BUNDLE" \
+    || printf 'fleet-transfer: warning: could not stop the recorded background commands\n' >&2
+fi
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
 fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
 if [ "$(opt '#{pane_dead}')" != 1 ]; then
