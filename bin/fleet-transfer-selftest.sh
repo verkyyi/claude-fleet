@@ -206,6 +206,8 @@ ok; kill -0 "$PID" || fail 'missing registry must keep source running'
 mv "$WORK/registry-saved" "$WORK/sessions/$PID.json"
 TM set-option -w -t "$WIN" @claude_state working
 transfer && fail 'busy source must refuse cutover'; ok
+TM set-option -w -t "$WIN" @claude_state looping
+transfer && fail 'a looping CLAUDE source is not a settled Codex round'; ok
 TM set-option -w -t "$WIN" @claude_state "done"
 SP=$(TM display-message -p -t "$PANE" '#{socket_path}')
 OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$WIN" --to codex 2>&1) \
@@ -471,6 +473,11 @@ transfer --prepare-only && fail 'stale Codex launcher must refuse'
 TM set-option -w -t "$WIN" @cc_launcher_pid "$PID"; ok
 TM set-option -w -t "$WIN" @claude_state working
 transfer && fail 'busy Codex source must refuse'; ok
+# looping is accepted only on native evidence (#786); a thread that cannot be
+# read as idle with a completed last turn still refuses.
+TM set-option -w -t "$WIN" @claude_state looping
+transfer && fail 'an unverifiable looping Codex source must refuse'; ok
+TM set-option -w -t "$WIN" @claude_state working
 TM set-option -w -t "$WIN" @handoff_armed 1
 FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 transfer --after-turn --handoff "$WORK/notes.md" || fail 'arm Codex context cycle'
 REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')

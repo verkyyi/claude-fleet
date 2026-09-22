@@ -185,6 +185,51 @@ class Failover(unittest.TestCase):
             self.assertEqual(flow.read(record)['schedule']['next_run_at'],due)
             self.assertEqual(flow.read(record)['deliveries'],7)
 
+    def looping_move(self,last):
+        # #786: a proactive request pauses the loop (waiting-quota), so a
+        # `looping` Codex source never runs another round and never produces the
+        # usageLimitExceeded turn validate() used to insist on — 442 retries/38h.
+        record=self.loop_record()
+        flow.evidence.return_value=(False,'codex:t1')
+        self.data['accounts'].append(self.other)
+        source=dict(self.source,state='looping',transcript='/t',codex_identity={})
+        manifest=self.root/'new/manifest.json';manifest.parent.mkdir()
+        def transfer(cmd,**_):
+            flow.save(manifest,{'quota_request':str(self.path),'target':{'session_id':'target'}})
+            flow.save(manifest.parent/'state.json',{'state':'started'})
+            return subprocess.CompletedProcess(cmd,0)
+        thread=dict(id='source',status={'type':'idle'},turns=[dict(id='t1',status=last,items=[dict(status='completed')])])
+        with patch.dict(flow.LOOP,current=lambda *_:None), patch.object(flow,'inspect',return_value=source), \
+             patch.object(flow,'opt',side_effect=lambda s,k: str(manifest) if k=='@handoff_manifest' else ''), \
+             patch.object(flow,'tm',return_value=''), patch.object(flow,'native_thread',return_value=thread), \
+             patch.object(flow,'quiet_processes'), patch.object(flow.subprocess,'run',side_effect=transfer), \
+             patch.dict(flow.INPUT,snapshot=lambda *a,**k:{'state':'empty','digest':'d'}):
+            flow.reconcile_one(source,self.account,self.data)
+        return self.request(),flow.read(record)
+
+    def test_looping_codex_source_is_moved_by_a_proactive_request(self):
+        r,loop=self.looping_move('completed')
+        self.assertEqual((r['state'],r['detail']),('bound','target target'))
+        self.assertEqual(loop['status'],'waiting-quota')   # the target generation takes it over
+
+    def test_looping_source_whose_last_round_did_not_complete_still_waits(self):
+        r,_=self.looping_move('interrupted')
+        self.assertEqual((r['state'],r['detail']),('waiting','source has no terminal quota failure'))
+
+    def test_manual_transfer_accepts_only_a_settled_looping_codex_round(self):
+        source=dict(self.source,state='looping')
+        idle=lambda last,items=(dict(status='completed'),),kind='idle': dict(status={'type':kind},turns=[dict(status=last,items=list(items))])
+        with patch.object(flow,'inspect',return_value=source), patch.object(flow,'native_thread') as thread:
+            thread.return_value=idle('completed');flow.settled('test','%2')
+            for bad,why in ((idle('interrupted'),'between rounds'),(idle('completed',kind='active'),'still active'),
+                            (idle('completed',[dict(status='inProgress')]),'tool is still active')):
+                thread.return_value=bad
+                with self.assertRaisesRegex(ValueError,why):flow.settled('test','%2')
+            thread.return_value=idle('completed')
+            for other in (dict(source,state='working'),dict(source,agent='claude')):
+                flow.inspect.return_value=other
+                with self.assertRaisesRegex(ValueError,'between rounds'):flow.settled('test','%2')
+
     def test_quota_never_revives_stopped_or_replacement_owner(self):
         record=self.loop_record()
         with patch.dict(flow.LOOP,current=lambda *_:None), patch.object(flow,'inspect',return_value=dict(self.source,pid=99)), patch.object(flow,'opt',return_value=''):

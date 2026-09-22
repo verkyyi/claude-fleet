@@ -233,6 +233,38 @@ def unresolved_claude_tools(path):
     return bool(pending)
 
 
+def codex_quiet(thread):
+    if thread.get('status', {}).get('type') not in ('idle','systemError'):
+        raise ValueError('source Codex turn or approval is still active')
+    if any(i.get('status') not in (None,'completed','failed','declined','interrupted')
+           for t in (thread.get('turns') or [])[-1:] for i in t.get('items', [])):
+        raise ValueError('source Codex tool is still active')
+
+
+def looping_settled(source, thread):
+    """A `looping` Codex source whose round ended cleanly is as settled as `done`.
+
+    `looping` means THIS round ended and the loop is waiting for its next
+    delivery. A proactive request pauses that delivery (quota_loop →
+    waiting-quota), so the usageLimitExceeded turn a hard move waits for can
+    never arrive (#786: 442 retries over 38h). Callers have already required an
+    idle thread with no live item (codex_quiet); a completed last turn is then
+    the end of a round, never an interrupted or failed one.
+    """
+    turns = thread.get('turns') or []
+    return (source.get('agent') == 'codex' and source.get('state') == 'looping'
+            and bool(turns) and turns[-1].get('status') == 'completed')
+
+
+def settled(session, pane):
+    """fleet-transfer.sh's manual source_ready for a `looping` Codex source."""
+    source = inspect(session, pane)
+    thread = native_thread(source)
+    codex_quiet(thread)
+    if not looping_settled(source, thread):
+        raise ValueError('source is not a looping Codex worker between rounds')
+
+
 def validate(request, session, pane, sid):
     """Recheck immediately before /exit; quota never means arbitrary needs=idle."""
     r = read(request / 'request.json', {})
@@ -252,13 +284,8 @@ def validate(request, session, pane, sid):
     if source['agent'] == 'codex':
         thread = native_thread(source)
         hard = quota_error(thread)
-        if thread.get('status', {}).get('type') not in ('idle','systemError'):
-            raise ValueError('source Codex turn or approval is still active')
-        turns = thread.get('turns') or []
-        if any(i.get('status') not in (None,'completed','failed','declined','interrupted')
-               for t in turns[-1:] for i in t.get('items', [])):
-            raise ValueError('source Codex tool is still active')
-        if source['state'] != 'done' and not hard:
+        codex_quiet(thread)
+        if source['state'] != 'done' and not hard and not looping_settled(source, thread):
             raise ValueError('source has no terminal quota failure')
     else:
         hard = claude_banner(source)
@@ -621,12 +648,14 @@ def main():
     q=sub.add_parser('reconcile'); q.add_argument('--session',required=True); q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('validate'); q.add_argument('request',type=Path)
     for field in ('session','pane','sid'): q.add_argument('--'+field,required=True)
+    q=sub.add_parser('settled'); q.add_argument('--session',required=True); q.add_argument('--pane',required=True)
     q=sub.add_parser('terminate-background'); q.add_argument('request',type=Path)
     q.add_argument('--bundle',type=Path)
     sub.add_parser('status')
     a=p.parse_args()
     if a.command=='reconcile': reconcile(a.session,a.dry_run)
     elif a.command=='validate': validate(a.request,a.session,a.pane,a.sid)
+    elif a.command=='settled': settled(a.session,a.pane)
     elif a.command=='terminate-background': terminate_background(a.request,a.bundle)
     else:
         paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))

@@ -814,8 +814,13 @@ class McpRestartTest(unittest.TestCase):
 
     def test_exact_config_and_explicit_contract_required(self):
         self.config['remote']={'url':'https://example.invalid/mcp','command':None,'args':None}
-        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='',FLEET_CONF_DIR='/cf'):
             with self.assertRaisesRegex(ValueError,'restartability contract'):self.classify()
+        # The refusal names the exact line and file that lifts it (#786): a
+        # failover refusal is otherwise visible only in request.json.
+        self.source['session']='fleet-x'
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='other',FLEET_CONF_DIR='/cf'):
+            with self.assertRaisesRegex(ValueError,'add FLEET_SLEEP_MCP_RESTARTABLE=other,safe to /cf/fleets/fleet-x/conf'):self.classify()
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='safe'):
             self.assertEqual(self.classify(),{2})
             self.assertEqual(set(self.source['sleep_mcp']),{'safe'})
