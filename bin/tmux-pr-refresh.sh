@@ -149,8 +149,8 @@ else
   for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
-    r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$r" ] && queue "$(fleet_norm_repo "$r")" "$_s"
+    # every repo the fleet hosts (issue #788) — the conf's own + each repos/ overlay
+    for r in $(fleet_repos "$_s"); do queue "$r" "$_s"; done
   done < <(fleet_each_conf)
 fi
 

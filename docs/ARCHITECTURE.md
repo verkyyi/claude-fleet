@@ -326,6 +326,8 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
 ~/.config/claude-fleet/
   fleets/<session>/
     conf              # per-fleet overlay — same keys as fleet.conf.example
+    repos/<slug>.conf # a further repo this fleet hosts (issue #788) — see below
+    current-repo      # the repo the dash/backlog is filtered to (`all` = none)
     restore.map       # crash-recovery snapshot (fleet-restore.sh)
     bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
     sweep.due         # /sweep scheduling ledger
@@ -344,6 +346,34 @@ enumerate every fleet with `fleet_each_conf`. A one-time migrator
 estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*`,
 …) into this layout **idempotently**, and every reader **dual-reads** both layouts
 so a fleet keeps working across the land→migrate window.
+
+### A fleet can host several repos (issue #788)
+
+The fleet conf's own `FLEET_REPO`/`FLEET_MAIN`/`FLEET_BASE_BRANCH` are **one
+registry entry** — no migration. Each further repo is an overlay at
+`fleets/<session>/repos/<slug>.conf` with the same three keys plus any per-repo
+override (`FLEET_MODEL`, `FLEET_AGENT`, `FLEET_MCP_CONFIG`, `FLEET_DEPLOY_*`); the
+fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there is no
+main repo. `bin/fleet-repo.sh add|remove|list` manages them; `add` refuses unless
+`FLEET_MULTIREPO=1` (the gate the batch's end-to-end check, #795, lifts).
+
+A window names its repo with `@repo=<owner/name>`; `@norepo 1` marks a session
+that deliberately belongs to none. Resolution goes through `bin/fleet-lib.sh`
+only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf`,
+`fleet_current_repo`/`_set` — never an ad-hoc `git remote` parse.
+`fleet_window_repo` reads `@repo`, else derives it once from `@worktree`'s git
+origin and stamps it, else takes the fleet's only repo, else answers **nothing**
+— and the consumer skips the window rather than guess.
+
+`fleet_load_conf` is window-aware: inside a pane of the fleet it loads, whose
+window resolves to a hosted repo, that repo's overlay is applied on top (the conf
+repo's identity + deploy keys are dropped first, so they never leak across). That
+one change moves every in-pane consumer — hooks, `commands/*.md`, the launcher's
+trust/model/MCP, the claim brief. **Degenerate case:** with no `repos/` dir it
+returns before any tmux call, byte-for-byte what it did before
+(`bin/fleet-repo-selftest.sh` pins it). The collector and pr-refresh fetch
+`issues`/`prmap` for every hosted repo, and `hooks/base-readonly-guard.py`
+protects every hosted repo's `FLEET_MAIN`.
 
 ### The launcher pre-trusts the fleet's checkout (issue #563)
 
