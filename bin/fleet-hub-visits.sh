@@ -90,7 +90,7 @@ if [ "${1:-}" = record ]; then
 fi
 
 # ---- summaries ----------------------------------------------------------------
-since=24h sess= brief=0 logf= all=0
+since=24h sess='' brief=0 logf='' all=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --since)   since="${2:-}"; shift 2 ;;
