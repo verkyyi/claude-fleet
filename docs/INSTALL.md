@@ -382,22 +382,26 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      `systemd/README.md`.
 
    **Ship the units as written — the scheduling class is load-bearing** (issue
-   #588). Five plists deliberately carry `ProcessType=Standard` rather than the
-   `Background` the other seven use: **cleanup**, **worktree-autoclean**,
-   **diskguard**, **base-sync** and **dispatch**. `ProcessType=Background` puts
+   #588). Seven plists deliberately carry `ProcessType=Standard` rather than the
+   `Background` the other six use: **cleanup**, **worktree-autoclean**,
+   **diskguard**, **base-sync**, **dispatch**, **sleep** and **collect**. `ProcessType=Background` puts
    the job's whole process TREE at QoS BACKGROUND, and that class carries
    **throttled disk I/O** — measured on macOS 26, two identical LaunchAgents
    deleting two identical 20k-file trees ran at **104 files/s (Background) vs
    10967 files/s (Standard)**, ~100x, and the gap widens as the machine gets
    busier: in the field a `git worktree remove` of a 308k-file worktree crawled
-   at **~0.4 files/s** — 67 minutes of wall clock for 54 seconds of CPU. Those
-   five daemons do bulk filesystem work (worktree reclaim, `du` tree walks, a
+   at **~0.4 files/s** — 67 minutes of wall clock for 54 seconds of CPU. The
+   first six do bulk filesystem work (worktree reclaim, `du` tree walks, a
    base ff-pull under the shared land lease, a full checkout on spawn) that the
    dash, the next worker or the operator is waiting behind, so throttling them
    penalises exactly the wrong thing; their `StartInterval` is the throttle that
-   matters. The seven pollers (collect, pr-refresh, spinner, quotawatch,
-   issue-bridge, ledger-watch, webhook) only touch gh/tmux/network and stay
-   `Background`. Don't "normalise" the templates in either direction — the split
+   matters. **collect** is Standard too, for a different reason (issue #651):
+   its tick forks per worktree, window and socket, Background makes each fork
+   ~8x dearer (80 `git` calls: 16s vs 2s at load 12 on 10 cores), and launchd
+   never overlaps a `StartInterval` job — so a throttled tick outran its 60s
+   interval and the dash refreshed every 3.5–5 minutes. The six pollers
+   (pr-refresh, spinner, quotawatch, issue-bridge, ledger-watch, webhook) only
+   touch gh/tmux/network and stay `Background`. Don't "normalise" the templates in either direction — the split
    is asserted by `bin/daemon-processtype-selftest.sh`, which also fails on a new
    daemon that hasn't been classified. On Linux the same rule reads as: no
    `IOSchedulingClass=idle` and no positive `Nice=` on those five services.

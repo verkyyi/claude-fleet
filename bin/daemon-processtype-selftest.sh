@@ -43,9 +43,21 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 checkout) synchronously as a CHILD process
 #   sleep                         transcript inspection and native resume on
 #                                 the user's entry/message path
+# CADENCE: not bulk I/O, but a FORK-HEAVY tick whose cadence IS the product —
+# must NOT be Background either (issue #651).
+#   collect                       every dash cache; launchd never overlaps a
+#                                 StartInterval job, so a tick longer than 60s
+#                                 IS the collector's real cadence. It forks per
+#                                 worktree / window / socket every tick, and
+#                                 Background makes a fork ~8x dearer: 40 worktrees
+#                                 x 2 git calls measured 16s under `taskpolicy -b`
+#                                 vs 2s at load 12/10 cores. git, banner and
+#                                 snapshot alone ate 50s of a 61s tick, and the
+#                                 unit ran every 3.5-5 min instead of every 1.
 # POLL: gh / tmux / network polling only — Background is correct and stays.
 IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep'
-POLL_UNITS='collect pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
+CADENCE_UNITS='collect'
+POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 
 ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent
   grep -o '<key>ProcessType</key><string>[A-Za-z]*</string>' \
@@ -56,16 +68,18 @@ ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent
 # --- 1. every plist on disk is classified above (a new daemon must choose) ----
 for f in "$LA"/com.claude-fleet.*.plist.tmpl; do
   u="$(basename "$f" .plist.tmpl)"; u="${u#com.claude-fleet.}"
-  case " $IO_UNITS $POLL_UNITS " in
+  case " $IO_UNITS $CADENCE_UNITS $POLL_UNITS " in
     *" $u "*) ok ;;
     *) fail "daemon '$u' has a plist but no ProcessType classification in this test —
       decide whether it does bulk filesystem I/O (→ Standard) or only polls
-      (→ Background), then add it to IO_UNITS or POLL_UNITS (issue #588)" ;;
+      (→ Standard), is a fork-heavy tick whose cadence matters (→ Standard,
+      CADENCE_UNITS, issue #651), or only polls (→ Background), then add it to
+      IO_UNITS, CADENCE_UNITS or POLL_UNITS (issue #588)" ;;
   esac
 done
 
 # --- 2. …and every classified unit still has a plist (no stale table rows) ----
-for u in $IO_UNITS $POLL_UNITS; do
+for u in $IO_UNITS $CADENCE_UNITS $POLL_UNITS; do
   [ -f "$LA/com.claude-fleet.$u.plist.tmpl" ] \
     || fail "classified unit '$u' has no launchd/com.claude-fleet.$u.plist.tmpl — retired? drop it from the table"
   ok
@@ -79,6 +93,16 @@ for u in $IO_UNITS; do
       its disk I/O ~100x (issue #588). Absent is NOT good enough: launchd.plist(5)
       says an unspecified ProcessType also gets 'light resource limits ... throttling
       its CPU usage and I/O bandwidth', so the value is written out explicitly."
+  ok
+done
+
+# --- 3b. the cadence-critical daemons are Standard too ----------------------
+for u in $CADENCE_UNITS; do
+  p="$(ptype "$u")"
+  [ "$p" = "Standard" ] \
+    || fail "$u: ProcessType is '${p:-<absent>}', expected 'Standard' — Background makes every
+      fork of its tick ~8x dearer, so the tick outruns its 60s StartInterval and the
+      dash shows a minutes-old world (issue #651)"
   ok
 done
 
@@ -102,7 +126,7 @@ done
 # ionice idle / a positive Nice would reproduce the bug on Linux. Checked for the
 # I/O-heavy units only — a poller is free to set them.
 if [ -d "$SD" ]; then
-  for u in $IO_UNITS; do
+  for u in $IO_UNITS $CADENCE_UNITS; do
     s="$SD/claude-fleet-$u.service"
     [ -f "$s" ] || continue          # not every launchd unit has a systemd twin
     if grep -qE '^[[:space:]]*IOSchedulingClass[[:space:]]*=[[:space:]]*(idle|3)' "$s"; then
@@ -116,6 +140,7 @@ if [ -d "$SD" ]; then
 fi
 
 n_io=0;   for u in $IO_UNITS;   do : "$u"; n_io=$((n_io + 1));     done
+n_cad=0;  for u in $CADENCE_UNITS; do : "$u"; n_cad=$((n_cad + 1)); done
 n_poll=0; for u in $POLL_UNITS; do : "$u"; n_poll=$((n_poll + 1)); done
-printf 'selftest OK: daemon-processtype (%s assertions — %s I/O daemons Standard, %s pollers Background, systemd twins unthrottled)\n' \
-  "$CHECKS" "$n_io" "$n_poll"
+printf 'selftest OK: daemon-processtype (%s assertions — %s I/O + %s cadence daemons Standard, %s pollers Background, systemd twins unthrottled)\n' \
+  "$CHECKS" "$n_io" "$n_cad" "$n_poll"
