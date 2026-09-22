@@ -35,6 +35,12 @@ curw=$(tmux display-message -p '#{window_id}')
 if [ "$mode" = "--home" ] || [ "$curw" != "$tw" ]; then
   # Home nav (⌂) always, and every cross-window jump: arrive UNZOOMED with the
   # dash focused. select-window is a no-op when already here (home-on-hub).
+  # Stamp WHY for the hub-visit meter (issue #897) — one-shot, read and cleared by
+  # the session-window-changed[73] hook the select-window below fires. Only on a
+  # real jump: home-on-hub changes no window, so a stamp there would go stale.
+  if [ "$curw" != "$tw" ]; then
+    if [ "$mode" = "--home" ]; then tmux set -q @hub_nav_via home; else tmux set -q @hub_nav_via f9; fi
+  fi
   tmux select-window -t "$target"
   tmux select-pane -t "$target"
   if [ "$(tmux display-message -p -t "$target" '#{window_zoomed_flag}')" = "1" ]; then

@@ -24,6 +24,7 @@ tw=$(tmux display-message -p -t "$target" '#{window_id}')
 curw=$(tmux display-message -p '#{window_id}')
 
 if [ "$curw" != "$tw" ]; then
+  tmux set -q @hub_nav_via g            # one-shot cause for the hub-visit meter (#897)
   tmux select-window -t "$target"       # jump — always arrive UNZOOMED
   tmux select-pane -t "$target"
   if [ "$(tmux display-message -p -t "$target" '#{window_zoomed_flag}')" = "1" ]; then
