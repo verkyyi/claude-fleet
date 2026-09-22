@@ -61,6 +61,22 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Kept-worktree reap min age @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
 #FLEET_REAP_KEPT_MINAGE=600
 
+# --- Idle scratch reclaim (issue #884) ------------------------------------------
+# OFF by default (0 = the #290 behaviour, byte for byte). A clean scratch worktree
+# where a real session ran is kept FOREVER today — the conversation is the work, so
+# no git-state rule may reap it — and they pile up: 53 of 92 worktrees on one
+# machine had not moved in 3 days, each costing disk, file-watcher load and a
+# collector scan. Set seconds (259200 = 3 days is the recommended value): once the
+# last session activity (newest human transcript, else the dir mtime) is older,
+# the hourly janitor drops a CLEAN scratch (strict ancestor, or tip == base) into
+# .fleet-trash — recoverable, /fleet-history row recorded first, and only past
+# every liveness gate (live pane / rotation lease / live procs). A DIRTY or
+# UNMERGED scratch is never deleted: past the age it joins ONE digest notify, at
+# most every 24h, listing all of them. Log line: `autoclean: scratch idle <Nd> →
+# trash <path>`. Per fleet.
+# @label=Reclaim idle scratch after @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
+#FLEET_SCRATCH_MAX_IDLE=0
+
 # --- Rotation lease TTL (issue #550) -------------------------------------------
 # An account rotation (bin/fleet-migrate.sh) closes a walled window and opens its
 # replacement seconds later. Through that gap the worktree has no window and no

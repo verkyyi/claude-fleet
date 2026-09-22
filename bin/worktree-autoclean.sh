@@ -91,6 +91,58 @@ scratch_surface() {   # $1=worktree-dir  $2=branch  $3=reason-label
   done
 }
 
+# --- the scratch IDLE age gate, issue #884 --------------------------------------
+# #290 keeps a clean scratch where a real session ran FOREVER — the conversation is
+# the work, so no git-state rule may reap it. That was right for one scratch and
+# wrong for ninety: 53 of 92 worktrees on the operator's machine had not moved in 3
+# days, and every one of them costs disk, Spotlight/fseventsd and a collector scan.
+# FLEET_SCRATCH_MAX_IDLE (seconds; per fleet; 0 = off = the #290 behaviour exactly)
+# adds a clock: once the last session activity is older than that, a CLEAN scratch
+# (strict ancestor with a human transcript, or tip == base) is dropped into
+# .fleet-trash like any other reap — recoverable, and its /fleet-history row is
+# recorded first. A DIRTY / UNMERGED one is never deleted; past the age it leaves
+# the surface-once path and joins ONE daily digest instead (all of them in one
+# message, not one per worktree), so kept work is re-announced rather than silent.
+# Liveness is already settled before any of this runs: every gate in process()
+# above the reap gate (live pane / @issue / server cwd / rotation lease / live
+# pane procs / fleet_reap_ok's own live probe) has let the worktree through.
+SCRATCH_MAX_IDLE=0; NOW="$(date +%s)"
+DIGEST=""; DIGEST_N=0
+DIGEST_STAMP="$LOGDIR/.scratch-idle-digest"
+DIGEST_EVERY=86400
+# Seconds since the last session activity in a worktree: the newest HUMAN transcript
+# mtime (the fleet's own classifier runs don't count), or the directory's own mtime
+# when that is newer / there is no transcript at all. Newer-of-both errs toward KEEP.
+scratch_idle_secs() {   # $1=worktree-dir → seconds on stdout; rc 1 = unknown (KEEP)
+  local t d
+  t="$(fleet_newest_human_mtime "$(fleet_transcript_dir "$1")")"
+  d="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo '')"
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  case "$d" in ''|*[!0-9]*) d=0 ;; esac
+  [ "$d" -gt "$t" ] && t="$d"
+  [ "$t" -gt 0 ] || return 1
+  printf '%s' $((NOW - t))
+}
+scratch_digest_add() {   # $1=branch  $2=reason  $3=idle-days
+  say "KEEP  $1  ($2 — scratch idle $3, in the daily digest; ⌃x to dispose)"; kept=$((kept+1))
+  DIGEST="$DIGEST $1($2,$3)"; DIGEST_N=$((DIGEST_N+1))
+}
+scratch_digest_flush() {   # once per run, after every fleet: at most one notify / 24h
+  [ "$DIGEST_N" -gt 0 ] || return 0
+  local msg="fleet: $DIGEST_N idle scratch worktree(s) still hold unsaved work —$DIGEST — ⌃x to dispose"
+  if [ "$DRY" = 1 ]; then echo "DIGEST $msg"; return 0; fi
+  if [ -e "$DIGEST_STAMP" ]; then
+    local m; m="$(stat -c %Y "$DIGEST_STAMP" 2>/dev/null || stat -f %m "$DIGEST_STAMP" 2>/dev/null || echo 0)"
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    [ $((NOW - m)) -lt "$DIGEST_EVERY" ] && return 0
+  fi
+  : > "$DIGEST_STAMP" 2>/dev/null || true
+  log "DIGEST $msg"
+  for _s in $SOCKETS; do
+    tmux -L "$_s" display-message "$msg" 2>/dev/null || true
+  done
+}
+
 command -v git >/dev/null 2>&1 || { say "git not found; abort"; exit 0; }
 
 # Fail-safe: require a live fleet so the "attached" check is meaningful. Each fleet
@@ -202,6 +254,13 @@ process() {
   local merged is_scratch=0
   case "$branch" in scratch-*) is_scratch=1 ;; esac   # issue #290
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
+  # Past FLEET_SCRATCH_MAX_IDLE? (#884) — only ever computed for a scratch, only when
+  # the knob is on, so the default path does not even stat.
+  local idle_d="" _age idle_prune=0
+  if [ "$is_scratch" = 1 ] && [ "$SCRATCH_MAX_IDLE" -gt 0 ] && [ "$merged" != live ] \
+     && _age="$(scratch_idle_secs "$dir")" && [ "$_age" -ge "$SCRATCH_MAX_IDLE" ]; then
+    idle_d="$((_age / 86400))d"
+  fi
   case "$merged" in
     live)
       say "KEEP  $branch  (shared reap gate: live or unknown)"; kept=$((kept+1)); return ;;
@@ -209,12 +268,24 @@ process() {
       # The worktree stays, its orphaned processes do not (#469).
       reap_detached "$dir" "$branch"
       # scratch: never silently delete an experiment — keep + surface once (#290).
-      if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "dirty"; return; fi
+      if [ "$is_scratch" = 1 ]; then
+        [ -n "$idle_d" ] && { scratch_digest_add "$branch" "dirty" "$idle_d"; return; }
+        scratch_surface "$dir" "$branch" "dirty"; return
+      fi
       say "KEEP  $branch  (dirty — uncommitted changes)"; kept=$((kept+1)); return ;;
     unmerged)
-      reap_detached "$dir" "$branch"
-      if [ "$is_scratch" = 1 ]; then scratch_surface "$dir" "$branch" "unmerged work"; return; fi
-      say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return ;;
+      # tip == base is "unmerged" only because a just-created branch has that shape
+      # (#565); an IDLE scratch sitting exactly on base holds no work at all (#884).
+      if [ "$is_scratch" = 1 ] && [ -n "$idle_d" ] && [ -n "$head" ] && [ "$head" = "$MASTER" ]; then
+        merged="ancestor-of-$BASE"; idle_prune=1
+      else
+        reap_detached "$dir" "$branch"
+        if [ "$is_scratch" = 1 ]; then
+          [ -n "$idle_d" ] && { scratch_digest_add "$branch" "unmerged work" "$idle_d"; return; }
+          scratch_surface "$dir" "$branch" "unmerged work"; return
+        fi
+        say "KEEP  $branch  (not merged)"; kept=$((kept+1)); return
+      fi ;;
     ancestor)
       # Even a clean scratch at a strict ancestor is NOT disposable when a
       # REAL session ran in it: "no file writes" describes most Q&A / research
@@ -225,7 +296,8 @@ process() {
       # slot, a spawn nobody typed into) → still pruned silently, as ever.
       if [ "$is_scratch" = 1 ]; then
         local hsid; hsid="$(fleet_newest_human_session "$(fleet_transcript_dir "$dir")")"
-        if [ -n "$hsid" ]; then
+        [ -n "$hsid" ] && [ -n "$idle_d" ] && idle_prune=1   # #884: past the age → reap
+        if [ -n "$hsid" ] && [ "$idle_prune" = 0 ]; then
           # Still RECORD the /fleet-history row (#466's safety net — SessionEnd /
           # ledger-watch usually beat us here, but a crashed window may have
           # missed both; idempotent, so at most one row). Recording while the
@@ -252,6 +324,7 @@ process() {
     fi
     local dr; dr="$(fleet_reap_worktree_procs "$dir" dry)"
     case "$dr" in would\ reap:*) ex="$ex  [$dr]" ;; esac
+    [ "$idle_prune" = 1 ] && ex="$ex  [scratch idle $idle_d]"
     echo "PRUNE $branch  ($merged)  -> ${dir##*/}$ex"; removed=$((removed+1)); return
   fi
   # Record a /fleet-history row BEFORE we remove the worktree (issue #384). The
@@ -285,6 +358,7 @@ process() {
   if drop="$(fleet_worktree_drop "$REPO_ROOT" "$dir")"; then
     git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
     log "PRUNED $branch ($merged) — ${dir##*/} $drop + deleted branch"
+    [ "$idle_prune" = 1 ] && log "autoclean: scratch idle $idle_d → trash ${drop#*:}"
     removed=$((removed+1))
     rm -f "$SURF_DIR/$(scratch_key "$dir")" 2>/dev/null || true   # drop any scratch surface marker (#290)
     # auto-close the bound issue if still open (net for a PR lacking Closes #N)
@@ -302,9 +376,11 @@ process() {
   fi
 }
 
-clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re
+clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle
   REPO_ROOT="$1"; REPO="$2"; BASE="${3:-main}"
   PROTECTED_RE="${4:-^(master|main|develop|test)$}"
+  SCRATCH_MAX_IDLE="${5:-0}"
+  case "$SCRATCH_MAX_IDLE" in ''|*[!0-9]*) SCRATCH_MAX_IDLE=0 ;; esac
   [ -d "$REPO_ROOT/.git" ] || { say "SKIP  $REPO_ROOT (not a git checkout)"; return; }
   git -C "$REPO_ROOT" fetch -q origin "$BASE" 2>/dev/null
   MASTER="$(git -C "$REPO_ROOT" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
@@ -338,16 +414,18 @@ EOF
 # --- enumerate fleets: the global/default fleet, then each per-fleet conf ---
 DEFAULT_MAIN="${FLEET_MAIN:-}"
 [ -n "$DEFAULT_MAIN" ] && clean_fleet "$DEFAULT_MAIN" "${FLEET_REPO:-}" \
-  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}"
+  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}"
 while IFS=$'\t' read -r _s cf; do
   [ -f "$cf" ] || continue
-  IFS=$'\t' read -r fm fr fb fp < <( . "$cf" >/dev/null 2>&1
-    printf '%s\t%s\t%s\t%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
-      "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" )
+  IFS=$'\t' read -r fm fr fb fp fx < <( . "$cf" >/dev/null 2>&1
+    printf '%s\t%s\t%s\t%s\t%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
+      "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
+      "${FLEET_SCRATCH_MAX_IDLE:-0}" )
   [ -n "$fm" ] || continue
   [ "$fm" = "$DEFAULT_MAIN" ] && continue   # already cleaned as the global default
-  clean_fleet "$fm" "$fr" "$fb" "$fp"
+  clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx"
 done < <(fleet_each_conf)
+scratch_digest_flush   # #884 — one message for every idle scratch holding work
 
 say "done: pruned=$removed closed=$closed kept=$kept"
 # keep the log from growing unbounded
