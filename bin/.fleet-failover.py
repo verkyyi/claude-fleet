@@ -121,7 +121,7 @@ def source_account(source, data):
     return matches[0]
 
 
-def quiet_processes(source):
+def quiet_processes(source, background=None):
     # The same exact executable/endpoint and restartable-MCP contract as
     # hibernation, for BOTH agents (#784/#808/#830): a quota-triggered wake must
     # be able to migrate a done worker whose only children are contract-listed
@@ -132,7 +132,91 @@ def quiet_processes(source):
         rpc = RPC(source['codex_identity'].get('remote', ''), timeout=5)
         try: sleep['quiet_native_children'](rpc, source['session_id'])
         finally: rpc.close()
-    return sleep['quiet_processes'](source)
+    if background is None:
+        return sleep['quiet_processes'](source)
+    return sleep['quiet_processes'](source, background=background)
+
+
+def bg_grace():
+    """FLEET_FAILOVER_BG_GRACE seconds a HARD wall waits on background work (#871).
+
+    0 = never override (the pre-#871 veto); a malformed value keeps the default."""
+    try: return max(0, int(os.environ.get('FLEET_FAILOVER_BG_GRACE', '600')))
+    except ValueError: return 600
+
+
+def process_start(pid):
+    """(state, lstart) — lstart fingerprints the process against pid reuse."""
+    try: fields = run(['ps', '-p', str(pid), '-o', 'stat=', '-o', 'lstart=']).split(None, 1)
+    except (subprocess.CalledProcessError, OSError): return '', ''
+    return fields[0], (fields[1] if len(fields) > 1 else '')
+
+
+def process_cwd(pid):
+    try: return os.readlink('/proc/%d/cwd' % pid)
+    except OSError: pass
+    try: out = run(['lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'])
+    except (subprocess.CalledProcessError, OSError): return ''
+    return next((line[1:] for line in out.splitlines() if line.startswith('n')), '')
+
+
+def background_inventory(source):
+    """Every non-infrastructure process the source owns, as [{pid,argv,cwd,start}].
+
+    The one inventory of "what a migration will terminate" (EPIC #875 contract 3):
+    the same walk as hibernation's veto, collecting instead of raising on an
+    unverified child. Any OTHER veto (a foreign Codex endpoint, an active
+    subagent) still raises."""
+    pids = []
+    quiet_processes(source, background=pids)
+    argv = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))['process_argv']
+    entries = []
+    for pid in pids:
+        state, start = process_start(pid)
+        if not start or state.startswith('Z'): continue
+        try: args = [str(x) for x in argv(pid)]
+        except OSError: args = []
+        entries.append(dict(pid=pid, argv=args, cwd=process_cwd(pid), start=start))
+    return entries
+
+
+background_note = TRANSFER['background_note']
+
+
+def background_override(r, hard):
+    """A hard wall that has waited out the grace no longer yields to background work."""
+    grace = bg_grace()
+    since = r.get('hard_at') or (r.get('created_at') if r.get('hard') else None)
+    return bool(hard and grace and since and time.time() - since >= grace)
+
+
+def terminate_background(request, bundle=None):
+    """Stop the processes validate() recorded, after the source exited (#871).
+
+    Only a pid whose start fingerprint still matches is signalled — a reused pid
+    is never touched. The resume prompt then names every recorded command."""
+    entries = read(Path(request) / 'background.json', [])
+    if not entries: return
+    live = []
+    for e in entries:
+        state, start = process_start(e['pid'])
+        if start and start == e.get('start') and not state.startswith('Z'):
+            try: os.kill(e['pid'], 15); live.append(e); e['stopped'] = 'SIGTERM'
+            except ProcessLookupError: e['stopped'] = 'exited'
+        else: e['stopped'] = 'exited'
+    deadline = time.time() + 5
+    while live and time.time() < deadline:
+        time.sleep(0.2)
+        live = [e for e in live if process_start(e['pid'])[1] == e['start']
+                and not process_start(e['pid'])[0].startswith('Z')]
+    for e in live:
+        try: os.kill(e['pid'], 9); e['stopped'] = 'SIGKILL'
+        except ProcessLookupError: pass
+    save(Path(request) / 'background.json', entries)
+    if bundle:
+        note = background_note(entries)
+        for name in ('pickup.md', 'handoff.md'):
+            with (Path(bundle) / name).open('a', encoding='utf-8') as out: out.write(note)
 
 
 def unresolved_claude_tools(path):
@@ -182,7 +266,17 @@ def validate(request, session, pane, sid):
             raise ValueError('source Claude turn is not complete or quota-blocked')
         if unresolved_claude_tools(source['transcript']):
             raise ValueError('source Claude tool result is unresolved')
-    quiet_processes(source)
+    # Hibernation and a PROACTIVE move keep the blanket background veto. A hard
+    # wall cannot act on its background shells anyway, so after the grace they
+    # are recorded (and stopped after /exit) instead of pinning it walled until
+    # the reset — 89 vetoed retries over 2h on 2026-09-22 (#871).
+    if background_override(r, hard):
+        entries = background_inventory(source)
+        if entries: save(request / 'background.json', entries)
+        else: (request / 'background.json').unlink(missing_ok=True)
+    else:
+        (request / 'background.json').unlink(missing_ok=True)
+        quiet_processes(source)
     for line in tm(session,'list-clients','-F','#{client_activity}|#{window_id}').splitlines():
         activity, win = line.split('|',1)
         if win == source['window'] and time.time()-int(activity) <= 30:
@@ -434,6 +528,11 @@ def reconcile_one(source, account, data, dry=False):
         r = dict(source=source,source_key=account['key'],created_at=time.time(),state='waiting',
                  hard=hard,episode=episode,attempts=0,failed_targets={})
         path.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if hard and not r.get('hard_at'):
+        # The background grace counts from the WALL, not from a proactive request
+        # that walled later (#871).
+        r['hard_at'] = time.time()
+        save(path/'request.json',r)
     if (source['agent'] == 'codex' and hard and not over and not blocked
             and not r.get('benched_until')):
         outcome(path,r,'waiting-evidence','native limit has no account-wide quota confirmation; check model limits or refresh ccquota')
@@ -522,10 +621,13 @@ def main():
     q=sub.add_parser('reconcile'); q.add_argument('--session',required=True); q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('validate'); q.add_argument('request',type=Path)
     for field in ('session','pane','sid'): q.add_argument('--'+field,required=True)
+    q=sub.add_parser('terminate-background'); q.add_argument('request',type=Path)
+    q.add_argument('--bundle',type=Path)
     sub.add_parser('status')
     a=p.parse_args()
     if a.command=='reconcile': reconcile(a.session,a.dry_run)
     elif a.command=='validate': validate(a.request,a.session,a.pane,a.sid)
+    elif a.command=='terminate-background': terminate_background(a.request,a.bundle)
     else:
         paths = list(root().glob('*/request.json')) + list(root().glob('unsupported-*.json'))
         print(json.dumps([read(f,{}) for f in paths],ensure_ascii=False))

@@ -1093,6 +1093,13 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # below FLEET_ACCOUNT_CEILING. No switch to unknown quota or pay-as-you-go credits.
 # @label=Failover allowed agents @group=accounts @tier=advanced @scope=fleet @edit=str
 #FLEET_FAILOVER_AGENTS=claude,codex
+# Background commands (a dev server, a long test) veto a move like they veto
+# hibernation. After a HARD wall the session cannot act on them anyway, so once
+# its request has waited this long they are recorded, stopped after /exit and
+# named in the resume prompt (issue #871). Proactive moves and sleep keep the
+# veto. 0 = never override (the old behaviour).
+# @label=Hard-wall background grace @group=accounts @tier=advanced @scope=fleet @edit=int @unit=sec
+#FLEET_FAILOVER_BG_GRACE=600
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
 # @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec

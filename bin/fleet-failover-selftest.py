@@ -351,4 +351,105 @@ class MarkerClear(unittest.TestCase):
                 self.assertEqual(flow.read(path/'request.json',{})['state'],state)
 
 
+class HardWallBackground(unittest.TestCase):
+    """A hard wall past FLEET_FAILOVER_BG_GRACE no longer yields to background work (#871)."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.request=Path(self.temp.name)/'req';self.request.mkdir()
+        self.source=dict(session='test',window='@2',pane='%2',pid=42,session_id='s',agent='claude',
+                         worktree='/w',transcript='/t',state='working')
+        self.sleep=module('sleep_bg','fleet-sleep.py')
+        # A 2-day-old `next dev` shell: zsh (43) → node (44), neither an MCP server.
+        rows={43:(42,'zsh'),44:(43,'node')}
+        self.argv={42:['claude'],43:['/bin/zsh','-c','next dev -p 3117'],44:['node','next','dev']}
+        self.hard=True
+        env={k:v for k,v in os.environ.items() if k!='FLEET_FAILOVER_BG_GRACE'}
+        mods={'fleet-sleep.py':vars(self.sleep),'fleet_sleep_argv.py':{'process_argv':lambda pid:self.argv[pid]}}
+        for p in (patch.object(flow.runpy,'run_path',side_effect=lambda f:mods[Path(f).name]),
+                  patch.dict(self.sleep.TRANSFER,process_rows=lambda:rows),
+                  patch.dict(self.sleep.MCP,claude_inventory=lambda *a:{},classify=lambda *a:set()),
+                  patch.dict(self.sleep.ARGV,process_argv=lambda pid:self.argv[pid],
+                             process_executable=lambda pid:Path(self.argv[pid][0])),
+                  patch.object(flow,'inspect',return_value=self.source),
+                  patch.object(flow,'opt',return_value=''),
+                  patch.object(flow,'evidence',return_value=(True,'claude:e')),
+                  patch.object(flow,'claude_banner',side_effect=lambda src:self.hard),
+                  patch.object(flow,'unresolved_claude_tools',return_value=False),
+                  patch.object(flow,'tm',return_value=''),
+                  patch.dict(flow.INPUT,snapshot=lambda *a,**k:{'state':'empty','digest':'d'}),
+                  patch.object(flow,'process_start',return_value=('S','Mon Sep 20 10:00:00 2026')),
+                  patch.object(flow,'process_cwd',return_value='/w/web'),
+                  patch.dict(os.environ,env,clear=True)):
+            p.start();self.addCleanup(p.stop)
+
+    def validate(self,waited,**extra):
+        r=dict(source=self.source,episode='claude:e',hard=True,created_at=time.time()-waited,**extra)
+        flow.save(self.request/'request.json',r)
+        flow.validate(self.request,'test','%2','s')
+        return flow.read(self.request/'background.json',None)
+
+    def test_hard_wall_waits_inside_grace_and_moves_after_it(self):
+        with self.assertRaisesRegex(ValueError,'unverified background/tool process: pid=43'):
+            self.validate(60)
+        self.assertFalse((self.request/'background.json').exists())
+        bg=self.validate(601)
+        self.assertEqual([(e['pid'],e['argv'],e['cwd']) for e in bg],
+                         [(43,self.argv[43],'/w/web'),(44,self.argv[44],'/w/web')])
+        note=flow.background_note(bg)
+        self.assertIn('Background commands terminated by migration',note)
+        self.assertIn("/bin/zsh -c 'next dev -p 3117'",note)
+        self.assertIn('/w/web',note)
+
+    def test_grace_counts_from_the_wall_not_a_proactive_request(self):
+        with self.assertRaisesRegex(ValueError,'background/tool'):
+            self.validate(7200,hard_at=time.time()-60)
+        self.assertEqual(len(self.validate(7200,hard_at=time.time()-600)),2)
+
+    def test_proactive_move_and_grace_zero_keep_the_veto(self):
+        self.hard=False;self.source['state']='done'
+        with self.assertRaisesRegex(ValueError,'background/tool'):self.validate(7200)
+        self.hard=True
+        with patch.dict(os.environ,FLEET_FAILOVER_BG_GRACE='0'):
+            with self.assertRaisesRegex(ValueError,'background/tool'):self.validate(7200)
+
+    def test_hibernation_contract_is_unchanged(self):
+        with self.assertRaisesRegex(ValueError,'pid=43'):self.sleep.quiet_processes(self.source)
+        collected=[]
+        self.sleep.quiet_processes(self.source,background=collected)
+        self.assertEqual(sorted(collected),[43,44])
+
+    def test_reconcile_stamps_hard_at_once(self):
+        path=Path(self.temp.name)/'attempt'
+        acct=account('claude','original',100)
+        with patch.object(flow,'request_path',return_value=path),patch.object(flow,'stamp'), \
+             patch.object(flow.subprocess,'run'),patch.dict(os.environ,FLEET_CONF_DIR=self.temp.name):
+            flow.reconcile_one(self.source,acct,{'accounts':[acct]})
+            first=flow.read(path/'request.json')['hard_at']
+            flow.reconcile_one(self.source,acct,{'accounts':[acct]})
+        self.assertEqual(flow.read(path/'request.json')['hard_at'],first)
+
+
+class TerminateBackground(unittest.TestCase):
+    def test_only_the_recorded_live_process_is_stopped_and_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            req=Path(tmp)/'req';bundle=Path(tmp)/'bundle';req.mkdir();bundle.mkdir()
+            (bundle/'pickup.md').write_text('pickup\n');(bundle/'handoff.md').write_text('handoff\n')
+            job=subprocess.Popen(['sleep','60']);self.addCleanup(lambda p=job:(p.kill(),p.wait()))
+            reused=subprocess.Popen(['sleep','60']);self.addCleanup(lambda p=reused:(p.kill(),p.wait()))
+            start=flow.process_start(job.pid)[1]
+            flow.save(req/'background.json',[
+                dict(pid=job.pid,argv=['sleep','60'],cwd=tmp,start=start),
+                # a recorded pid now held by a DIFFERENT process must survive
+                dict(pid=reused.pid,argv=['old'],cwd=tmp,start='Thu Jan  1 00:00:00 1970')])
+            flow.terminate_background(req,bundle)
+            self.assertEqual(job.wait(timeout=5),-15)
+            self.assertIsNone(reused.poll())
+            stopped=[e['stopped'] for e in flow.read(req/'background.json')]
+            self.assertEqual(stopped,['SIGTERM','exited'])
+            for name in ('pickup.md','handoff.md'):
+                text=(bundle/name).read_text()
+                self.assertIn('Background commands terminated by migration',text)
+                self.assertIn('`sleep 60` (cwd `%s`)' % tmp,text)
+
+
 if __name__=='__main__':unittest.main()

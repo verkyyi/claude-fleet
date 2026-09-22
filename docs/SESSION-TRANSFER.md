@@ -271,6 +271,13 @@ link to their transfer packet. `waiting-quota` means no eligible destination;
 `waiting` includes busy tools, recent typing and unreadable drafts;
 `ambiguous` requires inspection of the retained pane/packet and never starts a
 second writer. The dashboard shows the quota state; doctor shows its reason.
+A running background command (a dev server, a long test) keeps a request
+`waiting`, as it keeps a worker awake. After a **hard** wall that has waited
+`FLEET_FAILOVER_BG_GRACE` seconds (default 600; `0` disables), the move proceeds:
+the commands' pid/argv/cwd go to the request's `background.json`, they are
+stopped once the source has exited, and the resume prompt lists them under
+"Background commands terminated by migration" for the new session to restart
+as needed. Proactive moves and hibernation keep the veto.
 Disable `FLEET_FAILOVER` to cancel pending requests on the next tick. Packets and
 source recovery recipes remain available. Existing sessions without a verified
 native identity stay `unsupported`; never infer a session from the newest file.
