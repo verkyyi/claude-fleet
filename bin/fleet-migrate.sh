@@ -66,6 +66,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/usage-lib.sh"          # fleet_limit_banner — the wall this move leaves behind (#870)
 
 PANEL_RE='^(plan|dash|backlog)$'
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
@@ -180,6 +182,18 @@ migrate_selected() {
 # cycle of caution in the meantime.
 lease_drop() { [ -n "${1:-}" ] && fleet_rotate_lease_drop "$1"; return 0; }
 
+# migrated_stamp <window> <wall> — when this window last received a moved session
+# (@migrated_at, epoch; the dash can mark "just migrated") and the wall that
+# session left behind (@migrated_banner — fleet_banner_replayed, issue #870). An
+# empty wall UNSETS the stamp: a window reused by the no-hook branch must not keep
+# an older move's banner.
+migrated_stamp() {
+  TM set-window-option -t "$1" @migrated_at "$(now)" 2>/dev/null
+  if [ -n "$2" ]; then TM set-window-option -t "$1" @migrated_banner "$2" 2>/dev/null
+  else TM set-window-option -t "$1" -u @migrated_banner 2>/dev/null; fi
+  return 0
+}
+
 migrate_one() {
   local lockdir rc
   lockdir=$(wopt "$1" '#{@worktree}')
@@ -246,6 +260,14 @@ migrate_one_body() {
   local ldir=""
   case "$wt" in ?*) ldir="$wt" ;; *) [ -n "$cwd" ] && [ "$cwd" != "${FLEET_MAIN:-}" ] && ldir="$cwd" ;; esac
   [ -n "$ldir" ] && fleet_rotate_lease_take "$ldir" "migrate $name ($wid)"
+  # The wall this session is leaving (issue #870), read BEFORE it exits: the
+  # resumed process re-renders its transcript tail — this very banner — onto the
+  # new pane, where the collector would credit it to the NEW account and bench it.
+  # Stamped on the new window below, before the resume can render anything. The
+  # WHOLE history (-S -): with the classic line scrolled out, a 200-line capture
+  # finds only the live-only sticky footer, while the replay renders the classic
+  # line — and fleet_limit_banner prefers the newest classic line when there is one.
+  local wall; wall=$(TM capture-pane -p -S - -t "$wid" 2>/dev/null | fleet_limit_banner)
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
@@ -270,6 +292,7 @@ migrate_one_body() {
     # at its `exec $SHELL` — relaunch right there, keeping the window.
     fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { lease_drop "$ldir"; say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
     TM clear-history -t "$wid" 2>/dev/null || :     # drop the old limit banner (stale-banner cascade guard)
+    migrated_stamp "$wid" "$wall"
     SK -t "$wid" -l "$cmd" 2>/dev/null; SK -t "$wid" Enter 2>/dev/null
     nw="$wid"
   else
@@ -279,6 +302,9 @@ migrate_one_body() {
     TM display-message -p -t "$wid" '' >/dev/null 2>&1 && TM kill-window -t "$wid" 2>/dev/null
     # 4. a NEW window, same name + cwd, resumed under the active account.
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$cmd" 2>/dev/null)
+    # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
+    # render the old wall, this takes one tmux call.
+    [ -n "$nw" ] && migrated_stamp "$nw" "$wall"
     [ -n "$nw" ] || { lease_drop "$ldir"; say "  ✗ $name ($wid): new-window failed — session ${sid%%-*}… is closed but NOT resumed (resume by hand: cd $cwd && claude --resume $sid)"; skipped=$((skipped+1)); return 0; }
     [ -n "$iss" ] && TM set-window-option -t "$nw" @issue "$iss" 2>/dev/null
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
@@ -294,7 +320,6 @@ migrate_one_body() {
     TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
   fi
-  TM set-window-option -t "$nw" @migrated "$(now)" 2>/dev/null
   # The window exists and carries @issue/@worktree again — the gap is over, so the
   # reapers get their normal signals back (issue #550). Dropped BEFORE the boot
   # verification below: that loop waits up to BOOT_WAIT seconds on a window whose
@@ -311,6 +336,11 @@ migrate_one_body() {
     sleep 1
   done
   [ -n "$ncp" ] && nl=$(acct_of_pid "$ncp")
+  # The resumed process has rendered (or is rendering) its replay by now: drop
+  # the scrollback so the old wall is not carried in history (issue #870). The
+  # VISIBLE copy stays until the next redraw re-renders it — @migrated_banner
+  # above is what keeps that one from benching anyone.
+  [ -n "$ncp" ] && TM clear-history -t "$nw" 2>/dev/null
   if [ -z "$ncp" ]; then
     say "  ? $name ($wid → $nw): resumed window opened but no Claude seen within ${BOOT_WAIT}s — check it"
   elif [ -n "$ACTIVE" ] && [ "$nl" != "$ACTIVE" ]; then

@@ -84,9 +84,11 @@ def claude_banner(source):
     screen = tm(source['session'], 'capture-pane', '-p', '-t', source['pane'])
     # Restrict evidence to the current viewport; the bridge's canonical parser
     # distinguishes model caps and source-code strings from subscription walls.
-    out = run(['bash', '-c', '. "$1"; b=$(fleet_limit_banner); '
+    # A wall this window was migrated AWAY from is a --resume replay, not evidence
+    # about its current account (fleet_banner_replayed, issue #870): no kind.
+    out = run(['bash', '-c', '. "$1"; b=$(fleet_limit_banner); fleet_banner_replayed "$b" "$2" && b=; '
                'printf "%s\n" "$b" | fleet_limit_kind; printf "|"; printf "%s\n" "$b" | fleet_limit_axis',
-               'fleet-limit', BIN / 'usage-lib.sh'], input=screen)
+               'fleet-limit', BIN / 'usage-lib.sh', opt(source, '@migrated_banner')], input=screen)
     kind, _, axis = out.partition('|')
     return kind.strip(), axis.strip()
 

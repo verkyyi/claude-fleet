@@ -126,6 +126,25 @@ fleet_limit_banner() {
   printf '%s\n' "$text" | grep -aoE "Usage limit reached · [^│]*" | tail -1
 }
 
+# fleet_banner_replayed <banner> <migrated-banner> — exit 0 when <banner> (a
+# fleet_limit_banner line read off a window) is the wall the window was MOVED
+# away from, not a new one (issue #870). `claude --resume` re-renders the
+# transcript tail, so a session migrated off a walled account shows the OLD
+# account's "hit your weekly limit · resets …" on the NEW pane's visible screen —
+# and credited to the window's current @cc_account it benched the healthy target
+# (ylianghui at 7d 34%, 2026-09-22), whose next migrate replayed it again: a
+# cascade across the pool. Clearing the pane cannot fix that: any full redraw
+# (a resize, an attach at another size, Ctrl+L) re-renders the same tail. So
+# fleet-migrate.sh / fleet-transfer.sh stamp the source pane's banner on the
+# window as @migrated_banner, and a banner that equals it is a replay. A real
+# wall on the new account names its OWN reset instant, so it differs and still
+# counts. Trailing whitespace is ignored (a redraw at another width pads).
+fleet_banner_replayed() {
+  local b="${1:-}" s="${2:-}"
+  b="${b%"${b##*[![:space:]]}"}"; s="${s%"${s##*[![:space:]]}"}"
+  [ -n "$s" ] && [ "$b" = "$s" ]
+}
+
 # fleet_limit_kind — stdin: a fleet_limit_banner line. Prints `subscription` for the
 # account-wide wall (the session / weekly / N-hour banners and the sticky footer) or
 # `model:<alias>` for a PER-MODEL cap — "hit your Fable 5 limit", "reached your

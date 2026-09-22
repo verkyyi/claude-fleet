@@ -221,6 +221,7 @@ ok; ! kill -0 "$PID" 2>/dev/null || fail 'source process must exit'
 ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ "$(field origin)" = scratch-99 ] || fail 'window bindings changed'
 ok; [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'target provenance stamps missing'
 ok; [ "$(field worktree)" = "$WT" ] || fail 'issue-worker cutover must record verified worktree'
+ok; [ -n "$(field migrated_at)" ] && [ -z "$(field migrated_banner)" ] || fail 'cutover must stamp @migrated_at, and no @migrated_banner off a wall-free source (#870)'
 ok; [ "$(git -C "$WT" diff --binary HEAD)" = "$BEFORE" ] && [ -f "$WT/untracked" ] || fail 'cutover modified the source work'
 python3 - "$BUNDLE" "$WORK/target-argv.json" <<'PY' || fail 'target must receive the exact pickup prompt and manifest'
 import json, pathlib, sys

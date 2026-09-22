@@ -33,6 +33,8 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/usage-lib.sh"          # fleet_limit_banner — the wall this cutover leaves behind (#870)
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
@@ -264,6 +266,10 @@ fi
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'
+# The wall the source is leaving (issue #870): a Claude target re-renders the
+# transcript tail on this same pane, and the collector must not credit it to the
+# target's account. Stamped with @migrated_at just before the respawn.
+WALL=$(TM capture-pane -p -S - -t "$PANE" 2>/dev/null | fleet_limit_banner)
 
 EXIT_WAIT="${FLEET_TRANSFER_EXIT_WAIT:-30}"; BOOT_WAIT="${FLEET_TRANSFER_BOOT_WAIT:-15}"
 case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be positive integer seconds' ;; esac
@@ -334,6 +340,12 @@ TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp so
 TM set-option -w -t "$WIN" @source_session_id "$SID" || die 'cannot stamp source session'
 TM set-option -w -t "$WIN" @source_transcript "$TRANSCRIPT" || die 'cannot stamp source transcript'
 TM set-option -w -t "$WIN" @claude_state working || die 'cannot stamp target state'
+TM set-option -w -t "$WIN" @migrated_at "$(date +%s)" 2>/dev/null || :
+if [ -n "$WALL" ]; then TM set-option -w -t "$WIN" @migrated_banner "$WALL" 2>/dev/null || :
+else TM set-option -wu -t "$WIN" @migrated_banner 2>/dev/null || :; fi
+# respawn-pane keeps the pane's history: drop the source's scrollback (and the
+# old wall in it) so the target starts on a clean pane.
+TM clear-history -t "$PANE" 2>/dev/null || :
 printf -v CMD 'exec bash %q' "$BUNDLE/launch.sh"
 python3 "$HELPER" state "$BUNDLE" starting || die 'cannot record target launch'
 # -k only replaces the verified leftover shell; Claude is already confirmed gone.
@@ -349,6 +361,7 @@ for ((i=0; i<BOOT_WAIT; i++)); do
   sleep 1
 done
 [ -n "$CPID" ] || die 'target session did not bind; inspect the retained pane and handoff package'
+TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
 printf '%s started in %s/%s (identity %s). Source provenance: %s\n' "$TO" "$SESS" "${HANDLE:-$WIN}" "$CPID" "$BUNDLE/manifest.json"
