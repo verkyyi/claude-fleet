@@ -575,8 +575,8 @@ rm -rf "$G/sumhash" 2>/dev/null || true
 for r in ${FLEET_REPOS:-}; do queue "$(fleet_norm_repo "$r")"; done
 while IFS=$'\t' read -r _s cf; do
   [ -f "$cf" ] || continue
-  r=$( . "$cf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-  [ -n "$r" ] && queue "$(fleet_norm_repo "$r")"
+  # every repo the fleet hosts (issue #788) — the conf's own + each repos/ overlay
+  for r in $(fleet_repos "$_s"); do queue "$r"; done
 done < <(fleet_each_conf)
 
 # Publish the queue for the `issues` phase. Same write-guard reasoning as sessmap

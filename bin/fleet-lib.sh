@@ -277,7 +277,170 @@ fleet_load_conf() {
   # sourcing would do, minus the stripped keys.
   local _ore; _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
   eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
+  # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
+  # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
+  # commands/*.md, the launcher, the claim brief) sees its own repo's MAIN/base/model
+  # without learning about repos. A fleet with no repos/ dir returns HERE, before any
+  # tmux call: the degenerate case is byte-for-byte what it was. So does a caller
+  # outside tmux (daemons), or one loading ANOTHER fleet's conf from inside a pane.
+  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 0
+  [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+  local _wr
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$1" ] || return 0
+  _wr=$(fleet_window_repo "$1" "$TMUX_PANE")
+  [ -n "$_wr" ] && _fleet_repo_overlay "$1" "$_wr"
   return 0
+}
+
+# ---- repos a fleet hosts (issue #788) ---------------------------------------
+# A fleet may host several repos, all equal (there is no main repo). The fleet
+# conf's own FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH lines ARE one registry entry —
+# no migration — and every further repo is an overlay at
+#   $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf
+# carrying FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH plus any per-repo override
+# (FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*). The fleet conf keeps
+# the fleet-wide defaults an overlay may override. A window names its repo with the
+# window option @repo=<owner/name>; `@norepo 1` marks a session that deliberately
+# belongs to none. Every consumer resolves through the helpers below — never an
+# ad-hoc `git remote` parse.
+
+# Keys that describe the fleet conf's OWN repo, so they must not leak into another
+# repo's view when its overlay is applied: identity, and where it deploys.
+_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK"
+
+# fleet_repo_conf_file <sess> <repo> → the overlay path for <repo> (may not exist).
+fleet_repo_conf_file() {
+  printf '%s/fleets/%s/repos/%s.conf' "$FLEET_CONF_DIR" "${1:-_}" "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
+}
+
+# fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line: the
+# fleet conf's FLEET_REPO first (when set), then each repos/*.conf, deduplicated.
+# Reads confs in subshells, so the caller's env is untouched.
+fleet_repos() {
+  local sess="${1:-}" conf f r seen=' '
+  [ -n "$sess" ] || return 0
+  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
+  conf=$(fleet_conf_file "$sess")
+  for f in "$conf" "$FLEET_CONF_DIR/fleets/$sess/repos"/*.conf; do
+    [ -f "$f" ] || continue
+    r=$( unset FLEET_REPO; . "$f" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    r=$(fleet_norm_repo "$r")
+    case "$r" in ?*/?*) ;; *) continue ;; esac
+    case "$seen" in *" $r "*) continue ;; esac
+    seen="$seen$r "
+    printf '%s\n' "$r"
+  done
+  return 0
+}
+
+# fleet_repo_hosted <sess> <repo> → 0 iff the fleet hosts <repo>.
+fleet_repo_hosted() {
+  local want; want=$(fleet_norm_repo "${2:-}")
+  [ -n "$want" ] || return 1
+  fleet_repos "${1:-}" | grep -qxF "$want"
+}
+
+# fleet_repo_mains <sess> → each hosted repo's base checkout (FLEET_MAIN), one per
+# line — what the base-readonly guard protects. Degenerate: the fleet conf's one.
+fleet_repo_mains() {
+  local r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    ( fleet_load_repo_conf "$1" "$r" >/dev/null 2>&1 && [ -n "${FLEET_MAIN:-}" ] \
+        && printf '%s\n' "$FLEET_MAIN" )
+  done <<EOF
+$(fleet_repos "${1:-}")
+EOF
+  return 0
+}
+
+# fleet_window_repo <sess> <window-target> → the window's repo (owner/name), or
+# NOTHING when unknown — the caller then skips the window, it never guesses:
+#   1. @repo, when stamped;
+#   2. @norepo=1 → deliberately none (empty);
+#   3. derived ONCE from @worktree's git origin, and stamped as @repo;
+#   4. the fleet's only repo, when it hosts exactly one (not stamped: it is a
+#      default, not a fact about the window);
+#   5. else unknown.
+# Works inside a pane (bare tmux) and from a daemon (the fleet's own -L socket).
+fleet_window_repo() {
+  local sess="${1:-}" t="${2:-}" raw r norepo wt n
+  [ -n "$t" ] || return 0
+  # One read, '|'-separated: a printable sentinel (tmux <=3.4 vis-escapes control
+  # bytes in formats), @worktree LAST so a path containing '|' stays intact.
+  raw=$(_fleet_tmux "$sess" display-message -p -t "$t" '#{@repo}|#{@norepo}|#{@worktree}' 2>/dev/null)
+  r=${raw%%|*}; raw=${raw#*|}; norepo=${raw%%|*}; wt=${raw#*|}
+  [ -n "$r" ] && { printf '%s' "$r"; return 0; }
+  [ "$norepo" = 1 ] && return 0
+  if [ -n "$wt" ] && [ -d "$wt" ]; then
+    r=$(fleet_norm_repo "$(git -C "$wt" remote get-url origin 2>/dev/null)")
+    case "$r" in
+      ?*/?*) _fleet_tmux "$sess" set-option -w -t "$t" @repo "$r" 2>/dev/null
+             printf '%s' "$r"; return 0 ;;
+    esac
+  fi
+  [ -n "$sess" ] || sess=$(_fleet_tmux '' display-message -p -t "$t" '#{session_name}' 2>/dev/null)
+  r=$(fleet_repos "$sess")
+  n=$(printf '%s' "$r" | grep -c .)
+  [ "$n" = 1 ] && printf '%s' "$r"
+  return 0
+}
+
+# _fleet_repo_overlay <sess> <repo> — apply <repo>'s overlay on top of the ALREADY
+# loaded fleet conf, in the caller's shell. For the fleet conf's own repo the
+# overlay is optional (it can only override); for any other repo it is required,
+# and the conf repo's scoped keys are dropped first so they cannot leak across.
+# Returns 1 (env untouched) when <repo> is not hosted.
+_fleet_repo_overlay() {
+  local want f _ore
+  want=$(fleet_norm_repo "${2:-}"); [ -n "$want" ] || return 1
+  f=$(fleet_repo_conf_file "$1" "$want")
+  if [ "$(fleet_norm_repo "${FLEET_REPO:-}")" != "$want" ]; then
+    [ -f "$f" ] || return 1
+    eval "unset $_FLEET_REPO_SCOPED"
+  fi
+  [ -f "$f" ] || return 0
+  _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+  eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$f")"
+  return 0
+}
+
+# fleet_load_repo_conf <sess> <repo> — like fleet_load_conf, but for a NAMED repo
+# rather than the caller's window: the fleet conf, then <repo>'s overlay. Returns 1
+# when the fleet does not host <repo> (the fleet conf is still loaded).
+fleet_load_repo_conf() {
+  local conf _ore; conf=$(fleet_conf_file "${1:-}")
+  if [ -f "$conf" ]; then
+    _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+    eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
+  fi
+  _fleet_repo_overlay "${1:-}" "${2:-}"
+}
+
+# The fleet's CURRENT repo — what the dash and backlog are filtered to. One value
+# per fleet, shared by every screen attached to it; `all` (the default) = no
+# filter. A stored repo the fleet no longer hosts reads back as `all`.
+fleet_current_repo() {
+  local f r
+  f="$FLEET_CONF_DIR/fleets/${1:-_}/current-repo"
+  [ -f "$f" ] && r=$(head -n1 "$f" 2>/dev/null)
+  if [ -n "${r:-}" ] && [ "$r" != all ] && fleet_repo_hosted "${1:-}" "$r"; then
+    printf '%s\n' "$r"
+  else
+    printf 'all\n'
+  fi
+}
+
+# fleet_current_repo_set <sess> <repo|all> — refuses (1) a repo the fleet does not host.
+fleet_current_repo_set() {
+  local sess="${1:-}" want="${2:-}" d
+  [ -n "$sess" ] || return 1
+  if [ "$want" != all ]; then
+    want=$(fleet_norm_repo "$want")
+    fleet_repo_hosted "$sess" "$want" || return 1
+  fi
+  d=$(fleet_state_dir "$sess")
+  printf '%s\n' "$want" > "$d/current-repo.$$" && mv -f "$d/current-repo.$$" "$d/current-repo"
 }
 
 # Resolve the operator-facing BODY of an implementing worker's seed prompt

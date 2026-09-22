@@ -37,9 +37,11 @@ Contract (Claude Code hooks; Codex's is the same):
 
 Resolving the base checkout: prefer FLEET_MAIN from the environment; otherwise
 ask fleet-lib for the current session's base. Outside a fleet (no $TMUX, or no
-FLEET_MAIN resolvable) there is nothing to protect, so we allow.
+FLEET_MAIN resolvable) there is nothing to protect, so we allow. A fleet that
+hosts several repos (issue #788) has one base checkout per repo, and every one of
+them is protected.
 """
-import sys, os, json, re, subprocess
+import sys, os, glob, json, re, subprocess
 
 # apply_patch target lines (Codex): the path is everything after the marker.
 _PATCH_TARGET = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
@@ -74,39 +76,61 @@ def block(path, base):
     sys.exit(2)
 
 
-def _resolve_base():
-    """The fleet base checkout to protect, realpath'd — or "" if not in a fleet."""
+def _any_repo_overlays():
+    """True iff some fleet hosts a second repo (a fleets/<sess>/repos/ dir exists).
+    A cheap glob, so a seat that exports FLEET_MAIN keeps skipping the subprocess
+    whenever no fleet hosts more than one repo (issue #788)."""
+    d = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
+    return bool(glob.glob(os.path.join(d, "fleets", "*", "repos")))
+
+
+def _resolve_bases():
+    """Every base checkout to protect, realpath'd — [] if not in a fleet.
+
+    A fleet may host several repos (issue #788); each hosted repo's FLEET_MAIN is
+    a base checkout, so an edit into ANY of them is refused — not only the one the
+    fleet conf (or this window's repo) names."""
     # 1) Env is authoritative and free if the seat exports it.
-    base = os.environ.get("FLEET_MAIN", "").strip()
+    bases = []
+    env_base = os.environ.get("FLEET_MAIN", "").strip()
+    if env_base:
+        bases.append(env_base)
     # 2) Else resolve via fleet-lib for the current tmux session. Skip entirely
     #    when there's no $TMUX — a non-tmux session is never a fleet, and this
     #    avoids spawning a subprocess on every edit the operator makes elsewhere.
-    if not base and os.environ.get("TMUX"):
+    if os.environ.get("TMUX") and (not env_base or _any_repo_overlays()):
         lib = os.path.expanduser(
             os.environ.get("FLEET_LIB", "~/.claude/fleet/bin/fleet-lib.sh")
         )
         if os.path.exists(lib):
             try:
-                # Redirect the lib's own chatter to /dev/null so ONLY FLEET_MAIN
-                # reaches stdout (a stray echo during source/load would corrupt it).
+                # Redirect the lib's own chatter to /dev/null so ONLY the mains
+                # reach stdout (a stray echo during source/load would corrupt it).
                 out = subprocess.run(
                     ["bash", "-c",
                      'source "$1" >/dev/null 2>&1; '
                      'S=$(fleet_current_session 2>/dev/null); '
-                     '[ -n "$S" ] && fleet_load_conf "$S" >/dev/null 2>&1; '
-                     'printf "%s" "${FLEET_MAIN:-}"',
+                     '[ -n "$S" ] || exit 0; '
+                     'fleet_load_conf "$S" >/dev/null 2>&1; '
+                     'printf "%s\\n" "${FLEET_MAIN:-}"; '
+                     'fleet_repo_mains "$S" 2>/dev/null',
                      "_", lib],
                     capture_output=True, text=True, timeout=5,
                 )
-                base = out.stdout.strip()
+                bases.extend(l.strip() for l in out.stdout.splitlines())
             except Exception:
-                base = ""
-    if not base:
-        return ""
-    try:
-        return os.path.realpath(base)
-    except Exception:
-        return ""
+                pass
+    real = []
+    for b in bases:
+        if not b:
+            continue
+        try:
+            rb = os.path.realpath(b)
+        except Exception:
+            continue
+        if rb not in real:
+            real.append(rb)
+    return real
 
 
 def _under(path, base):
@@ -143,13 +167,14 @@ def main():
     if not paths:
         allow()
 
-    base = _resolve_base()
-    if not base:
+    bases = _resolve_bases()
+    if not bases:
         allow()  # not in a fleet → nothing to protect
 
     for path in paths:
-        if _under(path, base):
-            block(os.path.realpath(path), base)
+        for base in bases:
+            if _under(path, base):
+                block(os.path.realpath(path), base)
     allow()
 
 
