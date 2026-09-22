@@ -70,17 +70,19 @@ trap 'exit 130' INT TERM HUP
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # --- build the hub: session 't', a 'plan' window + a plain 'worker' window to
-#     jump from.
+#     jump from. Every pane runs `sleep`, not a login shell: once the task-bar
+#     legs attach a real client, an interactive shell's profile could end its pane
+#     and take the window the assertions are about with it.
 # The hub is DASH-ONLY, so there is no @hub pane to target. The second pane here
 # is NOT a hub Claude - it stands in for a pane the OPERATOR split in by hand, and
 # carries no marker. It exists so the zoom half of the contract stays testable
 # (tmux will not set window_zoomed_flag on a single-pane window), and so the
 # assertions below actually prove hub-zoom homes on the DASH rather than on
 # "whatever pane happens to be there". -------------------------------------
-tmux new-session -d -s t -n plan -x 200 -y 50 2>/dev/null || fail "could not start isolated tmux server"
-tmux new-window -d -t t: -n worker
+tmux new-session -d -s t -n plan -x 200 -y 50 'sleep 600' 2>/dev/null || fail "could not start isolated tmux server"
+tmux new-window -d -t t: -n worker 'sleep 600'
 dashp="$(tmux list-panes -t t:plan -F '#{pane_id}' | head -n1)"
-sidep="$(tmux split-window -d -P -F '#{pane_id}' -t "$dashp")"
+sidep="$(tmux split-window -d -P -F '#{pane_id}' -t "$dashp" 'sleep 600')"
 [ -n "$dashp" ] && [ -n "$sidep" ] && [ "$dashp" != "$sidep" ] || fail "could not build the plan window"
 tmux set-option -p -t "$dashp" @dash 1
 
@@ -158,6 +160,87 @@ run_zoom
 run_zoom
 [ "$(zflag)" = 0 ] || fail "F3: a second F9 press must restore the unzoomed hub"
 
+# =====================  TASK BAR FIRST (issue #899)  =========================
+# In a task that shows the task bar, the first ⌂ / F9 puts the keyboard on the bar
+# (client key table fleet-sidebar) and stays in the task; the second press — which
+# the conf's fleet-sidebar-table binds pass as --nav — goes to the hub. Needs a
+# real client for the key table: a pty via `script`, as hub-visits-selftest does.
+export FLEET_CONF_DIR="$WORK/conf" FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
+VLOG="$WORK/logs/hub-visits-t.log"
+attach_bg() {
+  if script -q /dev/null true >/dev/null 2>&1; then           # BSD/macOS
+    script -q /dev/null tmux -S "$SOCK" attach -t t:worker >/dev/null 2>&1 &
+  elif script -q -c true /dev/null >/dev/null 2>&1; then      # GNU/util-linux
+    script -q -c "$REAL_TMUX -S '$SOCK' attach -t t:worker" /dev/null >/dev/null 2>&1 &
+  else
+    return 1
+  fi
+}
+client=''
+if attach_bg; then
+  for _ in $(seq 1 50); do
+    client=$(tmux list-clients -F '#{client_name}' 2>/dev/null | head -n1)
+    [ -n "$client" ] && break
+    sleep 0.1
+  done
+fi
+if [ -z "$client" ]; then
+  printf 'selftest: no pty client (no usable `script`) — task-bar-first legs SKIPPED\n' >&2
+else
+  ktable()   { tmux list-clients -F '#{client_key_table}' | head -n1; }
+  on_worker() { tmux switch-client -c "$client" -T root; tmux select-window -t t:worker; }
+  lastcause() { tail -n1 "$VLOG" 2>/dev/null | cut -f3; }
+  tmux set-option -w -t t:worker @sidebar_worker 1
+
+  # S1 — ⌂ in a task with a task bar: the bar takes the keyboard, window unchanged,
+  #      and the meter records the trip that did not happen.
+  on_worker
+  run_zoom --home --client "$client"
+  [ "$(ktable)" = fleet-sidebar ] || fail "S1 first ⌂: key table is '$(ktable)', want fleet-sidebar"
+  [ "$(curwin)" = worker ]        || fail "S1 first ⌂: left the task for '$(curwin)'"
+  [ "$(lastcause)" = home-sidebar ] || fail "S1 first ⌂: hub-visit cause '$(lastcause)', want home-sidebar"
+  # S2 — ⌂ again, from the bar (the fleet-sidebar bind adds --nav): the hub, unzoomed.
+  run_zoom --home --nav --client "$client"
+  assert_home_split "S2 second ⌂ from the task bar"
+
+  # S3/S4 — the same two presses for F9.
+  on_worker
+  run_zoom --client "$client"
+  [ "$(ktable)" = fleet-sidebar ] || fail "S3 first F9: key table is '$(ktable)', want fleet-sidebar"
+  [ "$(curwin)" = worker ]        || fail "S3 first F9: left the task for '$(curwin)'"
+  [ "$(lastcause)" = f9-sidebar ] || fail "S3 first F9: hub-visit cause '$(lastcause)', want f9-sidebar"
+  run_zoom --nav --client "$client"
+  assert_home_split "S4 second F9 from the task bar"
+
+  # S5 — a zoomed task shows no bar: ⌂ keeps "never stay zoomed" and goes home.
+  wside="$(tmux split-window -d -P -F '#{pane_id}' -t t:worker 'sleep 600')"
+  on_worker; tmux resize-pane -Z -t t:worker
+  run_zoom --home --client "$client"
+  assert_home_split "S5 ⌂ from a zoomed task"
+  [ "$(ktable)" = root ] || fail "S5: a zoomed task must not enter the task bar"
+  tmux kill-pane -t "$wside"
+
+  # S6 — a name half-typed on the bar's input line (@sidebar_input on the view, the
+  #      window's {top-left} pane — issue #896): straight home, the text is kept.
+  on_worker; tmux set-option -p -t 't:worker.{top-left}' @sidebar_input 1
+  run_zoom --home --client "$client"
+  assert_home_split "S6 ⌂ while the task bar is typing"
+  tmux set-option -up -t 't:worker.{top-left}' @sidebar_input
+
+  # S7 — the knob off: word for word today's behaviour, first press goes home.
+  mkdir -p "$FLEET_CONF_DIR/fleets/t"
+  printf 'FLEET_HOME_SIDEBAR_FIRST=0\n' > "$FLEET_CONF_DIR/fleets/t/conf"
+  on_worker
+  run_zoom --home --client "$client"
+  assert_home_split "S7 ⌂ with FLEET_HOME_SIDEBAR_FIRST=0"
+  [ "$(ktable)" = root ] || fail "S7: knob 0 must not enter the task bar"
+  on_worker
+  run_zoom --client "$client"
+  assert_home_split "S7 F9 with FLEET_HOME_SIDEBAR_FIRST=0"
+  rm -f "$FLEET_CONF_DIR/fleets/t/conf"
+  tmux set-option -uw -t t:worker @sidebar_worker
+fi
+
 # =====================  STATIC GUARD : the shipped wiring  ==================
 grep -qF 'hub-zoom.sh --home' "$CONF" \
   || fail "conf: the ⌂ hub click must run 'hub-zoom.sh --home' (issue #405)"
@@ -168,6 +251,21 @@ grep -E 'bind -n F9 .*hub-zoom\.sh' "$CONF" | grep -q -- '--home' \
   && fail "conf: F9 must stay the progressive toggle — it must NOT carry --home"
 grep -qF -- '--home' "$SCRIPT" \
   || fail "hub-zoom.sh no longer understands --home (issue #405)"
+# Task bar first (#899): the SECOND press only reaches hub-zoom.sh as --nav through
+# the fleet-sidebar table's own binds, and that table's status click must still
+# serve every other status range the root one does (a bound key never falls through).
+grep -Eq '^bind -T fleet-sidebar F9 .*hub-zoom\.sh --nav' "$CONF" \
+  || fail "conf: the fleet-sidebar table needs an F9 bind running 'hub-zoom.sh --nav' (#899)"
+navclick=$(grep -E '^bind -T fleet-sidebar MouseDown1Status ' "$CONF")
+printf '%s\n' "$navclick" | grep -qF 'hub-zoom.sh --home --nav' \
+  || fail "conf: the fleet-sidebar status click must run 'hub-zoom.sh --home --nav' on the ⌂ (#899)"
+for leg in fleet-pick.sh 'next-attention.sh --needs-cycle' usage-modal.sh fleet-xfleet-jump.sh; do
+  grep -qF -- "$leg" "$CONF" || continue
+  printf '%s\n' "$navclick" | grep -qF -- "$leg" \
+    || fail "conf: the fleet-sidebar status click lost the root click's '$leg' range"
+done
+grep -Eq '^bind -n F9 .*--client' "$CONF" \
+  || fail "conf: the root F9 must pass --client so the right client's table switches (#899)"
 
-printf 'selftest PASS: ⌂ --home always lands unzoomed on the DASH; F9 keeps the progressive zoom toggle (#405)\n'
+printf 'selftest PASS: ⌂ --home always lands unzoomed on the DASH; F9 keeps the progressive zoom toggle (#405); both land on the task bar first (#899)\n'
 exit 0

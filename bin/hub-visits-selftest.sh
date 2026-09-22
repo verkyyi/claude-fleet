@@ -195,6 +195,16 @@ fx="$(bash "$HV" --since 24h --log "$WORK/fixed.log")"
 printf '%s\n' "$fx" | grep -q ': 2 (+1 attach, not counted)$' || fail "same-second dedup / --since cut: $fx"
 printf '%s\n' "$fx" | grep -Eq '^  f9 +1$' || fail "same-second repeats not counted once: $fx"
 
+# A task-bar landing (issue #899) is a trip that did NOT happen: listed on its
+# own, kept out of the total and out of --brief's count, even in a second shared
+# with a real trip.
+{ printf '%s\ta1\tf9\n%s\ta1\thome-sidebar\n%s\ta1\thome-sidebar\n' "$now" "$now" "$now"
+  printf '%s\tb2\tf9-sidebar\n' "$now"; } > "$WORK/side.log"
+sx="$(bash "$HV" --since 24h --log "$WORK/side.log")"
+printf '%s\n' "$sx" | grep -q ': 1 (+2 kept on the task bar, not counted)$' || fail "sidebar landings counted as trips: $sx"
+printf '%s\n' "$sx" | grep -Eq '^  home-sidebar +1  \(stayed on the task bar, not counted\)$' || fail "home-sidebar row missing: $sx"
+printf '%s\n' "$sx" | grep -Eq '^  f9-sidebar +1  \(stayed' || fail "f9-sidebar row missing: $sx"
+
 # No log at all, and a bad --since.
 empty="$(FLEET_HUB_VISITS_LOGDIR="$WORK/none" bash "$HV" --brief --all)"
 [ -z "$empty" ] || fail "--brief with no logs should print nothing, got '$empty'"
