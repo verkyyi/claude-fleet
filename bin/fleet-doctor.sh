@@ -1102,6 +1102,7 @@ inv="$(dirname "$0")/fleet-handoff-invariant.sh"
 hb_age=''
 if [ -f "$hbf" ]; then
   hb=$(cat "$hbf" 2>/dev/null)
+  hb=${hb%% *}   # `<epoch> tmux_calls_per_s=…` since #887 — the epoch is the first token
   case "$hb" in ''|*[!0-9]*) ;; *) hb_age=$(( $(date +%s 2>/dev/null || echo 0) - hb )) ;; esac
 fi
 # Cadence is ~20-30s: HB_CHECK_SECS is converted to a FRAME count, so like every

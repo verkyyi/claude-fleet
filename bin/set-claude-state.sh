@@ -210,6 +210,12 @@ if [ "$sem" != "leave" ]; then
   tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" 2>/dev/null
   # last-activity stamp (drives the dashboard's "Nm ago" column).
   tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
+  # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;
+  # this marker — `<socket path>.dirty`, beside tmux's own socket, the one path the
+  # daemon and this pane are guaranteed to agree on — gets the change drawn on its
+  # next tick instead. A builtin redirection: no fork on the per-tool hot path.
+  _sockp=${TMUX%%,*}
+  [ -n "$_sockp" ] && : > "$_sockp.dirty" 2>/dev/null
 fi
 
 # ── Auto-handoff nudge (issue #330) ──────────────────────────────────────────
