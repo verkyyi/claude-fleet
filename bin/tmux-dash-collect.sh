@@ -303,10 +303,12 @@ hb_phase() {  # $1 = the phase now starting ('' = the tick is done)
 #      tick drifting away from its interval.
 #
 # This only works because fleet_timebox measures WALL CLOCK (issue #653 again): it
-# used to count `sleep 1` iterations, which under this daemon's
+# used to count `sleep 1` iterations, which under this daemon's (then)
 # `ProcessType=Background` tier inflated a 30s budget to 126s — the same factor that
 # made the work slow. Ten phases each holding an elastic budget would have been ten
-# copies of one bug; see bin/fleet-lib.sh.
+# copies of one bug; see bin/fleet-lib.sh. The unit itself is Standard since #651
+# (Background made every fork ~8x dearer — see bin/daemon-processtype-selftest.sh);
+# the wall-clock budgets stay, because a Standard job on a loaded box can still lag.
 TICK_BUDGET="${FLEET_COLLECT_TICK_BUDGET:-120}"   # 2x the 60s StartInterval
 case "$TICK_BUDGET" in ''|*[!0-9]*) TICK_BUDGET=120 ;; esac
 PHASE_CURSOR="$G/collect.phase.cursor"
