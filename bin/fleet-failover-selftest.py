@@ -38,6 +38,7 @@ class Failover(unittest.TestCase):
         self.patches=[patch.object(flow,'request_path',return_value=self.path),
                       patch.object(flow,'evidence',return_value=(True,'turn:1')),
                       patch.object(flow,'stamp'),
+                      patch.object(flow,'stamp_stuck'),
                       patch.dict(flow.ACCOUNT,bench=lambda *_:None),
                       patch.dict(os.environ,FLEET_ACCOUNT_CEILING='85',FLEET_CONF_DIR=str(self.root))]
         for p in self.patches:p.start()
@@ -394,6 +395,98 @@ class MarkerClear(unittest.TestCase):
                     flow.outcome(path,r,state)
                 self.assertEqual(cleared,[''])
                 self.assertEqual(flow.read(path/'request.json',{})['state'],state)
+
+
+class StuckRequest(unittest.TestCase):
+    """The same veto, retried again and again, pages the operator once (#872)."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.path=self.root/'req';self.path.mkdir()
+        self.log=self.root/'notify.log'
+        notify=self.root/'notify.sh'
+        notify.write_text('#!/bin/sh\nprintf "%s\\n---\\n" "$1" >> "%s"\n' % ('%s',self.log))
+        notify.chmod(0o755)
+        self.marks=[]
+        self.patches=[patch.object(flow,'stamp'),patch.object(flow,'quota_loop'),
+                      patch.object(flow,'stamp_stuck',side_effect=lambda src,on:self.marks.append(on)),
+                      patch.dict(os.environ,FLEET_NOTIFY_CMD=str(notify),FLEET_FAILOVER_STUCK_ATTEMPTS='5')]
+        for p in self.patches:p.start()
+        self.addCleanup(lambda:[p.stop() for p in reversed(self.patches)])
+        self.r={'source':dict(session='fleet-x',window='@7',pane='%7',pid=42,session_id='s',agent='claude'),
+                'source_key':'claude/work'}
+
+    def sent(self):
+        return [m for m in self.log.read_text().split('---\n') if m.strip()] if self.log.exists() else []
+
+    def veto(self,n,detail='background/tool processes are still running: 4242 npm run dev'):
+        for _ in range(n):flow.outcome(self.path,self.r,'waiting',detail)
+
+    def test_five_identical_vetoes_notify_exactly_once_and_mark_stuck(self):
+        self.veto(4)
+        self.assertEqual(self.sent(),[]);self.assertNotIn(True,self.marks)
+        self.veto(1)
+        self.assertEqual(len(self.sent()),1)
+        self.assertEqual(self.marks[-1],True)
+        saved=flow.read(self.path/'request.json',{})
+        self.assertEqual(saved['same_detail_streak'],5);self.assertTrue(saved['stuck_notified'])
+        self.veto(20)                                  # still stuck: never a second page
+        self.assertEqual(len(self.sent()),1)
+        msg=self.sent()[0]
+        for part in ('fleet-x','@7','claude/work','npm run dev','fleet-account.sh migrate --session fleet-x @7'):
+            self.assertIn(part,msg)
+
+    def test_preparing_between_attempts_neither_extends_nor_breaks_the_streak(self):
+        for _ in range(5):
+            flow.outcome(self.path,self.r,'preparing','selected claude/other')
+            flow.outcome(self.path,self.r,'waiting','transfer did not confirm the bound target')
+        self.assertEqual(len(self.sent()),1)
+
+    def test_a_countdown_is_the_same_reason(self):
+        for n in range(5):flow.outcome(self.path,self.r,'waiting-quota','retry in %ds'%(60-n))
+        self.assertEqual(len(self.sent()),1)
+
+    def test_a_different_reason_or_state_restarts_the_count(self):
+        self.veto(4);self.veto(1,'another veto');self.veto(4)
+        flow.outcome(self.path,self.r,'waiting-quota',self.r['detail'])   # same text, other state
+        self.assertEqual(self.sent(),[])
+        self.assertEqual(flow.read(self.path/'request.json',{})['same_detail_streak'],1)
+
+    def test_a_new_reason_after_a_page_clears_the_marker_and_can_page_again(self):
+        self.veto(5)
+        flow.outcome(self.path,self.r,'waiting','something else')
+        self.assertEqual(self.marks[-1],False)
+        self.veto(5,'something else entirely')
+        self.assertEqual(len(self.sent()),2)
+
+    def test_terminal_outcome_clears_the_stuck_marker_and_state(self):
+        for state in ('bound','cancelled','recovered','ambiguous'):
+            self.r.update(state='waiting',streak_key=None,same_detail_streak=0,stuck_notified=False)
+            self.marks.clear();self.veto(5)
+            flow.outcome(self.path,self.r,state,'done')
+            self.assertEqual(self.marks[-1],False,state)
+            saved=flow.read(self.path/'request.json',{})
+            self.assertFalse(saved['stuck_notified']);self.assertEqual(saved['same_detail_streak'],0)
+
+    def test_a_request_that_never_stuck_never_touches_the_marker(self):
+        self.veto(2);flow.outcome(self.path,self.r,'bound','target t')
+        self.assertEqual(self.marks,[])
+
+    def test_no_notify_command_still_marks(self):
+        with patch.dict(os.environ,FLEET_NOTIFY_CMD=''):self.veto(5)
+        self.assertEqual(self.sent(),[]);self.assertEqual(self.marks[-1],True)
+
+    def test_stuck_mark_keeps_the_identity_guard_and_clear_always_lands(self):
+        self.patches[2].stop();self.patches.pop(2)
+        src=self.r['source'];sets=[]
+        with patch.object(flow,'inspect',return_value=dict(src,pid=99,session_id='new')), \
+             patch.object(flow,'tm',side_effect=lambda sess,*a:(sets.append(a),'')[1]):
+            flow.stamp_stuck(src,True);self.assertEqual(sets,[])
+            flow.stamp_stuck(src,False)
+            self.assertEqual(sets,[('set-option','-wu','-t','@7','@quota_stuck')])
+        with patch.object(flow,'inspect',return_value=dict(src)), \
+             patch.object(flow,'tm',side_effect=lambda sess,*a:(sets.append(a),'')[1]):
+            flow.stamp_stuck(src,True)
+            self.assertEqual(sets[-1],('set-option','-w','-t','@7','@quota_stuck','1'))
 
 
 class HardWallBackground(unittest.TestCase):

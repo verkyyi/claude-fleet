@@ -78,4 +78,16 @@ grep -Eq '^[[:space:]]+WARN[[:space:]]+failover[[:space:]]+sess-explicit/@8: wai
 grep -q 'sess-default/@7' "$WORK/stdout" && fail "explicit FLEET_CONF_DIR did not override the default (both requests printed)"
 ok
 
+# 4. a stuck request (issue #872) is counted on its own line; a merely pending
+#    one is not
+grep -Eq '^[[:space:]]+PASS[[:space:]]+failover-stuck[[:space:]]+0 stuck' "$WORK/stdout" \
+  || fail "a pending, non-stuck request was not reported as 0 stuck"
+mkdir -p "$WORK/explicit/handoffs/quota-requests/r2"
+printf '{"state":"waiting","detail":"same veto","same_detail_streak":7,"stuck_notified":true,"source":{"session":"sess-explicit","window":"@9"}}\n' \
+  > "$WORK/explicit/handoffs/quota-requests/r2/request.json"
+run_doctor FLEET_CONF_DIR="$WORK/explicit"
+grep -Eq '^[[:space:]]+WARN[[:space:]]+failover-stuck[[:space:]]+1 stuck: sess-explicit/@9 x7' "$WORK/stdout" \
+  || fail "a stuck request did not surface on the failover-stuck line"
+ok
+
 printf 'fleet-doctor-conf-dir-selftest: %d checks passed\n' "$CHECKS"
