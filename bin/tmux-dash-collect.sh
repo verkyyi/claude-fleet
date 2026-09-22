@@ -955,7 +955,7 @@ if [ -n "$line" ]; then printf '%s\t%s' "$(now)" "$line" | atomic_write "$G/rate
 # stamp, an unreadable token, or a non-Claude pane cannot bench another account.
 # No-op unless accounts are registered — so single-account installs skip it.
 ph_banner() {
-local sock win wid acct repair banner kind lm fb muntil mig msw mk muntilt newact rc
+local sock win wid acct repair banner kind lm fb muntil mig msw mk muntilt newact rc axis verdict hk
 if [ -d "${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}" ]; then
   for sock in $SOCKETS; do
   bash "$BIN/fleet-account-truth.sh" --socket "$sock" | \
@@ -1014,7 +1014,36 @@ account **$acct** hit its **$lm** cap (until $muntilt); the subscription itself 
           continue
         fi ;;
     esac
-    newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$?
+    # A SUBSCRIPTION banner is a HINT, not a verdict (issue #874). The screen is a
+    # guess at a fact ccquota states exactly, and the guess false-benched healthy
+    # accounts twice (#782: a Codex banner; 2026-09-22: a `--resume` replayed an old
+    # weekly banner and benched an account at 7d 34%, cascading across the pool).
+    # So the banner buys one forced refetch (deduped across windows: quota-verdict
+    # skips it while the cache is younger than FLEET_ACCOUNT_VERDICT_REFETCH), and
+    # the refreshed reading of the window the banner names decides:
+    #   ok       → no bench. Either the banner is replayed history, or the hub is
+    #              still behind a real wall — the banner stays on screen, so the
+    #              next tick asks again; one stderr line per banner, not per tick.
+    #   limited  → bench until ccquota's own reset instant.
+    #   unknown  → no fresh reading (stale / blind / not on the hub): the pre-#874
+    #              banner bench, and $G/quota.via-banner lights `⚠ quota via banner`.
+    axis=$(printf '%s\n' "$banner" | fleet_limit_axis)
+    verdict=$("$BIN/fleet-account.sh" quota-verdict "$acct" ${axis:+--axis "$axis"} --refresh 2>/dev/null)
+    case "$verdict" in
+      ok)
+        hk="$G/banner-hint.$(printf '%s' "$acct" | tr -c 'A-Za-z0-9._@-' '_')"
+        if [ "$(cat "$hk" 2>/dev/null)" != "$banner" ]; then
+          printf '%s' "$banner" | atomic_write "$hk"
+          printf '%s collect: %s banner ignored — ccquota %s reading has headroom (quota-verdict ok): %s\n' \
+            "$(date '+%F %T')" "$acct" "${axis:-5h+7d}" "$banner" >&2
+        fi
+        continue ;;
+      "limited "*)
+        newact=$("$BIN/fleet-account.sh" bench "$acct" "${verdict#limited }" "ccquota ${axis:-5h+7d} at ceiling · $banner" 2>/dev/null); rc=$? ;;
+      *)
+        printf '%s\t%s\n' "$(now)" "$acct" | atomic_write "$G/quota.via-banner"
+        newact=$("$BIN/fleet-account.sh" mark-limited "$acct" "$banner" 2>/dev/null); rc=$? ;;
+    esac
     # exit 10 = this call rotated the active account away → fires ONCE per bench.
     # A running session cannot hot-swap its token (apiKeyHelper only carries
     # API-key credentials, not subscription OAuth tokens — verified on #495), so

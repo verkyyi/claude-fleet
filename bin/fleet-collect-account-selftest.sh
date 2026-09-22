@@ -14,9 +14,12 @@ printf 'token-B\n' > "$WORK/accounts/acctB"
 python3 - "$BIN/tmux-dash-collect.sh" "$WORK/phase.sh" <<'PY'
 import re,sys
 s=open(sys.argv[1]).read()
-f=re.search(r'^ph_banner\(\) \{\n.*?^\}',s,re.M|re.S)
-assert f
-open(sys.argv[2],'w').write(f.group(0)+'\n')
+out=[]
+for name in ('atomic_write','ph_banner'):
+    f=re.search(r'^'+name+r'\(\) \{\n.*?^\}',s,re.M|re.S)
+    assert f, name
+    out.append(f.group(0))
+open(sys.argv[2],'w').write('\n'.join(out)+'\n')
 PY
 cat > "$WORK/fake/tmux" <<'FAKE'
 #!/bin/bash
@@ -54,6 +57,8 @@ case "$1" in 201|206|207) echo token-A ;; 202|203) echo token-B ;; 204) echo unr
 FAKE
 cat > "$WORK/bin/fleet-account.sh" <<'FAKE'
 #!/bin/sh
+# No ccquota reading here (issue #874) → the banner decides, as this test expects.
+[ "${1:-}" = quota-verdict ] && { echo unknown; exit 0; }
 printf '%s\n' "$*" >> "$ACLOG"
 exit 0
 FAKE

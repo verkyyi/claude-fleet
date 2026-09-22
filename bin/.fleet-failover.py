@@ -79,11 +79,38 @@ def quota_error(thread):
 
 
 def claude_banner(source):
+    """The viewport's limit banner as (kind, axis): kind is `subscription`,
+    `model:<alias>` or '' (no banner); axis is `5h`/`7d`/'' (unnamed)."""
     screen = tm(source['session'], 'capture-pane', '-p', '-t', source['pane'])
     # Restrict evidence to the current viewport; the bridge's canonical parser
     # distinguishes model caps and source-code strings from subscription walls.
-    return run(['bash', '-c', '. "$1"; fleet_limit_banner | fleet_limit_kind',
-                'fleet-limit', BIN / 'usage-lib.sh'], input=screen) == 'subscription'
+    out = run(['bash', '-c', '. "$1"; b=$(fleet_limit_banner); '
+               'printf "%s\n" "$b" | fleet_limit_kind; printf "|"; printf "%s\n" "$b" | fleet_limit_axis',
+               'fleet-limit', BIN / 'usage-lib.sh'], input=screen)
+    kind, _, axis = out.partition('|')
+    return kind.strip(), axis.strip()
+
+
+def claude_wall(source):
+    """Hard Claude evidence = a subscription banner ccquota does not overrule.
+
+    The banner is a hint (issue #874): a `--resume` replays an old one verbatim, and
+    that replay once made a source at 7d 34% "hard" and benched its account. So the
+    banner forces one refetch and `fleet-account.sh quota-verdict` decides — `ok`
+    (a fresh reading with headroom on the named window) is NOT a wall; `limited`
+    is; `unknown` (no fresh reading) keeps the banner's word, as before #874.
+    """
+    kind, axis = claude_banner(source)
+    if kind != 'subscription':
+        return False
+    try:
+        label = run(['bash', BIN / 'fleet-account.sh', 'whoami', '--verified',
+                     '--session', source['session'], source['window']])
+        verdict = run(['bash', BIN / 'fleet-account.sh', 'quota-verdict', label,
+                       *(['--axis', axis] if axis else []), '--refresh'], timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return verdict != 'ok'
 
 
 def source_account(source, data):
@@ -261,7 +288,7 @@ def validate(request, session, pane, sid):
         if source['state'] != 'done' and not hard:
             raise ValueError('source has no terminal quota failure')
     else:
-        hard = claude_banner(source)
+        hard = claude_wall(source)
         if source['state'] != 'done' and not hard:
             raise ValueError('source Claude turn is not complete or quota-blocked')
         if unresolved_claude_tools(source['transcript']):
@@ -414,7 +441,7 @@ def evidence(source):
         thread = native_thread(source)
         last = (thread.get('turns') or [{}])[-1]
         return quota_error(thread), 'codex:' + str(last.get('id', ''))
-    hard = claude_banner(source)
+    hard = claude_wall(source)
     with Path(source['transcript']).open('rb') as stream:
         stream.seek(max(0, Path(source['transcript']).stat().st_size - 65536))
         tail = stream.read()

@@ -373,7 +373,7 @@ class HardWallBackground(unittest.TestCase):
                   patch.object(flow,'inspect',return_value=self.source),
                   patch.object(flow,'opt',return_value=''),
                   patch.object(flow,'evidence',return_value=(True,'claude:e')),
-                  patch.object(flow,'claude_banner',side_effect=lambda src:self.hard),
+                  patch.object(flow,'claude_wall',side_effect=lambda src:self.hard),
                   patch.object(flow,'unresolved_claude_tools',return_value=False),
                   patch.object(flow,'tm',return_value=''),
                   patch.dict(flow.INPUT,snapshot=lambda *a,**k:{'state':'empty','digest':'d'}),
@@ -450,6 +450,51 @@ class TerminateBackground(unittest.TestCase):
                 text=(bundle/name).read_text()
                 self.assertIn('Background commands terminated by migration',text)
                 self.assertIn('`sleep 60` (cwd `%s`)' % tmp,text)
+
+
+class ClaudeWall(unittest.TestCase):
+    """Issue #874: a subscription banner is HARD evidence only when ccquota does not
+    overrule it — a `--resume` replays an old banner verbatim."""
+    source=dict(session='test',window='@2',pane='%2')
+
+    def wall(self, banner, verdict):
+        calls=[]
+        def fake_run(argv, timeout=15, **kw):
+            argv=[str(x) for x in argv]; calls.append(argv)
+            if 'whoami' in argv: return 'acct'
+            if 'quota-verdict' in argv: return verdict
+            raise AssertionError(argv)
+        with patch.object(flow,'claude_banner',return_value=banner), patch.object(flow,'run',side_effect=fake_run):
+            return flow.claude_wall(self.source), calls
+
+    def test_fresh_headroom_overrules_a_replayed_banner(self):
+        hard, calls = self.wall(('subscription','7d'),'ok')
+        self.assertFalse(hard)
+        verdict=[c for c in calls if 'quota-verdict' in c][0]
+        self.assertEqual(verdict[-4:],['acct','--axis','7d','--refresh'])
+
+    def test_limited_or_unknown_keeps_the_banner_hard(self):
+        self.assertTrue(self.wall(('subscription','5h'),'limited 1790000000')[0])
+        self.assertTrue(self.wall(('subscription',''),'unknown')[0])      # no fresh reading: pre-#874
+
+    def test_model_cap_and_no_banner_are_never_hard_and_never_fetch(self):
+        for banner in (('model:fable',''),('','')):
+            hard, calls = self.wall(banner,'limited 1')
+            self.assertFalse(hard); self.assertEqual(calls,[])
+
+    def test_unverifiable_account_keeps_the_banner_hard(self):
+        with patch.object(flow,'claude_banner',return_value=('subscription','7d')), \
+             patch.object(flow,'run',side_effect=subprocess.CalledProcessError(1,'whoami')):
+            self.assertTrue(flow.claude_wall(self.source))
+
+    def test_banner_parse_names_kind_and_axis(self):
+        for screen, want in (("You've hit your weekly limit · resets Sep 25", ('subscription','7d')),
+                             ("You've hit your session limit · resets 10pm", ('subscription','5h')),
+                             ("Usage limit reached · continuing automatically at 1:50am", ('subscription','')),
+                             ("You've hit your Fable 5 limit · resets Sep 6", ('model:fable','')),
+                             ("all quiet", ('',''))):
+            with patch.object(flow,'tm',return_value=screen):
+                self.assertEqual(flow.claude_banner(self.source), want, screen)
 
 
 if __name__=='__main__':unittest.main()

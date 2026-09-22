@@ -145,6 +145,37 @@ fleet_limit_kind() {
   esac
 }
 
+# fleet_limit_axis — stdin: a `subscription` fleet_limit_banner line. Prints the
+# ccquota window it names — `5h` for the session / N-hour wall, `7d` for the
+# weekly one — or nothing when the banner does not say (the sticky "Usage limit
+# reached" footer), in which case the verdict weighs both (issue #874).
+fleet_limit_axis() {
+  case "$(cat)" in
+    *"hit your weekly"*|*"reached your weekly"*) printf '7d\n' ;;
+    *"hit your session"*|*"reached your session"*|*"hit your "*-hour*|*"hit your "*" hour"*) printf '5h\n' ;;
+  esac
+}
+
+# --- "quota via banner" (issue #874) ------------------------------------------
+# A limit banner may bench an account by itself ONLY when ccquota has no fresh
+# reading for it (fleet-account.sh quota-verdict → unknown). That fallback is the
+# path that false-benched a healthy account twice, so it is never silent: the
+# collector stamps $G/quota.via-banner ("<epoch>\t<label>") each time it takes it,
+# and this prints "<label>\t<age>" while the stamp is younger than
+# FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS (default 600) — the status bar's
+# `⚠ quota via banner`. Nothing otherwise.
+fleet_quota_via_banner() {
+  _qvb=$(cat "$(fleet_usage_cache_dir)/quota.via-banner" 2>/dev/null) || return 0
+  _qvbt=${_qvb%%	*}; _qvbl=""
+  case "$_qvb" in *'	'*) _qvbl=${_qvb#*	} ;; esac
+  case "$_qvbt" in ''|*[!0-9]*) return 0 ;; esac
+  _qvba=$(( $(date +%s) - _qvbt ))
+  [ "$_qvba" -lt 0 ] && _qvba=0
+  [ "$_qvba" -lt "${FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS:-600}" ] || return 0
+  printf '%s\t%s' "$_qvbl" "$_qvba"
+  return 0
+}
+
 # --- ccquota pre-emptive watch liveness (issue #551) ---------------------------
 # The quota watch (bin/fleet-quotawatch.sh) restamps $C/account.quota.ts on every
 # tick — even when the hub is unreachable (empty rows still refresh the stamp) —

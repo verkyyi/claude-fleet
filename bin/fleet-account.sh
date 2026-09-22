@@ -67,6 +67,18 @@
 #                          An account ccquota says it CANNOT read (available:false) gets
 #                          no row either, and says why on stderr (issue #628) — never a
 #                          row of zeroes, which reads as a brand-new idle subscription.
+#   quota-verdict <label> [--axis 5h|7d] [--refresh]
+#                        — the ONE answer to "is <label> out of subscription quota?"
+#                          (issue #874): `limited <until-epoch>` | `ok` | `unknown`.
+#                          A FRESH ccquota row decides: limited iff the axis (both when
+#                          --axis is omitted) is at/above FLEET_ACCOUNT_CEILING, until
+#                          that window's reset. `unknown` = no hub/ccquota, a stale
+#                          cache (FLEET_ACCOUNT_QUOTA_STALE), or no row for the account
+#                          (blind hub, available:false, not on the hub) — only then may
+#                          a limit banner bench by itself. --refresh refetches first
+#                          unless the cache is younger than FLEET_ACCOUNT_VERDICT_REFETCH
+#                          (default 20 s, so N walled windows in one tick cost one fetch).
+#                          Why on stderr; exit 0.
 #   bench <label> <until-epoch> [reason]
 #                        — bench <label> until an EXACT instant (ccquota's reset) and
 #                          rotate if it was active; exit 10 iff rotated (like mark-limited)
@@ -552,6 +564,7 @@ account_reconcile() {
   export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL
   export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
   export FLEET_SLEEP_MCP_RESTARTABLE FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_QUOTA_TTL FLEET_SLEEP
+  export FLEET_ACCOUNT_QUOTA_STALE FLEET_ACCOUNT_VERDICT_REFETCH
   exec python3 "$BIN/.fleet-failover.py" "$@"
 }
 # quota_rows [cached|refresh] — the TSV rows; default = cache if fresh else fetch.
@@ -574,6 +587,67 @@ cmd_quota() {
     return 0
   fi
   quota_rows "$mode"
+}
+
+# --- the single subscription-limit verdict (issue #874) --------------------------
+# Two writers used to decide "this account is out of quota": ccquota's reading, and
+# a scrape of the pane for a limit banner. The scrape is a guess at the same fact
+# from terminal text, and it guessed wrong twice — #782 (a Codex banner benched a
+# Claude account) and 2026-09-22 (a `--resume` replayed an old weekly banner and
+# benched ylianghui at 7d 34%, starting a failover cascade across the pool). So a
+# FRESH reading alone decides; a banner is only a hint to refetch (the hub runs
+# ~60 s behind a real wall). `unknown` is the one answer that lets the banner path
+# bench by itself — it means there is no reading to overrule it.
+# The threshold is the CEILING, not 100: at/above it quotawatch benches the account
+# anyway, so a banner there must agree with it rather than wait for the hub to
+# round up to 100.
+VERDICT_REFETCH="${FLEET_ACCOUNT_VERDICT_REFETCH:-20}"
+cmd_quota_verdict() {
+  local label="" axis="" refresh=0 ts age rows u r ax lim=0 until=0 hits=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --axis) axis="${2:-}"; shift ;;
+      --axis=*) axis="${1#--axis=}" ;;
+      --refresh) refresh=1 ;;
+      -*) label="" ; break ;;
+      *) label="$1" ;;
+    esac
+    shift
+  done
+  case "$axis" in ''|5h|7d) ;; *) label="" ;; esac
+  [ -n "$label" ] || { echo "quota-verdict: usage: quota-verdict <label> [--axis 5h|7d] [--refresh]" >&2; return 2; }
+  if ! command -v "$CCQUOTA" >/dev/null 2>&1 || [ -z "${CCQUOTA_HUB_URL:-}" ]; then
+    echo "quota-verdict: $label unknown — no ccquota hub configured" >&2; echo unknown; return 0
+  fi
+  ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0); case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+  if [ "$refresh" = 1 ] && [ $(( $(now) - ts )) -ge "$VERDICT_REFETCH" ]; then
+    quota_fetch 2>/dev/null
+    ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0); case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+  fi
+  age=$(( $(now) - ts ))
+  if [ "$age" -ge "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ]; then
+    echo "quota-verdict: $label unknown — ccquota cache stale (${age}s)" >&2; echo unknown; return 0
+  fi
+  rows=$(cat "$STATE_QUOTA" 2>/dev/null || true)
+  if [ -z "$(quota_field "$rows" "$label" 2)" ]; then
+    echo "quota-verdict: $label unknown — no ccquota reading for it (blind hub, unreadable, or not on the hub)" >&2
+    echo unknown; return 0
+  fi
+  for ax in 5h 7d; do
+    [ -z "$axis" ] || [ "$axis" = "$ax" ] || continue
+    if [ "$ax" = 5h ]; then u=$(quota_field "$rows" "$label" 2); r=$(quota_field "$rows" "$label" 5)
+    else                   u=$(quota_field "$rows" "$label" 3); r=$(quota_field "$rows" "$label" 6); fi
+    case "$u" in ''|*[!0-9]*) u=0 ;; esac; case "$r" in ''|*[!0-9]*) r=0 ;; esac
+    hits="$hits $ax ${u}%"
+    if [ "$u" -ge "$CEILING" ]; then lim=1; [ "$r" -gt "$until" ] && until=$r; fi
+  done
+  echo "quota-verdict: $label —$hits (ceiling ${CEILING}%, cache ${age}s old)" >&2
+  if [ "$lim" = 1 ]; then
+    [ "$until" -gt "$(now)" ] || until=$(( $(now) + $(acct_ttl "$label") ))
+    echo "limited $until"
+  else
+    echo ok
+  fi
 }
 
 # --- 5h-window PHASE stagger (issue #598) --------------------------------------
@@ -1099,6 +1173,7 @@ case "${1:-active}" in
   clear)         cmd_clear "${2:-}" ;;
   limited-until) acct_limited_until "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
+  quota-verdict) shift; cmd_quota_verdict "$@" ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited-until) acct_model_limited_until "${2:-}" "${3:-}" ;;
@@ -1106,6 +1181,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|bench|phase|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|quota|quota-verdict|bench|phase|model-limited|model-limited-until|model-clear|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi
