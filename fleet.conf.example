@@ -1100,6 +1100,12 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # veto. 0 = never override (the old behaviour).
 # @label=Hard-wall background grace @group=accounts @tier=advanced @scope=fleet @edit=int @unit=sec
 #FLEET_FAILOVER_BG_GRACE=600
+# A request that records the SAME reason this many attempts in a row (one per
+# ~60s tick) is stuck: FLEET_NOTIFY_CMD fires once per stuck episode (window,
+# account, reason, the unstick command), the dash row shows `⚠ stuck` and
+# fleet-doctor counts it. A new reason restarts the count (issue #872).
+# @label=Failover stuck after @group=accounts @tier=advanced @scope=fleet @edit=int @unit=attempts
+#FLEET_FAILOVER_STUCK_ATTEMPTS=5
 # How long a limited account stays out of rotation before it's eligible again
 # (seconds; default 18000 = the 5-hour session window).
 # @label=Account limit re-check @group=accounts @tier=advanced @scope=global @edit=int @unit=sec

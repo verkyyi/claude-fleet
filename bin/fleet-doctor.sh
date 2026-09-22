@@ -276,6 +276,23 @@ PY
 )
   if [ -n "$_failover" ]; then warn failover "$_failover (fleet-account.sh failover-status)";
   else pass failover 'no pending subscription cutovers'; fi
+  # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS
+  # (issue #872) — the ones that already paged the operator, counted apart
+  # from ordinary pending cutovers.
+  _stuck=$(python3 - "$conf_dir/handoffs/quota-requests" <<'PY'
+import json,pathlib,sys
+rows=[]
+for p in pathlib.Path(sys.argv[1]).glob('*/request.json'):
+    try: r=json.loads(p.read_text())
+    except (OSError,ValueError): continue
+    if r.get('stuck_notified') and r.get('state') not in ('bound','cancelled','recovered'):
+        s=r.get('source',{})
+        rows.append('%s/%s x%s' % (s.get('session','?'),s.get('window','?'),r.get('same_detail_streak','?')))
+if rows: print('%d stuck: %s' % (len(rows),', '.join(rows)))
+PY
+)
+  if [ -n "$_stuck" ]; then warn failover-stuck "$_stuck — same reason every retry (fleet-account.sh migrate --session <fleet> <window>)";
+  else pass failover-stuck '0 stuck failover requests'; fi
 fi
 # OFF unless token files exist. When ON, each file's contents must be a non-empty
 # `claude setup-token` OAuth token, and 0600 so the token isn't world-readable.

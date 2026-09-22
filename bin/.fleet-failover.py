@@ -52,6 +52,18 @@ def stamp(source, status):
     tm(source['session'], 'set-option', '-w', '-t', source['window'], '@quota_failover', status)
 
 
+def stamp_stuck(source, stuck):
+    # Same identity rule as stamp(): only a live owner may be MARKED stuck, and
+    # the clear always lands.
+    if stuck:
+        current = inspect(source['session'], source['window'])
+        if any(current.get(k) != source.get(k) for k in ('pid','session_id','agent')):
+            return
+        tm(source['session'], 'set-option', '-w', '-t', source['window'], '@quota_stuck', '1')
+    else:
+        tm(source['session'], 'set-option', '-wu', '-t', source['window'], '@quota_stuck')
+
+
 def inspect(session, window):
     return json.loads(run(['bash', BIN / 'fleet-transfer.sh', '--session', session,
                           '--window', window, '--to', 'codex', '--inspect'], timeout=30))
@@ -376,9 +388,73 @@ def quota_loop(path, source, state, restored=False):
         LOOP['save'](record, loop)
 
 
+# The states a request retries in, every tick, until something changes. The
+# same one of these with the same reason, again and again, is a stuck request
+# (#872): 89 identical vetoes over ~2h on 2026-09-22 with nothing but the dash
+# string to show for it. `preparing` sits between two attempts of a move() and
+# neither extends nor breaks a streak.
+RETRYING = ('waiting', 'waiting-quota', 'waiting-evidence')
+
+
+def stuck_attempts():
+    try: return max(1, int(os.environ.get('FLEET_FAILOVER_STUCK_ATTEMPTS', '5')))
+    except ValueError: return 5
+
+
+def unstick_hint(source):
+    return 'fleet-account.sh migrate --session %s %s' % (source.get('session','?'), source.get('window','?'))
+
+
+def notify_stuck(r):
+    cmd = os.environ.get('FLEET_NOTIFY_CMD', '')
+    if not cmd:
+        return
+    s = r['source']
+    msg = ('# subscription failover stuck\n'
+           '**%s** window %s (%s on **%s**) has retried %d times with the same reason: %s — %s\n'
+           'unstick: `%s`' % (s.get('session','?'), s.get('window','?'), s.get('agent','?'),
+                              r.get('source_key','?'), r['same_detail_streak'], r['state'],
+                              r.get('detail','')[:300], unstick_hint(s)))
+    try: subprocess.run([*shlex.split(cmd), msg], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=15)
+    except (OSError, ValueError, subprocess.SubprocessError): pass
+
+
+def streak(r, state, detail):
+    """Count consecutive identical retry outcomes; True = the episode just went
+    stuck (page + mark, once), False = clear the mark, None = leave it be. The
+    mark is set on the transition only: stamp_stuck() inspects the pane, and a
+    stuck request is re-recorded every tick."""
+    if state == 'preparing':
+        return None
+    was = bool(r.get('stuck_notified'))
+    if state not in RETRYING:
+        r.update(same_detail_streak=0, stuck_notified=False)
+        return False if was else None
+    key = state + ': ' + re.sub(r'\d+', '#', detail)   # a countdown is the same reason
+    if r.get('streak_key') == key:
+        r['same_detail_streak'] = r.get('same_detail_streak', 0) + 1
+    else:
+        r.update(streak_key=key, same_detail_streak=1, stuck_notified=False)
+    if r['same_detail_streak'] >= stuck_attempts():
+        if r.get('stuck_notified'):
+            return None
+        # Persisted by outcome() BEFORE the send: a crash after it loses one
+        # page, never repeats it every tick.
+        r.update(stuck_notified=True, stuck_at=time.time())
+        return True
+    return False if was else None
+
+
 def outcome(path, r, state, detail=''):
+    mark = streak(r, state, detail)
     r.update(state=state, detail=detail, updated_at=time.time())
     save(path / 'request.json', r)
+    if mark:
+        notify_stuck(r)
+    if mark is not None:
+        try: stamp_stuck(r['source'], mark)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError): pass
     # A completed episode clears its window marker unconditionally: after a bound
     # migration the window holds the target's new session, so the previous
     # manifest-equality clear missed it. stamp() lets the empty status through

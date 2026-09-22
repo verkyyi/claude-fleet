@@ -278,6 +278,13 @@ the commands' pid/argv/cwd go to the request's `background.json`, they are
 stopped once the source has exited, and the resume prompt lists them under
 "Background commands terminated by migration" for the new session to restart
 as needed. Proactive moves and hibernation keep the veto.
+A request that records the same state and reason `FLEET_FAILOVER_STUCK_ATTEMPTS`
+times in a row (default 5, one per ~60s tick; digits are ignored so a countdown
+is one reason) is **stuck**: `FLEET_NOTIFY_CMD` fires once for that episode with
+the window, account, reason and the `fleet-account.sh migrate` command that
+unsticks it, the window is stamped `@quota_stuck=1` (dash: `⚠ stuck`), and
+doctor's `failover-stuck` line counts it. A new reason restarts the count and
+clears the mark; so does the request ending.
 Disable `FLEET_FAILOVER` to cancel pending requests on the next tick. Packets and
 source recovery recipes remain available. Existing sessions without a verified
 native identity stay `unsupported`; never infer a session from the newest file.

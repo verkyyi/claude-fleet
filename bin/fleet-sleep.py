@@ -445,6 +445,7 @@ class Worker:
                         # belongs to the retired PID; the next tick re-evaluates
                         # the resumed owner instead of inheriting its old wait.
                         self.stamp('@quota_failover','')
+                        self.stamp('@quota_stuck','')
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())
                         self.phase(path,data,'awake')
@@ -610,6 +611,7 @@ class Worker:
                         if not self.verify_resumed_services(data,source):return
                         if source['pid']!=data['source']['pid']:
                             self.stamp('@quota_failover','')
+                            self.stamp('@quota_stuck','')
                         self.resume_loop(path,data,source,rollback=source['pid']==data['source']['pid'])
                         self.stamp('@sleep_evidence','')
                         self.stamp('@sleep_woke_at',time.time())

@@ -43,7 +43,7 @@ R="${E}0m"; US=$'\x1f'
 # for that reason.
 # Keep the column count stable. Codex's agent cell carries an exact cache suffix;
 # the display loop separates it before drawing the ordinary `codex` tag.
-WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
+WFMT="#{session_name}${US}#{window_index}${US}#{window_name}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{@claude_needs}${US}#{@expand}${US}#{@pin}${US}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -525,7 +525,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   [ "$depth" -gt 0 ] && [ -n "$croot" ] && [ "$origin" = "$croot" ] && provd=''
   tagd="$provd"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
-  [ -z "$qwait" ] || tagd="${tagd:+$tagd }quota:${qwait%%:*}"
+  # A request retrying on the same reason past FLEET_FAILOVER_STUCK_ATTEMPTS is
+  # stamped @quota_stuck, which WFMT folds in as a `stuck:` prefix (issue #872):
+  # it reads `⚠ stuck`, not the ordinary `quota:waiting` it would otherwise be.
+  case $qwait in
+    '') ;;
+    stuck:*) tagd="${tagd:+$tagd }⚠ stuck" ;;
+    *) tagd="${tagd:+$tagd }quota:${qwait%%:*}" ;;
+  esac
 
   # --- subtree progress (issue #624) ------------------------------------------
   # A row that SPAWNED work reports the state of the group rendered beneath it:
