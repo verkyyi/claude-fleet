@@ -141,7 +141,10 @@ sys.exit(0 if cmds.count(guard) == 1 and cmds.count(mine) == 1 else 1)
 PY
 ok "user hooks: untouched, including one sharing a group with a fleet guard"
 
-[ "$(stat -f %Lp "$S2" 2>/dev/null || stat -c %a "$S2")" = 600 ] || fail "merge loosened settings.json's mode"
+# python, not stat: GNU `stat -f` is FILESYSTEM status and succeeds, so a
+# `stat -f %Lp … || stat -c %a …` fallback never reaches the Linux half.
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$S2")" = 600 ] \
+  || fail "merge loosened settings.json's mode"
 m check --settings "$S2" >"$WORK/c3" || fail "check still unhappy after the merge" "$(cat "$WORK/c3")"
 grep -q '^ok ' "$WORK/c3" || fail "check did not print ok" "$(cat "$WORK/c3")"
 ok "after merge: check passes, mode 0600 kept"
