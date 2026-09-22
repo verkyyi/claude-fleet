@@ -57,8 +57,15 @@ Branch on the exit code — it is the whole point of the script:
   permission / no sub-issues API is not something a plan can work around.
 - **2** → no fleet resolved; report and stop.
 
-Keep the warning rows (base drift, slots, quota). They are the *"this will hurt"*
+Keep the warning rows (base drift, quota). They are the *"this will hurt"*
 column, and whether it hurts enough to wait is the operator's call in step 4.
+
+**The concurrency caps are not this skill's business** (issue #881).
+`FLEET_MAX_SESSIONS` / `FLEET_GLOBAL_MAX_SESSIONS` are the operator's own
+settings: the preflight's `slots` row only states them, and the plan never
+suggests a different value, never asks about one, and never puts one on the page
+— not in 开跑前要处理, not in 需要你定的事. The run works inside whatever cap is
+set.
 
 ## 2. Read the backlog inside the theme
 
@@ -107,7 +114,7 @@ cat ~/.claude/skills/epic-page/template.html   # the ONE frame plan + report sha
 
 Write it to your scratchpad (`<scratchpad>/epic-plan-<slug>.html`; **not** into the
 repo — this skill ships to team repos and a proposal is not their artifact). Fill
-the eight sections; the ids are the contract, the labels follow the theme's
+the seven sections; the ids are the contract, the labels follow the theme's
 language.
 
 **One page, two layers** (issue #839). The page has two readers and they are not
@@ -120,42 +127,85 @@ Nothing is dropped and nothing is summarized away: **the write-back in step 5
 transcribes BOTH layers**, so what a worker receives is a field-for-field superset
 of what it received before this change.
 
-1. **`#preflight`** — the step-1 verdict + every warning row, verbatim, and (on
-   FIXABLE) the labels `--fix` would seed.
-2. **`#metrics`** — **打算移动的指标**: the contract this batch is asking to be
-   judged by (issue #839). A table of 指标 / 现在 / 期望 / 多久能读出来 / 成员,
-   on the surface layer, above the charter:
+**The decider's view — the rules** (issue #881: six rounds of 发起人 feedback on
+EPIC #883's page, fixed into the frame so the next page starts there instead of
+at round one). The surface is for someone deciding, not someone executing:
 
-   | 指标 | 现在 | 期望 | 多久能读出来 |
-   |---|---|---|---|
-   | 真实读者 / 30 天 | 62 | ↑ | 2 周 |
-   | 读者转作者 | 0 人 | >0 | 2 周 |
-   | 产品入口点击 | 0 / 30 天 | >0 | 1 周 |
+1. **Plain words in the number band** — 要做的事 / 有空再做 / 要看的指标 /
+   开跑前要处理. Never 核心层 / 储备层 / 新建子单 / 预检警告.
+2. **The preflight says only the problem** — one sentence on what to handle
+   before the run; the preflight screen itself goes into a fold.
+3. **How a number is read is hidden** — 读数口径, the measuring command, paths,
+   log names: all in the metrics section's 「怎么量」 fold. No command, path or
+   log name anywhere on the surface.
+4. **One page shows the whole batch; each item opens on demand** — the member
+   list IS the overview (rule 11): every card is one line until tapped, tap once
+   for the upper layer, again for 技术细节.
+5. **Few words** — a section lede is one sentence or nothing.
+6. **Execution detail is folded** — 先后顺序, 依赖, 来源单号, 复读时间 all live in a
+   fold; the order section is folded whole and sits last.
+7. **No keys on the surface** — `C1` / `R1` and source issue numbers appear only
+   inside a card's 技术细节 (its 编号 / 来源 field) and in the folded order table.
+   Card titles and every cross-reference on the surface use the member's
+   **name**. The parent's `- [ ] **C1** #N` list and `/fleet-epic-run`'s parsing
+   are untouched — this rule is about the page.
+8. **有空再做 is a list too** — the reserve is the last group of the same member
+   list, same one-line cards.
+9. **The metric table is numbers or ranges** — header 指标 / 现在 / 目标, almost
+   no words in the cells.
+10. **Order: 指标 → 范围 → 要做的事**, and 范围 is short items.
+11. **要做的事 and the member cards are ONE list** — grouped by theme (e.g.
+    少写文件 / 少起进程 / 看得见 / 有空再做, `<h3 class="grp">`), each card one line
+    (名称 + one sentence of 解决什么) until tapped. No separate overview table.
+12. **能不能开跑 comes last** among the visible sections — after 需要你定的事.
+13. **范围 in plain words** — short items, no code, no tool names
+    (「清掉不用的工作文件夹」「后台少干没用的活」「机器快扛不住时提前提醒」).
+14. **Risks in plain words** — each one sentence, 「会出什么事 — 我们怎么兜住」;
+    technical risks and 为什么这样切 go into the fold.
+15. **待决 + 发起人拍板 = 需要你定的事** — one two-column table 事项 / 建议, and
+    **every row carries a default recommendation**; an item that is only decided
+    after the batch is approved is marked 「（批后）」. Under the table, one line:
+    「点头即全部按建议。」
 
+Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
+`#members` → `#risks` → `#signoff` → `#preflight` → `#order` (folded whole).
+The template's file order already is this order — fill it, don't rearrange it.
+
+The sections, as the template lays them out:
+
+1. **`#metrics`** — **指标**: the contract this batch is asking to be judged by
+   (issue #839). On the surface a table of **指标 / 现在 / 目标**, numbers or
+   ranges only:
+
+   | 指标 | 现在 | 目标 |
+   |---|---|---|
+   | 真实读者 / 30 天 | 62 | > 100 |
+   | 新会话启动 | 5–13 秒 | ≤ 6 秒 |
+
+   and in its 「怎么量」 fold, per row: which member moves it (by name, or 全批),
+   **多久能读出来**, and the **读数口径** — the data source, the filter rules
+   (whose traffic is excluded, how duplicates are dropped, which timezone), the
+   exact command. Without the 口径 the report cannot re-read the same number.
    - **The numbers come from the theme's own diagnosis** — whatever the operator
      brought when they named the theme. **No diagnosis ⇒ write 「本批不量」** in
-     the 现在 column and say why in the lede. Never leave it blank, and **never
-     invent a number**: the report reads this table back row by row, so a made-up
-     baseline becomes a made-up improvement.
+     the 现在 column. Never leave it blank, and **never invent a number**: the
+     report reads this table back row by row, so a made-up baseline becomes a
+     made-up improvement.
    - A metric may be **batch-level or hang off one member** — both are supported;
-     name the member in the 成员 column and make that member's 怎么算成功 point
-     at the same row.
-   - **读数口径 goes on the line below the table**: the data source and the filter
-     rules (whose traffic is excluded, how duplicates are dropped, which timezone).
-     Without it the report cannot re-read the same number.
-3. **`#charter`** — theme · scope · what this batch does **NOT** do · the
-   conventions every member shares (*"this batch does not change conf format"*).
-   Verbatim into the parent body later. **Two audiences, two layers, not two
-   documents**: 主题 · 范围 · 这批不做 are what the decider reads, so keep them in
-   the decider's words; 共同约定 is horizontal instruction for the workers and
-   can be as technical as it needs to be. Neither is written "for the operator
-   alone" or "for the workers alone" — the page is one source and both layers
-   ship to both.
-4. **`#members`** — **one card per member**, core (6–8) first, then reserve
-   (8–10), `id="m-<key>"` (`C1`…, `R1`…). Each card has **two layers**, and the
-   card IS the sub-issue body later.
+     name the member in the fold and make that member's 怎么算成功 point at the
+     same row, by the 指标's name.
+2. **`#charter`** — **范围**: 做 and 不做 as short plain items on the surface (the
+   theme itself is the page's subtitle); **共同约定** — the conventions every
+   member shares (*"this batch does not change conf format"*) — in a fold. It is
+   horizontal instruction for the workers and can be as technical as it needs to
+   be. All of it goes verbatim into the parent body later.
+3. **`#members`** — **要做的事**: one card per member, core (6–8) grouped by theme,
+   then reserve (8–10) as the last group 「有空再做」, `id="m-<key>"` (`C1`…,
+   `R1`…) — the id carries the key so the page stays addressable, the title does
+   not. Each card is a `<details class="card">` whose summary is **名称 + one
+   sentence of 解决什么**; the card IS the sub-issue body later.
 
-   **上层 — 给决定的人**, four fields, plain words, no file names:
+   **上层 — 给决定的人** (tap 1), four fields, plain words, no file names:
    - **目标** — what it delivers, one sentence.
    - **为谁** — which real person or role, and how many of them
      (*"在微信里收到成果页的读者（每月约 62 人）"*).
@@ -165,14 +215,16 @@ of what it received before this change.
      (*"带 utm 的点击从 0 变成有数"*). Where a `#metrics` row covers it, say so —
      that row and this line must not disagree.
 
-   **下层 — 给动手的人**, inside `<details class="fold">`, default closed, the five
+   **下层 — 技术细节** (tap 2), inside `<details class="fold">`, default closed:
+   first **编号 / 来源** — the key and where it came from (`C1 · 已有 #N` /
+   `C2 · 拆自 #N` / `C3 · 新建`, a proposed split from step 3) — then the five
    fields exactly as before, none of them shortened:
    - **方案** — 改哪里、怎么改: the files / scripts / surfaces and the shape of the
      change. Enough that a worker starts from the code, not from a re-read.
    - **接口 / 约定** — what it exposes or promises the others: a helper name, a
      conf key, a file layout, a marker. This is the horizontal information the
      old charter kept as one line in "共同约定 7"; it belongs on the member.
-   - **依赖** — who it waits for, who waits for it.
+   - **依赖** — who it waits for, who waits for it (keys are fine down here).
    - **完成判据** — testable acceptance.
    - **上线证据** — **ONE line a worker and the report can both follow**: which
      URL to screenshot, which command's output to keep, which pane to
@@ -183,22 +235,24 @@ of what it received before this change.
      改动后 along it before landing, the report shows those side by side in the
      member's card. Write it so neither has to ask.
 
-   Mark each card `已有 #N` or `new · 拆自 #N` (a proposed split from step 3).
    **Reserve items left untouched do not count as unfinished** — they exist so a
    batch that runs faster than expected does not idle, not to inflate the scope.
-   Say so in the section lede.
-5. **`#order`** — dependency order: waves, who waits for whom, what runs in
-   parallel. A table is enough; draw an inline SVG (load the `dataviz` skill
-   first) only when the graph has real branches.
-6. **`#risks`** — the risks, and **why this split**: which seams, what was too big,
-   what was left whole.
-7. **`#open`** — 待决, the questions no charter answer covers. `/fleet-epic-run`
-   appends here after filing.
-8. **`#signoff`** — 发起人拍板: the decisions this plan asks the operator to make,
-   numbered, phrased so that nodding confirms them (*"C3 的视觉方向按样例 A；点头
-   即确认"*). After the nod these are recorded with the date and workers do not
-   re-open them — the section is the template for what #7773's charter did by
-   hand.
+4. **`#risks`** — **可能出的问题**: each risk one plain sentence,
+   「会出什么事 — 我们怎么兜住」. The technical risks and **why this split** (which
+   seams, what was too big, what was left whole) go into its fold.
+5. **`#signoff`** — **需要你定的事** (the `#open` anchor lives here too): one table,
+   事项 / 建议, **every row with a default recommendation**, phrased so that
+   nodding settles it; 「（批后）」 on an item decided only after approval. One
+   line under it: 「点头即全部按建议。」 After the nod these are recorded with the
+   date and workers do not re-open them — the section is the template for what
+   #7773's charter did by hand.
+6. **`#preflight`** — **能不能开跑**: one sentence — can it run, and what to
+   handle first. The step-1 screen, verbatim, in the fold, plus (on FIXABLE) the
+   labels `--fix` would seed.
+7. **`#order`** — the whole section folded, last: **执行安排** — waves, who waits
+   for whom, what runs in parallel. A table is enough; draw an inline SVG (load the
+   `dataviz` skill first) only when the graph has real branches. 「先后」 never
+   appears on the surface.
 
 Then host it and put **one URL + one sentence** in front of the operator:
 
@@ -206,8 +260,8 @@ Then host it and put **one URL + one sentence** in front of the operator:
 ~/.claude/skills/doc-preview/share.sh <scratchpad>/epic-plan-<slug>.html   # → READY <url>
 ```
 
-*"设计方案页 <READY url> — 核心 N · 储备 M · 新建 k · 预检 READY；打算移动的指标 j 条
-（或「本批不量」）。改哪条直接说；点头就照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
+*"设计方案页 <READY url> — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
+开跑前要处理 w。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
 bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / 放弃* is the
 right shape; keep free text for what they want changed.
 
@@ -233,8 +287,11 @@ no session→spend join yet (issue #625), so any number would be invented.
 
 **The page is the single source of truth.** Every body below is transcribed from
 the page section by section — not re-drafted from the conversation, which is where
-a "small change" agreed in chat and never made to the page goes missing. Only
-now, and in this order:
+a "small change" agreed in chat and never made to the page goes missing. **Folds
+change the page, never the issue** (issue #881): every fold — 怎么量, 共同约定,
+技术细节, 更多风险与拆分理由, 预检原文, 执行安排 — is written back in full, in the
+same section shape as before, so `/fleet-epic-run` and the workers read exactly
+the bodies they always did. Only now, and in this order:
 
 1. **Record the nod on the page** — `#signoff` gets the operator's login and the
    date, and any change they asked for goes into the page first
@@ -249,10 +306,15 @@ now, and in this order:
    > 设计方案页：<READY url>（tailnet 内可达，重启即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
 
    ## 主题
+   <the page's subtitle>
    ## 范围
+   <#charter's 做 items>
    ## 这批不做
+   <#charter's 不做 items>
    ## 打算移动的指标
-   <the #metrics table, as a markdown table, plus the 读数口径 line —
+   <ONE markdown table, the surface and the 「怎么量」 fold joined per row, in the
+    columns it has always had: 指标 / 现在 / 期望 (= the page's 目标) /
+    多久能读出来 / 成员 — then the 读数口径 line(s) under it.
     /fleet-epic-report reads THIS table back row by row; 「本批不量」 when the
     theme brought no diagnosis>
    ## 共同约定
@@ -263,12 +325,19 @@ now, and in this order:
    ## 依赖顺序
    <the #order table, as a markdown table>
    ## 风险与拆分理由
+   <the surface risks, then the fold's technical risks + 为什么这样切>
    ## 待决 / open questions
+   <every 「（批后）」 row of 需要你定的事: 事项 — 建议>
    <!-- /fleet-epic-run appends here -->
    ## 发起人拍板
    发起人 @login YYYY-MM-DD 拍板，worker 照做，不再讨论方向：
-   1. …
+   1. <事项>：<建议>   ← EVERY row of 需要你定的事, 「（批后）」 ones included
    ```
+
+   `## 依赖顺序` is the folded 执行安排 table, keys and all. The page's grouping of
+   要做的事 by theme is page-only: the Core / Reserve lists keep their exact
+   `- [ ] **C1** #N — title` shape and order-by-key, because that is what
+   `/fleet-epic-run` parses.
 
    ```sh
    gh issue create --repo "$FLEET_REPO" --label epic \
@@ -282,7 +351,10 @@ now, and in this order:
    markdown body in this shape: the four surface fields first, then the five
    technical ones under a `<details>` that mirrors the page's fold, the **上线证据
    line kept as one line**, and the parent pointer as the footer. The worker gets
-   everything it got before #839 — the fold changes the ORDER, never the content:
+   everything it got before #839 — the fold changes the ORDER, never the content.
+   The card's page-only bits stay on the page: its one-line summary (the title
+   already says it) and its 编号 / 来源 field (the key rides in the
+   `fleet:epic-member` marker, the source in the parent's list):
 
    ```markdown
    ## 目标

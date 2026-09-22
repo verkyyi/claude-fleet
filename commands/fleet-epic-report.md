@@ -97,8 +97,28 @@ machine ran, and nothing about whether it was worth running. The delivery and th
 metrics come first; how the batch ran is real, stays complete, and goes **into the
 folded `#ops`** at the bottom. **上层不用 fleet 黑话**: 占槽 → 占用时长, reap →
 回收, worker → 执行会话 (or just don't mention it), and the mirror ids
-(`prod-3a229eb80`) belong in the fold. `C1/C2` keys and PR numbers stay — they are
-how a reader gets from the page back to the record.
+(`prod-3a229eb80`) belong in the fold.
+
+**The decider's view holds here too** (issue #881 — the rules `/fleet-epic-plan`
+step 4 lists; the report takes five of them):
+
+- **Plain words in the number band** — 上线能力 / 指标已读出 / 未上线 / 还差什么,
+  never 核心层 / 储备层 / PR 数.
+- **How a number was read is hidden** — 读数口径, commands, paths, log names go
+  in the metrics section's 「怎么量」 fold; none of them on the surface.
+- **Few words** — a section lede is one sentence or nothing.
+- **Execution detail is folded** — PR numbers, merge times, 占用时长, 依赖,
+  来源单号, the whole of `#ops`.
+- **No keys on the surface** — `C1` / `R1` and issue / PR numbers live in a
+  card's 技术细节 (its 编号 / 来源 and PR fields); `#delivered`, `#gaps`,
+  `#obstacles` and every card title name the member by its **name**. The one
+  surface exception is the fleet-side issue line in `#obstacles` — those numbers
+  ARE the pointer.
+
+Members use the same one-line card as the design page (`<details class="card">`,
+grouped by the plan's themes): the summary line is the name, one sentence and the
+status pill — and **for anything unfinished that one sentence is the why**, so a
+reader never has to open a card to learn something did not ship.
 
 What earns its place, in page order:
 
@@ -111,9 +131,10 @@ What earns its place, in page order:
    unfinished / blocked live in the band above the fold and in `#gaps`, and the
    run figures in `#ops` — they just stopped being the headline.
 2. **指标怎么样** (`#metrics`) — **the effect, before the verdict.** Take the
-   charter's 打算移动的指标 table (step 1) and fill the 现在 column row by row,
-   with the 数据截至 date on the section lede and the 读数口径 line carried over
-   verbatim — the same filter rules, or the two numbers are not comparable:
+   charter's 打算移动的指标 table (step 1) and fill it row by row — on the surface
+   **指标 / 之前 / 现在 / 目标**, numbers or ranges only, with the 数据截至 date as
+   the section's one-line lede; the 读数口径 line carried over **verbatim** into the
+   「怎么量」 fold — the same filter rules, or the two numbers are not comparable:
 
    ```
    说好要移动的指标                     数据截至 2026-10-04（批次后 14 天）
@@ -130,12 +151,13 @@ What earns its place, in page order:
      measured, and better than silence.
    - **No table** (a pre-#839 batch, or a theme with no diagnosis) → 「本批未声明
      指标」. Do **not** back-fill a baseline — see step 1.
-3. **成员** (`#members`) — **the same two layers as the design page**: 目标 · 为谁
-   · 解决什么 · 怎么算成功 on the surface with the `.proof` grid; PR link, 占用时长,
-   mirror id, 方案/接口/依赖/完成判据/上线证据 inside the card's
-   `<details class="fold">`. For anything unfinished, *why* — quoted from the tick
-   log or the `blocked` reason, not paraphrased — belongs on the surface, not in
-   the fold: a reader must not have to click to find out something did not ship.
+3. **成员** (`#members`) — **the same card as the design page**: one line until
+   tapped (name · one sentence · status pill), then 目标 · 为谁 · 解决什么 ·
+   怎么算成功 with the `.proof` grid; 编号 / 来源, PR link, 占用时长, mirror id,
+   方案/接口/依赖/完成判据/上线证据 inside the card's `<details class="fold">`.
+   For anything unfinished, *why* — quoted from the tick log or the `blocked`
+   reason, not paraphrased — is the summary line's sentence, not buried in the
+   fold: a reader must not have to click to find out something did not ship.
 4. **还差什么** (`#gaps`) — 待部署 / 要人做的 / 没验证的, split by who has to act.
    This is where an honest 「要注册一个全新微信账号才看得到首次种入，本次未造号」
    lives, in those words. Restate 这批不做 here so an out-of-scope item is not read

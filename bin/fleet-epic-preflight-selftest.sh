@@ -18,7 +18,8 @@
 #   D. gh unauthed                             → BLOCKED, exit 3
 #   E. read-only permission                    → BLOCKED, exit 3
 #   F. the sub-issues API 404s                 → BLOCKED, exit 3
-#   G. a warn (base drift / slots / quota) never changes a READY verdict
+#   G. a warn (base drift / quota) never changes a READY verdict; the session
+#      cap is STATED, never warned about or advised on (issue #881)
 #   H. no repo resolvable                      → exit 2
 #   J. --session reads ANOTHER fleet's conf (repo + knobs together), and an
 #      unknown fleet name is a usage error, not a half-answered screen
@@ -253,18 +254,21 @@ printf '%s' "$OUT" | grep -qE 'WARN .*subissue' || fail "F3 must warn that linki
 ok "F3 a repo with no issue to probe is warned about, not blocked"
 
 # ============================ G: warns never change the verdict ===========
-# Base drift, a too-wide session cap and an exhausted pool are all real problems
-# — and all of them are the operator's call, so the exit code stays 0.
+# Base drift and an exhausted pool are real problems — and the operator's call, so
+# the exit code stays 0. A wide session cap is not a problem at all (issue #881):
+# it is the operator's own setting, stated as a PASS, with no advice to change it.
 FLEET_REPO='acme/widgets' FLEET_BASE_BRANCH='dashboard-redesign' \
   FLEET_MAX_SESSIONS=0 FLEET_GLOBAL_MAX_SESSIONS=30 CCQUOTA_HUB_URL='https://quota.example' \
   QUOTA_ROWS='a\t97\t20\t3\nb\t40\t99\t1\n' run_pf
 [ "$RC" -eq 0 ]                             || fail "G warns must not change a READY verdict (exit 0, got $RC)" "$OUT"
 printf '%s' "$OUT" | grep -qE 'WARN .*base'  || fail "G base drift must WARN (#603)" "$OUT"
-printf '%s' "$OUT" | grep -qE 'WARN .*slots' || fail "G a 30-wide cap must WARN (EPIC wants 4–6)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'PASS  *slots.*30' || fail "G a 30-wide cap is stated as PASS (#881)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'WARN .*slots' && fail "G the session cap must never WARN (#881)" "$OUT"
+printf '%s' "$OUT" | grep -q 'set FLEET_MAX_SESSIONS' && fail "G preflight must not advise changing the cap (#881)" "$OUT"
 printf '%s' "$OUT" | grep -qE 'WARN .*quota' || fail "G an exhausted pool must WARN" "$OUT"
 printf '%s' "$OUT" | grep -q 'dashboard-redesign' || fail "G must name the drifted base" "$OUT"
 printf '%s' "$OUT" | grep -q 'READY'         || fail "G the verdict is still READY" "$OUT"
-ok "G base drift + a 30-wide cap + a full pool all warn without changing the verdict"
+ok "G base drift + a full pool warn without changing the verdict; a 30-wide cap is only stated"
 
 # ============================ G2: no pool configured is not a fault =======
 FLEET_REPO='acme/widgets' FLEET_BASE_BRANCH='master' FLEET_MAX_SESSIONS=5 \
@@ -312,7 +316,7 @@ FLEET_CONF_DIR="$WORK/conf" FLEET_REPO='acme/widgets' FLEET_BASE_BRANCH='master'
 $(cat "$WORK/err")"
 printf '%s' "$OUT" | grep -q 'other/monorepo' \
   || fail "J --session must switch the REPO to the named fleet's" "$OUT"
-printf '%s' "$OUT" | grep -qE 'WARN .*slots.*30' \
+printf '%s' "$OUT" | grep -qE 'PASS  *slots.*30' \
   || fail "J --session must also switch the CONF knobs (30 slots, not the caller's 5)" "$OUT"
 printf '%s' "$OUT" | grep -qE 'PASS  *deploy.*actions' \
   || fail "J --session must read the named fleet's deploy criterion" "$OUT"
