@@ -131,7 +131,7 @@ $| = 1; print "fake claude sid=$sid\n";
 if (open(my $w, '<', "$ENV{FLEET_CC_SESSIONS_DIR}/../wall")) { print while <$w>; close $w }
 # a background command this session started (issue #873): its pid is recorded
 # for the test, and it outlives Claude's /exit unless the migrate stops it
-if ($ENV{FAKE_BG} && !$ARGV[0]) { my $c = fork; if (!$c) { exec 'sleep', '97' } open(my $b, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/../bg.pid"); print $b "$c\n"; close $b }
+if ($ENV{FAKE_BG} && !grep { $_ eq '--resume' } @ARGV) { my $c = fork; if (!$c) { exec 'sleep', '97' } open(my $b, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/../bg.pid"); print $b "$c\n"; close $b }
 if ($ENV{FAKE_STUCK}) { sleep 1 while 1 }
 while (my $l = <STDIN>) { exit 0 if $l =~ m{/exit} }
 exit 0;
@@ -156,7 +156,11 @@ EOS
 # runner-hook-b: the hook runner, but under account B's token (the #567 case below)
 sed 's/tokA-secret/tokB-secret/' "$FB/runner-hook" > "$FB/runner-hook-b"
 # runner-hook-bg: the hook runner whose Claude starts a background command (#873)
-sed 's/FAKE_SID=/FAKE_BG=1 FAKE_SID=/' "$FB/runner-hook" > "$FB/runner-hook-bg"
+# — launched with --strict-mcp-config, as every fleet spawn is (FLEET_MCP_CONFIG),
+# so the MCP half of the inventory reads the argv, never a ~/.claude.json the CI
+# runner does not have
+sed -e 's/FAKE_SID=/FAKE_BG=1 FAKE_SID=/' -e 's|claude.pl" </dev/tty|claude.pl" --strict-mcp-config </dev/tty|' \
+  "$FB/runner-hook" > "$FB/runner-hook-bg"
 # runner-nohook: same, but drops to the recording shell (FLEET_CLOSE_ON_EXIT=0)
 cat > "$FB/runner-nohook" <<EOS
 #!/bin/sh
