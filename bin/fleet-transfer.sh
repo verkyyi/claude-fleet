@@ -15,7 +15,7 @@
 #
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
-# done, one worker pane, a registered source session, and its own linked git worktree.
+# done (or a Codex `looping` between rounds), one worker pane, a registered source session, and its own linked git worktree.
 # Run an immediate cutover from another pane/terminal. Inside the source agent,
 # use --after-turn as the final tool call, then end the turn.
 #
@@ -140,7 +140,15 @@ source_ready() {
   if [ -n "$QUOTA_REQUEST" ]; then
     python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"
   else
-    [ "$(opt '#{@claude_state}')" = "done" ]
+    # A `looping` Codex source between rounds is as settled as `done`: its idle
+    # native thread, no live item and a completed last turn are checked, never
+    # assumed from the tmux flag (#786).
+    case "$(opt '#{@claude_state}')" in
+      done) return 0 ;;
+      looping) [ "$SOURCE_AGENT" = codex ] \
+        && python3 "$BIN/.fleet-failover.py" settled --session "$SESS" --pane "$PANE" ;;
+      *) return 1 ;;
+    esac
   fi
 }
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
@@ -155,7 +163,7 @@ printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcrip
   "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
 if [ "$DRY" = 1 ]; then
   printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
-  [ "$STATE" = "done" ] || printf 'cutover would refuse until the source reaches done.\n'
+  [ "$STATE" = "done" ] || [ "$STATE" = looping ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
 fi
 

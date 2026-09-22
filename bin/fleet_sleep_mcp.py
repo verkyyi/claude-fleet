@@ -286,6 +286,19 @@ def matched_services(pid, configured, rows, argv_reader, exe_reader):
              or npm_title_process(pid, conf, rows, argv_reader, exe_reader))]
 
 
+def contract_hint(source, approved, name):
+    """The one conf line that would lift this refusal, and where it goes (#786).
+
+    Sleep and quota failover share this classifier, and a failover refusal lives
+    only in its request.json detail, so the fix must be in the message itself.
+    """
+    listed = sorted(approved) + [name]
+    conf = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config' / 'claude-fleet')
+    conf = conf / 'fleets' / (source.get('session') or '<fleet>') / 'conf'
+    return ('if %s survives a restart, add FLEET_SLEEP_MCP_RESTARTABLE=%s to %s'
+            % (name, ','.join(listed), conf))
+
+
 def classify(source, inventory, rows, server_pid, argv_reader, exe_reader):
     configured, statuses = inventory
     approved = {name.strip() for name in os.environ.get('FLEET_SLEEP_MCP_RESTARTABLE', '').split(',') if name.strip()}
@@ -299,7 +312,8 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader):
             continue
         name, conf = matches[0]
         if name not in approved:
-            raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE)' % name)
+            raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE); %s'
+                             % (name, contract_hint(source, approved, name)))
         # Codex reports a runtime status per server. Claude has no such channel:
         # the exactly matching live process is the evidence, and a server still
         # initializing is as restartable as a ready one.
