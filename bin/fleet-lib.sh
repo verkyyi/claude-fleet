@@ -1731,7 +1731,7 @@ fleet_origin_key() {
 #                `↳cd-conductor-scratch-52` tag and no parent. So an explicit value
 #                is CANONICALIZED: `…-scratch-<N>`/`scratch-<N>` → scratch-<N>,
 #                `…issue-<N>` → issue-<N>; a canonical key and the known literals
-#                pass through; anything else yields to <detected> when there is
+#                pass through (`hub` → empty: stamp nothing, issue #896); anything else yields to <detected> when there is
 #                one (a stderr warning names the swap — a Claude caller sees it in
 #                its tool output) and is otherwise kept as a free-form label
 #                (`↳<label>`, no nesting — how a source-fleet name renders).
@@ -1748,6 +1748,10 @@ fleet_origin_canon() {
   [ -n "$det" ] && [ -n "$tgt" ] && [ -n "$src" ] && [ "$src" != "$tgt" ] && det=$src
   [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
   case "$ex" in autofill|bridge) printf '%s' "$ex"; return 0 ;; esac
+  # `hub` (issue #896): the caller IS the hub's ⌃s by another road — the worker
+  # sidebar's input line runs inside a worker's window, so detection would nest
+  # the new session under that worker. Empty ≡ hub, whatever was detected.
+  [ "$ex" = hub ] && return 0
   k=$(fleet_scratch_key "$ex")                    # scratch-<N> and *-scratch-<N>
   if [ -z "$k" ]; then
     case "$ex" in

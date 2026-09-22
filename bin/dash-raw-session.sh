@@ -365,7 +365,9 @@ if [ -z "$TARGET_SESS" ]; then
   # learns why their name wasn't used (non-blocking — they still got a window).
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ]; then
     TM select-window -t "$win" 2>/dev/null
-    [ -n "$note" ] && TM display-message "$note" 2>/dev/null
+    # An `if`, not `[ … ] &&`: as the script's last command a false test would make
+    # a successful spawn exit 1 — and the sidebar's input line reads that code.
+    if [ -n "$note" ]; then TM display-message "$note" 2>/dev/null; fi
   else
     msg="spawned raw session → $name"; [ -n "$PROMPT" ] && msg="spawned scratch → $name (seeded)"
     [ -n "$AGENT" ] && msg="$msg [$AGENT]"

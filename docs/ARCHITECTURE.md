@@ -130,7 +130,7 @@ never selected. The follow is the same `jump()` a click makes, and touches no
 key table — the movement binds re-enter `fleet-sidebar` before their key
 arrives, which is what keeps browsing alive across the switch. The mouse wheel
 only scrolls the highlight. Clicking the worker, Enter or Escape returns input
-(Escape, Enter and `n` also drop a pending follow); auto-hiding the sidebar also
+(Escape, Enter and ⌃n also drop a pending follow); auto-hiding the sidebar also
 clears its key table. The wake hooks (`session-window-changed[72]`,
 `client-attached[72]`) carry a two-second dwell — `fleet-sleep.sh wake … --dwell 2`
 sleeps, then wakes only if the window is still the session's current one — so
@@ -140,16 +140,59 @@ A double-click on the worker while its sidebar is on screen is tmux's stock
 select-word, not zoom (issue #820): the gate is `@sidebar_worker` set and the
 window not zoomed, so a zoomed worker and a sidebar-less window keep
 double-click-to-zoom; `DoubleClick1Border` is unchanged.
-Two dim footer rows close the list: a hint line, and `+ n: new task`. A click on
-that bottom row, or `n` while navigating, opens the hub's ⌃n popup from the
-sidebar pane (`dash-popup.sh`, which resolves the client and holds `@popup_open`
-for the popup's lifetime; the view pauses its repaint meanwhile and leaves curses
-so an inline fallback has a tty) to file an issue and spawn its worker; the new
-window becomes current and the window-changed hook moves the view there, and a
-cap refusal leaves the issue filed with a toast, as from the dash. Hiding is
-keyboard-only — `q` while navigating, or prefix e — and no click anywhere in the
-sidebar hides it or writes the saved preference: the bottom row was the easiest
-target to mis-hit on a touch screen (issue #821).
+ONE input line closes the list (issue #896; the hints it replaced live in the
+`?` sheet's "task sidebar" group). Away from the sidebar it is a bare `›`; with
+the keyboard there (a tap anywhere on it, prefix E) it shows a dim `› 新会话名…`,
+and typing fills it — no tap on the line first, no popup. Enter on a typed name
+runs `dash-raw-session.sh --name <text> --origin hub` in the foreground with
+`FLEET_SPAWN_FOCUS=1`: the hub's ⌃s, same script and same provenance (the view
+sits in a worker's window, and `--origin hub` stops the spawn nesting under that
+worker). The new window becomes current, the window-changed hook moves the view
+there, the line empties and the view hands the keyboard to the new agent. A
+refusal (the cap, a worktree failure) shows its reason on the line for four
+seconds and keeps the name. Escape clears a typed name and keeps the keyboard;
+Enter and Escape on an EMPTY line behave exactly as before. `@sidebar_input=1` on
+the view pane marks a non-empty line.
+
+How keys reach it — the routing decision. The design keeps the worker the
+active pane (above), so typed keys cannot simply land on the view. Two routes
+were considered: (1) an `Any` bind in the `fleet-sidebar` table forwarding the
+key to the view, or (2) `select-pane` onto the view while the line holds text.
+(1) is what ships: `send-keys` with no key argument sends the key that fired the
+bind, so `bind -T fleet-sidebar Any … send-keys -t '{top-left}'` delivers
+letters, digits and multi-byte UTF-8 (CJK from an IME) whole, and the active
+pane never changes. `{top-left}` is the view — it is always the full-height
+leftmost pane — and a guard on `@sidebar` sends the key to the worker instead
+when it is not there. The view reads raw bytes and decodes UTF-8 itself, so a
+CJK name survives whatever locale tmux started the pane under. Verified on an
+isolated socket, on tmux 3.7 locally and on CI's tmux 3.4, by
+`fleet-sidebar-selftest.sh` — with one version limit: tmux 3.7 handles a BURST
+of keys (one terminal write: an IME commit, a paste-speed typist) key by key in
+the table, but 3.4 looks the later keys of a burst up before the bind's queued
+`switch-client` re-enters it, so they reach the worker instead. Keys typed one
+at a time work on both; the live installs run 3.7, and the selftest types a
+burst only there. Its costs, each handled in the conf: tmux still
+honours the prefix inside a custom table, so prefix binds (prefix e hides) keep
+working; but `Any` also matches keys and mouse events the root table used to
+pick up for an unbound key, so F9, the wheel and the status-bar tap are bound
+in `fleet-sidebar` too (the tap is a verbatim copy of the root block, compared
+by the selftest), and any other mouse event (`#{mouse_x}` is set only for one)
+drops back to root and is forwarded to the pane under it. Enter and Escape
+test `@sidebar_input` on `{top-left}` to keep the keyboard on a non-empty line.
+
+Every letter types now — `q`, `n`, `j`, `k` included — so movement is ↑↓ only
+and hiding is prefix e only: no click and no letter hides the sidebar or writes
+the saved preference (a tap on the bottom row used to, and it is the easiest
+target to mis-hit on a touch screen, issue #821). The hub's new-task popup
+(file an issue and spawn its worker) moved from `n` to ⌃n, registered as
+`new` in `dash-keymap.sh --panel sidebar` — the first row of that table, which
+later sidebar keys join. The view reads ⌃n as the byte 0x0e; when ⌃n is the
+operator's tmux prefix the ⌥n fallback applies, which the conf rewrites to ⌃n.
+The popup opens from the sidebar pane (`dash-popup.sh`, which resolves the
+client and holds `@popup_open` for its lifetime; the view pauses its repaint
+meanwhile and leaves curses so an inline fallback has a tty); the spawned
+window becomes current and the view follows, and a cap refusal leaves the issue
+filed with a toast, as from the dash.
 Focus cues use the client's key table, not just `pane_active`: an amber
 **TASKS · INPUT** pane border means sidebar navigation, a blue **WORKER · INPUT**
 badge means worker input, while the `▶` row always identifies the current task.

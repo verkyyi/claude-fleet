@@ -6,6 +6,7 @@ That matters: collectors, messages and recovery tools resolve a window to its
 active agent pane. Mouse forwarding and the fleet-sidebar key table deliver
 input explicitly to this view without changing that identity.
 """
+import codecs
 import curses
 import fcntl
 import os
@@ -13,17 +14,22 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "4"  # #821: footer + bottom-row semantics changed; replace live v3 views once
+VIEW_VERSION = "5"  # #896: the two footer rows became one input line; replace live v4 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
 # dwell (fleet-sleep.py) never sees it either.
 FOLLOW_SECS = 0.25
+# The input line (issue #896): a refused spawn's reason stays this long, then
+# the typed name — which is kept — shows again.
+TOAST_SECS = 4
+PLACEHOLDER = "新会话名…"
 
 
 def run(args, **kwargs):
@@ -137,7 +143,7 @@ def sync(session, enabled, width, lock):
 
 
 def send_key(session, key):
-    if key not in ("Up", "Down", "Left", "Right", "Enter", "Escape", "q", "n", "Home", "End"):
+    if key not in ("Up", "Down", "Left", "Right", "Enter", "Escape", "Home", "End"):
         return
     window = fields(session + ":", "#{window_id}")[0]
     for pane in panes(session):
@@ -177,7 +183,8 @@ def clip(text, width):
 
 
 def new_task(screen, env):
-    """The hub's ⌃n popup, launched from this pane (issue #821): file an issue
+    """The hub's ⌃n popup, launched from this pane by ⌃n (issue #821; a letter
+    since #896 types into the input line instead): file an issue
     and spawn its worker. dash-popup.sh resolves the client, raises @popup_open
     for the popup's lifetime and clears it on the way out; the spawned window
     becomes current and the session-window-changed hook moves this view there.
@@ -189,6 +196,48 @@ def new_task(screen, env):
     subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "90%", "-h", "12", "--",
                      "bash", str(BIN / "dash-issue-new.sh"), "confirm", "--spawn"], env=env)
     screen.clear()  # the next refresh resumes curses and repaints the whole grid
+
+
+def tail(text, width):
+    """The END of the typed name in `width` cells: the cursor end stays visible."""
+    out, used = [], 0
+    for char in reversed(text):
+        size = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+        if used + size > width:
+            break
+        out.append(char)
+        used += size
+    return "".join(reversed(out))
+
+
+def typed(char):
+    """A character the input line takes: printable text, CJK included."""
+    return not unicodedata.category(char).startswith("C")
+
+
+def mark_input(pane, text):
+    # @sidebar_input=1 while the line holds text: the Enter/Escape binds (and
+    # C4's ⌂ / R2) read it to keep the keyboard here instead of handing it back.
+    if text:
+        tmux("set-option", "-p", "-t", pane, "@sidebar_input", "1")
+    else:
+        tmux("set-option", "-up", "-t", pane, "@sidebar_input")
+
+
+def spawn_scratch(name, env):
+    """The hub's ⌃s with a name (issue #896): the same script and the same
+    provenance (`--origin hub` — the sidebar sits in a worker's window, and a
+    session started here is not that worker's child). Focus follows the new
+    window, and the window-changed hook moves this view there. stderr (the
+    refusal reason) goes to a file, not a pipe: whatever the spawn leaves running
+    would hold a pipe open, and reading it would freeze this view."""
+    log = tempfile.TemporaryFile("w+")
+    proc = subprocess.Popen(
+        ["bash", str(BIN / "dash-raw-session.sh"), "--name", name, "--origin", "hub"],
+        env=dict(env, FLEET_SPAWN_FOCUS="1"), stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=log)
+    proc.log = log
+    return proc
 
 
 def visible(info, now):
@@ -216,11 +265,36 @@ def ui(screen, session, worker, lock):
     curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_YELLOW)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
+    curses.init_pair(7, curses.COLOR_RED, -1)
     screen.keypad(True)
+    curses.meta(True)
     rows, selected, offset, refresh_at = [], window, 0, 0.0
     shown, navigation, follow_at = False, False, None
+    # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
+    # table's Any bind; decode them here, so a CJK name survives whatever locale
+    # tmux started this pane under.
+    text, toast, toast_until, spawning = "", "", 0.0, None
+    decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+    mark_input(pane, "")
     while True:
         now = time.monotonic()
+        if spawning is not None and spawning.poll() is not None:
+            # The spawn selected its window; the hook has moved (or is moving)
+            # this view there. Input goes to the new session's agent.
+            spawning.log.seek(0)
+            error = spawning.log.read().strip().splitlines()
+            spawning.log.close()
+            if spawning.returncode == 0:
+                text = ""
+                mark_input(pane, text)
+                leave_navigation(session)
+            else:
+                # Keep the name: a cap refusal is retried once a slot frees.
+                reason = error[-1] if error else "spawn failed"
+                toast = "✗ " + reason.split(": ", 1)[-1]
+                toast_until = now + TOAST_SECS
+            spawning = None
+            refresh_at = 0
         if follow_at is not None and now >= follow_at:
             # The highlight settled: switch once. Nothing here touches the
             # client's key table, and the Up/Down binds re-enter fleet-sidebar
@@ -267,7 +341,7 @@ def ui(screen, session, worker, lock):
         if selected not in ids:
             selected = window if window in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
-        page = max(1, height - 2)
+        page = max(1, height - 1)
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index < offset:
             offset = index
@@ -298,23 +372,49 @@ def ui(screen, session, worker, lock):
             # columns right of its parent's.
             put(y, marker + " " + glyph + " " + (tree or " ") + " " + label, attr,
                 fill=wid == window or (navigation and wid == selected))
-        # Hide is keyboard-only (q here, prefix e anywhere): a tap on the bottom
-        # row used to hide the sidebar across every window, and on a touch
-        # screen that row is the easiest one to mis-hit (issue #821).
-        put(height - 2, " ↑↓ choose · ↵/Esc · q hide" if navigation else
-            " Keyboard: WORKER →", curses.A_DIM)
-        put(height - 1, " + n: new task", curses.A_DIM)
+        # ONE input line closes the list (issue #896): the hints moved to the
+        # `?` sheet. Typing while the keyboard is here fills it; Enter starts a
+        # scratch session named after it. Away from the sidebar only `›` shows.
+        # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
+        room = max(0, width - 3)
+        if spawning is not None:
+            put(height - 1, "› " + tail(text, max(0, room - 2)) + " …", curses.A_DIM)
+        elif toast and time.monotonic() < toast_until:
+            put(height - 1, "› " + toast, curses.color_pair(7))
+        elif text:
+            put(height - 1, "› " + tail(text, room - 1) + ("▏" if navigation else ""),
+                curses.A_BOLD if navigation else curses.A_DIM)
+        else:
+            put(height - 1, "› " + PLACEHOLDER if navigation else "›", curses.A_DIM)
         screen.refresh()
-        # Wake for whichever comes first: the next repaint or a pending follow.
+        # Wake for whichever comes first: the next repaint, a pending follow or
+        # a finished spawn.
         wait = refresh_at - time.monotonic()
         if follow_at is not None:
             wait = min(wait, follow_at - time.monotonic())
+        if spawning is not None:
+            wait = min(wait, 0.2)
         screen.timeout(max(1, min(1000, int(wait * 1000))))
         key = screen.getch()
-        if key in (curses.KEY_UP, ord("k")) and ids:
+        if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 27, 127):
+            # A (piece of a) typed character. Every letter types — j k q n
+            # included; movement is ↑↓ only, hide is prefix e.
+            chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c))
+            if chars and spawning is None:
+                was, text, toast = text, text + chars, ""
+                if not was:
+                    mark_input(pane, text)
+            continue
+        decoder.reset()
+        if key in (curses.KEY_BACKSPACE, 8, 127):
+            if text and spawning is None:
+                text, toast = text[:-1], ""
+                if not text:
+                    mark_input(pane, text)
+        elif key == curses.KEY_UP and ids:
             selected = ids[max(0, index - 1)]
             follow_at = time.monotonic() + FOLLOW_SECS
-        elif key in (curses.KEY_DOWN, ord("j")) and ids:
+        elif key == curses.KEY_DOWN and ids:
             selected = ids[min(len(ids) - 1, index + 1)]
             follow_at = time.monotonic() + FOLLOW_SECS
         elif key == curses.KEY_HOME and ids:
@@ -323,6 +423,13 @@ def ui(screen, session, worker, lock):
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
             follow_at = time.monotonic() + FOLLOW_SECS
+        elif key in (10, 13, curses.KEY_ENTER) and text.strip():
+            # A typed name: start its scratch session (the bind kept the
+            # keyboard here while @sidebar_input was set). One spawn at a time.
+            follow_at = None
+            if spawning is None:
+                toast = ""
+                spawning = spawn_scratch(text.strip(), env)
         elif key in (10, 13, curses.KEY_ENTER):
             # The Enter bind already returned the client to root; the key reaches
             # here a run-shell hop later. If the follow (or anyone) has moved the
@@ -336,15 +443,18 @@ def ui(screen, session, worker, lock):
             verb = "collapse" if key == curses.KEY_LEFT else "expand"
             run(["bash", str(BIN / "dash-fold-toggle.sh"), verb, selected], env=env)
             refresh_at = 0
-        elif key == ord("q"):
-            run(["bash", str(BIN / "fleet-sidebar.sh"), "hide", session])
-            return
-        elif key == ord("n"):
-            # The popup blocks; a follow scheduled just before must not fire
-            # after it and switch away from the window the spawn made current.
+        elif key == 14:
+            # ⌃n (dash-keymap.sh --panel sidebar `new`; its ⌥n fallback is
+            # rewritten to ⌃n by the bind). The popup blocks; a follow scheduled
+            # just before must not fire after it and switch away from the window
+            # the spawn made current.
             follow_at = None
             new_task(screen, env)
             refresh_at = 0
+        elif key == 27 and text and spawning is None:
+            # Escape clears a typed name first; the keyboard stays here.
+            text, toast = "", ""
+            mark_input(pane, text)
         elif key == 27:
             # Escape bails out of a pending follow too: the worker in view keeps input.
             follow_at = None
@@ -361,8 +471,8 @@ def ui(screen, session, worker, lock):
                     selected = rows[offset + y][0]
                     jump(session, selected, pane, lock)
                     refresh_at = 0
-                elif y == height - 1:
-                    new_task(screen, env)
+                # Anywhere else (the input line included) the click only focuses:
+                # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON4_PRESSED and ids:
                 selected = ids[max(0, index - 3)]
             elif buttons & getattr(curses, "BUTTON5_PRESSED", 0) and ids:
@@ -371,6 +481,8 @@ def ui(screen, session, worker, lock):
 
 def main():
     if sys.argv[1] == "ui":
+        # A lone Escape clears the input line; don't wait ncurses' default 1s.
+        os.environ.setdefault("ESCDELAY", "25")
         curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
         return
     verb, session, lock, enabled, width, key = sys.argv[1:]

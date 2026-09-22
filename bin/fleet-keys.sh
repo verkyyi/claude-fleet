@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-keys.sh — the fleet keymap cheatsheet (issue #110). One curated source
 # of truth for EVERY fleet shortcut, grouped by context:
-#   tmux prefix binds · dashboard fzf · backlog fzf · config modal fzf.
+#   tmux prefix binds · task sidebar · dashboard fzf · backlog fzf · config modal fzf.
 #
 # Opened by `prefix ?` (display-popup -E; see conf/tmux-attention.conf) and by a
 # `?` bind inside the dash/backlog. The popup closes on q/esc.
@@ -108,7 +108,7 @@ print_sheet() {
   key "prefix a" "jump to the next window that needs you (red first, then green)"
   key "prefix g" "focus the dash — jump to the hub's dash pane; press again to zoom it"
   key "prefix e" "show/hide the worker task sidebar (saved for this fleet; narrow screens hide it automatically)"
-  key "prefix E" "focus sidebar (or click it) — ↑↓ switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected), home/end ends, ←→ fold, enter/esc give input back to the worker, n new task (= the bottom row: file an issue + spawn its worker), q hide (keyboard-only)"
+  key "prefix E" "focus the task sidebar (or click/tap it) — then type: see the 'task sidebar' group"
   key "prefix b" "backlog modal — GitHub issues; enter spawns the issue's session"
   key "prefix c" "config modal — view/edit FLEET_* across layers"
   key "prefix ?" "this cheatsheet"
@@ -116,6 +116,18 @@ print_sheet() {
   key "click ● N" "the needs badge (bottom-left) cycles to the next 'needs' window"
   key "click ● N (orange)" "cross-fleet dot = N needy windows in OTHER fleets; click to jump"
   key "click usage" "footer usage stat — opens the usage + account modal"
+  fi
+
+  if want sidebar; then
+  eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
+  group "task sidebar" "— once prefix E or a tap puts the keyboard on it"
+  key "type a name" "fills the ONE input line at the bottom — every letter types (q n j k too), CJK fine; backspace deletes"
+  key "enter" "with a name: start a scratch session named after it (the hub's ⌃s) and switch to it — no popup, no hub. A refusal (cap, worktree) shows on the line and keeps the name. Empty line: give input back to the worker"
+  key "esc" "clear the typed name; on an empty line give input back to the worker"
+  key "↑ / ↓" "switch to the highlighted task (follows once you pause, ~¼s; a held key is one switch, a row passed over is never selected); home/end the ends"
+  key "← / →" "fold / unfold the highlighted row's subtree"
+  key "$(dg new)" "new task — file an issue AND spawn its worker (the hub's ⌃n popup)$(dn new)"
+  key "prefix e" "hide the sidebar (q types now; no tap hides it)"
   fi
 
   if want dashboard; then
