@@ -1102,6 +1102,14 @@ if n:
 ' 2>/dev/null)
   [ -n "$sdist" ] && pass state "sleep judgments (last hour): $sdist"
 fi
+# Trips back to the hub over the last day, per fleet, with the top two causes
+# (issue #897 — the meter EPIC #894 is judged by). Info only, like the line above:
+# a count is never a pass/fail. Silent until a hub-visits log exists.
+while IFS="$(printf '\t')" read -r hvs hvn hvtop; do
+  [ -n "$hvs" ] && pass hub "$hvs: $hvn trip(s) to the hub in 24h; top: $hvtop (table: bin/fleet-hub-visits.sh --session $hvs)"
+done <<EOF
+$(FLEET_HUB_VISITS_LOGDIR="$(dirname "$0")/../logs" bash "$(dirname "$0")/fleet-hub-visits.sh" --brief --all --since 24h 2>/dev/null </dev/null)
+EOF
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
 if [ -x "$inv" ]; then
