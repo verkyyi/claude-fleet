@@ -1,7 +1,7 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
 # Shows: [● container] │ CPU 23% │ MEM 1.2G/4G │ DSK 34G │ <usage stat>
-#        [│ ⚠ quota stale 47m | ⚠ quota blind 6m] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
+#        [│ ⚠ quota stale 47m | ⚠ quota blind 6m] [│ ⚠ quota via banner] [│ ⚠ dash stale 12m ↻2m | ↻ dash kicked 2m]
 #        [│ ⚠ daemon stale cleanup,dispatch+2 ↻3m | ↻ daemon kicked 3m]
 # Color coding: CPU green <50%, yellow 50-80%, red >80%;
 #               MEM green <60%, yellow 60-85%, red >85%;
@@ -160,6 +160,10 @@ else
     qblind=$(fleet_quota_blind)
     [ -n "$qblind" ] && quota_seg="${DIM}│ ${RED}⚠ quota blind $(fleet_usage_human_secs "${qblind#*	}") "
 fi
+# Its consequence (issue #874): with no fresh reading, a limit banner benched an
+# account by itself — the path that false-benched healthy accounts twice — so it
+# says so, beside (not instead of) the stale/blind alarm that usually explains it.
+[ -n "$(fleet_quota_via_banner)" ] && quota_seg="${quota_seg}${DIM}│ ${RED}⚠ quota via banner "
 
 # --- collector staleness + self-heal trace (issue #636): the SECOND always-on
 # alarm. Every number the dash draws comes out of the collector's caches, so a

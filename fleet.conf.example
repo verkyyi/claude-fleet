@@ -1149,6 +1149,18 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # one FLEET_NOTIFY_CMD per episode. Default 3 ≈ 3 min at the 60s TTL. 0 = off.
 # @label=Quota watch blind after @group=accounts @tier=advanced @scope=global @edit=int @unit=reads
 #FLEET_ACCOUNT_QUOTA_BLIND_STREAK=3
+# A subscription limit banner is a HINT when ccquota has a fresh reading (issue
+# #874): it forces one refetch, and `fleet-account.sh quota-verdict` decides. That
+# refetch is skipped while the cache is younger than this, so N walled windows in
+# one collector tick (or the failover controller right after it) cost one fetch.
+# @label=Banner refetch dedupe @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ACCOUNT_VERDICT_REFETCH=20
+# When ccquota has NO fresh reading (stale / blind / account not on the hub), a
+# banner still benches by itself — the path that false-benched healthy accounts
+# twice — so the status bar shows `⚠ quota via banner` for this long after the
+# last time it happened (issue #874).
+# @label=Quota via banner shown for @group=accounts @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS=600
 # How a new spawn RANKS the eligible accounts once the ceiling has thrown out the
 # ones that are too hot to use at all (issue #598):
 #   5h      (default) score = 5h-headroom × 2 + 7d-headroom. The 5-hour window

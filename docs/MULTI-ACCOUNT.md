@@ -219,6 +219,34 @@ until its bench ends (or you clear it with `fleet-account.sh clear <label>`). If
   point (it keeps the fleet working), but it means per-account settings aren't
   possible via this mechanism.
 
+## A limit banner is a hint; ccquota decides (#874)
+
+Two writers used to decide "this account is out of quota": ccquota's reading,
+and a scrape of each pane for the limit banner. The scrape guesses at a fact
+ccquota states exactly, and it guessed wrong twice — #782 (a Codex banner benched
+a Claude account) and 2026-09-22 (a `--resume` replayed an old weekly banner and
+benched an account at **7d 34%**, starting a failover cascade across the pool).
+
+Now there is one entry point, `fleet-account.sh quota-verdict <label> [--axis 5h|7d] [--refresh]`:
+
+| Answer | Meaning | What a banner does |
+|---|---|---|
+| `limited <until>` | a fresh ccquota row has the named window (both, without `--axis`) at/above `FLEET_ACCOUNT_CEILING` | bench until ccquota's reset instant |
+| `ok` | a fresh row with headroom on that window | **nothing** — one line in the collector log; the next tick asks again (the hub runs ~60s behind a real wall) |
+| `unknown` | no hub/ccquota, a stale cache (`FLEET_ACCOUNT_QUOTA_STALE`), or no row for the account (blind hub, `available:false`, not on the hub) | the pre-#874 banner bench, and the status bar shows **`⚠ quota via banner`** |
+
+- The banner names its window: `session`/N-hour → `5h`, `weekly` → `7d`; the
+  sticky "Usage limit reached" footer names neither, so both are weighed.
+- Every subscription banner buys **one forced refetch**; `--refresh` skips it
+  while the cache is younger than `FLEET_ACCOUNT_VERDICT_REFETCH` (20s), so N
+  walled windows in one tick cost one fetch.
+- The failover controller's **hard** evidence (`.fleet-failover.py`
+  `claude_wall`) follows the same rule, so a replayed banner cannot make a
+  source "hard" either.
+- **Not covered, on purpose:** per-model caps (below — ccquota does not report
+  them, the banner stays their only source) and Codex (its native
+  `quota_error` stays the hard signal).
+
 ## Per-model caps are not the subscription wall (#524)
 
 `You've hit your Fable 5 limit · resets Sep 6 at 10pm` — and its sticky twin,
