@@ -240,6 +240,19 @@ def spawn_scratch(name, env):
     return proc
 
 
+def landing(ids, window, limit=8):
+    """Where closing `window` should land (issue #900): the rows below it in
+    list order, then the rows above it nearest-first — so closing a middle task
+    lands on the next one, closing the last lands on the one before. Several are
+    kept, not one: the close hook takes the first that is still alive and not
+    asleep, so a batch of closes (or a neighbour that sleeps) never falls back to
+    the hub while a live task remains. Panels never appear in `ids`."""
+    if window not in ids:
+        return []
+    at = ids.index(window)
+    return (ids[at + 1:] + ids[:at][::-1])[:limit]
+
+
 def visible(info, now):
     if len(info) != 4:
         return False
@@ -276,6 +289,7 @@ def ui(screen, session, worker, lock):
     text, toast, toast_until, spawning = "", "", 0.0, None
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
     mark_input(pane, "")
+    published = None  # the (window, candidates) last written to @sidebar_next
     while True:
         now = time.monotonic()
         if spawning is not None and spawning.poll() is not None:
@@ -331,6 +345,16 @@ def ui(screen, session, worker, lock):
                 if result.returncode == 0:
                     rows = [line.split(US, 4) for line in result.stdout.split("\n")
                             if len(line.split(US, 4)) == 5]
+                    # Publish the close-landing candidates for THIS window (issue
+                    # #900) — only on change, so an idle view forks nothing extra.
+                    # `@sidebar_next_of` pins them to the window they were read
+                    # against: the hub-arrival hook uses them only when THAT is
+                    # the window that just closed.
+                    nxt = " ".join(landing([row[0] for row in rows], window))
+                    if (window, nxt) != published and window in [row[0] for row in rows]:
+                        tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
+                             "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
+                        published = (window, nxt)
         if not shown:
             follow_at = None  # a hidden view never switches windows
             screen.timeout(1000)
