@@ -156,6 +156,19 @@ refusal (the cap, a worktree failure) shows its reason on the line for four
 seconds and keeps the name. Escape clears a typed name and keeps the keyboard;
 Enter and Escape on an EMPTY line behave exactly as before. `@sidebar_input=1` on
 the view pane marks a non-empty line.
+With NO sidebar on screen — a window under ~111 columns hides it, prefix e turns
+it off — the same list opens as a popup: `bin/fleet-task-pick.sh` (issue #902),
+from `prefix Space`, from `prefix E`, and from ⌂ / F9 in a task window (the
+no-bar branch of `hub-zoom.sh`'s task-bar-first, same `FLEET_HOME_SIDEBAR_FIRST`
+knob; a zoomed task and the hub's own window keep their old behaviour). Rows come
+from `tmux-dashboard-rows.sh --sidebar`, so the order, pins, folds and the
+panel exclusion are the bar's. The popup only WRITES an action line —
+`select <@id>` · `scratch <name>` · `hub` — and the `--popup` parent acts on it
+after the overlay closes: `select-window` by stable id, the bar's
+`dash-raw-session.sh --name … --origin hub` with `FLEET_SPAWN_FOCUS=1`, or
+`hub-zoom.sh --nav` (the second press). @popup_open brackets the popup like
+every modal bind. ⌂ / F9 opening it log `home-pick` / `f9-pick` to the hub-visit
+meter — kept out of the trip count like `*-sidebar`.
 The row menu (issue #898) is the hub list's per-row actions without the hub:
 `.` on an EMPTY line (inside a name it types a dot), or a tap on the highlighted
 row — the second tap on a row the first one switched to — opens a tmux
