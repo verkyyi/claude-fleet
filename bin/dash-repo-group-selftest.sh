@@ -118,7 +118,7 @@ eq    "A2: colliding repos read owner/name, the rest stay bare" \
 eq    "A2: fleet_repo_name — collision" "$(fleet_repo_name alpha o/tokenledger)" "o/tokenledger"
 eq    "A2: fleet_repo_name — bare"      "$(fleet_repo_name alpha o/claude-fleet)" "claude-fleet"
 eq    "A2: fleet_repo_name — not hosted" "$(fleet_repo_name alpha o/elsewhere)" ""
-tmux kill-window -t 'alpha:p·issue-5'
+tmux kill-window -t 'alpha:issue-5'
 rm "$FLEET_CONF_DIR/fleets/alpha/repos/p-tokenledger.conf"
 eq    "A2: …and back to bare once it goes" "$(fleet_repo_name alpha o/tokenledger)" "tokenledger"
 
