@@ -243,9 +243,10 @@ while read -r action _ _ def _; do
   printf '%s\n' "$side_block" | grep -q "\$(dn $action)" \
     || fail "sidebar action '$action' has no \$(dn $action) remap note in fleet-keys.sh"
   # A printable punctuation default (`menu` = `.`, #898) acts only on an EMPTY
-  # input line, so it reaches the view through the `Any` bind as its own byte.
+  # input line, so it reaches the view through the `Any` bind as its own byte
+  # (read as `press`, which also folds an IME's full-width 。/？ onto it, #965).
   case "$def" in [[:punct:]])
-    grep -qF "key == ord(\"$def\") and not text" "$SIDEBAR_PY" \
+    grep -qF "press == \"$def\" and not text" "$SIDEBAR_PY" \
       || fail "sidebar action '$action' ($def) must act only on an empty input line in fleet-sidebar.py"
     continue ;;
   esac

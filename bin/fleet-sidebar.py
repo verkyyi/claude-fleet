@@ -22,7 +22,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "8"  # #948: the `? 快捷键` row above the input line; replace live v7 views once
+VIEW_VERSION = "9"  # #965: 。．？ on an empty line act as . ?; replace live v8 views once
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -37,6 +37,11 @@ PLACEHOLDER = "新会话名…"
 # An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
 # the operator: on an iPad a whole row is a tap target a hint glyph is not.
 HELP_ROW = " ? 快捷键"
+# A Chinese IME turns the `.` and `?` keys into full-width 。/． and ？ (issue
+# #965). On an EMPTY input line they are the same keys — the row menu and the
+# key sheet — so the operator need not switch to English first; inside a name
+# they type as themselves, like `.` and `?` do.
+KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
 
 
 def run(args, **kwargs):
@@ -505,24 +510,28 @@ def ui(screen, session, worker, lock):
                 text, toast = "", ""
                 mark_input(pane, renaming or text)
             continue
-        if key == ord(".") and not text and renaming is None and spawning is None and selected:
+        # A typed key is a byte; a multi-byte one (。 ？, CJK) completes over
+        # several getch calls, and only the last one yields its character.
+        byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127)
+        chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
+        press = KEY_ALIASES.get(chars, chars)
+        if press == "." and not text and renaming is None and spawning is None and selected:
             # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
             # `menu`); inside a name it types. The follow is dropped: the menu
             # acts on the highlighted row and the window in view stays put.
             follow_at = None
             open_menu(session, selected, env)
             continue
-        if key == ord("?") and not text and renaming is None and spawning is None:
+        if press == "?" and not text and renaming is None and spawning is None:
             # `?` on an EMPTY line is the sidebar's key sheet (dash-keymap.sh
             # --panel sidebar `help`, issue #948); inside a name it types.
             follow_at = None
             open_help(screen, env)
             refresh_at = 0
             continue
-        if 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 27, 127):
+        if byte:
             # A (piece of a) typed character. Every letter types — j k q n
             # included; movement is ↑↓ only, hide is prefix e.
-            chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c))
             if chars and spawning is None:
                 was, text, toast = text, text + chars, ""
                 if not was:

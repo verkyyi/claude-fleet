@@ -584,12 +584,13 @@ try:
     lines = tm('capture-pane', '-p', '-t', side).splitlines()
     check(len(lines) >= 2 and lines[-2].strip() == '? 快捷键',
           'the row above the input line is not the ? row: %r' % lines[-2:])
-    for how in ('a tap on the ? row', '? on an empty input line'):
+    # A Chinese IME's full-width ？ is the same key (issue #965).
+    for how in ('a tap on the ? row', '? on an empty input line', '？ on an empty input line'):
         del screen_out[:]
         if how.startswith('a tap'):
             click(side, row=height - 2)
         else:
-            os.write(terminal, b'?')
+            os.write(terminal, how.split()[0].encode())
         wait_for(popup_open, how + ' did not open a popup')
         wait_for(lambda: '任务栏快捷键' in bytes(screen_out).decode('utf-8', 'replace'),
                  how + ' did not show the sidebar key sheet')
@@ -733,6 +734,14 @@ try:
     wait_for(lambda: input_line(side) == '› a.b▏', '`.` inside a name did not type: %r' % input_line(side))
     os.write(terminal, b'\x1b')
     wait_for(lambda: tasks_cue(side), 'Esc did not clear the dotted name')
+    # A Chinese IME sends 。 (or ．) for the `.` key (issue #965): inside a
+    # name it types as itself; on an empty line it is the menu, like `.`.
+    type_keys('ab。')
+    wait_for(lambda: input_line(side) == '› ab。▏', '。 inside a name did not type: %r' % input_line(side))
+    time.sleep(.5)
+    check(not menu_open(), '。 inside a name opened the row menu')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: tasks_cue(side), 'Esc did not clear the ab。 name')
     del screen_out[:]
     os.write(terminal, b'.')
     wait_for(menu_open, '`.` on an empty input line did not open the row menu')
@@ -741,6 +750,15 @@ try:
     wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '1', 'the menu\'s pin did not pin the row')
     check(current() == w1, 'pinning from the menu switched windows')
     check(menu_items(w1)['t'] == '取消置顶', 'a pinned row does not offer unpin')
+    for wide, pin in (('。', ''), ('．', '1')):
+        del screen_out[:]
+        os.write(terminal, wide.encode())
+        wait_for(menu_open, '%s on an empty input line did not open the row menu' % wide)
+        check(tasks_cue(side), '%s on an empty line typed instead of opening the menu' % wide)
+        print('ok: %s on an empty input line opened the row menu' % wide)
+        os.write(terminal, b't')
+        wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == pin,
+                 'the menu %s opened did not toggle the pin' % wide)
     del screen_out[:]
     os.write(terminal, b'.')
     wait_for(menu_open, 'a second `.` did not reopen the menu')
