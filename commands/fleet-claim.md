@@ -109,6 +109,10 @@ Three habits buy most of it back:
   writes code is a WORKER: `fleet-issue-file.sh --parent N --spawn` below, and
   its `[child-report]` is how the result comes back — and
   `~/.claude/fleet/bin/fleet-children.sh` is where you read all of them at once.
+  Need the result BEFORE you can go on, the way a subagent would hand it back?
+  `~/.claude/fleet/bin/fleet-await.sh <N>` (with `run_in_background: true`)
+  spawns #N's worker if none is live and blocks until it lands, blocks or is
+  reaped, then prints the verdict + PR + summary (issue #812).
 - **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
   symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
   `cat -n` — read the function, not the file that contains it.

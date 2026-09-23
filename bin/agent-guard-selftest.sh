@@ -65,6 +65,7 @@ agent_json() { printf '{"tool_name":"Agent","tool_input":%s}' "$1"; }
   # the refusal must TELL the model what to do instead
   msg=$(printf '%s' "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')" | "$PY" "$GUARD" 2>&1 >/dev/null)
   case "$msg" in *dash-issue-session.sh*) ;; *) printf 'FAIL: refusal must point at dash-issue-session.sh (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *fleet-await.sh*) ;; *) printf 'FAIL: refusal must point at fleet-await.sh — the synchronous hand-off (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *fleet-issue-file.sh*--spawn*) ;; *) printf 'FAIL: refusal must point at fleet-issue-file.sh --spawn\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *Explore*) ;; *) printf 'FAIL: refusal must name Explore for read-only fan-out\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *FLEET_ALLOW_SUBAGENT=1*) ;; *) printf 'FAIL: refusal must name the FLEET_ALLOW_SUBAGENT escape hatch\n' >&2; fails=$((fails + 1)) ;; esac
