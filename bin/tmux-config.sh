@@ -15,6 +15,13 @@
 # `?` reveals the raw FLEET_* key inline; ⌃s toggles which layer a per-fleet edit
 # WRITES to; enter on an editable key edits it, on a section header expands it.
 #
+# Repo scope (issue #802): in a fleet hosting 2+ repos, ⌃s also steps through
+# `repo:<slug>` — one per hosted repo. There the per-repo keys (model, agent, MCP
+# servers, deploy, setup…; fcfg_repo_keys) show the value THAT repo's windows read,
+# with a magenta `▸ repo` source when its own overlay sets it, and enter writes the
+# repo's overlay. A one-repo fleet never sees the scope: the toggle stays
+# fleet⇄global and every row renders exactly as before.
+#
 # enter mirrors the ⌃s abort→act→relaunch pattern rather than nesting a popup:
 # a `transform` bind (emit_enter_action) branches on the row type — a section
 # header toggles in place, an editable FLEET_* key is stashed in a sentinel and
@@ -52,6 +59,7 @@ CFG_TX=$'\033[38;2;169;177;214m'      # text   — value
 CFG_FLEET=$'\033[38;2;158;206;106m'   # green  — per-fleet overlay wins
 CFG_GLOBAL=$'\033[38;2;122;162;247m'  # blue   — inherited from global
 CFG_DIM=$'\033[38;2;86;95;137m'       # dim    — unset → code default
+CFG_REPO=$'\033[38;2;187;154;247m'    # magenta — the repo's own overlay wins
 
 # ---- UI state (raw-key + section-expand toggles, persisted per session) ------
 CFG_STATE_DIR="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
@@ -95,11 +103,14 @@ render_row() {
     global)   stag='global'; scol="$CFG_GLOBAL" ;;
     *)        stag='fleet';  scol="$CFG_FLEET"  ;;
   esac
-  if   v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
+  if [ -n "$RREPO" ] && fcfg_is_repo_key "$key"; then
+    v=$(fcfg_repo_effective "$key" "$SESSION" "$RREPO"); val=${v%"$US"*}; src=${v##*"$US"}
+  elif v=$(fcfg_file_value "$RCONF_F" "$key"); then val="$v"; src=fleet
   elif v=$(fcfg_file_value "$RCONF_G" "$key"); then val="$v"; src=global
   else val="$def"; src=default
   fi
   case "$src" in
+    repo)   col="$CFG_REPO";   srcmark='▸ repo' ;;
     fleet)  col="$CFG_FLEET";  srcmark='▸ per-fleet' ;;
     global) col="$CFG_GLOBAL"; srcmark='· global' ;;
     *)      col="$CFG_DIM";    srcmark='  default' ;;
@@ -117,8 +128,9 @@ render_row() {
 # ---- non-key rows (field1 is a sentinel the binds recognize) -----------------
 emit_context() {
   local repo ws
-  repo=$(fcfg_effective FLEET_REPO "$SESSION"); repo=${repo%"$US"*}
-  ws=$(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]')
+  if [ -n "$RREPO" ]; then repo=$RREPO
+  else repo=$(fcfg_effective FLEET_REPO "$SESSION"); repo=${repo%"$US"*}; fi
+  ws=$(fcfg_wscope_label "$SESSION")
   printf '@@NOOP@@%s%sfleet%s %s%s%s   %sedits ▸ %s · ? raw keys · tab expand%s\n' \
     "$US" "$CFG_B" "$CFG_R" "$CFG_KEY" "${repo:-<unset>}" "$CFG_R" "$CFG_DIM" "$ws" "$CFG_R"
 }
@@ -148,6 +160,8 @@ emit_rows() {
   local key label group tier scope edit unit def og
   local common_t='' adv_t='' gadv_t='' id_t='' order='' line
   RCONF_F=$(fcfg_fleet_conf "$SESSION"); RCONF_G=$(fcfg_global_conf)
+  # Repo scope: the per-repo rows resolve for THIS repo (empty = fleet/global).
+  RREPO=$(fcfg_scope_repo "$SESSION" "$(fcfg_wscope "$SESSION")" || true)
   while IFS="$US" read -r key label group tier scope edit unit def; do
     [ -n "$key" ] || continue
     line="$key$US$label$US$group$US$tier$US$scope$US$edit$US$unit$US$def"
@@ -192,11 +206,15 @@ emit_preview() {
     @@TOGGLE@@*) printf '  %ssection%s\n\n  enter / tab expands or collapses this section.\n' "$DIM" "$R"; return ;;
     *)           printf '  %s(select a key)%s\n' "$DIM" "$R"; return ;;
   esac
-  local edit label unit dv ev val src scope fconf gconf fv gv ws tgt
+  local edit label unit dv ev val src scope fconf gconf fv gv ws tgt repo row r rv
   edit=$(fcfg_edit "$key"); label=$(fcfg_label "$key"); unit=$(fcfg_unit "$key")
   scope=$(fcfg_scope "$key"); dv=$(fcfg_default "$key")
   fconf=$(fcfg_fleet_conf "$SESSION"); gconf=$(fcfg_global_conf)
-  ev=$(fcfg_effective "$key" "$SESSION"); val=${ev%"$FCFG_US"*}; src=${ev##*"$FCFG_US"}
+  ws=$(fcfg_wscope "$SESSION"); repo=''
+  case "$ws" in repo:*) fcfg_is_repo_key "$key" && repo=$(fcfg_scope_repo "$SESSION" "$ws") ;; esac
+  if [ -n "$repo" ]; then ev=$(fcfg_repo_effective "$key" "$SESSION" "$repo")
+  else ev=$(fcfg_effective "$key" "$SESSION"); fi
+  val=${ev%"$FCFG_US"*}; src=${ev##*"$FCFG_US"}
   printf '%s%s%s   %s[%s%s]%s\n  %s%s%s\n\n' \
     "$B" "$label" "$R" "$DIM" "$edit" "${unit:+ · $unit}" "$R" "$DIM" "$key" "$R"
   fcfg_full "$key" | sed 's/^/  /'
@@ -206,20 +224,33 @@ emit_preview() {
     global)   printf '  %s%sglobal%s — global-only; writes fleet.conf; applies to ALL fleets.\n' "$B" "$BL" "$R" ;;
     *)        printf '  %s%sfleet%s — per-fleet; g writes the global default, f this fleet'\''s overlay.\n' "$B" "$GN" "$R" ;;
   esac
-  printf '  %seffective%s : %s%s%s   %s(%s)%s\n' "$B" "$R" "$GN" "${val:-<empty>}" "$R" "$DIM" "$src" "$R"
+  printf '  %seffective%s : %s%s%s   %s(%s%s)%s\n' "$B" "$R" "$GN" "${val:-<empty>}" "$R" "$DIM" "$src" "${repo:+ · $repo}" "$R"
   printf '  %sdefault%s   : %s\n' "$DIM" "$R" "${dv:-<empty>}"
   if fv=$(fcfg_file_value "$fconf" "$key"); then printf '  per-fleet : %s\n' "$fv"
   else printf '  %sper-fleet : (unset)%s\n' "$DIM" "$R"; fi
   if gv=$(fcfg_file_value "$gconf" "$key"); then printf '  global    : %s\n' "$gv"
   else printf '  %sglobal    : (unset)%s\n' "$DIM" "$R"; fi
+  # A per-repo key in a multi-repo fleet: what EACH hosted repo reads.
+  if fcfg_is_repo_key "$key" && [ -n "$(fcfg_repo_scopes "$SESSION")" ]; then
+    printf '\n  %sper repo%s\n' "$B" "$R"
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      r=${row#*"$FCFG_US"}; rv=$(fcfg_repo_effective "$key" "$SESSION" "$r")
+      printf '  %-28s %s  %s(%s)%s\n' "$r" "${rv%"$FCFG_US"*}" "$DIM" "${rv##*"$FCFG_US"}" "$R"
+    done <<EOF
+$(fcfg_repo_scopes "$SESSION")
+EOF
+  fi
   if [ "$scope" = identity ]; then
     printf '\n  %senter is disabled for identity keys%s\n' "$DIM" "$R"
   elif [ "$scope" = global ]; then
     printf '\n  %senter writes the GLOBAL layer%s\n  %s%s%s\n' "$B" "$R" "$DIM" "$gconf" "$R"
+  elif [ "${ws#repo:}" != "$ws" ] && [ -z "$repo" ]; then
+    printf '\n  %snot a per-repo setting%s — ⌃s to the FLEET scope to edit it\n' "$B" "$R"
   else
-    ws=$(fcfg_wscope "$SESSION"); tgt=$(fcfg_target_conf "$SESSION" "$ws")
+    tgt=$(fcfg_target_conf "$SESSION" "$ws")
     printf '\n  %senter edits the %s layer%s\n  %s%s%s\n' \
-      "$B" "$(printf '%s' "$ws" | tr '[:lower:]' '[:upper:]')" "$R" \
+      "$B" "$(fcfg_wscope_label "$SESSION")" "$R" \
       "$DIM" "${tgt:-<not in a fleet — global only>}" "$R"
   fi
 }
@@ -263,7 +294,7 @@ case "${1:-loop}" in
   preview)      emit_preview "${2:-}"; exit 0 ;;
   enter-action) emit_enter_action "${2:-}" "${3:-}" "${4:-}" "${5:-}"; exit 0 ;;
   toggle-scope) fcfg_wscope_toggle "$SESSION"
-                tmux display-message "config: per-fleet edits now write to the $(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]') layer" 2>/dev/null || true
+                tmux display-message "config: per-fleet edits now write to the $(fcfg_wscope_label "$SESSION") layer" 2>/dev/null || true
                 exit 0 ;;
   toggle-raw)   raw_toggle; exit 0 ;;
   toggle-bucket) case "${2:-}" in @@TOGGLE@@*) exp_toggle "${2#@@TOGGLE@@}" ;; esac
@@ -292,7 +323,7 @@ run_fzf() {
   # then clear the one-shot sentinels for this run.
   local savedq=''; [ -f "$QUERYF" ] && savedq=$(cat "$QUERYF" 2>/dev/null)
   rm -f "$RESTART" "$EDITKEY" "$QUERYF"
-  local scope; scope=$(fcfg_wscope "$SESSION" | tr '[:lower:]' '[:upper:]')
+  local scope; scope=$(fcfg_wscope_label "$SESSION")
   # The header carries a tappable `[✕ close]` button chip; the click-header bind
   # below aborts (→ closes this popup) when ✕/close is tapped — an iPad/Termius
   # dismiss that doesn't need Escape (issue #346). Bracketed as a button (issue
