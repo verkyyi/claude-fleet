@@ -420,6 +420,16 @@ main repo. `bin/fleet-repo.sh add|remove|list` manages them. (`add` refused unle
 `FLEET_MULTIREPO=1` until the two-repo end-to-end check landed — #795 removed the
 gate and the key.)
 
+`fleet-repo.sh fold <from> --into <sess> [--dry-run] [--wait]` (#796) retires a
+one-repo fleet into another. It is the hand fold of tokenledger done as one
+plan/execute pair: `add` the repo, carrying every per-repo key `<from>` sets
+differently (a differing fleet-level key is WARNED, not carried); move each
+`issue-N`/`scratch-N` window by `fleet-worker-stop.sh` then
+`dash-restore-session.sh --repo` (waking a hibernating one first; busy ones stay,
+or wait under `--wait`); and only when nothing is left, `fleet-down` (no `--purge`)
+and move `fleets/<from>/` to `archive/<from>-folded-into-<sess minus fleet->-<date>`. Panels and
+pool windows retire with the server. `bin/fleet-fold-selftest.sh` pins it.
+
 A window names its repo with `@repo=<owner/name>`; `@norepo 1` marks a session
 that deliberately belongs to none. Resolution goes through `bin/fleet-lib.sh`
 only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf`,

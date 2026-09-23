@@ -349,6 +349,16 @@ are equal — there is no main repo. Once a fleet hosts two:
 - cleanup, PR status, restore and every issue lookup are keyed on (repo, number),
   so repo A's #12 never touches repo B's #12.
 
+**Folding a fleet into another.** `bin/fleet-repo.sh fold <old-fleet> --into
+<fleet> --dry-run` shows what would move; drop `--dry-run` to do it. The old
+fleet's repo and its per-repo settings become an overlay of `<fleet>` (a setting
+that only a fleet conf can hold is warned about, not carried). Every idle or
+finished session exits cleanly and resumes in `<fleet>` with the same conversation
+and folder, and a hibernating one is woken first. Busy sessions are left where they
+are, or moved as each one finishes with `--wait`. Once the old fleet is empty, its
+server goes down and its conf is archived under
+`~/.config/claude-fleet/archive/`. It is never deleted.
+
 `bin/multirepo-e2e-selftest.sh` proves the whole path end to end. One crash of
 the fleet's tmux server takes every repo in it down, so keep a repo you want
 isolated in its own fleet.
