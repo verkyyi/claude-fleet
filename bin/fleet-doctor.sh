@@ -1297,78 +1297,189 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 
-# --- project trust: will a spawned worker stop at "trust this folder?" (issue #563) ---
-# Claude Code keys its per-directory trust on the resolved project root — a linked
-# worktree resolves to its MAIN checkout — with an exact lookup in ~/.claude.json
-# (`projects[<root>].hasTrustDialogAccepted === true`). So the ONE entry a fleet
-# needs is FLEET_MAIN's; with it missing/false every dispatched worker parks on the
-# dialog with nobody to answer (macmini, 2026-09-12: 7+ minutes, slot "filled",
-# nothing logged). The launcher pre-trusts at spawn since #563, but a live install
-# that predates it, or an opted-out fleet (FLEET_PRETRUST=0), still stalls — say so
-# here, with the one-line fix. Read the conf the way sourcing does (a subshell), so
-# a `$HOME/…` FLEET_MAIN expands; the verdict comes from bin/fleet-trust.sh itself.
+# --- hosted repos: one block per repo every fleet hosts (issue #801) -------------
+# A fleet hosts one or more repos (#788): the fleet conf's FLEET_REPO first, then
+# each fleets/<sess>/repos/<slug>.conf overlay. Each repo gets its own block —
+#   main    FLEET_MAIN exists, is a git checkout, and its origin IS the repo
+#   base    FLEET_BASE_BRANCH is the repo's GitHub default (#603) and exists locally
+#   trust   Claude Code's trust pre-grant for FLEET_MAIN (#563)
+#   deploy  FLEET_DEPLOY_REF / FLEET_DEPLOY_CHECK are usable (#541)
+#   labels  the canonical fleet label set is seeded on the repo (#333)
+# — because the check used to read the fleet conf alone, so a broken checkout or a
+# missing trust grant for any OTHER hosted repo went unnoticed until a spawn hung.
+#
+# Resolution mirrors fleet_repos / fleet_load_repo_conf in fleet-lib.sh (doctor is
+# /bin/sh and cannot source it — KEEP IN SYNC): the conf's own repo takes the conf's
+# repo-scoped keys with its overlay (if any) on top; every other repo takes them from
+# its overlay ONLY (the conf repo's are dropped, so they never leak across). Keys are
+# read the way sourcing does (a subshell), so a `$HOME/…` FLEET_MAIN expands.
+# Why the trust fault matters: Claude Code keys per-directory trust on the resolved
+# project root — a linked worktree resolves to its MAIN checkout — with an exact
+# lookup in ~/.claude.json (`projects[<root>].hasTrustDialogAccepted === true`); with
+# it missing every dispatched worker parks on the dialog with nobody to answer
+# (macmini, 2026-09-12: 7+ minutes, slot "filled", nothing logged). The launcher
+# pre-trusts at spawn since #563, but a live install that predates it, or an
+# opted-out fleet (FLEET_PRETRUST=0), still stalls.
+# Why the base fault matters: when FLEET_BASE_BRANCH is wrong nothing looks broken —
+# workers claim, branch, push, CI passes, PRs merge — onto a branch nobody ships
+# from (2026-09-12: fleet-ccquota sat on 'dashboard-redesign' for a whole round).
 tr_sh="$(dirname "$0")/fleet-trust.sh"
-if [ ! -f "$tr_sh" ]; then
-  warn trust "bin/fleet-trust.sh missing — spawns cannot pre-trust the checkout; a worker may park on Claude Code's \"trust this folder?\" dialog (#563); run /fleet-sync-install"
-elif [ -d "$conf_dir" ]; then
-  while IFS= read -r cf; do
-    [ -n "$cf" ] || continue
-    case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
-    main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
-    [ -n "$main" ] || { warn trust "$sess: conf has no FLEET_MAIN — cannot check checkout trust"; continue; }
-    pretrust=$(_conf_val "$cf" FLEET_PRETRUST); [ -n "$pretrust" ] || pretrust=$(_gconf_val FLEET_PRETRUST)
+lib_sh="$(dirname "$0")/fleet-lib.sh"
+_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT"
+
+# _norm_repo <url-or-slug> → owner/name (fleet_norm_repo, single-line case)
+_norm_repo() {
+  printf '%s' "$1" | sed -E 's#^git@[^:]*:##; s#^[a-z]+://[^/]*/##; s#\.git$##; s#/+$##'
+}
+# _repo_slug <owner/name> → the overlay basename (fleet_slug)
+_repo_slug() { printf '%s' "$1" | tr '/' '-' | tr -cd '[:alnum:]._-'; }
+# _repo_key <fleet-conf> <overlay|''> <own:1|0> <KEY> → KEY as fleet_load_repo_conf
+# leaves it for that repo.
+_repo_key() {
+  sh -c '. "$1" >/dev/null 2>&1
+         [ "$3" = 1 ] || unset '"$_REPO_SCOPED"'
+         [ -n "$2" ] && [ -f "$2" ] && . "$2" >/dev/null 2>&1
+         eval "printf %s \"\${$4:-}\""' _ "$1" "$2" "$3" "$4"
+}
+
+# The canonical label names, read from fleet-lib.sh (the one taxonomy, #333).
+canon_labels=''
+[ -f "$lib_sh" ] && command -v bash >/dev/null 2>&1 \
+  && canon_labels=$(bash -c '. "$1" >/dev/null 2>&1 && fleet_labels_allowed' _ "$lib_sh" 2>/dev/null)
+
+# _repo_block <sess> <fleet-conf> <repo> <overlay|''> <own:1|0> — one repo's block
+_repo_block() {
+  rb_sess=$1 rb_cf=$2 r=$3 rb_ov=$4 rb_own=$5
+  rb_src=$rb_cf; [ -n "$rb_ov" ] && rb_src=$rb_ov   # where a fix for THIS repo goes
+  printf '  %s── %s · %s%s\n' "$B" "$rb_sess" "$r" "$Z"
+  main=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_MAIN)
+  bbase=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_BASE_BRANCH)
+  dref=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_DEPLOY_REF)
+  dchk=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_DEPLOY_CHECK)
+
+  # main — the checkout every worktree for this repo branches from
+  main_ok=0
+  if [ -z "$main" ]; then
+    warn main "$r: no FLEET_MAIN — a spawn for this repo has no checkout to branch from; set it in $rb_src"
+  elif [ ! -d "$main" ]; then
+    warn main "$r: FLEET_MAIN $main does not exist — every spawn for this repo fails; clone it there or fix FLEET_MAIN in $rb_src"
+  elif ! git -C "$main" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn main "$r: FLEET_MAIN $main is not a git checkout — no worktree can be cut from it"
+  else
+    morigin=$(_norm_repo "$(git -C "$main" remote get-url origin 2>/dev/null)")
+    if [ -z "$morigin" ]; then
+      warn main "$r: $main has no origin remote — workers cannot push or open a PR"
+    elif [ "$morigin" != "$r" ]; then
+      warn main "$r: $main's origin is $morigin, not $r — its workers push to the wrong repo; fix FLEET_MAIN in $rb_src"
+    else
+      main_ok=1
+      pass main "$r: $main (origin matches)"
+    fi
+  fi
+
+  # base + labels — one gh read: the default branch, then every label name
+  if [ -z "$bbase" ]; then
+    warn base "$r: no FLEET_BASE_BRANCH — the tooling has to guess this repo's trunk; set it in $rb_src"
+  fi
+  gh_out=''
+  command -v gh >/dev/null 2>&1 \
+    && gh_out=$(gh repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
+  bdef=$(printf '%s\n' "$gh_out" | sed -n 1p)
+  if [ -n "$bbase" ]; then
+    if [ "$main_ok" = 1 ] && ! git -C "$main" rev-parse --verify -q "refs/heads/$bbase" >/dev/null 2>&1 \
+         && ! git -C "$main" rev-parse --verify -q "refs/remotes/origin/$bbase" >/dev/null 2>&1; then
+      warn base "$r: base \"$bbase\" does not exist in $main — no worktree can branch from it"
+    elif [ -z "$bdef" ]; then
+      printf '        note: %s: could not read the default branch (gh missing/unauthed/offline) — base "%s" left unverified.\n' "$r" "$bbase"
+    elif [ "$bbase" = "$bdef" ]; then
+      pass base "$r: base \"$bbase\" is the repo default"
+    else
+      warn base "$r: base \"$bbase\" is NOT the repo's default branch (\"$bdef\") — every worker here branches from and merges into \"$bbase\", so the trunk never moves; fix: set FLEET_BASE_BRANCH=\"$bdef\" in $rb_src, or keep it deliberately if \"$bbase\" really is this repo's trunk"
+    fi
+  fi
+
+  # trust — the verdict comes from bin/fleet-trust.sh itself
+  if [ -n "$main" ] && [ -f "$tr_sh" ]; then
+    pretrust=$(_conf_val "$rb_cf" FLEET_PRETRUST); [ -n "$pretrust" ] || pretrust=$(_gconf_val FLEET_PRETRUST)
     verdict=$(sh "$tr_sh" check "$main" 2>/dev/null)
     case "$verdict" in
       trusted)
-        pass trust "$sess: $main is trusted in $(sh "$tr_sh" file) — workers skip the trust dialog" ;;
+        pass trust "$r: $main is trusted in $(sh "$tr_sh" file) — workers skip the trust dialog" ;;
       untrusted)
         if [ "$pretrust" = 0 ]; then
-          warn trust "$sess: $main is NOT trusted and FLEET_PRETRUST=0 — every spawned worker will hang at Claude Code's \"trust this folder?\" dialog; fix: sh $(dirname "$0")/fleet-trust.sh grant --main '$main'"
+          warn trust "$r: $main is NOT trusted and FLEET_PRETRUST=0 — every spawned worker will hang at Claude Code's \"trust this folder?\" dialog; fix: sh $tr_sh grant --main '$main'"
         else
-          warn trust "$sess: $main is NOT trusted in $(sh "$tr_sh" file) — a worker spawned by a pre-#563 launcher hangs at the \"trust this folder?\" dialog; the current launcher pre-trusts at spawn; fix now: sh $(dirname "$0")/fleet-trust.sh grant --main '$main'"
+          warn trust "$r: $main is NOT trusted in $(sh "$tr_sh" file) — a worker spawned by a pre-#563 launcher hangs at the \"trust this folder?\" dialog; the current launcher pre-trusts at spawn; fix now: sh $tr_sh grant --main '$main'"
         fi ;;
       *)
         if [ ! -d "$main" ]; then
-          warn trust "$sess: FLEET_MAIN $main does not exist — nothing to trust (and nothing to spawn into)"
+          :   # already a `main` warning — nothing to trust
         elif ! command -v python3 >/dev/null 2>&1; then
-          warn trust "$sess: cannot read $(sh "$tr_sh" file) without python3 — trust unknown; pre-trust at spawn is also inert"
+          warn trust "$r: cannot read $(sh "$tr_sh" file) without python3 — trust unknown; pre-trust at spawn is also inert"
         else
-          printf '        note: %s: no %s yet (claude has never run here?) — the first spawn creates it with %s trusted.\n' "$sess" "$(sh "$tr_sh" file)" "$main"
+          printf '        note: %s: no %s yet (claude has never run here?) — the first spawn creates it with %s trusted.\n' "$r" "$(sh "$tr_sh" file)" "$main"
         fi ;;
     esac
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-fi
+  fi
 
-# --- base branch: does each fleet's conf point at the repo's REAL trunk? (#603) ---
-# FLEET_BASE_BRANCH is what every worker branches from and opens its PR against.
-# When it is wrong, nothing looks broken — workers claim, branch, push, CI passes,
-# PRs merge — onto a branch nobody ships from, and the trunk silently never moves.
-# It is the single hardest fleet fault to notice from the dash, which is exactly why
-# it needs a line here (2026-09-12: fleet-ccquota sat on 'dashboard-redesign' for a
-# whole round of work while the repo's default was 'main'). fleet-up.sh now refuses
-# to choose this quietly; this check catches the confs written before it did, and any
-# base that drifted after the repo renamed or re-pointed its default branch.
-if command -v gh >/dev/null 2>&1 && [ -d "$conf_dir" ]; then
+  # deploy — merged ≠ live (#541); REF wins over CHECK when both are set
+  if [ -n "$dref" ]; then
+    case "$dref" in \~/*) dref="$HOME/${dref#\~/}" ;; esac
+    if git -C "$dref" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      pass deploy "$r: FLEET_DEPLOY_REF $dref — a merged PR reads live once its sha reaches that HEAD"
+    else
+      warn deploy "$r: FLEET_DEPLOY_REF $dref is not a git checkout — every merged PR's deploy state stays unknown; fix it in $rb_src"
+    fi
+  elif [ "$dchk" = actions ]; then
+    pass deploy "$r: FLEET_DEPLOY_CHECK=actions — live once the merge sha's post-merge Actions runs go green"
+  elif [ -n "$dchk" ]; then
+    warn deploy "$r: FLEET_DEPLOY_CHECK=\"$dchk\" is not a mode the fleet knows (only \`actions\`) — deploy state stays off; fix it in $rb_src"
+  else
+    pass deploy "$r: no deploy state configured — MERGED ≡ done"
+  fi
+
+  # labels — the filer rejects any label outside the canonical set, and gh starts empty
+  if [ -n "$canon_labels" ] && [ -n "$bdef" ]; then
+    have=$(printf '%s\n' "$gh_out" | sed 1d)
+    # `repo view` returns the first 100 labels only; page the full list past that
+    [ "$(printf '%s\n' "$have" | grep -c .)" -ge 100 ] \
+      && have=$(gh label list --repo "$r" --limit 1000 --json name -q '.[].name' 2>/dev/null)
+    missing=''
+    for l in $canon_labels; do
+      printf '%s\n' "$have" | grep -qxF "$l" || missing="$missing $l"
+    done
+    if [ -z "$missing" ]; then
+      pass labels "$r: every fleet label is seeded"
+    else
+      warn labels "$r: missing fleet labels:$missing — filing an issue with one fails; fix: $(dirname "$0")/fleet-labels-seed.sh --repo $r"
+    fi
+  fi
+}
+
+if [ ! -f "$tr_sh" ]; then
+  warn trust "bin/fleet-trust.sh missing — spawns cannot pre-trust the checkout; a worker may park on Claude Code's \"trust this folder?\" dialog (#563); run /fleet-sync-install"
+fi
+if [ -d "$conf_dir" ]; then
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
-    brepo=$(_conf_val "$cf" FLEET_REPO)
-    bbase=$(_conf_val "$cf" FLEET_BASE_BRANCH)
-    [ -n "$brepo" ] || { warn base "$sess: conf has no FLEET_REPO — cannot check the base branch"; continue; }
-    if [ -z "$bbase" ]; then
-      warn base "$sess: conf has no FLEET_BASE_BRANCH — the tooling has to guess this fleet's trunk; set it in $cf"
-      continue
-    fi
-    bdef=$(gh repo view "$brepo" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)
-    if [ -z "$bdef" ]; then
-      printf '        note: %s: could not read %s default branch (unauthed/offline) — base "%s" left unverified.\n' "$sess" "$brepo" "$bbase"
-    elif [ "$bbase" = "$bdef" ]; then
-      pass base "$sess: $brepo base \"$bbase\" is the repo default"
+    own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
+    seen=' '
+    if [ -n "$own" ]; then
+      ov="$conf_dir/fleets/$sess/repos/$(_repo_slug "$own").conf"; [ -f "$ov" ] || ov=''
+      _repo_block "$sess" "$cf" "$own" "$ov" 1
+      seen=" $own "
     else
-      warn base "$sess: base \"$bbase\" is NOT $brepo's default branch (\"$bdef\") — every worker here branches from and merges into \"$bbase\", so the trunk never moves; fix: set FLEET_BASE_BRANCH=\"$bdef\" in $cf (prefix+c), or keep it deliberately if \"$bbase\" really is this fleet's trunk"
+      warn repo "$sess: conf has no FLEET_REPO — its first repo cannot be checked"
     fi
+    for ov in "$conf_dir/fleets/$sess/repos"/*.conf; do
+      [ -f "$ov" ] || continue
+      r=$(_norm_repo "$(sh -c 'unset FLEET_REPO; . "$1" >/dev/null 2>&1; printf %s "${FLEET_REPO:-}"' _ "$ov")")
+      case "$r" in ?*/?*) ;; *) warn repo "$sess: $ov names no FLEET_REPO — that overlay hosts nothing"; continue ;; esac
+      case "$seen" in *" $r "*) continue ;; esac
+      seen="$seen$r "
+      _repo_block "$sess" "$cf" "$r" "$ov" 0
+    done
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
