@@ -98,11 +98,16 @@ def name(value):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, ("issue",), ("agent",))
+        fields(params, ("issue",), ("agent", "repo"))
         if type(params["issue"]) is not int or not 1 <= params["issue"] <= 2147483647:
             raise Fault("INVALID_ARGUMENT", "issue must be a positive integer")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
+        # Which hosted repo the issue is in (issue #984): owner/name, slug or bare
+        # name — resolved against the fleet's repos on the machine, never a path.
+        repo = params.get("repo", "")
+        if not isinstance(repo, str) or repo and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}(/[A-Za-z0-9_.-]{1,100})?", repo):
+            raise Fault("INVALID_ARGUMENT", "repo must be owner/name or a hosted repo's name")
     elif action in WORKER_ACTIONS:
         fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
         parse_worker_id(params["worker_id"])

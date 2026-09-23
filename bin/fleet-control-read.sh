@@ -50,6 +50,16 @@ case "$mode" in
     fleet_load_conf "$sess"
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
+    # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
+    # or bare name. A fleet hosting 2+ repos REQUIRES it — two repos can both
+    # have an issue-12 — and an unknown/ambiguous one is refused (6) before any
+    # gate runs. A one-repo fleet with no $5 execs exactly as it always has.
+    srepo=''
+    if [ -n "${5:-}" ]; then
+      srepo=$(fleet_repo_for_slug "$sess" "$5") || { printf 'start: %s is not a repo this fleet hosts\n' "$5" >&2; exit 6; }
+    elif fleet_multirepo "$sess"; then
+      printf 'start: this fleet hosts several repos; name the repo of #%s\n' "${3:-}" >&2; exit 6
+    fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
       if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
@@ -58,7 +68,7 @@ case "$mode" in
     else
       bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4
     fi
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub
+    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at
