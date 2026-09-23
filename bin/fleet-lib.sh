@@ -440,7 +440,7 @@ _fleet_repo_overlay() {
     eval "unset $_FLEET_REPO_SCOPED"
   fi
   [ -f "$f" ] || return 0
-  _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+  _ore="${_FLEET_GLOBAL_ONLY// /|}"   # no `tr` fork: pr-refresh loads per repo (#888/#805)
   eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$f")"
   return 0
 }
@@ -451,7 +451,7 @@ _fleet_repo_overlay() {
 fleet_load_repo_conf() {
   local conf _ore; conf=$(fleet_conf_file "${1:-}")
   if [ -f "$conf" ]; then
-    _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
+    _ore="${_FLEET_GLOBAL_ONLY// /|}"   # no `tr` fork: pr-refresh loads per repo (#888/#805)
     eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
   fi
   _fleet_repo_overlay "${1:-}" "${2:-}"
