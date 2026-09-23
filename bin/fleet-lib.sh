@@ -731,6 +731,39 @@ fleet_multirepo() {
   [ "$(fleet_repos "$1" | grep -c .)" -ge 2 ]
 }
 
+# fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
+# trio, fleet-epic-preflight.sh, fleet-evidence.sh; issue #803) acts on:
+#   1. <repo>, when given — it must be hosted (exit 1 otherwise);
+#   2. a one-repo fleet: its repo (FLEET_REPO, else the collector's cached one);
+#   3. the caller pane's own window repo (a worker, a scratch bound to a repo);
+#   4. the fleet's current repo (the dash filter), when it is not `all`;
+#   5. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
+#      never guesses. Exit 1 = <repo> not hosted / nothing resolvable.
+# Degenerate (no repos/ overlay): 1 → the conf's own repo, unvalidated, as before.
+fleet_target_repo() {
+  local sess="${1:-}" want r
+  want=$(fleet_norm_repo "${2:-}")
+  if ! fleet_multirepo "$sess"; then
+    r=$( fleet_load_conf "$sess" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    [ -n "$r" ] || r=$(fleet_repo_cached "$sess" 2>/dev/null)
+    r=$(fleet_norm_repo "$r")
+    printf '%s\n' "${want:-$r}"
+    [ -n "${want:-$r}" ]; return
+  fi
+  if [ -n "$want" ]; then
+    fleet_repo_hosted "$sess" "$want" || return 1
+    printf '%s\n' "$want"; return 0
+  fi
+  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
+     && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" = "$sess" ]; then
+    r=$(fleet_norm_repo "$(fleet_window_repo "$sess" "$TMUX_PANE")")
+    if [ -n "$r" ] && fleet_repo_hosted "$sess" "$r"; then printf '%s\n' "$r"; return 0; fi
+  fi
+  r=$(fleet_current_repo "$sess")
+  [ "$r" != all ] && { printf '%s\n' "$r"; return 0; }
+  return 4
+}
+
 # fleet_issue_key <sess> <repo> <N> → the join key for issue N of <repo>.
 fleet_issue_key() {
   if fleet_multirepo "${1:-}"; then printf '%s#%s' "$(fleet_norm_repo "${2:-}")" "${3:-}"

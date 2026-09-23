@@ -29,6 +29,10 @@
 # fleet's conf (repo included) — that is how you preflight the monorepo from the
 # claude-fleet hub without moving. A bare `--repo` that disagrees with the loaded
 # conf says so on its own line rather than pretending the mix is one fleet.
+# In a fleet hosting 2+ repos (issue #803) `--repo B` names one of them, and every
+# row — base and deploy included — is B's (its repos/<slug>.conf overlay). With no
+# `--repo` there it takes the pane's repo, then the dash's current one, and under
+# `all` exits 2 listing the choices.
 #
 # DEFAULT IS READ-ONLY. `--fix` is the only thing that writes, and it writes
 # exactly one thing: bin/fleet-labels-seed.sh against this repo. That is opt-in
@@ -57,12 +61,13 @@ while [ "$#" -gt 0 ]; do
     --repo)    shift; repo_arg="${1:-}" ;;
     --session) shift; sess_arg="${1:-}" ;;
     --fix)     do_fix=1 ;;
-    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)       printf 'fleet-epic-preflight: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)         printf 'fleet-epic-preflight: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
+hint_repo="$repo_arg"
 
 # --- output helpers (color only on a tty), deliberately fleet-doctor's shape ---
 if [ -t 1 ]; then
@@ -92,6 +97,25 @@ conf_repo="${FLEET_REPO:-}"
 repo="${repo_arg:-$conf_repo}"
 if [ -z "$repo" ]; then
   _r=$(fleet_repo_cached "$sess" 2>/dev/null); [ -n "$_r" ] && repo="$_r"
+fi
+# A fleet hosting 2+ repos (issue #803): the target is one of THEM, and the fleet
+# rows below (base, deploy) must be that repo's — so load its overlay, not the conf
+# repo's. No --repo resolves like every repo-wide command (fleet_target_repo): the
+# pane's own repo, then the dash's current repo; under `all` it refuses and lists
+# the choices, so the skill asks instead of this screen silently probing repo A.
+# A --repo the fleet does NOT host keeps the one-repo override below (repo rows
+# only, noted). A one-repo fleet never enters this block.
+if fleet_multirepo "$sess"; then
+  _t=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
+  if [ "$_rc" = 0 ] && [ -n "$_t" ]; then
+    repo="$_t"; fleet_load_repo_conf "$sess" "$repo"; conf_repo="${FLEET_REPO:-$repo}"
+    hint_repo="$repo"   # the --fix rerun must name it: the dash's current repo can move
+  elif [ -z "$repo_arg" ]; then
+    printf 'fleet-epic-preflight: fleet %s hosts several repos and none is current — pass --repo, one of:\n' "$sess" >&2
+    fleet_repos "$sess" | sed 's/^/  /' >&2
+    exit 2
+  fi
+  unset _t _rc
 fi
 [ -n "$repo" ] || {
   printf 'fleet-epic-preflight: no repo resolved (pass --repo or --session, or run inside a fleet)\n' >&2; exit 2; }
@@ -285,7 +309,7 @@ elif [ "$fixes" -gt 0 ]; then
   # preflight of another fleet that suggests a bare --fix would seed the wrong repo.
   printf '%sFIXABLE%s — %d gap(s) --fix can seed, %d warn. Show the operator, then rerun: %s%s%s --fix\n' \
     "$C" "$Z" "$fixes" "$warns" "$0" \
-    "${sess_arg:+ --session $sess_arg}" "${repo_arg:+ --repo $repo_arg}"
+    "${sess_arg:+ --session $sess_arg}" "${hint_repo:+ --repo $hint_repo}"
   exit 1
 elif [ "$warns" -gt 0 ]; then
   printf '%sREADY%s — %d warn; an EPIC can run in %s, with the caveats above.\n' "$Y" "$Z" "$warns" "$repo"

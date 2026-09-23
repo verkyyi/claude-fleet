@@ -426,7 +426,9 @@ bridge_relay() {
         # Keep the spawn's stderr (issue #683): a refusal prints its reason there
         # — the tmux toast lands on no screen this daemon owns — so the outcome
         # line says WHY (cap / claimed / infra), not just that it failed.
-        if why=$("$BIN/dash-issue-session.sh" "$issue" "$target" --origin bridge 2>&1 >/dev/null); then
+        # 2+ repos: the spawn must name the repo (#972); one-repo argv unchanged.
+        local ra=(); _fleet_hosts_many "$target" && ra=(--repo "$repo")
+        if why=$("$BIN/dash-issue-session.sh" "$issue" "$target" ${ra[@]+"${ra[@]}"} --origin bridge 2>&1 >/dev/null); then
           echo "revived(#${issue}->${target})"; return 0
         fi
         why=${why#dash-issue-session: }; why=${why//$'\n'/ | }

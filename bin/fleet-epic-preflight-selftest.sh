@@ -23,6 +23,9 @@
 #   H. no repo resolvable                      → exit 2
 #   J. --session reads ANOTHER fleet's conf (repo + knobs together), and an
 #      unknown fleet name is a usage error, not a half-answered screen
+#   K. a multi-repo fleet: --repo B probes B with B's own knobs; no --repo takes
+#      the current repo, and under `all` refuses with the list (issue #803)
+#   L. the EPIC trio's documented spawn / preflight / evidence calls carry --repo
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -336,6 +339,70 @@ FLEET_REPO='acme/widgets' FLEET_BASE_BRANCH='master' FLEET_MAX_SESSIONS=5 \
 printf '%s' "$OUT" | grep -q 'overrides the repo only' \
   || fail "J3 a --repo that disagrees with the conf must say the fleet rows are still the current fleet's" "$OUT"
 ok "J3 a bare --repo announces that the fleet rows still belong to the current fleet"
+
+# ============================ K: a multi-repo fleet (issue #803) ============
+# The fleet hosts acme/widgets (its conf) AND acme/b (repos/ overlay). `--repo B`
+# must probe B and read B's OWN base/deploy — not repo A's with a "still the
+# current fleet's" note; no --repo follows the dash's current repo, and under
+# `all` it refuses with the list rather than silently probing A.
+mkdir -p "$WORK/mconf/fleets/fepsess/repos"
+cat > "$WORK/mconf/fleets/fepsess/conf" <<'MCONF'
+FLEET_REPO="acme/widgets"
+FLEET_BASE_BRANCH="master"
+FLEET_DEPLOY_REF=""
+FLEET_DEPLOY_CHECK=""
+MCONF
+b_conf=$(FLEET_CONF_DIR="$WORK/mconf"; . "$WORK/bin/fleet-lib.sh"; fleet_repo_conf_file fepsess acme/b)
+cat > "$b_conf" <<'BCONF'
+FLEET_REPO="acme/b"
+FLEET_BASE_BRANCH="main"
+FLEET_DEPLOY_CHECK="actions"
+BCONF
+mrun() { TMUX='' TMUX_PANE='' FLEET_SESSION=fepsess FLEET_CONF_DIR="$WORK/mconf" \
+  FLEET_MAX_SESSIONS=5 CCQUOTA_HUB_URL='' QUOTA_ROWS='' run_pf --session fepsess "$@"; }
+
+GH_DEFBRANCH=main mrun --repo acme/b
+[ "$RC" -eq 0 ] || fail "K1 --repo B in a multi-repo fleet must be READY (got $RC)" "$OUT
+$(cat "$WORK/err")"
+printf '%s' "$OUT" | grep -q 'epic preflight  *acme/b' || fail "K1 the screen must name repo B" "$OUT"
+printf '%s' "$OUT" | grep -qE 'PASS  *base  *main'      || fail "K1 base must be B's own (main), not A's master" "$OUT"
+printf '%s' "$OUT" | grep -qE 'PASS  *deploy.*actions'  || fail "K1 deploy must be B's own (actions)" "$OUT"
+printf '%s' "$OUT" | grep -q 'overrides the repo only' && fail "K1 a HOSTED --repo is not a mixed screen — no override note" "$OUT"
+ok "K1 preflight --repo B probes B with B's own base + deploy (multi-repo fleet)"
+
+rm -f "$WORK/mconf/fleets/fepsess/current-repo"
+mrun
+[ "$RC" -eq 2 ] || fail "K2 no --repo under \`all\` must exit 2 (got $RC)" "$OUT"
+grep -q 'acme/widgets' "$WORK/err" && grep -q 'acme/b' "$WORK/err" \
+  || fail "K2 the refusal must list the hosted repos to pick from" "$(cat "$WORK/err")"
+ok "K2 no --repo with the dash on \`all\` refuses and lists the choices (the skill asks)"
+
+printf 'acme/b\n' > "$WORK/mconf/fleets/fepsess/current-repo"
+GH_DEFBRANCH=main mrun
+[ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'epic preflight  *acme/b' \
+  || fail "K3 no --repo must follow the dash's current repo (acme/b)" "$OUT
+$(cat "$WORK/err")"
+ok "K3 no --repo follows the fleet's current repo"
+
+# ============================ L: the trio's documented calls name the repo ==
+# A fleet hosting 2+ repos refuses a spawn with no --repo (#972) — and the run
+# loop follows its doc literally, so an unattended batch stalls on the first
+# refill. Pin the doc: the spawn line, the preflight call and the report's
+# evidence reads all carry the resolved repo (issue #803).
+CMDS="$BIN/../commands"
+[ -f "$CMDS/fleet-epic-run.md" ] || fail "L commands/fleet-epic-run.md not found beside bin/"
+grep -E 'dash-issue-session\.sh <N>' "$CMDS/fleet-epic-run.md" | grep -qv -- '--repo' \
+  && fail "L every documented epic-run spawn line must carry --repo" "$(grep -n 'dash-issue-session' "$CMDS/fleet-epic-run.md")"
+grep -q 'dash-issue-session\.sh <N> --repo "\$FLEET_REPO"' "$CMDS/fleet-epic-run.md" \
+  || fail "L epic-run's spawn line must be \`dash-issue-session.sh <N> --repo \"\$FLEET_REPO\"\`"
+grep -q 'fleet-epic-preflight\.sh --repo "\$FLEET_REPO"' "$CMDS/fleet-epic-plan.md" \
+  || fail "L epic-plan must run preflight against the resolved repo"
+grep -E 'fleet-evidence\.sh (list|export|live) ' "$CMDS/fleet-epic-report.md" | grep -qv -- '--repo' \
+  && fail "L every evidence read in epic-report must carry --repo"
+for c in plan run report; do
+  grep -q 'fleet_target_repo' "$CMDS/fleet-epic-$c.md" || fail "L fleet-epic-$c.md must resolve its repo via fleet_target_repo"
+done
+ok "L the EPIC trio's spawn / preflight / evidence calls all name the resolved repo"
 
 # ============================ I: the taxonomy actually carries the labels ==
 # The preflight checks for three labels; fleet-labels-seed.sh can only create what

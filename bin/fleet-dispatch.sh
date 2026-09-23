@@ -300,7 +300,10 @@ dispatch_fleet() { (
     # Keep the spawn's stderr (issue #683): a refusal prints its reason there —
     # the tmux toast lands on no screen this daemon owns — and the exit code says
     # WHICH refusal: 2 at capacity, 3 claimed elsewhere, 1 infrastructure.
-    why=$("$BIN/dash-issue-session.sh" "$num" "$sess" --origin autofill 2>&1 >/dev/null); rc=$?
+    # A fleet hosting 2+ repos refuses a spawn that does not name its repo (#972);
+    # a one-repo fleet keeps its historic argv, byte for byte.
+    ra=(); _fleet_hosts_many "$sess" && ra=(--repo "$repo")
+    why=$("$BIN/dash-issue-session.sh" "$num" "$sess" ${ra[@]+"${ra[@]}"} --origin autofill 2>&1 >/dev/null); rc=$?
     why=${why#dash-issue-session: }; why=${why//$'\n'/ | }
     if [ "$rc" = 0 ]; then
       log "$sess: spawned #$num (p$tier)  [slot $((spawned + 1))/$slots]"
