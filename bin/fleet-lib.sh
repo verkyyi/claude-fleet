@@ -1863,7 +1863,7 @@ fleet_worktree_dir() {
 # relies on that as its serialization point. Creates the root on first use. Silent
 # on both streams (under `run-shell -b` any stdout becomes an overlay over the
 # dash, #401/#446); prints the worktree path on success, rc 1 on failure.
-# This is the hook point for what a new worktree gets beyond the checkout (#885).
+# What a new worktree gets beyond the checkout is fleet_worktree_setup's (#885).
 fleet_worktree_create() {
   local main="" slug="" base="" br="" reuse=0 n=0 wt
   while [ $# -gt 0 ]; do
@@ -1888,7 +1888,49 @@ fleet_worktree_create() {
       || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
       || return 1
   fi
+  fleet_worktree_setup "$main" "$wt"
   printf '%s\n' "$wt"
+}
+
+# fleet_worktree_setup <main> <wt> — the per-worktree setup hook (issue #885). When
+# the conf sets FLEET_WORKTREE_SETUP, run it as `<cmd> <wt> <main>` with cwd = the
+# new worktree, under fleet_timebox (FLEET_WORKTREE_SETUP_TIMEOUT, default 120 s).
+# The stock one is bin/fleet-deps-link.sh (borrow the base's node_modules).
+#
+# It can never cost the spawn: every outcome — not found, non-zero, timed out — is
+# one line in <install>/logs/worktree-setup.log and rc 0 here. Its streams go to
+# that log too, because fleet_worktree_create must stay silent on both (#401/#446).
+# A relative path resolves against the install root (`bin/fleet-deps-link.sh`), a
+# bare name against bin/, a leading ~/ against $HOME. Unset (the default) = no-op.
+fleet_worktree_setup() {
+  local main="${1:-}" wt="${2:-}" cmd="${FLEET_WORKTREE_SETUP:-}" budget bin log rc
+  [ -n "$cmd" ] && [ -n "$wt" ] || return 0
+  budget="${FLEET_WORKTREE_SETUP_TIMEOUT:-120}"
+  case "$budget" in ''|*[!0-9]*) budget=120 ;; esac
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  # shellcheck disable=SC2088  # a LITERAL ~ from a quoted conf value, expanded by hand
+  case "$cmd" in
+    '~/'*) cmd="$HOME/${cmd#\~/}" ;;
+    /*)    ;;
+    */*)   cmd="$(dirname "$bin")/$cmd" ;;
+    *)     cmd="$bin/$cmd" ;;
+  esac
+  log="${FLEET_WORKTREE_SETUP_LOG:-$(dirname "$bin")/logs/worktree-setup.log}"
+  mkdir -p "$(dirname "$log")" 2>/dev/null
+  {
+    printf '%s start %s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$wt" "$cmd"
+    if [ -x "$cmd" ]; then
+      ( cd "$wt" && fleet_timebox "$budget" "$cmd" "$wt" "$main" ) </dev/null 2>&1; rc=$?
+    else
+      printf 'not executable: %s\n' "$cmd"; rc=127
+    fi
+    case "$rc" in
+      0)   printf '%s ok %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$wt" ;;
+      124) printf '%s TIMEOUT after %ss %s — spawn continues\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$budget" "$wt" ;;
+      *)   printf '%s FAILED rc=%s %s — spawn continues\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$wt" ;;
+    esac
+  } >>"$log" 2>&1
+  return 0
 }
 
 # fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
@@ -1935,6 +1977,20 @@ fleet_worktree_drop() {
     st=$(git -C "$dir" status --porcelain 2>/dev/null); rc=$?
     [ "$rc" -eq 0 ] || { printf 'error:not-a-worktree\n'; return 2; }
     [ -n "$st" ] && { printf 'dirty\n'; return 1; }
+  fi
+
+  # Borrowed dependencies (issue #885): a node_modules that is a LINK into the base
+  # checkout goes as a link — removed here, before the tree moves, so neither the
+  # trash sweep's rm -rf nor the `worktree remove` fallback below ever holds a path
+  # into the base's live tree. Only what fleet-deps-link recorded, and only a link.
+  local gd l
+  gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
+  if [ -n "$gd" ] && [ -f "$gd/fleet-deps-links" ]; then
+    while IFS= read -r l; do
+      case "$l" in ''|/*|..|../*|*/../*|*/..) continue ;; esac
+      [ "$l" = . ] && l="$dir/node_modules" || l="$dir/$l/node_modules"
+      [ -L "$l" ] && rm -f "$l"
+    done < "$gd/fleet-deps-links"
   fi
 
   local trash target n=0
