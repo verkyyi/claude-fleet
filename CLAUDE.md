@@ -43,7 +43,9 @@ Do not install from memory: read the doc and work from it.
   several can write one worktree, and there is no one-worker-one-PR, no
   `/fleet-history` row, no handoff. Hand implementation to a worker
   (`dash-issue-session.sh <N>`, `fleet-issue-file.sh --spawn`,
-  `dash-raw-session.sh`); a subagent is for READ-ONLY fan-out only —
+  `dash-raw-session.sh`) — and when you need its result BACK the way a subagent
+  returns one, `fleet-await.sh <N>` spawns it and blocks on the outcome off the
+  child-report ledger (issue #812); a subagent is for READ-ONLY fan-out only —
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
