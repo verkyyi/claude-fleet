@@ -263,6 +263,16 @@ Focus cues use the client's key table, not just `pane_active`: an amber
 badge means worker input — colour only, the border text is the same focused or
 not (issue #999), while the `▶` row always identifies the current task.
 There is no title row inside the sidebar; task descriptions start at row zero.
+**Empty screens (issue #998).** A frame with no session row is never blank: the
+row producer emits ONE inert `hdr` hint row at the top — the hub list reads
+`No sessions — type a name to start one · ⌃n new task` (the key off
+`dash-keymap.sh`), `No sessions in tokenledger — …` for a picked repo; the
+30-column sidebar keeps it short (`No sessions — type a name`, its input line sits
+right below). Under `all` every hosted repo keeps its heading at `(0)`, so an idle
+repo still has a row to start work from. When the LAST session closes there is no
+neighbour to land on (#900's `@sidebar_next` is empty), so focus lands on the hub,
+which shows the hint. The task bar is never shown in the hub window itself
+(`plan`/`dash`/`backlog` are never `wanted`).
 The spinner samples the worker screen for stuck-working detection instead of
 using window activity, which includes sidebar repaints. The view exits if its
 worker disappears, including tmux versions where a manual kill emits no exit hook.
@@ -551,11 +561,16 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
 `dash-fold-toggle.sh`) read one `fleet_dash_repo_frame` per frame:
 - a picked repo shows only its own windows, and a hidden window is no one's parent
   there;
-- `all` groups the rows by repo (issue #974): one inert heading row per non-empty
-  group, `── tokenledger (1)` — the repo's bare name (`fleet_repo_name`; owner/name
+- `all` groups the rows by repo (issue #974): one inert heading row per hosted
+  repo — idle ones too, as `tokenledger (0)` (issue #998) — `tokenledger (1)`,
+  the repo's bare name (`fleet_repo_name`; owner/name
   only for two hosted repos sharing one), which is the only repo mark a row gets
   under `all` (issue #995: the sidebar is 30 columns) — in `fleet_repos` order, then a `?` group for
-  a repo the fleet does not host, and the no-repo group at the foot. A heading's
+  a repo the fleet does not host, and the no-repo group at the foot (those two only
+  while a window is in them). Both surfaces draw it bare, no `── ` rule (issue
+  #998, operator call: its purple / dim-bold paint already sets it apart), and the
+  sidebar's carries its owner/name in the row's state field, the one field the
+  new-session path may read. A heading's
   key fields read `hdr`, so every dash bind target no-ops on it and the sidebar's
   cursor steps over it; its count includes children a collapsed parent hides;
 - grouping keeps #790's repo-qualified keys, and the filter runs before them, so a
