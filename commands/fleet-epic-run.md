@@ -58,6 +58,7 @@ that dies at the boundary. Therefore:
   tick <n> · <UTC>
   quota: <acct> 5h=<x>% wk=<y>% · <acct> …
   slots: <k>/<cap> · spawned: #… · landed: #… · reaped: #…
+  backstop skipped: child busy (<child> <why>)   ← one per held READY PR (step 2a)
   blocked: #… (<why>)
   待决: <question that no charter answer covers>
   report: <pending | the report's URL>      ← closing tick only (step 4)
@@ -92,7 +93,21 @@ For each EPIC member with an open PR (the ledger read above names them):
 bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> -q
 ```
 
-- `READY` → merge it, **one command, never chained**:
+- `READY` → first ask whether the worker still owns it (issue #921):
+
+  ```sh
+  bash ~/.claude/fleet/bin/fleet-epic-backstop.sh <child-key> --pr <PR>
+  ```
+
+  `READY` is CI green + mergeable — it says nothing about the member's own
+  完成判据, which the worker runs locally *after* CI. On EPIC #875 this step
+  merged PR #917 while its worker was still `looping` through a 10× loadgen
+  acceptance run. Exit `1` prints `backstop skipped: child busy (<child> <why>)`
+  — the worker is mid-turn (`working` / `looping` / `waking`) or its turn ended
+  with a background job still running (`fleet_child_busy` → `bg`): **don't
+  merge**, copy that line into this tick's comment, next tick. Exit `0`
+  (`clear: …` — idle / done, window gone, or its own MERGED ship report is in
+  the ledger) → merge it, **one command, never chained**:
   `gh pr merge <PR> --squash --delete-branch`. A chained `push --delete` once
   closed the wrong issue and got the worker reaped.
 - `BEHIND` → `gh pr update-branch <PR>`.
