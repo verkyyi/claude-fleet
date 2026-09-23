@@ -44,4 +44,4 @@ esac
 
 export FLEET_SESSION="$sess"
 python3 "$BIN/fleet-sidebar.py" "$verb" "$sess" "$conf.sidebar.lock" \
-  "${FLEET_SIDEBAR:-1}" "${FLEET_SIDEBAR_WIDTH:-30}" "${3:-}" || :
+  "${FLEET_SIDEBAR:-1}" "${FLEET_SIDEBAR_WIDTH:-30}" "${3:-}" "$conf" || :
