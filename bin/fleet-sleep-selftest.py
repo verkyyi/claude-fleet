@@ -670,31 +670,78 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(bound['owner'],str(self.pid))
         self.assertEqual(bound['remote'],'unix:///test')
 
-    def source_navigation_hook(self):
-        # The shipped [72] hook, its wake command pointed at the sandbox. The
-        # dwell it carries (issue #822) is what the tests below exercise.
+    def source_navigation_hook(self,mode='confirm'):
+        # The shipped [72] hooks, their wake command pointed at the sandbox and
+        # the FLEET_SLEEP_WAKE knob fleet-sleep.sh would export (issue #1050).
+        # The dwell they carry (issue #822) applies only under `dwell`.
         import shlex
-        line=next(line for line in (BIN.parent/'conf/tmux-attention.conf').read_text().splitlines()
-                  if line.startswith('set-hook -g session-window-changed[72]'))
+        lines=[line for line in (BIN.parent/'conf/tmux-attention.conf').read_text().splitlines()
+               if line.startswith(('set-hook -g session-window-changed[72]','set-hook -g client-attached[72]'))]
+        self.assertEqual(len(lines),2)
         original="bash ~/.claude/fleet/bin/fleet-sleep.sh wake"
-        self.assertIn(original+" '#{session_name}' '#{window_id}' --dwell 2",line)
-        command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])
-        hookfile=self.root/'focus.conf';hookfile.write_text(line.replace(original,command)+'\n')
+        command=shlex.join(['env','FLEET_CONF_DIR='+self.env['FLEET_CONF_DIR'],'FLEET_SLEEP_WAKE='+mode,
+                            'python3',str(self.bin/'fleet-sleep.py'),'wake','--session'])
+        for line in lines:self.assertIn(original+" '#{session_name}' '#{window_id}' --dwell 2 --nav",line)
+        hookfile=self.root/'focus.conf';hookfile.write_text(''.join(l.replace(original,command)+'\n' for l in lines))
         self.tm('source-file',str(hookfile))
+        self.addCleanup(self.tm,'set-hook','-gu','client-attached[72]')
+        self.addCleanup(self.tm,'set-hook','-gu','session-window-changed[72]')
 
     def resume_count(self):
         return json.loads(Path(self.opt('@sleep_record')).read_text())['resume_count']
 
-    def test_navigation_hook_wakes_retained_window(self):
-        self.cli('sleep',self.pane)
+    def await_awake(self,timeout=45):
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline and self.opt('@worker_lifecycle'):time.sleep(.1)
+        self.assertEqual(self.opt('@worker_lifecycle'),'',self.tm('capture-pane','-p','-t',self.pane))
+
+    @contextmanager
+    def viewing_client(self):
+        import pty
+        master,slave=pty.openpty()
+        client=subprocess.Popen(['tmux','-L',self.socket,'attach-session','-t',self.socket],
+                                stdin=slave,stdout=slave,stderr=slave,env=dict(self.env,TERM='xterm-256color'))
+        os.close(slave)
         try:
-            self.source_navigation_hook()
-            self.tm('select-window','-t',self.pane)
-            deadline=time.monotonic()+15
-            while time.monotonic()<deadline and self.opt('@worker_lifecycle'):time.sleep(.1)
+            until=time.monotonic()+3
+            while time.monotonic()<until and self.opt('window_id') not in self.tm('list-clients','-F','#{window_id}'):
+                time.sleep(.05)
+            self.assertIn(self.opt('window_id'),self.tm('list-clients','-F','#{window_id}'))
+            yield
+        finally:
+            self.tm('detach-client','-s',self.socket)
+            try: client.wait(timeout=3)
+            except subprocess.TimeoutExpired: client.kill();client.wait(timeout=3)
+            os.close(master)
+
+    def test_navigation_and_viewing_never_wake_under_confirm(self):
+        # Issue #1050: arriving on a sleeper, attaching a client to it, and
+        # the scan finding it on screen all leave it asleep by default.
+        self.cli('sleep',self.pane)
+        self.source_navigation_hook()
+        self.tm('select-window','-t',self.pane)
+        with self.viewing_client():
+            time.sleep(3)
+            self.cli('scan')
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertEqual(self.resume_count(),0)
+        # Explicit CLI wake (no --nav) is untouched by the knob.
+        self.cli('wake',self.pane)
+        self.assertEqual(self.opt('@worker_lifecycle'),'')
+
+    def test_scan_wakes_viewed_sleeper_only_under_dwell(self):
+        self.cli('sleep',self.pane)
+        self.tm('select-window','-t',self.pane)
+        with self.viewing_client():
+            self.cli('scan',FLEET_SLEEP_WAKE='dwell')
             self.assertEqual(self.opt('@worker_lifecycle'),'')
-            self.assertEqual(self.resume_count(),1)
-        finally:self.tm('set-hook','-gu','session-window-changed[72]')
+
+    def test_navigation_hook_wakes_retained_window_under_dwell(self):
+        self.cli('sleep',self.pane)
+        self.source_navigation_hook('dwell')
+        self.tm('select-window','-t',self.pane)
+        self.await_awake(15)
+        self.assertEqual(self.resume_count(),1)
 
     def test_navigation_hook_dwell_skips_passed_window(self):
         # Selecting the sleeper and leaving again within the dwell — the
@@ -702,22 +749,77 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         # wake with a dwell honours the same rule, and settling on it wakes.
         first=self.tm('list-windows','-t',self.socket,'-F','#{window_id}').splitlines()[0]
         self.cli('sleep',self.pane)
-        try:
-            self.source_navigation_hook()
-            self.tm('select-window','-t',self.pane)
-            self.tm('select-window','-t',first)
-            time.sleep(3.5)
-            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-            self.assertEqual(self.resume_count(),0)
-            self.assertExited(self.pid)
-            self.cli('wake',self.pane,'--dwell','0.2')
-            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
-            self.assertEqual(self.resume_count(),0)
-            self.tm('select-window','-t',self.pane)
-            self.cli('wake',self.pane,'--dwell','0.2')
-            self.assertEqual(self.opt('@worker_lifecycle'),'')
-            self.assertEqual(self.resume_count(),1)
-        finally:self.tm('set-hook','-gu','session-window-changed[72]')
+        self.source_navigation_hook('dwell')
+        self.tm('select-window','-t',self.pane)
+        self.tm('select-window','-t',first)
+        time.sleep(3.5)
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertEqual(self.resume_count(),0)
+        self.assertExited(self.pid)
+        self.cli('wake',self.pane,'--dwell','0.2')
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertEqual(self.resume_count(),0)
+        self.tm('select-window','-t',self.pane)
+        self.cli('wake',self.pane,'--dwell','0.2')
+        self.assertEqual(self.opt('@worker_lifecycle'),'')
+        self.assertEqual(self.resume_count(),1)
+
+    def test_page_wakes_on_a_double_press_and_swallows_typing(self):
+        # Issue #1050: one ⏎ arms (still asleep), the arm lapses silently, a
+        # bounce <0.3s is not a second press, a second ⏎ inside the window
+        # wakes — and no byte typed at the page reaches the resumed agent.
+        self.cli('sleep',self.pane,FLEET_SLEEP_WAKE_ARM='2')
+        self.capture(lambda s:'⏎ Wake' in s)
+        self.tm('send-keys','-t',self.pane,'-l','abc')
+        self.tm('send-keys','-t',self.pane,'Enter')
+        screen=self.capture(lambda s:'again to wake' in s)
+        self.assertIn('again to wake · 2…',screen)
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.assertIn('again to wake · 1…',self.capture(lambda s:'again to wake · 1' in s))
+        screen=self.capture(lambda s:'⏎ Wake' in s,timeout=4)
+        self.assertNotIn('again to wake',screen)
+        self.tm('send-keys','-t',self.pane,'Enter',';','send-keys','-t',self.pane,'Enter')
+        time.sleep(.5)
+        self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        self.tm('send-keys','-t',self.pane,'-l','xyz')
+        self.assertEqual(self.resume_count(),0)
+        self.tm('send-keys','-t',self.pane,'Enter')
+        self.await_awake()
+        self.assertEqual(self.resume_count(),1)
+        trace=self.root/('input-'+self.opt('pane_pid')+'.log')
+        typed=trace.read_bytes() if trace.exists() else b''
+        for word in (b'abc',b'xyz',b'\r'):self.assertNotIn(word,typed)
+        self.assertEqual(LIB['INPUT']['snapshot'](self.socket,self.pane).get('state'),'empty')
+
+    def test_page_wakes_on_two_taps_on_the_button_only(self):
+        self.cli('sleep',self.pane)
+        self.capture(lambda s:'⏎ Wake' in s)
+        rows=int(self.opt('pane_height'))
+        self.assertEqual((self.opt('mouse_standard_flag'),self.opt('mouse_sgr_flag')),('1','1'))
+        def click(row):
+            seq='\x1b[<0;3;%dM\x1b[<0;3;%dm'%(row,row)
+            self.tm('send-keys','-t',self.pane,'-H',*('%02x'%ord(c) for c in seq))
+        click(1);time.sleep(.4);click(2)
+        time.sleep(.3)
+        self.assertNotIn('again to wake',self.tm('capture-pane','-p','-t',self.pane))
+        click(rows)
+        self.capture(lambda s:'again to wake' in s)
+        time.sleep(.4);click(rows)
+        self.await_awake()
+        self.assertEqual(self.resume_count(),1)
+        # The resumed agent must not inherit the page's mouse reporting.
+        self.assertEqual((self.opt('mouse_standard_flag'),self.opt('mouse_sgr_flag')),('0','0'))
+
+    def test_wake_button_state_machine(self):
+        P=LIB['PARK'];b=P['WakeButton'](3)
+        self.assertIsNone(b.timeout(0))
+        self.assertFalse(b.press(10));self.assertEqual(b.state,'armed')
+        self.assertFalse(b.press(10.1));self.assertEqual(b.state,'armed')
+        self.assertAlmostEqual(b.timeout(10.5),0.51,places=2)
+        self.assertFalse(b.press(13.5));self.assertEqual(b.state,'armed')
+        self.assertTrue(b.press(14));self.assertEqual(b.state,'waking')
+        self.assertFalse(b.press(14.5))
+        self.assertEqual(P['presses'](b'q\r\n\x1b[A\x1b[<0;1;9M\x1b[<0;1;9m\x1b[<0;1;3M\x1b[<2;1;9M',{9}),2)
 
     def test_hook_trust_preserves_only_authorized_hashes(self):
         check=LIB['hook_trust']

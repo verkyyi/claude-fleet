@@ -460,7 +460,8 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # An unmerged PR requires strict ancestry; dirty worktrees are kept untouched.
 # @label=Cleanup idle done raw sessions @group=bridge @tier=advanced @scope=fleet @edit=int @unit=min
 #FLEET_REAP_IDLE_DONE_MIN=30
-# Preserve idle workers in their original windows and resume on entry. Start in
+# Preserve idle workers in their original windows; resume from the sleeping page
+# (see FLEET_SLEEP_WAKE below) or on a due loop / quota / message. Start in
 # observe mode (logs only); on supersedes the idle scratch-window disposal above.
 # Unknown native idle/input/background-task evidence always keeps the agent alive.
 # @label=Worker sleep @group=bridge @tier=advanced @scope=fleet @edit=enum @options=off,observe,on
@@ -469,6 +470,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # viewed workers, drafts, active jobs and ambiguous transfers prevent sleep.
 # @label=Worker sleep idle grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_SLEEP_AFTER=1800
+# How a sleeping worker wakes when you go to it (issue #1050). confirm (default):
+# arriving, attaching or leaving it on screen only shows its sleeping page; press
+# its Wake button (⏎ or a tap) twice, or pick Wake in the sidebar row menu.
+# dwell: the old behaviour — wake once the window has stayed current for 2s.
+# Automatic wakes (due loop, quota back, incoming message) are unaffected.
+# @label=Worker wake on arrival @group=bridge @tier=advanced @scope=fleet @edit=enum @options=confirm,dwell
+#FLEET_SLEEP_WAKE=confirm
+# Seconds the sleeping page's Wake button stays armed after the first press;
+# the second press must land inside it (and ≥0.3s after the first).
+# @label=Worker wake confirm window @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+#FLEET_SLEEP_WAKE_ARM=3
 # Comma-separated native MCP server names whose volatile state may be discarded.
 # Empty by default. Exact configured stdio launchers/package entrypoints only;
 # child jobs/browser processes still prevent sleep. Do not list stateful REPLs.

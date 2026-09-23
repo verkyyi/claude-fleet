@@ -145,8 +145,11 @@ pane) and takes the new ones when it exits — only the first frame waits. And
 live view naming its worker, which is where a jump leaves it. The mouse wheel
 only scrolls the highlight. Clicking the worker, Enter or Escape returns input
 (Escape, Enter and ⌃n also drop a pending follow); auto-hiding the sidebar also
-clears its key table. The wake hooks (`session-window-changed[72]`,
-`client-attached[72]`) carry a two-second dwell — `fleet-sleep.sh wake … --dwell 2`
+clears its key table. Arriving on a sleeping worker never wakes it by default
+(issue #1050): the wake hooks (`session-window-changed[72]`,
+`client-attached[72]`) pass `--nav`, a no-op unless `FLEET_SLEEP_WAKE=dwell`; the
+worker wakes from its sleeping page's double-pressed Wake or the sidebar menu.
+Under `dwell` the hooks carry the old two-second dwell — `wake … --dwell 2`
 sleeps, then wakes only if the window is still the session's current one — so
 scanning past a sleeping worker never resumes it; the dash is unchanged and
 still never switches on highlight or preview.

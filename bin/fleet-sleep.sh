@@ -10,6 +10,13 @@ fleet_load_conf "$session"
 export FLEET_CONF_DIR FLEET_MAIN
 export FLEET_SLEEP="${FLEET_SLEEP:-observe}"
 export FLEET_SLEEP_AFTER="${FLEET_SLEEP_AFTER:-1800}"
+export FLEET_SLEEP_WAKE="${FLEET_SLEEP_WAKE:-confirm}"
+export FLEET_SLEEP_WAKE_ARM="${FLEET_SLEEP_WAKE_ARM:-3}"
+# The navigation/attach hooks pass --nav (issue #1050): under the default
+# `confirm` arriving on a sleeper only shows its page — exit before python.
+if [ "$action" = wake ] && [ "$FLEET_SLEEP_WAKE" != dwell ]; then
+  case " $* " in *" --nav "*) exit 0 ;; esac
+fi
 export FLEET_SLEEP_MCP_RESTARTABLE="${FLEET_SLEEP_MCP_RESTARTABLE:-}"
 export FLEET_FAILOVER="${FLEET_FAILOVER:-0}"
 export FLEET_FAILOVER_AGENTS="${FLEET_FAILOVER_AGENTS:-claude,codex}"

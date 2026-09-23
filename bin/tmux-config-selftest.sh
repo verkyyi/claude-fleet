@@ -236,7 +236,7 @@ case " $ma_sub "   in *' inherit '*) ok ;; *) fail "FLEET_SUBAGENT_MODEL must of
 # PICKER ⇔ VALIDATOR: every token the picker can offer for an enum key (from
 # fcfg_enum_options, what dash-config-edit reads) must also validate for that key.
 # Ties the offered set to the accepted set for EVERY enum key so they can't drift.
-for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_SLEEP; do
+for k in FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_HANDOFF_DEST FLEET_MERGE_METHOD FLEET_AGENT FLEET_SLEEP FLEET_SLEEP_WAKE; do
   while IFS="$FCFG_US" read -r tok _ann; do
     [ -n "$tok" ] || continue
     fcfg_validate enum "$tok" "$k" >/dev/null || fail "picker offers '$tok' for $k but the validator rejects it"

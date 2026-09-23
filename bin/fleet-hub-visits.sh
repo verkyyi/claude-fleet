@@ -80,7 +80,8 @@ if [ "${1:-}" = record ]; then
   # Move it on to the closed task's neighbour in the task list instead — the
   # candidates fleet-sidebar.py published while that task was on screen
   # (`@sidebar_next`, for the window named by `@sidebar_next_of`): the first one
-  # still alive, not asleep (landing must not wake it — the 2s-dwell rule) and
+  # still alive, not asleep (landing shows a sleeper's page, not the task, and
+  # under FLEET_SLEEP_WAKE=dwell would wake it — issues #822/#1050) and
   # not a panel. Only ever from here, i.e. only on a `closed` arrival: F9 / ⌂ /
   # prefix g carry a marker and never reach this, so a deliberate trip to the hub
   # is never rewritten. Nothing published, nothing alive, the hub no longer

@@ -1,7 +1,8 @@
 # Worker hibernation
 
 Fleet can retain a worker's window and worktree while its coding agent exits.
-Entering the window resumes the exact native conversation, with no new prompt.
+Going to the window shows a sleeping page; pressing its Wake button twice resumes
+the exact native conversation, with no new prompt.
 The dashboard and tmux tabs show `z` while sleeping, `↻` during a transition,
 and `!` if recovery needs attention. The task's `done/working/needs` state remains
 separate from the process lifecycle.
@@ -36,11 +37,34 @@ sleeping row; runs `wake` detached, at once) and a **保持唤醒 / 允许休眠
 (`k`, the label follows `@sleep_keep_awake`).
 
 Manual sleep bypasses only the idle duration, never safety checks. A client
-viewing the window prevents sleep, even if it has not typed recently. Normal
-tmux navigation, sidebar selection and client attach wake a sleeping worker
-once the window has stayed current for two seconds (`wake --dwell 2` in the
-hooks; a window only passed over — the sidebar's ↑↓ follow, `prefix n` past a
-sleeper — is not resumed); highlighting a dashboard row does not. During resume, wait for the native input
+viewing the window prevents sleep, even if it has not typed recently.
+
+### Waking it yourself (issue #1050)
+
+By default (`FLEET_SLEEP_WAKE=confirm`) nothing about *looking* at a sleeper
+wakes it: tmux navigation, sidebar selection, client attach, the scan finding it
+on screen, or entering it while it is going to sleep only show its page. It wakes
+when you press the page's one button, **Wake**, twice: the first ⏎ (or a tap on
+the button's row) arms it — amber, `⏎ again to wake · 3…` counting down — and a
+second one at least 0.3 s later and within `FLEET_SLEEP_WAKE_ARM` seconds
+(default 3) draws `↻ waking…` and starts the wake. Past the window the arm lapses
+silently and the next press arms again. The sidebar row menu's Wake wakes at
+once (opening the menu and picking it is already two steps).
+
+The page owns the pane's input while it sleeps: every other key, and any click
+outside the button, is read and discarded, so nothing typed there reaches the
+resumed agent. It turns on SGR mouse reporting for the tap and turns it off
+before the wake respawns the pane. The wake runs detached (`tmux run-shell -b …
+fleet-sleep.sh wake`), because the respawn kills the page's own process.
+
+`FLEET_SLEEP_WAKE=dwell` restores the old wake-on-arrival: the navigation and
+attach hooks (`wake --dwell 2 --nav`) wake a sleeper once its window has stayed
+current for two seconds (a window only passed over — the sidebar's ↑↓ follow,
+`prefix n` past a sleeper — is not resumed), and the scan wakes any sleeper a
+client is viewing. `--nav` is a no-op under `confirm`; the CLI's `wake` and
+`wake --dwell` are unaffected by the knob. Automatic wakes — a due loop, a
+quota-waiting loop finding an account, an incoming message — are unchanged in
+both modes. Highlighting a dashboard row never wakes. During resume, wait for the native input
 prompt before typing. No wake action authorizes an additional model turn. Codex resumes its saved native
 permission profile. Its existing hook authorization is carried as exact native
 hashes in temporary launch arguments; user trust configuration is not modified.
@@ -191,12 +215,13 @@ issue and window name, the repo, how long it has been asleep and idle, the agent
 model, account and memory freed, uncommitted and unpushed work in the worktree,
 the PR's CI glyph (`@prci`) or a merged PR, then the agent's last reply, wrapped
 to the width. Below that is a line listing what still wakes it on its own (a due
-loop, quota coming back, an incoming message) and the hint.
+loop, quota coming back, an incoming message) and the Wake button.
 
 When the last reply can't be read (a Codex session, or an unreadable
 transcript), the saved screen is shown instead, dimmed, labelled as old, and
 without the agent's input box and status line. Any field that is missing is
-left off the card. The card is redrawn on SIGWINCH and never on a timer. The
+left off the card. The card is redrawn on SIGWINCH and on input, and on a timer
+only while the button is armed (its countdown). The
 renderer is `render_park()` in `bin/fleet_sleep_park.py`, a pure function of
 the record, the window facts, and the size. Callers can pass their own
 `footer_lines`.

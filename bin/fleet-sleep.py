@@ -15,11 +15,13 @@ import os
 from pathlib import Path
 import re
 import runpy
+import select
 import shlex
 import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import uuid
 
@@ -37,6 +39,14 @@ PARK = runpy.run_path(str(BIN / 'fleet_sleep_park.py'))
 class NotAWorker(ValueError):
     """A window that structurally cannot be a worker (a panel or the hub): the
     scan skips it silently instead of logging a per-tick skip record for it."""
+
+
+def wake_on_view():
+    """FLEET_SLEEP_WAKE=dwell restores the old wake-on-arrival (issue #822's 2s
+    navigation dwell, the scan's viewed-window wake, entering mid-sleep). The
+    default `confirm` wakes a sleeper only from its page's double press, the
+    sidebar menu, or an automatic wake (issue #1050)."""
+    return os.environ.get('FLEET_SLEEP_WAKE','confirm').strip()=='dwell'
 
 
 def run(argv, **kwargs):
@@ -144,6 +154,7 @@ class Worker:
 
     def command(self,action):
         return shlex.join(['env','FLEET_CONF_DIR='+str(self.directory.parents[2]),
+                          'FLEET_SLEEP_WAKE_ARM='+os.environ.get('FLEET_SLEEP_WAKE_ARM','3'),
                           'python3',str(BIN/'fleet-sleep.py'),action,'--session',self.session,self.pane])
 
     def inspect(self):
@@ -395,7 +406,7 @@ class Worker:
                     if self.opt('@sleep_park_ready')==path.stem:
                         data['rss_parked_kb']=process_tree_rss(self.opt('pane_pid'))
                     save(path,data)
-                    if self.visible(): self.wake_locked(path,data)
+                    if wake_on_view() and self.visible(): self.wake_locked(path,data)
                     return {'state':data['state'],'record':str(path)}
                 except Exception as exc:
                     self.phase(path,data,'failed',str(exc))
@@ -507,7 +518,10 @@ class Worker:
         test='#{==:#{@cc_launcher_pid},'+owner+'}'
         self.tm('if-shell','-F','-t',self.pane,test,' ; '.join(cmds))
 
-    def wake(self,dwell=0):
+    def wake(self,dwell=0,nav=False):
+        # --nav marks the tmux navigation/attach hooks: under the default
+        # FLEET_SLEEP_WAKE=confirm arriving on a sleeper only shows its page.
+        if nav and not wake_on_view(): return
         if dwell>0:
             # Dwell threshold (issue #822): the navigation hooks fire for every
             # window the operator passes — the sidebar's ↑↓ follow, prefix n/p
@@ -607,8 +621,8 @@ class Worker:
                 self.replaceable()
                 self.phase(path,data,'sleeping')
                 command=self.command('park')
+                # The park process takes the pane's input itself and swallows it.
                 self.tm('respawn-pane','-k','-t',self.pane,'-c',data['source']['worktree'],command)
-                self.tm('select-pane','-d','-t',self.pane)
             if data['state'] in ('waking','failed'):
                 try:
                     if data['source']['agent']=='codex': self.bind_resumed_codex(data['source'])
@@ -628,7 +642,7 @@ class Worker:
                         self.tm('select-pane','-e','-t',self.pane)
                         self.tm('set-option','-p','-t',self.pane,'remain-on-exit',data['remain'])
                 except (ValueError,OSError,subprocess.SubprocessError): pass
-            if data['state']=='sleeping' and (self.visible() or self.scheduled_wake(path,data)):
+            if data['state']=='sleeping' and ((wake_on_view() and self.visible()) or self.scheduled_wake(path,data)):
                 self.wake_locked(path,data)
 
 
@@ -883,30 +897,98 @@ def launch(w):
 
 
 def park(w):
+    """The sleeping page (issues #1049/#1050). Blocks on its tty and signals —
+    no timer except the arm countdown (EPIC #1048 rule 4). It owns the pane's
+    input and discards every byte that is not a press of its one button, so
+    nothing typed here ever reaches the resumed agent (rule 3)."""
     path,data=w.record()
-    # Redraw on SIGWINCH only — no timer (EPIC #1048 rule 4). The handler just
-    # flags; the draw (tmux + git reads) runs back in the loop, never re-entrant.
-    pending=[True]
-    signal.signal(signal.SIGWINCH,lambda *_:pending.__setitem__(0,True))
-    while True:
-        if pending[0]:
-            pending[0]=False
-            try: path,data=w.record()
-            except (ValueError,KeyError,OSError): pass
-            sys.stdout.write('\033[2J\033[H'+park_frame(w,data)); sys.stdout.flush()
-            if w.opt('@sleep_park_ready')!=path.stem: w.stamp('@sleep_park_ready',path.stem)
-            continue
-        signal.pause()
+    try: arm=max(float(os.environ.get('FLEET_SLEEP_WAKE_ARM') or 3),1.0)
+    except ValueError: arm=3.0
+    button=PARK['WakeButton'](arm)
+    # SIGWINCH only flags, via the wakeup pipe: select() returns and the loop
+    # redraws — never re-entrant (PEP 475 would otherwise just resume select).
+    rd,wr=os.pipe()
+    for fd in (rd,wr): os.set_blocking(fd,False)
+    signal.set_wakeup_fd(wr)
+    signal.signal(signal.SIGWINCH,lambda *_:None)
+    for sig in (signal.SIGINT,signal.SIGQUIT,signal.SIGTSTP): signal.signal(sig,signal.SIG_IGN)
+    signal.signal(signal.SIGHUP,lambda *_:sys.exit(0))
+    saved=None
+    if os.isatty(0):
+        saved=termios.tcgetattr(0); mode=termios.tcgetattr(0)
+        mode[0]&=~(termios.IXON|termios.ICRNL)
+        mode[3]&=~(termios.ECHO|termios.ICANON|termios.ISIG|termios.IEXTEN)
+        mode[6][termios.VMIN],mode[6][termios.VTIME]=1,0
+        termios.tcsetattr(0,termios.TCSANOW,mode)
+    mouse=lambda on:sys.stdout.write('\033[?1000'+('h' if on else 'l')+'\033[?1006'+('h' if on else 'l'))
+    facts,rows,fds=None,set(),[rd,0]
+    try:
+        mouse(True)
+        redraw=True
+        while True:
+            now=time.monotonic()
+            if button.expire(now): redraw=True
+            if redraw:
+                redraw=False
+                if facts is None:
+                    try: path,data=w.record()
+                    except (ValueError,KeyError,OSError): pass
+                    facts=park_facts(w,data)
+                footer=button.lines(now)
+                frame=park_frame(w,data,footer,facts)
+                n=frame.count('\n')+1
+                rows=set(range(n-len(footer)+1,n+1))
+                sys.stdout.write('\033[2J\033[H'+frame); sys.stdout.flush()
+                if w.opt('@sleep_park_ready')!=path.stem:
+                    w.stamp('@sleep_park_ready',path.stem)
+                    # sleep() closed the input gate before /exit; the page
+                    # reopens it only for itself.
+                    w.tm('select-pane','-e','-t',w.pane)
+            try: ready=select.select(fds,[],[],button.timeout(time.monotonic()))[0]
+            except InterruptedError: ready=[rd]
+            if not ready: redraw=True
+            if rd in ready:
+                try:
+                    while os.read(rd,64): pass
+                except BlockingIOError: pass
+                facts,redraw=None,True
+            if 0 in ready:
+                chunk=os.read(0,4096)
+                if not chunk: fds.remove(0); continue
+                # A discarded key changes nothing on the page: no redraw for it.
+                for _ in range(PARK['presses'](chunk,rows)):
+                    redraw=True
+                    if button.press(time.monotonic()):
+                        mouse(False); sys.stdout.flush()
+                        park_wake(w)
+    finally:
+        try:
+            mouse(False); sys.stdout.flush()
+            if saved is not None: termios.tcsetattr(0,termios.TCSANOW,saved)
+        except (OSError,ValueError): pass
 
 
-def park_frame(w,data,footer_lines=None):
+def park_wake(w):
+    # Detached (EPIC #1048 rule 6): wake_locked respawns this pane, killing us.
+    # fleet-sleep.sh loads the fleet conf; a sandbox without it runs the .py.
+    sh=BIN/'fleet-sleep.sh'
+    command=shlex.join(['bash',str(sh),'wake',w.session,w.window]) if sh.exists() else w.command('wake')
+    w.tm('run-shell','-b',command+' >/dev/null 2>&1')
+
+
+def park_facts(w,data):
     opts={}
     for key,name in (('issue','@issue'),('title','window_name'),('repo','@repo'),('prci','@prci'),('reap_key','@reap_key')):
         try: opts[key]=w.opt(name)
         except subprocess.SubprocessError: pass
+    return PARK['gather'](data,opts)
+
+
+def park_frame(w,data,footer_lines=None,facts=None):
+    if facts is None: facts=park_facts(w,data)
     try: cols,rows=os.get_terminal_size(sys.stdout.fileno())
     except OSError: cols,rows=int(w.opt('pane_width')),int(w.opt('pane_height'))
-    return PARK['render_park'](data,PARK['gather'](data,opts),cols,rows,footer_lines)
+    return PARK['render_park'](data,facts,cols,rows,footer_lines)
 
 
 def main():
@@ -918,6 +1000,7 @@ def main():
     p.add_argument('--record',default='')
     p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
+    p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
     a=p.parse_intermixed_args()
     if a.action=='hook':
         try: hook()
@@ -972,7 +1055,7 @@ def main():
     elif a.action=='holds-exit':
         _,data=w.record()
         return 0 if w.holds_exit(data) else 1
-    elif a.action=='wake': w.wake(dwell=a.dwell)
+    elif a.action=='wake': w.wake(dwell=a.dwell,nav=a.nav)
     elif a.action=='deliver': w.deliver(sys.stdin.read())
     elif a.action=='restore':
         path=Path(a.record)
