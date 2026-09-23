@@ -58,6 +58,8 @@ trap 'exit 130' INT TERM HUP
 # window read is TAB-separated, so pin one (the daemons run under one too).
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$WORK/tmp"
+# the ledger leg must not depend on the runner's free disk: the gate always opens
+export FLEET_DISK_FLOOR_GB=0
 export FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_DISPATCH_LEASE_DIR="$WORK/leases" FLEET_LEDGER_WATCH_LEASE_DIR="$WORK/leases"
 mkdir -p "$FLEET_CONF_DIR" "$TMPDIR"
 unset TMUX TMUX_PANE FLEET_MULTIREPO FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION
@@ -136,6 +138,8 @@ eq "keys: window key A12" "$(fleet_window_key "$M" "$A12")" "o/a#12"
 eq "keys: window key B12" "$(fleet_window_key "$M" "$B12")" "o/b#12"
 eq "keys: unknown repo is #N, not a guess" "$(fleet_window_key "$M" "$U16")" "#16"
 eq "keys: one-repo window key stays bare" "$(fleet_window_key "$D" "$D12")" "12"
+eq "keys: window key CB" "$(fleet_window_key "$M" "$CB")" "o/b#21"
+eq "keys: one-repo D14 / DC stay bare" "$(fleet_window_key "$D" "$D14") $(fleet_window_key "$D" "$DC")" "14 20"
 eq "keys: panel has no key" "$(fleet_window_key "$M" "$M:plan")" ""
 iw=$(fleet_bound_windows "$M" | cut -f1 | sort | tr '\n' ' ')
 eq "keys: issue windows, multi" "$iw" "#16 o/a#12 o/a#20 o/b#12 o/b#14 o/b#21 "

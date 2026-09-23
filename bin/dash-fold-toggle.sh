@@ -72,6 +72,9 @@ SESS="${FLEET_SESSION:-}"
 # two can never disagree about who a row's parent is.
 WFMT="#{session_name}${US}#{window_id}${US}#{window_name}${US}#{pane_current_path}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{@expand}${US}#{@repo}"
 WLIST=$(tmux list-windows -a -F "$WFMT" 2>/dev/null) || exit 0
+# tmux ≤3.4 escapes the control separator as the literal four bytes `\037` (the
+# renderer normalizes the same way); without this every field lands in $wsess.
+WLIST=${WLIST//\\037/$US}
 
 # okey_v — byte-for-byte the renderer's key derivation (@issue, else the
 # `scratch-<N>` slug from @worktree first and the pane cwd only as a fallback,
