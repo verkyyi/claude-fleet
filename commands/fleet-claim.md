@@ -266,8 +266,21 @@ override them):
        SIGKILLed mid-edit by the reaper. **A failed merge must not delete the
        branch.** If the merge fails: fix it, push, re-read the verdict, merge
        again — the branch stays until a merge actually lands.
-     - **`PENDING`** → CI is still running. Wait and re-read (minutes between
-       reads — don't busy-poll). If it never resolves, treat it as blocked below.
+     - **`PENDING`** → CI is still running. **Don't re-read in a loop** — block
+       on it (issue #950), with the Bash tool's `run_in_background: true`:
+
+       ```sh
+       ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" --wait
+       ```
+
+       The harness wakes you when it exits, zero turns spent in between; the
+       token it prints is the verdict — branch on it with this same list. It
+       fails fast (the first red check is `FAILING`), waits out a check set that
+       hasn't registered yet or was reset by a push, and paces its polls to the
+       account's shared GraphQL budget. `TIMEOUT` (exit 3) is *undetermined*,
+       never red: its stderr note carries the `mergeStateStatus` — re-run the
+       wait, or treat a PR that never resolves as blocked below. (No background
+       shell in your harness? Run the same command in the foreground.)
      - **`BEHIND`** → `gh pr update-branch <PR> --repo "$FLEET_REPO"`, then re-read.
      - **`FAILING` / `CONFLICT`** → yours to fix: fix, push, re-read. Never merge
        red, never `--admin`, never force-push the base. Notify the spawning session
