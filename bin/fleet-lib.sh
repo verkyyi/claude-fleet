@@ -431,6 +431,85 @@ fleet_load_repo_conf() {
   _fleet_repo_overlay "${1:-}" "${2:-}"
 }
 
+# ---- reapers stay inside their own repo (issue #791) ------------------------
+# Every automatic reaper (cleanup daemon, idle close, SessionEnd, the worktree
+# janitor) and every mover that decides "is this worktree ours" resolves its repo
+# from the WINDOW it acts on, never from the fleet conf alone, and joins windows on
+# (repo, issue) — never a bare issue number. A window whose repo is unknown or
+# deliberately none (@norepo) is never reaped automatically. A fleet with no
+# overlay (fleet_has_repo_overlays) takes the historic single-repo path in every
+# caller, byte for byte.
+
+# fleet_load_window_conf <sess> <window> — for a caller acting ON <window> (a
+# reaper, not the window's own pane): the fleet conf with THAT window's repo
+# overlay on top. Degenerate (no overlay): exactly fleet_load_conf. Otherwise
+# returns 1 when the window's repo is unknown, none (@norepo) or no longer hosted —
+# with FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH UNSET, so a caller that ignores the
+# status still cannot reach any repo's worktrees.
+fleet_load_window_conf() {
+  local sess="${1:-}" r
+  fleet_load_conf "$sess"
+  fleet_has_repo_overlays "$sess" || return 0
+  r=$(fleet_window_repo "$sess" "${2:-}")
+  if [ -z "$r" ] || ! fleet_load_repo_conf "$sess" "$r"; then
+    eval "unset $_FLEET_REPO_SCOPED"
+    return 1
+  fi
+  return 0
+}
+
+# fleet_resolved_repo <sess> — the repo a reaper acts on, read AFTER a
+# fleet_load_*conf. A one-repo fleet keeps the historic rule (the collector's
+# sessmap wins over FLEET_REPO); a multi-repo fleet must not: the sessmap holds ONE
+# repo per session and would drag every window back to the conf's own repo.
+fleet_resolved_repo() {
+  local r=''
+  fleet_has_repo_overlays "${1:-}" || r=$(fleet_repo_cached "${1:-}")
+  printf '%s' "${r:-${FLEET_REPO:-}}"
+}
+
+# fleet_issue_windows <sess> <repo> <issue> → the window ids bound to (repo,
+# issue), one per line. In a multi-repo fleet a window matches only when its own
+# repo (fleet_window_repo) IS <repo> — an unknown/@norepo window never matches, so
+# repo B's #12 is invisible to repo A's cleanup. Degenerate: every window whose
+# @issue is <issue>, as before.
+fleet_issue_windows() {
+  local sess="${1:-}" want i w wi multi=0
+  want=$(fleet_norm_repo "${2:-}"); i="${3:-}"
+  [ -n "$i" ] || return 0
+  fleet_has_repo_overlays "$sess" && multi=1
+  _fleet_tmux "$sess" list-windows -t "$sess" -F '#{window_id} #{@issue}' 2>/dev/null |
+  while read -r w wi; do
+    [ "$wi" = "$i" ] || continue
+    if [ "$multi" = 1 ]; then
+      [ -n "$want" ] || continue
+      [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$w")")" = "$want" ] || continue
+    fi
+    printf '%s\n' "$w"
+  done
+  return 0
+}
+
+# fleet_worktree_repo <sess> <worktree> → "<repo><TAB><main>" of the hosted repo
+# whose base checkout registers <worktree> as a linked worktree (physical paths
+# compared); nothing when no hosted repo does. "Registered to this fleet" means
+# registered to ANY repo it hosts.
+fleet_worktree_repo() {
+  local sess="${1:-}" wt r m
+  wt=$(cd "${2:-/nonexistent}" 2>/dev/null && pwd -P) || return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    m=$( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1 || exit 0
+         cd "${FLEET_MAIN:-/nonexistent}" 2>/dev/null && pwd -P )
+    [ -n "$m" ] && [ "$m" != "$wt" ] || continue
+    git -C "$m" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $wt" || continue
+    printf '%s\t%s' "$r" "$m"; return 0
+  done <<EOF
+$(fleet_repos "$sess")
+EOF
+  return 0
+}
+
 # The fleet's CURRENT repo — what the dash and backlog are filtered to. One value
 # per fleet, shared by every screen attached to it; `all` (the default) = no
 # filter. A stored repo the fleet no longer hosts reads back as `all`.

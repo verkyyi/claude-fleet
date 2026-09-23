@@ -107,6 +107,9 @@ EOF
 [ "$count" -eq 0 ] && { printf 'refused:not-found\n'; exit 5; }
 [ "$count" -gt 1 ] && { printf 'refused:ambiguous\n'; exit 6; }
 wid="$found"
+# The stopped window's OWN repo for the ledger row (issue #791). An unknown/no-repo
+# window leaves FLEET_REPO/FLEET_MAIN unset, so its row lands in no guessed ledger.
+fleet_load_window_conf "$SESS" "$wid" || :
 # Hibernation owns the pane: its input is disabled and the agent is parked
 # (issue #808). Typing /exit there would either be swallowed or land in the
 # placeholder shell; the sleep controller is the only thing that may act on it.
@@ -126,6 +129,7 @@ cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || cpid=''
 # transcript), never fails the caller; `unmerged` is the KEEP verdict: worktree
 # + branch + issue stay, the row stays resumable (issue #466/#471).
 record_row() {
+  [ -n "${FLEET_REPO:-}" ] || ! fleet_has_repo_overlays "$SESS" || return 0
   fleet_reap_record unmerged "${FLEET_REPO:-}" "${FLEET_MAIN:-}" "$iss" "$wt" "$wid" \
     "$SESS" "" "$KEY" "$wname" "$origin" >/dev/null 2>&1 || :
 }

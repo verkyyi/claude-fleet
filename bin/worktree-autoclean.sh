@@ -159,7 +159,10 @@ LIVE="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{pane_current_pa
 # pane_current_path match above, which false-negatives a busy worker whenever its
 # foreground cwd has wandered into a subdir/scratch dir or has not settled right
 # after spawn, and can then false-reap the live worker's worktree.
-LIVE_ISSUES="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{@issue}' 2>/dev/null; done)"
+# Each line carries the window's @repo too (issue #791): a live #12 in repo B does
+# not keep repo A's merged issue-12 worktree. A window with no @repo still keeps
+# every same-numbered worktree — the unknown case only ever errs toward KEEP.
+LIVE_ISSUES="$(for _s in $SOCKETS; do tmux -L "$_s" list-panes -a -F '#{@issue} #{@repo}' 2>/dev/null; done)"
 
 # Also gather each live fleet SERVER's OWN process cwd (issue #509). A tmux server
 # chdir's itself into the panes it spawns, so its cwd drifts into a worktree over
@@ -211,7 +214,8 @@ process() {
   # cd'd into a subdir of the worktree still counts as attached.
   local _inum=""
   case "$branch" in issue-[0-9]*) _inum="${branch#issue-}"; _inum="${_inum%%[!0-9]*}" ;; esac
-  if [ -n "$_inum" ] && printf '%s\n' "$LIVE_ISSUES" | grep -qxF "$_inum"; then
+  if [ -n "$_inum" ] && printf '%s\n' "$LIVE_ISSUES" | awk -v i="$_inum" -v r="$REPO" '
+       $1 == i && ($2 == "" || r == "" || $2 == r) { hit=1 } END { exit !hit }'; then
     say "KEEP  $branch  (live worker window @issue=$_inum)"; kept=$((kept+1)); return
   fi
   if printf '%s\n' "$LIVE" | grep -qxF "$dir" || printf '%s\n' "$LIVE" | grep -qF "$dir/"; then
@@ -424,8 +428,20 @@ while IFS=$'\t' read -r _s cf; do
       "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
       "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
   [ -n "$fm" ] || continue
-  [ "$fm" = "$DEFAULT_MAIN" ] && continue   # already cleaned as the global default
-  clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx" "$fw"
+  [ "$fm" = "$DEFAULT_MAIN" ] || clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx" "$fw"   # else already cleaned as the global default
+  # Every FURTHER repo the fleet hosts (issue #791), each with its own MAIN/base.
+  fleet_has_repo_overlays "$_s" || continue
+  while IFS= read -r _r; do
+    [ -n "$_r" ] || continue
+    IFS=$'\037' read -r rm rr rb rp rx rw < <( fleet_load_repo_conf "$_s" "$_r" >/dev/null 2>&1
+      printf '%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
+        "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
+        "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
+    [ -n "$rm" ] && [ "$rm" != "$fm" ] && [ "$rm" != "$DEFAULT_MAIN" ] || continue
+    clean_fleet "$rm" "$rr" "$rb" "$rp" "$rx" "$rw"
+  done <<EOF
+$(fleet_repos "$_s")
+EOF
 done < <(fleet_each_conf)
 scratch_digest_flush   # #884 — one message for every idle scratch holding work
 
