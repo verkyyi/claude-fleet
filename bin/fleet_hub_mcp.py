@@ -134,10 +134,13 @@ def make_server(hub, *, token=None, oauth=None, grant_tokens=False):
         return await invoke("config_get", {"fleet_id": fleet_id})
 
     @server.tool(annotations=change, structured_output=True)
-    async def worker_start(fleet_id: str, issue: StrictInt, idempotency_key: str, agent: str = "") -> dict[str, Any]:
-        """Start work on an existing issue under local Fleet gates. Reuse the key only for the same request; poll operation_get."""
+    async def worker_start(fleet_id: str, issue: StrictInt, idempotency_key: str, agent: str = "", repo: str = "") -> dict[str, Any]:
+        """Start work on an existing issue under local Fleet gates; name its repo (owner/name) when the fleet hosts several. Reuse the key only for the same request; poll operation_get."""
+        params = {"issue": issue, "agent": agent}
+        if repo:
+            params["repo"] = repo
         return await invoke("worker_start", {"fleet_id": fleet_id, "idempotency_key": idempotency_key,
-                                             "params": {"issue": issue, "agent": agent}})
+                                             "params": params})
 
     @server.tool(annotations=change, structured_output=True)
     async def config_set(fleet_id: str, key: str, value: StrictInt, expected_revision: str, idempotency_key: str) -> dict[str, Any]:

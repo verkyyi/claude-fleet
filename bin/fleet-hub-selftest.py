@@ -402,6 +402,22 @@ class HubTests(HubFixture):
         with self.assertRaises(Fault):
             self.node.rpc("submit", changed)
 
+    def test_start_names_the_repo_in_a_multi_repo_fleet(self):
+        # issue #984: two repos can both have an issue-123, so the spawn needs --repo.
+        with self.assertRaises(Fault):
+            validate_write("worker_start", {"issue": 1, "repo": "../x;rm"})
+        repos = self.node.conf / "fleets/demo/repos"
+        repos.mkdir()
+        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\n')
+        bare = self.node.wait(self.submit(key="bare")["operation_id"])
+        self.assertEqual((bare["status"], bare["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
+        self.assertFalse((self.node.conf / "spawn.calls").exists())
+        named = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="named",
+                                               params={"issue": 123, "repo": "example/other"}))
+        self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "123 demo --agent claude --origin hub --repo example/other\n")
+
     def test_concurrent_same_key_routes_once(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: self.submit(), range(4)))

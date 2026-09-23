@@ -302,6 +302,7 @@ cp "$BIN/fleet-control-read.sh" "$BIN/fleet-lib.sh" "$HB/"
 printf '#!/bin/bash\nprintf "comment %%s\\n" "$*"\n' > "$HB/fleet-comment.sh"
 printf '#!/bin/bash\nexit 0\n' > "$HB/fleet-diskguard.sh"; cp "$HB/fleet-diskguard.sh" "$HB/fleet-quotaguard.sh"
 printf '#!/bin/bash\nprintf "restore %%s\\n" "$*"\n' > "$HB/dash-restore-session.sh"
+printf '#!/bin/bash\nprintf "spawn %%s\\n" "$*"\n' > "$HB/dash-issue-session.sh"
 # fake history: 12 is resumable in both repos, 40 only in o/b
 cat > "$HB/fleet-history.sh" <<'EOF'
 #!/bin/bash
@@ -320,6 +321,14 @@ out=$(hub resume "$M" o-a:issue-12); has "hub: resume o-a:issue-12 → o/a" "$ou
 out=$(hub resume "$M" issue-40);    has "hub: resume 40 → the one repo that has it" "$out" "restore landed:issue:40 $M --repo o/b"
 out=$(hub message "$D" 12);          has "hub: one-repo message unchanged" "$out" "comment 12 --repo o/c"
 out=$(hub resume "$D" issue-12);     eq "hub: one-repo resume unchanged" "$out" "restore landed:issue:12 $D"
+# start (issue #984): a 2+ repo fleet needs the repo, resolved before any gate
+hub start "$M" 12 claude >/dev/null; eq "hub: start with no repo in a 2-repo fleet is refused" "$?" 6
+hub start "$M" 12 claude o/zz >/dev/null; eq "hub: start naming an unhosted repo is refused" "$?" 6
+out=$(hub start "$M" 12 claude o-b); has "hub: start o-b → --repo o/b" "$out" "spawn 12 $M --agent claude --origin hub --repo o/b"
+out=$(hub start "$M" 12 "" o/a);     has "hub: start o/a → --repo o/a" "$out" "--origin hub --repo o/a"
+out=$(hub start "$D" 12 claude);     eq "hub: one-repo start unchanged" "$out" "spawn 12 $D --agent claude --origin hub"
+out=$(hub start "$D" 12 claude o/c); eq "hub: one-repo start naming its repo" "$out" "spawn 12 $D --agent claude --origin hub --repo o/c"
+hub start "$D" 12 claude o/a >/dev/null; eq "hub: one-repo start naming another repo is refused" "$?" 6
 leg hub
 
 if [ "$FAILS" -gt 0 ]; then printf 'multirepo-identity-selftest: %d FAIL\n' "$FAILS" >&2; exit 1; fi

@@ -249,9 +249,11 @@ class Control:
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
-                code, _, _ = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""), timeout=180)
+                code, _, _ = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
+                                          params.get("repo", ""), timeout=180)
                 if code:
-                    reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE"}
+                    # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
+                    reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}
                     attempted = code not in reasons
                     raise Fault(reasons.get(code, "EXECUTION_FAILED"), "Fleet refused to start the worker; inspect local Fleet logs")
                 snapshot = self.workers(fleet)
