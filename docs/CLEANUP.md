@@ -105,6 +105,12 @@ Spawned workers retain their existing `@origin` address and history provenance.
 Ship/land and blocked flows report to that parent; the RED path includes the PR.
 A Stop transition to `done` sends a one-time `STOPPED (no ship report)` fallback
 when no report has been delivered. Active loops and handoffs suppress that fallback.
+Every report is also appended to the parent's children ledger
+(`$FLEET_STATE/children/<parent-key>.ndjson`, issue #937), delivered or not. A
+parent verifies a report — or asks how all its children are doing — with ONE
+read of `bin/fleet-children.sh` (ledger + live window state + the dash's PR
+cache), never a `gh pr list` + `capture-pane` per report; `/fleet-claim` and
+`/fleet-epic-run` say so (issue #940).
 The reporting selftest uses two local windows and the actual inbox transport.
 
 | Piece | What |
