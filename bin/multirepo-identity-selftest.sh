@@ -153,8 +153,9 @@ eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" ""
 leg keys
 
 # --- dispatch: autofill dedup ------------------------------------------------------
-# M dispatches for o/a. A12 binds o/a#12; B14 binds only o/b#14; U16's repo is
-# unknown, so it blocks #16 everywhere (conservative). D: the legacy bare set.
+# M dispatches for BOTH o/a and o/b (o/b's overlay inherits FLEET_AUTOFILL=1, #799).
+# A12 binds o/a#12; B14 binds only o/b#14; U16's repo is unknown, so it blocks #16
+# everywhere (conservative). D: the legacy bare set, bare log lines.
 cat > "$WORK/issues.json" <<'JSON'
 [ {"number":12,"labels":[{"name":"autofill"}],"assignees":[]},
   {"number":14,"labels":[{"name":"autofill"}],"assignees":[]},
@@ -169,15 +170,20 @@ while [ "\$#" -gt 0 ]; do case "\$1" in --jq) shift; expr="\$1" ;; esac; shift; 
 exit 0
 EOF
 out=$(bash "$BIN/fleet-dispatch.sh" --dry-run "$M" 2>&1)
-has   "dispatch: A#12 bound"              "$out" "skip #12"
-has   "dispatch: B#14 does not bind A#14" "$out" "would spawn #14"
-has   "dispatch: unknown-repo #16 blocks" "$out" "skip #16"
-has   "dispatch: free #18"                "$out" "would spawn #18"
-hasnt "dispatch: A#12 never spawned"      "$out" "would spawn #12"
+has   "dispatch: A#12 bound"              "$out" "skip o/a#12"
+has   "dispatch: B#12 bound"              "$out" "skip o/b#12"
+has   "dispatch: B#14 does not bind A#14" "$out" "would spawn o/a#14 (p3) --repo o/a"
+has   "dispatch: B#14 bound"              "$out" "skip o/b#14"
+has   "dispatch: unknown-repo #16 blocks A" "$out" "skip o/a#16"
+has   "dispatch: unknown-repo #16 blocks B" "$out" "skip o/b#16"
+has   "dispatch: free A#18"               "$out" "would spawn o/a#18 (p3) --repo o/a"
+has   "dispatch: free B#18"               "$out" "would spawn o/b#18 (p3) --repo o/b"
+hasnt "dispatch: #12 never spawned"       "$out" "#12 (p3) --repo"
 out=$(bash "$BIN/fleet-dispatch.sh" --dry-run "$D" 2>&1)
 has   "dispatch: one-repo #12 bound"      "$out" "skip #12"
 has   "dispatch: one-repo #14 bound"      "$out" "skip #14"
-has   "dispatch: one-repo #16 free"       "$out" "would spawn #16"
+has   "dispatch: one-repo #16 free"       "$out" "would spawn #16 (p3)  [slot"
+hasnt "dispatch: one-repo never --repo"   "$out" "--repo"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 leg dispatch
 

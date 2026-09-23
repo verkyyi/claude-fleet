@@ -495,13 +495,13 @@ fleet_load_repo_conf() {
 #   identity/deploy (_FLEET_REPO_SCOPED)  FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
 #                                         FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT
 #   launch                                FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG
-#   setup + switches (#978)               $_FLEET_REPO_OVERRIDABLE
+#   setup + switches (#978)   (+ autofill, #799)  $_FLEET_REPO_OVERRIDABLE
 # An in-pane reader gets its window's repo for free (fleet_load_conf is window-
 # aware); a reader OUTSIDE the window (daemon, spawner, sleep/failover) resolves the
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL"
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
 # the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set

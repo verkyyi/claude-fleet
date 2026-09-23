@@ -14,6 +14,8 @@
 #                      the cross-machine pre-filter for issue #258: with
 #                      FLEET_PRESPAWN_DEDUP the spawn claims AT SPAWN, so a peer's
 #                      claim shows as an assignee → the "claimed elsewhere" skip.)
+#   • MULTI-REPO       (#799) every armed hosted repo dispatches, with --repo,
+#                      under the fleet's one cap + tick budget, per-repo lease.
 #   • ANTI-COLLISION   an issue with a live window is skipped even if it is the
 #                      highest-priority pick — matched by @issue binding AND by a
 #                      bare "issue-<N>" window name (dash-issue-session's own dedup).
@@ -280,6 +282,102 @@ PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR
   bash "$WORK/bin/fleet-dispatch.sh" s2 >/dev/null 2>"$LOG2" || fail2 'Codex gate run failed'
 [ ! -s "$SPAWN_LOG" ] || fail2 'native Codex hold must block Codex autofill'
 grep -q 's2: Codex quota gate closed.*Codex native quota hold' "$LOG2" || fail2 'native quota reason missing'
+
+# --- #799: a multi-repo fleet autofills EVERY armed repo, under ONE pair of caps ---
+# Fleet m hosts o/a (the fleet conf, FLEET_AUTOFILL=1), o/b (overlay, inherits the
+# fleet's 1) and o/c (overlay, FLEET_AUTOFILL=0 — opted out). One live worker,
+# o/a#10; fleet cap 4 → 3 free slots. The fake gh answers per --repo. Merged order:
+# within a tier the repos interleave least-loaded first (o/a has 1 live, o/b 0), so
+# o/b#11, o/b#13, o/a#11 — and o/a#12 waits for the cap, o/c#7 is never touched.
+rm -f "$WORK/bin/fleet-quotaguard.sh"   # the #730 leg's closed gate
+MC="$WORK/mconf"; mkdir -p "$MC/fleets/m/repos"
+cat > "$MC/fleets/m/conf" <<CONF
+FLEET_REPO="o/a"
+FLEET_AUTOFILL=1
+FLEET_MAX_SESSIONS=4
+FLEET_GLOBAL_MAX_SESSIONS=0
+FLEET_AUTOFILL_MAX_PER_TICK=9
+CONF
+printf 'FLEET_REPO="o/b"\n' > "$MC/fleets/m/repos/o-b.conf"
+printf 'FLEET_REPO="o/c"\nFLEET_AUTOFILL=0\n' > "$MC/fleets/m/repos/o-c.conf"
+mkdir -p "$WORK/canned"
+printf '%s' '[{"number":10,"labels":[{"name":"autofill"}],"assignees":[]},
+ {"number":11,"labels":[{"name":"autofill"}],"assignees":[]},
+ {"number":12,"labels":[{"name":"autofill"}],"assignees":[]}]' > "$WORK/canned/o-a.json"
+printf '%s' '[{"number":11,"labels":[{"name":"autofill"}],"assignees":[]},
+ {"number":13,"labels":[{"name":"autofill"}],"assignees":[]},
+ {"number":14,"labels":[],"assignees":[]}]' > "$WORK/canned/o-b.json"
+printf '%s' '[{"number":7,"labels":[{"name":"autofill"}],"assignees":[]}]' > "$WORK/canned/o-c.json"
+GH_LOG="$WORK/ghlog"; : > "$GH_LOG"
+cat > "$WORK/fakepath/gh" <<FAKE
+#!/bin/bash
+expr=''; repo=''
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in --jq) shift; expr="\$1" ;; --repo) shift; repo="\$1" ;; esac
+  shift
+done
+printf '%s\n' "\$repo" >> "$GH_LOG"
+[ -n "\$expr" ] && jq -r "\$expr" "$WORK/canned/\$(printf '%s' "\$repo" | tr / -).json"
+exit 0
+FAKE
+# One live worker, o/a#10 (@1). Match the lib's forms before the generic ones.
+cat > "$WORK/fakepath/tmux" <<'FAKE'
+#!/bin/bash
+args="$*"
+case "$args" in
+  *set-window-option*|*trust_stuck*|*capture-pane*) : ;;
+  *'@repo'*)       case "$args" in *'-t @1 '*) printf 'o/a||\n' ;; *) printf '||\n' ;; esac ;;
+  *'window_id}|'*) printf '@0||plan\n@1|10|issue-10\n' ;;
+  *'@issue'*)      printf '%b' "\tplan\n10\tissue-10\n" ;;
+  *session_name*)  printf 'm plan\nm issue-10\n' ;;
+  *window_name*)   printf 'plan\nissue-10\n' ;;
+  *)               : ;;
+esac
+exit 0
+FAKE
+cat > "$WORK/bin/dash-issue-session.sh" <<FAKE
+#!/bin/bash
+printf '%s\n' "\$*" >> "$SPAWN_LOG"
+exit 0
+FAKE
+LOG6="$WORK/log6"
+run_m() { PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$MC" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
+            bash "$WORK/bin/fleet-dispatch.sh" m >/dev/null 2>"$LOG6"; }
+fail6() { printf 'selftest FAIL: #799 %s\n' "$1" >&2; printf -- '--- log ---\n' >&2; cat "$LOG6" >&2
+          printf -- '--- spawns ---\n' >&2; cat "$SPAWN_LOG" >&2; exit 1; }
+: > "$SPAWN_LOG"
+run_m || fail6 'dispatcher exited non-zero'
+[ "$(cat "$SPAWN_LOG")" = "$(printf '11 m --repo o/b --origin autofill\n13 m --repo o/b --origin autofill\n11 m --repo o/a --origin autofill')" ] \
+  || fail6 'labelled issues in BOTH repos must dispatch, interleaved, each with its own --repo, capped at the fleet headroom (3)'
+grep -q 'skip o/a#10 (p3) — window already bound' "$LOG6" || fail6 'a live o/a#10 must be skipped by (repo, N)'
+grep -q 'spawned o/b#11 (p3) --repo o/b' "$LOG6" || fail6 'the log must name the repo and the --repo it spawned with'
+grep -q 'm: o/c: autofill off' "$LOG6" || fail6 'a repo whose overlay sets FLEET_AUTOFILL=0 is skipped, and says so'
+grep -qx 'o/c' "$GH_LOG" && fail6 'an opted-out repo must cost no gh call'
+for l in "$WORK/leases"/dispatch-*; do [ -e "$l" ] && fail6 'every per-repo lease must be released on exit'; done
+# The per-tick budget is the FLEET's, not per repo: 1/tick → exactly one spawn.
+: > "$SPAWN_LOG"
+sed -i.bak 's/^FLEET_AUTOFILL_MAX_PER_TICK=9$/FLEET_AUTOFILL_MAX_PER_TICK=1/' "$MC/fleets/m/conf"
+run_m || fail6 'per-tick run exited non-zero'
+[ "$(wc -l < "$SPAWN_LOG" | tr -d ' ')" = 1 ] || fail6 'MAX_PER_TICK bounds the whole fleet, not each repo'
+sed -i.bak 's/^FLEET_AUTOFILL_MAX_PER_TICK=1$/FLEET_AUTOFILL_MAX_PER_TICK=9/' "$MC/fleets/m/conf"
+# A repo whose lease another dispatcher holds sits the tick out; the others go on.
+mkdir -p "$WORK/leases/dispatch-o-b.lock"
+printf 'someone-else\n%s\n' "$(( $(date +%s) + 600 ))" > "$WORK/leases/dispatch-o-b.lock/holder"
+: > "$SPAWN_LOG"
+run_m || fail6 'lease run exited non-zero'
+grep -q -- '--repo o/b' "$SPAWN_LOG" && fail6 'o/b is leased elsewhere — it must not spawn'
+grep -q '^11 m --repo o/a' "$SPAWN_LOG" || fail6 "o/a must still dispatch while o/b's lease is held"
+grep -q 'm: o/b: another dispatcher holds the lease' "$LOG6" || fail6 'the held lease must be logged per repo'
+[ "$(sed -n 1p "$WORK/leases/dispatch-o-b.lock/holder")" = someone-else ] || fail6 "never release another holder's lease"
+rm -rf "$WORK/leases/dispatch-o-b.lock"
+# Fleet off, one overlay on: only that repo autofills.
+sed -i.bak 's/^FLEET_AUTOFILL=1$/FLEET_AUTOFILL=0/' "$MC/fleets/m/conf"
+printf 'FLEET_AUTOFILL=1\n' >> "$MC/fleets/m/repos/o-b.conf"
+: > "$SPAWN_LOG"
+run_m || fail6 'overlay-only run exited non-zero'
+[ "$(cut -d' ' -f1-4 "$SPAWN_LOG" | tr '\n' ' ')" = '11 m --repo o/b 13 m --repo o/b ' ] \
+  || fail6 'fleet FLEET_AUTOFILL=0 + o/b overlay =1 → only o/b dispatches'
+printf 'ok   multi-repo: every armed repo dispatches with --repo under one fleet cap + tick budget; per-repo opt-out and lease (#799)\n'
 
 
 printf 'selftest PASS: spawned [%s] in priority order — label-gated, under caps + eligibility + anti-collision; a trust-dialog-parked worker is reported once as needs (#563); a refusal logs its stderr reason and exit 3 skips / exit 2 stops (#683)\n' "$got"
